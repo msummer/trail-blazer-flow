@@ -1,0 +1,52 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash .claude/skills/issue-planner/scripts/find-planning-work.sh)",
+      "Bash(bash .claude/skills/issue-planner/scripts/setup-labels.sh)",
+      "Bash(bash .claude/skills/issue-implementer/scripts/find-implementation-work.sh)",
+      "Bash(bash .claude/skills/issue-implementer/scripts/cleanup-after-merge.sh)",
+      "Bash(bash .claude/skills/harness-setup/scripts/check-harness.sh)",
+      "Bash(gh issue list:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue comment:*)",
+      "Bash(gh issue edit:*)",
+      "Bash(gh label list:*)",
+      "Bash(gh label create:*)",
+      "Bash(gh label edit:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh repo view:*)",
+      "Bash(git status:*)",
+      "Bash(git fetch:*)",
+      "Bash(git pull:*)",
+      "Bash(git checkout:*)",
+      "Bash(git switch:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git restore:*)",
+      "Bash(git stash:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(pnpm:*)",
+      "Bash(npm:*)",
+      "Bash(yarn:*)",
+      "Bash(pytest:*)",
+      "Edit",
+      "Write"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Bash(rm -rf:*)",
+      "Bash(git branch -D main:*)",
+      "Bash(git push origin main:*)"
+    ]
+  }
+}
