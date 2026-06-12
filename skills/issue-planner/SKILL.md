@@ -14,7 +14,7 @@ description: >
 This skill turns GitHub issues into review-ready implementation plans. It is the **planning**
 half of the workflow; implementation is a separate, later step. You (the main session) act as
 the orchestrator: you handle all GitHub I/O, and you delegate the actual plan-writing to the
-read-only `planner` subagent (`.claude/agents/planner.md`), one dispatch per issue.
+read-only `planner` subagent (the plugin's `agents/planner.md`), one dispatch per issue.
 
 ## The label state machine
 
@@ -45,8 +45,9 @@ is how both this skill and the discovery script tell plan comments apart from fe
 
 - `gh` is installed and authenticated (`gh auth status`). If not, stop and tell the user.
 - `jq` is installed.
+- Note: the harness scripts (`*.sh` commands below) are provided on the Bash PATH by the plugin's `bin/` directory.
 - The lifecycle labels exist. If a label-related command fails, run
-  `bash .claude/skills/issue-planner/scripts/setup-labels.sh` once, then continue.
+  `setup-labels.sh` once, then continue.
 
 ## Project lessons (inject into every dispatch)
 
@@ -64,7 +65,7 @@ append it: 1–3 lines, dated, written as an instruction to a future agent.
 Run:
 
 ```bash
-bash .claude/skills/issue-planner/scripts/find-planning-work.sh
+find-planning-work.sh
 ```
 
 This returns JSON with `needs_initial_plan` and `needs_revision` arrays (each item has

@@ -75,17 +75,19 @@ if $gh_ready; then
   if [ -z "$missing" ]; then
     ok "all 5 lifecycle labels exist"
   else
-    bad "missing labels:$missing — run: bash .claude/skills/issue-planner/scripts/setup-labels.sh"
+    bad "missing labels:$missing — run: setup-labels.sh"
   fi
 else
   wrn "skipped label check (gh not ready)"
 fi
 
 # --- harness scripts executable (auto-fix) -------------------------------------
+# The harness scripts live alongside this one (the plugin's bin/, or .claude copies).
 fixed=""
-for s in "$claude_dir"/skills/*/scripts/*.sh; do
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+for s in "$script_dir"/*.sh; do
   [ -f "$s" ] || continue
-  if [ ! -x "$s" ]; then chmod +x "$s" && fixed="$fixed ${s#"$root"/}"; fi
+  if [ ! -x "$s" ]; then chmod +x "$s" && fixed="$fixed $(basename "$s")"; fi
 done
 if [ -n "$fixed" ]; then
   ok "harness scripts executable (auto-fixed:$fixed)"
@@ -108,6 +110,7 @@ fi
 if [ -f "$claude_dir/LESSONS.md" ]; then
   ok "LESSONS.md present"
 else
+  mkdir -p "$claude_dir"
   cat > "$claude_dir/LESSONS.md" <<'EOF'
 # Project lessons for workflow subagents
 
@@ -136,8 +139,15 @@ if [ -f "$settings" ]; then
   if [ "$tool_warns" -eq 0 ]; then
     ok "settings.json allow-list covers the detected toolchain(s) (subagents can't prompt for permissions — this matters)"
   fi
+  # Sentinel: are the harness's own commands allowed? (matches both the bare-name plugin
+  # entries and legacy .claude-path entries, since both contain the script name)
+  if grep -q "find-planning-work.sh" "$settings"; then
+    ok "harness script commands are in the allow-list"
+  else
+    wrn "harness script commands (e.g. find-planning-work.sh) not found in the allow-list — copy the permissions block from the plugin's templates/repo-settings.json"
+  fi
 else
-  bad "no .claude/settings.json — the harness's permission grants are missing"
+  bad "no .claude/settings.json — create one from the plugin's templates/repo-settings.json (permissions + enabledPlugins); plugins cannot ship permission grants"
 fi
 
 # --- branch protection ----------------------------------------------------------

@@ -5,39 +5,44 @@ A project-agnostic Claude Code setup for driving GitHub issues through **plannin
 keys, OAuth tokens, or GitHub Actions). The generic *mechanism* lives here; everything
 project-specific lives in the target repo's `CLAUDE.md` and `.claude/LESSONS.md`.
 
-This is the **standalone toolset repo**: its contents install as a target repo's `.claude/`
-directory (packaging as a Claude Code plugin is the next step). Keep the boundary in mind when
-editing: nothing project-specific belongs in the skills or agent files — it belongs in the
-target repo's `CLAUDE.md` (conventions, verification commands) or `LESSONS.md` (project
-gotchas), both of which stay with each project. Two files exist only on the project side and
-are deliberately NOT in this repo: `LESSONS.md` (project-owned gotchas, seeded by the doctor
-script) and `settings.local.json` (machine-local secrets/overrides — never commit or share).
+This repo is a **Claude Code plugin** (and its own marketplace — see "Installing in a new
+repo"). Keep the boundary in mind when editing: nothing project-specific belongs in the skills
+or agent files — it belongs in the target repo's `CLAUDE.md` (conventions, verification
+commands) or `.claude/LESSONS.md` (project gotchas), both of which stay with each project.
+Three things always live on the project side, never here: `LESSONS.md` (seeded by the doctor
+script), a thin `.claude/settings.json` (permission grants — plugins cannot ship permissions;
+template provided), and `settings.local.json` (machine-local secrets/overrides — never commit
+or share).
 
 ## What's in here
 
 ```
-.                                  # installs as the target repo's .claude/
-├── settings.json                 # permissions: gh/git/edit/write + build tools, with a deny-list
+.
+├── .claude-plugin/
+│   ├── plugin.json               # plugin manifest (no version field → every commit is an update)
+│   └── marketplace.json          # this repo doubles as its own marketplace
 ├── agents/
 │   ├── planner.md                # read-only planning subagent (Opus)
 │   ├── implementer.md            # code-writing subagent (Sonnet); no git/network
 │   └── verifier.md               # read-only plan-conformance reviewer (Opus); fresh context
-└── skills/
-    ├── harness-setup/
-    │   ├── SKILL.md              # one-time repo onboarding: doctor + CLAUDE.md audit + baseline
-    │   └── scripts/
-    │       └── check-harness.sh   # mechanical preflight ("doctor"); safe to re-run any time
-    ├── issue-planner/
-    │   ├── SKILL.md              # orchestrates planning (+ proposed-answers step)
-    │   └── scripts/
-    │       ├── find-planning-work.sh
-    │       └── setup-labels.sh    # creates the workflow labels (run once per repo)
-    └── issue-implementer/
-        ├── SKILL.md              # orchestrates implementation → PR
-        └── scripts/
-            ├── find-implementation-work.sh
-            └── cleanup-after-merge.sh   # post-merge sync + branch/label hygiene
+├── skills/
+│   ├── harness-setup/SKILL.md    # one-time repo onboarding: doctor + CLAUDE.md audit + baseline
+│   ├── issue-planner/SKILL.md    # orchestrates planning (+ proposed-answers step)
+│   └── issue-implementer/SKILL.md # orchestrates implementation → verification → PR
+├── bin/                          # on the Bash PATH when the plugin is enabled
+│   ├── check-harness.sh           # mechanical preflight ("doctor"); safe to re-run any time
+│   ├── find-planning-work.sh
+│   ├── setup-labels.sh            # creates the workflow labels (run once per repo)
+│   ├── find-implementation-work.sh
+│   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene
+└── templates/
+    └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + enabledPlugins)
 ```
+
+Skills are invoked with the plugin namespace (`/issue-harness:issue-planner`, …) or by natural
+language ("plan issue 14"). The `bin/` scripts are plain commands on the session's PATH — that
+is why the per-repo permission entries are portable bare names (`Bash(check-harness.sh:*)`)
+rather than machine-specific plugin-cache paths.
 
 ## The model tiering (deliberate design)
 
@@ -122,7 +127,7 @@ fall back to sequential. Any overlap or doubt → sequential.
 ### After the human merges
 
 ```bash
-bash .claude/skills/issue-implementer/scripts/cleanup-after-merge.sh
+cleanup-after-merge.sh
 ```
 Syncs the default branch, deletes local `claude/*` branches whose PRs merged, and reports label
 hygiene (issues still `pr-open` after a merge; stale `pr-open` from unmerged-closed PRs). Then
@@ -158,16 +163,18 @@ to a future agent.
 
 ## Installing in a new repo
 
-1. Copy this repo's contents into the target repo as its `.claude/` directory (until the
-   toolset is packaged as a plugin — see "Distribution" below), e.g. from the target repo root:
-   ```bash
-   git clone <this-repo-url> /tmp/claude-issue-harness
-   mkdir -p .claude && cp -R /tmp/claude-issue-harness/{agents,skills,settings.json,README.md} .claude/
+1. **Add the marketplace and install the plugin** (once per machine; private repos work via
+   your existing `gh` credentials):
    ```
-   If the target repo already has a `.claude/settings.json`, merge the allow/deny lists instead
-   of overwriting.
-2. Make the doctor runnable, then **run the `harness-setup` skill** — in a Claude Code session
-   in the repo, say:
+   /plugin marketplace add msummer/claude-issue-harness
+   /plugin install issue-harness@claude-issue-harness
+   ```
+2. **Create the thin per-repo settings.** Copy `templates/repo-settings.json` from this repo to
+   the target repo as `.claude/settings.json` (or merge into an existing one). It carries the
+   two things a plugin cannot ship: the **permission grants** (subagents can't answer
+   permission prompts, so their commands must be pre-allowed) and `enabledPlugins` (so
+   teammates who clone the repo get the plugin auto-enabled after the trust dialog). Commit it.
+3. **Run the `harness-setup` skill** — in a Claude Code session in the repo, say:
    > Run the harness-setup skill: check this repo's harness installation, audit CLAUDE.md
    > against the contract (draft what's missing for my review), and establish the
    > verification baseline.
@@ -176,28 +183,27 @@ to a future agent.
    baseline**, and reports readiness. Don't skip the baseline: every implementation run
    compares against it, and a repo that is red on its own default branch can't use the
    harness meaningfully.
-3. Recommended: enable branch protection on the default branch (require a PR before merge) —
+4. Recommended: enable branch protection on the default branch (require a PR before merge) —
    the doctor checks and reminds you.
 
-Manual fallback (no Claude session): `chmod +x .claude/skills/*/scripts/*.sh`, then
-`bash .claude/skills/harness-setup/scripts/check-harness.sh` and follow its FAIL/WARN
-remediation hints; create labels via `setup-labels.sh`; write `CLAUDE.md` per the contract
-above and confirm its verification commands pass on the default branch.
+**Updating:** push commits to this repo, then `/plugin update issue-harness@claude-issue-harness`
+in consuming sessions (the manifest has no version field, so every commit counts as an update).
 
-## The one project-specific setting
+## The per-repo settings file (required)
 
-`settings.json` auto-allows the build/test runners the subagents invoke (subagents can't show
-permission prompts, so their commands must be pre-allowed). The template allows `pnpm`, `npm`,
-`yarn`, and `pytest`. If your repo uses a different toolchain, add it to the `allow` list —
-the doctor script warns when it detects a toolchain the list doesn't cover — e.g.:
+Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
+`.claude/settings.json` — start from `templates/repo-settings.json`. It pre-allows the harness
+scripts (bare names — `bin/` is on the PATH), the `gh`/`git` commands the orchestrator runs,
+Edit/Write, the build/test runners, and carries the deny-list (no merge, no force-push, no
+`reset --hard`). The template allows `pnpm`, `npm`, `yarn`, and `pytest`; if your repo uses a
+different toolchain, add it — the doctor warns when it detects a toolchain the list doesn't
+cover — e.g.:
 
 ```json
-"Bash(make:*)", "Bash(cargo:*)", "Bash(go:*)", "Bash(pytest:*)", "Bash(just:*)"
+"Bash(make:*)", "Bash(cargo:*)", "Bash(go:*)", "Bash(just:*)"
 ```
 
-Everything else in `settings.json` (git, gh, Edit, Write, the deny-list) is generic.
-`settings.local.json` is machine-local (may hold secrets) — never commit it and never include it
-when extracting the toolset.
+`settings.local.json` is machine-local (may hold secrets) — never commit it.
 
 ## Safety model
 
@@ -210,10 +216,10 @@ PR review are the real backstops.
 
 ## Distribution
 
-Current state: **this standalone repo** — install by copying into a target repo's `.claude/`
-(see "Installing in a new repo"). Target state: **a Claude Code plugin** — skills + agents
-versioned together, installable per-project, with the agent model pins (`planner: opus`,
-`implementer: sonnet`, `verifier: opus`) travelling with the plugin.
+This repo **is the plugin and its own marketplace** (`.claude-plugin/plugin.json` +
+`marketplace.json`): skills + agents versioned together, installable per-project, with the
+agent model pins (`planner: opus`, `implementer: sonnet`, `verifier: opus`) travelling with
+the plugin. Install/update flow is in "Installing in a new repo".
 
 Project-side files that never live in this repo: `CLAUDE.md`, `LESSONS.md`,
 `settings.local.json`, and the label setup (per-repo, via `setup-labels.sh`). Nothing in the

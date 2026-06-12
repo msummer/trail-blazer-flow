@@ -1,11 +1,14 @@
 {
+  "enabledPlugins": {
+    "issue-harness@claude-issue-harness": true
+  },
   "permissions": {
     "allow": [
-      "Bash(bash .claude/skills/issue-planner/scripts/find-planning-work.sh)",
-      "Bash(bash .claude/skills/issue-planner/scripts/setup-labels.sh)",
-      "Bash(bash .claude/skills/issue-implementer/scripts/find-implementation-work.sh)",
-      "Bash(bash .claude/skills/issue-implementer/scripts/cleanup-after-merge.sh)",
-      "Bash(bash .claude/skills/harness-setup/scripts/check-harness.sh)",
+      "Bash(find-planning-work.sh:*)",
+      "Bash(setup-labels.sh:*)",
+      "Bash(find-implementation-work.sh:*)",
+      "Bash(cleanup-after-merge.sh:*)",
+      "Bash(check-harness.sh:*)",
       "Bash(gh issue list:*)",
       "Bash(gh issue view:*)",
       "Bash(gh issue comment:*)",

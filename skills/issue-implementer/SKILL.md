@@ -14,16 +14,16 @@ description: >
 This is the **implementation** half of the workflow. Planning (the `issue-planner` skill) has
 already produced and the human has approved a plan for each issue you handle here. You (the main
 session) are the orchestrator: you do all git and GitHub work, and you delegate code-writing to
-the read/write `implementer` subagent (`.claude/agents/implementer.md`), one dispatch per issue.
+the read/write `implementer` subagent (the plugin's `agents/implementer.md`), one dispatch per issue.
 After the implementer completes and the mechanical checks pass, a read-only `verifier` subagent
-(`.claude/agents/verifier.md`) adversarially reviews the diff against the plan and acceptance
+(the plugin's `agents/verifier.md`) adversarially reviews the diff against the plan and acceptance
 criteria **before anything is committed** — failures are kicked back to the implementer (max 2
 kickbacks), so the PR the human reviews is already verifier-clean.
 
 This skill is project-agnostic. All project-specific details — conventions, the verification
 commands that define "done", how dependencies are installed, schema/migration rules — come from
 the repo's **CLAUDE.md**, which the subagent reads at the start of every task. (See the
-"CLAUDE.md contract" in `.claude/README.md`.)
+"CLAUDE.md contract" in the plugin README.)
 
 The end state for each issue is **an open PR awaiting human review** — never a merge.
 
@@ -63,7 +63,7 @@ project has no dependency step, skip this.
 ### 1. Find the work
 
 ```bash
-bash .claude/skills/issue-implementer/scripts/find-implementation-work.sh
+find-implementation-work.sh   # on PATH via the plugin's bin/
 ```
 Returns JSON `{ ready: [...], counts: {...} }`. **Report the ready issues to the user** (number +
 title). If empty, say so and stop.
@@ -111,7 +111,7 @@ d. **On `status: complete`:** independently re-run the project's verification co
    CLAUDE.md) as the authoritative gate — the subagent may be mistaken. Run the same checks that
    define "done" for this repo. If they fail, treat it as a blocker (step f).
 
-e. **Dispatch the `verifier` subagent** (Task tool, `.claude/agents/verifier.md`) — the semantic
+e. **Dispatch the `verifier` subagent** (Task tool, the plugin's `agents/verifier.md`) — the semantic
    gate the mechanical checks can't provide. Its prompt must contain: the issue (with acceptance
    criteria), the full approved plan (Verified facts + `RESOLVED:` decisions included), the
    implementer's report, the output of `git diff <default-branch> --stat`, and the instruction
@@ -233,7 +233,7 @@ f. Everything else is unchanged: same labels, same PR contract, same CI watch, s
 
 - **After the human merges:** run the cleanup script —
 ```bash
-bash .claude/skills/issue-implementer/scripts/cleanup-after-merge.sh
+cleanup-after-merge.sh
 ```
   It syncs the default branch, deletes local `claude/*` branches whose PRs merged, and reports
   label hygiene problems (issues still `pr-open` whose PR merged but didn't auto-close, and

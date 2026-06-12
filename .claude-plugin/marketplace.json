@@ -1,0 +1,11 @@
+{
+  "name": "claude-issue-harness",
+  "owner": { "name": "Mark Summer" },
+  "plugins": [
+    {
+      "name": "issue-harness",
+      "source": "./",
+      "description": "Planner → implementer → verifier workflow for GitHub issues, with worktree-parallel mode and repo onboarding."
+    }
+  ]
+}

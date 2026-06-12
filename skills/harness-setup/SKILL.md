@@ -3,7 +3,7 @@ name: harness-setup
 description: >
   Onboards a repository onto the issue workflow harness (planner → implementer → verifier).
   Use when the user asks to "set up the harness", "onboard this repo", "check the harness
-  installation", or right after copying/installing the .claude/ toolset into a repo. Runs the
+  installation", or right after installing the plugin in a repo. Runs the
   mechanical preflight (doctor script), audits the repo's CLAUDE.md against the harness
   contract (drafting one if needed), establishes a green verification baseline on the default
   branch, and reports readiness. Advisory only — it never gates the other skills, never
@@ -26,14 +26,14 @@ You (the main session) do everything here yourself — no subagent dispatches ne
 ### 1. Mechanical preflight (the doctor)
 
 ```bash
-bash .claude/skills/harness-setup/scripts/check-harness.sh
+check-harness.sh   # on PATH via the plugin's bin/
 ```
 
 Report the full PASS/WARN/FAIL output to the user. The script auto-fixes two safe things
 (script exec bits, seeding an empty `LESSONS.md`) and tells you the fix command for everything
 else. Then resolve what you can directly:
 
-- Missing labels → run `bash .claude/skills/issue-planner/scripts/setup-labels.sh` and say so.
+- Missing labels → run `setup-labels.sh` and say so.
 - Toolchain allow-list WARNs → propose the exact `"Bash(<tool>:*)"` entries to add to
   `.claude/settings.json` (subagents cannot answer permission prompts, so a missing entry
   silently stalls them mid-implementation). Edit the file once the user confirms the tools.
@@ -45,7 +45,7 @@ Re-run the script after fixes; it is idempotent.
 ### 2. CLAUDE.md audit (the judgment step)
 
 Read the repo's `CLAUDE.md` and judge it against the contract (see "The CLAUDE.md contract"
-in `.claude/README.md`) — not "does it exist" but **"could a smaller-model implementer act on
+in the plugin README) — not "does it exist" but **"could a smaller-model implementer act on
 it without guessing?"**:
 
 1. **Verification commands** — are the commands that define "done" stated, copy-pasteable from
