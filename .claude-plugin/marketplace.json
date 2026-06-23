@@ -1,9 +1,9 @@
 {
-  "name": "claude-issue-harness",
+  "name": "trail-blazer-flow",
   "owner": { "name": "Mark Summer" },
   "plugins": [
     {
-      "name": "issue-harness",
+      "name": "trail-blazer-flow",
       "source": "./",
       "description": "Planner → implementer → verifier workflow for GitHub issues, with worktree-parallel mode and repo onboarding."
     }

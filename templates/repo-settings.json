@@ -1,6 +1,15 @@
 {
+  "extraKnownMarketplaces": {
+    "trail-blazer-flow": {
+      "source": {
+        "source": "github",
+        "repo": "msummer/trail-blazer-flow"
+      },
+      "autoUpdate": true
+    }
+  },
   "enabledPlugins": {
-    "issue-harness@claude-issue-harness": true
+    "trail-blazer-flow@trail-blazer-flow": true
   },
   "permissions": {
     "allow": [

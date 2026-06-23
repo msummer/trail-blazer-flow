@@ -19,7 +19,7 @@ or share).
 ```
 .
 ├── .claude-plugin/
-│   ├── plugin.json               # plugin manifest (no version field → every commit is an update)
+│   ├── plugin.json               # plugin manifest (semver version field — bump it to publish an update)
 │   └── marketplace.json          # this repo doubles as its own marketplace
 ├── agents/
 │   ├── planner.md                # read-only planning subagent (Opus)
@@ -36,10 +36,10 @@ or share).
 │   ├── find-implementation-work.sh
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene
 └── templates/
-    └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + enabledPlugins)
+    └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
 ```
 
-Skills are invoked with the plugin namespace (`/issue-harness:issue-planner`, …) or by natural
+Skills are invoked with the plugin namespace (`/trail-blazer-flow:issue-planner`, …) or by natural
 language ("plan issue 14"). The `bin/` scripts are plain commands on the session's PATH — that
 is why the per-repo permission entries are portable bare names (`Bash(check-harness.sh:*)`)
 rather than machine-specific plugin-cache paths.
@@ -166,14 +166,18 @@ to a future agent.
 1. **Add the marketplace and install the plugin** (once per machine; private repos work via
    your existing `gh` credentials):
    ```
-   /plugin marketplace add msummer/claude-issue-harness
-   /plugin install issue-harness@claude-issue-harness
+   /plugin marketplace add msummer/trail-blazer-flow
+   /plugin install trail-blazer-flow@trail-blazer-flow
    ```
+   (Or skip this entirely and let step 2 do it — see the note there.)
 2. **Create the thin per-repo settings.** Copy `templates/repo-settings.json` from this repo to
    the target repo as `.claude/settings.json` (or merge into an existing one). It carries the
-   two things a plugin cannot ship: the **permission grants** (subagents can't answer
-   permission prompts, so their commands must be pre-allowed) and `enabledPlugins` (so
-   teammates who clone the repo get the plugin auto-enabled after the trust dialog). Commit it.
+   three things a plugin cannot ship: the **permission grants** (subagents can't answer
+   permission prompts, so their commands must be pre-allowed), `extraKnownMarketplaces` (which
+   registers this marketplace — with `autoUpdate` on, see "Updating") and `enabledPlugins` (so
+   the plugin is enabled after the trust dialog). Because the checked-in settings register the
+   marketplace, **anyone who clones the repo gets the plugin installed and enabled on their first
+   trusted session — they don't need step 1 at all.** Commit it.
 3. **Run the `harness-setup` skill** — in a Claude Code session in the repo, say:
    > Run the harness-setup skill: check this repo's harness installation, audit CLAUDE.md
    > against the contract (draft what's missing for my review), and establish the
@@ -186,8 +190,14 @@ to a future agent.
 4. Recommended: enable branch protection on the default branch (require a PR before merge) —
    the doctor checks and reminds you.
 
-**Updating:** push commits to this repo, then `/plugin update issue-harness@claude-issue-harness`
-in consuming sessions (the manifest has no version field, so every commit counts as an update).
+**Updating:** the plugin uses semantic versioning (the `version` field in
+`.claude-plugin/plugin.json`). *To publish a release* (author side): bump that version, commit,
+and push — that is the whole release process. *To receive updates* (consumer side): the template
+registers the marketplace with `"autoUpdate": true`, so each new version is picked up
+automatically at the start of a session (Claude Code refreshes the marketplace and reports what
+it updated; run `/reload-plugins` if prompted). To update by hand instead, run
+`/plugin marketplace update trail-blazer-flow` then
+`/plugin update trail-blazer-flow@trail-blazer-flow`.
 
 ## The per-repo settings file (required)
 
@@ -195,7 +205,10 @@ Plugins cannot ship permission rules, so each target repo keeps a thin, checked-
 `.claude/settings.json` — start from `templates/repo-settings.json`. It pre-allows the harness
 scripts (bare names — `bin/` is on the PATH), the `gh`/`git` commands the orchestrator runs,
 Edit/Write, the build/test runners, and carries the deny-list (no merge, no force-push, no
-`reset --hard`). The template allows `pnpm`, `npm`, `yarn`, and `pytest`; if your repo uses a
+`reset --hard`). The same file also carries the non-permission keys a clone needs to bootstrap
+the plugin — `extraKnownMarketplaces` (auto-registering + auto-updating the marketplace) and
+`enabledPlugins` — covered in "Installing in a new repo". The template allows `pnpm`, `npm`,
+`yarn`, and `pytest`; if your repo uses a
 different toolchain, add it — the doctor warns when it detects a toolchain the list doesn't
 cover — e.g.:
 
