@@ -419,6 +419,39 @@ confirm on first run: the harness invokes its scripts by bare name (e.g. `check-
 which assumes Claude Code puts the plugin's `bin/` on the Bash PATH — if a script "isn't found",
 that's the cause. macOS and Linux need nothing beyond the three prerequisites above.
 
+### Windows: first-run smoke test
+
+Before relying on the harness on Windows, run this 30-second check from **Git Bash or WSL** (in
+any git repo, after installing the plugin). It verifies the two Windows-specific risks at once —
+the line-ending fix and the `bin/`-on-PATH assumption.
+
+1. Confirm the toolchain is visible on the Bash PATH:
+   ```bash
+   bash --version && gh --version && jq --version && gh auth status
+   ```
+   If any of these is "command not found", install it / authenticate before continuing.
+2. Run the harness doctor by **bare name** (this is the real test — it exercises both the PATH
+   assumption and the scripts' line endings):
+   ```bash
+   check-harness.sh
+   ```
+   Or just tell Claude Code: *"run the harness-setup skill"*.
+
+**Reading the result:**
+
+- **Prints a `== harness doctor ==` PASS/WARN/FAIL table** → ✅ both risks are clear: `bin/` is on
+  the Bash PATH and the LF fix held. The remaining WARN/FAIL items are normal setup, not Windows
+  problems — proceed as on any platform.
+- **`check-harness.sh: command not found`** → Claude Code did not put the plugin's `bin/` on the
+  Bash PATH. As a fallback, invoke scripts via the plugin root, e.g.
+  `bash "$CLAUDE_PLUGIN_ROOT/bin/check-harness.sh"`. Note this won't match the bare-name
+  permission entries (`Bash(check-harness.sh:*)`), so you'll see permission prompts — please
+  [report it](https://github.com/msummer/trail-blazer-flow/issues) so the fallback can be made
+  first-class.
+- **`bad interpreter` / `$'\r': command not found`** → a CRLF copy slipped through (shouldn't
+  happen with the shipped `.gitattributes`). Re-clone/reinstall with `core.autocrlf=false`, or
+  run `git config --global core.autocrlf input`, then reinstall the plugin.
+
 ## License
 
 [MIT](LICENSE) © 2026 Mark Summer. You're free to use, modify, and redistribute it — please keep
