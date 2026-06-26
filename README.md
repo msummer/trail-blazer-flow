@@ -410,6 +410,15 @@ were tightened to "any blocker/major finding ⇒ fail". Worktree-parallel valida
 - `jq`.
 - A Claude Code subscription (Pro/Max). Runs entirely locally.
 
+**On Windows:** the automation layer is Bash (`bin/*.sh`) plus `gh`/`jq`, so run Claude Code
+under **Git Bash or WSL** — there is no native cmd/PowerShell path. Install `gh` and `jq` so
+they're on the *Bash* PATH you launch Claude Code from (e.g. `winget install GitHub.cli
+jqlang.jq`, or scoop/choco). This repo ships a `.gitattributes` that pins `*.sh` to LF so Git
+for Windows' line-ending conversion can't corrupt the scripts after install. One thing to
+confirm on first run: the harness invokes its scripts by bare name (e.g. `check-harness.sh`),
+which assumes Claude Code puts the plugin's `bin/` on the Bash PATH — if a script "isn't found",
+that's the cause. macOS and Linux need nothing beyond the three prerequisites above.
+
 ## License
 
 [MIT](LICENSE) © 2026 Mark Summer. You're free to use, modify, and redistribute it — please keep

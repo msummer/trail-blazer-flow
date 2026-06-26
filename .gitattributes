@@ -1,0 +1,8 @@
+# Normalize line endings on checkin; let Git infer text vs binary.
+* text=auto
+
+# Shell scripts MUST stay LF, even on Windows. Git for Windows' autocrlf would
+# otherwise check these out with CRLF, and Bash (incl. Git Bash) then fails on the
+# trailing \r ("bad interpreter" / "$'\r': command not found"). This also keeps the
+# plugin's bin/ scripts runnable after a Windows clone/plugin-install.
+*.sh text eol=lf
