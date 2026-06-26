@@ -334,7 +334,10 @@ git push origin vX.Y.Z
 That is the whole release process. The `version` field on the default branch is what actually
 drives updates; the matching `vX.Y.Z` **annotated tag is an immutable anchor** for
 rollback/bisect (and pinning), not the update trigger — so always tag in the same step as the
-bump to keep the two from drifting. *To receive updates* (consumer side): the template
+bump to keep the two from drifting. (`main` is branch-protected: collaborators land changes via
+pull request — no required approvals while the project is solo — while the maintainer pushes
+directly via admin bypass, which is what keeps this direct-push ritual working. Force-pushes and
+branch deletion are blocked for everyone.) *To receive updates* (consumer side): the template
 registers the marketplace with `"autoUpdate": true`, so each new version is picked up
 automatically at the start of a session (Claude Code refreshes the marketplace and reports what
 it updated; run `/reload-plugins` if prompted). To update by hand instead, run
