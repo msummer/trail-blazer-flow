@@ -315,8 +315,20 @@ of the interview, and files the initial backlog. The manual steps below are for 
    the doctor checks and reminds you.
 
 **Updating:** the plugin uses semantic versioning (the `version` field in
-`.claude-plugin/plugin.json`). *To publish a release* (author side): bump that version, commit,
-and push — that is the whole release process. *To receive updates* (consumer side): the template
+`.claude-plugin/plugin.json`). *To publish a release* (author side):
+
+```bash
+# 1. bump "version" in .claude-plugin/plugin.json (e.g. 1.1.0 -> 1.2.0)
+git commit -am "Release vX.Y.Z: <summary>"
+git tag -a vX.Y.Z -m "trail-blazer-flow vX.Y.Z"   # match the version field exactly
+git push origin main
+git push origin vX.Y.Z
+```
+
+That is the whole release process. The `version` field on the default branch is what actually
+drives updates; the matching `vX.Y.Z` **annotated tag is an immutable anchor** for
+rollback/bisect (and pinning), not the update trigger — so always tag in the same step as the
+bump to keep the two from drifting. *To receive updates* (consumer side): the template
 registers the marketplace with `"autoUpdate": true`, so each new version is picked up
 automatically at the start of a session (Claude Code refreshes the marketplace and reports what
 it updated; run `/reload-plugins` if prompted). To update by hand instead, run
