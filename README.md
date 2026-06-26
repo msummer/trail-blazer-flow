@@ -1,4 +1,4 @@
-# Trail Blazer Flow - A Claude Code issue workflow & portable harness
+# Trail Blazer Flow - A portable Claude Code development harness
 
 **Trail Blazer Flow** is a software development harness, designed as a plug-in for Claude
 Code, that supports an aagentic, GitHub issues driven development cycle. 
