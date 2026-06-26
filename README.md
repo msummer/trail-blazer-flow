@@ -8,6 +8,12 @@ A project-agnostic Claude Code setup for driving GitHub issues through **plannin
 keys, OAuth tokens, or GitHub Actions). The generic *mechanism* lives here; everything
 project-specific lives in the target repo's `CLAUDE.md` and `.claude/LESSONS.md`.
 
+> **Status: early access.** This harness is in active testing with a small group. Expect rough
+> edges and occasional breaking changes — and note that, by default, updates arrive
+> automatically (see "Updating"). Bug reports and feedback are very welcome: please
+> [open an issue](https://github.com/msummer/trail-blazer-flow/issues). Licensed under
+> [MIT](LICENSE).
+
 This repo is a **Claude Code plugin** (and its own marketplace — see "Installing in a new
 repo"). Keep the boundary in mind when editing: nothing project-specific belongs in the skills
 or agent files — it belongs in the target repo's `CLAUDE.md` (conventions, verification
@@ -287,8 +293,8 @@ the GitHub repo, lays down `.claude/settings.json`, installs labels, drafts `CLA
 of the interview, and files the initial backlog. The manual steps below are for onboarding an
 *existing* repo.
 
-1. **Add the marketplace and install the plugin** (once per machine; private repos work via
-   your existing `gh` credentials):
+1. **Add the marketplace and install the plugin** (once per machine; the repo is public, so any
+   GitHub-authenticated machine can install it — no special access needed):
    ```
    /plugin marketplace add msummer/trail-blazer-flow
    /plugin install trail-blazer-flow@trail-blazer-flow
@@ -334,6 +340,13 @@ automatically at the start of a session (Claude Code refreshes the marketplace a
 it updated; run `/reload-plugins` if prompted). To update by hand instead, run
 `/plugin marketplace update trail-blazer-flow` then
 `/plugin update trail-blazer-flow@trail-blazer-flow`.
+
+**Heads-up for testers — `autoUpdate` is a trust choice.** With `"autoUpdate": true` you pull
+each new push to `main` automatically at session start; convenient, but it means taking the
+author's latest commit sight-unseen. If you'd rather vet updates first, set
+`"autoUpdate": false` in your `.claude/settings.json` and run the two manual commands above once
+you've reviewed what changed. The published `vX.Y.Z` tags give you known-good points to compare
+against or roll back to.
 
 ## The per-repo settings file (required)
 
@@ -393,3 +406,8 @@ were tightened to "any blocker/major finding ⇒ fail". Worktree-parallel valida
 - `gh` (GitHub CLI), authenticated.
 - `jq`.
 - A Claude Code subscription (Pro/Max). Runs entirely locally.
+
+## License
+
+[MIT](LICENSE) © 2026 Mark Summer. You're free to use, modify, and redistribute it — please keep
+the copyright notice. Provided as-is, without warranty; see the `LICENSE` file for the full text.
