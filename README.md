@@ -26,6 +26,7 @@ or share).
 │   ├── implementer.md            # code-writing subagent (Sonnet); no git/network
 │   └── verifier.md               # read-only plan-conformance reviewer (Opus); fresh context
 ├── skills/
+│   ├── project-kickoff/SKILL.md  # greenfield on-ramp: interview → brief + CLAUDE.md + repo + backlog
 │   ├── harness-setup/SKILL.md    # one-time repo onboarding: doctor + CLAUDE.md audit + baseline
 │   ├── issue-planner/SKILL.md    # orchestrates planning (+ proposed-answers step)
 │   └── issue-implementer/SKILL.md # orchestrates implementation → verification → PR
@@ -65,6 +66,28 @@ Two consequences are baked into the skills:
    plausible-but-wrong code.
 
 ## How it works
+
+### Starting a new project ("start a new project" / "I want to build …")
+
+The `project-kickoff` skill is the **greenfield on-ramp** — the front door for a project that
+doesn't exist yet. The rest of the harness consumes GitHub issues and reads `CLAUDE.md`; kickoff
+produces the first of each. The main session (no subagents):
+1. **Interviews** the user — document-first if they have a PRD/notes/link (ingest it, ask only
+   about gaps), a fuller interview if they don't. Adaptive depth, batched recommendation-first
+   questions, and an explicit nudge to **dictate by voice** to keep a thorough interview from
+   feeling like an interrogation. Open points are tagged BLOCKING / ADVISORY / DEFERRED.
+2. **Synthesizes** an opinionated brief, architecture/stack (with rationale and rejected
+   alternatives), methodology, and a proposed issue backlog — presented for a **single approval**.
+3. On approval, **connects GitHub** (creates or selects the repo, installs labels, lays down the
+   thin `.claude/settings.json`), then emits the artifacts: `docs/PROJECT-BRIEF.md`, a drafted
+   `CLAUDE.md`, and the **issue backlog whose first item is a walking skeleton** (project
+   skeleton + verification setup — the thing that later makes the baseline green).
+4. **Hands off:** plan+implement the skeleton issue first → run `harness-setup` to record the
+   green baseline (which can't exist until there's code) → `issue-planner` on the rest.
+
+Kickoff never writes feature code and never establishes the baseline itself (no buildable code
+yet — that's `harness-setup`'s job after the skeleton lands). For an *existing* codebase, skip
+kickoff and go straight to `harness-setup`.
 
 ### Planning ("plan the open issues" / "plan issues 13 and 15")
 
@@ -133,6 +156,98 @@ Syncs the default branch, deletes local `claude/*` branches whose PRs merged, an
 hygiene (issues still `pr-open` after a merge; stale `pr-open` from unmerged-closed PRs). Then
 re-run the verification suite once on merged main — two green PRs can still compose badly.
 
+## Greenfield walkthrough: from idea to first feature
+
+This is the end-to-end story of starting a project on the harness — exactly what you say to the
+orchestrator (Claude Code running in the project directory) at each stage, and what it does in
+response. Lines in **quotes** are what *you* type or say (dictation works fine); everything else
+is the harness acting. Approvals and merges are always yours.
+
+**Before you start:** an empty (or nearly empty) directory, `gh` authenticated, and the plugin
+installed (see "Installing in a new repo" step 1). You do **not** need a GitHub repo yet —
+kickoff creates one with you.
+
+### Why the order is what it is (read this once)
+
+The harness's quality gate is a **green verification baseline** — "the suite was green at N
+before my change". A brand-new project has no buildable code, so that baseline cannot exist yet.
+That is the whole reason kickoff's **issue #1 is a walking skeleton**: it stands up the project
+and its verification commands, and only once it's merged does a green baseline exist to record.
+So the sequence is deliberately: **kickoff → build issue #1 → `harness-setup` (baseline) → build
+everything else.** `harness-setup` runs *after* the first merge, not before. (Trade-off: this
+means one trip through the normal plan→implement→merge loop before the baseline is locked in. We
+chose this so kickoff stays code-free like every other skill — it never writes implementation,
+the pipeline does.)
+
+### Stage 1 — Kick off the project
+
+> **"Let's start a new project — I want to build &lt;your idea&gt;."** (paste a PRD, notes, or a
+> doc link if you have one; otherwise just describe it — and feel free to dictate by voice)
+
+The `project-kickoff` skill runs. It ingests anything you shared, then interviews you — adaptive
+depth, batched multiple-choice questions, going deeper only where the project is ambiguous or
+high-stakes. It then shows you a synthesized **project brief**, an opinionated
+**architecture/stack** (with rationale and the alternatives it rejected), a **methodology**, and
+the **proposed issue backlog**, all for a single approval.
+
+> **"Looks good — go ahead."** (or give feedback: *"use Postgres not SQLite, and drop the admin
+> panel from the MVP"* — it revises and re-presents)
+
+On approval it creates or selects the GitHub repo, installs the lifecycle labels, and writes the
+project-owned files (`.claude/settings.json`, `docs/PROJECT-BRIEF.md`, a drafted `CLAUDE.md`)
+plus the issue backlog — **issue #1 the walking skeleton**, the rest a focused first milestone.
+It leaves the files uncommitted for your review and runs the doctor (`check-harness.sh`); the
+only outstanding items will be baseline-related, which is expected.
+
+> **"Commit and push the setup files."** (kickoff never commits on its own)
+
+### Stage 2 — Plan and build the walking skeleton (issue #1)
+
+> **"Plan issue 1."**
+
+The `issue-planner` skill dispatches the read-only `planner` subagent, then posts an
+implementation plan as a comment on issue #1 and labels it `plan-proposed`. Review the plan on
+GitHub. To request changes, just comment on the issue and say *"revise the plan for issue 1"*; to
+accept it, approve it:
+
+```bash
+gh issue edit 1 --add-label plan-approved   # or click the label in the GitHub UI
+```
+
+> **"Implement issue 1."**
+
+The `issue-implementer` skill branches off the default branch, dispatches the `implementer`
+subagent to build the skeleton, **independently re-runs the verification commands**, then runs
+the `verifier` subagent against the plan — all before committing. It opens a PR (`Closes #1`) with
+the verification results. Review the PR and **merge it** on GitHub. After merging:
+
+```bash
+cleanup-after-merge.sh
+```
+
+Now the repo has buildable code and a passing verification suite for the first time.
+
+### Stage 3 — Record the baseline with harness-setup
+
+> **"Run harness-setup: audit the CLAUDE.md against the real code now that the skeleton is
+> merged, and record the green verification baseline."**
+
+The `harness-setup` skill runs the doctor, reviews the now-real `CLAUDE.md` against the actual
+scaffold (the verification commands kickoff drafted are no longer aspirational — they exist and
+pass), runs them to capture the **green baseline numbers**, and reports the repo **ready**. From
+here every implementation run compares against this baseline.
+
+### Stage 4 — Build the rest of the backlog
+
+From now on it's the steady-state loop, as many times as you like:
+
+> **"Plan the open issues."** → review the plans on GitHub → approve the ones you want
+> (`plan-approved`) → **"Implement the approved issues."** → review and merge each PR →
+> `cleanup-after-merge.sh`.
+
+That's the whole lifecycle: kickoff blazed the trail (repo, conventions, backlog, skeleton), and
+the planner → implementer → verifier loop walks it for every feature after.
+
 ## Label lifecycle
 
 *(no label)* → `plan-proposed` → *(human adds)* `plan-approved` → `pr-open`, with `impl-blocked`
@@ -162,6 +277,12 @@ seeds an empty one on install). Format: 1–3 lines per entry, dated, written as
 to a future agent.
 
 ## Installing in a new repo
+
+**Starting a brand-new project?** Do step 1 below to get the plugin, then just run the
+`project-kickoff` skill ("start a new project") — it does steps 2–3 *for* you (creates/selects
+the GitHub repo, lays down `.claude/settings.json`, installs labels, drafts `CLAUDE.md`) as part
+of the interview, and files the initial backlog. The manual steps below are for onboarding an
+*existing* repo.
 
 1. **Add the marketplace and install the plugin** (once per machine; private repos work via
    your existing `gh` credentials):
