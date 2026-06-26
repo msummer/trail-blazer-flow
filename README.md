@@ -1,4 +1,7 @@
-# Claude Code issue workflow — portable harness
+# Trail Blazer Flow - A Claude Code issue workflow & portable harness
+
+**Trail Blazer Flow** is a software development harness, designed as a plug-in for Claude
+Code, that supports an aagentic, GitHub issues driven development cycle. 
 
 A project-agnostic Claude Code setup for driving GitHub issues through **planning**,
 **implementation**, and **verification**, locally, on your Claude Code subscription (no API
