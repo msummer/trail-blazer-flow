@@ -32,7 +32,7 @@ or share).
 │   └── marketplace.json          # this repo doubles as its own marketplace
 ├── agents/
 │   ├── planner.md                # read-only planning subagent (Opus)
-│   ├── implementer.md            # code-writing subagent (Sonnet); no git/network
+│   ├── implementer.md            # code-writing subagent (Sonnet 5); no git/network
 │   └── verifier.md               # read-only plan-conformance reviewer (Opus); fresh context
 ├── skills/
 │   ├── project-kickoff/SKILL.md  # greenfield on-ramp: interview → brief + CLAUDE.md + repo + backlog
@@ -62,7 +62,7 @@ Three capability tiers, each placed where it pays:
 |------|-------|-----|
 | **Orchestrator** (the main session) | most capable available | judgment calls: proposing answers to open questions, verifying premises with measurements, reconciling staged files vs. reports, deciding when something is a blocker |
 | **planner** subagent | Opus | codebase research and design; one dispatch per issue, read-only |
-| **implementer** subagent | Sonnet | execution of a fully-resolved plan; cheap enough to run often (and in parallel) |
+| **implementer** subagent | Sonnet 5 | execution of a fully-resolved plan; cheap enough to run often (and in parallel) |
 | **verifier** subagent | Opus | adversarial plan-conformance review of the diff with fresh context — the generator/critic split; judgment-heavy, so it gets the stronger model |
 
 Two consequences are baked into the skills:
@@ -383,7 +383,7 @@ PR review are the real backstops.
 
 This repo **is the plugin and its own marketplace** (`.claude-plugin/plugin.json` +
 `marketplace.json`): skills + agents versioned together, installable per-project, with the
-agent model pins (`planner: opus`, `implementer: sonnet`, `verifier: opus`) travelling with
+agent model pins (`planner: opus`, `implementer: claude-sonnet-5`, `verifier: opus`) travelling with
 the plugin. Install/update flow is in "Installing in a new repo".
 
 Project-side files that never live in this repo: `CLAUDE.md`, `LESSONS.md`,

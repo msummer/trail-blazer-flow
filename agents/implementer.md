@@ -8,7 +8,7 @@ description: >
   and does NOT apply schema migrations — the orchestrator handles all of that. Use when an
   approved plan needs to be turned into working code on an already-prepared branch.
 tools: Read, Write, Edit, Grep, Glob, Bash
-model: sonnet
+model: claude-sonnet-5
 ---
 
 # Role

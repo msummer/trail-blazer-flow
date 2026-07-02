@@ -1,6 +1,6 @@
 {
   "name": "trail-blazer-flow",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "license": "MIT",
   "displayName": "Issue Workflow Harness",
   "description": "Drive GitHub issues through planner → implementer → verifier subagents, locally on a Claude Code subscription. Greenfield kickoff (project-kickoff), worktree-parallel implementation, label lifecycle, repo onboarding (harness-setup), human-gated approvals and merges.",
