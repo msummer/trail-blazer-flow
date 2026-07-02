@@ -4,7 +4,8 @@
 #
 # Checks everything mechanical the harness needs in a repo: gh/jq, the git remote,
 # the lifecycle labels, executable scripts, a CLAUDE.md with a verification section,
-# LESSONS.md, the settings.json toolchain allow-list, and branch protection.
+# LESSONS.md, the settings.json toolchain allow-list, the verification baseline
+# (.claude/BASELINE.md, machine-local), and branch protection.
 #
 # Read-only except two safe, idempotent fixes it applies automatically:
 #   - chmod +x on the harness's own scripts
@@ -69,11 +70,11 @@ fi
 if $gh_ready; then
   existing="$(gh label list --limit 200 --json name --jq '.[].name' 2>/dev/null || true)"
   missing=""
-  for l in plan-proposed plan-approved pr-open impl-blocked no-plan; do
+  for l in plan-proposed plan-approved pr-open impl-blocked no-plan no-auto-approve; do
     echo "$existing" | grep -qx "$l" || missing="$missing $l"
   done
   if [ -z "$missing" ]; then
-    ok "all 5 lifecycle labels exist"
+    ok "all 6 lifecycle labels exist"
   else
     bad "missing labels:$missing — run: setup-labels.sh"
   fi
@@ -146,8 +147,44 @@ if [ -f "$settings" ]; then
   else
     wrn "harness script commands (e.g. find-planning-work.sh) not found in the allow-list — copy the permissions block from the plugin's templates/repo-settings.json"
   fi
+  # Newer entries (added in v1.3): repos onboarded earlier won't have them, and a missing
+  # grant silently stalls unattended runs behind a permission prompt.
+  stale_entries=""
+  for e in "harness-status.sh" "gh pr list" "gh run view" "git rev-parse" "git worktree"; do
+    grep -q "Bash($e" "$settings" || stale_entries="$stale_entries '$e'"
+  done
+  if [ -n "$stale_entries" ]; then
+    wrn "allow-list predates v1.3 — missing:$stale_entries; re-copy the permissions block from the plugin's templates/repo-settings.json"
+  else
+    ok "allow-list includes the v1.3 entries (status script, gh pr list/run view, rev-parse, worktree)"
+  fi
 else
   bad "no .claude/settings.json — create one from the plugin's templates/repo-settings.json (permissions + enabledPlugins); plugins cannot ship permission grants"
+fi
+
+# --- verification baseline ------------------------------------------------------
+# BASELINE.md records THIS machine's last known-green run of the verification commands
+# on the default branch (full commit SHA + per-command results). It is machine-local
+# state: gitignored, written by harness-setup, refreshed by the implementer/cycle skills.
+baseline="$claude_dir/BASELINE.md"
+if [ -f "$baseline" ]; then
+  recorded="$(sed -nE 's/^- commit:[[:space:]]*([0-9a-f]+).*/\1/p' "$baseline" | head -1)"
+  current=""
+  [ -n "$default_branch" ] && current="$(git rev-parse "origin/$default_branch" 2>/dev/null || true)"
+  if [ -z "$recorded" ]; then
+    wrn "BASELINE.md present but no '- commit:' line found — re-run the harness-setup skill to re-record it"
+  elif [ -n "$current" ] && [ "$recorded" != "$current" ]; then
+    wrn "verification baseline is behind origin/$default_branch (recorded ${recorded:0:12}, remote at ${current:0:12}) — the next implementer/cycle run refreshes it"
+  else
+    ok "verification baseline recorded (BASELINE.md at ${recorded:0:12})"
+  fi
+  if git check-ignore -q "$baseline" 2>/dev/null; then
+    ok "BASELINE.md is gitignored (machine-local state)"
+  else
+    wrn "BASELINE.md is not gitignored — add '.claude/BASELINE.md' to .gitignore; it records this machine's green run and must not be committed (dirty-tree/merge noise otherwise)"
+  fi
+else
+  wrn "no verification baseline (.claude/BASELINE.md) — run the harness-setup skill to record one; implementation runs compare against it"
 fi
 
 # --- branch protection ----------------------------------------------------------

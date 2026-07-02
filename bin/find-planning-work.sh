@@ -39,8 +39,16 @@ candidates=$(gh issue list \
   --limit "$LIMIT" --jq '.[].number')
 
 needs_revision="[]"
+fetch_failures=0
 for n in $candidates; do
-  issue=$(gh issue view "$n" --json number,title,url,comments)
+  # Tolerate per-issue failures: one transient gh/API error must not kill the whole
+  # discovery run (matters for unattended/scheduled runs). The issue is simply
+  # reconsidered next time.
+  if ! issue=$(gh issue view "$n" --json number,title,url,comments 2>/dev/null); then
+    echo "warn: could not fetch issue #$n — skipping it this run" >&2
+    fetch_failures=$((fetch_failures+1))
+    continue
+  fi
   has_feedback=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" '
     .comments as $c
     | ([ $c[] | select(.body | contains($m)) | .createdAt ] | max) as $lastPlan
@@ -56,8 +64,17 @@ for n in $candidates; do
   fi
 done
 
+# candidate_count: how many plan-proposed issues were examined for feedback (used for
+# the truncation flag — if either query hit LIMIT, the buckets may be incomplete).
+candidate_count=$(printf '%s\n' $candidates | grep -c . || true)
+
 jq -n \
   --argjson initial "$needs_initial_plan" \
   --argjson revision "$needs_revision" \
+  --argjson ff "$fetch_failures" \
+  --argjson cc "$candidate_count" \
+  --argjson limit "$LIMIT" \
   '{needs_initial_plan: $initial, needs_revision: $revision,
-    counts: {initial: ($initial | length), revision: ($revision | length)}}'
+    counts: {initial: ($initial | length), revision: ($revision | length),
+             fetch_failures: $ff,
+             truncated: ((($initial | length) >= $limit) or ($cc >= $limit))}}'

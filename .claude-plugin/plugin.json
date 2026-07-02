@@ -1,9 +1,9 @@
 {
   "name": "trail-blazer-flow",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "license": "MIT",
   "displayName": "Issue Workflow Harness",
-  "description": "Drive GitHub issues through planner → implementer → verifier subagents, locally on a Claude Code subscription. Greenfield kickoff (project-kickoff), worktree-parallel implementation, label lifecycle, repo onboarding (harness-setup), human-gated approvals and merges.",
+  "description": "Drive GitHub issues through planner → implementer → verifier subagents, locally on a Claude Code subscription. Steady-state cycle skill (issue-cycle), persistent verification baseline, policy-gated plan auto-approval, bounded CI auto-fix, crash recovery, greenfield kickoff (project-kickoff), worktree-parallel implementation, label lifecycle, repo onboarding (harness-setup), human-gated merges always.",
   "author": { "name": "Mark Summer" },
   "repository": "https://github.com/msummer/trail-blazer-flow",
   "keywords": ["github", "issues", "workflow", "kickoff", "planner", "implementer", "verifier", "subagents"]

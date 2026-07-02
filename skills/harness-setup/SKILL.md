@@ -54,6 +54,13 @@ it without guessing?"**:
 2. **Setup command** — how dependencies are installed (needed for fresh checkouts/worktrees).
 3. **Conventions** — concrete enough that a plan can cite them: code style, patterns,
    security/data rules, schema/migration rules if there is a database.
+4. **Plan auto-approval policy (optional)** — if a section titled "Plan auto-approval policy"
+   exists, the issue-planner may auto-approve plans that meet its conditions (a hard floor
+   still always applies — see the plugin README). Explain the semantics to the user either
+   way: no section means every approval is manual. If they want more autonomy, offer to draft
+   a conservative starting policy (e.g. *"Auto-approve plans that are size S with no
+   data/schema impact and no security-sensitive risks"*) for their review — it's their trust
+   decision, in their file, and the `no-auto-approve` label opts individual issues back out.
 
 If `CLAUDE.md` is missing or thin: explore the repo (manifests, CI workflow files, test
 configs, existing docs) and **draft** the missing sections — or a full `CLAUDE.md` — and
@@ -67,21 +74,43 @@ On a clean default branch (run the setup command from CLAUDE.md first if depende
 installed), run each verification command and record the outcome — e.g. "pytest: 631 passed",
 "build: green".
 
-- **All green** → record the baseline numbers in your report. This is the reference every
-  future implementation run compares against.
-- **Anything red on the default branch** → report it prominently and stop short of declaring
-  readiness. A repo whose own gate is red on main cannot use the harness: the implementer
-  skill would misattribute the pre-existing failure to the subagent's change. Fixing it is the
-  human's call (it may be a known-flaky test — if so, that belongs in CLAUDE.md's verification
-  section as a documented exclusion, and in LESSONS.md).
+- **All green** → **persist the baseline to `.claude/BASELINE.md`** (don't just report it —
+  a baseline that lives only in this chat is gone next session). Write exactly this shape:
+
+  ```markdown
+  # Verification baseline (harness-maintained)
+
+  The last known-green run of the project's verification commands on the default branch,
+  on THIS machine. Written by harness-setup; refreshed automatically by the
+  issue-implementer / issue-cycle pre-flight whenever the default branch moves past the
+  recorded commit. Machine-local — keep it gitignored. Do not edit by hand.
+
+  - commit: <full 40-char SHA of the default-branch commit the suite ran on>
+  - branch: <default branch>
+  - date: <YYYY-MM-DD>
+  - results:
+    - `<command>`: <outcome, with counts where the tool reports them>
+  ```
+
+  Then make sure `.claude/BASELINE.md` is gitignored (append it to `.gitignore` if not — this
+  edit is part of the baseline step; tell the user it needs committing). It must never be
+  committed: it records one machine's state, and tracking it would dirty the tree on every
+  refresh.
+- **Anything red on the default branch** → report it prominently, write no baseline, and stop
+  short of declaring readiness. A repo whose own gate is red on main cannot use the harness:
+  the implementer skill would misattribute the pre-existing failure to the subagent's change.
+  Fixing it is the human's call (it may be a known-flaky test — if so, that belongs in
+  CLAUDE.md's verification section as a documented exclusion, and in LESSONS.md).
 
 ### 4. Readiness report
 
 Summarise for the user:
 
 - Doctor results (after fixes) — anything still WARN/FAIL and who owns it.
-- CLAUDE.md verdict — satisfies the contract / draft pending review / gaps named.
-- Verification baseline — the exact commands and their green outcomes.
+- CLAUDE.md verdict — satisfies the contract / draft pending review / gaps named — and whether
+  an auto-approval policy exists (and what it allows).
+- Verification baseline — the exact commands and their green outcomes, and confirmation that
+  `.claude/BASELINE.md` was written (and is gitignored).
 - Remaining human items — typically: branch protection, allow-list confirmation, CLAUDE.md
   draft approval.
 - An explicit closing line: whether the repo is **ready** for `issue-planner` /
@@ -94,7 +123,9 @@ Summarise for the user:
 - **Never commit or push.** Everything this skill writes (allow-list entries, LESSONS seed,
   an approved CLAUDE.md) is left in the working tree for the human to review and commit.
 - **Project-owned files need approval.** `CLAUDE.md` and `LESSONS.md` belong to the repo, not
-  the toolset — drafts are proposals. (The empty LESSONS seed from the doctor script is the
-  one exception: it contains nothing project-specific.)
+  the toolset — drafts are proposals. (Two exceptions: the empty LESSONS seed from the doctor
+  script, which contains nothing project-specific, and `.claude/BASELINE.md`, which is
+  harness-maintained machine state — writing and refreshing it is the harness's job, which is
+  why it stays gitignored.)
 - **Nothing project-specific goes into the toolset files** (skills, agents, this file). Repo
   facts belong in `CLAUDE.md`; gotchas in `LESSONS.md`.

@@ -21,5 +21,6 @@ ready=$(gh issue list \
   --json number,title,url \
   --limit "$LIMIT")
 
-jq -n --argjson ready "$ready" \
-  '{ready: $ready, counts: {ready: ($ready | length)}}'
+jq -n --argjson ready "$ready" --argjson limit "$LIMIT" \
+  '{ready: $ready,
+    counts: {ready: ($ready | length), truncated: (($ready | length) >= $limit)}}'

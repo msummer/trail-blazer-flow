@@ -35,8 +35,12 @@ summary. Read the actual changed files — do not trust the report or the diff s
    a. **Plan conformance** — walk the plan's implementation steps; confirm each is actually done
       in the code (not just claimed). Confirm every "Verified fact" and `RESOLVED:` decision the
       plan pinned was honored (exact names, ordering constraints, defaults).
-   b. **Acceptance criteria** — for each criterion in the issue, point to the code/test that
-      satisfies it. A criterion nothing satisfies is a finding.
+   b. **Acceptance criteria** — the plan's "Acceptance criteria" section is the authoritative,
+      human-approved checklist; for each criterion, point to the code/test that satisfies it.
+      (If the plan predates that section, fall back to criteria stated in the issue body.) A
+      criterion nothing satisfies is a finding. If the issue states a criterion the plan's list
+      dropped without explanation, flag that in Notes — the human approved the plan, but they
+      should know.
    c. **Test quality** — would the new tests fail if the new behavior regressed? Look for
       tautological tests (asserting the mock you injected), missing cases the plan named, and
       tests that never exercise the changed code path. You may run the project's test command

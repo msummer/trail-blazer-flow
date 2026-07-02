@@ -96,7 +96,11 @@ dozens of turns.
    systems to integrate with; data to store; **hosting/deployment target**.
 7. **Constraints** — timeline/milestones, team size & experience, budget, licensing.
 8. **Methodology expectations** — how work should proceed: issue granularity, testing
-   expectations, CI, what "done" means. (Feeds CLAUDE.md's verification section.)
+   expectations, CI, what "done" means. (Feeds CLAUDE.md's verification section.) Include the
+   autonomy question: should the harness auto-approve low-risk plans (a "Plan auto-approval
+   policy" section in CLAUDE.md — see the plugin README), or does the user want to review
+   every plan? Recommend starting manual and adding a conservative policy once trust is
+   established; per-issue opt-out via the `no-auto-approve` label exists either way.
 
 As you go, record each open point as BLOCKING / ADVISORY / DEFERRED. You don't need every
 answer to be the user's — where you have a well-grounded recommendation, **propose it** as the
@@ -156,7 +160,9 @@ user to review and commit; **never commit or push without explicit approval**):
 4. **`CLAUDE.md`** — drafted from the brief: conventions, architecture, and a **Verification**
    section. If the chosen stack's exact commands aren't pinned until the skeleton exists, state
    the intended commands and note that the walking-skeleton issue establishes and verifies them.
-   Reference `docs/PROJECT-BRIEF.md` for product context.
+   Reference `docs/PROJECT-BRIEF.md` for product context. If the user opted into plan
+   auto-approval during the interview, include the "Plan auto-approval policy" section they
+   agreed to; otherwise leave it out (absent section = fully manual approvals).
 5. **The issue backlog** (`gh issue create`, in dependency order). Shape:
    - **Issue #1 is the walking skeleton:** stand up the project skeleton, wire the toolchain,
      and make a thin end-to-end slice (e.g. "app boots / one endpoint returns / one test runs")

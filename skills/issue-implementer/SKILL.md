@@ -43,8 +43,11 @@ The end state for each issue is **an open PR awaiting human review** — never a
 - **Never merge** (`gh pr merge` is denied) and **never push to the default branch**. One issue →
   one `claude/<n>-<slug>` branch → one PR.
 - **The subagent writes code; you do every git and `gh` command.**
-- **If the working tree is dirty at the start, STOP** and tell the user — do not risk clobbering
-  uncommitted work.
+- **A dirty working tree is only recoverable when it's clearly the harness's own.** If the
+  dirty tree is on a `claude/<n>-*` branch, run the crash recovery in step 0. Anywhere else
+  (the default branch, any human branch), STOP and tell the user — do not risk clobbering
+  uncommitted work. Changes to `.claude/LESSONS.md` alone never count as dirty: that's harness
+  bookkeeping, carried into the next harness commit (see step 2e).
 
 ## Procedure
 
@@ -52,13 +55,52 @@ The end state for each issue is **an open PR awaiting human review** — never a
 
 ```bash
 gh auth status                 # must be authenticated
-git status --porcelain         # MUST be empty; if not, stop and tell the user
+git status --porcelain         # see the dirty-tree rules below
 git fetch origin
 ```
 Determine the repo's default branch (e.g. via `gh repo view --json defaultBranchRef`); use it
-everywhere this doc says "the default branch". Then install dependencies using the project's
-setup command from CLAUDE.md (e.g. `pnpm install`, `npm install`, `bundle install`). If the
-project has no dependency step, skip this.
+everywhere this doc says "the default branch".
+
+**Dirty tree → crash recovery or stop.** If `git status --porcelain` is non-empty (ignoring
+`.claude/LESSONS.md`, which is harness bookkeeping):
+
+- **On a `claude/<n>-*` branch** → a previous run died mid-issue. Recover mechanically:
+  `git add -A && git commit -m "wip: interrupted run (#<n>)"`, post a short comment on issue
+  `<n>` ("a previous implementation run was interrupted; work preserved on `<branch>`; the
+  issue will be re-attempted"), check out the default branch, and continue the run. Do NOT
+  label `impl-blocked` — the issue re-enters the queue and step 2b's branch logic resets the
+  wip branch for a fresh attempt. Note the recovery in your summary.
+- **Anywhere else** → STOP and tell the user. That's uncommitted human work; it is never yours
+  to move.
+
+**Sync & hygiene:** run
+
+```bash
+cleanup-after-merge.sh --fix
+```
+
+(fast-forwards the default branch when checked out — check it out first if you aren't on it and
+the tree is clean; prunes merged `claude/*` branches; repairs stale `pr-open` labels with
+audited comments).
+
+**Baseline refresh.** Read `.claude/BASELINE.md` (machine-local; format: a `- commit:` line
+with the full SHA of the last known-green default-branch commit, plus per-command results). If
+it's missing, warn the user to run the harness-setup skill, and proceed — you still have
+CLAUDE.md's verification commands. If the default branch tip now differs from the recorded
+commit (merges landed since the last green run), re-establish it **before implementing
+anything**: on the clean default branch, run the project's verification commands from
+CLAUDE.md.
+
+- **Green** → rewrite `.claude/BASELINE.md` with the new commit SHA, today's date, and each
+  command's outcome (e.g. "pytest: 631 passed"). This is also the "two green PRs can still
+  compose badly" check, done mechanically.
+- **Red** → STOP the whole run and report prominently. The default branch itself is broken;
+  implementing on top of it would make every failure unattributable. Fixing main is the
+  human's call.
+
+Then install dependencies using the project's setup command from CLAUDE.md (e.g.
+`pnpm install`, `npm install`, `bundle install`). If the project has no dependency step, skip
+this.
 
 ### 1. Find the work
 
@@ -76,7 +118,10 @@ gh issue view <number> --json number,title,body,url,comments
 ```
 Find the latest comment containing the `<!-- planner-plan -->` marker — that is the approved
 plan. If there is no such comment, skip the issue and warn (it's labelled approved but has no
-plan; the human should check).
+plan; the human should check). Also read every comment posted *after* that plan: human comments
+there are binding context (late instructions, clarified decisions) — restate them as
+`RESOLVED:` decisions in the dispatch below. If one contradicts the approved plan outright,
+treat the issue as mislabelled and ask the human instead of dispatching.
 
 b. **Branch off a fresh default branch:**
 ```bash
@@ -87,8 +132,15 @@ Build a slug from the title (lowercase; non-alphanumerics → hyphens; trim; ~40
 ```bash
 git checkout -b "claude/<number>-<slug>"
 ```
-If the branch already exists, stop and warn for that issue (likely a previous run) rather than
-guessing.
+**If a `claude/<number>-*` branch already exists**, decide by what's on it
+(`git log <default-branch>..<branch> --format=%s`):
+- **Every unique commit is a `wip:` commit** → leftovers of a blocked or interrupted attempt
+  (the findings live in the issue's comments — carry them into the dispatch as context).
+  Delete it (`git branch -D <branch>`) and create the branch fresh.
+- **Any non-wip commit** → real prior work. If an OPEN PR exists for the branch, skip the
+  issue and warn (it should be labelled `pr-open`; the label was probably removed by mistake).
+  Otherwise stop and warn for that issue — reusing or discarding committed work is the
+  human's call.
 
 c. **Dispatch the `implementer` subagent** (Task tool). The implementer runs on a smaller model
    than you: the prompt must contain **every decision and verified fact** so it never has to
@@ -97,7 +149,9 @@ c. **Dispatch the `implementer` subagent** (Task tool). The implementer runs on 
    - the **full approved plan**, including its "Verified facts" section;
    - **resolved answers to ALL open questions** — the human's answer for each BLOCKING question,
      and each ADVISORY question's accepted default (or the human's override), restated as
-     `RESOLVED:` decisions, not questions;
+     `RESOLVED:` decisions, not questions. Decisions the plan already carries as `RESOLVED
+     (orchestrator-proposed):` were accepted when the human approved the plan — pass them
+     through as-is;
    - relevant entries from `.claude/LESSONS.md` (if the project has one);
    - the standing caveat *"Line numbers and code excerpts in the plan are from when it was
      written — verify locally; if the code has drifted, trust the live code and note the drift
@@ -109,12 +163,18 @@ c. **Dispatch the `implementer` subagent** (Task tool). The implementer runs on 
 
 d. **On `status: complete`:** independently re-run the project's verification commands (from
    CLAUDE.md) as the authoritative gate — the subagent may be mistaken. Run the same checks that
-   define "done" for this repo. If they fail, treat it as a blocker (step f).
+   define "done" for this repo. If they fail, treat it as a blocker (step f). Compare the
+   results against `.claude/BASELINE.md`: every check green at baseline must still be green,
+   and counts should not drop without explanation (fewer tests passing than baseline usually
+   means tests were deleted or skipped — investigate before proceeding; a legitimate drop, e.g.
+   a planned test removal, must be explained by the plan or the report).
 
 e. **Dispatch the `verifier` subagent** (Task tool, the plugin's `agents/verifier.md`) — the semantic
-   gate the mechanical checks can't provide. Its prompt must contain: the issue (with acceptance
-   criteria), the full approved plan (Verified facts + `RESOLVED:` decisions included), the
-   implementer's report, the output of `git diff <default-branch> --stat`, and the instruction
+   gate the mechanical checks can't provide. Its prompt must contain: the issue, the full
+   approved plan (Acceptance criteria + Verified facts + `RESOLVED:` decisions included), the
+   implementer's report, the output of `git diff <default-branch>...HEAD --stat` (three-dot —
+   diff from the merge base, so drift on the default branch never pollutes it), and the
+   instruction
    *"Verify this implementation against the plan and acceptance criteria following your process.
    Return your verdict."*
    - **Verdict `pass`:** carry its "Notes for the PR reviewer" into the PR body, proceed to
@@ -135,10 +195,12 @@ git status --porcelain   # review this list
 ```
      Compare the staged paths against the subagent report's "Files changed" list. Every staged
      path must be accounted for by the report (or be an obvious consequence of it, e.g. a
-     lockfile). If anything unexpected is staged — test artifacts, stray outputs, files outside
-     the plan's scope — unstage it (`git restore --staged <path>`) and investigate; if it can't
-     be explained, treat the issue as blocked rather than committing files the report can't
-     account for. Once the staged set is clean, commit, push, open the PR, and label the issue:
+     lockfile — and `.claude/LESSONS.md` is always legitimate: harness bookkeeping rides along
+     with the next commit). If anything unexpected is staged — test artifacts, stray outputs,
+     files outside the plan's scope — unstage it (`git restore --staged <path>`) and
+     investigate; if it can't be explained, treat the issue as blocked rather than committing
+     files the report can't account for. Once the staged set is clean, commit, push, open the
+     PR, and label the issue:
 ```bash
 git commit -m "feat: <concise title> (#<number>)"   # use the project's commit convention
 git push -u origin "claude/<number>-<slug>"
@@ -157,9 +219,24 @@ gh issue edit <number> --add-label pr-open
 ```bash
 gh pr checks "claude/<number>-<slug>" --watch
 ```
-     Record the outcome (pass / fail / no checks configured) for the summary table. If checks
-     fail, do not attempt fixes mid-queue — note the failure in the summary and on the issue so
-     the human decides. **Distill the lesson:** when a failure (CI or your re-verification)
+     Record the outcome (pass / fail / no checks configured) for the summary table.
+
+     **Red CI → one bounded fix attempt.** The PR is not merged, so a fix here is exactly as
+     safe as the kickback loop. First classify the failure (fetch the failing log, e.g.
+     `gh run view <run-id> --log-failed`):
+     - **Caused by this PR** (lint/test/build failures traceable to the changed code, incl.
+       environment differences like a CI-only strictness flag) → re-dispatch the
+       **implementer** on the branch with the plan, its report, the failing log excerpt, and
+       *"Fix ONLY this CI failure. Do not expand scope. Return your report."* Re-run the
+       mechanical checks, re-dispatch the **verifier** (prior context included, scope: the
+       fix), then commit (`fix: <what> (CI, #<number>)`) and push — CI re-runs on the new
+       commit; watch it again. **Maximum ONE CI-fix attempt per issue** (it does not count
+       toward the kickback limit). Still red → note the failure in the summary and on the
+       issue; the human decides.
+     - **Not caused by this PR** (infra flake, unrelated breakage, quota) → don't burn the
+       attempt; note it in the summary and on the issue so the human decides.
+
+     **Distill the lesson:** when a failure (CI or your re-verification)
      traces to a project-specific gotcha the subagent couldn't have known, append it to
      `.claude/LESSONS.md` (1–3 lines, dated, written as an instruction) and include it in every
      subsequent dispatch this run. Finally, return to the default branch:
@@ -172,7 +249,7 @@ f. **On `status: blocked`** (or failed mechanical checks, or a verifier fail tha
    flag the issue, and reset the tree:
 ```bash
 git add -A
-git commit -m "wip: blocked — <short reason> (#<number>)"   # local only, not pushed
+git commit -m "wip: blocked — <short reason> (#<number>)"   # local only, not pushed (skip if nothing changed)
 gh issue comment <number> --body-file <tempfile>            # blocker explanation (incl. verifier findings, if any)
 gh issue edit <number> --add-label impl-blocked
 git checkout <default-branch>
@@ -184,7 +261,10 @@ g. Move to the next issue (back to step 2a).
 
 Report a table: issue number, title, outcome (PR opened → link / blocked → branch name),
 verification rounds (1 = clean first pass; 2–3 = kickbacks happened — say what the verifier
-caught), CI status (pass / fail / no checks), and any issues skipped and why.
+caught), CI status (pass / fixed after 1 attempt / fail / no checks), and any issues skipped
+and why. Also note: any crash recovery or wip-branch reset from pre-flight/step 2b, whether the
+baseline was refreshed (and its new numbers), and whether discovery reported `truncated: true`
+(more approved issues exist than the query returned — run again after this batch).
 
 ## Worktree-parallel mode (optional)
 
@@ -231,18 +311,16 @@ f. Everything else is unchanged: same labels, same PR contract, same CI watch, s
 
 ## Notes
 
-- **After the human merges:** run the cleanup script —
-```bash
-cleanup-after-merge.sh
-```
-  It syncs the default branch, deletes local `claude/*` branches whose PRs merged, and reports
-  label hygiene problems (issues still `pr-open` whose PR merged but didn't auto-close, and
-  stale `pr-open` from PRs closed without merging). Then re-run the project's verification
-  command once on merged main — two green PRs can still compose badly.
+- **After the human merges:** nothing is required — this skill's pre-flight runs
+  `cleanup-after-merge.sh --fix` and the baseline refresh, which together cover branch sync,
+  branch/label hygiene, and re-verifying merged main. Running `cleanup-after-merge.sh` by hand
+  right after a merge is still fine (it's idempotent) if the human wants the tidy-up
+  immediately.
 - **Stale `pr-open` recovery:** if a PR is closed *without* merging, the issue keeps its
-  `pr-open` label and silently never re-enters the queue. To requeue it, remove the `pr-open`
-  label (and delete the old `claude/<n>-<slug>` branch so the branch-exists check doesn't trip).
-  The cleanup script detects this case.
+  `pr-open` label and silently never re-enters the queue. The pre-flight's
+  `cleanup-after-merge.sh --fix` repairs this automatically (removes the label with an audit
+  comment); step 2b then decides what to do with the old branch — wip-only branches are reset,
+  branches with real commits go to the human.
 - **Parallelism:** supported via the worktree-parallel mode above, gated on pairwise-disjoint
   Affected areas. Sequential remains the default and the fallback whenever eligibility is
   unclear.

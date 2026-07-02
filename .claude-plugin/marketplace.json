@@ -5,7 +5,7 @@
     {
       "name": "trail-blazer-flow",
       "source": "./",
-      "description": "Planner → implementer → verifier workflow for GitHub issues, with worktree-parallel mode and repo onboarding."
+      "description": "Planner → implementer → verifier workflow for GitHub issues, with a steady-state cycle skill, policy-gated auto-approval, worktree-parallel mode, and repo onboarding."
     }
   ]
 }
