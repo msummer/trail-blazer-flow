@@ -33,7 +33,7 @@ create_or_update "plan-approved"   "1D76DB" "Plan approved; ready for the implem
 create_or_update "pr-open"         "5319E7" "PR opened for this issue; awaiting human review/merge"
 create_or_update "impl-blocked"    "B60205" "Implementation hit a blocker; needs human input (remove to retry)"
 create_or_update "no-plan"         "EEEEEE" "Excluded from the planning workflow; the planner ignores this issue"
-create_or_update "no-auto-approve" "FBCA04" "Never auto-approve this issue's plans; approval must be manual (only relevant when CLAUDE.md defines an auto-approval policy)"
+create_or_update "no-auto-approve" "FBCA04" "Never auto-approve this issue's plans; approval must be manual"
 
 echo "Labels are set up."
 echo "Note: the old 'plan-changes-requested' label is no longer used. Delete it if you like:"
