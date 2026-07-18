@@ -27,7 +27,7 @@ set -euo pipefail
 FIX=false
 [[ "${1:-}" == "--fix" ]] && FIX=true
 
-default_branch=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+default_branch=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name | tr -d '\r')
 current=$(git branch --show-current)
 
 echo "== sync ${default_branch} =="
@@ -44,7 +44,7 @@ if [[ -z "$branches" ]]; then
   echo "none"
 else
   for b in $branches; do
-    state=$(gh pr view "$b" --json state --jq .state 2>/dev/null || echo "NO_PR")
+    state=$(gh pr view "$b" --json state --jq .state 2>/dev/null | tr -d '\r' || echo "NO_PR")
     if [[ "$state" == "MERGED" ]]; then
       if [[ "$b" == "$current" ]]; then
         echo "SKIP    $b — currently checked out; switch to ${default_branch} and re-run"

@@ -56,9 +56,12 @@ else
 fi
 
 # --- default branch -----------------------------------------------------------
+# tr -d '\r' on gh outputs used in comparisons/paths: gh itself emits LF, but a
+# CRLF-translating layer between gh and Bash (some Windows/WSL interop setups) would
+# otherwise poison exact-match greps and command arguments.
 default_branch=""
 if $gh_ready; then
-  default_branch="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null || true)"
+  default_branch="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null | tr -d '\r' || true)"
 fi
 if [ -n "$default_branch" ]; then
   ok "default branch: $default_branch"
@@ -68,7 +71,7 @@ fi
 
 # --- lifecycle labels ---------------------------------------------------------
 if $gh_ready; then
-  existing="$(gh label list --limit 200 --json name --jq '.[].name' 2>/dev/null || true)"
+  existing="$(gh label list --limit 200 --json name --jq '.[].name' 2>/dev/null | tr -d '\r' || true)"
   missing=""
   for l in plan-proposed plan-approved pr-open impl-blocked no-plan no-auto-approve; do
     echo "$existing" | grep -qx "$l" || missing="$missing $l"
@@ -84,17 +87,28 @@ fi
 
 # --- harness scripts executable (auto-fix) -------------------------------------
 # The harness scripts live alongside this one (the plugin's bin/, or .claude copies).
-fixed=""
 script_dir="$(cd "$(dirname "$0")" && pwd)"
-for s in "$script_dir"/*.sh; do
-  [ -f "$s" ] || continue
-  if [ ! -x "$s" ]; then chmod +x "$s" && fixed="$fixed $(basename "$s")"; fi
-done
-if [ -n "$fixed" ]; then
-  ok "harness scripts executable (auto-fixed:$fixed)"
-else
-  ok "harness scripts are executable"
-fi
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    # NTFS has no POSIX exec bit: Git Bash emulates one from the shebang, so chmod is a
+    # no-op here and a "fixed it" message would be theatre. The real Windows risks —
+    # CRLF corruption and bin/ not on the PATH — are both exercised by the fact that
+    # this script is running at all (see the README's Windows smoke test).
+    ok "harness scripts runnable (Windows: exec bits are emulated from the shebang; chmod check not applicable)"
+    ;;
+  *)
+    fixed=""
+    for s in "$script_dir"/*.sh; do
+      [ -f "$s" ] || continue
+      if [ ! -x "$s" ]; then chmod +x "$s" && fixed="$fixed $(basename "$s")"; fi
+    done
+    if [ -n "$fixed" ]; then
+      ok "harness scripts executable (auto-fixed:$fixed)"
+    else
+      ok "harness scripts are executable"
+    fi
+    ;;
+esac
 
 # --- CLAUDE.md ----------------------------------------------------------------
 if [ -f "$root/CLAUDE.md" ]; then
@@ -189,7 +203,7 @@ fi
 
 # --- branch protection ----------------------------------------------------------
 if $gh_ready && [ -n "$default_branch" ]; then
-  repo_slug="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)"
+  repo_slug="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null | tr -d '\r' || true)"
   if [ -n "$repo_slug" ] && gh api "repos/$repo_slug/branches/$default_branch/protection" >/dev/null 2>&1; then
     ok "branch protection enabled on $default_branch"
   else
