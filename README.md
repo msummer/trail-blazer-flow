@@ -540,6 +540,22 @@ confirm on first run: the harness invokes its scripts by bare name (e.g. `check-
 which assumes Claude Code puts the plugin's `bin/` on the Bash PATH — if a script "isn't found",
 that's the cause. macOS and Linux need nothing beyond the three prerequisites above.
 
+Windows specifics worth knowing:
+
+- **WSL is its own machine.** `gh` inside WSL has its own credential store — run `gh auth
+  login` there even if the Windows-side `gh` is already authenticated. And keep repos in the
+  WSL filesystem (`~/...`), not under `/mnt/c/...`: NTFS-mounted repos are dramatically slower
+  and reintroduce the exec-bit and line-ending quirks the harness otherwise avoids.
+- **Prefer forward-slash paths** in anything that reaches a Bash command — worktree paths in
+  parallel mode, `--body-file` temp files. Git Bash accepts `C:/Users/...` and `/c/Users/...`;
+  backslash paths get mangled by quoting. (`mktemp` works in Git Bash and yields safe temp
+  paths.) Python venvs on Windows put the interpreter at `.venv/Scripts/python.exe`, not
+  `.venv/bin/python` — the worktree-parallel instructions account for this.
+- **The doctor's exec-bit check is informational on Windows.** NTFS has no POSIX exec bit; Git
+  Bash runs the scripts via their shebang, so the check reports that and moves on. The
+  harness's `gh`-output parsing also strips stray `\r` defensively, in case a CRLF-translating
+  layer sits between `gh` and Bash.
+
 ### Windows: first-run smoke test
 
 Before relying on the harness on Windows, run this 30-second check from **Git Bash or WSL** (in

@@ -282,15 +282,20 @@ git worktree add "../<repo-dirname>-wt-<number>" -b "claude/<number>-<slug>" <de
 b. **Dispatch all implementer subagents in one batch** (they run concurrently). Each prompt is
    exactly as in step 2c, PLUS: *"Work EXCLUSIVELY inside <absolute worktree path>. Every file
    you read, write, or edit and every command you run must use that path — never the main
-   repository checkout."* Include the worktree path when stating verification commands. Also
+   repository checkout."* Include the worktree path when stating verification commands. On
+   Windows, write every path you embed in a prompt or command with **forward slashes**
+   (`C:/Users/...` or `/c/Users/...`) — commands run under Git Bash, where backslash paths get
+   mangled by quoting. Also
    name the sibling issues' affected files as explicitly out of scope ("issues <n>, <m> are
    being implemented concurrently — do NOT touch <their files>") so a subagent that discovers
    adjacent work doesn't drift into a concurrent issue's territory.
 
 c. **Dependency caveat (critical):** ignored files don't exist in a fresh worktree — virtualenvs,
    `node_modules`, `.env`. Tell each subagent how to verify without reinstalling: e.g. for a
-   Python project, run the MAIN checkout's venv binary against the worktree's tests
-   (`cd <worktree>/api && <main-repo>/api/.venv/bin/python -m pytest`). If a plan touches UI and
+   Python project, run the MAIN checkout's venv interpreter against the worktree's tests
+   (`cd <worktree>/api && <main-repo>/api/.venv/bin/python -m pytest` — on Windows the venv's
+   interpreter is `.venv/Scripts/python.exe`, not `.venv/bin/python`; state the exact path in
+   the prompt so the smaller model doesn't have to know this). If a plan touches UI and
    needs `npm install`/`npm run build` per worktree, prefer sequential mode for that issue
    instead of duplicating installs.
 

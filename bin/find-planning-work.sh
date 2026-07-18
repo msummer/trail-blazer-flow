@@ -36,7 +36,7 @@ needs_initial_plan=$(gh issue list \
 candidates=$(gh issue list \
   --search "is:open is:issue label:plan-proposed -label:plan-approved -label:no-plan" \
   --json number \
-  --limit "$LIMIT" --jq '.[].number')
+  --limit "$LIMIT" --jq '.[].number' | tr -d '\r')
 
 needs_revision="[]"
 fetch_failures=0

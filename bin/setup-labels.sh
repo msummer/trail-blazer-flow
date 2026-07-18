@@ -21,7 +21,7 @@ set -euo pipefail
 
 create_or_update() {
   local name="$1" color="$2" desc="$3"
-  if gh label list --limit 200 --json name --jq '.[].name' | grep -qx "$name"; then
+  if gh label list --limit 200 --json name --jq '.[].name' | tr -d '\r' | grep -qx "$name"; then
     gh label edit "$name" --color "$color" --description "$desc"
   else
     gh label create "$name" --color "$color" --description "$desc"
