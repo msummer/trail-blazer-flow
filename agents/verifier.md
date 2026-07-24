@@ -8,7 +8,7 @@ description: >
   the implementation being written. Read-only: it never edits files, never runs git mutations,
   never pushes. Returns a structured pass/fail verdict with actionable findings.
 tools: Read, Grep, Glob, Bash
-model: opus
+model: claude-opus-5
 ---
 
 # Role

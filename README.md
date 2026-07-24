@@ -32,9 +32,9 @@ or share).
 │   ├── plugin.json               # plugin manifest (semver version field — bump it to publish an update)
 │   └── marketplace.json          # this repo doubles as its own marketplace
 ├── agents/
-│   ├── planner.md                # read-only planning subagent (Opus)
+│   ├── planner.md                # read-only planning subagent (Opus 5)
 │   ├── implementer.md            # code-writing subagent (Sonnet 5); no git/network
-│   └── verifier.md               # read-only plan-conformance reviewer (Opus); fresh context
+│   └── verifier.md               # read-only plan-conformance reviewer (Opus 5); fresh context
 ├── skills/
 │   ├── project-kickoff/SKILL.md  # greenfield on-ramp: interview → brief + CLAUDE.md + repo + backlog
 │   ├── harness-setup/SKILL.md    # one-time repo onboarding: doctor + CLAUDE.md audit + baseline
@@ -64,9 +64,9 @@ Three capability tiers, each placed where it pays:
 | Role | Model | Why |
 |------|-------|-----|
 | **Orchestrator** (the main session) | most capable available | judgment calls: proposing answers to open questions, verifying premises with measurements, reconciling staged files vs. reports, deciding when something is a blocker |
-| **planner** subagent | Opus | codebase research and design; one dispatch per issue, read-only |
+| **planner** subagent | Opus 5 | codebase research and design; one dispatch per issue, read-only |
 | **implementer** subagent | Sonnet 5 | execution of a fully-resolved plan; cheap enough to run often (and in parallel) |
-| **verifier** subagent | Opus | adversarial plan-conformance review of the diff with fresh context — the generator/critic split; judgment-heavy, so it gets the stronger model |
+| **verifier** subagent | Opus 5 | adversarial plan-conformance review of the diff with fresh context — the generator/critic split; judgment-heavy, so it gets the stronger model |
 
 Two consequences are baked into the skills:
 1. **Ambiguity is resolved top-down, before execution.** Plans classify questions
@@ -504,7 +504,7 @@ gate is never delegated — a bad auto-approval costs a wasted PR, not a bad mer
 
 This repo **is the plugin and its own marketplace** (`.claude-plugin/plugin.json` +
 `marketplace.json`): skills + agents versioned together, installable per-project, with the
-agent model pins (`planner: opus`, `implementer: claude-sonnet-5`, `verifier: opus`) travelling with
+agent model pins (`planner: claude-opus-5`, `implementer: claude-sonnet-5`, `verifier: claude-opus-5`) travelling with
 the plugin. Install/update flow is in "Installing in a new repo".
 
 Project-side files that never live in this repo: `CLAUDE.md`, `LESSONS.md`, `BASELINE.md`,

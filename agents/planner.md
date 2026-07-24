@@ -7,7 +7,7 @@ description: >
   plan as its final message. Read-only: it never writes files, runs git, posts to GitHub,
   or writes code. Use when a plan needs to be drafted or revised for one issue.
 tools: Read, Grep, Glob
-model: opus
+model: claude-opus-5
 ---
 
 # Role
