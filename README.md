@@ -179,7 +179,9 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    fix attempt** (implementer → mechanical checks → verifier → push; the PR isn't merged, so
    this is as safe as the kickback loop); still red — or not the PR's fault — is noted on the
    issue for the human. If the failure was a project gotcha, **append it to `LESSONS.md`**.
-8. Never merges. Blockers → local `wip:` branch + `impl-blocked` label + explanatory comment.
+8. Never merges (merging is the human's, or the cycle's merge pass under an opt-in policy —
+   see "The CLAUDE.md contract"). Blockers → local `wip:` branch + `impl-blocked` label +
+   explanatory comment.
 
 **Worktree-parallel mode:** when 2+ approved plans have pairwise **disjoint Affected areas**
 (production + test files), the orchestrator may create one git worktree per issue and dispatch
@@ -202,10 +204,12 @@ two green PRs can still compose badly, and that check is now mechanical. Running
 
 The `issue-cycle` skill composes the above into a single bounded pass: pre-flight (cleanup +
 baseline refresh) → planning pass (plans, revisions, proposed answers, policy auto-approvals) →
-implementation pass (everything `plan-approved`) → a closing report via `harness-status.sh`
-that splits the world into *what the cycle did* and *what waits on the human* (plans to review,
-PRs to merge, blocked issues). It adds no authority — the same gates apply — it just removes
-the hand-cranking between stages. Pair it with `/loop` or a scheduled routine for unattended
+implementation pass (everything `plan-approved`) → merge pass (only when the repo opts in via
+a CLAUDE.md "Merge autonomy policy" *and* the human has lifted the `gh pr merge` deny; one PR
+at a time, re-verified between, audited in the report) → a closing report via
+`harness-status.sh` that splits the world into *what the cycle did* and *what waits on the
+human* (plans to review, PRs to merge, blocked issues). It adds no authority beyond what the
+repo's CLAUDE.md delegates — it just removes the hand-cranking between stages. Pair it with `/loop` or a scheduled routine for unattended
 operation; each invocation stays one bounded pass, and an empty cycle reports "all quiet" in
 one line. With a conservative auto-approval policy in place, the unattended flow becomes:
 issues in → verifier-clean PRs out, with the human reviewing PRs and answering BLOCKING
@@ -216,7 +220,8 @@ questions.
 This is the end-to-end story of starting a project on the harness — exactly what you say to the
 orchestrator (Claude Code running in the project directory) at each stage, and what it does in
 response. Lines in **quotes** are what *you* type or say (dictation works fine); everything else
-is the harness acting. Approvals and merges are always yours.
+is the harness acting. Approvals and merges are yours by default (each is delegable only
+through an explicit policy section you write into CLAUDE.md — see "The CLAUDE.md contract").
 
 **Before you start:** an empty (or nearly empty) directory, `gh` authenticated, and the plugin
 installed (see "Installing in a new repo" step 1). You do **not** need a GitHub repo yet —
@@ -296,7 +301,8 @@ implementation run compares against this baseline, and refreshes it as merges la
 From now on it's the steady-state loop, as many times as you like:
 
 > **"Run the cycle."** → review the plans it posted (approve with `plan-approved`, or let a
-> CLAUDE.md auto-approval policy handle the low-risk ones) → review and merge the PRs →
+> CLAUDE.md auto-approval policy handle the low-risk ones) → review and merge the PRs (or let
+> a CLAUDE.md merge autonomy policy land the low-risk ones once you've opted in) →
 > **"Run the cycle"** again.
 
 (The stages are still available individually — **"Plan the open issues"** /
@@ -312,7 +318,9 @@ the planner → implementer → verifier loop walks it for every feature after.
 `pr-open`, with `impl-blocked` for issues needing human input, `no-plan` to opt an issue out of
 planning entirely (tracking/discussion/question issues), and `no-auto-approve` to keep an
 individual issue's approval manual even when CLAUDE.md defines an auto-approval policy. Humans
-gate twice: plan approval (unless delegated via the policy) and PR merge (always).
+gate twice: plan approval and PR merge — each manual unless the repo's CLAUDE.md explicitly
+delegates it (see "The CLAUDE.md contract"; merge delegation additionally requires the human
+to lift the `gh pr merge` deny).
 
 ## The CLAUDE.md contract (required)
 
@@ -338,6 +346,28 @@ subagents need:
    in), every auto-approval is audited with an issue comment, and the `no-auto-approve` label
    opts any issue out. **No section means no auto-approval** — this is a trust decision that
    belongs in your file, not the plugin's.
+
+5. **Merge autonomy policy** (optional) — a section titled exactly "Merge autonomy policy"
+   stating which PRs the `issue-cycle` merge pass may merge on your behalf, e.g.:
+
+   ```markdown
+   ## Merge autonomy policy
+   The cycle may merge harness PRs whose plan was approved, whose verifier verdict
+   is pass, and whose CI is green — plus Dependabot patch/minor updates with green
+   CI. Never: anything touching `db/`, auth, CI/CD, or dependency majors.
+   ```
+
+   Activation is a **double opt-in**: the section alone does nothing until you also remove
+   `Bash(gh pr merge:*)` from the deny list in `.claude/settings.json` (and add it to the
+   allow list, or unattended runs stall on the permission prompt). Both edits are yours,
+   never an agent's — and because the deny is machine-local state in a checked-in file, you
+   can activate one machine at a time by leaving the removal uncommitted. The merge pass's
+   hard floor always applies on top (standard-flow PRs only, CI green on the head commit,
+   never the governance surface — CLAUDE.md, `.claude/`, policy/ADR docs — nothing flagged
+   for human decision, one merge at a time with re-verification between, every merge audited
+   in the cycle report). **No section means no autonomous merges** — behavior is exactly the
+   pre-1.5 default. Recommended pairing: branch protection with required status checks, so
+   the policy has a technical rail under it, not just prompt adherence.
 
 The subagents read `CLAUDE.md` at the start of every task. A thin `CLAUDE.md` leaves them
 guessing — it is the real input that makes the harness work well in a given repo.
@@ -458,6 +488,10 @@ migrated. For **≤ v1.2 → v1.3** specifically, expect three items:
    persist `.claude/BASELINE.md` and its `.gitignore` entry. Until then, runs warn and proceed
    without baseline comparisons.
 
+For **v1.4 → v1.5** nothing migrates: merge autonomy is pure opt-in, and every repo without a
+CLAUDE.md "Merge autonomy policy" section behaves exactly as before (PR merge always human).
+To opt a repo in, see the double opt-in under "The CLAUDE.md contract" item 5.
+
 Optional, not required: add a **"Plan auto-approval policy"** section to `CLAUDE.md` if you
 want the planner to approve low-risk plans for you — without it, behavior stays fully manual,
 exactly as before. Nothing else migrates: existing issues, labels, and plan comments keep
@@ -470,7 +504,8 @@ Plugins cannot ship permission rules, so each target repo keeps a thin, checked-
 `.claude/settings.json` — start from `templates/repo-settings.json`. It pre-allows the harness
 scripts (bare names — `bin/` is on the PATH), the `gh`/`git` commands the orchestrator runs,
 Edit/Write, the build/test runners, and carries the deny-list (no merge, no force-push, no
-`reset --hard`). The same file also carries the non-permission keys a clone needs to bootstrap
+`reset --hard`). The `gh pr merge` deny is the merge-autonomy off-switch: it ships on, and
+lifting it is a human edit reserved for repos that define a CLAUDE.md merge autonomy policy. The same file also carries the non-permission keys a clone needs to bootstrap
 the plugin — `extraKnownMarketplaces` (auto-registering + auto-updating the marketplace) and
 `enabledPlugins` — covered in "Installing in a new repo". The template allows `pnpm`, `npm`,
 `yarn`, and `pytest`; if your repo uses a
@@ -487,18 +522,25 @@ cover — e.g.:
 
 The implementer subagent can edit files and run the build tool, but does **no** git or network —
 the orchestrator does all git/GitHub. Guarantees: branch isolation (work never lands on the
-default branch directly), a deny-list (no merge, no force-push, no `reset --hard`, no `rm -rf`),
-independent re-verification + staged-file reconciliation before every commit, and **human review
-of every PR before merge**. The deny-list is best-effort pattern matching; branch protection +
+default branch directly), a deny-list (no merge by default, no force-push, no `reset --hard`,
+no `rm -rf`), independent re-verification + staged-file reconciliation before every commit, and
+**human review of every PR before merge unless the repo has double-opted-in to merge autonomy**
+(CLAUDE.md policy + lifted deny — see "The CLAUDE.md contract"). The deny-list is best-effort pattern matching; branch protection +
 PR review are the real backstops.
 
 Two honest caveats. First, the implementer's "no git" rule is enforced by prompt, not by
 permissions: the settings allow-list must permit git for the orchestrator, and permission
 grants are session-wide, so a misbehaving subagent *could* run git — the staged-file
-reconciliation and branch isolation are what bound the damage. Second, plan auto-approval
-(when you opt in via CLAUDE.md) deliberately trades one human gate for throughput on low-risk
-work; its hard floor is not configurable, every use is audited on the issue, and the merge
-gate is never delegated — a bad auto-approval costs a wasted PR, not a bad merge.
+reconciliation and branch isolation are what bound the damage. Second, plan auto-approval and
+merge autonomy (each opt-in via CLAUDE.md; merge additionally requires the human to lift the
+`gh pr merge` deny) deliberately trade human gates for throughput on low-risk work. Their hard
+floors are not configurable and every use is audited (issue comment; cycle report). With only
+auto-approval enabled, a bad auto-approval costs a wasted PR, not a bad merge. With merge
+autonomy also enabled, the backstop is the merge pass's hard floor (standard-flow PRs only,
+green CI, protected governance surface, sequential re-verification) — and on a repo with
+branch protection + required checks, that floor is a technical rail, not just policy. Enable
+merge autonomy only where a bad merge is cheap to revert (e.g. a default branch that doesn't
+auto-deploy).
 
 ## Distribution
 
