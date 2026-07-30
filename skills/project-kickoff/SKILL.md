@@ -160,7 +160,8 @@ user to review and commit; **never commit or push without explicit approval**):
 4. **`CLAUDE.md`** — drafted from the brief: conventions, architecture, and a **Verification**
    section. If the chosen stack's exact commands aren't pinned until the skeleton exists, state
    the intended commands and note that the walking-skeleton issue establishes and verifies them.
-   Reference `docs/PROJECT-BRIEF.md` for product context. If the user opted into plan
+   Reference `docs/PROJECT-BRIEF.md` for product context. Draft lean: the contract sections
+   plus the non-obvious — not a tour of the planned tree. If the user opted into plan
    auto-approval during the interview, include the "Plan auto-approval policy" section they
    agreed to; otherwise leave it out (absent section = fully manual approvals).
 5. **The issue backlog** (`gh issue create`, in dependency order). Shape:

@@ -369,8 +369,12 @@ subagents need:
    pre-1.5 default. Recommended pairing: branch protection with required status checks, so
    the policy has a technical rail under it, not just prompt adherence.
 
-The subagents read `CLAUDE.md` at the start of every task. A thin `CLAUDE.md` leaves them
-guessing — it is the real input that makes the harness work well in a given repo.
+The subagents read `CLAUDE.md` at the start of every task — it is the real input that makes
+the harness work well in a given repo. Too little and they're guessing; too much and the
+contract above drowns in restatement of what the file system, manifests, and linter config
+already say. The five items above are the floor, not a template to pad: leave out directory
+tours, framework defaults, and formatter-enforced style, and keep the non-obvious — invariants,
+why-this-way decisions, traps a fresh reader would hit — instead.
 
 ## The LESSONS.md contract (project-owned)
 
