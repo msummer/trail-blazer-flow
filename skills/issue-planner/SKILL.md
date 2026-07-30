@@ -110,12 +110,16 @@ gh issue view <number> --json number,title,body,url,labels
 ```
 
 b. Dispatch the **`planner` subagent** (via the Task tool) with a prompt containing the issue
-   number, title, and body, relevant `.claude/LESSONS.md` entries, and this instruction:
+   number, title, and body, relevant `.claude/LESSONS.md` entries, the dispatch attempt number
+   ("Dispatch attempt: `<k>`", starting at 1), and this instruction:
    *"Produce an implementation plan for this issue following your output template. This is an
    initial plan (no prior feedback)."* Let the subagent explore the codebase and return the
    plan. If you (the orchestrator) hold context the issue lacks — recently merged PRs that
    changed the files it names, corrected measurements, related pending plans — put it in the
    prompt with a note that line numbers/claims in the issue may be stale and must be verified.
+   If the dispatch itself fails (tool error, API 429/500/529, no parseable report) or the
+   subagent's status line reports `incomplete`/`died`, retry/relaunch per the `issue-implementer`
+   skill's "Resilient dispatch" section — cited here by name, not restated.
 
 c. Post the returned plan as an issue comment. Write the plan body to a temp file first to
    avoid shell-quoting problems, then:
@@ -151,11 +155,13 @@ b. Identify (i) the **most recent prior plan** — the last comment whose body c
    that plan that does NOT contain the marker.
 
 c. Dispatch the **`planner` subagent** with a prompt containing: the issue title and body, the
-   prior plan, the feedback comments, and relevant `.claude/LESSONS.md` entries, plus the
-   instruction: *"This is a REVISION. Address every point of feedback. Begin with a short 'What
-   changed since the last plan' note, then give the full revised plan following your template.
-   Treat the feedback's decisions as binding but verify its factual claims against the live
-   code. The revised plan must be self-contained."*
+   prior plan, the feedback comments, relevant `.claude/LESSONS.md` entries, and the dispatch
+   attempt number ("Dispatch attempt: `<k>`", starting at 1), plus the instruction: *"This is a
+   REVISION. Address every point of feedback. Begin with a short 'What changed since the last
+   plan' note, then give the full revised plan following your template. Treat the feedback's
+   decisions as binding but verify its factual claims against the live code. The revised plan
+   must be self-contained."* Retries/relaunches for a failed or incomplete/died dispatch follow
+   the `issue-implementer` skill's "Resilient dispatch" section — cited here, not restated.
 
 d. Post the revised plan as a new comment, using the same marker and format as step 2c.
 
@@ -206,8 +212,9 @@ b. **Post the answers as a normal issue comment** (no `<!-- planner-plan -->` ma
    thread shows where each decision came from.
 
 c. **Revise immediately (same run).** For every question you could answer, re-dispatch the
-   `planner` subagent per step 3, treating your posted answers as the feedback, with this
-   addition to the instruction: *"Fold each proposed answer in as a decision tagged `RESOLVED
+   `planner` subagent per step 3 (same dispatch attempt numbering and "Resilient dispatch"
+   citation), treating your posted answers as the feedback, with this addition to the
+   instruction: *"Fold each proposed answer in as a decision tagged `RESOLVED
    (orchestrator-proposed):` so reviewers can see its provenance. Questions the answers did not
    cover remain open questions."* Post the revised plan (step 2c format). The human now reviews
    ONE artifact — the revised plan with visible provenance — instead of an answers comment plus
@@ -263,6 +270,16 @@ plans and what you did about them, and whether discovery reported `truncated: tr
 issues exist than the query limit returned — run again after this batch). Plans whose questions
 are all ADVISORY can be approved as-is (the defaults are accepted); say so explicitly so the
 human doesn't assume another round is needed.
+
+**Reconcile discovery against outcomes.** Before closing, walk `find-planning-work.sh`'s
+`needs_initial_plan` and `needs_revision` lists and confirm every issue on them has a row in the
+table above. Any issue discovered but with no recorded outcome (planned, revised, or explicitly
+skipped-with-reason) is an **escalated skipped stage** — report it prominently in the summary,
+never let it drop silently. This is the standalone-run equivalent of the pre-advance checks
+`issue-cycle` performs when it runs this skill as part of a full pass. Keep escalation detail in
+the run summary only — do NOT post it as an issue comment on a `plan-proposed` issue: any
+non-plan comment posted after the latest plan comment is exactly what triggers a revision on the
+next run, so an escalation comment there would spuriously re-open a plan nobody asked to revise.
 
 ## Rules
 

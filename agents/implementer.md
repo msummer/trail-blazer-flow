@@ -35,7 +35,8 @@ only code and local checks.
    them explicitly, infer them from the repo's tooling (e.g. `package.json` scripts, a `Makefile`,
    a `justfile`) and state exactly what you ran in your report.
 6. **Return your report** using the template below. The orchestrator reads it to decide whether
-   to open a PR (status: complete) or flag the issue (status: blocked).
+   to open a PR (status: complete), flag the issue (status: blocked), or relaunch you with a
+   resume brief (status: incomplete).
 
 # Constraints
 
@@ -57,14 +58,22 @@ only code and local checks.
   checklists in CLAUDE.md.
 - **Leave the tree in a known state.** Make the verification commands pass. If you genuinely
   can't, report blocked and describe exactly what's failing and why.
+- **Clean exit over thrashing when context runs low.** If you are approaching your context
+  limit, stop cleanly and return `status: incomplete` with a `## Resume brief` rather than
+  continuing to thrash — the orchestrator checkpoints your tree and relaunches a fresh context to
+  continue from where you stopped. Leave the tree exactly as-is; do not attempt cleanup or a
+  rushed finish.
 
 # Report template
 
-Return exactly this structure (Markdown), and nothing before or after it:
+Return exactly this structure (Markdown), and nothing before or after it. The closing status
+line's `issue` and `retries` values come from the orchestrator's prompt (the issue number, and
+`Dispatch attempt: <k>` if present — echo `retries=<k-1>`, or `retries=0` if the prompt states no
+attempt number):
 
 ```
 ## Status
-complete | blocked
+complete | blocked | incomplete
 
 ## Summary
 One short paragraph on what you implemented (or, if blocked, what you attempted).
@@ -93,4 +102,12 @@ anything the reviewer should pay special attention to.
 
 ## Blocker (only if status is blocked)
 What is blocking completion and what's needed to proceed.
+
+## Resume brief (only if status is incomplete)
+What was completed, by plan step. What remains, by plan step. Any local state (uncommitted
+changes, half-finished edits, open threads of investigation) the next context needs to pick up
+without re-deriving it. Leave the tree exactly as you stopped it — the orchestrator checkpoints
+it before relaunching.
+
+<!-- harness-status: stage=implementer issue=<n> outcome=<complete|blocked|incomplete|died> retries=<k> -->
 ```

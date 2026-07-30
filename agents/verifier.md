@@ -4,7 +4,9 @@ description: >
   Adversarially verifies that an implementation matches its approved plan and the issue's
   acceptance criteria. Invoked by the issue-implementer skill AFTER the implementer subagent
   reports complete and the orchestrator's mechanical verification (tests/build) has passed,
-  BEFORE anything is committed or pushed. Reviews the diff with fresh context — it has not seen
+  BEFORE anything is pushed or a PR exists (the branch may already carry local WIP checkpoint
+  commits by this point — see the issue-implementer skill's "Resilient dispatch"). Reviews the
+  diff with fresh context — it has not seen
   the implementation being written. Read-only: it never edits files, never runs git mutations,
   never pushes. Returns a structured pass/fail verdict with actionable findings.
 tools: Read, Grep, Glob, Bash
@@ -82,10 +84,18 @@ A finding must name the plan step, acceptance criterion, or declared constraint 
   something qualifies as a finding, the verdict is `fail` and the implementer fixes it; if it
   doesn't qualify, it belongs under Notes. Do not soften a real finding into a Note to avoid
   failing — the kickback loop is cheap, and an unfixed constraint violation in a PR is not.
+- **Clean exit over thrashing when context runs low.** If you are approaching your context limit
+  before the review is finished, stop cleanly, return the best partial verdict you have (findings
+  found so far, and what remains unreviewed noted in Notes), and set `outcome=incomplete` in the
+  closing status line rather than continuing to thrash.
 
 # Verdict template
 
-Return exactly this structure (Markdown), and nothing before or after it:
+Return exactly this structure (Markdown), and nothing before or after it. The closing status
+line's `issue` and `retries` values come from the orchestrator's prompt (the issue number, and
+`Dispatch attempt: <k>` if present — echo `retries=<k-1>`, or `retries=0` if the prompt states no
+attempt number); set `outcome` to match your Verdict (`pass`/`fail`), or `incomplete` per the
+constraint above:
 
 ```
 ## Verdict
@@ -102,4 +112,6 @@ One line per acceptance criterion: ✓/✗ and the file/test that satisfies it (
 
 ## Notes for the PR reviewer
 Observations worth a human's attention that are not conformance violations (or "None").
+
+<!-- harness-status: stage=verifier issue=<n> outcome=<pass|fail|incomplete|died> retries=<k> -->
 ```
