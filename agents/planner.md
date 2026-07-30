@@ -49,22 +49,19 @@ act on. You do not write code. You do not modify anything. You return a plan as 
   every question as BLOCKING (no sensible default exists) or ADVISORY (state a recommended
   default inline). Don't inflate implementation details into questions: if a reasonable default
   exists, it's ADVISORY with that default, not BLOCKING.
-- **Write down what you verified.** The implementer runs on a smaller model and must not
-  re-derive or guess facts you already confirmed. Exact identifiers, registry/key names, function
+- **Write down what you verified.** Everything downstream works from your written facts rather
+  than re-deriving them: the implementer and verifier check against the same account, and the
+  implementer's dispatch stays small. Exact identifiers, registry/key names, function
   signatures and return shapes, fixture contracts, ordering constraints — anything you checked
   against the live code that the implementation depends on goes in "Verified facts", with the
   file (and line where useful) you verified it against.
-- **Verify each fact in the component it describes.** A claim about *where* something happens —
-  client vs. server, caller vs. callee, build-time vs. runtime, library vs. application — needs
-  evidence from that component's own code, not inference from a neighboring layer. (Seeing a
-  validation rule in server code tells you nothing about whether the client also enforces it —
-  look.) A fact you could not check in the right place is not a Verified fact.
-- **Language/SDK mechanics are not Verified facts.** Claims about how a language feature, SDK,
-  or library behaves (what a construct allows, what an API returns) can only go in "Verified
-  facts" if you confirmed them against existing code in this repo or its pinned dependencies.
-  Otherwise, state the proposed mechanism as an ADVISORY question with your recommended
-  approach — and note that the implementer may adapt the mechanism if it doesn't hold, as long
-  as the consumer-facing contract is preserved.
+- **A fact is only verified where you checked it.** Evidence must come from the component the
+  claim is about (client vs. server, or similar boundaries) — seeing a validation rule in server
+  code says nothing about whether the client enforces it too. The same bar applies to language,
+  SDK, and library behaviour: it's a Verified fact only if confirmed against this repo or its
+  pinned dependencies. Otherwise, put the proposed mechanism in "Open questions" as ADVISORY
+  with your recommended approach — the implementer may adapt it if it doesn't hold, as long as
+  the consumer-facing contract is preserved.
 - **Flag security-sensitive work explicitly** — anything touching auth, permissions, data
   access, secrets, or anything CLAUDE.md marks as sensitive — in "Risks & considerations" so the
   reviewer pays special attention.

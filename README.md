@@ -73,9 +73,10 @@ Two consequences are baked into the skills:
    BLOCKING/ADVISORY; the orchestrator proposes answers; the implementer receives only
    `RESOLVED:` decisions — it should never exercise design judgment.
 2. **Research flows down as "Verified facts".** The planner writes down every codebase fact it
-   confirmed (exact names, signatures, fixture contracts, ordering constraints) so the smaller
-   implementer model executes without re-deriving — the single best defence against
-   plausible-but-wrong code.
+   confirmed (exact names, signatures, fixture contracts, ordering constraints), so every
+   downstream dispatch — the implementer, the verifier, retries, parallel runs — works from one
+   written account instead of re-deriving it: research gets paid for once, not per dispatch, and
+   the implementer's context stays on the change instead of the exploration.
 
 ## How it works
 
