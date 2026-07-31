@@ -22,7 +22,9 @@ What a cycle can do unattended: turn new issues into plans, revise on feedback, 
 grounded answers to open questions, auto-approve plans **only** under the repo's CLAUDE.md
 auto-approval policy (hard floor always applies), implement approved plans through the verifier
 gate, open PRs, merge PRs **only** under the repo's CLAUDE.md merge autonomy policy (its own
-hard floor always applies — see the merge pass), and repair queue hygiene. If there is no
+hard floor always applies — see the merge pass), file coverage-increasing issues **only** under
+the repo's CLAUDE.md test-suite ratchet policy (see the ratchet pass), and repair queue hygiene.
+If there is no
 CLAUDE.md auto-approval policy, a cycle ends with plans awaiting review; if there is no
 CLAUDE.md merge autonomy policy (or the `gh pr merge` deny is still in place), it ends with
 PRs awaiting merge — both the human's.
@@ -43,9 +45,10 @@ stage columns empty.
 **Updating:** each pass (planning, implementation, merge) fills in its own stage column for every
 issue it touches, using the outcome each sub-skill's dispatch reports via the status line
 contract (see the issue-implementer skill's "Resilient dispatch" — cited here by name, not
-restated).
+restated). The ratchet pass fills in nothing: it dispatches no agent and touches no issue already
+in the pipeline (see step 4).
 
-**Serialized form:** the ledger lives in context, but step 4 hands it to `reconcile-ledger.sh`
+**Serialized form:** the ledger lives in context, but step 5 hands it to `reconcile-ledger.sh`
 as one whitespace-separated record per line — `<issue> <stage> <outcome> [retries]`, where
 `stage` is `seed` (the step-0 row, whose outcome is the discovery bucket the issue came from,
 or `-`) or `planner` / `implementer` / `verifier` / `merge`. Write a record only for a stage
@@ -58,8 +61,8 @@ the last record wins for the same issue+stage (a same-run revision just appends)
 with no ledger entry is **launched, not assumed**. This is what stops an issue from silently
 skipping a stage: the cycle never infers "must have been fine" from an empty cell.
 
-**Closing reconciliation (step 4):** `reconcile-ledger.sh` compares the serialized ledger
-against the live queues and prints one line per discrepancy (invocation in step 4). It
+**Closing reconciliation (step 5):** `reconcile-ledger.sh` compares the serialized ledger
+against the live queues and prints one line per discrepancy (invocation in step 5). It
 **detects**; the judgment stays here — an issue still queued for a stage the ledger never
 recorded is an **escalated skipped stage**, never a silent drop.
 
@@ -79,10 +82,10 @@ baseline degrades comparisons; it doesn't block the cycle.
 **Seed the dispatch ledger.** Run `find-planning-work.sh` and `find-implementation-work.sh`
 (both idempotent, read-only) to learn the full universe of issues this run might touch, and add
 one ledger row per issue found (all four stage columns empty), noting which discovery bucket it
-came from — that bucket is the row's `seed` record when step 4 serializes the ledger. Steps 1
+came from — that bucket is the row's `seed` record when step 5 serializes the ledger. Steps 1
 and 2 below re-run their
 own discovery internally as part of their normal procedure — that's expected, not wasted work —
-but the ledger's up-front seed is what lets the pre-advance checks and step 4's reconciliation
+but the ledger's up-front seed is what lets the pre-advance checks and step 5's reconciliation
 catch a stage that never got touched.
 
 ### 1. Planning pass
@@ -101,7 +104,7 @@ Invoke the **`issue-implementer`** skill for everything now `plan-approved` — 
 auto-approved in step 1 (that's the point of the policy; the PR gate remains). Skip its step 0
 (already covered). Sequential by default; its worktree-parallel mode — and the supervisor loop
 that fans the implementers out — applies under its own rules if the batch qualifies, and changes
-nothing here: one worktree is one issue, so the ledger row, its status lines, and step 4's
+nothing here: one worktree is one issue, so the ledger row, its status lines, and step 5's
 reconciliation are the same either way. Fill in the `implemented` and `verified` ledger columns
 from its summary table (outcome, retry/kickback counts, CI status). **Pre-advance check:** the same rule
 as step 1 — an issue this pass should have touched with no ledger outcome is launched (or
@@ -185,7 +188,41 @@ PRs that fail any check (guard or policy) simply stay in the "waits on the human
 one-line reason. That is a normal outcome, not an error — the loud escalations above (guard (c),
 a hard `main`-red stop) are for cases that need the human's attention beyond just "PR waits".
 
-### 4. Close the loop
+### 4. Ratchet pass (only under a repo test-suite ratchet policy)
+
+Skip this pass entirely — **silently** — when the repo's `CLAUDE.md` has no section titled
+exactly **"Test-suite ratchet policy"**. As with the merge pass, that absence is the only silent
+case: everything past activation is loud, including a policy whose measurement command doesn't
+run.
+
+Activation needs that section and nothing else — there is no permission to lift, because
+`gh issue create` is already how the harness files a plan's follow-ups. When active, invoke the
+**`test-ratchet`** skill and let it run its full procedure (activation check, measurement, gap
+selection under its hard floor, filing, report). Do not re-implement or relax any part of it
+here; this pass is sequencing plus one cost guard.
+
+**Why it runs here, after the merge pass:** the measurement then reflects everything that landed
+this run, and — because the planning pass is already behind you — an issue filed now cannot be
+planned, approved, or implemented until the *next* cycle. That ordering, not a policy clause, is
+what keeps a ratchet-filed issue from going idea-to-merge inside one unattended pass.
+
+**Cost guard.** A measurement command can be the repo's slowest command, and a `/loop`ed cycle
+would otherwise pay it every run. Skip the measurement (and say so in one line) when this run
+merged nothing **and** the pre-flight found the default branch unchanged from the recorded
+baseline commit — the number cannot have moved. A standalone invocation of the skill always
+measures; the human asked for it.
+
+**No ledger row, no status line.** This pass touches no issue already in the pipeline and
+dispatches no agent, so it records nothing in the ledger and emits no status line — the ledger's
+`stage` vocabulary is closed, and a `ratchet` row would abort step 5's reconciliation outright.
+Note the issue numbers it filed: step 5 will list each as `unledgered`, which for these is
+**expected and attributable**, not an escalated skipped stage.
+
+Report what it filed in the cycle report's "what this cycle did" half — issue links, the
+measurement command and figure, and the reminder that each carries `no-auto-approve`, so its plan
+waits for a human.
+
+### 5. Close the loop
 
 ```bash
 harness-status.sh
@@ -214,6 +251,8 @@ call is yours:
 - `contradiction` → the stage reported success but the issue never left the queue (a label edit
   or PR step that didn't land). Report it with its evidence and treat the issue as unfinished.
 - `unledgered` → usually an issue filed *during* the run: say so and let the next cycle take it.
+  An issue this run's **ratchet pass** filed is exactly this case: name it as ratchet-filed
+  rather than reporting it as a discrepancy.
   If it was in the pre-flight discovery output, the seed step missed it — escalate that.
 
 If the script isn't on the PATH (an older install), fall back to comparing the ledger against
@@ -261,7 +300,8 @@ seed.)
   verbatim — this skill adds sequencing plus the merge pass, nothing else. Never approve a plan
   outside the auto-approval policy path and its hard floor; merge authority is defined once, in
   the merge pass's activation conditions and hard floor (step 3), and exists nowhere else;
-  never touch a dirty tree that isn't the harness's own.
+  the ratchet pass files issues and nothing else — it never approves, implements, or merges what
+  it files; never touch a dirty tree that isn't the harness's own.
 - **Fail towards the human.** If any pass ends in an unexpected state (red baseline, repeated
   crash recovery on the same issue, discovery truncation that won't drain, a resume cap exceeded,
   a stage that exhausted the retry ladder), stop that issue's progress and report rather than
@@ -270,7 +310,7 @@ seed.)
 - **No stage skipped but unreported.** A cycle may not end with an issue silently missing a
   stage it should have gone through. Every ledger row gets an outcome (success, blocked, or
   escalated) for every stage it reached — enforced by the pre-advance checks per pass and the
-  closing reconciliation in step 4.
+  closing reconciliation in step 5.
 - **One cycle, one report.** Even when both passes ran, the human gets a single consolidated
   report at the end — not two skill summaries stitched mid-run. (The sub-skills' summary steps
   feed it; don't emit them separately.)

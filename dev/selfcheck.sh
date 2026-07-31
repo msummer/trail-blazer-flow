@@ -8,13 +8,14 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 20 assertions total:
+# Five groups, 24 assertions total:
 #   1. shell syntax and portability (bin/*.sh, this script)
 #   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json)
 #   3. agent instruction-file invariants (agents/*.md: frontmatter, one fenced template
 #      block, the harness-status line grammar, the #4 dedupe invariant, required headings)
-#   4. cross-file markers and skills (the planner-plan marker, skill frontmatter, README
-#      model-pin strings, WIP-message vocabulary)
+#   4. cross-file markers and skills (the planner-plan and ratchet-issue markers, skill
+#      frontmatter, README model-pin strings, WIP-message vocabulary, the label bijection,
+#      skill/README coverage, policy-section titles)
 #   5. bin/ script behavior (reconcile-ledger.sh against fabricated ledger/status inputs)
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
@@ -407,6 +408,70 @@ if [ -z "$bad_list" ]; then
   ok "4.4 every 'wip: …' string in issue-implementer/SKILL.md matches the documented vocabulary"
 else
   bad "4.4 undocumented or line-wrapped wip message(s):$bad_list"
+fi
+
+# 4.5 — the literal ratchet-issue marker appears in both files (fixed-string). Mirrors 4.1.
+marker='<!-- ratchet-issue -->'
+missing=""
+grep -qF -- "$marker" "$root/skills/test-ratchet/SKILL.md" || missing="$missing skills/test-ratchet/SKILL.md"
+grep -qF -- "$marker" "$root/skills/issue-planner/SKILL.md" || missing="$missing skills/issue-planner/SKILL.md"
+if [ -z "$missing" ]; then
+  ok "4.5 '$marker' present in skills/test-ratchet/SKILL.md and skills/issue-planner/SKILL.md"
+else
+  bad "4.5 '$marker' missing from:$missing"
+fi
+
+# 4.6 — bijection: labels bin/setup-labels.sh creates <-> labels bin/check-harness.sh's doctor
+# requires. Report both directions separately, like 2.4. Depends on 'for l in ...; do' being
+# the doctor's only such loop (see bin/check-harness.sh).
+setup_labels_list="$(sed -nE 's/^create_or_update "([^"]+)".*/\1/p' "$root/bin/setup-labels.sh" | sort -u)"
+doctor_labels_list="$(sed -nE 's/^[[:space:]]*for l in (.*); do$/\1/p' "$root/bin/check-harness.sh" | tr ' ' '\n' | grep -v '^$' | sort -u)"
+labels_without_doctor="$(comm -23 <(_lines "$setup_labels_list") <(_lines "$doctor_labels_list"))"
+doctor_without_setup="$(comm -13 <(_lines "$setup_labels_list") <(_lines "$doctor_labels_list"))"
+if [ -z "$labels_without_doctor" ] && [ -z "$doctor_without_setup" ]; then
+  ok "4.6 setup-labels.sh <-> check-harness.sh doctor label bijection holds"
+else
+  msg="4.6 label bijection broken:"
+  [ -n "$labels_without_doctor" ] && msg="$msg label(s) created with no doctor check: $(printf '%s' "$labels_without_doctor" | tr '\n' ' ');"
+  [ -n "$doctor_without_setup" ] && msg="$msg doctor-required label(s) with no creator: $(printf '%s' "$doctor_without_setup" | tr '\n' ' ');"
+  bad "$msg"
+fi
+
+# 4.7 — every skills/ directory's basename appears (fixed-string) in README.md.
+bad_list=""
+for d in "$root"/skills/*/; do
+  base="$(basename "$d")"
+  grep -qF -- "$base" "$root/README.md" || bad_list="$bad_list $base"
+done
+if [ -z "$bad_list" ]; then
+  ok "4.7 every skills/ directory's basename appears in README.md"
+else
+  bad "4.7 skill(s) not documented in README.md:$bad_list"
+fi
+
+# 4.8 — policy section titles: each must appear (exact, fixed-string) in README.md and in
+# skills/harness-setup/SKILL.md (the audit must cover every policy), and in at least two
+# skills/*/SKILL.md files in total. Titles contain spaces, so iterate over a heredoc — 4.4
+# already uses this shape.
+bad_list=""
+while IFS= read -r title; do
+  [ -n "$title" ] || continue
+  grep -qF -- "$title" "$root/README.md" || bad_list="$bad_list [$title: missing from README.md]"
+  grep -qF -- "$title" "$root/skills/harness-setup/SKILL.md" || bad_list="$bad_list [$title: missing from skills/harness-setup/SKILL.md]"
+  n=0
+  for f in "$root"/skills/*/SKILL.md; do
+    grep -qF -- "$title" "$f" && n=$((n+1))
+  done
+  [ "$n" -ge 2 ] || bad_list="$bad_list [$title: present in only $n skills/*/SKILL.md file(s), need >= 2]"
+done <<EOF
+Plan auto-approval policy
+Merge autonomy policy
+Test-suite ratchet policy
+EOF
+if [ -z "$bad_list" ]; then
+  ok "4.8 policy section titles cross-referenced in README.md, harness-setup, and >=2 skills"
+else
+  bad "4.8 policy-title cross-reference problem(s):$bad_list"
 fi
 
 # ============================================================================

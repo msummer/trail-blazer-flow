@@ -73,11 +73,11 @@ fi
 if $gh_ready; then
   existing="$(gh label list --limit 200 --json name --jq '.[].name' 2>/dev/null | tr -d '\r' || true)"
   missing=""
-  for l in plan-proposed plan-approved pr-open impl-blocked no-plan no-auto-approve; do
+  for l in plan-proposed plan-approved pr-open impl-blocked no-plan no-auto-approve test-ratchet; do
     echo "$existing" | grep -qx "$l" || missing="$missing $l"
   done
   if [ -z "$missing" ]; then
-    ok "all 6 lifecycle labels exist"
+    ok "all 7 lifecycle labels exist"
   else
     bad "missing labels:$missing — run: setup-labels.sh"
   fi
@@ -185,7 +185,7 @@ if [ -f "$settings" ]; then
     ok "allow-list includes the v1.6 entries (sleep, date, git reset --soft, git merge-base)"
   fi
   # v1.6.4 entry: the cycle's closing reconciliation runs reconcile-ledger.sh; without the
-  # grant an unattended run stalls at step 4 behind a permission prompt.
+  # grant an unattended run stalls at step 5 behind a permission prompt.
   if grep -q "Bash(reconcile-ledger.sh" "$settings"; then
     ok "allow-list includes the v1.6.4 entry (reconcile-ledger.sh)"
   else
