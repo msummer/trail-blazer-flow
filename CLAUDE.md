@@ -31,7 +31,9 @@ instruction-file contracts the skills silently depend on (the `<!-- planner-plan
 `# Constraints` section per agent, the harness-status line grammar, no constraint keyword
 restated across sections of the same file — extended to `skills/*/SKILL.md`'s merge-authority,
 push-boundary, sequencing, and read-only language — the `<!-- ratchet-issue -->` marker, the
-`setup-labels.sh` ↔ doctor label bijection, the policy-section titles the skills read, that
+follow-up justification phrase shared by `agents/planner.md`'s plan template and the implementer
+skill's filing step, the `setup-labels.sh` ↔ doctor label bijection, the policy-section titles the
+skills read, that
 `bin/check-harness.sh` reads `.claude/settings.json` only through `jq` (never a raw-text
 grep/sed/awk of the file), the CI workflow's gate command, `agents/verifier.md`'s lettered
 Process checks `a.`–`g.` matching

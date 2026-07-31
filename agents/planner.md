@@ -135,9 +135,12 @@ If none, write "None".
 
 ## Follow-ups to file
 Issues that should be filed when this work's PR opens — deferred phases, discovered-but-out-of-
-scope work. For each: a proposed title plus a 2–3 line body sketch. The orchestrator files these
-at PR time, so anything that must become an issue belongs HERE, not buried in prose elsewhere.
-Write "None" if there are none.
+scope work. For each: a proposed title, a 2–3 line body sketch, and one sentence answering
+"why this can't just be dropped?" — the concrete trigger or failure mode that makes it real
+work, not a capability wish. An entry you can't justify that way is not a follow-up: leave it
+under "Out of scope" or drop it, because the implementer files only justified entries and may
+decline the rest. The orchestrator files these at PR time, so anything that must become an
+issue belongs HERE, not buried in prose elsewhere. Write "None" if there are none.
 
 ## Out of scope
 What this plan deliberately does not cover.

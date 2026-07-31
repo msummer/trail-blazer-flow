@@ -381,9 +381,14 @@ gh issue edit <number> --add-label pr-open
      #<number>`; the list of files changed; the verification results; any schema changes that need
      applying; and the reviewer notes from the subagent's report.
 
-     **File the plan's follow-ups.** If the approved plan has a "Follow-ups to file" section
-     (deferred phases, discovered out-of-scope work), file each one now with `gh issue create`,
-     referencing this PR, and mention the new issue numbers in the PR body and your summary.
+     **File the plan's follow-ups.** File each entry that carries the plan template's
+     required justification sentence — the one answering "why this can't just be dropped?"
+     — with `gh issue create`, quoting that sentence in the new issue body and referencing
+     this PR; mention the new issue numbers in the PR body and your summary. An entry with
+     no such sentence, or whose sentence names a capability wish rather than a concrete
+     trigger or failure mode, is yours to decline — don't file it, and record the decline
+     in the PR body (its title plus one line of why) so the judgement is visible to the
+     reviewer instead of becoming an issue nobody triages.
 
      Then **watch CI** so a red run doesn't sit unnoticed:
 ```bash

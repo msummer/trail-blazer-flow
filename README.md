@@ -137,7 +137,7 @@ The plan template (see `agents/planner.md`) includes: Summary, **Acceptance crit
 testable definition of done the verifier later checks against — derived even when the issue
 didn't state any), Estimated size (S/M/L), Affected areas, Data/schema impact, Implementation
 steps, Testing approach, Risks, **Verified facts**, **Open questions (BLOCKING/ADVISORY)**,
-**Follow-ups to file**, Out of scope.
+**Follow-ups to file** (each carrying a one-sentence justification), Out of scope.
 
 ### Approval (human by default, policy-assisted if you opt in)
 
@@ -190,7 +190,9 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    report's "Files changed"** (unexplained files = blocker, not a commit), commits once, pushes,
    opens the PR (`Closes #n`, verification results, verifier notes, schema notes), labels
    `pr-open`. The PR still ends up as one clean commit, exactly as before.
-6. **Files the plan's "Follow-ups to file"** as new issues, referencing the PR.
+6. **Files the plan's "Follow-ups to file"** as new issues referencing the PR — each entry
+   that carries its required "why this can't just be dropped?" justification; speculative
+   entries are declined with a note in the PR body instead of becoming issues.
 7. **Watches CI** (`gh pr checks --watch`). Red CI caused by the PR itself gets **one bounded
    fix attempt** (implementer → mechanical checks → verifier → push; the PR isn't merged, so
    this is as safe as the kickback loop); still red — or not the PR's fault — is noted on the
@@ -798,8 +800,10 @@ suffix, `grep -P`, `readlink -f`, `mapfile`/`readarray`, `declare -A` — in `bi
 silently depend on (template markers, the harness-status line grammar, one `# Constraints`
 section per agent, no constraint keyword restated across sections — extended to
 `skills/*/SKILL.md`'s merge-authority, push-boundary, sequencing, and read-only language — the
-label bijection between `setup-labels.sh` and the doctor, the policy-section titles the skills
-read, the CI workflow's gate command, `agents/verifier.md`'s lettered Process checks `a.`–`g.`
+follow-up justification phrase shared by `agents/planner.md`'s plan template and the implementer
+skill's filing step, the label bijection between `setup-labels.sh` and the doctor, the
+policy-section titles the skills read, the CI workflow's gate command, `agents/verifier.md`'s
+lettered Process checks `a.`–`g.`
 matching CLAUDE.md's own `rule Nx` citations, and the git permission-mirror invariants in
 `templates/repo-settings.json` — the `-C` allow forms `skills/issue-implementer/SKILL.md`
 mandates, and the bare↔`-C` mirroring of its own git allow/deny entries), plus the behavior of
