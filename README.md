@@ -48,6 +48,7 @@ or share).
 │   ├── setup-labels.sh            # creates the workflow labels (run once per repo)
 │   ├── find-implementation-work.sh
 │   ├── harness-status.sh          # who acts next: harness queues vs. items waiting on the human
+│   ├── reconcile-ledger.sh        # reconciles a cycle's dispatch ledger against live state
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── dev/
 │   └── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
@@ -235,8 +236,9 @@ cite it by name):
   on a stage's behalf when it died or never reported, and for the merge stage
   (which has no agent). `issue-cycle` keeps an in-context, non-persisted **dispatch ledger**
   (planned/implemented/verified/merged per issue, retries, duration, final state) seeded from
-  discovery and reconciled against `harness-status.sh` at the end of a run, so a stage can never
-  be silently dropped — see "The steady state" below.
+  discovery and reconciled at the end of a run by `reconcile-ledger.sh` (it compares the ledger
+  against `harness-status.sh`'s live queues and prints one line per unaccounted issue, exiting
+  non-zero), so a stage can never be silently dropped — see "The steady state" below.
 - **Merge guards.** Covered under the merge pass in "The steady state" below: a base-branch
   assertion before merging, loud escalation (never silent) when merge autonomy is configured but
   denied, and post-merge state verification before a PR is reported merged.
@@ -260,8 +262,9 @@ policy" *and* the human has lifted the `gh pr merge` deny; guarded per PR — th
 asserted before merging, a permission-denied merge escalates loudly with the exact command
 instead of failing silently, and the merge is confirmed via a post-merge state check before
 being reported — one PR at a time, re-verified between, audited in the report) → a closing
-report via `harness-status.sh` that reconciles the ledger against it (any issue the cycle meant
-to act on with no recorded outcome is escalated, never dropped), prints a **per-issue summary
+report via `harness-status.sh`, with `reconcile-ledger.sh` mechanically reconciling the ledger
+against it (any issue the cycle meant to act on with no recorded outcome is escalated, never
+dropped), prints a **per-issue summary
 table** (stages completed, retries, duration, final state, escalations), and splits the world
 into *what the cycle did* and *what waits on the human* (plans to review, PRs to merge —
 including any issue reading `verified, merge blocked` with its exact merge command — blocked
@@ -572,6 +575,13 @@ For **v1.6.1 → v1.6.2**, nothing migrates: the release adds this repo's own `C
 tooling for developing the harness itself — it ships no agent/skill/script behavior change for
 consumer repos.
 
+For **v1.6.3 → v1.6.4**, one item: **a new permission grant**. Re-copy (or merge) the
+`permissions` block from the plugin's `templates/repo-settings.json` into
+`.claude/settings.json` — v1.6.4 adds `Bash(reconcile-ledger.sh:*)`, the script `issue-cycle`
+runs at step 4 to reconcile the run's dispatch ledger against the live queues. Without the
+grant an unattended cycle stalls at step 4 behind a permission prompt; `check-harness.sh` names
+it, same as any other version.
+
 Optional, not required: add a **"Plan auto-approval policy"** section to `CLAUDE.md` if you
 want the planner to approve low-risk plans for you — without it, behavior stays fully manual,
 exactly as before. Nothing else migrates: existing issues, labels, and plan comments keep
@@ -662,7 +672,8 @@ bash dev/selfcheck.sh
 
 It checks shell syntax/portability, the JSON manifests, and the cross-file instruction-file
 invariants the skills silently depend on (template markers, the harness-status line grammar, one
-`# Constraints` section per agent, no constraint keyword restated across sections). This repo
+`# Constraints` section per agent, no constraint keyword restated across sections), plus the
+behavior of `reconcile-ledger.sh` against fabricated ledger and status inputs. This repo
 deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the *consumer*
 doctor, and onboarding it here would mean registering this repo's own published marketplace and
 enabling a cached copy of itself over the working tree being edited.
