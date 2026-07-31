@@ -52,9 +52,10 @@ or share).
 │   ├── reconcile-ledger.sh        # reconciles a cycle's dispatch ledger against live state
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── dev/
-│   └── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
+│   ├── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
+│   └── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
 ├── .github/
-│   └── workflows/selfcheck.yml # CI: runs the gate above on every pull request
+│   └── workflows/selfcheck.yml # CI: runs the gate, then the negative-test harness, on every PR
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
 ```
@@ -778,17 +779,26 @@ command, run from the repo root:
 bash dev/selfcheck.sh
 ```
 
-It checks shell syntax/portability, the JSON manifests, and the cross-file instruction-file
-invariants the skills silently depend on (template markers, the harness-status line grammar, one
-`# Constraints` section per agent, no constraint keyword restated across sections, the label
-bijection between `setup-labels.sh` and the doctor, the policy-section titles the skills read,
-the CI workflow's gate command, and the git permission-mirror invariants in
+It checks shell syntax/portability (including no GNU-only shell constructs — `sed -i` without a
+suffix, `grep -P`, `readlink -f`, `mapfile`/`readarray`, `declare -A` — in `bin/*.sh` or
+`dev/*.sh`), the JSON manifests, and the cross-file instruction-file invariants the skills
+silently depend on (template markers, the harness-status line grammar, one `# Constraints`
+section per agent, no constraint keyword restated across sections — extended to
+`skills/*/SKILL.md`'s merge-authority, push-boundary, sequencing, and read-only language — the
+label bijection between `setup-labels.sh` and the doctor, the policy-section titles the skills
+read, the CI workflow's gate command, `agents/verifier.md`'s lettered Process checks `a.`–`g.`
+matching CLAUDE.md's own `rule Nx` citations, and the git permission-mirror invariants in
 `templates/repo-settings.json` — the `-C` allow forms `skills/issue-implementer/SKILL.md`
 mandates, and the bare↔`-C` mirroring of its own git allow/deny entries), plus the behavior of
 `reconcile-ledger.sh` against fabricated ledger and status inputs.
 
 The same command also runs in CI on every pull request (`.github/workflows/selfcheck.yml`), so
-the gate no longer depends on someone remembering to run it.
+the gate no longer depends on someone remembering to run it. CI also runs the gate's own
+negative-test harness, `dev/selfcheck-tests.sh`, as a second step in the same job: it copies the
+repo to a throwaway temp directory, applies one documented perturbation per case, and asserts the
+gate fails with exactly the expected assertion id(s) — run it by hand
+(`bash dev/selfcheck-tests.sh`, optionally with a case-name substring) whenever `dev/selfcheck.sh`
+changes.
 
 This repo
 deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the *consumer*

@@ -13,3 +13,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash dev/selfcheck.sh
+      - run: bash dev/selfcheck-tests.sh

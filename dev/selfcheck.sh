@@ -8,16 +8,18 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 27 assertions total:
-#   1. shell syntax and portability (bin/*.sh, this script)
+# Five groups, 30 assertions total:
+#   1. shell syntax and portability (bin/*.sh, dev/*.sh, and no GNU-only constructs in either)
 #   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json), plus the
 #      permission allow/deny mirroring between templates/repo-settings.json's `git -C` entries
 #      and the `-C` forms skills/issue-implementer/SKILL.md mandates
 #   3. agent instruction-file invariants (agents/*.md: frontmatter, one fenced template
-#      block, the harness-status line grammar, the #4 dedupe invariant, required headings)
+#      block, the harness-status line grammar, the #4 dedupe invariant, required headings, and
+#      the verifier's lettered Process checks a.-g. plus CLAUDE.md's `rule Nx` citations)
 #   4. cross-file markers and skills (the planner-plan and ratchet-issue markers, skill
 #      frontmatter, README model-pin strings, WIP-message vocabulary, the label bijection,
-#      skill/README coverage, policy-section titles, the CI workflow's gate command)
+#      skill/README coverage, policy-section titles, the CI workflow's gate command, and the
+#      #4 dedupe invariant extended to skills/*/SKILL.md)
 #   5. bin/ script behavior (reconcile-ledger.sh against fabricated ledger/status inputs)
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
@@ -56,27 +58,104 @@ fence_lines() {
   grep -n '^```$' "$1" | cut -d: -f1
 }
 
+# bt — a literal backtick, built via printf rather than embedded in a quoted string (used by
+# assertions 1.4 and 4.4, both of which need a backtick inside a single-quoted awk/ERE body).
+bt="$(printf '\140')"
+
+# code_segments FILE — awk helper for assertion 1.4. Emits one *command segment* per line as
+# "FILE:LINE:segment", having (a) skipped full-line comments, (b) skipped heredoc bodies
+# (detects '<<'/'<<-' with an optional quoted word, never '<<<'), (c) split each remaining line
+# on '; | & ( ) { }' and backtick, and (d) stripped, repeatedly, leading whitespace, leading
+# shell keywords, and leading VAR=value assignments — so the emitted segment always starts with
+# the leading command word. The single-quote character is passed in via -v sq rather than
+# embedded in the single-quoted awk program (same trick as the $bt precedent above).
+code_segments() {
+  awk -v sq="'" -v bt="$bt" '
+    function strip(s,   keep) {
+      keep = 1
+      while (keep) {
+        keep = 0
+        if (match(s, /^[[:space:]]+/)) { s = substr(s, RLENGTH+1); keep = 1; continue }
+        if (match(s, /^(if|while|until|then|else|elif|do|time|!|command|exec|env|sudo|xargs)([[:space:]]|$)/)) {
+          s = substr(s, RLENGTH+1); keep = 1; continue
+        }
+        if (match(s, /^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+/)) {
+          s = substr(s, RLENGTH+1); keep = 1; continue
+        }
+      }
+      return s
+    }
+    function emit(codepart, file, lineno,    n, i, seg, s) {
+      n = split(codepart, parts, sq_class)
+      for (i = 1; i <= n; i++) {
+        seg = parts[i]
+        gsub(/^[[:space:]]+/, "", seg)
+        gsub(/[[:space:]]+$/, "", seg)
+        if (seg == "") continue
+        s = strip(seg)
+        if (s == "") continue
+        print file ":" lineno ":" s
+      }
+    }
+    BEGIN { sq_class = "[;|&(){}" bt "]"; in_hd = 0 }
+    {
+      line = $0
+      if (in_hd) {
+        t = line
+        if (strip_tabs) gsub(/^\t+/, "", t)
+        if (t == hd_term) in_hd = 0
+        next
+      }
+      if (line ~ /^[[:space:]]*#/) next
+      protected_line = line
+      gsub(/<<</, "@@@", protected_line)
+      if (match(protected_line, /<<-?[[:space:]]*/)) {
+        op_start = RSTART; op_len = RLENGTH
+        after = substr(line, op_start + op_len)
+        opstr = substr(protected_line, op_start, op_len)
+        strip_tabs = (opstr ~ /^<<-/)
+        word = ""
+        if (match(after, "^" sq "[^" sq "]*" sq)) {
+          word = substr(after, 2, RLENGTH-2)
+        } else if (match(after, /^"[^"]*"/)) {
+          word = substr(after, 2, RLENGTH-2)
+        } else if (match(after, /^[A-Za-z_][A-Za-z0-9_]*/)) {
+          word = substr(after, 1, RLENGTH)
+        }
+        if (word != "") {
+          codepart = substr(line, 1, op_start-1)
+          emit(codepart, FILENAME, FNR)
+          in_hd = 1
+          hd_term = word
+          next
+        }
+      }
+      emit(line, FILENAME, FNR)
+    }
+  ' "$1"
+}
+
 echo "== trail-blazer-flow selfcheck: $root =="
 
 # ============================================================================
 echo
 echo "-- Group 1: shell syntax and portability --"
 
-# 1.1 — bash -n on every bin/*.sh and on this script itself.
+# 1.1 — bash -n on every bin/*.sh and every dev/*.sh.
 bad_files=""
-for s in "$root"/bin/*.sh "$root"/dev/selfcheck.sh; do
+for s in "$root"/bin/*.sh "$root"/dev/*.sh; do
   [ -f "$s" ] || continue
   err="$(bash -n "$s" 2>&1 >/dev/null)" || bad_files="$bad_files $s: $err;"
 done
 if [ -z "$bad_files" ]; then
-  ok "1.1 bash -n passes on all bin/*.sh and dev/selfcheck.sh"
+  ok "1.1 bash -n passes on all bin/*.sh and dev/*.sh"
 else
   bad "1.1 bash -n failed —$bad_files"
 fi
 
-# 1.2 — every bin/*.sh line 1 is exactly '#!/usr/bin/env bash' and has a 'set -' line.
+# 1.2 — every bin/*.sh and dev/*.sh line 1 is exactly '#!/usr/bin/env bash' and has a 'set -' line.
 bad_files=""
-for s in "$root"/bin/*.sh; do
+for s in "$root"/bin/*.sh "$root"/dev/*.sh; do
   [ -f "$s" ] || continue
   first="$(head -n1 "$s")"
   if [ "$first" != "#!/usr/bin/env bash" ]; then
@@ -86,7 +165,7 @@ for s in "$root"/bin/*.sh; do
   grep -q '^set -' "$s" || bad_files="$bad_files $s(no 'set -' line)"
 done
 if [ -z "$bad_files" ]; then
-  ok "1.2 every bin/*.sh starts with '#!/usr/bin/env bash' and has a 'set -' line"
+  ok "1.2 every bin/*.sh and dev/*.sh starts with '#!/usr/bin/env bash' and has a 'set -' line"
 else
   bad "1.2 shebang/set- check failed —$bad_files"
 fi
@@ -101,6 +180,31 @@ if [ -z "$bad_files" ]; then
   ok "1.3 no CR bytes in bin/*.sh or dev/*.sh"
 else
   bad "1.3 CR byte(s) found in:$bad_files"
+fi
+
+# 1.4 — no GNU-only shell constructs in bin/*.sh or dev/*.sh: grep -P/--perl-regexp, sed
+# -i/--in-place without a suffix (sed -i.bak stays legal), readlink -f/--canonicalize,
+# mapfile/readarray, declare/typeset/local -A. Matched against code_segments' output, anchored
+# right after the FILE:LINE: prefix so the flag is only recognised in the leading option
+# cluster (a run of clean '-x'/'--word' tokens right after the command name) — a flag typed
+# after a non-flag argument is deliberately not policed (documented heuristic limit, same as
+# 3.6's false-positive escape hatch). Because this loop scans dev/*.sh, it polices its own
+# table and dev/selfcheck-tests.sh — including this very pattern: 'mapfile'/'readarray' spelled
+# out next to '(' '|' ')' would otherwise land as their own bare, delimiter-bounded segments and
+# self-trip the rule below. map[f]ile / read[a]rray are single-char bracket expressions — an ERE
+# match for the literal word, just not the literal *substring* the self-scan would isolate.
+genopt='([[:space:]]+--?[A-Za-z][A-Za-z-]*)*'
+forbidden_pat="^[^:]*:[0-9]+:(grep${genopt}[[:space:]]+(-[A-Za-z]*P|--perl-regexp)([[:space:]]|\$)|sed${genopt}[[:space:]]+(-[A-Za-z]*i|--in-place)([[:space:]]|\$)|readlink${genopt}[[:space:]]+(-[A-Za-z]*f|--canonicalize)([[:space:]]|\$)|(declare|typeset|local)${genopt}[[:space:]]+(-[A-Za-z]*A)([[:space:]]|\$)|(map[f]ile|read[a]rray)([[:space:]]|\$))"
+bad_list=""
+for s in "$root"/bin/*.sh "$root"/dev/*.sh; do
+  [ -f "$s" ] || continue
+  hits="$(code_segments "$s" | grep -E "$forbidden_pat")"
+  [ -z "$hits" ] || bad_list="$bad_list $(printf '%s' "$hits" | tr '\n' ' ')"
+done
+if [ -z "$bad_list" ]; then
+  ok "1.4 no GNU-only constructs (grep -P, sed -i without suffix, readlink -f, mapfile/readarray, declare -A) in bin/*.sh or dev/*.sh"
+else
+  bad "1.4 GNU-only construct(s) found —$bad_list"
 fi
 
 # ============================================================================
@@ -332,13 +436,20 @@ kw_pattern() {
     migration)      printf '%s' 'migration' ;;
   esac
 }
+# prose_tsv FILE [HEADING_ERE] — walks FILE's prose body (frontmatter and fenced blocks
+# excluded via a fence toggle, so files with more than two fence markers — e.g. skills/*/SKILL.md
+# — are handled the same as agents/*.md's exactly-two-fence case), tracking the current heading
+# (matched by HEADING_ERE, default '^# ') as the section id. The section starts as the literal
+# "(preamble)" rather than empty, so a keyword occurring before the first heading is attributed
+# to a real, countable section instead of silently vanishing from the restated-keyword check.
 prose_tsv() {
-  awk '
+  awk -v hre="${2:-^# }" '
+    BEGIN { section = "(preamble)" }
     $0 == "---" { fm++; next }
     fm < 2 { next }
-    $0 == "```" { fence++; next }
-    fence == 1 { next }
-    /^# / { section = substr($0, 3) }
+    /^```/ { fence = !fence; next }
+    fence { next }
+    $0 ~ hre { section = $0 }
     { printf "%d\t%s\t%s\n", NR, section, $0 }
   ' "$1"
 }
@@ -395,6 +506,76 @@ else
   bad "3.7 missing or out-of-fence heading(s):$bad_list"
 fi
 
+# next_numbered_step_line FILE START_LINE — first '^[0-9]+\. ' line after START_LINE, or
+# (file's last line + 1) if there is none (so callers can slice an open-ended trailing range).
+next_numbered_step_line() {
+  local n
+  n="$(awk -v s="$2" 'NR>s && /^[0-9]+\. /{print NR; exit}' "$1")"
+  if [ -z "$n" ]; then
+    n=$(( $(wc -l < "$1") + 1 ))
+  fi
+  printf '%s' "$n"
+}
+
+# 3.8 — verifier Process lettering. agents/verifier.md's step 3 ("Check, in order:") must list
+# exactly a.-g., contiguous and in order, each with its pinned bold title — full-table pinning
+# (not just letter 'g') because CLAUDE.md's 'rule 3g' citation only means what it says if the
+# whole table is stable: reordering would keep 'g' a valid letter while silently changing what
+# it refers to. Also: every 'rule [0-9][a-z]' citation anywhere in CLAUDE.md must resolve to a
+# real numbered Process step and a real letter inside it.
+vf="$root/agents/verifier.md"
+bad_list=""
+start_ln="$(grep -n '^3\. \*\*Check, in order:\*\*' "$vf" | head -1 | cut -d: -f1)"
+if [ -z "$start_ln" ]; then
+  bad_list="$bad_list [agents/verifier.md: step 3 header '3. **Check, in order:**' not found]"
+else
+  end_ln="$(next_numbered_step_line "$vf" "$start_ln")"
+  letter_lines="$(sed -n "$((start_ln+1)),$((end_ln-1))p" "$vf" | grep -E '^[[:space:]]+[a-g]\. \*\*')"
+  seq="$(printf '%s\n' "$letter_lines" | sed -E 's/^[[:space:]]+([a-g])\..*/\1/' | tr '\n' ' ' | sed -E 's/[[:space:]]+$//')"
+  [ "$seq" = "a b c d e f g" ] || bad_list="$bad_list [letter sequence '$seq' != 'a b c d e f g']"
+  letter_pairs=(
+    "a|Plan conformance"
+    "b|Acceptance criteria"
+    "c|Test quality"
+    "d|Scope"
+    "e|Declared constraints"
+    "f|Report honesty"
+    "g|Documentation"
+  )
+  for lp in "${letter_pairs[@]}"; do
+    ltr="${lp%%|*}"
+    title="${lp#*|}"
+    line="$(printf '%s\n' "$letter_lines" | grep -E "^[[:space:]]+${ltr}\. \*\*")"
+    if [ -z "$line" ]; then
+      bad_list="$bad_list [letter $ltr missing from step 3]"
+    else
+      printf '%s' "$line" | grep -qF -- "$title" || bad_list="$bad_list [letter $ltr's title doesn't name '$title']"
+    fi
+  done
+fi
+cm="$root/CLAUDE.md"
+citations="$(grep -oE 'rule [0-9][a-z]' "$cm" | sort -u)"
+while IFS= read -r cite; do
+  [ -z "$cite" ] && continue
+  cnum="$(printf '%s' "$cite" | sed -E 's/^rule ([0-9])[a-z]$/\1/')"
+  cltr="$(printf '%s' "$cite" | sed -E 's/^rule [0-9]([a-z])$/\1/')"
+  step_ln="$(grep -n "^${cnum}\. \*\*" "$vf" | head -1 | cut -d: -f1)"
+  if [ -z "$step_ln" ]; then
+    bad_list="$bad_list [CLAUDE.md citation '$cite': no numbered step $cnum in agents/verifier.md]"
+    continue
+  fi
+  step_end="$(next_numbered_step_line "$vf" "$step_ln")"
+  sed -n "$((step_ln+1)),$((step_end-1))p" "$vf" | grep -qE "^[[:space:]]+${cltr}\. \*\*" \
+    || bad_list="$bad_list [CLAUDE.md citation '$cite': letter $cltr not found in step $cnum]"
+done <<EOF
+$citations
+EOF
+if [ -z "$bad_list" ]; then
+  ok "3.8 agents/verifier.md's step 3 lists a.-g. contiguous with pinned titles; every CLAUDE.md 'rule Nx' citation resolves"
+else
+  bad "3.8 verifier lettering/citation problem(s):$bad_list"
+fi
+
 # ============================================================================
 echo
 echo "-- Group 4: cross-file markers and skills --"
@@ -410,21 +591,40 @@ else
   bad "4.1 '$marker' missing from:$missing"
 fi
 
+# skill_description FILE — prints FILE's frontmatter 'description:' value with all whitespace
+# removed: the inline text after 'description:' on its own line if present, otherwise (a bare
+# block-scalar indicator '>'/'>-'/'>+'/'|'/'|-'/'|+' with nothing else on the line) the
+# indented continuation lines that follow, up to the first non-indented line. Scoped to
+# frontmatter_text so a 'description:'-looking line in the prose body can't satisfy this.
+skill_description() {
+  frontmatter_text "$1" | awk '
+    /^description:/ && !found {
+      found = 1
+      val = $0
+      sub(/^description:[[:space:]]*/, "", val)
+      if (val ~ /^[|>][+-]?[[:space:]]*$/) { collecting = 1 } else { text = text val }
+      next
+    }
+    collecting && /^[[:space:]]/ { text = text " " $0; next }
+    collecting { collecting = 0 }
+    END { gsub(/[[:space:]]+/, "", text); print text }
+  '
+}
+
 # 4.2 — every skills/*/SKILL.md has frontmatter name == its containing directory, and a
-# non-empty description.
+# non-empty description (Gap B: a bare 'description: >' with its folded body deleted used to
+# pass, because the old check only looked at whether the line *after* 'description:' was
+# non-blank — which is also true of the next frontmatter key entirely. Extracting the actual
+# collected value closes that).
 bad_list=""
 for f in "$root"/skills/*/SKILL.md; do
   dir="$(dirname "$f")"
   base="$(basename "$dir")"
-  name_field="$(sed -n 's/^name: *//p' "$f" | head -1 | tr -d '[:space:]')"
+  fm="$(frontmatter_text "$f")"
+  name_field="$(printf '%s\n' "$fm" | sed -n 's/^name: *//p' | head -1 | tr -d '[:space:]')"
   [ "$name_field" = "$base" ] || bad_list="$bad_list $f(name='$name_field' != '$base')"
-  if ! grep -q '^description:' "$f"; then
-    bad_list="$bad_list $f(no description key)"
-  else
-    desc_lineno="$(grep -n '^description:' "$f" | head -1 | cut -d: -f1)"
-    next_content="$(sed -n "$((desc_lineno+1))p" "$f")"
-    [ -n "$(printf '%s' "$next_content" | tr -d '[:space:]')" ] || bad_list="$bad_list $f(empty description)"
-  fi
+  desc="$(skill_description "$f")"
+  [ -n "$desc" ] || bad_list="$bad_list $f(empty description)"
 done
 if [ -z "$bad_list" ]; then
   ok "4.2 every skills/*/SKILL.md has frontmatter name == its directory, non-empty description"
@@ -452,7 +652,7 @@ fi
 # five forms documented in its "WIP checkpoint vocabulary" section, written complete on ONE line.
 # Step 2b classifies a leftover branch by these messages, and worktree mode emits them with
 # 'git -C <worktree>' in front — a new variant, or one wrapped across lines, breaks that silently.
-bt="$(printf '\140')"
+# ($bt is defined once, near the top-level helpers, and reused here.)
 wip_canon="$root/skills/issue-implementer/SKILL.md"
 wip_ok='^wip: (checkpoint ([a-z-]+|<stage>)|([a-z-]+|<stage>) died|context exhausted|interrupted run|blocked — .*) \(#<n(umber)?>\)$|^wip: blocked — …$'
 wip_list="$(grep -o "wip: [^${bt}\"]*" "$wip_canon")"
@@ -539,6 +739,46 @@ if [ -f "$wf" ] && grep -qF -- 'bash dev/selfcheck.sh' "$wf"; then
   ok "4.9 .github/workflows/selfcheck.yml runs 'bash dev/selfcheck.sh'"
 else
   bad "4.9 .github/workflows/selfcheck.yml missing or does not run 'bash dev/selfcheck.sh'"
+fi
+
+# 4.10 — one-statement dedupe for skills/*/SKILL.md: the #4/#21 invariant 3.6 applies to
+# agents/*.md, extended here to skills at any '#'-'####' heading granularity (frontmatter and
+# fenced blocks excluded via prose_tsv's fence toggle). A line matching the cross-reference ERE
+# ("stated once", "defined once", "lives solely in", "exists nowhere else") is the pointer the
+# #21 dedupe pass deliberately introduced and is excluded before counting — it names where the
+# real statement lives rather than restating it. Within-section repetition stays legal: that is
+# what the merge pass's legitimate concentration of merge-authority phrasing in one section
+# looks like. Same note as 3.6: a false positive is resolved by rewording the prose or by
+# adjusting this table with a comment — never by deleting the check.
+kw10_ids="merge-authority push-boundary sequencing read-only"
+kw10_pattern() {
+  case "$1" in
+    merge-authority) printf '%s' 'merge authority|never merge' ;;
+    push-boundary)   printf '%s' 'never push to the default|push to the default branch' ;;
+    sequencing)      printf '%s' 'one at a time|never in parallel' ;;
+    read-only)       printf '%s' 'read-only' ;;
+  esac
+}
+xref10_pat='(stated|defined) once|lives solely in|exists nowhere else'
+bad_list=""
+for f in "$root"/skills/*/SKILL.md; do
+  tsv="$(prose_tsv "$f" '^(#|##|###|####) ')"
+  for kwid in $kw10_ids; do
+    pat="$(kw10_pattern "$kwid")"
+    matches="$(printf '%s\n' "$tsv" | grep -iE -- "$pat" | grep -viE -- "$xref10_pat")"
+    [ -z "$matches" ] && continue
+    sections="$(printf '%s\n' "$matches" | cut -f2 | sort -u)"
+    nsec="$(printf '%s\n' "$sections" | grep -c '.')"
+    if [ "$nsec" -gt 1 ]; then
+      detail="$(printf '%s\n' "$matches" | awk -F'\t' -v ff="$f" '{print ff":"$1" ["$2"]"}' | tr '\n' ' ')"
+      bad_list="$bad_list keyword=$kwid: $detail;"
+    fi
+  done
+done
+if [ -z "$bad_list" ]; then
+  ok "4.10 no merge-authority/push-boundary/sequencing/read-only keyword restated across more than one section of the same skills/*/SKILL.md"
+else
+  bad "4.10 keyword restated across sections —$bad_list"
 fi
 
 # ============================================================================
