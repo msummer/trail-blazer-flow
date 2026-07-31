@@ -241,6 +241,9 @@ reconcile-ledger.sh - <<'LEDGER'
 LEDGER
 ```
 
+This heredoc form is covered by the single `Bash(reconcile-ledger.sh:*)` grant — a heredoc body
+is not split into separately-matched subcommands — verified live; see README "Safety model".
+
 No output and exit 0 means every queued issue is accounted for. Otherwise it prints one line per
 discrepancy and exits 1 (an expected non-zero exit, not a tool failure). The script detects; the
 call is yours:

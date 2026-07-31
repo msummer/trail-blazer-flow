@@ -191,6 +191,35 @@ if [ -f "$settings" ]; then
   else
     wrn "allow-list predates v1.6.4 — missing 'reconcile-ledger.sh'; re-copy the permissions block from the plugin's templates/repo-settings.json"
   fi
+  # v1.8.1 entries: worktree-parallel mode's per-worktree git commands run as
+  # `git -C <worktree> <sub> ...`, which does not match the bare `Bash(git <sub>:*)`-style
+  # rules — a missing grant stalls a swarm run's serial per-worktree step (2e) behind a
+  # permission prompt.
+  v181_missing=""
+  for e in "git -C * status " "git -C * add " "git -C * commit " "git -C * push " \
+           "git -C * restore " "git -C * diff " "git -C * rev-parse " \
+           "git -C * merge-base " "git -C * reset --soft "; do
+    grep -qF -- "Bash($e" "$settings" || v181_missing="$v181_missing '$e'"
+  done
+  if [ -n "$v181_missing" ]; then
+    wrn "allow-list predates v1.8.1 — missing:$v181_missing; re-copy the permissions block from the plugin's templates/repo-settings.json"
+  else
+    ok "allow-list includes the v1.8.1 -C entries (worktree-parallel git commands)"
+  fi
+  # v1.8.1 deny mirrors: without these, a `-C`-form allow (above) has no matching `-C`-form
+  # deny, so e.g. `git -C <worktree> push --force` or `git -C <worktree> reset --hard` would
+  # bypass a guard that stops the bare form — strictly less safe than before v1.8.1.
+  v181_deny_missing=""
+  for e in "git -C * push --force" "git -C * push -f" "git -C * push --force-with-lease" \
+           "git -C * reset --hard" "git -C * clean" "git -C * branch -D main" \
+           "git -C * push origin main"; do
+    grep -qF -- "Bash($e" "$settings" || v181_deny_missing="$v181_deny_missing '$e'"
+  done
+  if [ -n "$v181_deny_missing" ]; then
+    wrn "deny-list predates v1.8.1 — missing -C mirror(s):$v181_deny_missing; worktree-mode force-push / reset --hard guards are bypassable via 'git -C <worktree> ...' until you re-copy the permissions block from the plugin's templates/repo-settings.json"
+  else
+    ok "deny-list includes the v1.8.1 -C deny mirrors (worktree-parallel force-push / reset --hard guards)"
+  fi
 else
   bad "no .claude/settings.json — create one from the plugin's templates/repo-settings.json (permissions + enabledPlugins); plugins cannot ship permission grants"
 fi

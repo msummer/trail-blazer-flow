@@ -26,9 +26,11 @@ the gate checks shell syntax/portability, JSON manifest validity, and the cross-
 instruction-file contracts the skills silently depend on (the `<!-- planner-plan -->` marker,
 one `# Constraints` section per agent, the harness-status line grammar, no constraint keyword
 restated across sections of the same file, the `<!-- ratchet-issue -->` marker, the
-`setup-labels.sh` ↔ doctor label bijection, and the policy-section titles the skills read), plus
-the behavior of `bin/reconcile-ledger.sh` against fabricated inputs. A change the gate can't
-catch needs a new assertion in the gate, not a waiver.
+`setup-labels.sh` ↔ doctor label bijection, the policy-section titles the skills read, and the
+git permission-mirror invariants in `templates/repo-settings.json` — the `-C` allow forms
+`skills/issue-implementer/SKILL.md` mandates, and the bare↔`-C` mirroring of its own git
+allow/deny entries), plus the behavior of `bin/reconcile-ledger.sh` against fabricated inputs. A
+change the gate can't catch needs a new assertion in the gate, not a waiver.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor. Onboarding it here would mean checking in a `.claude/settings.json` that

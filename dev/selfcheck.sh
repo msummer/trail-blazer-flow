@@ -8,9 +8,11 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 24 assertions total:
+# Five groups, 26 assertions total:
 #   1. shell syntax and portability (bin/*.sh, this script)
-#   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json)
+#   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json), plus the
+#      permission allow/deny mirroring between templates/repo-settings.json's `git -C` entries
+#      and the `-C` forms skills/issue-implementer/SKILL.md mandates
 #   3. agent instruction-file invariants (agents/*.md: frontmatter, one fenced template
 #      block, the harness-status line grammar, the #4 dedupe invariant, required headings)
 #   4. cross-file markers and skills (the planner-plan and ratchet-issue markers, skill
@@ -153,6 +155,63 @@ else
   msg="2.4 bijection broken:"
   [ -n "$scripts_without_grant" ] && msg="$msg bin/ script(s) with no allow entry: $(printf '%s' "$scripts_without_grant" | tr '\n' ' ');"
   [ -n "$grants_without_script" ] && msg="$msg allow entry(ies) with no bin/ script: $(printf '%s' "$grants_without_script" | tr '\n' ' ');"
+  bad "$msg"
+fi
+
+# 2.5 — permission mirror, allow side. Two directions:
+#   (a) coverage: every `git -C <worktree> <sub> ...` form skills/issue-implementer/SKILL.md
+#       mandates has an allow entry `Bash(git -C * <sub> )`. Deliberately one-directional: step
+#       e's blanket "every git command takes `-C <worktree>`" mandates forms the prose never
+#       spells out as a literal command (e.g. `restore --staged`), so the grants may legitimately
+#       exceed what this text extraction finds — that is not a failure.
+#   (b) bare counterpart: every `-C`-form allow entry's subcommand still has a bare `Bash(git
+#       <sub>` allow entry — the mechanical pin that no bare-form rule was removed (sequential
+#       mode depends on them).
+# Whitespace-normalize the skill text first: two of the documented forms wrap across lines, so a
+# line-based grep would silently miss them.
+skill_text="$root/skills/issue-implementer/SKILL.md"
+mandated_subs="$(tr '\n' ' ' < "$skill_text" \
+  | grep -oE 'git -C [^[:space:]]+[[:space:]]+[a-z][a-z-]*' \
+  | sed -E 's/.*[[:space:]]//' \
+  | sort -u)"
+allow_raw="$(jq -r '.permissions.allow[]? // empty' "$settings_json" 2>/dev/null)"
+missing_grant=""
+for tok in $mandated_subs; do
+  printf '%s\n' "$allow_raw" | grep -qF -- "Bash(git -C * $tok " || missing_grant="$missing_grant $tok"
+done
+c_allow_subs="$(printf '%s\n' "$allow_raw" \
+  | grep -oE '^Bash\(git -C \* [a-z][a-z-]*' \
+  | sed -E 's/^Bash\(git -C \* //' \
+  | sort -u)"
+missing_bare=""
+for sub in $c_allow_subs; do
+  printf '%s\n' "$allow_raw" | grep -qF -- "Bash(git $sub" || missing_bare="$missing_bare $sub"
+done
+if [ -z "$missing_grant" ] && [ -z "$missing_bare" ]; then
+  ok "2.5 permission mirror (allow): every -C form the skill mandates is granted, every -C grant has a bare-form counterpart"
+else
+  msg="2.5 permission mirror (allow) broken:"
+  [ -n "$missing_grant" ] && msg="$msg -C form(s) the skill mandates but not granted:$missing_grant;"
+  [ -n "$missing_bare" ] && msg="$msg -C grant(s) with no bare-form counterpart:$missing_bare;"
+  bad "$msg"
+fi
+
+# 2.6 — permission mirror, deny side: every bare git deny has a `-C` mirror, and vice versa.
+# An unmirrored deny is a real bypass (deny rules are prefix-matched the same way as allows, so
+# `git -C <worktree> push --force` would slip past a guard that stops the bare form). The bare
+# extraction pattern excludes `-C` entries automatically — they don't end in `:*)` — and the `*`
+# must be escaped (`:\*)`), or a BRE reads `:*` as "zero or more colons".
+deny_raw="$(jq -r '.permissions.deny[]? // empty' "$settings_json" 2>/dev/null)"
+bare_deny_phrases="$(printf '%s\n' "$deny_raw" | sed -n 's/^Bash(git \(.*\):\*)$/\1/p' | sort -u)"
+c_deny_phrases="$(printf '%s\n' "$deny_raw" | sed -n 's/^Bash(git -C \* \(.*\)\*)$/\1/p' | sort -u)"
+bare_without_mirror="$(comm -23 <(_lines "$bare_deny_phrases") <(_lines "$c_deny_phrases"))"
+mirror_without_bare="$(comm -13 <(_lines "$bare_deny_phrases") <(_lines "$c_deny_phrases"))"
+if [ -z "$bare_without_mirror" ] && [ -z "$mirror_without_bare" ]; then
+  ok "2.6 permission mirror (deny): every bare git deny has a -C mirror and vice versa"
+else
+  msg="2.6 permission mirror (deny) broken:"
+  [ -n "$bare_without_mirror" ] && msg="$msg bare git deny(ies) with no -C mirror: $(printf '%s' "$bare_without_mirror" | tr '\n' ' ');"
+  [ -n "$mirror_without_bare" ] && msg="$msg -C deny mirror(s) with no bare counterpart: $(printf '%s' "$mirror_without_bare" | tr '\n' ' ');"
   bad "$msg"
 fi
 

@@ -641,15 +641,29 @@ it, same as any other version.
 
 For **v1.6.4 → v1.7.0**, nothing migrates: the release adds the supervisor loop and the
 stale-branch / stale-worktree handling to the `issue-implementer` skill's worktree-parallel mode
-— instruction text only. No new permission grant is needed (`Bash(git worktree:*)`, granted since
-v1.3, already covers `git worktree list`, `prune`, and `remove`), no new script, no label or
-baseline change; repos that never use worktree-parallel mode are unaffected.
+— instruction text only. The `Bash(git worktree:*)` grant, in place since v1.3, covers
+`git worktree list`, `prune`, and `remove` — the main checkout's worktree management — but it
+does **not** cover the `git -C <worktree> …` commands that mode's serial per-worktree work (step
+2e) issues; see the v1.8.1 entry below for the `-C` grants that mode actually needs. No new
+script, no label or baseline change; repos that never use worktree-parallel mode are unaffected.
 
 For **v1.7.0 → v1.8.0**, one item: **a new label** — run `setup-labels.sh` once (idempotent);
 v1.8.0 adds `test-ratchet`, the provenance label on issues the test-suite ratchet files. No new
 permission grant is needed (`gh issue create` has been granted since v1.1), no new script, no
 baseline change; repos with no "Test-suite ratchet policy" section in `CLAUDE.md` are otherwise
 unaffected — the ratchet never runs.
+
+For **v1.8.0 → v1.8.1**, one item: **new permission grants and denies** for worktree-parallel
+mode. Re-copy (or merge) the `permissions` block from the plugin's
+`templates/repo-settings.json` into `.claude/settings.json` — the `git -C <path> …` commands the
+swarm issues inside each worktree do not match the bare `Bash(git add:*)`-style rules, so without
+the new entries every git command the swarm issues inside a worktree stalls behind a permission
+prompt (the main checkout's `git worktree`/`git branch`/`git log` commands are bare-form and
+unaffected). **Copy the `deny` additions too**:
+deny rules are prefix-matched the same way, so `-C`-form allows without `-C`-form denies would
+let `git -C <worktree> push --force` past a guard that stops the bare form. Nothing else
+migrates; repos that never use worktree-parallel mode are unaffected, and sequential mode is
+unchanged. `check-harness.sh` names exactly what's missing, same as any other version.
 
 Optional, not required: add a **"Plan auto-approval policy"** section to `CLAUDE.md` if you
 want the planner to approve low-risk plans for you — without it, behavior stays fully manual,
@@ -672,7 +686,11 @@ resilience mechanism (see "Resilience: checkpointing, retries, and the dispatch 
 summary table — advisory only, its absence just costs `duration: unknown`),
 `Bash(git reset --soft:*)` and `Bash(git merge-base:*)` (collapsing a run's WIP checkpoints into
 one clean commit before the PR — `git reset --soft` never touches the working tree, only where
-HEAD points; see "Safety model"). The template allows `pnpm`, `npm`,
+HEAD points; see "Safety model"). Nine further `Bash(git -C * <sub> *)` allow entries exist
+solely for worktree-parallel mode (see the `issue-implementer` skill's "Supervisor loop" and
+"Swarm procedure" sections). Separately, the seven bare `git` deny entries above each gained a
+`git -C * …` mirror, so a worktree-mode command can't slip past a guard the bare form already
+stops — see "Safety model" for why the mirror matters. The template allows `pnpm`, `npm`,
 `yarn`, and `pytest`; if your repo uses a
 different toolchain, add it — the doctor warns when it detects a toolchain the list doesn't
 cover — e.g.:
@@ -697,7 +715,17 @@ not "nothing committed": WIP checkpoint commits accumulate locally during a run 
 for collapsing those checkpoints, only moves what a branch points at — it never touches the
 working tree or deletes any file, so it carries none of the risk `reset --hard` does; the
 `Bash(git reset --hard:*)` deny is unchanged and, like every deny, takes precedence over any
-allow entry.
+allow entry. Bash rules are prefix-matched, and a `git -C <path> …` command does **not** match a
+bare-subcommand rule — allow or deny — which is why the template carries `-C`-form entries on
+both sides, in two different shapes: the nine allows use `Bash(git -C * <sub> *)` (one per `-C`
+form worktree-parallel mode issues), while every bare git deny — not only the ones worktree mode
+itself issues — gets a no-space trailing-wildcard `-C` mirror, e.g. `Bash(git -C * push --force*)`
+and `Bash(git -C * clean*)` (see "The per-repo settings file"): an unmirrored deny would be a
+real bypass (e.g. `git -C <worktree> push --force` slipping past a guard that stops the bare
+form). A heredoc body
+(e.g. `reconcile-ledger.sh - <<'LEDGER'`, used by `issue-cycle`) is not split into
+separately-matched subcommands, so it stays covered by its single prefix grant. Both facts were
+verified by live probe against Claude Code 2.1.220 (#41, #39).
 
 Two honest caveats. First, the implementer's "no git" rule is enforced by prompt, not by
 permissions: the settings allow-list must permit git for the orchestrator, and permission
@@ -751,8 +779,11 @@ bash dev/selfcheck.sh
 It checks shell syntax/portability, the JSON manifests, and the cross-file instruction-file
 invariants the skills silently depend on (template markers, the harness-status line grammar, one
 `# Constraints` section per agent, no constraint keyword restated across sections, the label
-bijection between `setup-labels.sh` and the doctor, and the policy-section titles the skills
-read), plus the behavior of `reconcile-ledger.sh` against fabricated ledger and status inputs.
+bijection between `setup-labels.sh` and the doctor, the policy-section titles the skills read,
+and the git permission-mirror invariants in `templates/repo-settings.json` — the `-C` allow forms
+`skills/issue-implementer/SKILL.md` mandates, and the bare↔`-C` mirroring of its own git
+allow/deny entries), plus the behavior of `reconcile-ledger.sh` against fabricated ledger and
+status inputs.
 This repo
 deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the *consumer*
 doctor, and onboarding it here would mean registering this repo's own published marketplace and

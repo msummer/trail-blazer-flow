@@ -614,7 +614,11 @@ e. **As each implementer completes, run steps 2d–2e for that worktree** (mecha
      checkpoints are `git -C <worktree> add -A && git -C <worktree> commit -m
      "wip: checkpoint <stage> (#<n>)"`, and the pre-final-commit collapse is `git -C <worktree>
      reset --soft "$(git -C <worktree> merge-base <default-branch> HEAD)"` — the merge base is
-     computed per worktree, which is what makes a resumed branch collapse correctly;
+     computed per worktree, which is what makes a resumed branch collapse correctly. These forms
+     need the `git -C` grants added in v1.8.1 — a permission prompt on any of them means this
+     repo's `.claude/settings.json` predates them; finish that issue sequentially instead and
+     tell the human to re-copy the `permissions` block from the plugin's
+     `templates/repo-settings.json`;
    - **the checkpoint lands in the worktree, not the main checkout**, which stays on the default
      branch, untouched, for the whole swarm;
    - **on a resumed branch there is nothing to create** — step b already attached it, so the
@@ -623,7 +627,8 @@ e. **As each implementer completes, run steps 2d–2e for that worktree** (mecha
      verification command you quote.
    Kickbacks re-dispatch the implementer into the same worktree and rejoin the parallel lane,
    counting against the concurrency bound; the checks, the verifier, and your own git/gh work
-   stay serialized. Then commit/push/PR with `git -C <worktree> ...`.
+   stay serialized. Then commit/push/PR, with push as
+   `git -C <worktree> push -u origin "claude/<number>-<slug>"`.
 
 f. **Clean up each worktree once its issue is terminal** — its PR is open *and* its deferred CI
    watch (plus any CI-fix attempt) has drained, or it took the blocked path and its `wip:` commit
