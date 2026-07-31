@@ -45,7 +45,7 @@ Re-run the script after fixes; it is idempotent.
 ### 2. CLAUDE.md audit (the judgment step)
 
 Read the repo's `CLAUDE.md` and judge it against the contract (see "The CLAUDE.md contract"
-in the plugin README) — not "does it exist" but **"could a smaller-model implementer act on
+in the plugin README) — not "does it exist" but **"could a fresh-context implementer act on
 it without guessing?"**:
 
 1. **Verification commands** — are the commands that define "done" stated, copy-pasteable from
