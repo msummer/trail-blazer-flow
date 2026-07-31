@@ -71,7 +71,8 @@ recorded is an **escalated skipped stage**, never a silent drop.
 ### 0. Pre-flight
 
 Run the issue-implementer skill's pre-flight (step 0) **up front**: gh auth, the dirty-tree /
-crash-recovery rules, `cleanup-after-merge.sh --fix`, and the **baseline refresh**. Doing the
+crash-recovery rules (including the stale-worktree sweep, which must run before the hygiene
+script), `cleanup-after-merge.sh --fix`, and the **baseline refresh**. Doing the
 baseline refresh before planning (not just before implementing) is deliberate: if the default
 branch is red, STOP the cycle and report — planning against a broken main wastes a round, and
 implementing on it is forbidden anyway.

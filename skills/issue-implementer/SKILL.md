@@ -189,9 +189,33 @@ everywhere this doc says "the default branch".
 - **Anywhere else** → STOP and tell the user. That's uncommitted human work; it is never yours
   to move.
 
-This pre-flight recovery handles a dirty tree found at **startup** (a crash from a previous run).
-A dispatch dying or exhausting context **within** the current run is a different case — see
-"Resilient dispatch" for the ladder, checkpoints, and resume brief that cover it.
+**Stale worktrees → sweep.** A run that died mid-swarm leaves worktrees registered, possibly
+dirty, and holding their branches checked out. `git status --porcelain` above says nothing about
+them, and the next sequential run would only find out by failing to check out the branch
+(`fatal: … is already checked out at …`), so sweep them here — before the hygiene run below
+(`cleanup-after-merge.sh` cannot delete a merged branch a stale worktree still holds — the script
+would abort mid-run) — in both modes:
+```bash
+git worktree prune                # forget registrations whose directory is gone
+git worktree list --porcelain     # what is still attached, and to which branch
+```
+For each surviving worktree named `<repo-dirname>-wt-<number>` (the name step b of
+"Worktree-parallel mode" creates): if `git -C <path> status --porcelain` is non-empty (these
+`-C` forms need the v1.8.1 grants — see step e of "Worktree-parallel mode"), preserve the work
+where it stands —
+`git -C <path> add -A && git -C <path> commit -m "wip: interrupted run (#<number>)"`.
+Post a short comment on issue `<number>` ("a previous run's worktree for this issue was cleared;
+anything it had committed remains on `<branch>`" — add "the issue will be re-attempted" if it has
+no open PR), then `git worktree remove <path>`. If removal refuses over leftover
+untracked/ignored files (`node_modules`, a `.venv`), re-run it with `--force`: the tracked work
+is committed on the branch by then, and the branch outlives the worktree. A path that is **not**
+one of ours is never yours to remove — leave it; if it holds a branch this batch needs, skip that
+issue and tell the human. Report every sweep in the summary.
+
+This pre-flight recovery handles what a previous run left behind at **startup** — a dirty main
+checkout and stale worktrees alike. A dispatch dying or exhausting context **within** the current
+run is a different case — see "Resilient dispatch" for the ladder, checkpoints, and resume brief
+that cover it.
 
 **Sync & hygiene:** run
 
@@ -270,7 +294,7 @@ git checkout -b "claude/<number>-<slug>"
   not rebase or re-cut the branch from the default branch — the pre-flight baseline refresh plus
   the PR's own CI cover any divergence. If the checkout fails because the branch is already
   checked out in another worktree (a swarm run that died before cleanup), sweep that worktree
-  first per step a of "Worktree-parallel mode", then retry. Say so in the summary.
+  first per step 0's stale-worktree sweep, then retry. Say so in the summary.
 - **Any non-wip commit** → real prior work. If an OPEN PR exists for the branch, skip the
   issue and warn (it should be labelled `pr-open`; the label was probably removed by mistake).
   Otherwise stop and warn for that issue — reusing or discarding committed work is the
@@ -498,10 +522,10 @@ Three rules keep one sick worktree from stalling the swarm:
   relaunch, or kickback. For a death that is `git -C <worktree> add -A && git -C <worktree>
   commit -m "wip: implementer died (#<n>)"` (skip if nothing changed); otherwise the
   stage-appropriate message from "WIP checkpoint vocabulary". This is the one place the swarm
-  does *more* than sequential mode, deliberately: a worktree's dirty tree is invisible to the
-  next run's pre-flight (`git status --porcelain` in the main checkout says nothing about it),
-  and the supervisor is busy with other worktrees between a death and its retry. The commit is a
-  no-op when nothing changed, so the vocabulary and the classification rule are untouched.
+  does *more* than sequential mode, deliberately: a dirty worktree is only recovered by the
+  *next* run's pre-flight sweep (step 0) — too late for this run — and the supervisor is busy
+  with other worktrees between a death and its retry. The commit is a no-op when nothing changed,
+  so the vocabulary and the classification rule are untouched.
 - **Backoff waits go last.** Run the ladder's `sleep` for a dead worktree only after every other
   worktree's ready work in that round is drained — a 240s wait must never be why another
   worktree's PR is late.
@@ -532,21 +556,9 @@ reconciles exactly like a sequential one.
 
 ### Swarm procedure
 
-a. **Sweep stale worktrees first** (once, before creating any). A run that died mid-swarm leaves
-   worktrees registered, possibly dirty, and holding their branches checked out — and step 0's
-   pre-flight inspects only the main checkout, so nothing else catches them:
-```bash
-git worktree prune                # forget registrations whose directory is gone
-git worktree list --porcelain     # what is still attached, and to which branch
-```
-   For each surviving worktree named `<repo-dirname>-wt-<number>`: if
-   `git -C <path> status --porcelain` is non-empty, preserve the work where it stands —
-   `git -C <path> add -A && git -C <path> commit -m "wip: interrupted run (#<number>)"` — then
-   `git worktree remove <path>`. If removal refuses over leftover untracked/ignored files
-   (`node_modules`, a `.venv`), re-run it with `--force`: the tracked work is committed on the
-   branch by then, and the branch outlives the worktree. A path that is **not** one of ours is
-   never yours to remove — leave it; if it holds a branch this batch needs, skip that issue and
-   tell the human. Report every sweep in the summary.
+a. **Stale worktrees are already swept.** Step 0's pre-flight does it once per run, before any
+   issue work and in both modes — nothing to repeat here. If a straggler survives it, step b's
+   last bullet routes back to that rule.
 
 b. **Create one worktree per issue** (siblings of the repo, never nested inside it). The branch
    may already exist — resume-not-restart makes leftover wip branches routine — so classify
@@ -579,10 +591,11 @@ git worktree add "../<repo-dirname>-wt-<number>" "<branch>"
        `pr-open` label was dropped by mistake; otherwise reusing or discarding committed work is
        the human's call). The rest of the batch proceeds without it.
    - **`git worktree add` refuses because the branch is already checked out in another
-     worktree** → step a missed one whose directory still exists. Re-read
-     `git worktree list --porcelain`, apply step a's rule to that path, and retry. If it instead
-     refuses because the *path* exists but is not registered, stop and tell the human — never
-     delete a directory to clear the way (`rm -rf` is deny-listed, and for good reason).
+     worktree** → step 0's sweep missed one whose directory still exists. Re-read
+     `git worktree list --porcelain`, apply the step-0 sweep's rule to that path, and retry. If
+     it instead refuses because the *path* exists but is not registered, stop and tell the
+     human — never delete a directory to clear the way (`rm -rf` is deny-listed, and for good
+     reason).
 
 c. **Dispatch the implementers as one batch** (up to the concurrency bound; they run
    concurrently). Each prompt is exactly as in step 2c — including the dispatch attempt number,
@@ -645,8 +658,8 @@ git worktree remove "../<repo-dirname>-wt-<number>"
 
 g. Everything else is unchanged: same labels, same PR contract, same CI-fix budget, same summary
    table — add a worktree/parallel column so the human knows which mode ran, and note per issue
-   whether its branch was created fresh, resumed, or reset, and whether step a swept a stale
-   worktree for it.
+   whether its branch was created fresh, resumed, or reset, and whether the pre-flight sweep
+   (step 0) swept a stale worktree for it.
 
 ## Notes
 
