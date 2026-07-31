@@ -113,6 +113,8 @@ p_1_4_comment() {
   printf '# mentions mapfile, readarray, sed -i, grep -P, readlink -f, declare -A here\n' \
     | append "$1/bin/harness-status.sh"
 }
+p_1_5()               { printf 'git branch -D "$stale" >/dev/null\n' | append "$1/bin/harness-status.sh"; }
+p_1_5_guarded()        { printf 'git branch -D "$stale" || true\n' | append "$1/bin/harness-status.sh"; }
 p_2_1() {
   # PREPEND the stray '{' (not append): jq streams top-level values, so appending garbage
   # after an already-complete, valid document still lets '.plugins[0].name' resolve from that
@@ -162,6 +164,8 @@ cases=(
   "1.1-dev|1.1|p_1_1_dev|append a stray 'if [' to dev/selfcheck-tests.sh itself (syntax error)"
   "1.4-mapfile|1.4|p_1_4_mapfile|append a bare 'mapfile' invocation to bin/harness-status.sh"
   "1.4-mentions||p_1_4_comment|control: a single #-comment naming all five constructs"
+  "1.5|1.5|p_1_5|append a bare, unchecked 'git branch -D' to bin/harness-status.sh"
+  "1.5-guarded||p_1_5_guarded|control: the same delete with a '|| true' fallback is not flagged"
   "2.1|2.1 2.3|p_2_1|prepend a stray '{' to marketplace.json (invalid JSON; blanks 2.3's jq read too)"
   "2.4-missing-grant|2.4|p_2_4_missing_grant|drop the Bash(harness-status.sh:*) allow entry"
   "2.4-orphan-grant|2.4|p_2_4_orphan_grant|add an allow entry for a bin/ script that doesn't exist"
