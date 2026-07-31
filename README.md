@@ -806,7 +806,9 @@ policy-section titles the skills read, the CI workflow's gate command, `agents/v
 lettered Process checks `a.`–`g.`
 matching CLAUDE.md's own `rule Nx` citations, and the git permission-mirror invariants in
 `templates/repo-settings.json` — the `-C` allow forms `skills/issue-implementer/SKILL.md`
-mandates, and the bare↔`-C` mirroring of its own git allow/deny entries), plus the behavior of
+mandates, and the bare↔`-C` mirroring of its own git allow/deny entries — and the ledger stage
+vocabulary shared by `bin/reconcile-ledger.sh` and `skills/issue-implementer/SKILL.md`'s
+status-line grammar (`seed` excepted — it is ledger-only)), plus the behavior of
 `reconcile-ledger.sh` against fabricated ledger and status inputs.
 
 The same command also runs in CI on every pull request (`.github/workflows/selfcheck.yml`), so

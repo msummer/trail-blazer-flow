@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 32 assertions total:
+# Five groups, 33 assertions total:
 #   1. shell syntax and portability (bin/*.sh, dev/*.sh, and no GNU-only constructs in either)
 #   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json), plus the
 #      permission allow/deny mirroring between templates/repo-settings.json's `git -C` entries
@@ -22,7 +22,8 @@
 #      #4 dedupe invariant extended to skills/*/SKILL.md, that bin/check-harness.sh reads
 #      .claude/settings.json only through jq — never a raw-text grep/sed/awk of the file —
 #      and the follow-up justification phrase shared by planner.md's template and the
-#      implementer skill's filing step)
+#      implementer skill's filing step; and the ledger stage vocabulary shared by
+#      bin/reconcile-ledger.sh and the implementer skill's status-line grammar)
 #   5. bin/ script behavior (reconcile-ledger.sh against fabricated ledger/status inputs)
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
@@ -824,6 +825,82 @@ if [ -z "$missing" ]; then
   ok "4.12 follow-up justification phrase present in agents/planner.md's fenced template and skills/issue-implementer/SKILL.md"
 else
   bad "4.12 follow-up justification phrase missing from:$missing"
+fi
+
+# 4.13 — ledger stage vocabulary: bin/reconcile-ledger.sh's accepted stage list
+# (`case "$f_stage" in`) must agree with skills/issue-implementer/SKILL.md's status-line
+# grammar (`stage=<...>`) — with 'seed' as the one documented ledger-only exception — and the
+# script's own internal enumerations (vocab()'s case arms, and the record-check loop's
+# `for s in ...; do`) must cover exactly that same non-'seed' set. Failure mode this guards: a
+# stage added to one file and not the other means a live issue-cycle run either has its ledger
+# rejected by reconcile-ledger.sh's `die` (exit 2, aborting step 5's reconciliation mid-cycle)
+# or silently mis-vocabbed inside the script itself, rather than failing this gate before it
+# ships. 'seed' is exempt because issue-cycle step 0 writes 'seed' ledger rows directly from the
+# discovery bucket; no planner/implementer/verifier/merge status line ever carries
+# `stage=seed` (skills/issue-cycle/SKILL.md's step 0). Honest limit: this pins vocabulary
+# agreement across these sites, never that any given stage is actually dispatched.
+rl="$root/bin/reconcile-ledger.sh"
+sk="$root/skills/issue-implementer/SKILL.md"
+bad_list=""
+hs_count="$(grep -c 'harness-status: stage=<' "$sk")"
+if [ "$hs_count" -ne 1 ]; then
+  bad_list=" extraction failed — skills/issue-implementer/SKILL.md's status-line grammar count is $hs_count, expected 1 (structure changed)"
+else
+  accepted="$(awk '/case "\$f_stage" in/{f=1;next} f&&/esac/{exit} f' "$rl" \
+    | sed -nE 's/^[[:space:]]*([a-z][a-z|-]*)\).*/\1/p' | tr '|' '\n' | sort -u)"
+  skill_stages="$(sed -nE 's/.*harness-status: stage=<([^>]*)>.*/\1/p' "$sk" | tr '|' '\n' | sort -u)"
+  vocab_stages="$(awk '/^vocab\(\)/{f=1;next} f&&/^}/{exit} f' "$rl" \
+    | sed -nE 's/^[[:space:]]*([a-z][a-z-]*)\).*/\1/p' | sort -u)"
+  loop_stages="$(sed -nE 's/^[[:space:]]*for s in ([a-z].*); do$/\1/p' "$rl" | tr ' ' '\n' | sort -u)"
+  if [ -z "$accepted" ] || [ -z "$skill_stages" ] || [ -z "$vocab_stages" ] || [ -z "$loop_stages" ]; then
+    bad_list=" extraction failed — reconcile-ledger.sh/SKILL.md structure changed (one or more extracted lists came back empty)"
+  else
+    # the one documented ledger-only stage: written by issue-cycle step 0 from the discovery
+    # bucket, never emitted as an agent/orchestrator status line. Filtered with 'for' +
+    # string-compare, not a 'case " $x " in *" $y "*)' pattern: inside $( ), bash 3.2 mis-parses
+    # the ')' closing ANY case-arm pattern — loop or not, single- or multi-line (direct repro
+    # confirmed); safe fixes: '(pattern)' arms, backticks, or skip 'case' entirely, as here.
+    ledger_only_stages="seed"
+    agent_stages="$(for s in $accepted; do
+      is_exempt=0
+      for e in $ledger_only_stages; do
+        [ "$s" = "$e" ] && is_exempt=1 && break
+      done
+      [ "$is_exempt" -eq 1 ] || printf '%s\n' "$s"
+    done)"
+
+    # clause (a) — cross-file, both directions.
+    script_not_skill="$(comm -23 <(_lines "$agent_stages") <(_lines "$skill_stages"))"
+    skill_not_script="$(comm -13 <(_lines "$agent_stages") <(_lines "$skill_stages"))"
+    [ -n "$script_not_skill" ] && bad_list="$bad_list stage(s) the script accepts with no status-line alternative: $(printf '%s' "$script_not_skill" | tr '\n' ' ');"
+    [ -n "$skill_not_script" ] && bad_list="$bad_list status-line stage(s) the script would reject: $(printf '%s' "$skill_not_script" | tr '\n' ' ');"
+
+    # clause (b) — exemption liveness: every documented ledger-only stage must still be
+    # accepted by the script (catches the removal direction clause (a) is blind to).
+    missing_exempt=""
+    for s in $ledger_only_stages; do
+      printf '%s\n' "$accepted" | grep -qxF -- "$s" || missing_exempt="$missing_exempt $s"
+    done
+    [ -n "$missing_exempt" ] && bad_list="$bad_list documented ledger-only stage(s) no longer accepted by the script:$missing_exempt;"
+
+    # clause (c) — intra-file agreement: a stage accepted by the case arm but missing from
+    # vocab() makes every row for it emit a bogus unknown-outcome; missing from the
+    # record-check loop makes its rows accepted and never checked — the silent skip the
+    # ledger exists to prevent.
+    va="$(comm -23 <(_lines "$agent_stages") <(_lines "$vocab_stages"))"
+    av="$(comm -13 <(_lines "$agent_stages") <(_lines "$vocab_stages"))"
+    [ -n "$va" ] && bad_list="$bad_list stage(s) accepted but missing from vocab(): $(printf '%s' "$va" | tr '\n' ' ');"
+    [ -n "$av" ] && bad_list="$bad_list vocab() stage(s) not in the accepted list: $(printf '%s' "$av" | tr '\n' ' ');"
+    la="$(comm -23 <(_lines "$agent_stages") <(_lines "$loop_stages"))"
+    al="$(comm -13 <(_lines "$agent_stages") <(_lines "$loop_stages"))"
+    [ -n "$la" ] && bad_list="$bad_list stage(s) accepted but missing from the record-check loop: $(printf '%s' "$la" | tr '\n' ' ');"
+    [ -n "$al" ] && bad_list="$bad_list record-check loop stage(s) not in the accepted list: $(printf '%s' "$al" | tr '\n' ' ');"
+  fi
+fi
+if [ -z "$bad_list" ]; then
+  ok "4.13 ledger stage vocabulary agrees: reconcile-ledger.sh accepts exactly issue-implementer/SKILL.md's status-line stages plus 'seed'"
+else
+  bad "4.13 ledger stage vocabulary drift:$bad_list"
 fi
 
 # ============================================================================
