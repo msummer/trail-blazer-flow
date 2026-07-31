@@ -45,14 +45,23 @@ issue it touches, using the outcome each sub-skill's dispatch reports via the st
 contract (see the issue-implementer skill's "Resilient dispatch" — cited here by name, not
 restated).
 
+**Serialized form:** the ledger lives in context, but step 4 hands it to `reconcile-ledger.sh`
+as one whitespace-separated record per line — `<issue> <stage> <outcome> [retries]`, where
+`stage` is `seed` (the step-0 row, whose outcome is the discovery bucket the issue came from,
+or `-`) or `planner` / `implementer` / `verifier` / `merge`. Write a record only for a stage
+this run actually **dispatched**: a stage never reached is simply absent, never a `-` row —
+that value means "dispatched, outcome not recorded", which the script flags. A dispatch's
+verbatim status line counts as a record, so lines can be pasted instead of transcribed, and
+the last record wins for the same issue+stage (a same-run revision just appends).
+
 **Pre-advance check:** before moving an issue on to its next stage, check the ledger — a stage
 with no ledger entry is **launched, not assumed**. This is what stops an issue from silently
 skipping a stage: the cycle never infers "must have been fine" from an empty cell.
 
-**Closing reconciliation (step 4):** compare the ledger against the `harness-status.sh` JSON step
-4 already collects. Any issue the cycle intended to act on this run that still sits in the same
-discovery bucket with no ledger outcome is reported as an **escalated skipped stage** — never a
-silent drop.
+**Closing reconciliation (step 4):** `reconcile-ledger.sh` compares the serialized ledger
+against the live queues and prints one line per discrepancy (invocation in step 4). It
+**detects**; the judgment stays here — an issue still queued for a stage the ledger never
+recorded is an **escalated skipped stage**, never a silent drop.
 
 ## Procedure
 
@@ -69,7 +78,9 @@ baseline degrades comparisons; it doesn't block the cycle.
 
 **Seed the dispatch ledger.** Run `find-planning-work.sh` and `find-implementation-work.sh`
 (both idempotent, read-only) to learn the full universe of issues this run might touch, and add
-one ledger row per issue found (all four stage columns empty). Steps 1 and 2 below re-run their
+one ledger row per issue found (all four stage columns empty), noting which discovery bucket it
+came from — that bucket is the row's `seed` record when step 4 serializes the ledger. Steps 1
+and 2 below re-run their
 own discovery internally as part of their normal procedure — that's expected, not wasted work —
 but the ledger's up-front seed is what lets the pre-advance checks and step 4's reconciliation
 catch a stage that never got touched.
@@ -178,11 +189,33 @@ a hard `main`-red stop) are for cases that need the human's attention beyond jus
 harness-status.sh
 ```
 
-**Closing reconciliation.** Compare the dispatch ledger against this JSON: any issue the cycle
-intended to act on this run (it appears in the ledger, seeded at step 0) that still sits in the
-same `harness-status.sh` discovery bucket it started in, with no ledger outcome for the stage
-that should have moved it — report that as an **escalated skipped stage**, not a clean "still
-pending" item. This is the mechanical backstop behind the pre-advance checks in steps 1-3.
+**Closing reconciliation.** Pipe the ledger (serialized per "Dispatch ledger" above) through the
+reconciler — it re-reads live state itself, so no temp file is needed:
+
+```bash
+reconcile-ledger.sh - <<'LEDGER'
+14 seed unplanned 0
+14 planner plan-posted 0
+17 seed ready_to_implement 0
+17 implementer complete 0
+17 verifier pass 0
+LEDGER
+```
+
+No output and exit 0 means every queued issue is accounted for. Otherwise it prints one line per
+discrepancy and exits 1 (an expected non-zero exit, not a tool failure). The script detects; the
+call is yours:
+
+- `stage-skipped`, `outcome-missing`, `unknown-outcome` → an **escalated skipped stage**, not a
+  clean "still pending" item. This is the mechanical backstop behind the pre-advance checks in
+  steps 1-3.
+- `contradiction` → the stage reported success but the issue never left the queue (a label edit
+  or PR step that didn't land). Report it with its evidence and treat the issue as unfinished.
+- `unledgered` → usually an issue filed *during* the run: say so and let the next cycle take it.
+  If it was in the pre-flight discovery output, the seed step missed it — escalate that.
+
+If the script isn't on the PATH (an older install), fall back to comparing the ledger against
+the JSON by hand, on the same criteria.
 
 **Per-issue summary table.** Before the two-halves report below, print the ledger as a table:
 issue, planned / implemented / verified / merged (outcome or "—"), retries (ladder + resume,

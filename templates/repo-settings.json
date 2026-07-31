@@ -19,6 +19,7 @@
       "Bash(cleanup-after-merge.sh:*)",
       "Bash(check-harness.sh:*)",
       "Bash(harness-status.sh:*)",
+      "Bash(reconcile-ledger.sh:*)",
       "Bash(gh issue list:*)",
       "Bash(gh issue view:*)",
       "Bash(gh issue create:*)",

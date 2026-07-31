@@ -8,13 +8,14 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Four groups, 17 assertions total:
+# Five groups, 19 assertions total:
 #   1. shell syntax and portability (bin/*.sh, this script)
 #   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json)
 #   3. agent instruction-file invariants (agents/*.md: frontmatter, one fenced template
 #      block, the harness-status line grammar, the #4 dedupe invariant, required headings)
 #   4. cross-file markers and skills (the planner-plan marker, skill frontmatter, README
 #      model-pin strings)
+#   5. bin/ script behavior (reconcile-ledger.sh against fabricated ledger/status inputs)
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -385,6 +386,35 @@ if [ -z "$bad_list" ]; then
   ok "4.3 README.md contains '<name>: <model>' for every agent"
 else
   bad "4.3 README.md missing model-pin string(s):$bad_list"
+fi
+
+# ============================================================================
+echo
+echo "-- Group 5: bin/ script behavior --"
+
+# reconcile-ledger.sh, fed fabricated inputs through process substitution: no files written,
+# no gh call (the status JSON is supplied), so the gate stays read-only and offline.
+rl="$root/bin/reconcile-ledger.sh"
+status_fixture='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[{"number":17,"title":"t","url":"u"}]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{}}'
+
+# 5.1 — accounted for: the issue is still queued, but the ledger reports why (implementer died,
+# a reported non-advance) -> silence, exit 0.
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0' '17 implementer died 4') \
+                  <(printf '%s' "$status_fixture") 2>&1)"; rc=$?
+if [ -z "$out" ] && [ "$rc" -eq 0 ]; then
+  ok "5.1 reconcile-ledger.sh: silent, exit 0 on an accounted-for ledger"
+else
+  bad "5.1 reconcile-ledger.sh: expected silence and exit 0, got rc=$rc output='$out'"
+fi
+
+# 5.2 — seeded and still queued with no implementer record -> exactly one stage-skipped line, exit 1.
+expected='stage-skipped issue=17 bucket=ready_to_implement stage=implementer: still queued for this stage and the ledger records no outcome for it'
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') \
+                  <(printf '%s' "$status_fixture") 2>&1)"; rc=$?
+if [ "$out" = "$expected" ] && [ "$rc" -eq 1 ]; then
+  ok "5.2 reconcile-ledger.sh: reports the skipped stage and exits 1"
+else
+  bad "5.2 reconcile-ledger.sh: expected rc=1 and the stage-skipped line, got rc=$rc output='$out'"
 fi
 
 # ============================================================================

@@ -184,6 +184,13 @@ if [ -f "$settings" ]; then
   else
     ok "allow-list includes the v1.6 entries (sleep, date, git reset --soft, git merge-base)"
   fi
+  # v1.6.4 entry: the cycle's closing reconciliation runs reconcile-ledger.sh; without the
+  # grant an unattended run stalls at step 4 behind a permission prompt.
+  if grep -q "Bash(reconcile-ledger.sh" "$settings"; then
+    ok "allow-list includes the v1.6.4 entry (reconcile-ledger.sh)"
+  else
+    wrn "allow-list predates v1.6.4 — missing 'reconcile-ledger.sh'; re-copy the permissions block from the plugin's templates/repo-settings.json"
+  fi
 else
   bad "no .claude/settings.json — create one from the plugin's templates/repo-settings.json (permissions + enabledPlugins); plugins cannot ship permission grants"
 fi
