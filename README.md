@@ -470,7 +470,11 @@ subagents need:
    for human decision, one merge at a time with re-verification between, every merge audited
    in the cycle report). **No section means no autonomous merges** — behavior is exactly the
    pre-1.5 default. Recommended pairing: branch protection with required status checks, so
-   the policy has a technical rail under it, not just prompt adherence.
+   the policy has a technical rail under it, not just prompt adherence. `check-harness.sh`
+   reports the activation state of this section — off, active, or (the trap it exists to catch)
+   half-activated: a "Merge autonomy policy" section present while `Bash(gh pr merge:*)` is
+   still denied, which the doctor WARNs on by name, because it leaves the cycle reporting
+   `verified, merge blocked` on every run.
 
 6. **Test-suite ratchet policy** (optional) — a section titled exactly "Test-suite ratchet
    policy" stating the measurement command the `test-ratchet` skill (standalone, and as the
@@ -490,13 +494,18 @@ subagents need:
    governance surface (`CLAUDE.md`, `.claude/`, policy/ADR docs, CI config). **No section means
    the ratchet never runs.** Every filed issue carries `no-auto-approve`, so plan review stays
    human by default; closing a ratchet issue as *not planned* vetoes that gap permanently.
+   `check-harness.sh` reports whether the section exists and, if it does, whether it names a
+   backtick-quoted measurement command that resolves on the PATH — it never runs that command
+   itself; only the `harness-setup` skill does, once, at onboarding, with a human present.
 
 The subagents read `CLAUDE.md` at the start of every task — it is the real input that makes
 the harness work well in a given repo. Too little and they're guessing; too much and the
 contract above drowns in restatement of what the file system, manifests, and linter config
 already say. The six items above are the floor, not a template to pad: leave out directory
 tours, framework defaults, and formatter-enforced style, and keep the non-obvious — invariants,
-why-this-way decisions, traps a fresh reader would hit — instead.
+why-this-way decisions, traps a fresh reader would hit — instead. `check-harness.sh` turns "too
+much" into a mechanical proxy: it WARNs once `CLAUDE.md` passes 300 lines or 20,000 bytes,
+pointing at the harness-setup skill's leanness audit — not at the six contract items themselves.
 
 ## The LESSONS.md contract (project-owned)
 
@@ -702,7 +711,11 @@ cover — e.g.:
 "Bash(make:*)", "Bash(cargo:*)", "Bash(go:*)", "Bash(just:*)"
 ```
 
-`settings.local.json` is machine-local (may hold secrets) — never commit it.
+`check-harness.sh` reads this file exclusively with `jq`, matching literal entries in the
+`permissions.allow`/`permissions.deny` arrays it parses out — never a raw-text search of the
+whole file, which could be fooled by a rule merely mentioned in an unrelated string (a comment,
+an `env` value) or by a deny-side entry that a whole-file search can't tell apart from an
+allow-side one. `settings.local.json` is machine-local (may hold secrets) — never commit it.
 
 ## Safety model
 
