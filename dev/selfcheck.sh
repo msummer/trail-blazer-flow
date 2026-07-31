@@ -471,17 +471,19 @@ else
   bad "4.9 .github/workflows/selfcheck.yml missing or does not run 'bash dev/selfcheck.sh'"
 fi
 
-# 4.11 — bin/check-harness.sh reads .claude/settings.json only through jq: no raw-text
-# grep/sed/awk of "$settings" anywhere in the file. A raw-text read makes a rule merely
-# *mentioned* in an unrelated string count as present, and can't tell the allow array from the
-# deny array — a deny-side `-C` mirror pasted into the allow array would still read as "present"
-# to a whole-file grep, the dangerous direction. Comments are excluded by LINE, not by
-# character, so an indented comment that merely quotes "$settings" doesn't false-positive.
-raw_reads="$(grep -nE '(grep|sed|awk).*"\$settings"' "$root/bin/check-harness.sh" | grep -vE '^[0-9]+:[[:space:]]*#')"
+# 4.11 — bin/check-harness.sh reads every settings file only through jq: no raw-text
+# grep/sed/awk of any $settings* path variable anywhere in the file (every settings-file path
+# variable in bin/check-harness.sh is named settings*, e.g. $settings, $settings_local,
+# $settings_user — see #66). A raw-text read makes a rule merely *mentioned* in an unrelated
+# string count as present, and can't tell the allow array from the deny array — a deny-side
+# `-C` mirror pasted into the allow array would still read as "present" to a whole-file grep,
+# the dangerous direction. Comments are excluded by LINE, not by character, so an indented
+# comment that merely quotes "$settings" doesn't false-positive.
+raw_reads="$(grep -nE '(grep|sed|awk).*"\$settings[a-z_]*"' "$root/bin/check-harness.sh" | grep -vE '^[0-9]+:[[:space:]]*#')"
 if [ -z "$raw_reads" ]; then
-  ok "4.11 bin/check-harness.sh reads .claude/settings.json only through jq (no raw-text grep/sed/awk of \"\$settings\")"
+  ok "4.11 bin/check-harness.sh reads every settings file only through jq (no raw-text grep/sed/awk of any \$settings* path variable)"
 else
-  bad "4.11 raw-text grep/sed/awk of \"\$settings\" found in bin/check-harness.sh — line(s): $(printf '%s' "$raw_reads" | tr '\n' ' ')"
+  bad "4.11 raw-text grep/sed/awk of a \$settings* path variable found in bin/check-harness.sh — line(s): $(printf '%s' "$raw_reads" | tr '\n' ' ')"
 fi
 
 # 4.13 — ledger stage vocabulary, two clauses:
