@@ -72,6 +72,17 @@ EOF
 }
 die() { echo "reconcile-ledger.sh: $1" >&2; exit 2; }
 
+# THE stage list — dev/selfcheck.sh's 4.13 parses this exact line (STAGES="..."). 'seed' is
+# ledger-only (a discovery bucket, not an agent stage); agent_stages() excludes it.
+STAGES="seed planner implementer verifier merge"
+LEDGER_ONLY_STAGES="seed"
+agent_stages() {
+  for s in $STAGES; do
+    case " $LEDGER_ONLY_STAGES " in *" $s "*) continue ;; esac
+    printf '%s ' "$s"
+  done
+}
+
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   "")        usage >&2; exit 2 ;;
@@ -101,8 +112,8 @@ while IFS= read -r line; do
   case "$line" in *harness-status:*) die "malformed harness-status line: $line" ;; esac
   read -r f_issue f_stage f_outcome _rest <<<"$line"
   case "$f_issue" in ''|*[!0-9]*) die "ledger record does not start with an issue number: $line" ;; esac
-  case "$f_stage" in
-    seed|planner|implementer|verifier|merge) ;;
+  case " $STAGES " in
+    *" $f_stage "*) ;;
     *) die "unknown stage '$f_stage' in ledger record: $line" ;;
   esac
   [ -n "$f_outcome" ] || f_outcome="-"
@@ -152,6 +163,7 @@ vocab() {
     implementer) printf '%s' 'complete blocked incomplete died' ;;
     verifier)    printf '%s' 'pass fail incomplete died' ;;
     merge)       printf '%s' 'merged merge-blocked not-eligible merge-unconfirmed' ;;
+    *) die "no outcome vocabulary defined for stage '$1' — add it to vocab()" ;;
   esac
 }
 in_vocab()   { case " $(vocab "$1") " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
@@ -177,7 +189,7 @@ emit() { printf '%s\n' "$1"; found=1; }
 
 for n in $issues; do
   # (a) record-level checks, fixed stage order
-  for s in planner implementer verifier merge; do
+  for s in $(agent_stages); do
     row_exists "$n" "$s" || continue
     o="$(row_outcome "$n" "$s")"
     if [ "$o" = "-" ]; then

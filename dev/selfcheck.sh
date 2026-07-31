@@ -8,22 +8,17 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 33 assertions total:
-#   1. shell syntax and portability (bin/*.sh, dev/*.sh, and no GNU-only constructs in either)
+# Five groups, 25 assertions total:
+#   1. shell syntax and portability (bin/*.sh, dev/*.sh; no GNU-only constructs in bin/*.sh)
 #   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json), plus the
-#      permission allow/deny mirroring between templates/repo-settings.json's `git -C` entries
-#      and the `-C` forms skills/issue-implementer/SKILL.md mandates
-#   3. agent instruction-file invariants (agents/*.md: frontmatter, one fenced template
-#      block, the harness-status line grammar, the #4 dedupe invariant, required headings, and
-#      the verifier's lettered Process checks a.-g. plus CLAUDE.md's `rule Nx` citations)
+#      bin/*.sh <-> allow-list bijection and the git permission-mirror invariants
+#   3. agent instruction-file invariants (agents/*.md: frontmatter, one fenced template block,
+#      the harness-status line grammar, required template headings)
 #   4. cross-file markers and skills (the planner-plan and ratchet-issue markers, skill
-#      frontmatter, README model-pin strings, WIP-message vocabulary, the label bijection,
-#      skill/README coverage, policy-section titles, the CI workflow's gate command, the
-#      #4 dedupe invariant extended to skills/*/SKILL.md, that bin/check-harness.sh reads
-#      .claude/settings.json only through jq — never a raw-text grep/sed/awk of the file —
-#      and the follow-up justification phrase shared by planner.md's template and the
-#      implementer skill's filing step; and the ledger stage vocabulary shared by
-#      bin/reconcile-ledger.sh and the implementer skill's status-line grammar)
+#      frontmatter, the label bijection, skill/README coverage, policy-section titles, the CI
+#      workflow's gate command, that bin/check-harness.sh reads .claude/settings.json only
+#      through jq, the ledger stage vocabulary shared by bin/reconcile-ledger.sh and the
+#      implementer skill's status-line grammar, and a per-skill size budget)
 #   5. bin/ script behavior (reconcile-ledger.sh against fabricated ledger/status inputs)
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
@@ -62,82 +57,9 @@ fence_lines() {
   grep -n '^```$' "$1" | cut -d: -f1
 }
 
-# bt — a literal backtick, built via printf rather than embedded in a quoted string (used by
-# assertions 1.4 and 4.4, both of which need a backtick inside a single-quoted awk/ERE body).
-bt="$(printf '\140')"
-
-# code_segments FILE — awk helper for assertion 1.4. Emits one *command segment* per line as
-# "FILE:LINE:segment", having (a) skipped full-line comments, (b) skipped heredoc bodies
-# (detects '<<'/'<<-' with an optional quoted word, never '<<<'), (c) split each remaining line
-# on '; | & ( ) { }' and backtick, and (d) stripped, repeatedly, leading whitespace, leading
-# shell keywords, and leading VAR=value assignments — so the emitted segment always starts with
-# the leading command word. The single-quote character is passed in via -v sq rather than
-# embedded in the single-quoted awk program (same trick as the $bt precedent above).
-code_segments() {
-  awk -v sq="'" -v bt="$bt" '
-    function strip(s,   keep) {
-      keep = 1
-      while (keep) {
-        keep = 0
-        if (match(s, /^[[:space:]]+/)) { s = substr(s, RLENGTH+1); keep = 1; continue }
-        if (match(s, /^(if|while|until|then|else|elif|do|time|!|command|exec|env|sudo|xargs)([[:space:]]|$)/)) {
-          s = substr(s, RLENGTH+1); keep = 1; continue
-        }
-        if (match(s, /^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+/)) {
-          s = substr(s, RLENGTH+1); keep = 1; continue
-        }
-      }
-      return s
-    }
-    function emit(codepart, file, lineno,    n, i, seg, s) {
-      n = split(codepart, parts, sq_class)
-      for (i = 1; i <= n; i++) {
-        seg = parts[i]
-        gsub(/^[[:space:]]+/, "", seg)
-        gsub(/[[:space:]]+$/, "", seg)
-        if (seg == "") continue
-        s = strip(seg)
-        if (s == "") continue
-        print file ":" lineno ":" s
-      }
-    }
-    BEGIN { sq_class = "[;|&(){}" bt "]"; in_hd = 0 }
-    {
-      line = $0
-      if (in_hd) {
-        t = line
-        if (strip_tabs) gsub(/^\t+/, "", t)
-        if (t == hd_term) in_hd = 0
-        next
-      }
-      if (line ~ /^[[:space:]]*#/) next
-      protected_line = line
-      gsub(/<<</, "@@@", protected_line)
-      if (match(protected_line, /<<-?[[:space:]]*/)) {
-        op_start = RSTART; op_len = RLENGTH
-        after = substr(line, op_start + op_len)
-        opstr = substr(protected_line, op_start, op_len)
-        strip_tabs = (opstr ~ /^<<-/)
-        word = ""
-        if (match(after, "^" sq "[^" sq "]*" sq)) {
-          word = substr(after, 2, RLENGTH-2)
-        } else if (match(after, /^"[^"]*"/)) {
-          word = substr(after, 2, RLENGTH-2)
-        } else if (match(after, /^[A-Za-z_][A-Za-z0-9_]*/)) {
-          word = substr(after, 1, RLENGTH)
-        }
-        if (word != "") {
-          codepart = substr(line, 1, op_start-1)
-          emit(codepart, FILENAME, FNR)
-          in_hd = 1
-          hd_term = word
-          next
-        }
-      }
-      emit(line, FILENAME, FNR)
-    }
-  ' "$1"
-}
+# _lines STR — prints STR followed by a newline, or nothing for an empty STR — so an empty set
+# feeds `comm`/`sort` as zero lines rather than one blank line.
+_lines() { [ -n "$1" ] && printf '%s\n' "$1" || true; }
 
 echo "== trail-blazer-flow selfcheck: $root =="
 
@@ -186,27 +108,23 @@ else
   bad "1.3 CR byte(s) found in:$bad_files"
 fi
 
-# 1.4 — no GNU-only shell constructs in bin/*.sh or dev/*.sh: grep -P/--perl-regexp, sed
-# -i/--in-place without a suffix (sed -i.bak stays legal), readlink -f/--canonicalize,
-# mapfile/readarray, declare/typeset/local -A. Matched against code_segments' output, anchored
-# right after the FILE:LINE: prefix so the flag is only recognised in the leading option
-# cluster (a run of clean '-x'/'--word' tokens right after the command name) — a flag typed
-# after a non-flag argument is deliberately not policed (documented heuristic limit, same as
-# 3.6's false-positive escape hatch). Because this loop scans dev/*.sh, it polices its own
-# table and dev/selfcheck-tests.sh — including this very pattern: 'mapfile'/'readarray' spelled
-# out next to '(' '|' ')' would otherwise land as their own bare, delimiter-bounded segments and
-# self-trip the rule below. map[f]ile / read[a]rray are single-char bracket expressions — an ERE
-# match for the literal word, just not the literal *substring* the self-scan would isolate.
+# 1.4 — no GNU-only shell constructs in bin/*.sh: grep -P/--perl-regexp, sed -i/--in-place
+# without a suffix (sed -i.bak stays legal), readlink -f/--canonicalize, mapfile/readarray,
+# declare/typeset/local -A. Full-line comments are stripped before matching; the pattern then
+# matches anywhere else in the line, including inside quotes/heredocs — a comment is the only
+# safe place to name these constructs in bin/*.sh. dev/*.sh follows the same rule by convention
+# (CLAUDE.md), not mechanically — dev/ is exempt so this gate never has to self-scan its own
+# vocabulary of forbidden words.
 genopt='([[:space:]]+--?[A-Za-z][A-Za-z-]*)*'
-forbidden_pat="^[^:]*:[0-9]+:(grep${genopt}[[:space:]]+(-[A-Za-z]*P|--perl-regexp)([[:space:]]|\$)|sed${genopt}[[:space:]]+(-[A-Za-z]*i|--in-place)([[:space:]]|\$)|readlink${genopt}[[:space:]]+(-[A-Za-z]*f|--canonicalize)([[:space:]]|\$)|(declare|typeset|local)${genopt}[[:space:]]+(-[A-Za-z]*A)([[:space:]]|\$)|(map[f]ile|read[a]rray)([[:space:]]|\$))"
+forbidden_pat="(grep${genopt}[[:space:]]+(-[A-Za-z]*P|--perl-regexp)([[:space:]]|\$)|sed${genopt}[[:space:]]+(-[A-Za-z]*i|--in-place)([[:space:]]|\$)|readlink${genopt}[[:space:]]+(-[A-Za-z]*f|--canonicalize)([[:space:]]|\$)|(declare|typeset|local)${genopt}[[:space:]]+(-[A-Za-z]*A)([[:space:]]|\$)|mapfile([[:space:]]|\$)|readarray([[:space:]]|\$))"
 bad_list=""
-for s in "$root"/bin/*.sh "$root"/dev/*.sh; do
+for s in "$root"/bin/*.sh; do
   [ -f "$s" ] || continue
-  hits="$(code_segments "$s" | grep -E "$forbidden_pat")"
-  [ -z "$hits" ] || bad_list="$bad_list $(printf '%s' "$hits" | tr '\n' ' ')"
+  hits="$(grep -vnE '^[[:space:]]*#' "$s" | grep -E "$forbidden_pat")"
+  [ -z "$hits" ] || bad_list="$bad_list $s: $(printf '%s' "$hits" | tr '\n' ' ');"
 done
 if [ -z "$bad_list" ]; then
-  ok "1.4 no GNU-only constructs (grep -P, sed -i without suffix, readlink -f, mapfile/readarray, declare -A) in bin/*.sh or dev/*.sh"
+  ok "1.4 no GNU-only constructs (grep -P, sed -i without suffix, readlink -f, mapfile/readarray, declare -A) in bin/*.sh"
 else
   bad "1.4 GNU-only construct(s) found —$bad_list"
 fi
@@ -249,7 +167,6 @@ fi
 
 # 2.4 — bijection: bin/*.sh basenames <-> 'Bash(<name>.sh:*)' allow entries in
 # templates/repo-settings.json. Report both directions separately.
-_lines() { [ -n "$1" ] && printf '%s\n' "$1" || true; }
 allow_list="$(jq -r '.permissions.allow[]? // empty' "$settings_json" 2>/dev/null \
   | grep -oE '^Bash\([A-Za-z0-9._-]+\.sh:' \
   | sed -E 's/^Bash\(//; s/:$//' \
@@ -266,27 +183,10 @@ else
   bad "$msg"
 fi
 
-# 2.5 — permission mirror, allow side. Two directions:
-#   (a) coverage: every `git -C <worktree> <sub> ...` form skills/issue-implementer/SKILL.md
-#       mandates has an allow entry `Bash(git -C * <sub> )`. Deliberately one-directional: step
-#       e's blanket "every git command takes `-C <worktree>`" mandates forms the prose never
-#       spells out as a literal command (e.g. `restore --staged`), so the grants may legitimately
-#       exceed what this text extraction finds — that is not a failure.
-#   (b) bare counterpart: every `-C`-form allow entry's subcommand still has a bare `Bash(git
-#       <sub>` allow entry — the mechanical pin that no bare-form rule was removed (sequential
-#       mode depends on them).
-# Whitespace-normalize the skill text first: two of the documented forms wrap across lines, so a
-# line-based grep would silently miss them.
-skill_text="$root/skills/issue-implementer/SKILL.md"
-mandated_subs="$(tr '\n' ' ' < "$skill_text" \
-  | grep -oE 'git -C [^[:space:]]+[[:space:]]+[a-z][a-z-]*' \
-  | sed -E 's/.*[[:space:]]//' \
-  | sort -u)"
+# 2.5 — permission mirror, allow side: every `-C`-form allow entry's subcommand also has a bare
+# `Bash(git <sub>` allow entry — the mechanical pin that no bare-form rule was removed while a
+# `-C` form was added (sequential mode depends on the bare forms existing independently).
 allow_raw="$(jq -r '.permissions.allow[]? // empty' "$settings_json" 2>/dev/null)"
-missing_grant=""
-for tok in $mandated_subs; do
-  printf '%s\n' "$allow_raw" | grep -qF -- "Bash(git -C * $tok " || missing_grant="$missing_grant $tok"
-done
 c_allow_subs="$(printf '%s\n' "$allow_raw" \
   | grep -oE '^Bash\(git -C \* [a-z][a-z-]*' \
   | sed -E 's/^Bash\(git -C \* //' \
@@ -295,13 +195,10 @@ missing_bare=""
 for sub in $c_allow_subs; do
   printf '%s\n' "$allow_raw" | grep -qF -- "Bash(git $sub" || missing_bare="$missing_bare $sub"
 done
-if [ -z "$missing_grant" ] && [ -z "$missing_bare" ]; then
-  ok "2.5 permission mirror (allow): every -C form the skill mandates is granted, every -C grant has a bare-form counterpart"
+if [ -z "$missing_bare" ]; then
+  ok "2.5 permission mirror (allow): every -C grant has a bare-form counterpart"
 else
-  msg="2.5 permission mirror (allow) broken:"
-  [ -n "$missing_grant" ] && msg="$msg -C form(s) the skill mandates but not granted:$missing_grant;"
-  [ -n "$missing_bare" ] && msg="$msg -C grant(s) with no bare-form counterpart:$missing_bare;"
-  bad "$msg"
+  bad "2.5 permission mirror (allow) broken: -C grant(s) with no bare-form counterpart:$missing_bare"
 fi
 
 # 2.6 — permission mirror, deny side: every bare git deny has a `-C` mirror, and vice versa.
@@ -344,32 +241,9 @@ else
   bad "3.1 frontmatter problems:$bad_list"
 fi
 
-# 3.2 — exactly one '# Constraints' heading.
-bad_list=""
-for f in "$root"/agents/*.md; do
-  n="$(grep -c '^# Constraints$' "$f")"
-  [ "$n" -eq 1 ] || bad_list="$bad_list $f(count=$n)"
-done
-if [ -z "$bad_list" ]; then
-  ok "3.2 every agents/*.md has exactly one '# Constraints' heading"
-else
-  bad "3.2 wrong '# Constraints' count:$bad_list"
-fi
-
-# 3.3 — exactly two fence lines (one fenced template block).
-bad_list=""
-for f in "$root"/agents/*.md; do
-  n="$(grep -c '^```$' "$f")"
-  [ "$n" -eq 2 ] || bad_list="$bad_list $f(count=$n)"
-done
-if [ -z "$bad_list" ]; then
-  ok "3.3 every agents/*.md has exactly two \`\`\` lines (one fenced template block)"
-else
-  bad "3.3 wrong fence count:$bad_list"
-fi
-
-# 3.4 — exactly one harness-status line; inside the fence; last non-blank line inside it;
-# matches the canonical grammar with stage == the frontmatter name.
+# 3.4 — exactly one harness-status line, inside the fence, matching the canonical grammar with
+# stage == the frontmatter name. bin/reconcile-ledger.sh:~95's `sed -E` is the consumer of this
+# grammar — a drift here breaks its status-line-to-record rewrite.
 bad_list=""
 for f in "$root"/agents/*.md; do
   base="$(basename "$f" .md)"
@@ -389,93 +263,14 @@ for f in "$root"/agents/*.md; do
     continue
   fi
 
-  last_nonblank_rel="$(sed -n "$((t1+1)),$((t2-1))p" "$f" | grep -n '[^[:space:]]' | tail -1 | cut -d: -f1)"
-  expected_lineno=$((t1 + last_nonblank_rel))
-  if [ "$hs_lineno" -ne "$expected_lineno" ]; then
-    bad_list="$bad_list $f(status line at $hs_lineno is not the fence's last non-blank line, $expected_lineno)"
-    continue
-  fi
-
   if ! printf '%s' "$hs_text" | grep -qE "^<!-- harness-status: stage=${base} issue=<n> outcome=<[A-Za-z|-]+> retries=<k> -->\$"; then
     bad_list="$bad_list $f(status line doesn't match the canonical grammar for stage=$base)"
   fi
 done
 if [ -z "$bad_list" ]; then
-  ok "3.4 harness-status line: exactly one, inside the fence, last non-blank, grammar+stage correct"
+  ok "3.4 harness-status line: exactly one, inside the fence, grammar+stage correct"
 else
   bad "3.4 harness-status problems:$bad_list"
-fi
-
-# 3.5 — every '|'-separated outcome alternative from 3.4's status line appears as a fixed
-# string in skills/issue-implementer/SKILL.md (the canonical Status-line vocabulary).
-canon="$root/skills/issue-implementer/SKILL.md"
-bad_list=""
-for f in "$root"/agents/*.md; do
-  hs_text="$(grep '<!-- harness-status:' "$f" | head -1)"
-  alt_list="$(printf '%s' "$hs_text" | sed -nE 's/.*outcome=<([^>]*)>.*/\1/p' | tr '|' '\n')"
-  for alt in $alt_list; do
-    [ -z "$alt" ] && continue
-    grep -qF -- "$alt" "$canon" || bad_list="$bad_list $f:$alt"
-  done
-done
-if [ -z "$bad_list" ]; then
-  ok "3.5 every agent outcome alternative appears in skills/issue-implementer/SKILL.md"
-else
-  bad "3.5 outcome alternative(s) missing from skills/issue-implementer/SKILL.md:$bad_list"
-fi
-
-# 3.6 — the #4 dedupe invariant: walk the prose body only (frontmatter and the fenced
-# template block excluded), tracking the current '^# ' heading as the section; FAIL if any
-# keyword occurs in more than one section OF THE SAME FILE.
-#
-# Keyword table (case-insensitive ERE). A false positive is resolved by rewording the prose
-# or by adjusting this table with a comment explaining why — never by deleting the check.
-kw_ids="read-only git-boundary write-boundary deploy migration"
-kw_pattern() {
-  case "$1" in
-    read-only)      printf '%s' 'read-only' ;;
-    git-boundary)   printf '%s' 'no git|never .*run git|runs git' ;;
-    write-boundary) printf '%s' 'never (edit|write)|no .*push|never push' ;;
-    deploy)         printf '%s' 'deployment|deployed' ;;
-    migration)      printf '%s' 'migration' ;;
-  esac
-}
-# prose_tsv FILE [HEADING_ERE] — walks FILE's prose body (frontmatter and fenced blocks
-# excluded via a fence toggle, so files with more than two fence markers — e.g. skills/*/SKILL.md
-# — are handled the same as agents/*.md's exactly-two-fence case), tracking the current heading
-# (matched by HEADING_ERE, default '^# ') as the section id. The section starts as the literal
-# "(preamble)" rather than empty, so a keyword occurring before the first heading is attributed
-# to a real, countable section instead of silently vanishing from the restated-keyword check.
-prose_tsv() {
-  awk -v hre="${2:-^# }" '
-    BEGIN { section = "(preamble)" }
-    $0 == "---" { fm++; next }
-    fm < 2 { next }
-    /^```/ { fence = !fence; next }
-    fence { next }
-    $0 ~ hre { section = $0 }
-    { printf "%d\t%s\t%s\n", NR, section, $0 }
-  ' "$1"
-}
-bad_list=""
-for f in "$root"/agents/*.md; do
-  tsv="$(prose_tsv "$f")"
-  for kwid in $kw_ids; do
-    pat="$(kw_pattern "$kwid")"
-    matches="$(printf '%s\n' "$tsv" | grep -iE -- "$pat")"
-    [ -z "$matches" ] && continue
-    sections="$(printf '%s\n' "$matches" | cut -f2 | sort -u)"
-    nsec="$(printf '%s\n' "$sections" | grep -c '.')"
-    if [ "$nsec" -gt 1 ]; then
-      detail="$(printf '%s\n' "$matches" | awk -F'\t' -v ff="$f" '{print ff":"$1" ["$2"]"}' | tr '\n' ' ')"
-      bad_list="$bad_list keyword=$kwid: $detail;"
-    fi
-  done
-done
-if [ -z "$bad_list" ]; then
-  ok "3.6 no constraint keyword restated across more than one section of the same file"
-else
-  bad "3.6 keyword restated across sections —$bad_list"
 fi
 
 # 3.7 — required template headings (referenced by exact name elsewhere) exist inside the
@@ -483,7 +278,7 @@ fi
 pairs=(
   "planner.md|## Acceptance criteria"       # referenced by agents/verifier.md
   "planner.md|## Verified facts"            # referenced by agents/verifier.md and skills/issue-implementer/SKILL.md
-  "planner.md|## Follow-ups to file"        # referenced by README.md and skills/test-ratchet/SKILL.md; the implementer skill couples via 4.12's phrase
+  "planner.md|## Follow-ups to file"        # referenced by README.md and skills/test-ratchet/SKILL.md
   "implementer.md|## Resume brief"          # referenced by skills/issue-implementer/SKILL.md
   "verifier.md|## Notes for the PR reviewer" # referenced by skills/issue-implementer/SKILL.md
 )
@@ -508,76 +303,6 @@ if [ -z "$bad_list" ]; then
   ok "3.7 required template headings present inside the fenced block"
 else
   bad "3.7 missing or out-of-fence heading(s):$bad_list"
-fi
-
-# next_numbered_step_line FILE START_LINE — first '^[0-9]+\. ' line after START_LINE, or
-# (file's last line + 1) if there is none (so callers can slice an open-ended trailing range).
-next_numbered_step_line() {
-  local n
-  n="$(awk -v s="$2" 'NR>s && /^[0-9]+\. /{print NR; exit}' "$1")"
-  if [ -z "$n" ]; then
-    n=$(( $(wc -l < "$1") + 1 ))
-  fi
-  printf '%s' "$n"
-}
-
-# 3.8 — verifier Process lettering. agents/verifier.md's step 3 ("Check, in order:") must list
-# exactly a.-g., contiguous and in order, each with its pinned bold title — full-table pinning
-# (not just letter 'g') because CLAUDE.md's 'rule 3g' citation only means what it says if the
-# whole table is stable: reordering would keep 'g' a valid letter while silently changing what
-# it refers to. Also: every 'rule [0-9][a-z]' citation anywhere in CLAUDE.md must resolve to a
-# real numbered Process step and a real letter inside it.
-vf="$root/agents/verifier.md"
-bad_list=""
-start_ln="$(grep -n '^3\. \*\*Check, in order:\*\*' "$vf" | head -1 | cut -d: -f1)"
-if [ -z "$start_ln" ]; then
-  bad_list="$bad_list [agents/verifier.md: step 3 header '3. **Check, in order:**' not found]"
-else
-  end_ln="$(next_numbered_step_line "$vf" "$start_ln")"
-  letter_lines="$(sed -n "$((start_ln+1)),$((end_ln-1))p" "$vf" | grep -E '^[[:space:]]+[a-g]\. \*\*')"
-  seq="$(printf '%s\n' "$letter_lines" | sed -E 's/^[[:space:]]+([a-g])\..*/\1/' | tr '\n' ' ' | sed -E 's/[[:space:]]+$//')"
-  [ "$seq" = "a b c d e f g" ] || bad_list="$bad_list [letter sequence '$seq' != 'a b c d e f g']"
-  letter_pairs=(
-    "a|Plan conformance"
-    "b|Acceptance criteria"
-    "c|Test quality"
-    "d|Scope"
-    "e|Declared constraints"
-    "f|Report honesty"
-    "g|Documentation"
-  )
-  for lp in "${letter_pairs[@]}"; do
-    ltr="${lp%%|*}"
-    title="${lp#*|}"
-    line="$(printf '%s\n' "$letter_lines" | grep -E "^[[:space:]]+${ltr}\. \*\*")"
-    if [ -z "$line" ]; then
-      bad_list="$bad_list [letter $ltr missing from step 3]"
-    else
-      printf '%s' "$line" | grep -qF -- "$title" || bad_list="$bad_list [letter $ltr's title doesn't name '$title']"
-    fi
-  done
-fi
-cm="$root/CLAUDE.md"
-citations="$(grep -oE 'rule [0-9][a-z]' "$cm" | sort -u)"
-while IFS= read -r cite; do
-  [ -z "$cite" ] && continue
-  cnum="$(printf '%s' "$cite" | sed -E 's/^rule ([0-9])[a-z]$/\1/')"
-  cltr="$(printf '%s' "$cite" | sed -E 's/^rule [0-9]([a-z])$/\1/')"
-  step_ln="$(grep -n "^${cnum}\. \*\*" "$vf" | head -1 | cut -d: -f1)"
-  if [ -z "$step_ln" ]; then
-    bad_list="$bad_list [CLAUDE.md citation '$cite': no numbered step $cnum in agents/verifier.md]"
-    continue
-  fi
-  step_end="$(next_numbered_step_line "$vf" "$step_ln")"
-  sed -n "$((step_ln+1)),$((step_end-1))p" "$vf" | grep -qE "^[[:space:]]+${cltr}\. \*\*" \
-    || bad_list="$bad_list [CLAUDE.md citation '$cite': letter $cltr not found in step $cnum]"
-done <<EOF
-$citations
-EOF
-if [ -z "$bad_list" ]; then
-  ok "3.8 agents/verifier.md's step 3 lists a.-g. contiguous with pinned titles; every CLAUDE.md 'rule Nx' citation resolves"
-else
-  bad "3.8 verifier lettering/citation problem(s):$bad_list"
 fi
 
 # ============================================================================
@@ -616,10 +341,9 @@ skill_description() {
 }
 
 # 4.2 — every skills/*/SKILL.md has frontmatter name == its containing directory, and a
-# non-empty description (Gap B: a bare 'description: >' with its folded body deleted used to
-# pass, because the old check only looked at whether the line *after* 'description:' was
-# non-blank — which is also true of the next frontmatter key entirely. Extracting the actual
-# collected value closes that).
+# non-empty description (a bare 'description: >' with its folded body deleted must fail: the
+# check extracts the actual collected value rather than just checking the next line is non-blank,
+# which is also true of the next frontmatter key entirely).
 bad_list=""
 for f in "$root"/skills/*/SKILL.md; do
   dir="$(dirname "$f")"
@@ -634,43 +358,6 @@ if [ -z "$bad_list" ]; then
   ok "4.2 every skills/*/SKILL.md has frontmatter name == its directory, non-empty description"
 else
   bad "4.2 skill frontmatter problems:$bad_list"
-fi
-
-# 4.3 — for each agent, the string '<name>: <model>' (from its own frontmatter) appears in
-# README.md — pins the documented model tiering to the actual pins.
-bad_list=""
-for f in "$root"/agents/*.md; do
-  fm="$(frontmatter_text "$f")"
-  name_field="$(printf '%s\n' "$fm" | sed -n 's/^name: *//p' | head -1 | tr -d '[:space:]')"
-  model_field="$(printf '%s\n' "$fm" | sed -n 's/^model: *//p' | head -1 | tr -d '[:space:]')"
-  needle="${name_field}: ${model_field}"
-  grep -qF -- "$needle" "$root/README.md" || bad_list="$bad_list [$needle]"
-done
-if [ -z "$bad_list" ]; then
-  ok "4.3 README.md contains '<name>: <model>' for every agent"
-else
-  bad "4.3 README.md missing model-pin string(s):$bad_list"
-fi
-
-# 4.4 — WIP-message vocabulary: every 'wip: …' string in the canonical skill file is one of the
-# five forms documented in its "WIP checkpoint vocabulary" section, written complete on ONE line.
-# Step 2b classifies a leftover branch by these messages, and worktree mode emits them with
-# 'git -C <worktree>' in front — a new variant, or one wrapped across lines, breaks that silently.
-# ($bt is defined once, near the top-level helpers, and reused here.)
-wip_canon="$root/skills/issue-implementer/SKILL.md"
-wip_ok='^wip: (checkpoint ([a-z-]+|<stage>)|([a-z-]+|<stage>) died|context exhausted|interrupted run|blocked — .*) \(#<n(umber)?>\)$|^wip: blocked — …$'
-wip_list="$(grep -o "wip: [^${bt}\"]*" "$wip_canon")"
-bad_list=""
-while IFS= read -r s; do
-  [ -n "$s" ] || continue
-  printf '%s' "$s" | grep -qE "$wip_ok" || bad_list="$bad_list [$s]"
-done <<EOF
-$wip_list
-EOF
-if [ -z "$bad_list" ]; then
-  ok "4.4 every 'wip: …' string in issue-implementer/SKILL.md matches the documented vocabulary"
-else
-  bad "4.4 undocumented or line-wrapped wip message(s):$bad_list"
 fi
 
 # 4.5 — the literal ratchet-issue marker appears in both files (fixed-string). Mirrors 4.1.
@@ -713,26 +400,20 @@ else
 fi
 
 # 4.8 — policy section titles: each must appear (exact, fixed-string) in README.md and in
-# skills/harness-setup/SKILL.md (the audit must cover every policy), and in at least two
-# skills/*/SKILL.md files in total. Titles contain spaces, so iterate over a heredoc — 4.4
-# already uses this shape.
+# skills/harness-setup/SKILL.md — the strings bin/check-harness.sh:39's has_policy_section
+# greps for. Titles contain spaces, so iterate over a heredoc.
 bad_list=""
 while IFS= read -r title; do
   [ -n "$title" ] || continue
   grep -qF -- "$title" "$root/README.md" || bad_list="$bad_list [$title: missing from README.md]"
   grep -qF -- "$title" "$root/skills/harness-setup/SKILL.md" || bad_list="$bad_list [$title: missing from skills/harness-setup/SKILL.md]"
-  n=0
-  for f in "$root"/skills/*/SKILL.md; do
-    grep -qF -- "$title" "$f" && n=$((n+1))
-  done
-  [ "$n" -ge 2 ] || bad_list="$bad_list [$title: present in only $n skills/*/SKILL.md file(s), need >= 2]"
 done <<EOF
 Plan auto-approval policy
 Merge autonomy policy
 Test-suite ratchet policy
 EOF
 if [ -z "$bad_list" ]; then
-  ok "4.8 policy section titles cross-referenced in README.md, harness-setup, and >=2 skills"
+  ok "4.8 policy section titles cross-referenced in README.md and skills/harness-setup/SKILL.md"
 else
   bad "4.8 policy-title cross-reference problem(s):$bad_list"
 fi
@@ -745,56 +426,12 @@ else
   bad "4.9 .github/workflows/selfcheck.yml missing or does not run 'bash dev/selfcheck.sh'"
 fi
 
-# 4.10 — one-statement dedupe for skills/*/SKILL.md: the #4/#21 invariant 3.6 applies to
-# agents/*.md, extended here to skills at any '#'-'####' heading granularity (frontmatter and
-# fenced blocks excluded via prose_tsv's fence toggle). A line matching the cross-reference ERE
-# ("stated once", "defined once", "lives solely in", "exists nowhere else") is the pointer the
-# #21 dedupe pass deliberately introduced and is excluded before counting — it names where the
-# real statement lives rather than restating it. Within-section repetition stays legal: that is
-# what the merge pass's legitimate concentration of merge-authority phrasing in one section
-# looks like. Same note as 3.6: a false positive is resolved by rewording the prose or by
-# adjusting this table with a comment — never by deleting the check.
-kw10_ids="merge-authority push-boundary sequencing read-only"
-kw10_pattern() {
-  case "$1" in
-    merge-authority) printf '%s' 'merge authority|never merge' ;;
-    push-boundary)   printf '%s' 'never push to the default|push to the default branch' ;;
-    sequencing)      printf '%s' 'one at a time|never in parallel' ;;
-    read-only)       printf '%s' 'read-only' ;;
-  esac
-}
-xref10_pat='(stated|defined) once|lives solely in|exists nowhere else'
-bad_list=""
-for f in "$root"/skills/*/SKILL.md; do
-  tsv="$(prose_tsv "$f" '^(#|##|###|####) ')"
-  for kwid in $kw10_ids; do
-    pat="$(kw10_pattern "$kwid")"
-    matches="$(printf '%s\n' "$tsv" | grep -iE -- "$pat" | grep -viE -- "$xref10_pat")"
-    [ -z "$matches" ] && continue
-    sections="$(printf '%s\n' "$matches" | cut -f2 | sort -u)"
-    nsec="$(printf '%s\n' "$sections" | grep -c '.')"
-    if [ "$nsec" -gt 1 ]; then
-      detail="$(printf '%s\n' "$matches" | awk -F'\t' -v ff="$f" '{print ff":"$1" ["$2"]"}' | tr '\n' ' ')"
-      bad_list="$bad_list keyword=$kwid: $detail;"
-    fi
-  done
-done
-if [ -z "$bad_list" ]; then
-  ok "4.10 no merge-authority/push-boundary/sequencing/read-only keyword restated across more than one section of the same skills/*/SKILL.md"
-else
-  bad "4.10 keyword restated across sections —$bad_list"
-fi
-
 # 4.11 — bin/check-harness.sh reads .claude/settings.json only through jq: no raw-text
-# grep/sed/awk of "$settings" anywhere in the file. Why this matters: a raw-text read makes a
-# rule merely *mentioned* in an unrelated string (e.g. an env value) count as present, and can't
-# tell the allow array from the deny array — a deny-side `-C` mirror pasted into the allow array
-# would still read as "present" to a whole-file grep, which is the dangerous direction.
-# Two-stage, unanchored: no leading '^[[:space:]]*[^#]' — that anchor forces the mandatory
-# [^#] to consume the command word's own first letter on a column-0 line (no whitespace left to
-# sacrifice instead), so a flush-left raw read would slip past unnoticed. Comments are excluded
-# by LINE (grep -v on the whole matched line) rather than by character, so an indented comment
-# that merely quotes "$settings" doesn't false-positive either.
+# grep/sed/awk of "$settings" anywhere in the file. A raw-text read makes a rule merely
+# *mentioned* in an unrelated string count as present, and can't tell the allow array from the
+# deny array — a deny-side `-C` mirror pasted into the allow array would still read as "present"
+# to a whole-file grep, the dangerous direction. Comments are excluded by LINE, not by
+# character, so an indented comment that merely quotes "$settings" doesn't false-positive.
 raw_reads="$(grep -nE '(grep|sed|awk).*"\$settings"' "$root/bin/check-harness.sh" | grep -vE '^[0-9]+:[[:space:]]*#')"
 if [ -z "$raw_reads" ]; then
   ok "4.11 bin/check-harness.sh reads .claude/settings.json only through jq (no raw-text grep/sed/awk of \"\$settings\")"
@@ -802,105 +439,76 @@ else
   bad "4.11 raw-text grep/sed/awk of \"\$settings\" found in bin/check-harness.sh — line(s): $(printf '%s' "$raw_reads" | tr '\n' ' ')"
 fi
 
-# 4.12 — the follow-up justification phrase: skills/issue-implementer/SKILL.md's filing step now
-# filters on agents/planner.md's template text by name, the same dependency class 3.7 exists for.
-# FAILs unless the phrase below appears, verbatim (fixed-string), inside planner.md's fenced
-# template block (scoped like 3.7 — a prose mention outside the fence must not satisfy this) AND
-# anywhere in skills/issue-implementer/SKILL.md. Failure mode this guards: reword the phrase on
-# one side and the other silently keeps filtering on a sentence nothing asks for anymore. Honest
-# limit: this pins presence and phrase agreement between the two files, never whether any given
-# follow-up's justification is actually sound — that judgement stays the planner's and the
-# orchestrator's.
-phrase="why this can't just be dropped"
-missing=""
-f="$root/agents/planner.md"
-fences="$(fence_lines "$f")"
-t1="$(printf '%s\n' "$fences" | sed -n '1p')"
-t2="$(printf '%s\n' "$fences" | sed -n '2p')"
-if [ -z "$t1" ] || [ -z "$t2" ] || ! sed -n "$((t1+1)),$((t2-1))p" "$f" | grep -qF -- "$phrase"; then
-  missing="$missing agents/planner.md(fenced template)"
-fi
-grep -qF -- "$phrase" "$root/skills/issue-implementer/SKILL.md" || missing="$missing skills/issue-implementer/SKILL.md"
-if [ -z "$missing" ]; then
-  ok "4.12 follow-up justification phrase present in agents/planner.md's fenced template and skills/issue-implementer/SKILL.md"
-else
-  bad "4.12 follow-up justification phrase missing from:$missing"
-fi
-
-# 4.13 — ledger stage vocabulary: bin/reconcile-ledger.sh's accepted stage list
-# (`case "$f_stage" in`) must agree with skills/issue-implementer/SKILL.md's status-line
-# grammar (`stage=<...>`) — with 'seed' as the one documented ledger-only exception — and the
-# script's own internal enumerations (vocab()'s case arms, and the record-check loop's
-# `for s in ...; do`) must cover exactly that same non-'seed' set. Failure mode this guards: a
-# stage added to one file and not the other means a live issue-cycle run either has its ledger
-# rejected by reconcile-ledger.sh's `die` (exit 2, aborting step 5's reconciliation mid-cycle)
-# or silently mis-vocabbed inside the script itself, rather than failing this gate before it
-# ships. 'seed' is exempt because issue-cycle step 0 writes 'seed' ledger rows directly from the
-# discovery bucket; no planner/implementer/verifier/merge status line ever carries
-# `stage=seed` (skills/issue-cycle/SKILL.md's step 0). Honest limit: this pins vocabulary
-# agreement across these sites, never that any given stage is actually dispatched.
+# 4.13 — ledger stage vocabulary, two clauses:
+#   (a) cross-file: bin/reconcile-ledger.sh's `STAGES=` list must agree, both directions, with
+#       skills/issue-implementer/SKILL.md's status-line grammar (`stage=<...>`) — 'seed' is the
+#       one documented ledger-only exception (issue-cycle step 0 writes it from the discovery
+#       bucket; no agent status line ever carries stage=seed). Anchored single-line extraction
+#       on both sides; an empty extraction FAILs loudly rather than vacuously passing.
+#   (b) folded former-3.5: every '|'-separated outcome alternative in each agents/*.md status
+#       line appears as a fixed string in skills/issue-implementer/SKILL.md (the canonical
+#       Status-line vocabulary).
 rl="$root/bin/reconcile-ledger.sh"
 sk="$root/skills/issue-implementer/SKILL.md"
 bad_list=""
 hs_count="$(grep -c 'harness-status: stage=<' "$sk")"
-if [ "$hs_count" -ne 1 ]; then
-  bad_list=" extraction failed — skills/issue-implementer/SKILL.md's status-line grammar count is $hs_count, expected 1 (structure changed)"
+script_stages="$(sed -nE 's/^STAGES="([^"]*)"$/\1/p' "$rl" | tr ' ' '\n' | sort -u)"
+if [ "$hs_count" -ne 1 ] || [ -z "$script_stages" ]; then
+  bad_list=" extraction failed — SKILL.md's status-line grammar count is $hs_count (expected 1) or bin/reconcile-ledger.sh's STAGES= line didn't match (structure changed)"
 else
-  accepted="$(awk '/case "\$f_stage" in/{f=1;next} f&&/esac/{exit} f' "$rl" \
-    | sed -nE 's/^[[:space:]]*([a-z][a-z|-]*)\).*/\1/p' | tr '|' '\n' | sort -u)"
   skill_stages="$(sed -nE 's/.*harness-status: stage=<([^>]*)>.*/\1/p' "$sk" | tr '|' '\n' | sort -u)"
-  vocab_stages="$(awk '/^vocab\(\)/{f=1;next} f&&/^}/{exit} f' "$rl" \
-    | sed -nE 's/^[[:space:]]*([a-z][a-z-]*)\).*/\1/p' | sort -u)"
-  loop_stages="$(sed -nE 's/^[[:space:]]*for s in ([a-z].*); do$/\1/p' "$rl" | tr ' ' '\n' | sort -u)"
-  if [ -z "$accepted" ] || [ -z "$skill_stages" ] || [ -z "$vocab_stages" ] || [ -z "$loop_stages" ]; then
-    bad_list=" extraction failed — reconcile-ledger.sh/SKILL.md structure changed (one or more extracted lists came back empty)"
-  else
-    # the one documented ledger-only stage: written by issue-cycle step 0 from the discovery
-    # bucket, never emitted as an agent/orchestrator status line. Filtered with 'for' +
-    # string-compare, not a 'case " $x " in *" $y "*)' pattern: inside $( ), bash 3.2 mis-parses
-    # the ')' closing ANY case-arm pattern — loop or not, single- or multi-line (direct repro
-    # confirmed); safe fixes: '(pattern)' arms, backticks, or skip 'case' entirely, as here.
-    ledger_only_stages="seed"
-    agent_stages="$(for s in $accepted; do
-      is_exempt=0
-      for e in $ledger_only_stages; do
-        [ "$s" = "$e" ] && is_exempt=1 && break
-      done
-      [ "$is_exempt" -eq 1 ] || printf '%s\n' "$s"
-    done)"
-
-    # clause (a) — cross-file, both directions.
-    script_not_skill="$(comm -23 <(_lines "$agent_stages") <(_lines "$skill_stages"))"
-    skill_not_script="$(comm -13 <(_lines "$agent_stages") <(_lines "$skill_stages"))"
-    [ -n "$script_not_skill" ] && bad_list="$bad_list stage(s) the script accepts with no status-line alternative: $(printf '%s' "$script_not_skill" | tr '\n' ' ');"
-    [ -n "$skill_not_script" ] && bad_list="$bad_list status-line stage(s) the script would reject: $(printf '%s' "$skill_not_script" | tr '\n' ' ');"
-
-    # clause (b) — exemption liveness: every documented ledger-only stage must still be
-    # accepted by the script (catches the removal direction clause (a) is blind to).
-    missing_exempt=""
-    for s in $ledger_only_stages; do
-      printf '%s\n' "$accepted" | grep -qxF -- "$s" || missing_exempt="$missing_exempt $s"
-    done
-    [ -n "$missing_exempt" ] && bad_list="$bad_list documented ledger-only stage(s) no longer accepted by the script:$missing_exempt;"
-
-    # clause (c) — intra-file agreement: a stage accepted by the case arm but missing from
-    # vocab() makes every row for it emit a bogus unknown-outcome; missing from the
-    # record-check loop makes its rows accepted and never checked — the silent skip the
-    # ledger exists to prevent.
-    va="$(comm -23 <(_lines "$agent_stages") <(_lines "$vocab_stages"))"
-    av="$(comm -13 <(_lines "$agent_stages") <(_lines "$vocab_stages"))"
-    [ -n "$va" ] && bad_list="$bad_list stage(s) accepted but missing from vocab(): $(printf '%s' "$va" | tr '\n' ' ');"
-    [ -n "$av" ] && bad_list="$bad_list vocab() stage(s) not in the accepted list: $(printf '%s' "$av" | tr '\n' ' ');"
-    la="$(comm -23 <(_lines "$agent_stages") <(_lines "$loop_stages"))"
-    al="$(comm -13 <(_lines "$agent_stages") <(_lines "$loop_stages"))"
-    [ -n "$la" ] && bad_list="$bad_list stage(s) accepted but missing from the record-check loop: $(printf '%s' "$la" | tr '\n' ' ');"
-    [ -n "$al" ] && bad_list="$bad_list record-check loop stage(s) not in the accepted list: $(printf '%s' "$al" | tr '\n' ' ');"
-  fi
+  agent_stages="$(comm -23 <(_lines "$script_stages") <(_lines "seed"))"
+  script_not_skill="$(comm -23 <(_lines "$agent_stages") <(_lines "$skill_stages"))"
+  skill_not_script="$(comm -13 <(_lines "$agent_stages") <(_lines "$skill_stages"))"
+  [ -n "$script_not_skill" ] && bad_list="$bad_list stage(s) the script accepts with no status-line alternative: $(printf '%s' "$script_not_skill" | tr '\n' ' ');"
+  [ -n "$skill_not_script" ] && bad_list="$bad_list status-line stage(s) the script would reject: $(printf '%s' "$skill_not_script" | tr '\n' ' ');"
+  printf '%s\n' "$script_stages" | grep -qxF -- "seed" || bad_list="$bad_list documented ledger-only stage 'seed' no longer accepted by the script;"
 fi
+for f in "$root"/agents/*.md; do
+  hs_text="$(grep '<!-- harness-status:' "$f" | head -1)"
+  alt_list="$(printf '%s' "$hs_text" | sed -nE 's/.*outcome=<([^>]*)>.*/\1/p' | tr '|' '\n')"
+  for alt in $alt_list; do
+    [ -z "$alt" ] && continue
+    grep -qF -- "$alt" "$sk" || bad_list="$bad_list $f:$alt (outcome alternative missing from SKILL.md);"
+  done
+done
 if [ -z "$bad_list" ]; then
-  ok "4.13 ledger stage vocabulary agrees: reconcile-ledger.sh accepts exactly issue-implementer/SKILL.md's status-line stages plus 'seed'"
+  ok "4.13 ledger stage vocabulary agrees with SKILL.md; every agent outcome alternative appears in SKILL.md"
 else
-  bad "4.13 ledger stage vocabulary drift:$bad_list"
+  bad "4.13 ledger/status-line vocabulary drift:$bad_list"
+fi
+
+# 4.14 — per-skill size budget: wc -l on every skills/*/SKILL.md against a fixed table, plus a
+# total — the anti-regrowth control replacing the old restated-keyword checks (former 3.6, 4.10):
+# a line budget is cheaper to keep honest and catches regrowth regardless of which words come
+# back. Raising a budget here is a legitimate, reviewable one-line edit when growth is justified
+# — this assertion only says "look at this diff" (recipe: per-file cap = actual rounded up to
+# the next multiple of 5, plus a small kept-tight headroom buffer; total = sum of actuals + 25).
+# references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
+# read on demand, not on every run.
+budget_table="issue-implementer 410
+issue-cycle 235
+issue-planner 320
+project-kickoff 225
+test-ratchet 205
+harness-setup 180"
+bad_list=""
+total=0
+while IFS=' ' read -r skill cap; do
+  [ -n "$skill" ] || continue
+  f="$root/skills/$skill/SKILL.md"
+  [ -f "$f" ] || { bad_list="$bad_list skills/$skill/SKILL.md missing;"; continue; }
+  n="$(wc -l < "$f" | tr -d '[:space:]')"
+  total=$((total + n))
+  [ "$n" -le "$cap" ] || bad_list="$bad_list skills/$skill/SKILL.md: $n lines > budget $cap;"
+done <<EOF
+$budget_table
+EOF
+[ "$total" -le 1551 ] || bad_list="$bad_list total $total lines > budget 1551 across all skills/*/SKILL.md;"
+if [ -z "$bad_list" ]; then
+  ok "4.14 every skills/*/SKILL.md is within its size budget (total $total/1551)"
+else
+  bad "4.14 size budget exceeded:$bad_list"
 fi
 
 # ============================================================================

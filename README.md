@@ -41,6 +41,7 @@ or share).
 │   ├── harness-setup/SKILL.md    # one-time repo onboarding: doctor + CLAUDE.md audit + baseline
 │   ├── issue-planner/SKILL.md    # orchestrates planning (answers → revision → policy auto-approval)
 │   ├── issue-implementer/SKILL.md # orchestrates implementation → verification → PR (+ CI fix)
+│   ├── issue-implementer/references/worktree-mode.md  # worktree-parallel procedure (read on demand)
 │   ├── issue-cycle/SKILL.md      # steady-state loop: cleanup → plan → implement → status report
 │   └── test-ratchet/SKILL.md     # optional, policy-gated: files coverage-increasing issues (never implements)
 ├── bin/                          # on the Bash PATH when the plugin is enabled
@@ -193,9 +194,10 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    report's "Files changed"** (unexplained files = blocker, not a commit), commits once, pushes,
    opens the PR (`Closes #n`, verification results, verifier notes, schema notes), labels
    `pr-open`. The PR still ends up as one clean commit, exactly as before.
-6. **Files the plan's "Follow-ups to file"** as new issues referencing the PR — each entry
-   that carries its required "why this can't just be dropped?" justification; speculative
-   entries are declined with a note in the PR body instead of becoming issues.
+6. **Files the plan's "Follow-ups to file"** as new issues referencing the PR — each entry whose
+   justification names a concrete failure a user of this software would experience; entries that
+   only name a capability wish or an unnoticeable drift risk are declined with a note in the PR
+   body instead of becoming issues.
 7. **Watches CI** (`gh pr checks --watch`). Red CI caused by the PR itself gets **one bounded
    fix attempt** (implementer → mechanical checks → verifier → push; the PR isn't merged, so
    this is as safe as the kickback loop); still red — or not the PR's fault — is noted on the
@@ -222,43 +224,12 @@ doubt → sequential.
 
 ### Resilience: checkpointing, retries, and the dispatch ledger
 
-Improvised recovery behavior from live runs is now an owned mechanism (the `issue-implementer`
-skill's "Resilient dispatch" section is the canonical spec; `issue-planner` and `issue-cycle`
-cite it by name):
-
-- **WIP checkpointing, resume-not-restart.** The orchestrator commits the tree at each stage
-  boundary — after the implementer returns, after each kickback round, after a CI-fix dispatch —
-  with a `wip:` message (`wip: checkpoint <stage> (#n)`). A branch found at the start of a run
-  carrying only `wip:` commits is **resumed** (checked out and continued) unless its newest
-  commit is `wip: blocked — …`, which still resets fresh as before. Resuming preserves whatever
-  the previous attempt finished; nothing is lost to a crash or a dead subagent mid-issue.
-- **Backoff and retry.** A retryable dispatch failure (a tool-level error, an API 429/500/529, or
-  a dispatch that returns nothing usable) is retried with exponential backoff, up to a bounded
-  number of attempts (exact wait times and attempt count are defined once, in the
-  `issue-implementer` skill's "Resilient dispatch" section), before the stage is escalated into
-  the run report as **failed** — never silently skipped, never quietly advanced past. A full
-  ladder adds several minutes of wall-clock time per failing stage; fine unattended, worth
-  knowing about if you're watching a run live. This is orthogonal to the existing kickback loop
-  (a verifier `fail`) and the CI-fix attempt, which are unaffected.
-- **Clean exit on context exhaustion.** An implementer approaching its context limit stops
-  cleanly and returns `status: incomplete` with a resume brief (what's done, what remains) rather
-  than thrashing; the orchestrator checkpoints the tree and relaunches, capped at 2 resume
-  relaunches per issue per run (3 implementer contexts total). Planner and verifier stages get
-  the same clean-exit behavior with no commit involved — the orchestrator retains the last
-  completed plan/verdict and relaunches with that as the resume brief.
-- **Status lines and the dispatch ledger.** Every planner/implementer/verifier report ends with a
-  machine-readable HTML-comment status line (stage, issue, outcome, retry count — harmless noise
-  when a plan is posted verbatim to GitHub; the exact grammar is defined once, in the
-  `issue-implementer` skill's "Resilient dispatch" section); the orchestrator emits the same line
-  on a stage's behalf when it died or never reported, and for the merge stage
-  (which has no agent). `issue-cycle` keeps an in-context, non-persisted **dispatch ledger**
-  (planned/implemented/verified/merged per issue, retries, duration, final state) seeded from
-  discovery and reconciled at the end of a run by `reconcile-ledger.sh` (it compares the ledger
-  against `harness-status.sh`'s live queues and prints one line per unaccounted issue, exiting
-  non-zero), so a stage can never be silently dropped — see "The steady state" below.
-- **Merge guards.** Covered under the merge pass in "The steady state" below: a base-branch
-  assertion before merging, loud escalation (never silent) when merge autonomy is configured but
-  denied, and post-merge state verification before a PR is reported merged.
+Recovery is an owned mechanism, not improvisation (canonical spec: the `issue-implementer`
+skill's "Resilient dispatch", cited by name from `issue-planner`/`issue-cycle`): WIP
+checkpointing with resume-not-restart, bounded exponential backoff before a stage escalates as
+**failed**, a clean exit on context exhaustion under a capped relaunch budget, a status-line-fed
+dispatch ledger reconciled by `reconcile-ledger.sh`, and merge guards — see "The steady state"
+below for the ledger and the guards.
 
 ### After the human merges
 
@@ -271,54 +242,37 @@ two green PRs can still compose badly, and that check is now mechanical. Running
 
 ### The steady state, as one command ("run the cycle")
 
-The `issue-cycle` skill composes the above into a single bounded pass: pre-flight (cleanup +
-baseline refresh, and seeding the run's **dispatch ledger** from discovery) → planning pass
-(plans, revisions, proposed answers, policy auto-approvals) → implementation pass (everything
-`plan-approved`) → merge pass (only when the repo opts in via a CLAUDE.md "Merge autonomy
-policy" *and* the human has lifted the `gh pr merge` deny; guarded per PR — the base branch is
-asserted before merging, a permission-denied merge escalates loudly with the exact command
-instead of failing silently, and the merge is confirmed via a post-merge state check before
-being reported — one PR at a time, re-verified between, audited in the report) → a closing
-report via `harness-status.sh`, with `reconcile-ledger.sh` mechanically reconciling the ledger
-against it (any issue the cycle meant to act on with no recorded outcome is escalated, never
-dropped), prints a **per-issue summary
-table** (stages completed, retries, duration, final state, escalations), and splits the world
-into *what the cycle did* and *what waits on the human* (plans to review, PRs to merge —
-including any issue reading `verified, merge blocked` with its exact merge command — blocked
-issues). It adds no authority beyond what the repo's CLAUDE.md delegates — it just removes the
+The `issue-cycle` skill composes the above into a single bounded pass: pre-flight → planning
+pass → implementation pass → merge pass (**opt-in**: only with a CLAUDE.md "Merge autonomy
+policy" *and* the `gh pr merge` deny lifted; guarded per PR, one at a time, re-verified between,
+audited in the report) → a closing reconciliation, comparing the run's **dispatch ledger**
+against `harness-status.sh`'s live queues via `reconcile-ledger.sh` (an issue with no recorded
+outcome is escalated, never dropped), then a **per-issue summary table** and a two-halves report
+— *what the cycle did* and *what waits on the human* (plans to review, PRs to merge, blocked
+issues). It adds no authority beyond what CLAUDE.md delegates — it just removes the
 hand-cranking between stages. Pair it with `/loop` or a scheduled routine for unattended
-operation; each invocation stays one bounded pass, and an empty cycle reports "all quiet" in
-one line. With a conservative auto-approval policy in place, the unattended flow becomes:
-issues in → verifier-clean PRs out, with the human reviewing PRs and answering BLOCKING
-questions.
+operation; each invocation stays one bounded pass, and an empty cycle reports "all quiet" in one
+line. See the `issue-cycle` skill for the full procedure.
 
 ### The test-suite ratchet (opt-in)
 
 The `test-ratchet` skill is the harness's only skill that files **machine-authored** issues —
-proposals derived from tool output that no human wrote or reviewed, closing the biggest test
-coverage gaps it can measure. (`project-kickoff` files a backlog the human reviews as part of
-kickoff; `issue-implementer` files follow-ups derived from a human-approved plan.) It is off
-unless the repo's `CLAUDE.md` has a section titled exactly **"Test-suite ratchet policy"**; with
-no such section, it never runs. The policy states the
-measurement command (required — the exact, copy-pasteable command that reports coverage; no
-command means no ratchet), and optionally a scope (paths to propose work for, and never to), a
-per-run cap and an open-backlog cap (each may only lower the hard floor's numbers, never raise
-them), and a per-file target.
+proposals derived from tool output, closing measurable test coverage gaps. Off unless `CLAUDE.md`
+has a section titled exactly **"Test-suite ratchet policy"**, which must state a measurement
+command (required — no command means no ratchet) and may add a scope, per-run/open-backlog caps
+(each may only lower the hard floor's numbers, never raise them), and a per-file target.
 
-A non-configurable hard floor applies on top of whatever the policy says: **test-only** (a
-ratchet issue adds or extends tests and nothing else), **monotonic** (never proposes deleting,
-skipping, or weakening an existing test, assertion, or threshold), **evidence-backed** (every
-issue quotes the measurement command, the commit, and a verbatim output excerpt — no command, a
-failing command, or unattributable output means nothing is filed), **capped** at 3 issues per
-run and 5 open `test-ratchet` issues at a time, **never the governance surface** (`CLAUDE.md`,
-`.claude/`, policy/ADR docs, CI config are off-limits), and **`no-auto-approve` on every filed
-issue**, so its plan waits for a human by default — closing a ratchet issue as *not planned*
-vetoes that gap permanently.
+A non-configurable hard floor applies on top: **test-only** (adds/extends tests, nothing else),
+**monotonic** (never deletes, skips, or weakens an existing test/assertion/threshold),
+**evidence-backed** (quotes the measurement command, the commit, a verbatim output excerpt),
+**capped** at 3 issues/run and 5 open `test-ratchet` issues at a time, **never the governance
+surface** (`CLAUDE.md`, `.claude/`, policy/ADR docs, CI config), and **`no-auto-approve` on
+every filed issue** — closing one as *not planned* vetoes that gap permanently.
 
-In the `issue-cycle` skill it runs as **step 4, after the merge pass** — so the measurement
-reflects everything that landed this run, and because the planning pass has already happened,
-an issue the ratchet files this run cannot be planned, approved, or implemented until the *next*
-cycle. It files issues only: it never plans, approves, implements, or merges what it files.
+Runs as `issue-cycle`'s **step 4, after the merge pass**, so the measurement reflects everything
+that landed this run; an issue it files this run can't be planned, approved, or implemented
+until the *next* cycle. It only files issues — never plans, approves, implements, or merges what
+it files.
 
 ## Greenfield walkthrough: from idea to first feature
 
@@ -684,9 +638,9 @@ unchanged. `check-harness.sh` names exactly what's missing, same as any other ve
 
 For **v1.8.1 → v1.9.0**, nothing migrates — no new label, script, permission grant, or
 baseline step. This release is the 2026-07-31 hardening run, and every item in it is
-harness-internal or instruction text: the gate (`dev/selfcheck.sh`) grew from 26 to 33 assertions
-and gained its negative-test harness (`dev/selfcheck-tests.sh`), and both now run in CI on every
-pull request (see "Working on the harness itself"); `check-harness.sh` reads
+harness-internal or instruction text: the gate (`dev/selfcheck.sh`) gained its negative-test
+harness (`dev/selfcheck-tests.sh`), and both now run in CI on every pull request (see "Working on
+the harness itself"); `check-harness.sh` reads
 `.claude/settings.json` exclusively through `jq`, reports each optional policy section's
 activation state, and warns when `CLAUDE.md` outgrows the leanness guideline — all
 informational, so it may name items an older doctor passed over, and fixing what it names is the
@@ -720,8 +674,8 @@ summary table — advisory only, its absence just costs `duration: unknown`),
 `Bash(git reset --soft:*)` and `Bash(git merge-base:*)` (collapsing a run's WIP checkpoints into
 one clean commit before the PR — `git reset --soft` never touches the working tree, only where
 HEAD points; see "Safety model"). Nine further `Bash(git -C * <sub> *)` allow entries exist
-solely for worktree-parallel mode (see the `issue-implementer` skill's "Supervisor loop" and
-"Swarm procedure" sections). Separately, the seven bare `git` deny entries above each gained a
+solely for worktree-parallel mode (see the `issue-implementer` skill's
+`references/worktree-mode.md`). Separately, the seven bare `git` deny entries above each gained a
 `git -C * …` mirror, so a worktree-mode command can't slip past a guard the bare form already
 stops — see "Safety model" for why the mirror matters. The template allows `pnpm`, `npm`,
 `yarn`, and `pytest`; if your repo uses a
@@ -813,22 +767,9 @@ command, run from the repo root:
 bash dev/selfcheck.sh
 ```
 
-It checks shell syntax/portability (including no GNU-only shell constructs — `sed -i` without a
-suffix, `grep -P`, `readlink -f`, `mapfile`/`readarray`, `declare -A` — in `bin/*.sh` or
-`dev/*.sh`), the JSON manifests, and the cross-file instruction-file invariants the skills
-silently depend on (template markers, the harness-status line grammar, one `# Constraints`
-section per agent, no constraint keyword restated across sections — extended to
-`skills/*/SKILL.md`'s merge-authority, push-boundary, sequencing, and read-only language — the
-follow-up justification phrase shared by `agents/planner.md`'s plan template and the implementer
-skill's filing step, the label bijection between `setup-labels.sh` and the doctor, the
-policy-section titles the skills read, the CI workflow's gate command, `agents/verifier.md`'s
-lettered Process checks `a.`–`g.`
-matching CLAUDE.md's own `rule Nx` citations, and the git permission-mirror invariants in
-`templates/repo-settings.json` — the `-C` allow forms `skills/issue-implementer/SKILL.md`
-mandates, and the bare↔`-C` mirroring of its own git allow/deny entries — and the ledger stage
-vocabulary shared by `bin/reconcile-ledger.sh` and `skills/issue-implementer/SKILL.md`'s
-status-line grammar (`seed` excepted — it is ledger-only)), plus the behavior of
-`reconcile-ledger.sh` against fabricated ledger and status inputs.
+It prints a `PASS`/`FAIL` line per assertion and a `== summary: N pass, M fail ==` footer — run
+it to see exactly what it checks. There is no test suite and no build step: this repo is
+Markdown instruction files, Bash scripts, and JSON manifests.
 
 The same command also runs in CI on every pull request (`.github/workflows/selfcheck.yml`), so
 the gate no longer depends on someone remembering to run it. CI also runs the gate's own

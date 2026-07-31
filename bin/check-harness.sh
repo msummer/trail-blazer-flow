@@ -214,66 +214,40 @@ else
   else
     wrn "harness script commands (e.g. find-planning-work.sh) not found in the allow-list — copy the permissions block from the plugin's templates/repo-settings.json"
   fi
-  # Newer entries (added in v1.3): repos onboarded earlier won't have them, and a missing
-  # grant silently stalls unattended runs behind a permission prompt.
-  stale_entries=""
-  for e in "harness-status.sh" "gh pr list" "gh run view" "git rev-parse" "git worktree"; do
-    entry_has "$allow_raw" "Bash($e" || stale_entries="$stale_entries '$e'"
-  done
-  if [ -n "$stale_entries" ]; then
-    wrn "allow-list predates v1.3 — missing:$stale_entries; re-copy the permissions block from the plugin's templates/repo-settings.json"
+  # --- template drift (generic diff; replaces the old per-version blocks) ------
+  # Reports template entries missing from this repo; repo-only extras are legitimate and
+  # never reported. Bash(gh pr merge:*) is excluded from the deny comparison: its absence is
+  # the documented merge-autonomy opt-in (see "policy activation state" below), not drift.
+  tmpl="$script_dir/../templates/repo-settings.json"
+  if [ ! -f "$tmpl" ] || ! jq -e . "$tmpl" >/dev/null 2>&1; then
+    wrn "could not read the plugin's templates/repo-settings.json (expected at $tmpl) — skipping the permission drift check"
   else
-    ok "allow-list includes the v1.3 entries (status script, gh pr list/run view, rev-parse, worktree)"
-  fi
-  # v1.6 entries: resilient dispatch (backoff/retry, WIP checkpoint collapse) needs these; a
-  # missing grant silently degrades the retry ladder to one immediate retry, or forces the
-  # WIP-checkpoint fallback (commits ride along in the PR instead of collapsing cleanly).
-  v16_missing=""
-  for e in "sleep" "date" "git reset --soft" "git merge-base"; do
-    entry_has "$allow_raw" "Bash($e" || v16_missing="$v16_missing '$e'"
-  done
-  if [ -n "$v16_missing" ]; then
-    wrn "allow-list predates v1.6 — missing:$v16_missing; re-copy the permissions block from the plugin's templates/repo-settings.json"
-  else
-    ok "allow-list includes the v1.6 entries (sleep, date, git reset --soft, git merge-base)"
-  fi
-  # v1.6.4 entry: the cycle's closing reconciliation runs reconcile-ledger.sh; without the
-  # grant an unattended run stalls at step 5 behind a permission prompt.
-  if entry_has "$allow_raw" "Bash(reconcile-ledger.sh"; then
-    ok "allow-list includes the v1.6.4 entry (reconcile-ledger.sh)"
-  else
-    wrn "allow-list predates v1.6.4 — missing 'reconcile-ledger.sh'; re-copy the permissions block from the plugin's templates/repo-settings.json"
-  fi
-  # v1.8.1 entries: worktree-parallel mode's per-worktree git commands run as
-  # `git -C <worktree> <sub> ...`, which does not match the bare `Bash(git <sub>:*)`-style
-  # rules — a missing grant stalls a swarm run's serial per-worktree step (2e) behind a
-  # permission prompt.
-  v181_missing=""
-  for e in "git -C * status " "git -C * add " "git -C * commit " "git -C * push " \
-           "git -C * restore " "git -C * diff " "git -C * rev-parse " \
-           "git -C * merge-base " "git -C * reset --soft "; do
-    entry_has "$allow_raw" "Bash($e" || v181_missing="$v181_missing '$e'"
-  done
-  if [ -n "$v181_missing" ]; then
-    wrn "allow-list predates v1.8.1 — missing:$v181_missing; re-copy the permissions block from the plugin's templates/repo-settings.json"
-  else
-    ok "allow-list includes the v1.8.1 -C entries (worktree-parallel git commands)"
-  fi
-  # v1.8.1 deny mirrors: without these, a `-C`-form allow (above) has no matching `-C`-form
-  # deny, so e.g. `git -C <worktree> push --force` or `git -C <worktree> reset --hard` would
-  # bypass a guard that stops the bare form — strictly less safe than before v1.8.1. Reads
-  # deny_raw, not allow_raw — this is the half of the bug where a deny-side entry moved into the
-  # allow array used to still read as "present" under a whole-file grep.
-  v181_deny_missing=""
-  for e in "git -C * push --force" "git -C * push -f" "git -C * push --force-with-lease" \
-           "git -C * reset --hard" "git -C * clean" "git -C * branch -D main" \
-           "git -C * push origin main"; do
-    entry_has "$deny_raw" "Bash($e" || v181_deny_missing="$v181_deny_missing '$e'"
-  done
-  if [ -n "$v181_deny_missing" ]; then
-    wrn "deny-list predates v1.8.1 — missing -C mirror(s):$v181_deny_missing; worktree-mode force-push / reset --hard guards are bypassable via 'git -C <worktree> ...' until you re-copy the permissions block from the plugin's templates/repo-settings.json"
-  else
-    ok "deny-list includes the v1.8.1 -C deny mirrors (worktree-parallel force-push / reset --hard guards)"
+    tmpl_allow="$(jq -r '.permissions.allow[]? // empty' "$tmpl")"
+    tmpl_deny="$(jq -r '.permissions.deny[]? // empty' "$tmpl" | grep -vxF 'Bash(gh pr merge:*)')"
+    diff_side() {  # $1=template list  $2=already-extracted repo list -> sets n_missing/out_missing
+      n_missing=0; out_missing=""
+      while IFS= read -r e; do
+        [ -n "$e" ] || continue
+        printf '%s\n' "$2" | grep -qxF -- "$e" && continue
+        n_missing=$((n_missing+1))
+        [ "$n_missing" -le 6 ] && out_missing="$out_missing$e, "
+      done <<EOF
+$1
+EOF
+    }
+    diff_side "$tmpl_allow" "$allow_raw"; n_allow=$n_missing; miss_allow="${out_missing%, }"
+    diff_side "$tmpl_deny" "$deny_raw";   n_deny=$n_missing;  miss_deny="${out_missing%, }"
+    if [ "$n_allow" -eq 0 ] && [ "$n_deny" -eq 0 ]; then
+      ok "settings.json permissions match the plugin's template ($(printf '%s\n' "$tmpl_allow" | grep -c .) allow / $(printf '%s\n' "$tmpl_deny" | grep -c .) deny entries checked)"
+    fi
+    if [ "$n_allow" -gt 0 ]; then
+      more=""; [ "$n_allow" -gt 6 ] && more=" (+$((n_allow-6)) more)"
+      wrn "settings.json allow-list missing $n_allow template entries: $miss_allow$more; re-copy the permissions block from the plugin's templates/repo-settings.json"
+    fi
+    if [ "$n_deny" -gt 0 ]; then
+      more=""; [ "$n_deny" -gt 6 ] && more=" (+$((n_deny-6)) more)"
+      wrn "settings.json deny-list missing $n_deny template entries: $miss_deny$more — a missing -C mirror makes the bare-form guard bypassable; re-copy the permissions block from the plugin's templates/repo-settings.json"
+    fi
   fi
 fi
 
@@ -318,7 +292,7 @@ else
     ok "test-suite ratchet: off — no 'Test-suite ratchet policy' section in CLAUDE.md, so the ratchet never runs"
   else
     bt="$(printf '\140')"
-    # Documented heuristic (like 1.4/3.6 in dev/selfcheck.sh): the first backtick-quoted span in
+    # Documented heuristic (like 1.4 in dev/selfcheck.sh): the first backtick-quoted span in
     # the section is taken as the measurement command.
     sec="$(awk '/^#+[[:space:]]+Test-suite ratchet policy[[:space:]]*$/ { inx=1; next } inx && /^#+[[:space:]]/ { exit } inx { print }' "$root/CLAUDE.md")"
     span="$(printf '%s\n' "$sec" | grep -o "${bt}[^${bt}]*${bt}" | head -1 | tr -d "$bt")"
