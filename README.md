@@ -163,7 +163,10 @@ gate.
 The `issue-implementer` skill, for each `plan-approved` issue (sequential by default):
 1. Pre-flight: crash recovery (a dirty tree on a `claude/<n>-*` branch from an interrupted run
    is wip-committed, noted on the issue, and requeued; a dirty tree anywhere else is a hard
-   stop — that's human work), `cleanup-after-merge.sh --fix`, and the **baseline refresh**: if
+   stop — that's human work; stale worktrees left by a crashed swarm are swept in the same
+   pre-flight (a dirty one is wip-committed first, then removed), so a sequential run no longer
+   trips over a branch still checked out elsewhere), `cleanup-after-merge.sh --fix`, and the
+   **baseline refresh**: if
    the default branch moved past `.claude/BASELINE.md`'s recorded commit, re-run the
    verification suite on it — green updates the baseline, red stops the whole run (a broken
    main makes every failure unattributable). Then a fresh `claude/<n>-<slug>` branch; a wip-only
@@ -209,8 +212,8 @@ checkpoints a dead subagent's worktree *before* re-dispatching it under the same
 resume cap as sequential mode, and defers the blocking CI watches until no implementer is still
 running. Only the implementer dispatches fan out — the mechanical checks, the verifier, and the
 orchestrator's own git/gh work stay sequential, one worktree at a time. Leftover state from an
-earlier run is handled rather than fatal: stale worktrees are swept (`git worktree prune`, and a
-dirty one is wip-committed before removal), and an existing `claude/<n>-*` branch is attached and
+earlier run is handled rather than fatal: the pre-flight's stale-worktree sweep (above) has
+already run for both modes, and an existing `claude/<n>-*` branch is attached and
 resumed instead of failing a `git worktree add -b` — reset fresh only when its newest commit is a
 `wip: blocked — …`, exactly as sequential mode decides. Ignored files (venvs, `node_modules`)
 don't exist in fresh worktrees: verification runs the main checkout's tool binaries against the
