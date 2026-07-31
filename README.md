@@ -28,6 +28,7 @@ or share).
 
 ```
 .
+├── CLAUDE.md                     # this repo's OWN harness contract — governs work on the harness itself
 ├── .claude-plugin/
 │   ├── plugin.json               # plugin manifest (semver version field — bump it to publish an update)
 │   └── marketplace.json          # this repo doubles as its own marketplace
@@ -48,6 +49,8 @@ or share).
 │   ├── find-implementation-work.sh
 │   ├── harness-status.sh          # who acts next: harness queues vs. items waiting on the human
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
+├── dev/
+│   └── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
 ```
@@ -564,6 +567,11 @@ missing `sleep` grant falls back to a single immediate retry, a missing `date` g
 `duration: unknown`, and missing `git reset --soft`/`git merge-base` fall back to leaving WIP
 checkpoint commits in the PR instead of collapsing them.
 
+For **v1.6.1 → v1.6.2**, nothing migrates: the release adds this repo's own `CLAUDE.md` and
+`dev/selfcheck.sh` (see "Working on the harness itself"), which is instruction-text and
+tooling for developing the harness itself — it ships no agent/skill/script behavior change for
+consumer repos.
+
 Optional, not required: add a **"Plan auto-approval policy"** section to `CLAUDE.md` if you
 want the planner to approve low-risk plans for you — without it, behavior stays fully manual,
 exactly as before. Nothing else migrates: existing issues, labels, and plan comments keep
@@ -633,10 +641,31 @@ This repo **is the plugin and its own marketplace** (`.claude-plugin/plugin.json
 agent model pins (`planner: claude-opus-5`, `implementer: claude-sonnet-5`, `verifier: claude-opus-5`) travelling with
 the plugin. Install/update flow is in "Installing in a new repo".
 
-Project-side files that never live in this repo: `CLAUDE.md`, `LESSONS.md`, `BASELINE.md`,
-`settings.local.json`, and the label setup (per-repo, via `setup-labels.sh`). Nothing in the
-skills/agents should reference a specific project — if you find such a reference, that content
-belongs in the target repo's `CLAUDE.md` or `LESSONS.md` instead.
+Project-side files that never live in this repo: `LESSONS.md`, `BASELINE.md`,
+`settings.local.json`, and the label setup (per-repo, via `setup-labels.sh`). This repo does
+carry its own root `CLAUDE.md` — see "Working on the harness itself" below — but that file
+governs work *on* the harness itself, not on a project that consumes it; a consumer repo's own
+`CLAUDE.md` (conventions, verification commands) is a separate, project-owned file that never
+lives here. Nothing in the skills/agents should reference a specific project — if you find such
+a reference, that content belongs in the target repo's `CLAUDE.md` or `LESSONS.md` instead.
+
+## Working on the harness itself
+
+This repo has its own root `CLAUDE.md` — separate from, and with a different audience than, the
+`CLAUDE.md` contract this harness expects of a *consumer* repo (see "The CLAUDE.md contract"
+above). It governs changes to this repo's own agents, skills, scripts, and docs. The gate is one
+command, run from the repo root:
+
+```bash
+bash dev/selfcheck.sh
+```
+
+It checks shell syntax/portability, the JSON manifests, and the cross-file instruction-file
+invariants the skills silently depend on (template markers, the harness-status line grammar, one
+`# Constraints` section per agent, no constraint keyword restated across sections). This repo
+deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the *consumer*
+doctor, and onboarding it here would mean registering this repo's own published marketplace and
+enabling a cached copy of itself over the working tree being edited.
 
 ## Known future improvements
 
