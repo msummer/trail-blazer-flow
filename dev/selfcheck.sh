@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 31 assertions total:
+# Five groups, 32 assertions total:
 #   1. shell syntax and portability (bin/*.sh, dev/*.sh, and no GNU-only constructs in either)
 #   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json), plus the
 #      permission allow/deny mirroring between templates/repo-settings.json's `git -C` entries
@@ -19,8 +19,10 @@
 #   4. cross-file markers and skills (the planner-plan and ratchet-issue markers, skill
 #      frontmatter, README model-pin strings, WIP-message vocabulary, the label bijection,
 #      skill/README coverage, policy-section titles, the CI workflow's gate command, the
-#      #4 dedupe invariant extended to skills/*/SKILL.md, and that bin/check-harness.sh reads
-#      .claude/settings.json only through jq — never a raw-text grep/sed/awk of the file)
+#      #4 dedupe invariant extended to skills/*/SKILL.md, that bin/check-harness.sh reads
+#      .claude/settings.json only through jq — never a raw-text grep/sed/awk of the file —
+#      and the follow-up justification phrase shared by planner.md's template and the
+#      implementer skill's filing step)
 #   5. bin/ script behavior (reconcile-ledger.sh against fabricated ledger/status inputs)
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
@@ -480,7 +482,7 @@ fi
 pairs=(
   "planner.md|## Acceptance criteria"       # referenced by agents/verifier.md
   "planner.md|## Verified facts"            # referenced by agents/verifier.md and skills/issue-implementer/SKILL.md
-  "planner.md|## Follow-ups to file"        # referenced by skills/issue-implementer/SKILL.md
+  "planner.md|## Follow-ups to file"        # referenced by README.md and skills/test-ratchet/SKILL.md; the implementer skill couples via 4.12's phrase
   "implementer.md|## Resume brief"          # referenced by skills/issue-implementer/SKILL.md
   "verifier.md|## Notes for the PR reviewer" # referenced by skills/issue-implementer/SKILL.md
 )
@@ -797,6 +799,31 @@ if [ -z "$raw_reads" ]; then
   ok "4.11 bin/check-harness.sh reads .claude/settings.json only through jq (no raw-text grep/sed/awk of \"\$settings\")"
 else
   bad "4.11 raw-text grep/sed/awk of \"\$settings\" found in bin/check-harness.sh — line(s): $(printf '%s' "$raw_reads" | tr '\n' ' ')"
+fi
+
+# 4.12 — the follow-up justification phrase: skills/issue-implementer/SKILL.md's filing step now
+# filters on agents/planner.md's template text by name, the same dependency class 3.7 exists for.
+# FAILs unless the phrase below appears, verbatim (fixed-string), inside planner.md's fenced
+# template block (scoped like 3.7 — a prose mention outside the fence must not satisfy this) AND
+# anywhere in skills/issue-implementer/SKILL.md. Failure mode this guards: reword the phrase on
+# one side and the other silently keeps filtering on a sentence nothing asks for anymore. Honest
+# limit: this pins presence and phrase agreement between the two files, never whether any given
+# follow-up's justification is actually sound — that judgement stays the planner's and the
+# orchestrator's.
+phrase="why this can't just be dropped"
+missing=""
+f="$root/agents/planner.md"
+fences="$(fence_lines "$f")"
+t1="$(printf '%s\n' "$fences" | sed -n '1p')"
+t2="$(printf '%s\n' "$fences" | sed -n '2p')"
+if [ -z "$t1" ] || [ -z "$t2" ] || ! sed -n "$((t1+1)),$((t2-1))p" "$f" | grep -qF -- "$phrase"; then
+  missing="$missing agents/planner.md(fenced template)"
+fi
+grep -qF -- "$phrase" "$root/skills/issue-implementer/SKILL.md" || missing="$missing skills/issue-implementer/SKILL.md"
+if [ -z "$missing" ]; then
+  ok "4.12 follow-up justification phrase present in agents/planner.md's fenced template and skills/issue-implementer/SKILL.md"
+else
+  bad "4.12 follow-up justification phrase missing from:$missing"
 fi
 
 # ============================================================================
