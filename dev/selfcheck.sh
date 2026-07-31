@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 26 assertions total:
+# Five groups, 27 assertions total:
 #   1. shell syntax and portability (bin/*.sh, this script)
 #   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json), plus the
 #      permission allow/deny mirroring between templates/repo-settings.json's `git -C` entries
@@ -17,7 +17,7 @@
 #      block, the harness-status line grammar, the #4 dedupe invariant, required headings)
 #   4. cross-file markers and skills (the planner-plan and ratchet-issue markers, skill
 #      frontmatter, README model-pin strings, WIP-message vocabulary, the label bijection,
-#      skill/README coverage, policy-section titles)
+#      skill/README coverage, policy-section titles, the CI workflow's gate command)
 #   5. bin/ script behavior (reconcile-ledger.sh against fabricated ledger/status inputs)
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
@@ -531,6 +531,14 @@ if [ -z "$bad_list" ]; then
   ok "4.8 policy section titles cross-referenced in README.md, harness-setup, and >=2 skills"
 else
   bad "4.8 policy-title cross-reference problem(s):$bad_list"
+fi
+
+# 4.9 — the CI workflow exists and runs the same command CLAUDE.md names as the gate.
+wf="$root/.github/workflows/selfcheck.yml"
+if [ -f "$wf" ] && grep -qF -- 'bash dev/selfcheck.sh' "$wf"; then
+  ok "4.9 .github/workflows/selfcheck.yml runs 'bash dev/selfcheck.sh'"
+else
+  bad "4.9 .github/workflows/selfcheck.yml missing or does not run 'bash dev/selfcheck.sh'"
 fi
 
 # ============================================================================
