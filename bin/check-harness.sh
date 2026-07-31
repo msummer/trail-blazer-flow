@@ -3,9 +3,17 @@
 # check-harness.sh — preflight "doctor" for the issue-workflow harness.
 #
 # Checks everything mechanical the harness needs in a repo: gh/jq, the git remote,
-# the lifecycle labels, executable scripts, a CLAUDE.md with a verification section,
-# LESSONS.md, the settings.json toolchain allow-list, the verification baseline
-# (.claude/BASELINE.md, machine-local), and branch protection.
+# the lifecycle labels, executable scripts, a CLAUDE.md with a verification section and a
+# size guideline, LESSONS.md, the settings.json toolchain allow-list (read exclusively through
+# jq — never a raw-text grep/sed/awk of the file), whether the "Merge autonomy policy" section
+# is activated by its companion .claude/settings.json edits, whether a "Test-suite ratchet
+# policy" section exists and names a measurement command (looked up with `command -v`, never
+# executed), the verification baseline (.claude/BASELINE.md, machine-local), and branch
+# protection.
+#
+# The test-suite-ratchet check never executes, evals, or shells out to anything read from
+# CLAUDE.md: it only looks up the measurement command's first word with `command -v` (a lookup,
+# not an execution) and prints it back, quoted, as a report.
 #
 # Read-only except two safe, idempotent fixes it applies automatically:
 #   - chmod +x on the harness's own scripts
@@ -22,6 +30,13 @@ pass=0; warn=0; fail=0
 ok()  { echo "  PASS  $1"; pass=$((pass+1)); }
 wrn() { echo "  WARN  $1"; warn=$((warn+1)); }
 bad() { echo "  FAIL  $1"; fail=$((fail+1)); }
+
+# has_policy_section TITLE — does $root/CLAUDE.md have a heading matching TITLE exactly (any
+# '#' depth, case-sensitive, no trailing text)? '#+', not an interval expression, because
+# interval expressions are portable in `grep -E` but not guaranteed in every `awk`, and the
+# ratchet section-slice below uses awk with the same shape. Exact match is the contract wording
+# all three skills use ("a section titled exactly …").
+has_policy_section() { grep -qE "^#+[[:space:]]+$1[[:space:]]*\$" "$root/CLAUDE.md"; }
 
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "  FAIL  not inside a git repository"; exit 1; }
 cd "$root"
@@ -49,8 +64,10 @@ else
 fi
 
 # --- jq -----------------------------------------------------------------------
+jq_ready=false
 if command -v jq >/dev/null 2>&1; then
   ok "jq installed"
+  jq_ready=true
 else
   bad "jq not installed — the discovery scripts need it"
 fi
@@ -117,6 +134,17 @@ if [ -f "$root/CLAUDE.md" ]; then
   else
     wrn "CLAUDE.md present but no verification/test section found — subagents won't know what 'done' means; run the harness-setup skill"
   fi
+  # Mechanical proxy for "too much and the contract drowns in restatement" (README, "The
+  # CLAUDE.md contract"): the file is re-read by the planner, implementer, and verifier on
+  # every dispatch and every retry, so its cost is multiplied by the run, not paid once.
+  # tr -d strips the leading spaces BSD `wc` pads its output with.
+  cm_lines="$(wc -l < "$root/CLAUDE.md" | tr -d '[:space:]')"
+  cm_bytes="$(wc -c < "$root/CLAUDE.md" | tr -d '[:space:]')"
+  if [ "$cm_lines" -gt 300 ] || [ "$cm_bytes" -gt 20000 ]; then
+    wrn "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes — over the 300-line/20000-byte guideline; run the harness-setup skill's leanness audit to trim restatement (directory tours, framework defaults, formatter-enforced style — not the contract's six items themselves)"
+  else
+    ok "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes"
+  fi
 else
   bad "no CLAUDE.md — the harness contract requires one (conventions + verification commands); the harness-setup skill can draft it"
 fi
@@ -140,10 +168,32 @@ EOF
 fi
 
 # --- settings.json toolchain allow-list ----------------------------------------
+# Read only through jq below — never a raw-text grep/sed/awk of $settings. A raw-text read
+# makes a rule merely *mentioned* in an unrelated string (an env value, a comment-ish string)
+# count as present, and can't tell the allow array from the deny array (a deny-side `-C` mirror
+# pasted into the allow array would still read as "present" to a whole-file grep). Pre-initialise
+# allow_raw/deny_raw/settings_ok unconditionally: the script runs under set -u, and the policy
+# activation section below reads them regardless of which branch this if/elif/elif/else takes.
 settings="$claude_dir/settings.json"
-if [ -f "$settings" ]; then
+allow_raw=""
+deny_raw=""
+settings_ok=false
+if [ ! -f "$settings" ]; then
+  bad "no .claude/settings.json — create one from the plugin's templates/repo-settings.json (permissions + enabledPlugins); plugins cannot ship permission grants"
+elif ! $jq_ready; then
+  wrn "skipped the .claude/settings.json permission checks (jq not installed — see the FAIL above)"
+elif ! jq -e . "$settings" >/dev/null 2>&1; then
+  bad ".claude/settings.json does not parse as JSON — Claude Code cannot load these rules, so every grant and deny in the file is inoperative; fix the syntax (a trailing comma is the usual cause) and re-run"
+else
+  settings_ok=true
+  allow_raw="$(jq -r '.permissions.allow[]? // empty' "$settings" 2>/dev/null)"
+  deny_raw="$(jq -r '.permissions.deny[]? // empty' "$settings" 2>/dev/null)"
+
   has_marker() { find "$root" -maxdepth 2 -name "$1" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | grep -q .; }
-  allow_has()  { grep -qE "Bash\\(($1)" "$settings"; }
+  # entry_has LIST PREFIX — literal prefix test over a newline-separated entry list (no regex),
+  # mirroring how Claude Code matches Bash permission rules against a command string.
+  entry_has() { printf '%s\n' "$1" | awk -v p="$2" 'index($0, p) == 1 { hit = 1 } END { exit !hit }'; }
+  allow_has()  { printf '%s\n' "$allow_raw" | grep -qE "^Bash\\(($1)"; }
   tool_warns=0
   if has_marker package.json   && ! allow_has "npm|pnpm|yarn|bun";          then wrn "package.json found but no npm/pnpm/yarn/bun in the settings.json allow-list"; tool_warns=1; fi
   if { has_marker pyproject.toml || has_marker requirements.txt || has_marker pytest.ini; } && ! allow_has "pytest|python|uv|poetry|tox"; then wrn "Python project files found but no pytest/python/uv/poetry in the allow-list"; tool_warns=1; fi
@@ -154,9 +204,12 @@ if [ -f "$settings" ]; then
   if [ "$tool_warns" -eq 0 ]; then
     ok "settings.json allow-list covers the detected toolchain(s) (subagents can't prompt for permissions — this matters)"
   fi
-  # Sentinel: are the harness's own commands allowed? (matches both the bare-name plugin
-  # entries and legacy .claude-path entries, since both contain the script name)
-  if grep -q "find-planning-work.sh" "$settings"; then
+  # Sentinel: are the harness's own commands allowed? Deliberately a *substring* test over the
+  # extracted allow entries, not a prefix test like entry_has — this matches both the bare-name
+  # plugin entries and legacy .claude-path entries (e.g.
+  # "Bash(.claude/scripts/find-planning-work.sh:*)"), which contain the script name but not as
+  # a prefix of the entry.
+  if printf '%s\n' "$allow_raw" | grep -qF -- "find-planning-work.sh"; then
     ok "harness script commands are in the allow-list"
   else
     wrn "harness script commands (e.g. find-planning-work.sh) not found in the allow-list — copy the permissions block from the plugin's templates/repo-settings.json"
@@ -165,7 +218,7 @@ if [ -f "$settings" ]; then
   # grant silently stalls unattended runs behind a permission prompt.
   stale_entries=""
   for e in "harness-status.sh" "gh pr list" "gh run view" "git rev-parse" "git worktree"; do
-    grep -q "Bash($e" "$settings" || stale_entries="$stale_entries '$e'"
+    entry_has "$allow_raw" "Bash($e" || stale_entries="$stale_entries '$e'"
   done
   if [ -n "$stale_entries" ]; then
     wrn "allow-list predates v1.3 — missing:$stale_entries; re-copy the permissions block from the plugin's templates/repo-settings.json"
@@ -177,7 +230,7 @@ if [ -f "$settings" ]; then
   # WIP-checkpoint fallback (commits ride along in the PR instead of collapsing cleanly).
   v16_missing=""
   for e in "sleep" "date" "git reset --soft" "git merge-base"; do
-    grep -q "Bash($e" "$settings" || v16_missing="$v16_missing '$e'"
+    entry_has "$allow_raw" "Bash($e" || v16_missing="$v16_missing '$e'"
   done
   if [ -n "$v16_missing" ]; then
     wrn "allow-list predates v1.6 — missing:$v16_missing; re-copy the permissions block from the plugin's templates/repo-settings.json"
@@ -186,7 +239,7 @@ if [ -f "$settings" ]; then
   fi
   # v1.6.4 entry: the cycle's closing reconciliation runs reconcile-ledger.sh; without the
   # grant an unattended run stalls at step 5 behind a permission prompt.
-  if grep -q "Bash(reconcile-ledger.sh" "$settings"; then
+  if entry_has "$allow_raw" "Bash(reconcile-ledger.sh"; then
     ok "allow-list includes the v1.6.4 entry (reconcile-ledger.sh)"
   else
     wrn "allow-list predates v1.6.4 — missing 'reconcile-ledger.sh'; re-copy the permissions block from the plugin's templates/repo-settings.json"
@@ -199,7 +252,7 @@ if [ -f "$settings" ]; then
   for e in "git -C * status " "git -C * add " "git -C * commit " "git -C * push " \
            "git -C * restore " "git -C * diff " "git -C * rev-parse " \
            "git -C * merge-base " "git -C * reset --soft "; do
-    grep -qF -- "Bash($e" "$settings" || v181_missing="$v181_missing '$e'"
+    entry_has "$allow_raw" "Bash($e" || v181_missing="$v181_missing '$e'"
   done
   if [ -n "$v181_missing" ]; then
     wrn "allow-list predates v1.8.1 — missing:$v181_missing; re-copy the permissions block from the plugin's templates/repo-settings.json"
@@ -208,20 +261,82 @@ if [ -f "$settings" ]; then
   fi
   # v1.8.1 deny mirrors: without these, a `-C`-form allow (above) has no matching `-C`-form
   # deny, so e.g. `git -C <worktree> push --force` or `git -C <worktree> reset --hard` would
-  # bypass a guard that stops the bare form — strictly less safe than before v1.8.1.
+  # bypass a guard that stops the bare form — strictly less safe than before v1.8.1. Reads
+  # deny_raw, not allow_raw — this is the half of the bug where a deny-side entry moved into the
+  # allow array used to still read as "present" under a whole-file grep.
   v181_deny_missing=""
   for e in "git -C * push --force" "git -C * push -f" "git -C * push --force-with-lease" \
            "git -C * reset --hard" "git -C * clean" "git -C * branch -D main" \
            "git -C * push origin main"; do
-    grep -qF -- "Bash($e" "$settings" || v181_deny_missing="$v181_deny_missing '$e'"
+    entry_has "$deny_raw" "Bash($e" || v181_deny_missing="$v181_deny_missing '$e'"
   done
   if [ -n "$v181_deny_missing" ]; then
     wrn "deny-list predates v1.8.1 — missing -C mirror(s):$v181_deny_missing; worktree-mode force-push / reset --hard guards are bypassable via 'git -C <worktree> ...' until you re-copy the permissions block from the plugin's templates/repo-settings.json"
   else
     ok "deny-list includes the v1.8.1 -C deny mirrors (worktree-parallel force-push / reset --hard guards)"
   fi
+fi
+
+# --- policy activation state (informational) -------------------------------------
+# Reports whether an optional CLAUDE.md policy section is *activated* by its companion
+# permission-file edit — never whether the policy prose itself is any good (that quality
+# judgment stays with the harness-setup skill), and never auto-fixes anything: every WARN below
+# names the human's edit. Permission-state accuracy is per-file (.claude/settings.json only) —
+# a deny/allow in .claude/settings.local.json or ~/.claude/settings.json can still change the
+# effective answer; messages are worded about this file, not about effective permission.
+if [ ! -f "$root/CLAUDE.md" ]; then
+  wrn "policy activation checks skipped (no CLAUDE.md)"
 else
-  bad "no .claude/settings.json — create one from the plugin's templates/repo-settings.json (permissions + enabledPlugins); plugins cannot ship permission grants"
+  # --- merge autonomy (#28) --- exactly one 'merge autonomy: ' line; states mutually exclusive.
+  if ! $settings_ok; then
+    wrn "merge autonomy: activation state unknown — .claude/settings.json is missing or unreadable (see the FAIL/WARN above)"
+  else
+    merge_denied=false
+    entry_has "$deny_raw" "Bash(gh pr merge" && merge_denied=true
+    merge_allowed=false
+    entry_has "$allow_raw" "Bash(gh pr merge" && merge_allowed=true
+    has_merge_policy=false
+    has_policy_section "Merge autonomy policy" && has_merge_policy=true
+
+    if $has_merge_policy && $merge_denied; then
+      wrn "merge autonomy: half-activated — 'Merge autonomy policy' section present but 'Bash(gh pr merge:*)' is still denied in .claude/settings.json, so the cycle reports 'verified, merge blocked' instead of merging; to activate, remove \"Bash(gh pr merge:*)\" from permissions.deny AND add it to permissions.allow in .claude/settings.json (both edits are yours, never an agent's)"
+    elif $has_merge_policy && ! $merge_denied && $merge_allowed; then
+      ok "merge autonomy: active ('Merge autonomy policy' section present, deny lifted, allow entry present)"
+    elif $has_merge_policy && ! $merge_denied && ! $merge_allowed; then
+      wrn "merge autonomy: deny on 'Bash(gh pr merge:*)' lifted but no matching allow entry in .claude/settings.json — unattended cycles will stall on the permission prompt; add the allow entry"
+    elif ! $has_merge_policy && ! $merge_denied; then
+      wrn "merge autonomy: 'Bash(gh pr merge:*)' deny lifted but no 'Merge autonomy policy' section in CLAUDE.md — the cycle skips the merge pass anyway; add the section (or restore the deny)"
+    else
+      ok "merge autonomy: off (default — no 'Merge autonomy policy' section, deny in place; every PR merge is manual)"
+    fi
+  fi
+
+  # --- test-suite ratchet (#45) --- the doctor never executes the measurement command it finds:
+  # command -v is a lookup, not an execution, and the extracted token is only ever a quoted
+  # argument — never eval'd, never expanded. See the header comment for why.
+  if ! has_policy_section "Test-suite ratchet policy"; then
+    ok "test-suite ratchet: off — no 'Test-suite ratchet policy' section in CLAUDE.md, so the ratchet never runs"
+  else
+    bt="$(printf '\140')"
+    # Documented heuristic (like 1.4/3.6 in dev/selfcheck.sh): the first backtick-quoted span in
+    # the section is taken as the measurement command.
+    sec="$(awk '/^#+[[:space:]]+Test-suite ratchet policy[[:space:]]*$/ { inx=1; next } inx && /^#+[[:space:]]/ { exit } inx { print }' "$root/CLAUDE.md")"
+    span="$(printf '%s\n' "$sec" | grep -o "${bt}[^${bt}]*${bt}" | head -1 | tr -d "$bt")"
+    if [ -z "$span" ]; then
+      wrn "test-suite ratchet: 'Test-suite ratchet policy' section present but names no backtick-quoted measurement command ('No command ⇒ no ratchet') — the ratchet won't run until one is added"
+    else
+      tok="$(printf '%s' "$span" | awk '{print $1}')"
+      if printf '%s' "$tok" | grep -qE '^[A-Za-z0-9._/-][A-Za-z0-9._/+-]*$'; then
+        if command -v "$tok" >/dev/null 2>&1; then
+          ok "test-suite ratchet: measurement command \`$span\` found (the doctor only looks it up — command -v, never runs it; the harness-setup skill runs it once, with a human present)"
+        else
+          wrn "test-suite ratchet: measurement command names '$tok', not found on PATH (the doctor only looks it up — command -v, never runs it) — a project venv may still provide it once activated"
+        fi
+      else
+        ok "test-suite ratchet: 'Test-suite ratchet policy' section names a measurement command (\`$span\`) — the doctor does not run it; the harness-setup skill does, once, with a human present"
+      fi
+    fi
+  fi
 fi
 
 # --- verification baseline ------------------------------------------------------

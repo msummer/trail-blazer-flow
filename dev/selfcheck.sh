@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 30 assertions total:
+# Five groups, 31 assertions total:
 #   1. shell syntax and portability (bin/*.sh, dev/*.sh, and no GNU-only constructs in either)
 #   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json), plus the
 #      permission allow/deny mirroring between templates/repo-settings.json's `git -C` entries
@@ -18,8 +18,9 @@
 #      the verifier's lettered Process checks a.-g. plus CLAUDE.md's `rule Nx` citations)
 #   4. cross-file markers and skills (the planner-plan and ratchet-issue markers, skill
 #      frontmatter, README model-pin strings, WIP-message vocabulary, the label bijection,
-#      skill/README coverage, policy-section titles, the CI workflow's gate command, and the
-#      #4 dedupe invariant extended to skills/*/SKILL.md)
+#      skill/README coverage, policy-section titles, the CI workflow's gate command, the
+#      #4 dedupe invariant extended to skills/*/SKILL.md, and that bin/check-harness.sh reads
+#      .claude/settings.json only through jq — never a raw-text grep/sed/awk of the file)
 #   5. bin/ script behavior (reconcile-ledger.sh against fabricated ledger/status inputs)
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
@@ -779,6 +780,23 @@ if [ -z "$bad_list" ]; then
   ok "4.10 no merge-authority/push-boundary/sequencing/read-only keyword restated across more than one section of the same skills/*/SKILL.md"
 else
   bad "4.10 keyword restated across sections —$bad_list"
+fi
+
+# 4.11 — bin/check-harness.sh reads .claude/settings.json only through jq: no raw-text
+# grep/sed/awk of "$settings" anywhere in the file. Why this matters: a raw-text read makes a
+# rule merely *mentioned* in an unrelated string (e.g. an env value) count as present, and can't
+# tell the allow array from the deny array — a deny-side `-C` mirror pasted into the allow array
+# would still read as "present" to a whole-file grep, which is the dangerous direction.
+# Two-stage, unanchored: no leading '^[[:space:]]*[^#]' — that anchor forces the mandatory
+# [^#] to consume the command word's own first letter on a column-0 line (no whitespace left to
+# sacrifice instead), so a flush-left raw read would slip past unnoticed. Comments are excluded
+# by LINE (grep -v on the whole matched line) rather than by character, so an indented comment
+# that merely quotes "$settings" doesn't false-positive either.
+raw_reads="$(grep -nE '(grep|sed|awk).*"\$settings"' "$root/bin/check-harness.sh" | grep -vE '^[0-9]+:[[:space:]]*#')"
+if [ -z "$raw_reads" ]; then
+  ok "4.11 bin/check-harness.sh reads .claude/settings.json only through jq (no raw-text grep/sed/awk of \"\$settings\")"
+else
+  bad "4.11 raw-text grep/sed/awk of \"\$settings\" found in bin/check-harness.sh — line(s): $(printf '%s' "$raw_reads" | tr '\n' ' ')"
 fi
 
 # ============================================================================
