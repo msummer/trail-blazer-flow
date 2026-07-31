@@ -172,6 +172,18 @@ if [ -f "$settings" ]; then
   else
     ok "allow-list includes the v1.3 entries (status script, gh pr list/run view, rev-parse, worktree)"
   fi
+  # v1.6 entries: resilient dispatch (backoff/retry, WIP checkpoint collapse) needs these; a
+  # missing grant silently degrades the retry ladder to one immediate retry, or forces the
+  # WIP-checkpoint fallback (commits ride along in the PR instead of collapsing cleanly).
+  v16_missing=""
+  for e in "sleep" "date" "git reset --soft" "git merge-base"; do
+    grep -q "Bash($e" "$settings" || v16_missing="$v16_missing '$e'"
+  done
+  if [ -n "$v16_missing" ]; then
+    wrn "allow-list predates v1.6 — missing:$v16_missing; re-copy the permissions block from the plugin's templates/repo-settings.json"
+  else
+    ok "allow-list includes the v1.6 entries (sleep, date, git reset --soft, git merge-base)"
+  fi
 else
   bad "no .claude/settings.json — create one from the plugin's templates/repo-settings.json (permissions + enabledPlugins); plugins cannot ship permission grants"
 fi

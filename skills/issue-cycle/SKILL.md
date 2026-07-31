@@ -30,6 +30,33 @@ auto-approval policy, a cycle ends with plans awaiting review; if there is no CL
 autonomy policy (or the `gh pr merge` deny is still in place), it ends with PRs awaiting
 merge — both the human's.
 
+## Dispatch ledger
+
+A cycle tracks every issue it touches in a **per-issue dispatch ledger**, kept **in the run's
+context only** — no state file, no `.claude/CYCLE-LEDGER.md`, no new label. Each row: issue
+number, `planned` / `implemented` / `verified` / `merged` (each a stage outcome or "—" if not yet
+reached this run), retry count (ladder retries + resume relaunches, summed per stage), wall-clock
+duration (`unknown` if a clock is unavailable — never fail the cycle over a missing `date`),
+final state, and escalations.
+
+**Seeding:** at step 0, seed one row per issue named in the pre-flight discovery output (both the
+planning and implementation discovery lists once step 1/2 run them), each starting with all four
+stage columns empty.
+
+**Updating:** each pass (planning, implementation, merge) fills in its own stage column for every
+issue it touches, using the outcome each sub-skill's dispatch reports via the status line
+contract (see the issue-implementer skill's "Resilient dispatch" — cited here by name, not
+restated).
+
+**Pre-advance check:** before moving an issue on to its next stage, check the ledger — a stage
+with no ledger entry is **launched, not assumed**. This is what stops an issue from silently
+skipping a stage: the cycle never infers "must have been fine" from an empty cell.
+
+**Closing reconciliation (step 4):** compare the ledger against the `harness-status.sh` JSON step
+4 already collects. Any issue the cycle intended to act on this run that still sits in the same
+discovery bucket with no ledger outcome is reported as an **escalated skipped stage** — never a
+silent drop.
+
 ## Procedure
 
 ### 0. Pre-flight
@@ -43,32 +70,50 @@ implementing on it is forbidden anyway.
 If `.claude/BASELINE.md` is missing, warn once (run harness-setup) and continue — a missing
 baseline degrades comparisons; it doesn't block the cycle.
 
+**Seed the dispatch ledger.** Run `find-planning-work.sh` and `find-implementation-work.sh`
+(both idempotent, read-only) to learn the full universe of issues this run might touch, and add
+one ledger row per issue found (all four stage columns empty). Steps 1 and 2 below re-run their
+own discovery internally as part of their normal procedure — that's expected, not wasted work —
+but the ledger's up-front seed is what lets the pre-advance checks and step 4's reconciliation
+catch a stage that never got touched.
+
 ### 1. Planning pass
 
 Invoke the **`issue-planner`** skill and let it run its full procedure: discovery, initial
 plans, revisions, stale/overlap handling, proposed answers + same-run revision, policy
-auto-approval, summary. Skip its step 0 (your pre-flight already covered it).
+auto-approval, summary. Skip its step 0 (your pre-flight already covered it). As it reports each
+outcome, fill in the `planned` column for the corresponding ledger rows (including the retry
+count from each dispatch's status line). **Pre-advance check:** before treating an issue as
+planned, confirm the ledger shows an outcome for it — a blank cell after this pass means the
+stage was skipped and must be escalated, not silently carried forward.
 
 ### 2. Implementation pass
 
 Invoke the **`issue-implementer`** skill for everything now `plan-approved` — including plans
 auto-approved in step 1 (that's the point of the policy; the PR gate remains). Skip its step 0
 (already covered). Sequential by default; its worktree-parallel mode applies under its own
-rules if the batch qualifies.
+rules if the batch qualifies. Fill in the `implemented` and `verified` ledger columns from its
+summary table (outcome, retry/kickback counts, CI status). **Pre-advance check:** the same rule
+as step 1 — an issue this pass should have touched with no ledger outcome is launched (or
+escalated if it can't be), never assumed done.
 
 If step 1 produced nothing to implement and nothing was already approved, skip this pass.
 
 ### 3. Merge pass (only under a repo merge autonomy policy)
 
-Skip this pass entirely — silently — unless **both** activation conditions hold:
+Skip this pass entirely — **silently, exactly as v1.5.0** — when there is no "Merge autonomy
+policy" section at all (activation condition 1 below unmet). That silence is the only silent
+case; everything past activation is loud (see the guards below).
+
+Activation requires **both**:
 
 1. The repo's `CLAUDE.md` has a section titled exactly **"Merge autonomy policy"**. No section
    means merging stays fully manual, exactly as before — that trust decision belongs in the
-   repo's file, not this plugin.
+   repo's file, not this plugin. (No section → skip silently, per above.)
 2. `gh pr merge` actually runs — i.e. the human has removed it from the deny list in
-   `.claude/settings.json`. If the command is denied or prompts, the human has not activated
-   merge autonomy on this machine: leave the PR for them and never route around it (no API
-   calls, no web merges, no asking the user mid-cycle).
+   `.claude/settings.json`. If the policy section exists but the command is denied or prompts,
+   that is the **loud** case (see guard (c) below), not a silent skip: the half-finished double
+   opt-in gets escalated, not passed over quietly.
 
 When active, evaluate each open harness PR (and Dependabot PRs, if the policy covers them)
 against the repo's policy. The policy defines *which* PRs qualify; this **hard floor applies
@@ -91,14 +136,63 @@ on top and is not configurable**:
 - **Every autonomous merge is audited**: it appears in the cycle report with its evidence —
   PR link, verifier verdict, CI run — never merged silently.
 
-PRs that fail any check simply stay in the "waits on the human" queue with a one-line reason.
-That is a normal outcome, not an error.
+**Merge guards, applied per PR, in order:**
+
+(a) **Base assertion.** Before attempting the merge, confirm the PR targets the repo's default
+    branch:
+    ```bash
+    gh pr view <n> --json baseRefName --jq .baseRefName | tr -d '\r'
+    ```
+    resolved once via `gh repo view --json defaultBranchRef` (the same lookup the
+    issue-implementer pre-flight already does — not a hardcoded `main`). A mismatch **aborts
+    that merge and escalates** — the harness never merges a PR whose base is a feature branch,
+    even if every other guard passes.
+
+(b) **Attempt the merge**, matching the repo's existing merge method as today.
+
+(c) **Permission-denied escalates loudly.** If the policy section exists but `gh pr merge` comes
+    back permission-denied (the human hasn't lifted the deny on this machine), the stage fails
+    loudly: report the issue as **`verified, merge blocked`** (never `done`), and print the
+    **exact command** for the human in the run summary, including the PR number and the repo's
+    merge method, e.g. `gh pr merge <n> --squash` (adjust the flag to match). Never route around
+    the denial — no API calls, no web merges, no asking the user mid-cycle.
+
+(d) **Post-merge verification.** After the merge command returns, confirm it actually landed
+    before reporting it merged:
+    ```bash
+    gh pr view <n> --json state --jq .state | tr -d '\r'
+    ```
+    must return `MERGED`. If it doesn't, the state is **`merge attempted, unconfirmed`** and the
+    merge pass stops for that PR — don't proceed to the next merge assuming success.
+
+Fill in the `merged` ledger column with the outcome (`merged` / `merge-blocked` / `not-eligible`
+/ `merge-unconfirmed`) for every PR the pass evaluated, and emit the merge stage's status line
+yourself (there is no merge agent) per the issue-implementer skill's "Resilient dispatch":
+`stage=merge`, `issue=<n>`, that same outcome, `retries=0` (the merge pass doesn't retry through
+the ladder — a denial or a base mismatch is a policy/config fact, not a transient failure).
+
+PRs that fail any check (guard or policy) simply stay in the "waits on the human" queue with a
+one-line reason. That is a normal outcome, not an error — the loud escalations above (guard (c),
+a hard `main`-red stop) are for cases that need the human's attention beyond just "PR waits".
 
 ### 4. Close the loop
 
 ```bash
 harness-status.sh
 ```
+
+**Closing reconciliation.** Compare the dispatch ledger against this JSON: any issue the cycle
+intended to act on this run (it appears in the ledger, seeded at step 0) that still sits in the
+same `harness-status.sh` discovery bucket it started in, with no ledger outcome for the stage
+that should have moved it — report that as an **escalated skipped stage**, not a clean "still
+pending" item. This is the mechanical backstop behind the pre-advance checks in steps 1-3.
+
+**Per-issue summary table.** Before the two-halves report below, print the ledger as a table:
+issue, planned / implemented / verified / merged (outcome or "—"), retries (ladder + resume,
+summed), duration (wall-clock per issue if `date` is available, else `unknown` — never fail the
+cycle over a missing clock), final state, escalations. This is the single artifact that answers
+"what happened to every issue this run touched," including the ones that ended up escalated
+rather than progressed.
 
 End with a report in two halves, drawn from the status JSON and the sub-skills' summaries:
 
@@ -107,11 +201,14 @@ End with a report in two halves, drawn from the status JSON and the sub-skills' 
    blocked, CI outcomes, lessons recorded, hygiene fixes.
 2. **What waits on the human** — plans to review (with BLOCKING/ADVISORY counts), PRs to
    review/merge (with CI state, and the one-line reason each PR didn't qualify for the merge
-   pass, when one ran), blocked issues (with the blocker, one line each). This is the
-   human's work queue; make it copy-paste actionable (issue/PR links).
+   pass, when one ran — including any `verified, merge blocked` issue and its exact merge
+   command), blocked issues (with the blocker, one line each). This is the human's work queue;
+   make it copy-paste actionable (issue/PR links).
 
 If the cycle did nothing and nothing waits on anyone, say "all quiet" in one line and stop —
-an empty cycle must be cheap and unceremonious.
+an empty cycle must be cheap and unceremonious. (An empty cycle still means an empty ledger, not
+a skipped reconciliation — the "all quiet" shortcut only applies when there was truly nothing to
+seed.)
 
 ## Unattended operation
 
@@ -133,8 +230,14 @@ an empty cycle must be cheap and unceremonious.
   or merge a PR outside the respective policy path and its hard floor; never touch a dirty tree
   that isn't the harness's own.
 - **Fail towards the human.** If any pass ends in an unexpected state (red baseline, repeated
-  crash recovery on the same issue, discovery truncation that won't drain), stop the cycle and
-  report rather than looping through the damage.
+  crash recovery on the same issue, discovery truncation that won't drain, a resume cap exceeded,
+  a stage that exhausted the retry ladder), stop that issue's progress and report rather than
+  looping through the damage — the resume cap and the ladder's escalation are themselves the
+  bounded version of this rule, not an exception to it.
+- **No stage skipped but unreported.** A cycle may not end with an issue silently missing a
+  stage it should have gone through. Every ledger row gets an outcome (success, blocked, or
+  escalated) for every stage it reached — enforced by the pre-advance checks per pass and the
+  closing reconciliation in step 4.
 - **One cycle, one report.** Even when both passes ran, the human gets a single consolidated
   report at the end — not two skill summaries stitched mid-run. (The sub-skills' summary steps
   feed it; don't emit them separately.)

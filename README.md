@@ -158,8 +158,10 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    stop — that's human work), `cleanup-after-merge.sh --fix`, and the **baseline refresh**: if
    the default branch moved past `.claude/BASELINE.md`'s recorded commit, re-run the
    verification suite on it — green updates the baseline, red stops the whole run (a broken
-   main makes every failure unattributable). Then a fresh `claude/<n>-<slug>` branch; wip-only
-   leftover branches are reset automatically, branches with real commits go to the human.
+   main makes every failure unattributable). Then a fresh `claude/<n>-<slug>` branch; a wip-only
+   leftover branch is **resumed, not restarted** unless its newest commit is a `wip: blocked —
+   …`, in which case it's reset fresh as before — see "Resilience" below. Branches with real
+   (non-wip) commits still go to the human.
 2. Dispatches the `implementer` subagent with: issue + full plan (incl. Verified facts) +
    **resolved answers to every open question** (including binding post-approval comments from
    the thread) + `LESSONS.md` entries. Missing a BLOCKING answer → don't dispatch; ask the human.
@@ -170,11 +172,16 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    the diff against the plan's steps, the plan's acceptance criteria, test quality, scope, and
    declared constraints. **Verifier fail → kickback**: the implementer is re-dispatched with the
    findings ("fix ONLY these"), then re-checked — **max 2 kickbacks**, then `impl-blocked` with
-   the findings. All of this happens *before* anything is committed, so every PR the human sees
-   is verifier-clean.
-5. On verifier pass: stages everything, **reconciles the staged list against the report's "Files
-   changed"** (unexplained files = blocker, not a commit), commits, pushes, opens the PR
-   (`Closes #n`, verification results, verifier notes, schema notes), labels `pr-open`.
+   the findings. All of this happens *before* anything is pushed or a PR exists — the branch may
+   already carry local WIP checkpoint commits by this point (see "Resilience: checkpointing,
+   retries, and the dispatch ledger" below), but nothing leaves the machine until the verifier
+   passes, so every PR the human sees is verifier-clean.
+5. On verifier pass: **collapses the run's WIP checkpoint commits** into the working tree (one
+   `git reset --soft` to the branch's merge base with the default branch — never the working
+   tree itself, which is untouched), stages everything, **reconciles the staged list against the
+   report's "Files changed"** (unexplained files = blocker, not a commit), commits once, pushes,
+   opens the PR (`Closes #n`, verification results, verifier notes, schema notes), labels
+   `pr-open`. The PR still ends up as one clean commit, exactly as before.
 6. **Files the plan's "Follow-ups to file"** as new issues, referencing the PR.
 7. **Watches CI** (`gh pr checks --watch`). Red CI caused by the PR itself gets **one bounded
    fix attempt** (implementer → mechanical checks → verifier → push; the PR isn't merged, so
@@ -192,6 +199,45 @@ files (venvs, `node_modules`) don't exist in fresh worktrees: verification runs 
 checkout's tool binaries against the worktree, and UI-heavy issues that need per-tree installs
 fall back to sequential. Any overlap or doubt → sequential.
 
+### Resilience: checkpointing, retries, and the dispatch ledger
+
+Improvised recovery behavior from live runs is now an owned mechanism (the `issue-implementer`
+skill's "Resilient dispatch" section is the canonical spec; `issue-planner` and `issue-cycle`
+cite it by name):
+
+- **WIP checkpointing, resume-not-restart.** The orchestrator commits the tree at each stage
+  boundary — after the implementer returns, after each kickback round, after a CI-fix dispatch —
+  with a `wip:` message (`wip: checkpoint <stage> (#n)`). A branch found at the start of a run
+  carrying only `wip:` commits is **resumed** (checked out and continued) unless its newest
+  commit is `wip: blocked — …`, which still resets fresh as before. Resuming preserves whatever
+  the previous attempt finished; nothing is lost to a crash or a dead subagent mid-issue.
+- **Backoff and retry.** A retryable dispatch failure (a tool-level error, an API 429/500/529, or
+  a dispatch that returns nothing usable) is retried with exponential backoff, up to a bounded
+  number of attempts (exact wait times and attempt count are defined once, in the
+  `issue-implementer` skill's "Resilient dispatch" section), before the stage is escalated into
+  the run report as **failed** — never silently skipped, never quietly advanced past. A full
+  ladder adds several minutes of wall-clock time per failing stage; fine unattended, worth
+  knowing about if you're watching a run live. This is orthogonal to the existing kickback loop
+  (a verifier `fail`) and the CI-fix attempt, which are unaffected.
+- **Clean exit on context exhaustion.** An implementer approaching its context limit stops
+  cleanly and returns `status: incomplete` with a resume brief (what's done, what remains) rather
+  than thrashing; the orchestrator checkpoints the tree and relaunches, capped at 2 resume
+  relaunches per issue per run (3 implementer contexts total). Planner and verifier stages get
+  the same clean-exit behavior with no commit involved — the orchestrator retains the last
+  completed plan/verdict and relaunches with that as the resume brief.
+- **Status lines and the dispatch ledger.** Every planner/implementer/verifier report ends with a
+  machine-readable HTML-comment status line (stage, issue, outcome, retry count — harmless noise
+  when a plan is posted verbatim to GitHub; the exact grammar is defined once, in the
+  `issue-implementer` skill's "Resilient dispatch" section); the orchestrator emits the same line
+  on a stage's behalf when it died or never reported, and for the merge stage
+  (which has no agent). `issue-cycle` keeps an in-context, non-persisted **dispatch ledger**
+  (planned/implemented/verified/merged per issue, retries, duration, final state) seeded from
+  discovery and reconciled against `harness-status.sh` at the end of a run, so a stage can never
+  be silently dropped — see "The steady state" below.
+- **Merge guards.** Covered under the merge pass in "The steady state" below: a base-branch
+  assertion before merging, loud escalation (never silent) when merge autonomy is configured but
+  denied, and post-merge state verification before a PR is reported merged.
+
 ### After the human merges
 
 Nothing is required: every planner/implementer/cycle run starts with
@@ -204,13 +250,20 @@ two green PRs can still compose badly, and that check is now mechanical. Running
 ### The steady state, as one command ("run the cycle")
 
 The `issue-cycle` skill composes the above into a single bounded pass: pre-flight (cleanup +
-baseline refresh) → planning pass (plans, revisions, proposed answers, policy auto-approvals) →
-implementation pass (everything `plan-approved`) → merge pass (only when the repo opts in via
-a CLAUDE.md "Merge autonomy policy" *and* the human has lifted the `gh pr merge` deny; one PR
-at a time, re-verified between, audited in the report) → a closing report via
-`harness-status.sh` that splits the world into *what the cycle did* and *what waits on the
-human* (plans to review, PRs to merge, blocked issues). It adds no authority beyond what the
-repo's CLAUDE.md delegates — it just removes the hand-cranking between stages. Pair it with `/loop` or a scheduled routine for unattended
+baseline refresh, and seeding the run's **dispatch ledger** from discovery) → planning pass
+(plans, revisions, proposed answers, policy auto-approvals) → implementation pass (everything
+`plan-approved`) → merge pass (only when the repo opts in via a CLAUDE.md "Merge autonomy
+policy" *and* the human has lifted the `gh pr merge` deny; guarded per PR — the base branch is
+asserted before merging, a permission-denied merge escalates loudly with the exact command
+instead of failing silently, and the merge is confirmed via a post-merge state check before
+being reported — one PR at a time, re-verified between, audited in the report) → a closing
+report via `harness-status.sh` that reconciles the ledger against it (any issue the cycle meant
+to act on with no recorded outcome is escalated, never dropped), prints a **per-issue summary
+table** (stages completed, retries, duration, final state, escalations), and splits the world
+into *what the cycle did* and *what waits on the human* (plans to review, PRs to merge —
+including any issue reading `verified, merge blocked` with its exact merge command — blocked
+issues). It adds no authority beyond what the repo's CLAUDE.md delegates — it just removes the
+hand-cranking between stages. Pair it with `/loop` or a scheduled routine for unattended
 operation; each invocation stays one bounded pass, and an empty cycle reports "all quiet" in
 one line. With a conservative auto-approval policy in place, the unattended flow becomes:
 issues in → verifier-clean PRs out, with the human reviewing PRs and answering BLOCKING
@@ -279,7 +332,9 @@ gh issue edit 1 --add-label plan-approved   # or click the label in the GitHub U
 
 The `issue-implementer` skill branches off the default branch, dispatches the `implementer`
 subagent to build the skeleton, **independently re-runs the verification commands**, then runs
-the `verifier` subagent against the plan — all before committing. It opens a PR (`Closes #1`) with
+the `verifier` subagent against the plan — all before anything is pushed or a PR exists (local
+WIP checkpoint commits may already exist on the branch by this point). It opens a PR (`Closes
+#1`) with
 the verification results. Review the PR and **merge it** on GitHub. (No cleanup step needed —
 the next skill run's pre-flight syncs and tidies automatically; run `cleanup-after-merge.sh`
 by hand if you want the tidy-up immediately.)
@@ -497,6 +552,18 @@ For **v1.4 → v1.5** nothing migrates: merge autonomy is pure opt-in, and every
 CLAUDE.md "Merge autonomy policy" section behaves exactly as before (PR merge always human).
 To opt a repo in, see the double opt-in under "The CLAUDE.md contract" item 5.
 
+For **v1.5 → v1.6**, one item: **new permission grants** for the resilience mechanism
+(checkpointing, backoff/retry, the WIP-checkpoint collapse). Re-copy (or merge) the
+`permissions` block from the plugin's `templates/repo-settings.json` into
+`.claude/settings.json` — v1.6 adds `Bash(sleep:*)` (the retry ladder's backoff wait),
+`Bash(date:*)` (duration reporting in the summary table), `Bash(git reset --soft:*)`, and
+`Bash(git merge-base:*)` (collapsing a run's WIP checkpoints into one clean commit before the
+PR). `check-harness.sh` names exactly what's missing, same as any other version. Nothing is
+required if you never notice the gap — the harness degrades gracefully (see "Safety model"): a
+missing `sleep` grant falls back to a single immediate retry, a missing `date` grant reports
+`duration: unknown`, and missing `git reset --soft`/`git merge-base` fall back to leaving WIP
+checkpoint commits in the PR instead of collapsing them.
+
 Optional, not required: add a **"Plan auto-approval policy"** section to `CLAUDE.md` if you
 want the planner to approve low-risk plans for you — without it, behavior stays fully manual,
 exactly as before. Nothing else migrates: existing issues, labels, and plan comments keep
@@ -512,7 +579,13 @@ Edit/Write, the build/test runners, and carries the deny-list (no merge, no forc
 `reset --hard`). The `gh pr merge` deny is the merge-autonomy off-switch: it ships on, and
 lifting it is a human edit reserved for repos that define a CLAUDE.md merge autonomy policy. The same file also carries the non-permission keys a clone needs to bootstrap
 the plugin — `extraKnownMarketplaces` (auto-registering + auto-updating the marketplace) and
-`enabledPlugins` — covered in "Installing in a new repo". The template allows `pnpm`, `npm`,
+`enabledPlugins` — covered in "Installing in a new repo". Four grants exist solely for the
+resilience mechanism (see "Resilience: checkpointing, retries, and the dispatch ledger"):
+`Bash(sleep:*)` (the retry ladder's backoff waits), `Bash(date:*)` (duration reporting in the
+summary table — advisory only, its absence just costs `duration: unknown`),
+`Bash(git reset --soft:*)` and `Bash(git merge-base:*)` (collapsing a run's WIP checkpoints into
+one clean commit before the PR — `git reset --soft` never touches the working tree, only where
+HEAD points; see "Safety model"). The template allows `pnpm`, `npm`,
 `yarn`, and `pytest`; if your repo uses a
 different toolchain, add it — the doctor warns when it detects a toolchain the list doesn't
 cover — e.g.:
@@ -531,7 +604,13 @@ default branch directly), a deny-list (no merge by default, no force-push, no `r
 no `rm -rf`), independent re-verification + staged-file reconciliation before every commit, and
 **human review of every PR before merge unless the repo has double-opted-in to merge autonomy**
 (CLAUDE.md policy + lifted deny — see "The CLAUDE.md contract"). The deny-list is best-effort pattern matching; branch protection +
-PR review are the real backstops.
+PR review are the real backstops. The pre-merge guarantee is "nothing pushed, no PR exists" —
+not "nothing committed": WIP checkpoint commits accumulate locally during a run (see
+"Resilience"), but never leave the machine before the verifier passes. `git reset --soft`, added
+for collapsing those checkpoints, only moves what a branch points at — it never touches the
+working tree or deletes any file, so it carries none of the risk `reset --hard` does; the
+`Bash(git reset --hard:*)` deny is unchanged and, like every deny, takes precedence over any
+allow entry.
 
 Two honest caveats. First, the implementer's "no git" rule is enforced by prompt, not by
 permissions: the settings allow-list must permit git for the orchestrator, and permission
