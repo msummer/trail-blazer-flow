@@ -678,7 +678,12 @@ HEAD points; see "Safety model"). Nine further `Bash(git -C * <sub> *)` allow en
 solely for worktree-parallel mode (see the `issue-implementer` skill's
 `references/worktree-mode.md`). Separately, the seven bare `git` deny entries above each gained a
 `git -C * …` mirror, so a worktree-mode command can't slip past a guard the bare form already
-stops — see "Safety model" for why the mirror matters. The template allows `pnpm`, `npm`,
+stops — see "Safety model" for why the mirror matters. Two of those seven bare denies
+(`branch -D main` and `push origin main`) name the default branch literally, so they guard
+nothing on a repo whose default branch isn't `main` (`master`, `trunk`, `develop`, ...);
+`check-harness.sh` derives the guarded operations from the template itself, checks them against
+this repo's actual default branch, and — when coverage is missing — names the exact bare and
+`-C` deny entries to add. The template allows `pnpm`, `npm`,
 `yarn`, and `pytest`; if your repo uses a
 different toolchain, add it — the doctor warns when it detects a toolchain the list doesn't
 cover — e.g.:
@@ -701,7 +706,9 @@ default branch directly), a deny-list (no merge by default, no force-push, no `r
 no `rm -rf`), independent re-verification + staged-file reconciliation before every commit, and
 **human review of every PR before merge unless the repo has double-opted-in to merge autonomy**
 (CLAUDE.md policy + lifted deny — see "The CLAUDE.md contract"). The deny-list is best-effort pattern matching; branch protection +
-PR review are the real backstops. The pre-merge guarantee is "nothing pushed, no PR exists" —
+PR review are the real backstops, and — because two of the seven bare denies name the default
+branch literally — `check-harness.sh` reports per-repo whether those two entries (and their `-C`
+mirrors) actually cover this repo's default branch. The pre-merge guarantee is "nothing pushed, no PR exists" —
 not "nothing committed": WIP checkpoint commits accumulate locally during a run (see
 "Resilience"), but never leave the machine before the verifier passes. `git reset --soft`, added
 for collapsing those checkpoints, only moves what a branch points at — it never touches the

@@ -131,6 +131,8 @@ p_2_4_orphan_grant() {
 }
 p_2_5_missing_bare()  { drop "$1/templates/repo-settings.json" '"Bash\(git commit:\*\)"'; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
+p_2_7_template()       { edit "$1/templates/repo-settings.json" 's/ main:\*)/ trunk:*)/; s/ main\*)/ trunk*)/'; }
+p_2_7_doctor()         { edit "$1/bin/check-harness.sh" 's/^tmpl_guarded_branch=/tmpl_renamed_branch=/'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
   local f="$1/skills/project-kickoff/SKILL.md"
@@ -172,6 +174,8 @@ cases=(
   "2.4-orphan-grant|2.4|p_2_4_orphan_grant|add an allow entry for a bin/ script that doesn't exist"
   "2.5-missing-bare|2.5|p_2_5_missing_bare|drop the Bash(git commit:*) allow entry"
   "2.6|2.6|p_2_6|drop the Bash(git -C * clean*) deny entry"
+  "2.7-template|2.7|p_2_7_template|retarget the template's branch-scoped denies from main to trunk"
+  "2.7-doctor|2.7|p_2_7_doctor|rename check-harness.sh's tmpl_guarded_branch= line so the gate's extraction comes back empty"
   "3.4|3.4|p_3_4|agents/planner.md's harness-status line: retries=<k> becomes retries=<kk>"
   "4.2-empty-desc|4.2|p_4_2_empty_desc|delete project-kickoff/SKILL.md's folded description body"
   "4.6|4.6|p_4_6|drop a label bin/setup-labels.sh creates from the doctor's required list"
