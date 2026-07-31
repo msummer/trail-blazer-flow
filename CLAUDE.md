@@ -22,17 +22,29 @@ bash dev/selfcheck.sh
 It prints a `PASS`/`FAIL` line per assertion (grouped and labelled in its own output) and a
 `== summary: N pass, M fail ==` footer, and exits 0 iff nothing failed. The same command runs in
 CI on every pull request (`.github/workflows/selfcheck.yml`, one job on `ubuntu-latest`); a red
-check there means this exact command failed, so reproduce it locally with the line above. There
+check there means one of the job's two commands failed — reproduce locally with
+`bash dev/selfcheck.sh` and `bash dev/selfcheck-tests.sh`. There
 is no test suite and no build step: this repo is Markdown instruction files, Bash scripts, and
-JSON manifests, so the gate checks shell syntax/portability, JSON manifest validity, and the
-cross-file instruction-file contracts the skills silently depend on (the `<!-- planner-plan -->`
-marker, one `# Constraints` section per agent, the harness-status line grammar, no constraint
-keyword restated across sections of the same file, the `<!-- ratchet-issue -->` marker, the
+JSON manifests, so the gate checks shell syntax/portability (including no GNU-only shell
+constructs in `bin/*.sh` or `dev/*.sh`), JSON manifest validity, and the cross-file
+instruction-file contracts the skills silently depend on (the `<!-- planner-plan -->` marker, one
+`# Constraints` section per agent, the harness-status line grammar, no constraint keyword
+restated across sections of the same file — extended to `skills/*/SKILL.md`'s merge-authority,
+push-boundary, sequencing, and read-only language — the `<!-- ratchet-issue -->` marker, the
 `setup-labels.sh` ↔ doctor label bijection, the policy-section titles the skills read, the CI
-workflow's gate command, and the git permission-mirror invariants in `templates/repo-settings.json`
-— the `-C` allow forms `skills/issue-implementer/SKILL.md` mandates, and the bare↔`-C` mirroring
-of its own git allow/deny entries), plus the behavior of `bin/reconcile-ledger.sh` against
-fabricated inputs. A change the gate can't catch needs a new assertion in the gate, not a waiver.
+workflow's gate command, `agents/verifier.md`'s lettered Process checks `a.`–`g.` matching
+CLAUDE.md's own `rule Nx` citations, and the git permission-mirror invariants in
+`templates/repo-settings.json` — the `-C` allow forms `skills/issue-implementer/SKILL.md`
+mandates, and the bare↔`-C` mirroring of its own git allow/deny entries), plus the behavior of
+`bin/reconcile-ledger.sh` against fabricated inputs. A change the gate can't catch needs a new
+assertion in the gate, not a waiver.
+
+`dev/selfcheck-tests.sh` is the gate's own negative-test harness — a separate script, not part
+of the gate itself, that copies this repo to a throwaway temp directory, applies one documented
+perturbation per case, and asserts the gate fails with exactly the expected assertion id(s). It
+also runs in CI, as a second step after the gate in the same job; run it by hand
+(`bash dev/selfcheck-tests.sh`) whenever `dev/selfcheck.sh` changes, and add a case for every new
+assertion.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor. Onboarding it here would mean checking in a `.claude/settings.json` that
@@ -50,7 +62,8 @@ itself".
   only for developing this repo (not for consumers) go in `dev/` instead.
 - `*.sh` files are LF-only (enforced by `.gitattributes`) and must stay portable across BSD
   (macOS) and Git-Bash userlands — no GNU-only flags (`sed -i` without a suffix, `grep -P`,
-  `readlink -f`, `mapfile`).
+  `readlink -f`, `mapfile`/`readarray`, `declare -A`). Assertion 1.4 enforces this on `bin/*.sh`
+  and `dev/*.sh`.
 - The README is part of "done": every factual claim it makes about this repo's behavior must be
   checkable against the code (the verifier applies its rule 3g to docs).
 - Release ritual: bump `version` in `.claude-plugin/plugin.json` and create the matching
