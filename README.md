@@ -426,11 +426,11 @@ subagents need:
    `.claude/settings.local.json` (machine-local, gitignored, never committed) to activate on
    one machine only — settings.local.json is the first-class way to do that. A deny in
    *either* file — or in your user-level settings file — wins over an allow anywhere else.
-   Both edits are yours, never an agent's. The merge pass's
-   hard floor always applies on top (standard-flow PRs only, CI green on the head commit,
-   never the governance surface — CLAUDE.md, `.claude/`, policy/ADR docs — nothing flagged
-   for human decision, one merge at a time with re-verification between, every merge audited
-   in the cycle report). **No section means no autonomous merges** — behavior is exactly the
+   Both edits are yours, never an agent's. The merge pass's hard floor always applies on
+   top (standard-flow PRs only, CI green on the head commit, never the governance surface —
+   CLAUDE.md, `.claude/`, policy/ADR docs, CI config — nothing flagged for human decision,
+   one merge at a time with re-verification between, every merge audited in the cycle
+   report). **No section means no autonomous merges** — behavior is exactly the
    pre-1.5 default. Recommended pairing: branch protection with required status checks, so
    the policy has a technical rail under it, not just prompt adherence. `check-harness.sh`
    judges activation from *effective* merge-permission state — across `.claude/settings.json`,
