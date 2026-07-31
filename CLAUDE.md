@@ -39,7 +39,9 @@ grep/sed/awk of the file), the CI workflow's gate command, `agents/verifier.md`'
 Process checks `a.`–`g.` matching
 CLAUDE.md's own `rule Nx` citations, and the git permission-mirror invariants in
 `templates/repo-settings.json` — the `-C` allow forms `skills/issue-implementer/SKILL.md`
-mandates, and the bare↔`-C` mirroring of its own git allow/deny entries), plus the behavior of
+mandates, and the bare↔`-C` mirroring of its own git allow/deny entries — and the ledger stage
+vocabulary shared by `bin/reconcile-ledger.sh` and `skills/issue-implementer/SKILL.md`'s
+status-line grammar (`seed` excepted — it is ledger-only)), plus the behavior of
 `bin/reconcile-ledger.sh` against fabricated inputs. A change the gate can't catch needs a new
 assertion in the gate, not a waiver.
 

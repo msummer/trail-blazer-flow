@@ -203,12 +203,15 @@ p_4_10_same_section() {
 p_4_11()              { printf 'grep -q "Bash(gh pr merge" "$settings"\n' | append "$1/bin/check-harness.sh"; }
 p_4_12_planner()      { edit "$1/agents/planner.md" 's/just be dropped/just be droppped/'; }
 p_4_12_skill()        { edit "$1/skills/issue-implementer/SKILL.md" 's/just be dropped/just be droppped/'; }
+p_4_13_script()       { edit "$1/bin/reconcile-ledger.sh" 's/seed|planner|implementer|verifier|merge)/seed|planner|implementer|verifier|merge|docs)/'; }
+p_4_13_skill()        { edit "$1/skills/issue-implementer/SKILL.md" 's/stage=<planner|implementer|verifier|merge>/stage=<planner|implementer|verifier|merge|docs>/'; }
+p_4_13_vocab()        { drop "$1/bin/reconcile-ledger.sh" '^    merge\)'; }
 p_5_1()               { edit "$1/bin/reconcile-ledger.sh" 's/blocked incomplete died/blocked incomplete/'; }
 p_5_2()               { edit "$1/bin/reconcile-ledger.sh" 's/stage-skipped issue/stage_skipped issue/'; }
 
 # ---------------------------------------------------------------------------------------------
 # Case table: name|expected-ids (space-separated, empty for a control case)|perturb function
-# name ("none" for no perturbation)|one-line description. Full coverage of all 32 gate ids —
+# name ("none" for no perturbation)|one-line description. Full coverage of all 33 gate ids —
 # the `coverage` meta-case below fails if that stops being true.
 cases=(
   "control-clean||none|pristine copy, no perturbation: the gate must be all-green"
@@ -255,6 +258,9 @@ cases=(
   "4.11|4.11|p_4_11|reintroduce a raw grep of \"\$settings\" in bin/check-harness.sh"
   "4.12-planner|4.12|p_4_12_planner|mangle the follow-up justification phrase in agents/planner.md's template"
   "4.12-skill|4.12|p_4_12_skill|mangle the same phrase in issue-implementer/SKILL.md's filing step"
+  "4.13-script|4.13|p_4_13_script|add a 'docs' stage to reconcile-ledger.sh's accepted list only (trips the cross-file and intra-file clauses together)"
+  "4.13-skill|4.13|p_4_13_skill|add a 'docs' alternative to issue-implementer/SKILL.md's status-line stage grammar only"
+  "4.13-vocab|4.13|p_4_13_vocab|drop reconcile-ledger.sh's vocab() merge arm, leaving the accepted list and the skill grammar intact"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
 )
