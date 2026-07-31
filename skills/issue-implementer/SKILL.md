@@ -15,9 +15,9 @@ description: >
 
 This is the **implementation** half of the workflow. Planning (the `issue-planner` skill) has
 already produced and the human has approved a plan for each issue you handle here. You (the main
-session) are the orchestrator: you do all git and GitHub work, and you delegate code-writing to
-the read/write `implementer` subagent (the plugin's `agents/implementer.md`), one dispatch per issue.
-After the implementer completes and the mechanical checks pass, a read-only `verifier` subagent
+session) are the orchestrator: you delegate code-writing to
+the `implementer` subagent (the plugin's `agents/implementer.md`), one dispatch per issue.
+After the implementer completes and the mechanical checks pass, a `verifier` subagent
 (the plugin's `agents/verifier.md`) adversarially reviews the diff against the plan and acceptance
 criteria **before anything is pushed or a PR exists** (the branch may already carry local WIP
 checkpoint commits by this point — see "Resilient dispatch") — failures are kicked back to the
