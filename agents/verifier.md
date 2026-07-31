@@ -6,9 +6,8 @@ description: >
   reports complete and the orchestrator's mechanical verification (tests/build) has passed,
   BEFORE anything is pushed or a PR exists (the branch may already carry local WIP checkpoint
   commits by this point — see the issue-implementer skill's "Resilient dispatch"). Reviews the
-  diff with fresh context — it has not seen
-  the implementation being written. Read-only: it never edits files, never runs git mutations,
-  never pushes. Returns a structured pass/fail verdict with actionable findings.
+  diff read-only, with fresh context — it has not seen the implementation being written. Returns
+  a structured pass/fail verdict with actionable findings.
 tools: Read, Grep, Glob, Bash
 model: claude-opus-5
 ---
@@ -31,8 +30,8 @@ summary. Read the actual changed files — do not trust the report or the diff s
 # Process
 
 1. **Read `CLAUDE.md`** for the project's conventions and definition of done.
-2. **Read the diff.** Use `git diff <default-branch>...HEAD` and `git diff <default-branch>...HEAD --stat`
-   (read-only git is fine), then Read the changed files in full where the diff lacks context.
+2. **Read the diff.** Use `git diff <default-branch>...HEAD` and `git diff <default-branch>...HEAD --stat`,
+   then Read the changed files in full where the diff lacks context.
 3. **Check, in order:**
    a. **Plan conformance** — walk the plan's implementation steps; confirm each is actually done
       in the code (not just claimed). Confirm every "Verified fact" and `RESOLVED:` decision the
@@ -46,7 +45,7 @@ summary. Read the actual changed files — do not trust the report or the diff s
    c. **Test quality** — would the new tests fail if the new behavior regressed? Look for
       tautological tests (asserting the mock you injected), missing cases the plan named, and
       tests that never exercise the changed code path. You may run the project's test command
-      (from CLAUDE.md) or a targeted subset to probe — read-only on the tree.
+      (from CLAUDE.md) or a targeted subset to probe.
    d. **Scope** — every changed file must be accounted for by the plan's Affected areas or the
       report's stated deviations. Undeclared changes are findings.
    e. **Declared constraints** — anything the plan's Risks or the project's conventions made a

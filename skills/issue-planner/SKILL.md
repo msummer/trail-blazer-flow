@@ -6,7 +6,7 @@ description: >
   similar. Finds open issues that need an initial plan (no plan-* label) or a revision (a
   plan-proposed issue with feedback comments posted after the latest plan), dispatches a
   read-only `planner` subagent for each, then posts each plan as an issue comment and sets
-  labels. Planning only — it never writes code or implements anything.
+  labels. Planning only.
 ---
 
 # Issue Planner
@@ -14,7 +14,7 @@ description: >
 This skill turns GitHub issues into review-ready implementation plans. It is the **planning**
 half of the workflow; implementation is a separate, later step. You (the main session) act as
 the orchestrator: you handle all GitHub I/O, and you delegate the actual plan-writing to the
-read-only `planner` subagent (the plugin's `agents/planner.md`), one dispatch per issue.
+`planner` subagent (the plugin's `agents/planner.md`), one dispatch per issue.
 
 ## The label state machine
 
