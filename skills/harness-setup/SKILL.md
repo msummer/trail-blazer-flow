@@ -60,8 +60,8 @@ it without guessing?"**:
    section, why it's discoverable, proposed action (drop / compress / relocate to
    `.claude/LESSONS.md` if it's really a recurring, incident-derived trap) — for the human to
    decide, never an unapproved edit (see "Project-owned files need approval" below). The
-   contract sections above, and any auto-approval/merge-autonomy policy, are never trim
-   targets — lean removes restatement, not the contract. When unsure, keep it.
+   contract sections above, and any auto-approval / merge-autonomy / test-suite-ratchet policy,
+   are never trim targets — lean removes restatement, not the contract. When unsure, keep it.
 5. **Plan auto-approval policy (optional)** — if a section titled "Plan auto-approval policy"
    exists, the issue-planner may auto-approve plans that meet its conditions (a hard floor
    still always applies — see the plugin README). Explain the semantics to the user either
@@ -82,6 +82,18 @@ it without guessing?"**:
    policy (e.g. *"Merge harness PRs whose plan was approved, whose verifier verdict is pass,
    and whose CI is green; never anything touching `db/`, auth, or CI/CD"*) for their review,
    and recommend pairing it with branch protection and required status checks.
+7. **Test-suite ratchet policy (optional)** — if a section titled exactly "Test-suite ratchet
+   policy" exists, the `test-ratchet` skill (standalone, and as the `issue-cycle` ratchet pass)
+   may file coverage-increasing issues on the repo's behalf; a non-configurable hard floor
+   applies on top — test-only work, monotonic, capped per run and per open backlog, evidence
+   required, `no-auto-approve` on every issue (see the plugin README). No section means the
+   ratchet never runs. If the section exists, **run the measurement command it names once** and
+   report the figure: a policy whose command doesn't run files nothing, and that is worth
+   catching here rather than in an unattended cycle. If they want it, offer to draft a
+   conservative starting policy (e.g. *"Measure with `<cmd>`; propose coverage work under
+   `src/` only; at most 1 issue per run"*) for their review, and explain the flow — filed issues
+   arrive labelled `test-ratchet` + `no-auto-approve`, so every one still gets a human's plan
+   review, and closing one as *not planned* vetoes that gap permanently.
 
 If `CLAUDE.md` is missing or thin: explore the repo (manifests, CI workflow files, test
 configs, existing docs) and **draft** the missing sections — or a full `CLAUDE.md` — and
@@ -136,7 +148,8 @@ Summarise for the user:
 - CLAUDE.md verdict — satisfies the contract / draft pending review / gaps named, trim
   proposals if any — and which autonomy policies exist: plan auto-approval (and what it
   allows), and merge autonomy (and whether the `gh pr merge` deny has been lifted, i.e.
-  whether the double opt-in is complete).
+  whether the double opt-in is complete) — and the test-suite ratchet (present or absent, and
+  whether its measurement command actually runs).
 - Verification baseline — the exact commands and their green outcomes, and confirmation that
   `.claude/BASELINE.md` was written (and is gitignored).
 - Remaining human items — typically: branch protection, allow-list confirmation, CLAUDE.md

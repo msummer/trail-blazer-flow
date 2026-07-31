@@ -8,7 +8,7 @@
 #
 # Compares a cycle run's dispatch ledger against the live harness queues (harness-status.sh
 # JSON) and prints one line per discrepancy. It DETECTS ONLY — what a discrepancy means, and
-# what to do about it, stays with the orchestrator (see the issue-cycle skill, step 4).
+# what to do about it, stays with the orchestrator (see the issue-cycle skill, step 5).
 #
 # LEDGER RECORDS — one per line, whitespace-separated; blank lines and #-comments ignored:
 #

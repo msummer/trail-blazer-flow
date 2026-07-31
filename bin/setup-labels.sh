@@ -12,6 +12,9 @@
 #   no-plan         -> opt-out: the planner ignores this issue entirely (tracking/discussion)
 #   no-auto-approve -> opt-out: this issue's plans are never auto-approved, even if CLAUDE.md
 #                      defines an auto-approval policy; approval must be manual
+#   test-ratchet    -> provenance: filed by the test-ratchet skill under the repo's CLAUDE.md
+#                      "Test-suite ratchet policy". Harness-authored, so it also gets
+#                      no-auto-approve; close it as "not planned" to veto that gap for good.
 #
 # Requesting plan changes does NOT use a label — just comment on the issue and the planner
 # revises on its next run. Approval and the implementation states ARE labels (unambiguous signals).
@@ -34,6 +37,7 @@ create_or_update "pr-open"         "5319E7" "PR opened for this issue; awaiting 
 create_or_update "impl-blocked"    "B60205" "Implementation hit a blocker; needs human input (remove to retry)"
 create_or_update "no-plan"         "EEEEEE" "Excluded from the planning workflow; the planner ignores this issue"
 create_or_update "no-auto-approve" "FBCA04" "Never auto-approve this issue's plans; approval must be manual"
+create_or_update "test-ratchet"    "006B75" "Filed by the test-suite ratchet; harness-authored coverage work"
 
 echo "Labels are set up."
 echo "Note: the old 'plan-changes-requested' label is no longer used. Delete it if you like:"
