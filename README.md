@@ -682,6 +682,22 @@ let `git -C <worktree> push --force` past a guard that stops the bare form. Noth
 migrates; repos that never use worktree-parallel mode are unaffected, and sequential mode is
 unchanged. `check-harness.sh` names exactly what's missing, same as any other version.
 
+For **v1.8.1 → v1.9.0**, nothing migrates — no new label, script, permission grant, or
+baseline step. This release is the 2026-07-31 hardening run, and every item in it is
+harness-internal or instruction text: the gate (`dev/selfcheck.sh`) grew from 26 to 33 assertions
+and gained its negative-test harness (`dev/selfcheck-tests.sh`), and both now run in CI on every
+pull request (see "Working on the harness itself"); `check-harness.sh` reads
+`.claude/settings.json` exclusively through `jq`, reports each optional policy section's
+activation state, and warns when `CLAUDE.md` outgrows the leanness guideline — all
+informational, so it may name items an older doctor passed over, and fixing what it names is the
+same migration step it always was; every follow-up a plan files now carries a justification
+sentence; the dispatch ledger's stage vocabulary is pinned across `reconcile-ledger.sh` and the
+implementer skill; the pre-flight now sweeps stale worktrees before the hygiene run in both modes
+(no new grant — the bare `git worktree` commands are covered by `Bash(git worktree:*)`, in place
+since v1.3, and the dirty-worktree wip-commit by the v1.8.1 `git -C` grants, so if you skipped the
+v1.8.0 → v1.8.1 permission copy above, do it now even if you never use worktree-parallel mode);
+and the `issue-planner` / `issue-cycle` skill files were trimmed of restated rules.
+
 Optional, not required: add a **"Plan auto-approval policy"** section to `CLAUDE.md` if you
 want the planner to approve low-risk plans for you — without it, behavior stays fully manual,
 exactly as before. Nothing else migrates: existing issues, labels, and plan comments keep
