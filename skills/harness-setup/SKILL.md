@@ -54,7 +54,15 @@ it without guessing?"**:
 2. **Setup command** — how dependencies are installed (needed for fresh checkouts/worktrees).
 3. **Conventions** — concrete enough that a plan can cite them: code style, patterns,
    security/data rules, schema/migration rules if there is a database.
-4. **Plan auto-approval policy (optional)** — if a section titled "Plan auto-approval policy"
+4. **Leanness** — does a section just restate what an implementer could find in ten seconds (a
+   directory listing, "we use React; components live in `src/components`", a framework's own
+   defaults, a style rule the linter/formatter already enforces)? Flag it as a trim proposal —
+   section, why it's discoverable, proposed action (drop / compress / relocate to
+   `.claude/LESSONS.md` if it's really a recurring, incident-derived trap) — for the human to
+   decide, never an unapproved edit (see "Project-owned files need approval" below). The
+   contract sections above, and any auto-approval/merge-autonomy policy, are never trim
+   targets — lean removes restatement, not the contract. When unsure, keep it.
+5. **Plan auto-approval policy (optional)** — if a section titled "Plan auto-approval policy"
    exists, the issue-planner may auto-approve plans that meet its conditions (a hard floor
    still always applies — see the plugin README). Explain the semantics to the user either
    way: no section means every approval is manual. If they want more autonomy, offer to draft
@@ -64,9 +72,14 @@ it without guessing?"**:
 
 If `CLAUDE.md` is missing or thin: explore the repo (manifests, CI workflow files, test
 configs, existing docs) and **draft** the missing sections — or a full `CLAUDE.md` — and
-present the draft to the user for review. `CLAUDE.md` is project-owned: never write or
-overwrite it without explicit approval of the draft. CI workflow files are the best source of
-truth for verification commands — what CI runs IS the gate.
+present the draft to the user for review. Draft lean from the start: repo purpose, the
+contract sections above, and the non-obvious — invariants, why-this-way decisions, and
+cross-cutting traps a fresh reader would violate. Skip directory tours, framework defaults,
+and formatter-enforced style; point at the source of truth instead of copying it, except the
+verification commands, which stay verbatim and copy-pasteable — they *are* the contract.
+`CLAUDE.md` is project-owned: never write or overwrite it without explicit approval of the
+draft. CI workflow files are the best source of truth for verification commands — what CI
+runs IS the gate.
 
 ### 3. Verification baseline
 
@@ -107,8 +120,8 @@ installed), run each verification command and record the outcome — e.g. "pytes
 Summarise for the user:
 
 - Doctor results (after fixes) — anything still WARN/FAIL and who owns it.
-- CLAUDE.md verdict — satisfies the contract / draft pending review / gaps named — and whether
-  an auto-approval policy exists (and what it allows).
+- CLAUDE.md verdict — satisfies the contract / draft pending review / gaps named, trim
+  proposals if any — and whether an auto-approval policy exists (and what it allows).
 - Verification baseline — the exact commands and their green outcomes, and confirmation that
   `.claude/BASELINE.md` was written (and is gitignored).
 - Remaining human items — typically: branch protection, allow-list confirmation, CLAUDE.md
