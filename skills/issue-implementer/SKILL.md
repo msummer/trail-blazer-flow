@@ -6,9 +6,7 @@ description: >
   plans", or similar. Finds issues labelled plan-approved (excluding pr-open / impl-blocked),
   processes them ONE AT A TIME (never in parallel — they share a working tree), and for each:
   branches off the default branch, dispatches a single `implementer` subagent to write and verify
-  the code, then commits, pushes, and opens a PR for review. This skill never merges — merging
-  belongs to the human, or to the issue-cycle merge pass where the repo's CLAUDE.md merge
-  autonomy policy delegates it.
+  the code, then commits, pushes, and opens a PR for review. Never merges.
 ---
 
 # Issue Implementer
@@ -28,9 +26,8 @@ commands that define "done", how dependencies are installed, schema/migration ru
 the repo's **CLAUDE.md**, which the subagent reads at the start of every task. (See the
 "CLAUDE.md contract" in the plugin README.)
 
-The end state for each issue is **an open PR awaiting review** — this skill never merges.
-(Merging happens afterwards: by the human, or by the `issue-cycle` skill's merge pass when the
-repo's CLAUDE.md defines a merge autonomy policy and the human has enabled `gh pr merge`.)
+The end state for each issue is **an open PR awaiting review**. The merge boundary — and where
+merge authority lives when it exists at all — is stated once under "Hard rules" below.
 
 ## Labels involved
 
@@ -46,9 +43,10 @@ repo's CLAUDE.md defines a merge autonomy policy and the human has enabled `gh p
   the worktree-parallel procedure below, and only when every plan in the batch has pairwise
   disjoint "Affected areas".
 - **Never merge in this skill** and **never push to the default branch**. One issue →
-  one `claude/<n>-<slug>` branch → one PR. (Merge authority, where it exists at all, lives
-  solely in the issue-cycle merge pass under the repo's CLAUDE.md merge autonomy policy; by
-  default `gh pr merge` is on the repo deny list.)
+  one `claude/<n>-<slug>` branch → one PR. Merging happens afterwards and belongs to the
+  human — or, where the repo's CLAUDE.md defines a merge autonomy policy and the human has
+  lifted the default `gh pr merge` deny, to the `issue-cycle` skill's merge pass, the sole
+  place any harness merge authority exists.
 - **The subagent writes code; you do every git and `gh` command.**
 - **A dirty working tree is only recoverable when it's clearly the harness's own.** If the
   dirty tree is on a `claude/<n>-*` branch, run the crash recovery in step 0. Anywhere else
