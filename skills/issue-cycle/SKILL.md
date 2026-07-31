@@ -5,10 +5,8 @@ description: >
   propose answers, policy auto-approve) → implement approved issues → report what now waits on
   the human. Use when the user asks to "run the cycle", "process everything pending", "run the
   harness", "do a full pass", or wants unattended/scheduled operation (pair with /loop or a
-  scheduled routine). It composes the issue-planner and issue-implementer skills; it adds no
-  authority beyond what the repo delegates — the same human gates apply (plan approval, and PR
-  merge, are the human's unless the repo's CLAUDE.md policies explicitly delegate them; see the
-  merge pass for the merge-side hard floor).
+  scheduled routine). It composes the issue-planner and issue-implementer skills and adds no
+  authority beyond what the repo's CLAUDE.md delegates.
 ---
 
 # Issue Cycle
@@ -24,11 +22,10 @@ What a cycle can do unattended: turn new issues into plans, revise on feedback, 
 grounded answers to open questions, auto-approve plans **only** under the repo's CLAUDE.md
 auto-approval policy (hard floor always applies), implement approved plans through the verifier
 gate, open PRs, merge PRs **only** under the repo's CLAUDE.md merge autonomy policy (its own
-hard floor always applies — see the merge pass), and repair queue hygiene. What it can never
-do: approve a plan or merge a PR outside the respective policy path. If there is no CLAUDE.md
-auto-approval policy, a cycle ends with plans awaiting review; if there is no CLAUDE.md merge
-autonomy policy (or the `gh pr merge` deny is still in place), it ends with PRs awaiting
-merge — both the human's.
+hard floor always applies — see the merge pass), and repair queue hygiene. If there is no
+CLAUDE.md auto-approval policy, a cycle ends with plans awaiting review; if there is no
+CLAUDE.md merge autonomy policy (or the `gh pr merge` deny is still in place), it ends with
+PRs awaiting merge — both the human's.
 
 ## Dispatch ledger
 
@@ -227,8 +224,9 @@ seed.)
 
 - **No authority beyond the repo's delegation.** Every rule of the composed skills applies
   verbatim — this skill adds sequencing plus the merge pass, nothing else. Never approve a plan
-  or merge a PR outside the respective policy path and its hard floor; never touch a dirty tree
-  that isn't the harness's own.
+  outside the auto-approval policy path and its hard floor; merge authority is defined once, in
+  the merge pass's activation conditions and hard floor (step 3), and exists nowhere else;
+  never touch a dirty tree that isn't the harness's own.
 - **Fail towards the human.** If any pass ends in an unexpected state (red baseline, repeated
   crash recovery on the same issue, discovery truncation that won't drain, a resume cap exceeded,
   a stage that exhausted the retry ladder), stop that issue's progress and report rather than
