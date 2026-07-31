@@ -145,6 +145,7 @@ p_4_2_empty_desc() {
 }
 p_4_6()               { drop "$1/bin/setup-labels.sh" '^create_or_update "plan-proposed"'; }
 p_4_11()              { printf 'grep -q "Bash(gh pr merge" "$settings"\n' | append "$1/bin/check-harness.sh"; }
+p_4_11_local()         { printf 'sed -n "1p" "$settings_local" >/dev/null\n' | append "$1/bin/check-harness.sh"; }
 p_4_13_script()       { edit "$1/bin/reconcile-ledger.sh" 's/^STAGES="seed planner implementer verifier merge"$/STAGES="seed planner implementer verifier merge docs"/'; }
 p_4_13_skill()        { edit "$1/skills/issue-implementer/SKILL.md" 's/stage=<planner|implementer|verifier|merge>/stage=<planner|implementer|verifier|merge|docs>/'; }
 p_4_13_outcome()      { edit "$1/agents/verifier.md" 's/outcome=<pass|fail|incomplete|died>/outcome=<pass|fail|incomplete|died|bogus-outcome>/'; }
@@ -180,6 +181,7 @@ cases=(
   "4.2-empty-desc|4.2|p_4_2_empty_desc|delete project-kickoff/SKILL.md's folded description body"
   "4.6|4.6|p_4_6|drop a label bin/setup-labels.sh creates from the doctor's required list"
   "4.11|4.11|p_4_11|reintroduce a raw grep of \"\$settings\" in bin/check-harness.sh"
+  "4.11-local|4.11|p_4_11_local|reintroduce a raw sed of \"\$settings_local\" in bin/check-harness.sh"
   "4.13-script|4.13|p_4_13_script|add a 'docs' stage to reconcile-ledger.sh's STAGES= list only"
   "4.13-skill|4.13|p_4_13_skill|add a 'docs' alternative to issue-implementer/SKILL.md's status-line stage grammar only"
   "4.13-outcome|4.13|p_4_13_outcome|add an undocumented outcome alternative to agents/verifier.md's status line"

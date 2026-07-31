@@ -5,12 +5,14 @@
 # Checks everything mechanical the harness needs in a repo: gh/jq, the git remote,
 # the lifecycle labels, executable scripts, a CLAUDE.md with a verification section and a
 # size guideline, LESSONS.md, the settings.json toolchain allow-list (read exclusively through
-# jq — never a raw-text grep/sed/awk of the file), whether the "Merge autonomy policy" section
-# is activated by its companion .claude/settings.json edits, whether a "Test-suite ratchet
-# policy" section exists and names a measurement command (looked up with `command -v`, never
-# executed), the verification baseline (.claude/BASELINE.md, machine-local), whether the
-# template's branch-scoped deny entries actually cover this repo's default branch, and branch
-# protection.
+# jq — never a raw-text grep/sed/awk of any settings* path variable), whether the "Merge autonomy
+# policy" section is activated by the effective merge-permission state across
+# .claude/settings.json, .claude/settings.local.json, and the user-level settings file (a deny in
+# any of them wins, regardless of allows elsewhere — union semantics, not just the checked-in
+# file), whether a "Test-suite ratchet policy" section exists and names a measurement command
+# (looked up with `command -v`, never executed), the verification baseline (.claude/BASELINE.md,
+# machine-local), whether the template's branch-scoped deny entries actually cover this repo's
+# default branch, and branch protection.
 #
 # The test-suite-ratchet check never executes, evals, or shells out to anything read from
 # CLAUDE.md: it only looks up the measurement command's first word with `command -v` (a lookup,
@@ -38,6 +40,13 @@ bad() { echo "  FAIL  $1"; fail=$((fail+1)); }
 # ratchet section-slice below uses awk with the same shape. Exact match is the contract wording
 # all three skills use ("a section titled exactly …").
 has_policy_section() { grep -qE "^#+[[:space:]]+$1[[:space:]]*\$" "$root/CLAUDE.md"; }
+
+# entry_has LIST PREFIX — literal prefix test over a newline-separated entry list (no regex),
+# mirroring how Claude Code matches Bash permission rules against a command string. Top-level
+# (not scoped to .claude/settings.json) because the merge-autonomy scan below applies it across
+# every settings file it reads: .claude/settings.json, .claude/settings.local.json, and the
+# user-level settings file.
+entry_has() { printf '%s\n' "$1" | awk -v p="$2" 'index($0, p) == 1 { hit = 1 } END { exit !hit }'; }
 
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "  FAIL  not inside a git repository"; exit 1; }
 cd "$root"
@@ -169,16 +178,21 @@ EOF
 fi
 
 # --- settings.json toolchain allow-list ----------------------------------------
-# Read only through jq below — never a raw-text grep/sed/awk of $settings. A raw-text read
-# makes a rule merely *mentioned* in an unrelated string (an env value, a comment-ish string)
-# count as present, and can't tell the allow array from the deny array (a deny-side `-C` mirror
-# pasted into the allow array would still read as "present" to a whole-file grep). Pre-initialise
-# allow_raw/deny_raw/settings_ok unconditionally: the script runs under set -u, and the policy
-# activation section below reads them regardless of which branch this if/elif/elif/else takes.
+# Read only through jq below — never a raw-text grep/sed/awk of any settings* path variable
+# (every settings-file path variable in this script is named settings*, so dev/selfcheck.sh's
+# assertion 4.11 catches a raw-text read of any of them). A raw-text read makes a rule merely
+# *mentioned* in an unrelated string (an env value, a comment-ish string) count as present, and
+# can't tell the allow array from the deny array (a deny-side `-C` mirror pasted into the allow
+# array would still read as "present" to a whole-file grep). Pre-initialise allow_raw/deny_raw
+# unconditionally: the script runs under set -u. Both are scoped to THIS file only — the
+# toolchain allow-list, harness-script sentinel, template-drift, and #54 guard-coverage checks
+# below all judge .claude/settings.json by design (it is the shared, checked-in file). The
+# merge-autonomy verdict further down needs *effective* state across .claude/settings.json,
+# .claude/settings.local.json, and the user-level settings file instead, so it runs its own
+# three-file scan and does not read allow_raw/deny_raw.
 settings="$claude_dir/settings.json"
 allow_raw=""
 deny_raw=""
-settings_ok=false
 if [ ! -f "$settings" ]; then
   bad "no .claude/settings.json — create one from the plugin's templates/repo-settings.json (permissions + enabledPlugins); plugins cannot ship permission grants"
 elif ! $jq_ready; then
@@ -186,14 +200,10 @@ elif ! $jq_ready; then
 elif ! jq -e . "$settings" >/dev/null 2>&1; then
   bad ".claude/settings.json does not parse as JSON — Claude Code cannot load these rules, so every grant and deny in the file is inoperative; fix the syntax (a trailing comma is the usual cause) and re-run"
 else
-  settings_ok=true
   allow_raw="$(jq -r '.permissions.allow[]? // empty' "$settings" 2>/dev/null)"
   deny_raw="$(jq -r '.permissions.deny[]? // empty' "$settings" 2>/dev/null)"
 
   has_marker() { find "$root" -maxdepth 2 -name "$1" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | grep -q .; }
-  # entry_has LIST PREFIX — literal prefix test over a newline-separated entry list (no regex),
-  # mirroring how Claude Code matches Bash permission rules against a command string.
-  entry_has() { printf '%s\n' "$1" | awk -v p="$2" 'index($0, p) == 1 { hit = 1 } END { exit !hit }'; }
   allow_has()  { printf '%s\n' "$allow_raw" | grep -qE "^Bash\\(($1)"; }
   tool_warns=0
   if has_marker package.json   && ! allow_has "npm|pnpm|yarn|bun";          then wrn "package.json found but no npm/pnpm/yarn/bun in the settings.json allow-list"; tool_warns=1; fi
@@ -213,7 +223,7 @@ else
   if printf '%s\n' "$allow_raw" | grep -qF -- "find-planning-work.sh"; then
     ok "harness script commands are in the allow-list"
   else
-    wrn "harness script commands (e.g. find-planning-work.sh) not found in the allow-list — copy the permissions block from the plugin's templates/repo-settings.json"
+    wrn "harness script commands (e.g. find-planning-work.sh) not found in .claude/settings.json's allow-list — copy the permissions block from the plugin's templates/repo-settings.json"
   fi
   # --- template drift (generic diff; replaces the old per-version blocks) ------
   # Reports template entries missing from this repo; repo-only extras are legitimate and
@@ -296,37 +306,100 @@ EOF
   fi
 fi
 
+# --- settings-file candidates for the merge-autonomy verdict (#66) ---------------------------
+# Claude Code resolves *effective* permission state by merging .claude/settings.json,
+# .claude/settings.local.json (machine-local, gitignored — never committed), and the user-level
+# settings file below; a deny in ANY of them blocks the merge, regardless of allows elsewhere.
+# Every settings-file path variable in this script is named settings* (never a bare $config or
+# similar) so dev/selfcheck.sh's assertion 4.11 catches a raw-text grep/sed/awk read of any of
+# them, not just the project file.
+settings_local="$claude_dir/settings.local.json"
+settings_user="${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/settings.json"
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  settings_user_label="$CLAUDE_CONFIG_DIR/settings.json"
+else
+  settings_user_label="~/.claude/settings.json"
+fi
+
+# Per-file merge-rule scan, read ONLY through jq (see above, and #66). NEVER piped from the
+# heredoc's producer side — a `| while read` here would run the loop in a subshell and lose
+# every accumulator below the moment the loop exits (same idiom as diff_side/guard_missing
+# above). The user-level file is read no differently than the other two — same two jq paths,
+# .permissions.deny[]?/.permissions.allow[]? — and only ever contributes its LABEL to
+# merge_deny_src/merge_allow_src below; no entry from it, nor anything else in the file, is ever
+# printed, diffed, or counted.
+broken_list=""
+read_list=""
+merge_deny_src=""
+merge_allow_src=""
+if $jq_ready; then
+  while IFS='|' read -r settings_file settings_label; do
+    [ -n "$settings_file" ] || continue
+    [ -f "$settings_file" ] || continue
+    if ! jq -e . "$settings_file" >/dev/null 2>&1; then
+      broken_list="$broken_list$settings_label, "
+      continue
+    fi
+    read_list="$read_list$settings_label, "
+    file_deny="$(jq -r '.permissions.deny[]? // empty' "$settings_file" 2>/dev/null)"
+    file_allow="$(jq -r '.permissions.allow[]? // empty' "$settings_file" 2>/dev/null)"
+    entry_has "$file_deny" "Bash(gh pr merge" && merge_deny_src="$merge_deny_src$settings_label, "
+    entry_has "$file_allow" "Bash(gh pr merge" && merge_allow_src="$merge_allow_src$settings_label, "
+  done <<EOF
+$settings|.claude/settings.json
+$settings_local|.claude/settings.local.json
+$settings_user|$settings_user_label
+EOF
+fi
+broken_list="${broken_list%, }"
+read_list="${read_list%, }"
+merge_deny_src="${merge_deny_src%, }"
+merge_allow_src="${merge_allow_src%, }"
+
 # --- policy activation state (informational) -------------------------------------
 # Reports whether an optional CLAUDE.md policy section is *activated* by its companion
 # permission-file edit — never whether the policy prose itself is any good (that quality
 # judgment stays with the harness-setup skill), and never auto-fixes anything: every WARN below
-# names the human's edit. Permission-state accuracy is per-file (.claude/settings.json only) —
-# a deny/allow in .claude/settings.local.json or ~/.claude/settings.json can still change the
-# effective answer; messages are worded about this file, not about effective permission.
+# names the human's edit. The merge-autonomy verdict below is effective-state accurate: it reads
+# .claude/settings.json, .claude/settings.local.json, and the user-level settings file (see the
+# scan above), and a deny in ANY of them wins over an allow anywhere else — union semantics, not
+# just the checked-in file. The user-level file is queried for exactly one thing, the presence of
+# a Bash(gh pr merge...) rule — nothing else from it is ever printed, diffed, or counted. Every
+# OTHER check in this script (toolchain allow-list, harness-script sentinel, template drift, #54
+# guard coverage) stays .claude/settings.json-only by design: those checks judge the shared,
+# checked-in file, not effective permission. Enterprise/managed settings are not read by this
+# script at all.
 if [ ! -f "$root/CLAUDE.md" ]; then
   wrn "policy activation checks skipped (no CLAUDE.md)"
 else
-  # --- merge autonomy (#28) --- exactly one 'merge autonomy: ' line; states mutually exclusive.
-  if ! $settings_ok; then
-    wrn "merge autonomy: activation state unknown — .claude/settings.json is missing or unreadable (see the FAIL/WARN above)"
+  # --- merge autonomy (#28, #66) --- exactly one 'merge autonomy: ' line; states mutually
+  # exclusive. Deny wins across files: a deny in ANY of the three files scanned above blocks the
+  # merge, regardless of allows elsewhere.
+  has_merge_policy=false
+  has_policy_section "Merge autonomy policy" && has_merge_policy=true
+
+  if ! $jq_ready; then
+    wrn "merge autonomy: activation state unknown — jq not installed (see the FAIL above)"
+  elif [ -n "$broken_list" ]; then
+    wrn "merge autonomy: activation state unknown — $broken_list does not parse as JSON, so Claude Code cannot load its rules; fix the syntax and re-run"
+  elif [ -z "$read_list" ]; then
+    wrn "merge autonomy: activation state unknown — none of .claude/settings.json, .claude/settings.local.json, $settings_user_label were found"
   else
     merge_denied=false
-    entry_has "$deny_raw" "Bash(gh pr merge" && merge_denied=true
+    [ -n "$merge_deny_src" ] && merge_denied=true
     merge_allowed=false
-    entry_has "$allow_raw" "Bash(gh pr merge" && merge_allowed=true
-    has_merge_policy=false
-    has_policy_section "Merge autonomy policy" && has_merge_policy=true
+    [ -n "$merge_allow_src" ] && merge_allowed=true
 
     if $has_merge_policy && $merge_denied; then
-      wrn "merge autonomy: half-activated — 'Merge autonomy policy' section present but 'Bash(gh pr merge:*)' is still denied in .claude/settings.json, so the cycle reports 'verified, merge blocked' instead of merging; to activate, remove \"Bash(gh pr merge:*)\" from permissions.deny AND add it to permissions.allow in .claude/settings.json (both edits are yours, never an agent's)"
+      wrn "merge autonomy: half-activated — 'Merge autonomy policy' section present but 'Bash(gh pr merge:*)' is still denied in $merge_deny_src — a deny wins over any allow, in any settings file; to activate, remove \"Bash(gh pr merge:*)\" from permissions.deny AND add it to permissions.allow in .claude/settings.json (both edits are yours, never an agent's)"
     elif $has_merge_policy && ! $merge_denied && $merge_allowed; then
-      ok "merge autonomy: active ('Merge autonomy policy' section present, deny lifted, allow entry present)"
+      ok "merge autonomy: active ('Merge autonomy policy' section present, no deny found in $read_list, allow present in $merge_allow_src)"
     elif $has_merge_policy && ! $merge_denied && ! $merge_allowed; then
-      wrn "merge autonomy: deny on 'Bash(gh pr merge:*)' lifted but no matching allow entry in .claude/settings.json — unattended cycles will stall on the permission prompt; add the allow entry"
+      wrn "merge autonomy: deny on 'Bash(gh pr merge:*)' lifted (no deny found in $read_list) but no matching allow entry — unattended cycles will stall on the permission prompt; add the allow entry to .claude/settings.json, or to .claude/settings.local.json to opt in on this machine only"
     elif ! $has_merge_policy && ! $merge_denied; then
-      wrn "merge autonomy: 'Bash(gh pr merge:*)' deny lifted but no 'Merge autonomy policy' section in CLAUDE.md — the cycle skips the merge pass anyway; add the section (or restore the deny)"
+      wrn "merge autonomy: 'Bash(gh pr merge:*)' deny lifted (no deny found in $read_list) but no 'Merge autonomy policy' section in CLAUDE.md — the cycle skips the merge pass anyway; add the section (or restore the deny)"
     else
-      ok "merge autonomy: off (default — no 'Merge autonomy policy' section, deny in place; every PR merge is manual)"
+      ok "merge autonomy: off (default — no 'Merge autonomy policy' section, deny in place in $merge_deny_src; every PR merge is manual)"
     fi
   fi
 

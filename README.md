@@ -421,20 +421,24 @@ subagents need:
    ```
 
    Activation is a **double opt-in**: the section alone does nothing until you also remove
-   `Bash(gh pr merge:*)` from the deny list in `.claude/settings.json` (and add it to the
-   allow list, or unattended runs stall on the permission prompt). Both edits are yours,
-   never an agent's — and because the deny is machine-local state in a checked-in file, you
-   can activate one machine at a time by leaving the removal uncommitted. The merge pass's
+   `Bash(gh pr merge:*)` from the deny list (and add it to the allow list, or unattended runs
+   stall on the permission prompt). Edit `.claude/settings.json` to activate for everyone, or
+   `.claude/settings.local.json` (machine-local, gitignored, never committed) to activate on
+   one machine only — settings.local.json is the first-class way to do that. A deny in
+   *either* file — or in your user-level settings file — wins over an allow anywhere else.
+   Both edits are yours, never an agent's. The merge pass's
    hard floor always applies on top (standard-flow PRs only, CI green on the head commit,
    never the governance surface — CLAUDE.md, `.claude/`, policy/ADR docs — nothing flagged
    for human decision, one merge at a time with re-verification between, every merge audited
    in the cycle report). **No section means no autonomous merges** — behavior is exactly the
    pre-1.5 default. Recommended pairing: branch protection with required status checks, so
    the policy has a technical rail under it, not just prompt adherence. `check-harness.sh`
-   reports the activation state of this section — off, active, or (the trap it exists to catch)
-   half-activated: a "Merge autonomy policy" section present while `Bash(gh pr merge:*)` is
-   still denied, which the doctor WARNs on by name, because it leaves the cycle reporting
-   `verified, merge blocked` on every run.
+   judges activation from *effective* merge-permission state — across `.claude/settings.json`,
+   `.claude/settings.local.json`, and your user-level settings file — and reports off, active,
+   or (the trap it exists to catch) half-activated: a "Merge autonomy policy" section present
+   while `Bash(gh pr merge:*)` is still denied in one of those files, which the doctor WARNs on
+   by naming the file, because it leaves the cycle reporting `verified, merge blocked` on every
+   run.
 
 6. **Test-suite ratchet policy** (optional) — a section titled exactly "Test-suite ratchet
    policy" stating the measurement command the `test-ratchet` skill (standalone, and as the
@@ -696,7 +700,12 @@ cover — e.g.:
 `permissions.allow`/`permissions.deny` arrays it parses out — never a raw-text search of the
 whole file, which could be fooled by a rule merely mentioned in an unrelated string (a comment,
 an `env` value) or by a deny-side entry that a whole-file search can't tell apart from an
-allow-side one. `settings.local.json` is machine-local (may hold secrets) — never commit it.
+allow-side one. Every check here — the toolchain allow-list, the harness-script sentinel,
+template drift, and default-branch guard coverage — stays scoped to this file by design: they
+judge the shared, checked-in file, not effective permission. The one exception is the merge
+autonomy verdict (see "Merge autonomy policy" above), which needs *effective* state and so also
+reads `.claude/settings.local.json` and your user-level settings file, jq-only, for that single
+rule. `settings.local.json` is machine-local (may hold secrets) — never commit it.
 
 ## Safety model
 
