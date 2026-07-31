@@ -149,8 +149,10 @@ e. **As each implementer completes, run the issue-implementer skill's steps 2d�
    - **every git command takes `-C <worktree>`** — the verifier's diff is `git -C <worktree> diff
      <default-branch>...HEAD --stat` (three-dot, matching sequential mode now that checkpoints
      make it non-empty here too), checkpoints are `git -C <worktree> add -A && git -C <worktree>
-     commit -m "wip: checkpoint <stage> (#<n>)"`, and the pre-final-commit collapse is `git -C
-     <worktree> reset --soft "$(git -C <worktree> merge-base <default-branch> HEAD)"` — the
+     commit -m "wip: checkpoint <stage> (#<n>)"`, and the pre-final-commit collapse follows the
+     issue-implementer skill's "Hard rules" — never inline the merge base — as two separate
+     calls: `git -C <worktree> merge-base <default-branch> HEAD`, read the SHA from that call's
+     result, then `git -C <worktree> reset --soft <sha>` with the SHA pasted in as a literal. The
      merge base is computed per worktree, which is what makes a resumed branch collapse
      correctly. These forms need the `git -C` grants added in v1.8.1 — a permission prompt on
      any of them means this repo's `.claude/settings.json` predates them; finish that issue
