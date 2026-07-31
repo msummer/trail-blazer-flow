@@ -18,11 +18,12 @@
 #   3. agent instruction-file invariants (agents/*.md: frontmatter, one fenced template block,
 #      the harness-status line grammar, required template headings)
 #   4. cross-file markers and skills (the planner-plan and ratchet-issue markers, skill
-#      frontmatter, the label bijection, skill/README coverage, policy-section titles, the CI
-#      workflow's gate command, that bin/check-harness.sh reads .claude/settings.json only
-#      through jq, the ledger stage vocabulary shared by bin/reconcile-ledger.sh and the
-#      implementer skill's status-line grammar, a per-skill size budget, and that no
-#      skill/agent instruction file contains an inline command-substitution token)
+#      frontmatter, the label bijection, skill/README coverage, policy-section titles, the
+#      dev/*.sh <-> CI workflow run-step bijection, that bin/check-harness.sh reads
+#      .claude/settings.json only through jq, the ledger stage vocabulary shared by
+#      bin/reconcile-ledger.sh and the implementer skill's status-line grammar, a per-skill
+#      size budget, and that no skill/agent instruction file contains an inline
+#      command-substitution token)
 #   5. bin/ script behavior (reconcile-ledger.sh against fabricated ledger/status inputs)
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
@@ -463,12 +464,28 @@ else
   bad "4.8 policy-title cross-reference problem(s):$bad_list"
 fi
 
-# 4.9 — the CI workflow exists and runs the same command CLAUDE.md names as the gate.
+# 4.9 — bijection: dev/*.sh basenames <-> '- run: bash dev/<name>.sh' steps in
+# .github/workflows/selfcheck.yml. Report both directions separately, like 2.4 (closes #63). The
+# escape hatch: a future dev/ script that legitimately isn't its own CI entry point (e.g. a
+# helper sourced or invoked BY another dev/*.sh, never directly by CI) needs a reviewable
+# amendment right here — an explicit exclusion with a comment — not a silent gap; that pressure
+# is intended, and it's why this assertion left the coverage-exemption list below.
 wf="$root/.github/workflows/selfcheck.yml"
-if [ -f "$wf" ] && grep -qF -- 'bash dev/selfcheck.sh' "$wf"; then
-  ok "4.9 .github/workflows/selfcheck.yml runs 'bash dev/selfcheck.sh'"
+if [ ! -f "$wf" ]; then
+  bad "4.9 .github/workflows/selfcheck.yml not found"
 else
-  bad "4.9 .github/workflows/selfcheck.yml missing or does not run 'bash dev/selfcheck.sh'"
+  wf_steps="$(sed -nE 's|^[[:space:]]*-[[:space:]]*run:[[:space:]]*bash[[:space:]]+dev/([A-Za-z0-9._-]+\.sh)[[:space:]]*$|\1|p' "$wf" | sort -u)"
+  dev_list="$( (cd "$root/dev" 2>/dev/null && ls -1 *.sh 2>/dev/null) | sort -u)"
+  scripts_without_step="$(comm -13 <(_lines "$wf_steps") <(_lines "$dev_list"))"
+  steps_without_script="$(comm -23 <(_lines "$wf_steps") <(_lines "$dev_list"))"
+  if [ -z "$scripts_without_step" ] && [ -z "$steps_without_script" ]; then
+    ok "4.9 dev/*.sh <-> .github/workflows/selfcheck.yml run-step bijection holds"
+  else
+    msg="4.9 bijection broken:"
+    [ -n "$scripts_without_step" ] && msg="$msg dev/ script(s) with no CI run step: $(printf '%s' "$scripts_without_step" | tr '\n' ' ');"
+    [ -n "$steps_without_script" ] && msg="$msg CI run step(s) naming a nonexistent dev/ script: $(printf '%s' "$steps_without_script" | tr '\n' ' ');"
+    bad "$msg"
+  fi
 fi
 
 # 4.11 — bin/check-harness.sh reads every settings file only through jq: no raw-text

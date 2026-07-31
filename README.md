@@ -54,9 +54,10 @@ or share).
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── dev/
 │   ├── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
-│   └── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
+│   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
+│   └── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh (not run by the gate)
 ├── .github/
-│   └── workflows/selfcheck.yml # CI: runs the gate, then the negative-test harness, on every PR
+│   └── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
 ```
@@ -803,6 +804,15 @@ repo to a throwaway temp directory, applies one documented perturbation per case
 gate fails with exactly the expected assertion id(s) — run it by hand
 (`bash dev/selfcheck-tests.sh`, optionally with a case-name substring) whenever `dev/selfcheck.sh`
 changes.
+
+CI's third step, `dev/doctor-tests.sh`, is a separate fixture-based negative-test harness for the
+*consumer* doctor itself (`bin/check-harness.sh`): it builds throwaway `mktemp` + `git init`
+fixtures, runs a copy of the doctor against each with a stub `gh` and isolated
+`HOME`/`CLAUDE_CONFIG_DIR`, and pins verdicts (the settings.json block, template-diff, the
+ratchet's never-execute guarantee, merge-autonomy activation) that were previously only
+hand-verified. It is not part of `dev/selfcheck.sh` — run it by hand
+(`bash dev/doctor-tests.sh`, optionally with a case-name substring) whenever
+`bin/check-harness.sh` changes.
 
 This repo
 deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the *consumer*

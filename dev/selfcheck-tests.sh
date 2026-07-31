@@ -15,9 +15,10 @@
 # flagged). Same output contract as the gate: one PASS/FAIL line per case, a
 # `== summary: N pass, M fail ==` footer, exit 0 iff nothing failed.
 #
-# This is the only script under dev/ that writes files (the consumer doctor bin/check-harness.sh
-# also seeds .claude/LESSONS.md when absent). Every write here happens under a single
-# `mktemp -d` root, removed via a trap on EXIT; nothing outside that root is ever touched. By
+# This and dev/doctor-tests.sh are the only scripts under dev/ that write files (the consumer
+# doctor bin/check-harness.sh also seeds .claude/LESSONS.md when absent). Every write here
+# happens under a single `mktemp -d` root, removed via a trap on EXIT; nothing outside that root
+# is ever touched. By
 # convention (CLAUDE.md), no perturbation helper here uses `sed -i` either — plain `sed` writing
 # to a sibling temp file, same idiom as the rest of this repo.
 #
@@ -28,7 +29,8 @@
 # proves the jq read), 2.3 (equality of two jq scalars; 2.1's expected set already includes it),
 # 3.1 (frontmatter_text is exercised by 4.2-empty-desc; 3.1's own clauses are key-presence
 # greps), 3.7 (fence_lines is exercised by the 3.4 case; 3.7 itself is a fixed-string grep
-# inside the slice), 4.1, 4.5, 4.7, 4.8, 4.9 (fixed-string presence checks).
+# inside the slice), 4.1, 4.5, 4.7, 4.8 (fixed-string presence checks). 4.9 left this list when
+# it became a bijection (see the 4.9-missing-step/4.9-orphan-step cases below).
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -144,8 +146,16 @@ p_4_2_empty_desc() {
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 p_4_6()               { drop "$1/bin/setup-labels.sh" '^create_or_update "plan-proposed"'; }
+p_4_9_missing_step()   { drop "$1/.github/workflows/selfcheck.yml" 'dev/doctor-tests\.sh'; }
+p_4_9_orphan_step() {
+  printf '      - run: bash dev/nonexistent.sh\n' | append "$1/.github/workflows/selfcheck.yml"
+}
 p_4_11()              { printf 'grep -q "Bash(gh pr merge" "$settings"\n' | append "$1/bin/check-harness.sh"; }
 p_4_11_local()         { printf 'sed -n "1p" "$settings_local" >/dev/null\n' | append "$1/bin/check-harness.sh"; }
+p_4_11_comment() {
+  printf '  # note: grep "$settings" here is prose in a comment, never executed\n' \
+    | append "$1/bin/check-harness.sh"
+}
 p_4_13_script()       { edit "$1/bin/reconcile-ledger.sh" 's/^STAGES="seed planner implementer verifier merge"$/STAGES="seed planner implementer verifier merge docs"/'; }
 p_4_13_skill()        { edit "$1/skills/issue-implementer/SKILL.md" 's/stage=<planner|implementer|verifier|merge>/stage=<planner|implementer|verifier|merge|docs>/'; }
 p_4_13_outcome()      { edit "$1/agents/verifier.md" 's/outcome=<pass|fail|incomplete|died>/outcome=<pass|fail|incomplete|died|bogus-outcome>/'; }
@@ -180,8 +190,11 @@ cases=(
   "3.4|3.4|p_3_4|agents/planner.md's harness-status line: retries=<k> becomes retries=<kk>"
   "4.2-empty-desc|4.2|p_4_2_empty_desc|delete project-kickoff/SKILL.md's folded description body"
   "4.6|4.6|p_4_6|drop a label bin/setup-labels.sh creates from the doctor's required list"
+  "4.9-missing-step|4.9|p_4_9_missing_step|drop the 'bash dev/doctor-tests.sh' run step from the workflow"
+  "4.9-orphan-step|4.9|p_4_9_orphan_step|add a CI run step for a nonexistent dev/nonexistent.sh"
   "4.11|4.11|p_4_11|reintroduce a raw grep of \"\$settings\" in bin/check-harness.sh"
   "4.11-local|4.11|p_4_11_local|reintroduce a raw sed of \"\$settings_local\" in bin/check-harness.sh"
+  "4.11-comment||p_4_11_comment|control: an indented comment mentioning grep and quoting \"\$settings\" is not flagged"
   "4.13-script|4.13|p_4_13_script|add a 'docs' stage to reconcile-ledger.sh's STAGES= list only"
   "4.13-skill|4.13|p_4_13_skill|add a 'docs' alternative to issue-implementer/SKILL.md's status-line stage grammar only"
   "4.13-outcome|4.13|p_4_13_outcome|add an undocumented outcome alternative to agents/verifier.md's status line"

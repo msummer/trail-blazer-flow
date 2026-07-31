@@ -358,8 +358,10 @@ merge_allow_src="${merge_allow_src%, }"
 
 # --- policy activation state (informational) -------------------------------------
 # Reports whether an optional CLAUDE.md policy section is *activated* by its companion
-# permission-file edit — never whether the policy prose itself is any good (that quality
-# judgment stays with the harness-setup skill), and never auto-fixes anything: every WARN below
+# permission-file edit, where it has one (the ratchet activates by naming a measurement command
+# instead; plan auto-approval has no companion edit at all) — never whether the policy prose
+# itself is any good (that quality judgment stays with the harness-setup skill), and never
+# auto-fixes anything: every WARN below
 # names the human's edit. The merge-autonomy verdict below is effective-state accurate: it reads
 # .claude/settings.json, .claude/settings.local.json, and the user-level settings file (see the
 # scan above), and a deny in ANY of them wins over an allow anywhere else — union semantics, not
