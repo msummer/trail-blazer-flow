@@ -99,9 +99,11 @@ stage was skipped and must be escalated, not silently carried forward.
 
 Invoke the **`issue-implementer`** skill for everything now `plan-approved` — including plans
 auto-approved in step 1 (that's the point of the policy; the PR gate remains). Skip its step 0
-(already covered). Sequential by default; its worktree-parallel mode applies under its own
-rules if the batch qualifies. Fill in the `implemented` and `verified` ledger columns from its
-summary table (outcome, retry/kickback counts, CI status). **Pre-advance check:** the same rule
+(already covered). Sequential by default; its worktree-parallel mode — and the supervisor loop
+that fans the implementers out — applies under its own rules if the batch qualifies, and changes
+nothing here: one worktree is one issue, so the ledger row, its status lines, and step 4's
+reconciliation are the same either way. Fill in the `implemented` and `verified` ledger columns
+from its summary table (outcome, retry/kickback counts, CI status). **Pre-advance check:** the same rule
 as step 1 — an issue this pass should have touched with no ledger outcome is launched (or
 escalated if it can't be), never assumed done.
 
