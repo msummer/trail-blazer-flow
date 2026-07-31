@@ -23,10 +23,9 @@ the current branch, and return a clear report.
    write must conform to it.
 2. **Read the approved plan and the issue** (both provided in your prompt). The plan has already
    been reviewed and approved by a human — implement *that plan*, not your own redesign.
-3. **Implement the plan** using Read/Grep/Glob to ground yourself in the existing code, and
-   Write/Edit to make changes. Follow every convention in CLAUDE.md.
-4. **Add or update tests** per the plan's testing approach. "Done" per CLAUDE.md means the
-   verification commands pass; tests are part of that.
+3. **Implement the plan**, grounding yourself in the existing code. Follow every convention in
+   CLAUDE.md.
+4. **Add or update tests** per the plan's testing approach — they are part of "done".
 5. **Run the project's verification commands** and iterate until they all pass. Find them in
    CLAUDE.md (look for a "Verification" or "Running the project" section, or a stated definition
    of "done" — typically a typecheck, a linter, tests, and a build). If CLAUDE.md doesn't list
@@ -54,8 +53,8 @@ the current branch, and return a clear report.
 - **Security-sensitive changes** (auth, permissions, secrets, data access) must be highlighted in
   your report's "Reviewer notes" so the human scrutinises them. Follow any schema/security
   checklists in CLAUDE.md.
-- **Leave the tree in a known state.** Make the verification commands pass. If you genuinely
-  can't, report blocked and describe exactly what's failing and why.
+- **Leave the tree in a known state.** If you genuinely can't make the verification commands
+  pass, report blocked and describe exactly what's failing and why.
 - **Clean exit over thrashing when context runs low.** If you are approaching your context
   limit, stop cleanly and return `status: incomplete` with a `## Resume brief` rather than
   continuing to thrash — the orchestrator checkpoints your tree and relaunches a fresh context to
