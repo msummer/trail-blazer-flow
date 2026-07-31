@@ -8,7 +8,8 @@
 # jq — never a raw-text grep/sed/awk of the file), whether the "Merge autonomy policy" section
 # is activated by its companion .claude/settings.json edits, whether a "Test-suite ratchet
 # policy" section exists and names a measurement command (looked up with `command -v`, never
-# executed), the verification baseline (.claude/BASELINE.md, machine-local), and branch
+# executed), the verification baseline (.claude/BASELINE.md, machine-local), whether the
+# template's branch-scoped deny entries actually cover this repo's default branch, and branch
 # protection.
 #
 # The test-suite-ratchet check never executes, evals, or shells out to anything read from
@@ -247,6 +248,50 @@ EOF
     if [ "$n_deny" -gt 0 ]; then
       more=""; [ "$n_deny" -gt 6 ] && more=" (+$((n_deny-6)) more)"
       wrn "settings.json deny-list missing $n_deny template entries: $miss_deny$more — a missing -C mirror makes the bare-form guard bypassable; re-copy the permissions block from the plugin's templates/repo-settings.json"
+    fi
+
+    # --- default-branch guard coverage (#54) ------------------------------------
+    # Two of the seven bare git denies in templates/repo-settings.json name the branch literally
+    # ("main") rather than deriving it from the repo — on a repo whose default branch is
+    # something else (master, trunk, develop, ...) those two denies, and their -C mirrors, guard
+    # nothing. This derives the guarded operations from the template itself (no second
+    # hard-coded operation list — $tmpl_deny is the only source) and checks whether THIS repo's
+    # actual default branch has equivalent deny coverage. Deliberately overlaps the WARNs above:
+    # a 'main' repo with an uncopied template can trip both — those say the repo is behind the
+    # template, this one says the deny-list doesn't cover this repo's actual default branch.
+    # Different diagnoses; don't collapse them. Lives inside THIS else branch, not the
+    # unreadable-template branch above: it must only ever run with a real $tmpl_deny to derive
+    # from, never fall back to an empty list and manufacture a vacuous pass — that's the failure
+    # mode #54 exists to surface, and the WARN above (unreadable template) is the sole signal
+    # for that path.
+    #
+    # tmpl_guarded_branch must stay a bare literal, free of regex metacharacters (it is
+    # interpolated into a sed script below), and this declaration must stay unindented and
+    # otherwise unadorned — dev/selfcheck.sh's assertion 2.7 extracts it with an anchored
+    # 's/^tmpl_guarded_branch="([^"]*)"$/\1/p'.
+tmpl_guarded_branch="main"
+    if [ -n "$default_branch" ]; then
+      tmpl_branch_ops="$(printf '%s\n' "$tmpl_deny" | sed -n "s/^Bash(git \(.*\) $tmpl_guarded_branch:\*)\$/\1/p" | sort -u)"
+      # deny_guards PREFIX — does deny_raw contain an entry that starts with PREFIX and is
+      # immediately followed by a rule-boundary character ('*', ':', or ')')? A plain
+      # substring/prefix test would let a same-prefix branch name (e.g. "mainline") false-positive
+      # as covering "main". '*' comes first in the bracket expression — a leading '[:' opens a
+      # POSIX class, not a literal ':'.
+      deny_guards() { printf '%s\n' "$deny_raw" | awk -v p="$1" 'index($0, p) == 1 { r = substr($0, length(p) + 1); if (r ~ /^[*:)]/) hit = 1 } END { exit !hit }'; }
+      guard_missing=""
+      while IFS= read -r op; do
+        [ -n "$op" ] || continue
+        deny_guards "Bash(git $op $default_branch" || guard_missing="$guard_missing Bash(git $op $default_branch:*),"
+        deny_guards "Bash(git -C * $op $default_branch" || guard_missing="$guard_missing Bash(git -C * $op $default_branch*),"
+      done <<EOF
+$tmpl_branch_ops
+EOF
+      guard_missing="${guard_missing%,}"
+      if [ -z "$guard_missing" ]; then
+        ok "default-branch guard coverage: '$default_branch' has deny entries for every branch-scoped operation the template guards on '$tmpl_guarded_branch'"
+      else
+        wrn "default-branch guard coverage: '$default_branch' is missing deny entries:$guard_missing — add these to permissions.deny in .claude/settings.json (a missing -C mirror makes the bare-form guard bypassable)"
+      fi
     fi
   fi
 fi

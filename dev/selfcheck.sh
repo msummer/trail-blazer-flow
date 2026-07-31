@@ -8,11 +8,13 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 27 assertions total:
+# Five groups, 28 assertions total:
 #   1. shell syntax, portability, and error handling (bin/*.sh, dev/*.sh; no GNU-only constructs
 #      in bin/*.sh; no unguarded 'git branch -d/-D' in bin/*.sh)
 #   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json), plus the
-#      bin/*.sh <-> allow-list bijection and the git permission-mirror invariants
+#      bin/*.sh <-> allow-list bijection, the git permission-mirror invariants, and whether
+#      bin/check-harness.sh's tmpl_guarded_branch literal still names a branch that
+#      templates/repo-settings.json actually deny-guards
 #   3. agent instruction-file invariants (agents/*.md: frontmatter, one fenced template block,
 #      the harness-status line grammar, required template headings)
 #   4. cross-file markers and skills (the planner-plan and ratchet-issue markers, skill
@@ -243,6 +245,24 @@ else
   [ -n "$bare_without_mirror" ] && msg="$msg bare git deny(ies) with no -C mirror: $(printf '%s' "$bare_without_mirror" | tr '\n' ' ');"
   [ -n "$mirror_without_bare" ] && msg="$msg -C deny mirror(s) with no bare counterpart: $(printf '%s' "$mirror_without_bare" | tr '\n' ' ');"
   bad "$msg"
+fi
+
+# 2.7 — default-branch guard derivation: bin/check-harness.sh's tmpl_guarded_branch="..." literal
+# must still name a branch that templates/repo-settings.json's branch-scoped bare deny entries
+# actually guard — i.e. deriving operations from those entries for that literal branch must
+# yield at least one operation. FAILs loudly (rather than passing vacuously) if either
+# extraction comes back empty: the script-side literal, or the JSON-side deny list itself.
+tmpl_guarded_branch="$(sed -nE 's/^tmpl_guarded_branch="([^"]*)"$/\1/p' "$root/bin/check-harness.sh")"
+if [ -z "$tmpl_guarded_branch" ] || [ -z "$deny_raw" ]; then
+  bad "2.7 could not extract tmpl_guarded_branch from bin/check-harness.sh (got '$tmpl_guarded_branch') or deny entries from templates/repo-settings.json"
+else
+  tmpl_branch_ops="$(printf '%s\n' "$deny_raw" | sed -n "s/^Bash(git \(.*\) $tmpl_guarded_branch:\*)\$/\1/p" | sort -u)"
+  n_branch_ops="$(printf '%s\n' "$tmpl_branch_ops" | grep -c .)"
+  if [ "$n_branch_ops" -eq 0 ]; then
+    bad "2.7 templates/repo-settings.json has zero branch-scoped bare deny entries for '$tmpl_guarded_branch' (bin/check-harness.sh's tmpl_guarded_branch literal) — the doctor's derived-coverage check would guard nothing"
+  else
+    ok "2.7 bin/check-harness.sh's tmpl_guarded_branch ('$tmpl_guarded_branch') matches $n_branch_ops branch-scoped bare deny entries in templates/repo-settings.json"
+  fi
 fi
 
 # ============================================================================
