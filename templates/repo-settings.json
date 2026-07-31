@@ -51,6 +51,15 @@
       "Bash(git worktree:*)",
       "Bash(git merge-base:*)",
       "Bash(git reset --soft:*)",
+      "Bash(git -C * status *)",
+      "Bash(git -C * add *)",
+      "Bash(git -C * commit *)",
+      "Bash(git -C * push *)",
+      "Bash(git -C * restore *)",
+      "Bash(git -C * diff *)",
+      "Bash(git -C * rev-parse *)",
+      "Bash(git -C * merge-base *)",
+      "Bash(git -C * reset --soft *)",
       "Bash(sleep:*)",
       "Bash(date:*)",
       "Bash(pnpm:*)",
@@ -69,7 +78,14 @@
       "Bash(git clean:*)",
       "Bash(rm -rf:*)",
       "Bash(git branch -D main:*)",
-      "Bash(git push origin main:*)"
+      "Bash(git push origin main:*)",
+      "Bash(git -C * push --force*)",
+      "Bash(git -C * push -f*)",
+      "Bash(git -C * push --force-with-lease*)",
+      "Bash(git -C * reset --hard*)",
+      "Bash(git -C * clean*)",
+      "Bash(git -C * branch -D main*)",
+      "Bash(git -C * push origin main*)"
     ]
   }
 }
