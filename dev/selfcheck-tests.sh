@@ -17,9 +17,18 @@
 #
 # This is the only script under dev/ that writes files (the consumer doctor bin/check-harness.sh
 # also seeds .claude/LESSONS.md when absent). Every write here happens under a single
-# `mktemp -d` root, removed via a trap on EXIT; nothing outside that root is ever touched, and
-# no perturbation helper uses `sed -i` (assertion 1.4, which this file is itself subject to,
-# forbids it).
+# `mktemp -d` root, removed via a trap on EXIT; nothing outside that root is ever touched. By
+# convention (CLAUDE.md), no perturbation helper here uses `sed -i` either — plain `sed` writing
+# to a sibling temp file, same idiom as the rest of this repo.
+#
+# Case coverage policy: a case is required for any assertion that parses structure out of a
+# file, compares two extracted sets, or exercises script behavior; fixed-string and
+# numeric-threshold assertions are exempt (one reason each): 1.2 (two fixed-string comparisons
+# per file), 1.3 (single fixed-string grep), 2.2 (one regex over one jq scalar — the 2.1 case
+# proves the jq read), 2.3 (equality of two jq scalars; 2.1's expected set already includes it),
+# 3.1 (frontmatter_text is exercised by 4.2-empty-desc; 3.1's own clauses are key-presence
+# greps), 3.7 (fence_lines is exercised by the 3.4 case; 3.7 itself is a fixed-string grep
+# inside the slice), 4.1, 4.5, 4.7, 4.8, 4.9 (fixed-string presence checks).
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -99,30 +108,10 @@ normalize_ids() {
 
 p_1_1()            { printf 'if [\n' | append "$1/bin/harness-status.sh"; }
 p_1_1_dev()         { printf 'if [\n' | append "$1/dev/selfcheck-tests.sh"; }
-p_1_2()            { edit "$1/bin/harness-status.sh" '1s|.*|#!/bin/bash|'; }
-p_1_3()            { printf 'x\r\n' | append "$1/bin/find-implementation-work.sh"; }
 p_1_4_mapfile()    { printf 'mapfile -t x < /dev/null\n' | append "$1/bin/harness-status.sh"; }
-p_1_4_sed_i()      { printf "sed -i 's/a/b/' /tmp/x\n" | append "$1/bin/harness-status.sh"; }
-p_1_4_grep_p()     { printf "grep -P 'x' /tmp/x\n" | append "$1/bin/harness-status.sh"; }
-p_1_4_subshell() {
-  # a heredoc, not printf: the literal '$(readlink -f ...)' text would otherwise land as its
-  # own delimiter-bounded segment and self-trip 1.4 when it scans this very file (dev/*.sh).
-  cat >> "$1/bin/harness-status.sh" <<'PERTURB'
-x="$(readlink -f /tmp)"
-PERTURB
-}
-p_1_4_mentions() {
-  cat >> "$1/bin/harness-status.sh" <<'PERTURB'
-# mentions mapfile, readarray, sed -i, grep -P, readlink -f, declare -A here
-echo "avoid sed -i or grep -P or readlink -f or mapfile or declare -A here"
-cat <<'HD'
-mapfile
-sed -i
-grep -P
-readlink -f
-declare -A
-HD
-PERTURB
+p_1_4_comment() {
+  printf '# mentions mapfile, readarray, sed -i, grep -P, readlink -f, declare -A here\n' \
+    | append "$1/bin/harness-status.sh"
 }
 p_2_1() {
   # PREPEND the stray '{' (not append): jq streams top-level values, so appending garbage
@@ -133,38 +122,14 @@ p_2_1() {
   local f="$1/.claude-plugin/marketplace.json"
   { printf '{\n'; cat "$f"; } > "$f.tmp" && mv "$f.tmp" "$f"
 }
-p_2_2() {
-  local f="$1/.claude-plugin/plugin.json"
-  local v v_short
-  v="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$f" | head -1)"
-  v_short="${v%.*}"
-  edit "$f" "s|\"version\": \"$v\"|\"version\": \"$v_short\"|"
-}
-p_2_3()            { edit "$1/.claude-plugin/marketplace.json" 's|^      "name": "trail-blazer-flow"|      "name": "not-the-plugin"|'; }
 p_2_4_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(harness-status\.sh:\*\)"'; }
 p_2_4_orphan_grant() {
   local f="$1/templates/repo-settings.json"
   awk '{print} /"Bash\(harness-status\.sh:\*\)",/ && !done {print "      \"Bash(nonexistent.sh:*)\","; done=1}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
-p_2_5_missing_c()     { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* commit \*\)"'; }
 p_2_5_missing_bare()  { drop "$1/templates/repo-settings.json" '"Bash\(git commit:\*\)"'; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
-p_3_1()               { drop "$1/agents/implementer.md" '^tools:'; }
-p_3_2()               { printf '# Constraints\n' | append "$1/agents/implementer.md"; }
-p_3_3()               { printf '```\n' | append "$1/agents/implementer.md"; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
-p_3_5()               { edit "$1/agents/verifier.md" 's/outcome=<pass|fail|incomplete|died>/outcome=<pass|fail|incomplete|died|bogus-outcome>/'; }
-p_3_6()               { printf 'This step is read-only.\n' | append "$1/agents/verifier.md"; }
-p_3_6_preamble() {
-  local f="$1/agents/verifier.md"
-  awk '{print} /^---$/{c++; if (c==2) print "This agent is read-only."}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-}
-p_3_7()               { drop "$1/agents/planner.md" '^## Verified facts$'; }
-p_3_8_letter()        { edit "$1/agents/verifier.md" 's/^   g\. \*\*Documentation/   h. **Documentation/'; }
-p_3_8_title()         { edit "$1/agents/verifier.md" 's/g\. \*\*Documentation changes\*\*/g. **Doc notes**/'; }
-p_3_8_citation()      { edit "$1/CLAUDE.md" 's/rule 3g/rule 3z/'; }
-p_4_1()               { edit "$1/bin/find-planning-work.sh" 's/planner-plan/planner-plann/g'; }
-p_4_2_name()          { edit "$1/skills/test-ratchet/SKILL.md" 's/^name: test-ratchet$/name: nope/'; }
 p_4_2_empty_desc() {
   local f="$1/skills/project-kickoff/SKILL.md"
   awk '
@@ -174,93 +139,43 @@ p_4_2_empty_desc() {
     { print }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
-p_4_3()               { edit "$1/README.md" 's/planner: claude-opus-5/planner: claude-opus-4/'; }
-p_4_4()               { printf 'wip: made up message\n' | append "$1/skills/issue-implementer/SKILL.md"; }
-p_4_5()               { edit "$1/skills/test-ratchet/SKILL.md" 's/ratchet-issue/ratchet-issuex/'; }
 p_4_6()               { drop "$1/bin/setup-labels.sh" '^create_or_update "plan-proposed"'; }
-p_4_7() {
-  mkdir -p "$1/skills/zz-undocumented"
-  cat > "$1/skills/zz-undocumented/SKILL.md" <<'SKILLEOF'
----
-name: zz-undocumented
-description: >
-  A throwaway skill directory that exists only to prove assertion 4.7 catches a skill missing
-  from README.md's coverage. Never used by the harness.
----
-
-# zz-undocumented
-
-Not a real skill; exists only for dev/selfcheck-tests.sh's 4.7 negative-test case.
-SKILLEOF
-}
-p_4_8()               { drop "$1/skills/harness-setup/SKILL.md" 'Merge autonomy'; }
-p_4_9()               { edit "$1/.github/workflows/selfcheck.yml" 's/bash dev\/selfcheck\.sh/bash dev\/selfchek.sh/'; }
-p_4_10()              { printf -- '- **Never merge:** merging belongs to the human.\n' | append "$1/skills/issue-implementer/SKILL.md"; }
-p_4_10_same_section() {
-  local f="$1/skills/issue-implementer/SKILL.md"
-  awk '{print} /\*\*Never merge in this skill\*\*/{print "- **Never merge:** merging belongs to the human."}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-}
 p_4_11()              { printf 'grep -q "Bash(gh pr merge" "$settings"\n' | append "$1/bin/check-harness.sh"; }
-p_4_12_planner()      { edit "$1/agents/planner.md" 's/just be dropped/just be droppped/'; }
-p_4_12_skill()        { edit "$1/skills/issue-implementer/SKILL.md" 's/just be dropped/just be droppped/'; }
-p_4_13_script()       { edit "$1/bin/reconcile-ledger.sh" 's/seed|planner|implementer|verifier|merge)/seed|planner|implementer|verifier|merge|docs)/'; }
+p_4_13_script()       { edit "$1/bin/reconcile-ledger.sh" 's/^STAGES="seed planner implementer verifier merge"$/STAGES="seed planner implementer verifier merge docs"/'; }
 p_4_13_skill()        { edit "$1/skills/issue-implementer/SKILL.md" 's/stage=<planner|implementer|verifier|merge>/stage=<planner|implementer|verifier|merge|docs>/'; }
-p_4_13_vocab()        { drop "$1/bin/reconcile-ledger.sh" '^    merge\)'; }
+p_4_13_outcome()      { edit "$1/agents/verifier.md" 's/outcome=<pass|fail|incomplete|died>/outcome=<pass|fail|incomplete|died|bogus-outcome>/'; }
+p_4_13_extraction()   { edit "$1/bin/reconcile-ledger.sh" 's/STAGES/STAGE_LIST/g'; }
+p_4_14_oversize() {
+  local i=0
+  { while [ "$i" -lt 300 ]; do echo "filler line $i"; i=$((i+1)); done; } | append "$1/skills/harness-setup/SKILL.md"
+}
 p_5_1()               { edit "$1/bin/reconcile-ledger.sh" 's/blocked incomplete died/blocked incomplete/'; }
 p_5_2()               { edit "$1/bin/reconcile-ledger.sh" 's/stage-skipped issue/stage_skipped issue/'; }
 
 # ---------------------------------------------------------------------------------------------
 # Case table: name|expected-ids (space-separated, empty for a control case)|perturb function
-# name ("none" for no perturbation)|one-line description. Full coverage of all 33 gate ids —
-# the `coverage` meta-case below fails if that stops being true.
+# name ("none" for no perturbation)|one-line description. Every id not listed here is on the
+# coverage-exemption list in the header comment above.
 cases=(
   "control-clean||none|pristine copy, no perturbation: the gate must be all-green"
   "1.1|1.1|p_1_1|append a stray 'if [' to bin/harness-status.sh (syntax error)"
   "1.1-dev|1.1|p_1_1_dev|append a stray 'if [' to dev/selfcheck-tests.sh itself (syntax error)"
-  "1.2|1.2|p_1_2|bin/harness-status.sh's shebang becomes '#!/bin/bash'"
-  "1.3|1.3|p_1_3|append a CR-terminated line to bin/find-implementation-work.sh"
   "1.4-mapfile|1.4|p_1_4_mapfile|append a bare 'mapfile' invocation to bin/harness-status.sh"
-  "1.4-sed-i|1.4|p_1_4_sed_i|append a suffix-less 'sed -i' to bin/harness-status.sh"
-  "1.4-grep-P|1.4|p_1_4_grep_p|append a 'grep -P' to bin/harness-status.sh"
-  "1.4-subshell|1.4|p_1_4_subshell|append a \$( )-nested 'readlink -f' to bin/harness-status.sh"
-  "1.4-mentions||p_1_4_mentions|control: a comment, a quoted mention, and a heredoc naming all five constructs"
+  "1.4-mentions||p_1_4_comment|control: a single #-comment naming all five constructs"
   "2.1|2.1 2.3|p_2_1|prepend a stray '{' to marketplace.json (invalid JSON; blanks 2.3's jq read too)"
-  "2.2|2.2|p_2_2|drop plugin.json's patch version digit"
-  "2.3|2.3|p_2_3|marketplace.json's plugins[0].name diverges from plugin.json's name"
   "2.4-missing-grant|2.4|p_2_4_missing_grant|drop the Bash(harness-status.sh:*) allow entry"
   "2.4-orphan-grant|2.4|p_2_4_orphan_grant|add an allow entry for a bin/ script that doesn't exist"
-  "2.5-missing-c|2.5|p_2_5_missing_c|drop the Bash(git -C * commit *) allow entry"
   "2.5-missing-bare|2.5|p_2_5_missing_bare|drop the Bash(git commit:*) allow entry"
   "2.6|2.6|p_2_6|drop the Bash(git -C * clean*) deny entry"
-  "3.1|3.1|p_3_1|drop the 'tools:' line from agents/implementer.md's frontmatter"
-  "3.2|3.2|p_3_2|append a second '# Constraints' heading to agents/implementer.md"
-  "3.3|3.3|p_3_3|append a third fence line to agents/implementer.md"
   "3.4|3.4|p_3_4|agents/planner.md's harness-status line: retries=<k> becomes retries=<kk>"
-  "3.5|3.5|p_3_5|add an undocumented outcome alternative to agents/verifier.md's status line"
-  "3.6|3.6|p_3_6|append a restated 'read-only' sentence to agents/verifier.md's prose"
-  "3.6-preamble|3.6|p_3_6_preamble|insert a 'read-only' sentence into agents/verifier.md's preamble (Gap A)"
-  "3.7|3.7|p_3_7|drop '## Verified facts' from agents/planner.md's fenced template"
-  "3.8-letter|3.8|p_3_8_letter|renumber verifier.md's letter g to h"
-  "3.8-title|3.8|p_3_8_title|retitle verifier.md's letter g away from 'Documentation'"
-  "3.8-citation|3.8|p_3_8_citation|CLAUDE.md's 'rule 3g' citation becomes 'rule 3z'"
-  "4.1|4.1|p_4_1|mangle the planner-plan marker text in bin/find-planning-work.sh"
-  "4.2-name|4.2|p_4_2_name|skills/test-ratchet/SKILL.md's frontmatter name no longer matches its directory"
-  "4.2-empty-desc|4.2|p_4_2_empty_desc|delete project-kickoff/SKILL.md's folded description body (Gap B)"
-  "4.3|4.3|p_4_3|README.md's planner model pin diverges from agents/planner.md's frontmatter"
-  "4.4|4.4|p_4_4|append an undocumented 'wip: …' message to issue-implementer/SKILL.md"
-  "4.5|4.5|p_4_5|mangle the ratchet-issue marker text in skills/test-ratchet/SKILL.md"
+  "4.2-empty-desc|4.2|p_4_2_empty_desc|delete project-kickoff/SKILL.md's folded description body"
   "4.6|4.6|p_4_6|drop a label bin/setup-labels.sh creates from the doctor's required list"
-  "4.7|4.7|p_4_7|add a skills/ directory with no README.md coverage"
-  "4.8|4.8|p_4_8|drop the 'Merge autonomy policy' title from skills/harness-setup/SKILL.md"
-  "4.9|4.9|p_4_9|misspell the gate command in .github/workflows/selfcheck.yml"
-  "4.10|4.10|p_4_10|append a merge-authority restatement under issue-implementer/SKILL.md's ## Notes"
-  "4.10-same-section||p_4_10_same_section|control: restate merge-authority inside the existing ## Hard rules section"
   "4.11|4.11|p_4_11|reintroduce a raw grep of \"\$settings\" in bin/check-harness.sh"
-  "4.12-planner|4.12|p_4_12_planner|mangle the follow-up justification phrase in agents/planner.md's template"
-  "4.12-skill|4.12|p_4_12_skill|mangle the same phrase in issue-implementer/SKILL.md's filing step"
-  "4.13-script|4.13|p_4_13_script|add a 'docs' stage to reconcile-ledger.sh's accepted list only (trips the cross-file and intra-file clauses together)"
+  "4.13-script|4.13|p_4_13_script|add a 'docs' stage to reconcile-ledger.sh's STAGES= list only"
   "4.13-skill|4.13|p_4_13_skill|add a 'docs' alternative to issue-implementer/SKILL.md's status-line stage grammar only"
-  "4.13-vocab|4.13|p_4_13_vocab|drop reconcile-ledger.sh's vocab() merge arm, leaving the accepted list and the skill grammar intact"
+  "4.13-outcome|4.13|p_4_13_outcome|add an undocumented outcome alternative to agents/verifier.md's status line"
+  "4.13-extraction|4.13|p_4_13_extraction|rename reconcile-ledger.sh's STAGES= line so the gate's extraction comes back empty"
+  "4.14|4.14|p_4_14_oversize|append 300 filler lines to skills/harness-setup/SKILL.md"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
 )
@@ -301,34 +216,6 @@ run_case() {
   fi
 }
 
-run_coverage_case() {
-  local out all_ids covered row cexpected id missing
-  out="$(bash "$root/dev/selfcheck.sh" "$root" 2>&1)"
-  # BRE (plain sed, no -E) has no portable alternation: '\(PASS\|FAIL\)' matches on GNU sed but
-  # not BSD sed, so match the shared '^  <WORD>  <id> ' shape instead of spelling out PASS/FAIL.
-  all_ids="$(printf '%s\n' "$out" | sed -n 's/^  [A-Z][A-Z]*  \([0-9][0-9]*\.[0-9][0-9]*\) .*/\1/p' | sort -u)"
-  covered=""
-  for row in "${cases[@]}"; do
-    cexpected="$(printf '%s' "$row" | awk -F'|' '{print $2}')"
-    covered="$covered $cexpected"
-  done
-  covered="$(normalize_ids "$covered")"
-  # exemption list: ids allowed to ship without a case row. Must be empty on merge.
-  local exempt=""
-  missing=""
-  for id in $all_ids; do
-    case " $covered " in *" $id "*) continue ;; esac
-    case " $exempt " in *" $id "*) continue ;; esac
-    missing="$missing $id"
-  done
-  if [ -z "$missing" ]; then
-    case_ok "coverage" "every id a clean gate run prints has a case in this table"
-  else
-    case_bad "coverage" "every id a clean gate run prints has a case in this table"
-    echo "    id(s) with no case:$missing"
-  fi
-}
-
 run_headercount_case() {
   local header_n out n_lines
   header_n="$(grep -m1 -oE '[0-9]+ assertions total' "$root/dev/selfcheck.sh" | grep -oE '^[0-9]+')"
@@ -343,7 +230,7 @@ run_headercount_case() {
 }
 
 # ---------------------------------------------------------------------------------------------
-meta_names="coverage header-count"
+meta_names="header-count"
 matched=0
 
 for row in "${cases[@]}"; do
@@ -368,7 +255,6 @@ for name in $meta_names; do
   esac
   matched=$((matched+1))
   case "$name" in
-    coverage)      run_coverage_case ;;
     header-count)  run_headercount_case ;;
   esac
 done

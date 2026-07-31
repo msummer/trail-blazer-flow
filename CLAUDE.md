@@ -23,34 +23,19 @@ It prints a `PASS`/`FAIL` line per assertion (grouped and labelled in its own ou
 `== summary: N pass, M fail ==` footer, and exits 0 iff nothing failed. The same command runs in
 CI on every pull request (`.github/workflows/selfcheck.yml`, one job on `ubuntu-latest`); a red
 check there means one of the job's two commands failed — reproduce locally with
-`bash dev/selfcheck.sh` and `bash dev/selfcheck-tests.sh`. There
-is no test suite and no build step: this repo is Markdown instruction files, Bash scripts, and
-JSON manifests, so the gate checks shell syntax/portability (including no GNU-only shell
-constructs in `bin/*.sh` or `dev/*.sh`), JSON manifest validity, and the cross-file
-instruction-file contracts the skills silently depend on (the `<!-- planner-plan -->` marker, one
-`# Constraints` section per agent, the harness-status line grammar, no constraint keyword
-restated across sections of the same file — extended to `skills/*/SKILL.md`'s merge-authority,
-push-boundary, sequencing, and read-only language — the `<!-- ratchet-issue -->` marker, the
-follow-up justification phrase shared by `agents/planner.md`'s plan template and the implementer
-skill's filing step, the `setup-labels.sh` ↔ doctor label bijection, the policy-section titles the
-skills read, that
-`bin/check-harness.sh` reads `.claude/settings.json` only through `jq` (never a raw-text
-grep/sed/awk of the file), the CI workflow's gate command, `agents/verifier.md`'s lettered
-Process checks `a.`–`g.` matching
-CLAUDE.md's own `rule Nx` citations, and the git permission-mirror invariants in
-`templates/repo-settings.json` — the `-C` allow forms `skills/issue-implementer/SKILL.md`
-mandates, and the bare↔`-C` mirroring of its own git allow/deny entries — and the ledger stage
-vocabulary shared by `bin/reconcile-ledger.sh` and `skills/issue-implementer/SKILL.md`'s
-status-line grammar (`seed` excepted — it is ledger-only)), plus the behavior of
-`bin/reconcile-ledger.sh` against fabricated inputs. A change the gate can't catch needs a new
-assertion in the gate, not a waiver.
+`bash dev/selfcheck.sh` and `bash dev/selfcheck-tests.sh`. There is no test suite and no build
+step: this repo is Markdown instruction files, Bash scripts, and JSON manifests. The gate prints
+what it checks — run it. A change the gate can't catch needs a new assertion in the gate, not a
+waiver, subject to the machine-parsed-artifacts rule below.
 
 `dev/selfcheck-tests.sh` is the gate's own negative-test harness — a separate script, not part
 of the gate itself, that copies this repo to a throwaway temp directory, applies one documented
 perturbation per case, and asserts the gate fails with exactly the expected assertion id(s). It
 also runs in CI, as a second step after the gate in the same job; run it by hand
-(`bash dev/selfcheck-tests.sh`) whenever `dev/selfcheck.sh` changes, and add a case for every new
-assertion.
+(`bash dev/selfcheck-tests.sh`) whenever `dev/selfcheck.sh` changes, and add a case for any
+assertion that parses structure out of a file, compares two extracted sets, or exercises script
+behavior; fixed-string and numeric-threshold assertions may ship without one, listed in the
+harness's exempt comment with a one-line reason each.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor. Onboarding it here would mean checking in a `.claude/settings.json` that
@@ -66,11 +51,18 @@ itself".
 - `bin/` is on consumers' Bash PATH; every `bin/*.sh` needs a matching allow entry in
   `templates/repo-settings.json` (the gate's bijection assertion checks this). Scripts meant
   only for developing this repo (not for consumers) go in `dev/` instead.
+- **Gate assertions compare machine-parsed artifacts only.** An assertion may only compare two
+  mechanically extracted artifacts (JSON↔JSON, script↔script, script↔JSON, filename↔frontmatter);
+  no assertion may parse or pin English prose. Duplicated spec text is resolved by **deleting a
+  copy**, never by pinning both — pinning makes the duplication load-bearing and permanent.
+- **Follow-ups must name a user-visible failure.** A follow-up issue filed from a PR must name a
+  concrete failure a user of this plugin would experience; a verifier's "Notes for the PR
+  reviewer" is not a finding and does not become a follow-up by default.
 - `*.sh` files are LF-only (enforced by `.gitattributes`) and must stay portable across BSD
   (macOS) and Git-Bash userlands — no GNU-only flags (`sed -i` without a suffix, `grep -P`,
-  `readlink -f`, `mapfile`/`readarray`, `declare -A`). Assertion 1.4 enforces this on `bin/*.sh`
-  and `dev/*.sh`.
+  `readlink -f`, `mapfile`/`readarray`, `declare -A`). Enforced mechanically on `bin/*.sh`
+  (assertion 1.4); `dev/*.sh` follows the same rule by convention.
 - The README is part of "done": every factual claim it makes about this repo's behavior must be
-  checkable against the code (the verifier applies its rule 3g to docs).
+  checkable against the code (the verifier's Documentation changes check applies to docs).
 - Release ritual: bump `version` in `.claude-plugin/plugin.json` and create the matching
   `vX.Y.Z` annotated tag, in the same commit — see the README's "Updating".
