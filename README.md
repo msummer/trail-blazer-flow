@@ -53,6 +53,8 @@ or share).
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── dev/
 │   └── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
+├── .github/
+│   └── workflows/selfcheck.yml # CI: runs the gate above on every pull request
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
 ```
@@ -780,10 +782,14 @@ It checks shell syntax/portability, the JSON manifests, and the cross-file instr
 invariants the skills silently depend on (template markers, the harness-status line grammar, one
 `# Constraints` section per agent, no constraint keyword restated across sections, the label
 bijection between `setup-labels.sh` and the doctor, the policy-section titles the skills read,
-and the git permission-mirror invariants in `templates/repo-settings.json` — the `-C` allow forms
-`skills/issue-implementer/SKILL.md` mandates, and the bare↔`-C` mirroring of its own git
-allow/deny entries), plus the behavior of `reconcile-ledger.sh` against fabricated ledger and
-status inputs.
+the CI workflow's gate command, and the git permission-mirror invariants in
+`templates/repo-settings.json` — the `-C` allow forms `skills/issue-implementer/SKILL.md`
+mandates, and the bare↔`-C` mirroring of its own git allow/deny entries), plus the behavior of
+`reconcile-ledger.sh` against fabricated ledger and status inputs.
+
+The same command also runs in CI on every pull request (`.github/workflows/selfcheck.yml`), so
+the gate no longer depends on someone remembering to run it.
+
 This repo
 deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the *consumer*
 doctor, and onboarding it here would mean registering this repo's own published marketplace and
