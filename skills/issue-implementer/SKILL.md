@@ -45,6 +45,11 @@ once under "Hard rules" below.
 - **The subagent writes code; you do every git and `gh` command.**
 - **A dirty working tree is only recoverable when it's clearly the harness's own** — step 0 has
   the full rule; never risk clobbering uncommitted human work.
+- **No Bash command may wrap another command's output inline** (backticks or dollar-paren
+  substitution) — the permission matcher can't approve a composite like that, so under an
+  unattended session it degrades silently instead of failing loudly. Run the inner command on its
+  own, then paste its literal result into the next call (step 2e's collapse is the worked
+  example).
 
 ## Resilient dispatch
 
@@ -286,13 +291,14 @@ e. **Dispatch the `verifier` subagent** (Task tool, `agents/verifier.md`) — th
      used for the summary table.
 
    - Once the verifier passes, **collapse this run's WIP checkpoints** so the PR carries one
-     clean commit instead of the checkpoint trail: `git reset --soft "$(git merge-base
-     <default-branch> HEAD)"`. Reset to the **merge base**, not the default branch's tip (a
-     resumed branch may be behind it
-     — resetting to a moved tip would fold other people's commits in as a revert); `reset --soft`
-     only moves HEAD, so the implemented tree stays fully staged. If the grants aren't available,
-     skip it and add the `feat:` commit on top of the WIP trail instead (note it in the summary;
-     squash-merging repos are unaffected).
+     clean commit instead of the checkpoint trail. Per "Hard rules", do this as two separate Bash
+     calls, never one command with the merge base substituted in: first `git merge-base
+     <default-branch> HEAD`, read the SHA from that call's result; then `git reset --soft <sha>`
+     with the SHA pasted in as a literal. Reset to the **merge base**, not the default branch's
+     tip (a resumed branch may be behind it — resetting to a moved tip would fold other people's
+     commits in as a revert); `reset --soft` only moves HEAD, so the implemented tree stays fully
+     staged. If the grants aren't available, skip it and add the `feat:` commit on top of the WIP
+     trail instead (note it in the summary; squash-merging repos are unaffected).
 
      Stage and sanity-check **before** committing:
 ```bash

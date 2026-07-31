@@ -716,8 +716,16 @@ and `Bash(git -C * clean*)` (see "The per-repo settings file"): an unmirrored de
 real bypass (e.g. `git -C <worktree> push --force` slipping past a guard that stops the bare
 form). A heredoc body
 (e.g. `reconcile-ledger.sh - <<'LEDGER'`, used by `issue-cycle`) is not split into
-separately-matched subcommands, so it stays covered by its single prefix grant. Both facts were
-verified by live probe against Claude Code 2.1.220 (#41, #39).
+separately-matched subcommands, so it stays covered by its single prefix grant. A third fact from
+the same probe series: no allow rule can approve a Bash command containing command substitution
+— `$(...)` or backticks, which behave identically — even when every constituent command is
+individually granted, in both bare and `git -C` wildcard forms; such a command instead falls
+through to the session's permission mode (prompt on manual/default, a recorded denial headless,
+silent auto-approval under `auto`), while a deny rule *does* match inside a substitution body and
+blocks the whole composite. That's why the WIP-collapse step ("Resilience") runs as two plain
+`git` calls — a `merge-base` lookup followed by `reset --soft` on its literal SHA — rather than
+one command with the SHA substituted in. All three facts were verified by live probe against
+Claude Code 2.1.220 (#41, #39, #55).
 
 Two honest caveats. First, the implementer's "no git" rule is enforced by prompt, not by
 permissions: the settings allow-list must permit git for the orchestrator, and permission

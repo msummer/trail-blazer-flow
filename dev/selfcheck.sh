@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 26 assertions total:
+# Five groups, 27 assertions total:
 #   1. shell syntax, portability, and error handling (bin/*.sh, dev/*.sh; no GNU-only constructs
 #      in bin/*.sh; no unguarded 'git branch -d/-D' in bin/*.sh)
 #   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json), plus the
@@ -19,7 +19,8 @@
 #      frontmatter, the label bijection, skill/README coverage, policy-section titles, the CI
 #      workflow's gate command, that bin/check-harness.sh reads .claude/settings.json only
 #      through jq, the ledger stage vocabulary shared by bin/reconcile-ledger.sh and the
-#      implementer skill's status-line grammar, and a per-skill size budget)
+#      implementer skill's status-line grammar, a per-skill size budget, and that no
+#      skill/agent instruction file contains an inline command-substitution token)
 #   5. bin/ script behavior (reconcile-ledger.sh against fabricated ledger/status inputs)
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
@@ -533,6 +534,32 @@ if [ -z "$bad_list" ]; then
   ok "4.14 every skills/*/SKILL.md is within its size budget (total $total/1551)"
 else
   bad "4.14 size budget exceeded:$bad_list"
+fi
+
+# 4.15 — no inline command substitution in the instruction surface. Probe #55 found that no
+# allow rule can approve a Bash command containing command substitution — dollar-paren or
+# backtick, which behave identically — even when every constituent command is individually
+# granted; such a command instead falls through to the session's permission mode, so one written
+# into a skill/agent instruction degrades silently (silent auto-approval under 'auto') instead of
+# failing loudly. Scoped to skills/*/SKILL.md, skills/*/references/*.md, and agents/*.md.
+# README.md, bin/*.sh, and dev/*.sh are deliberately OUT of scope: README documents the literal
+# syntax on purpose (that's the one place it should appear), and the bin/dev scripts are code,
+# not instructions handed to a subagent. Backtick substitution isn't checkable here — Markdown
+# inline-code spans use backticks legitimately — so the two-character dollar-paren token is used
+# as the proxy for both forms; accepted cost: none of the scanned files can spell that token even
+# in prose (e.g. to describe the syntax) without tripping this assertion.
+bad_list=""
+for f in "$root"/skills/*/SKILL.md "$root"/skills/*/references/*.md "$root"/agents/*.md; do
+  [ -f "$f" ] || continue
+  lines="$(grep -Fn '$(' "$f" | cut -d: -f1)"
+  for ln in $lines; do
+    bad_list="$bad_list $f:$ln"
+  done
+done
+if [ -z "$bad_list" ]; then
+  ok "4.15 no inline command substitution (dollar-paren/backtick proxy) in skills/*/SKILL.md, skills/*/references/*.md, or agents/*.md"
+else
+  bad "4.15 dollar-paren substitution found — run the inner command separately and paste its literal result instead:$bad_list"
 fi
 
 # ============================================================================
