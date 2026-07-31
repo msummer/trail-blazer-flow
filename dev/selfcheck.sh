@@ -8,8 +8,9 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 25 assertions total:
-#   1. shell syntax and portability (bin/*.sh, dev/*.sh; no GNU-only constructs in bin/*.sh)
+# Five groups, 26 assertions total:
+#   1. shell syntax, portability, and error handling (bin/*.sh, dev/*.sh; no GNU-only constructs
+#      in bin/*.sh; no unguarded 'git branch -d/-D' in bin/*.sh)
 #   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json), plus the
 #      bin/*.sh <-> allow-list bijection and the git permission-mirror invariants
 #   3. agent instruction-file invariants (agents/*.md: frontmatter, one fenced template block,
@@ -65,7 +66,7 @@ echo "== trail-blazer-flow selfcheck: $root =="
 
 # ============================================================================
 echo
-echo "-- Group 1: shell syntax and portability --"
+echo "-- Group 1: shell syntax, portability, and error handling --"
 
 # 1.1 — bash -n on every bin/*.sh and every dev/*.sh.
 bad_files=""
@@ -127,6 +128,29 @@ if [ -z "$bad_list" ]; then
   ok "1.4 no GNU-only constructs (grep -P, sed -i without suffix, readlink -f, mapfile/readarray, declare -A) in bin/*.sh"
 else
   bad "1.4 GNU-only construct(s) found —$bad_list"
+fi
+
+# 1.5 — no unguarded 'git branch -d/-D/--delete' in bin/*.sh: a bare delete aborts the whole
+# script the moment git refuses (e.g. a stale worktree still holds the branch) under
+# 'set -euo pipefail' — see cleanup-after-merge.sh's history. A delete is safe only when its
+# line is an if/elif/while/until condition (so a failing command substitution doesn't trip
+# set -e) or carries a '||' fallback. Known limitation: a delete invocation split across
+# continuation lines is out of reach here — keep it on one line. Scans bin/*.sh only, not
+# dev/*.sh, for the same reason as 1.4 — dev/selfcheck-tests.sh's own perturbation functions
+# must be free to contain the unguarded form (that's the point of the 1.5 test case) without
+# self-flagging.
+del_pat='git[[:space:]]+branch[[:space:]]+(-[A-Za-z]*[dD][A-Za-z]*|--delete)([[:space:]]|$)'
+guard_pat='(^[0-9]+:[[:space:]]*((el)?if|while|until)[[:space:]]|\|\|)'
+bad_list=""
+for s in "$root"/bin/*.sh; do
+  [ -f "$s" ] || continue
+  hits="$(grep -vnE '^[[:space:]]*#' "$s" | grep -E "$del_pat" | grep -vE "$guard_pat")"
+  [ -z "$hits" ] || bad_list="$bad_list $s: $(printf '%s' "$hits" | tr '\n' ' ');"
+done
+if [ -z "$bad_list" ]; then
+  ok "1.5 no unguarded 'git branch -d/-D/--delete' in bin/*.sh"
+else
+  bad "1.5 unguarded 'git branch' delete found —$bad_list"
 fi
 
 # ============================================================================

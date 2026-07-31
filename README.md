@@ -234,11 +234,12 @@ below for the ledger and the guards.
 ### After the human merges
 
 Nothing is required: every planner/implementer/cycle run starts with
-`cleanup-after-merge.sh --fix` (sync, prune merged `claude/*` branches, repair stale `pr-open`
-labels with audited comments) and the implementer's baseline refresh re-verifies merged main —
-two green PRs can still compose badly, and that check is now mechanical. Running
-`cleanup-after-merge.sh` by hand right after a merge is still fine (it's idempotent); without
-`--fix` it only reports label problems instead of repairing them.
+`cleanup-after-merge.sh --fix` (sync, prune merged `claude/*` branches — a merged branch a
+worktree still holds is reported and skipped, never fatal — repair stale `pr-open` labels with
+audited comments) and the implementer's baseline refresh re-verifies merged main — two green PRs
+can still compose badly, and that check is now mechanical. Running `cleanup-after-merge.sh` by
+hand right after a merge is still fine (it's idempotent); without `--fix` it only reports label
+problems instead of repairing them.
 
 ### The steady state, as one command ("run the cycle")
 

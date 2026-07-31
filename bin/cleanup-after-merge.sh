@@ -5,7 +5,9 @@
 # implementer / cycle skills also run it as part of their pre-flight, so manual runs are
 # optional in the steady state.
 #   1. Fast-forwards the default branch (only if currently checked out).
-#   2. Deletes local claude/<n>-<slug> branches whose PRs are MERGED.
+#   2. Deletes local claude/<n>-<slug> branches whose PRs are MERGED. A merged branch still
+#      held by a worktree can't be deleted (-D refuses); that's reported (SKIP) and skipped,
+#      never fatal — same for any other delete failure (WARN, with git's stderr).
 #   3. Label hygiene for open issues still labelled pr-open:
 #        - PR merged but issue still open  -> "Closes #n" linkage probably missing
 #        - PR closed WITHOUT merging       -> stale pr-open; the issue should requeue
@@ -40,6 +42,9 @@ fi
 echo
 echo "== local claude/* branches =="
 branches=$(git for-each-ref --format='%(refname:short)' 'refs/heads/claude/*' || true)
+# Which branches a worktree holds, so a refused delete can be explained without parsing
+# git's (localizable) error text. Read once — nothing removes worktrees mid-loop.
+worktrees=$(git worktree list --porcelain 2>/dev/null || true)
 if [[ -z "$branches" ]]; then
   echo "none"
 else
@@ -48,10 +53,19 @@ else
     if [[ "$state" == "MERGED" ]]; then
       if [[ "$b" == "$current" ]]; then
         echo "SKIP    $b — currently checked out; switch to ${default_branch} and re-run"
-      else
-        # -D because squash/rebase merges leave the branch tip unreachable from main
-        git branch -D "$b" >/dev/null
+      # -D because squash/rebase merges leave the branch tip unreachable from main
+      elif err=$(git branch -D "$b" 2>&1 >/dev/null); then
         echo "deleted $b (PR merged)"
+      else
+        wt=$(printf '%s\n' "$worktrees" | awk -v ref="branch refs/heads/$b" '
+          /^worktree / { p = substr($0, 10) }
+          $0 == ref    { hit = p }
+          END          { if (hit != "") print hit }')
+        if [[ -n "$wt" ]]; then
+          echo "SKIP    $b — checked out in a worktree at ${wt}; remove it and re-run"
+        else
+          echo "WARN    $b — PR merged but delete failed: ${err}"
+        fi
       fi
     else
       echo "kept    $b (PR state: ${state})"
