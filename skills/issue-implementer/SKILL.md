@@ -268,7 +268,9 @@ git checkout -b "claude/<number>-<slug>"
   failures noted in the run's history) and carry them into the dispatch as context alongside the
   resume brief — a resumed dispatch must never lose information a previous attempt surfaced. Do
   not rebase or re-cut the branch from the default branch — the pre-flight baseline refresh plus
-  the PR's own CI cover any divergence. Say so in the summary.
+  the PR's own CI cover any divergence. If the checkout fails because the branch is already
+  checked out in another worktree (a swarm run that died before cleanup), sweep that worktree
+  first per step a of "Worktree-parallel mode", then retry. Say so in the summary.
 - **Any non-wip commit** → real prior work. If an OPEN PR exists for the branch, skip the
   issue and warn (it should be labelled `pr-open`; the label was probably removed by mistake).
   Otherwise stop and warn for that issue — reusing or discarding committed work is the
@@ -460,28 +462,137 @@ returned — run again after this batch).
 When the batch has 2+ ready issues whose approved plans have **pairwise disjoint "Affected
 areas"** (production files AND test files — compare carefully, including shared fixtures like a
 test `conftest`), you may implement them in parallel using git worktrees instead of sequentially.
-Any overlap, any doubt, or any plan lacking an Affected areas section → sequential. Worth using
-for 2–4 small/medium disjoint issues; beyond that, queue depth beats fan-out.
+Any overlap, any doubt, or any plan lacking an Affected areas section → sequential.
 
-a. **Create one worktree per issue** (siblings of the repo, never nested inside it):
+**Concurrency bound: at most 4 implementer dispatches in flight at once.** Two to four
+small/medium disjoint issues is the sweet spot; a fifth eligible issue waits for a free slot
+rather than widening the fan-out — beyond 4, queue depth beats fan-out. Only implementer
+dispatches fan out. The mechanical checks, the verifier dispatch, the commit/push/PR sequence
+and the blocked path all stay **serialized**, one worktree at a time: they share the main
+checkout's toolchain (step d) and your own git/`gh` hands.
+
+### Supervisor loop
+
+There is no separate coordinator process — **you are the supervisor**. Keep a **worktree table**
+in context for the life of the swarm, one row per issue: issue number, worktree path, branch,
+current stage (`implementer` → `checks` → `verifier` → `pr` → `ci` → terminal), dispatch attempt
+`k`, kickbacks used (of 2), resume relaunches used (of 2), last WIP SHA, and whether a dispatch
+is in flight. Every budget in "Resilient dispatch" is **per issue**: a ladder retry or a resume
+relaunch in one worktree never consumes another's.
+
+Work in **rounds, not barriers.** A round is: launch every currently-launchable dispatch as one
+batch (never exceeding the concurrency bound in flight), then take the returned reports **one at
+a time**, in completion order, carrying that worktree's serial work (step e) through to its PR
+or its blocked commit before picking up the next report. Never hold a finished worktree behind
+an unfinished one. Whatever the round produces — kickbacks, resume relaunches, ladder retries,
+newly freed slots — becomes the next round's batch.
+
+Three rules keep one sick worktree from stalling the swarm:
+
+- **Checkpoint in the worktree before every re-dispatch into it** — ladder retry, resume
+  relaunch, or kickback. For a death that is `git -C <worktree> add -A && git -C <worktree>
+  commit -m "wip: implementer died (#<n>)"` (skip if nothing changed); otherwise the
+  stage-appropriate message from "WIP checkpoint vocabulary". This is the one place the swarm
+  does *more* than sequential mode, deliberately: a worktree's dirty tree is invisible to the
+  next run's pre-flight (`git status --porcelain` in the main checkout says nothing about it),
+  and the supervisor is busy with other worktrees between a death and its retry. The commit is a
+  no-op when nothing changed, so the vocabulary and the classification rule are untouched.
+- **Backoff waits go last.** Run the ladder's `sleep` for a dead worktree only after every other
+  worktree's ready work in that round is drained — a 240s wait must never be why another
+  worktree's PR is late.
+- **Defer the CI watch.** `gh pr checks --watch` blocks for as long as CI takes; run inline it
+  would serialize the whole swarm behind one repo's slowest check. Open the PR, record the watch
+  as pending, and drain the pending watches one at a time once no implementer dispatch is in
+  flight — each with its single bounded CI-fix attempt exactly per step 2e, re-dispatching the
+  implementer into that issue's worktree. A worktree stays alive until its watch is drained.
+
+**Relaunch is always into the same worktree on the same branch.** Never recreate the worktree,
+never re-cut the branch, never `git worktree add -b` twice for one issue: after step b the branch
+exists and already carries the work, so a resumed dispatch is exactly step 2c's relaunch with
+`-C <worktree>` in front of the git commands.
+
+**Every worktree reaches a terminal state before the swarm ends** — PR open with a CI outcome
+recorded, `impl-blocked` via step 2f, or a stage escalated as failed after the ladder — and every
+one leaves a status line and a ledger record. Exhausting the ladder or the resume cap in one
+worktree routes that issue to the blocked path and leaves the rest of the swarm running; it never
+ends the swarm. A worktree you launched and never accounted for is exactly the failure this loop
+exists to prevent.
+
+**Ledger and status lines are unchanged by the fan-out.** One worktree = one issue = one ledger
+row: each dispatch's status line is its record, with the same `stage`/`outcome`/`retries`
+vocabulary, and you emit the line yourself for any worktree stage that died with no usable
+report. Records land out of issue order as completions interleave — harmless:
+`reconcile-ledger.sh` sorts by issue and keeps the last record per issue+stage, so a swarm run
+reconciles exactly like a sequential one.
+
+### Swarm procedure
+
+a. **Sweep stale worktrees first** (once, before creating any). A run that died mid-swarm leaves
+   worktrees registered, possibly dirty, and holding their branches checked out — and step 0's
+   pre-flight inspects only the main checkout, so nothing else catches them:
+```bash
+git worktree prune                # forget registrations whose directory is gone
+git worktree list --porcelain     # what is still attached, and to which branch
+```
+   For each surviving worktree named `<repo-dirname>-wt-<number>`: if
+   `git -C <path> status --porcelain` is non-empty, preserve the work where it stands —
+   `git -C <path> add -A && git -C <path> commit -m "wip: interrupted run (#<number>)"` — then
+   `git worktree remove <path>`. If removal refuses over leftover untracked/ignored files
+   (`node_modules`, a `.venv`), re-run it with `--force`: the tracked work is committed on the
+   branch by then, and the branch outlives the worktree. A path that is **not** one of ours is
+   never yours to remove — leave it; if it holds a branch this batch needs, skip that issue and
+   tell the human. Report every sweep in the summary.
+
+b. **Create one worktree per issue** (siblings of the repo, never nested inside it). The branch
+   may already exist — resume-not-restart makes leftover wip branches routine — so classify
+   before you create:
+```bash
+git branch --list "claude/<number>-*"      # this issue's existing branch, if any
+```
+   - **No such branch** → create branch and worktree together:
 ```bash
 git worktree add "../<repo-dirname>-wt-<number>" -b "claude/<number>-<slug>" <default-branch>
 ```
+   - **A `claude/<number>-*` branch exists** → work with its **actual** name (never a freshly
+     built slug — the issue title may have changed since), and decide by what is on it
+     (`git log <default-branch>..<branch> --format=%s`) using the classification rule from
+     "Resilient dispatch". Same three cases as step 2b, same rules, different plumbing:
+     - **every unique commit is a `wip:` commit and the newest is `wip: blocked — …`** → reset
+       fresh: `git branch -D <branch>`, then the `-b` form above. Carry the blocked attempt's
+       findings from the issue's comments into the dispatch, as in step 2b.
+     - **every unique commit is a `wip:` commit and the newest is anything else** → **resume**:
+       attach the existing branch — no `-b`, no base argument — so the worktree checks out that
+       branch at its own tip:
+```bash
+git worktree add "../<repo-dirname>-wt-<number>" "<branch>"
+```
+       Do not reset it onto the default branch: that would discard precisely the partial work the
+       resume exists to preserve. Capture the WIP SHA (`git -C <worktree> rev-parse HEAD`), build
+       the resume brief per "Resilient dispatch", and carry the issue's prior-attempt comments
+       into the dispatch alongside it — same as step 2b.
+     - **any non-wip commit** → real prior work: skip that issue and warn (an open PR means the
+       `pr-open` label was dropped by mistake; otherwise reusing or discarding committed work is
+       the human's call). The rest of the batch proceeds without it.
+   - **`git worktree add` refuses because the branch is already checked out in another
+     worktree** → step a missed one whose directory still exists. Re-read
+     `git worktree list --porcelain`, apply step a's rule to that path, and retry. If it instead
+     refuses because the *path* exists but is not registered, stop and tell the human — never
+     delete a directory to clear the way (`rm -rf` is deny-listed, and for good reason).
 
-b. **Dispatch all implementer subagents in one batch** (they run concurrently). Each prompt is
-   exactly as in step 2c (including the dispatch attempt number), PLUS: *"Work EXCLUSIVELY inside
-   <absolute worktree path>. Every file you read, write, or edit and every command you run must
-   use that path — never the main repository checkout."* A dispatch that fails is retried per the
-   "Resilient dispatch" ladder, same as step 2c. Include the worktree path when stating
-   verification commands. On
-   Windows, write every path you embed in a prompt or command with **forward slashes**
-   (`C:/Users/...` or `/c/Users/...`) — commands run under Git Bash, where backslash paths get
-   mangled by quoting. Also
-   name the sibling issues' affected files as explicitly out of scope ("issues <n>, <m> are
-   being implemented concurrently — do NOT touch <their files>") so a subagent that discovers
-   adjacent work doesn't drift into a concurrent issue's territory.
+c. **Dispatch the implementers as one batch** (up to the concurrency bound; they run
+   concurrently). Each prompt is exactly as in step 2c — including the dispatch attempt number,
+   and the resume brief plus verbatim relaunch instruction wherever step b resumed a branch —
+   PLUS: *"Work EXCLUSIVELY inside <absolute worktree path>. Every file you read, write, or edit
+   and every command you run must use that path — never the main repository checkout."* A
+   dispatch that fails is retried per the "Resilient dispatch" ladder, same as step 2c. Include
+   the worktree path when stating verification commands. On Windows, write every path you embed
+   in a prompt or command with **forward slashes** (`C:/Users/...` or `/c/Users/...`) — commands
+   run under Git Bash, where backslash paths get mangled by quoting. Also name the sibling
+   issues' affected files as explicitly out of scope ("issues <n>, <m> are being implemented
+   concurrently — do NOT touch <their files>") so a subagent that discovers adjacent work doesn't
+   drift into a concurrent issue's territory.
 
-c. **Dependency caveat (critical):** ignored files don't exist in a fresh worktree — virtualenvs,
+d. **Dependency caveat (critical):** ignored files don't exist in a fresh worktree — virtualenvs,
    `node_modules`, `.env`. Tell each subagent how to verify without reinstalling: e.g. for a
    Python project, run the MAIN checkout's venv interpreter against the worktree's tests
    (`cd <worktree>/api && <main-repo>/api/.venv/bin/python -m pytest` — on Windows the venv's
@@ -490,27 +601,42 @@ c. **Dependency caveat (critical):** ignored files don't exist in a fresh worktr
    checkout's layout). If a plan touches UI and needs `npm install`/`npm run build` per
    worktree, prefer sequential mode for that issue instead of duplicating installs.
 
-d. **As each implementer completes, run steps 2d–2e per worktree** (mechanical checks with the
-   main venv as above, then the verifier — its prompt must also carry the worktree path). Diff
-   instructions, checkpoints, and the retry ladder are exactly as in the sequential steps 2c–2e —
-   just every git command gets `-C <worktree>`: the verifier's diff is `git -C <worktree> diff
-   <default-branch>...HEAD --stat` (three-dot, matching sequential mode now that checkpoints make
-   it non-empty here too — the old two-dot form is retired so the two modes agree), checkpoint
-   commits are `git -C <worktree> add -A && git -C <worktree> commit -m "wip: checkpoint <stage>
-   (#<n>)"`, and the pre-final-commit collapse is `git -C <worktree> reset --soft "$(git -C
-   <worktree> merge-base <default-branch> HEAD)"`. Kickbacks re-dispatch into the same worktree,
-   retried per the ladder if the dispatch itself fails. Then commit/push/PR with
-   `git -C <worktree> ...`. Process completions one at a time — your own git/gh work stays
-   sequential even when subagents ran in parallel.
+e. **As each implementer completes, run steps 2d–2e for that worktree** (mechanical checks with
+   the main venv as above, then the verifier — its prompt must also carry the worktree path),
+   one worktree at a time. Everything in the sequential pipeline applies verbatim; what changes
+   is only where it runs. **Identical:** the retry ladder and its escalation, the WIP checkpoint
+   vocabulary and the classification rule, the resume brief's five elements and its cap of 2, the
+   max-2 kickback limit, the status-line grammar, the mechanical checks as the authoritative
+   gate, the staged-file reconciliation, and the PR contract. **Worktree-specific:**
+   - **every git command takes `-C <worktree>`** — the verifier's diff is `git -C <worktree> diff
+     <default-branch>...HEAD --stat` (three-dot, matching sequential mode now that checkpoints
+     make it non-empty here too — the old two-dot form is retired so the two modes agree),
+     checkpoints are `git -C <worktree> add -A && git -C <worktree> commit -m
+     "wip: checkpoint <stage> (#<n>)"`, and the pre-final-commit collapse is `git -C <worktree>
+     reset --soft "$(git -C <worktree> merge-base <default-branch> HEAD)"` — the merge base is
+     computed per worktree, which is what makes a resumed branch collapse correctly;
+   - **the checkpoint lands in the worktree, not the main checkout**, which stays on the default
+     branch, untouched, for the whole swarm;
+   - **on a resumed branch there is nothing to create** — step b already attached it, so the
+     dispatch continues from the branch tip;
+   - **the worktree path travels in every prompt** (the verifier's included) and in every
+     verification command you quote.
+   Kickbacks re-dispatch the implementer into the same worktree and rejoin the parallel lane,
+   counting against the concurrency bound; the checks, the verifier, and your own git/gh work
+   stay serialized. Then commit/push/PR with `git -C <worktree> ...`.
 
-e. **Clean up each worktree** after its PR is open (the branch lives on in the repo):
+f. **Clean up each worktree once its issue is terminal** — its PR is open *and* its deferred CI
+   watch (plus any CI-fix attempt) has drained, or it took the blocked path and its `wip:` commit
+   exists. Removing it earlier breaks the CI-fix attempt, which re-dispatches into it. The branch
+   lives on in the repo:
 ```bash
 git worktree remove "../<repo-dirname>-wt-<number>"
 ```
-   On the blocked path, keep the worktree until the `wip:` commit exists, then remove it.
 
-f. Everything else is unchanged: same labels, same PR contract, same CI watch, same summary
-   table (add a worktree/parallel column so the human knows which mode ran).
+g. Everything else is unchanged: same labels, same PR contract, same CI-fix budget, same summary
+   table — add a worktree/parallel column so the human knows which mode ran, and note per issue
+   whether its branch was created fresh, resumed, or reset, and whether step a swept a stale
+   worktree for it.
 
 ## Notes
 
@@ -525,9 +651,9 @@ f. Everything else is unchanged: same labels, same PR contract, same CI watch, s
   comment); step 2b then decides what to do with the old branch — wip-only branches are resumed
   or reset per the classification rule in "Resilient dispatch", branches with real commits go to
   the human.
-- **Parallelism:** supported via the worktree-parallel mode above, gated on pairwise-disjoint
-  Affected areas. Sequential remains the default and the fallback whenever eligibility is
-  unclear.
+- **Parallelism:** supported via the worktree-parallel mode above and its supervisor loop, gated
+  on pairwise-disjoint Affected areas. Sequential remains the default and the fallback whenever
+  eligibility is unclear.
 - Schema changes: if the subagent created a migration or other schema change, the PR body must say
   so clearly — it has NOT been applied to any database. Applying it is a human step, per the
   project's process in CLAUDE.md.

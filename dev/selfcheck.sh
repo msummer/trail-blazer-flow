@@ -8,13 +8,13 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 19 assertions total:
+# Five groups, 20 assertions total:
 #   1. shell syntax and portability (bin/*.sh, this script)
 #   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json)
 #   3. agent instruction-file invariants (agents/*.md: frontmatter, one fenced template
 #      block, the harness-status line grammar, the #4 dedupe invariant, required headings)
 #   4. cross-file markers and skills (the planner-plan marker, skill frontmatter, README
-#      model-pin strings)
+#      model-pin strings, WIP-message vocabulary)
 #   5. bin/ script behavior (reconcile-ledger.sh against fabricated ledger/status inputs)
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
@@ -386,6 +386,27 @@ if [ -z "$bad_list" ]; then
   ok "4.3 README.md contains '<name>: <model>' for every agent"
 else
   bad "4.3 README.md missing model-pin string(s):$bad_list"
+fi
+
+# 4.4 — WIP-message vocabulary: every 'wip: …' string in the canonical skill file is one of the
+# five forms documented in its "WIP checkpoint vocabulary" section, written complete on ONE line.
+# Step 2b classifies a leftover branch by these messages, and worktree mode emits them with
+# 'git -C <worktree>' in front — a new variant, or one wrapped across lines, breaks that silently.
+bt="$(printf '\140')"
+wip_canon="$root/skills/issue-implementer/SKILL.md"
+wip_ok='^wip: (checkpoint ([a-z-]+|<stage>)|([a-z-]+|<stage>) died|context exhausted|interrupted run|blocked — .*) \(#<n(umber)?>\)$|^wip: blocked — …$'
+wip_list="$(grep -o "wip: [^${bt}\"]*" "$wip_canon")"
+bad_list=""
+while IFS= read -r s; do
+  [ -n "$s" ] || continue
+  printf '%s' "$s" | grep -qE "$wip_ok" || bad_list="$bad_list [$s]"
+done <<EOF
+$wip_list
+EOF
+if [ -z "$bad_list" ]; then
+  ok "4.4 every 'wip: …' string in issue-implementer/SKILL.md matches the documented vocabulary"
+else
+  bad "4.4 undocumented or line-wrapped wip message(s):$bad_list"
 fi
 
 # ============================================================================

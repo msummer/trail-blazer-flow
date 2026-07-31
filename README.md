@@ -196,12 +196,20 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    explanatory comment.
 
 **Worktree-parallel mode:** when 2+ approved plans have pairwise **disjoint Affected areas**
-(production + test files), the orchestrator may create one git worktree per issue and dispatch
-the implementers concurrently — each pipeline (mechanical checks → verifier → commit → PR) then
-completes per-worktree, with the orchestrator's own git/gh work staying sequential. Ignored
-files (venvs, `node_modules`) don't exist in fresh worktrees: verification runs the main
-checkout's tool binaries against the worktree, and UI-heavy issues that need per-tree installs
-fall back to sequential. Any overlap or doubt → sequential.
+(production + test files), the orchestrator may create one git worktree per issue and dispatch up
+to **4 implementers concurrently**, acting as their **supervisor**: it tracks each worktree in an
+in-context table, handles each completion as it arrives instead of waiting for the batch,
+checkpoints a dead subagent's worktree *before* re-dispatching it under the same retry ladder and
+resume cap as sequential mode, and defers the blocking CI watches until no implementer is still
+running. Only the implementer dispatches fan out — the mechanical checks, the verifier, and the
+orchestrator's own git/gh work stay sequential, one worktree at a time. Leftover state from an
+earlier run is handled rather than fatal: stale worktrees are swept (`git worktree prune`, and a
+dirty one is wip-committed before removal), and an existing `claude/<n>-*` branch is attached and
+resumed instead of failing a `git worktree add -b` — reset fresh only when its newest commit is a
+`wip: blocked — …`, exactly as sequential mode decides. Ignored files (venvs, `node_modules`)
+don't exist in fresh worktrees: verification runs the main checkout's tool binaries against the
+worktree, and UI-heavy issues that need per-tree installs fall back to sequential. Any overlap or
+doubt → sequential.
 
 ### Resilience: checkpointing, retries, and the dispatch ledger
 
@@ -581,6 +589,12 @@ For **v1.6.3 → v1.6.4**, one item: **a new permission grant**. Re-copy (or mer
 runs at step 4 to reconcile the run's dispatch ledger against the live queues. Without the
 grant an unattended cycle stalls at step 4 behind a permission prompt; `check-harness.sh` names
 it, same as any other version.
+
+For **v1.6.4 → v1.7.0**, nothing migrates: the release adds the supervisor loop and the
+stale-branch / stale-worktree handling to the `issue-implementer` skill's worktree-parallel mode
+— instruction text only. No new permission grant is needed (`Bash(git worktree:*)`, granted since
+v1.3, already covers `git worktree list`, `prune`, and `remove`), no new script, no label or
+baseline change; repos that never use worktree-parallel mode are unaffected.
 
 Optional, not required: add a **"Plan auto-approval policy"** section to `CLAUDE.md` if you
 want the planner to approve low-risk plans for you — without it, behavior stays fully manual,
