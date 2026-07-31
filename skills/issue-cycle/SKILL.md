@@ -62,9 +62,7 @@ with no ledger entry is **launched, not assumed**. This is what stops an issue f
 skipping a stage: the cycle never infers "must have been fine" from an empty cell.
 
 **Closing reconciliation (step 5):** `reconcile-ledger.sh` compares the serialized ledger
-against the live queues and prints one line per discrepancy (invocation in step 5). It
-**detects**; the judgment stays here — an issue still queued for a stage the ledger never
-recorded is an **escalated skipped stage**, never a silent drop.
+against the live queues and prints one line per discrepancy (invocation in step 5).
 
 ## Procedure
 
@@ -216,8 +214,7 @@ measures; the human asked for it.
 **No ledger row, no status line.** This pass touches no issue already in the pipeline and
 dispatches no agent, so it records nothing in the ledger and emits no status line — the ledger's
 `stage` vocabulary is closed, and a `ratchet` row would abort step 5's reconciliation outright.
-Note the issue numbers it filed: step 5 will list each as `unledgered`, which for these is
-**expected and attributable**, not an escalated skipped stage.
+Note the issue numbers it filed: step 5 will list each as `unledgered`.
 
 Report what it filed in the cycle report's "what this cycle did" half — issue links, the
 measurement command and figure, and the reminder that each carries `no-auto-approve`, so its plan
@@ -264,10 +261,9 @@ the JSON by hand, on the same criteria.
 
 **Per-issue summary table.** Before the two-halves report below, print the ledger as a table:
 issue, planned / implemented / verified / merged (outcome or "—"), retries (ladder + resume,
-summed), duration (wall-clock per issue if `date` is available, else `unknown` — never fail the
-cycle over a missing clock), final state, escalations. This is the single artifact that answers
-"what happened to every issue this run touched," including the ones that ended up escalated
-rather than progressed.
+summed), duration (wall-clock per issue if `date` is available, else `unknown`), final state,
+escalations. This is the single artifact that answers "what happened to every issue this run
+touched," including the ones that ended up escalated rather than progressed.
 
 End with a report in two halves, drawn from the status JSON and the sub-skills' summaries:
 

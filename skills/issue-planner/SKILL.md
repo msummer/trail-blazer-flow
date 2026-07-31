@@ -114,10 +114,10 @@ b. Dispatch the **`planner` subagent** (via the Task tool) with a prompt contain
    number, title, and body, relevant `.claude/LESSONS.md` entries, the dispatch attempt number
    ("Dispatch attempt: `<k>`", starting at 1), and this instruction:
    *"Produce an implementation plan for this issue following your output template. This is an
-   initial plan (no prior feedback)."* Let the subagent explore the codebase and return the
-   plan. If you (the orchestrator) hold context the issue lacks — recently merged PRs that
-   changed the files it names, corrected measurements, related pending plans — put it in the
-   prompt with a note that line numbers/claims in the issue may be stale and must be verified.
+   initial plan (no prior feedback)."* If you (the orchestrator) hold context the issue lacks —
+   recently merged PRs that changed the files it names, corrected measurements, related pending
+   plans — put it in the prompt with a note that line numbers/claims in the issue may be stale
+   and must be verified.
    If the dispatch itself fails (tool error, API 429/500/529, no parseable report) or the
    subagent's status line reports `incomplete`/`died`, retry/relaunch per the `issue-implementer`
    skill's "Resilient dispatch" section — cited here by name, not restated.
@@ -211,8 +211,7 @@ auto-approval (step 6) — sequencing overlapping work is a human call.
 For each plan just posted or revised whose open questions include **BLOCKING** items, resolve
 what you can yourself — this step is deliberately yours, not the subagent's: you are the most
 capable model in the stack, and resolving ambiguity well *before* it reaches the implementer is
-the cheapest quality lever in the workflow. (Plans whose questions are all ADVISORY need nothing
-here: approving accepts the stated defaults.)
+the cheapest quality lever in the workflow.
 
 a. **Draft proposed answers, grounded in evidence.** Verify the plan's (and the issue's)
    load-bearing claims against the code rather than taking them on faith; where a number
@@ -232,8 +231,7 @@ c. **Revise immediately (same run).** For every question you could answer, re-di
    ONE artifact — the revised plan with visible provenance — instead of an answers comment plus
    a later revision.
 
-If you could answer none of the BLOCKING questions, leave the plan as posted; the open
-questions are exactly the feedback the human needs to provide.
+If you could answer none of the BLOCKING questions, leave the plan as posted.
 
 ### 6. Auto-approval (policy-gated)
 
