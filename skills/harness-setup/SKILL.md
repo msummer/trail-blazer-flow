@@ -69,6 +69,19 @@ it without guessing?"**:
    a conservative starting policy (e.g. *"Auto-approve plans that are size S with no
    data/schema impact and no security-sensitive risks"*) for their review — it's their trust
    decision, in their file, and the `no-auto-approve` label opts individual issues back out.
+6. **Merge autonomy policy (optional)** — if a section titled exactly "Merge autonomy
+   policy" exists, the `issue-cycle` merge pass may merge PRs that meet its conditions (a
+   non-configurable hard floor still applies on top — see the plugin README). Activation is
+   a **double opt-in**: the section alone does nothing until the human also lifts the
+   `Bash(gh pr merge:*)` deny in `.claude/settings.json`. Both halves are theirs — unlike
+   the step-1 allow-list additions, never lift that deny yourself, even if asked to finish
+   the setup. Explain the semantics either way: no section means no autonomous merges, and
+   every PR merge stays manual. Report which halves are in place: a policy section with the
+   deny still standing is inert — the cycle reports `verified, merge blocked` with the exact
+   merge command instead of merging. If they want it, offer to draft a conservative starting
+   policy (e.g. *"Merge harness PRs whose plan was approved, whose verifier verdict is pass,
+   and whose CI is green; never anything touching `db/`, auth, or CI/CD"*) for their review,
+   and recommend pairing it with branch protection and required status checks.
 
 If `CLAUDE.md` is missing or thin: explore the repo (manifests, CI workflow files, test
 configs, existing docs) and **draft** the missing sections — or a full `CLAUDE.md` — and
@@ -121,7 +134,9 @@ Summarise for the user:
 
 - Doctor results (after fixes) — anything still WARN/FAIL and who owns it.
 - CLAUDE.md verdict — satisfies the contract / draft pending review / gaps named, trim
-  proposals if any — and whether an auto-approval policy exists (and what it allows).
+  proposals if any — and which autonomy policies exist: plan auto-approval (and what it
+  allows), and merge autonomy (and whether the `gh pr merge` deny has been lifted, i.e.
+  whether the double opt-in is complete).
 - Verification baseline — the exact commands and their green outcomes, and confirmation that
   `.claude/BASELINE.md` was written (and is gitignored).
 - Remaining human items — typically: branch protection, allow-list confirmation, CLAUDE.md
