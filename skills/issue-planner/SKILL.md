@@ -198,9 +198,9 @@ auto-approval (step 6) — sequencing overlapping work is a human call.
 
 For each plan just posted or revised whose open questions include **BLOCKING** items, resolve
 what you can yourself — this step is deliberately yours, not the subagent's: you are the most
-capable model in the stack, and resolving ambiguity well *before* the smaller implementer model
-sees it is the cheapest quality lever in the workflow. (Plans whose questions are all ADVISORY
-need nothing here: approving accepts the stated defaults.)
+capable model in the stack, and resolving ambiguity well *before* it reaches the implementer is
+the cheapest quality lever in the workflow. (Plans whose questions are all ADVISORY need nothing
+here: approving accepts the stated defaults.)
 
 a. **Draft proposed answers, grounded in evidence.** Verify the plan's (and the issue's)
    load-bearing claims against the code rather than taking them on faith; where a number

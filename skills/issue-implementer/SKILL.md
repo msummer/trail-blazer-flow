@@ -276,9 +276,9 @@ git checkout -b "claude/<number>-<slug>"
   Otherwise stop and warn for that issue — reusing or discarding committed work is the
   human's call.
 
-c. **Dispatch the `implementer` subagent** (Task tool). The implementer runs on a smaller model
-   than you: the prompt must contain **every decision and verified fact** so it never has to
-   exercise design judgment or re-derive codebase facts. Include:
+c. **Dispatch the `implementer` subagent** (Task tool). The dispatch starts from a fresh context
+   and sees only what you send, so the prompt must carry **every decision and verified fact** —
+   it should never have to exercise design judgment or re-derive codebase facts. Include:
    - the issue number, title, and body;
    - the **full approved plan**, including its "Verified facts" section;
    - **resolved answers to ALL open questions** — the human's answer for each BLOCKING question,
@@ -488,9 +488,9 @@ c. **Dependency caveat (critical):** ignored files don't exist in a fresh worktr
    Python project, run the MAIN checkout's venv interpreter against the worktree's tests
    (`cd <worktree>/api && <main-repo>/api/.venv/bin/python -m pytest` — on Windows the venv's
    interpreter is `.venv/Scripts/python.exe`, not `.venv/bin/python`; state the exact path in
-   the prompt so the smaller model doesn't have to know this). If a plan touches UI and
-   needs `npm install`/`npm run build` per worktree, prefer sequential mode for that issue
-   instead of duplicating installs.
+   the prompt — the subagent works only inside its worktree and cannot discover the main
+   checkout's layout). If a plan touches UI and needs `npm install`/`npm run build` per
+   worktree, prefer sequential mode for that issue instead of duplicating installs.
 
 d. **As each implementer completes, run steps 2d–2e per worktree** (mechanical checks with the
    main venv as above, then the verifier — its prompt must also carry the worktree path). Diff
