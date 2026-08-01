@@ -659,8 +659,20 @@ through to the session's permission mode (prompt on manual/default, a recorded d
 silent auto-approval under `auto`), while a deny rule *does* match inside a substitution body and
 blocks the whole composite. That's why the WIP-collapse step ("Resilience") runs as two plain
 `git` calls — a `merge-base` lookup followed by `reset --soft` on its literal SHA — rather than
-one command with the SHA substituted in. All three facts were verified by live probe against
-Claude Code 2.1.220 (#41, #39, #55).
+one command with the SHA substituted in. Composites joined by `&&` or `|` behave the opposite way
+to substitution, and identically to each other: they **are** statically split, and each
+constituent is matched on its own, so such a command is approved exactly when every constituent
+that requires approval has its own matching allow entry. One part's grant does not cover the whole
+(`Bash(git add:*)` alone does not approve `git add -A && git commit …`, and the reverse fails
+too), and a single rule written across the operator — `Bash(git add -A && git commit:*)` — matches
+nothing at all. Not every constituent needs an entry: some commands are approved without one
+(`cd`, `tr` and `head` were each confirmed), which is why the three `… | tr -d '\r'` pipelines the
+harness issues need no `tr` grant; the WIP checkpoints (`git add -A && git commit …`, in both the
+bare and `git -C` forms) are covered because both of their constituents are already granted. Every
+command the harness issues across either operator is therefore approved by the template exactly as
+it ships. As with substitution, a deny matching
+any one constituent blocks the entire composite. All of these facts were verified by live probe
+against Claude Code 2.1.220 (#41, #39, #55, #79, #80).
 
 Two honest caveats. First, the implementer's "no git" rule is enforced by prompt, not by
 permissions: the settings allow-list must permit git for the orchestrator, and permission
