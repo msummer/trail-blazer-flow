@@ -529,16 +529,17 @@ fi
 # total — the anti-regrowth control replacing the old restated-keyword checks (former 3.6, 4.10):
 # a line budget is cheaper to keep honest and catches regrowth regardless of which words come
 # back. Raising a budget here is a legitimate, reviewable one-line edit when growth is justified
-# — this assertion only says "look at this diff" (recipe: per-file cap = actual rounded up to
-# the next multiple of 5, plus a small kept-tight headroom buffer; total = sum of actuals + 25).
+# — this assertion only says "look at this diff" (recipe: per-file cap = the next multiple of 5
+# strictly above the actual, so every file keeps 1-5 lines of headroom; total = sum of actuals
+# + 25. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 410
-issue-cycle 235
-issue-planner 320
-project-kickoff 225
-test-ratchet 205
-harness-setup 180"
+budget_table="issue-implementer 405
+issue-cycle 230
+issue-planner 315
+project-kickoff 215
+test-ratchet 200
+harness-setup 175"
 bad_list=""
 total=0
 while IFS=' ' read -r skill cap; do
@@ -551,9 +552,9 @@ while IFS=' ' read -r skill cap; do
 done <<EOF
 $budget_table
 EOF
-[ "$total" -le 1551 ] || bad_list="$bad_list total $total lines > budget 1551 across all skills/*/SKILL.md;"
+[ "$total" -le 1547 ] || bad_list="$bad_list total $total lines > budget 1547 across all skills/*/SKILL.md;"
 if [ -z "$bad_list" ]; then
-  ok "4.14 every skills/*/SKILL.md is within its size budget (total $total/1551)"
+  ok "4.14 every skills/*/SKILL.md is within its size budget (total $total/1547)"
 else
   bad "4.14 size budget exceeded:$bad_list"
 fi

@@ -29,8 +29,7 @@ someone's behalf is a trust decision, and it belongs in their file, not in this 
 
 There is no second opt-in to lift: the ratchet's only mutation is `gh issue create`, which the
 harness already uses to file a plan's "Follow-ups to file". The restraint lives in the hard floor
-below instead — above all in the `no-auto-approve` label every filed issue carries, which keeps a
-human at the plan-approval gate.
+below instead.
 
 **What the policy states:**
 
@@ -111,9 +110,8 @@ gh issue list --label test-ratchet --state all --limit 50 \
   --json number,title,state,stateReason,url
 ```
 
-From this: how many are **open** (headroom against the cap of 5, or the policy's lower number),
-which gaps are already proposed (never file a duplicate), and which were **closed with
-`stateReason` `NOT_PLANNED`** — those gaps are vetoed per hard floor 8.
+From this: how many are **open**, which gaps are already proposed (never file a duplicate), and
+which were **closed with `stateReason` `NOT_PLANNED`** — those gaps are vetoed per hard floor 8.
 
 ### 3. Choose the gaps
 

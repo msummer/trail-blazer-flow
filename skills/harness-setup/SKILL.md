@@ -99,12 +99,11 @@ If `CLAUDE.md` is missing or thin: explore the repo (manifests, CI workflow file
 configs, existing docs) and **draft** the missing sections — or a full `CLAUDE.md` — and
 present the draft to the user for review. Draft lean from the start: repo purpose, the
 contract sections above, and the non-obvious — invariants, why-this-way decisions, and
-cross-cutting traps a fresh reader would violate. Skip directory tours, framework defaults,
-and formatter-enforced style; point at the source of truth instead of copying it, except the
-verification commands, which stay verbatim and copy-pasteable — they *are* the contract.
-`CLAUDE.md` is project-owned: never write or overwrite it without explicit approval of the
-draft. CI workflow files are the best source of truth for verification commands — what CI
-runs IS the gate.
+cross-cutting traps a fresh reader would violate. Point at the source of truth instead of
+copying it, except the verification commands, which stay verbatim and copy-pasteable — they
+*are* the contract. `CLAUDE.md` is project-owned: never write or overwrite it without explicit
+approval of the draft. CI workflow files are the best source of truth for verification
+commands — what CI runs IS the gate.
 
 ### 3. Verification baseline
 
