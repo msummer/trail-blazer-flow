@@ -36,8 +36,7 @@ user wants help *settling* on an approach, not a stenographer.
    walking skeleton** (project skeleton + the verification setup that makes the baseline green).
 
 It does **not** write feature code, and it does **not** establish the green verification
-baseline — there is no buildable code yet. That baseline is `harness-setup`'s job, run *after*
-the scaffold issue is implemented (see "Handoff").
+baseline — there is no buildable code yet (see "Handoff").
 
 ## Guiding principles
 
@@ -212,6 +211,4 @@ drafted (pending the user's commit), and the backlog is filed — ready for plan
 - **Nothing project-specific goes into the toolset files** (this skill, the agents, the plugin).
   Everything you learn about the project lands in `CLAUDE.md`, `docs/PROJECT-BRIEF.md`, or the
   issues — the same boundary every other skill respects.
-- **Streamline relentlessly.** Batch questions, propose defaults, suggest voice input, skip what
-  the intake answered, and defer choices that belong to a future issue. A kickoff that feels
-  like an interrogation is a failed kickoff.
+- **Streamline relentlessly.** A kickoff that feels like an interrogation is a failed kickoff.

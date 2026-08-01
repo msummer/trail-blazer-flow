@@ -6,11 +6,6 @@ Eligibility for this mode is decided in `SKILL.md`, not here — read this file 
 references (the retry ladder, the WIP checkpoint vocabulary, the resume cap, the kickback limit)
 is defined in `SKILL.md`'s "Resilient dispatch" and is unchanged by the fan-out.
 
-When the batch has 2+ ready issues whose approved plans have **pairwise disjoint "Affected
-areas"** (production files AND test files — compare carefully, including shared fixtures like a
-test `conftest`), you may implement them in parallel using git worktrees instead of sequentially.
-Any overlap, any doubt, or any plan lacking an Affected areas section → sequential.
-
 **Concurrency bound: at most 4 implementer dispatches in flight at once.** Two to four
 small/medium disjoint issues is the sweet spot; a fifth eligible issue waits for a free slot
 rather than widening the fan-out — beyond 4, queue depth beats fan-out. Only implementer
@@ -141,11 +136,7 @@ d. **Dependency caveat (critical):** ignored files don't exist in a fresh worktr
 e. **As each implementer completes, run the issue-implementer skill's steps 2d–2e for that
    worktree** (mechanical checks with the main venv as above, then the verifier — its prompt
    must also carry the worktree path), one worktree at a time. Everything in the sequential
-   pipeline applies verbatim; what changes is only where it runs. **Identical:** the retry
-   ladder and its escalation, the WIP checkpoint vocabulary and the classification rule, the
-   resume brief's five elements and its cap of 2, the max-2 kickback limit, the status-line
-   grammar, the mechanical checks as the authoritative gate, the staged-file reconciliation, and
-   the PR contract. **Worktree-specific:**
+   pipeline applies verbatim; what changes is only where it runs. **Worktree-specific:**
    - **every git command takes `-C <worktree>`** — the verifier's diff is `git -C <worktree> diff
      <default-branch>...HEAD --stat` (three-dot, matching sequential mode now that checkpoints
      make it non-empty here too), checkpoints are `git -C <worktree> add -A && git -C <worktree>
@@ -160,8 +151,6 @@ e. **As each implementer completes, run the issue-implementer skill's steps 2d�
      plugin's `templates/repo-settings.json`;
    - **the checkpoint lands in the worktree, not the main checkout**, which stays on the default
      branch, untouched, for the whole swarm;
-   - **on a resumed branch there is nothing to create** — step b already attached it, so the
-     dispatch continues from the branch tip;
    - **the worktree path travels in every prompt** (the verifier's included) and in every
      verification command you quote.
    Kickbacks re-dispatch the implementer into the same worktree and rejoin the parallel lane,

@@ -36,8 +36,7 @@ once under "Hard rules" below.
 
 - **Sequential by default.** In the shared working tree, never dispatch more than one
   `implementer` subagent at a time — they would corrupt each other's work. The ONLY exception is
-  "Worktree-parallel mode" below (full mechanics in `references/worktree-mode.md`), and only when
-  every plan in the batch has pairwise disjoint "Affected areas".
+  "Worktree-parallel mode" below (full mechanics in `references/worktree-mode.md`).
 - **Never merge in this skill** and **never push to the default branch**. One issue → one
   `claude/<n>-<slug>` branch → one PR. Merging belongs to the human — or, where CLAUDE.md defines
   a merge autonomy policy and the human has lifted the default `gh pr merge` deny, to the
@@ -258,12 +257,9 @@ c. **Dispatch the `implementer` subagent** (Task tool). It starts from a fresh c
    checkpoint implementer (#<n>)"` (skip if nothing changed) — makes the verifier's diff (step 2e)
    non-empty and correct.
 
-   **On `status: incomplete` or a hard death:** checkpoint immediately (`"wip: context exhausted
-   (#<n>)"` or `"wip: implementer died (#<n>)"`, skip if nothing changed), build the resume brief
-   (agent's own `## Resume brief`, or by reconstruction on a hard death) per "Resilient dispatch",
-   and relaunch — bounded by the resume cap (2 per issue per run), consuming neither a kickback
-   nor a ladder retry. Exceeding it routes to the blocked path (step f); record the relaunch
-   count for the summary table.
+   **On `status: incomplete` or a hard death:** checkpoint immediately, build the resume brief
+   per "Resilient dispatch", and relaunch — bounded by the resume cap, consuming neither a
+   kickback nor a ladder retry. Record the relaunch count for the summary table.
 
 d. **On `status: complete`:** independently re-run the project's verification commands (from
    CLAUDE.md) as the authoritative gate — the subagent may be mistaken. If they fail, treat it as
@@ -355,9 +351,7 @@ gh issue edit <number> --add-label pr-open
 
 f. **On `status: blocked`** (or failed mechanical checks, or a verifier fail that survived 2
    kickbacks): do NOT push or open a PR. Preserve the work for inspection on a local branch, flag
-   the issue, and reset the tree. The blocked marker must land as the branch's newest commit even
-   when a prior checkpoint already committed everything — the empty-commit invariant from "WIP
-   checkpoint vocabulary" applies here:
+   the issue, and reset the tree:
 ```bash
 git add -A
 if git diff --cached --quiet; then
