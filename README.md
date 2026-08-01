@@ -150,15 +150,11 @@ resolved decisions. Plans with unanswered BLOCKING questions shouldn't be approv
 
 **Plan auto-approval (opt-in).** If the repo's `CLAUDE.md` contains a section titled **"Plan
 auto-approval policy"**, the planner may add `plan-approved` itself for plans that satisfy the
-policy's conditions AND a non-negotiable hard floor: no unanswered BLOCKING questions, no
-BLOCKING questions resolved by the orchestrator's own proposed answers (it never approves its
-own answers), not stale, no overlap with other pending plans, no schema impact and nothing
-security-sensitive unless the policy explicitly opts those in, and no `no-auto-approve` label
-on the issue. Every auto-approval leaves an audit comment (which conditions were met, how to
-veto). No policy section ⇒ no auto-approval — the default is fully manual. The
-**`no-auto-approve` label** opts any individual issue back out of the policy. Note that an
-auto-approved plan may be implemented in the same run — for that work, PR review is the human
-gate.
+policy's conditions AND a non-negotiable hard floor (see "The CLAUDE.md contract" item 4). Every
+auto-approval leaves an audit comment (which conditions were met, how to veto). No policy section
+⇒ no auto-approval — the default is fully manual. The **`no-auto-approve` label** opts any
+individual issue back out of the policy. Note that an auto-approved plan may be implemented in
+the same run — for that work, PR review is the human gate.
 
 ### Implementation ("implement the approved issues" / "implement issue 14")
 
@@ -268,12 +264,8 @@ has a section titled exactly **"Test-suite ratchet policy"**, which must state a
 command (required — no command means no ratchet) and may add a scope, per-run/open-backlog caps
 (each may only lower the hard floor's numbers, never raise them), and a per-file target.
 
-A non-configurable hard floor applies on top: **test-only** (adds/extends tests, nothing else),
-**monotonic** (never deletes, skips, or weakens an existing test/assertion/threshold),
-**evidence-backed** (quotes the measurement command, the commit, a verbatim output excerpt),
-**capped** at 3 issues/run and 5 open `test-ratchet` issues at a time, **never the governance
-surface** (`CLAUDE.md`, `.claude/`, policy/ADR docs, CI config), and **`no-auto-approve` on
-every filed issue** — closing one as *not planned* vetoes that gap permanently.
+A non-configurable hard floor applies on top (see "The CLAUDE.md contract" item 6); closing an
+issue as *not planned* vetoes that gap permanently.
 
 Runs as `issue-cycle`'s **step 4, after the merge pass**, so the measurement reflects everything
 that landed this run; an issue it files this run can't be planned, approved, or implemented
@@ -341,14 +333,10 @@ gh issue edit 1 --add-label plan-approved   # or click the label in the GitHub U
 
 > **"Implement issue 1."**
 
-The `issue-implementer` skill branches off the default branch, dispatches the `implementer`
-subagent to build the skeleton, **independently re-runs the verification commands**, then runs
-the `verifier` subagent against the plan — all before anything is pushed or a PR exists (local
-WIP checkpoint commits may already exist on the branch by this point). It opens a PR (`Closes
-#1`) with
-the verification results. Review the PR and **merge it** on GitHub. (No cleanup step needed —
-the next skill run's pre-flight syncs and tidies automatically; run `cleanup-after-merge.sh`
-by hand if you want the tidy-up immediately.)
+The `issue-implementer` skill runs the full loop described under "Implementation" above and opens
+a PR (`Closes #1`) with the verification results. Review the PR and **merge it** on GitHub. (No
+cleanup step needed — the next skill run's pre-flight syncs and tidies automatically; run
+`cleanup-after-merge.sh` by hand if you want the tidy-up immediately.)
 
 Now the repo has buildable code and a passing verification suite for the first time.
 
@@ -586,95 +574,14 @@ check-harness.sh
 ```
 
 It names exactly what the new version needs that your repo lacks; fix what it flags and you're
-migrated. For **≤ v1.2 → v1.3** specifically, expect three items:
+migrated.
 
-1. **New label** — run `setup-labels.sh` once (idempotent); v1.3 adds `no-auto-approve`, the
-   per-issue opt-out from plan auto-approval. Until it exists, you can't opt an issue out —
-   though nothing auto-approves anyway until you add a policy (see 3).
-2. **New permission grants** — re-copy (or merge) the `permissions` block from the plugin's
-   `templates/repo-settings.json` into `.claude/settings.json`. v1.3 adds `harness-status.sh`,
-   `gh pr list`, `gh run view`, `git rev-parse`, and `git worktree`; a missing grant silently
-   stalls an unattended run behind a permission prompt, which is why the doctor checks for
-   these specifically.
-3. **Baseline file** — run the `harness-setup` skill once (or just its baseline step) to
-   persist `.claude/BASELINE.md` and its `.gitignore` entry. Until then, runs warn and proceed
-   without baseline comparisons.
-
-For **v1.4 → v1.5** nothing migrates: merge autonomy is pure opt-in, and every repo without a
-CLAUDE.md "Merge autonomy policy" section behaves exactly as before (PR merge always human).
-To opt a repo in, see the double opt-in under "The CLAUDE.md contract" item 5.
-
-For **v1.5 → v1.6**, one item: **new permission grants** for the resilience mechanism
-(checkpointing, backoff/retry, the WIP-checkpoint collapse). Re-copy (or merge) the
-`permissions` block from the plugin's `templates/repo-settings.json` into
-`.claude/settings.json` — v1.6 adds `Bash(sleep:*)` (the retry ladder's backoff wait),
-`Bash(date:*)` (duration reporting in the summary table), `Bash(git reset --soft:*)`, and
-`Bash(git merge-base:*)` (collapsing a run's WIP checkpoints into one clean commit before the
-PR). `check-harness.sh` names exactly what's missing, same as any other version. Nothing is
-required if you never notice the gap — the harness degrades gracefully (see "Safety model"): a
-missing `sleep` grant falls back to a single immediate retry, a missing `date` grant reports
-`duration: unknown`, and missing `git reset --soft`/`git merge-base` fall back to leaving WIP
-checkpoint commits in the PR instead of collapsing them.
-
-For **v1.6.1 → v1.6.2**, nothing migrates: the release adds this repo's own `CLAUDE.md` and
-`dev/selfcheck.sh` (see "Working on the harness itself"), which is instruction-text and
-tooling for developing the harness itself — it ships no agent/skill/script behavior change for
-consumer repos.
-
-For **v1.6.3 → v1.6.4**, one item: **a new permission grant**. Re-copy (or merge) the
-`permissions` block from the plugin's `templates/repo-settings.json` into
-`.claude/settings.json` — v1.6.4 adds `Bash(reconcile-ledger.sh:*)`, the script `issue-cycle`
-runs at step 5 to reconcile the run's dispatch ledger against the live queues. Without the
-grant an unattended cycle stalls at step 5 behind a permission prompt; `check-harness.sh` names
-it, same as any other version.
-
-For **v1.6.4 → v1.7.0**, nothing migrates: the release adds the supervisor loop and the
-stale-branch / stale-worktree handling to the `issue-implementer` skill's worktree-parallel mode
-— instruction text only. The `Bash(git worktree:*)` grant, in place since v1.3, covers
-`git worktree list`, `prune`, and `remove` — the main checkout's worktree management — but it
-does **not** cover the `git -C <worktree> …` commands that mode's serial per-worktree work (step
-2e) issues; see the v1.8.1 entry below for the `-C` grants that mode actually needs. No new
-script, no label or baseline change; repos that never use worktree-parallel mode are unaffected.
-
-For **v1.7.0 → v1.8.0**, one item: **a new label** — run `setup-labels.sh` once (idempotent);
-v1.8.0 adds `test-ratchet`, the provenance label on issues the test-suite ratchet files. No new
-permission grant is needed (`gh issue create` has been granted since v1.1), no new script, no
-baseline change; repos with no "Test-suite ratchet policy" section in `CLAUDE.md` are otherwise
-unaffected — the ratchet never runs.
-
-For **v1.8.0 → v1.8.1**, one item: **new permission grants and denies** for worktree-parallel
-mode. Re-copy (or merge) the `permissions` block from the plugin's
-`templates/repo-settings.json` into `.claude/settings.json` — the `git -C <path> …` commands the
-swarm issues inside each worktree do not match the bare `Bash(git add:*)`-style rules, so without
-the new entries every git command the swarm issues inside a worktree stalls behind a permission
-prompt (the main checkout's `git worktree`/`git branch`/`git log` commands are bare-form and
-unaffected). **Copy the `deny` additions too**:
-deny rules are prefix-matched the same way, so `-C`-form allows without `-C`-form denies would
-let `git -C <worktree> push --force` past a guard that stops the bare form. Nothing else
-migrates; repos that never use worktree-parallel mode are unaffected, and sequential mode is
-unchanged. `check-harness.sh` names exactly what's missing, same as any other version.
-
-For **v1.8.1 → v1.9.0**, nothing migrates — no new label, script, permission grant, or
-baseline step. This release is the 2026-07-31 hardening run, and every item in it is
-harness-internal or instruction text: the gate (`dev/selfcheck.sh`) gained its negative-test
-harness (`dev/selfcheck-tests.sh`), and both now run in CI on every pull request (see "Working on
-the harness itself"); `check-harness.sh` reads
-`.claude/settings.json` exclusively through `jq`, reports each optional policy section's
-activation state, and warns when `CLAUDE.md` outgrows the leanness guideline — all
-informational, so it may name items an older doctor passed over, and fixing what it names is the
-same migration step it always was; every follow-up a plan files now carries a justification
-sentence; the dispatch ledger's stage vocabulary is pinned across `reconcile-ledger.sh` and the
-implementer skill; the pre-flight now sweeps stale worktrees before the hygiene run in both modes
-(no new grant — the bare `git worktree` commands are covered by `Bash(git worktree:*)`, in place
-since v1.3, and the dirty-worktree wip-commit by the v1.8.1 `git -C` grants, so if you skipped the
-v1.8.0 → v1.8.1 permission copy above, do it now even if you never use worktree-parallel mode);
-and the `issue-planner` / `issue-cycle` skill files were trimmed of restated rules.
-
-Optional, not required: add a **"Plan auto-approval policy"** section to `CLAUDE.md` if you
-want the planner to approve low-risk plans for you — without it, behavior stays fully manual,
-exactly as before. Nothing else migrates: existing issues, labels, and plan comments keep
-working (plans posted by older versions lack the "Acceptance criteria" section; the verifier
-falls back to the issue body for those), and `LESSONS.md` is untouched.
+For **v1.8.1 → v1.9.0**, nothing migrates — no new label, script, permission grant, or baseline
+step. This release (the 2026-07-31 hardening run) is entirely harness-internal or instruction
+text: the gate gained a negative-test harness and both now run in CI, `check-harness.sh` reads
+`.claude/settings.json` exclusively through `jq` and reports each optional policy section's
+activation state, and the dispatch ledger's stage vocabulary is pinned across
+`reconcile-ledger.sh` and the implementer skill.
 
 ## The per-repo settings file (required)
 
@@ -715,10 +622,9 @@ whole file, which could be fooled by a rule merely mentioned in an unrelated str
 an `env` value) or by a deny-side entry that a whole-file search can't tell apart from an
 allow-side one. Every check here — the toolchain allow-list, the harness-script sentinel,
 template drift, and default-branch guard coverage — stays scoped to this file by design: they
-judge the shared, checked-in file, not effective permission. The one exception is the merge
-autonomy verdict (see "Merge autonomy policy" above), which needs *effective* state and so also
-reads `.claude/settings.local.json` and your user-level settings file, jq-only, for that single
-rule. `settings.local.json` is machine-local (may hold secrets) — never commit it.
+judge the shared, checked-in file, not effective permission. The one exception is the
+merge-autonomy verdict, which needs *effective* state across all three files (see "The CLAUDE.md
+contract" item 5). `settings.local.json` is machine-local (may hold secrets) — never commit it.
 
 ## Safety model
 
@@ -760,9 +666,9 @@ Two honest caveats. First, the implementer's "no git" rule is enforced by prompt
 permissions: the settings allow-list must permit git for the orchestrator, and permission
 grants are session-wide, so a misbehaving subagent *could* run git — the staged-file
 reconciliation and branch isolation are what bound the damage. Second, plan auto-approval and
-merge autonomy (each opt-in via CLAUDE.md; merge additionally requires the human to lift the
-`gh pr merge` deny) deliberately trade human gates for throughput on low-risk work. Their hard
-floors are not configurable and every use is audited (issue comment; cycle report). With only
+merge autonomy (each opt-in via `CLAUDE.md` — see "The CLAUDE.md contract" items 4–5)
+deliberately trade human gates for throughput on low-risk work. Their hard floors are not
+configurable and every use is audited (issue comment; cycle report). With only
 auto-approval enabled, a bad auto-approval costs a wasted PR, not a bad merge. With merge
 autonomy also enabled, the backstop is the merge pass's hard floor (standard-flow PRs only,
 green CI, protected governance surface, sequential re-verification) — and on a repo with
@@ -811,31 +717,14 @@ bash dev/selfcheck.sh
 
 It prints a `PASS`/`FAIL` line per assertion and a `== summary: N pass, M fail ==` footer — run
 it to see exactly what it checks. There is no test suite and no build step: this repo is
-Markdown instruction files, Bash scripts, and JSON manifests.
+Markdown instruction files, Bash scripts, and JSON manifests. The gate and its two negative-test
+harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tests.sh`) all run in CI on every pull request —
+see this repo's `CLAUDE.md` "Verification" section for the exact commands and jobs.
 
-The same command also runs in CI on every pull request (`.github/workflows/selfcheck.yml`), so
-the gate no longer depends on someone remembering to run it. The same three commands also run in
-a second job, `selfcheck-macos`, on `macos-latest` with `/bin` prepended to `PATH` so bare `bash`
-resolves to Apple's bash 3.2 — the `dev/*.sh` portability convention is proven in CI, not merely
-asserted. CI also runs the gate's own negative-test harness, `dev/selfcheck-tests.sh`, as a
-second step in each job: it copies the repo to a throwaway temp directory, applies one documented
-perturbation per case, and asserts the gate fails with exactly the expected assertion id(s) — run
-it by hand (`bash dev/selfcheck-tests.sh`, optionally with a case-name substring) whenever
-`dev/selfcheck.sh` changes.
-
-CI's third step, `dev/doctor-tests.sh`, is a separate fixture-based negative-test harness for the
-*consumer* doctor itself (`bin/check-harness.sh`): it builds throwaway `mktemp` + `git init`
-fixtures, runs a copy of the doctor against each with a stub `gh` and isolated
-`HOME`/`CLAUDE_CONFIG_DIR`, and pins verdicts (the settings.json block, template-diff, the
-ratchet's never-execute guarantee, merge-autonomy activation) that were previously only
-hand-verified. It is not part of `dev/selfcheck.sh` — run it by hand
-(`bash dev/doctor-tests.sh`, optionally with a case-name substring) whenever
-`bin/check-harness.sh` changes.
-
-This repo
-deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the *consumer*
-doctor, and onboarding it here would mean registering this repo's own published marketplace and
-enabling a cached copy of itself over the working tree being edited.
+This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
+*consumer* doctor. Onboarding it here would mean checking in a `.claude/settings.json` that
+registers this repo's own published marketplace (with `autoUpdate: true`) and enables a cached
+copy of itself over the working tree being edited.
 
 ## Known future improvements
 

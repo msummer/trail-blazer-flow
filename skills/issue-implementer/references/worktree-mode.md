@@ -87,22 +87,18 @@ git worktree add "../<repo-dirname>-wt-<number>" -b "claude/<number>-<slug>" <de
      (`git log <default-branch>..<branch> --format=%s`) using the classification rule from the
      issue-implementer skill's "Resilient dispatch". Same three cases as its step 2b, same
      rules, different plumbing:
-     - **every unique commit is a `wip:` commit and the newest is `wip: blocked — …`** → reset
-       fresh: `git branch -D <branch>`, then the `-b` form above. Carry the blocked attempt's
-       findings from the issue's comments into the dispatch, as in step 2b.
-     - **every unique commit is a `wip:` commit and the newest is anything else** → **resume**:
-       attach the existing branch — no `-b`, no base argument — so the worktree checks out that
-       branch at its own tip:
+     - **Reset fresh** (blocked attempt) → `git branch -D <branch>`, then the `-b` form above.
+       Carry the blocked attempt's findings from the issue's comments into the dispatch, as in
+       step 2b.
+     - **Resume** → attach the existing branch — no `-b`, no base argument — so the worktree
+       checks out that branch at its own tip:
 ```bash
 git worktree add "../<repo-dirname>-wt-<number>" "<branch>"
 ```
-       Do not reset it onto the default branch: that would discard precisely the partial work the
-       resume exists to preserve. Capture the WIP SHA (`git -C <worktree> rev-parse HEAD`), build
-       the resume brief per "Resilient dispatch", and carry the issue's prior-attempt comments
-       into the dispatch alongside it — same as step 2b.
-     - **any non-wip commit** → real prior work: skip that issue and warn (an open PR means the
-       `pr-open` label was dropped by mistake; otherwise reusing or discarding committed work is
-       the human's call). The rest of the batch proceeds without it.
+       Never reset it onto the default branch. Capture the WIP SHA (`git -C <worktree> rev-parse
+       HEAD`), build the resume brief per "Resilient dispatch", and carry the issue's
+       prior-attempt comments into the dispatch alongside it — same as step 2b.
+     - **Any non-wip commit** → skip and warn, exactly as step 2b.
    - **`git worktree add` refuses because the branch is already checked out in another
      worktree** → the issue-implementer skill's step 0 sweep missed one whose directory still
      exists. Re-read `git worktree list --porcelain`, apply that sweep's rule to that path, and

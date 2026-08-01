@@ -72,10 +72,10 @@ already done and pick up from the first incomplete step rather than re-interview
 ### 1. Intake
 
 Ask the user to share whatever they already have — a PRD, a one-pager, rough notes, a Google
-Doc / Notion link, or just a few sentences. **Tell them they can dictate it by voice** rather
-than typing. Ingest anything they provide (read the file/link) and extract: problem, users,
-features, constraints, any tech preferences. Restate back the gist in a sentence or two so they
-can correct course early. If they have nothing, say so is fine — the interview just goes deeper.
+Doc / Notion link, or just a few sentences. Ingest anything they provide (read the file/link) and
+extract: problem, users, features, constraints, any tech preferences. Restate back the gist in a
+sentence or two so they can correct course early. If they have nothing, say so is fine — the
+interview just goes deeper.
 
 ### 2. Interview (adaptive, batched)
 
@@ -85,7 +85,7 @@ this project is high-stakes or genuinely ambiguous.** Aim for a handful of batch
 dozens of turns.
 
 1. **Problem & vision** — what is being built and why; what changes for whom if it succeeds.
-   (Open prompt — invite voice. This one is worth getting in the user's own words.)
+   (Open prompt. This one is worth getting in the user's own words.)
 2. **Users & core journeys** — who uses it; the 1–3 primary flows that define the product.
 3. **Scope** — the MVP / first milestone vs. later; **explicit non-goals** (what it is *not*).
 4. **Key features** — the functional must-haves for the first milestone.

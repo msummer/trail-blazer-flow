@@ -43,15 +43,12 @@ harness's exempt comment with a one-line reason each.
 `dev/doctor-tests.sh` is a separate negative-test harness for the *consumer* doctor
 (`bin/check-harness.sh`): it builds throwaway fixture repos under `mktemp` and pins verdicts
 (the settings.json block, template-diff, the ratchet's never-execute guarantee, merge-autonomy
-activation) that would otherwise only be hand-verified. It runs in CI as the third step, but it
-is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/check-harness.sh`
-changes.
+activation, default-branch guard coverage) that would otherwise only be hand-verified. It runs
+in CI as the third step, but it is not part of `dev/selfcheck.sh` itself — run it by hand
+whenever `bin/check-harness.sh` changes.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
-*consumer* doctor. Onboarding it here would mean checking in a `.claude/settings.json` that
-registers this repo's own published marketplace (with `autoUpdate: true`) and enables a cached
-copy of itself over the working tree being edited; see the README's "Working on the harness
-itself".
+*consumer* doctor; see the README's "Working on the harness itself" for why.
 
 ## Conventions
 
