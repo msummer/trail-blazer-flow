@@ -19,7 +19,8 @@
 #      the harness-status line grammar, required template headings)
 #   4. cross-file markers and skills (the planner-plan and ratchet-issue markers, skill
 #      frontmatter, the label bijection, skill/README coverage, policy-section titles, the
-#      dev/*.sh <-> CI workflow run-step bijection, that bin/check-harness.sh reads
+#      dev/*.sh <-> CI workflow run-step bijection (plus per-job coverage), that
+#      bin/check-harness.sh reads
 #      .claude/settings.json only through jq, the ledger stage vocabulary shared by
 #      bin/reconcile-ledger.sh and the implementer skill's status-line grammar, a per-skill
 #      size budget, and that no skill/agent instruction file contains an inline
@@ -465,11 +466,16 @@ else
 fi
 
 # 4.9 — bijection: dev/*.sh basenames <-> '- run: bash dev/<name>.sh' steps in
-# .github/workflows/selfcheck.yml. Report both directions separately, like 2.4 (closes #63). The
+# .github/workflows/selfcheck.yml, PLUS a per-job coverage count: every dev/*.sh script's
+# run-step line count must equal the workflow's job count, so a script wired into only one of
+# several jobs — satisfying the set-based bijection while quietly losing coverage in the others
+# (see #58) — still fails. Report all three failure modes separately, like 2.4 (closes #63). The
 # escape hatch: a future dev/ script that legitimately isn't its own CI entry point (e.g. a
-# helper sourced or invoked BY another dev/*.sh, never directly by CI) needs a reviewable
-# amendment right here — an explicit exclusion with a comment — not a silent gap; that pressure
-# is intended, and it's why this assertion left the coverage-exemption list below.
+# helper sourced or invoked BY another dev/*.sh, never directly by CI), a job that legitimately
+# runs only a subset of scripts, or a strategy.matrix where one runs-on stands for several jobs,
+# needs a reviewable amendment right here — an explicit exclusion with a comment — not a silent
+# gap; that pressure is intended, and it's why this assertion left the coverage-exemption list
+# below.
 wf="$root/.github/workflows/selfcheck.yml"
 if [ ! -f "$wf" ]; then
   bad "4.9 .github/workflows/selfcheck.yml not found"
@@ -478,12 +484,20 @@ else
   dev_list="$( (cd "$root/dev" 2>/dev/null && ls -1 *.sh 2>/dev/null) | sort -u)"
   scripts_without_step="$(comm -13 <(_lines "$wf_steps") <(_lines "$dev_list"))"
   steps_without_script="$(comm -23 <(_lines "$wf_steps") <(_lines "$dev_list"))"
-  if [ -z "$scripts_without_step" ] && [ -z "$steps_without_script" ]; then
+  job_count="$(grep -cE '^[[:space:]]+runs-on:' "$wf")"
+  uneven=""
+  for s in $dev_list; do
+    s_esc="${s//./\\.}"
+    n="$(grep -cE "^[[:space:]]*-[[:space:]]*run:[[:space:]]*bash[[:space:]]+dev/${s_esc}[[:space:]]*\$" "$wf")"
+    [ "$n" -eq "$job_count" ] || uneven="$uneven $s($n/$job_count)"
+  done
+  if [ -z "$scripts_without_step" ] && [ -z "$steps_without_script" ] && [ -z "$uneven" ]; then
     ok "4.9 dev/*.sh <-> .github/workflows/selfcheck.yml run-step bijection holds"
   else
     msg="4.9 bijection broken:"
     [ -n "$scripts_without_step" ] && msg="$msg dev/ script(s) with no CI run step: $(printf '%s' "$scripts_without_step" | tr '\n' ' ');"
     [ -n "$steps_without_script" ] && msg="$msg CI run step(s) naming a nonexistent dev/ script: $(printf '%s' "$steps_without_script" | tr '\n' ' ');"
+    [ -n "$uneven" ] && msg="$msg dev/ script(s) not run in every job (script(run-steps/jobs)):$uneven;"
     bad "$msg"
   fi
 fi

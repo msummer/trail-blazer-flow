@@ -15,3 +15,23 @@ jobs:
       - run: bash dev/selfcheck.sh
       - run: bash dev/selfcheck-tests.sh
       - run: bash dev/doctor-tests.sh
+
+  selfcheck-macos:
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      # Apple's /bin/bash is 3.2.57 (last GPLv2 bash). Put /bin first so bare `bash` — including
+      # the nested invocations inside both test harnesses — is that 3.2 shell, not a newer bash
+      # that may sit earlier in the image's PATH.
+      - run: echo /bin >> "$GITHUB_PATH"
+      - name: pin check — fail loudly if this is not the bash 3.2 userland
+        run: |
+          command -v bash
+          bash --version | head -1
+          /bin/bash --version | head -1
+          bash --version | head -1 | grep -q 'version 3\.2' || {
+            echo "PATH bash is not 3.2 — this job would not be testing the BSD/3.2 userland"; exit 1; }
+      - run: bash dev/selfcheck.sh
+      - run: bash dev/selfcheck-tests.sh
+      - run: bash dev/doctor-tests.sh

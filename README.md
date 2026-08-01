@@ -57,7 +57,7 @@ or share).
 │   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
 │   └── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh (not run by the gate)
 ├── .github/
-│   └── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness
+│   └── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
 ```
@@ -798,12 +798,14 @@ it to see exactly what it checks. There is no test suite and no build step: this
 Markdown instruction files, Bash scripts, and JSON manifests.
 
 The same command also runs in CI on every pull request (`.github/workflows/selfcheck.yml`), so
-the gate no longer depends on someone remembering to run it. CI also runs the gate's own
-negative-test harness, `dev/selfcheck-tests.sh`, as a second step in the same job: it copies the
-repo to a throwaway temp directory, applies one documented perturbation per case, and asserts the
-gate fails with exactly the expected assertion id(s) — run it by hand
-(`bash dev/selfcheck-tests.sh`, optionally with a case-name substring) whenever `dev/selfcheck.sh`
-changes.
+the gate no longer depends on someone remembering to run it. The same three commands also run in
+a second job, `selfcheck-macos`, on `macos-latest` with `/bin` prepended to `PATH` so bare `bash`
+resolves to Apple's bash 3.2 — the `dev/*.sh` portability convention is proven in CI, not merely
+asserted. CI also runs the gate's own negative-test harness, `dev/selfcheck-tests.sh`, as a
+second step in each job: it copies the repo to a throwaway temp directory, applies one documented
+perturbation per case, and asserts the gate fails with exactly the expected assertion id(s) — run
+it by hand (`bash dev/selfcheck-tests.sh`, optionally with a case-name substring) whenever
+`dev/selfcheck.sh` changes.
 
 CI's third step, `dev/doctor-tests.sh`, is a separate fixture-based negative-test harness for the
 *consumer* doctor itself (`bin/check-harness.sh`): it builds throwaway `mktemp` + `git init`
