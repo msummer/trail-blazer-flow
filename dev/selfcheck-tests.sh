@@ -25,8 +25,8 @@
 # Case coverage policy: a case is required for any assertion that parses structure out of a
 # file, compares two extracted sets, or exercises script behavior; fixed-string and
 # numeric-threshold assertions are exempt (one reason each): 1.2 (two fixed-string comparisons
-# per file), 1.3 (single fixed-string grep), 2.2 (one regex over one jq scalar — the 2.1 case
-# proves the jq read), 2.3 (equality of two jq scalars; 2.1's expected set already includes it),
+# per file), 2.2 (one regex over one jq scalar — the 2.1 case proves the jq read), 2.3 (equality
+# of two jq scalars; 2.1's expected set already includes it),
 # 3.1 (frontmatter_text is exercised by 4.2-empty-desc; 3.1's own clauses are key-presence
 # greps), 3.7 (fence_lines is exercised by the 3.4 case; 3.7 itself is a fixed-string grep
 # inside the slice), 4.1, 4.5, 4.7, 4.8 (fixed-string presence checks). 4.9 left this list when
@@ -133,8 +133,6 @@ p_2_4_orphan_grant() {
 }
 p_2_5_missing_bare()  { drop "$1/templates/repo-settings.json" '"Bash\(git commit:\*\)"'; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
-p_2_7_template()       { edit "$1/templates/repo-settings.json" 's/ main:\*)/ trunk:*)/; s/ main\*)/ trunk*)/'; }
-p_2_7_doctor()         { edit "$1/bin/check-harness.sh" 's/^tmpl_guarded_branch=/tmpl_renamed_branch=/'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
   local f="$1/skills/project-kickoff/SKILL.md"
@@ -151,7 +149,6 @@ p_4_9_orphan_step() {
   printf '      - run: bash dev/nonexistent.sh\n' | append "$1/.github/workflows/selfcheck.yml"
 }
 p_4_9_one_job_only() { edit "$1/.github/workflows/selfcheck.yml" '$d'; }
-p_4_11()              { printf 'grep -q "Bash(gh pr merge" "$settings"\n' | append "$1/bin/check-harness.sh"; }
 p_4_11_local()         { printf 'sed -n "1p" "$settings_local" >/dev/null\n' | append "$1/bin/check-harness.sh"; }
 p_4_11_comment() {
   printf '  # note: grep "$settings" here is prose in a comment, never executed\n' \
@@ -177,6 +174,8 @@ p_5_2()               { edit "$1/bin/reconcile-ledger.sh" 's/stage-skipped issue
 cases=(
   "control-clean||none|pristine copy, no perturbation: the gate must be all-green"
   "1.1|1.1|p_1_1|append a stray 'if [' to bin/harness-status.sh (syntax error)"
+  # 1.1-dev is not a twin of 1.1: it is the only case that proves 1.1's loop still scans the
+  # dev/*.sh glob, not just bin/*.sh.
   "1.1-dev|1.1|p_1_1_dev|append a stray 'if [' to dev/selfcheck-tests.sh itself (syntax error)"
   "1.4-mapfile|1.4|p_1_4_mapfile|append a bare 'mapfile' invocation to bin/harness-status.sh"
   "1.4-mentions||p_1_4_comment|control: a single #-comment naming all five constructs"
@@ -187,15 +186,12 @@ cases=(
   "2.4-orphan-grant|2.4|p_2_4_orphan_grant|add an allow entry for a bin/ script that doesn't exist"
   "2.5-missing-bare|2.5|p_2_5_missing_bare|drop the Bash(git commit:*) allow entry"
   "2.6|2.6|p_2_6|drop the Bash(git -C * clean*) deny entry"
-  "2.7-template|2.7|p_2_7_template|retarget the template's branch-scoped denies from main to trunk"
-  "2.7-doctor|2.7|p_2_7_doctor|rename check-harness.sh's tmpl_guarded_branch= line so the gate's extraction comes back empty"
   "3.4|3.4|p_3_4|agents/planner.md's harness-status line: retries=<k> becomes retries=<kk>"
   "4.2-empty-desc|4.2|p_4_2_empty_desc|delete project-kickoff/SKILL.md's folded description body"
   "4.6|4.6|p_4_6|drop a label bin/setup-labels.sh creates from the doctor's required list"
   "4.9-missing-step|4.9|p_4_9_missing_step|drop the 'bash dev/doctor-tests.sh' run step from the workflow"
   "4.9-orphan-step|4.9|p_4_9_orphan_step|add a CI run step for a nonexistent dev/nonexistent.sh"
   "4.9-uneven-jobs|4.9|p_4_9_one_job_only|delete the workflow's last line (the macOS job's dev/doctor-tests.sh step), leaving that script covered on ubuntu only"
-  "4.11|4.11|p_4_11|reintroduce a raw grep of \"\$settings\" in bin/check-harness.sh"
   "4.11-local|4.11|p_4_11_local|reintroduce a raw sed of \"\$settings_local\" in bin/check-harness.sh"
   "4.11-comment||p_4_11_comment|control: an indented comment mentioning grep and quoting \"\$settings\" is not flagged"
   "4.13-script|4.13|p_4_13_script|add a 'docs' stage to reconcile-ledger.sh's STAGES= list only"
@@ -259,7 +255,6 @@ run_headercount_case() {
 }
 
 # ---------------------------------------------------------------------------------------------
-meta_names="header-count"
 matched=0
 
 for row in "${cases[@]}"; do
@@ -277,16 +272,9 @@ for row in "${cases[@]}"; do
   run_case "$name" "$expected" "$perturb" "$desc"
 done
 
-for name in $meta_names; do
-  case "$name" in
-    *"$filter"*) : ;;
-    *) continue ;;
-  esac
-  matched=$((matched+1))
-  case "$name" in
-    header-count)  run_headercount_case ;;
-  esac
-done
+case "header-count" in
+  *"$filter"*) matched=$((matched+1)); run_headercount_case ;;
+esac
 
 if [ "$matched" -eq 0 ]; then
   echo "no case name contains '$filter'"

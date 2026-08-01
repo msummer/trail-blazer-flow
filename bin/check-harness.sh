@@ -187,9 +187,7 @@ fi
 # unconditionally: the script runs under set -u. Both are scoped to THIS file only — the
 # toolchain allow-list, harness-script sentinel, template-drift, and #54 guard-coverage checks
 # below all judge .claude/settings.json by design (it is the shared, checked-in file). The
-# merge-autonomy verdict further down needs *effective* state across .claude/settings.json,
-# .claude/settings.local.json, and the user-level settings file instead, so it runs its own
-# three-file scan and does not read allow_raw/deny_raw.
+# merge-autonomy verdict further down runs its own three-file scan instead (see below).
 settings="$claude_dir/settings.json"
 allow_raw=""
 deny_raw=""
@@ -276,10 +274,8 @@ EOF
     # for that path.
     #
     # tmpl_guarded_branch must stay a bare literal, free of regex metacharacters (it is
-    # interpolated into a sed script below), and this declaration must stay unindented and
-    # otherwise unadorned — dev/selfcheck.sh's assertion 2.7 extracts it with an anchored
-    # 's/^tmpl_guarded_branch="([^"]*)"$/\1/p'.
-tmpl_guarded_branch="main"
+    # interpolated into a sed script below).
+    tmpl_guarded_branch="main"
     if [ -n "$default_branch" ]; then
       tmpl_branch_ops="$(printf '%s\n' "$tmpl_deny" | sed -n "s/^Bash(git \(.*\) $tmpl_guarded_branch:\*)\$/\1/p" | sort -u)"
       # deny_guards PREFIX — does deny_raw contain an entry that starts with PREFIX and is
@@ -307,12 +303,7 @@ EOF
 fi
 
 # --- settings-file candidates for the merge-autonomy verdict (#66) ---------------------------
-# Claude Code resolves *effective* permission state by merging .claude/settings.json,
-# .claude/settings.local.json (machine-local, gitignored — never committed), and the user-level
-# settings file below; a deny in ANY of them blocks the merge, regardless of allows elsewhere.
-# Every settings-file path variable in this script is named settings* (never a bare $config or
-# similar) so dev/selfcheck.sh's assertion 4.11 catches a raw-text grep/sed/awk read of any of
-# them, not just the project file.
+# The three files whose union decides effective merge permission — see the header.
 settings_local="$claude_dir/settings.local.json"
 settings_user="${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/settings.json"
 if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
@@ -361,22 +352,13 @@ merge_allow_src="${merge_allow_src%, }"
 # permission-file edit, where it has one (the ratchet activates by naming a measurement command
 # instead; plan auto-approval has no companion edit at all) — never whether the policy prose
 # itself is any good (that quality judgment stays with the harness-setup skill), and never
-# auto-fixes anything: every WARN below
-# names the human's edit. The merge-autonomy verdict below is effective-state accurate: it reads
-# .claude/settings.json, .claude/settings.local.json, and the user-level settings file (see the
-# scan above), and a deny in ANY of them wins over an allow anywhere else — union semantics, not
-# just the checked-in file. The user-level file is queried for exactly one thing, the presence of
-# a Bash(gh pr merge...) rule — nothing else from it is ever printed, diffed, or counted. Every
-# OTHER check in this script (toolchain allow-list, harness-script sentinel, template drift, #54
-# guard coverage) stays .claude/settings.json-only by design: those checks judge the shared,
-# checked-in file, not effective permission. Enterprise/managed settings are not read by this
-# script at all.
+# auto-fixes anything: every WARN below names the human's edit. Enterprise/managed settings are
+# not read by this script at all.
 if [ ! -f "$root/CLAUDE.md" ]; then
   wrn "policy activation checks skipped (no CLAUDE.md)"
 else
   # --- merge autonomy (#28, #66) --- exactly one 'merge autonomy: ' line; states mutually
-  # exclusive. Deny wins across files: a deny in ANY of the three files scanned above blocks the
-  # merge, regardless of allows elsewhere.
+  # exclusive.
   has_merge_policy=false
   has_policy_section "Merge autonomy policy" && has_merge_policy=true
 

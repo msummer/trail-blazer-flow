@@ -80,7 +80,7 @@ approved, skip this pass.
 
 ### 3. Merge pass (only under a repo merge autonomy policy)
 
-Skip this pass entirely — **silently, exactly as v1.5.0** — when there is no "Merge autonomy
+Skip this pass entirely — **silently** — when there is no "Merge autonomy
 policy" section at all; that silence is the only silent case, everything past activation is
 loud. Activation requires **both**: (1) `CLAUDE.md` has a section titled exactly **"Merge
 autonomy policy"** — no section means merging stays fully manual, exactly as before, that trust

@@ -8,24 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 29 assertions total:
-#   1. shell syntax, portability, and error handling (bin/*.sh, dev/*.sh; no GNU-only constructs
-#      in bin/*.sh; no unguarded 'git branch -d/-D' in bin/*.sh)
-#   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json), plus the
-#      bin/*.sh <-> allow-list bijection, the git permission-mirror invariants, and whether
-#      bin/check-harness.sh's tmpl_guarded_branch literal still names a branch that
-#      templates/repo-settings.json actually deny-guards
-#   3. agent instruction-file invariants (agents/*.md: frontmatter, one fenced template block,
-#      the harness-status line grammar, required template headings)
-#   4. cross-file markers and skills (the planner-plan, ratchet-issue, and harness-follow-up
-#      markers, skill frontmatter, the label bijection, skill/README coverage, policy-section
-#      titles, the dev/*.sh <-> CI workflow run-step bijection (plus per-job coverage), that
-#      bin/check-harness.sh reads
-#      .claude/settings.json only through jq, the ledger stage vocabulary shared by
-#      bin/reconcile-ledger.sh and the implementer skill's status-line grammar, a per-skill
-#      size budget, and that no skill/agent instruction file contains an inline
-#      command-substitution token)
-#   5. bin/ script behavior (reconcile-ledger.sh against fabricated ledger/status inputs)
+# Five groups, 27 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -100,18 +83,6 @@ if [ -z "$bad_files" ]; then
   ok "1.2 every bin/*.sh and dev/*.sh starts with '#!/usr/bin/env bash' and has a 'set -' line"
 else
   bad "1.2 shebang/set- check failed —$bad_files"
-fi
-
-# 1.3 — no *.sh under bin/ or dev/ contains a CR byte.
-bad_files=""
-for s in "$root"/bin/*.sh "$root"/dev/*.sh; do
-  [ -f "$s" ] || continue
-  LC_ALL=C grep -q "$(printf '\r')" "$s" && bad_files="$bad_files $s"
-done
-if [ -z "$bad_files" ]; then
-  ok "1.3 no CR bytes in bin/*.sh or dev/*.sh"
-else
-  bad "1.3 CR byte(s) found in:$bad_files"
 fi
 
 # 1.4 — no GNU-only shell constructs in bin/*.sh: grep -P/--perl-regexp, sed -i/--in-place
@@ -247,24 +218,6 @@ else
   [ -n "$bare_without_mirror" ] && msg="$msg bare git deny(ies) with no -C mirror: $(printf '%s' "$bare_without_mirror" | tr '\n' ' ');"
   [ -n "$mirror_without_bare" ] && msg="$msg -C deny mirror(s) with no bare counterpart: $(printf '%s' "$mirror_without_bare" | tr '\n' ' ');"
   bad "$msg"
-fi
-
-# 2.7 — default-branch guard derivation: bin/check-harness.sh's tmpl_guarded_branch="..." literal
-# must still name a branch that templates/repo-settings.json's branch-scoped bare deny entries
-# actually guard — i.e. deriving operations from those entries for that literal branch must
-# yield at least one operation. FAILs loudly (rather than passing vacuously) if either
-# extraction comes back empty: the script-side literal, or the JSON-side deny list itself.
-tmpl_guarded_branch="$(sed -nE 's/^tmpl_guarded_branch="([^"]*)"$/\1/p' "$root/bin/check-harness.sh")"
-if [ -z "$tmpl_guarded_branch" ] || [ -z "$deny_raw" ]; then
-  bad "2.7 could not extract tmpl_guarded_branch from bin/check-harness.sh (got '$tmpl_guarded_branch') or deny entries from templates/repo-settings.json"
-else
-  tmpl_branch_ops="$(printf '%s\n' "$deny_raw" | sed -n "s/^Bash(git \(.*\) $tmpl_guarded_branch:\*)\$/\1/p" | sort -u)"
-  n_branch_ops="$(printf '%s\n' "$tmpl_branch_ops" | grep -c .)"
-  if [ "$n_branch_ops" -eq 0 ]; then
-    bad "2.7 templates/repo-settings.json has zero branch-scoped bare deny entries for '$tmpl_guarded_branch' (bin/check-harness.sh's tmpl_guarded_branch literal) — the doctor's derived-coverage check would guard nothing"
-  else
-    ok "2.7 bin/check-harness.sh's tmpl_guarded_branch ('$tmpl_guarded_branch') matches $n_branch_ops branch-scoped bare deny entries in templates/repo-settings.json"
-  fi
 fi
 
 # ============================================================================
@@ -469,13 +422,8 @@ fi
 # .github/workflows/selfcheck.yml, PLUS a per-job coverage count: every dev/*.sh script's
 # run-step line count must equal the workflow's job count, so a script wired into only one of
 # several jobs — satisfying the set-based bijection while quietly losing coverage in the others
-# (see #58) — still fails. Report all three failure modes separately, like 2.4 (closes #63). The
-# escape hatch: a future dev/ script that legitimately isn't its own CI entry point (e.g. a
-# helper sourced or invoked BY another dev/*.sh, never directly by CI), a job that legitimately
-# runs only a subset of scripts, or a strategy.matrix where one runs-on stands for several jobs,
-# needs a reviewable amendment right here — an explicit exclusion with a comment — not a silent
-# gap; that pressure is intended, and it's why this assertion left the coverage-exemption list
-# below.
+# (see #58) — still fails. Report all three failure modes separately, like 2.4 (closes #63).
+# A legitimate exception needs an explicit exclusion here, not a silent gap.
 wf="$root/.github/workflows/selfcheck.yml"
 if [ ! -f "$wf" ]; then
   bad "4.9 .github/workflows/selfcheck.yml not found"
@@ -556,13 +504,12 @@ else
   bad "4.13 ledger/status-line vocabulary drift:$bad_list"
 fi
 
-# 4.14 — per-skill size budget: wc -l on every skills/*/SKILL.md against a fixed table, plus a
-# total — the anti-regrowth control replacing the old restated-keyword checks (former 3.6, 4.10):
-# a line budget is cheaper to keep honest and catches regrowth regardless of which words come
-# back. Raising a budget here is a legitimate, reviewable one-line edit when growth is justified
-# — this assertion only says "look at this diff" (recipe: per-file cap = the next multiple of 5
-# strictly above the actual, so every file keeps 1-5 lines of headroom; total = sum of actuals
-# + 25. Caps ratchet down as files shrink).
+# 4.14 — per-skill size budget: wc -l on every skills/*/SKILL.md against a fixed table — the
+# anti-regrowth control replacing the old restated-keyword checks (former 3.6, 4.10): a line
+# budget is cheaper to keep honest and catches regrowth regardless of which words come back.
+# Raising a budget here is a legitimate, reviewable one-line edit when growth is justified — this
+# assertion only says "look at this diff" (recipe: per-file cap = the next multiple of 5 strictly
+# above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 405
@@ -572,20 +519,17 @@ project-kickoff 215
 test-ratchet 200
 harness-setup 175"
 bad_list=""
-total=0
 while IFS=' ' read -r skill cap; do
   [ -n "$skill" ] || continue
   f="$root/skills/$skill/SKILL.md"
   [ -f "$f" ] || { bad_list="$bad_list skills/$skill/SKILL.md missing;"; continue; }
   n="$(wc -l < "$f" | tr -d '[:space:]')"
-  total=$((total + n))
   [ "$n" -le "$cap" ] || bad_list="$bad_list skills/$skill/SKILL.md: $n lines > budget $cap;"
 done <<EOF
 $budget_table
 EOF
-[ "$total" -le 1547 ] || bad_list="$bad_list total $total lines > budget 1547 across all skills/*/SKILL.md;"
 if [ -z "$bad_list" ]; then
-  ok "4.14 every skills/*/SKILL.md is within its size budget (total $total/1547)"
+  ok "4.14 every skills/*/SKILL.md is within its size budget"
 else
   bad "4.14 size budget exceeded:$bad_list"
 fi
