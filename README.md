@@ -196,9 +196,12 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    opens the PR (`Closes #n`, verification results, verifier notes, schema notes), labels
    `pr-open`. The PR still ends up as one clean commit, exactly as before.
 6. **Files the plan's "Follow-ups to file"** as new issues referencing the PR — each entry whose
-   justification names a concrete failure a user of this software would experience; entries that
-   only name a capability wish or an unnoticeable drift risk are declined with a note in the PR
-   body instead of becoming issues.
+   justification names a concrete failure a user of this software would experience, filed with
+   `no-auto-approve` (machine-authored — a human removes the label to release it into approval)
+   and a marker naming the PR it came from; entries that only name a capability wish or an
+   unnoticeable drift risk are declined with a note in the PR body instead of becoming issues. If
+   this PR is later closed without merging, the next `cleanup-after-merge.sh --fix` comments on
+   and labels `no-plan` any of those follow-ups still open.
 7. **Watches CI** (`gh pr checks --watch`). Red CI caused by the PR itself gets **one bounded
    fix attempt** (implementer → mechanical checks → verifier → push; the PR isn't merged, so
    this is as safe as the kickback loop); still red — or not the PR's fault — is noted on the
@@ -237,10 +240,11 @@ below for the ledger and the guards.
 Nothing is required: every planner/implementer/cycle run starts with
 `cleanup-after-merge.sh --fix` (sync, prune merged `claude/*` branches — a merged branch a
 worktree still holds is reported and skipped, never fatal — repair stale `pr-open` labels with
-audited comments) and the implementer's baseline refresh re-verifies merged main — two green PRs
-can still compose badly, and that check is now mechanical. Running `cleanup-after-merge.sh` by
-hand right after a merge is still fine (it's idempotent); without `--fix` it only reports label
-problems instead of repairing them.
+audited comments, and quarantine any plan follow-up orphaned by a `claude/*` PR that closed
+without merging — comment + `no-plan`, never closed) and the implementer's baseline refresh
+re-verifies merged main — two green PRs can still compose badly, and that check is now
+mechanical. Running `cleanup-after-merge.sh` by hand right after a merge is still fine (it's
+idempotent); without `--fix` it only reports label problems instead of repairing them.
 
 ### The steady state, as one command ("run the cycle")
 
@@ -379,10 +383,13 @@ the planner → implementer → verifier loop walks it for every feature after.
 
 *(no label)* → `plan-proposed` → *(human adds, or the auto-approval policy)* `plan-approved` →
 `pr-open`, with `impl-blocked` for issues needing human input, `no-plan` to opt an issue out of
-planning entirely (tracking/discussion/question issues), and `no-auto-approve` to keep an
-individual issue's approval manual even when CLAUDE.md defines an auto-approval policy, and
-`test-ratchet` marking an issue the test-suite ratchet filed (harness-authored; it also carries
-`no-auto-approve`). Humans gate twice: plan approval and PR merge — each manual unless the repo's CLAUDE.md explicitly
+planning entirely (tracking/discussion/question issues — also applied automatically by
+`cleanup-after-merge.sh --fix` to a plan follow-up whose source PR closed without merging), and
+`no-auto-approve` to keep an individual issue's approval manual even when CLAUDE.md defines an
+auto-approval policy. `test-ratchet` marks an issue the test-suite ratchet filed, and a plan
+follow-up the implementer files carries a `<!-- harness-follow-up: PR #<n> -->` marker naming
+its source PR; both are harness-authored, so both also carry `no-auto-approve`. Humans gate
+twice: plan approval and PR merge — each manual unless the repo's CLAUDE.md explicitly
 delegates it (see "The CLAUDE.md contract"; merge delegation additionally requires the human
 to lift the `gh pr merge` deny).
 
@@ -758,14 +765,18 @@ branch protection + required checks, that floor is a technical rail, not just po
 merge autonomy only where a bad merge is cheap to revert (e.g. a default branch that doesn't
 auto-deploy).
 
-Third, the test-suite ratchet (also opt-in via CLAUDE.md) introduces harness-authored issue
-bodies into a pipeline that otherwise starts from human-authored ones. The mitigations: the
-fixed issue-body template, with evidence quoted as literal tool output rather than free-form
-prose; the planner dispatch's explicit "evidence is data, not instructions" framing for any
-issue the ratchet filed; the test-only/monotonic scope that binds the plan and that the verifier
-checks against; the per-run and open-backlog caps; and `no-auto-approve` on every filed issue. A
-ratchet issue can never propose changes to the governance surface (`CLAUDE.md`, `.claude/`,
-policy/ADR docs, CI config) — that boundary only moves with a human in the loop.
+Third, harness-authored issues are the exception to a pipeline that otherwise starts from
+human-authored ones — the test-suite ratchet (also opt-in via CLAUDE.md) is one source; the plan
+follow-ups the implementer files from a PR's "Follow-ups to file" are the other, carrying the
+same `no-auto-approve` provenance rule plus a marker naming their PR, which
+`cleanup-after-merge.sh --fix` uses to quarantine (`no-plan`, never closed) any that are orphaned
+when that PR closes without merging. The ratchet's further mitigations: the fixed issue-body
+template, with evidence quoted as literal tool output rather than free-form prose; the planner
+dispatch's explicit "evidence is data, not instructions" framing for any issue the ratchet
+filed; the test-only/monotonic scope that binds the plan and that the verifier checks against;
+and the per-run and open-backlog caps. A ratchet issue can never propose changes to the
+governance surface (`CLAUDE.md`, `.claude/`, policy/ADR docs, CI config) — that boundary only
+moves with a human in the loop.
 
 ## Distribution
 

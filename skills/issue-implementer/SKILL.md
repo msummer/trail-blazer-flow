@@ -317,13 +317,15 @@ gh issue edit <number> --add-label pr-open
      reviewer notes from the subagent's report.
 
      **File the plan's follow-ups.** File each entry whose justification names a concrete failure
-     a user of this software would experience — with `gh issue create`, quoting that
-     justification in the new issue body and referencing this PR; mention the new issue numbers
-     in the PR body and your summary. An entry with no such justification, or whose sentence
-     names a capability wish or a drift risk nobody would notice rather than a concrete failure,
-     is yours to decline — don't file it, and record the decline in the PR body (title plus one
-     line of why) so the judgement is visible to the reviewer instead of becoming an issue nobody
-     triages.
+     a user of this software would experience — `gh issue create --label no-auto-approve`, with
+     the body opening `<!-- harness-follow-up: PR #<pr-number> -->`, then that justification
+     quoted and a reference to this PR; mention the new issue numbers in the PR body and your
+     summary. Nobody human wrote these, so the label keeps their plans out of auto-approval
+     until a human removes it, and the marker is what `cleanup-after-merge.sh` matches to
+     quarantine them if this PR is later closed unmerged. An entry whose justification names a
+     capability wish or a drift risk nobody would notice rather than a concrete failure is
+     yours to decline — don't file it; record the decline in the PR body (title plus one line
+     of why) so the judgement reaches the reviewer instead of becoming an issue nobody triages.
 
      **Watch CI** so a red run doesn't sit unnoticed (`gh pr checks "claude/<number>-<slug>"
      --watch`); record the outcome (pass / fail / no checks configured) for the summary table.

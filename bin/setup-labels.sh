@@ -9,7 +9,9 @@
 #   plan-approved   -> you approved the plan; ready for the implementer
 #   pr-open         -> a PR has been opened for the issue; awaiting your review/merge
 #   impl-blocked    -> implementation hit a blocker; needs your input (remove to retry)
-#   no-plan         -> opt-out: the planner ignores this issue entirely (tracking/discussion)
+#   no-plan         -> opt-out: the planner ignores this issue entirely (tracking/discussion);
+#                      also applied automatically by cleanup-after-merge.sh --fix to a plan
+#                      follow-up orphaned when its source PR was closed without merging
 #   no-auto-approve -> opt-out: this issue's plans are never auto-approved, even if CLAUDE.md
 #                      defines an auto-approval policy; approval must be manual
 #   test-ratchet    -> provenance: filed by the test-ratchet skill under the repo's CLAUDE.md

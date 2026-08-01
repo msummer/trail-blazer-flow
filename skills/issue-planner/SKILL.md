@@ -23,8 +23,8 @@ the orchestrator: you handle all GitHub I/O, and you delegate the actual plan-wr
 | Needs initial plan | *(no plan-* label)* | New issue, never planned | — |
 | Awaiting review | `plan-proposed` | Plan posted; waiting on human | this skill |
 | Approved | `plan-approved` | Ready for the implementer | human, or this skill via the auto-approval policy (step 6) |
-| Opted out | `no-plan` | Planner ignores this issue entirely (tracking/discussion/question) | human |
-| Manual approval only | `no-auto-approve` | This issue's plans are never auto-approved, even under a CLAUDE.md policy | human |
+| Opted out | `no-plan` | Planner ignores this issue entirely (tracking/discussion/question) | human, or cleanup-after-merge.sh --fix (orphaned follow-ups) |
+| Manual approval only | `no-auto-approve` | This issue's plans are never auto-approved, even under a CLAUDE.md policy | human; the implementer on every follow-up it files; the test-ratchet skill |
 | Harness-authored | `test-ratchet` | Filed by the `test-ratchet` skill; the body is machine-authored evidence | the `test-ratchet` skill |
 
 **Requesting changes is comment-driven, not label-driven.** To ask for a revision, the human
