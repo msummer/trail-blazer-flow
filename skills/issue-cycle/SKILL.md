@@ -97,7 +97,8 @@ on top and is not configurable**:
 - **Only PRs from the standard flow** — harness branches whose plan was approved (by the human
   or the auto-approval policy) and whose PR body carries a verifier pass — or Dependabot PRs of
   the update classes the policy names. Never a human's PR.
-- **CI green on the head commit**, verified fresh (`gh pr checks`), not remembered.
+- **CI green on the head commit**, verified fresh (`gh pr checks`), not remembered; **"no checks
+  configured" is not green** unless the policy section explicitly opts a no-CI repo in.
 - **Never the governance surface**: any PR touching `CLAUDE.md`, `.claude/`, the repo's
   policy/ADR documents, or CI configuration waits for the human regardless of what the policy
   says — the autonomy boundary only moves with a human in the loop.

@@ -392,10 +392,21 @@ else
     merge_allowed=false
     [ -n "$merge_allow_src" ] && merge_allowed=true
 
+    # The merge pass's hard floor treats a "no checks configured" result from `gh pr checks` as
+    # NOT green (see skills/issue-cycle/SKILL.md). No workflow file is a proxy for that, not proof
+    # of it (an external CI app can still report checks) — so this is an informational note on the
+    # active PASS, never a WARN or a gate on its own.
+    has_ci_workflow=false
+    for wf in "$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml; do
+      [ -f "$wf" ] && { has_ci_workflow=true; break; }
+    done
+    merge_ci_note=""
+    $has_ci_workflow || merge_ci_note=" — but no .github/workflows file exists, so gh pr checks likely reports 'no checks configured', which the merge pass's hard floor treats as NOT green: no PR qualifies unless your 'Merge autonomy policy' section explicitly opts a no-CI repo in"
+
     if $has_merge_policy && $merge_denied; then
       wrn "merge autonomy: half-activated — 'Merge autonomy policy' section present but 'Bash(gh pr merge:*)' is still denied in $merge_deny_src — a deny wins over any allow, in any settings file; to activate, remove \"Bash(gh pr merge:*)\" from permissions.deny AND add it to permissions.allow in .claude/settings.json (both edits are yours, never an agent's)"
     elif $has_merge_policy && ! $merge_denied && $merge_allowed; then
-      ok "merge autonomy: active ('Merge autonomy policy' section present, no deny found in $read_list, allow present in $merge_allow_src)"
+      ok "merge autonomy: active ('Merge autonomy policy' section present, no deny found in $read_list, allow present in $merge_allow_src)$merge_ci_note"
     elif $has_merge_policy && ! $merge_denied && ! $merge_allowed; then
       wrn "merge autonomy: deny on 'Bash(gh pr merge:*)' lifted (no deny found in $read_list) but no matching allow entry — unattended cycles will stall on the permission prompt; add the allow entry to .claude/settings.json, or to .claude/settings.local.json to opt in on this machine only"
     elif ! $has_merge_policy && ! $merge_denied; then

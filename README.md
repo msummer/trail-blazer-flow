@@ -439,14 +439,19 @@ subagents need:
    CLAUDE.md, `.claude/`, policy/ADR docs, CI config — nothing flagged for human decision,
    one merge at a time with re-verification between, every merge audited in the cycle
    report). **No section means no autonomous merges** — behavior is exactly the
-   pre-1.5 default. Recommended pairing: branch protection with required status checks, so
-   the policy has a technical rail under it, not just prompt adherence. `check-harness.sh`
-   judges activation from *effective* merge-permission state — across `.claude/settings.json`,
-   `.claude/settings.local.json`, and your user-level settings file — and reports off, active,
-   or (the trap it exists to catch) half-activated: a "Merge autonomy policy" section present
-   while `Bash(gh pr merge:*)` is still denied in one of those files, which the doctor WARNs on
-   by naming the file, because it leaves the cycle reporting `verified, merge blocked` on every
-   run.
+   pre-1.5 default. **"No checks configured" is not green.** A repo with no CI wired up gets a
+   "no checks configured" result from `gh pr checks`, and the hard floor above treats that the
+   same as red: no PR qualifies for the merge pass unless your "Merge autonomy policy" section
+   explicitly opts a no-CI repo in. Absent that opt-in, the PR simply waits, with the reason
+   recorded in the cycle report. Recommended pairing: branch protection with required status
+   checks, so the policy has a technical rail under it, not just prompt adherence.
+   `check-harness.sh` judges activation from *effective* merge-permission state — across
+   `.claude/settings.json`, `.claude/settings.local.json`, and your user-level settings file —
+   and reports off, active (with a note when no `.github/workflows` file is found, naming the
+   same no-checks-configured precondition), or (the trap it exists to catch) half-activated: a
+   "Merge autonomy policy" section present while `Bash(gh pr merge:*)` is still denied in one of
+   those files, which the doctor WARNs on by naming the file, because it leaves the cycle
+   reporting `verified, merge blocked` on every run.
 
 6. **Test-suite ratchet policy** (optional) — a section titled exactly "Test-suite ratchet
    policy" stating the measurement command the `test-ratchet` skill (standalone, and as the

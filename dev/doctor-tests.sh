@@ -4,8 +4,8 @@
 # (bin/check-harness.sh), not this repo's own gate (that's dev/selfcheck.sh +
 # dev/selfcheck-tests.sh). Builds throwaway git repos under mktemp, runs a COPY of the real
 # doctor against each, and pins verdicts that were previously only hand-verified: the four-way
-# settings.json block, the template-diff scenarios, the ratchet's never-execute guarantee, and
-# entry_has's allow/deny distinction.
+# settings.json block, the template-diff scenarios, the ratchet's never-execute guarantee,
+# entry_has's allow/deny distinction, and the active verdict's no-CI note.
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -174,7 +174,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 11 cases. Every fixture also emits the LESSONS.md auto-seed line and a no-baseline WARN —
+# The 12 cases. Every fixture also emits the LESSONS.md auto-seed line and a no-baseline WARN —
 # expected, deliberately unasserted below.
 
 case_settings_missing() {
@@ -254,6 +254,17 @@ case_merge_allow_only() {
   expect_rc 0
   expect "merge autonomy: active"
   expect_absent "half-activated"
+  expect "no checks configured"
+}
+
+case_merge_ci_present() {
+  local dir; dir="$(mk_repo merge-ci-present merge merge-allow-only)"
+  mkdir -p "$dir/.github/workflows"
+  printf 'name: ci\non: [pull_request]\njobs: {}\n' > "$dir/.github/workflows/ci.yml"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "merge autonomy: active"
+  expect_absent "no checks configured"
 }
 
 case_merge_deny_only() {
@@ -289,6 +300,7 @@ cases=(
   "template-missing|case_template_missing|template-diff: fixture's own template deleted"
   "ratchet-never-executes|case_ratchet_never_executes|ratchet measurement command is looked up, never executed"
   "merge-allow-only|case_merge_allow_only|entry_has: merge rule in allow only"
+  "merge-ci-present|case_merge_ci_present|merge verdict: no-CI note absent when a workflow file exists"
   "merge-deny-only|case_merge_deny_only|entry_has: merge rule in deny only"
   "merge-mention-only|case_merge_mention_only|entry_has: 'only' inside an unrelated JSON string"
 )
