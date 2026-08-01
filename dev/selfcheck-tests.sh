@@ -30,7 +30,7 @@
 # 3.1 (frontmatter_text is exercised by 4.2-empty-desc; 3.1's own clauses are key-presence
 # greps), 3.7 (fence_lines is exercised by the 3.4 case; 3.7 itself is a fixed-string grep
 # inside the slice), 4.1, 4.5, 4.7, 4.8 (fixed-string presence checks). 4.9 left this list when
-# it became a bijection (see the 4.9-missing-step/4.9-orphan-step cases below).
+# it became a bijection (see the 4.9-missing-step/4.9-orphan-step/4.9-uneven-jobs cases below).
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -150,6 +150,7 @@ p_4_9_missing_step()   { drop "$1/.github/workflows/selfcheck.yml" 'dev/doctor-t
 p_4_9_orphan_step() {
   printf '      - run: bash dev/nonexistent.sh\n' | append "$1/.github/workflows/selfcheck.yml"
 }
+p_4_9_one_job_only() { edit "$1/.github/workflows/selfcheck.yml" '$d'; }
 p_4_11()              { printf 'grep -q "Bash(gh pr merge" "$settings"\n' | append "$1/bin/check-harness.sh"; }
 p_4_11_local()         { printf 'sed -n "1p" "$settings_local" >/dev/null\n' | append "$1/bin/check-harness.sh"; }
 p_4_11_comment() {
@@ -192,6 +193,7 @@ cases=(
   "4.6|4.6|p_4_6|drop a label bin/setup-labels.sh creates from the doctor's required list"
   "4.9-missing-step|4.9|p_4_9_missing_step|drop the 'bash dev/doctor-tests.sh' run step from the workflow"
   "4.9-orphan-step|4.9|p_4_9_orphan_step|add a CI run step for a nonexistent dev/nonexistent.sh"
+  "4.9-uneven-jobs|4.9|p_4_9_one_job_only|delete the workflow's last line (the macOS job's dev/doctor-tests.sh step), leaving that script covered on ubuntu only"
   "4.11|4.11|p_4_11|reintroduce a raw grep of \"\$settings\" in bin/check-harness.sh"
   "4.11-local|4.11|p_4_11_local|reintroduce a raw sed of \"\$settings_local\" in bin/check-harness.sh"
   "4.11-comment||p_4_11_comment|control: an indented comment mentioning grep and quoting \"\$settings\" is not flagged"

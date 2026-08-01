@@ -21,17 +21,20 @@ bash dev/selfcheck.sh
 
 It prints a `PASS`/`FAIL` line per assertion (grouped and labelled in its own output) and a
 `== summary: N pass, M fail ==` footer, and exits 0 iff nothing failed. The same command runs in
-CI on every pull request (`.github/workflows/selfcheck.yml`, one job on `ubuntu-latest`); a red
-check there means one of the job's three commands failed — reproduce locally with
-`bash dev/selfcheck.sh`, `bash dev/selfcheck-tests.sh`, and `bash dev/doctor-tests.sh`. There is
-no test suite and no build step: this repo is Markdown instruction files, Bash scripts, and JSON
-manifests. The gate prints what it checks — run it. A change the gate can't catch needs a new
-assertion in the gate, not a waiver, subject to the machine-parsed-artifacts rule below.
+CI on every pull request (`.github/workflows/selfcheck.yml`, two jobs — `selfcheck` on
+`ubuntu-latest` and `selfcheck-macos` on `macos-latest`, which prepends `/bin` to `PATH` so the
+same commands run under Apple's bash 3.2 instead of a newer bash); a red check means one of the
+jobs' three commands failed — reproduce locally with `bash dev/selfcheck.sh`,
+`bash dev/selfcheck-tests.sh`, and `bash dev/doctor-tests.sh` (on a Mac, prefix each with
+`PATH=/bin:$PATH` to match the macOS job's shell, e.g. `PATH=/bin:$PATH bash dev/selfcheck.sh`).
+There is no test suite and no build step: this repo is Markdown instruction files, Bash scripts,
+and JSON manifests. The gate prints what it checks — run it. A change the gate can't catch needs
+a new assertion in the gate, not a waiver, subject to the machine-parsed-artifacts rule below.
 
 `dev/selfcheck-tests.sh` is the gate's own negative-test harness — a separate script, not part
 of the gate itself, that copies this repo to a throwaway temp directory, applies one documented
 perturbation per case, and asserts the gate fails with exactly the expected assertion id(s). It
-also runs in CI, as the second step in the same job; run it by hand
+also runs in CI, as the second step in each job; run it by hand
 (`bash dev/selfcheck-tests.sh`) whenever `dev/selfcheck.sh` changes, and add a case for any
 assertion that parses structure out of a file, compares two extracted sets, or exercises script
 behavior; fixed-string and numeric-threshold assertions may ship without one, listed in the
@@ -68,7 +71,8 @@ itself".
 - `*.sh` files are LF-only (enforced by `.gitattributes`) and must stay portable across BSD
   (macOS) and Git-Bash userlands — no GNU-only flags (`sed -i` without a suffix, `grep -P`,
   `readlink -f`, `mapfile`/`readarray`, `declare -A`). Enforced mechanically on `bin/*.sh`
-  (assertion 1.4); `dev/*.sh` follows the same rule by convention.
+  (assertion 1.4); `dev/*.sh` follows the same rule by convention, and is exercised under
+  BSD/bash 3.2 by the `selfcheck-macos` CI job.
 - The README is part of "done": every factual claim it makes about this repo's behavior must be
   checkable against the code (the verifier's Documentation changes check applies to docs).
 - Release ritual: bump `version` in `.claude-plugin/plugin.json` and create the matching
