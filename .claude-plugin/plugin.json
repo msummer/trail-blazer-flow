@@ -1,6 +1,6 @@
 {
   "name": "trail-blazer-flow",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "license": "MIT",
   "displayName": "Issue Workflow Harness",
   "description": "Drive GitHub issues through planner → implementer → verifier subagents, locally on a Claude Code subscription. Steady-state cycle skill (issue-cycle), persistent verification baseline, policy-gated plan auto-approval, bounded CI auto-fix, crash recovery with WIP checkpointing and resume (not restart), backoff/retry on transient dispatch failures, a per-issue dispatch ledger with pre-advance checks and mechanical closing reconciliation, per-stage status reporting, greenfield kickoff (project-kickoff), worktree-parallel implementation with a supervisor loop, label lifecycle, repo onboarding (harness-setup), merges human-gated by default with opt-in policy-gated merge autonomy guarded by base-branch assertion, loud permission-denied escalation, post-merge verification, and an opt-in test-suite ratchet that files evidence-backed, test-only coverage issues under a CLAUDE.md policy.",

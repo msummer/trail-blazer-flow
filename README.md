@@ -576,12 +576,19 @@ check-harness.sh
 It names exactly what the new version needs that your repo lacks; fix what it flags and you're
 migrated.
 
-For **v1.8.1 → v1.9.0**, nothing migrates — no new label, script, permission grant, or baseline
-step. This release (the 2026-07-31 hardening run) is entirely harness-internal or instruction
-text: the gate gained a negative-test harness and both now run in CI, `check-harness.sh` reads
-`.claude/settings.json` exclusively through `jq` and reports each optional policy section's
-activation state, and the dispatch ledger's stage vocabulary is pinned across
-`reconcile-ledger.sh` and the implementer skill.
+For **v1.9.0 → v2.0.0**, exactly one thing migrates: a new permission grant,
+`"Bash(gh auth status:*)"`. Three skills run `gh auth status` as their first command, so without
+it a repo on the default permission mode stalls at the start of every run. Re-copy the
+permissions block from `templates/repo-settings.json`, or add that one entry by hand — the doctor
+names it either way. No new label, script, or baseline step.
+
+Two behaviour changes worth knowing, both of which *narrow* what the harness does unattended, so
+neither can surprise you into a merge you didn't want. The merge pass now treats CI configuration
+as governance surface, and treats a repo that reports "no checks configured" as **not** green —
+if you run merge autonomy on a repo with no CI, no PR qualifies until your own policy section
+explicitly opts a no-CI repo in. Follow-up issues the harness files now carry `no-auto-approve`
+(remove the label to release one into planning) and are commented and labelled `no-plan` by
+`cleanup-after-merge.sh --fix` if the PR that filed them is closed without merging.
 
 ## The per-repo settings file (required)
 
