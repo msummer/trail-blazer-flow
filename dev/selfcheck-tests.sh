@@ -166,6 +166,7 @@ p_4_14_oversize() {
   { while [ "$i" -lt 300 ]; do echo "filler line $i"; i=$((i+1)); done; } | append "$1/skills/harness-setup/SKILL.md"
 }
 p_4_15()              { printf 'x=$(echo hi)\n' | append "$1/skills/harness-setup/SKILL.md"; }
+p_4_16()              { edit "$1/bin/cleanup-after-merge.sh" 's/harness-follow-up/harness-followup/g'; }
 p_5_1()               { edit "$1/bin/reconcile-ledger.sh" 's/blocked incomplete died/blocked incomplete/'; }
 p_5_2()               { edit "$1/bin/reconcile-ledger.sh" 's/stage-skipped issue/stage_skipped issue/'; }
 
@@ -203,6 +204,7 @@ cases=(
   "4.13-extraction|4.13|p_4_13_extraction|rename reconcile-ledger.sh's STAGES= line so the gate's extraction comes back empty"
   "4.14|4.14|p_4_14_oversize|append 300 filler lines to skills/harness-setup/SKILL.md"
   "4.15|4.15|p_4_15|append a real dollar-paren command to skills/harness-setup/SKILL.md"
+  "4.16|4.16|p_4_16|rename the follow-up marker in cleanup-after-merge.sh so the skill and the script disagree"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
 )

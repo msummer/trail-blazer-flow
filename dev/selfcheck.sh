@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 28 assertions total:
+# Five groups, 29 assertions total:
 #   1. shell syntax, portability, and error handling (bin/*.sh, dev/*.sh; no GNU-only constructs
 #      in bin/*.sh; no unguarded 'git branch -d/-D' in bin/*.sh)
 #   2. JSON manifests (plugin.json, marketplace.json, templates/repo-settings.json), plus the
@@ -17,9 +17,9 @@
 #      templates/repo-settings.json actually deny-guards
 #   3. agent instruction-file invariants (agents/*.md: frontmatter, one fenced template block,
 #      the harness-status line grammar, required template headings)
-#   4. cross-file markers and skills (the planner-plan and ratchet-issue markers, skill
-#      frontmatter, the label bijection, skill/README coverage, policy-section titles, the
-#      dev/*.sh <-> CI workflow run-step bijection (plus per-job coverage), that
+#   4. cross-file markers and skills (the planner-plan, ratchet-issue, and harness-follow-up
+#      markers, skill frontmatter, the label bijection, skill/README coverage, policy-section
+#      titles, the dev/*.sh <-> CI workflow run-step bijection (plus per-job coverage), that
 #      bin/check-harness.sh reads
 #      .claude/settings.json only through jq, the ledger stage vocabulary shared by
 #      bin/reconcile-ledger.sh and the implementer skill's status-line grammar, a per-skill
@@ -614,6 +614,19 @@ if [ -z "$bad_list" ]; then
   ok "4.15 no inline command substitution (dollar-paren/backtick proxy) in skills/*/SKILL.md, skills/*/references/*.md, or agents/*.md"
 else
   bad "4.15 dollar-paren substitution found — run the inner command separately and paste its literal result instead:$bad_list"
+fi
+
+# 4.16 — the literal harness-follow-up marker prefix appears in both files (fixed-string).
+# Mirrors 4.1/4.5. Pins only the prefix — the PR number varies per issue, so the full marker
+# is never a fixed string.
+marker='<!-- harness-follow-up: PR #'
+missing=""
+grep -qF -- "$marker" "$root/skills/issue-implementer/SKILL.md" || missing="$missing skills/issue-implementer/SKILL.md"
+grep -qF -- "$marker" "$root/bin/cleanup-after-merge.sh" || missing="$missing bin/cleanup-after-merge.sh"
+if [ -z "$missing" ]; then
+  ok "4.16 '$marker' present in skills/issue-implementer/SKILL.md and bin/cleanup-after-merge.sh"
+else
+  bad "4.16 '$marker' missing from:$missing"
 fi
 
 # ============================================================================
