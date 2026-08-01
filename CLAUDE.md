@@ -22,20 +22,27 @@ bash dev/selfcheck.sh
 It prints a `PASS`/`FAIL` line per assertion (grouped and labelled in its own output) and a
 `== summary: N pass, M fail ==` footer, and exits 0 iff nothing failed. The same command runs in
 CI on every pull request (`.github/workflows/selfcheck.yml`, one job on `ubuntu-latest`); a red
-check there means one of the job's two commands failed — reproduce locally with
-`bash dev/selfcheck.sh` and `bash dev/selfcheck-tests.sh`. There is no test suite and no build
-step: this repo is Markdown instruction files, Bash scripts, and JSON manifests. The gate prints
-what it checks — run it. A change the gate can't catch needs a new assertion in the gate, not a
-waiver, subject to the machine-parsed-artifacts rule below.
+check there means one of the job's three commands failed — reproduce locally with
+`bash dev/selfcheck.sh`, `bash dev/selfcheck-tests.sh`, and `bash dev/doctor-tests.sh`. There is
+no test suite and no build step: this repo is Markdown instruction files, Bash scripts, and JSON
+manifests. The gate prints what it checks — run it. A change the gate can't catch needs a new
+assertion in the gate, not a waiver, subject to the machine-parsed-artifacts rule below.
 
 `dev/selfcheck-tests.sh` is the gate's own negative-test harness — a separate script, not part
 of the gate itself, that copies this repo to a throwaway temp directory, applies one documented
 perturbation per case, and asserts the gate fails with exactly the expected assertion id(s). It
-also runs in CI, as a second step after the gate in the same job; run it by hand
+also runs in CI, as the second step in the same job; run it by hand
 (`bash dev/selfcheck-tests.sh`) whenever `dev/selfcheck.sh` changes, and add a case for any
 assertion that parses structure out of a file, compares two extracted sets, or exercises script
 behavior; fixed-string and numeric-threshold assertions may ship without one, listed in the
 harness's exempt comment with a one-line reason each.
+
+`dev/doctor-tests.sh` is a separate negative-test harness for the *consumer* doctor
+(`bin/check-harness.sh`): it builds throwaway fixture repos under `mktemp` and pins verdicts
+(the settings.json block, template-diff, the ratchet's never-execute guarantee, merge-autonomy
+activation) that would otherwise only be hand-verified. It runs in CI as the third step, but it
+is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/check-harness.sh`
+changes.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor. Onboarding it here would mean checking in a `.claude/settings.json` that
