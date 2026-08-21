@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 29 assertions total. The gate prints what it checks — run it.
+# Five groups, 31 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -470,7 +470,7 @@ else
   bad "4.11 raw-text grep/sed/awk of a \$settings* path variable found in bin/check-harness.sh — line(s): $(printf '%s' "$raw_reads" | tr '\n' ' ')"
 fi
 
-# 4.13 — ledger stage vocabulary, two clauses:
+# 4.13 — ledger stage vocabulary, three clauses:
 #   (a) cross-file: bin/reconcile-ledger.sh's `STAGES=` list must agree, both directions, with
 #       skills/issue-implementer/SKILL.md's status-line grammar (`stage=<...>`) — 'seed' is the
 #       one documented ledger-only exception (issue-cycle step 0 writes it from the discovery
@@ -479,6 +479,11 @@ fi
 #   (b) folded former-3.5: every '|'-separated outcome alternative in each agents/*.md status
 #       line appears as a fixed string in skills/issue-implementer/SKILL.md (the canonical
 #       Status-line vocabulary).
+#   (c) deploy vocabulary: bin/reconcile-ledger.sh's `DEPLOY_OUTCOMES=` list must agree, both
+#       directions, with the optional `deploy=<...>` alternatives on SKILL.md's same status-line
+#       grammar line. Anchored single-line extraction on both sides; an empty extraction FAILs
+#       loudly rather than vacuously passing. Folded into the shared bad_list below so the
+#       assertion count is unchanged by this clause.
 rl="$root/bin/reconcile-ledger.sh"
 sk="$root/skills/issue-implementer/SKILL.md"
 bad_list=""
@@ -503,6 +508,16 @@ for f in "$root"/agents/*.md; do
     grep -qF -- "$alt" "$sk" || bad_list="$bad_list $f:$alt (outcome alternative missing from SKILL.md);"
   done
 done
+script_deploy="$(sed -nE 's/^DEPLOY_OUTCOMES="([^"]*)"$/\1/p' "$rl" | tr ' ' '\n' | sort -u)"
+skill_deploy="$(sed -nE 's/.*deploy=<([^>]*)>.*/\1/p' "$sk" | tr '|' '\n' | sort -u)"
+if [ -z "$script_deploy" ] || [ -z "$skill_deploy" ]; then
+  bad_list="$bad_list deploy-vocabulary extraction failed — bin/reconcile-ledger.sh's DEPLOY_OUTCOMES= line or SKILL.md's deploy=<...> alternative didn't match (structure changed);"
+else
+  script_not_skill_deploy="$(comm -23 <(_lines "$script_deploy") <(_lines "$skill_deploy"))"
+  skill_not_script_deploy="$(comm -13 <(_lines "$script_deploy") <(_lines "$skill_deploy"))"
+  [ -n "$script_not_skill_deploy" ] && bad_list="$bad_list deploy outcome(s) the script accepts with no status-line alternative: $(printf '%s' "$script_not_skill_deploy" | tr '\n' ' ');"
+  [ -n "$skill_not_script_deploy" ] && bad_list="$bad_list status-line deploy outcome(s) the script would reject: $(printf '%s' "$skill_not_script_deploy" | tr '\n' ' ');"
+fi
 if [ -z "$bad_list" ]; then
   ok "4.13 ledger stage vocabulary agrees with SKILL.md; every agent outcome alternative appears in SKILL.md"
 else
@@ -517,8 +532,8 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 420
-issue-cycle 240
+budget_table="issue-implementer 425
+issue-cycle 280
 issue-planner 350
 project-kickoff 215
 test-ratchet 200
@@ -637,6 +652,30 @@ if [ "$out" = "$expected" ] && [ "$rc" -eq 1 ]; then
   ok "5.2 reconcile-ledger.sh: reports the skipped stage and exits 1"
 else
   bad "5.2 reconcile-ledger.sh: expected rc=1 and the stage-skipped line, got rc=$rc output='$out'"
+fi
+
+# empty-queue fixture for 5.3/5.4: a merge-only ledger row against no queued issues, so neither
+# assertion's expected output is polluted by an unrelated seed/queue discrepancy.
+empty_status_fixture='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{}}'
+
+# 5.3 — a verbatim merge status line carrying deploy=verified parses into a record (proves the
+# two-sed rewrite end to end) and a valid deploy value produces no discrepancy -> silence, exit 0.
+out="$(bash "$rl" <(printf '%s\n' '<!-- harness-status: stage=merge issue=17 outcome=merged retries=0 deploy=verified -->') \
+                  <(printf '%s' "$empty_status_fixture") 2>&1)"; rc=$?
+if [ -z "$out" ] && [ "$rc" -eq 0 ]; then
+  ok "5.3 reconcile-ledger.sh: verbatim merge status line with deploy=verified parses cleanly, exit 0"
+else
+  bad "5.3 reconcile-ledger.sh: expected silence and exit 0, got rc=$rc output='$out'"
+fi
+
+# 5.4 — a merge row with an out-of-vocabulary deploy slug -> exactly one unknown-outcome line, exit 1.
+expected="unknown-outcome issue=17 bucket=- stage=merge: deploy outcome 'bogus' is not in the deploy vocabulary (verified|pending|failed)"
+out="$(bash "$rl" <(printf '%s\n' '17 merge merged 0 deploy=bogus') \
+                  <(printf '%s' "$empty_status_fixture") 2>&1)"; rc=$?
+if [ "$out" = "$expected" ] && [ "$rc" -eq 1 ]; then
+  ok "5.4 reconcile-ledger.sh: reports the unknown deploy outcome and exits 1"
+else
+  bad "5.4 reconcile-ledger.sh: expected rc=1 and the unknown-outcome line, got rc=$rc output='$out'"
 fi
 
 # ============================================================================

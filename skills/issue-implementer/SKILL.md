@@ -83,7 +83,7 @@ status line carries the right `retries` value.
 
 Every `planner`, `implementer`, and `verifier` report ends with one machine-readable line:
 
-`<!-- harness-status: stage=<planner|implementer|verifier|merge> issue=<n> outcome=<slug> retries=<k> -->`
+`<!-- harness-status: stage=<planner|implementer|verifier|merge> issue=<n> outcome=<slug> retries=<k> [deploy=<verified|pending|failed>] -->`
 
 - `stage` — the pipeline stage (`merge` has no agent; the orchestrator emits its line directly —
   see `issue-cycle`'s merge guards); `issue` — the GitHub issue number.
@@ -92,6 +92,9 @@ Every `planner`, `implementer`, and `verifier` report ends with one machine-read
   `merged|merge-blocked|not-eligible|merge-unconfirmed`.
 - `retries` — `k-1`, where `k` is the dispatch attempt number stated in the prompt; agents echo
   it back, defaulting to `0` when the prompt is silent.
+- `deploy` — optional, valid only with `stage=merge`: emitted by the cycle's merge pass when the
+  repo declares post-merge verification (`issue-cycle`'s merge-pass guard (e)), values as in the
+  grammar line above.
 
 The orchestrator emits this line itself, on the stage's behalf, whenever a stage died or never
 reported, and always for merge — keeping `issue-cycle`'s ledger reconciliation checkable.

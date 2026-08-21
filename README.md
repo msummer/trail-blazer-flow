@@ -296,6 +296,33 @@ that landed this run; an issue it files this run can't be planned, approved, or 
 until the *next* cycle. It only files issues — never plans, approves, implements, or merges what
 it files.
 
+### Working the human gates from the phone
+
+Every gate the harness waits on is an ordinary GitHub object — a label, an issue comment, a pull
+request — so a cycle running unattended (via `/loop` or a scheduled routine) can be driven
+entirely from wherever you read GitHub notifications, including the GitHub mobile app, without a
+laptop in reach.
+
+**What a cycle leaves behind.** A plan is a comment on the issue carrying a `<!-- planner-plan
+-->` marker, with the `plan-proposed` label added to the issue. Implementation work becomes a
+pull request, opened once the verifier passes, with the verification results in its body. You
+only see either one if you're watching the repo or subscribed to the issue/PR — GitHub's own
+notification settings govern that, not this harness.
+
+**Reviewing a plan.** Read the issue comment. To accept it, add the `plan-approved` label. To
+request changes, comment on the issue with what to change — no label needed; the next cycle
+reads your comment and revises. To take an issue out of planning entirely, add `no-plan`.
+
+**Reviewing a PR.** Read the PR body (summary, files changed, verification results, the
+verifier's own status line) and its CI checks. Merge it, or close it, the same as any other PR;
+comment on it first if you want changes made before either.
+
+**Returning to a laptop.** Run `harness-status.sh` to see what's left: `counts.human_actions` is
+the total waiting on you, broken into `waiting_on_human.plans_to_review`,
+`waiting_on_human.prs_to_review` (each PR entry carries a coarse `ci`: `passing`, `failing`,
+`pending`, or `none`), and `waiting_on_human.blocked`. Nothing in that JSON is phone-specific —
+it's the same summary a scheduled routine's own report already gives you.
+
 ## Greenfield walkthrough: from idea to first feature
 
 This is the end-to-end story of starting a project on the harness — exactly what you say to the
@@ -467,6 +494,36 @@ subagents need:
    "Merge autonomy policy" section present while `Bash(gh pr merge:*)` is still denied in one of
    those files, which the doctor WARNs on by naming the file, because it leaves the cycle
    reporting `verified, merge blocked` on every run.
+
+   **Post-merge verification** (optional, nested under this same section) — a sub-heading titled
+   exactly "Post-merge verification" (any `#` depth) followed by a fenced block of read-only
+   commands, one per line, run in order from the repo root after a merge is confirmed, so a repo
+   whose default branch auto-deploys stops reporting "done" when only "merged" is true, e.g.:
+
+   ````markdown
+   ## Merge autonomy policy
+   The cycle may merge harness PRs whose plan was approved, whose verifier verdict
+   is pass, and whose CI is green.
+
+   ### Post-merge verification
+   Wait: 10 minutes
+   ```
+   railway status --service api --json
+   curl -fsS https://api.example.com/readyz
+   ```
+   ````
+
+   An optional `Wait: <N> minutes` line before the fence sets the poll budget (default 10,
+   clamped to a non-configurable 30-minute ceiling, beyond which the pass hands off rather than
+   waiting longer). The `issue-cycle` merge pass runs exactly the declared commands — never one
+   it synthesizes, adapts, or extends — and records the outcome as a trailing `deploy=` field on
+   the merge stage's ledger row and status line: `verified` (every command exited 0 within the
+   budget), `pending` (budget spent with no conclusive result, or a permission/`sleep` problem),
+   or `failed` (a command exited non-zero — which additionally stops the merge pass for the rest
+   of the run); `pending`/`failed` surface loudly in the cycle report with the command output's
+   last lines. **No sub-block means the merge pass behaves exactly as it does today** — no extra
+   step, no `deploy=` field. These commands are reads only: the harness never approves, promotes,
+   or redeploys anything — see "Safety model".
 
 6. **Test-suite ratchet policy** (optional) — a section titled exactly "Test-suite ratchet
    policy" stating the measurement command the `test-ratchet` skill (standalone, and as the
@@ -823,7 +880,10 @@ autonomy also enabled, the backstop is the merge pass's hard floor (standard-flo
 green CI, protected governance surface, sequential re-verification) — and on a repo with
 branch protection + required checks, that floor is a technical rail, not just policy. Enable
 merge autonomy only where a bad merge is cheap to revert (e.g. a default branch that doesn't
-auto-deploy).
+auto-deploy) — or, on a repo whose default branch does auto-deploy, declare a "Post-merge
+verification" sub-block (see "The CLAUDE.md contract" item 5) so "merged" stops standing in for
+"shipped": the declared commands are reads only, and the harness never approves, promotes, or
+redeploys anything on your behalf — it only observes and records what the deploy did.
 
 Third, harness-authored issues are the exception to a pipeline that otherwise starts from
 human-authored ones — the test-suite ratchet (also opt-in via CLAUDE.md) is one source; the plan

@@ -36,8 +36,9 @@ summed per stage), wall-clock duration (`unknown` if no clock), final state, esc
   column per issue touched, from the outcome each dispatch reports via the status line contract
   (issue-implementer's "Resilient dispatch"); the ratchet pass fills in nothing (step 4).
 - **Serialized form:** step 5 hands it to `reconcile-ledger.sh` as one record per line —
-  `<issue> <stage> <outcome> [retries]` (format/vocabulary owned by that script — see its
-  header / `--help`). A stage never reached is absent, never a `-` row.
+  `<issue> <stage> <outcome> [retries] [deploy=<slug>]` (format/vocabulary owned by that script —
+  see its header / `--help`; the `deploy` field is merge-only, from guard (e)). A stage never
+  reached is absent, never a `-` row.
 - **Pre-advance check:** before advancing an issue, check the ledger — a stage with no entry is
   **launched, not assumed**; never infer "must have been fine" from an empty cell. **Closing
   reconciliation (step 5):** `reconcile-ledger.sh` then compares the serialized ledger against
@@ -139,16 +140,54 @@ on top and is not configurable**:
     merge method, e.g. `gh pr merge <n> --squash` (adjust the flag to match). Never route around
     the denial — no API calls, no web merges, no asking the user mid-cycle.
 
-(d) **Post-merge verification.** After the merge command returns, confirm it actually landed
+(d) **Merge-landed confirmation.** After the merge command returns, confirm it actually landed
     before reporting it merged (`gh pr view <n> --json state --jq .state | tr -d '\r'` must
     return `MERGED`). If it doesn't, the state is **`merge attempted, unconfirmed`** and the
     merge pass stops for that PR — don't proceed to the next merge assuming success.
+
+(e) **Post-merge verification (optional, CLAUDE.md-declared).** Only when the "Merge autonomy
+    policy" section carries a sub-heading titled exactly **"Post-merge verification"** (any `#`
+    depth) followed by a fenced block: detection mirrors the policy sections above — exact
+    heading match, then the fenced block under it. No sub-block means this step does not exist —
+    silent, like the merge pass's own activation check: the pass behaves exactly as it does
+    today, no `deploy=` field, no report line. When present, every non-blank fenced line is one
+    command, read-only by contract, run in order from the repo root, exactly as written — never
+    a command the fence does not contain, never synthesized, adapted, or extended. An optional
+    `Wait: <N> minutes` line in the sub-block before the fence sets the poll budget (absent →
+    10; clamped to a non-configurable 30-minute ceiling — beyond it the pass records
+    `deploy=pending` and hands to the human).
+
+    Runs after guard (d) confirms `MERGED` **and** after this PR's `cleanup-after-merge.sh --fix`
+    + baseline refresh, before the next PR is merged.
+
+    **Read-only contract:** these commands are reads; the harness never approves a deployment,
+    promotes a build, or re-runs a deploy — that authority stays with the human, always. A
+    declared command with no matching allow entry, or one containing command substitution (no
+    allow rule can approve those — README "Safety model"), records `deploy=pending` and names
+    the exact problem in the report; never route around a denial.
+
+    **Bounded wait, `sleep` only:** run the declared commands; if the result is not yet
+    conclusive, `sleep 60` and re-run, at most N times (N = the declared minutes, clamped at
+    30). If `sleep` is denied, re-run once immediately and record `deploy=pending` with "backoff
+    unavailable — grant `Bash(sleep:*)`".
+
+    **Outcome mapping:** all declared commands exit 0 within the budget → `deploy=verified`;
+    budget spent with no conclusive result, or a permission/`sleep` problem → `deploy=pending`;
+    any command exits non-zero → `deploy=failed`.
+
+    **Escalation:** `pending`/`failed` are loud in step 5's "waits on the human" half, quoting
+    the last ~10 lines of the command output verbatim; `deploy=failed` additionally **STOPs the
+    merge pass for the rest of the run** (no further merges), reported the same way a red
+    baseline is.
 
 Fill in the `merged` ledger column **for every PR the pass evaluated** and emit the merge
 stage's status line yourself (there is no merge agent) — `stage=merge`, `issue=<n>`,
 `retries=0` (the merge pass doesn't retry through the ladder — a denial or base mismatch is a
 policy/config fact, not a transient failure), and an outcome from the issue-implementer skill's
-"Resilient dispatch" vocabulary for `merge`.
+"Resilient dispatch" vocabulary for `merge`. When guard (e) ran, the status line and ledger row
+also carry a trailing `deploy=<verified|pending|failed>` field, e.g.
+`<!-- harness-status: stage=merge issue=<n> outcome=merged retries=0 deploy=verified -->`; no
+field is emitted when there is no declaration or the outcome is not `merged`.
 
 PRs that fail any check (guard or policy) simply stay in the "waits on the human" queue with a
 one-line reason — a normal outcome, not an error (the loud escalations above are for cases
@@ -213,7 +252,8 @@ applies when there was truly nothing to seed).
 
 - **Recurring runs:** pair with `/loop` (e.g. "loop the issue-cycle every 30m") or a scheduled
   routine; each invocation stays ONE bounded pass — recurrence is the wrapper's job, never this
-  skill's (no internal polling or sleeping).
+  skill's (never polls for new work or repeats a pass; the merge pass's declared deploy wait,
+  guard (e), is the one bounded exception).
 - **Single-flight:** never start a cycle while another runs in the same checkout (they'd share a
   working tree exactly like two implementers would); if evidence of a live concurrent run
   appears, stop and say so.
