@@ -15,10 +15,10 @@
 # flagged). Same output contract as the gate: one PASS/FAIL line per case, a
 # `== summary: N pass, M fail ==` footer, exit 0 iff nothing failed.
 #
-# This and dev/doctor-tests.sh are the only scripts under dev/ that write files (the consumer
-# doctor bin/check-harness.sh also seeds .claude/LESSONS.md when absent). Every write here
-# happens under a single `mktemp -d` root, removed via a trap on EXIT; nothing outside that root
-# is ever touched. By
+# This, dev/doctor-tests.sh, and dev/cleanup-tests.sh are the only scripts under dev/ that write
+# files (the consumer doctor bin/check-harness.sh also seeds .claude/LESSONS.md when absent).
+# Every write here happens under a single `mktemp -d` root, removed via a trap on EXIT; nothing
+# outside that root is ever touched. By
 # convention (CLAUDE.md), no perturbation helper here uses `sed -i` either — plain `sed` writing
 # to a sibling temp file, same idiom as the rest of this repo.
 #
@@ -164,6 +164,7 @@ p_4_14_oversize() {
 }
 p_4_15()              { printf 'x=$(echo hi)\n' | append "$1/skills/harness-setup/SKILL.md"; }
 p_4_16()              { edit "$1/bin/cleanup-after-merge.sh" 's/harness-follow-up/harness-followup/g'; }
+p_4_17()              { edit "$1/bin/cleanup-after-merge.sh" 's/harness-multi-pr/harness-multipr/g'; }
 p_5_1()               { edit "$1/bin/reconcile-ledger.sh" 's/blocked incomplete died/blocked incomplete/'; }
 p_5_2()               { edit "$1/bin/reconcile-ledger.sh" 's/stage-skipped issue/stage_skipped issue/'; }
 
@@ -191,7 +192,7 @@ cases=(
   "4.6|4.6|p_4_6|drop a label bin/setup-labels.sh creates from the doctor's required list"
   "4.9-missing-step|4.9|p_4_9_missing_step|drop the 'bash dev/doctor-tests.sh' run step from the workflow"
   "4.9-orphan-step|4.9|p_4_9_orphan_step|add a CI run step for a nonexistent dev/nonexistent.sh"
-  "4.9-uneven-jobs|4.9|p_4_9_one_job_only|delete the workflow's last line (the macOS job's dev/doctor-tests.sh step), leaving that script covered on ubuntu only"
+  "4.9-uneven-jobs|4.9|p_4_9_one_job_only|delete the workflow's last line (the macOS job's dev/cleanup-tests.sh step), leaving that script covered on ubuntu only"
   "4.11-local|4.11|p_4_11_local|reintroduce a raw sed of \"\$settings_local\" in bin/check-harness.sh"
   "4.11-comment||p_4_11_comment|control: an indented comment mentioning grep and quoting \"\$settings\" is not flagged"
   "4.13-script|4.13|p_4_13_script|add a 'docs' stage to reconcile-ledger.sh's STAGES= list only"
@@ -201,6 +202,7 @@ cases=(
   "4.14|4.14|p_4_14_oversize|append 300 filler lines to skills/harness-setup/SKILL.md"
   "4.15|4.15|p_4_15|append a real dollar-paren command to skills/harness-setup/SKILL.md"
   "4.16|4.16|p_4_16|rename the follow-up marker in cleanup-after-merge.sh so the skill and the script disagree"
+  "4.17|4.17|p_4_17|rename the multi-pr marker in cleanup-after-merge.sh so the script and the docs disagree"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
 )

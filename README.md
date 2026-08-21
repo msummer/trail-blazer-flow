@@ -55,9 +55,10 @@ or share).
 ├── dev/
 │   ├── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
 │   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
-│   └── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh (not run by the gate)
+│   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh (not run by the gate)
+│   └── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 ├── .github/
-│   └── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
+│   └── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the cleanup script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
 ```
@@ -234,13 +235,23 @@ below for the ledger and the guards.
 ### After the human merges
 
 Nothing is required: every planner/implementer/cycle run starts with
-`cleanup-after-merge.sh --fix` (sync, prune merged `claude/*` branches — a merged branch a
+`cleanup-after-merge.sh --fix` (best-effort sync — a diverged/missing upstream is reported and
+the run continues, never aborts, prune merged `claude/*` branches — a merged branch a
 worktree still holds is reported and skipped, never fatal — repair stale `pr-open` labels with
 audited comments, and quarantine any plan follow-up orphaned by a `claude/*` PR that closed
 without merging — comment + `no-plan`, never closed) and the implementer's baseline refresh
 re-verifies merged main — two green PRs can still compose badly, and that check is now
 mechanical. Running `cleanup-after-merge.sh` by hand right after a merge is still fine (it's
 idempotent); without `--fix` it only reports label problems instead of repairing them.
+
+A merged `claude/<n>-*` PR only closes its issue when the PR body carries a closing keyword
+(`Closes`/`Fixes`/`Resolves #<n>`) for that issue and no multi-PR signal is present. A PR that
+delivers only part of an issue — its body says `Part of #<n>` / `PR <k> of <m>`, another
+`claude/<n>-*` PR is still open, or the issue body/a comment carries a
+`<!-- harness-multi-pr -->` marker — leaves the issue open (reported as `KEEP`) instead of
+closing it. `--fix` still drops `pr-open` in that case, but only once no other `claude/<n>-*`
+PR is open, so the issue re-queues for its next slice; a human closes it by hand if the work is
+actually finished.
 
 ### The steady state, as one command ("run the cycle")
 
@@ -736,9 +747,10 @@ bash dev/selfcheck.sh
 
 It prints a `PASS`/`FAIL` line per assertion and a `== summary: N pass, M fail ==` footer — run
 it to see exactly what it checks. There is no test suite and no build step: this repo is
-Markdown instruction files, Bash scripts, and JSON manifests. The gate and its two negative-test
-harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tests.sh`) all run in CI on every pull request —
-see this repo's `CLAUDE.md` "Verification" section for the exact commands and jobs.
+Markdown instruction files, Bash scripts, and JSON manifests. The gate and its three negative-test
+harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tests.sh`, `dev/cleanup-tests.sh`) all run in CI
+on every pull request — see this repo's `CLAUDE.md` "Verification" section for the exact
+commands and jobs.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor. Onboarding it here would mean checking in a `.claude/settings.json` that

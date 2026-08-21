@@ -24,9 +24,10 @@ It prints a `PASS`/`FAIL` line per assertion (grouped and labelled in its own ou
 CI on every pull request (`.github/workflows/selfcheck.yml`, two jobs — `selfcheck` on
 `ubuntu-latest` and `selfcheck-macos` on `macos-latest`, which prepends `/bin` to `PATH` so the
 same commands run under Apple's bash 3.2 instead of a newer bash); a red check means one of the
-jobs' three commands failed — reproduce locally with `bash dev/selfcheck.sh`,
-`bash dev/selfcheck-tests.sh`, and `bash dev/doctor-tests.sh` (on a Mac, prefix each with
-`PATH=/bin:$PATH` to match the macOS job's shell, e.g. `PATH=/bin:$PATH bash dev/selfcheck.sh`).
+jobs' four commands failed — reproduce locally with `bash dev/selfcheck.sh`,
+`bash dev/selfcheck-tests.sh`, `bash dev/doctor-tests.sh`, and `bash dev/cleanup-tests.sh` (on a
+Mac, prefix each with `PATH=/bin:$PATH` to match the macOS job's shell, e.g.
+`PATH=/bin:$PATH bash dev/selfcheck.sh`).
 There is no test suite and no build step: this repo is Markdown instruction files, Bash scripts,
 and JSON manifests. The gate prints what it checks — run it. A change the gate can't catch needs
 a new assertion in the gate, not a waiver, subject to the machine-parsed-artifacts rule below.
@@ -46,6 +47,14 @@ harness's exempt comment with a one-line reason each.
 activation, default-branch guard coverage) that would otherwise only be hand-verified. It runs
 in CI as the third step, but it is not part of `dev/selfcheck.sh` itself — run it by hand
 whenever `bin/check-harness.sh` changes.
+
+`dev/cleanup-tests.sh` is a separate negative-test harness for `bin/cleanup-after-merge.sh`: it
+builds throwaway fixture git repos under `mktemp`, with a stub `gh` on `PATH`, and runs the real
+script against them to pin the multi-PR `KEEP` behavior (a merged PR that is only "Part of #n",
+an open sibling PR, or a `<!-- harness-multi-pr -->` marker must leave the issue open and never
+call `gh issue close`), the ordinary close path, and the `--ff-only` pull failure continuing
+instead of aborting. It runs in CI as the fourth step, but it is not part of `dev/selfcheck.sh`
+itself — run it by hand whenever `bin/cleanup-after-merge.sh` changes.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor; see the README's "Working on the harness itself" for why.
