@@ -833,8 +833,11 @@ too), and a single rule written across the operator — `Bash(git add -A && git 
 nothing at all. Not every constituent needs an entry: some commands are approved without one
 (`cd`, `tr` and `head` were each confirmed), which is why the three `… | tr -d '\r'` pipelines the
 harness issues need no `tr` grant; the WIP checkpoints (`git add -A && git commit …`, in both the
-bare and `git -C` forms) are covered because both of their constituents are already granted. Every
-command the harness issues across either operator is therefore approved by the template exactly as
+bare and `git -C` forms) are covered because both of their constituents are already granted. A
+path-qualified invocation matches no bare-name rule — allow or deny — so such a command needs its
+own grant on the literal path prefix (this is why a worktree's venv-interpreter verification
+command needs a dedicated entry; see the issue-implementer skill's worktree-parallel reference).
+Every command the harness issues across either operator is therefore approved by the template exactly as
 it ships. As with substitution, a deny matching
 any one constituent blocks the entire composite. All of these facts were verified by live probe
 against Claude Code 2.1.220 (#41, #39, #55, #79, #80).

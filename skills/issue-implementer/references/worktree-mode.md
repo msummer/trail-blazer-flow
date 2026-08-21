@@ -126,7 +126,24 @@ d. **Dependency caveat (critical):** ignored files don't exist in a fresh worktr
    (`cd <worktree>/api && <main-repo>/api/.venv/bin/python -m pytest` — on Windows the venv's
    interpreter is `.venv/Scripts/python.exe`, not `.venv/bin/python`; state the exact path in
    the prompt — the subagent works only inside its worktree and cannot discover the main
-   checkout's layout). If a plan touches UI and needs `npm install`/`npm run build` per
+   checkout's layout). This composite splits per constituent: `cd` needs no allow entry (probe
+   A8/A9), so don't contort the command to avoid it. The interpreter is the sole ungranted part —
+   a path-qualified binary matches neither `Bash(pytest:*)` nor a bare `Bash(python:*)`, because
+   prefix matching is literal (probe A10/A11, #79/#80) — so a Python consumer running only on the
+   template's grants gets a permission prompt (or, headless, a recorded denial) at this step
+   every time. The fix is to grant the interpreter by its literal path:
+   `Bash(<main-repo>/api/.venv/bin/python:*)`, or on Windows
+   `Bash(<main-repo>/api/.venv/Scripts/python.exe:*)`. That entry belongs in
+   `.claude/settings.local.json` (machine-local — effective permission is the union across
+   `.claude/settings.json`, `.claude/settings.local.json`, and the user-level settings file), or
+   in the checked-in `.claude/settings.json` where every clone sits at the same path.
+   `templates/repo-settings.json` cannot ship this entry because the path is machine-specific; a
+   repo-only extra entry like this is not template drift — the doctor's template-diff never flags
+   repo-only extras. If the project has a launcher invoked by bare name (`uv`, `tox`, `poetry`),
+   preferring it over the raw interpreter lets a normal `Bash(<name>:*)` entry cover the command
+   instead of a path grant. A permission prompt on the interpreter (or, headless, a recorded
+   denial) means the grant is absent — finish that issue sequentially instead and tell the human
+   the exact entry to add. If a plan touches UI and needs `npm install`/`npm run build` per
    worktree, prefer sequential mode for that issue instead of duplicating installs.
 
 e. **As each implementer completes, run the issue-implementer skill's steps 2d–2e for that
