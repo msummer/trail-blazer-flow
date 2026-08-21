@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 28 assertions total. The gate prints what it checks — run it.
+# Five groups, 29 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -513,8 +513,8 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 410
-issue-cycle 230
+budget_table="issue-implementer 420
+issue-cycle 240
 issue-planner 315
 project-kickoff 215
 test-ratchet 200
@@ -587,6 +587,23 @@ if [ -z "$missing" ]; then
   ok "4.17 '$marker' present in bin/cleanup-after-merge.sh, README.md, and skills/issue-implementer/SKILL.md"
 else
   bad "4.17 '$marker' missing from:$missing"
+fi
+
+# 4.18 — the literal verifier closing-status-line prefix appears in the agent template that
+# emits it, the skill that writes it into a PR body, and the skill that greps for it before
+# merging. Mirrors 4.1/4.5/4.16/4.17 — this is not pinning duplicated prose (CLAUDE.md's rule):
+# the needle is a marker literal that must appear in the file that writes it, the file that
+# greps it, and the agent template that emits it, the same relationship 4.1 pins between the
+# '<!-- planner-plan -->' marker and its consumer.
+marker='<!-- harness-status: stage=verifier issue='
+missing=""
+for f in agents/verifier.md skills/issue-implementer/SKILL.md skills/issue-cycle/SKILL.md; do
+  grep -qF -- "$marker" "$root/$f" || missing="$missing $f"
+done
+if [ -z "$missing" ]; then
+  ok "4.18 '$marker' present in agents/verifier.md, skills/issue-implementer/SKILL.md, and skills/issue-cycle/SKILL.md"
+else
+  bad "4.18 '$marker' missing from:$missing"
 fi
 
 # ============================================================================

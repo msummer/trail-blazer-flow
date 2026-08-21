@@ -187,17 +187,20 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    immediately after every mutant; a surviving mutant on a behavior the plan's criteria named is
    a `major` finding) — scope, and declared constraints. **Verifier fail → kickback**: the
    implementer is re-dispatched with the findings ("fix ONLY these"), then re-checked — **max 2
-   kickbacks**, then `impl-blocked` with the findings. All of this happens *before* anything is
-   pushed or a PR exists — the branch may
-   already carry local WIP checkpoint commits by this point (see "Resilience: checkpointing,
-   retries, and the dispatch ledger" below), but nothing leaves the machine until the verifier
-   passes, so every PR the human sees is verifier-clean.
+   kickbacks**, then `impl-blocked` with the findings; **the orchestrator itself never patches a
+   finding** — it never edits a source, test, or doc file to resolve one, only re-dispatches the
+   implementer or, once kickbacks are exhausted, takes the blocked path. All of this happens
+   *before* anything is pushed or a PR exists — the branch may already carry local WIP checkpoint
+   commits by this point (see "Resilience: checkpointing, retries, and the dispatch ledger"
+   below), but nothing leaves the machine until the verifier passes, so every PR the human sees is
+   verifier-clean.
 5. On verifier pass: **collapses the run's WIP checkpoint commits** into the working tree (one
    `git reset --soft` to the branch's merge base with the default branch — never the working
    tree itself, which is untouched), stages everything, **reconciles the staged list against the
    report's "Files changed"** (unexplained files = blocker, not a commit), commits once, pushes,
-   opens the PR (`Closes #n`, verification results, verifier notes, schema notes), labels
-   `pr-open`. The PR still ends up as one clean commit, exactly as before.
+   opens the PR (`Closes #n`, verification results, **the verifier's own closing status line
+   pasted verbatim** — never one the orchestrator composes on its behalf — verifier notes, schema
+   notes), labels `pr-open`. The PR still ends up as one clean commit, exactly as before.
 6. **Files the plan's "Follow-ups to file"** as new issues referencing the PR — each entry whose
    justification names a concrete failure a user of this software would experience, filed with
    `no-auto-approve` (machine-authored — a human removes the label to release it into approval)
@@ -440,10 +443,12 @@ subagents need:
    one machine only — settings.local.json is the first-class way to do that. A deny in
    *either* file — or in your user-level settings file — wins over an allow anywhere else.
    Both edits are yours, never an agent's. The merge pass's hard floor always applies on
-   top (standard-flow PRs only, CI green on the head commit, never the governance surface —
-   CLAUDE.md, `.claude/`, policy/ADR docs, CI config — nothing flagged for human decision,
-   one merge at a time with re-verification between, every merge audited in the cycle
-   report). **No section means no autonomous merges** — behavior is exactly the
+   top (standard-flow PRs only, the PR body carrying the verifier's own `outcome=pass` status
+   line — not prose — checked mechanically and cross-checked against the dispatch ledger, CI
+   green on the head commit, never the governance surface — CLAUDE.md, `.claude/`, policy/ADR
+   docs, CI config — nothing flagged for human decision, one merge at a time with
+   re-verification between, every merge audited in the cycle report). **No section means no
+   autonomous merges** — behavior is exactly the
    pre-1.5 default. **"No checks configured" is not green.** A repo with no CI wired up gets a
    "no checks configured" result from `gh pr checks`, and the hard floor above treats that the
    same as red: no PR qualifies for the merge pass unless your "Merge autonomy policy" section
@@ -701,6 +706,19 @@ command the harness issues across either operator is therefore approved by the t
 it ships. As with substitution, a deny matching
 any one constituent blocks the entire composite. All of these facts were verified by live probe
 against Claude Code 2.1.220 (#41, #39, #55, #79, #80).
+
+**Verdict provenance.** The kickback loop is enforced the same way as the rest of this section:
+the orchestrator never edits a source, test, or doc file to resolve a verifier finding or a red
+CI run itself — its only edits anywhere in this pipeline are harness bookkeeping
+(`.claude/LESSONS.md`, the PR body, issue comments) — and the merge pass's hard floor requires the
+PR body to carry the verifier's own closing status line
+(`<!-- harness-status: stage=verifier issue=<n> outcome=pass retries=<k> -->`) verbatim, checked
+mechanically (`gh pr view … --jq 'contains(...)'`) and cross-checked against the dispatch ledger's
+`verifier` row before any autonomous merge — a prose "verifier verdict: pass" without that line
+does not qualify. Honest limit: the check proves a matching line is present in the PR body and
+agrees with the ledger, not that a human witnessed the dispatch — both artifacts are
+orchestrator-written, so it raises the cost of asserting a verification event that didn't happen
+rather than eliminating the possibility.
 
 Two honest caveats. First, the implementer's "no git" rule is enforced by prompt, not by
 permissions: the settings allow-list must permit git for the orchestrator, and permission
