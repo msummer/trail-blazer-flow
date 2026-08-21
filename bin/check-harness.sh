@@ -5,11 +5,15 @@
 # Checks everything mechanical the harness needs in a repo: gh/jq, the git remote,
 # the lifecycle labels, executable scripts, a CLAUDE.md with a verification section and a
 # size guideline, LESSONS.md, the settings.json toolchain allow-list (read exclusively through
-# jq — never a raw-text grep/sed/awk of any settings* path variable), whether the "Merge autonomy
+# jq — never a raw-text grep/sed/awk of any settings* path variable), whether a path-qualified
+# verification interpreter (e.g. <repo>/api/.venv/bin/python, as worktree-parallel mode
+# instructs) has a matching literal-path allow entry, whether the "Merge autonomy
 # policy" section is activated by the effective merge-permission state across
 # .claude/settings.json, .claude/settings.local.json, and the user-level settings file (a deny in
 # any of them wins, regardless of allows elsewhere — union semantics, not just the checked-in
-# file), whether a "Test-suite ratchet policy" section exists and names a measurement command
+# file), whether its optional "Post-merge verification" declaration is present and, if so,
+# fenced (declared/no-fence/not-declared — never whether the declared commands are any good),
+# whether a "Test-suite ratchet policy" section exists and names a measurement command
 # (looked up with `command -v`, never executed), whether "Autonomy reserve" and "Autonomy
 # decision record" sections are declared and well-formed (and, when gh is ready, whether the
 # declared grant label exists — never applied, removed, or judged for content), the verification
@@ -18,7 +22,9 @@
 #
 # The test-suite-ratchet check never executes, evals, or shells out to anything read from
 # CLAUDE.md: it only looks up the measurement command's first word with `command -v` (a lookup,
-# not an execution) and prints it back, quoted, as a report.
+# not an execution) and prints it back, quoted, as a report. The post-merge-verification
+# declaration-state check carries the same guarantee, stricter still: it never even looks up a
+# declared command, only counts non-blank fenced lines and prints that integer.
 #
 # Read-only except two safe, idempotent fixes it applies automatically:
 #   - chmod +x on the harness's own scripts
@@ -49,6 +55,87 @@ has_policy_section() { grep -qE "^#+[[:space:]]+$1[[:space:]]*\$" "$root/CLAUDE.
 # every settings file it reads: .claude/settings.json, .claude/settings.local.json, and the
 # user-level settings file.
 entry_has() { printf '%s\n' "$1" | awk -v p="$2" 'index($0, p) == 1 { hit = 1 } END { exit !hit }'; }
+
+# bt — a single backtick, hoisted here (was previously local to the test-suite-ratchet check
+# below) so both that check and the verification-scope candidate scan (see
+# claude_md_verification_scope/verification_candidates below) can build the same documented
+# grep -o "${bt}...${bt}" backtick-quoted-span heuristic without a second, drifting copy.
+bt="$(printf '\140')"
+
+# claude_md_section TITLE — depth-aware, fence-aware slice of $root/CLAUDE.md: starts right
+# after the heading matching TITLE exactly (any '#' depth, same match shape as
+# has_policy_section) and ends only at the next heading-shaped line OUTSIDE a fenced block whose
+# '#' depth is <= the starting heading's own depth — so a deeper sub-heading nested under TITLE
+# (e.g. "### Post-merge verification" under "## Merge autonomy policy") does NOT end the slice,
+# only a sibling-or-shallower heading does. Fence-aware like bin/check-decision-record.sh's
+# claude_md_block (a '#'-prefixed comment inside a fenced block is not a heading — see
+# .claude/LESSONS.md); depth-aware unlike it, which is why that idiom (also used at lines
+# 448/470 below) isn't reused here: it would stop at the very sub-heading this exists to see
+# past. Fence-delimiter lines are included in the output (so a downstream first-fence extractor
+# can still find them), same as claude_md_block.
+claude_md_section() {
+  awk -v t="$1" '
+    $0 ~ "^#+[[:space:]]+" t "[[:space:]]*$" { inx=1; match($0, /^#+/); d=RLENGTH; next }
+    inx && /^```/ { infence = !infence }
+    inx && !infence && /^#+[[:space:]]/ {
+      match($0, /^#+/)
+      if (RLENGTH <= d) exit
+    }
+    inx { print }
+  ' "$root/CLAUDE.md"
+}
+
+# has_verification_heading — is there a heading in $root/CLAUDE.md whose text, lower-cased,
+# starts with "verification"? The CLAUDE.md contract only asks for the verification commands to
+# live "ideally under a clearly labelled 'Verification' section" (not an exact title, unlike the
+# policy sections above), so this is a looser, case-insensitive prefix match, not
+# has_policy_section's exact one.
+has_verification_heading() {
+  awk '
+    /^#+[[:space:]]/ {
+      h = $0
+      sub(/^#+[[:space:]]+/, "", h)
+      sub(/[[:space:]]+$/, "", h)
+      if (tolower(h) ~ /^verification/) { print "found"; exit }
+    }
+  ' "$root/CLAUDE.md" | grep -q .
+}
+
+# claude_md_verification_scope — depth-aware, fence-aware slice (same shape as
+# claude_md_section) of $root/CLAUDE.md starting at the first heading matched by
+# has_verification_heading. Only ever called after has_verification_heading confirms one exists
+# — see the whole-file fallback (Q2, ACCEPTED) at the call site below.
+claude_md_verification_scope() {
+  awk '
+    !inx && /^#+[[:space:]]/ {
+      h = $0
+      sub(/^#+[[:space:]]+/, "", h)
+      sub(/[[:space:]]+$/, "", h)
+      if (tolower(h) ~ /^verification/) { inx=1; match($0, /^#+/); d=RLENGTH; next }
+    }
+    inx && /^```/ { infence = !infence }
+    inx && !infence && /^#+[[:space:]]/ {
+      match($0, /^#+/)
+      if (RLENGTH <= d) exit
+    }
+    inx { print }
+  ' "$root/CLAUDE.md"
+}
+
+# verification_candidates SCOPE — extracts candidate command strings from a verification-scope
+# slice (or the whole file, when there's no "Verification…" heading — Q2, ACCEPTED: coverage
+# over precision, since the only outcome downstream is a WARN naming a grant, never a FAIL or an
+# action): every non-blank line inside ANY fenced block, plus every backtick-quoted span outside
+# one (the same documented grep -o "${bt}...${bt}" heuristic the test-suite ratchet uses below).
+# One candidate per output line. Consumed only to look up an interpreter token's basename below
+# — never executed, eval'd, or expanded.
+verification_candidates() {
+  printf '%s\n' "$1" | awk '
+    /^```/ { infence = !infence; next }
+    infence && NF { print }
+  '
+  printf '%s\n' "$1" | grep -o "${bt}[^${bt}]*${bt}" | tr -d "$bt"
+}
 
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "  FAIL  not inside a git repository"; exit 1; }
 cd "$root"
@@ -207,8 +294,63 @@ else
   has_marker() { find "$root" -maxdepth 2 -name "$1" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | grep -q .; }
   allow_has()  { printf '%s\n' "$allow_raw" | grep -qE "^Bash\\(($1)"; }
   tool_warns=0
+
+  # --- path-qualified verification interpreter (#132/#128) --- a bare-name allow entry
+  # (Bash(pytest:*)) does not cover a path-qualified interpreter
+  # (<repo>/api/.venv/bin/python -m pytest, which worktree-parallel mode's step d instructs —
+  # see skills/issue-implementer/references/worktree-mode.md): Claude Code's permission matching
+  # is a literal prefix test, not a basename match, so allow_has's regex would falsely reassure
+  # (it only checks whether some settings.json allow ENTRY starts with a bare interpreter name
+  # like Bash(python — it never looks at the path-qualified token itself) while the grant that
+  # actually covers the command is the literal path itself. Scan the verification-scope
+  # candidates (whole file when no "Verification…" heading exists — Q2, ACCEPTED), take each
+  # candidate's first whitespace-delimited token, and keep the FIRST one that both contains a
+  # '/' and whose basename is a known Python-family interpreter name. entry_has (literal prefix
+  # test) is used to probe the grant — never allow_has (a regex test unsuited to matching a
+  # literal path).
+  py_path_tok=""
+  py_path_covered=false
+  if [ -f "$root/CLAUDE.md" ]; then
+    if has_verification_heading; then
+      verify_scope="$(claude_md_verification_scope)"
+    else
+      verify_scope="$(cat "$root/CLAUDE.md")"
+    fi
+    while IFS= read -r cand; do
+      [ -n "$cand" ] || continue
+      [ -n "$py_path_tok" ] && continue
+      tok="$(printf '%s\n' "$cand" | awk '{print $1}')"
+      case "$tok" in
+        */*)
+          base="${tok##*/}"
+          case "$base" in
+            python|python3|python.exe|pytest|uv|poetry|tox) py_path_tok="$tok" ;;
+          esac
+          ;;
+      esac
+    done <<EOF
+$(verification_candidates "$verify_scope")
+EOF
+    if [ -n "$py_path_tok" ]; then
+      if entry_has "$allow_raw" "Bash($py_path_tok"; then
+        py_path_covered=true
+      else
+        case "$py_path_tok" in
+          /*|?:/*) : ;;
+          *) entry_has "$allow_raw" "Bash($root/$py_path_tok" && py_path_covered=true ;;
+        esac
+      fi
+      if $py_path_covered; then
+        ok "path-qualified verification interpreter '$py_path_tok' is covered by a literal-path allow entry"
+      else
+        wrn "path-qualified verification interpreter '$py_path_tok' has no matching allow entry — add \"Bash($py_path_tok:*)\" to permissions.allow in .claude/settings.json (or .claude/settings.local.json if the path is machine-specific to one worktree) — see the issue-implementer skill's worktree-mode.md step d"
+        tool_warns=1
+      fi
+    fi
+  fi
+
   if has_marker package.json   && ! allow_has "npm|pnpm|yarn|bun";          then wrn "package.json found but no npm/pnpm/yarn/bun in the settings.json allow-list"; tool_warns=1; fi
-  if { has_marker pyproject.toml || has_marker requirements.txt || has_marker pytest.ini; } && ! allow_has "pytest|python|uv|poetry|tox"; then wrn "Python project files found but no pytest/python/uv/poetry in the allow-list"; tool_warns=1; fi
+  if { has_marker pyproject.toml || has_marker requirements.txt || has_marker pytest.ini; } && ! allow_has "pytest|python|uv|poetry|tox" && ! $py_path_covered; then wrn "Python project files found but no pytest/python/uv/poetry in the allow-list"; tool_warns=1; fi
   if has_marker Cargo.toml     && ! allow_has "cargo";                      then wrn "Cargo.toml found but no cargo in the allow-list"; tool_warns=1; fi
   if has_marker go.mod         && ! allow_has "go";                         then wrn "go.mod found but no go in the allow-list"; tool_warns=1; fi
   if has_marker Makefile       && ! allow_has "make";                       then wrn "Makefile found but no make in the allow-list"; tool_warns=1; fi
@@ -401,15 +543,57 @@ else
     fi
   fi
 
+  # --- post-merge verification declaration state (#132) --- purely informational: reports
+  # whether the optional "Post-merge verification" sub-heading (nested, any '#' depth, under
+  # "Merge autonomy policy") is declared, and — if so — how many non-blank fenced command lines
+  # it holds. Never judges whether the declared commands are any good, and never checks whether
+  # they have a matching allow entry (see the README's Follow-ups for that separate,
+  # not-yet-built check). Deliberately placed OUTSIDE the jq_ready/broken_list chain above, so it
+  # still reports even when the merge-autonomy activation state itself is unknown (no settings
+  # file, unparseable, ...) — the declaration lives in CLAUDE.md, not in any settings file, and
+  # doesn't depend on activation state. Never executes, evals, command -v's, or expands anything
+  # read from the declaration: the only derived value ever printed is an integer count.
+  if $has_merge_policy; then
+    merge_sec="$(claude_md_section "Merge autonomy policy")"
+    postdeploy_found=false
+    if printf '%s\n' "$merge_sec" | awk '
+      /^```/ { infence = !infence; next }
+      !infence && /^#+[[:space:]]+Post-merge verification[[:space:]]*$/ { print "found"; exit }
+    ' | grep -q .; then
+      postdeploy_found=true
+    fi
+
+    if ! $postdeploy_found; then
+      ok "post-merge verification: not declared — the cycle's merge pass runs no post-merge commands (add a 'Post-merge verification' sub-heading under 'Merge autonomy policy' to opt in; see the README's CLAUDE.md contract)"
+    else
+      postdeploy_sec="$(printf '%s\n' "$merge_sec" | awk '
+        /^#+[[:space:]]+Post-merge verification[[:space:]]*$/ { inx=1; next }
+        inx && /^```/ { infence = !infence }
+        inx && !infence && /^#+[[:space:]]/ { exit }
+        inx { print }
+      ')"
+      postdeploy_blk="$(printf '%s\n' "$postdeploy_sec" | awk '
+        /^```/ { if (infence) { exit } else { infence=1; next } }
+        infence { print }
+      ')"
+      postdeploy_count="$(printf '%s\n' "$postdeploy_blk" | grep -c '[^[:space:]]')"
+      if [ "$postdeploy_count" -eq 0 ]; then
+        wrn "post-merge verification: heading present but no fenced commands ('Post-merge verification' sub-heading found, but the cycle silently skips deploy verification with no fenced block — 'No command ⇒ no check', same rule as the test-suite ratchet below) — add a fenced block with at least one command"
+      else
+        ok "post-merge verification: declared ($postdeploy_count command line(s)) — the cycle's merge pass runs these read-only commands after a merge; this doctor never previews or executes them"
+      fi
+    fi
+  fi
+
   # --- test-suite ratchet (#45) --- the doctor never executes the measurement command it finds:
   # command -v is a lookup, not an execution, and the extracted token is only ever a quoted
   # argument — never eval'd, never expanded. See the header comment for why.
   if ! has_policy_section "Test-suite ratchet policy"; then
     ok "test-suite ratchet: off — no 'Test-suite ratchet policy' section in CLAUDE.md, so the ratchet never runs"
   else
-    bt="$(printf '\140')"
     # Documented heuristic (like 1.4 in dev/selfcheck.sh): the first backtick-quoted span in
-    # the section is taken as the measurement command.
+    # the section is taken as the measurement command. $bt (a single backtick) is hoisted near
+    # the top of this file, shared with the verification-scope candidate scan.
     sec="$(awk '/^#+[[:space:]]+Test-suite ratchet policy[[:space:]]*$/ { inx=1; next } inx && /^#+[[:space:]]/ { exit } inx { print }' "$root/CLAUDE.md")"
     span="$(printf '%s\n' "$sec" | grep -o "${bt}[^${bt}]*${bt}" | head -1 | tr -d "$bt")"
     if [ -z "$span" ]; then

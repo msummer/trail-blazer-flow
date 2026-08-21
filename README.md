@@ -264,8 +264,13 @@ worktree still holds is reported and skipped, never fatal — repair stale `pr-o
 audited comments, and quarantine any plan follow-up orphaned by a `claude/*` PR that closed
 without merging — comment + `no-plan`, never closed) and the implementer's baseline refresh
 re-verifies merged main — two green PRs can still compose badly, and that check is now
-mechanical. Running `cleanup-after-merge.sh` by hand right after a merge is still fine (it's
-idempotent); without `--fix` it only reports label problems instead of repairing them.
+mechanical. The script's own pre-flight lookups (the default branch, the current branch, the
+open-PR list, the `pr-open`-labelled issue list, and the follow-up-candidate issue search) are
+best-effort too — a failure on any of them is reported (`WARN`) and the run continues, degrading
+gracefully (skipping just the sync, or just the label/follow-up steps that depend on it) rather
+than aborting before producing any output. Running `cleanup-after-merge.sh` by hand right after a
+merge is still fine (it's idempotent); without `--fix` it only reports label problems instead of
+repairing them.
 
 A merged `claude/<n>-*` PR only closes its issue when the PR body carries a closing keyword
 (`Closes`/`Fixes`/`Resolves #<n>`) for that issue and no multi-PR signal is present. A PR that
@@ -535,7 +540,10 @@ subagents need:
    of the run); `pending`/`failed` surface loudly in the cycle report with the command output's
    last lines. **No sub-block means the merge pass behaves exactly as it does today** — no extra
    step, no `deploy=` field. These commands are reads only: the harness never approves, promotes,
-   or redeploys anything — see "Safety model".
+   or redeploys anything — see "Safety model". `check-harness.sh` reports the declaration state as
+   part of the merge-autonomy verdict — declared (with a count of fenced command lines), heading
+   present but no fenced commands, or not declared at all — without ever executing, eval'ing, or
+   otherwise looking up any of the declared commands themselves.
 
 6. **Test-suite ratchet policy** (optional) — a section titled exactly "Test-suite ratchet
    policy" stating the measurement command the `test-ratchet` skill (standalone, and as the
@@ -804,6 +812,16 @@ cover — e.g.:
 ```json
 "Bash(make:*)", "Bash(cargo:*)", "Bash(go:*)", "Bash(just:*)"
 ```
+
+That bare-name check is a regex match prefix-anchored at `^Bash(` against the allow-list entries,
+and doesn't cover a *path-qualified* verification interpreter (e.g. `api/.venv/bin/python`, as
+worktree-parallel mode's per-checkout virtualenvs require) — those need their own literal-path
+allow entry (`Bash(<repo>/api/.venv/bin/python:*)`) instead of, or in addition to, the bare
+`Bash(python:*)` form. When CLAUDE.md's verification scope names such a path, `check-harness.sh`
+looks for a matching literal-path grant and WARNs with the exact entry to add if none exists —
+the shell resolves an absolute venv path just fine, but Claude Code's permission match is a
+literal prefix test, so a bare-name grant can't produce a false reassurance for a path-qualified
+interpreter it doesn't actually cover.
 
 `check-harness.sh` reads this file exclusively with `jq`, matching literal entries in the
 `permissions.allow`/`permissions.deny` arrays it parses out — never a raw-text search of the
