@@ -216,8 +216,8 @@ the cheapest quality lever in the workflow.
 a. **Draft proposed answers, grounded in evidence.** Verify the plan's (and the issue's)
    load-bearing claims against the code rather than taking them on faith; where a number
    matters, measure it (e.g. a quick script) instead of estimating. State corrections
-   prominently. A question you cannot ground in code or measurements stays open for the human —
-   say so rather than guessing.
+   prominently. A question you cannot ground in code, measurements, or — on a granted issue —
+   its binding decision record stays open for the human — say so rather than guessing.
 
 b. **Post the answers as a normal issue comment** (no `<!-- planner-plan -->` marker), so the
    thread shows where each decision came from.
@@ -226,10 +226,12 @@ c. **Revise immediately (same run).** For every question you could answer, re-di
    `planner` subagent per step 3 (same dispatch attempt numbering and "Resilient dispatch"
    citation), treating your posted answers as the feedback, with this addition to the
    instruction: *"Fold each proposed answer in as a decision tagged `RESOLVED
-   (orchestrator-proposed):` so reviewers can see its provenance. Questions the answers did not
-   cover remain open questions."* Post the revised plan (step 2c format). The human now reviews
-   ONE artifact — the revised plan with visible provenance — instead of an answers comment plus
-   a later revision.
+   (orchestrator-proposed):` so reviewers can see its provenance. On a granted issue, if the
+   answer derives from the binding decision record, quote the record bullet inside that same
+   tagged decision — step 6 reads the tagged text, not the surrounding prose. Questions the
+   answers did not cover remain open questions."* Post the revised plan (step 2c format). The
+   human now reviews ONE artifact — the revised plan with visible provenance — instead of an
+   answers comment plus a later revision.
 
 If you could answer none of the BLOCKING questions, leave the plan as posted.
 
@@ -259,8 +261,15 @@ the following. The policy can loosen nothing in the hard floor; it can only add 
 **Hard floor (non-negotiable, regardless of what the policy says):**
 - the issue does NOT carry the `no-auto-approve` label;
 - the plan has **zero unanswered BLOCKING questions** — and zero BLOCKING questions resolved by
-  `RESOLVED (orchestrator-proposed):` decisions (you may not approve your own answers; those
-  plans always wait for a human);
+  `RESOLVED (orchestrator-proposed):` decisions (you may not approve your own answers). One
+  narrow exception: on an issue carrying the grant label declared under "Autonomy decision
+  record" (6a), such a decision does not block auto-approval if it quotes — inside its own
+  tagged text — the binding decision-record bullet it derives from, since it then only restates
+  a decision the human already wrote. No declared grant, no label on the issue, or no quoted
+  bullet: the default holds and the plan waits for a human. An answer that goes beyond what the
+  quoted bullet settles is not covered either — the grant is void by the repo's own rule at that
+  point — and ambiguity resolves the same way it does under 6b's policy conditions: the answer is
+  no. This skill only ever reads the grant label; it never applies, restores, or re-applies it;
 - the plan is not stale (step 4) and does not overlap another pending plan's Affected areas;
 - the plan's "Data / schema impact" is "None" **unless** the policy explicitly opts schema work
   in;
@@ -283,10 +292,11 @@ gh issue comment <number> --body-file <tempfile>
 ```
 
 The audit comment (normal comment, no marker) must state: that this was an auto-approval under
-the CLAUDE.md policy; which policy conditions it satisfied (one line); and how to veto — remove
-`plan-approved`, and add `no-auto-approve` to keep this issue manual in future. Include the
-warning: *"An auto-approved plan may be implemented in the same run — the PR review is your
-gate for this work."*
+the CLAUDE.md policy; which policy conditions it satisfied (one line); how to veto — remove
+`plan-approved`, and add `no-auto-approve` to keep this issue manual in future; and, if step 6's
+granted-issue exception approved any decision, the record bullet(s) each such decision cited.
+Include the warning: *"An auto-approved plan may be implemented in the same run — the PR review
+is your gate for this work."*
 
 In the summary, list auto-approved plans in their own group; they are the ones the human never
 saw pre-implementation.
@@ -331,8 +341,8 @@ next run, so an escalation comment there would spuriously re-open a plan nobody 
   post to GitHub.
 - **`plan-approved` is set by the human — or by step 6's policy path, never otherwise.** No
   CLAUDE.md policy section ⇒ no auto-approval, full stop. The hard floor is not negotiable, and
-  a plan containing orchestrator-proposed answers to BLOCKING questions always waits for a
-  human.
+  orchestrator-proposed answers to BLOCKING questions keep a plan manual unless step 6's
+  granted-issue exception applies.
 - **If a subagent's plan is dominated by open questions** (i.e. it couldn't form a real plan),
   still post it — the open questions are exactly the feedback the human needs to provide — and
   say so in the summary.
