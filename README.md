@@ -35,7 +35,7 @@ or share).
 ├── agents/
 │   ├── planner.md                # read-only planning subagent (Opus 5)
 │   ├── implementer.md            # code-writing subagent (Sonnet 5); no git/network
-│   └── verifier.md               # read-only plan-conformance reviewer (Opus 5); fresh context
+│   └── verifier.md               # plan-conformance reviewer (Opus 5); fresh context; restores anything it mutates
 ├── skills/
 │   ├── project-kickoff/SKILL.md  # greenfield on-ramp: interview → brief + CLAUDE.md + repo + backlog
 │   ├── harness-setup/SKILL.md    # one-time repo onboarding: doctor + CLAUDE.md audit + baseline
@@ -181,11 +181,14 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
 3. On completion: **independently re-runs the verification commands** (the mechanical gate — the
    subagent may be wrong, and this re-run stays the authoritative gate), comparing against the
    recorded baseline (counts must not drop unexplained).
-4. **Dispatches the `verifier` subagent** (the semantic gate): fresh-context, read-only review of
-   the diff against the plan's steps, the plan's acceptance criteria, test quality, scope, and
-   declared constraints. **Verifier fail → kickback**: the implementer is re-dispatched with the
-   findings ("fix ONLY these"), then re-checked — **max 2 kickbacks**, then `impl-blocked` with
-   the findings. All of this happens *before* anything is pushed or a PR exists — the branch may
+4. **Dispatches the `verifier` subagent** (the semantic gate): fresh-context review of the diff
+   against the plan's steps, the plan's acceptance criteria, test quality — including a bounded
+   mutation probe (3 to 5 mutants in the changed code, tests re-run against each, tree restored
+   immediately after every mutant; a surviving mutant on a behavior the plan's criteria named is
+   a `major` finding) — scope, and declared constraints. **Verifier fail → kickback**: the
+   implementer is re-dispatched with the findings ("fix ONLY these"), then re-checked — **max 2
+   kickbacks**, then `impl-blocked` with the findings. All of this happens *before* anything is
+   pushed or a PR exists — the branch may
    already carry local WIP checkpoint commits by this point (see "Resilience: checkpointing,
    retries, and the dispatch ledger" below), but nothing leaves the machine until the verifier
    passes, so every PR the human sees is verifier-clean.
@@ -650,7 +653,11 @@ contract" item 5). `settings.local.json` is machine-local (may hold secrets) —
 ## Safety model
 
 The implementer subagent can edit files and run the build tool, but does **no** git or network —
-the orchestrator does all git/GitHub. Guarantees: branch isolation (work never lands on the
+the orchestrator does all git/GitHub. The verifier subagent writes nothing durable: its mutation
+probe edits an already-tracked file inside the tree under review, runs the tests, restores it
+with `git restore <file>` (working tree only — never a commit, ref, or push), and re-checks
+`git status --porcelain` against its pre-probe output before returning; if the repo doesn't grant
+the restore, it skips the probe and says so. Guarantees: branch isolation (work never lands on the
 default branch directly), a deny-list (no merge by default, no force-push, no `reset --hard`,
 no `rm -rf`), independent re-verification + staged-file reconciliation before every commit, and
 **human review of every PR before merge unless the repo has double-opted-in to merge autonomy**
