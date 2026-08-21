@@ -105,6 +105,19 @@ on top and is not configurable**:
     must print `true`, and the same command with `outcome=fail` in place of `outcome=pass` must
     print `false`. Keep the trailing space after `outcome=pass` in the needle so extra trailing
     `key=value` fields on the line stay tolerated.
+  - *Archived verdict, checked mechanically*, between the check above and the *Ledger
+    cross-check* below, same `<n>`-from-the-head-branch scoping (harness PRs only; Dependabot PRs
+    skip this bullet): read the latest archive with one substitution-free command —
+    `gh issue view <n> --json comments --jq '[.comments[] | select(.body | contains("<!-- verifier-verdict -->"))] | sort_by(.createdAt) | last | ((.url // "none"), ((.body // "") | split("\n") | map(select(startswith("<!-- harness-status:"))) | last // "none"))' | tr -d '\r'`
+    — prints the comment URL, then the archived closing status line. A second line reading
+    `none`, or one that does not begin `<!-- harness-status: stage=verifier issue=<n>
+    outcome=pass `, is **not eligible** ("no archived verifier verdict for this issue"), one-line
+    reason in the report. Otherwise paste that second line literally as the needle of a second,
+    equally substitution-free command:
+    `gh pr view <pr> --json body --jq '(.body // "") | contains("<paste the printed line here>")' | tr -d '\r'`
+    — anything but `true` is **not eligible** ("the PR body's verifier line does not match the
+    archived verdict"), one-line reason in the report. Cite the printed comment URL as merge
+    evidence.
   - *Ledger cross-check*, against the pre-advance check above: the issue's `verifier` ledger row
     must read `pass`; a row reading `fail`/`incomplete`/`died` against a pass line in the PR body
     is a contradiction — don't merge, escalate with both pieces of evidence.
@@ -121,7 +134,7 @@ on top and is not configurable**:
   report (two green PRs can still compose badly; sequential re-verification attributes the
   breakage). Match the repo's existing merge method (merge/squash/rebase) from recent history.
 - **Every autonomous merge is audited**: it appears in the cycle report with its evidence —
-  PR link, verifier verdict, CI run — never merged silently.
+  PR link, verifier verdict, the archived verdict comment's URL, CI run — never merged silently.
 
 **Merge guards, applied per PR, in order:**
 

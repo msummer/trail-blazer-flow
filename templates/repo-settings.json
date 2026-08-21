@@ -32,6 +32,7 @@
       "Bash(gh label edit:*)",
       "Bash(gh pr checks:*)",
       "Bash(gh pr create:*)",
+      "Bash(gh pr edit:*)",
       "Bash(gh pr list:*)",
       "Bash(gh pr view:*)",
       "Bash(gh repo view:*)",
