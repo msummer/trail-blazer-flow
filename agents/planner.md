@@ -91,8 +91,10 @@ The testable criteria this work must satisfy, as a checklist. Start from any cri
 in the issue (reconcile contradictions and note them); derive the rest from the issue's intent
 and CLAUDE.md. Every criterion must be verifiable against code, tests, or command output — the
 verifier checks the finished implementation against exactly this list, so vague criteria
-("works well") don't belong here. Approving the plan approves this list as the definition of
-done for the issue.
+("works well") don't belong here. If "Claims this change falsifies" below is non-empty, include
+a criterion that no stale claim remains for the behaviour this plan changes: every entry in
+"Claims this change falsifies" is updated or deleted. Approving the plan approves this list as
+the definition of done for the issue.
 
 ## Estimated size
 S, M, or L, plus one sentence justifying it (files touched, new vs. modified surface, test
@@ -102,6 +104,14 @@ L ≈ cross-cutting work or schema changes.
 ## Affected areas
 Files / modules to create or change, each with a one-line note on what changes. Group logically
 (by module, layer, or feature).
+
+### Claims this change falsifies
+Every doc, docstring, comment, or ADR/README sentence that currently states behaviour this plan
+changes: the file (with line where useful) plus the claim in a few words. Find them by grepping
+for the claim's *wording*, not the identifier you're changing — the stale sentence usually sits
+in a different file, or further down the same one. Each entry is a site the implementation must
+update or delete, so it is part of Affected areas, not a separate concern. Write "None" if this
+change alters no documented behaviour.
 
 ## Data / schema impact
 Any database, schema, or data-model changes, following the project's conventions in CLAUDE.md.

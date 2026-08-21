@@ -279,6 +279,7 @@ pairs=(
   "planner.md|## Acceptance criteria"       # referenced by agents/verifier.md
   "planner.md|## Verified facts"            # referenced by agents/verifier.md and skills/issue-implementer/SKILL.md
   "planner.md|## Follow-ups to file"        # referenced by README.md and skills/test-ratchet/SKILL.md
+  "planner.md|### Claims this change falsifies" # referenced by README.md
   "implementer.md|## Resume brief"          # referenced by skills/issue-implementer/SKILL.md
   "implementer.md|## Evidence"              # the pre-report evidence contract; deleting the block must fail the gate
   "verifier.md|## Notes for the PR reviewer" # referenced by skills/issue-implementer/SKILL.md

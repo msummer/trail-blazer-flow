@@ -138,9 +138,12 @@ The `issue-planner` skill:
 
 The plan template (see `agents/planner.md`) includes: Summary, **Acceptance criteria** (the
 testable definition of done the verifier later checks against — derived even when the issue
-didn't state any), Estimated size (S/M/L), Affected areas, Data/schema impact, Implementation
-steps, Testing approach, Risks, **Verified facts**, **Open questions (BLOCKING/ADVISORY)**,
-**Follow-ups to file** (each carrying a one-sentence justification), Out of scope.
+didn't state any), Estimated size (S/M/L), Affected areas (including a **"Claims this change
+falsifies"** sub-list: the docs, docstrings, comments, and ADR sentences the change invalidates,
+found at planning time rather than by the verifier afterwards), Data/schema impact,
+Implementation steps, Testing approach, Risks, **Verified facts**, **Open questions
+(BLOCKING/ADVISORY)**, **Follow-ups to file** (each carrying a one-sentence justification), Out
+of scope.
 
 ### Approval (human by default, policy-assisted if you opt in)
 
