@@ -425,9 +425,10 @@ subagents need:
    ```
 
    The hard floor always applies on top (no BLOCKING questions — none answered by the
-   orchestrator itself — not stale, no overlap, schema/security work only if explicitly opted
-   in), every auto-approval is audited with an issue comment, and the `no-auto-approve` label
-   opts any issue out. **No section means no auto-approval** — this is a trust decision that
+   orchestrator itself, except a granted issue's record-citing answer, see item 8 below — not
+   stale, no overlap, schema/security work only if explicitly opted in), every auto-approval is
+   audited with an issue comment, and the `no-auto-approve` label opts any issue out. **No
+   section means no auto-approval** — this is a trust decision that
    belongs in your file, not the plugin's.
 
 5. **Merge autonomy policy** (optional) — a section titled exactly "Merge autonomy policy"
@@ -810,8 +811,14 @@ grants are session-wide, so a misbehaving subagent *could* run git — the stage
 reconciliation and branch isolation are what bound the damage. Second, plan auto-approval and
 merge autonomy (each opt-in via `CLAUDE.md` — see "The CLAUDE.md contract" items 4–5)
 deliberately trade human gates for throughput on low-risk work. Their hard floors are not
-configurable and every use is audited (issue comment; cycle report). With only
-auto-approval enabled, a bad auto-approval costs a wasted PR, not a bad merge. With merge
+configurable by the policy section — the one exception is itself part of the floor's fixed
+definition, not something a policy can widen: on an issue the human granted under the repo's
+scoped-autonomy declarations (see "The CLAUDE.md contract" item 8, "Autonomy decision record"),
+an orchestrator-proposed answer to a BLOCKING question skips the human wait only if it quotes the
+human-authored binding-record bullet it derives from. The grant label itself is applied by the
+human, per issue, and the harness never applies it, so an uncitable answer still waits, and every
+use is audited (issue comment; cycle report). With only auto-approval enabled, a bad
+auto-approval costs a wasted PR, not a bad merge. With merge
 autonomy also enabled, the backstop is the merge pass's hard floor (standard-flow PRs only,
 green CI, protected governance surface, sequential re-verification) — and on a repo with
 branch protection + required checks, that floor is a technical rail, not just policy. Enable
