@@ -95,8 +95,18 @@ against the repo's policy. The policy defines *which* PRs qualify; this **hard f
 on top and is not configurable**:
 
 - **Only PRs from the standard flow** — harness branches whose plan was approved (by the human
-  or the auto-approval policy) and whose PR body carries a verifier pass — or Dependabot PRs of
-  the update classes the policy names. Never a human's PR.
+  or the auto-approval policy) and whose PR body carries **the verifier's own closing status
+  line** for that issue with `outcome=pass` — or Dependabot PRs of the update classes the policy
+  names. Never a human's PR. A prose "verifier verdict: pass" without that line is **not** green.
+  - *Verdict provenance, checked mechanically, before guard (a):* with `<n>` the issue number
+    taken from the PR's `claude/<n>-…` head branch (never from prose in the body):
+    `gh pr view <pr> --json body --jq '(.body // "") | contains("<!-- harness-status: stage=verifier issue=<n> outcome=pass ")' | tr -d '\r'`
+    must print `true`, and the same command with `outcome=fail` in place of `outcome=pass` must
+    print `false`. Keep the trailing space after `outcome=pass` in the needle so extra trailing
+    `key=value` fields on the line stay tolerated.
+  - *Ledger cross-check*, against the pre-advance check above: the issue's `verifier` ledger row
+    must read `pass`; a row reading `fail`/`incomplete`/`died` against a pass line in the PR body
+    is a contradiction — don't merge, escalate with both pieces of evidence.
 - **CI green on the head commit**, verified fresh (`gh pr checks`), not remembered; **"no checks
   configured" is not green** unless the policy section explicitly opts a no-CI repo in.
 - **Never the governance surface**: any PR touching `CLAUDE.md`, `.claude/`, the repo's

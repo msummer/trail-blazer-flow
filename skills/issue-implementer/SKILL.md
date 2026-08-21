@@ -41,7 +41,11 @@ once under "Hard rules" below.
   `claude/<n>-<slug>` branch → one PR. Merging belongs to the human — or, where CLAUDE.md defines
   a merge autonomy policy and the human has lifted the default `gh pr merge` deny, to the
   `issue-cycle` skill's merge pass, the sole place any harness merge authority exists.
-- **The subagent writes code; you do every git and `gh` command.**
+- **The subagent writes code; you do every git and `gh` command.** This holds after a verifier
+  `fail` and after red CI, too: you never edit a source, test, or doc file yourself to resolve a
+  finding or a CI failure — you re-dispatch the implementer (step 2e), and once the kickback
+  budget is spent, the issue takes the blocked path (step 2f). Your own edits are harness
+  bookkeeping only — `.claude/LESSONS.md`, the PR body, and issue comments.
 - **A dirty working tree is only recoverable when it's clearly the harness's own** — step 0 has
   the full rule; never risk clobbering uncommitted human work.
 - **No Bash command may wrap another command's output inline** (backticks or dollar-paren
@@ -274,8 +278,8 @@ e. **Dispatch the `verifier` subagent** (Task tool, `agents/verifier.md`) — th
    number, `git diff <default-branch>...HEAD --stat` (three-dot, from the merge base; non-empty
    because of step 2c's checkpoint), and *"Verify this implementation against the plan and
    acceptance criteria following your process. Return your verdict."*
-   - **Verdict `pass`:** carry its "Notes for the PR reviewer" into the PR body, proceed to
-     commit (next step).
+   - **Verdict `pass`:** carry its closing status line — verbatim — and its "Notes for the PR
+     reviewer" into the PR body's verification section, proceed to commit (next step).
    - **Verdict `fail`:** kick back. Re-dispatch the **implementer** (per the ladder if the
      dispatch fails) with: the full approved plan, its own previous report, and the verifier's
      findings verbatim, plus *"Fix ONLY these verification findings. Do not expand scope. Return
@@ -313,10 +317,14 @@ gh pr create --title "<concise title> (#<number>)" --body-file <tempfile>
 gh issue edit <number> --add-label pr-open
 ```
      The PR body (the temp file) must include: a one-paragraph summary; `Closes #<number>`; the
-     files changed; the verification results; any schema changes needing application; and the
-     reviewer notes from the subagent's report. **Exception — a PR that delivers only part of
-     an issue** (a deliberately multi-PR split): write `Part of #<number>` (plus
-     `PR <k> of <m>` when the total is known) instead of a closing keyword, so
+     files changed; the verification results; **the verifier's own closing status line, pasted
+     verbatim — never one you compose on its behalf** —
+     `<!-- harness-status: stage=verifier issue=<number> outcome=pass retries=<k> -->` — from the
+     verdict that reviewed the **final** tree, after the last kickback (a kickback round's `fail`
+     line is replaced, not appended: never leave a superseded one in the body); any schema changes
+     needing application; and the reviewer notes from the subagent's report. **Exception — a PR
+     that delivers only part of an issue** (a deliberately multi-PR split): write `Part of
+     #<number>` (plus `PR <k> of <m>` when the total is known) instead of a closing keyword, so
      `cleanup-after-merge.sh` leaves the issue open after this slice merges; only the PR that
      finishes the issue carries `Closes #<number>`. A human who plans the split up front can
      put `<!-- harness-multi-pr -->` in the issue body or a comment as the same opt-out.
