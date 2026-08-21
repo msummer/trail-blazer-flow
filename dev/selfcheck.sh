@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 27 assertions total. The gate prints what it checks — run it.
+# Five groups, 28 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -512,7 +512,7 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 405
+budget_table="issue-implementer 410
 issue-cycle 230
 issue-planner 315
 project-kickoff 215
@@ -571,6 +571,21 @@ if [ -z "$missing" ]; then
   ok "4.16 '$marker' present in skills/issue-implementer/SKILL.md and bin/cleanup-after-merge.sh"
 else
   bad "4.16 '$marker' missing from:$missing"
+fi
+
+# 4.17 — the literal harness-multi-pr marker appears in the script, the README, and the
+# implementer skill (fixed-string). Mirrors 4.1/4.5/4.16 — a human plans a multi-PR issue split
+# up front by putting this marker in the issue body or a comment, so cleanup-after-merge.sh's
+# label hygiene never closes it after the first slice merges.
+marker='<!-- harness-multi-pr -->'
+missing=""
+grep -qF -- "$marker" "$root/bin/cleanup-after-merge.sh" || missing="$missing bin/cleanup-after-merge.sh"
+grep -qF -- "$marker" "$root/README.md" || missing="$missing README.md"
+grep -qF -- "$marker" "$root/skills/issue-implementer/SKILL.md" || missing="$missing skills/issue-implementer/SKILL.md"
+if [ -z "$missing" ]; then
+  ok "4.17 '$marker' present in bin/cleanup-after-merge.sh, README.md, and skills/issue-implementer/SKILL.md"
+else
+  bad "4.17 '$marker' missing from:$missing"
 fi
 
 # ============================================================================
