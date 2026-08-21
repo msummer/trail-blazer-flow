@@ -31,7 +31,27 @@ the current branch, and return a clear report.
    of "done" — typically a typecheck, a linter, tests, and a build). If CLAUDE.md doesn't list
    them explicitly, infer them from the repo's tooling (e.g. `package.json` scripts, a `Makefile`,
    a `justfile`) and state exactly what you ran in your report.
-6. **Return your report** using the template below. The orchestrator reads it to decide whether
+6. **Gather evidence before you report.** Do all five, every dispatch:
+   1. **Sweep for the claim, not the cited lines.** For every behavioural claim your diff changes
+      or falsifies, grep the repo — README, docs, ADRs, module and test docstrings, inline
+      comments — for the claim itself, and fix every site, including other statements in files
+      your diff already touches. The plan's list of doc sites is a starting point, never
+      exhaustive.
+   2. **Self-mutation check on every new or rewritten test.** Temporarily break the behaviour the
+      test claims to pin, run just that test, confirm it fails, then restore the edit
+      immediately — you have no `git`, so restoration is a manual edit. A test that still passes
+      is not done. Known vacuous-pass modes to name if you find one: an already-stable sort, a
+      fixture whose data already satisfies the assertion, a cap a library enforces on its own.
+      After the last restore, re-run the verification commands once more, so every number you
+      report comes from the final tree.
+   3. **Consequence assertions.** A docstring or test name that describes a consequence must be
+      matched by an assertion on that consequence, not on a neighbouring field.
+   4. **Numbers are pasted, never paraphrased.** Every count in your report — tests run, files
+      checked, rows — is copied from command output, never recalled or estimated, and the report
+      names the command that produced it.
+   5. **Record it.** Write the sweep, the mutation checks, and the sourced numbers into the
+      report's Evidence block below.
+7. **Return your report** using the template below. The orchestrator reads it to decide whether
    to open a PR (status: complete), flag the issue (status: blocked), or relaunch you with a
    resume brief (status: incomplete).
 
@@ -84,7 +104,17 @@ One short paragraph on what you implemented (or, if blocked, what you attempted)
 The verification commands you ran (per CLAUDE.md) and the result of each:
 - <command>: pass/fail
 - ...
-Note how many tests ran, if applicable.
+Note how many tests ran, if applicable — counts pasted from output, sourced in Evidence below.
+
+## Evidence
+Required for status: complete; for blocked/incomplete, record whatever you gathered before
+stopping, or state plainly that you did not reach the evidence pass.
+- Claims swept: grep pattern(s) run and the site(s) fixed. "None — this diff changes no
+  behavioural claim" if so.
+- Mutation checks: one line per new or rewritten test — test, mutation applied, failed as
+  expected y/n. "None — no new or rewritten tests" if so.
+- Numbers: each count in this report and the exact command whose output it was copied from.
+  "None — this report cites no counts" if so.
 
 ## Schema / data changes
 New migration or schema files created (if any) and a note that they need applying by a human.

@@ -273,13 +273,14 @@ else
   bad "3.4 harness-status problems:$bad_list"
 fi
 
-# 3.7 — required template headings (referenced by exact name elsewhere) exist inside the
-# fenced block.
+# 3.7 — required template headings (referenced by exact name elsewhere, or required by a
+# documented contract) exist inside the fenced block.
 pairs=(
   "planner.md|## Acceptance criteria"       # referenced by agents/verifier.md
   "planner.md|## Verified facts"            # referenced by agents/verifier.md and skills/issue-implementer/SKILL.md
   "planner.md|## Follow-ups to file"        # referenced by README.md and skills/test-ratchet/SKILL.md
   "implementer.md|## Resume brief"          # referenced by skills/issue-implementer/SKILL.md
+  "implementer.md|## Evidence"              # the pre-report evidence contract; deleting the block must fail the gate
   "verifier.md|## Notes for the PR reviewer" # referenced by skills/issue-implementer/SKILL.md
 )
 bad_list=""

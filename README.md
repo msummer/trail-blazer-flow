@@ -175,9 +175,12 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
 2. Dispatches the `implementer` subagent with: issue + full plan (incl. Verified facts) +
    **resolved answers to every open question** (including binding post-approval comments from
    the thread) + `LESSONS.md` entries. Missing a BLOCKING answer → don't dispatch; ask the human.
+   Before reporting, the subagent runs a mandatory evidence pass — sweeping the repo for every
+   claim its diff falsifies, mutation-checking each new or rewritten test, pasting every number
+   from command output — and records it in its report's Evidence block.
 3. On completion: **independently re-runs the verification commands** (the mechanical gate — the
-   subagent may be wrong), comparing against the recorded baseline (counts must not drop
-   unexplained).
+   subagent may be wrong, and this re-run stays the authoritative gate), comparing against the
+   recorded baseline (counts must not drop unexplained).
 4. **Dispatches the `verifier` subagent** (the semantic gate): fresh-context, read-only review of
    the diff against the plan's steps, the plan's acceptance criteria, test quality, scope, and
    declared constraints. **Verifier fail → kickback**: the implementer is re-dispatched with the
