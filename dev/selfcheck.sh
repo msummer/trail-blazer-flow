@@ -280,6 +280,7 @@ pairs=(
   "planner.md|## Verified facts"            # referenced by agents/verifier.md and skills/issue-implementer/SKILL.md
   "planner.md|## Follow-ups to file"        # referenced by README.md and skills/test-ratchet/SKILL.md
   "planner.md|### Claims this change falsifies" # referenced by README.md
+  "planner.md|## Reserve touch list"        # referenced by skills/issue-planner/SKILL.md
   "implementer.md|## Resume brief"          # referenced by skills/issue-implementer/SKILL.md
   "implementer.md|## Evidence"              # the pre-report evidence contract; deleting the block must fail the gate
   "verifier.md|## Notes for the PR reviewer" # referenced by skills/issue-implementer/SKILL.md
@@ -413,6 +414,8 @@ done <<EOF
 Plan auto-approval policy
 Merge autonomy policy
 Test-suite ratchet policy
+Autonomy reserve
+Autonomy decision record
 EOF
 if [ -z "$bad_list" ]; then
   ok "4.8 policy section titles cross-referenced in README.md and skills/harness-setup/SKILL.md"
@@ -516,10 +519,10 @@ fi
 # read on demand, not on every run.
 budget_table="issue-implementer 420
 issue-cycle 240
-issue-planner 315
+issue-planner 340
 project-kickoff 215
 test-ratchet 200
-harness-setup 175"
+harness-setup 180"
 bad_list=""
 while IFS=' ' read -r skill cap; do
   [ -n "$skill" ] || continue

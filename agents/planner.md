@@ -113,6 +113,12 @@ in a different file, or further down the same one. Each entry is a site the impl
 update or delete, so it is part of Affected areas, not a separate concern. Write "None" if this
 change alters no documented behaviour.
 
+## Reserve touch list
+Include this section ONLY if CLAUDE.md declares an "Autonomy reserve" section (a fenced
+block of path globs, one per line). Then list every "Affected areas" entry matching one of
+those globs, naming the glob it matched, or write "None". If no reserve is declared, omit
+this section entirely.
+
 ## Data / schema impact
 Any database, schema, or data-model changes, following the project's conventions in CLAUDE.md.
 Write "None" if there is no such impact.

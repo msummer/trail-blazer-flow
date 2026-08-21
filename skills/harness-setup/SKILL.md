@@ -94,6 +94,14 @@ it without guessing?"**:
    `src/` only; at most 1 issue per run"*) for their review, and explain the flow — filed issues
    arrive labelled `test-ratchet` + `no-auto-approve`, so every one still gets a human's plan
    review, and closing one as *not planned* vetoes that gap permanently.
+8. **Scoped autonomy (optional)** — if sections titled exactly "Autonomy reserve" and/or
+   "Autonomy decision record" exist, they make a human-applied grant label checkable: the
+   planner adds a "Reserve touch list" to plans and runs `check-decision-record.sh` on
+   grant-labelled issues, reporting `grant: will deliver` / `grant: will not deliver` before
+   implementation; `check-harness.sh` reports whether both declarations are present and
+   well-formed, and whether the declared label exists. This only makes the grant checkable — it
+   never decides what the grant means, and the harness never applies or removes the label; that
+   stays entirely with this repo and its human. Neither section means nothing changes.
 
 If `CLAUDE.md` is missing or thin: explore the repo (manifests, CI workflow files, test
 configs, existing docs) and **draft** the missing sections — or a full `CLAUDE.md` — and

@@ -18,6 +18,7 @@
       "Bash(find-implementation-work.sh:*)",
       "Bash(cleanup-after-merge.sh:*)",
       "Bash(check-harness.sh:*)",
+      "Bash(check-decision-record.sh:*)",
       "Bash(harness-status.sh:*)",
       "Bash(reconcile-ledger.sh:*)",
       "Bash(gh auth status:*)",

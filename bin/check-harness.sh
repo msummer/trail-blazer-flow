@@ -10,9 +10,11 @@
 # .claude/settings.json, .claude/settings.local.json, and the user-level settings file (a deny in
 # any of them wins, regardless of allows elsewhere — union semantics, not just the checked-in
 # file), whether a "Test-suite ratchet policy" section exists and names a measurement command
-# (looked up with `command -v`, never executed), the verification baseline (.claude/BASELINE.md,
-# machine-local), whether the template's branch-scoped deny entries actually cover this repo's
-# default branch, and branch protection.
+# (looked up with `command -v`, never executed), whether "Autonomy reserve" and "Autonomy
+# decision record" sections are declared and well-formed (and, when gh is ready, whether the
+# declared grant label exists — never applied, removed, or judged for content), the verification
+# baseline (.claude/BASELINE.md, machine-local), whether the template's branch-scoped deny
+# entries actually cover this repo's default branch, and branch protection.
 #
 # The test-suite-ratchet check never executes, evals, or shells out to anything read from
 # CLAUDE.md: it only looks up the measurement command's first word with `command -v` (a lookup,
@@ -97,6 +99,7 @@ else
 fi
 
 # --- lifecycle labels ---------------------------------------------------------
+existing=""
 if $gh_ready; then
   existing="$(gh label list --limit 200 --json name --jq '.[].name' 2>/dev/null | tr -d '\r' || true)"
   missing=""
@@ -151,7 +154,7 @@ if [ -f "$root/CLAUDE.md" ]; then
   cm_lines="$(wc -l < "$root/CLAUDE.md" | tr -d '[:space:]')"
   cm_bytes="$(wc -c < "$root/CLAUDE.md" | tr -d '[:space:]')"
   if [ "$cm_lines" -gt 300 ] || [ "$cm_bytes" -gt 20000 ]; then
-    wrn "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes — over the 300-line/20000-byte guideline; run the harness-setup skill's leanness audit to trim restatement (directory tours, framework defaults, formatter-enforced style — not the contract's six items themselves)"
+    wrn "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes — over the 300-line/20000-byte guideline; run the harness-setup skill's leanness audit to trim restatement (directory tours, framework defaults, formatter-enforced style — not the contract's eight items themselves)"
   else
     ok "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes"
   fi
@@ -421,6 +424,64 @@ else
         fi
       else
         ok "test-suite ratchet: 'Test-suite ratchet policy' section names a measurement command (\`$span\`) — the doctor does not run it; the harness-setup skill does, once, with a human present"
+      fi
+    fi
+  fi
+
+  # --- scoped autonomy (#107) --- reads the "Autonomy reserve" and "Autonomy decision record"
+  # declarations verbatim; the policy itself (what's reserved, what a record must contain, what
+  # a grant permits) stays in the repo's own CLAUDE.md, and the grant label is the human's to
+  # apply or remove — this only reports whether the declarations are well-formed and, when gh is
+  # ready, whether the declared label exists on the repo.
+  has_reserve=false
+  has_policy_section "Autonomy reserve" && has_reserve=true
+  has_record=false
+  has_policy_section "Autonomy decision record" && has_record=true
+
+  if ! $has_reserve && ! $has_record; then
+    ok "scoped autonomy: off — no 'Autonomy reserve' or 'Autonomy decision record' section in CLAUDE.md, so no grant is ever evaluated"
+  else
+    scoped_grant_label=""
+    scoped_element_count=0
+    scoped_record_ok=true
+    if $has_record; then
+      scoped_record_sec="$(awk '/^#+[[:space:]]+Autonomy decision record[[:space:]]*$/ { inx=1; next } inx && /^```/ { infence = !infence } inx && !infence && /^#+[[:space:]]/ { exit } inx { print }' "$root/CLAUDE.md")"
+      scoped_record_blk="$(printf '%s\n' "$scoped_record_sec" | awk '/^```/ { if (infence) { exit } else { infence=1; next } } infence { print }')"
+      scoped_grant_label="$(printf '%s\n' "$scoped_record_blk" | sed -nE 's/^[[:space:]]*grant-label:[[:space:]]*(.*[^[:space:]])[[:space:]]*$/\1/p' | head -1)"
+      scoped_element_count="$(printf '%s\n' "$scoped_record_blk" | grep -cE '^[[:space:]]*element:')"
+      if [ -z "$scoped_grant_label" ]; then
+        wrn "scoped autonomy: 'Autonomy decision record' section present but names no 'grant-label:' line — add one (see the README's CLAUDE.md contract)"
+        scoped_record_ok=false
+      fi
+      if [ "$scoped_element_count" -eq 0 ]; then
+        wrn "scoped autonomy: 'Autonomy decision record' section present but names no 'element:' line — add at least one (see the README's CLAUDE.md contract)"
+        scoped_record_ok=false
+      fi
+    fi
+
+    if $has_record && ! $has_reserve; then
+      wrn "scoped autonomy: no 'Autonomy reserve' section, so every plan's Reserve touch list is omitted and a granted issue always looks reserve-free — add the section if reserved paths matter to your grant"
+    fi
+    if $has_reserve && ! $has_record; then
+      wrn "scoped autonomy: 'Autonomy reserve' section present but no 'Autonomy decision record' section — no grant label is declared, so check-decision-record.sh never runs"
+    fi
+
+    if $has_reserve && $has_record && $scoped_record_ok; then
+      scoped_reserve_sec="$(awk '/^#+[[:space:]]+Autonomy reserve[[:space:]]*$/ { inx=1; next } inx && /^```/ { infence = !infence } inx && !infence && /^#+[[:space:]]/ { exit } inx { print }' "$root/CLAUDE.md")"
+      scoped_reserve_blk="$(printf '%s\n' "$scoped_reserve_sec" | awk '/^```/ { if (infence) { exit } else { infence=1; next } } infence { print }')"
+      scoped_reserve_count="$(printf '%s\n' "$scoped_reserve_blk" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' | grep -v '^#' | grep -c .)"
+      ok "scoped autonomy: declared (grant label '$scoped_grant_label', $scoped_reserve_count reserve pattern(s), $scoped_element_count required record element(s))"
+    fi
+
+    if [ -n "$scoped_grant_label" ]; then
+      if $gh_ready; then
+        if printf '%s\n' "$existing" | grep -qx "$scoped_grant_label"; then
+          :
+        else
+          wrn "scoped autonomy: grant label '$scoped_grant_label' does not exist on this repo — run: gh label create \"$scoped_grant_label\" (the harness never applies or removes it, only reports whether it exists)"
+        fi
+      else
+        wrn "scoped autonomy: grant label '$scoped_grant_label' existence unknown (gh not ready)"
       fi
     fi
   fi
