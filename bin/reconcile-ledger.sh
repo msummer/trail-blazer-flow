@@ -12,7 +12,7 @@
 #
 # LEDGER RECORDS — one per line, whitespace-separated; blank lines and #-comments ignored:
 #
-#   <issue> <stage> <outcome> [retries] [further fields, ignored]
+#   <issue> <stage> <outcome> [retries] [deploy=<slug>] [further fields, ignored]
 #
 #   issue    bare integer
 #   stage    seed | planner | implementer | verifier | merge
@@ -21,9 +21,14 @@
 #            unplanned | in_revision | ready_to_implement (harness-status.sh names) or
 #            needs_initial_plan | needs_revision | ready (the discovery scripts' names), or '-'.
 #   retries  accepted and ignored, so agent status lines can be pasted verbatim.
+#   deploy   optional, valid only when stage=merge: a slug from the deploy vocabulary (below),
+#            from the merge pass's optional post-merge verification step (issue-cycle guard
+#            (e)). Absent on any other record; a deploy= token on a non-merge stage is a
+#            parse-time error (die, exit 2).
 #
 # A verbatim agent status line counts as a record:
 #   <!-- harness-status: stage=planner issue=17 outcome=plan-posted retries=0 -->
+#   <!-- harness-status: stage=merge issue=17 outcome=merged retries=0 deploy=verified -->
 #
 # Write a record only for a stage the run actually DISPATCHED — a stage the run never reached
 # is ABSENT, not '-'. For the same issue+stage the LAST record wins (append-friendly).
@@ -33,6 +38,8 @@
 #   implementer  complete | blocked | incomplete | died
 #   verifier     pass | fail | incomplete | died
 #   merge        merged | merge-blocked | not-eligible | merge-unconfirmed
+#   deploy       verified | pending | failed (merge-only; see DEPLOY_OUTCOMES below —
+#                dev/selfcheck.sh's 4.13 parses that exact line)
 #
 # STATUS JSON: harness-status.sh output. Omit the argument and this script runs
 # harness-status.sh itself (needs gh authenticated); pass a path to work offline.
@@ -63,7 +70,7 @@ usage: reconcile-ledger.sh <ledger-file|-> [status-json-file]
 Compares an issue-cycle dispatch ledger against the live harness queues and prints one line
 per discrepancy (stage-skipped | unledgered | outcome-missing | unknown-outcome | contradiction).
 
-  <ledger-file>       records, one per line: "<issue> <stage> <outcome> [retries]".
+  <ledger-file>       records, one per line: "<issue> <stage> <outcome> [retries] [deploy=<slug>]".
                       Use '-' to read the ledger from stdin.
   [status-json-file]  harness-status.sh JSON; if omitted, harness-status.sh is run.
 
@@ -83,6 +90,11 @@ agent_stages() {
   done
 }
 
+# THE deploy outcome vocabulary — dev/selfcheck.sh's 4.13 parses this exact line
+# (DEPLOY_OUTCOMES="..."). Valid only on a merge-stage record's optional deploy= field.
+DEPLOY_OUTCOMES="verified pending failed"
+in_deploy_vocab() { case " $DEPLOY_OUTCOMES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   "")        usage >&2; exit 2 ;;
@@ -99,9 +111,16 @@ else
   raw="$(cat "$ledger_src")"
 fi
 
-# CR-safe; rewrite agent status lines into plain records; drop comments and blanks.
+# CR-safe; rewrite agent status lines into plain records; drop comments and blanks. Two
+# sed -E passes, not one optional-group expression: the deploy-bearing form is matched and
+# rewritten FIRST (its result no longer contains '<!--', so the second pass — today's
+# no-deploy form — cannot re-match it and leaves it alone); a line with no deploy field never
+# matches the first pass and falls through to the second, unchanged. Preferred over a single
+# expression with a back-reference to a possibly-unmatched capture, whose behavior under BSD
+# sed -E is unverified.
 norm="$(printf '%s\n' "$raw" \
   | tr -d '\r' \
+  | sed -E 's/^.*<!-- harness-status: stage=([^ ]+) issue=([0-9]+) outcome=([^ ]+) retries=([^ ]+) (deploy=[^ ]+) -->.*$/\2 \1 \3 \4 \5/' \
   | sed -E 's/^.*<!-- harness-status: stage=([^ ]+) issue=([0-9]+) outcome=([^ ]+) retries=([^ ]+) -->.*$/\2 \1 \3 \4/' \
   | grep -v '^[[:space:]]*#' \
   | grep -v '^[[:space:]]*$')"
@@ -123,7 +142,16 @@ while IFS= read -r line; do
       *) die "unknown seed bucket '$f_outcome' in ledger record: $line" ;;
     esac
   fi
-  records="${records}${f_issue} ${f_stage} ${f_outcome}
+  # deploy= is positional-independent inside the remaining fields, so a record with no
+  # retries still works (e.g. a hand-written "17 merge merged deploy=verified").
+  f_deploy="-"
+  for tok in $_rest; do
+    case "$tok" in deploy=*) f_deploy="${tok#deploy=}" ;; esac
+  done
+  if [ "$f_deploy" != "-" ] && [ "$f_stage" != "merge" ]; then
+    die "deploy= field only valid for stage=merge, found on stage '$f_stage' in ledger record: $line"
+  fi
+  records="${records}${f_issue} ${f_stage} ${f_outcome} ${f_deploy}
 "
 done <<EOF
 $norm
@@ -177,6 +205,7 @@ chain()      { case "$1" in
                esac; }
 row_exists() { printf '%s\n' "$records" | awk -v n="$1" -v s="$2" '$1==n && $2==s {f=1} END{exit !f}'; }
 row_outcome(){ printf '%s\n' "$records" | awk -v n="$1" -v s="$2" '$1==n && $2==s {o=$3} END{if (o!="") print o}'; }
+row_deploy() { printf '%s\n' "$records" | awk -v n="$1" -v s="$2" '$1==n && $2==s {d=$4} END{if (d!="") print d}'; }
 has_rows()   { printf '%s\n' "$records" | awk -v n="$1" '$1==n {f=1} END{exit !f}'; }
 in_bucket()  { printf '%s\n' "$live"    | awk -v b="$1" -v n="$2" '$1==b && $2==n {f=1} END{exit !f}'; }
 
@@ -196,6 +225,12 @@ for n in $issues; do
       emit "outcome-missing issue=$n bucket=- stage=$s: ledger row for this stage records no outcome"
     elif ! in_vocab "$s" "$o"; then
       emit "unknown-outcome issue=$n bucket=- stage=$s: outcome '$o' is not in the $s vocabulary ($(vocab "$s" | tr ' ' '|'))"
+    fi
+    if [ "$s" = "merge" ]; then
+      d="$(row_deploy "$n" "$s")"
+      if [ -n "$d" ] && [ "$d" != "-" ] && ! in_deploy_vocab "$d"; then
+        emit "unknown-outcome issue=$n bucket=- stage=$s: deploy outcome '$d' is not in the deploy vocabulary ($(printf '%s' "$DEPLOY_OUTCOMES" | tr ' ' '|'))"
+      fi
     fi
   done
   # (b) queue checks, fixed bucket order

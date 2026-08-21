@@ -99,6 +99,20 @@ mk_repo() {
     case "$variant" in
       merge)   printf '\n## Merge autonomy policy\n\nThe cycle may merge fixture PRs. (fixture stub policy)\n' ;;
       ratchet) printf '\n## Test-suite ratchet policy\n\nMeasure with `tbf-boobytrap --cov`. (fixture stub policy)\n' ;;
+      merge-postdeploy)
+        cat <<'EOF'
+
+## Merge autonomy policy
+
+The cycle may merge fixture PRs. (fixture stub policy)
+
+### Post-merge verification
+
+```
+tbf-boobytrap --smoke
+```
+EOF
+        ;;
       scoped)
         cat <<'EOF'
 
@@ -221,7 +235,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 18 cases. Every fixture also emits the LESSONS.md auto-seed line and a no-baseline WARN —
+# The 19 cases. Every fixture also emits the LESSONS.md auto-seed line and a no-baseline WARN —
 # expected, deliberately unasserted below.
 
 case_settings_missing() {
@@ -294,6 +308,19 @@ case_merge_allow_only() {
   expect "merge autonomy: active"
   expect_absent "half-activated"
   expect "no checks configured"
+}
+
+case_merge_postdeploy() {
+  local dir; dir="$(mk_repo merge-postdeploy merge-postdeploy merge-allow-only)"
+  local trapdir="$dir/boobytrap-bin" sentinel="$dir/sentinel-touched"
+  mkdir -p "$trapdir"
+  { printf '#!%s\n' "$bash_bin"; printf 'touch %s\n' "$sentinel"; } > "$trapdir/tbf-boobytrap"
+  chmod +x "$trapdir/tbf-boobytrap"
+  run_doctor "$dir" "$stub_gh_dir:$trapdir:$PATH"
+  expect_rc 0
+  expect "merge autonomy: active"
+  expect_absent "half-activated"
+  expect_no_file "$sentinel"
 }
 
 case_merge_ci_present() {
@@ -464,6 +491,7 @@ cases=(
   "template-missing|case_template_missing|template-diff: fixture's own template deleted"
   "ratchet-never-executes|case_ratchet_never_executes|ratchet measurement command is looked up, never executed"
   "merge-allow-only|case_merge_allow_only|entry_has: merge rule in allow only"
+  "merge-postdeploy|case_merge_postdeploy|post-merge verification sub-block: identical merge-autonomy verdict, declared command never executed"
   "merge-ci-present|case_merge_ci_present|merge verdict: no-CI note absent when a workflow file exists"
   "merge-deny-only|case_merge_deny_only|entry_has: merge rule in deny only"
   "merge-mention-only|case_merge_mention_only|entry_has: 'only' inside an unrelated JSON string"

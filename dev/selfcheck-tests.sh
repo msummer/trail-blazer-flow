@@ -158,6 +158,17 @@ p_4_13_script()       { edit "$1/bin/reconcile-ledger.sh" 's/^STAGES="seed plann
 p_4_13_skill()        { edit "$1/skills/issue-implementer/SKILL.md" 's/stage=<planner|implementer|verifier|merge>/stage=<planner|implementer|verifier|merge|docs>/'; }
 p_4_13_outcome()      { edit "$1/agents/verifier.md" 's/outcome=<pass|fail|incomplete|died>/outcome=<pass|fail|incomplete|died|bogus-outcome>/'; }
 p_4_13_extraction()   { edit "$1/bin/reconcile-ledger.sh" 's/STAGES/STAGE_LIST/g'; }
+p_4_13_deploy_script() { edit "$1/bin/reconcile-ledger.sh" 's/^DEPLOY_OUTCOMES="verified pending failed"$/DEPLOY_OUTCOMES="verified pending failed extra"/'; }
+p_4_13_deploy_skill() { edit "$1/skills/issue-implementer/SKILL.md" 's/deploy=<verified|pending|failed>/deploy=<verified|pending|failed|extra>/'; }
+# p_5_3: break ONLY the deploy-bearing sed's capture (its literal "(deploy=[^ ]+) -->" text,
+# matched via -E since escaping that as BRE data would be unreadable) so a verbatim deploy
+# status line no longer matches either sed pass and falls through to the malformed-line die —
+# the plain-field 5.1/5.2/5.4 ledger forms never touch this sed at all, so they're unaffected.
+p_5_3() {
+  local f="$1/bin/reconcile-ledger.sh"
+  sed -E 's/\(deploy=\[\^ \]\+\) -->/(deployX=[^ ]+) -->/' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+p_5_4()               { edit "$1/bin/reconcile-ledger.sh" 's/is not in the deploy vocabulary/is not part of the deploy vocabulary/'; }
 p_4_14_oversize() {
   local i=0
   { while [ "$i" -lt 300 ]; do echo "filler line $i"; i=$((i+1)); done; } | append "$1/skills/harness-setup/SKILL.md"
@@ -200,6 +211,8 @@ cases=(
   "4.13-skill|4.13|p_4_13_skill|add a 'docs' alternative to issue-implementer/SKILL.md's status-line stage grammar only"
   "4.13-outcome|4.13|p_4_13_outcome|add an undocumented outcome alternative to agents/verifier.md's status line"
   "4.13-extraction|4.13|p_4_13_extraction|rename reconcile-ledger.sh's STAGES= line so the gate's extraction comes back empty"
+  "4.13-deploy-script|4.13 5.4|p_4_13_deploy_script|add an 'extra' deploy outcome to reconcile-ledger.sh's DEPLOY_OUTCOMES= list only (also changes 5.4's printed vocabulary, so both trip)"
+  "4.13-deploy-skill|4.13|p_4_13_deploy_skill|add an 'extra' deploy alternative to issue-implementer/SKILL.md's status-line grammar only"
   "4.14|4.14|p_4_14_oversize|append 300 filler lines to skills/harness-setup/SKILL.md"
   "4.15|4.15|p_4_15|append a real dollar-paren command to skills/harness-setup/SKILL.md"
   "4.16|4.16|p_4_16|rename the follow-up marker in cleanup-after-merge.sh so the skill and the script disagree"
@@ -207,6 +220,8 @@ cases=(
   "4.18|4.18|p_4_18|rename the verifier status-line needle in issue-cycle/SKILL.md so the writer and the checker disagree"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
+  "5.3|5.3|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again"
+  "5.4|5.4|p_5_4|reword the deploy-specific unknown-outcome explanation 5.4 compares literally"
 )
 
 # ---------------------------------------------------------------------------------------------
