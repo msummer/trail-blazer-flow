@@ -178,6 +178,8 @@ p_4_16()              { edit "$1/bin/cleanup-after-merge.sh" 's/harness-follow-u
 p_4_17()              { edit "$1/bin/cleanup-after-merge.sh" 's/harness-multi-pr/harness-multipr/g'; }
 p_4_18()              { edit "$1/skills/issue-cycle/SKILL.md" 's/stage=verifier/stage=verified/g'; }
 p_4_19()              { edit "$1/skills/issue-cycle/SKILL.md" 's/verifier-verdict/verifier-verdictx/g'; }
+p_4_21()               { edit "$1/agents/verifier.md" 's/Autonomy reserve/Autonomy Reserve/g'; }
+p_4_22()               { edit "$1/skills/issue-cycle/SKILL.md" 's/Post-merge verification/Post-Merge Verification/g'; }
 p_4_20_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(gh pr edit:\*\)"'; }
 p_4_20_orphan_grant() {
   local f="$1/templates/repo-settings.json"
@@ -227,6 +229,8 @@ cases=(
   "4.19|4.19|p_4_19|rename the verifier-verdict marker in skills/issue-cycle/SKILL.md so the writer and the checker disagree"
   "4.20-missing-grant|4.20|p_4_20_missing_grant|drop the Bash(gh pr edit:*) allow entry while a skill still names 'gh pr edit'"
   "4.20-orphan-grant|4.20|p_4_20_orphan_grant|add a Bash(gh pr close:*) allow entry no skill names"
+  "4.21|4.21|p_4_21|re-case 'Autonomy reserve' to 'Autonomy Reserve' in agents/verifier.md so the case-sensitive marker no longer matches"
+  "4.22|4.22|p_4_22|re-case 'Post-merge verification' to 'Post-Merge Verification' in skills/issue-cycle/SKILL.md so the case-sensitive marker no longer matches"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
   "5.3|5.3|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again"

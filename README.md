@@ -189,7 +189,9 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    against the plan's steps, the plan's acceptance criteria, test quality — including a bounded
    mutation probe (3 to 5 mutants in the changed code, tests re-run against each, tree restored
    immediately after every mutant; a surviving mutant on a behavior the plan's criteria named is
-   a `major` finding) — scope, and declared constraints. **Verifier fail → kickback**: the
+   a `major` finding) — scope, declared constraints, and, when CLAUDE.md declares an "Autonomy
+   reserve", the diff's changed paths against those same globs (an undeclared reserve touch is a
+   `blocker` finding). **Verifier fail → kickback**: the
    implementer is re-dispatched with the findings ("fix ONLY these"), then re-checked — **max 2
    kickbacks**, then `impl-blocked` with the findings; **the orchestrator itself never patches a
    finding** — it never edits a source, test, or doc file to resolve one, only re-dispatches the
@@ -543,7 +545,10 @@ subagents need:
    or redeploys anything — see "Safety model". `check-harness.sh` reports the declaration state as
    part of the merge-autonomy verdict — declared (with a count of fenced command lines), heading
    present but no fenced commands, or not declared at all — without ever executing, eval'ing, or
-   otherwise looking up any of the declared commands themselves.
+   otherwise looking up any of the declared commands themselves. Because the dispatch ledger lives
+   in each run's context only, the next run's merge pass re-runs these same commands once,
+   immediately before its first merge, and stops before merging anything if that recheck comes
+   back anything but `verified`.
 
 6. **Test-suite ratchet policy** (optional) — a section titled exactly "Test-suite ratchet
    policy" stating the measurement command the `test-ratchet` skill (standalone, and as the
@@ -583,8 +588,12 @@ subagents need:
    The planner adds a "Reserve touch list" section to every plan when this section exists: every
    "Affected areas" entry matching a declared glob (naming the glob it matched), or "None". A
    non-empty Reserve touch list blocks auto-approval (item 4's hard floor) unless the "Plan
-   auto-approval policy" section explicitly opts reserve-touching work in. **No section means the
-   harness never populates a Reserve touch list, and the hard floor's reserve bullet is inert.**
+   auto-approval policy" section explicitly opts reserve-touching work in. The `verifier` subagent
+   re-checks the same globs against the diff's actually-changed paths at review time (see
+   "Implementation" step 4 above) — a changed path matching a declared glob that the plan's
+   Reserve touch list never named is a `blocker` finding, whether or not the plan was
+   auto-approved. **No section means the harness never populates a Reserve touch list, the hard
+   floor's reserve bullet is inert, and the verifier's reserve-touch check never runs either.**
    What counts as reserved, and what a grant may override, stays this repo's decision — the
    harness only reads the declared globs and does the matching in prose.
 
