@@ -3,10 +3,12 @@
 # cleanup-tests.sh — fixture-based negative-test harness for bin/cleanup-after-merge.sh, not
 # this repo's own gate (that's dev/selfcheck.sh + dev/selfcheck-tests.sh) and not the consumer
 # doctor's harness (dev/doctor-tests.sh). Builds throwaway git repos under mktemp, with a stub
-# `gh` on PATH, and runs the REAL bin/cleanup-after-merge.sh (no copy — the script has no
-# $0-relative path, unlike bin/check-harness.sh) against each, pinning the multi-PR KEEP
-# behaviour (#106) and the best-effort default-branch sync (#77) that would otherwise only be
-# hand-verified.
+# `gh` (and, where needed, a stub `git`) on PATH, and runs the REAL bin/cleanup-after-merge.sh
+# (no copy — the script has no $0-relative path, unlike bin/check-harness.sh) against each,
+# pinning the multi-PR KEEP behaviour (#106) and the best-effort pre-flight (#77, #111, #132):
+# a failed `gh repo view` (default-branch lookup), `git branch --show-current` (current-branch
+# lookup), `gh pr list`, or `git pull --ff-only` is reported (WARN) and survived rather than
+# aborting the run before any output, that would otherwise only be hand-verified.
 #
 # Usage: bash dev/cleanup-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh and dev/doctor-tests.sh: one PASS/FAIL line per case, a
@@ -21,7 +23,9 @@
 # real gh call, no network, ever. The "pull-ok" fixture additionally gets a local `--bare`
 # origin pushed once at setup time, so its own fast-forward is exercised for real and stays
 # fully offline. The "pull-fail" fixtures have no remote at all, so `git pull --ff-only` fails
-# instantly and offline, with no timeout risk.
+# instantly and offline, with no timeout risk. The "current-branch-failure" fixture additionally
+# gets a stub `git` (see build_stub_git) that fails only `branch --show-current` and execs the
+# real git (captured as $git_bin before any PATH is handed to a fixture) for everything else.
 #
 # Prose coupling: this repo's own gate compares machine-parsed artifacts only (see CLAUDE.md);
 # that rule governs dev/selfcheck.sh, not this fixture harness. Like dev/doctor-tests.sh, this
@@ -47,6 +51,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 bash_bin="$(command -v bash)"
+git_bin="$(command -v git)"
 
 pass=0; fail=0
 case_ok()  { echo "  PASS  $1 — $2"; pass=$((pass+1)); }
@@ -86,25 +91,40 @@ mk_repo_with_origin() {
   printf '%s' "$dir"
 }
 
-# build_stub_gh DIR — writes an executable DIR/gh (absolute paths to DIR's own prs.json,
-# issues.json, comments.json baked in) and resets DIR/gh-calls.log empty. Deterministic and
-# offline: `repo view` always answers "main" (every fixture's branch is renamed to match);
-# `pr list` cats DIR/prs.json; `issue list` cats DIR/issues.json when invoked with the literal
-# `--label pr-open` flag pair (the label-hygiene query) and prints `[]` for any other `issue
-# list` invocation (the follow-ups query, never exercised by these fixtures since their
-# prs.json carries no CLOSED entry); `issue view` cats DIR/comments.json (the
-# `--json comments`-shaped payload the marker lookup expects); `issue comment|edit|close`
-# append the full `"$*"` line to DIR/gh-calls.log and exit 0 — the machine-derived payload every
-# case's assertions read back. Anything else exits 1.
+# build_stub_gh DIR [REPO_MODE] [PR_MODE] — writes an executable DIR/gh (absolute paths to DIR's
+# own prs.json, issues.json, comments.json baked in) and resets DIR/gh-calls.log empty.
+# Deterministic and offline. REPO_MODE (default "ok") composes the `repo)` arm with printf,
+# outside the quoted heredoc — exactly the idiom dev/doctor-tests.sh's build_stub_gh uses for its
+# `repo)`/`label)` lines: "ok" answers "main" (every fixture's branch is renamed to match; every
+# case that doesn't pass this parameter gets that answer), "fail" exits 1 (simulating a
+# rate-limited/unauthenticated `gh repo view`). PR_MODE (default "ok", same idiom) composes the
+# `pr list)` arm: "ok" cats DIR/prs.json, "fail" exits 1 (simulating a failed `gh pr list`).
+# Otherwise: `issue list` cats DIR/issues.json when invoked with the literal `--label pr-open`
+# flag pair (the label-hygiene query) and prints `[]` for any other `issue list` invocation
+# (the follow-ups query, never exercised by these fixtures since their prs.json carries no
+# CLOSED entry); `issue view` cats DIR/comments.json (the `--json comments`-shaped payload the
+# marker lookup expects); `issue comment|edit|close` append the full `"$*"` line to
+# DIR/gh-calls.log and exit 0 — the machine-derived payload every case's assertions read back.
+# Anything else exits 1. The `__DIR__` placeholder + sed substitution step stays for the
+# fixed part of the script (unchanged from before REPO_MODE/PR_MODE existed).
 build_stub_gh() {
-  local dir="$1" tmpl="$dir/gh.tmpl"
+  local dir="$1" repo_mode="${2:-ok}" pr_mode="${3:-ok}" tmpl="$dir/gh.tmpl"
   : > "$dir/gh-calls.log"
-  { printf '#!%s\n' "$bash_bin"; cat <<'EOF'
-case "$1" in
-  repo) echo main; exit 0 ;;
-  pr)
-    case "$2" in
-      list) cat "__DIR__/prs.json"; exit 0 ;;
+  {
+    printf '#!%s\n' "$bash_bin"
+    printf 'case "$1" in\n'
+    if [ "$repo_mode" = fail ]; then
+      printf '  repo) exit 1 ;;\n'
+    else
+      printf '  repo) echo main; exit 0 ;;\n'
+    fi
+    printf '  pr)\n    case "$2" in\n'
+    if [ "$pr_mode" = fail ]; then
+      printf '      list) exit 1 ;;\n'
+    else
+      printf '      list) cat "__DIR__/prs.json"; exit 0 ;;\n'
+    fi
+    cat <<'EOF'
       *) exit 1 ;;
     esac
     ;;
@@ -130,6 +150,27 @@ EOF
   sed "s#__DIR__#$dir#g" "$tmpl" > "$dir/gh"
   rm -f "$tmpl"
   chmod +x "$dir/gh"
+}
+
+# build_stub_git DIR — writes an executable DIR/git that fails ONLY for the exact invocation
+# `branch --show-current` (rc 1, no output — simulating a git failure, distinct from the
+# legitimate empty-output detached-HEAD case) and execs the real git (its absolute path
+# captured once at the top of this harness, in $git_bin, before any PATH is handed to a
+# fixture — never a bare "git", which could re-resolve to this very stub) for every other
+# invocation, so `git pull`, `git for-each-ref`, `git worktree list`, and `git branch -D`
+# inside bin/cleanup-after-merge.sh all behave exactly as the real git.
+build_stub_git() {
+  local dir="$1" tmpl="$dir/git.tmpl"
+  { printf '#!%s\n' "$bash_bin"; cat <<'EOF'
+if [ "$#" -eq 2 ] && [ "$1" = branch ] && [ "$2" = --show-current ]; then
+  exit 1
+fi
+exec "__GIT_BIN__" "$@"
+EOF
+  } > "$tmpl"
+  sed "s#__GIT_BIN__#$git_bin#g" "$tmpl" > "$dir/git"
+  rm -f "$tmpl"
+  chmod +x "$dir/git"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -368,6 +409,75 @@ EOF
   run_cleanup "$dir" --fix
   expect_rc 0
   expect_absent "could not fast-forward"
+  expect_absent "could not determine the default branch"
+}
+
+# repo-view-failure-continues (#132/#111) — the stub gh's very first call (`gh repo view`, the
+# pre-flight's own default-branch lookup) fails: rc 0, the WARN stem printed, the fast-forward
+# WARN absent (the sync step is skipped outright, not attempted and failed), and the run still
+# reaches label hygiene — proving the failure is reported and survived, not fatal before any
+# output.
+case_repo_view_failure_continues() {
+  local dir; dir="$(mk_repo repo-view-failure-continues)"
+  cat > "$dir/prs.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir" fail
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "could not determine the default branch"
+  expect "== pr-open label hygiene =="
+  expect "no open issues labelled pr-open"
+  expect_absent "could not fast-forward"
+}
+
+# current-branch-failure-continues (#132/#111) — a stub git that fails only for
+# `branch --show-current` (distinct from a legitimate empty detached-HEAD result): rc 0, the
+# WARN stem printed, and the run still reaches label hygiene.
+case_current_branch_failure_continues() {
+  local dir; dir="$(mk_repo current-branch-failure-continues)"
+  cat > "$dir/prs.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  build_stub_git "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "could not determine the current branch"
+  expect "== pr-open label hygiene =="
+}
+
+# pr-list-failure-continues (#132/#111, Q1) — the stub gh's `gh pr list` call fails: rc 0, the
+# WARN stem printed, and the script still reaches its closing Reminder line, proving it runs to
+# completion instead of dying at the third gh call in a rate-limit window.
+case_pr_list_failure_continues() {
+  local dir; dir="$(mk_repo pr-list-failure-continues)"
+  cat > "$dir/prs.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir" ok fail
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "could not fetch the PR list"
+  expect "Reminder:"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -382,6 +492,9 @@ cases=(
   "keep-no-fix|case_keep_no_fix|KEEP fixture run without --fix: no gh mutation call, KEEP line still printed"
   "pull-failure-continues|case_pull_failure_continues|no remote: pull fails, script warns and continues into label hygiene"
   "pull-ok|case_pull_ok|control: bare origin with upstream set, no fast-forward warning"
+  "repo-view-failure-continues|case_repo_view_failure_continues|gh repo view fails: rc 0, WARN, sync skipped, run reaches label hygiene"
+  "current-branch-failure-continues|case_current_branch_failure_continues|git branch --show-current fails: rc 0, WARN, sync skipped, run continues"
+  "pr-list-failure-continues|case_pr_list_failure_continues|gh pr list fails: rc 0, WARN, run still reaches the closing reminder"
 )
 
 matched=0

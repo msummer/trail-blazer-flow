@@ -44,17 +44,23 @@ harness's exempt comment with a one-line reason each.
 `dev/doctor-tests.sh` is a separate negative-test harness for the *consumer* doctor
 (`bin/check-harness.sh`): it builds throwaway fixture repos under `mktemp` and pins verdicts
 (the settings.json block, template-diff, the ratchet's never-execute guarantee, merge-autonomy
-activation, default-branch guard coverage) that would otherwise only be hand-verified. It runs
-in CI as the third step, but it is not part of `dev/selfcheck.sh` itself — run it by hand
-whenever `bin/check-harness.sh` changes.
+activation, default-branch guard coverage, the post-merge-verification declaration state —
+declared/no-fence/not-declared, fence-aware and depth-aware, printing only an integer count of
+fenced command lines — and a path-qualified verification interpreter such as
+`<repo>/api/.venv/bin/python` being checked against a literal-path allow entry distinct from the
+bare-name regex check) that would otherwise only be hand-verified. It runs in CI as the third
+step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
+`bin/check-harness.sh` changes.
 
 `dev/cleanup-tests.sh` is a separate negative-test harness for `bin/cleanup-after-merge.sh`: it
-builds throwaway fixture git repos under `mktemp`, with a stub `gh` on `PATH`, and runs the real
-script against them to pin the multi-PR `KEEP` behavior (a merged PR that is only "Part of #n",
-an open sibling PR, or a `<!-- harness-multi-pr -->` marker must leave the issue open and never
-call `gh issue close`), the ordinary close path, and the `--ff-only` pull failure continuing
-instead of aborting. It runs in CI as the fourth step, but it is not part of `dev/selfcheck.sh`
-itself — run it by hand whenever `bin/cleanup-after-merge.sh` changes.
+builds throwaway fixture git repos under `mktemp`, with a stub `gh` and stub `git` on `PATH`, and
+runs the real script against them to pin the multi-PR `KEEP` behavior (a merged PR that is only
+"Part of #n", an open sibling PR, or a `<!-- harness-multi-pr -->` marker must leave the issue
+open and never call `gh issue close`), the ordinary close path, the `--ff-only` pull failure
+continuing instead of aborting, and the pre-flight `gh repo view` / `git branch --show-current` /
+`gh pr list` lookup failures each being reported (WARN) and survived rather than aborting the
+script before any output. It runs in CI as the fourth step, but it is not part of
+`dev/selfcheck.sh` itself — run it by hand whenever `bin/cleanup-after-merge.sh` changes.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor; see the README's "Working on the harness itself" for why.

@@ -6,9 +6,11 @@
 # git repos under mktemp, runs a COPY of the real scripts against each, and pins verdicts that
 # were previously only hand-verified: the settings.json block, the template-diff scenarios, the
 # ratchet's never-execute guarantee, entry_has's allow/deny distinction, the active verdict's
-# no-CI note, default-branch guard coverage, the half-activated remediation's file naming, and
-# the scoped-autonomy declarations (the doctor's verdict block and check-decision-record.sh's
-# per-element PASS/FAIL report).
+# no-CI note, default-branch guard coverage, the half-activated remediation's file naming, the
+# scoped-autonomy declarations (the doctor's verdict block and check-decision-record.sh's
+# per-element PASS/FAIL report), the post-merge-verification declaration-state line (declared
+# count / no-fence WARN / not-declared, with the same never-execute guarantee as the ratchet),
+# and the path-qualified verification interpreter's literal-path grant check.
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -77,6 +79,16 @@ write_settings() {
     merge-mention-only)
       jq '.permissions.deny |= map(select(. != "Bash(gh pr merge:*)")) |
           . + {".env.NOTE": "mentions Bash(gh pr merge:*) here only, never in permissions.allow"}' "$tmpl" > "$out" ;;
+    verify-path-grant)
+      # Drops the bare "Bash(pytest:*)" template entry and replaces it with a literal-path grant
+      # for THIS fixture's own venv interpreter (same $dir the CLAUDE.md fenced block's token is
+      # built from — see mk_repo's verify-path-python variant) — deliberate, so the case proves
+      # the path grant alone satisfies the Python toolchain check, with no bare-name entry left
+      # to pass it by coincidence. This also re-raises the pre-existing allow-drift WARN (a
+      # template entry is now missing); that WARN is expected and deliberately unasserted by the
+      # cases that use this mode.
+      jq --arg e "Bash($dir/.venv/bin/python:*)" \
+        '.permissions.allow |= (map(select(. != "Bash(pytest:*)")) + [$e])' "$tmpl" > "$out" ;;
   esac
 }
 
@@ -101,6 +113,10 @@ mk_repo() {
       merge)   printf '\n## Merge autonomy policy\n\nThe cycle may merge fixture PRs. (fixture stub policy)\n' ;;
       ratchet) printf '\n## Test-suite ratchet policy\n\nMeasure with `tbf-boobytrap --cov`. (fixture stub policy)\n' ;;
       merge-postdeploy)
+        # The fenced block's "# comment" line between two commands is the fence-awareness pin
+        # .claude/LESSONS.md requires: a non-fence-aware section slice would read it as a
+        # heading-shaped line and truncate before "tbf-boobytrap --health", undercounting the
+        # declared-state line's non-blank-line count (3, not 2).
         cat <<'EOF'
 
 ## Merge autonomy policy
@@ -111,8 +127,33 @@ The cycle may merge fixture PRs. (fixture stub policy)
 
 ```
 tbf-boobytrap --smoke
+# comment
+tbf-boobytrap --health
 ```
 EOF
+        ;;
+      merge-postdeploy-nofence)
+        cat <<'EOF'
+
+## Merge autonomy policy
+
+The cycle may merge fixture PRs. (fixture stub policy)
+
+### Post-merge verification
+
+Prose only — a fenced block was never added.
+EOF
+        ;;
+      verify-path-python)
+        # No heading of its own: lands inside the base "## Verification" section above. The
+        # interpreter token is built from $dir with printf, not a quoted heredoc, so it expands
+        # (a quoted heredoc would emit the literal string "$dir"). The "# comment" line between
+        # "pytest -q" and the path-qualified interpreter is the same fence-awareness pin as
+        # merge-postdeploy's, for the verification-scope slice.
+        printf '\n```\npytest -q\n# comment\n%s/.venv/bin/python -m pytest\n```\n' "$dir"
+        ;;
+      verify-bare-python)
+        printf '\n```\npytest -q\n```\n'
         ;;
       scoped)
         cat <<'EOF'
@@ -236,7 +277,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 20 cases. Every fixture also emits the LESSONS.md auto-seed line and a no-baseline WARN —
+# The 25 cases. Every fixture also emits the LESSONS.md auto-seed line and a no-baseline WARN —
 # expected, deliberately unasserted below.
 
 case_settings_missing() {
@@ -300,6 +341,10 @@ case_ratchet_never_executes() {
   expect_rc 0
   expect_no_file "$sentinel"
   expect "tbf-boobytrap"
+  # This fixture's variant is "ratchet" — no "Merge autonomy policy" section at all — so the
+  # post-merge-verification declaration-state line (#132/#125) must not print; it would tell a
+  # merge-autonomy-off consumer to add a sub-heading under a section they don't have.
+  expect_absent "post-merge verification"
 }
 
 case_merge_allow_only() {
@@ -322,6 +367,26 @@ case_merge_postdeploy() {
   expect "merge autonomy: active"
   expect_absent "half-activated"
   expect_no_file "$sentinel"
+  expect "post-merge verification: declared (3 command line(s))"
+}
+
+# postdeploy-no-fence (#132/#125) — "Post-merge verification" heading present with prose only,
+# no fenced block: WARN, not a FAIL — the cycle silently skips deploy verification, which is
+# exactly the failure this check exists to surface.
+case_postdeploy_no_fence() {
+  local dir; dir="$(mk_repo postdeploy-no-fence merge-postdeploy-nofence merge-allow-only)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "post-merge verification: heading present but no fenced commands"
+}
+
+# postdeploy-absent (#132/#125) — "Merge autonomy policy" present, no "Post-merge verification"
+# sub-heading at all: informational PASS, silent-by-design (no extra step, no deploy= field).
+case_postdeploy_absent() {
+  local dir; dir="$(mk_repo postdeploy-absent merge merge-allow-only)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "post-merge verification: not declared"
 }
 
 case_merge_ci_present() {
@@ -373,6 +438,47 @@ case_guard_coverage_offbranch() {
   done <<EOF
 $tmpl_branch_ops
 EOF
+}
+
+# verify-path-grant-missing (#132/#128) — the verification section names a path-qualified
+# interpreter (<dir>/.venv/bin/python) and settings.json carries the template's bare
+# "Bash(pytest:*)" only: WARN naming the exact literal-path entry to add, and the reassuring
+# "covers the detected toolchain(s)" PASS is suppressed even though the marker-based Python
+# check (pyproject.toml present, bare pytest entry present) would otherwise pass on its own.
+case_verify_path_grant_missing() {
+  local dir; dir="$(mk_repo verify-path-grant-missing verify-path-python verbatim)"
+  : > "$dir/pyproject.toml"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "path-qualified verification interpreter '$dir/.venv/bin/python' has no matching allow entry"
+  expect "Bash($dir/.venv/bin/python:*)"
+  expect_absent "covers the detected toolchain(s)"
+}
+
+# verify-path-grant-present (#132/#128) — same CLAUDE.md, but settings.json carries a
+# literal-path grant for that exact interpreter and NO bare-name entry (write_settings's
+# verify-path-grant mode drops "Bash(pytest:*)" deliberately): PASS, and the pre-existing Python
+# toolchain WARN (pyproject.toml present, no bare pytest/python/uv/poetry entry) does not fire
+# even though there is no bare-name entry to satisfy it on its own.
+case_verify_path_grant_present() {
+  local dir; dir="$(mk_repo verify-path-grant-present verify-path-python verify-path-grant)"
+  : > "$dir/pyproject.toml"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "path-qualified verification interpreter '$dir/.venv/bin/python' is covered by a literal-path allow entry"
+  expect "covers the detected toolchain(s)"
+  expect_absent "Python project files found but no pytest/python/uv/poetry"
+}
+
+# verify-bare-command (#132/#128, control) — the verification section names only a bare
+# "pytest -q" (no path-qualified token anywhere), verbatim template settings: unchanged
+# behaviour — neither new stem prints, and the pre-existing bare-name PASS still does.
+case_verify_bare_command() {
+  local dir; dir="$(mk_repo verify-bare-command verify-bare-python verbatim)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "covers the detected toolchain(s)"
+  expect_absent "path-qualified verification interpreter"
 }
 
 # record_body TEXT_LINES — writes a synthetic issue body to $tmpbase/<caller-provided path> via
@@ -503,12 +609,17 @@ cases=(
   "template-missing|case_template_missing|template-diff: fixture's own template deleted"
   "ratchet-never-executes|case_ratchet_never_executes|ratchet measurement command is looked up, never executed"
   "merge-allow-only|case_merge_allow_only|entry_has: merge rule in allow only"
-  "merge-postdeploy|case_merge_postdeploy|post-merge verification sub-block: identical merge-autonomy verdict, declared command never executed"
+  "merge-postdeploy|case_merge_postdeploy|post-merge verification sub-block: identical merge-autonomy verdict, declared command never executed, declared-state count correct across a fence-internal comment"
+  "postdeploy-no-fence|case_postdeploy_no_fence|post-merge verification: heading present but no fenced commands -> WARN"
+  "postdeploy-absent|case_postdeploy_absent|post-merge verification: no sub-heading at all -> informational PASS, not declared"
   "merge-ci-present|case_merge_ci_present|merge verdict: no-CI note absent when a workflow file exists"
   "merge-deny-only|case_merge_deny_only|entry_has: merge rule in deny only"
   "merge-deny-local-only|case_merge_deny_local_only|merge verdict: half-activated remediation names the file holding the deny (settings.local.json)"
   "merge-mention-only|case_merge_mention_only|entry_has: 'only' inside an unrelated JSON string"
   "guard-coverage-offbranch|case_guard_coverage_offbranch|default-branch guard coverage: WARN when the repo's default branch is one the template doesn't guard"
+  "verify-path-grant-missing|case_verify_path_grant_missing|path-qualified verification interpreter with no literal-path grant -> WARN, reassuring PASS suppressed"
+  "verify-path-grant-present|case_verify_path_grant_present|path-qualified verification interpreter with a literal-path grant -> PASS, Python toolchain WARN suppressed with no bare-name entry"
+  "verify-bare-command|case_verify_bare_command|control: bare-name-only verification command -> unchanged behaviour, neither new stem prints"
   "record-complete|case_record_complete|check-decision-record.sh: every declared element present, rc 0"
   "record-missing-element|case_record_missing_element|check-decision-record.sh: one declared element missing, rc 1, named"
   "record-no-declaration|case_record_no_declaration|check-decision-record.sh: no 'Autonomy decision record' section, rc 2"
