@@ -213,8 +213,9 @@ a. **Fetch the issue and its approved plan** (`gh issue view <number> --json
 number,title,body,url,comments`). Find the latest comment containing the `<!-- planner-plan -->`
 marker — the approved plan. If none, skip and warn (labelled approved but has no plan). Also
 read every comment posted *after* the plan: human comments there are binding context — restate
-them as `RESOLVED:` decisions below. If one contradicts the plan outright, treat the issue as
-mislabelled and ask the human instead of dispatching.
+them as `RESOLVED:` decisions below; machine-posted comments opening with `<!-- verifier-verdict
+-->` are the orchestrator's own archive (step 2e), never binding human context. If one contradicts
+the plan outright, treat the issue as mislabelled and ask the human instead of dispatching.
 
 b. **Branch off a fresh default branch:**
 ```bash
@@ -281,8 +282,14 @@ e. **Dispatch the `verifier` subagent** (Task tool, `agents/verifier.md`) — th
    number, `git diff <default-branch>...HEAD --stat` (three-dot, from the merge base; non-empty
    because of step 2c's checkpoint), and *"Verify this implementation against the plan and
    acceptance criteria following your process. Return your verdict."*
-   - **Verdict `pass`:** carry its closing status line — verbatim — and its "Notes for the PR
-     reviewer" into the PR body's verification section, proceed to commit (next step).
+   - **Verdict `pass`:** archive it first, then carry it. Archive: `gh issue comment <number>
+     --body-file <tempfile>`, whose temp file's first line is exactly `<!-- verifier-verdict -->`,
+     followed by the verdict verbatim (including its closing status line). Do this after
+     **every** verifier pass — this one and any CI-fix re-verification below, not just the first
+     — because the merge floor matches the *latest* archived comment against the PR body. Then
+     carry its closing status line — verbatim — a `Mutation probe:` line carrying its
+     `## Mutation probe` content, and its "Notes for the PR reviewer" into the PR body's
+     verification section, proceed to commit (next step).
    - **Verdict `fail`:** kick back. Re-dispatch the **implementer** (per the ladder if the
      dispatch fails) with: the full approved plan, its own previous report, and the verifier's
      findings verbatim, plus *"Fix ONLY these verification findings. Do not expand scope. Return
@@ -324,24 +331,31 @@ gh issue edit <number> --add-label pr-open
      verbatim — never one you compose on its behalf** —
      `<!-- harness-status: stage=verifier issue=<number> outcome=pass retries=<k> -->` — from the
      verdict that reviewed the **final** tree, after the last kickback (a kickback round's `fail`
-     line is replaced, not appended: never leave a superseded one in the body); any schema changes
-     needing application; and the reviewer notes from the subagent's report. **Exception — a PR
-     that delivers only part of an issue** (a deliberately multi-PR split): write `Part of
-     #<number>` (plus `PR <k> of <m>` when the total is known) instead of a closing keyword, so
-     `cleanup-after-merge.sh` leaves the issue open after this slice merges; only the PR that
-     finishes the issue carries `Closes #<number>`. A human who plans the split up front can
-     put `<!-- harness-multi-pr -->` in the issue body or a comment as the same opt-out.
+     line is replaced, not appended — and so is a CI-fix round's fresh line below: never leave a
+     superseded one in the body); a `Mutation probe:` line carrying that same verdict's
+     `## Mutation probe` content (the `k/n killed; survivors: …` form, or its skip reason); the
+     implementer's Evidence block condensed to its **Claims swept** and **Mutation checks**
+     lines, copied from the report; any schema changes needing application; and the reviewer
+     notes from the subagent's report. **Exception — a PR that delivers only part of an issue**
+     (a deliberately multi-PR split): write `Part of #<number>` (plus `PR <k> of <m>` when the
+     total is known) instead of a closing keyword, so `cleanup-after-merge.sh` leaves the issue
+     open after this slice merges; only the PR that finishes the issue carries `Closes
+     #<number>`. A human who plans the split up front can put `<!-- harness-multi-pr -->` in the
+     issue body or a comment as the same opt-out.
 
      **File the plan's follow-ups.** File each entry whose justification names a concrete failure
      a user of this software would experience — `gh issue create --label no-auto-approve`, with
      the body opening `<!-- harness-follow-up: PR #<pr-number> -->`, then that justification
-     quoted and a reference to this PR; mention the new issue numbers in the PR body and your
-     summary. Nobody human wrote these, so the label keeps their plans out of auto-approval
-     until a human removes it, and the marker is what `cleanup-after-merge.sh` matches to
-     quarantine them if this PR is later closed unmerged. An entry whose justification names a
-     capability wish or a drift risk nobody would notice rather than a concrete failure is
-     yours to decline — don't file it; record the decline in the PR body (title plus one line
-     of why) so the judgement reaches the reviewer instead of becoming an issue nobody triages.
+     quoted and a reference to this PR; then refresh the PR body: rewrite the body you composed
+     above with the new issue numbers added, and apply it with `gh pr edit --body-file
+     <tempfile>` — arg-less, from the issue's branch, resolves the PR from the branch, or pass
+     the URL `gh pr create` printed if you're not on it — and note the numbers in your summary
+     too. Nobody human wrote these, so the label keeps their plans out of auto-approval until a
+     human removes it, and the marker is what `cleanup-after-merge.sh` matches to quarantine them
+     if this PR is later closed unmerged. An entry whose justification names a capability wish or
+     a drift risk nobody would notice rather than a concrete failure is yours to decline — don't
+     file it; record the decline in the PR body (title plus one line of why) so the judgement
+     reaches the reviewer instead of becoming an issue nobody triages.
 
      **Watch CI** so a red run doesn't sit unnoticed (`gh pr checks "claude/<number>-<slug>"
      --watch`); record the outcome (pass / fail / no checks configured) for the summary table.
@@ -352,13 +366,19 @@ gh issue edit <number> --add-label pr-open
        fails) with the plan, its report, the failing log excerpt, and *"Fix ONLY this CI failure.
        Do not expand scope. Return your report."* On return, checkpoint: `git add -A && git
        commit -m "wip: checkpoint ci-fix (#<n>)"` (skip if nothing changed). Re-run the
-       mechanical checks, re-dispatch the **verifier** (scope: the fix); once it confirms, amend
-       the ci-fix checkpoint if one was created (`git commit --amend -m "fix: <what> (CI,
-       #<number>)"`), otherwise commit empty instead (`git commit --allow-empty -m "fix: <what>
-       (CI, #<number>)"`) — never amend the already-pushed `feat:` commit (force-push is denied,
-       so the push would be rejected). Push — CI re-runs; watch again. **Maximum ONE CI-fix
-       attempt per issue** (not counted toward the kickback limit). Still red → note it and let
-       the human decide.
+       mechanical checks, re-dispatch the **verifier** (scope: the fix); once it confirms,
+       archive its fresh verdict the same way as any other pass (above), then refresh the PR
+       body — rewrite it with the fresh verdict's closing status line and `Mutation probe:` line
+       replacing the superseded ones — and apply it with `gh pr edit --body-file <tempfile>`, so
+       the body describes the tree the head commit actually carries. A permission-denied `gh pr
+       edit` is never routed around: report it loudly in the run summary with the exact command,
+       and flag the PR as needing a manual body update before it can qualify for autonomous
+       merge. Amend the ci-fix checkpoint if one was created (`git commit --amend -m "fix: <what>
+       (CI, #<number>)"`), otherwise commit empty instead (`git commit --allow-empty -m "fix:
+       <what> (CI, #<number>)"`) — never amend the already-pushed `feat:` commit (force-push is
+       denied, so the push would be rejected). Push — CI re-runs; watch again. **Maximum ONE
+       CI-fix attempt per issue** (not counted toward the kickback limit). Still red → note it
+       and let the human decide.
      - **Not caused by this PR** (infra flake, unrelated breakage, quota) → don't burn the
        attempt; note it and let the human decide.
 

@@ -177,6 +177,12 @@ p_4_15()              { printf 'x=$(echo hi)\n' | append "$1/skills/harness-setu
 p_4_16()              { edit "$1/bin/cleanup-after-merge.sh" 's/harness-follow-up/harness-followup/g'; }
 p_4_17()              { edit "$1/bin/cleanup-after-merge.sh" 's/harness-multi-pr/harness-multipr/g'; }
 p_4_18()              { edit "$1/skills/issue-cycle/SKILL.md" 's/stage=verifier/stage=verified/g'; }
+p_4_19()              { edit "$1/skills/issue-cycle/SKILL.md" 's/verifier-verdict/verifier-verdictx/g'; }
+p_4_20_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(gh pr edit:\*\)"'; }
+p_4_20_orphan_grant() {
+  local f="$1/templates/repo-settings.json"
+  awk '{print} /"Bash\(gh pr edit:\*\)",/ && !done {print "      \"Bash(gh pr close:*)\","; done=1}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
 p_5_1()               { edit "$1/bin/reconcile-ledger.sh" 's/blocked incomplete died/blocked incomplete/'; }
 p_5_2()               { edit "$1/bin/reconcile-ledger.sh" 's/stage-skipped issue/stage_skipped issue/'; }
 
@@ -218,6 +224,9 @@ cases=(
   "4.16|4.16|p_4_16|rename the follow-up marker in cleanup-after-merge.sh so the skill and the script disagree"
   "4.17|4.17|p_4_17|rename the multi-pr marker in cleanup-after-merge.sh so the script and the docs disagree"
   "4.18|4.18|p_4_18|rename the verifier status-line needle in issue-cycle/SKILL.md so the writer and the checker disagree"
+  "4.19|4.19|p_4_19|rename the verifier-verdict marker in skills/issue-cycle/SKILL.md so the writer and the checker disagree"
+  "4.20-missing-grant|4.20|p_4_20_missing_grant|drop the Bash(gh pr edit:*) allow entry while a skill still names 'gh pr edit'"
+  "4.20-orphan-grant|4.20|p_4_20_orphan_grant|add a Bash(gh pr close:*) allow entry no skill names"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
   "5.3|5.3|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again"

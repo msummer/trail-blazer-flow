@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 31 assertions total. The gate prints what it checks — run it.
+# Five groups, 33 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -282,8 +282,9 @@ pairs=(
   "planner.md|### Claims this change falsifies" # referenced by README.md
   "planner.md|## Reserve touch list"        # referenced by skills/issue-planner/SKILL.md
   "implementer.md|## Resume brief"          # referenced by skills/issue-implementer/SKILL.md
-  "implementer.md|## Evidence"              # the pre-report evidence contract; deleting the block must fail the gate
+  "implementer.md|## Evidence"              # the pre-report evidence contract; also referenced by skills/issue-implementer/SKILL.md; deleting the block must fail the gate
   "verifier.md|## Notes for the PR reviewer" # referenced by skills/issue-implementer/SKILL.md
+  "verifier.md|## Mutation probe"           # referenced by skills/issue-implementer/SKILL.md
 )
 bad_list=""
 for p in "${pairs[@]}"; do
@@ -532,8 +533,8 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 425
-issue-cycle 280
+budget_table="issue-implementer 445
+issue-cycle 295
 issue-planner 350
 project-kickoff 215
 test-ratchet 200
@@ -623,6 +624,49 @@ if [ -z "$missing" ]; then
   ok "4.18 '$marker' present in agents/verifier.md, skills/issue-implementer/SKILL.md, and skills/issue-cycle/SKILL.md"
 else
   bad "4.18 '$marker' missing from:$missing"
+fi
+
+# 4.19 — the literal verifier-verdict marker appears in the skill that writes it (as an issue
+# comment, after every verifier pass) and the skill that checks for it before an autonomous
+# merge. Mirrors 4.1/4.5/4.16/4.17/4.18 — a floor that greps for a marker nobody writes is the
+# exact failure this pins.
+marker='<!-- verifier-verdict -->'
+missing=""
+grep -qF -- "$marker" "$root/skills/issue-implementer/SKILL.md" || missing="$missing skills/issue-implementer/SKILL.md"
+grep -qF -- "$marker" "$root/skills/issue-cycle/SKILL.md" || missing="$missing skills/issue-cycle/SKILL.md"
+if [ -z "$missing" ]; then
+  ok "4.19 '$marker' present in skills/issue-implementer/SKILL.md and skills/issue-cycle/SKILL.md"
+else
+  bad "4.19 '$marker' missing from:$missing"
+fi
+
+# 4.20 — bijection: 'gh pr <sub>' invocations named in skills/*/SKILL.md and
+# skills/*/references/*.md <-> 'Bash(gh pr <sub>:*)' allow entries in
+# templates/repo-settings.json, with 'merge' as the single documented exception (merge is only
+# ever reached through the deny-lifted merge pass — see the merge pass's activation contract —
+# never a plain allow grant). Report both directions separately, like 2.4, plus a clause that
+# Bash(gh pr merge:*) is still present in permissions.deny (mirrors 4.13's 'seed' clause), so the
+# exception can't be used to quietly hide a granted merge.
+skill_pr_subs="$(grep -ohE 'gh pr [a-z]+' "$root"/skills/*/SKILL.md "$root"/skills/*/references/*.md 2>/dev/null \
+  | sed -E 's/^gh pr //' \
+  | sort -u)"
+allow_pr_subs="$(jq -r '.permissions.allow[]? // empty' "$settings_json" 2>/dev/null \
+  | grep -oE '^Bash\(gh pr [a-z]+:' \
+  | sed -E 's/^Bash\(gh pr //; s/:$//' \
+  | sort -u)"
+skill_pr_subs_noexc="$(comm -23 <(_lines "$skill_pr_subs") <(_lines "merge"))"
+subs_without_grant="$(comm -23 <(_lines "$skill_pr_subs_noexc") <(_lines "$allow_pr_subs"))"
+grants_without_sub="$(comm -13 <(_lines "$skill_pr_subs_noexc") <(_lines "$allow_pr_subs"))"
+deny_has_merge="no"
+jq -r '.permissions.deny[]? // empty' "$settings_json" 2>/dev/null | grep -qxF 'Bash(gh pr merge:*)' && deny_has_merge="yes"
+if [ -z "$subs_without_grant" ] && [ -z "$grants_without_sub" ] && [ "$deny_has_merge" = "yes" ]; then
+  ok "4.20 'gh pr <sub>' <-> templates/repo-settings.json allow-list bijection holds ('merge' excepted, still denied)"
+else
+  msg="4.20 bijection broken:"
+  [ -n "$subs_without_grant" ] && msg="$msg gh pr subcommand(s) named in skills/ with no allow entry: $(printf '%s' "$subs_without_grant" | tr '\n' ' ');"
+  [ -n "$grants_without_sub" ] && msg="$msg allow entry(ies) for a gh pr subcommand no skill names: $(printf '%s' "$grants_without_sub" | tr '\n' ' ');"
+  [ "$deny_has_merge" = "yes" ] || msg="$msg Bash(gh pr merge:*) missing from permissions.deny — the 'merge' exception must stay denied;"
+  bad "$msg"
 fi
 
 # ============================================================================

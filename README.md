@@ -198,24 +198,34 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    commits by this point (see "Resilience: checkpointing, retries, and the dispatch ledger"
    below), but nothing leaves the machine until the verifier passes, so every PR the human sees is
    verifier-clean.
-5. On verifier pass: **collapses the run's WIP checkpoint commits** into the working tree (one
+5. On verifier pass: **archives the verdict verbatim as an issue comment** (opening with
+   `<!-- verifier-verdict -->`, after every pass, including a later CI-fix re-verification), then
+   **collapses the run's WIP checkpoint commits** into the working tree (one
    `git reset --soft` to the branch's merge base with the default branch — never the working
    tree itself, which is untouched), stages everything, **reconciles the staged list against the
    report's "Files changed"** (unexplained files = blocker, not a commit), commits once, pushes,
    opens the PR (`Closes #n`, verification results, **the verifier's own closing status line
-   pasted verbatim** — never one the orchestrator composes on its behalf — verifier notes, schema
-   notes), labels `pr-open`. The PR still ends up as one clean commit, exactly as before.
+   pasted verbatim** — never one the orchestrator composes on its behalf — a `Mutation probe:`
+   line carrying the verdict's mutation-probe result, the implementer's Evidence block condensed
+   to its Claims-swept and Mutation-checks lines, schema notes, verifier notes), labels
+   `pr-open`. The PR still ends up as one clean commit, exactly as before.
 6. **Files the plan's "Follow-ups to file"** as new issues referencing the PR — each entry whose
    justification names a concrete failure a user of this software would experience, filed with
    `no-auto-approve` (machine-authored — a human removes the label to release it into approval)
-   and a marker naming the PR it came from; entries that only name a capability wish or an
-   unnoticeable drift risk are declined with a note in the PR body instead of becoming issues. If
-   this PR is later closed without merging, the next `cleanup-after-merge.sh --fix` comments on
-   and labels `no-plan` any of those follow-ups still open.
+   and a marker naming the PR it came from — then **writes the new issue numbers back into the PR
+   body with `gh pr edit`**, not merely mentioned in the summary; entries that only name a
+   capability wish or an unnoticeable drift risk are declined with a note in the PR body instead
+   of becoming issues. If this PR is later closed without merging, the next
+   `cleanup-after-merge.sh --fix` comments on and labels `no-plan` any of those follow-ups still
+   open.
 7. **Watches CI** (`gh pr checks --watch`). Red CI caused by the PR itself gets **one bounded
    fix attempt** (implementer → mechanical checks → verifier → push; the PR isn't merged, so
-   this is as safe as the kickback loop); still red — or not the PR's fault — is noted on the
-   issue for the human. If the failure was a project gotcha, **append it to `LESSONS.md`**.
+   this is as safe as the kickback loop) — once that re-verification passes, its verdict is
+   archived too, and the PR body's verifier status line and `Mutation probe:` line are refreshed
+   with `gh pr edit` so the body always describes the tree the head commit actually carries (a
+   denied `gh pr edit` is reported loudly, never routed around); still red — or not the PR's
+   fault — is noted on the issue for the human. If the failure was a project gotcha, **append it
+   to `LESSONS.md`**.
 8. Never merges (merging is the human's, or the cycle's merge pass under an opt-in policy —
    see "The CLAUDE.md contract"). Blockers → local `wip:` branch + `impl-blocked` label +
    explanatory comment.
@@ -314,8 +324,9 @@ request changes, comment on the issue with what to change — no label needed; t
 reads your comment and revises. To take an issue out of planning entirely, add `no-plan`.
 
 **Reviewing a PR.** Read the PR body (summary, files changed, verification results, the
-verifier's own status line) and its CI checks. Merge it, or close it, the same as any other PR;
-comment on it first if you want changes made before either.
+verifier's own status line, its mutation-probe line, the implementer's condensed Evidence lines)
+and its CI checks. Merge it, or close it, the same as any other PR; comment on it first if you
+want changes made before either.
 
 **Returning to a laptop.** Run `harness-status.sh` to see what's left: `counts.human_actions` is
 the total waiting on you, broken into `waiting_on_human.plans_to_review`,
@@ -476,7 +487,8 @@ subagents need:
    *either* file — or in your user-level settings file — wins over an allow anywhere else.
    Both edits are yours, never an agent's. The merge pass's hard floor always applies on
    top (standard-flow PRs only, the PR body carrying the verifier's own `outcome=pass` status
-   line — not prose — checked mechanically and cross-checked against the dispatch ledger, CI
+   line — not prose — checked mechanically and cross-checked against the dispatch ledger *and*
+   against the verifier's verdict archived verbatim as an issue comment, CI
    green on the head commit, never the governance surface — CLAUDE.md, `.claude/`, policy/ADR
    docs, CI config — nothing flagged for human decision, one merge at a time with
    re-verification between, every merge audited in the cycle report). **No section means no
@@ -744,6 +756,16 @@ explicitly opts a no-CI repo in. Follow-up issues the harness files now carry `n
 (remove the label to release one into planning) and are commented and labelled `no-plan` by
 `cleanup-after-merge.sh --fix` if the PR that filed them is closed without merging.
 
+This release adds one further grant your repo must add: `"Bash(gh pr edit:*)"` — the orchestrator
+needs it to refresh a PR body it already opened (writing filed follow-up issue numbers into it,
+and replacing the verifier status line and mutation-probe line after a CI-fix round). Re-copy the
+permissions block from `templates/repo-settings.json`, or add that one entry by hand — the doctor
+names it either way. Under merge autonomy, this release also makes the merge floor stricter: it
+now additionally requires the PR body's verifier line to match a verifier verdict the orchestrator
+archived as an issue comment (see "Verdict provenance" under "Safety model"). Any PR opened before
+your repo picks up this version carries no such comment, so it is not eligible for autonomous
+merge — it simply waits in the "waits on the human" queue until you merge it by hand.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -751,7 +773,13 @@ Plugins cannot ship permission rules, so each target repo keeps a thin, checked-
 scripts (bare names — `bin/` is on the PATH), the `gh`/`git` commands the orchestrator runs,
 Edit/Write, the build/test runners, and carries the deny-list (no merge, no force-push, no
 `reset --hard`). The `gh pr merge` deny is the merge-autonomy off-switch: it ships on, and
-lifting it is a human edit reserved for repos that define a CLAUDE.md merge autonomy policy. The same file also carries the non-permission keys a clone needs to bootstrap
+lifting it is a human edit reserved for repos that define a CLAUDE.md merge autonomy policy.
+`Bash(gh pr edit:*)` lets the orchestrator refresh a PR body it already opened — writing in filed
+follow-up issue numbers, and replacing the verifier status line and mutation-probe line with a
+fresh verdict's after a CI-fix round; `gh pr comment` is deliberately **not** granted — the
+verifier's verdict is archived on the *issue* instead (`Bash(gh issue comment:*)`, already
+granted), which is also where the merge pass reads it back with one `gh issue view` call. The same
+file also carries the non-permission keys a clone needs to bootstrap
 the plugin — `extraKnownMarketplaces` (auto-registering + auto-updating the marketplace) and
 `enabledPlugins` — covered in "Installing in a new repo". Four grants exist solely for the
 resilience mechanism (see "Resilience: checkpointing, retries, and the dispatch ledger"):
@@ -845,15 +873,21 @@ against Claude Code 2.1.220 (#41, #39, #55, #79, #80).
 **Verdict provenance.** The kickback loop is enforced the same way as the rest of this section:
 the orchestrator never edits a source, test, or doc file to resolve a verifier finding or a red
 CI run itself — its only edits anywhere in this pipeline are harness bookkeeping
-(`.claude/LESSONS.md`, the PR body, issue comments) — and the merge pass's hard floor requires the
-PR body to carry the verifier's own closing status line
-(`<!-- harness-status: stage=verifier issue=<n> outcome=pass retries=<k> -->`) verbatim, checked
-mechanically (`gh pr view … --jq 'contains(...)'`) and cross-checked against the dispatch ledger's
-`verifier` row before any autonomous merge — a prose "verifier verdict: pass" without that line
-does not qualify. Honest limit: the check proves a matching line is present in the PR body and
-agrees with the ledger, not that a human witnessed the dispatch — both artifacts are
-orchestrator-written, so it raises the cost of asserting a verification event that didn't happen
-rather than eliminating the possibility.
+(`.claude/LESSONS.md`, the PR body, issue comments) — and the merge pass's hard floor requires
+three artifacts to agree before any autonomous merge: the PR body carries the verifier's own
+closing status line (`<!-- harness-status: stage=verifier issue=<n> outcome=pass retries=<k>
+-->`) verbatim, checked mechanically (`gh pr view … --jq 'contains(...)'`); the dispatch ledger's
+`verifier` row for that issue reads `pass`; and the verifier's verdict is separately archived,
+also verbatim, as an issue comment opening with `<!-- verifier-verdict -->` — posted by the
+orchestrator after every verifier pass, including a CI-fix re-verification — whose own closing
+status line the PR body's line is checked against literally before the merge pass proceeds. A
+prose "verifier verdict: pass" without the PR-body line, or a PR body with no matching archived
+comment, does not qualify. Honest limit: the check proves a matching line is present in the PR
+body, agrees with the ledger, and agrees with a comment independently timestamped on the issue —
+not that a human witnessed the dispatch. All three artifacts are still orchestrator-written, so a
+misreporting orchestrator can still fabricate them; the gain is that doing so now requires two
+consistent, durably visible artifacts instead of one, raising the cost of asserting a verification
+event that didn't happen rather than eliminating the possibility.
 
 **The body-hash grant pattern is a tripwire, not a control** (see "The CLAUDE.md contract" item
 8). It exists only as a documented convention a consuming repo may adopt in its own CLAUDE.md —
