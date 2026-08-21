@@ -389,7 +389,7 @@ else
     $has_ci_workflow || merge_ci_note=" — but no .github/workflows file exists, so gh pr checks likely reports 'no checks configured', which the merge pass's hard floor treats as NOT green: no PR qualifies unless your 'Merge autonomy policy' section explicitly opts a no-CI repo in"
 
     if $has_merge_policy && $merge_denied; then
-      wrn "merge autonomy: half-activated — 'Merge autonomy policy' section present but 'Bash(gh pr merge:*)' is still denied in $merge_deny_src — a deny wins over any allow, in any settings file; to activate, remove \"Bash(gh pr merge:*)\" from permissions.deny AND add it to permissions.allow in .claude/settings.json (both edits are yours, never an agent's)"
+      wrn "merge autonomy: half-activated — 'Merge autonomy policy' section present but 'Bash(gh pr merge:*)' is still denied in $merge_deny_src — a deny wins over any allow, in any settings file; to activate, remove \"Bash(gh pr merge:*)\" from permissions.deny in $merge_deny_src AND add it to permissions.allow in .claude/settings.json (both edits are yours, never an agent's)"
     elif $has_merge_policy && ! $merge_denied && $merge_allowed; then
       ok "merge autonomy: active ('Merge autonomy policy' section present, no deny found in $read_list, allow present in $merge_allow_src)$merge_ci_note"
     elif $has_merge_policy && ! $merge_denied && ! $merge_allowed; then

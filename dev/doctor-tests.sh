@@ -6,8 +6,9 @@
 # git repos under mktemp, runs a COPY of the real scripts against each, and pins verdicts that
 # were previously only hand-verified: the settings.json block, the template-diff scenarios, the
 # ratchet's never-execute guarantee, entry_has's allow/deny distinction, the active verdict's
-# no-CI note, default-branch guard coverage, and the scoped-autonomy declarations (the doctor's
-# verdict block and check-decision-record.sh's per-element PASS/FAIL report).
+# no-CI note, default-branch guard coverage, the half-activated remediation's file naming, and
+# the scoped-autonomy declarations (the doctor's verdict block and check-decision-record.sh's
+# per-element PASS/FAIL report).
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -235,7 +236,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 19 cases. Every fixture also emits the LESSONS.md auto-seed line and a no-baseline WARN —
+# The 20 cases. Every fixture also emits the LESSONS.md auto-seed line and a no-baseline WARN —
 # expected, deliberately unasserted below.
 
 case_settings_missing() {
@@ -339,6 +340,17 @@ case_merge_deny_only() {
   expect_rc 0
   expect "half-activated"
   expect_absent "merge autonomy: active"
+}
+
+case_merge_deny_local_only() {
+  local dir; dir="$(mk_repo merge-deny-local-only merge merge-deny-lifted)"
+  local label=".claude/settings.local.json"
+  jq '{permissions: {deny: [.permissions.deny[] | select(. == "Bash(gh pr merge:*)")]}}' \
+    "$dir/templates/repo-settings.json" > "$dir/$label"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "half-activated"
+  expect "permissions.deny in $label"
 }
 
 case_merge_mention_only() {
@@ -494,6 +506,7 @@ cases=(
   "merge-postdeploy|case_merge_postdeploy|post-merge verification sub-block: identical merge-autonomy verdict, declared command never executed"
   "merge-ci-present|case_merge_ci_present|merge verdict: no-CI note absent when a workflow file exists"
   "merge-deny-only|case_merge_deny_only|entry_has: merge rule in deny only"
+  "merge-deny-local-only|case_merge_deny_local_only|merge verdict: half-activated remediation names the file holding the deny (settings.local.json)"
   "merge-mention-only|case_merge_mention_only|entry_has: 'only' inside an unrelated JSON string"
   "guard-coverage-offbranch|case_guard_coverage_offbranch|default-branch guard coverage: WARN when the repo's default branch is one the template doesn't guard"
   "record-complete|case_record_complete|check-decision-record.sh: every declared element present, rc 0"
