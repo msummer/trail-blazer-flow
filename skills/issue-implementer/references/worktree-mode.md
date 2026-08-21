@@ -152,7 +152,8 @@ e. **As each implementer completes, run the issue-implementer skill's steps 2d�
    pipeline applies verbatim; what changes is only where it runs. **Worktree-specific:**
    - **every git command takes `-C <worktree>`** — the verifier's diff is `git -C <worktree> diff
      <default-branch>...HEAD --stat` (three-dot, matching sequential mode now that checkpoints
-     make it non-empty here too), checkpoints are `git -C <worktree> add -A && git -C <worktree>
+     make it non-empty here too) and, for its reserve-touch check, `git -C <worktree> diff
+     <default-branch>...HEAD --name-only`, checkpoints are `git -C <worktree> add -A && git -C <worktree>
      commit -m "wip: checkpoint <stage> (#<n>)"`, and the pre-final-commit collapse follows the
      issue-implementer skill's "Hard rules" — never inline the merge base — as two separate
      calls: `git -C <worktree> merge-base <default-branch> HEAD`, read the SHA from that call's

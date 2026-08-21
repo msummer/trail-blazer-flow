@@ -136,6 +136,23 @@ on top and is not configurable**:
 - **Every autonomous merge is audited**: it appears in the cycle report with its evidence —
   PR link, verifier verdict, the archived verdict comment's URL, CI run — never merged silently.
 
+**Pre-first-merge deploy recheck.** Active only when guard (e)'s "Post-merge verification"
+sub-block is declared — no sub-block, this step does not exist, silently, exactly like guard (e)
+itself. The dispatch ledger lives in this run's context only, so a `deploy=failed` recorded by an
+earlier cycle is already forgotten by the next one, which is exactly the gap this recheck closes.
+**When:** once per run, immediately before the first merge attempt of the pass — before guard (b)
+for the first PR that reaches it, never again for later merges (guard (e) covers those); if no PR
+ever reaches guard (b), this never runs. **How:** run guard (e)'s declared commands exactly as
+guard (e) defines them — same read-only contract, same bounded wait, same
+`verified|pending|failed` outcome mapping, not restated here. **Outcome:** `verified` ⇒ proceed to
+guard (a) as normal; `failed` or `pending` ⇒ **STOP the merge pass for the rest of the run before
+any merge happens**, reported the same way a red baseline is, quoting the last ~10 lines of
+command output verbatim, and named in the cycle report. **Bookkeeping:** no status line, no ledger
+row, no `deploy=` field of its own; PRs that had qualified for this pass but were not merged
+because of the stop are recorded `outcome=merge-blocked`, the recheck's result as their one-line
+reason — guard (c)'s "print the exact `gh pr merge` command" hand-off does **not** apply here,
+since production is unverified and whether to merge onto it is the human's call.
+
 **Merge guards, applied per PR, in order:**
 
 (a) **Base assertion.** Before attempting the merge, confirm the PR targets the repo's default
@@ -265,8 +282,8 @@ applies when there was truly nothing to seed).
 
 - **Recurring runs:** pair with `/loop` (e.g. "loop the issue-cycle every 30m") or a scheduled
   routine; each invocation stays ONE bounded pass — recurrence is the wrapper's job, never this
-  skill's (never polls for new work or repeats a pass; the merge pass's declared deploy wait,
-  guard (e), is the one bounded exception).
+  skill's (never polls for new work or repeats a pass; the merge pass's declared deploy waits —
+  guard (e) and the pre-first-merge recheck — are the two bounded exceptions).
 - **Single-flight:** never start a cycle while another runs in the same checkout (they'd share a
   working tree exactly like two implementers would); if evidence of a live concurrent run
   appears, stop and say so.

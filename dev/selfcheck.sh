@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 33 assertions total. The gate prints what it checks — run it.
+# Five groups, 35 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -285,6 +285,7 @@ pairs=(
   "implementer.md|## Evidence"              # the pre-report evidence contract; also referenced by skills/issue-implementer/SKILL.md; deleting the block must fail the gate
   "verifier.md|## Notes for the PR reviewer" # referenced by skills/issue-implementer/SKILL.md
   "verifier.md|## Mutation probe"           # referenced by skills/issue-implementer/SKILL.md
+  "verifier.md|## Reserve touch check"      # referenced by skills/issue-implementer/SKILL.md
 )
 bad_list=""
 for p in "${pairs[@]}"; do
@@ -534,7 +535,7 @@ fi
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 445
-issue-cycle 295
+issue-cycle 310
 issue-planner 350
 project-kickoff 215
 test-ratchet 200
@@ -667,6 +668,36 @@ else
   [ -n "$grants_without_sub" ] && msg="$msg allow entry(ies) for a gh pr subcommand no skill names: $(printf '%s' "$grants_without_sub" | tr '\n' ' ');"
   [ "$deny_has_merge" = "yes" ] || msg="$msg Bash(gh pr merge:*) missing from permissions.deny — the 'merge' exception must stay denied;"
   bad "$msg"
+fi
+
+# 4.21 — fixed-string presence of 'Autonomy reserve' in the three files that make up the
+# run-time enforcement chain: the planner that populates the Reserve touch list, the orchestrator
+# that hands the declared globs to the verifier, and the verifier that checks the diff against
+# them. 4.8 already pins the *declaration* side (README + harness-setup); this pins the
+# *enforcement* side — a drift in any one of the three silently disables the run-time check.
+marker='Autonomy reserve'
+missing=""
+for f in agents/planner.md agents/verifier.md skills/issue-implementer/SKILL.md; do
+  grep -qF -- "$marker" "$root/$f" || missing="$missing $f"
+done
+if [ -z "$missing" ]; then
+  ok "4.21 '$marker' present in agents/planner.md, agents/verifier.md, and skills/issue-implementer/SKILL.md"
+else
+  bad "4.21 '$marker' missing from:$missing"
+fi
+
+# 4.22 — fixed-string presence of 'Post-merge verification' in README.md and
+# skills/issue-cycle/SKILL.md. The README tells the user to title the sub-heading exactly this;
+# the merge pass matches it exactly for both guard (e) and the pre-first-merge recheck, so a
+# drift makes both silently inert.
+marker='Post-merge verification'
+missing=""
+grep -qF -- "$marker" "$root/README.md" || missing="$missing README.md"
+grep -qF -- "$marker" "$root/skills/issue-cycle/SKILL.md" || missing="$missing skills/issue-cycle/SKILL.md"
+if [ -z "$missing" ]; then
+  ok "4.22 '$marker' present in README.md and skills/issue-cycle/SKILL.md"
+else
+  bad "4.22 '$marker' missing from:$missing"
 fi
 
 # ============================================================================

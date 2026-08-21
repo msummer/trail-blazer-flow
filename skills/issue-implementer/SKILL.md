@@ -280,8 +280,11 @@ e. **Dispatch the `verifier` subagent** (Task tool, `agents/verifier.md`) — th
    itself fails. Its prompt must contain: the issue, the full approved plan (Acceptance criteria
    + Verified facts + `RESOLVED:` decisions), the implementer's report, the dispatch attempt
    number, `git diff <default-branch>...HEAD --stat` (three-dot, from the merge base; non-empty
-   because of step 2c's checkpoint), and *"Verify this implementation against the plan and
-   acceptance criteria following your process. Return your verdict."*
+   because of step 2c's checkpoint), the declared autonomy reserve globs — pasted one per line
+   from CLAUDE.md's `## Autonomy reserve` fenced block, or the literal `none declared` — plus the
+   plan's "Reserve touch list" (or that it has none), which feed the verifier's `## Reserve touch
+   check`, and *"Verify this implementation against the plan and acceptance criteria following
+   your process. Return your verdict."*
    - **Verdict `pass`:** archive it first, then carry it. Archive: `gh issue comment <number>
      --body-file <tempfile>`, whose temp file's first line is exactly `<!-- verifier-verdict -->`,
      followed by the verdict verbatim (including its closing status line). Do this after

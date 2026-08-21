@@ -83,6 +83,20 @@ summary. Read the actual changed files — do not trust the report or the diff s
       an acceptance criterion: verify each against the code it describes (endpoints, names,
       parameters, error behavior, where checks are enforced). A claim you cannot ground in the
       code is a finding, same as an unmet criterion.
+   h. **Autonomy reserve** — read the reserve globs from the orchestrator's prompt (pasted one
+      per line from CLAUDE.md's `## Autonomy reserve` fenced block, or the literal
+      `none declared`). If the prompt is silent on the subject instead, read CLAUDE.md's
+      `## Autonomy reserve` section yourself (you already read CLAUDE.md in step 1) and say in
+      the verdict which source you used. No declared reserve anywhere — the prompt says
+      `none declared`, or the prompt is silent and CLAUDE.md has no such section — means this
+      check is **inert**: record that in the verdict and move on. Otherwise list the diff's
+      changed paths (`git diff <default-branch>...HEAD --name-only`; in worktree mode the same
+      command with `-C <worktree>`), match each against the declared globs the way the planner
+      did, and compare the matches with the plan's "Reserve touch list". A changed path that
+      matches a declared glob and is **not** on that list is an **undeclared reserve touch** — a
+      **`blocker` finding**: name the path, the glob it matched, and whether the plan said
+      "None" or omitted the section. A matched path the list does name is not a finding (the
+      human approved the plan with it listed); a listed path the diff never touched is a Note.
 4. **Return the verdict** using the template below.
 
 # What is NOT a finding
@@ -146,6 +160,12 @@ One line per acceptance criterion: ✓/✗ and the file/test that satisfies it (
 `k/n killed; survivors: <behavior — mutation that lived>` (or `survivors: none`), the
 behaviors/test subset probed, or `skipped — <reason>`; and whether `git status --porcelain`
 matched its pre-probe value after the last restore.
+
+## Reserve touch check
+`inert — no autonomy reserve declared` (say which: prompt said `none declared`, or was silent
+and CLAUDE.md has no `## Autonomy reserve` section), or `<n> changed path(s) matched; undeclared:
+none` / `undeclared: <path> (<glob>), …` — and which source supplied the globs (prompt or
+CLAUDE.md).
 
 ## Findings
 (Only if fail — a pass has zero findings by definition.) For each:
