@@ -46,6 +46,7 @@ or share).
 │   └── test-ratchet/SKILL.md     # optional, policy-gated: files coverage-increasing issues (never implements)
 ├── bin/                          # on the Bash PATH when the plugin is enabled
 │   ├── check-harness.sh           # mechanical preflight ("doctor"); safe to re-run any time
+│   ├── check-decision-record.sh   # scoped-autonomy: checks an issue body against a declared decision record
 │   ├── find-planning-work.sh
 │   ├── setup-labels.sh            # creates the workflow labels (run once per repo)
 │   ├── find-implementation-work.sh
@@ -488,14 +489,84 @@ subagents need:
    backtick-quoted measurement command that resolves on the PATH — it never runs that command
    itself; only the `harness-setup` skill does, once, at onboarding, with a human present.
 
+7. **Autonomy reserve** (optional) — a section titled exactly "Autonomy reserve" declaring a
+   fenced block of path globs, one per line (`**` allowed), naming paths a scoped-autonomy grant
+   must never be treated as authorizing, e.g.:
+
+   ````markdown
+   ## Autonomy reserve
+   ```
+   CLAUDE.md
+   .claude/**
+   docs/adr/**
+   ```
+   ````
+
+   The planner adds a "Reserve touch list" section to every plan when this section exists: every
+   "Affected areas" entry matching a declared glob (naming the glob it matched), or "None". A
+   non-empty Reserve touch list blocks auto-approval (item 4's hard floor) unless the "Plan
+   auto-approval policy" section explicitly opts reserve-touching work in. **No section means the
+   harness never populates a Reserve touch list, and the hard floor's reserve bullet is inert.**
+   What counts as reserved, and what a grant may override, stays this repo's decision — the
+   harness only reads the declared globs and does the matching in prose.
+
+8. **Autonomy decision record** (optional) — a section titled exactly "Autonomy decision record"
+   declaring a fenced block of `key: value` lines describing the record a human-applied grant
+   label requires an issue's body to carry, e.g.:
+
+   ````markdown
+   ## Autonomy decision record
+   ```
+   grant-label: scoped-autonomy
+   record-section: Binding decisions
+   element: Escalation triggers
+   element: Migration posture
+   element: Worked example
+   ```
+   ````
+
+   `grant-label:` (required) names the label a human applies to an issue to grant it whatever
+   autonomy this repo's own policy defines. `record-section:` (optional, default "Binding
+   decisions") names the heading the issue body's record lives under. Each `element:` line (at
+   least one required) names a required sub-heading under that section. When an issue this run
+   carries the declared label, the `issue-planner` skill runs `check-decision-record.sh <n>` — a
+   read-only script that fetches the issue body and checks it for the record-section heading and
+   every declared element heading, printing a PASS/FAIL line per check — and reports a
+   `grant: will deliver` / `grant: will not deliver` verdict in its summary before
+   implementation. A non-zero exit on a grant-labelled issue also joins item 4's hard floor.
+   **The harness never applies, removes, or creates the grant label** — that stays a human
+   action — and never judges whether the record's *content* is any good, only whether the
+   declared headings are present. **No 'Autonomy decision record' section means the check never
+   runs and no grant is ever evaluated.** `check-harness.sh` reports `scoped autonomy: off` only
+   when neither this section nor item 7's "Autonomy reserve" is declared; a repo that declares
+   "Autonomy reserve" alone gets a WARN instead (no grant label is declared, so
+   `check-decision-record.sh` never runs).
+
+   **The body-hash grant pattern (documented convention, not harness behaviour).** A repo that
+   wants its grant label to be tamper-evident against a re-label that skips a genuine re-review
+   can adopt this convention in its own `CLAUDE.md`: when granting, the human posts a comment
+   `grant: <sha256 of issue body>`. The canonical recipe, run as two plain commands (no allow rule
+   approves a command containing command substitution — see "Safety model"):
+
+   ```bash
+   gh issue view <n> --json body --jq .body | tr -d '\r' > /tmp/body.txt
+   shasum -a 256 /tmp/body.txt        # macOS/BSD
+   sha256sum /tmp/body.txt            # Linux
+   ```
+
+   Both sides must use the same recipe or the digests won't match. **The harness computes and
+   verifies nothing here** — a repo that wants a subagent to recompute the hash must say so in
+   its own `CLAUDE.md` and add `Bash(shasum:*)` / `Bash(sha256sum:*)` to its allow-list; the
+   template does not ship either grant.
+
 The subagents read `CLAUDE.md` at the start of every task — it is the real input that makes
 the harness work well in a given repo. Too little and they're guessing; too much and the
 contract above drowns in restatement of what the file system, manifests, and linter config
-already say. The six items above are the floor, not a template to pad: leave out directory
+already say. The eight items above are the floor, not a template to pad: leave out directory
 tours, framework defaults, and formatter-enforced style, and keep the non-obvious — invariants,
 why-this-way decisions, traps a fresh reader would hit — instead. `check-harness.sh` turns "too
 much" into a mechanical proxy: it WARNs once `CLAUDE.md` passes 300 lines or 20,000 bytes,
-pointing at the harness-setup skill's leanness audit — not at the six contract items themselves.
+pointing at the harness-setup skill's leanness audit — not at the eight contract items themselves.
 
 ## The LESSONS.md contract (project-owned)
 
@@ -722,6 +793,16 @@ does not qualify. Honest limit: the check proves a matching line is present in t
 agrees with the ledger, not that a human witnessed the dispatch — both artifacts are
 orchestrator-written, so it raises the cost of asserting a verification event that didn't happen
 rather than eliminating the possibility.
+
+**The body-hash grant pattern is a tripwire, not a control** (see "The CLAUDE.md contract" item
+8). It exists only as a documented convention a consuming repo may adopt in its own CLAUDE.md —
+this harness never computes or verifies a body hash itself. Even where a repo adopts it, the
+harness and the human share one `gh` identity, so anyone able to post the `grant: <sha256>`
+comment can also edit the issue body and re-post a matching hash; a mismatch means "grant void,
+standard flow" only because the repo's own instructions say so, not because the harness enforces
+anything. Separately, and unconditionally: the harness never applies or removes a scoped-autonomy
+grant label itself, on any issue — `check-harness.sh` and `check-decision-record.sh` only report
+whether the label exists and whether the declared record is present.
 
 Two honest caveats. First, the implementer's "no git" rule is enforced by prompt, not by
 permissions: the settings allow-list must permit git for the orchestrator, and permission

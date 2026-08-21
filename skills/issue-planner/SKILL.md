@@ -235,10 +235,26 @@ If you could answer none of the BLOCKING questions, leave the plan as posted.
 
 ### 6. Auto-approval (policy-gated)
 
-Read the repo's `CLAUDE.md` for a section titled **"Plan auto-approval policy"**. If there is
-no such section, skip this step — every approval is the human's. If there is one, evaluate each
-plan you posted or revised **this run** against BOTH of the following. The policy can loosen
-nothing in the hard floor; it can only add conditions.
+**6a. Scoped-autonomy inputs.** This part runs regardless of whether a "Plan auto-approval
+policy" section exists. Read the repo's `CLAUDE.md` for a section titled exactly **"Autonomy
+decision record"**; if present, take the `grant-label:` value from its fenced block. For each
+issue you planned or revised **this run** that carries that label, run — as a plain Bash
+command with the literal issue number, never a command substitution:
+
+```bash
+check-decision-record.sh <number>
+```
+
+Record the per-element pass/fail output next to the plan's "Reserve touch list" — both feed the
+hard floor below and the grant verdict line in step 7. The harness never applies, removes, or
+creates the grant label — that is the human's action, and the repo's own CLAUDE.md policy
+decides what the label and the record permit. If CLAUDE.md declares no "Autonomy decision
+record" section, or no issue this run carries the declared label, there is nothing to do here.
+
+**6b. Auto-approval.** Read the repo's `CLAUDE.md` for a section titled **"Plan auto-approval
+policy"**. If there is no such section, skip the rest of this step — every approval is the
+human's. If there is one, evaluate each plan you posted or revised **this run** against BOTH of
+the following. The policy can loosen nothing in the hard floor; it can only add conditions.
 
 **Hard floor (non-negotiable, regardless of what the policy says):**
 - the issue does NOT carry the `no-auto-approve` label;
@@ -249,7 +265,11 @@ nothing in the hard floor; it can only add conditions.
 - the plan's "Data / schema impact" is "None" **unless** the policy explicitly opts schema work
   in;
 - the plan's "Risks & considerations" flags nothing security-sensitive (auth, permissions,
-  secrets, data access) **unless** the policy explicitly opts such work in.
+  secrets, data access) **unless** the policy explicitly opts such work in;
+- the plan's "Reserve touch list" is absent or "None" **unless** the policy explicitly opts
+  reserve-touching work in;
+- if the issue carries the grant label declared under "Autonomy decision record", 6a's
+  `check-decision-record.sh` run reported every declared element present (exit 0).
 
 **Policy conditions:** whatever the CLAUDE.md section states — typically a max size (e.g. "S
 only"), allowed areas, excluded paths. Judge them honestly against the plan; when a condition
@@ -280,6 +300,14 @@ plans and what you did about them, and whether discovery reported `truncated: tr
 issues exist than the query limit returned — run again after this batch). Plans whose questions
 are all ADVISORY can be approved as-is (the defaults are accepted); say so explicitly so the
 human doesn't assume another round is needed.
+
+**Grant verdict.** For every issue this run that carries the grant label declared under
+"Autonomy decision record" (6a), report one line: `grant: will deliver` when
+`check-decision-record.sh` exited 0 and the plan's "Reserve touch list" is absent or "None" (or
+the policy explicitly opts reserve-touching work in), otherwise `grant: will not deliver —
+<reason>` naming the missing record elements and/or the reserve-matching Affected areas entries.
+This tells the human, before implementation, whether the grant they applied can actually
+deliver — the harness itself never applies, removes, or creates the label.
 
 **Reconcile discovery against outcomes.** Before closing, walk `find-planning-work.sh`'s
 `needs_initial_plan` and `needs_revision` lists and confirm every issue on them has a row in the
