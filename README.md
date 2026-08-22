@@ -789,6 +789,18 @@ archived as an issue comment (see "Verdict provenance" under "Safety model"). An
 your repo picks up this version carries no such comment, so it is not eligible for autonomous
 merge — it simply waits in the "waits on the human" queue until you merge it by hand.
 
+**v2.2.0 → v2.3.0** adds no grant, label, script, or baseline step — the doctor reports nothing
+new to migrate. Three doctor checks got sharper: a `#` comment inside the ratchet policy's fenced
+block no longer truncates the section slice; a declared "Post-merge verification" block now gets an
+advisory WARN naming the exact `Bash(<command>:*)` entry for any declared command that has no
+matching allow entry (a string comparison — nothing declared is ever executed); and an abbreviated
+`- commit:` value of 7+ hex characters in `.claude/BASELINE.md` no longer trips the "baseline is
+behind" WARN, while a shorter value WARNs as malformed. Under merge autonomy the merge floor is
+stricter again: the archived verifier verdict is now keyed to the PR's head branch (a second
+`<!-- verifier-verdict-branch: … -->` line in the archive comment), so a PR opened before your repo
+picks up this version carries an unkeyed archive and is not eligible for autonomous merge — it
+waits for one manual merge, exactly like the v2.2.0 transition above.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
