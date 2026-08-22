@@ -286,10 +286,13 @@ e. **Dispatch the `verifier` subagent** (Task tool, `agents/verifier.md`) — th
    check`, and *"Verify this implementation against the plan and acceptance criteria following
    your process. Return your verdict."*
    - **Verdict `pass`:** archive it first, then carry it. Archive: `gh issue comment <number>
-     --body-file <tempfile>`, whose temp file's first line is exactly `<!-- verifier-verdict -->`,
-     followed by the verdict verbatim (including its closing status line). Do this after
-     **every** verifier pass — this one and any CI-fix re-verification below, not just the first
-     — because the merge floor matches the *latest* archived comment against the PR body. Then
+     --body-file <tempfile>`, whose temp file's first line is exactly `<!-- verifier-verdict -->`
+     and second line is exactly `<!-- verifier-verdict-branch: claude/<number>-<slug> -->` (this
+     PR's head branch, from step 2b — the key the merge floor matches on, so a multi-PR issue's
+     slices don't shadow each other), followed by the verdict verbatim (including its closing
+     status line). Do this after **every** verifier pass — this one and any CI-fix
+     re-verification below, not just the first — because the merge floor matches the *latest*
+     archived comment **for this head branch** against the PR body. Then
      carry its closing status line — verbatim — a `Mutation probe:` line carrying its
      `## Mutation probe` content, and its "Notes for the PR reviewer" into the PR body's
      verification section, proceed to commit (next step).
