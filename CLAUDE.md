@@ -45,12 +45,14 @@ harness's exempt comment with a one-line reason each.
 (`bin/check-harness.sh`): it builds throwaway fixture repos under `mktemp` and pins verdicts
 (the settings.json block, template-diff, the ratchet's never-execute guarantee, merge-autonomy
 activation, default-branch guard coverage, the post-merge-verification declaration state —
-declared/no-fence/not-declared, fence-aware and depth-aware, printing only an integer count of
-fenced command lines — and a path-qualified verification interpreter such as
+declared/no-fence/not-declared, fence-aware and depth-aware, and (when declared) whether each
+declared command's first token has a matching allow entry, a pure string comparison that WARNs
+rather than fails — a path-qualified verification interpreter such as
 `<repo>/api/.venv/bin/python` being checked against a literal-path allow entry distinct from the
-bare-name regex check) that would otherwise only be hand-verified. It runs in CI as the third
-step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
-`bin/check-harness.sh` changes.
+bare-name regex check, the test-suite ratchet's fence-aware section slice with a
+fence-delimiter-skipping span hunt, and the verification baseline's short-SHA-as-prefix compare)
+that would otherwise only be hand-verified. It runs in CI as the third step, but it is not part
+of `dev/selfcheck.sh` itself — run it by hand whenever `bin/check-harness.sh` changes.
 
 `dev/cleanup-tests.sh` is a separate negative-test harness for `bin/cleanup-after-merge.sh`: it
 builds throwaway fixture git repos under `mktemp`, with a stub `gh` and stub `git` on `PATH`, and

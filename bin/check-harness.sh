@@ -12,19 +12,25 @@
 # .claude/settings.json, .claude/settings.local.json, and the user-level settings file (a deny in
 # any of them wins, regardless of allows elsewhere — union semantics, not just the checked-in
 # file), whether its optional "Post-merge verification" declaration is present and, if so,
-# fenced (declared/no-fence/not-declared — never whether the declared commands are any good),
-# whether a "Test-suite ratchet policy" section exists and names a measurement command
-# (looked up with `command -v`, never executed), whether "Autonomy reserve" and "Autonomy
-# decision record" sections are declared and well-formed (and, when gh is ready, whether the
-# declared grant label exists — never applied, removed, or judged for content), the verification
-# baseline (.claude/BASELINE.md, machine-local), whether the template's branch-scoped deny
-# entries actually cover this repo's default branch, and branch protection.
+# fenced (declared/no-fence/not-declared — never whether the declared commands are any good) and
+# whether each declared command's first token has a matching allow entry in
+# .claude/settings.json, whether a "Test-suite ratchet policy" section exists and names a
+# measurement command via a fence-aware, depth-aware section slice (looked up with `command -v`,
+# never executed), whether "Autonomy reserve" and "Autonomy decision record" sections are
+# declared and well-formed (and, when gh is ready, whether the declared grant label exists —
+# never applied, removed, or judged for content), the verification baseline (.claude/BASELINE.md,
+# machine-local — an abbreviated recorded commit SHA of 7+ hex characters is accepted as a
+# prefix), whether the template's branch-scoped deny entries actually cover this repo's default
+# branch, and branch protection.
 #
 # The test-suite-ratchet check never executes, evals, or shells out to anything read from
 # CLAUDE.md: it only looks up the measurement command's first word with `command -v` (a lookup,
 # not an execution) and prints it back, quoted, as a report. The post-merge-verification
-# declaration-state check carries the same guarantee, stricter still: it never even looks up a
-# declared command, only counts non-blank fenced lines and prints that integer.
+# declaration-state check carries a related guarantee: it never executes, evals, `command -v`'s,
+# or expands a declared command either — the derived values it prints are an integer count of
+# fenced command lines and, when a declared command's first token has no matching allow entry, a
+# WARN echoing that token and the literal `Bash(<token>:*)` entry to add, produced by a pure
+# string comparison (entry_has) against the settings allow list, never a lookup or an execution.
 #
 # Read-only except two safe, idempotent fixes it applies automatically:
 #   - chmod +x on the harness's own scripts
@@ -69,10 +75,10 @@ bt="$(printf '\140')"
 # (e.g. "### Post-merge verification" under "## Merge autonomy policy") does NOT end the slice,
 # only a sibling-or-shallower heading does. Fence-aware like bin/check-decision-record.sh's
 # claude_md_block (a '#'-prefixed comment inside a fenced block is not a heading — see
-# .claude/LESSONS.md); depth-aware unlike it, which is why that idiom (also used at lines
-# 448/470 below) isn't reused here: it would stop at the very sub-heading this exists to see
-# past. Fence-delimiter lines are included in the output (so a downstream first-fence extractor
-# can still find them), same as claude_md_block.
+# .claude/LESSONS.md); depth-aware unlike it, which is why that idiom (also used by the
+# scoped-autonomy reserve/record slices below) isn't reused here: it would stop at the very
+# sub-heading this exists to see past. Fence-delimiter lines are included in the output (so a
+# downstream first-fence extractor can still find them), same as claude_md_block.
 claude_md_section() {
   awk -v t="$1" '
     $0 ~ "^#+[[:space:]]+" t "[[:space:]]*$" { inx=1; match($0, /^#+/); d=RLENGTH; next }
@@ -281,6 +287,7 @@ fi
 settings="$claude_dir/settings.json"
 allow_raw=""
 deny_raw=""
+allow_list_read=false
 if [ ! -f "$settings" ]; then
   bad "no .claude/settings.json — create one from the plugin's templates/repo-settings.json (permissions + enabledPlugins); plugins cannot ship permission grants"
 elif ! $jq_ready; then
@@ -290,6 +297,7 @@ elif ! jq -e . "$settings" >/dev/null 2>&1; then
 else
   allow_raw="$(jq -r '.permissions.allow[]? // empty' "$settings" 2>/dev/null)"
   deny_raw="$(jq -r '.permissions.deny[]? // empty' "$settings" 2>/dev/null)"
+  allow_list_read=true
 
   has_marker() { find "$root" -maxdepth 2 -name "$1" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | grep -q .; }
   allow_has()  { printf '%s\n' "$allow_raw" | grep -qE "^Bash\\(($1)"; }
@@ -543,16 +551,17 @@ else
     fi
   fi
 
-  # --- post-merge verification declaration state (#132) --- purely informational: reports
-  # whether the optional "Post-merge verification" sub-heading (nested, any '#' depth, under
-  # "Merge autonomy policy") is declared, and — if so — how many non-blank fenced command lines
-  # it holds. Never judges whether the declared commands are any good, and never checks whether
-  # they have a matching allow entry (see the README's Follow-ups for that separate,
-  # not-yet-built check). Deliberately placed OUTSIDE the jq_ready/broken_list chain above, so it
-  # still reports even when the merge-autonomy activation state itself is unknown (no settings
-  # file, unparseable, ...) — the declaration lives in CLAUDE.md, not in any settings file, and
-  # doesn't depend on activation state. Never executes, evals, command -v's, or expands anything
-  # read from the declaration: the only derived value ever printed is an integer count.
+  # --- post-merge verification declaration state (#132, #142) --- reports whether the optional
+  # "Post-merge verification" sub-heading (nested, any '#' depth, under "Merge autonomy policy")
+  # is declared, how many non-blank fenced command lines it holds, and — when declared and
+  # .claude/settings.json was readable — whether each declared command's first token has a
+  # matching allow entry there (a literal string comparison via entry_has, never a lookup or an
+  # execution of the command itself; see the allow-entry loop below). Never judges whether the
+  # declared commands are any good. Deliberately placed OUTSIDE the jq_ready/broken_list chain
+  # above, so the declaration state still reports even when the merge-autonomy activation state
+  # itself is unknown (no settings file, unparseable, ...) — the declaration lives in CLAUDE.md,
+  # not in any settings file, and doesn't depend on activation state. Never executes, evals,
+  # command -v's, or expands anything read from the declaration.
   if $has_merge_policy; then
     merge_sec="$(claude_md_section "Merge autonomy policy")"
     postdeploy_found=false
@@ -581,6 +590,45 @@ else
         wrn "post-merge verification: heading present but no fenced commands ('Post-merge verification' sub-heading found, but the cycle silently skips deploy verification with no fenced block — 'No command ⇒ no check', same rule as the test-suite ratchet below) — add a fenced block with at least one command"
       else
         ok "post-merge verification: declared ($postdeploy_count command line(s)) — the cycle's merge pass runs these read-only commands after a merge; this doctor never previews or executes them"
+
+        # --- post-merge allow-entry check (#138, #142) --- when .claude/settings.json was
+        # readable (allow_list_read), checks each declared line's first whitespace-delimited
+        # token against allow_raw with entry_has: a plain prefix test, NOT the rule-boundary
+        # variant deny_guards uses above — deliberately, so an arg-scoped grant such as
+        # Bash(tbf-boobytrap --smoke:*) still counts as covering the bare command. A pure string
+        # comparison: never command -v's, evals, or expands the token. Skipped silently when
+        # allow_list_read is false — the settings block above already FAILs/WARNs loudly about
+        # the unreadable file, so a second "check skipped" line here would be noise.
+        if $allow_list_read; then
+          pd_seen=""; pd_missing=""; pd_entries=""; pd_checked=0
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            tok="$(printf '%s\n' "$line" | awk '{print $1}')"
+            [ -n "$tok" ] || continue
+            case "$tok" in
+              '#'*) continue ;;
+            esac
+            printf '%s' "$tok" | grep -qE '^[A-Za-z0-9._/-][A-Za-z0-9._/+-]*$' || continue
+            printf '%s\n' "$pd_seen" | grep -qxF -- "$tok" && continue
+            pd_seen="${pd_seen}${tok}"$'\n'
+            pd_checked=$((pd_checked+1))
+            if entry_has "$allow_raw" "Bash($tok"; then
+              :
+            else
+              pd_missing="$pd_missing$tok, "
+              pd_entries="$pd_entries\"Bash($tok:*)\", "
+            fi
+          done <<EOF
+$postdeploy_blk
+EOF
+          pd_missing="${pd_missing%, }"
+          pd_entries="${pd_entries%, }"
+          if [ -n "$pd_missing" ]; then
+            wrn "post-merge verification: declared command(s) with no matching allow entry: $pd_missing — add $pd_entries to permissions.allow in .claude/settings.json (checked against .claude/settings.json only); without the grant the cycle's merge pass records deploy=pending, not shipped"
+          elif [ "$pd_checked" -gt 0 ]; then
+            ok "post-merge verification: every declared command has a matching allow entry ($pd_checked checked; string comparison only, never executed or looked up)"
+          fi
+        fi
       fi
     fi
   fi
@@ -593,9 +641,16 @@ else
   else
     # Documented heuristic (like 1.4 in dev/selfcheck.sh): the first backtick-quoted span in
     # the section is taken as the measurement command. $bt (a single backtick) is hoisted near
-    # the top of this file, shared with the verification-scope candidate scan.
-    sec="$(awk '/^#+[[:space:]]+Test-suite ratchet policy[[:space:]]*$/ { inx=1; next } inx && /^#+[[:space:]]/ { exit } inx { print }' "$root/CLAUDE.md")"
-    span="$(printf '%s\n' "$sec" | grep -o "${bt}[^${bt}]*${bt}" | head -1 | tr -d "$bt")"
+    # the top of this file, shared with the verification-scope candidate scan. Routed through
+    # claude_md_section (fence-aware AND depth-aware, .claude/LESSONS.md 2026-08-21) instead of
+    # a local inline slice, so a '#'-prefixed comment inside the section's fenced block does not
+    # truncate it, and a nested sub-heading no longer ends the slice early either.
+    sec="$(claude_md_section "Test-suite ratchet policy")"
+    # Fence-delimiter lines must be filtered out before the backtick-span hunt: claude_md_section
+    # deliberately keeps them in its output, and a bare ``` line's own two backticks would
+    # otherwise be the first match `grep -o` finds, making `head -1` return an empty span even
+    # though a real command follows later in the section. Do not "simplify" this away.
+    span="$(printf '%s\n' "$sec" | awk '/^```/ { next } { print }' | grep -o "${bt}[^${bt}]*${bt}" | head -1 | tr -d "$bt")"
     if [ -z "$span" ]; then
       wrn "test-suite ratchet: 'Test-suite ratchet policy' section present but names no backtick-quoted measurement command ('No command ⇒ no ratchet') — the ratchet won't run until one is added"
     else
@@ -673,16 +728,29 @@ fi
 
 # --- verification baseline ------------------------------------------------------
 # BASELINE.md records THIS machine's last known-green run of the verification commands
-# on the default branch (full commit SHA + per-command results). It is machine-local
+# on the default branch (commit SHA + per-command results). It is machine-local
 # state: gitignored, written by harness-setup, refreshed by the implementer/cycle skills.
+# harness-setup still writes the full 40-char SHA; the doctor merely tolerates an abbreviated
+# recorded value of at least 7 hex characters, treating it as a prefix of the remote tip.
 baseline="$claude_dir/BASELINE.md"
 if [ -f "$baseline" ]; then
   recorded="$(sed -nE 's/^- commit:[[:space:]]*([0-9a-f]+).*/\1/p' "$baseline" | head -1)"
   current=""
   [ -n "$default_branch" ] && current="$(git rev-parse "origin/$default_branch" 2>/dev/null || true)"
+  # A case statement isn't usable directly in an elif condition, so compute both booleans first.
+  baseline_short=false; baseline_matches=false
+  if [ -n "$recorded" ] && [ -n "$current" ]; then
+    if [ "${#recorded}" -lt 7 ]; then
+      baseline_short=true
+    else
+      case "$current" in "$recorded"*) baseline_matches=true ;; esac
+    fi
+  fi
   if [ -z "$recorded" ]; then
     wrn "BASELINE.md present but no '- commit:' line found — re-run the harness-setup skill to re-record it"
-  elif [ -n "$current" ] && [ "$recorded" != "$current" ]; then
+  elif $baseline_short; then
+    wrn "BASELINE.md's '- commit:' value ('$recorded') is under 7 hex characters and cannot reliably identify a commit — re-run the harness-setup skill to re-record it with the full SHA"
+  elif [ -n "$current" ] && ! $baseline_matches; then
     wrn "verification baseline is behind origin/$default_branch (recorded ${recorded:0:12}, remote at ${current:0:12}) — the next implementer/cycle run refreshes it"
   else
     ok "verification baseline recorded (BASELINE.md at ${recorded:0:12})"
