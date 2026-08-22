@@ -107,17 +107,21 @@ on top and is not configurable**:
     `key=value` fields on the line stay tolerated.
   - *Archived verdict, checked mechanically*, between the check above and the *Ledger
     cross-check* below, same `<n>`-from-the-head-branch scoping (harness PRs only; Dependabot PRs
-    skip this bullet): read the latest archive with one substitution-free command —
-    `gh issue view <n> --json comments --jq '[.comments[] | select(.body | contains("<!-- verifier-verdict -->"))] | sort_by(.createdAt) | last | ((.url // "none"), ((.body // "") | split("\n") | map(select(startswith("<!-- harness-status:"))) | last // "none"))' | tr -d '\r'`
+    skip this bullet): the archive is keyed to the PR's head branch, so a multi-PR issue's
+    earlier slice matches its own verdict rather than the newest on the issue. Read the key
+    first — `gh pr view <pr> --json headRefName --jq .headRefName | tr -d '\r'` (also where `<n>`
+    comes from) — then paste that branch name literally into the placeholder below, in this
+    one-line, substitution-free command:
+    `gh issue view <n> --json comments --jq '[.comments[] | select((.body | contains("<!-- verifier-verdict -->")) and (.body | contains("<!-- verifier-verdict-branch: <paste the head branch here> -->")))] | sort_by(.createdAt) | last | ((.url // "none"), ((.body // "") | split("\n") | map(select(startswith("<!-- harness-status:"))) | last // "none"))' | tr -d '\r'`
     — prints the comment URL, then the archived closing status line. A second line reading
     `none`, or one that does not begin `<!-- harness-status: stage=verifier issue=<n>
-    outcome=pass `, is **not eligible** ("no archived verifier verdict for this issue"), one-line
-    reason in the report. Otherwise paste that second line literally as the needle of a second,
-    equally substitution-free command:
+    outcome=pass `, is **not eligible** ("no archived verifier verdict for head branch
+    <branch>"), one-line reason in the report. Otherwise paste that second line literally as the
+    needle of a second, equally substitution-free command:
     `gh pr view <pr> --json body --jq '(.body // "") | contains("<paste the printed line here>")' | tr -d '\r'`
     — anything but `true` is **not eligible** ("the PR body's verifier line does not match the
-    archived verdict"), one-line reason in the report. Cite the printed comment URL as merge
-    evidence.
+    verdict archived for head branch <branch>"), one-line reason in the report. Cite the printed
+    comment URL as merge evidence.
   - *Ledger cross-check*, against the pre-advance check above: the issue's `verifier` ledger row
     must read `pass`; a row reading `fail`/`incomplete`/`died` against a pass line in the PR body
     is a contradiction — don't merge, escalate with both pieces of evidence.

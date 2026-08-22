@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 35 assertions total. The gate prints what it checks — run it.
+# Five groups, 38 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -534,8 +534,8 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 445
-issue-cycle 310
+budget_table="issue-implementer 450
+issue-cycle 315
 issue-planner 350
 project-kickoff 215
 test-ratchet 200
@@ -627,18 +627,23 @@ else
   bad "4.18 '$marker' missing from:$missing"
 fi
 
-# 4.19 — the literal verifier-verdict marker appears in the skill that writes it (as an issue
-# comment, after every verifier pass) and the skill that checks for it before an autonomous
-# merge. Mirrors 4.1/4.5/4.16/4.17/4.18 — a floor that greps for a marker nobody writes is the
-# exact failure this pins.
-marker='<!-- verifier-verdict -->'
+# 4.19 — the literal verifier-verdict marker and the verifier-verdict-branch key prefix both
+# appear in the skill that writes them (as an issue comment, after every verifier pass) and the
+# skill that checks for them before an autonomous merge. Mirrors 4.1/4.5/4.16/4.17/4.18 — a floor
+# that greps for a marker nobody writes is the exact failure this pins. Like 4.16, the key marker
+# is pinned only by its prefix (without the trailing space) — the branch name varies per PR, so
+# the full key line is never a fixed string; the fine-grained spacing of the writer's key-line
+# template is left to assertion 5.7.
 missing=""
-grep -qF -- "$marker" "$root/skills/issue-implementer/SKILL.md" || missing="$missing skills/issue-implementer/SKILL.md"
-grep -qF -- "$marker" "$root/skills/issue-cycle/SKILL.md" || missing="$missing skills/issue-cycle/SKILL.md"
+for marker in '<!-- verifier-verdict -->' '<!-- verifier-verdict-branch:'; do
+  for f in skills/issue-implementer/SKILL.md skills/issue-cycle/SKILL.md; do
+    grep -qF -- "$marker" "$root/$f" || missing="$missing $f($marker)"
+  done
+done
 if [ -z "$missing" ]; then
-  ok "4.19 '$marker' present in skills/issue-implementer/SKILL.md and skills/issue-cycle/SKILL.md"
+  ok "4.19 '<!-- verifier-verdict -->' and '<!-- verifier-verdict-branch:' present in skills/issue-implementer/SKILL.md and skills/issue-cycle/SKILL.md"
 else
-  bad "4.19 '$marker' missing from:$missing"
+  bad "4.19 markers missing from:$missing"
 fi
 
 # 4.20 — bijection: 'gh pr <sub>' invocations named in skills/*/SKILL.md and
@@ -702,7 +707,7 @@ fi
 
 # ============================================================================
 echo
-echo "-- Group 5: bin/ script behavior --"
+echo "-- Group 5: script and extracted-program behavior --"
 
 # reconcile-ledger.sh, fed fabricated inputs through process substitution: no files written,
 # no gh call (the status JSON is supplied), so the gate stays read-only and offline.
@@ -751,6 +756,111 @@ if [ "$out" = "$expected" ] && [ "$rc" -eq 1 ]; then
   ok "5.4 reconcile-ledger.sh: reports the unknown deploy outcome and exits 1"
 else
   bad "5.4 reconcile-ledger.sh: expected rc=1 and the unknown-outcome line, got rc=$rc output='$out'"
+fi
+
+# 5.5/5.6/5.7 — extract the archived-verdict --jq program out of skills/issue-cycle/SKILL.md
+# (the actual instruction text, not a copy of it) and execute it with jq against literal offline
+# fixtures. Read-only, offline: no files written, no gh call. Each assertion fails loudly if the
+# extraction is empty or malformed, rather than silently passing on nothing.
+cyc="$root/skills/issue-cycle/SKILL.md"
+q="'"
+av_n="$(grep -c -- '--json comments --jq ' "$cyc")"
+av_line="$(grep -F -- '--json comments --jq ' "$cyc" | head -1)"
+av_prog="$(printf '%s\n' "$av_line" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
+# av_for BRANCH — the extracted program with the head-branch placeholder substituted.
+av_for() { printf '%s' "$av_prog" | sed "s|<paste the head branch here>|$1|"; }
+
+extraction_ok=1
+if [ "$av_n" != "1" ]; then
+  bad "5.5 archived-verdict --jq extraction: expected exactly one matching line in skills/issue-cycle/SKILL.md, found $av_n"
+  bad "5.6 archived-verdict --jq extraction: skipped (extraction did not find exactly one line)"
+  bad "5.7 archived-verdict --jq extraction: skipped (extraction did not find exactly one line)"
+  extraction_ok=0
+elif [ -z "$av_prog" ]; then
+  bad "5.5 archived-verdict --jq extraction: extracted program is empty"
+  bad "5.6 archived-verdict --jq extraction: skipped (extracted program is empty)"
+  bad "5.7 archived-verdict --jq extraction: skipped (extracted program is empty)"
+  extraction_ok=0
+else
+  case "$av_prog" in
+    '[.comments[]'*) : ;;
+    *)
+      bad "5.5 archived-verdict --jq extraction: extracted program does not start with [.comments[ -- got: $av_prog"
+      bad "5.6 archived-verdict --jq extraction: skipped (extracted program malformed)"
+      bad "5.7 archived-verdict --jq extraction: skipped (extracted program malformed)"
+      extraction_ok=0
+      ;;
+  esac
+fi
+
+if [ "$extraction_ok" = "1" ]; then
+  # 5.5 — none / one / two-out-of-createdAt-order (newest wins) on a single branch.
+  fx_av_none='{"comments":[{"url":"https://example/none","createdAt":"2026-08-01T00:00:00Z","body":"no marker here at all"}]}'
+  fx_av_one='{"comments":[{"url":"https://example/c2","createdAt":"2026-08-01T00:00:00Z","body":"<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: claude/17-a -->\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->"}]}'
+  fx_av_two='{"comments":[{"url":"https://example/c4","createdAt":"2026-08-05T00:00:00Z","body":"<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: claude/17-a -->\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=1 -->"},{"url":"https://example/c3","createdAt":"2026-08-03T00:00:00Z","body":"<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: claude/17-a -->\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->"}]}'
+
+  fail_55=""
+  out="$(printf '%s' "$fx_av_none" | jq -r "$(av_for claude/17-a)" 2>&1)"
+  expected="$(printf 'none\nnone')"
+  [ "$out" = "$expected" ] || fail_55="$fail_55 none-fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_av_one" | jq -r "$(av_for claude/17-a)" 2>&1)"
+  expected="$(printf 'https://example/c2\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->')"
+  [ "$out" = "$expected" ] || fail_55="$fail_55 one-fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_av_two" | jq -r "$(av_for claude/17-a)" 2>&1)"
+  expected="$(printf 'https://example/c4\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=1 -->')"
+  [ "$out" = "$expected" ] || fail_55="$fail_55 two-fixture (newest-wins, out of array order): got '$out';"
+
+  if [ -z "$fail_55" ]; then
+    ok "5.5 archived-verdict --jq program: none/one/two(newest-wins) fixtures all match"
+  else
+    bad "5.5 archived-verdict --jq program:$fail_55"
+  fi
+
+  # 5.6 — three branches on one issue: own verdict per branch, an absent branch, and the
+  # prefix-collision guard (claude/17-slice-a must never resolve to claude/17-slice-ab's comment).
+  fx_av_multi='{"comments":[{"url":"https://example/pa","createdAt":"2026-08-01T00:00:00Z","body":"<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: claude/17-slice-a -->\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->"},{"url":"https://example/pab","createdAt":"2026-08-02T00:00:00Z","body":"<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: claude/17-slice-ab -->\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=1 -->"},{"url":"https://example/pb","createdAt":"2026-08-03T00:00:00Z","body":"<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: claude/17-slice-b -->\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=2 -->"}]}'
+
+  fail_56=""
+  out="$(printf '%s' "$fx_av_multi" | jq -r "$(av_for claude/17-slice-a)" 2>&1)"
+  expected="$(printf 'https://example/pa\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->')"
+  [ "$out" = "$expected" ] || fail_56="$fail_56 slice-a (prefix-collision guard): got '$out';"
+
+  out="$(printf '%s' "$fx_av_multi" | jq -r "$(av_for claude/17-slice-b)" 2>&1)"
+  expected="$(printf 'https://example/pb\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=2 -->')"
+  [ "$out" = "$expected" ] || fail_56="$fail_56 slice-b: got '$out';"
+
+  out="$(printf '%s' "$fx_av_multi" | jq -r "$(av_for claude/17-slice-zz)" 2>&1)"
+  expected="$(printf 'none\nnone')"
+  [ "$out" = "$expected" ] || fail_56="$fail_56 slice-zz (absent branch): got '$out';"
+
+  if [ -z "$fail_56" ]; then
+    ok "5.6 archived-verdict --jq program: three branches on one issue each resolve to their own verdict, absent branch -> none/none, prefix-collision guard holds"
+  else
+    bad "5.6 archived-verdict --jq program:$fail_56"
+  fi
+
+  # 5.7 — writer<->checker round-trip: extract the key-line template skills/issue-implementer/
+  # SKILL.md mandates writers emit, build a fixture comment from it, and prove the cycle skill's
+  # --jq program selects it. A drift in the writer's key-line spelling would silently stop every
+  # autonomous merge, which 4.19 alone (a prefix-only presence check) would not catch.
+  impl="$root/skills/issue-implementer/SKILL.md"
+  key_n="$(grep -c -- '<!-- verifier-verdict-branch:' "$impl")"
+  key_tpl="$(grep -o '<!-- verifier-verdict-branch: [^`]*-->' "$impl" | head -1)"
+  if [ "$key_n" != "1" ] || [ -z "$key_tpl" ]; then
+    bad "5.7 writer/checker round-trip: expected exactly one verifier-verdict-branch key-line template in skills/issue-implementer/SKILL.md, found $key_n (extracted: '$key_tpl')"
+  else
+    key_line="$(printf '%s' "$key_tpl" | sed 's|claude/<number>-<slug>|claude/17-a|')"
+    fx_av_writer='{"comments":[{"url":"https://example/w1","createdAt":"2026-08-04T00:00:00Z","body":"<!-- verifier-verdict -->\n'"$key_line"'\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->"}]}'
+    out="$(printf '%s' "$fx_av_writer" | jq -r "$(av_for claude/17-a)" 2>&1)"
+    expected="$(printf 'https://example/w1\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->')"
+    if [ "$out" = "$expected" ]; then
+      ok "5.7 writer/checker round-trip: the writer's mandated key-line template resolves through the checker's --jq program"
+    else
+      bad "5.7 writer/checker round-trip: expected '$expected', got '$out'"
+    fi
+  fi
 fi
 
 # ============================================================================

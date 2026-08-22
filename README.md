@@ -201,7 +201,8 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    below), but nothing leaves the machine until the verifier passes, so every PR the human sees is
    verifier-clean.
 5. On verifier pass: **archives the verdict verbatim as an issue comment** (opening with
-   `<!-- verifier-verdict -->`, after every pass, including a later CI-fix re-verification), then
+   `<!-- verifier-verdict -->`, its second line keying the archive to this PR's head branch,
+   after every pass, including a later CI-fix re-verification), then
    **collapses the run's WIP checkpoint commits** into the working tree (one
    `git reset --soft` to the branch's merge base with the default branch — never the working
    tree itself, which is untouched), stages everything, **reconciles the staged list against the
@@ -495,9 +496,9 @@ subagents need:
    Both edits are yours, never an agent's. The merge pass's hard floor always applies on
    top (standard-flow PRs only, the PR body carrying the verifier's own `outcome=pass` status
    line — not prose — checked mechanically and cross-checked against the dispatch ledger *and*
-   against the verifier's verdict archived verbatim as an issue comment, CI
-   green on the head commit, never the governance surface — CLAUDE.md, `.claude/`, policy/ADR
-   docs, CI config — nothing flagged for human decision, one merge at a time with
+   against the verifier's verdict archived verbatim as an issue comment for that PR's head
+   branch, CI green on the head commit, never the governance surface — CLAUDE.md, `.claude/`,
+   policy/ADR docs, CI config — nothing flagged for human decision, one merge at a time with
    re-verification between, every merge audited in the cycle report). **No section means no
    autonomous merges** — behavior is exactly the
    pre-1.5 default. **"No checks configured" is not green.** A repo with no CI wired up gets a
@@ -911,11 +912,18 @@ closing status line (`<!-- harness-status: stage=verifier issue=<n> outcome=pass
 -->`) verbatim, checked mechanically (`gh pr view … --jq 'contains(...)'`); the dispatch ledger's
 `verifier` row for that issue reads `pass`; and the verifier's verdict is separately archived,
 also verbatim, as an issue comment opening with `<!-- verifier-verdict -->` — posted by the
-orchestrator after every verifier pass, including a CI-fix re-verification — whose own closing
-status line the PR body's line is checked against literally before the merge pass proceeds. A
-prose "verifier verdict: pass" without the PR-body line, or a PR body with no matching archived
-comment, does not qualify. Honest limit: the check proves a matching line is present in the PR
-body, agrees with the ledger, and agrees with a comment independently timestamped on the issue —
+orchestrator after every verifier pass, including a CI-fix re-verification — whose second line
+keys the archive to this PR's head branch (`<!-- verifier-verdict-branch: claude/<n>-<slug>
+-->`). The merge pass matches the newest verdict archived **for that branch**, not the newest on
+the issue, so a deliberately multi-PR issue split across several `claude/<n>-*` branches has each
+slice match its own verdict instead of an earlier slice losing to whichever slice verified last.
+That keyed comment's own closing status line is what the PR body's line is checked against
+literally before the merge pass proceeds. A prose "verifier verdict: pass" without the PR-body
+line, or a PR body with no archived comment keyed to its head branch, does not qualify —
+including a PR opened before this keying existed, whose archive carries no key line and which
+therefore waits for a human merge rather than being retrofitted. Honest limit: the check proves
+a matching line is present in the PR body, agrees with the ledger, and agrees with a comment
+independently timestamped on the issue —
 not that a human witnessed the dispatch. All three artifacts are still orchestrator-written, so a
 misreporting orchestrator can still fabricate them; the gain is that doing so now requires two
 consistent, durably visible artifacts instead of one, raising the cost of asserting a verification
