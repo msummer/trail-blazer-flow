@@ -9,8 +9,14 @@
 # no-CI note, default-branch guard coverage, the half-activated remediation's file naming, the
 # scoped-autonomy declarations (the doctor's verdict block and check-decision-record.sh's
 # per-element PASS/FAIL report), the post-merge-verification declaration-state line (declared
-# count / no-fence WARN / not-declared, with the same never-execute guarantee as the ratchet),
-# and the path-qualified verification interpreter's literal-path grant check.
+# count / no-fence WARN / not-declared, with the same never-execute guarantee as the ratchet) and
+# its allow-entry check (each declared command's first token against the settings allow list, a
+# pure string comparison, WARN never FAIL when a grant is missing), the path-qualified
+# verification interpreter's literal-path grant check, the test-suite ratchet's fence-aware,
+# depth-aware section slice and fence-delimiter-skipping span hunt (a '#' comment inside the
+# fenced block must not truncate it, nor must a bare fence line itself be mistaken for the
+# quoted command), and the verification baseline's short-SHA-as-prefix compare (an abbreviated
+# recorded commit of 7+ hex characters is accepted; fewer is a malformed-value WARN).
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -89,6 +95,12 @@ write_settings() {
       # cases that use this mode.
       jq --arg e "Bash($dir/.venv/bin/python:*)" \
         '.permissions.allow |= (map(select(. != "Bash(pytest:*)")) + [$e])' "$tmpl" > "$out" ;;
+    postdeploy-grant)
+      # merge-allow-only plus a grant for the boobytrap command the merge-postdeploy variant's
+      # fenced block declares, so the post-merge allow-entry check (#138/#142) finds every
+      # declared token covered.
+      jq '.permissions.deny  |= map(select(. != "Bash(gh pr merge:*)")) |
+          .permissions.allow += ["Bash(gh pr merge:*)", "Bash(tbf-boobytrap:*)"]' "$tmpl" > "$out" ;;
   esac
 }
 
@@ -112,6 +124,28 @@ mk_repo() {
     case "$variant" in
       merge)   printf '\n## Merge autonomy policy\n\nThe cycle may merge fixture PRs. (fixture stub policy)\n' ;;
       ratchet) printf '\n## Test-suite ratchet policy\n\nMeasure with `tbf-boobytrap --cov`. (fixture stub policy)\n' ;;
+      ratchet-fenced)
+        # Fence-aware-slice + fence-delimiter-skip regression pin (#137/#142,
+        # .claude/LESSONS.md 2026-08-21): the "# a comment ..." line sits BETWEEN two data lines
+        # inside the fenced block (not a heading, even though it starts with '#'), and the
+        # backtick-quoted measurement command comes AFTER the fenced block closes — if it came
+        # first, the old non-fence-aware slice would find it too and this case would not be a
+        # regression pin.
+        cat <<'EOF'
+
+## Test-suite ratchet policy
+
+Example measurement output:
+
+```
+lines 100
+# a comment between two data lines
+lines 200
+```
+
+Measure with `tbf-boobytrap --cov`. (fixture stub policy)
+EOF
+        ;;
       merge-postdeploy)
         # The fenced block's "# comment" line between two commands is the fence-awareness pin
         # .claude/LESSONS.md requires: a non-fence-aware section slice would read it as a
@@ -207,6 +241,58 @@ EOF
   printf '%s' "$dir"
 }
 
+# seed_commit DIR — records a local identity with gpgsign off (same idiom as
+# dev/cleanup-tests.sh:66-78, so CI runners with no global git identity work), forces the branch
+# name to "main" before the first commit (portable regardless of the machine's
+# init.defaultBranch — a no-op on later calls, since HEAD already points there), and creates one
+# empty commit. May be called more than once per fixture to build a short history. Prints the new
+# HEAD SHA.
+seed_commit() {
+  local dir="$1"
+  (
+    cd "$dir" &&
+    git config user.name "doctor-tests" &&
+    git config user.email "doctor-tests@example.invalid" &&
+    git config commit.gpgsign false &&
+    git symbolic-ref HEAD refs/heads/main &&
+    git commit -q --allow-empty -m "fixture commit"
+  ) >/dev/null
+  (cd "$dir" && git rev-parse HEAD)
+}
+
+# point_origin_ref DIR SHA — makes `git rev-parse origin/main` resolve entirely offline by
+# writing the remote-tracking ref directly. No bare clone, push, or fetch is needed: mk_repo's
+# origin URL (https://example.invalid/acme/demo.git) is deliberately unreachable, and this never
+# touches it.
+point_origin_ref() {
+  local dir="$1" sha="$2"
+  (cd "$dir" && git update-ref refs/remotes/origin/main "$sha")
+}
+
+# write_baseline DIR SHA_TEXT — writes DIR/.claude/BASELINE.md in harness-setup's documented
+# shape (skills/harness-setup/SKILL.md), with the '- commit:' line carrying trailing prose after
+# the SHA text (the real-world #141 report showed exactly this shape, and the doctor's `sed`
+# extraction is tolerant of it), and appends .claude/BASELINE.md to DIR/.gitignore so the
+# fixture also takes the gitignored-PASS branch instead of the unrelated "not gitignored" WARN.
+write_baseline() {
+  local dir="$1" sha_text="$2"
+  cat > "$dir/.claude/BASELINE.md" <<EOF
+# Verification baseline (harness-maintained)
+
+The last known-green run of the project's verification commands on the default branch,
+on THIS machine. Written by harness-setup; refreshed automatically by the
+issue-implementer / issue-cycle pre-flight whenever the default branch moves past the
+recorded commit. Machine-local — keep it gitignored. Do not edit by hand.
+
+- commit: $sha_text (fixture stub)
+- branch: main
+- date: 2026-01-01
+- results:
+  - \`true\`: pass
+EOF
+  printf '.claude/BASELINE.md\n' >> "$dir/.gitignore"
+}
+
 # build_stub_gh DIR [BRANCH] [EXTRA_LABEL] — a deterministic, offline gh: auth always succeeds;
 # repo view returns the fixture's fake nameWithOwner and BRANCH (default "main") as
 # defaultBranchRef; label list returns the seven lifecycle labels (extracted from
@@ -277,8 +363,10 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 25 cases. Every fixture also emits the LESSONS.md auto-seed line and a no-baseline WARN —
-# expected, deliberately unasserted below.
+# The 31 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
+# unasserted below. Every fixture except the three baseline-* ones also emits a no-baseline WARN
+# (also unasserted); the baseline-* fixtures write their own .claude/BASELINE.md instead, via
+# seed_commit/point_origin_ref/write_baseline, so they exercise the baseline compare itself.
 
 case_settings_missing() {
   local dir; dir="$(mk_repo settings-missing base missing)"
@@ -356,6 +444,9 @@ case_merge_allow_only() {
   expect "no checks configured"
 }
 
+# This fixture's settings mode (merge-allow-only) grants no allow entry for "tbf-boobytrap", so
+# the post-merge allow-entry check (#138/#142) also fires its missing-grant WARN here — expected
+# and deliberately unasserted, same idiom as write_settings's verify-path-grant mode note above.
 case_merge_postdeploy() {
   local dir; dir="$(mk_repo merge-postdeploy merge-postdeploy merge-allow-only)"
   local trapdir="$dir/boobytrap-bin" sentinel="$dir/sentinel-touched"
@@ -577,6 +668,98 @@ case_scoped_reserve_missing() {
   expect_absent "scoped autonomy: off"
 }
 
+# ratchet-fence-comment (#137/#142) — a '#' comment BETWEEN two data lines inside the ratchet
+# section's fenced block must not truncate the section slice, and a bare ``` fence-delimiter
+# line must not itself be mistaken for the backtick-quoted measurement command: the real command
+# (after the fence) is still found, never executed (sentinel absent).
+case_ratchet_fence_comment() {
+  local dir; dir="$(mk_repo ratchet-fence-comment ratchet-fenced verbatim)"
+  local trapdir="$dir/boobytrap-bin" sentinel="$dir/sentinel-touched"
+  mkdir -p "$trapdir"
+  { printf '#!%s\n' "$bash_bin"; printf 'touch %s\n' "$sentinel"; } > "$trapdir/tbf-boobytrap"
+  chmod +x "$trapdir/tbf-boobytrap"
+  run_doctor "$dir" "$stub_gh_dir:$trapdir:$PATH"
+  expect_rc 0
+  expect "tbf-boobytrap --cov"
+  expect_absent "names no backtick-quoted measurement command"
+  expect_no_file "$sentinel"
+}
+
+# postdeploy-grant-missing (#138/#142) — a declared post-merge command with no matching allow
+# entry in .claude/settings.json: WARN naming the exact token and the literal
+# "Bash(<token>:*)" entry to add, never a FAIL.
+case_postdeploy_grant_missing() {
+  local dir; dir="$(mk_repo postdeploy-grant-missing merge-postdeploy merge-allow-only)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "post-merge verification: declared command(s) with no matching allow entry: tbf-boobytrap"
+  expect "Bash(tbf-boobytrap:*)"
+  expect_absent "post-merge verification: every declared command has a matching allow entry"
+}
+
+# postdeploy-grant-present (#138/#142) — every declared command's first token has a matching
+# allow entry: PASS, no missing-grant WARN, and the check never executes the command it found a
+# grant for (sentinel absent) — the never-execute guarantee applies to the present-grant branch
+# too, not just the missing-grant one. The pre-existing declared-count line is unchanged (the
+# '#' comment line is still counted there, while being skipped by the grant check itself).
+case_postdeploy_grant_present() {
+  local dir; dir="$(mk_repo postdeploy-grant-present merge-postdeploy postdeploy-grant)"
+  local trapdir="$dir/boobytrap-bin" sentinel="$dir/sentinel-touched"
+  mkdir -p "$trapdir"
+  { printf '#!%s\n' "$bash_bin"; printf 'touch %s\n' "$sentinel"; } > "$trapdir/tbf-boobytrap"
+  chmod +x "$trapdir/tbf-boobytrap"
+  run_doctor "$dir" "$stub_gh_dir:$trapdir:$PATH"
+  expect_rc 0
+  expect "post-merge verification: every declared command has a matching allow entry"
+  expect_absent "no matching allow entry"
+  expect_no_file "$sentinel"
+  expect "post-merge verification: declared (3 command line(s))"
+}
+
+# baseline-short-sha (#141/#142) — a recorded '- commit:' value of exactly 7 hex characters that
+# is a genuine prefix of origin/main's tip: treated as identifying that commit, not "behind".
+case_baseline_short_sha() {
+  local dir; dir="$(mk_repo baseline-short-sha base verbatim)"
+  local sha; sha="$(seed_commit "$dir")"
+  point_origin_ref "$dir" "$sha"
+  write_baseline "$dir" "${sha:0:7}"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "verification baseline recorded (BASELINE.md at"
+  expect_absent "verification baseline is behind"
+}
+
+# baseline-behind (#141/#142) — a 7-hex-char recorded value that is NOT a prefix of origin/main's
+# current tip (the branch moved on): the prefix compare must still catch a genuinely stale
+# baseline, not over-permissively pass every short value.
+case_baseline_behind() {
+  local dir; dir="$(mk_repo baseline-behind base verbatim)"
+  local c1 c2
+  c1="$(seed_commit "$dir")"
+  c2="$(seed_commit "$dir")"
+  point_origin_ref "$dir" "$c2"
+  write_baseline "$dir" "${c1:0:7}"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "verification baseline is behind origin/main"
+  expect_absent "verification baseline recorded (BASELINE.md at"
+}
+
+# baseline-too-short (#141/#142) — a recorded value under 7 hex characters cannot reliably
+# identify a commit: WARN as malformed, not a silent PASS and not the "behind" wording (a 3-char
+# value would otherwise glob-prefix-match almost anything).
+case_baseline_too_short() {
+  local dir; dir="$(mk_repo baseline-too-short base verbatim)"
+  local sha; sha="$(seed_commit "$dir")"
+  point_origin_ref "$dir" "$sha"
+  write_baseline "$dir" "${sha:0:3}"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "BASELINE.md's '- commit:' value"
+  expect_absent "verification baseline is behind"
+  expect_absent "verification baseline recorded (BASELINE.md at"
+}
+
 # ---------------------------------------------------------------------------------------------
 stub_gh_dir="$tmpbase/stub-gh"
 build_stub_gh "$stub_gh_dir"
@@ -626,6 +809,12 @@ cases=(
   "record-comment-preserved|case_record_comment_preserved|check-decision-record.sh: a '#' comment inside the fenced block does not truncate it, later elements still checked"
   "scoped-declared|case_scoped_declared|scoped autonomy: declared PASS when both declarations and the grant label exist"
   "scoped-reserve-missing|case_scoped_reserve_missing|scoped autonomy: WARN when the reserve declaration is missing, rc still 0"
+  "ratchet-fence-comment|case_ratchet_fence_comment|test-suite ratchet: fence-aware section slice + fence-delimiter-skip span hunt find the command past an in-fence comment"
+  "postdeploy-grant-missing|case_postdeploy_grant_missing|post-merge verification: declared command with no matching allow entry -> WARN naming the entry to add"
+  "postdeploy-grant-present|case_postdeploy_grant_present|post-merge verification: every declared command has a matching allow entry -> PASS, never executed"
+  "baseline-short-sha|case_baseline_short_sha|verification baseline: 7-hex-char recorded value that prefixes the remote tip -> recorded, not behind"
+  "baseline-behind|case_baseline_behind|verification baseline: 7-hex-char recorded value that does NOT prefix the remote tip -> still behind"
+  "baseline-too-short|case_baseline_too_short|verification baseline: recorded value under 7 hex characters -> malformed WARN, not recorded, not behind"
 )
 
 matched=0

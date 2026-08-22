@@ -546,10 +546,14 @@ subagents need:
    or redeploys anything — see "Safety model". `check-harness.sh` reports the declaration state as
    part of the merge-autonomy verdict — declared (with a count of fenced command lines), heading
    present but no fenced commands, or not declared at all — without ever executing, eval'ing, or
-   otherwise looking up any of the declared commands themselves. Because the dispatch ledger lives
-   in each run's context only, the next run's merge pass re-runs these same commands once,
-   immediately before its first merge, and stops before merging anything if that recheck comes
-   back anything but `verified`.
+   otherwise looking up any of the declared commands themselves. When declared, it additionally
+   reports whether each declared command's first token has a matching `Bash(<token>:*)` allow
+   entry in `.claude/settings.json` — a literal string comparison only, never a lookup or an
+   execution — WARNing (never failing) and naming the exact entry to add when one is missing, so
+   an unattended cycle doesn't discover the missing grant only after a merge. Because the dispatch
+   ledger lives in each run's context only, the next run's merge pass re-runs these same commands
+   once, immediately before its first merge, and stops before merging anything if that recheck
+   comes back anything but `verified`.
 
 6. **Test-suite ratchet policy** (optional) — a section titled exactly "Test-suite ratchet
    policy" stating the measurement command the `test-ratchet` skill (standalone, and as the
@@ -678,7 +682,8 @@ recorded commit (green → new baseline; red → the run stops, because a broken
 failure unattributable — that's also the mechanical "two green PRs can still compose badly"
 check). It is **machine-local state, not a project document**: keep it gitignored
 (`harness-setup` adds the entry; the doctor warns if it's missing or tracked), and never edit
-it by hand.
+it by hand. `harness-setup` always writes the full SHA; the doctor's compare against it tolerates
+an abbreviated recorded value of 7 or more hex characters as a prefix of the current tip.
 
 ## Installing in a new repo
 
