@@ -214,6 +214,8 @@ p_5_2()               { edit "$1/bin/reconcile-ledger.sh" 's/stage-skipped issue
 p_5_5()               { edit "$1/skills/issue-cycle/SKILL.md" 's/sort_by(.createdAt) | //'; }
 p_5_6()               { edit "$1/skills/issue-cycle/SKILL.md" 's/verifier-verdict-branch: <paste the head branch here> -->/verifier-verdict-branch: <paste the head branch here>/'; }
 p_5_7()               { edit "$1/skills/issue-implementer/SKILL.md" 's/verifier-verdict-branch: claude/verifier-verdict-branch:claude/'; }
+p_5_8()               { edit "$1/skills/issue-cycle/SKILL.md" 's/outcome=pass ")/outcome=pass")/'; }
+p_5_9()               { edit "$1/skills/issue-cycle/SKILL.md" 's#(\.body // "") | contains("<paste#(.bodyText // "") | contains("<paste#'; }
 
 # ---------------------------------------------------------------------------------------------
 # Case table: name|expected-ids (space-separated, empty for a control case)|perturb function
@@ -259,7 +261,7 @@ cases=(
   "4.15|4.15|p_4_15|append a real dollar-paren command to skills/harness-setup/SKILL.md"
   "4.16|4.16|p_4_16|rename the follow-up marker in cleanup-after-merge.sh so the skill and the script disagree"
   "4.17|4.17|p_4_17|rename the multi-pr marker in cleanup-after-merge.sh so the script and the docs disagree"
-  "4.18|4.18|p_4_18|rename the verifier status-line needle in issue-cycle/SKILL.md so the writer and the checker disagree"
+  "4.18|4.18 5.8|p_4_18|rename the verifier status-line needle in issue-cycle/SKILL.md so the writer and the checker disagree (also renames stage=verifier inside the extracted verdict-provenance --jq program, so 5.8's unrenamed fixtures no longer match)"
   "4.19|4.19 5.5 5.6 5.7|p_4_19|rename the verifier-verdict marker throughout skills/issue-cycle/SKILL.md so the writer and the checker disagree (also renames both needles inside the extracted archived-verdict --jq program, so 5.5/5.6/5.7 no longer match the unrenamed fixtures and fail alongside it)"
   "4.20-missing-grant|4.20|p_4_20_missing_grant|drop the Bash(gh pr edit:*) allow entry while a skill still names 'gh pr edit'"
   "4.20-orphan-grant|4.20|p_4_20_orphan_grant|add a Bash(gh pr close:*) allow entry no skill names"
@@ -272,6 +274,8 @@ cases=(
   "5.5|5.5|p_5_5|drop the sort_by(.createdAt) clause from the archived-verdict --jq program so array order, not recency, picks the winner"
   "5.6|5.6|p_5_6|drop the archived-verdict key needle's trailing ' -->' so a shorter branch name substring-matches a longer sibling branch's key line"
   "5.7|5.7|p_5_7|remove the space after the colon in the writer's verifier-verdict-branch key-line template so it no longer matches the checker's needle"
+  "5.8|5.8|p_5_8|delete the trailing space after outcome=pass in the verdict-provenance needle so a longer outcome token (outcome=passed) substring-matches"
+  "5.9|5.9|p_5_9|rename .body to .bodyText in the archived-verdict match needle so the extracted program reads a field gh never returns"
 )
 
 # ---------------------------------------------------------------------------------------------

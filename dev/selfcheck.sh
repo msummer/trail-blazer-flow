@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 41 assertions total. The gate prints what it checks — run it.
+# Five groups, 43 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -938,6 +938,135 @@ if [ "$extraction_ok" = "1" ]; then
     else
       bad "5.7 writer/checker round-trip: expected '$expected', got '$out'"
     fi
+  fi
+fi
+
+# 5.8/5.9 — execute the merge floor's two PR-body --jq needles out of skills/issue-cycle/SKILL.md
+# (the actual instruction lines, not copies of them) against literal offline fixtures. Read-only,
+# offline: no files written, no gh call. Each fails loudly if its own extraction finds a wrong
+# number of matching lines, an empty program, or a malformed one, rather than silently passing on
+# nothing. $cyc and $q are the 5.5-5.7 block's; reused as-is.
+
+# --- 5.8: verdict-provenance needle (SKILL.md:104) ---
+vp_n="$(grep -F -- '--json body --jq' "$cyc" | grep -c -F -- '<!-- harness-status:')"
+vp_line="$(grep -F -- '--json body --jq' "$cyc" | grep -F -- '<!-- harness-status:' | head -1)"
+vp_prog="$(printf '%s\n' "$vp_line" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
+# vp_for N — the extracted verdict-provenance program with <n> substituted.
+vp_for() { printf '%s' "$vp_prog" | sed "s|<n>|$1|"; }
+# vp_fail_for N — the same, with outcome=fail in place of outcome=pass (the SKILL.md line's "the
+# same command with outcome=fail in place of outcome=pass" twin).
+vp_fail_for() { printf '%s' "$vp_prog" | sed -e "s|<n>|$1|" -e "s|outcome=pass |outcome=fail |"; }
+
+vp_ok=1
+if [ "$vp_n" != "1" ]; then
+  bad "5.8 verdict-provenance --jq extraction: expected exactly one matching line in skills/issue-cycle/SKILL.md, found $vp_n"
+  vp_ok=0
+elif [ -z "$vp_prog" ]; then
+  bad "5.8 verdict-provenance --jq extraction: extracted program is empty"
+  vp_ok=0
+else
+  case "$vp_prog" in
+    '(.body'*) : ;;
+    *)
+      bad "5.8 verdict-provenance --jq extraction: extracted program does not start with (.body -- got: $vp_prog"
+      vp_ok=0
+      ;;
+  esac
+fi
+
+if [ "$vp_ok" = "1" ]; then
+  fx_vp_present='{"body":"some prose <!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 --> more prose"}'
+  fx_vp_extra='{"body":"prose <!-- harness-status: stage=verifier issue=17 outcome=pass retries=2 deploy=verified --> prose"}'
+  fx_vp_longer='{"body":"prose <!-- harness-status: stage=verifier issue=17 outcome=passed retries=0 --> prose"}'
+  fx_vp_fail='{"body":"prose <!-- harness-status: stage=verifier issue=17 outcome=fail retries=1 --> prose"}'
+  fx_vp_prose='{"body":"verifier verdict: pass"}'
+  fx_vp_other_issue='{"body":"prose <!-- harness-status: stage=verifier issue=18 outcome=pass retries=0 --> prose"}'
+  fx_vp_null='{"body":null}'
+
+  fail_58=""
+  out="$(printf '%s' "$fx_vp_present" | jq -r "$(vp_for 17)" 2>&1)"
+  [ "$out" = "true" ] || fail_58="$fail_58 present-fixture (pass-needle): got '$out';"
+
+  out="$(printf '%s' "$fx_vp_present" | jq -r "$(vp_fail_for 17)" 2>&1)"
+  [ "$out" = "false" ] || fail_58="$fail_58 present-fixture (fail-twin): got '$out';"
+
+  out="$(printf '%s' "$fx_vp_extra" | jq -r "$(vp_for 17)" 2>&1)"
+  [ "$out" = "true" ] || fail_58="$fail_58 extra-trailing-fields fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_vp_longer" | jq -r "$(vp_for 17)" 2>&1)"
+  [ "$out" = "false" ] || fail_58="$fail_58 longer-outcome-token (outcome=passed) fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_vp_fail" | jq -r "$(vp_for 17)" 2>&1)"
+  [ "$out" = "false" ] || fail_58="$fail_58 outcome=fail fixture (pass-needle): got '$out';"
+
+  out="$(printf '%s' "$fx_vp_fail" | jq -r "$(vp_fail_for 17)" 2>&1)"
+  [ "$out" = "true" ] || fail_58="$fail_58 outcome=fail fixture (fail-twin): got '$out';"
+
+  out="$(printf '%s' "$fx_vp_prose" | jq -r "$(vp_for 17)" 2>&1)"
+  [ "$out" = "false" ] || fail_58="$fail_58 prose-only fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_vp_other_issue" | jq -r "$(vp_for 17)" 2>&1)"
+  [ "$out" = "false" ] || fail_58="$fail_58 different-issue fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_vp_null" | jq -r "$(vp_for 17)" 2>&1)"
+  [ "$out" = "false" ] || fail_58="$fail_58 null-body fixture: got '$out';"
+
+  if [ -z "$fail_58" ]; then
+    ok "5.8 verdict-provenance --jq program: present, fail-twin, extra-trailing-fields, longer-outcome-token, outcome=fail, prose-only, different-issue and null-body fixtures all match"
+  else
+    bad "5.8 verdict-provenance --jq program:$fail_58"
+  fi
+fi
+
+# --- 5.9: archived-verdict match needle (SKILL.md:121) ---
+mn_n="$(grep -F -- '--json body --jq' "$cyc" | grep -c -F -- 'paste the printed line here')"
+mn_line_src="$(grep -F -- '--json body --jq' "$cyc" | grep -F -- 'paste the printed line here' | head -1)"
+mn_prog="$(printf '%s\n' "$mn_line_src" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
+# mn_for LINE — the extracted archived-verdict match program with the placeholder substituted by
+# a literal status line. The substituted line contains no |, & or \, so a |-delimited BRE is safe.
+mn_for() { printf '%s' "$mn_prog" | sed "s|<paste the printed line here>|$1|"; }
+
+mn_ok=1
+if [ "$mn_n" != "1" ]; then
+  bad "5.9 archived-verdict match --jq extraction: expected exactly one matching line in skills/issue-cycle/SKILL.md, found $mn_n"
+  mn_ok=0
+elif [ -z "$mn_prog" ]; then
+  bad "5.9 archived-verdict match --jq extraction: extracted program is empty"
+  mn_ok=0
+else
+  case "$mn_prog" in
+    '(.body'*) : ;;
+    *)
+      bad "5.9 archived-verdict match --jq extraction: extracted program does not start with (.body -- got: $mn_prog"
+      mn_ok=0
+      ;;
+  esac
+fi
+
+if [ "$mn_ok" = "1" ]; then
+  mn_line='<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->'
+  fx_mn_present='{"body":"some prose\n'"$mn_line"'\nmore prose"}'
+  fx_mn_retries='{"body":"some prose\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=1 -->\nmore prose"}'
+  fx_mn_none='{"body":"no status line here"}'
+  fx_mn_null='{"body":null}'
+
+  fail_59=""
+  out="$(printf '%s' "$fx_mn_present" | jq -r "$(mn_for "$mn_line")" 2>&1)"
+  [ "$out" = "true" ] || fail_59="$fail_59 line-present fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_mn_retries" | jq -r "$(mn_for "$mn_line")" 2>&1)"
+  [ "$out" = "false" ] || fail_59="$fail_59 retries-differ fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_mn_none" | jq -r "$(mn_for "$mn_line")" 2>&1)"
+  [ "$out" = "false" ] || fail_59="$fail_59 no-status-line fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_mn_null" | jq -r "$(mn_for "$mn_line")" 2>&1)"
+  [ "$out" = "false" ] || fail_59="$fail_59 null-body fixture: got '$out';"
+
+  if [ -z "$fail_59" ]; then
+    ok "5.9 archived-verdict match --jq program: line-present, retries-differ, no-status-line and null-body fixtures all match"
+  else
+    bad "5.9 archived-verdict match --jq program:$fail_59"
   fi
 fi
 

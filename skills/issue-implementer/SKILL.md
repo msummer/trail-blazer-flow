@@ -194,9 +194,9 @@ harness-setup skill and proceed — CLAUDE.md's verification commands still appl
 branch tip now differs from the recorded commit, re-establish it **before implementing
 anything**: on the clean default branch, run the project's verification commands from CLAUDE.md.
 
-**Green** → rewrite `.claude/BASELINE.md` with the new commit SHA, today's date, and each
-command's outcome (e.g. "pytest: 631 passed"). **Red** → STOP the whole run and report
-prominently; fixing main is the human's call.
+**Green** → rewrite `.claude/BASELINE.md` with the new commit SHA (the full 40-char SHA, from
+`git rev-parse HEAD`), today's date, and each command's outcome (e.g. "pytest: 631 passed").
+**Red** → STOP the whole run and report prominently; fixing main is the human's call.
 
 Then install dependencies using the project's setup command from CLAUDE.md (e.g. `pnpm install`);
 skip if the project has no dependency step.
