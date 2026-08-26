@@ -21,7 +21,10 @@
 # never applied, removed, or judged for content), the verification baseline (.claude/BASELINE.md,
 # machine-local — an abbreviated recorded commit SHA of 7+ hex characters is accepted as a
 # prefix), whether the template's branch-scoped deny entries actually cover this repo's default
-# branch, and branch protection.
+# branch, whether any of the three settings files disables all hooks (silently disabling the
+# plugin's `git -C` guard hook, and every other hook), whether `.claude/settings.json` still
+# carries legacy `Bash(git -C * <sub> *)` allow entries the guard hook now supersedes (#150 —
+# Claude Code 2.1.246+ warns about these at startup), and branch protection.
 #
 # The test-suite-ratchet check never executes, evals, or shells out to anything read from
 # CLAUDE.md: it only looks up the measurement command's first word with `command -v` (a lookup,
@@ -411,6 +414,21 @@ EOF
       wrn "settings.json deny-list missing $n_deny template entries: $miss_deny$more — a missing -C mirror makes the bare-form guard bypassable; re-copy the permissions block from the plugin's templates/repo-settings.json"
     fi
 
+    # --- stale -C allow entries (#150) -------------------------------------------
+    # v2.4.0 deleted the nine `Bash(git -C * <sub> *)` allow entries from the template — a
+    # plugin-shipped PreToolUse guard hook (hooks/git-c-guard.sh) covers those forms instead, and
+    # Claude Code 2.1.246+ prints a startup wildcard warning for each one still present. The
+    # template-diff block above only ever reports MISSING template entries, never repo-only
+    # extras, so a repo that never re-syncs gets no cue from it — this is that cue. Never FAILs:
+    # the stale rules still work, they're just noisy and superseded.
+    stale_c_allow="$(printf '%s\n' "$allow_raw" | grep -E '^Bash\(git -C ' | sort -u)"
+    if [ -n "$stale_c_allow" ]; then
+      n_stale="$(printf '%s\n' "$stale_c_allow" | grep -c .)"
+      more=""; [ "$n_stale" -gt 6 ] && more=" (+$((n_stale-6)) more)"
+      stale_list="$(printf '%s\n' "$stale_c_allow" | head -6 | tr '\n' ',' | sed 's/,/, /g; s/, $//')"
+      wrn "settings.json allow-list still carries $n_stale legacy 'Bash(git -C ...)' entries: $stale_list$more — Claude Code 2.1.246+ prints a startup wildcard warning for each; the plugin's guard hook now covers these forms, so delete them by re-copying the permissions block from the plugin's templates/repo-settings.json"
+    fi
+
     # --- default-branch guard coverage (#54) ------------------------------------
     # Two of the seven bare git denies in templates/repo-settings.json name the branch literally
     # ("main") rather than deriving it from the repo — on a repo whose default branch is
@@ -476,6 +494,7 @@ broken_list=""
 read_list=""
 merge_deny_src=""
 merge_allow_src=""
+disable_hooks_src=""
 if $jq_ready; then
   while IFS='|' read -r settings_file settings_label; do
     [ -n "$settings_file" ] || continue
@@ -489,6 +508,8 @@ if $jq_ready; then
     file_allow="$(jq -r '.permissions.allow[]? // empty' "$settings_file" 2>/dev/null)"
     entry_has "$file_deny" "Bash(gh pr merge" && merge_deny_src="$merge_deny_src$settings_label, "
     entry_has "$file_allow" "Bash(gh pr merge" && merge_allow_src="$merge_allow_src$settings_label, "
+    file_disable="$(jq -r '.disableAllHooks? // empty' "$settings_file" 2>/dev/null)"
+    [ "$file_disable" = "true" ] && disable_hooks_src="$disable_hooks_src$settings_label, "
   done <<EOF
 $settings|.claude/settings.json
 $settings_local|.claude/settings.local.json
@@ -499,6 +520,16 @@ broken_list="${broken_list%, }"
 read_list="${read_list%, }"
 merge_deny_src="${merge_deny_src%, }"
 merge_allow_src="${merge_allow_src%, }"
+disable_hooks_src="${disable_hooks_src%, }"
+
+# --- disableAllHooks (#150) -------------------------------------------------------------------
+# A true value in ANY of the three settings files silently disables every hook, including the
+# plugin's `git -C` guard hook — worktree-parallel mode's `git -C` commands then prompt in
+# default mode (or, headless, stall unattended, since a subagent can't answer a prompt). Never
+# FAILs: disabling hooks is a legitimate choice, this just names the consequence.
+if [ -n "$disable_hooks_src" ]; then
+  wrn "disableAllHooks: true in $disable_hooks_src — the plugin's git -C guard hook (and every other hook) cannot run, so worktree-parallel mode's git -C commands prompt in default mode and an unattended run stalls"
+fi
 
 # --- policy activation state (informational) -------------------------------------
 # Reports whether an optional CLAUDE.md policy section is *activated* by its companion

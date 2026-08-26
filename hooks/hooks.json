@@ -1,0 +1,17 @@
+{
+  "description": "trail-blazer-flow: PreToolUse guard that approves only the exact git -C <worktree> <subcommand> forms worktree-parallel mode issues (see issue #150); says nothing about everything else, so the normal permission flow — a prompt, or a matching deny rule, which always wins over this hook's decision — applies.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/git-c-guard.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

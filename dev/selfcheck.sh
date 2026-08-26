@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 38 assertions total. The gate prints what it checks — run it.
+# Five groups, 41 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -56,21 +56,22 @@ echo "== trail-blazer-flow selfcheck: $root =="
 echo
 echo "-- Group 1: shell syntax, portability, and error handling --"
 
-# 1.1 — bash -n on every bin/*.sh and every dev/*.sh.
+# 1.1 — bash -n on every bin/*.sh, every dev/*.sh, and every hooks/*.sh.
 bad_files=""
-for s in "$root"/bin/*.sh "$root"/dev/*.sh; do
+for s in "$root"/bin/*.sh "$root"/dev/*.sh "$root"/hooks/*.sh; do
   [ -f "$s" ] || continue
   err="$(bash -n "$s" 2>&1 >/dev/null)" || bad_files="$bad_files $s: $err;"
 done
 if [ -z "$bad_files" ]; then
-  ok "1.1 bash -n passes on all bin/*.sh and dev/*.sh"
+  ok "1.1 bash -n passes on all bin/*.sh, dev/*.sh, and hooks/*.sh"
 else
   bad "1.1 bash -n failed —$bad_files"
 fi
 
-# 1.2 — every bin/*.sh and dev/*.sh line 1 is exactly '#!/usr/bin/env bash' and has a 'set -' line.
+# 1.2 — every bin/*.sh, dev/*.sh, and hooks/*.sh line 1 is exactly '#!/usr/bin/env bash' and has
+# a 'set -' line.
 bad_files=""
-for s in "$root"/bin/*.sh "$root"/dev/*.sh; do
+for s in "$root"/bin/*.sh "$root"/dev/*.sh "$root"/hooks/*.sh; do
   [ -f "$s" ] || continue
   first="$(head -n1 "$s")"
   if [ "$first" != "#!/usr/bin/env bash" ]; then
@@ -80,30 +81,44 @@ for s in "$root"/bin/*.sh "$root"/dev/*.sh; do
   grep -q '^set -' "$s" || bad_files="$bad_files $s(no 'set -' line)"
 done
 if [ -z "$bad_files" ]; then
-  ok "1.2 every bin/*.sh and dev/*.sh starts with '#!/usr/bin/env bash' and has a 'set -' line"
+  ok "1.2 every bin/*.sh, dev/*.sh, and hooks/*.sh starts with '#!/usr/bin/env bash' and has a 'set -' line"
 else
   bad "1.2 shebang/set- check failed —$bad_files"
 fi
 
-# 1.4 — no GNU-only shell constructs in bin/*.sh: grep -P/--perl-regexp, sed -i/--in-place
-# without a suffix (sed -i.bak stays legal), readlink -f/--canonicalize, mapfile/readarray,
-# declare/typeset/local -A. Full-line comments are stripped before matching; the pattern then
-# matches anywhere else in the line, including inside quotes/heredocs — a comment is the only
-# safe place to name these constructs in bin/*.sh. dev/*.sh follows the same rule by convention
-# (CLAUDE.md), not mechanically — dev/ is exempt so this gate never has to self-scan its own
-# vocabulary of forbidden words.
+# 1.4 — no GNU-only shell constructs in bin/*.sh or hooks/*.sh: grep -P/--perl-regexp, sed
+# -i/--in-place without a suffix (sed -i.bak stays legal), readlink -f/--canonicalize,
+# mapfile/readarray, declare/typeset/local -A. Full-line comments are stripped before matching;
+# the pattern then matches anywhere else in the line, including inside quotes/heredocs — a
+# comment is the only safe place to name these constructs in bin/*.sh or hooks/*.sh. dev/*.sh
+# follows the same rule by convention (CLAUDE.md), not mechanically — dev/ is exempt so this gate
+# never has to self-scan its own vocabulary of forbidden words.
 genopt='([[:space:]]+--?[A-Za-z][A-Za-z-]*)*'
 forbidden_pat="(grep${genopt}[[:space:]]+(-[A-Za-z]*P|--perl-regexp)([[:space:]]|\$)|sed${genopt}[[:space:]]+(-[A-Za-z]*i|--in-place)([[:space:]]|\$)|readlink${genopt}[[:space:]]+(-[A-Za-z]*f|--canonicalize)([[:space:]]|\$)|(declare|typeset|local)${genopt}[[:space:]]+(-[A-Za-z]*A)([[:space:]]|\$)|mapfile([[:space:]]|\$)|readarray([[:space:]]|\$))"
 bad_list=""
-for s in "$root"/bin/*.sh; do
+for s in "$root"/bin/*.sh "$root"/hooks/*.sh; do
   [ -f "$s" ] || continue
   hits="$(grep -vnE '^[[:space:]]*#' "$s" | grep -E "$forbidden_pat")"
   [ -z "$hits" ] || bad_list="$bad_list $s: $(printf '%s' "$hits" | tr '\n' ' ');"
 done
 if [ -z "$bad_list" ]; then
-  ok "1.4 no GNU-only constructs (grep -P, sed -i without suffix, readlink -f, mapfile/readarray, declare -A) in bin/*.sh"
+  ok "1.4 no GNU-only constructs (grep -P, sed -i without suffix, readlink -f, mapfile/readarray, declare -A) in bin/*.sh or hooks/*.sh"
 else
   bad "1.4 GNU-only construct(s) found —$bad_list"
+fi
+
+# 1.6 — no 'eval' in hooks/*.sh: the guard hook must never eval anything derived from an
+# untrusted Bash command string. Same comment-stripping idiom as 1.4/1.5.
+bad_list=""
+for s in "$root"/hooks/*.sh; do
+  [ -f "$s" ] || continue
+  hits="$(grep -vnE '^[[:space:]]*#' "$s" | grep -E '(^|[^A-Za-z0-9_])eval([^A-Za-z0-9_]|$)')"
+  [ -z "$hits" ] || bad_list="$bad_list $s: $(printf '%s' "$hits" | tr '\n' ' ');"
+done
+if [ -z "$bad_list" ]; then
+  ok "1.6 no 'eval' in hooks/*.sh"
+else
+  bad "1.6 'eval' found in hooks/*.sh —$bad_list"
 fi
 
 # 1.5 — no unguarded 'git branch -d/-D/--delete' in bin/*.sh: a bare delete aborts the whole
@@ -136,14 +151,15 @@ echo "-- Group 2: JSON manifests --"
 plugin_json="$root/.claude-plugin/plugin.json"
 marketplace_json="$root/.claude-plugin/marketplace.json"
 settings_json="$root/templates/repo-settings.json"
+hooks_json="$root/hooks/hooks.json"
 
-# 2.1 — all three JSON files parse.
+# 2.1 — all four JSON files parse.
 bad_files=""
-for f in "$plugin_json" "$marketplace_json" "$settings_json"; do
+for f in "$plugin_json" "$marketplace_json" "$settings_json" "$hooks_json"; do
   jq -e . "$f" >/dev/null 2>&1 || bad_files="$bad_files $f"
 done
 if [ -z "$bad_files" ]; then
-  ok "2.1 plugin.json, marketplace.json, and templates/repo-settings.json all parse as JSON"
+  ok "2.1 plugin.json, marketplace.json, templates/repo-settings.json, and hooks/hooks.json all parse as JSON"
 else
   bad "2.1 invalid/unreadable JSON:$bad_files"
 fi
@@ -183,22 +199,38 @@ else
   bad "$msg"
 fi
 
-# 2.5 — permission mirror, allow side: every `-C`-form allow entry's subcommand also has a bare
-# `Bash(git <sub>` allow entry — the mechanical pin that no bare-form rule was removed while a
-# `-C` form was added (sequential mode depends on the bare forms existing independently).
+# 2.5 — permission mirror, allow side, re-pointed at the guard hook (#150 deleted the nine
+# `Bash(git -C * <sub> *)` allow entries; hooks/git-c-guard.sh covers those forms instead). Three
+# clauses, folded into one assertion so the count stays unchanged:
+#   (a) the hook's subcommand list extracts with an anchored sed -nE, same idiom as 4.13's
+#       STAGES= extraction — an empty extraction FAILs loudly ("structure changed"), never a
+#       vacuous pass;
+#   (b) every extracted subcommand has a bare `Bash(git <sub>` allow entry in the template — the
+#       mechanical pin that no bare-form rule was removed while the hook still lists it
+#       (sequential mode depends on the bare forms existing independently; `reset` legitimately
+#       matches `Bash(git reset --soft:*)`);
+#   (c) the template's allow array contains NO entry beginning `Bash(git -C ` — the
+#       wildcard-warning regression pin (deleting the nine allows is the whole point of #150; if
+#       one comes back, clause (a)/(b) alone would stay vacuously green because the hook's own
+#       list is the only source they compare against).
 allow_raw="$(jq -r '.permissions.allow[]? // empty' "$settings_json" 2>/dev/null)"
-c_allow_subs="$(printf '%s\n' "$allow_raw" \
-  | grep -oE '^Bash\(git -C \* [a-z][a-z-]*' \
-  | sed -E 's/^Bash\(git -C \* //' \
-  | sort -u)"
-missing_bare=""
-for sub in $c_allow_subs; do
-  printf '%s\n' "$allow_raw" | grep -qF -- "Bash(git $sub" || missing_bare="$missing_bare $sub"
-done
-if [ -z "$missing_bare" ]; then
-  ok "2.5 permission mirror (allow): every -C grant has a bare-form counterpart"
+hook_subs="$(sed -nE 's/^GIT_C_SUBCOMMANDS="([^"]*)"$/\1/p' "$root/hooks/git-c-guard.sh" | tr ' ' '\n' | grep -v '^$' | sort -u)"
+c_allow_present="$(printf '%s\n' "$allow_raw" | grep -c '^Bash(git -C ')"
+if [ -z "$hook_subs" ]; then
+  bad "2.5 permission mirror (allow): hooks/git-c-guard.sh's GIT_C_SUBCOMMANDS= line didn't match (structure changed) — extraction failed"
 else
-  bad "2.5 permission mirror (allow) broken: -C grant(s) with no bare-form counterpart:$missing_bare"
+  missing_bare=""
+  for sub in $hook_subs; do
+    printf '%s\n' "$allow_raw" | grep -qF -- "Bash(git $sub" || missing_bare="$missing_bare $sub"
+  done
+  if [ -n "$missing_bare" ] || [ "$c_allow_present" -ne 0 ]; then
+    msg="2.5 permission mirror (allow) broken:"
+    [ -n "$missing_bare" ] && msg="$msg hook subcommand(s) with no bare-form counterpart:$missing_bare;"
+    [ "$c_allow_present" -ne 0 ] && msg="$msg $c_allow_present legacy 'Bash(git -C ...)' allow entry(ies) present — these trip Claude Code's startup wildcard warning and are superseded by the guard hook;"
+    bad "$msg"
+  else
+    ok "2.5 permission mirror (allow): every hook subcommand has a bare-form counterpart, and no legacy -C allow entry remains"
+  fi
 fi
 
 # 2.6 — permission mirror, deny side: every bare git deny has a `-C` mirror, and vice versa.
@@ -218,6 +250,35 @@ else
   [ -n "$bare_without_mirror" ] && msg="$msg bare git deny(ies) with no -C mirror: $(printf '%s' "$bare_without_mirror" | tr '\n' ' ');"
   [ -n "$mirror_without_bare" ] && msg="$msg -C deny mirror(s) with no bare counterpart: $(printf '%s' "$mirror_without_bare" | tr '\n' ' ');"
   bad "$msg"
+fi
+
+# 2.7 — hooks/hooks.json structure ↔ filesystem: parses (2.1 already checked); .hooks.PreToolUse
+# is a non-empty array; its first element's .matcher == "Bash"; every type=="command" handler's
+# .command, with ${CLAUDE_PLUGIN_ROOT} textually replaced by $root and the surrounding
+# 'bash "' / '"' stripped, names a file that exists. Fails loudly on an empty extraction rather
+# than a vacuous pass, same guard as 2.5/4.13.
+pretooluse_n="$(jq -r '.hooks.PreToolUse? // [] | length' "$hooks_json" 2>/dev/null)"
+first_matcher="$(jq -r '.hooks.PreToolUse[0].matcher? // empty' "$hooks_json" 2>/dev/null)"
+handler_cmds="$(jq -r '.hooks.PreToolUse[]?.hooks[]? | select(.type == "command") | .command // empty' "$hooks_json" 2>/dev/null)"
+if [ -z "$pretooluse_n" ] || [ "$pretooluse_n" -eq 0 ] || [ -z "$handler_cmds" ]; then
+  bad "2.7 hooks/hooks.json structure: .hooks.PreToolUse extraction failed or came back empty (structure changed)"
+elif [ "$first_matcher" != "Bash" ]; then
+  bad "2.7 hooks/hooks.json structure: .hooks.PreToolUse[0].matcher is '$first_matcher', expected 'Bash'"
+else
+  missing_script=""
+  while IFS= read -r hc; do
+    [ -n "$hc" ] || continue
+    resolved="${hc//\$\{CLAUDE_PLUGIN_ROOT\}/$root}"
+    path="$(printf '%s' "$resolved" | sed -E 's/^bash "//; s/"$//')"
+    [ -f "$path" ] || missing_script="$missing_script $path"
+  done <<EOF
+$handler_cmds
+EOF
+  if [ -z "$missing_script" ]; then
+    ok "2.7 hooks/hooks.json structure: PreToolUse present with matcher 'Bash', every command handler resolves to an existing file"
+  else
+    bad "2.7 hooks/hooks.json structure: command handler(s) resolve to a nonexistent file:$missing_script"
+  fi
 fi
 
 # ============================================================================
@@ -703,6 +764,23 @@ if [ -z "$missing" ]; then
   ok "4.22 '$marker' present in README.md and skills/issue-cycle/SKILL.md"
 else
   bad "4.22 '$marker' missing from:$missing"
+fi
+
+# 4.23 — fixed-string presence of '-wt-' in hooks/git-c-guard.sh,
+# skills/issue-implementer/references/worktree-mode.md, and skills/issue-implementer/SKILL.md.
+# Mirrors 4.1/4.5/4.16/4.17 — the guard hook's path ERE and worktree-mode's directory-naming
+# convention must agree on this literal, or a rename of the worktree directory convention
+# silently stops the hook from ever matching (a permission prompt on every -C command, not a
+# loud failure).
+marker='-wt-'
+missing=""
+grep -qF -- "$marker" "$root/hooks/git-c-guard.sh" || missing="$missing hooks/git-c-guard.sh"
+grep -qF -- "$marker" "$root/skills/issue-implementer/references/worktree-mode.md" || missing="$missing skills/issue-implementer/references/worktree-mode.md"
+grep -qF -- "$marker" "$root/skills/issue-implementer/SKILL.md" || missing="$missing skills/issue-implementer/SKILL.md"
+if [ -z "$missing" ]; then
+  ok "4.23 '$marker' present in hooks/git-c-guard.sh, worktree-mode.md, and skills/issue-implementer/SKILL.md"
+else
+  bad "4.23 '$marker' missing from:$missing"
 fi
 
 # ============================================================================

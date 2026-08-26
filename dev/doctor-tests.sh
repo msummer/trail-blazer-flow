@@ -15,8 +15,11 @@
 # verification interpreter's literal-path grant check, the test-suite ratchet's fence-aware,
 # depth-aware section slice and fence-delimiter-skipping span hunt (a '#' comment inside the
 # fenced block must not truncate it, nor must a bare fence line itself be mistaken for the
-# quoted command), and the verification baseline's short-SHA-as-prefix compare (an abbreviated
-# recorded commit of 7+ hex characters is accepted; fewer is a malformed-value WARN).
+# quoted command), the verification baseline's short-SHA-as-prefix compare (an abbreviated
+# recorded commit of 7+ hex characters is accepted; fewer is a malformed-value WARN), the
+# disableAllHooks: true WARN across the three settings files (#150 — silently disables the
+# plugin's git -C guard hook, and every other hook), and the stale-legacy-'-C'-allow-entry WARN
+# on .claude/settings.json (#150 — the entries the guard hook now supersedes).
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -101,6 +104,12 @@ write_settings() {
       # declared token covered.
       jq '.permissions.deny  |= map(select(. != "Bash(gh pr merge:*)")) |
           .permissions.allow += ["Bash(gh pr merge:*)", "Bash(tbf-boobytrap:*)"]' "$tmpl" > "$out" ;;
+    stale-c-allow)
+      # #150 deleted the nine `Bash(git -C * <sub> *)` allow entries from the live template, so
+      # this fixture re-adds two of them by hand (necessarily a literal here — $tmpl no longer
+      # carries any to copy from) to prove the doctor's stale-entry WARN fires on a repo that
+      # never re-synced its settings.json after picking up the guard hook.
+      jq '.permissions.allow += ["Bash(git -C * status *)", "Bash(git -C * push *)"]' "$tmpl" > "$out" ;;
   esac
 }
 
@@ -363,7 +372,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 31 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
+# The 33 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
 # unasserted below. Every fixture except the three baseline-* ones also emits a no-baseline WARN
 # (also unasserted); the baseline-* fixtures write their own .claude/BASELINE.md instead, via
 # seed_commit/point_origin_ref/write_baseline, so they exercise the baseline compare itself.
@@ -391,6 +400,32 @@ case_settings_parsed() {
   expect "permissions match the plugin's template"
   expect "merge autonomy: off"
   expect "scoped autonomy: off"
+  # #150 controls: a verbatim-template fixture trips neither new WARN.
+  expect_absent "disableAllHooks: true"
+  expect_absent "legacy 'Bash(git -C ...)' entries"
+}
+
+# hooks-disabled (#150) — disableAllHooks: true in .claude/settings.local.json (a file the
+# doctor already reads for the merge-autonomy scan) silently disables the plugin's git -C guard
+# hook, and every other hook; WARN, never FAIL.
+case_hooks_disabled() {
+  local dir; dir="$(mk_repo hooks-disabled base verbatim)"
+  printf '{"disableAllHooks": true}' > "$dir/.claude/settings.local.json"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "disableAllHooks: true in .claude/settings.local.json"
+}
+
+# stale-c-allows (#150) — .claude/settings.json still carries legacy `Bash(git -C * ...)` allow
+# entries the guard hook now supersedes: WARN naming them, never FAIL (the rules still work,
+# they're just noisy and superseded — see the startup wildcard warning they trip).
+case_stale_c_allows() {
+  local dir; dir="$(mk_repo stale-c-allows base stale-c-allow)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "legacy 'Bash(git -C ...)' entries"
+  expect "Bash(git -C * status *)"
+  expect "Bash(git -C * push *)"
 }
 
 case_drift_missing_entries() {
@@ -815,6 +850,8 @@ cases=(
   "baseline-short-sha|case_baseline_short_sha|verification baseline: 7-hex-char recorded value that prefixes the remote tip -> recorded, not behind"
   "baseline-behind|case_baseline_behind|verification baseline: 7-hex-char recorded value that does NOT prefix the remote tip -> still behind"
   "baseline-too-short|case_baseline_too_short|verification baseline: recorded value under 7 hex characters -> malformed WARN, not recorded, not behind"
+  "hooks-disabled|case_hooks_disabled|disableAllHooks: true in settings.local.json -> WARN naming the file and the guard-hook consequence"
+  "stale-c-allows|case_stale_c_allows|legacy Bash(git -C * ...) allow entries still present -> WARN naming them and the guard hook that supersedes them"
 )
 
 matched=0

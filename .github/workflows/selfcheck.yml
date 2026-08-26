@@ -15,6 +15,7 @@ jobs:
       - run: bash dev/selfcheck.sh
       - run: bash dev/selfcheck-tests.sh
       - run: bash dev/doctor-tests.sh
+      - run: bash dev/hook-tests.sh
       - run: bash dev/cleanup-tests.sh
 
   selfcheck-macos:
@@ -36,4 +37,5 @@ jobs:
       - run: bash dev/selfcheck.sh
       - run: bash dev/selfcheck-tests.sh
       - run: bash dev/doctor-tests.sh
+      - run: bash dev/hook-tests.sh
       - run: bash dev/cleanup-tests.sh

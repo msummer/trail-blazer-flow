@@ -29,8 +29,9 @@
 # of two jq scalars; 2.1's expected set already includes it),
 # 3.1 (frontmatter_text is exercised by 4.2-empty-desc; 3.1's own clauses are key-presence
 # greps), 3.7 (fence_lines is exercised by the 3.4 case; 3.7 itself is a fixed-string grep
-# inside the slice), 4.1, 4.5, 4.7, 4.8 (fixed-string presence checks). 4.9 left this list when
-# it became a bijection (see the 4.9-missing-step/4.9-orphan-step/4.9-uneven-jobs cases below).
+# inside the slice), 4.1, 4.5, 4.7, 4.8, 4.23 (fixed-string presence checks). 4.9 left this list
+# when it became a bijection (see the 4.9-missing-step/4.9-orphan-step/4.9-uneven-jobs cases
+# below).
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -117,6 +118,11 @@ p_1_4_comment() {
 }
 p_1_5()               { printf 'git branch -D "$stale" >/dev/null\n' | append "$1/bin/harness-status.sh"; }
 p_1_5_guarded()        { printf 'git branch -D "$stale" || true\n' | append "$1/bin/harness-status.sh"; }
+p_1_1_hooks()          { printf 'if [\n' | append "$1/hooks/git-c-guard.sh"; }
+p_1_6()                { printf 'eval "$x"\n' | append "$1/hooks/git-c-guard.sh"; }
+p_1_6_comment() {
+  printf '# mentions eval here only, in a comment\n' | append "$1/hooks/git-c-guard.sh"
+}
 p_2_1() {
   # PREPEND the stray '{' (not append): jq streams top-level values, so appending garbage
   # after an already-complete, valid document still lets '.plugins[0].name' resolve from that
@@ -126,12 +132,30 @@ p_2_1() {
   local f="$1/.claude-plugin/marketplace.json"
   { printf '{\n'; cat "$f"; } > "$f.tmp" && mv "$f.tmp" "$f"
 }
+p_2_1_hooks() {
+  # Same "prepend a stray '{'" idiom as p_2_1, applied to hooks/hooks.json — trips 2.1 (invalid
+  # JSON) and, since 2.7 also jq-parses this same file, 2.7 alongside it.
+  local f="$1/hooks/hooks.json"
+  { printf '{\n'; cat "$f"; } > "$f.tmp" && mv "$f.tmp" "$f"
+}
 p_2_4_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(harness-status\.sh:\*\)"'; }
 p_2_4_orphan_grant() {
   local f="$1/templates/repo-settings.json"
   awk '{print} /"Bash\(harness-status\.sh:\*\)",/ && !done {print "      \"Bash(nonexistent.sh:*)\","; done=1}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 p_2_5_missing_bare()  { drop "$1/templates/repo-settings.json" '"Bash\(git commit:\*\)"'; }
+p_2_5_c_allow_returns() {
+  # Re-insert one of the nine legacy -C allow entries #150 deleted — 2.5's clause (c) pin.
+  local f="$1/templates/repo-settings.json"
+  awk '{print} /"Bash\(git reset --soft:\*\)",/ && !done {print "      \"Bash(git -C * status *)\","; done=1}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+p_2_5_extraction() { edit "$1/hooks/git-c-guard.sh" 's/GIT_C_SUBCOMMANDS/GIT_C_SUBCOMMAND_LIST/g'; }
+p_2_7_missing_script() {
+  # Repoint hooks.json's command at a nonexistent file — deliberately NOT deleting
+  # hooks/git-c-guard.sh itself, which would also trip 1.1/1.2/2.5 and widen the expected set
+  # beyond {2.7}.
+  edit "$1/hooks/hooks.json" 's#git-c-guard\.sh#nonexistent.sh#'
+}
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -205,10 +229,17 @@ cases=(
   "1.4-mentions||p_1_4_comment|control: a single #-comment naming all five constructs"
   "1.5|1.5|p_1_5|append a bare, unchecked 'git branch -D' to bin/harness-status.sh"
   "1.5-guarded||p_1_5_guarded|control: the same delete with a '|| true' fallback is not flagged"
+  "1.1-hooks|1.1|p_1_1_hooks|append a stray 'if [' to hooks/git-c-guard.sh (proves the glob extension)"
+  "1.6|1.6|p_1_6|append a bare 'eval \"\$x\"' line to hooks/git-c-guard.sh"
+  "1.6-comment||p_1_6_comment|control: a single #-comment naming eval is not flagged"
   "2.1|2.1 2.3|p_2_1|prepend a stray '{' to marketplace.json (invalid JSON; blanks 2.3's jq read too)"
+  "2.1-hooks|2.1 2.7|p_2_1_hooks|prepend a stray '{' to hooks/hooks.json (invalid JSON; blanks 2.7's jq read too)"
   "2.4-missing-grant|2.4|p_2_4_missing_grant|drop the Bash(harness-status.sh:*) allow entry"
   "2.4-orphan-grant|2.4|p_2_4_orphan_grant|add an allow entry for a bin/ script that doesn't exist"
   "2.5-missing-bare|2.5|p_2_5_missing_bare|drop the Bash(git commit:*) allow entry"
+  "2.5-c-allow-returns|2.5|p_2_5_c_allow_returns|re-insert a legacy Bash(git -C * status *) allow entry #150 deleted"
+  "2.5-extraction|2.5|p_2_5_extraction|rename hooks/git-c-guard.sh's GIT_C_SUBCOMMANDS= line so the gate's extraction comes back empty"
+  "2.7-missing-script|2.7|p_2_7_missing_script|repoint hooks.json's command at a nonexistent script"
   "2.6|2.6|p_2_6|drop the Bash(git -C * clean*) deny entry"
   "3.4|3.4|p_3_4|agents/planner.md's harness-status line: retries=<k> becomes retries=<kk>"
   "4.2-empty-desc|4.2|p_4_2_empty_desc|delete project-kickoff/SKILL.md's folded description body"
