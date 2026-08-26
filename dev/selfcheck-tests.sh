@@ -156,6 +156,8 @@ p_2_7_missing_script() {
   # beyond {2.7}.
   edit "$1/hooks/hooks.json" 's#git-c-guard\.sh#nonexistent.sh#'
 }
+p_2_7_if_value()   { edit "$1/hooks/hooks.json" 's/Bash(git -C \*)/Bash(git *)/'; }
+p_2_7_if_missing() { edit "$1/hooks/hooks.json" 's/"if":/"iff":/'; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -242,6 +244,8 @@ cases=(
   "2.5-c-allow-returns|2.5|p_2_5_c_allow_returns|re-insert a legacy Bash(git -C * status *) allow entry #150 deleted"
   "2.5-extraction|2.5|p_2_5_extraction|rename hooks/git-c-guard.sh's GIT_C_SUBCOMMANDS= line so the gate's extraction comes back empty"
   "2.7-missing-script|2.7|p_2_7_missing_script|repoint hooks.json's command at a nonexistent script"
+  "2.7-if-value|2.7|p_2_7_if_value|widen hooks.json's handler if filter to Bash(git *)"
+  "2.7-if-missing|2.7|p_2_7_if_missing|rename the handler's \"if\" key so the gate's extraction comes back short"
   "2.6|2.6|p_2_6|drop the Bash(git -C * clean*) deny entry"
   "3.4|3.4|p_3_4|agents/planner.md's harness-status line: retries=<k> becomes retries=<kk>"
   "4.2-empty-desc|4.2|p_4_2_empty_desc|delete project-kickoff/SKILL.md's folded description body"

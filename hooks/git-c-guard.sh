@@ -2,11 +2,12 @@
 #
 # git-c-guard.sh — plugin-shipped PreToolUse guard hook (#150). Approves, without a prompt,
 # ONLY the exact `git -C <worktree-path> <subcommand>` forms worktree-parallel mode issues (see
-# skills/issue-implementer/references/worktree-mode.md) — no more than the nine forms the
-# template's now-deleted `Bash(git -C * <sub> *)` allow entries used to cover. Says nothing (exit
-# 0, empty stdout — "no opinion") about everything else, so the normal permission flow applies: a
-# prompt in default mode, or the matching `-C` deny mirror in templates/repo-settings.json, which
-# always wins over this hook's decision regardless. Never emits "deny" or "ask" — a bug here
+# skills/issue-implementer/references/worktree-mode.md) — the ten `git -C <worktree> <subcommand>`
+# forms it issues: the nine the template's now-deleted `Bash(git -C * <sub> *)` allow entries used
+# to cover, plus the verifier's read-only `log` (#155). Says nothing (exit 0, empty stdout — "no
+# opinion") about everything else, so the normal permission flow applies: a prompt in default
+# mode, or the matching `-C` deny mirror in templates/repo-settings.json, which always wins over
+# this hook's decision regardless. Never emits "deny" or "ask" — a bug here
 # degrades to a prompt, never to a bypass. Never invokes `git` (or anything else that would touch
 # the untrusted path), never `eval`s, never writes a file. bash + jq + POSIX awk only — no
 # python, no perl, no GNU-only flags (this repo's CLAUDE.md portability convention); exercised
@@ -20,9 +21,13 @@ set -uo pipefail
 input="$(cat)"
 
 # Fast path: skip the jq spawn for the overwhelming majority of Bash calls that never mention
-# `git -C` at all — see the plan's "Every-Bash-call cost" risk. A raw substring miss (e.g. a
-# double space between `-C` and the path) just leaves this hook silent for that one call; the
-# normal permission flow still applies, so a miss here is never unsafe, only a missed convenience.
+# `git -C` at all — see the plan's "Every-Bash-call cost" risk. hooks/hooks.json's handler now
+# carries `"if": "Bash(git -C *)"` (Claude Code 2.1.85+), which filters most non-`git -C` Bash
+# calls upstream so this script is never even spawned for them; this raw-stdin check is the
+# backstop for everything else (a Claude Code below the `if` floor, or any call the `if` match
+# still lets through). A raw substring miss (e.g. a double space between `-C` and the path) just
+# leaves this hook silent for that one call; the normal permission flow still applies, so a miss
+# here is never unsafe, only a missed convenience.
 case "$input" in
   *'git -C'*) : ;;
   *) exit 0 ;;
@@ -43,9 +48,9 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command? // empty' 2>/dev/null)
 pmode="$(printf '%s' "$input" | jq -r '.permission_mode? // empty' 2>/dev/null)"
 [ "$pmode" != "plan" ] || exit 0
 
-# The nine forms worktree-parallel mode issues, and no more — kept as one grep-extractable line
+# The ten forms worktree-parallel mode issues, and no more — kept as one grep-extractable line
 # (dev/selfcheck.sh 2.5 extracts this list mechanically; keep the exact `KEY="value"` shape).
-GIT_C_SUBCOMMANDS="status add commit push restore diff rev-parse merge-base reset"
+GIT_C_SUBCOMMANDS="status add commit push restore diff rev-parse merge-base reset log"
 
 # Relative sibling (`../<name>-wt-<n>`), POSIX absolute, Git-Bash (`/c/Users/...`), and Windows
 # drive-letter (`C:/Users/...`) forms — see worktree-mode.md:83 and README's Windows section.
@@ -136,7 +141,7 @@ lex_rc=$?
 # --- segment validation ------------------------------------------------------------------------
 # A segment is the token run between "S" markers. A segment conforms iff it has at least 4
 # tokens and: t0 == "git"; t1 == "-C" exactly (rejects the attached -C<path> form and a second
-# -C); t2 matches the worktree-path shape; t3 is one of the nine subcommands above, and — when
+# -C); t2 matches the worktree-path shape; t3 is one of the ten subcommands above, and — when
 # t3 == "reset" — t4 == "--soft". Everything after the subcommand is unconstrained: it is that
 # subcommand's own option surface, and the lexer has already guaranteed it holds no unquoted
 # metacharacter and no substitution — the same exposure the bare `Bash(git <sub>:*)` rules

@@ -255,11 +255,18 @@ fi
 # 2.7 — hooks/hooks.json structure ↔ filesystem: parses (2.1 already checked); .hooks.PreToolUse
 # is a non-empty array; its first element's .matcher == "Bash"; every type=="command" handler's
 # .command, with ${CLAUDE_PLUGIN_ROOT} textually replaced by $root and the surrounding
-# 'bash "' / '"' stripped, names a file that exists. Fails loudly on an empty extraction rather
-# than a vacuous pass, same guard as 2.5/4.13.
+# 'bash "' / '"' stripped, names a file that exists; and every type=="command" handler's `if`
+# field (jq's `.["if"]`, since `if` is a jq keyword) equals the literal Bash(git -C *) (#155) —
+# same shape as this assertion's own `.matcher == "Bash"` comparison: a jq-extracted JSON value
+# compared to a script literal. Fails loudly on an empty extraction rather than a vacuous pass,
+# same guard as 2.5/4.13: a missing or renamed "if" key makes handler_ifs shorter than
+# handler_cmds, which the count comparison in this same clause catches instead of silently
+# reading as zero mismatches.
 pretooluse_n="$(jq -r '.hooks.PreToolUse? // [] | length' "$hooks_json" 2>/dev/null)"
 first_matcher="$(jq -r '.hooks.PreToolUse[0].matcher? // empty' "$hooks_json" 2>/dev/null)"
 handler_cmds="$(jq -r '.hooks.PreToolUse[]?.hooks[]? | select(.type == "command") | .command // empty' "$hooks_json" 2>/dev/null)"
+expected_if='Bash(git -C *)'
+handler_ifs="$(jq -r '.hooks.PreToolUse[]?.hooks[]? | select(.type == "command") | .["if"] // empty' "$hooks_json" 2>/dev/null)"
 if [ -z "$pretooluse_n" ] || [ "$pretooluse_n" -eq 0 ] || [ -z "$handler_cmds" ]; then
   bad "2.7 hooks/hooks.json structure: .hooks.PreToolUse extraction failed or came back empty (structure changed)"
 elif [ "$first_matcher" != "Bash" ]; then
@@ -274,10 +281,17 @@ else
   done <<EOF
 $handler_cmds
 EOF
-  if [ -z "$missing_script" ]; then
-    ok "2.7 hooks/hooks.json structure: PreToolUse present with matcher 'Bash', every command handler resolves to an existing file"
+  cmd_n="$(printf '%s\n' "$handler_cmds" | grep -c '[^[:space:]]')"
+  if_ok_n="$(printf '%s\n' "$handler_ifs" | grep -c -x -F -- "$expected_if")"
+  bad_if=""
+  [ "$if_ok_n" -eq "$cmd_n" ] || bad_if=" only $if_ok_n of $cmd_n command handler(s) carry \"if\": \"$expected_if\";"
+  if [ -z "$missing_script" ] && [ -z "$bad_if" ]; then
+    ok "2.7 hooks/hooks.json structure: PreToolUse present with matcher 'Bash', every command handler resolves to an existing file and carries \"if\": \"$expected_if\""
   else
-    bad "2.7 hooks/hooks.json structure: command handler(s) resolve to a nonexistent file:$missing_script"
+    msg="2.7 hooks/hooks.json structure broken:"
+    [ -n "$missing_script" ] && msg="$msg command handler(s) resolve to a nonexistent file:$missing_script;"
+    [ -n "$bad_if" ] && msg="$msg$bad_if"
+    bad "$msg"
   fi
 fi
 
