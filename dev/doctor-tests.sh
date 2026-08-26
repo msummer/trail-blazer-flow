@@ -10,16 +10,19 @@
 # scoped-autonomy declarations (the doctor's verdict block and check-decision-record.sh's
 # per-element PASS/FAIL report), the post-merge-verification declaration-state line (declared
 # count / no-fence WARN / not-declared, with the same never-execute guarantee as the ratchet) and
-# its allow-entry check (each declared command's first token against the settings allow list, a
-# pure string comparison, WARN never FAIL when a grant is missing), the path-qualified
-# verification interpreter's literal-path grant check, the test-suite ratchet's fence-aware,
-# depth-aware section slice and fence-delimiter-skipping span hunt (a '#' comment inside the
-# fenced block must not truncate it, nor must a bare fence line itself be mistaken for the
-# quoted command), the verification baseline's short-SHA-as-prefix compare (an abbreviated
-# recorded commit of 7+ hex characters is accepted; fewer is a malformed-value WARN), the
-# disableAllHooks: true WARN across the three settings files (#150 — silently disables the
-# plugin's git -C guard hook, and every other hook), and the stale-legacy-'-C'-allow-entry WARN
-# on .claude/settings.json (#150 — the entries the guard hook now supersedes).
+# its allow-entry check (each declared command's first token against the three-file settings
+# allow-list union — .claude/settings.json, .claude/settings.local.json, and the user-level
+# settings file, so a grant that lives only in .claude/settings.local.json or the user-level file
+# still counts as covered — a pure string comparison, WARN never FAIL when a grant is missing),
+# the path-qualified verification interpreter's literal-path grant check against that same
+# three-file union, the test-suite ratchet's fence-aware, depth-aware section slice and
+# fence-delimiter-skipping span hunt (a '#' comment inside the fenced block must not truncate it,
+# nor must a bare fence line itself be mistaken for the quoted command), the verification
+# baseline's short-SHA-as-prefix compare (an abbreviated recorded commit of 7+ hex characters is
+# accepted; fewer is a malformed-value WARN), the disableAllHooks: true WARN across the three
+# settings files (#150 — silently disables the plugin's git -C guard hook, and every other hook),
+# and the stale-legacy-'-C'-allow-entry WARN on .claude/settings.json (#150 — the entries the
+# guard hook now supersedes).
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -596,6 +599,20 @@ case_verify_path_grant_present() {
   expect_absent "Python project files found but no pytest/python/uv/poetry"
 }
 
+# verify-path-grant-local-only (#147) — the literal-path grant for the interpreter lives ONLY in
+# .claude/settings.local.json, not in the checked-in .claude/settings.json (write_settings's
+# verbatim mode leaves only the template's bare "Bash(pytest:*)" entry there): PASS, covered by
+# the literal-path allow entry. Pins the three-file union the interpreter probe now reads instead
+# of .claude/settings.json alone.
+case_verify_path_grant_local_only() {
+  local dir; dir="$(mk_repo verify-path-grant-local-only verify-path-python verbatim)"
+  jq -n --arg e "Bash($dir/.venv/bin/python:*)" '{permissions:{allow:[$e]}}' > "$dir/.claude/settings.local.json"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "path-qualified verification interpreter '$dir/.venv/bin/python' is covered by a literal-path allow entry"
+  expect_absent "has no matching allow entry"
+}
+
 # verify-bare-command (#132/#128, control) — the verification section names only a bare
 # "pytest -q" (no path-qualified token anywhere), verbatim template settings: unchanged
 # behaviour — neither new stem prints, and the pre-existing bare-name PASS still does.
@@ -751,6 +768,33 @@ case_postdeploy_grant_present() {
   expect "post-merge verification: declared (3 command line(s))"
 }
 
+# postdeploy-grant-local-only (#147) — the grant for the declared post-merge command lives ONLY
+# in .claude/settings.local.json (the documented, machine-specific place for it), not in the
+# checked-in .claude/settings.json: PASS, every declared command covered, no missing-grant WARN.
+# Pins the three-file union the post-merge allow-entry check now reads instead of
+# .claude/settings.json alone.
+case_postdeploy_grant_local_only() {
+  local dir; dir="$(mk_repo postdeploy-grant-local-only merge-postdeploy merge-allow-only)"
+  printf '{"permissions":{"allow":["Bash(tbf-boobytrap:*)"]}}' > "$dir/.claude/settings.local.json"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "post-merge verification: every declared command has a matching allow entry"
+  expect_absent "no matching allow entry"
+}
+
+# postdeploy-grant-user-only (#147) — same as postdeploy-grant-local-only, but the grant lives
+# only in the user-level settings file. run_doctor already points CLAUDE_CONFIG_DIR at
+# $dir/claudecfg, so this resolves to $dir/claudecfg/settings.json — hermetic, never the
+# developer's real ~/.claude/settings.json.
+case_postdeploy_grant_user_only() {
+  local dir; dir="$(mk_repo postdeploy-grant-user-only merge-postdeploy merge-allow-only)"
+  printf '{"permissions":{"allow":["Bash(tbf-boobytrap:*)"]}}' > "$dir/claudecfg/settings.json"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "post-merge verification: every declared command has a matching allow entry"
+  expect_absent "no matching allow entry"
+}
+
 # baseline-short-sha (#141/#142) — a recorded '- commit:' value of exactly 7 hex characters that
 # is a genuine prefix of origin/main's tip: treated as identifying that commit, not "behind".
 case_baseline_short_sha() {
@@ -837,6 +881,7 @@ cases=(
   "guard-coverage-offbranch|case_guard_coverage_offbranch|default-branch guard coverage: WARN when the repo's default branch is one the template doesn't guard"
   "verify-path-grant-missing|case_verify_path_grant_missing|path-qualified verification interpreter with no literal-path grant -> WARN, reassuring PASS suppressed"
   "verify-path-grant-present|case_verify_path_grant_present|path-qualified verification interpreter with a literal-path grant -> PASS, Python toolchain WARN suppressed with no bare-name entry"
+  "verify-path-grant-local-only|case_verify_path_grant_local_only|path-qualified verification interpreter: literal-path grant lives only in .claude/settings.local.json -> PASS, three-file union covers it"
   "verify-bare-command|case_verify_bare_command|control: bare-name-only verification command -> unchanged behaviour, neither new stem prints"
   "record-complete|case_record_complete|check-decision-record.sh: every declared element present, rc 0"
   "record-missing-element|case_record_missing_element|check-decision-record.sh: one declared element missing, rc 1, named"
@@ -847,6 +892,8 @@ cases=(
   "ratchet-fence-comment|case_ratchet_fence_comment|test-suite ratchet: fence-aware section slice + fence-delimiter-skip span hunt find the command past an in-fence comment"
   "postdeploy-grant-missing|case_postdeploy_grant_missing|post-merge verification: declared command with no matching allow entry -> WARN naming the entry to add"
   "postdeploy-grant-present|case_postdeploy_grant_present|post-merge verification: every declared command has a matching allow entry -> PASS, never executed"
+  "postdeploy-grant-local-only|case_postdeploy_grant_local_only|post-merge verification: grant lives only in .claude/settings.local.json -> PASS, three-file union covers it"
+  "postdeploy-grant-user-only|case_postdeploy_grant_user_only|post-merge verification: grant lives only in the user-level settings file -> PASS, three-file union covers it"
   "baseline-short-sha|case_baseline_short_sha|verification baseline: 7-hex-char recorded value that prefixes the remote tip -> recorded, not behind"
   "baseline-behind|case_baseline_behind|verification baseline: 7-hex-char recorded value that does NOT prefix the remote tip -> still behind"
   "baseline-too-short|case_baseline_too_short|verification baseline: recorded value under 7 hex characters -> malformed WARN, not recorded, not behind"
