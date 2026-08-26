@@ -81,7 +81,7 @@ expect_rc() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# Allow cases — every one of the nine `-C` forms worktree-parallel mode issues, plus quoting,
+# Allow cases — every one of the ten `-C` forms worktree-parallel mode issues, plus quoting,
 # path-shape, and composite variants.
 
 case_status_rel()          { run_hook "$(mk_cmd 'git -C ../demo-wt-3 status --porcelain')"; expect_rc 0; expect_allow; }
@@ -101,6 +101,7 @@ case_merge_base()   { run_hook "$(mk_cmd 'git -C ../demo-wt-1 merge-base main HE
 case_restore()      { run_hook "$(mk_cmd 'git -C ../demo-wt-1 restore file.txt')"; expect_rc 0; expect_allow; }
 case_push_upstream() { run_hook "$(mk_cmd 'git -C ../demo-wt-1 push -u origin "claude/17-a"')"; expect_rc 0; expect_allow; }
 case_diff_name_only() { run_hook "$(mk_cmd 'git -C ../demo-wt-1 diff --name-only')"; expect_rc 0; expect_allow; }
+case_log() { run_hook "$(mk_cmd 'git -C ../demo-wt-1 log main..HEAD --format=%s')"; expect_rc 0; expect_allow; }
 
 # never-executes-git — a conforming command run with a booby-trapped git (and rm) earlier on
 # PATH that touches a sentinel file: expect allow AND no sentinel. This is the guard's central
@@ -164,7 +165,7 @@ case_path_glob()          { run_hook "$(mk_cmd 'git -C ../*-wt-1 status')"; expe
 case_unknown_sub()        { run_hook "$(mk_cmd 'git -C ../demo-wt-1 clean -fd')"; expect_rc 0; expect_silent; }
 case_reset_hard() {
   # probe row (c)'s static half — the deny mirror is what actually blocks this live; the hook
-  # itself must have no opinion (reset without --soft is not one of the nine forms).
+  # itself must have no opinion (reset without --soft is not one of the ten forms).
   run_hook "$(mk_cmd 'git -C ../demo-wt-1 reset --hard HEAD')"
   expect_rc 0
   expect_silent
@@ -214,6 +215,7 @@ cases=(
   "restore|case_restore|allow: restore"
   "push-upstream|case_push_upstream|allow: push -u origin with a quoted branch name"
   "diff-name-only|case_diff_name_only|allow: diff --name-only"
+  "log|case_log|allow: log with a <default-branch>..HEAD range and --format=%s (probe row g)"
   "never-executes-git|case_never_executes_git|allow, AND the guard never invokes git (or rm) on the untrusted PATH — sentinel absent"
   "inject-config|case_inject_config|no opinion: -c core.pager=cat inserted before the subcommand (probe row b)"
   "inject-execpath|case_inject_execpath|no opinion: --exec-path= inserted before the subcommand"
@@ -223,7 +225,7 @@ cases=(
   "attached-C-4tok|case_attached_c_4tok|no opinion: attached -C<path> with 4+ tokens, an otherwise-conforming path/subcommand, and a second git -C segment"
   "path-not-worktree|case_path_not_worktree|no opinion: path is not <name>-wt-<n>"
   "path-glob|case_path_glob|no opinion: unquoted glob in the path"
-  "unknown-sub|case_unknown_sub|no opinion: subcommand not in the nine (clean)"
+  "unknown-sub|case_unknown_sub|no opinion: subcommand not in the ten (clean)"
   "reset-hard|case_reset_hard|no opinion: reset --hard is not reset --soft (probe row c's static half)"
   "composite-nongit|case_composite_nongit|no opinion: composite with a non-git constituent"
   "composite-one-bad|case_composite_one_bad|no opinion: composite where one constituent injects -c"

@@ -817,7 +817,11 @@ sync settings in practice, so the guard hook is already active by the time you d
 entries — worktree-parallel mode's `git -C` commands stay prompt-free throughout the transition.
 `check-harness.sh` now also WARNs when it finds `disableAllHooks: true` in any of the three
 settings files (silently disabling the guard hook, and every other hook) and, separately, when
-`.claude/settings.json` still carries one of the superseded legacy `-C` allow entries.
+`.claude/settings.json` still carries one of the superseded legacy `-C` allow entries. The guard
+also now covers `git -C <worktree> log` (#155) — the verifier's read-only commit-message evidence
+call, which previously hit an unanswerable prompt inside a worktree — and its handler is
+registered with an `"if": "Bash(git -C *)"` filter so the hook process is only spawned for `git
+-C` Bash commands, which needs Claude Code **2.1.85+** (see "Prerequisites").
 
 ## The per-repo settings file (required)
 
@@ -918,11 +922,19 @@ option lands inside the first `*`), and there is no "exactly one token" rule syn
 gap; Claude Code 2.1.246 added a startup warning naming exactly this shape. The plugin ships
 `hooks/git-c-guard.sh` (a `PreToolUse` hook, registered in `hooks/hooks.json`) to do the job
 instead: it sees the whole command string and can require exactly one `-C` token, one path token
-matching the `<repo-dirname>-wt-<number>` worktree shape, and then one of the nine covered
+matching the `<repo-dirname>-wt-<number>` worktree shape, and then one of the ten covered
 subcommands (`status`, `add`, `commit`, `push`, `restore`, `diff`, `rev-parse`, `merge-base`,
-`reset --soft`), with nothing else in between — an injected `-c`/`--exec-path`, a second `-C`, an
-unrecognized path or subcommand, a non-conforming composite part, or any command substitution all
-get **no opinion** (empty stdout, exit 0), so the normal permission flow applies. Hook decisions
+`reset --soft`, `log`), with nothing else in between — an injected `-c`/`--exec-path`, a second
+`-C`, an unrecognized path or subcommand, a non-conforming composite part, or any command
+substitution all get **no opinion** (empty stdout, exit 0), so the normal permission flow
+applies. A handler `"if": "Bash(git -C *)"` gate on the hook's registration (Claude Code 2.1.85+)
+restricts when the hook process is even spawned to Bash commands whose constituents — matched
+after composite splitting and after any leading `VAR=value` assignment is stripped — match that
+pattern; it can only *reduce* spawns, never widen approval, since the hook itself is the only
+thing that ever emits `allow`; a command the filter doesn't match simply gets no hook opinion and
+follows the normal permission flow, and per Claude Code's own docs the filter fails open (spawns
+the hook anyway) on `$()`/backtick, `$VAR`, or an otherwise-unparseable command — which the guard
+then rejects on its own terms, same as if `if` weren't there at all. Hook decisions
 never override a deny: Claude Code evaluates deny and ask rules regardless of what a `PreToolUse`
 hook returns, so the `-C` deny mirrors above keep winning over the hook's allow, and the guard
 itself never emits anything but `allow` or nothing — never `deny`/`ask` — so a bug in it degrades
@@ -936,7 +948,12 @@ because the implementer and verifier subagents issue most of the `-C` commands, 
 orchestrator. The guard fails open in every direction: no `jq` on `PATH`, the plugin disabled or
 not yet updated, `disableAllHooks: true` in any of the three settings files, or a headless
 `--bare` run all leave a `-C` call unapproved by the hook — a prompt in default mode (or a
-recorded denial headless), never a silent bypass; `check-harness.sh` WARNs when it finds
+recorded denial headless), never a silent bypass. Below the `if` gate's 2.1.85 floor (see
+"Prerequisites"), Claude Code predates support for the handler's `if` field, and its handling
+there is unverified: either it runs the hook on every Bash call as before — prior behaviour,
+with `-C` calls still approved by the guard — or it rejects the handler and the guard never
+fires, degrading to the same prompt (or recorded denial headless) as above; either way, never a
+silent bypass. `check-harness.sh` WARNs when it finds
 `disableAllHooks: true`, and separately when `.claude/settings.json` still carries a legacy
 `Bash(git -C * …)` allow entry the hook now supersedes. A heredoc body
 (e.g. `reconcile-ledger.sh - <<'LEDGER'`, used by `issue-cycle`) is not split into
@@ -974,10 +991,38 @@ entire composite.
 All of the bare-form facts above (prefix matching, the substitution gap, and the `&&`/`|`
 composite split) were verified by live probe against Claude Code 2.1.220 (#41, #39, #55, #79,
 #80) and are unaffected by the `-C` guard hook. The hook's own allow/no-opinion boundary — the
-nine `-C` forms, the injected-option and malformed-input rejections, the composite checkpoint,
-and the never-execute-`git` guarantee — is pinned by fixture in `dev/hook-tests.sh` instead; a
-live-probe confirmation against the shipping Claude Code version (2.1.246+, in a real worktree,
-default permission mode) is tracked as a follow-up and not yet recorded here.
+ten `-C` forms, the injected-option and malformed-input rejections, the composite checkpoint, and
+the never-execute-`git` guarantee — is pinned by fixture in `dev/hook-tests.sh`, and was also
+confirmed live against Claude Code **2.1.246** on macOS (2026-08-26): a throwaway consumer repo
+with a real sibling worktree, the template's `permissions` block copied verbatim (49 allows, the
+seven `-C` deny mirrors, no `-C` allows), run both headless (`-p`, model-driven) and through a
+real interactive session. Two controls proved the method: with the template's permissions alone
+and no plugin loaded, the same `git -C <worktree> status --porcelain` command is **denied**, so
+every "ran" below is attributable to the hook, not the permissions block alone; and the startup
+wildcard warning is independently observable by this method — a single `Bash(git -C * status *)`
+allow prints exactly one such warning line on a fresh start in an already-trusted workspace
+(never in `-p` mode, and never on the run where the trust dialog is first accepted).
+
+| row | tested against | command / observation | expected | observed |
+|---|---|---|---|---|
+| (a) / (a-rel) | the hook as shipped before this issue | `git -C <worktree> status --porcelain` (absolute and relative-sibling forms) | runs, no prompt | **ran**, `?? probe-anchor.txt`, no denial |
+| (b) | as shipped | `git -C <worktree> -c core.pager=cat status` | prompts | **"This command requires approval"** |
+| (c) | as shipped | `git -C <worktree> push --force` | blocked by the deny mirror | **"Permission to use Bash with command … has been denied."** — deny-rule wording, distinct from (b)'s prompt wording: the deny mirror wins over the hook's allow |
+| (d) | as shipped | `git -C <worktree> add -A && git -C <worktree> commit -m "wip: checkpoint verifier (#12)"` | runs, no prompt | **ran**, one commit; both `&&` constituents validated as conforming segments |
+| (g-pre) | as shipped (no `log`) | `git -C <worktree> log main..HEAD --format=%s` | the #154 gap | **"This command requires approval"** — gap confirmed live |
+| (g) | this issue's state (`log` added) | same `log` command | runs | **ran** |
+| (a-if) / (d-if) | this issue's state (`if` gate added) | rows (a) and (d) again | run, no prompt | **ran** — the `if` gate matched each constituent of the (d) composite too |
+| (b-if) | this issue's state | row (b) again | prompts | **"This command requires approval"** — the `if` gate loosens nothing |
+| spawn trace | no `if` | `echo hi` | hook spawns | **1 spawn** |
+| spawn trace | with `if` | `echo hi` | no spawn | **0 spawns** |
+| spawn trace | with `if` | `git -C <worktree> status --porcelain` | spawns and runs | **1 spawn**, ran |
+| (e) | as shipped | interactive session start, template block only | zero wildcard warnings | **0** (a positive control on the same path printed 1) |
+| (f) | this issue's state | interactive session start with the `if` gate on the handler | zero wildcard warnings; hook still fires | **0** warnings; firing shown by (a-if)/(d-if)/the spawn trace |
+
+The seven `Bash(git -C * …)` deny mirrors were present throughout and produced no warning in any
+row above — Claude Code 2.1.246's startup scan is allow-only. The one item this probe left
+unconfirmed is the Windows/Git-Bash spot-check of row (a) — see "Prerequisites" and the Windows
+section below.
 
 **Verdict provenance.** The kickback loop is enforced the same way as the rest of this section:
 the orchestrator never edits a source, test, or doc file to resolve a verifier finding or a red
@@ -1107,6 +1152,9 @@ were tightened to "any blocker/major finding ⇒ fail". Worktree-parallel valida
 - `gh` (GitHub CLI), authenticated.
 - `jq`.
 - A Claude Code subscription (Pro/Max). Runs entirely locally.
+- Claude Code **2.1.85 or newer** — the plugin's `git -C` guard hook is registered with a handler
+  `if` filter, added in 2.1.85 (composite `&&` matching fixed in 2.1.89; a `$()`/backtick
+  false-fire fixed in 2.1.243). Probed against 2.1.246 on macOS — see "Safety model".
 
 **On Windows:** the automation layer is Bash (`bin/*.sh`) plus `gh`/`jq`, so run Claude Code
 under **Git Bash or WSL** — there is no native cmd/PowerShell path. Install `gh` and `jq` so
@@ -1137,7 +1185,8 @@ Windows specifics worth knowing:
   variable in backslash form on Windows, the quoted path could fail to resolve under Git Bash and
   the hook simply never runs for that session — fail-safe (worktree-mode `git -C` commands then
   prompt, same as if the plugin were disabled), but a Windows spot-check of the hook actually
-  firing is worth doing before relying on unattended worktree-parallel mode there.
+  firing is worth doing before relying on unattended worktree-parallel mode there (the probe
+  table under "Safety model" covers macOS only).
 
 ### Windows: first-run smoke test
 

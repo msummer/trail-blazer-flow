@@ -1,5 +1,5 @@
 {
-  "description": "trail-blazer-flow: PreToolUse guard that approves only the exact git -C <worktree> <subcommand> forms worktree-parallel mode issues (see issue #150); says nothing about everything else, so the normal permission flow — a prompt, or a matching deny rule, which always wins over this hook's decision — applies.",
+  "description": "trail-blazer-flow: PreToolUse guard that approves only the exact git -C <worktree> <subcommand> forms worktree-parallel mode issues (see issue #150); says nothing about everything else, so the normal permission flow — a prompt, or a matching deny rule, which always wins over this hook's decision — applies. The handler's if gate (#155, Claude Code 2.1.85+) restricts when this hook is even spawned to git -C Bash calls; it can only reduce spawns, never widen approval — the guard script remains the backstop for everything else.",
   "hooks": {
     "PreToolUse": [
       {
@@ -8,6 +8,7 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/git-c-guard.sh\"",
+            "if": "Bash(git -C *)",
             "timeout": 10
           }
         ]
