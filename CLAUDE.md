@@ -24,10 +24,10 @@ It prints a `PASS`/`FAIL` line per assertion (grouped and labelled in its own ou
 CI on every pull request (`.github/workflows/selfcheck.yml`, two jobs — `selfcheck` on
 `ubuntu-latest` and `selfcheck-macos` on `macos-latest`, which prepends `/bin` to `PATH` so the
 same commands run under Apple's bash 3.2 instead of a newer bash); a red check means one of the
-jobs' four commands failed — reproduce locally with `bash dev/selfcheck.sh`,
-`bash dev/selfcheck-tests.sh`, `bash dev/doctor-tests.sh`, and `bash dev/cleanup-tests.sh` (on a
-Mac, prefix each with `PATH=/bin:$PATH` to match the macOS job's shell, e.g.
-`PATH=/bin:$PATH bash dev/selfcheck.sh`).
+jobs' five commands failed — reproduce locally with `bash dev/selfcheck.sh`,
+`bash dev/selfcheck-tests.sh`, `bash dev/doctor-tests.sh`, `bash dev/hook-tests.sh`, and
+`bash dev/cleanup-tests.sh` (on a Mac, prefix each with `PATH=/bin:$PATH` to match the macOS
+job's shell, e.g. `PATH=/bin:$PATH bash dev/selfcheck.sh`).
 There is no test suite and no build step: this repo is Markdown instruction files, Bash scripts,
 and JSON manifests. The gate prints what it checks — run it. A change the gate can't catch needs
 a new assertion in the gate, not a waiver, subject to the machine-parsed-artifacts rule below.
@@ -50,9 +50,22 @@ declared command's first token has a matching allow entry, a pure string compari
 rather than fails — a path-qualified verification interpreter such as
 `<repo>/api/.venv/bin/python` being checked against a literal-path allow entry distinct from the
 bare-name regex check, the test-suite ratchet's fence-aware section slice with a
-fence-delimiter-skipping span hunt, and the verification baseline's short-SHA-as-prefix compare)
-that would otherwise only be hand-verified. It runs in CI as the third step, but it is not part
-of `dev/selfcheck.sh` itself — run it by hand whenever `bin/check-harness.sh` changes.
+fence-delimiter-skipping span hunt, the verification baseline's short-SHA-as-prefix compare, the
+`disableAllHooks: true` WARN across the three settings files, and the stale-legacy-`-C`-allow
+WARN on `.claude/settings.json`) that would otherwise only be hand-verified. It runs in CI as the
+third step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
+`bin/check-harness.sh` changes.
+
+`dev/hook-tests.sh` is a separate negative-test harness for the plugin-shipped PreToolUse guard
+hook (`hooks/git-c-guard.sh`, #150): it feeds fixture stdin JSON straight into the real script
+and pins its verdict — allow, or no opinion (empty stdout) — for every conforming `git -C
+<worktree> <subcommand>` form and every rejection case (an injected `-c`/`--exec-path`, the
+attached `-C<path>` form, a non-worktree path, an unknown subcommand, command substitution, an
+unquoted shell metacharacter, an unterminated quote, the wrong tool, malformed stdin, and
+`permission_mode: "plan"`), plus a booby-trapped `git`/`rm` on `PATH` proving the guard never
+executes anything against the untrusted path it is validating. It runs in CI as the fourth step,
+but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
+`hooks/git-c-guard.sh` changes.
 
 `dev/cleanup-tests.sh` is a separate negative-test harness for `bin/cleanup-after-merge.sh`: it
 builds throwaway fixture git repos under `mktemp`, with a stub `gh` and stub `git` on `PATH`, and
@@ -61,7 +74,7 @@ runs the real script against them to pin the multi-PR `KEEP` behavior (a merged 
 open and never call `gh issue close`), the ordinary close path, the `--ff-only` pull failure
 continuing instead of aborting, and the pre-flight `gh repo view` / `git branch --show-current` /
 `gh pr list` lookup failures each being reported (WARN) and survived rather than aborting the
-script before any output. It runs in CI as the fourth step, but it is not part of
+script before any output. It runs in CI as the fifth step, but it is not part of
 `dev/selfcheck.sh` itself — run it by hand whenever `bin/cleanup-after-merge.sh` changes.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
@@ -74,7 +87,10 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   "Distribution".
 - `bin/` is on consumers' Bash PATH; every `bin/*.sh` needs a matching allow entry in
   `templates/repo-settings.json` (the gate's bijection assertion checks this). Scripts meant
-  only for developing this repo (not for consumers) go in `dev/` instead.
+  only for developing this repo (not for consumers) go in `dev/` instead. `hooks/*.sh` is a
+  third case: invoked by Claude Code itself (via `hooks/hooks.json`), never by the model issuing
+  a Bash command, so a hook script takes no permission allow entry and stays out of the `bin/`
+  bijection — see the README's "Safety model".
 - **Gate assertions compare machine-parsed artifacts only.** An assertion may only compare two
   mechanically extracted artifacts (JSON↔JSON, script↔script, script↔JSON, filename↔frontmatter);
   no assertion may parse or pin English prose. Duplicated spec text is resolved by **deleting a

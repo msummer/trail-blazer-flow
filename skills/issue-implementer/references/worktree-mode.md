@@ -159,10 +159,12 @@ e. **As each implementer completes, run the issue-implementer skill's steps 2d�
      calls: `git -C <worktree> merge-base <default-branch> HEAD`, read the SHA from that call's
      result, then `git -C <worktree> reset --soft <sha>` with the SHA pasted in as a literal. The
      merge base is computed per worktree, which is what makes a resumed branch collapse
-     correctly. These forms need the `git -C` grants added in v1.8.1 — a permission prompt on
-     any of them means this repo's `.claude/settings.json` predates them; finish that issue
-     sequentially instead and tell the human to re-copy the `permissions` block from the
-     plugin's `templates/repo-settings.json`;
+     correctly. These forms are covered by the plugin's `git -C` guard hook (a PreToolUse hook
+     shipped in `hooks/`, not a permission grant — see the README's "Safety model"), which
+     approves only these nine exact forms against a `<repo-dirname>-wt-<number>` path and stays
+     silent otherwise; a permission prompt on any of them means the plugin is disabled, out of
+     date, or a settings file has `disableAllHooks: true` — finish that issue sequentially
+     instead and tell the human what `check-harness.sh` reports;
    - **the checkpoint lands in the worktree, not the main checkout**, which stays on the default
      branch, untouched, for the whole swarm;
    - **the worktree path travels in every prompt** (the verifier's included) and in every

@@ -176,7 +176,7 @@ git worktree list --porcelain     # what is still attached, and to which branch
 ```
 For each surviving worktree named `<repo-dirname>-wt-<number>` (the name step b of
 `references/worktree-mode.md`'s Swarm procedure creates): if `git -C <path> status --porcelain`
-is non-empty (needs the v1.8.1 `-C` grants — see that file's step e), preserve the work —
+is non-empty (covered by the plugin's `git -C` guard hook — see that file's step e), preserve the work —
 `git -C <path> add -A && git -C <path> commit -m "wip: interrupted run (#<number>)"` — comment on
 the issue that its worktree was cleared and anything committed remains on the branch, then
 `git worktree remove <path>` (`--force` over untracked/ignored files like `node_modules`; tracked

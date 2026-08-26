@@ -53,13 +53,17 @@ or share).
 │   ├── harness-status.sh          # who acts next: harness queues vs. items waiting on the human
 │   ├── reconcile-ledger.sh        # reconciles a cycle's dispatch ledger against live state
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
+├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
+│   ├── hooks.json                 # registers the PreToolUse guard below
+│   └── git-c-guard.sh             # approves only the exact git -C <worktree> <subcommand> forms worktree-parallel mode issues
 ├── dev/
 │   ├── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
 │   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
 │   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh (not run by the gate)
+│   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh (not run by the gate)
 │   └── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 ├── .github/
-│   └── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the cleanup script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
+│   └── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the guard hook's negative-test harness, then the cleanup script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
 ```
@@ -801,6 +805,20 @@ stricter again: the archived verifier verdict is now keyed to the PR's head bran
 picks up this version carries an unkeyed archive and is not eligible for autonomous merge — it
 waits for one manual merge, exactly like the v2.2.0 transition above.
 
+**v2.3.0 → v2.4.0** removes a grant rather than adding one: the nine `Bash(git -C * <sub> *)`
+allow entries worktree-parallel mode used to depend on are gone from the template, replaced by a
+plugin-shipped `PreToolUse` guard hook (`hooks/hooks.json` + `hooks/git-c-guard.sh`) that
+auto-updates with the plugin and needs no per-repo file. Re-copy the permissions block from
+`templates/repo-settings.json` (or delete the nine entries by hand) to pick this up — the nine
+"has a wildcard before the rest of the command" warnings Claude Code 2.1.246+ prints at the start
+of every session are the visible cue that your repo is still on the old template. Because the
+plugin's marketplace entry ships `"autoUpdate": true`, the plugin itself updates before you next
+sync settings in practice, so the guard hook is already active by the time you delete the old
+entries — worktree-parallel mode's `git -C` commands stay prompt-free throughout the transition.
+`check-harness.sh` now also WARNs when it finds `disableAllHooks: true` in any of the three
+settings files (silently disabling the guard hook, and every other hook) and, separately, when
+`.claude/settings.json` still carries one of the superseded legacy `-C` allow entries.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -822,9 +840,15 @@ resilience mechanism (see "Resilience: checkpointing, retries, and the dispatch 
 summary table — advisory only, its absence just costs `duration: unknown`),
 `Bash(git reset --soft:*)` and `Bash(git merge-base:*)` (collapsing a run's WIP checkpoints into
 one clean commit before the PR — `git reset --soft` never touches the working tree, only where
-HEAD points; see "Safety model"). Nine further `Bash(git -C * <sub> *)` allow entries exist
-solely for worktree-parallel mode (see the `issue-implementer` skill's
-`references/worktree-mode.md`). Separately, the seven bare `git` deny entries above each gained a
+HEAD points; see "Safety model"). Worktree-parallel mode's `git -C <worktree> <subcommand>`
+commands (see the `issue-implementer` skill's `references/worktree-mode.md`) are approved by a
+plugin-shipped `PreToolUse` hook instead of a permission grant — through v2.3.0 the template
+shipped nine `Bash(git -C * <sub> *)` allow entries for this, but a `*` before the subcommand
+also matches any option inserted at that position (`-c core.pager=…`, `--exec-path=…`) and
+approves it without a prompt, which Claude Code 2.1.246 started warning about at startup, and no
+rewrite of the rule closes the gap — there is no "exactly one token" rule syntax. `hooks/`
+ships a guard script instead (see "Safety model" for its contract and the fail-safe design).
+Separately, the seven bare `git` deny entries above each gained a
 `git -C * …` mirror, so a worktree-mode command can't slip past a guard the bare form already
 stops — see "Safety model" for why the mirror matters. Two of those seven bare denies
 (`branch -D main` and `push origin main`) name the default branch literally, so they guard
@@ -881,39 +905,79 @@ for collapsing those checkpoints, only moves what a branch points at — it neve
 working tree or deletes any file, so it carries none of the risk `reset --hard` does; the
 `Bash(git reset --hard:*)` deny is unchanged and, like every deny, takes precedence over any
 allow entry. Bash rules are prefix-matched, and a `git -C <path> …` command does **not** match a
-bare-subcommand rule — allow or deny — which is why the template carries `-C`-form entries on
-both sides, in two different shapes: the nine allows use `Bash(git -C * <sub> *)` (one per `-C`
-form worktree-parallel mode issues), while every bare git deny — not only the ones worktree mode
-itself issues — gets a no-space trailing-wildcard `-C` mirror, e.g. `Bash(git -C * push --force*)`
-and `Bash(git -C * clean*)` (see "The per-repo settings file"): an unmirrored deny would be a
-real bypass (e.g. `git -C <worktree> push --force` slipping past a guard that stops the bare
-form). A heredoc body
+bare-subcommand rule — allow or deny — so a `-C` command needs its own coverage on each side of
+the permission model, and the two sides use different mechanisms. On the deny side, every bare
+git deny — not only the ones worktree mode itself issues — gets a no-space trailing-wildcard `-C`
+mirror, e.g. `Bash(git -C * push --force*)` and `Bash(git -C * clean*)` (see "The per-repo
+settings file"): an unmirrored deny would be a real bypass (e.g. `git -C <worktree> push --force`
+slipping past a guard that stops the bare form). On the allow side, a permission *rule* cannot do
+this safely at all: the only syntax available is an exact match, a trailing `:*`, or a `*` that
+matches any text including spaces, so `Bash(git -C * push *)` — the form the template shipped
+through v2.3.0 — also approves `git -C <worktree> -c core.sshCommand=… push …` (the injected
+option lands inside the first `*`), and there is no "exactly one token" rule syntax to close that
+gap; Claude Code 2.1.246 added a startup warning naming exactly this shape. The plugin ships
+`hooks/git-c-guard.sh` (a `PreToolUse` hook, registered in `hooks/hooks.json`) to do the job
+instead: it sees the whole command string and can require exactly one `-C` token, one path token
+matching the `<repo-dirname>-wt-<number>` worktree shape, and then one of the nine covered
+subcommands (`status`, `add`, `commit`, `push`, `restore`, `diff`, `rev-parse`, `merge-base`,
+`reset --soft`), with nothing else in between — an injected `-c`/`--exec-path`, a second `-C`, an
+unrecognized path or subcommand, a non-conforming composite part, or any command substitution all
+get **no opinion** (empty stdout, exit 0), so the normal permission flow applies. Hook decisions
+never override a deny: Claude Code evaluates deny and ask rules regardless of what a `PreToolUse`
+hook returns, so the `-C` deny mirrors above keep winning over the hook's allow, and the guard
+itself never emits anything but `allow` or nothing — never `deny`/`ask` — so a bug in it degrades
+to a prompt, not a bypass. It also never invokes `git` (or anything else) against the untrusted
+`-C` path it is validating, which matters because — per the same docs — a plain `cd` into a
+different directory prompts before the `git` command that follows it, since running `git` in a
+new directory can execute that directory's hooks; `cd`-with-`git` is therefore not a simpler
+escape hatch for either the template or the guard. Hooks shipped by a plugin fire inside
+subagents too (carrying `agent_id`/`agent_type` alongside the usual fields), which matters here
+because the implementer and verifier subagents issue most of the `-C` commands, not just the
+orchestrator. The guard fails open in every direction: no `jq` on `PATH`, the plugin disabled or
+not yet updated, `disableAllHooks: true` in any of the three settings files, or a headless
+`--bare` run all leave a `-C` call unapproved by the hook — a prompt in default mode (or a
+recorded denial headless), never a silent bypass; `check-harness.sh` WARNs when it finds
+`disableAllHooks: true`, and separately when `.claude/settings.json` still carries a legacy
+`Bash(git -C * …)` allow entry the hook now supersedes. A heredoc body
 (e.g. `reconcile-ledger.sh - <<'LEDGER'`, used by `issue-cycle`) is not split into
 separately-matched subcommands, so it stays covered by its single prefix grant. A third fact from
 the same probe series: no allow rule can approve a Bash command containing command substitution
 — `$(...)` or backticks, which behave identically — even when every constituent command is
-individually granted, in both bare and `git -C` wildcard forms; such a command instead falls
-through to the session's permission mode (prompt on manual/default, a recorded denial headless,
-silent auto-approval under `auto`), while a deny rule *does* match inside a substitution body and
-blocks the whole composite. That's why the WIP-collapse step ("Resilience") runs as two plain
-`git` calls — a `merge-base` lookup followed by `reset --soft` on its literal SHA — rather than
-one command with the SHA substituted in. Composites joined by `&&` or `|` behave the opposite way
-to substitution, and identically to each other: they **are** statically split, and each
-constituent is matched on its own, so such a command is approved exactly when every constituent
-that requires approval has its own matching allow entry. One part's grant does not cover the whole
-(`Bash(git add:*)` alone does not approve `git add -A && git commit …`, and the reverse fails
-too), and a single rule written across the operator — `Bash(git add -A && git commit:*)` — matches
-nothing at all. Not every constituent needs an entry: some commands are approved without one
-(`cd`, `tr` and `head` were each confirmed), which is why the three `… | tr -d '\r'` pipelines the
-harness issues need no `tr` grant; the WIP checkpoints (`git add -A && git commit …`, in both the
-bare and `git -C` forms) are covered because both of their constituents are already granted. A
-path-qualified invocation matches no bare-name rule — allow or deny — so such a command needs its
-own grant on the literal path prefix (this is why a worktree's venv-interpreter verification
-command needs a dedicated entry; see the issue-implementer skill's worktree-parallel reference).
-Every command the harness issues across either operator is therefore approved by the template exactly as
-it ships. As with substitution, a deny matching
-any one constituent blocks the entire composite. All of these facts were verified by live probe
-against Claude Code 2.1.220 (#41, #39, #55, #79, #80).
+individually granted; such a command instead falls through to the session's permission mode
+(prompt on manual/default, a recorded denial headless, silent auto-approval under `auto`), while
+a deny rule *does* match inside a substitution body and blocks the whole composite. That's why
+the WIP-collapse step ("Resilience") runs as two plain `git` calls — a `merge-base` lookup
+followed by `reset --soft` on its literal SHA — rather than one command with the SHA substituted
+in, and it is also why the guard hook rejects any `$(...)`/backtick span outright rather than
+trying to reason about what it might expand to. Composites joined by `&&` or `|` behave the
+opposite way to substitution, and identically to each other: they **are** statically split, and
+each constituent is matched on its own, so such a command is approved exactly when every
+constituent that requires approval has its own matching allow entry. One part's grant does not
+cover the whole (`Bash(git add:*)` alone does not approve `git add -A && git commit …`, and the
+reverse fails too), and a single rule written across the operator — `Bash(git add -A && git
+commit:*)` — matches nothing at all. Not every constituent needs an entry: some commands are
+approved without one (`cd`, `tr` and `head` were each confirmed), which is why the three
+`… | tr -d '\r'` pipelines the harness issues need no `tr` grant; the bare-form WIP checkpoint
+(`git add -A && git commit …`) is covered because both of its constituents are already granted, while its
+`-C` counterpart is covered by the guard hook validating `git -C <worktree> add -A` and `git -C
+<worktree> commit …` as two conforming segments of the same `&&`-joined command (the
+`checkpoint-composite` case in `dev/hook-tests.sh` pins this, including the double-quoted `#`,
+`(`, `)`, and `:` a WIP commit message carries). A path-qualified invocation matches no bare-name
+rule — allow or deny — so such a command needs its own grant on the literal path prefix (this is
+why a worktree's venv-interpreter verification command needs a dedicated entry; see the
+issue-implementer skill's worktree-parallel reference). Every command the harness issues across
+either operator is therefore approved — by the template's allow rules for the bare-form and
+path-qualified-grant cases, and by the guard hook for the worktree `-C` forms — exactly as the
+plugin and template ship. As with substitution, a deny matching any one constituent blocks the
+entire composite.
+
+All of the bare-form facts above (prefix matching, the substitution gap, and the `&&`/`|`
+composite split) were verified by live probe against Claude Code 2.1.220 (#41, #39, #55, #79,
+#80) and are unaffected by the `-C` guard hook. The hook's own allow/no-opinion boundary — the
+nine `-C` forms, the injected-option and malformed-input rejections, the composite checkpoint,
+and the never-execute-`git` guarantee — is pinned by fixture in `dev/hook-tests.sh` instead; a
+live-probe confirmation against the shipping Claude Code version (2.1.246+, in a real worktree,
+default permission mode) is tracked as a follow-up and not yet recorded here.
 
 **Verdict provenance.** The kickback loop is enforced the same way as the rest of this section:
 the orchestrator never edits a source, test, or doc file to resolve a verifier finding or a red
@@ -1015,10 +1079,10 @@ bash dev/selfcheck.sh
 
 It prints a `PASS`/`FAIL` line per assertion and a `== summary: N pass, M fail ==` footer — run
 it to see exactly what it checks. There is no test suite and no build step: this repo is
-Markdown instruction files, Bash scripts, and JSON manifests. The gate and its three negative-test
-harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tests.sh`, `dev/cleanup-tests.sh`) all run in CI
-on every pull request — see this repo's `CLAUDE.md` "Verification" section for the exact
-commands and jobs.
+Markdown instruction files, Bash scripts, and JSON manifests. The gate and its four negative-test
+harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tests.sh`, `dev/hook-tests.sh`,
+`dev/cleanup-tests.sh`) all run in CI on every pull request — see this repo's `CLAUDE.md`
+"Verification" section for the exact commands and jobs.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor. Onboarding it here would mean checking in a `.claude/settings.json` that
@@ -1068,6 +1132,12 @@ Windows specifics worth knowing:
   Bash runs the scripts via their shebang, so the check reports that and moves on. The
   harness's `gh`-output parsing also strips stray `\r` defensively, in case a CRLF-translating
   layer sits between `gh` and Bash.
+- **The `git -C` guard hook's `${CLAUDE_PLUGIN_ROOT}` path.** `hooks/hooks.json` invokes the
+  guard as `bash "${CLAUDE_PLUGIN_ROOT}/hooks/git-c-guard.sh"`; if Claude Code ever exports that
+  variable in backslash form on Windows, the quoted path could fail to resolve under Git Bash and
+  the hook simply never runs for that session — fail-safe (worktree-mode `git -C` commands then
+  prompt, same as if the plugin were disabled), but a Windows spot-check of the hook actually
+  firing is worth doing before relying on unattended worktree-parallel mode there.
 
 ### Windows: first-run smoke test
 
