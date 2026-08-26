@@ -2,19 +2,19 @@
 #
 # check-harness.sh — preflight "doctor" for the issue-workflow harness.
 #
-# Checks everything mechanical the harness needs in a repo: gh/jq, the git remote,
-# the lifecycle labels, executable scripts, a CLAUDE.md with a verification section and a
-# size guideline, LESSONS.md, the settings.json toolchain allow-list (read exclusively through
-# jq — never a raw-text grep/sed/awk of any settings* path variable), whether a path-qualified
-# verification interpreter (e.g. <repo>/api/.venv/bin/python, as worktree-parallel mode
-# instructs) has a matching literal-path allow entry, whether the "Merge autonomy
-# policy" section is activated by the effective merge-permission state across
-# .claude/settings.json, .claude/settings.local.json, and the user-level settings file (a deny in
-# any of them wins, regardless of allows elsewhere — union semantics, not just the checked-in
-# file), whether its optional "Post-merge verification" declaration is present and, if so,
-# fenced (declared/no-fence/not-declared — never whether the declared commands are any good) and
-# whether each declared command's first token has a matching allow entry in
-# .claude/settings.json, whether a "Test-suite ratchet policy" section exists and names a
+# Checks everything mechanical the harness needs in a repo: gh/jq, the git remote, the lifecycle
+# labels, executable scripts, a CLAUDE.md with a verification section and a size guideline,
+# LESSONS.md, the settings.json toolchain allow-list (read exclusively through jq — never a
+# raw-text grep/sed/awk of any settings* path variable), whether a path-qualified verification
+# interpreter (e.g. <repo>/api/.venv/bin/python, as worktree-parallel mode instructs) has a
+# matching literal-path allow entry across the same three-file union the next clause names,
+# whether the "Merge autonomy policy" section is activated by the effective merge-permission
+# state across .claude/settings.json, .claude/settings.local.json, and the user-level settings
+# file (a deny in any of them wins, regardless of allows elsewhere — union semantics, not just
+# the checked-in file), whether its optional "Post-merge verification" declaration is present
+# and, if so, fenced (declared/no-fence/not-declared — never whether the declared commands are
+# any good) and whether each declared command's first token has a matching allow entry in that
+# same three-file union, whether a "Test-suite ratchet policy" section exists and names a
 # measurement command via a fence-aware, depth-aware section slice (looked up with `command -v`,
 # never executed), whether "Autonomy reserve" and "Autonomy decision record" sections are
 # declared and well-formed (and, when gh is ready, whether the declared grant label exists —
@@ -33,7 +33,8 @@
 # or expands a declared command either — the derived values it prints are an integer count of
 # fenced command lines and, when a declared command's first token has no matching allow entry, a
 # WARN echoing that token and the literal `Bash(<token>:*)` entry to add, produced by a pure
-# string comparison (entry_has) against the settings allow list, never a lookup or an execution.
+# string comparison (entry_has) against the three-file settings allow-list union, never a lookup
+# or an execution.
 #
 # Read-only except two safe, idempotent fixes it applies automatically:
 #   - chmod +x on the harness's own scripts
@@ -276,6 +277,67 @@ EOF
   ok "seeded empty .claude/LESSONS.md (project-owned; append dated gotchas as they bite)"
 fi
 
+# --- settings-file candidates: the three-file union (#66, #147) ------------------------------
+# The three files whose union this script consults more than once: the merge-autonomy verdict
+# below (deny-and-allow-aware, via merge_deny_src/merge_allow_src — never $allow_union), the
+# path-qualified interpreter probe — via allow_union — in the toolchain block right after this
+# one, and the post-merge allow-entry check — also via allow_union — further down, in the
+# post-merge-verification block under "policy activation state" (both allow-only; neither check
+# looks at deny — that asymmetry is unchanged from before this union existed). Read ONLY through
+# jq (every settings-file path variable in this script is named settings*, so dev/selfcheck.sh's
+# assertion 4.11 catches a raw-text read of any of them).
+settings="$claude_dir/settings.json"
+settings_local="$claude_dir/settings.local.json"
+settings_user="${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/settings.json"
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  settings_user_label="$CLAUDE_CONFIG_DIR/settings.json"
+else
+  settings_user_label="~/.claude/settings.json"
+fi
+
+# Per-file scan, read ONLY through jq (see above, and #66). NEVER piped from the heredoc's
+# producer side — a `| while read` here would run the loop in a subshell and lose every
+# accumulator below the moment the loop exits (same idiom as diff_side/guard_missing further
+# down). The user-level file is read no differently than the other two — same two jq paths,
+# .permissions.deny[]?/.permissions.allow[]? — and only ever contributes its LABEL to
+# merge_deny_src/merge_allow_src, and its allow entries to allow_union; no entry from it, nor
+# anything else in the file, is ever printed, diffed, or counted on its own. allow_union is only
+# ever consumed by entry_has (a boolean literal-prefix test) — never print allow_union or any
+# slice of it in a verdict, or a user's private grants would leak into doctor output.
+broken_list=""
+read_list=""
+merge_deny_src=""
+merge_allow_src=""
+disable_hooks_src=""
+allow_union=""
+if $jq_ready; then
+  while IFS='|' read -r settings_file settings_label; do
+    [ -n "$settings_file" ] || continue
+    [ -f "$settings_file" ] || continue
+    if ! jq -e . "$settings_file" >/dev/null 2>&1; then
+      broken_list="$broken_list$settings_label, "
+      continue
+    fi
+    read_list="$read_list$settings_label, "
+    file_deny="$(jq -r '.permissions.deny[]? // empty' "$settings_file" 2>/dev/null)"
+    file_allow="$(jq -r '.permissions.allow[]? // empty' "$settings_file" 2>/dev/null)"
+    entry_has "$file_deny" "Bash(gh pr merge" && merge_deny_src="$merge_deny_src$settings_label, "
+    entry_has "$file_allow" "Bash(gh pr merge" && merge_allow_src="$merge_allow_src$settings_label, "
+    allow_union="${allow_union}${file_allow}"$'\n'
+    file_disable="$(jq -r '.disableAllHooks? // empty' "$settings_file" 2>/dev/null)"
+    [ "$file_disable" = "true" ] && disable_hooks_src="$disable_hooks_src$settings_label, "
+  done <<EOF
+$settings|.claude/settings.json
+$settings_local|.claude/settings.local.json
+$settings_user|$settings_user_label
+EOF
+fi
+broken_list="${broken_list%, }"
+read_list="${read_list%, }"
+merge_deny_src="${merge_deny_src%, }"
+merge_allow_src="${merge_allow_src%, }"
+disable_hooks_src="${disable_hooks_src%, }"
+
 # --- settings.json toolchain allow-list ----------------------------------------
 # Read only through jq below — never a raw-text grep/sed/awk of any settings* path variable
 # (every settings-file path variable in this script is named settings*, so dev/selfcheck.sh's
@@ -283,11 +345,14 @@ fi
 # *mentioned* in an unrelated string (an env value, a comment-ish string) count as present, and
 # can't tell the allow array from the deny array (a deny-side `-C` mirror pasted into the allow
 # array would still read as "present" to a whole-file grep). Pre-initialise allow_raw/deny_raw
-# unconditionally: the script runs under set -u. Both are scoped to THIS file only — the
-# toolchain allow-list, harness-script sentinel, template-drift, and #54 guard-coverage checks
-# below all judge .claude/settings.json by design (it is the shared, checked-in file). The
-# merge-autonomy verdict further down runs its own three-file scan instead (see below).
-settings="$claude_dir/settings.json"
+# unconditionally: the script runs under set -u. All of the toolchain allow-list, harness-script
+# sentinel, template-drift, stale-`-C`-allow WARN, and #54 guard-coverage checks below judge
+# .claude/settings.json by design (it is the shared, checked-in file) and read $allow_raw, not
+# the union. The merge-autonomy verdict below consumes the same three-file scan too, but via
+# merge_deny_src/merge_allow_src (deny-aware), never $allow_union. Only the path-qualified
+# interpreter probe (below, in this same toolchain block) and the post-merge allow-entry check
+# (further down, in the post-merge-verification block under "policy activation state") read the
+# three-file $allow_union computed above — see the "settings-file candidates" block.
 allow_raw=""
 deny_raw=""
 allow_list_read=false
@@ -306,7 +371,7 @@ else
   allow_has()  { printf '%s\n' "$allow_raw" | grep -qE "^Bash\\(($1)"; }
   tool_warns=0
 
-  # --- path-qualified verification interpreter (#132/#128) --- a bare-name allow entry
+  # --- path-qualified verification interpreter (#132/#128, #147) --- a bare-name allow entry
   # (Bash(pytest:*)) does not cover a path-qualified interpreter
   # (<repo>/api/.venv/bin/python -m pytest, which worktree-parallel mode's step d instructs —
   # see skills/issue-implementer/references/worktree-mode.md): Claude Code's permission matching
@@ -317,8 +382,8 @@ else
   # candidates (whole file when no "Verification…" heading exists — Q2, ACCEPTED), take each
   # candidate's first whitespace-delimited token, and keep the FIRST one that both contains a
   # '/' and whose basename is a known Python-family interpreter name. entry_has (literal prefix
-  # test) is used to probe the grant — never allow_has (a regex test unsuited to matching a
-  # literal path).
+  # test) probes the grant against $allow_union, the three-file union computed above — never
+  # allow_has (a regex test unsuited to matching a literal path, and scoped to $allow_raw only).
   py_path_tok=""
   py_path_covered=false
   if [ -f "$root/CLAUDE.md" ]; then
@@ -343,12 +408,12 @@ else
 $(verification_candidates "$verify_scope")
 EOF
     if [ -n "$py_path_tok" ]; then
-      if entry_has "$allow_raw" "Bash($py_path_tok"; then
+      if entry_has "$allow_union" "Bash($py_path_tok"; then
         py_path_covered=true
       else
         case "$py_path_tok" in
           /*|?:/*) : ;;
-          *) entry_has "$allow_raw" "Bash($root/$py_path_tok" && py_path_covered=true ;;
+          *) entry_has "$allow_union" "Bash($root/$py_path_tok" && py_path_covered=true ;;
         esac
       fi
       if $py_path_covered; then
@@ -473,55 +538,6 @@ EOF
   fi
 fi
 
-# --- settings-file candidates for the merge-autonomy verdict (#66) ---------------------------
-# The three files whose union decides effective merge permission — see the header.
-settings_local="$claude_dir/settings.local.json"
-settings_user="${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/settings.json"
-if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
-  settings_user_label="$CLAUDE_CONFIG_DIR/settings.json"
-else
-  settings_user_label="~/.claude/settings.json"
-fi
-
-# Per-file merge-rule scan, read ONLY through jq (see above, and #66). NEVER piped from the
-# heredoc's producer side — a `| while read` here would run the loop in a subshell and lose
-# every accumulator below the moment the loop exits (same idiom as diff_side/guard_missing
-# above). The user-level file is read no differently than the other two — same two jq paths,
-# .permissions.deny[]?/.permissions.allow[]? — and only ever contributes its LABEL to
-# merge_deny_src/merge_allow_src below; no entry from it, nor anything else in the file, is ever
-# printed, diffed, or counted.
-broken_list=""
-read_list=""
-merge_deny_src=""
-merge_allow_src=""
-disable_hooks_src=""
-if $jq_ready; then
-  while IFS='|' read -r settings_file settings_label; do
-    [ -n "$settings_file" ] || continue
-    [ -f "$settings_file" ] || continue
-    if ! jq -e . "$settings_file" >/dev/null 2>&1; then
-      broken_list="$broken_list$settings_label, "
-      continue
-    fi
-    read_list="$read_list$settings_label, "
-    file_deny="$(jq -r '.permissions.deny[]? // empty' "$settings_file" 2>/dev/null)"
-    file_allow="$(jq -r '.permissions.allow[]? // empty' "$settings_file" 2>/dev/null)"
-    entry_has "$file_deny" "Bash(gh pr merge" && merge_deny_src="$merge_deny_src$settings_label, "
-    entry_has "$file_allow" "Bash(gh pr merge" && merge_allow_src="$merge_allow_src$settings_label, "
-    file_disable="$(jq -r '.disableAllHooks? // empty' "$settings_file" 2>/dev/null)"
-    [ "$file_disable" = "true" ] && disable_hooks_src="$disable_hooks_src$settings_label, "
-  done <<EOF
-$settings|.claude/settings.json
-$settings_local|.claude/settings.local.json
-$settings_user|$settings_user_label
-EOF
-fi
-broken_list="${broken_list%, }"
-read_list="${read_list%, }"
-merge_deny_src="${merge_deny_src%, }"
-merge_allow_src="${merge_allow_src%, }"
-disable_hooks_src="${disable_hooks_src%, }"
-
 # --- disableAllHooks (#150) -------------------------------------------------------------------
 # A true value in ANY of the three settings files silently disables every hook, including the
 # plugin's `git -C` guard hook — worktree-parallel mode's `git -C` commands then prompt in
@@ -622,14 +638,17 @@ else
       else
         ok "post-merge verification: declared ($postdeploy_count command line(s)) — the cycle's merge pass runs these read-only commands after a merge; this doctor never previews or executes them"
 
-        # --- post-merge allow-entry check (#138, #142) --- when .claude/settings.json was
+        # --- post-merge allow-entry check (#138, #142, #147) --- when .claude/settings.json was
         # readable (allow_list_read), checks each declared line's first whitespace-delimited
-        # token against allow_raw with entry_has: a plain prefix test, NOT the rule-boundary
-        # variant deny_guards uses above — deliberately, so an arg-scoped grant such as
-        # Bash(tbf-boobytrap --smoke:*) still counts as covering the bare command. A pure string
-        # comparison: never command -v's, evals, or expands the token. Skipped silently when
-        # allow_list_read is false — the settings block above already FAILs/WARNs loudly about
-        # the unreadable file, so a second "check skipped" line here would be noise.
+        # token against allow_union (the three-file union computed above) with entry_has: a plain
+        # prefix test, NOT the rule-boundary variant deny_guards uses above — deliberately, so an
+        # arg-scoped grant such as Bash(tbf-boobytrap --smoke:*) still counts as covering the bare
+        # command. A pure string comparison: never command -v's, evals, or expands the token.
+        # Still gated on allow_list_read (.claude/settings.json itself, not the union) rather than
+        # "any of the three files parsed" — see the "settings-file candidates" block for why.
+        # Skipped silently when allow_list_read is false — the settings block above already
+        # FAILs/WARNs loudly about the unreadable file, so a second "check skipped" line here
+        # would be noise.
         if $allow_list_read; then
           pd_seen=""; pd_missing=""; pd_entries=""; pd_checked=0
           while IFS= read -r line; do
@@ -643,7 +662,7 @@ else
             printf '%s\n' "$pd_seen" | grep -qxF -- "$tok" && continue
             pd_seen="${pd_seen}${tok}"$'\n'
             pd_checked=$((pd_checked+1))
-            if entry_has "$allow_raw" "Bash($tok"; then
+            if entry_has "$allow_union" "Bash($tok"; then
               :
             else
               pd_missing="$pd_missing$tok, "
@@ -655,9 +674,9 @@ EOF
           pd_missing="${pd_missing%, }"
           pd_entries="${pd_entries%, }"
           if [ -n "$pd_missing" ]; then
-            wrn "post-merge verification: declared command(s) with no matching allow entry: $pd_missing — add $pd_entries to permissions.allow in .claude/settings.json (checked against .claude/settings.json only); without the grant the cycle's merge pass records deploy=pending, not shipped"
+            wrn "post-merge verification: declared command(s) with no matching allow entry: $pd_missing — add $pd_entries to permissions.allow in .claude/settings.json (or .claude/settings.local.json for a machine-specific grant); checked against $read_list; without the grant the cycle's merge pass records deploy=pending, not shipped"
           elif [ "$pd_checked" -gt 0 ]; then
-            ok "post-merge verification: every declared command has a matching allow entry ($pd_checked checked; string comparison only, never executed or looked up)"
+            ok "post-merge verification: every declared command has a matching allow entry ($pd_checked checked across $read_list; string comparison only, never executed or looked up)"
           fi
         fi
       fi
@@ -761,8 +780,9 @@ fi
 # BASELINE.md records THIS machine's last known-green run of the verification commands
 # on the default branch (commit SHA + per-command results). It is machine-local
 # state: gitignored, written by harness-setup, refreshed by the implementer/cycle skills.
-# harness-setup still writes the full 40-char SHA; the doctor merely tolerates an abbreviated
-# recorded value of at least 7 hex characters, treating it as a prefix of the remote tip.
+# harness-setup and the implementer/cycle refresh both still write the full 40-char SHA; the
+# doctor merely tolerates an abbreviated recorded value of at least 7 hex characters, treating it
+# as a prefix of the remote tip.
 baseline="$claude_dir/BASELINE.md"
 if [ -f "$baseline" ]; then
   recorded="$(sed -nE 's/^- commit:[[:space:]]*([0-9a-f]+).*/\1/p' "$baseline" | head -1)"

@@ -46,10 +46,13 @@ harness's exempt comment with a one-line reason each.
 (the settings.json block, template-diff, the ratchet's never-execute guarantee, merge-autonomy
 activation, default-branch guard coverage, the post-merge-verification declaration state —
 declared/no-fence/not-declared, fence-aware and depth-aware, and (when declared) whether each
-declared command's first token has a matching allow entry, a pure string comparison that WARNs
+declared command's first token has a matching allow entry across the three-file settings
+allow-list union (`.claude/settings.json`, `.claude/settings.local.json`, and the user-level
+settings file — a grant living in any one of them counts), a pure string comparison that WARNs
 rather than fails — a path-qualified verification interpreter such as
-`<repo>/api/.venv/bin/python` being checked against a literal-path allow entry distinct from the
-bare-name regex check, the test-suite ratchet's fence-aware section slice with a
+`<repo>/api/.venv/bin/python` being checked against a literal-path allow entry in that same
+three-file union, distinct from the bare-name regex check (which stays scoped to
+`.claude/settings.json`), the test-suite ratchet's fence-aware section slice with a
 fence-delimiter-skipping span hunt, the verification baseline's short-SHA-as-prefix compare, the
 `disableAllHooks: true` WARN across the three settings files, and the stale-legacy-`-C`-allow
 WARN on `.claude/settings.json`) that would otherwise only be hand-verified. It runs in CI as the

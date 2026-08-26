@@ -551,13 +551,14 @@ subagents need:
    part of the merge-autonomy verdict — declared (with a count of fenced command lines), heading
    present but no fenced commands, or not declared at all — without ever executing, eval'ing, or
    otherwise looking up any of the declared commands themselves. When declared, it additionally
-   reports whether each declared command's first token has a matching `Bash(<token>:*)` allow
-   entry in `.claude/settings.json` — a literal string comparison only, never a lookup or an
-   execution — WARNing (never failing) and naming the exact entry to add when one is missing, so
-   an unattended cycle doesn't discover the missing grant only after a merge. Because the dispatch
-   ledger lives in each run's context only, the next run's merge pass re-runs these same commands
-   once, immediately before its first merge, and stops before merging anything if that recheck
-   comes back anything but `verified`.
+   reports whether each declared command's first token has a matching `Bash(<token>:*)` allow entry
+   in the same three-file union the merge-autonomy verdict reads (`.claude/settings.json`,
+   `.claude/settings.local.json`, and the user-level settings file) — a literal string comparison
+   only, never a lookup or an execution — WARNing (never failing) and naming the exact entry to add
+   when one is missing, so an unattended cycle doesn't discover the missing grant only after a
+   merge. Because the dispatch ledger lives in each run's context only, the next run's merge pass
+   re-runs these same commands once, immediately before its first merge, and stops before merging
+   anything if that recheck comes back anything but `verified`.
 
 6. **Test-suite ratchet policy** (optional) — a section titled exactly "Test-suite ratchet
    policy" stating the measurement command the `test-ratchet` skill (standalone, and as the
@@ -686,8 +687,9 @@ recorded commit (green → new baseline; red → the run stops, because a broken
 failure unattributable — that's also the mechanical "two green PRs can still compose badly"
 check). It is **machine-local state, not a project document**: keep it gitignored
 (`harness-setup` adds the entry; the doctor warns if it's missing or tracked), and never edit
-it by hand. `harness-setup` always writes the full SHA; the doctor's compare against it tolerates
-an abbreviated recorded value of 7 or more hex characters as a prefix of the current tip.
+it by hand. `harness-setup` and the implementer/cycle refresh both always write the full SHA; the
+doctor's compare against it tolerates an abbreviated recorded value of 7 or more hex characters
+as a prefix of the current tip.
 
 ## Installing in a new repo
 
@@ -817,7 +819,11 @@ sync settings in practice, so the guard hook is already active by the time you d
 entries — worktree-parallel mode's `git -C` commands stay prompt-free throughout the transition.
 `check-harness.sh` now also WARNs when it finds `disableAllHooks: true` in any of the three
 settings files (silently disabling the guard hook, and every other hook) and, separately, when
-`.claude/settings.json` still carries one of the superseded legacy `-C` allow entries.
+`.claude/settings.json` still carries one of the superseded legacy `-C` allow entries. The
+post-merge allow-entry check and the path-qualified interpreter probe now also consult this same
+three-file union instead of `.claude/settings.json` alone, so a grant that lives only in
+`.claude/settings.local.json` or the user-level settings file no longer produces a spurious "no
+matching allow entry" WARN — no consumer action required.
 
 ## The per-repo settings file (required)
 
@@ -869,20 +875,22 @@ and doesn't cover a *path-qualified* verification interpreter (e.g. `api/.venv/b
 worktree-parallel mode's per-checkout virtualenvs require) — those need their own literal-path
 allow entry (`Bash(<repo>/api/.venv/bin/python:*)`) instead of, or in addition to, the bare
 `Bash(python:*)` form. When CLAUDE.md's verification scope names such a path, `check-harness.sh`
-looks for a matching literal-path grant and WARNs with the exact entry to add if none exists —
-the shell resolves an absolute venv path just fine, but Claude Code's permission match is a
-literal prefix test, so a bare-name grant can't produce a false reassurance for a path-qualified
-interpreter it doesn't actually cover.
+looks for a matching literal-path grant across all three settings files and WARNs with the exact
+entry to add if none exists — the shell resolves an absolute venv path just fine, but Claude
+Code's permission match is a literal prefix test, so a bare-name grant can't produce a false
+reassurance for a path-qualified interpreter it doesn't actually cover.
 
 `check-harness.sh` reads this file exclusively with `jq`, matching literal entries in the
 `permissions.allow`/`permissions.deny` arrays it parses out — never a raw-text search of the
 whole file, which could be fooled by a rule merely mentioned in an unrelated string (a comment,
 an `env` value) or by a deny-side entry that a whole-file search can't tell apart from an
 allow-side one. Every check here — the toolchain allow-list, the harness-script sentinel,
-template drift, and default-branch guard coverage — stays scoped to this file by design: they
-judge the shared, checked-in file, not effective permission. The one exception is the
-merge-autonomy verdict, which needs *effective* state across all three files (see "The CLAUDE.md
-contract" item 5). `settings.local.json` is machine-local (may hold secrets) — never commit it.
+template drift, the stale-`-C`-allow WARN, and default-branch guard coverage — stays scoped to
+this file by design: they judge the shared, checked-in file, not effective permission. Three
+checks are the exception, because they need *effective* state across all three files: the
+merge-autonomy verdict (see "The CLAUDE.md contract" item 5), the post-merge allow-entry check,
+and the path-qualified interpreter probe above. `settings.local.json` is machine-local (may hold
+secrets) — never commit it.
 
 ## Safety model
 
