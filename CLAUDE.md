@@ -42,7 +42,8 @@ behavior; fixed-string and numeric-threshold assertions may ship without one, li
 harness's exempt comment with a one-line reason each.
 
 `dev/doctor-tests.sh` is a separate negative-test harness for the *consumer* doctor
-(`bin/check-harness.sh`): it builds throwaway fixture repos under `mktemp` and pins verdicts
+(`bin/check-harness.sh`) and its scoped-autonomy companion script (`bin/check-decision-record.sh`)
+— it builds throwaway fixture repos under `mktemp` and pins verdicts
 (the settings.json block, template-diff, the ratchet's never-execute guarantee, merge-autonomy
 activation, default-branch guard coverage, the post-merge-verification declaration state —
 declared/no-fence/not-declared, fence-aware and depth-aware, and (when declared) whether each
@@ -57,7 +58,7 @@ fence-delimiter-skipping span hunt, the verification baseline's short-SHA-as-pre
 `disableAllHooks: true` WARN across the three settings files, and the stale-legacy-`-C`-allow
 WARN on `.claude/settings.json`) that would otherwise only be hand-verified. It runs in CI as the
 third step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
-`bin/check-harness.sh` changes.
+`bin/check-harness.sh` or `bin/check-decision-record.sh` changes.
 
 `dev/hook-tests.sh` is a separate negative-test harness for the plugin-shipped PreToolUse guard
 hook (`hooks/git-c-guard.sh`, #150): it feeds fixture stdin JSON straight into the real script
