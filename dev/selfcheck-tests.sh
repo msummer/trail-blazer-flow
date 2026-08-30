@@ -206,6 +206,11 @@ p_4_18()              { edit "$1/skills/issue-cycle/SKILL.md" 's/stage=verifier/
 p_4_19()              { edit "$1/skills/issue-cycle/SKILL.md" 's/verifier-verdict/verifier-verdictx/g'; }
 p_4_21()               { edit "$1/agents/verifier.md" 's/Autonomy reserve/Autonomy Reserve/g'; }
 p_4_22()               { edit "$1/skills/issue-cycle/SKILL.md" 's/Post-merge verification/Post-Merge Verification/g'; }
+p_4_24_tag_pin()       { edit "$1/.github/workflows/selfcheck.yml" 's|actions/checkout@[0-9a-f]*|actions/checkout@v4|'; }
+p_4_24_no_uses()       { drop "$1/.github/workflows/selfcheck.yml" '^[[:space:]]*-[[:space:]]*uses:'; }
+p_4_24_comment() {
+  printf '      # historical: this step read "uses: actions/checkout@v4"\n' | append "$1/.github/workflows/selfcheck.yml"
+}
 p_4_20_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(gh pr edit:\*\)"'; }
 p_4_20_orphan_grant() {
   local f="$1/templates/repo-settings.json"
@@ -271,6 +276,9 @@ cases=(
   "4.20-orphan-grant|4.20|p_4_20_orphan_grant|add a Bash(gh pr close:*) allow entry no skill names"
   "4.21|4.21|p_4_21|re-case 'Autonomy reserve' to 'Autonomy Reserve' in agents/verifier.md so the case-sensitive marker no longer matches"
   "4.22|4.22|p_4_22|re-case 'Post-merge verification' to 'Post-Merge Verification' in skills/issue-cycle/SKILL.md so the case-sensitive marker no longer matches"
+  "4.24-tag-pin|4.24|p_4_24_tag_pin|rewrite the checkout SHA pin back to the mutable @v4 tag"
+  "4.24-extraction|4.24|p_4_24_no_uses|drop every 'uses:' line from the workflow so the gate's extraction comes back empty"
+  "4.24-comment||p_4_24_comment|control: a #-comment quoting an unpinned 'uses: actions/checkout@v4' is not flagged"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
   "5.3|5.3|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again"
