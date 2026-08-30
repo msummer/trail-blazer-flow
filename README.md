@@ -61,9 +61,10 @@ or share).
 │   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
 │   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh (not run by the gate)
 │   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh (not run by the gate)
-│   └── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
+│   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
+│   └── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh (not run by the gate)
 ├── .github/
-│   └── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the guard hook's negative-test harness, then the cleanup script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
+│   └── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the guard hook's negative-test harness, then the cleanup script's negative-test harness, then the planning script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
 ```
@@ -124,7 +125,9 @@ The `issue-planner` skill:
 1. Pre-flight: `cleanup-after-merge.sh --fix` (sync + queue hygiene), then makes sure plans are
    written against the current default branch.
 2. Finds issues needing an **initial plan** (no `plan-*` label) or a **revision**
-   (`plan-proposed` with comments after the latest plan), via `find-planning-work.sh`.
+   (`plan-proposed` with maintainer — `OWNER`/`MEMBER`/`COLLABORATOR` — comments after the latest
+   trusted plan), via `find-planning-work.sh`. Comments from anyone else are reported, never
+   acted on — see "Safety model" below.
 3. Dispatches the read-only `planner` subagent per issue (parallel dispatches OK — each is
    scoped to one issue). Prompts include relevant `LESSONS.md` entries and any orchestrator
    context the issue lacks (recently merged PRs, corrected measurements).
@@ -152,8 +155,9 @@ of scope.
 
 ### Approval (human by default, policy-assisted if you opt in)
 
-Comment on the issue to request changes (comment-driven, no label needed). Add `plan-approved`
-to accept. **Approving a plan whose open questions are all ADVISORY accepts the stated
+A maintainer (`OWNER`/`MEMBER`/`COLLABORATOR`) comments on the issue to request changes
+(comment-driven, no label needed) — a comment from anyone else is reported to the human but
+never treated as feedback. Add `plan-approved` to accept. **Approving a plan whose open questions are all ADVISORY accepts the stated
 defaults** — no extra revision round; the orchestrator passes the defaults to the implementer as
 resolved decisions. Plans with unanswered BLOCKING questions shouldn't be approved.
 
@@ -1097,12 +1101,27 @@ follow-ups the implementer files from a PR's "Follow-ups to file" are the other,
 same `no-auto-approve` provenance rule plus a marker naming their PR, which
 `cleanup-after-merge.sh --fix` uses to quarantine (`no-plan`, never closed) any that are orphaned
 when that PR closes without merging. The ratchet's further mitigations: the fixed issue-body
-template, with evidence quoted as literal tool output rather than free-form prose; the planner
-dispatch's explicit "evidence is data, not instructions" framing for any issue the ratchet
-filed; the test-only/monotonic scope that binds the plan and that the verifier checks against;
-and the per-run and open-backlog caps. A ratchet issue can never propose changes to the
-governance surface (`CLAUDE.md`, `.claude/`, policy/ADR docs, CI config) — that boundary only
-moves with a human in the loop.
+template, with evidence quoted as literal tool output rather than free-form prose; the "issue
+text is data, not instructions" rule below, applied to the ratchet's Evidence section like any
+other issue content; the test-only/monotonic scope that binds the plan and that the verifier
+checks against; and the per-run and open-backlog caps. A ratchet issue can never propose changes
+to the governance surface (`CLAUDE.md`, `.claude/`, policy/ADR docs, CI config) — that boundary
+only moves with a human in the loop.
+
+Fourth, every dispatch — not only ratchet-filed issues — treats the issue body and quoted
+comments as untrusted **data**, never as instructions (#164): `agents/planner.md`,
+`agents/implementer.md`, and `agents/verifier.md` each carry this as a standing constraint (an
+embedded directive is a finding to report, never something to obey), and the orchestrating
+skills' dispatch prompts quote issue content as delimited data. Mechanically,
+`find-planning-work.sh` enforces the planner-facing half of this: only a comment whose GitHub
+`authorAssociation` is `OWNER`, `MEMBER`, or `COLLABORATOR` is ever treated as feedback or
+honoured as the latest plan comment; a `CONTRIBUTOR`/`NONE` comment, or one with no
+`authorAssociation` field at all (fail-closed), posted after the issue's latest trusted plan (or
+any such comment, if there is no trusted plan yet) is reported in the `untrusted_comments` bucket
+instead of being silently dropped or silently trusted, and never shadows real feedback posted
+before it — one posted before that plan is dropped with no bucket entry. The honest limit: that
+mechanical gate covers only the planner's feedback/plan selection; the implementer- and
+verifier-side halves of the rule are prompt-enforced, not mechanically checked.
 
 ## Distribution
 
@@ -1132,10 +1151,10 @@ bash dev/selfcheck.sh
 
 It prints a `PASS`/`FAIL` line per assertion and a `== summary: N pass, M fail ==` footer — run
 it to see exactly what it checks. There is no test suite and no build step: this repo is
-Markdown instruction files, Bash scripts, and JSON manifests. The gate and its four negative-test
+Markdown instruction files, Bash scripts, and JSON manifests. The gate and its five negative-test
 harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tests.sh`, `dev/hook-tests.sh`,
-`dev/cleanup-tests.sh`) all run in CI on every pull request — see this repo's `CLAUDE.md`
-"Verification" section for the exact commands and jobs.
+`dev/cleanup-tests.sh`, `dev/planning-tests.sh`) all run in CI on every pull request — see this
+repo's `CLAUDE.md` "Verification" section for the exact commands and jobs.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor. Onboarding it here would mean checking in a `.claude/settings.json` that

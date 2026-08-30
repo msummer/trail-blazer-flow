@@ -15,10 +15,11 @@
 # flagged). Same output contract as the gate: one PASS/FAIL line per case, a
 # `== summary: N pass, M fail ==` footer, exit 0 iff nothing failed.
 #
-# This, dev/doctor-tests.sh, and dev/cleanup-tests.sh are the only scripts under dev/ that write
-# files (the consumer doctor bin/check-harness.sh also seeds .claude/LESSONS.md when absent).
-# Every write here happens under a single `mktemp -d` root, removed via a trap on EXIT; nothing
-# outside that root is ever touched. By
+# This is one of several dev/*.sh scripts that write files — dev/doctor-tests.sh,
+# dev/hook-tests.sh, dev/cleanup-tests.sh, and dev/planning-tests.sh also do (the consumer doctor
+# bin/check-harness.sh also seeds .claude/LESSONS.md when absent). Every one of them writes only
+# under its own single `mktemp -d` root, removed via a trap on EXIT; nothing outside that root is
+# ever touched. By
 # convention (CLAUDE.md), no perturbation helper here uses `sed -i` either — plain `sed` writing
 # to a sibling temp file, same idiom as the rest of this repo.
 #
@@ -252,7 +253,7 @@ cases=(
   "4.6|4.6|p_4_6|drop a label bin/setup-labels.sh creates from the doctor's required list"
   "4.9-missing-step|4.9|p_4_9_missing_step|drop the 'bash dev/doctor-tests.sh' run step from the workflow"
   "4.9-orphan-step|4.9|p_4_9_orphan_step|add a CI run step for a nonexistent dev/nonexistent.sh"
-  "4.9-uneven-jobs|4.9|p_4_9_one_job_only|delete the workflow's last line (the macOS job's dev/cleanup-tests.sh step), leaving that script covered on ubuntu only"
+  "4.9-uneven-jobs|4.9|p_4_9_one_job_only|delete the workflow's last line (the macOS job's dev/planning-tests.sh step), leaving that script covered on ubuntu only"
   "4.11-local|4.11|p_4_11_local|reintroduce a raw sed of \"\$settings_local\" in bin/check-harness.sh"
   "4.11-comment||p_4_11_comment|control: an indented comment mentioning grep and quoting \"\$settings\" is not flagged"
   "4.13-script|4.13|p_4_13_script|add a 'docs' stage to reconcile-ledger.sh's STAGES= list only"
