@@ -4,27 +4,33 @@
 #
 # Checks everything mechanical the harness needs in a repo: gh/jq, the git remote, the lifecycle
 # labels, executable scripts, a CLAUDE.md with a verification section and a size guideline,
-# LESSONS.md, the settings.json toolchain allow-list (read exclusively through jq — never a
-# raw-text grep/sed/awk of any settings* path variable), whether a path-qualified verification
-# interpreter (e.g. <repo>/api/.venv/bin/python, as worktree-parallel mode instructs) has a
-# matching literal-path allow entry across the same three-file union the next clause names,
-# whether the "Merge autonomy policy" section is activated by the effective merge-permission
-# state across .claude/settings.json, .claude/settings.local.json, and the user-level settings
-# file (a deny in any of them wins, regardless of allows elsewhere — union semantics, not just
-# the checked-in file), whether its optional "Post-merge verification" declaration is present
-# and, if so, fenced (declared/no-fence/not-declared — never whether the declared commands are
-# any good) and whether each declared command's first token has a matching allow entry in that
-# same three-file union, whether a "Test-suite ratchet policy" section exists and names a
-# measurement command via a fence-aware, depth-aware section slice (looked up with `command -v`,
-# never executed), whether "Autonomy reserve" and "Autonomy decision record" sections are
-# declared and well-formed (and, when gh is ready, whether the declared grant label exists —
-# never applied, removed, or judged for content), the verification baseline (.claude/BASELINE.md,
-# machine-local — an abbreviated recorded commit SHA of 7+ hex characters is accepted as a
-# prefix), whether the template's branch-scoped deny entries actually cover this repo's default
-# branch, whether any of the three settings files disables all hooks (silently disabling the
-# plugin's `git -C` guard hook, and every other hook), whether `.claude/settings.json` still
-# carries legacy `Bash(git -C * <sub> *)` allow entries the guard hook now supersedes (#150 —
-# Claude Code 2.1.246+ warns about these at startup), and branch protection.
+# LESSONS.md, the toolchain allow-list (checked against the three-file settings union — see
+# below — read exclusively through jq, never a raw-text grep/sed/awk of any settings* path
+# variable), whether a path-qualified verification interpreter (e.g. <repo>/api/.venv/bin/python,
+# as worktree-parallel mode instructs) has a matching literal-path allow entry across the same
+# three-file union the next clause names, whether the "Merge autonomy policy" section is
+# activated by the effective merge-permission state across .claude/settings.json,
+# .claude/settings.local.json, and the user-level settings file (a deny in any of them wins,
+# regardless of allows elsewhere — union semantics, not just the checked-in file), whether a
+# consumer's CI workflows pin every `uses:` ref to a full 40-hex commit SHA rather than a mutable
+# tag or branch, when that "Merge autonomy policy" section is present (#166 — under merge
+# autonomy the cycle merges on "CI green", so a repointed tag would change what CI runs with no
+# diff visible in this repo; string comparison only — never executes, evals, or expands anything
+# read from a workflow file), whether its optional "Post-merge verification" declaration is
+# present and, if so, fenced (declared/no-fence/not-declared — never whether the declared
+# commands are any good) and whether each declared command's first token has a matching allow
+# entry in that same three-file union, whether a "Test-suite ratchet policy" section exists and
+# names a measurement command via a fence-aware, depth-aware section slice (looked up with
+# `command -v`, never executed), whether "Autonomy reserve" and "Autonomy decision record"
+# sections are declared and well-formed (and, when gh is ready, whether the declared grant label
+# exists — never applied, removed, or judged for content), the verification baseline
+# (.claude/BASELINE.md, machine-local — an abbreviated recorded commit SHA of 7+ hex characters
+# is accepted as a prefix), whether the template's branch-scoped deny entries actually cover this
+# repo's default branch, whether any of the three settings files disables all hooks (silently
+# disabling the plugin's `git -C` guard hook, and every other hook), whether
+# `.claude/settings.json` still carries legacy `Bash(git -C * <sub> *)` allow entries the guard
+# hook now supersedes (#150 — Claude Code 2.1.246+ warns about these at startup), and branch
+# protection.
 #
 # The test-suite-ratchet check never executes, evals, or shells out to anything read from
 # CLAUDE.md: it only looks up the measurement command's first word with `command -v` (a lookup,
@@ -280,12 +286,13 @@ fi
 # --- settings-file candidates: the three-file union (#66, #147) ------------------------------
 # The three files whose union this script consults more than once: the merge-autonomy verdict
 # below (deny-and-allow-aware, via merge_deny_src/merge_allow_src — never $allow_union), the
-# path-qualified interpreter probe — via allow_union — in the toolchain block right after this
-# one, and the post-merge allow-entry check — also via allow_union — further down, in the
-# post-merge-verification block under "policy activation state" (both allow-only; neither check
-# looks at deny — that asymmetry is unchanged from before this union existed). Read ONLY through
-# jq (every settings-file path variable in this script is named settings*, so dev/selfcheck.sh's
-# assertion 4.11 catches a raw-text read of any of them).
+# bare-name toolchain allow-list check and the path-qualified interpreter probe — both via
+# allow_union — in the toolchain block right after this one, and the post-merge allow-entry
+# check — also via allow_union — further down, in the post-merge-verification block under
+# "policy activation state" (all three allow-only; none of them looks at deny — that asymmetry is
+# unchanged from before this union existed). Read ONLY through jq (every settings-file path
+# variable in this script is named settings*, so dev/selfcheck.sh's assertion 4.11 catches a
+# raw-text read of any of them).
 settings="$claude_dir/settings.json"
 settings_local="$claude_dir/settings.local.json"
 settings_user="${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/settings.json"
@@ -302,7 +309,8 @@ fi
 # .permissions.deny[]?/.permissions.allow[]? — and only ever contributes its LABEL to
 # merge_deny_src/merge_allow_src, and its allow entries to allow_union; no entry from it, nor
 # anything else in the file, is ever printed, diffed, or counted on its own. allow_union is only
-# ever consumed by entry_has (a boolean literal-prefix test) — never print allow_union or any
+# ever consumed by entry_has and allow_has, both boolean tests (entry_has a literal-prefix test,
+# allow_has a regex prefix test) — neither ever prints an entry: never print allow_union or any
 # slice of it in a verdict, or a user's private grants would leak into doctor output.
 broken_list=""
 read_list=""
@@ -345,14 +353,16 @@ disable_hooks_src="${disable_hooks_src%, }"
 # *mentioned* in an unrelated string (an env value, a comment-ish string) count as present, and
 # can't tell the allow array from the deny array (a deny-side `-C` mirror pasted into the allow
 # array would still read as "present" to a whole-file grep). Pre-initialise allow_raw/deny_raw
-# unconditionally: the script runs under set -u. All of the toolchain allow-list, harness-script
-# sentinel, template-drift, stale-`-C`-allow WARN, and #54 guard-coverage checks below judge
-# .claude/settings.json by design (it is the shared, checked-in file) and read $allow_raw, not
-# the union. The merge-autonomy verdict below consumes the same three-file scan too, but via
-# merge_deny_src/merge_allow_src (deny-aware), never $allow_union. Only the path-qualified
-# interpreter probe (below, in this same toolchain block) and the post-merge allow-entry check
-# (further down, in the post-merge-verification block under "policy activation state") read the
-# three-file $allow_union computed above — see the "settings-file candidates" block.
+# unconditionally: the script runs under set -u. The harness-script sentinel, template-drift,
+# stale-`-C`-allow WARN, and #54 guard-coverage checks below judge .claude/settings.json by
+# design (it is the shared, checked-in file) and read $allow_raw, not the union. The
+# merge-autonomy verdict below consumes the same three-file scan too, but via
+# merge_deny_src/merge_allow_src (deny-aware), never $allow_union. The bare-name toolchain
+# allow-list check (allow_has, right below), the path-qualified interpreter probe (below, in this
+# same toolchain block), and the post-merge allow-entry check (further down, in the
+# post-merge-verification block under "policy activation state") all read the three-file
+# $allow_union computed above instead — they judge effective permission, not just this file — see
+# the "settings-file candidates" block.
 allow_raw=""
 deny_raw=""
 allow_list_read=false
@@ -368,22 +378,37 @@ else
   allow_list_read=true
 
   has_marker() { find "$root" -maxdepth 2 -name "$1" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | grep -q .; }
-  allow_has()  { printf '%s\n' "$allow_raw" | grep -qE "^Bash\\(($1)"; }
+  # allow_has tests $allow_union (the three-file union), not $allow_raw — it judges effective
+  # permission, matching the WARN/PASS text below. It is still defined only inside this
+  # .claude/settings.json-readable else branch, so the toolchain block as a whole stays gated on
+  # that file being present and parseable, exactly like the post-merge allow-entry check's
+  # allow_list_read gate further down (see its rationale comment) — even though the values it
+  # tests come from the union.
+  allow_has()  { printf '%s\n' "$allow_union" | grep -qE "^Bash\\(($1)"; }
   tool_warns=0
+  # tool_warn MARKER_TEXT TOOLS — one uniform WARN for the six toolchain marker checks below:
+  # scope (the three-file union, named via $read_list) and remediation (which file to edit,
+  # depending on whether the grant should be shared or machine-specific) stated once, so the six
+  # marker/tool pairs below don't carry six independent copies of the same sentence.
+  tool_warn() {
+    wrn "$1 found but no $2 in the allow-list (checked across $read_list) — add \"Bash(<tool>:*)\" to permissions.allow in .claude/settings.json, or .claude/settings.local.json for a machine-specific grant"
+    tool_warns=1
+  }
 
   # --- path-qualified verification interpreter (#132/#128, #147) --- a bare-name allow entry
   # (Bash(pytest:*)) does not cover a path-qualified interpreter
   # (<repo>/api/.venv/bin/python -m pytest, which worktree-parallel mode's step d instructs —
   # see skills/issue-implementer/references/worktree-mode.md): Claude Code's permission matching
   # is a literal prefix test, not a basename match, so allow_has's regex would falsely reassure
-  # (it only checks whether some settings.json allow ENTRY starts with a bare interpreter name
-  # like Bash(python — it never looks at the path-qualified token itself) while the grant that
+  # (it only checks whether some allow-union ENTRY starts with a bare interpreter name like
+  # Bash(python — it never looks at the path-qualified token itself) while the grant that
   # actually covers the command is the literal path itself. Scan the verification-scope
   # candidates (whole file when no "Verification…" heading exists — Q2, ACCEPTED), take each
   # candidate's first whitespace-delimited token, and keep the FIRST one that both contains a
   # '/' and whose basename is a known Python-family interpreter name. entry_has (literal prefix
   # test) probes the grant against $allow_union, the three-file union computed above — never
-  # allow_has (a regex test unsuited to matching a literal path, and scoped to $allow_raw only).
+  # allow_has (a regex test over bare marker names like `pytest|python`, unsuited to matching an
+  # arbitrary literal path string, even though it too now reads $allow_union).
   py_path_tok=""
   py_path_covered=false
   if [ -f "$root/CLAUDE.md" ]; then
@@ -425,14 +450,14 @@ EOF
     fi
   fi
 
-  if has_marker package.json   && ! allow_has "npm|pnpm|yarn|bun";          then wrn "package.json found but no npm/pnpm/yarn/bun in the settings.json allow-list"; tool_warns=1; fi
-  if { has_marker pyproject.toml || has_marker requirements.txt || has_marker pytest.ini; } && ! allow_has "pytest|python|uv|poetry|tox" && ! $py_path_covered; then wrn "Python project files found but no pytest/python/uv/poetry in the allow-list"; tool_warns=1; fi
-  if has_marker Cargo.toml     && ! allow_has "cargo";                      then wrn "Cargo.toml found but no cargo in the allow-list"; tool_warns=1; fi
-  if has_marker go.mod         && ! allow_has "go";                         then wrn "go.mod found but no go in the allow-list"; tool_warns=1; fi
-  if has_marker Makefile       && ! allow_has "make";                       then wrn "Makefile found but no make in the allow-list"; tool_warns=1; fi
-  if has_marker Gemfile        && ! allow_has "bundle|rake|rspec";          then wrn "Gemfile found but no bundle/rake/rspec in the allow-list"; tool_warns=1; fi
+  if has_marker package.json   && ! allow_has "npm|pnpm|yarn|bun";          then tool_warn "package.json"           "npm/pnpm/yarn/bun"; fi
+  if { has_marker pyproject.toml || has_marker requirements.txt || has_marker pytest.ini; } && ! allow_has "pytest|python|uv|poetry|tox" && ! $py_path_covered; then tool_warn "Python project files"     "pytest/python/uv/poetry"; fi
+  if has_marker Cargo.toml     && ! allow_has "cargo";                      then tool_warn "Cargo.toml"              "cargo"; fi
+  if has_marker go.mod         && ! allow_has "go";                         then tool_warn "go.mod"                 "go"; fi
+  if has_marker Makefile       && ! allow_has "make";                       then tool_warn "Makefile"               "make"; fi
+  if has_marker Gemfile        && ! allow_has "bundle|rake|rspec";          then tool_warn "Gemfile"                "bundle/rake/rspec"; fi
   if [ "$tool_warns" -eq 0 ]; then
-    ok "settings.json allow-list covers the detected toolchain(s) (subagents can't prompt for permissions — this matters)"
+    ok "allow-list covers the detected toolchain(s) across $read_list (subagents can't prompt for permissions — this matters)"
   fi
   # Sentinel: are the harness's own commands allowed? Deliberately a *substring* test over the
   # extracted allow entries, not a prefix test like entry_has — this matches both the bare-name
@@ -595,6 +620,65 @@ else
       wrn "merge autonomy: 'Bash(gh pr merge:*)' deny lifted (no deny found in $read_list) but no 'Merge autonomy policy' section in CLAUDE.md — the cycle skips the merge pass anyway; add the section (or restore the deny)"
     else
       ok "merge autonomy: off (default — no 'Merge autonomy policy' section, deny in place in $merge_deny_src; every PR merge is manual)"
+    fi
+  fi
+
+  # --- CI action pinning (#166) --- gated on $has_merge_policy: under merge autonomy the cycle
+  # merges on "CI green" (see the merge-autonomy verdict above), so a `uses:` ref pinned to a
+  # mutable tag or branch lets that tag's owner repoint what CI executes with no diff visible in
+  # this repo — the workflow's own green check is the blast radius. String comparison only: never
+  # `eval`, `command -v`, or expand anything read from the workflow file. The extraction mirrors
+  # this repo's own dev/selfcheck.sh assertion 4.24 (comment-stripped by LINE first, so a
+  # commented-out unpinned `uses:` line can't false-positive), plus a CRLF strip and a
+  # surrounding-quote strip that 4.24 doesn't need (a consumer's workflow may be CRLF and/or
+  # quoted, unlike this repo's own) and a skip for local (`./…`, `../…`) and `docker://` refs —
+  # not SHA-pinnable / a different pinning syntax, documented here rather than left silent, same
+  # as 4.24's own comment on that same gap. Never FAILs: this is a WARN-only, advisory check, so
+  # the doctor's exit code is unaffected by it.
+  if $has_merge_policy; then
+    ci_uses_total=0
+    ci_bad_count=0
+    ci_bad_list=""
+    for wf in "$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml; do
+      [ -f "$wf" ] || continue
+      uses_lines="$(grep -vE '^[[:space:]]*#' "$wf" | grep -E '^[[:space:]]*-?[[:space:]]*uses:')"
+      [ -n "$uses_lines" ] || continue
+      while IFS= read -r ul; do
+        [ -n "$ul" ] || continue
+        ref="$(printf '%s\n' "$ul" | tr -d '\r' | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//; s/[[:space:]].*$//')"
+        case "$ref" in
+          \"*\") ref="${ref#\"}"; ref="${ref%\"}" ;;
+          \'*\') ref="${ref#\'}"; ref="${ref%\'}" ;;
+        esac
+        case "$ref" in
+          ./*|../*|docker://*) continue ;;
+        esac
+        ci_uses_total=$((ci_uses_total+1))
+        case "$ref" in
+          *@*) ci_sha="${ref##*@}" ;;
+          *)   ci_sha="" ;;
+        esac
+        ci_pinned=false
+        case "$ci_sha" in
+          ''|*[!0-9a-f]*) : ;;
+          *) [ "${#ci_sha}" -eq 40 ] && ci_pinned=true ;;
+        esac
+        if ! $ci_pinned; then
+          ci_bad_count=$((ci_bad_count+1))
+          [ "$ci_bad_count" -le 6 ] && ci_bad_list="$ci_bad_list${wf#$root/}:$ref, "
+        fi
+      done <<EOF
+$uses_lines
+EOF
+    done
+    ci_bad_list="${ci_bad_list%, }"
+    if [ "$ci_uses_total" -gt 0 ]; then
+      if [ "$ci_bad_count" -gt 0 ]; then
+        more=""; [ "$ci_bad_count" -gt 6 ] && more=" (+$((ci_bad_count-6)) more)"
+        wrn "CI action pinning: $ci_bad_count uses: ref(s) in .github/workflows are not pinned to a full 40-hex commit SHA: $ci_bad_list$more — under merge autonomy the cycle merges on 'CI green', so a repointed tag changes what CI runs with no diff in your repo; pin each to a full commit SHA (keep the tag in a trailing comment)"
+      else
+        ok "CI action pinning: all $ci_uses_total uses: ref(s) in .github/workflows are pinned to a full commit SHA"
+      fi
     fi
   fi
 

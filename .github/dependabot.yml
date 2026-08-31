@@ -1,0 +1,11 @@
+# Keeps the actions/checkout commit-SHA pin in .github/workflows/selfcheck.yml (gate
+# assertion 4.24) from aging out — a SHA pin never moves on its own, so without this file
+# nothing ever opens a PR to bump it.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"

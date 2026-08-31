@@ -62,9 +62,10 @@ or share).
 │   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh (not run by the gate)
 │   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh (not run by the gate)
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
-│   └── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh (not run by the gate)
+│   └── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
 ├── .github/
-│   └── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the guard hook's negative-test harness, then the cleanup script's negative-test harness, then the planning script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
+│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the guard hook's negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
+│   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
 ```
@@ -127,7 +128,8 @@ The `issue-planner` skill:
 2. Finds issues needing an **initial plan** (no `plan-*` label) or a **revision**
    (`plan-proposed` with maintainer — `OWNER`/`MEMBER`/`COLLABORATOR` — comments after the latest
    trusted plan), via `find-planning-work.sh`. Comments from anyone else are reported, never
-   acted on — see "Safety model" below.
+   acted on — see "Safety model" below. Each issue also carries its author's association;
+   non-maintainer-authored issues are still planned but can never be auto-approved (step 6).
 3. Dispatches the read-only `planner` subagent per issue (parallel dispatches OK — each is
    scoped to one issue). Prompts include relevant `LESSONS.md` entries and any orchestrator
    context the issue lacks (recently merged PRs, corrected measurements).
@@ -185,8 +187,9 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    …`, in which case it's reset fresh as before — see "Resilience" below. Branches with real
    (non-wip) commits still go to the human.
 2. Dispatches the `implementer` subagent with: issue + full plan (incl. Verified facts) +
-   **resolved answers to every open question** (including binding post-approval comments from
-   the thread) + `LESSONS.md` entries. Missing a BLOCKING answer → don't dispatch; ask the human.
+   **resolved answers to every open question** (including binding post-approval comments, taken
+   from `find-implementation-work.sh`'s per-issue plan selection, not read from the thread by
+   hand) + `LESSONS.md` entries. Missing a BLOCKING answer → don't dispatch; ask the human.
    Before reporting, the subagent runs a mandatory evidence pass — sweeping the repo for every
    claim its diff falsifies, mutation-checking each new or rewritten test, pasting every number
    from command output — and records it in its report's Evidence block.
@@ -480,9 +483,9 @@ subagents need:
 
    The hard floor always applies on top (no BLOCKING questions — none answered by the
    orchestrator itself, except a granted issue's record-citing answer, see item 8 below — not
-   stale, no overlap, schema/security work only if explicitly opted in), every auto-approval is
-   audited with an issue comment, and the `no-auto-approve` label opts any issue out. **No
-   section means no auto-approval** — this is a trust decision that
+   stale, no overlap, schema/security work only if explicitly opted in, and the issue's author is
+   a maintainer), every auto-approval is audited with an issue comment, and the `no-auto-approve`
+   label opts any issue out. **No section means no auto-approval** — this is a trust decision that
    belongs in your file, not the plugin's.
 
 5. **Merge autonomy policy** (optional) — a section titled exactly "Merge autonomy policy"
@@ -521,7 +524,11 @@ subagents need:
    same no-checks-configured precondition), or (the trap it exists to catch) half-activated: a
    "Merge autonomy policy" section present while `Bash(gh pr merge:*)` is still denied in one of
    those files, which the doctor WARNs on by naming the file, because it leaves the cycle
-   reporting `verified, merge blocked` on every run.
+   reporting `verified, merge blocked` on every run. Once this section is present,
+   `check-harness.sh` also WARNs on any `uses:` ref in `.github/workflows/*.yml`/`*.yaml` —
+   local (`./…`, `../…`) and `docker://` refs excepted — that isn't pinned to a full 40-hex
+   commit SHA — under merge autonomy the cycle merges on "CI green", and a mutable tag lets its
+   owner repoint what CI runs with no diff visible in this repo.
 
    **Post-merge verification** (optional, nested under this same section) — a sub-heading titled
    exactly "Post-merge verification" (any `#` depth) followed by a fenced block of read-only
@@ -879,33 +886,36 @@ nothing on a repo whose default branch isn't `main` (`master`, `trunk`, `develop
 this repo's actual default branch, and — when coverage is missing — names the exact bare and
 `-C` deny entries to add. The template allows `pnpm`, `npm`,
 `yarn`, and `pytest`; if your repo uses a
-different toolchain, add it — the doctor warns when it detects a toolchain the list doesn't
-cover — e.g.:
+different toolchain, add it — the doctor warns when it detects a toolchain no settings file's
+allow-list covers — e.g.:
 
 ```json
 "Bash(make:*)", "Bash(cargo:*)", "Bash(go:*)", "Bash(just:*)"
 ```
 
-That bare-name check is a regex match prefix-anchored at `^Bash(` against the allow-list entries,
-and doesn't cover a *path-qualified* verification interpreter (e.g. `api/.venv/bin/python`, as
-worktree-parallel mode's per-checkout virtualenvs require) — those need their own literal-path
-allow entry (`Bash(<repo>/api/.venv/bin/python:*)`) instead of, or in addition to, the bare
-`Bash(python:*)` form. When CLAUDE.md's verification scope names such a path, `check-harness.sh`
-looks for a matching literal-path grant across all three settings files and WARNs with the exact
-entry to add if none exists — the shell resolves an absolute venv path just fine, but Claude
-Code's permission match is a literal prefix test, so a bare-name grant can't produce a false
-reassurance for a path-qualified interpreter it doesn't actually cover.
+That bare-name check is a regex match prefix-anchored at `^Bash(` against the allow-list entries
+across all three settings files (the same three-file union named in "The CLAUDE.md contract" item
+5 above) — a grant
+in `.claude/settings.local.json` or your user-level settings file counts too, not just
+`.claude/settings.json` — and doesn't cover a *path-qualified* verification interpreter (e.g.
+`api/.venv/bin/python`, as worktree-parallel mode's per-checkout virtualenvs require) — those need
+their own literal-path allow entry (`Bash(<repo>/api/.venv/bin/python:*)`) instead of, or in
+addition to, the bare `Bash(python:*)` form. When CLAUDE.md's verification scope names such a
+path, `check-harness.sh` looks for a matching literal-path grant across all three settings files
+and WARNs with the exact entry to add if none exists — the shell resolves an absolute venv path
+just fine, but Claude Code's permission match is a literal prefix test, so a bare-name grant can't
+produce a false reassurance for a path-qualified interpreter it doesn't actually cover.
 
-`check-harness.sh` reads this file exclusively with `jq`, matching literal entries in the
-`permissions.allow`/`permissions.deny` arrays it parses out — never a raw-text search of the
-whole file, which could be fooled by a rule merely mentioned in an unrelated string (a comment,
-an `env` value) or by a deny-side entry that a whole-file search can't tell apart from an
-allow-side one. Every check here — the toolchain allow-list, the harness-script sentinel,
-template drift, the stale-`-C`-allow WARN, and default-branch guard coverage — stays scoped to
-this file by design: they judge the shared, checked-in file, not effective permission. Three
-checks are the exception, because they need *effective* state across all three files: the
-merge-autonomy verdict (see "The CLAUDE.md contract" item 5), the post-merge allow-entry check,
-and the path-qualified interpreter probe above. `settings.local.json` is machine-local (may hold
+`check-harness.sh` reads these files exclusively with `jq`, matching literal entries in the
+`permissions.allow`/`permissions.deny` arrays it parses out — never a raw-text search of a whole
+file, which could be fooled by a rule merely mentioned in an unrelated string (a comment, an
+`env` value) or by a deny-side entry that a whole-file search can't tell apart from an allow-side
+one. Every check here — the harness-script sentinel, template drift, the stale-`-C`-allow WARN,
+and default-branch guard coverage — stays scoped to `.claude/settings.json` by design: they judge
+the shared, checked-in file, not effective permission. Four checks are the exception, because
+they need *effective* state across all three files: the toolchain bare-name check above, the
+path-qualified interpreter probe, the merge-autonomy verdict (see "The CLAUDE.md contract" item
+5), and the post-merge allow-entry check. `settings.local.json` is machine-local (may hold
 secrets) — never commit it.
 
 ## Safety model
@@ -1127,9 +1137,16 @@ honoured as the latest plan comment; a `CONTRIBUTOR`/`NONE` comment, or one with
 `authorAssociation` field at all (fail-closed), posted after the issue's latest trusted plan (or
 any such comment, if there is no trusted plan yet) is reported in the `untrusted_comments` bucket
 instead of being silently dropped or silently trusted, and never shadows real feedback posted
-before it — one posted before that plan is dropped with no bucket entry. The honest limit: that
-mechanical gate covers only the planner's feedback/plan selection; the implementer- and
-verifier-side halves of the rule are prompt-enforced, not mechanically checked.
+before it — one posted before that plan is dropped with no bucket entry. The same script also
+enforces provenance on WHO OPENED the issue: every discovered issue carries `trusted_author`, a
+non-maintainer-authored (or association-unreadable) issue is reported in `untrusted_issue_authors`
+and can never be auto-approved, though it is still planned (#176). `find-implementation-work.sh`
+enforces the implementer-facing half the same way: it selects each ready issue's approved plan
+comment and binding post-plan comments itself, using the identical trust gate (gate assertion
+4.26 pins that the two scripts' trusted-association lists agree), so the `issue-implementer`
+orchestrator reads a filtered artifact instead of applying the rule from memory (#176). The
+honest limit: this mechanical coverage is planner- and implementer-side only; the verifier-side
+half of the untrusted-data rule is still prompt-enforced, not mechanically checked.
 
 ## Distribution
 

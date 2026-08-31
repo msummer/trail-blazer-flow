@@ -19,15 +19,28 @@
 # comments posted after the latest trusted plan are reported in the untrusted_comments output
 # bucket instead of being silently dropped, so the human still sees them.
 #
-# Output (JSON): needs_initial_plan, needs_revision (as before, unchanged shape) plus
-# untrusted_comments — an array of {number, title, url, comments: [{author, association,
-# createdAt, has_plan_marker}, ...]}, one entry per issue that has at least one untrusted
-# comment posted after its latest trusted plan (or, if it has no trusted plan yet, any untrusted
-# comment). counts gains untrusted_comments (total untrusted comments reported, across all
-# issues), untrusted_plan_markers (how many of those carried the plan marker — ignored for plan
-# selection because their author wasn't trusted), and missing_association (how many comments,
-# across all issues, carried no authorAssociation field at all — treated as untrusted,
-# fail-closed, per the warn stems below).
+# #176 extends the same trust boundary to WHO OPENED the issue, not just who commented on it:
+# both needs_initial_plan and needs_revision items now carry {author, association,
+# trusted_author}, and every item with trusted_author: false ALSO appears in a new top-level
+# untrusted_issue_authors array ({number, title, url, author, association, bucket}) — visible so
+# the human sees it, but issue-planner's step 6b hard floor blocks auto-approval on it. Planning
+# itself is NOT gated on issue authorship — a non-maintainer-authored issue is still planned; only
+# auto-approval is blocked. If the installed gh cannot return authorAssociation for issues (an
+# older gh, or a transient API error), the script falls back to its current field list, warns
+# once, sets counts.author_association_unavailable: true, and marks EVERY issue's
+# trusted_author: false for this run (fail-closed) rather than dying or silently trusting.
+#
+# Output (JSON): needs_initial_plan, needs_revision (each item now additionally carries author,
+# association, trusted_author) plus untrusted_comments — an array of {number, title, url,
+# comments: [{author, association, createdAt, has_plan_marker}, ...]}, one entry per issue that
+# has at least one untrusted comment posted after its latest trusted plan (or, if it has no
+# trusted plan yet, any untrusted comment) — and untrusted_issue_authors (see above). counts
+# gains untrusted_comments (total untrusted comments reported, across all issues),
+# untrusted_plan_markers (how many of those carried the plan marker — ignored for plan selection
+# because their author wasn't trusted), missing_association (how many comments, across all
+# issues, carried no authorAssociation field at all — treated as untrusted, fail-closed, per the
+# warn stems below), untrusted_issue_authors (count of the array above), and
+# author_association_unavailable (boolean, see above).
 #
 # Skipped automatically:
 #   - plan-proposed with no newer trusted non-plan comment -> awaiting your review, nothing to do
@@ -49,10 +62,39 @@ PLAN_MARKER="<!-- planner-plan -->"
 # outside contributor's suggestion, a maintainer comments themselves.
 TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"
 
-needs_initial_plan=$(gh issue list \
+# Probe once, in an `if !` guard (so `set -e` doesn't abort): request author/authorAssociation
+# on the needs_initial_plan query. On failure — an older gh that doesn't support the issue-level
+# field, or a transient API error — fall back to the current field list, warn once, and mark this
+# whole run fail-closed via author_association_unavailable. view_fields is reused below for the
+# per-candidate `gh issue view` calls so both queries agree on what's available this run.
+author_association_unavailable=false
+if ! needs_initial_plan=$(gh issue list \
   --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan" \
-  --json number,title,url \
-  --limit "$LIMIT")
+  --json number,title,url,author,authorAssociation \
+  --limit "$LIMIT" 2>/dev/null); then
+  echo "warn: could not read issue authorAssociation — every issue author treated as untrusted this run (fail-closed)" >&2
+  author_association_unavailable=true
+  view_fields="number,title,url,comments"
+  needs_initial_plan=$(gh issue list \
+    --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan" \
+    --json number,title,url \
+    --limit "$LIMIT")
+else
+  view_fields="number,title,url,author,authorAssociation,comments"
+fi
+
+# Annotate needs_initial_plan items with author/association/trusted_author. When
+# author_association_unavailable is true, .author and .authorAssociation are both absent from
+# every item, so this maps them to "unknown"/"MISSING" and trusted_author: false uniformly —
+# the same fail-closed path, with no separate branch needed.
+needs_initial_plan=$(printf '%s' "$needs_initial_plan" | jq --arg trusted "$TRUSTED_ASSOCIATIONS" '
+  ($trusted | split(" ")) as $ok
+  | map({number, title, url,
+         author: (.author.login // "unknown"),
+         association: ((.authorAssociation // "MISSING") | ascii_upcase),
+         trusted_author: ( ((.authorAssociation // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null )
+        })
+')
 
 # Candidates for revision: awaiting review, not yet approved, not opted out.
 candidates=$(gh issue list \
@@ -70,7 +112,7 @@ for n in $candidates; do
   # Tolerate per-issue failures: one transient gh/API error must not kill the whole
   # discovery run (matters for unattended/scheduled runs). The issue is simply
   # reconsidered next time.
-  if ! issue=$(gh issue view "$n" --json number,title,url,comments 2>/dev/null); then
+  if ! issue=$(gh issue view "$n" --json "$view_fields" 2>/dev/null); then
     echo "warn: could not fetch issue #$n — skipping it this run" >&2
     fetch_failures=$((fetch_failures+1))
     continue
@@ -101,7 +143,13 @@ for n in $candidates; do
 
   has_feedback=$(printf '%s' "$result" | jq -r '.has_feedback')
   if [ "$has_feedback" = "true" ]; then
-    entry=$(printf '%s' "$issue" | jq '{number, title, url}')
+    entry=$(printf '%s' "$issue" | jq --arg trusted "$TRUSTED_ASSOCIATIONS" '
+      ($trusted | split(" ")) as $ok
+      | {number, title, url,
+         author: (.author.login // "unknown"),
+         association: ((.authorAssociation // "MISSING") | ascii_upcase),
+         trusted_author: ( ((.authorAssociation // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null )
+        }')
     needs_revision=$(jq -n --argjson arr "$needs_revision" --argjson e "$entry" '$arr + [$e]')
   fi
 
@@ -133,6 +181,16 @@ for n in $candidates; do
   fi
 done
 
+# untrusted_issue_authors: every needs_initial_plan/needs_revision item with trusted_author:
+# false, from EITHER bucket, tagged with which bucket it came from. trusted_author itself is
+# dropped from the entry — the documented shape is {number, title, url, author, association,
+# bucket}.
+untrusted_issue_authors=$(jq -n --argjson initial "$needs_initial_plan" --argjson revision "$needs_revision" '
+  ( [ $initial[] | select(.trusted_author == false) | (. + {bucket: "needs_initial_plan"}) | del(.trusted_author) ] )
+  + ( [ $revision[] | select(.trusted_author == false) | (. + {bucket: "needs_revision"}) | del(.trusted_author) ] )
+')
+untrusted_issue_author_count=$(printf '%s' "$untrusted_issue_authors" | jq 'length')
+
 # candidate_count: how many plan-proposed issues were examined for feedback (used for
 # the truncation flag — if either query hit LIMIT, the buckets may be incomplete).
 candidate_count=$(printf '%s\n' $candidates | grep -c . || true)
@@ -141,16 +199,22 @@ jq -n \
   --argjson initial "$needs_initial_plan" \
   --argjson revision "$needs_revision" \
   --argjson untrusted "$untrusted_comments" \
+  --argjson uia "$untrusted_issue_authors" \
   --argjson ff "$fetch_failures" \
   --argjson cc "$candidate_count" \
   --argjson limit "$LIMIT" \
   --argjson uct "$untrusted_comment_total" \
   --argjson upm "$untrusted_plan_markers" \
   --argjson ma "$missing_association" \
+  --argjson uiac "$untrusted_issue_author_count" \
+  --argjson aau "$author_association_unavailable" \
   '{needs_initial_plan: $initial, needs_revision: $revision, untrusted_comments: $untrusted,
+    untrusted_issue_authors: $uia,
     counts: {initial: ($initial | length), revision: ($revision | length),
              fetch_failures: $ff,
              truncated: ((($initial | length) >= $limit) or ($cc >= $limit)),
              untrusted_comments: $uct,
              untrusted_plan_markers: $upm,
-             missing_association: $ma}}'
+             missing_association: $ma,
+             untrusted_issue_authors: $uiac,
+             author_association_unavailable: $aau}}'
