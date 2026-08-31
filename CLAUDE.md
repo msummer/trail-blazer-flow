@@ -109,5 +109,10 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   BSD/bash 3.2 by the `selfcheck-macos` CI job.
 - The README is part of "done": every factual claim it makes about this repo's behavior must be
   checkable against the code (the verifier's Documentation changes check applies to docs).
+- Every `uses:` step in `.github/workflows/` is pinned to a full 40-hex commit SHA, with the
+  human-readable release tag in a trailing comment — a mutable tag ref would let the action's
+  owner change what CI executes with no diff visible here, and this repo's CI is the gate's own
+  merge condition. The SHA pin is enforced mechanically (assertion 4.24); the trailing tag
+  comment is a review-level convention, not machine-checked.
 - Release ritual: bump `version` in `.claude-plugin/plugin.json` and create the matching
   `vX.Y.Z` annotated tag, in the same commit — see the README's "Updating".
