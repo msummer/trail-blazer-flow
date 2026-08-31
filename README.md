@@ -632,17 +632,22 @@ subagents need:
    least one required) names a required sub-heading under that section. When an issue this run
    carries the declared label, the `issue-planner` skill runs `check-decision-record.sh <n>` — a
    read-only script that fetches the issue body and checks it for the record-section heading
-   (presence only) and, for each declared element, a heading found outside any fenced code block
-   that has at least one non-blank line of content in its span — printing a PASS/FAIL line per
-   check, with a distinct message for "heading absent" versus "heading found, no content under
-   it" — and reports a `grant: will deliver` / `grant: will not deliver` verdict in its summary
-   before implementation. A non-zero exit on a grant-labelled issue also joins item 4's hard
-   floor. **The harness never applies, removes, or creates the grant label** — that stays a
-   human action — and never judges whether the record's *content* is any good, only whether each
-   declared element's heading is present outside a fenced block and has something written under
-   it. **No 'Autonomy decision record' section means the check never
-   runs and no grant is ever evaluated.** `check-harness.sh` reports `scoped autonomy: off` only
-   when neither this section nor item 7's "Autonomy reserve" is declared; a repo that declares
+   (presence only) and, for each declared element, a heading nested under the record-section
+   heading (strictly deeper, before the next same-or-shallower heading outside a fence — a
+   same-depth heading is NOT nested) that has at least one non-blank line of content in its span
+   — printing a PASS/FAIL line per check, with a distinct message for "heading absent" versus
+   "heading found outside the record section" versus "heading found, no content under it" — and
+   reports a `grant: will deliver` / `grant: will not deliver` verdict in its summary before
+   implementation. The body scan recognises backtick- and tilde-fenced blocks of any matching
+   length, indented up to 3 spaces, closing only on a same-character run at least as long
+   followed by nothing but whitespace. A non-zero exit on a grant-labelled issue also joins item
+   4's hard floor. **The harness never applies, removes, or creates the grant label** — that
+   stays a human action — and never judges whether the record's *content* is any good, only
+   whether each declared element's heading is nested under the record section, outside a fenced
+   block, and has something written under it. **No 'Autonomy decision record' section means the
+   check never runs and no grant is ever evaluated.** `check-harness.sh` reports
+   `scoped autonomy: off` only when neither this section nor item 7's "Autonomy reserve" is
+   declared; a repo that declares
    "Autonomy reserve" alone gets a WARN instead (no grant label is declared, so
    `check-decision-record.sh` never runs).
 
