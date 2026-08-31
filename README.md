@@ -64,7 +64,8 @@ or share).
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 │   └── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh (not run by the gate)
 ├── .github/
-│   └── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the guard hook's negative-test harness, then the cleanup script's negative-test harness, then the planning script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
+│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the guard hook's negative-test harness, then the cleanup script's negative-test harness, then the planning script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
+│   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
 ```

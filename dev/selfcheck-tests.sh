@@ -212,6 +212,10 @@ p_4_24_no_uses()       { drop "$1/.github/workflows/selfcheck.yml" '^[[:space:]]
 p_4_24_comment() {
   printf '      # historical: this step read "uses: actions/checkout@v4"\n' | append "$1/.github/workflows/selfcheck.yml"
 }
+p_4_25_missing()       { rm -f "$1/.github/dependabot.yml"; }
+p_4_25_ecosystem()     { edit "$1/.github/dependabot.yml" 's/github-actions/npm/'; }
+p_4_25_commented_out() { edit "$1/.github/dependabot.yml" 's|^\( *\)- package-ecosystem:|\1#- package-ecosystem:|'; }
+p_4_25_interval()      { drop "$1/.github/dependabot.yml" '^[[:space:]]*interval:'; }
 p_4_20_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(gh pr edit:\*\)"'; }
 p_4_20_orphan_grant() {
   local f="$1/templates/repo-settings.json"
@@ -280,6 +284,10 @@ cases=(
   "4.24-tag-pin|4.24|p_4_24_tag_pin|rewrite the checkout SHA pin back to the mutable @v4 tag"
   "4.24-extraction|4.24|p_4_24_no_uses|drop every 'uses:' line from the workflow so the gate's extraction comes back empty"
   "4.24-comment||p_4_24_comment|control: a #-comment quoting an unpinned 'uses: actions/checkout@v4' is not flagged"
+  "4.25-missing|4.25|p_4_25_missing|delete .github/dependabot.yml so nothing bumps the actions/checkout SHA pin forward"
+  "4.25-ecosystem|4.25|p_4_25_ecosystem|rewrite package-ecosystem from github-actions to npm"
+  "4.25-commented-out|4.25|p_4_25_commented_out|comment out the package-ecosystem line so the declaration no longer counts"
+  "4.25-interval|4.25|p_4_25_interval|drop the schedule's interval: line"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
   "5.3|5.3|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again"

@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 44 assertions total. The gate prints what it checks — run it.
+# Five groups, 45 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -836,6 +836,32 @@ elif [ -n "$bad_uses" ]; then
   bad "4.24 uses: ref(s) not pinned to a full 40-hex commit SHA:$bad_uses"
 else
   ok "4.24 every \`uses:\` line in .github/workflows/*.yml|*.yaml is pinned to a full 40-hex commit SHA"
+fi
+
+# 4.25 — .github/dependabot.yml exists and declares a weekly github-actions update, so the
+# 4.24 SHA pin has a mechanism to age forward instead of only being enforced at the pin's
+# current value forever: a SHA pin never moves on its own, and deleting or misconfiguring this
+# file leaves the gate green while the pin ages out — exactly the gap #167 exists to close.
+# The extraction is comment-stripped by LINE first (same idiom as 4.11/1.4/4.24), so a
+# commented-out declaration can't false-positive. The two clauses (package-ecosystem and
+# interval) are checked independently, file-wide, because the file declares a single `updates`
+# entry — a second entry for another ecosystem would need block-scoped parsing added here
+# explicitly, not left as a silent gap, the same policy 4.9's and 4.24's comments state.
+dbot="$root/.github/dependabot.yml"
+if [ ! -f "$dbot" ]; then
+  bad "4.25 .github/dependabot.yml not found — nothing bumps the actions/checkout SHA pin (assertion 4.24) forward"
+else
+  dbot_body="$(grep -vE '^[[:space:]]*#' "$dbot")"
+  miss_25=""
+  printf '%s\n' "$dbot_body" | grep -qE '^[[:space:]]*-?[[:space:]]*package-ecosystem:[[:space:]]*"?github-actions"?[[:space:]]*$' \
+    || miss_25="$miss_25 no uncommented package-ecosystem: \"github-actions\" line;"
+  printf '%s\n' "$dbot_body" | grep -qE '^[[:space:]]*interval:' \
+    || miss_25="$miss_25 no uncommented interval: line;"
+  if [ -n "$miss_25" ]; then
+    bad "4.25 .github/dependabot.yml missing:$miss_25"
+  else
+    ok "4.25 .github/dependabot.yml declares an uncommented github-actions package-ecosystem update with a weekly interval"
+  fi
 fi
 
 # ============================================================================

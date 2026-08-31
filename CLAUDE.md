@@ -129,6 +129,10 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   human-readable release tag in a trailing comment — a mutable tag ref would let the action's
   owner change what CI executes with no diff visible here, and this repo's CI is the gate's own
   merge condition. The SHA pin is enforced mechanically (assertion 4.24); the trailing tag
-  comment is a review-level convention, not machine-checked.
+  comment is a review-level convention, not machine-checked. `.github/dependabot.yml` is the
+  weekly bump mechanism for those pins; assertion 4.25 enforces mechanically only that the file
+  is present and declares an uncommented `package-ecosystem: "github-actions"` update with an
+  `interval:` line — not that Dependabot actually opens a PR, and not that a bump rewrites the
+  trailing tag comment.
 - Release ritual: bump `version` in `.claude-plugin/plugin.json` and create the matching
   `vX.Y.Z` annotated tag, in the same commit — see the README's "Updating".
