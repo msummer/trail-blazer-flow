@@ -58,6 +58,13 @@ comment posted after the issue's latest trusted plan (or any untrusted comment, 
 trusted plan yet) is never silently dropped — `find-planning-work.sh` reports it in its
 `untrusted_comments` bucket, and step 1 surfaces that bucket to the human.
 
+The same trust boundary now also covers **who opened the issue**, not just who commented on it.
+`find-planning-work.sh` captures every issue's `authorAssociation` too, and marks it
+`trusted_author: false` when the author isn't a maintainer (or when the field couldn't be read at
+all — fail-closed, see step 1). This does NOT gate planning — a non-maintainer-authored issue is
+still planned; it is reported in `untrusted_issue_authors` (step 1 and step 7) and its plan can
+never be auto-approved (step 6b's hard floor).
+
 ## Prerequisites (check once)
 
 - `gh` is installed and authenticated (`gh auth status`). If not, stop and tell the user.
@@ -105,21 +112,27 @@ Run:
 find-planning-work.sh
 ```
 
-This returns JSON with `needs_initial_plan` and `needs_revision` arrays (each item has
-`number`, `title`, `url`), an `untrusted_comments` array (each item additionally has
-`comments: [{author, association, createdAt, has_plan_marker}]`), and a `counts` object. The
-script has already done the trusted-feedback-after-latest-trusted-plan detection, so
-`needs_revision` contains only issues with genuine, maintainer-authored unaddressed feedback.
+This returns JSON with `needs_initial_plan` and `needs_revision` arrays (each item has `number`,
+`title`, `url`, `author`, `association`, `trusted_author`), an `untrusted_comments` array (each
+item additionally has `comments: [{author, association, createdAt, has_plan_marker}]`), an
+`untrusted_issue_authors` array (`{number, title, url, author, association, bucket}`, one entry
+per issue with `trusted_author: false` in either bucket above), and a `counts` object. The script
+has already done the trusted-feedback-after-latest-trusted-plan detection, so `needs_revision`
+contains only issues with genuine, maintainer-authored unaddressed feedback.
 
 **Report the findings to the user before doing anything else** — list the issue numbers and
-titles in each bucket, INCLUDING `untrusted_comments` (issue, author, association, and count) so
-the human can see what was reported but not acted on. If a `warn:` line about an ignored plan
-marker appears on the script's stderr, say so too — it can mean the harness's own `gh` identity
-isn't in the trusted set on this repo, which wouldn't stop plans from posting, but would break
-feedback detection instead: `$lastPlan` stays null, so genuine maintainer feedback never triggers
-a revision. If `needs_initial_plan` and `needs_revision` are both empty, say so and stop (an
-empty `untrusted_comments` bucket needs no separate stop condition — report it as empty and
-continue, or as part of the same "nothing to do" message).
+titles in each bucket, INCLUDING `untrusted_comments` (issue, author, association, and count) and
+`untrusted_issue_authors` (issue, author, association, and which bucket) so the human can see
+what was reported but not acted on. If a `warn:` line about an ignored plan marker appears on the
+script's stderr, say so too — it can mean the harness's own `gh` identity isn't in the trusted set
+on this repo, which wouldn't stop plans from posting, but would break feedback detection instead:
+`$lastPlan` stays null, so genuine maintainer feedback never triggers a revision. If
+`counts.author_association_unavailable` is `true`, say so prominently too — the installed `gh`
+couldn't return issue-level `authorAssociation` this run, so EVERY issue is `trusted_author:
+false` regardless of who actually opened it, and no plan can auto-approve until that's fixed. If
+`needs_initial_plan` and `needs_revision` are both empty, say so and stop (empty
+`untrusted_comments`/`untrusted_issue_authors` buckets need no separate stop condition — report
+them as empty and continue, or as part of the same "nothing to do" message).
 
 ### 2. For each issue needing an INITIAL plan
 
@@ -301,7 +314,11 @@ the following. The policy can loosen nothing in the hard floor; it can only add 
 - the plan's "Reserve touch list" is absent or "None" **unless** the policy explicitly opts
   reserve-touching work in;
 - if the issue carries the grant label declared under "Autonomy decision record", 6a's
-  `check-decision-record.sh` run reported every declared element present (exit 0).
+  `check-decision-record.sh` run reported every declared element present (exit 0);
+- the issue's author association is trusted (`OWNER`/`MEMBER`/`COLLABORATOR`) — i.e.
+  `find-planning-work.sh` marked it `trusted_author: true`. An issue opened by anyone else, or
+  whose author association could not be read this run (`counts.author_association_unavailable:
+  true`), is planned but never auto-approved.
 
 **Policy conditions:** whatever the CLAUDE.md section states — typically a max size (e.g. "S
 only"), allowed areas, excluded paths. Judge them honestly against the plan; when a condition
@@ -339,6 +356,11 @@ human doesn't assume another round is needed.
 plan marker — the bucket carries no comment body; quote the actual text only for an issue whose
 full thread you fetched) so the human knows what was seen but not acted on, and can comment
 themselves if they want it to count.
+
+**Report untrusted issue authors.** List every issue in `find-planning-work.sh`'s
+`untrusted_issue_authors` bucket (issue, author, association, and which bucket —
+`needs_initial_plan` or `needs_revision` — it came from) so the human knows which plans this run
+can never auto-approve under step 6b's hard floor, and can approve them manually if warranted.
 
 **Grant verdict.** For every issue this run that carries the grant label declared under
 "Autonomy decision record" (6a), report one line: `grant: will deliver` when

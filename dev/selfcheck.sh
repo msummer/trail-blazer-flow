@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 44 assertions total. The gate prints what it checks — run it.
+# Five groups, 45 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -389,13 +389,16 @@ fi
 echo
 echo "-- Group 4: cross-file markers and skills --"
 
-# 4.1 — the literal planner-plan marker appears in both files (fixed-string).
+# 4.1 — the literal planner-plan marker appears in every file that selects a plan comment by it
+# (fixed-string): the two discovery scripts and the planner skill. #176 gave
+# bin/find-implementation-work.sh its own plan-selection jq program built on this same marker.
 marker='<!-- planner-plan -->'
 missing=""
 grep -qF -- "$marker" "$root/bin/find-planning-work.sh" || missing="$missing bin/find-planning-work.sh"
+grep -qF -- "$marker" "$root/bin/find-implementation-work.sh" || missing="$missing bin/find-implementation-work.sh"
 grep -qF -- "$marker" "$root/skills/issue-planner/SKILL.md" || missing="$missing skills/issue-planner/SKILL.md"
 if [ -z "$missing" ]; then
-  ok "4.1 '$marker' present in bin/find-planning-work.sh and skills/issue-planner/SKILL.md"
+  ok "4.1 '$marker' present in bin/find-planning-work.sh, bin/find-implementation-work.sh, and skills/issue-planner/SKILL.md"
 else
   bad "4.1 '$marker' missing from:$missing"
 fi
@@ -609,9 +612,9 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 460
+budget_table="issue-implementer 465
 issue-cycle 315
-issue-planner 380
+issue-planner 405
 project-kickoff 215
 test-ratchet 200
 harness-setup 180"
@@ -708,15 +711,18 @@ fi
 # that greps for a marker nobody writes is the exact failure this pins. Like 4.16, the key marker
 # is pinned only by its prefix (without the trailing space) — the branch name varies per PR, so
 # the full key line is never a fixed string; the fine-grained spacing of the writer's key-line
-# template is left to assertion 5.7.
+# template is left to assertion 5.7. #176 gave bin/find-implementation-work.sh its own
+# verdict-marker exclusion (a verifier-verdict comment is never binding human context, so it's
+# excluded from trusted_post_plan), so the verdict marker is pinned there too.
 missing=""
 for marker in '<!-- verifier-verdict -->' '<!-- verifier-verdict-branch:'; do
   for f in skills/issue-implementer/SKILL.md skills/issue-cycle/SKILL.md; do
     grep -qF -- "$marker" "$root/$f" || missing="$missing $f($marker)"
   done
 done
+grep -qF -- '<!-- verifier-verdict -->' "$root/bin/find-implementation-work.sh" || missing="$missing bin/find-implementation-work.sh(<!-- verifier-verdict -->)"
 if [ -z "$missing" ]; then
-  ok "4.19 '<!-- verifier-verdict -->' and '<!-- verifier-verdict-branch:' present in skills/issue-implementer/SKILL.md and skills/issue-cycle/SKILL.md"
+  ok "4.19 '<!-- verifier-verdict -->' and '<!-- verifier-verdict-branch:' present in skills/issue-implementer/SKILL.md, skills/issue-cycle/SKILL.md, and bin/find-implementation-work.sh"
 else
   bad "4.19 markers missing from:$missing"
 fi
@@ -836,6 +842,30 @@ elif [ -n "$bad_uses" ]; then
   bad "4.24 uses: ref(s) not pinned to a full 40-hex commit SHA:$bad_uses"
 else
   ok "4.24 every \`uses:\` line in .github/workflows/*.yml|*.yaml is pinned to a full 40-hex commit SHA"
+fi
+
+# 4.26 — the two discovery scripts' TRUSTED_ASSOCIATIONS declarations agree (#176 extended
+# bin/find-implementation-work.sh with the same trust gate bin/find-planning-work.sh already
+# has, rather than forking it — this pins that they didn't drift apart). Anchored single-line
+# extraction on both sides, same idiom as 2.5(a)/4.13 — an empty extraction on either side FAILs
+# loudly ("structure changed") rather than passing vacuously; a non-empty extraction is
+# normalised (space-separated -> one association per line, sorted, de-duplicated) and compared
+# both directions with comm.
+planning_trusted="$(sed -nE 's/^TRUSTED_ASSOCIATIONS="([^"]*)"$/\1/p' "$root/bin/find-planning-work.sh" | tr ' ' '\n' | grep -v '^$' | sort -u)"
+impl_trusted="$(sed -nE 's/^TRUSTED_ASSOCIATIONS="([^"]*)"$/\1/p' "$root/bin/find-implementation-work.sh" | tr ' ' '\n' | grep -v '^$' | sort -u)"
+if [ -z "$planning_trusted" ] || [ -z "$impl_trusted" ]; then
+  bad "4.26 TRUSTED_ASSOCIATIONS extraction failed — bin/find-planning-work.sh's or bin/find-implementation-work.sh's TRUSTED_ASSOCIATIONS= line didn't match (structure changed)"
+else
+  planning_not_impl="$(comm -23 <(_lines "$planning_trusted") <(_lines "$impl_trusted"))"
+  impl_not_planning="$(comm -13 <(_lines "$planning_trusted") <(_lines "$impl_trusted"))"
+  if [ -z "$planning_not_impl" ] && [ -z "$impl_not_planning" ]; then
+    ok "4.26 bin/find-planning-work.sh and bin/find-implementation-work.sh agree on TRUSTED_ASSOCIATIONS"
+  else
+    msg="4.26 TRUSTED_ASSOCIATIONS drift:"
+    [ -n "$planning_not_impl" ] && msg="$msg association(s) in find-planning-work.sh but not find-implementation-work.sh: $(printf '%s' "$planning_not_impl" | tr '\n' ' ');"
+    [ -n "$impl_not_planning" ] && msg="$msg association(s) in find-implementation-work.sh but not find-planning-work.sh: $(printf '%s' "$impl_not_planning" | tr '\n' ' ');"
+    bad "$msg"
+  fi
 fi
 
 # ============================================================================

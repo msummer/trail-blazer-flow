@@ -212,6 +212,8 @@ p_4_24_no_uses()       { drop "$1/.github/workflows/selfcheck.yml" '^[[:space:]]
 p_4_24_comment() {
   printf '      # historical: this step read "uses: actions/checkout@v4"\n' | append "$1/.github/workflows/selfcheck.yml"
 }
+p_4_26_drift()      { edit "$1/bin/find-implementation-work.sh" 's/^TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"$/TRUSTED_ASSOCIATIONS="OWNER MEMBER"/'; }
+p_4_26_extraction() { edit "$1/bin/find-planning-work.sh" 's/TRUSTED_ASSOCIATIONS/TRUSTED_ASSOCIATION_LIST/g'; }
 p_4_20_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(gh pr edit:\*\)"'; }
 p_4_20_orphan_grant() {
   local f="$1/templates/repo-settings.json"
@@ -280,6 +282,8 @@ cases=(
   "4.24-tag-pin|4.24|p_4_24_tag_pin|rewrite the checkout SHA pin back to the mutable @v4 tag"
   "4.24-extraction|4.24|p_4_24_no_uses|drop every 'uses:' line from the workflow so the gate's extraction comes back empty"
   "4.24-comment||p_4_24_comment|control: a #-comment quoting an unpinned 'uses: actions/checkout@v4' is not flagged"
+  "4.26-drift|4.26|p_4_26_drift|drop COLLABORATOR from bin/find-implementation-work.sh's TRUSTED_ASSOCIATIONS= value only"
+  "4.26-extraction|4.26|p_4_26_extraction|rename bin/find-planning-work.sh's TRUSTED_ASSOCIATIONS= line so the gate's extraction comes back empty"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
   "5.3|5.3|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again"

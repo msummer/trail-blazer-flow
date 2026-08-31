@@ -81,18 +81,30 @@ continuing instead of aborting, and the pre-flight `gh repo view` / `git branch 
 script before any output. It runs in CI as the fifth step, but it is not part of
 `dev/selfcheck.sh` itself — run it by hand whenever `bin/cleanup-after-merge.sh` changes.
 
-`dev/planning-tests.sh` is a separate negative-test harness for `bin/find-planning-work.sh`
-(#164): it builds throwaway fixture directories under `mktemp`, with a stub `gh` on `PATH`, and
-runs the real script against them to pin the trusted-association gate — only a comment whose
-`authorAssociation` is `OWNER`, `MEMBER`, or `COLLABORATOR` ever puts its issue into
-`needs_revision` or is honoured as the latest plan comment; a `CONTRIBUTOR`/`NONE`
-comment, or one with no `authorAssociation` field at all (fail-closed), posted after the issue's
-latest trusted plan (or any such comment, if there is no trusted plan yet) is reported in the
-`untrusted_comments` output bucket instead of being silently dropped or silently trusted, and an
-untrusted marker comment never shadows real, trusted feedback posted before it; one posted before
-that plan is dropped with no bucket entry. It runs in CI as the sixth and last step, but it is
-not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh`
-changes.
+`dev/planning-tests.sh` is a separate negative-test harness for BOTH of this repo's discovery
+scripts, `bin/find-planning-work.sh` (#164) and, since #176, `bin/find-implementation-work.sh`:
+it builds throwaway fixture directories under `mktemp`, with a stub `gh` on `PATH`, and runs the
+real script under test against them. For `bin/find-planning-work.sh` it pins the
+trusted-association gate — only a comment whose `authorAssociation` is `OWNER`, `MEMBER`, or
+`COLLABORATOR` ever puts its issue into `needs_revision` or is honoured as the latest plan
+comment; a `CONTRIBUTOR`/`NONE` comment, or one with no `authorAssociation` field at all
+(fail-closed), posted after the issue's latest trusted plan (or any such comment, if there is no
+trusted plan yet) is reported in the `untrusted_comments` output bucket instead of being silently
+dropped or silently trusted, and an untrusted marker comment never shadows real, trusted feedback
+posted before it (one posted before that plan is dropped with no bucket entry) — plus, since
+#176, the same trust gate applied to WHO OPENED the issue: a non-maintainer-authored issue is
+still planned, but is reported in `untrusted_issue_authors` and never auto-approved, and if the
+installed `gh` can't return issue-level `authorAssociation` the whole run fails closed (every
+issue untrusted, one warn line, `counts.author_association_unavailable: true`). For
+`bin/find-implementation-work.sh` (#176, reusing the identical trust gate rather than forking it)
+it pins the implementer-side plan-selection artifact: a plan-marker comment from an untrusted
+author is never selected as `plan`; an untrusted post-plan comment never lands in
+`trusted_post_plan`; a trusted post-plan comment opening `<!-- verifier-verdict -->` (the
+orchestrator's own archive) is excluded from `trusted_post_plan` too; a comment missing
+`authorAssociation` entirely is fail-closed untrusted; and an issue with no trusted plan comment
+yields `plan: null` but stays in `ready`. It runs in CI as the sixth and last step, but it is not
+part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh` or
+`bin/find-implementation-work.sh` changes.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor; see the README's "Working on the harness itself" for why.
