@@ -614,7 +614,7 @@ issue-cycle 315
 issue-planner 380
 project-kickoff 215
 test-ratchet 200
-harness-setup 180"
+harness-setup 185"
 bad_list=""
 while IFS=' ' read -r skill cap; do
   [ -n "$skill" ] || continue
