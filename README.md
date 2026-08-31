@@ -521,7 +521,11 @@ subagents need:
    same no-checks-configured precondition), or (the trap it exists to catch) half-activated: a
    "Merge autonomy policy" section present while `Bash(gh pr merge:*)` is still denied in one of
    those files, which the doctor WARNs on by naming the file, because it leaves the cycle
-   reporting `verified, merge blocked` on every run.
+   reporting `verified, merge blocked` on every run. Once this section is present,
+   `check-harness.sh` also WARNs on any `uses:` ref in `.github/workflows/*.yml`/`*.yaml` —
+   local (`./…`, `../…`) and `docker://` refs excepted — that isn't pinned to a full 40-hex
+   commit SHA — under merge autonomy the cycle merges on "CI green", and a mutable tag lets its
+   owner repoint what CI runs with no diff visible in this repo.
 
    **Post-merge verification** (optional, nested under this same section) — a sub-heading titled
    exactly "Post-merge verification" (any `#` depth) followed by a fenced block of read-only
@@ -874,33 +878,36 @@ nothing on a repo whose default branch isn't `main` (`master`, `trunk`, `develop
 this repo's actual default branch, and — when coverage is missing — names the exact bare and
 `-C` deny entries to add. The template allows `pnpm`, `npm`,
 `yarn`, and `pytest`; if your repo uses a
-different toolchain, add it — the doctor warns when it detects a toolchain the list doesn't
-cover — e.g.:
+different toolchain, add it — the doctor warns when it detects a toolchain no settings file's
+allow-list covers — e.g.:
 
 ```json
 "Bash(make:*)", "Bash(cargo:*)", "Bash(go:*)", "Bash(just:*)"
 ```
 
-That bare-name check is a regex match prefix-anchored at `^Bash(` against the allow-list entries,
-and doesn't cover a *path-qualified* verification interpreter (e.g. `api/.venv/bin/python`, as
-worktree-parallel mode's per-checkout virtualenvs require) — those need their own literal-path
-allow entry (`Bash(<repo>/api/.venv/bin/python:*)`) instead of, or in addition to, the bare
-`Bash(python:*)` form. When CLAUDE.md's verification scope names such a path, `check-harness.sh`
-looks for a matching literal-path grant across all three settings files and WARNs with the exact
-entry to add if none exists — the shell resolves an absolute venv path just fine, but Claude
-Code's permission match is a literal prefix test, so a bare-name grant can't produce a false
-reassurance for a path-qualified interpreter it doesn't actually cover.
+That bare-name check is a regex match prefix-anchored at `^Bash(` against the allow-list entries
+across all three settings files (the same three-file union named in "The CLAUDE.md contract" item
+5 above) — a grant
+in `.claude/settings.local.json` or your user-level settings file counts too, not just
+`.claude/settings.json` — and doesn't cover a *path-qualified* verification interpreter (e.g.
+`api/.venv/bin/python`, as worktree-parallel mode's per-checkout virtualenvs require) — those need
+their own literal-path allow entry (`Bash(<repo>/api/.venv/bin/python:*)`) instead of, or in
+addition to, the bare `Bash(python:*)` form. When CLAUDE.md's verification scope names such a
+path, `check-harness.sh` looks for a matching literal-path grant across all three settings files
+and WARNs with the exact entry to add if none exists — the shell resolves an absolute venv path
+just fine, but Claude Code's permission match is a literal prefix test, so a bare-name grant can't
+produce a false reassurance for a path-qualified interpreter it doesn't actually cover.
 
-`check-harness.sh` reads this file exclusively with `jq`, matching literal entries in the
-`permissions.allow`/`permissions.deny` arrays it parses out — never a raw-text search of the
-whole file, which could be fooled by a rule merely mentioned in an unrelated string (a comment,
-an `env` value) or by a deny-side entry that a whole-file search can't tell apart from an
-allow-side one. Every check here — the toolchain allow-list, the harness-script sentinel,
-template drift, the stale-`-C`-allow WARN, and default-branch guard coverage — stays scoped to
-this file by design: they judge the shared, checked-in file, not effective permission. Three
-checks are the exception, because they need *effective* state across all three files: the
-merge-autonomy verdict (see "The CLAUDE.md contract" item 5), the post-merge allow-entry check,
-and the path-qualified interpreter probe above. `settings.local.json` is machine-local (may hold
+`check-harness.sh` reads these files exclusively with `jq`, matching literal entries in the
+`permissions.allow`/`permissions.deny` arrays it parses out — never a raw-text search of a whole
+file, which could be fooled by a rule merely mentioned in an unrelated string (a comment, an
+`env` value) or by a deny-side entry that a whole-file search can't tell apart from an allow-side
+one. Every check here — the harness-script sentinel, template drift, the stale-`-C`-allow WARN,
+and default-branch guard coverage — stays scoped to `.claude/settings.json` by design: they judge
+the shared, checked-in file, not effective permission. Four checks are the exception, because
+they need *effective* state across all three files: the toolchain bare-name check above, the
+path-qualified interpreter probe, the merge-autonomy verdict (see "The CLAUDE.md contract" item
+5), and the post-merge allow-entry check. `settings.local.json` is machine-local (may hold
 secrets) — never commit it.
 
 ## Safety model

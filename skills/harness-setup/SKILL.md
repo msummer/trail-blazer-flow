@@ -35,8 +35,9 @@ else. Then resolve what you can directly:
 
 - Missing labels → run `setup-labels.sh` and say so.
 - Toolchain allow-list WARNs → propose the exact `"Bash(<tool>:*)"` entries to add to
-  `.claude/settings.json` (subagents cannot answer permission prompts, so a missing entry
-  silently stalls them mid-implementation). Edit the file once the user confirms the tools.
+  `.claude/settings.json` (or `.claude/settings.local.json` for a machine-specific grant —
+  subagents cannot answer permission prompts, so a missing entry silently stalls them
+  mid-implementation). Edit the file once the user confirms the tools.
 - `gh` auth / `jq` / branch protection → these are the human's to fix; state the command or
   setting and move on.
 
