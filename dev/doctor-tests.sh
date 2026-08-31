@@ -8,7 +8,12 @@
 # ratchet's never-execute guarantee, entry_has's allow/deny distinction, the active verdict's
 # no-CI note, default-branch guard coverage, the half-activated remediation's file naming, the
 # scoped-autonomy declarations (the doctor's verdict block and check-decision-record.sh's
-# per-element PASS/FAIL report), the post-merge-verification declaration-state line (declared
+# per-element PASS/FAIL report — a fence-aware, depth-aware scan that requires each declared
+# heading to be found outside a fenced code block AND to have at least one non-blank content
+# line in its span before the next same-or-shallower heading, distinguishing "heading absent"
+# from "heading found, no content under it", counting content under a deeper sub-heading or
+# inside a fenced block, and requiring whitespace after the heading's '#' run), the
+# post-merge-verification declaration-state line (declared
 # count / no-fence WARN / not-declared, with the same never-execute guarantee as the ratchet) and
 # its allow-entry check (each declared command's first token against the three-file settings
 # allow-list union — .claude/settings.json, .claude/settings.local.json, and the user-level
@@ -375,7 +380,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 33 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
+# The 41 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
 # unasserted below. Every fixture except the three baseline-* ones also emits a no-baseline WARN
 # (also unasserted); the baseline-* fixtures write their own .claude/BASELINE.md instead, via
 # seed_commit/point_origin_ref/write_baseline, so they exercise the baseline compare itself.
@@ -702,6 +707,132 @@ text'
   expect "FAIL  element: Rollback plan"
 }
 
+# record-fenced-body (#162) — the whole record (section + all three elements) lives only inside
+# one fenced code block; the unrelated "## Overview" heading sits outside it. A fence-blind scan
+# would find every heading anyway; the fence-aware scan must find none of them.
+case_record_fenced_body() {
+  local dir; dir="$(mk_repo record-fenced-body scoped verbatim)"
+  local ghdir="$tmpbase/record-fenced-body-gh"
+  build_stub_gh "$ghdir"
+  write_record_body "$ghdir" '## Overview
+
+Overview text, outside the fence.
+
+```
+## Binding decisions
+
+### Escalation triggers
+text
+
+### Migration posture
+text
+
+### Worked example
+text
+```'
+  run_record_check "$dir" "$ghdir:$PATH" 42
+  expect_rc 1
+  expect "FAIL  section: Binding decisions (no heading found)"
+  expect "FAIL  element: Escalation triggers (no heading found)"
+  expect "FAIL  element: Migration posture (no heading found)"
+  expect "FAIL  element: Worked example (no heading found)"
+  expect_absent "PASS  element:"
+}
+
+# record-empty-element (#162) — happy body except "### Migration posture" has nothing before the
+# next heading: heading found, but no content, must FAIL distinguishably from "heading absent".
+case_record_empty_element() {
+  local dir; dir="$(mk_repo record-empty-element scoped verbatim)"
+  local ghdir="$tmpbase/record-empty-element-gh"
+  build_stub_gh "$ghdir"
+  write_record_body "$ghdir" '## Binding decisions
+
+### Escalation triggers
+text
+
+### Migration posture
+
+### Worked example
+text'
+  run_record_check "$dir" "$ghdir:$PATH" 42
+  expect_rc 1
+  expect "PASS  element: Escalation triggers"
+  expect "FAIL  element: Migration posture (heading found, no content under it)"
+  expect "PASS  element: Worked example"
+}
+
+# record-nested-content (#162) — "### Migration posture" is immediately followed by a deeper
+# "#### Details" sub-heading, then prose: the prose counts toward the parent element's span.
+case_record_nested_content() {
+  local dir; dir="$(mk_repo record-nested-content scoped verbatim)"
+  local ghdir="$tmpbase/record-nested-content-gh"
+  build_stub_gh "$ghdir"
+  write_record_body "$ghdir" '## Binding decisions
+
+### Escalation triggers
+text
+
+### Migration posture
+#### Details
+prose under the sub-heading
+
+### Worked example
+text'
+  run_record_check "$dir" "$ghdir:$PATH" 42
+  expect_rc 0
+  expect "PASS  element: Migration posture"
+  expect_absent "no content under it"
+}
+
+# record-fenced-content (#162) — "### Worked example"'s only content is a fenced block whose
+# first line looks like a heading ("# not a heading"): the fence line counts as content, and the
+# in-fence "#" line must not be read as a heading (it stays invisible to the heading scan).
+case_record_fenced_content() {
+  local dir; dir="$(mk_repo record-fenced-content scoped verbatim)"
+  local ghdir="$tmpbase/record-fenced-content-gh"
+  build_stub_gh "$ghdir"
+  write_record_body "$ghdir" '## Binding decisions
+
+### Escalation triggers
+text
+
+### Migration posture
+text
+
+### Worked example
+```
+# not a heading
+fenced content line
+```'
+  run_record_check "$dir" "$ghdir:$PATH" 42
+  expect_rc 0
+  expect "PASS  element: Worked example"
+  expect_absent "no content under it"
+}
+
+# record-no-space-heading (#162) — the complete record written with no whitespace after the '#'
+# run ("#Binding decisions", "###Escalation triggers", ...): none of it counts as a heading,
+# matching claude_md_block/claude_md_section's own whitespace-required rule.
+case_record_no_space_heading() {
+  local dir; dir="$(mk_repo record-no-space-heading scoped verbatim)"
+  local ghdir="$tmpbase/record-no-space-heading-gh"
+  build_stub_gh "$ghdir"
+  write_record_body "$ghdir" '#Binding decisions
+
+###Escalation triggers
+text
+
+###Migration posture
+text
+
+###Worked example
+text'
+  run_record_check "$dir" "$ghdir:$PATH" 42
+  expect_rc 1
+  expect "FAIL  section: Binding decisions (no heading found)"
+  expect_absent "PASS  element:"
+}
+
 case_scoped_declared() {
   local dir; dir="$(mk_repo scoped-declared scoped verbatim)"
   run_doctor "$dir" "$stub_gh_scoped_dir:$PATH"
@@ -887,6 +1018,11 @@ cases=(
   "record-missing-element|case_record_missing_element|check-decision-record.sh: one declared element missing, rc 1, named"
   "record-no-declaration|case_record_no_declaration|check-decision-record.sh: no 'Autonomy decision record' section, rc 2"
   "record-comment-preserved|case_record_comment_preserved|check-decision-record.sh: a '#' comment inside the fenced block does not truncate it, later elements still checked"
+  "record-fenced-body|case_record_fenced_body|check-decision-record.sh: record lives only inside a fenced code block -> every heading FAILs as absent"
+  "record-empty-element|case_record_empty_element|check-decision-record.sh: element heading present but no content under it -> FAIL, distinct message from heading-absent"
+  "record-nested-content|case_record_nested_content|check-decision-record.sh: content under a deeper sub-heading counts toward the parent element's span -> PASS"
+  "record-fenced-content|case_record_fenced_content|check-decision-record.sh: content inside a fenced block counts, and an in-fence '#' line is not read as a heading -> PASS"
+  "record-no-space-heading|case_record_no_space_heading|check-decision-record.sh: no whitespace after the '#' run means no heading, matching claude_md_block/claude_md_section"
   "scoped-declared|case_scoped_declared|scoped autonomy: declared PASS when both declarations and the grant label exist"
   "scoped-reserve-missing|case_scoped_reserve_missing|scoped autonomy: WARN when the reserve declaration is missing, rc still 0"
   "ratchet-fence-comment|case_ratchet_fence_comment|test-suite ratchet: fence-aware section slice + fence-delimiter-skip span hunt find the command past an in-fence comment"
