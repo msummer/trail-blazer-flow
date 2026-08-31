@@ -9,10 +9,14 @@
 # no-CI note, default-branch guard coverage, the half-activated remediation's file naming, the
 # scoped-autonomy declarations (the doctor's verdict block and check-decision-record.sh's
 # per-element PASS/FAIL report — a fence-aware, depth-aware scan that requires each declared
-# heading to be found outside a fenced code block AND to have at least one non-blank content
-# line in its span before the next same-or-shallower heading, distinguishing "heading absent"
-# from "heading found, no content under it", counting content under a deeper sub-heading or
-# inside a fenced block, and requiring whitespace after the heading's '#' run), the
+# heading to be found nested under the record-section heading (strictly deeper, before the next
+# same-or-shallower heading outside a fence — a same-depth heading is not nested) AND to have at
+# least one non-blank content line in its in-section span, distinguishing "heading absent" from
+# "heading found outside the record section" from "heading found, no content under it";
+# counting content under a deeper sub-heading or inside a fenced block; requiring whitespace
+# after the heading's '#' run; and tracking backtick- and tilde-fences of any matching length,
+# indented up to 3 spaces, closing only on a same-character run at least as long followed by
+# nothing but whitespace), the
 # post-merge-verification declaration-state line (declared
 # count / no-fence WARN / not-declared, with the same never-execute guarantee as the ratchet) and
 # its allow-entry check (each declared command's first token against the three-file settings
@@ -393,7 +397,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 46 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
+# The 52 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
 # unasserted below. Every fixture except the three baseline-* ones also emits a no-baseline WARN
 # (also unasserted); the baseline-* fixtures write their own .claude/BASELINE.md instead, via
 # seed_commit/point_origin_ref/write_baseline, so they exercise the baseline compare itself.
@@ -874,8 +878,9 @@ text'
 }
 
 # record-fenced-content (#162) — "### Worked example"'s only content is a fenced block whose
-# first line looks like a heading ("# not a heading"): the fence line counts as content, and the
-# in-fence "#" line must not be read as a heading (it stays invisible to the heading scan).
+# first line looks like a heading ("# not a heading"): the fenced block's inner line counts as
+# content (the delimiter lines do not), and the in-fence "#" line must not be read as a heading
+# (it stays invisible to the heading scan).
 case_record_fenced_content() {
   local dir; dir="$(mk_repo record-fenced-content scoped verbatim)"
   local ghdir="$tmpbase/record-fenced-content-gh"
@@ -920,6 +925,222 @@ text'
   expect_rc 1
   expect "FAIL  section: Binding decisions (no heading found)"
   expect_absent "PASS  element:"
+}
+
+# record-element-outside-section (#177) — "### Worked example" is a real, filled heading, but it
+# sits under an unrelated later "## Appendix" section instead of nested under "## Binding
+# decisions": it must FAIL distinguishably from both "no heading found" and "no content under
+# it". Non-vacuity: method (a) — under the pre-#177 script (no nesting requirement), "Worked
+# example" is found anywhere in the body and has content, so it PASSes and the whole check exits
+# 0; observed pre-change verdict: rc 0, "PASS  element: Worked example", no FAIL lines at all.
+case_record_element_outside_section() {
+  local dir; dir="$(mk_repo record-element-outside-section scoped verbatim)"
+  local ghdir="$tmpbase/record-element-outside-section-gh"
+  build_stub_gh "$ghdir"
+  write_record_body "$ghdir" '## Binding decisions
+
+### Escalation triggers
+text
+
+### Migration posture
+text
+
+## Appendix
+
+### Worked example
+text'
+  run_record_check "$dir" "$ghdir:$PATH" 42
+  expect_rc 1
+  expect "PASS  element: Escalation triggers"
+  expect "PASS  element: Migration posture"
+  expect "FAIL  element: Worked example (heading found outside the record section)"
+}
+
+# record-element-sibling-depth (#177) — "## Worked example" is a direct same-depth sibling of
+# "## Binding decisions" (no intervening section), pinning the documented "same depth is not
+# nested" consequence: the record-section span closes as soon as a same-or-shallower heading is
+# seen outside a fence, so a same-depth heading never counts as inside it. Non-vacuity: method
+# (a) — the pre-#177 script has no nesting requirement at all, so "Worked example" PASSes;
+# observed pre-change verdict: rc 0, "PASS  element: Worked example", no FAIL lines at all.
+case_record_element_sibling_depth() {
+  local dir; dir="$(mk_repo record-element-sibling-depth scoped verbatim)"
+  local ghdir="$tmpbase/record-element-sibling-depth-gh"
+  build_stub_gh "$ghdir"
+  write_record_body "$ghdir" '## Binding decisions
+
+### Escalation triggers
+text
+
+### Migration posture
+text
+
+## Worked example
+text'
+  run_record_check "$dir" "$ghdir:$PATH" 42
+  expect_rc 1
+  expect "PASS  element: Escalation triggers"
+  expect "PASS  element: Migration posture"
+  expect "FAIL  element: Worked example (heading found outside the record section)"
+}
+
+# record-tilde-fence (#177) — the whole record (section + all three filled elements) lives only
+# inside a '~~~' block; the unrelated "## Overview" heading sits outside it. The pre-#177 fence
+# tracker only recognises backtick runs, so a '~~~' fence is invisible to it and every heading
+# inside leaks through as if it were outside any fence. Non-vacuity: method (a) — observed
+# pre-change verdict: rc 0, every heading (section + all three elements) PASSes, no FAIL lines.
+case_record_tilde_fence() {
+  local dir; dir="$(mk_repo record-tilde-fence scoped verbatim)"
+  local ghdir="$tmpbase/record-tilde-fence-gh"
+  build_stub_gh "$ghdir"
+  write_record_body "$ghdir" '## Overview
+
+Overview text, outside the fence.
+
+~~~
+## Binding decisions
+
+### Escalation triggers
+text
+
+### Migration posture
+text
+
+### Worked example
+text
+~~~'
+  run_record_check "$dir" "$ghdir:$PATH" 42
+  expect_rc 1
+  expect "FAIL  section: Binding decisions (no heading found)"
+  expect "FAIL  element: Escalation triggers (no heading found)"
+  expect "FAIL  element: Migration posture (no heading found)"
+  expect "FAIL  element: Worked example (no heading found)"
+  expect_absent "PASS  element:"
+}
+
+# record-nested-fence (#177) — a four-backtick-opened block (info string "markdown") whose
+# content includes an inner, unmatched three-backtick line before the record and another right
+# after it, before the real four-backtick closer; the record itself lives between them. The
+# pre-#177 tracker toggles on ANY run of 3+ backticks regardless of length, so the inner
+# three-backtick line right after the opener flips it back to "outside a fence" — leaking the
+# whole record's headings through — and the second inner three-backtick line flips it "inside"
+# again just before the real closer. The new fence-length-aware tracker requires a closer at
+# least as long as the four-backtick opener, so neither inner three-backtick line closes it and
+# the record stays hidden throughout. Non-vacuity: method (a) — observed pre-change verdict: rc
+# 0, every heading (section + all three elements) PASSes, no FAIL lines.
+case_record_nested_fence() {
+  local dir; dir="$(mk_repo record-nested-fence scoped verbatim)"
+  local ghdir="$tmpbase/record-nested-fence-gh"
+  build_stub_gh "$ghdir"
+  write_record_body "$ghdir" '## Overview
+
+Overview text, outside the fence.
+
+````markdown
+```
+## Binding decisions
+
+### Escalation triggers
+text
+
+### Migration posture
+text
+
+### Worked example
+text
+```
+````'
+  run_record_check "$dir" "$ghdir:$PATH" 42
+  expect_rc 1
+  expect "FAIL  section: Binding decisions (no heading found)"
+  expect "FAIL  element: Escalation triggers (no heading found)"
+  expect "FAIL  element: Migration posture (no heading found)"
+  expect "FAIL  element: Worked example (no heading found)"
+  expect_absent "PASS  element:"
+}
+
+# record-indented-fence (#177) — the whole record lives inside a 2-space-indented '```' fence
+# (opener and closer both indented; the record's own headings sit at column 0 inside it). The
+# leading spaces on the fence lines are load-bearing source text, not formatting — do not
+# reindent this heredoc. The pre-#177 tracker requires the fence delimiter at column 0
+# (`/^```/`), so an indented delimiter is never recognised as a fence at all, and the scan runs
+# the whole body as if it were never fenced — every heading (inside the "fence" and out) is found
+# and, since it has following text or a nested heading, filled. Non-vacuity: method (a) —
+# observed pre-change verdict: rc 0, every heading PASSes, no FAIL lines.
+case_record_indented_fence() {
+  local dir; dir="$(mk_repo record-indented-fence scoped verbatim)"
+  local ghdir="$tmpbase/record-indented-fence-gh"
+  build_stub_gh "$ghdir"
+  write_record_body "$ghdir" '## Overview
+
+- a list item
+
+  ```
+## Binding decisions
+
+### Escalation triggers
+text
+
+### Migration posture
+text
+
+### Worked example
+text
+  ```'
+  run_record_check "$dir" "$ghdir:$PATH" 42
+  expect_rc 1
+  expect "FAIL  section: Binding decisions (no heading found)"
+  expect "FAIL  element: Escalation triggers (no heading found)"
+  expect "FAIL  element: Migration posture (no heading found)"
+  expect "FAIL  element: Worked example (no heading found)"
+  expect_absent "PASS  element:"
+}
+
+# record-fence-close-rules (#177) — control case, all PASS: pins that the stricter closing rule
+# genuinely closes (a broken closer would swallow every later element as "no heading found") and
+# that a wrong-character run and an info-string run never close a fence early. "Escalation
+# triggers"'s content is a '```' block containing a same-char, same-length run followed by an
+# info string ("```js", must not close) and a wrong-character run ("~~~ still inside", must not
+# close), then a real closer. "Migration posture"'s content is a '~~~' block containing a
+# wrong-character run ("``` still inside", must not close), then a real closer. "Worked example"
+# has plain text, no fence at all. Non-vacuity: method (a) — the pre-#177 tracker toggles on
+# every 3+-backtick run regardless of character or trailing text ('~~~' runs never toggle it,
+# only tilde-prefixed lines were ever invisible to it in other fixtures above), so "```js" inside
+# "Escalation triggers"'s block toggles it back "outside" mid-block, the block's own closing
+# "```" toggles it "inside" again, and "### Migration posture" is then read while "inside" — its
+# heading pattern is gated on being outside a fence, so the line is swallowed as ordinary content
+# instead of recorded as a heading at all, and the heading text "Migration posture" never enters
+# the pre-#177 script's heading list. "Migration posture"'s own '~~~'-delimited block never
+# toggles the backtick-only tracker, so its inner "``` still inside" line toggles it "outside"
+# again in time for "### Worked example" to be read correctly. Observed pre-change verdict: rc 1,
+# "PASS  element: Escalation triggers", "FAIL  element: Migration posture (no heading found)",
+# "PASS  element: Worked example" — the new script's PASS for Migration posture is exactly what
+# the old script's toggle-count coincidence gets wrong.
+case_record_fence_close_rules() {
+  local dir; dir="$(mk_repo record-fence-close-rules scoped verbatim)"
+  local ghdir="$tmpbase/record-fence-close-rules-gh"
+  build_stub_gh "$ghdir"
+  write_record_body "$ghdir" '## Binding decisions
+
+### Escalation triggers
+```
+```js
+still inside
+~~~ still inside
+```
+
+### Migration posture
+~~~
+``` still inside
+~~~
+
+### Worked example
+plain text'
+  run_record_check "$dir" "$ghdir:$PATH" 42
+  expect_rc 0
+  expect "PASS  element: Escalation triggers"
+  expect "PASS  element: Migration posture"
+  expect "PASS  element: Worked example"
+  expect_absent "FAIL"
 }
 
 case_scoped_declared() {
@@ -1117,6 +1338,12 @@ cases=(
   "record-nested-content|case_record_nested_content|check-decision-record.sh: content under a deeper sub-heading counts toward the parent element's span -> PASS"
   "record-fenced-content|case_record_fenced_content|check-decision-record.sh: content inside a fenced block counts, and an in-fence '#' line is not read as a heading -> PASS"
   "record-no-space-heading|case_record_no_space_heading|check-decision-record.sh: no whitespace after the '#' run means no heading, matching claude_md_block/claude_md_section"
+  "record-element-outside-section|case_record_element_outside_section|check-decision-record.sh: element heading found only outside the record section's span -> distinct FAIL, other elements still PASS"
+  "record-element-sibling-depth|case_record_element_sibling_depth|check-decision-record.sh: element heading as a same-depth sibling of the record section -> not nested, same distinct FAIL"
+  "record-tilde-fence|case_record_tilde_fence|check-decision-record.sh: whole record inside a '~~~' block -> every heading FAILs as absent"
+  "record-nested-fence|case_record_nested_fence|check-decision-record.sh: whole record inside a four-backtick block flanked by unmatched inner three-backtick lines -> every heading FAILs as absent"
+  "record-indented-fence|case_record_indented_fence|check-decision-record.sh: whole record inside a 2-space-indented fence -> every heading FAILs as absent"
+  "record-fence-close-rules|case_record_fence_close_rules|control: an info-string run and a wrong-character run never close a fence early -> all three elements PASS"
   "scoped-declared|case_scoped_declared|scoped autonomy: declared PASS when both declarations and the grant label exist"
   "scoped-reserve-missing|case_scoped_reserve_missing|scoped autonomy: WARN when the reserve declaration is missing, rc still 0"
   "ratchet-fence-comment|case_ratchet_fence_comment|test-suite ratchet: fence-aware section slice + fence-delimiter-skip span hunt find the command past an in-fence comment"
