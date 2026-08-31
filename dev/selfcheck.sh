@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 43 assertions total. The gate prints what it checks — run it.
+# Five groups, 44 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -795,6 +795,47 @@ if [ -z "$missing" ]; then
   ok "4.23 '$marker' present in hooks/git-c-guard.sh, worktree-mode.md, and skills/issue-implementer/SKILL.md"
 else
   bad "4.23 '$marker' missing from:$missing"
+fi
+
+# 4.24 — every `uses:` line in .github/workflows/*.yml|*.yaml is pinned to a full 40-hex commit
+# SHA, never a mutable tag or branch ref: this workflow's own green check is the mechanical merge
+# condition the harness's merge pass trusts, so a repointable tag (e.g. actions/checkout@v4) would
+# let the action's owner substitute what CI executes with no diff visible here — the gate's own
+# verdict is the blast radius. The extraction is comment-stripped by LINE first (same idiom as
+# 4.11/1.4), so a commented-out unpinned `uses:` line can't false-positive. A zero-`uses:`
+# extraction across every workflow file FAILs loudly ("structure changed") rather than passing
+# vacuously, same guard as 2.5/2.7/4.13. Only the SHA is enforced here — the trailing `# vX.Y.Z`
+# tag comment is left as a review-level convention, not machine-checked. A future local (`./…`) or
+# `docker://` action ref cannot be SHA-pinned this way; that needs an explicit exclusion added to
+# this assertion, not a silent gap — the same policy assertion 4.9's comment states.
+uses_total=0
+bad_uses=""
+for wf24 in "$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml; do
+  [ -f "$wf24" ] || continue
+  uses_lines="$(grep -vE '^[[:space:]]*#' "$wf24" | grep -E '^[[:space:]]*-?[[:space:]]*uses:')"
+  [ -n "$uses_lines" ] || continue
+  while IFS= read -r ul; do
+    [ -n "$ul" ] || continue
+    uses_total=$((uses_total+1))
+    ref="$(printf '%s\n' "$ul" | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//; s/[[:space:]].*$//')"
+    case "$ref" in
+      *@*) sha="${ref##*@}" ;;
+      *)   sha="" ;;
+    esac
+    case "$sha" in
+      ''|*[!0-9a-f]*) bad_uses="$bad_uses $wf24:$ref;" ;;
+      *) [ "${#sha}" -eq 40 ] || bad_uses="$bad_uses $wf24:$ref;" ;;
+    esac
+  done <<EOF
+$uses_lines
+EOF
+done
+if [ "$uses_total" -eq 0 ]; then
+  bad "4.24 no \`uses:\` line found in .github/workflows/*.yml or *.yaml (structure changed) — extraction failed"
+elif [ -n "$bad_uses" ]; then
+  bad "4.24 uses: ref(s) not pinned to a full 40-hex commit SHA:$bad_uses"
+else
+  ok "4.24 every \`uses:\` line in .github/workflows/*.yml|*.yaml is pinned to a full 40-hex commit SHA"
 fi
 
 # ============================================================================
