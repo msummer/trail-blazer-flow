@@ -5,10 +5,10 @@
 #
 #   harness_will_handle:
 #     unplanned          : open issues with no plan-* label (next planner run plans them)
-#     in_revision        : plan-proposed issues with unaddressed feedback (next planner run revises)
+#     in_revision        : plan-proposed issues with unaddressed maintainer feedback (next planner run revises)
 #     ready_to_implement : plan-approved, not pr-open / impl-blocked (next implementer run)
 #   waiting_on_human:
-#     plans_to_review    : plan-proposed issues with NO new feedback — your review/approval
+#     plans_to_review    : plan-proposed issues with NO new maintainer feedback — your review/approval
 #     prs_to_review      : open claude/* PRs, with a coarse CI state — your review/merge
 #     blocked            : impl-blocked issues — remove the label to retry
 #   counts               : per-bucket counts + human_actions (total items waiting on you)

@@ -24,10 +24,10 @@ It prints a `PASS`/`FAIL` line per assertion (grouped and labelled in its own ou
 CI on every pull request (`.github/workflows/selfcheck.yml`, two jobs — `selfcheck` on
 `ubuntu-latest` and `selfcheck-macos` on `macos-latest`, which prepends `/bin` to `PATH` so the
 same commands run under Apple's bash 3.2 instead of a newer bash); a red check means one of the
-jobs' five commands failed — reproduce locally with `bash dev/selfcheck.sh`,
-`bash dev/selfcheck-tests.sh`, `bash dev/doctor-tests.sh`, `bash dev/hook-tests.sh`, and
-`bash dev/cleanup-tests.sh` (on a Mac, prefix each with `PATH=/bin:$PATH` to match the macOS
-job's shell, e.g. `PATH=/bin:$PATH bash dev/selfcheck.sh`).
+jobs' six commands failed — reproduce locally with `bash dev/selfcheck.sh`,
+`bash dev/selfcheck-tests.sh`, `bash dev/doctor-tests.sh`, `bash dev/hook-tests.sh`,
+`bash dev/cleanup-tests.sh`, and `bash dev/planning-tests.sh` (on a Mac, prefix each with
+`PATH=/bin:$PATH` to match the macOS job's shell, e.g. `PATH=/bin:$PATH bash dev/selfcheck.sh`).
 There is no test suite and no build step: this repo is Markdown instruction files, Bash scripts,
 and JSON manifests. The gate prints what it checks — run it. A change the gate can't catch needs
 a new assertion in the gate, not a waiver, subject to the machine-parsed-artifacts rule below.
@@ -80,6 +80,19 @@ continuing instead of aborting, and the pre-flight `gh repo view` / `git branch 
 `gh pr list` lookup failures each being reported (WARN) and survived rather than aborting the
 script before any output. It runs in CI as the fifth step, but it is not part of
 `dev/selfcheck.sh` itself — run it by hand whenever `bin/cleanup-after-merge.sh` changes.
+
+`dev/planning-tests.sh` is a separate negative-test harness for `bin/find-planning-work.sh`
+(#164): it builds throwaway fixture directories under `mktemp`, with a stub `gh` on `PATH`, and
+runs the real script against them to pin the trusted-association gate — only a comment whose
+`authorAssociation` is `OWNER`, `MEMBER`, or `COLLABORATOR` ever puts its issue into
+`needs_revision` or is honoured as the latest plan comment; a `CONTRIBUTOR`/`NONE`
+comment, or one with no `authorAssociation` field at all (fail-closed), posted after the issue's
+latest trusted plan (or any such comment, if there is no trusted plan yet) is reported in the
+`untrusted_comments` output bucket instead of being silently dropped or silently trusted, and an
+untrusted marker comment never shadows real, trusted feedback posted before it; one posted before
+that plan is dropped with no bucket entry. It runs in CI as the sixth and last step, but it is
+not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh`
+changes.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor; see the README's "Working on the harness itself" for why.
