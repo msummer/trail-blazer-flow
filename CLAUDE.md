@@ -50,15 +50,18 @@ declared/no-fence/not-declared, fence-aware and depth-aware, and (when declared)
 declared command's first token has a matching allow entry across the three-file settings
 allow-list union (`.claude/settings.json`, `.claude/settings.local.json`, and the user-level
 settings file — a grant living in any one of them counts), a pure string comparison that WARNs
-rather than fails — a path-qualified verification interpreter such as
-`<repo>/api/.venv/bin/python` being checked against a literal-path allow entry in that same
-three-file union, distinct from the bare-name regex check (which stays scoped to
-`.claude/settings.json`), the test-suite ratchet's fence-aware section slice with a
+rather than fails — the bare-name toolchain allow-list check and a path-qualified verification
+interpreter probe such as `<repo>/api/.venv/bin/python`, both checked against that same
+three-file union (#175 — a grant living only in `.claude/settings.local.json` no longer produces
+a spurious toolchain WARN), the test-suite ratchet's fence-aware section slice with a
 fence-delimiter-skipping span hunt, the verification baseline's short-SHA-as-prefix compare, the
-`disableAllHooks: true` WARN across the three settings files, and the stale-legacy-`-C`-allow
-WARN on `.claude/settings.json`) that would otherwise only be hand-verified. It runs in CI as the
-third step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
-`bin/check-harness.sh` or `bin/check-decision-record.sh` changes.
+`disableAllHooks: true` WARN across the three settings files, the stale-legacy-`-C`-allow WARN on
+`.claude/settings.json`, and (#175, gated on a "Merge autonomy policy" section) a WARN naming any
+`uses:` ref in a consumer's `.github/workflows/*.yml`/`*.yaml` — local (`./…`, `../…`) and
+`docker://` refs excepted — not pinned to a full 40-hex commit SHA) that would otherwise only be
+hand-verified. It runs in CI as the third step, but it is not part of
+`dev/selfcheck.sh` itself — run it by hand whenever `bin/check-harness.sh` or
+`bin/check-decision-record.sh` changes.
 
 `dev/hook-tests.sh` is a separate negative-test harness for the plugin-shipped PreToolUse guard
 hook (`hooks/git-c-guard.sh`, #150): it feeds fixture stdin JSON straight into the real script
@@ -138,6 +141,10 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   human-readable release tag in a trailing comment — a mutable tag ref would let the action's
   owner change what CI executes with no diff visible here, and this repo's CI is the gate's own
   merge condition. The SHA pin is enforced mechanically (assertion 4.24); the trailing tag
-  comment is a review-level convention, not machine-checked.
+  comment is a review-level convention, not machine-checked. `.github/dependabot.yml` is the
+  weekly bump mechanism for those pins; assertion 4.25 enforces mechanically only that the file
+  is present and declares an uncommented `package-ecosystem: "github-actions"` update with an
+  `interval:` line — not that Dependabot actually opens a PR, and not that a bump rewrites the
+  trailing tag comment.
 - Release ritual: bump `version` in `.claude-plugin/plugin.json` and create the matching
   `vX.Y.Z` annotated tag, in the same commit — see the README's "Updating".
