@@ -19,15 +19,20 @@
 # allow-list union — .claude/settings.json, .claude/settings.local.json, and the user-level
 # settings file, so a grant that lives only in .claude/settings.local.json or the user-level file
 # still counts as covered — a pure string comparison, WARN never FAIL when a grant is missing),
-# the path-qualified verification interpreter's literal-path grant check against that same
-# three-file union, the test-suite ratchet's fence-aware, depth-aware section slice and
-# fence-delimiter-skipping span hunt (a '#' comment inside the fenced block must not truncate it,
-# nor must a bare fence line itself be mistaken for the quoted command), the verification
-# baseline's short-SHA-as-prefix compare (an abbreviated recorded commit of 7+ hex characters is
-# accepted; fewer is a malformed-value WARN), the disableAllHooks: true WARN across the three
-# settings files (#150 — silently disables the plugin's git -C guard hook, and every other hook),
-# and the stale-legacy-'-C'-allow-entry WARN on .claude/settings.json (#150 — the entries the
-# guard hook now supersedes).
+# the bare-name toolchain allow-list check and the path-qualified verification interpreter's
+# literal-path grant check, both against that same three-file union (#175 — a toolchain grant
+# living only in .claude/settings.local.json no longer produces a spurious WARN), the test-suite
+# ratchet's fence-aware, depth-aware section slice and fence-delimiter-skipping span hunt (a '#'
+# comment inside the fenced block must not truncate it, nor must a bare fence line itself be
+# mistaken for the quoted command), the verification baseline's short-SHA-as-prefix compare (an
+# abbreviated recorded commit of 7+ hex characters is accepted; fewer is a malformed-value WARN),
+# the disableAllHooks: true WARN across the three settings files (#150 — silently disables the
+# plugin's git -C guard hook, and every other hook), the stale-legacy-'-C'-allow-entry WARN on
+# .claude/settings.json (#150 — the entries the guard hook now supersedes), and (#175, ex-#166)
+# the CI action pinning WARN — gated on a "Merge autonomy policy" section, it lists any `uses:`
+# ref in .github/workflows/*.yml|*.yaml — local (./…, ../…) and docker:// refs excepted — not
+# pinned to a full 40-hex commit SHA, comment-stripped by line, string comparison only, never
+# executed.
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -118,6 +123,14 @@ write_settings() {
       # carries any to copy from) to prove the doctor's stale-entry WARN fires on a repo that
       # never re-synced its settings.json after picking up the guard hook.
       jq '.permissions.allow += ["Bash(git -C * status *)", "Bash(git -C * push *)"]' "$tmpl" > "$out" ;;
+    no-python-tool)
+      # Drops the template's only Python-family entry so the bare-name toolchain check's Python
+      # marker fails to match .claude/settings.json alone — a fixture then grants
+      # "Bash(pytest:*)" only in .claude/settings.local.json (#175). Same note as
+      # verify-path-grant above: this re-raises the pre-existing allow-drift WARN (a template
+      # entry is now missing); that WARN is expected and deliberately unasserted by the cases
+      # that use this mode.
+      jq '.permissions.allow |= map(select(. != "Bash(pytest:*)"))' "$tmpl" > "$out" ;;
   esac
 }
 
@@ -380,7 +393,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 41 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
+# The 46 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
 # unasserted below. Every fixture except the three baseline-* ones also emits a no-baseline WARN
 # (also unasserted); the baseline-* fixtures write their own .claude/BASELINE.md instead, via
 # seed_commit/point_origin_ref/write_baseline, so they exercise the baseline compare itself.
@@ -531,6 +544,53 @@ case_merge_ci_present() {
   expect_rc 0
   expect "merge autonomy: active"
   expect_absent "no checks configured"
+  # zero `uses:` lines anywhere in .github/workflows must not produce a "CI action pinning" PASS
+  # or WARN at all (acceptance criterion 6): confirmed by mutating check-harness.sh's
+  # `ci_uses_total -gt 0` guard to `-ge 0`, which turns this into a false-reassurance PASS line.
+  expect_absent "CI action pinning:"
+}
+
+# ci-uses-tag-pinned (#175, ex-#166) — under merge autonomy the cycle merges on "CI green", so a
+# workflow `uses:` ref pinned to a mutable tag (not a full 40-hex commit SHA) gets a WARN naming
+# the exact <repo-relative-path>:<ref>, never a FAIL.
+case_ci_uses_tag_pinned() {
+  local dir; dir="$(mk_repo ci-uses-tag-pinned merge merge-allow-only)"
+  mkdir -p "$dir/.github/workflows"
+  printf 'name: ci\non: [pull_request]\njobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n' > "$dir/.github/workflows/ci.yml"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "CI action pinning:"
+  expect ".github/workflows/ci.yml:actions/checkout@v4"
+}
+
+# ci-uses-sha-pinned (#175, ex-#166, control) — a full 40-hex SHA ref passes clean; a
+# commented-out unpinned `uses:` line is the comment-stripping control (same idiom as
+# dev/selfcheck.sh's assertion 4.24) — if the doctor read commented-out lines, this case would
+# also WARN.
+case_ci_uses_sha_pinned() {
+  local dir; dir="$(mk_repo ci-uses-sha-pinned merge merge-allow-only)"
+  mkdir -p "$dir/.github/workflows"
+  {
+    printf 'name: ci\non: [pull_request]\n'
+    printf '# uses: actions/checkout@v4\n'
+    printf 'jobs:\n  build:\n    steps:\n      - uses: actions/checkout@1de3ae0b2b1e8c1a35e6d3e6f4d3a06b6fa5db47\n'
+  } > "$dir/.github/workflows/ci.yml"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "are pinned to a full commit SHA"
+  expect_absent "are not pinned"
+}
+
+# ci-uses-no-merge-policy (#175, ex-#166) — a tag-pinned workflow with no "Merge autonomy policy"
+# section in CLAUDE.md at all: the CI-pinning check stays completely silent, not just WARN-free —
+# a repo that never activates merge autonomy shouldn't see a line about it.
+case_ci_uses_no_merge_policy() {
+  local dir; dir="$(mk_repo ci-uses-no-merge-policy base verbatim)"
+  mkdir -p "$dir/.github/workflows"
+  printf 'name: ci\non: [pull_request]\njobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n' > "$dir/.github/workflows/ci.yml"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect_absent "CI action pinning:"
 }
 
 case_merge_deny_only() {
@@ -627,6 +687,35 @@ case_verify_bare_command() {
   expect_rc 0
   expect "covers the detected toolchain(s)"
   expect_absent "path-qualified verification interpreter"
+}
+
+# toolchain-grant-local-only (#175, ex-#158) — the bare-name toolchain allow-list check now reads
+# the three-file settings union: a "Bash(pytest:*)" grant living ONLY in
+# .claude/settings.local.json (write_settings's no-python-tool mode drops it from the checked-in
+# .claude/settings.json) still satisfies the Python toolchain check — the exact scenario in the
+# issue's user-visible failure (a consumer whose test runner is granted only in
+# settings.local.json no longer gets a permanent spurious WARN).
+case_toolchain_grant_local_only() {
+  local dir; dir="$(mk_repo toolchain-grant-local-only base no-python-tool)"
+  : > "$dir/pyproject.toml"
+  printf '{"permissions":{"allow":["Bash(pytest:*)"]}}' > "$dir/.claude/settings.local.json"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "covers the detected toolchain(s)"
+  expect_absent "Python project files found but no pytest/python/uv/poetry"
+}
+
+# toolchain-grant-absent (#175, non-vacuity control) — identical fixture minus the
+# .claude/settings.local.json write: the Python toolchain WARN fires and the reassuring PASS is
+# absent, proving toolchain-grant-local-only isn't passing regardless of the grant. Hand-verified:
+# deleting the settings.local.json write from that case reproduces this case's expectations.
+case_toolchain_grant_absent() {
+  local dir; dir="$(mk_repo toolchain-grant-absent base no-python-tool)"
+  : > "$dir/pyproject.toml"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "Python project files found but no pytest/python/uv/poetry"
+  expect_absent "covers the detected toolchain(s)"
 }
 
 # record_body TEXT_LINES — writes a synthetic issue body to $tmpbase/<caller-provided path> via
@@ -1006,6 +1095,9 @@ cases=(
   "postdeploy-no-fence|case_postdeploy_no_fence|post-merge verification: heading present but no fenced commands -> WARN"
   "postdeploy-absent|case_postdeploy_absent|post-merge verification: no sub-heading at all -> informational PASS, not declared"
   "merge-ci-present|case_merge_ci_present|merge verdict: no-CI note absent when a workflow file exists"
+  "ci-uses-tag-pinned|case_ci_uses_tag_pinned|CI action pinning: tag-pinned uses: ref under merge autonomy -> WARN naming file:ref"
+  "ci-uses-sha-pinned|case_ci_uses_sha_pinned|CI action pinning: SHA-pinned uses: ref, commented-out unpinned line -> PASS, comment-stripping control"
+  "ci-uses-no-merge-policy|case_ci_uses_no_merge_policy|CI action pinning: tag-pinned uses: ref with no Merge autonomy policy section -> no output at all"
   "merge-deny-only|case_merge_deny_only|entry_has: merge rule in deny only"
   "merge-deny-local-only|case_merge_deny_local_only|merge verdict: half-activated remediation names the file holding the deny (settings.local.json)"
   "merge-mention-only|case_merge_mention_only|entry_has: 'only' inside an unrelated JSON string"
@@ -1014,6 +1106,8 @@ cases=(
   "verify-path-grant-present|case_verify_path_grant_present|path-qualified verification interpreter with a literal-path grant -> PASS, Python toolchain WARN suppressed with no bare-name entry"
   "verify-path-grant-local-only|case_verify_path_grant_local_only|path-qualified verification interpreter: literal-path grant lives only in .claude/settings.local.json -> PASS, three-file union covers it"
   "verify-bare-command|case_verify_bare_command|control: bare-name-only verification command -> unchanged behaviour, neither new stem prints"
+  "toolchain-grant-local-only|case_toolchain_grant_local_only|bare-name toolchain allow-list check: grant lives only in .claude/settings.local.json -> PASS, three-file union covers it"
+  "toolchain-grant-absent|case_toolchain_grant_absent|bare-name toolchain allow-list check: non-vacuity control, no grant anywhere -> Python WARN, toolchain PASS absent"
   "record-complete|case_record_complete|check-decision-record.sh: every declared element present, rc 0"
   "record-missing-element|case_record_missing_element|check-decision-record.sh: one declared element missing, rc 1, named"
   "record-no-declaration|case_record_no_declaration|check-decision-record.sh: no 'Autonomy decision record' section, rc 2"
