@@ -548,12 +548,14 @@ subagents need:
    those files, which the doctor WARNs on by naming the file, because it leaves the cycle
    reporting `verified, merge blocked` on every run. Once this section is present,
    `check-harness.sh` also WARNs on any `uses:` ref in `.github/workflows/*.yml`/`*.yaml` and in
-   any `action.yml`/`action.yaml` at any depth under `.github/actions/` (so a workflow that only
-   calls a local composite action still gets that action's own refs checked) — local (`./…`,
+   any `action.yml`/`action.yaml` anywhere in the repo (so a local composite action gets its own
+   refs checked no matter where it lives, not only under `.github/actions/`) — local (`./…`,
    `../…`) and `docker://` refs excepted in both — that isn't pinned to a full 40-hex commit
    SHA — under merge autonomy the cycle merges on "CI green", and a mutable tag lets its owner
-   repoint what CI runs with no diff visible in this repo. A local action living outside
-   `.github/actions/` is not scanned.
+   repoint what CI runs with no diff visible in this repo. An action metadata file inside a
+   pruned `.git/` or `node_modules/` tree, a symlinked action directory whose target lies outside
+   the repo, and the body of a reusable workflow owned by another repo (its ref is still checked,
+   just not its contents) are not scanned.
 
    **Post-merge verification** (optional, nested under this same section) — a sub-heading titled
    exactly "Post-merge verification" (any `#` depth) followed by a fenced block of read-only
@@ -896,7 +898,9 @@ one manual merge, exactly like the v2.2.0 and v2.3.0 transitions. This costs one
 GitHub API call per ready issue. (4) The doctor's merge-gated CI action-pinning WARN now also
 scans `action.yml`/`action.yaml` under `.github/actions/` — a repo that previously showed a clean
 PASS may newly WARN if an unpinned ref hides inside a local composite action; that is the fix, not
-a regression (a local action *outside* `.github/actions/` is still not scanned). (5) The
+a regression (that hop's scan stopped at `.github/actions/`; it has since widened to cover any
+`action.yml`/`action.yaml` anywhere in the repo — see the "Merge autonomy policy" item in the
+CLAUDE.md contract). (5) The
 decision-record checker is stricter: fence-aware section slicing, required non-empty content, and
 same-depth sibling headings no longer leak into a record's span — a record that passed by accident
 under the looser scan can start failing; the failure names the element.

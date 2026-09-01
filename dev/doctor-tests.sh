@@ -33,12 +33,13 @@
 # the disableAllHooks: true WARN across the three settings files (#150 — silently disables the
 # plugin's git -C guard hook, and every other hook), the stale-legacy-'-C'-allow-entry WARN on
 # .claude/settings.json (#150 — the entries the guard hook now supersedes), and (#175, ex-#166,
-# widened by #179) the CI action pinning WARN — gated on a "Merge autonomy policy" section, it
-# lists any `uses:` ref in .github/workflows/*.yml|*.yaml AND in any action.yml/action.yaml at
-# any depth under .github/actions/ (so a workflow that only calls a local composite action still
-# gets its unpinned refs surfaced) — local (./…, ../…) and docker:// refs excepted in both file
-# classes — not pinned to a full 40-hex commit SHA, comment-stripped by line, string comparison
-# only, never executed.
+# widened by #179, widened again by #186) the CI action pinning WARN — gated on a "Merge autonomy
+# policy" section, it lists any `uses:` ref in .github/workflows/*.yml|*.yaml AND in any
+# action.yml/action.yaml anywhere in the repo (pruning .git/, node_modules/, and
+# .github/workflows/ so a local composite action is found regardless of where it lives, and a
+# workflow file literally named action.yml is never double-counted) — local (./…, ../…) and
+# docker:// refs excepted in both file classes — not pinned to a full 40-hex commit SHA,
+# comment-stripped by line, string comparison only, never executed.
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -399,7 +400,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 55 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
+# The 59 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
 # unasserted below. Every fixture except the three baseline-* ones also emits a no-baseline WARN
 # (also unasserted); the baseline-* fixtures write their own .claude/BASELINE.md instead, via
 # seed_commit/point_origin_ref/write_baseline, so they exercise the baseline compare itself.
@@ -550,10 +551,11 @@ case_merge_ci_present() {
   expect_rc 0
   expect "merge autonomy: active"
   expect_absent "no checks configured"
-  # zero `uses:` lines anywhere in the scanned files (.github/workflows — this fixture has no
-  # .github/actions/ at all) must not produce a "CI action pinning" PASS or WARN at all
-  # (acceptance criterion 6): confirmed by mutating check-harness.sh's `ci_uses_total -gt 0` guard
-  # to `-ge 0`, which turns this into a false-reassurance PASS line.
+  # zero `uses:` lines anywhere in the scanned files (.github/workflows plus every
+  # action.yml/action.yaml in the repo — this fixture has no action.yml/action.yaml anywhere at
+  # all) must not produce a "CI action pinning" PASS or WARN at all (acceptance criterion 6):
+  # confirmed by mutating check-harness.sh's `ci_uses_total -gt 0` guard to `-ge 0`, which turns
+  # this into a false-reassurance PASS line.
   expect_absent "CI action pinning:"
 }
 
@@ -634,13 +636,15 @@ EOF
 # ci-uses-composite-sha-pinned (#179) — union counter across BOTH file classes. Non-vacuity,
 # proof (a): the pre-#179 doctor prints "all 1 uses: ref(s) …" (it never reads .github/actions/
 # at all), so `expect "all 2 uses: ref(s)"` fails against it. Mutation proof (b), measured:
-# disable the `.github/actions` enumeration (e.g. `if false && [ -d "$root/.github/actions" ]`)
-# and all three #179 composite cases fail, this one included — the action file's ref is never
-# read, so `ci_uses_total` stays 1. The commented-out `# uses: actions/cache@v3` line inside the
-# action file is NOT a comment-stripping control: the anchored extraction grep
-# (`^[[:space:]]*-?[[:space:]]*uses:`) can never match a line whose first non-blank character is
-# `#`, so the earlier `grep -vE '^[[:space:]]*#'` pre-filter is redundant, and this case does
-# not exercise it.
+# neutering the repo-wide `action.yml`/`action.yaml` `find` — deleting the `while … <<EOF
+# $action_files` loop that walks it (bin/check-harness.sh, right after the `find` assignment) —
+# makes all three #179 composite cases fail, this one included: measured output drops from "all 2
+# uses: ref(s) …" to "CI action pinning: all 1 uses: ref(s) …" (the workflow's own ref only) — the
+# action file's ref is never read, so `ci_uses_total` stays 1. The commented-out
+# `# uses: actions/cache@v3` line inside the action file is NOT a comment-stripping control: the
+# anchored extraction grep (`^[[:space:]]*-?[[:space:]]*uses:`) can never match a line whose first
+# non-blank character is `#`, so the earlier `grep -vE '^[[:space:]]*#'` pre-filter is redundant,
+# and this case does not exercise it.
 case_ci_uses_composite_sha_pinned() {
   local dir; dir="$(mk_repo ci-uses-composite-sha-pinned merge merge-allow-only)"
   mkdir -p "$dir/.github/workflows" "$dir/.github/actions/setup"
@@ -680,6 +684,122 @@ EOF
   expect_rc 0
   expect "CI action pinning:"
   expect ".github/actions/group/inner/action.yml:actions/setup-node@v4"
+}
+
+# ci-uses-outside-actions-dir (#186) — the issue's exact repro: a local composite action lives
+# OUTSIDE .github/actions/ entirely (tools/ci-setup/, referenced only as `uses: ./tools/ci-setup`,
+# a ref the workflow-only scan skips as local). Non-vacuity, MEASURED proof (a): a scratch copy of
+# this repo with bin/check-harness.sh restored to its pre-#186 content (main@e9bfd91) run against
+# this exact fixture prints no "CI action pinning:" line at all (ci_uses_total stays 0 — the
+# workflow's only ref is `./…`, skipped, and the action file sits outside the old
+# `.github/actions`-gated find, so it is never read) — both expectations below fail against it.
+# Mutation proof (b), MEASURED: re-scoping the new `find` back to "$root/.github/actions" (i.e.
+# restoring the `[ -d "$root/.github/actions" ]`-gated old find) makes this case fail identically
+# to proof (a) — the file is once again unreached.
+case_ci_uses_outside_actions_dir() {
+  local dir; dir="$(mk_repo ci-uses-outside-actions-dir merge merge-allow-only)"
+  mkdir -p "$dir/.github/workflows" "$dir/tools/ci-setup"
+  printf 'name: ci\non: [pull_request]\njobs:\n  build:\n    steps:\n      - uses: ./tools/ci-setup\n' > "$dir/.github/workflows/ci.yml"
+  cat > "$dir/tools/ci-setup/action.yml" <<'EOF'
+name: ci-setup
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+EOF
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "CI action pinning: 1 uses: ref(s)"
+  expect "tools/ci-setup/action.yml:actions/checkout@v4"
+}
+
+# ci-uses-unreferenced-action-yaml (#186) — pins that the enumeration is repo-wide and extension-
+# agnostic, independent of any workflow reference: packages/build/action.yaml (the .yaml
+# extension, no .github/ directory anywhere in the fixture, no workflow ever mentions it) is still
+# scanned. Non-vacuity, MEASURED proof (a): against the pre-#186 doctor (main@e9bfd91) this
+# fixture prints no "CI action pinning:" line at all (there is no .github/workflows and no
+# .github/actions, so both the workflow loop and the old `[ -d "$root/.github/actions" ]` guard
+# are inert) — both expectations below fail against it. Mutation proof (b), MEASURED: re-scoping
+# the new `find` back to "$root/.github/actions" makes this case fail identically — the file lives
+# nowhere near that directory.
+case_ci_uses_unreferenced_action_yaml() {
+  local dir; dir="$(mk_repo ci-uses-unreferenced-action-yaml merge merge-allow-only)"
+  mkdir -p "$dir/packages/build"
+  cat > "$dir/packages/build/action.yaml" <<'EOF'
+name: build
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+EOF
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "CI action pinning:"
+  expect "packages/build/action.yaml:actions/setup-node@v4"
+}
+
+# ci-uses-pruned-paths (#186) — pins the two non-.github/workflows prunes by BOTH count and
+# expect_absent: tools/setup/action.yml (the file that should be scanned) sits alongside
+# node_modules/pkg/action.yml and .git/vendored/action.yml, each carrying a different unpinned
+# ref. Writing under the fixture's real .git/ (mk_repo runs `git init` there) did not interfere
+# with git usage in this case — no git command in mk_repo/run_doctor reads that subtree — so both
+# prunes are pinned in one case per the plan's fallback clause. Non-vacuity, MEASURED proof (a):
+# against the pre-#186 doctor (main@e9bfd91, no .github/actions/ directory at all) this fixture
+# prints no "CI action pinning:" line — the expected total-1 assertion fails (got no line, not
+# "1"). Mutation proof (b), MEASURED: deleting the `.git`/`node_modules` prune terms from the new
+# `find` (`-name .git -o -name node_modules -o -path …` → just `-path "$root/.github/workflows"`)
+# makes ci_uses_total become 3, not 1, and both expect_absent lines fail — the pruned refs'
+# file:ref strings appear in the WARN.
+case_ci_uses_pruned_paths() {
+  local dir; dir="$(mk_repo ci-uses-pruned-paths merge merge-allow-only)"
+  mkdir -p "$dir/tools/setup" "$dir/node_modules/pkg" "$dir/.git/vendored"
+  cat > "$dir/tools/setup/action.yml" <<'EOF'
+name: setup
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+EOF
+  cat > "$dir/node_modules/pkg/action.yml" <<'EOF'
+name: vendored-pkg
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v3
+EOF
+  cat > "$dir/.git/vendored/action.yml" <<'EOF'
+name: vendored-git
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+EOF
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "CI action pinning: 1 uses: ref(s)"
+  expect "tools/setup/action.yml:actions/checkout@v4"
+  expect_absent "node_modules/pkg/action.yml:actions/cache@v3"
+  expect_absent ".git/vendored/action.yml:actions/setup-node@v4"
+}
+
+# ci-uses-workflow-named-action-yml (#186) — no-double-count control: a workflow file literally
+# named action.yml sits in .github/workflows/ (a valid, if unusual, workflow filename), with one
+# unpinned `uses:` ref. Without the .github/workflows prune, the same file would be picked up
+# twice — once by the workflow-glob loop, once by the repo-wide action.yml/action.yaml find — and
+# double-counted. Non-vacuity, MEASURED proof (a): against the pre-#186 doctor (main@e9bfd91,
+# scoped to .github/actions/) this fixture already prints "CI action pinning: 1 uses: ref(s)" (no
+# .github/actions/ directory exists, so the old code never double-scanned it either) — this proof
+# shows proof (a) does NOT distinguish this case, so it is the mutation proof (b) that carries the
+# pin. Mutation proof (b), MEASURED: deleting the `-path "$root/.github/workflows"` prune term
+# from the new `find` makes the count become 2, not 1 — the workflow-glob loop and the repo-wide
+# find both read .github/workflows/action.yml.
+case_ci_uses_workflow_named_action_yml() {
+  local dir; dir="$(mk_repo ci-uses-workflow-named-action-yml merge merge-allow-only)"
+  mkdir -p "$dir/.github/workflows"
+  printf 'name: ci\non: [pull_request]\njobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n' > "$dir/.github/workflows/action.yml"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "CI action pinning: 1 uses: ref(s)"
 }
 
 case_merge_deny_only() {
@@ -1407,6 +1527,10 @@ cases=(
   "ci-uses-composite-tag-pinned|case_ci_uses_composite_tag_pinned|CI action pinning: local composite action's tag-pinned uses: ref surfaced (#179 repro), local-to-local ref skipped"
   "ci-uses-composite-sha-pinned|case_ci_uses_composite_sha_pinned|CI action pinning: workflow + composite-action refs share one counter, commented-out uses: line inside action file excluded by the anchored extraction grep"
   "ci-uses-composite-nested|case_ci_uses_composite_nested|CI action pinning: action.yml two levels below .github/actions/ still scanned"
+  "ci-uses-outside-actions-dir|case_ci_uses_outside_actions_dir|CI action pinning: local composite action outside .github/actions/ (#186 repro) surfaced, workflow's own ./… ref stays skipped"
+  "ci-uses-unreferenced-action-yaml|case_ci_uses_unreferenced_action_yaml|CI action pinning: action.yaml with no .github/ directory and no workflow reference still scanned"
+  "ci-uses-pruned-paths|case_ci_uses_pruned_paths|CI action pinning: .git/ and node_modules/ prunes exclude action.yml files by count and by absence"
+  "ci-uses-workflow-named-action-yml|case_ci_uses_workflow_named_action_yml|CI action pinning: .github/workflows prune stops a workflow literally named action.yml from being double-counted"
   "merge-deny-only|case_merge_deny_only|entry_has: merge rule in deny only"
   "merge-deny-local-only|case_merge_deny_local_only|merge verdict: half-activated remediation names the file holding the deny (settings.local.json)"
   "merge-mention-only|case_merge_mention_only|entry_has: 'only' inside an unrelated JSON string"
