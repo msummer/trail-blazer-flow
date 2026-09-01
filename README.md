@@ -873,6 +873,34 @@ previously hit an unanswerable prompt inside a worktree — and its handler is r
 `"if": "Bash(git -C *)"` filter so the hook process is only spawned for `git -C` Bash commands,
 which needs Claude Code **2.1.85+** (see "Prerequisites").
 
+**v2.4.0 → v2.5.0** adds no grant, label, script, or baseline step — the doctor reports nothing
+new to migrate. What changes is trust and provenance, and every change *narrows* what the harness
+does unattended. (1) Comment- and issue-author provenance: only `OWNER`/`MEMBER`/`COLLABORATOR`
+comments are binding feedback, only maintainer-authored issues can be auto-approved, and
+everything untrusted is surfaced to you in new report buckets instead of silently acted on. The
+installed `gh` (through at least 2.97.0) does not return issue-level `authorAssociation`, so
+issue-author trust fails closed — **plan auto-approval is effectively paused wherever a policy
+exists** until `gh` grows the field; manual approval is unaffected. (2) Harness-authored record
+comments (auto-approval audits, staleness notes on approved plans, interrupted-run/worktree-sweep
+notes, `cleanup-after-merge.sh`'s hygiene comments) now open with `<!-- harness-audit -->` and are
+excluded from feedback detection and from the implementer's binding context — no more phantom
+revisions after an audit comment. One-time transition note: such comments posted by *older*
+versions carry no marker, so each can trigger at most one spurious revision before its issue's
+next plan supersedes it. (3) Approval now binds to the plan artifact: the newest `plan-approved`
+labeling event must post-date the plan comment, the implementer revalidates before dispatch and
+before push (a plan revised after approval is returned to review — `plan-approved` removed, an
+audit comment posted — never silently built), PR bodies carry a machine-generated
+`<!-- harness-plan-binding: … -->` line, and under merge autonomy the floor requires it — so a PR
+opened before your repo picks up this version is not eligible for autonomous merge and waits for
+one manual merge, exactly like the v2.2.0 and v2.3.0 transitions. This costs one extra read-only
+GitHub API call per ready issue. (4) The doctor's merge-gated CI action-pinning WARN now also
+scans `action.yml`/`action.yaml` under `.github/actions/` — a repo that previously showed a clean
+PASS may newly WARN if an unpinned ref hides inside a local composite action; that is the fix, not
+a regression (a local action *outside* `.github/actions/` is still not scanned). (5) The
+decision-record checker is stricter: fence-aware section slicing, required non-empty content, and
+same-depth sibling headings no longer leak into a record's span — a record that passed by accident
+under the looser scan can start failing; the failure names the element.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
