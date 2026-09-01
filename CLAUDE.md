@@ -120,7 +120,17 @@ plan comment posted after the newest `plan-approved` labeling event is not cover
 decides, not the first; equal plan/label timestamps still count as covered; an unreadable events
 lookup fails closed (`covers_plan: null`); and `--issue <n>` single-issue mode (used by the
 implementer skill's fresh per-issue revalidation) returns the identical output shape for exactly
-one issue regardless of its labels, with an unknown flag or non-numeric `<n>` exiting 2. It runs in CI as the sixth and last step, but it
+one issue regardless of its labels, with an unknown flag or non-numeric `<n>` exiting 2. Since
+#194 it additionally pins, on BOTH scripts: workstream A, a `has_harness_marker` boolean added to
+each untrusted bucket entry (`untrusted_comments[].comments[]` / `untrusted_post_plan[]`) that
+only ANNOTATES a forged `<!-- harness-audit -->`/`<!-- verifier-verdict -->` marker from an
+untrusted author, never filters it out (`counts.untrusted_harness_markers`, gate assertion 4.29);
+workstream B, `find-implementation-work.sh`'s `trusted_post_plan[].covered_by_approval`
+(true/false/null against `approval.approved_at`, `counts.post_approval_comments` for the uncovered
+total, `counts.trusted_post_plan` still the grand total); and workstream C, that the planner
+skill's step-7 stalled-stage escalation — now posted as an issue comment opening with
+`<!-- harness-audit -->` rather than kept summary-only — exercises the existing audit-marker
+exclusion and does not re-open the plan for revision. It runs in CI as the sixth and last step, but it
 is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh` or
 `bin/find-implementation-work.sh` changes.
 
