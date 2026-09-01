@@ -908,6 +908,32 @@ decision-record checker is stricter: fence-aware section slicing, required non-e
 same-depth sibling headings no longer leak into a record's span — a record that passed by accident
 under the looser scan can start failing; the failure names the element.
 
+**v2.5.0 → v2.5.1** adds no grant, label, script, or baseline step — the doctor reports nothing
+new to migrate — but **upgrade promptly: v2.5.0's approval binding is broken live**. (1) The bug
+(#196): `find-implementation-work.sh`'s `plan-approved` events lookup applied its `gh api --jq`
+filter to the wrong document shape (each response page arrives as a JSON array), the error was
+swallowed, and every ready issue fail-closed to `approval-unreadable` — so under the v2.5.0
+implementer skill's approval gate no approved issue could ever be dispatched, and the gate's
+prescribed remedy would strip your fresh `plan-approved` labels and post revision-triggering
+comments. v2.5.1 fixes the filter and makes the planning-tests stub faithful to real
+`gh api --jq` document semantics, so the approval fixtures now pin the live shape instead of two
+bugs canceling out. (2) Post-approval comments narrow further (#194): a trusted comment posted
+*after* the `plan-approved` label is no longer restated to the implementer as a binding
+`RESOLVED:` decision — it is marked `covered_by_approval: false`, warned about, and reported to
+you; to make such a comment binding, remove and re-add `plan-approved`, which re-binds the
+approval to the thread's current state. (3) Forged harness-record markers are flagged (#194): an
+untrusted comment carrying `<!-- harness-audit -->` or `<!-- verifier-verdict -->` is annotated
+`has_harness_marker: true` in the untrusted report buckets, with a warn line and a count — new
+warns may appear where drive-by comments dress up as harness records; nothing is filtered out.
+(4) Unattended planning runs leave a durable trace (#194): an issue that drops out of a pass with
+no recorded outcome now gets a `<!-- harness-audit -->` escalation comment on the issue itself,
+instead of only a line in the run summary that vanishes with the session. (5) The doctor's
+merge-gated CI action-pinning WARN now scans every `action.yml`/`action.yaml` anywhere in the
+repo, pruning `.git`, `node_modules`, and `.github/workflows` (#186) — a repo that previously
+showed a clean PASS may newly WARN about an unpinned ref in a local composite action outside
+`.github/actions/` (the exact exposure the widening closes) or in action files CI never runs;
+WARN-only, the doctor's exit code is unaffected.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
