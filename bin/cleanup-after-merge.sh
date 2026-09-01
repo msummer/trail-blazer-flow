@@ -35,17 +35,20 @@
 # Without --fix: read-mostly and conservative — never switches branches, never
 # force-deletes work that isn't merged, never edits labels (it only reports).
 #
-# With --fix, it additionally repairs the label-hygiene cases:
+# With --fix, it additionally repairs the label-hygiene cases — every comment below opens with
+# the "<!-- harness-audit -->" marker, so it's excluded from both discovery scripts' binding
+# comment sets (a harness-authored audit/hygiene record is never fed back to the planner or
+# implementer as human decision text):
 #   - PR merged, issue still open, closing keyword present, no multi-PR signal -> comment,
-#     remove pr-open, close the issue (audited with an issue comment)
+#     remove pr-open, close the issue (audited with a marked issue comment)
 #   - PR merged but a multi-PR signal is present (KEEP) -> issue stays open; pr-open is
-#     removed (and the issue commented, once) only when no other claude/<n>-* PR is still
-#     open, so the issue re-queues for its next slice — a human closes it by hand if the
-#     work is actually finished
+#     removed (and the issue commented, once, with the same marker) only when no other
+#     claude/<n>-* PR is still open, so the issue re-queues for its next slice — a human closes
+#     it by hand if the work is actually finished
 #   - PR closed without merging    -> comment, remove pr-open (requeues the issue; the
 #     old claude/* branch is left alone — the implementer's branch-exists logic decides
 #     whether it can be reset or needs a human)
-# ...and quarantines orphaned plan follow-ups (also audited with an issue comment):
+# ...and quarantines orphaned plan follow-ups (also audited with a marked issue comment):
 #   - follow-up filed from a claude/* PR closed without merging -> comment, add no-plan
 #     (never closes the issue; a human removes no-plan to requeue it)
 #
@@ -54,6 +57,8 @@ set -euo pipefail
 
 FIX=false
 [[ "${1:-}" == "--fix" ]] && FIX=true
+
+AUDIT_MARKER='<!-- harness-audit -->'
 
 default_branch_known=true
 default_branch="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null | tr -d '\r' || true)"
@@ -189,7 +194,8 @@ if $prs_ok && $issues_ok; then
             echo "KEEP  #${n} (${title}): PR #${prnum} merged as part of a multi-PR issue (${keep_reason}); leaving the issue open"
             if $FIX; then
               if [[ "$open_siblings" -eq 0 ]]; then
-                gh issue comment "$n" --body "🧹 Harness cleanup: PR #${prnum} for this issue merged, but this looks like one slice of a multi-PR issue (${keep_reason}), so it was left open. \`pr-open\` has been removed so it re-queues for its next slice — if this issue is actually finished, close it by hand." >/dev/null
+                gh issue comment "$n" --body "${AUDIT_MARKER}
+🧹 Harness cleanup: PR #${prnum} for this issue merged, but this looks like one slice of a multi-PR issue (${keep_reason}), so it was left open. \`pr-open\` has been removed so it re-queues for its next slice — if this issue is actually finished, close it by hand." >/dev/null
                 gh issue edit "$n" --remove-label pr-open >/dev/null
                 echo "        pr-open removed — re-queued for its next slice"
               else
@@ -199,7 +205,8 @@ if $prs_ok && $issues_ok; then
               echo "        re-run with --fix to drop pr-open so it re-queues (once no sibling PR is open)"
             fi
           elif $FIX; then
-            gh issue comment "$n" --body "🧹 Harness cleanup: PR #${prnum} for this issue links it with a closing keyword, but the issue didn't auto-close (e.g. it merged into a non-default branch). Closing it now." >/dev/null
+            gh issue comment "$n" --body "${AUDIT_MARKER}
+🧹 Harness cleanup: PR #${prnum} for this issue links it with a closing keyword, but the issue didn't auto-close (e.g. it merged into a non-default branch). Closing it now." >/dev/null
             gh issue edit "$n" --remove-label pr-open >/dev/null
             gh issue close "$n" >/dev/null
             echo "FIXED #${n} (${title}): PR #${prnum} merged — commented, removed pr-open, closed the issue"
@@ -209,7 +216,8 @@ if $prs_ok && $issues_ok; then
           ;;
         CLOSED)
           if $FIX; then
-            gh issue comment "$n" --body "🧹 Harness cleanup: PR #${prnum} was closed without merging, so this issue has been requeued for implementation (\`pr-open\` removed). The old \`claude/${n}-*\` branch was left in place — the next implementer run resets it if it only contains wip commits, and asks a human otherwise." >/dev/null
+            gh issue comment "$n" --body "${AUDIT_MARKER}
+🧹 Harness cleanup: PR #${prnum} was closed without merging, so this issue has been requeued for implementation (\`pr-open\` removed). The old \`claude/${n}-*\` branch was left in place — the next implementer run resets it if it only contains wip commits, and asks a human otherwise." >/dev/null
             gh issue edit "$n" --remove-label pr-open >/dev/null
             echo "FIXED #${n} (${title}): PR #${prnum} closed without merge — commented, removed pr-open (issue requeued)"
           else
@@ -256,7 +264,8 @@ else
           n=$(echo "$hit" | jq -r .number)
           title=$(echo "$hit" | jq -r .title)
           if $FIX; then
-            gh issue comment "$n" --body "🧹 Harness cleanup: this issue was filed automatically as a follow-up from PR #${p}, which was closed without merging, so the work it defers may never have landed. It has been labelled \`no-plan\` so the planner skips it — remove \`no-plan\` to requeue it (and \`no-auto-approve\` when you have confirmed you want it), or just close it." >/dev/null
+            gh issue comment "$n" --body "${AUDIT_MARKER}
+🧹 Harness cleanup: this issue was filed automatically as a follow-up from PR #${p}, which was closed without merging, so the work it defers may never have landed. It has been labelled \`no-plan\` so the planner skips it — remove \`no-plan\` to requeue it (and \`no-auto-approve\` when you have confirmed you want it), or just close it." >/dev/null
             gh issue edit "$n" --add-label no-plan >/dev/null
             echo "FIXED #${n} (${title}): follow-up from PR #${p}, closed without merge — commented, labelled no-plan"
           else

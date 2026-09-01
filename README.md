@@ -135,10 +135,12 @@ The `issue-planner` skill:
    context the issue lacks (recently merged PRs, corrected measurements).
 4. Posts each plan as an issue comment tagged `<!-- planner-plan -->`, labels `plan-proposed`.
 5. **Handles stale and overlapping plans**: a pending `plan-proposed` plan whose affected files
-   changed under it (PRs merged since posting) gets a staleness comment and an immediate
-   same-run revision; a stale `plan-approved` plan gets the comment plus a prominent flag (the
-   human approved *that* plan — re-approval is theirs). Overlapping plans (same files → merge
-   conflicts) are flagged and excluded from auto-approval.
+   changed under it (PRs merged since posting) gets a staleness comment (deliberately unmarked —
+   it's this run's revision feedback) and an immediate same-run revision; a stale `plan-approved`
+   plan gets the same staleness note, but opening with `<!-- harness-audit -->` (it's a record for
+   the human, not feedback), plus a prominent flag (the human approved *that* plan — re-approval
+   is theirs). Overlapping plans (same files → merge conflicts) are flagged and excluded from
+   auto-approval.
 6. **Proposes answers and revises in the same run**: for BLOCKING open questions the
    orchestrator can ground in code/measurements, it posts proposed answers as a comment, then
    immediately revises the plan, tagging each folded decision `RESOLVED
@@ -166,9 +168,10 @@ resolved decisions. Plans with unanswered BLOCKING questions shouldn't be approv
 **Plan auto-approval (opt-in).** If the repo's `CLAUDE.md` contains a section titled **"Plan
 auto-approval policy"**, the planner may add `plan-approved` itself for plans that satisfy the
 policy's conditions AND a non-negotiable hard floor (see "The CLAUDE.md contract" item 4). Every
-auto-approval leaves an audit comment (which conditions were met, how to veto). No policy section
-⇒ no auto-approval — the default is fully manual. The **`no-auto-approve` label** opts any
-individual issue back out of the policy. Note that an auto-approved plan may be implemented in
+auto-approval leaves an audit comment, opening with `<!-- harness-audit -->` — the marker (matched
+anywhere in the body) is what excludes it from both discovery scripts' binding sets (which
+conditions were met, how to veto). No policy section ⇒ no auto-approval — the default is fully
+manual. The **`no-auto-approve` label** opts any individual issue back out of the policy. Note that an auto-approved plan may be implemented in
 the same run — for that work, PR review is the human gate.
 
 ### Implementation ("implement the approved issues" / "implement issue 14")
@@ -1147,9 +1150,27 @@ and can never be auto-approved, though it is still planned (#176). `find-impleme
 enforces the implementer-facing half the same way: it selects each ready issue's approved plan
 comment and binding post-plan comments itself, using the identical trust gate (gate assertion
 4.26 pins that the two scripts' trusted-association lists agree), so the `issue-implementer`
-orchestrator reads a filtered artifact instead of applying the rule from memory (#176). The
-honest limit: this mechanical coverage is planner- and implementer-side only; the verifier-side
-half of the untrusted-data rule is still prompt-enforced, not mechanically checked.
+orchestrator reads a filtered artifact instead of applying the rule from memory (#176). Both
+scripts share a second, orthogonal exclusion inside the trusted set (#182): any trusted comment
+containing `<!-- harness-audit -->` (a harness-authored audit/hygiene record — the planner's
+auto-approval audit trail, its `plan-approved` staleness note, the implementer's interrupted-run
+and worktree-sweep notes, `cleanup-after-merge.sh`'s hygiene comments) or `<!-- verifier-verdict
+-->` (the orchestrator's own archive) anywhere in its body is excluded from
+`find-planning-work.sh`'s feedback detection and `find-implementation-work.sh`'s
+`trusted_post_plan` alike — a harness-authored record is never binding context, on either side of
+the pipeline. Both markers are matched with `contains`, not anchored to the comment's first line
+(the same behaviour the verdict marker has always had) — a maintainer who quotes a marker
+verbatim inside their own feedback has that comment silently dropped from both binding sets, with
+no revision, no `trusted_post_plan` entry, and no warning; accepted as an inherited risk rather
+than fixed here. The filter only ever narrows the trusted set: a forged marker from an untrusted
+author still surfaces, unfiltered, in `untrusted_comments` / `untrusted_post_plan`, exactly like
+a forged plan marker does (gate
+assertion 4.27 pins the marker's presence in every writer and consumer). Three comment surfaces
+stay deliberately unmarked because they *are* the feedback that drives a subsequent dispatch, not
+a record of one: the planner's `plan-proposed` staleness note, its proposed-answers comment, and
+the implementer's blocked-path comment (which step 2b explicitly reads back into the retry
+dispatch). The honest limit: this mechanical coverage is planner- and implementer-side only; the
+verifier-side half of the untrusted-data rule is still prompt-enforced, not mechanically checked.
 
 ## Distribution
 

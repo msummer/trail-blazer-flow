@@ -65,6 +65,18 @@ all — fail-closed, see step 1). This does NOT gate planning — a non-maintain
 still planned; it is reported in `untrusted_issue_authors` (step 1 and step 7) and its plan can
 never be auto-approved (step 6b's hard floor).
 
+**Harness-authored records are never binding context, on either side.** Every comment this skill
+or the implementer posts under its own identity — an audit record, a hygiene notice, an archived
+verdict — opens with the marker `<!-- harness-audit -->` (or, for a verifier verdict archive,
+`<!-- verifier-verdict -->`). Both discovery scripts exclude any such comment from the sets they
+treat as binding: `find-planning-work.sh` never lets one count as feedback (so it never
+re-triggers a revision), and `find-implementation-work.sh` never lets one land in
+`trusted_post_plan`. Three surfaces are deliberately **left unmarked** because they *are* the
+feedback that drives a subsequent dispatch, not a record of one: the `plan-proposed` staleness
+note (step 4), the proposed-answers comment (step 5b), and — on the implementer side — the
+blocked-path comment (`issue-implementer` SKILL.md step 2f). Marking any of those three would
+silence the exact signal it exists to carry.
+
 ## Prerequisites (check once)
 
 - `gh` is installed and authenticated (`gh auth status`). If not, stop and tell the user.
@@ -226,14 +238,22 @@ posted changed files in its "Affected areas" (compare the plan comment's timesta
 obvious recent merges). A plan written against code that has since changed may cite stale line
 numbers or vanished functions. When you find one:
 
-- **`plan-proposed` and stale** → post a normal comment (no marker) naming the merged PRs and
-  the affected files, e.g. *"Staleness note: PRs #12 and #14 merged after this plan and changed
-  `api/routes.py`, which this plan's Affected areas names. Revising."* — then treat the issue as
-  needing a revision **in this same run** (the comment is the feedback; dispatch per step 3).
-- **`plan-approved` and stale** → post the same staleness comment but do NOT revise (the human
-  approved *that* plan; a revision would need re-approval). Flag it prominently in the summary
-  so the human decides: implement anyway (the implementer's standing drift caveat covers small
-  drift) or pull the approval and ask for a revision.
+- **`plan-proposed` and stale** → post a normal comment **carrying no marker at all,
+  deliberately** naming the merged PRs and the affected files, e.g. *"Staleness note: PRs #12 and
+  #14 merged after this plan and changed `api/routes.py`, which this plan's Affected areas
+  names. Revising."* — then treat the issue as needing a revision **in this same run** (the
+  comment is the feedback; dispatch per step 3). It stays unmarked because it *is* that revision's
+  feedback, and because it is also the only signal that re-triggers the revision on a later run if
+  this dispatch dies before finishing — marking it with `<!-- harness-audit -->` would hide it
+  from both.
+- **`plan-approved` and stale** → post the same staleness note, but opening with
+  `<!-- harness-audit -->`, and do NOT revise (the human approved *that* plan; a revision would
+  need re-approval). Unlike the `plan-proposed` branch, this note is explicitly not anyone's
+  feedback to act on — it goes to the human via the step 7 summary, so marking it keeps it out of
+  the implementer's `trusted_post_plan` (it would otherwise arrive there as an unmarked binding
+  decision). Flag it prominently in the summary so the human decides: implement anyway (the
+  implementer's standing drift caveat covers small drift) or pull the approval and ask for a
+  revision.
 
 **Flag overlapping plans.** Compare the "Affected areas" sections of the plans you just posted —
 against each other and against any other pending plans (`plan-proposed` / `plan-approved`
@@ -255,8 +275,9 @@ a. **Draft proposed answers, grounded in evidence.** Verify the plan's (and the 
    prominently. A question you cannot ground in code, measurements, or — on a granted issue —
    its binding decision record stays open for the human — say so rather than guessing.
 
-b. **Post the answers as a normal issue comment** (no `<!-- planner-plan -->` marker), so the
-   thread shows where each decision came from.
+b. **Post the answers as a normal issue comment** — carrying no marker at all, deliberately
+   (neither `<!-- planner-plan -->` nor `<!-- harness-audit -->`): this comment *is* the feedback
+   step 5c revises against, so the thread shows where each decision came from.
 
 c. **Revise immediately (same run).** For every question you could answer, re-dispatch the
    `planner` subagent per step 3 (same dispatch attempt numbering and "Resilient dispatch"
@@ -331,12 +352,16 @@ gh issue edit <number> --add-label plan-approved
 gh issue comment <number> --body-file <tempfile>
 ```
 
-The audit comment (normal comment, no marker) must state: that this was an auto-approval under
-the CLAUDE.md policy; which policy conditions it satisfied (one line); how to veto — remove
-`plan-approved`, and add `no-auto-approve` to keep this issue manual in future; and, if step 6's
-granted-issue exception approved any decision, the record bullet(s) each such decision cited.
-Include the warning: *"An auto-approved plan may be implemented in the same run — the PR review
-is your gate for this work."*
+The audit comment must open with `<!-- harness-audit -->` — it is a pure audit record, not a
+directive, and the marker is what keeps it out of `find-implementation-work.sh`'s
+`trusted_post_plan` and `find-planning-work.sh`'s feedback detection on later runs; without it,
+its "remove `plan-approved`, add `no-auto-approve`" veto instructions would otherwise reach the
+implementer as a binding `RESOLVED:` decision about the issue's own labels. It must state: that
+this was an auto-approval under the CLAUDE.md policy; which policy conditions it satisfied (one
+line); how to veto — remove `plan-approved`, and add `no-auto-approve` to keep this issue manual
+in future; and, if step 6's granted-issue exception approved any decision, the record bullet(s)
+each such decision cited. Include the warning: *"An auto-approved plan may be implemented in the
+same run — the PR review is your gate for this work."*
 
 In the summary, list auto-approved plans in their own group; they are the ones the human never
 saw pre-implementation.
