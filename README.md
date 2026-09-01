@@ -528,10 +528,13 @@ subagents need:
    "Merge autonomy policy" section present while `Bash(gh pr merge:*)` is still denied in one of
    those files, which the doctor WARNs on by naming the file, because it leaves the cycle
    reporting `verified, merge blocked` on every run. Once this section is present,
-   `check-harness.sh` also WARNs on any `uses:` ref in `.github/workflows/*.yml`/`*.yaml` —
-   local (`./…`, `../…`) and `docker://` refs excepted — that isn't pinned to a full 40-hex
-   commit SHA — under merge autonomy the cycle merges on "CI green", and a mutable tag lets its
-   owner repoint what CI runs with no diff visible in this repo.
+   `check-harness.sh` also WARNs on any `uses:` ref in `.github/workflows/*.yml`/`*.yaml` and in
+   any `action.yml`/`action.yaml` at any depth under `.github/actions/` (so a workflow that only
+   calls a local composite action still gets that action's own refs checked) — local (`./…`,
+   `../…`) and `docker://` refs excepted in both — that isn't pinned to a full 40-hex commit
+   SHA — under merge autonomy the cycle merges on "CI green", and a mutable tag lets its owner
+   repoint what CI runs with no diff visible in this repo. A local action living outside
+   `.github/actions/` is not scanned.
 
    **Post-merge verification** (optional, nested under this same section) — a sub-heading titled
    exactly "Post-merge verification" (any `#` depth) followed by a fenced block of read-only
