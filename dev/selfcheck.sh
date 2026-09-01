@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 48 assertions total. The gate prints what it checks — run it.
+# Five groups, 49 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -612,9 +612,9 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 490
+budget_table="issue-implementer 500
 issue-cycle 330
-issue-planner 430
+issue-planner 440
 project-kickoff 215
 test-ratchet 200
 harness-setup 185"
@@ -930,6 +930,30 @@ if [ -z "$missing" ]; then
   ok "4.28 '$marker' present in bin/find-implementation-work.sh, skills/issue-implementer/SKILL.md, and skills/issue-cycle/SKILL.md"
 else
   bad "4.28 '$marker' missing from:$missing"
+fi
+
+# 4.29 — the two discovery scripts' has_*marker field NAMES agree (#194 workstream A: both
+# scripts annotate their untrusted bucket with a has_harness_marker boolean, alongside the
+# existing has_plan_marker, so a forged harness-record marker from a non-maintainer is called out
+# symmetrically on both sides — the same #176 "reuse, never fork" decision 4.26 already pins for
+# TRUSTED_ASSOCIATIONS). Anchored single-line extraction, same idiom as 4.26: an empty extraction
+# on either side FAILs loudly ("structure changed") rather than passing vacuously. This pins the
+# flag NAMES only, not the predicate behind them — a reviewer still has to read both predicates.
+planning_flags="$(sed -nE 's/^[[:space:]]*(has_[a-z_]*marker):.*/\1/p' "$root/bin/find-planning-work.sh" | sort -u)"
+impl_flags="$(sed -nE 's/^[[:space:]]*(has_[a-z_]*marker):.*/\1/p' "$root/bin/find-implementation-work.sh" | sort -u)"
+if [ -z "$planning_flags" ] || [ -z "$impl_flags" ]; then
+  bad "4.29 has_*marker extraction failed — bin/find-planning-work.sh's or bin/find-implementation-work.sh's untrusted-bucket field declarations didn't match (structure changed)"
+else
+  planning_not_impl="$(comm -23 <(_lines "$planning_flags") <(_lines "$impl_flags"))"
+  impl_not_planning="$(comm -13 <(_lines "$planning_flags") <(_lines "$impl_flags"))"
+  if [ -z "$planning_not_impl" ] && [ -z "$impl_not_planning" ]; then
+    ok "4.29 bin/find-planning-work.sh and bin/find-implementation-work.sh agree on has_*marker field names"
+  else
+    msg="4.29 has_*marker field drift:"
+    [ -n "$planning_not_impl" ] && msg="$msg field(s) in find-planning-work.sh but not find-implementation-work.sh: $(printf '%s' "$planning_not_impl" | tr '\n' ' ');"
+    [ -n "$impl_not_planning" ] && msg="$msg field(s) in find-implementation-work.sh but not find-planning-work.sh: $(printf '%s' "$impl_not_planning" | tr '\n' ' ');"
+    bad "$msg"
+  fi
 fi
 
 # ============================================================================

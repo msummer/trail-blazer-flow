@@ -40,17 +40,23 @@
 #
 # Output (JSON): needs_initial_plan, needs_revision (each item now additionally carries author,
 # association, trusted_author) plus untrusted_comments — an array of {number, title, url,
-# comments: [{author, association, createdAt, has_plan_marker}, ...]}, one entry per issue that
-# has at least one untrusted comment posted after its latest trusted plan (or, if it has no
-# trusted plan yet, any untrusted comment) — and untrusted_issue_authors (see above). counts
-# gains untrusted_comments (total untrusted comments reported, across all issues),
-# untrusted_plan_markers (how many of those carried the plan marker — ignored for plan selection
-# because their author wasn't trusted), missing_association (how many comments, across all
-# issues, carried no authorAssociation field at all — treated as untrusted, fail-closed, per the
-# warn stems below), audit_comments_skipped and verdict_archives_skipped (trusted, post-plan
-# comments containing "<!-- harness-audit -->" / "<!-- verifier-verdict -->" respectively, excluded
-# from has_feedback so neither re-opens a plan for revision), untrusted_issue_authors (count of
-# the array above), and author_association_unavailable (boolean, see above).
+# comments: [{author, association, createdAt, has_plan_marker, has_harness_marker}, ...]}, one
+# entry per issue that has at least one untrusted comment posted after its latest trusted plan
+# (or, if it has no trusted plan yet, any untrusted comment) — and untrusted_issue_authors (see
+# above). has_harness_marker (#194) is true when the comment's body contains
+# "<!-- harness-audit -->" or "<!-- verifier-verdict -->" — a forged harness-record marker from an
+# untrusted author; it only ANNOTATES the untrusted bucket, never filters it (the #182 placement
+# rule — a self-censoring forgery must never disappear from this report). counts gains
+# untrusted_comments (total untrusted comments reported, across all issues), untrusted_plan_markers
+# (how many of those carried the plan marker — ignored for plan selection because their author
+# wasn't trusted), untrusted_harness_markers (how many of those carried a forged harness-record
+# marker), missing_association (how many comments, across all issues, carried no authorAssociation
+# field at all — treated as untrusted, fail-closed, per the warn stems below),
+# audit_comments_skipped and verdict_archives_skipped (trusted, post-plan comments containing
+# "<!-- harness-audit -->" / "<!-- verifier-verdict -->" respectively, excluded from has_feedback so
+# neither re-opens a plan for revision — this trusted-side counter is unrelated to
+# untrusted_harness_markers, which only ever counts the untrusted bucket), untrusted_issue_authors
+# (count of the array above), and author_association_unavailable (boolean, see above).
 #
 # Skipped automatically:
 #   - plan-proposed with no newer trusted non-plan comment -> awaiting your review, nothing to do
@@ -119,6 +125,7 @@ untrusted_comments="[]"
 fetch_failures=0
 untrusted_comment_total=0
 untrusted_plan_markers=0
+untrusted_harness_markers=0
 missing_association=0
 audit_comments_skipped=0
 verdict_archives_skipped=0
@@ -152,7 +159,8 @@ for n in $candidates; do
           | { author: (.author.login // "unknown"),
               association: (.authorAssociation // "MISSING"),
               createdAt: .createdAt,
-              has_plan_marker: (.body | contains($m)) } ],
+              has_plan_marker: (.body | contains($m)),
+              has_harness_marker: ((.body | contains($a)) or (.body | contains($v))) } ],
         missing_association: ([ $c[] | select(has("authorAssociation") | not) ] | length),
         audit_comments_skipped: (
           if $lastPlan == null then 0
@@ -198,6 +206,19 @@ for n in $candidates; do
     done <<<"$marker_pairs"
   fi
 
+  # warn (a2): an untrusted comment carries a forged harness-record marker (harness-audit or
+  # verifier-verdict) — never filtered out of the untrusted bucket (#182's placement rule; this
+  # only annotates it), just called out so the human sees who impersonated a harness-authored
+  # record. One line per such comment, same idiom as the plan-marker loop above.
+  harness_marker_pairs=$(printf '%s' "$untrusted_arr" | jq -r '.[] | select(.has_harness_marker) | "\(.author)/\(.association)"')
+  if [ -n "$harness_marker_pairs" ]; then
+    while IFS= read -r pair; do
+      [ -n "$pair" ] || continue
+      echo "warn: issue #$n: harness record marker from an untrusted author ($pair) — not a harness-authored record" >&2
+      untrusted_harness_markers=$((untrusted_harness_markers+1))
+    done <<<"$harness_marker_pairs"
+  fi
+
   # warn (b): fail-closed — a comment with no authorAssociation field at all is treated as
   # untrusted rather than trusted or crashing the script.
   issue_missing=$(printf '%s' "$result" | jq '.missing_association')
@@ -237,6 +258,7 @@ jq -n \
   --argjson limit "$LIMIT" \
   --argjson uct "$untrusted_comment_total" \
   --argjson upm "$untrusted_plan_markers" \
+  --argjson uhm "$untrusted_harness_markers" \
   --argjson ma "$missing_association" \
   --argjson acs "$audit_comments_skipped" \
   --argjson vas "$verdict_archives_skipped" \
@@ -249,6 +271,7 @@ jq -n \
              truncated: ((($initial | length) >= $limit) or ($cc >= $limit)),
              untrusted_comments: $uct,
              untrusted_plan_markers: $upm,
+             untrusted_harness_markers: $uhm,
              missing_association: $ma,
              audit_comments_skipped: $acs,
              verdict_archives_skipped: $vas,
