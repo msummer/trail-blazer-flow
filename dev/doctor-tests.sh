@@ -32,11 +32,13 @@
 # abbreviated recorded commit of 7+ hex characters is accepted; fewer is a malformed-value WARN),
 # the disableAllHooks: true WARN across the three settings files (#150 — silently disables the
 # plugin's git -C guard hook, and every other hook), the stale-legacy-'-C'-allow-entry WARN on
-# .claude/settings.json (#150 — the entries the guard hook now supersedes), and (#175, ex-#166)
-# the CI action pinning WARN — gated on a "Merge autonomy policy" section, it lists any `uses:`
-# ref in .github/workflows/*.yml|*.yaml — local (./…, ../…) and docker:// refs excepted — not
-# pinned to a full 40-hex commit SHA, comment-stripped by line, string comparison only, never
-# executed.
+# .claude/settings.json (#150 — the entries the guard hook now supersedes), and (#175, ex-#166,
+# widened by #179) the CI action pinning WARN — gated on a "Merge autonomy policy" section, it
+# lists any `uses:` ref in .github/workflows/*.yml|*.yaml AND in any action.yml/action.yaml at
+# any depth under .github/actions/ (so a workflow that only calls a local composite action still
+# gets its unpinned refs surfaced) — local (./…, ../…) and docker:// refs excepted in both file
+# classes — not pinned to a full 40-hex commit SHA, comment-stripped by line, string comparison
+# only, never executed.
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -397,7 +399,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 52 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
+# The 55 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
 # unasserted below. Every fixture except the three baseline-* ones also emits a no-baseline WARN
 # (also unasserted); the baseline-* fixtures write their own .claude/BASELINE.md instead, via
 # seed_commit/point_origin_ref/write_baseline, so they exercise the baseline compare itself.
@@ -548,9 +550,10 @@ case_merge_ci_present() {
   expect_rc 0
   expect "merge autonomy: active"
   expect_absent "no checks configured"
-  # zero `uses:` lines anywhere in .github/workflows must not produce a "CI action pinning" PASS
-  # or WARN at all (acceptance criterion 6): confirmed by mutating check-harness.sh's
-  # `ci_uses_total -gt 0` guard to `-ge 0`, which turns this into a false-reassurance PASS line.
+  # zero `uses:` lines anywhere in the scanned files (.github/workflows — this fixture has no
+  # .github/actions/ at all) must not produce a "CI action pinning" PASS or WARN at all
+  # (acceptance criterion 6): confirmed by mutating check-harness.sh's `ci_uses_total -gt 0` guard
+  # to `-ge 0`, which turns this into a false-reassurance PASS line.
   expect_absent "CI action pinning:"
 }
 
@@ -595,6 +598,88 @@ case_ci_uses_no_merge_policy() {
   run_doctor "$dir" "$stub_gh_dir:$PATH"
   expect_rc 0
   expect_absent "CI action pinning:"
+}
+
+# ci-uses-composite-tag-pinned (#179) — the issue's exact reproduction: a workflow's only step
+# calls a LOCAL composite action (`uses: ./.github/actions/local`, a `./…` ref the
+# workflow-only scan skips), and the action itself contains a tag-pinned `uses:` ref.
+# Non-vacuity, proof (a): against the pre-#179 doctor this fixture produces no
+# "CI action pinning:" line at all — the workflow's only ref is `./…`, which the old code skips,
+# leaving ci_uses_total at 0 and the `-gt 0` guard silencing both verdicts, so both expectations
+# below fail against it. The "1 uses: ref(s)" count additionally pins that the in-action
+# `./.github/actions/other` ref stays skipped as local — mutation proof (b): drop the
+# `./*|../*|docker://*` case from the helper and the count becomes 3, not 2 (the workflow's own
+# `./.github/actions/local` ref is skipped by that same arm, so removing it adds two refs, not
+# one — measured: `.github/workflows/ci.yml:./.github/actions/local`,
+# `.github/actions/local/action.yml:actions/checkout@v4`,
+# `.github/actions/local/action.yml:./.github/actions/other`).
+case_ci_uses_composite_tag_pinned() {
+  local dir; dir="$(mk_repo ci-uses-composite-tag-pinned merge merge-allow-only)"
+  mkdir -p "$dir/.github/workflows" "$dir/.github/actions/local"
+  printf 'name: ci\non: [pull_request]\njobs:\n  build:\n    steps:\n      - uses: ./.github/actions/local\n' > "$dir/.github/workflows/ci.yml"
+  cat > "$dir/.github/actions/local/action.yml" <<'EOF'
+name: local
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/other
+EOF
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "CI action pinning: 1 uses: ref(s)"
+  expect ".github/actions/local/action.yml:actions/checkout@v4"
+}
+
+# ci-uses-composite-sha-pinned (#179) — union counter across BOTH file classes. Non-vacuity,
+# proof (a): the pre-#179 doctor prints "all 1 uses: ref(s) …" (it never reads .github/actions/
+# at all), so `expect "all 2 uses: ref(s)"` fails against it. Mutation proof (b), measured:
+# disable the `.github/actions` enumeration (e.g. `if false && [ -d "$root/.github/actions" ]`)
+# and all three #179 composite cases fail, this one included — the action file's ref is never
+# read, so `ci_uses_total` stays 1. The commented-out `# uses: actions/cache@v3` line inside the
+# action file is NOT a comment-stripping control: the anchored extraction grep
+# (`^[[:space:]]*-?[[:space:]]*uses:`) can never match a line whose first non-blank character is
+# `#`, so the earlier `grep -vE '^[[:space:]]*#'` pre-filter is redundant, and this case does
+# not exercise it.
+case_ci_uses_composite_sha_pinned() {
+  local dir; dir="$(mk_repo ci-uses-composite-sha-pinned merge merge-allow-only)"
+  mkdir -p "$dir/.github/workflows" "$dir/.github/actions/setup"
+  printf 'name: ci\non: [pull_request]\njobs:\n  build:\n    steps:\n      - uses: actions/checkout@1de3ae0b2b1e8c1a35e6d3e6f4d3a06b6fa5db47\n' > "$dir/.github/workflows/ci.yml"
+  cat > "$dir/.github/actions/setup/action.yml" <<'EOF'
+name: setup
+runs:
+  using: composite
+  steps:
+    # uses: actions/cache@v3
+    - uses: actions/checkout@1de3ae0b2b1e8c1a35e6d3e6f4d3a06b6fa5db47
+EOF
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "all 2 uses: ref(s)"
+  expect_absent "are not pinned"
+}
+
+# ci-uses-composite-nested (#179) — depth independence: the action file sits TWO levels below
+# .github/actions/ (group/inner/action.yml), and there is no workflow `uses:` ref at all.
+# Non-vacuity, proof (a): the pre-#179 doctor prints nothing (it never reads .github/actions/).
+# Mutation proof (b): replace the `find` enumeration with a one-level
+# `for … in "$root"/.github/actions/*/action.yml` glob and this case fails while
+# ci-uses-composite-tag-pinned (one level deep) still passes — this is the case that catches a
+# depth-limited implementation.
+case_ci_uses_composite_nested() {
+  local dir; dir="$(mk_repo ci-uses-composite-nested merge merge-allow-only)"
+  mkdir -p "$dir/.github/actions/group/inner"
+  cat > "$dir/.github/actions/group/inner/action.yml" <<'EOF'
+name: inner
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+EOF
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "CI action pinning:"
+  expect ".github/actions/group/inner/action.yml:actions/setup-node@v4"
 }
 
 case_merge_deny_only() {
@@ -1319,6 +1404,9 @@ cases=(
   "ci-uses-tag-pinned|case_ci_uses_tag_pinned|CI action pinning: tag-pinned uses: ref under merge autonomy -> WARN naming file:ref"
   "ci-uses-sha-pinned|case_ci_uses_sha_pinned|CI action pinning: SHA-pinned uses: ref, commented-out unpinned line -> PASS, comment-stripping control"
   "ci-uses-no-merge-policy|case_ci_uses_no_merge_policy|CI action pinning: tag-pinned uses: ref with no Merge autonomy policy section -> no output at all"
+  "ci-uses-composite-tag-pinned|case_ci_uses_composite_tag_pinned|CI action pinning: local composite action's tag-pinned uses: ref surfaced (#179 repro), local-to-local ref skipped"
+  "ci-uses-composite-sha-pinned|case_ci_uses_composite_sha_pinned|CI action pinning: workflow + composite-action refs share one counter, commented-out uses: line inside action file excluded by the anchored extraction grep"
+  "ci-uses-composite-nested|case_ci_uses_composite_nested|CI action pinning: action.yml two levels below .github/actions/ still scanned"
   "merge-deny-only|case_merge_deny_only|entry_has: merge rule in deny only"
   "merge-deny-local-only|case_merge_deny_local_only|merge verdict: half-activated remediation names the file holding the deny (settings.local.json)"
   "merge-mention-only|case_merge_mention_only|entry_has: 'only' inside an unrelated JSON string"

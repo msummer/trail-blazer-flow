@@ -24,8 +24,10 @@
 #                         normalised) — {author, association, createdAt, url}, or null when no
 #                         such comment exists.
 #   trusted_post_plan  : trusted comments posted after that plan, excluding the plan marker
-#                         itself and any comment opening "<!-- verifier-verdict -->" (the
-#                         orchestrator's own archive, not human context) — same field shape.
+#                         itself and any comment containing "<!-- verifier-verdict -->" (the
+#                         orchestrator's own archive) or "<!-- harness-audit -->" (a harness-
+#                         authored audit/hygiene record) anywhere in its body — neither is human
+#                         context — same field shape.
 #   untrusted_post_plan: non-trusted comments posted after the plan (or after nothing, if there
 #                         is no trusted plan yet) — same field shape plus has_plan_marker, so a
 #                         forged plan comment from an untrusted author is visible but never
@@ -69,9 +71,11 @@
 # issue gets no plan_selection entry, every other ready issue still gets one), no_trusted_plan,
 # trusted_post_plan, untrusted_post_plan (totals across all issues), untrusted_plan_markers,
 # verdict_archives_skipped (trusted, post-plan, verdict-marker-carrying comments excluded from
-# trusted_post_plan), missing_association, plan_after_approval, no_approval_event, and
-# approval_unreadable (the last three from #174's approval binding, one per corresponding
-# `reason`). ready and counts.ready/counts.truncated keep their current names and computation.
+# trusted_post_plan), audit_comments_skipped (trusted, post-plan, harness-audit-marker-carrying
+# comments excluded from trusted_post_plan the same way), missing_association,
+# plan_after_approval, no_approval_event, and approval_unreadable (the last three from #174's
+# approval binding, one per corresponding `reason`). ready and counts.ready/counts.truncated
+# keep their current names and computation.
 #
 # Requires: gh (authenticated), jq. Run from anywhere inside the repo.
 set -euo pipefail
@@ -79,6 +83,7 @@ set -euo pipefail
 LIMIT=100
 PLAN_MARKER="<!-- planner-plan -->"
 VERDICT_MARKER="<!-- verifier-verdict -->"
+AUDIT_MARKER="<!-- harness-audit -->"
 
 # GitHub's authorAssociation enum: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR,
 # FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, NONE. Only the first three carry repo
@@ -140,6 +145,7 @@ trusted_post_plan_total=0
 untrusted_post_plan_total=0
 untrusted_plan_markers=0
 verdict_archives_skipped=0
+audit_comments_skipped=0
 missing_association=0
 plan_after_approval=0
 no_approval_event=0
@@ -156,7 +162,7 @@ for n in $ready_numbers; do
     fetch_failures=$((fetch_failures+1))
     continue
   fi
-  result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg v "$VERDICT_MARKER" --arg trusted "$TRUSTED_ASSOCIATIONS" '
+  result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg v "$VERDICT_MARKER" --arg a "$AUDIT_MARKER" --arg trusted "$TRUSTED_ASSOCIATIONS" '
     ($trusted | split(" ")) as $ok
     | (.comments // []) as $c
     | ($c | map(select( ((.authorAssociation // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null ))) as $trustedC
@@ -174,6 +180,7 @@ for n in $ready_numbers; do
           else [ $trustedC[]
                  | select((.body | contains($m)) | not)
                  | select((.body | contains($v)) | not)
+                 | select((.body | contains($a)) | not)
                  | select(.createdAt > $lastPlan)
                  | { author: (.author.login // "unknown"), association: (.authorAssociation // ""),
                      createdAt: .createdAt, url: (.url // null) } ]
@@ -191,6 +198,11 @@ for n in $ready_numbers; do
         verdict_archives_skipped: (
           if $lastPlan == null then 0
           else ([ $trustedC[] | select(.body | contains($v)) | select(.createdAt > $lastPlan) ] | length)
+          end
+        ),
+        audit_comments_skipped: (
+          if $lastPlan == null then 0
+          else ([ $trustedC[] | select(.body | contains($a)) | select(.createdAt > $lastPlan) ] | length)
           end
         )
       }
@@ -293,6 +305,9 @@ for n in $ready_numbers; do
 
   issue_verdict_skipped=$(printf '%s' "$result" | jq '.verdict_archives_skipped')
   verdict_archives_skipped=$((verdict_archives_skipped+issue_verdict_skipped))
+
+  issue_audit_skipped=$(printf '%s' "$result" | jq '.audit_comments_skipped')
+  audit_comments_skipped=$((audit_comments_skipped+issue_audit_skipped))
 done
 
 jq -n \
@@ -305,6 +320,7 @@ jq -n \
   --argjson upp "$untrusted_post_plan_total" \
   --argjson upm "$untrusted_plan_markers" \
   --argjson vas "$verdict_archives_skipped" \
+  --argjson acs "$audit_comments_skipped" \
   --argjson ma "$missing_association" \
   --argjson paa "$plan_after_approval" \
   --argjson nae "$no_approval_event" \
@@ -318,6 +334,7 @@ jq -n \
              untrusted_post_plan: $upp,
              untrusted_plan_markers: $upm,
              verdict_archives_skipped: $vas,
+             audit_comments_skipped: $acs,
              missing_association: $ma,
              plan_after_approval: $paa,
              no_approval_event: $nae,

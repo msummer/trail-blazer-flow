@@ -56,10 +56,11 @@ three-file union (#175 — a grant living only in `.claude/settings.local.json` 
 a spurious toolchain WARN), the test-suite ratchet's fence-aware section slice with a
 fence-delimiter-skipping span hunt, the verification baseline's short-SHA-as-prefix compare, the
 `disableAllHooks: true` WARN across the three settings files, the stale-legacy-`-C`-allow WARN on
-`.claude/settings.json`, and (#175, gated on a "Merge autonomy policy" section) a WARN naming any
-`uses:` ref in a consumer's `.github/workflows/*.yml`/`*.yaml` — local (`./…`, `../…`) and
-`docker://` refs excepted — not pinned to a full 40-hex commit SHA) that would otherwise only be
-hand-verified. It runs in CI as the third step, but it is not part of
+`.claude/settings.json`, and (#175, gated on a "Merge autonomy policy" section, widened by #179) a
+WARN naming any `uses:` ref in a consumer's `.github/workflows/*.yml`/`*.yaml` and in any
+`action.yml`/`action.yaml` at any depth under `.github/actions/` — local (`./…`, `../…`) and
+`docker://` refs excepted in both — not pinned to a full 40-hex commit SHA) that would otherwise
+only be hand-verified. It runs in CI as the third step, but it is not part of
 `dev/selfcheck.sh` itself — run it by hand whenever `bin/check-harness.sh` or
 `bin/check-decision-record.sh` changes.
 
@@ -98,23 +99,29 @@ posted before it (one posted before that plan is dropped with no bucket entry) �
 #176, the same trust gate applied to WHO OPENED the issue: a non-maintainer-authored issue is
 still planned, but is reported in `untrusted_issue_authors` and never auto-approved, and if the
 installed `gh` can't return issue-level `authorAssociation` the whole run fails closed (every
-issue untrusted, one warn line, `counts.author_association_unavailable: true`). For
-`bin/find-implementation-work.sh` (#176, reusing the identical trust gate rather than forking it)
-it pins the implementer-side plan-selection artifact: a plan-marker comment from an untrusted
-author is never selected as `plan`; an untrusted post-plan comment never lands in
-`trusted_post_plan`; a trusted post-plan comment opening `<!-- verifier-verdict -->` (the
-orchestrator's own archive) is excluded from `trusted_post_plan` too; a comment missing
-`authorAssociation` entirely is fail-closed untrusted; and an issue with no trusted plan comment
-yields `plan: null` but stays in `ready`. It also pins that script's plan-binding approval
+issue untrusted, one warn line, `counts.author_association_unavailable: true`) — plus, since
+#182, a trusted comment containing `<!-- harness-audit -->` (a harness-authored audit/hygiene
+record) or `<!-- verifier-verdict -->` (the orchestrator's own archive) never counts as feedback
+either, so neither re-opens a plan for revision (`counts.audit_comments_skipped` /
+`counts.verdict_archives_skipped`), while a forged marker from an untrusted author still lands in
+`untrusted_comments`, never silently dropped. For `bin/find-implementation-work.sh` (#176,
+reusing the identical trust gate rather than forking it) it pins the implementer-side
+plan-selection artifact: a plan-marker comment from an untrusted author is never selected as
+`plan`; an untrusted post-plan comment never lands in `trusted_post_plan`; a trusted post-plan
+comment containing `<!-- verifier-verdict -->` (the orchestrator's own archive) or, since #182,
+`<!-- harness-audit -->` (a harness-authored audit/hygiene record) is excluded from
+`trusted_post_plan` too (`counts.verdict_archives_skipped` / `counts.audit_comments_skipped`),
+while a forged marker from an untrusted author still lands in `untrusted_post_plan`; a comment
+missing `authorAssociation` entirely is fail-closed untrusted; and an issue with no trusted plan
+comment yields `plan: null` but stays in `ready`. It also pins that script's plan-binding approval
 provenance (#174, the same script's `plan_selection` entry gains `approval`/`binding_line`): a
 plan comment posted after the newest `plan-approved` labeling event is not covered
 (`covers_plan: false`, `reason: "plan-after-approval"`); the newest of several relabel events
 decides, not the first; equal plan/label timestamps still count as covered; an unreadable events
 lookup fails closed (`covers_plan: null`); and `--issue <n>` single-issue mode (used by the
 implementer skill's fresh per-issue revalidation) returns the identical output shape for exactly
-one issue regardless of its labels, with an unknown flag or non-numeric `<n>` exiting 2. It runs
-in CI as the sixth and last step, but it is not
-part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh` or
+one issue regardless of its labels, with an unknown flag or non-numeric `<n>` exiting 2. It runs in CI as the sixth and last step, but it
+is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh` or
 `bin/find-implementation-work.sh` changes.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the

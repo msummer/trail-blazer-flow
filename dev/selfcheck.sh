@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 47 assertions total. The gate prints what it checks — run it.
+# Five groups, 48 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -612,9 +612,9 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 485
+budget_table="issue-implementer 490
 issue-cycle 330
-issue-planner 405
+issue-planner 430
 project-kickoff 215
 test-ratchet 200
 harness-setup 185"
@@ -713,7 +713,9 @@ fi
 # the full key line is never a fixed string; the fine-grained spacing of the writer's key-line
 # template is left to assertion 5.7. #176 gave bin/find-implementation-work.sh its own
 # verdict-marker exclusion (a verifier-verdict comment is never binding human context, so it's
-# excluded from trusted_post_plan), so the verdict marker is pinned there too.
+# excluded from trusted_post_plan), so the verdict marker is pinned there too; #182 gave
+# bin/find-planning-work.sh the symmetric planner-side exclusion (a verdict archive never
+# re-triggers a revision), so the verdict marker is pinned there too.
 missing=""
 for marker in '<!-- verifier-verdict -->' '<!-- verifier-verdict-branch:'; do
   for f in skills/issue-implementer/SKILL.md skills/issue-cycle/SKILL.md; do
@@ -721,8 +723,9 @@ for marker in '<!-- verifier-verdict -->' '<!-- verifier-verdict-branch:'; do
   done
 done
 grep -qF -- '<!-- verifier-verdict -->' "$root/bin/find-implementation-work.sh" || missing="$missing bin/find-implementation-work.sh(<!-- verifier-verdict -->)"
+grep -qF -- '<!-- verifier-verdict -->' "$root/bin/find-planning-work.sh" || missing="$missing bin/find-planning-work.sh(<!-- verifier-verdict -->)"
 if [ -z "$missing" ]; then
-  ok "4.19 '<!-- verifier-verdict -->' and '<!-- verifier-verdict-branch:' present in skills/issue-implementer/SKILL.md, skills/issue-cycle/SKILL.md, and bin/find-implementation-work.sh"
+  ok "4.19 '<!-- verifier-verdict -->' and '<!-- verifier-verdict-branch:' present in skills/issue-implementer/SKILL.md, skills/issue-cycle/SKILL.md, bin/find-implementation-work.sh, and bin/find-planning-work.sh"
 else
   bad "4.19 markers missing from:$missing"
 fi
@@ -892,6 +895,25 @@ else
     [ -n "$impl_not_planning" ] && msg="$msg association(s) in find-implementation-work.sh but not find-planning-work.sh: $(printf '%s' "$impl_not_planning" | tr '\n' ' ');"
     bad "$msg"
   fi
+fi
+
+# 4.27 — the literal harness-audit marker (a marker literal, not prose — CLAUDE.md's
+# machine-parsed-artifacts rule) appears in every writer that must open a harness-authored
+# record with it and every consumer that must exclude such a record from its binding comment
+# set (#182): the two SKILL.md files that instruct posting it, the script that prefixes it onto
+# cleanup-after-merge.sh's audit comments, and both discovery scripts that filter it out of
+# their binding sets (find-implementation-work.sh's trusted_post_plan, find-planning-work.sh's
+# has_feedback). Mirrors 4.16/4.17/4.19 — a floor that greps for a marker nobody writes, or that
+# nobody filters, is the exact failure this pins.
+marker='<!-- harness-audit -->'
+missing=""
+for f in skills/issue-planner/SKILL.md skills/issue-implementer/SKILL.md bin/cleanup-after-merge.sh bin/find-planning-work.sh bin/find-implementation-work.sh; do
+  grep -qF -- "$marker" "$root/$f" || missing="$missing $f"
+done
+if [ -z "$missing" ]; then
+  ok "4.27 '$marker' present in skills/issue-planner/SKILL.md, skills/issue-implementer/SKILL.md, bin/cleanup-after-merge.sh, bin/find-planning-work.sh, and bin/find-implementation-work.sh"
+else
+  bad "4.27 '$marker' missing from:$missing"
 fi
 
 # 4.28 — fixed-string presence of the literal '<!-- harness-plan-binding:' marker prefix in the

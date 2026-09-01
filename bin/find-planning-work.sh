@@ -6,7 +6,10 @@
 #   needs_revision     : open issues labelled plan-proposed (and not plan-approved) that have
 #                        a comment posted by a maintainer (OWNER/MEMBER/COLLABORATOR) AFTER the
 #                        most recent trusted plan comment — i.e. feedback the planner hasn't
-#                        addressed yet.
+#                        addressed yet. A harness-authored record (a comment containing
+#                        "<!-- harness-audit -->" or "<!-- verifier-verdict -->" anywhere in its
+#                        body) never counts as feedback, even from a trusted account — it's a
+#                        record, not a decision.
 #
 # Issues labelled "no-plan" are excluded from BOTH buckets — add that label to keep an issue
 # (tracking, discussion, question, etc.) out of the planning workflow entirely.
@@ -17,7 +20,12 @@
 # a comment to be recognised as either: an untrusted comment never becomes the latest plan and
 # never counts as feedback, regardless of the marker or its position in the thread. Untrusted
 # comments posted after the latest trusted plan are reported in the untrusted_comments output
-# bucket instead of being silently dropped, so the human still sees them.
+# bucket instead of being silently dropped, so the human still sees them. A second, orthogonal
+# exclusion also applies inside the trusted set: a trusted comment containing
+# "<!-- harness-audit -->" (a harness-authored audit/hygiene record) or "<!-- verifier-verdict -->"
+# anywhere in its body (the orchestrator's own archive) is never treated as feedback either, and
+# is reported in counts.audit_comments_skipped / counts.verdict_archives_skipped instead — this
+# only ever narrows the trusted set, so it never adds anything to untrusted_comments.
 #
 # #176 extends the same trust boundary to WHO OPENED the issue, not just who commented on it:
 # both needs_initial_plan and needs_revision items now carry {author, association,
@@ -39,8 +47,10 @@
 # untrusted_plan_markers (how many of those carried the plan marker — ignored for plan selection
 # because their author wasn't trusted), missing_association (how many comments, across all
 # issues, carried no authorAssociation field at all — treated as untrusted, fail-closed, per the
-# warn stems below), untrusted_issue_authors (count of the array above), and
-# author_association_unavailable (boolean, see above).
+# warn stems below), audit_comments_skipped and verdict_archives_skipped (trusted, post-plan
+# comments containing "<!-- harness-audit -->" / "<!-- verifier-verdict -->" respectively, excluded
+# from has_feedback so neither re-opens a plan for revision), untrusted_issue_authors (count of
+# the array above), and author_association_unavailable (boolean, see above).
 #
 # Skipped automatically:
 #   - plan-proposed with no newer trusted non-plan comment -> awaiting your review, nothing to do
@@ -54,6 +64,8 @@ set -euo pipefail
 
 LIMIT=100
 PLAN_MARKER="<!-- planner-plan -->"
+AUDIT_MARKER="<!-- harness-audit -->"
+VERDICT_MARKER="<!-- verifier-verdict -->"
 
 # GitHub's authorAssociation enum: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR,
 # FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, NONE. Only the first three carry repo
@@ -108,6 +120,8 @@ fetch_failures=0
 untrusted_comment_total=0
 untrusted_plan_markers=0
 missing_association=0
+audit_comments_skipped=0
+verdict_archives_skipped=0
 for n in $candidates; do
   # Tolerate per-issue failures: one transient gh/API error must not kill the whole
   # discovery run (matters for unattended/scheduled runs). The issue is simply
@@ -117,7 +131,7 @@ for n in $candidates; do
     fetch_failures=$((fetch_failures+1))
     continue
   fi
-  result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg trusted "$TRUSTED_ASSOCIATIONS" '
+  result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg a "$AUDIT_MARKER" --arg v "$VERDICT_MARKER" --arg trusted "$TRUSTED_ASSOCIATIONS" '
     ($trusted | split(" ")) as $ok
     | (.comments // []) as $c
     | ($c | map(select( ((.authorAssociation // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null ))) as $trustedC
@@ -127,6 +141,8 @@ for n in $candidates; do
           if $lastPlan == null then false
           else ([ $trustedC[]
                   | select((.body | contains($m)) | not)
+                  | select((.body | contains($a)) | not)
+                  | select((.body | contains($v)) | not)
                   | select(.createdAt > $lastPlan) ] | length) > 0
           end
         ),
@@ -137,7 +153,17 @@ for n in $candidates; do
               association: (.authorAssociation // "MISSING"),
               createdAt: .createdAt,
               has_plan_marker: (.body | contains($m)) } ],
-        missing_association: ([ $c[] | select(has("authorAssociation") | not) ] | length)
+        missing_association: ([ $c[] | select(has("authorAssociation") | not) ] | length),
+        audit_comments_skipped: (
+          if $lastPlan == null then 0
+          else ([ $trustedC[] | select(.body | contains($a)) | select(.createdAt > $lastPlan) ] | length)
+          end
+        ),
+        verdict_archives_skipped: (
+          if $lastPlan == null then 0
+          else ([ $trustedC[] | select(.body | contains($v)) | select(.createdAt > $lastPlan) ] | length)
+          end
+        )
       }
   ')
 
@@ -179,6 +205,12 @@ for n in $candidates; do
     echo "warn: issue #$n: $issue_missing comment(s) have no authorAssociation field, treated as untrusted" >&2
     missing_association=$((missing_association+issue_missing))
   fi
+
+  issue_audit_skipped=$(printf '%s' "$result" | jq '.audit_comments_skipped')
+  audit_comments_skipped=$((audit_comments_skipped+issue_audit_skipped))
+
+  issue_verdict_skipped=$(printf '%s' "$result" | jq '.verdict_archives_skipped')
+  verdict_archives_skipped=$((verdict_archives_skipped+issue_verdict_skipped))
 done
 
 # untrusted_issue_authors: every needs_initial_plan/needs_revision item with trusted_author:
@@ -206,6 +238,8 @@ jq -n \
   --argjson uct "$untrusted_comment_total" \
   --argjson upm "$untrusted_plan_markers" \
   --argjson ma "$missing_association" \
+  --argjson acs "$audit_comments_skipped" \
+  --argjson vas "$verdict_archives_skipped" \
   --argjson uiac "$untrusted_issue_author_count" \
   --argjson aau "$author_association_unavailable" \
   '{needs_initial_plan: $initial, needs_revision: $revision, untrusted_comments: $untrusted,
@@ -216,5 +250,7 @@ jq -n \
              untrusted_comments: $uct,
              untrusted_plan_markers: $upm,
              missing_association: $ma,
+             audit_comments_skipped: $acs,
+             verdict_archives_skipped: $vas,
              untrusted_issue_authors: $uiac,
              author_association_unavailable: $aau}}'
