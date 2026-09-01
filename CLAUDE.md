@@ -113,7 +113,14 @@ comment containing `<!-- verifier-verdict -->` (the orchestrator's own archive) 
 `trusted_post_plan` too (`counts.verdict_archives_skipped` / `counts.audit_comments_skipped`),
 while a forged marker from an untrusted author still lands in `untrusted_post_plan`; a comment
 missing `authorAssociation` entirely is fail-closed untrusted; and an issue with no trusted plan
-comment yields `plan: null` but stays in `ready`. It runs in CI as the sixth and last step, but it
+comment yields `plan: null` but stays in `ready`. It also pins that script's plan-binding approval
+provenance (#174, the same script's `plan_selection` entry gains `approval`/`binding_line`): a
+plan comment posted after the newest `plan-approved` labeling event is not covered
+(`covers_plan: false`, `reason: "plan-after-approval"`); the newest of several relabel events
+decides, not the first; equal plan/label timestamps still count as covered; an unreadable events
+lookup fails closed (`covers_plan: null`); and `--issue <n>` single-issue mode (used by the
+implementer skill's fresh per-issue revalidation) returns the identical output shape for exactly
+one issue regardless of its labels, with an unknown flag or non-numeric `<n>` exiting 2. It runs in CI as the sixth and last step, but it
 is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh` or
 `bin/find-implementation-work.sh` changes.
 

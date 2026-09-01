@@ -163,7 +163,11 @@ A maintainer (`OWNER`/`MEMBER`/`COLLABORATOR`) comments on the issue to request 
 (comment-driven, no label needed) — a comment from anyone else is reported to the human but
 never treated as feedback. Add `plan-approved` to accept. **Approving a plan whose open questions are all ADVISORY accepts the stated
 defaults** — no extra revision round; the orchestrator passes the defaults to the implementer as
-resolved decisions. Plans with unanswered BLOCKING questions shouldn't be approved.
+resolved decisions. Plans with unanswered BLOCKING questions shouldn't be approved. The
+approval binds to the *specific plan comment* the label's newest application postdates (#174,
+see "Approval provenance" below) — approving, then commenting again to trigger a same-run
+revision, returns the issue to review instead of letting the implementer build the revised plan
+under the old approval.
 
 **Plan auto-approval (opt-in).** If the repo's `CLAUDE.md` contains a section titled **"Plan
 auto-approval policy"**, the planner may add `plan-approved` itself for plans that satisfy the
@@ -189,10 +193,15 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    leftover branch is **resumed, not restarted** unless its newest commit is a `wip: blocked —
    …`, in which case it's reset fresh as before — see "Resilience" below. Branches with real
    (non-wip) commits still go to the human.
-2. Dispatches the `implementer` subagent with: issue + full plan (incl. Verified facts) +
+2. Runs a fresh `find-implementation-work.sh --issue <n>` immediately before dispatch and
+   dispatches the `implementer` subagent with: issue + full plan (incl. Verified facts) +
    **resolved answers to every open question** (including binding post-approval comments, taken
-   from `find-implementation-work.sh`'s per-issue plan selection, not read from the thread by
-   hand) + `LESSONS.md` entries. Missing a BLOCKING answer → don't dispatch; ask the human.
+   from that fresh, per-issue run, not read from the thread by hand) + `LESSONS.md` entries.
+   **Plan-binding gate (#174):** the approval must cover the specific plan comment selected — the
+   newest `plan-approved` labeling event must not be earlier than that comment; if it doesn't
+   (e.g. the plan was revised after approval), the issue is **not dispatched**: `plan-approved` is
+   removed and an audit comment posted, naming why. Missing a BLOCKING answer → don't dispatch;
+   ask the human.
    Before reporting, the subagent runs a mandatory evidence pass — sweeping the repo for every
    claim its diff falsifies, mutation-checking each new or rewritten test, pasting every number
    from command output — and records it in its report's Evidence block.
@@ -220,9 +229,13 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    **collapses the run's WIP checkpoint commits** into the working tree (one
    `git reset --soft` to the branch's merge base with the default branch — never the working
    tree itself, which is untouched), stages everything, **reconciles the staged list against the
-   report's "Files changed"** (unexplained files = blocker, not a commit), commits once, pushes,
+   report's "Files changed"** (unexplained files = blocker, not a commit), **re-validates the
+   plan binding** (#174: a fresh `find-implementation-work.sh --issue <n>` run's `binding_line`
+   must still match the one captured before dispatch — otherwise no commit, no push, the blocked
+   path instead, and `plan-approved` removed), commits once, pushes,
    opens the PR (`Closes #n`, verification results, **the verifier's own closing status line
-   pasted verbatim** — never one the orchestrator composes on its behalf — a `Mutation probe:`
+   pasted verbatim** — never one the orchestrator composes on its behalf — the re-validated
+   `binding_line` pasted verbatim too, a `Mutation probe:`
    line carrying the verdict's mutation-probe result, the implementer's Evidence block condensed
    to its Claims-swept and Mutation-checks lines, schema notes, verifier notes), labels
    `pr-open`. The PR still ends up as one clean commit, exactly as before.
@@ -460,7 +473,11 @@ planning entirely (tracking/discussion/question issues — also applied automati
 `no-auto-approve` to keep an individual issue's approval manual even when CLAUDE.md defines an
 auto-approval policy. `test-ratchet` marks an issue the test-suite ratchet filed, and a plan
 follow-up the implementer files carries a `<!-- harness-follow-up: PR #<n> -->` marker naming
-its source PR; both are harness-authored, so both also carry `no-auto-approve`. Humans gate
+its source PR; both are harness-authored, so both also carry `no-auto-approve`. `plan-approved`
+can also come back off: the `issue-implementer` skill removes it (with an audit comment) when the
+approval no longer covers the freshest plan comment — a same-run revision landed after the label
+was applied (#174) — returning the issue to the human's review queue rather than building the
+wrong version. Humans gate
 twice: plan approval and PR merge — each manual unless the repo's CLAUDE.md explicitly
 delegates it (see "The CLAUDE.md contract"; merge delegation additionally requires the human
 to lift the `gh pr merge` deny).
@@ -511,7 +528,9 @@ subagents need:
    top (standard-flow PRs only, the PR body carrying the verifier's own `outcome=pass` status
    line — not prose — checked mechanically and cross-checked against the dispatch ledger *and*
    against the verifier's verdict archived verbatim as an issue comment for that PR's head
-   branch, CI green on the head commit, never the governance surface — CLAUDE.md, `.claude/`,
+   branch, *and* against the approval covering the specific plan comment implemented — the PR
+   body's `binding_line` matched against a fresh `find-implementation-work.sh` run (#174) — CI
+   green on the head commit, never the governance surface — CLAUDE.md, `.claude/`,
    policy/ADR docs, CI config — nothing flagged for human decision, one merge at a time with
    re-verification between, every merge audited in the cycle report). **No section means no
    autonomous merges** — behavior is exactly the
@@ -1086,6 +1105,26 @@ misreporting orchestrator can still fabricate them; the gain is that doing so no
 consistent, durably visible artifacts instead of one, raising the cost of asserting a verification
 event that didn't happen rather than eliminating the possibility.
 
+**Approval provenance** (#174). The `plan-approved` label attaches to the *issue*, not to a
+specific plan comment, so a naive read of the label alone can't tell a still-current approval
+from one a later revision has silently outrun. `find-implementation-work.sh` closes that gap with
+an identity-and-freshness binding, computed fresh every time it's asked: it reads the newest
+`labeled` event for `plan-approved` from GitHub's own issue-events API and compares its timestamp
+against the selected plan comment's `createdAt` — the approval **covers** the plan only when the
+label's newest application is not earlier than the comment (equal timestamps count, so the
+auto-approval path — which labels immediately after posting — always covers its own plan). When
+it does, the script emits a `binding_line` naming the specific plan comment and approval
+timestamp; the `issue-implementer` skill revalidates this **before dispatch and again before
+push** — a same-run revision landing in between un-covers the plan, and the skill removes
+`plan-approved` and returns the issue to review rather than build a plan nobody approved — and
+the `issue-cycle` merge pass revalidates it once more, requiring that same `binding_line` verbatim
+in the PR body before an autonomous merge. Honest limit: like verdict provenance above, all three
+checkpoints (the discovery script, the PR body, the merge pass) are orchestrator-written and share
+one `gh` identity, so this raises the cost of asserting an approval that didn't happen rather than
+eliminating it; and it binds the plan comment's *identity* and *timing*, not its *content* — an
+in-place edit of an already-approved comment is not detected (a named follow-up, deliberately out
+of scope here).
+
 **The body-hash grant pattern is a tripwire, not a control** (see "The CLAUDE.md contract" item
 8). It exists only as a documented convention a consuming repo may adopt in its own CLAUDE.md —
 this harness never computes or verifies a body hash itself. Even where a repo adopts it, the
@@ -1150,7 +1189,9 @@ and can never be auto-approved, though it is still planned (#176). `find-impleme
 enforces the implementer-facing half the same way: it selects each ready issue's approved plan
 comment and binding post-plan comments itself, using the identical trust gate (gate assertion
 4.26 pins that the two scripts' trusted-association lists agree), so the `issue-implementer`
-orchestrator reads a filtered artifact instead of applying the rule from memory (#176). Both
+orchestrator reads a filtered artifact instead of applying the rule from memory (#176) — the
+same script also computes the approval-binding verdict described in "Approval provenance" above
+(#174). Both
 scripts share a second, orthogonal exclusion inside the trusted set (#182): any trusted comment
 containing `<!-- harness-audit -->` (a harness-authored audit/hygiene record — the planner's
 auto-approval audit trail, its `plan-approved` staleness note, the implementer's interrupted-run
