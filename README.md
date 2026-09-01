@@ -195,8 +195,11 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    (non-wip) commits still go to the human.
 2. Runs a fresh `find-implementation-work.sh --issue <n>` immediately before dispatch and
    dispatches the `implementer` subagent with: issue + full plan (incl. Verified facts) +
-   **resolved answers to every open question** (including binding post-approval comments, taken
-   from that fresh, per-issue run, not read from the thread by hand) + `LESSONS.md` entries.
+   **resolved answers to every open question** (as `RESOLVED:` decisions built ONLY from the trusted
+   post-plan comments that `find-implementation-work.sh` marks `covered_by_approval: true` — a
+   comment posted after the `plan-approved` label is `covered_by_approval: false`, reported to the
+   human instead of folded in as a binding decision, per #194 — taken from that fresh, per-issue
+   run, not read from the thread by hand) + `LESSONS.md` entries.
    **Plan-binding gate (#174):** the approval must cover the specific plan comment selected — the
    newest `plan-approved` labeling event must not be earlier than that comment; if it doesn't
    (e.g. the plan was revised after approval), the issue is **not dispatched**: `plan-approved` is
@@ -1155,7 +1158,14 @@ checkpoints (the discovery script, the PR body, the merge pass) are orchestrator
 one `gh` identity, so this raises the cost of asserting an approval that didn't happen rather than
 eliminating it; and it binds the plan comment's *identity* and *timing*, not its *content* — an
 in-place edit of an already-approved comment is not detected (a named follow-up, deliberately out
-of scope here).
+of scope here). The same binding also governs each trusted post-plan *comment*, not just the plan
+(#194): `find-implementation-work.sh` marks every `trusted_post_plan` entry
+`covered_by_approval: true` when the comment's `createdAt` is not later than `approval.approved_at`
+and `false` when it is later — a maintainer who comments after approving is not silently treated
+as having amended the approved plan; the comment is reported to the human (`counts.
+post_approval_comments`, a `warn:` line) instead of becoming a binding `RESOLVED:` decision. To
+make a post-approval comment binding, remove and re-add `plan-approved` — the same audited path
+#174 already documents, not a new surface.
 
 **The body-hash grant pattern is a tripwire, not a control** (see "The CLAUDE.md contract" item
 8). It exists only as a documented convention a consuming repo may adopt in its own CLAUDE.md —
@@ -1226,8 +1236,9 @@ same script also computes the approval-binding verdict described in "Approval pr
 (#174). Both
 scripts share a second, orthogonal exclusion inside the trusted set (#182): any trusted comment
 containing `<!-- harness-audit -->` (a harness-authored audit/hygiene record — the planner's
-auto-approval audit trail, its `plan-approved` staleness note, the implementer's interrupted-run
-and worktree-sweep notes, `cleanup-after-merge.sh`'s hygiene comments) or `<!-- verifier-verdict
+auto-approval audit trail, its `plan-approved` staleness note, its step-7 stalled-stage escalation
+comment (#194), the implementer's interrupted-run and worktree-sweep notes,
+`cleanup-after-merge.sh`'s hygiene comments) or `<!-- verifier-verdict
 -->` (the orchestrator's own archive) anywhere in its body is excluded from
 `find-planning-work.sh`'s feedback detection and `find-implementation-work.sh`'s
 `trusted_post_plan` alike — a harness-authored record is never binding context, on either side of
@@ -1237,7 +1248,12 @@ verbatim inside their own feedback has that comment silently dropped from both b
 no revision, no `trusted_post_plan` entry, and no warning; accepted as an inherited risk rather
 than fixed here. The filter only ever narrows the trusted set: a forged marker from an untrusted
 author still surfaces, unfiltered, in `untrusted_comments` / `untrusted_post_plan`, exactly like
-a forged plan marker does (gate
+a forged plan marker does — and, since #194, is additionally FLAGGED there: both scripts add a
+`has_harness_marker: true` boolean to that entry (alongside the existing `has_plan_marker`),
+counted in `counts.untrusted_harness_markers` and named in a `warn:` line, so the human sees the
+impersonation called out rather than having to notice the marker text themselves — annotation
+only, the untrusted bucket is still never filtered by it (gate assertion 4.29 pins that the two
+scripts' flag names agree; gate
 assertion 4.27 pins the marker's presence in every writer and consumer). Three comment surfaces
 stay deliberately unmarked because they *are* the feedback that drives a subsequent dispatch, not
 a record of one: the planner's `plan-proposed` staleness note, its proposed-answers comment, and
