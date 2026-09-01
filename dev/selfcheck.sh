@@ -816,7 +816,14 @@ fi
 # vacuously, same guard as 2.5/2.7/4.13. Only the SHA is enforced here — the trailing `# vX.Y.Z`
 # tag comment is left as a review-level convention, not machine-checked. A future local (`./…`) or
 # `docker://` action ref cannot be SHA-pinned this way; that needs an explicit exclusion added to
-# this assertion, not a silent gap — the same policy assertion 4.9's comment states.
+# this assertion, not a silent gap — the same policy assertion 4.9's comment states. Scope stays
+# workflows-only, unlike the consumer doctor's CI-pinning WARN (bin/check-harness.sh, #186), which
+# scans every action.yml/action.yaml anywhere in the repo: this repo has no .github/actions/
+# directory and no action.yml/action.yaml anywhere (verified at #186's implementation), so there is
+# nothing for this assertion to miss today. If a local composite action is ever added here, this
+# assertion must be widened in the same PR to mirror that repo-wide enumeration (the same `find`,
+# pruning `.git`, `node_modules`, and .github/workflows), with a matching dev/selfcheck-tests.sh
+# perturbation case — not left as a silent gap between this repo's own gate and the doctor it ships.
 uses_total=0
 bad_uses=""
 for wf24 in "$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml; do

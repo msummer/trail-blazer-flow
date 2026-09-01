@@ -12,12 +12,12 @@
 # activated by the effective merge-permission state across .claude/settings.json,
 # .claude/settings.local.json, and the user-level settings file (a deny in any of them wins,
 # regardless of allows elsewhere — union semantics, not just the checked-in file), whether a
-# consumer's CI workflows and the local composite actions under `.github/actions/` pin every
+# consumer's CI workflows and every action.yml/action.yaml anywhere in the repo pin every
 # `uses:` ref to a full 40-hex commit SHA rather than a mutable tag or branch, when that "Merge
-# autonomy policy" section is present (#166, #179 — under merge autonomy the cycle merges on "CI
-# green", so a repointed tag would change what CI runs with no diff visible in this repo; string
-# comparison only — never executes, evals, or expands anything read from a workflow file or an
-# action.yml/action.yaml under .github/actions/), whether its optional "Post-merge verification"
+# autonomy policy" section is present (#166, #179, #186 — under merge autonomy the cycle merges on
+# "CI green", so a repointed tag would change what CI runs with no diff visible in this repo;
+# string comparison only — never executes, evals, or expands anything read from a workflow file or
+# an action.yml/action.yaml anywhere in the repo), whether its optional "Post-merge verification"
 # declaration is present and, if so, fenced (declared/no-fence/not-declared — never whether the
 # declared commands are any good) and whether each declared command's first token has a matching
 # allow entry in that same three-file union, whether a "Test-suite ratchet policy" section exists
@@ -624,31 +624,37 @@ else
     fi
   fi
 
-  # --- CI action pinning (#166, #179) --- gated on $has_merge_policy: under merge autonomy the
-  # cycle merges on "CI green" (see the merge-autonomy verdict above), so a `uses:` ref pinned to
-  # a mutable tag or branch lets that tag's owner repoint what CI executes with no diff visible
+  # --- CI action pinning (#166, #179, #186) --- gated on $has_merge_policy: under merge autonomy
+  # the cycle merges on "CI green" (see the merge-autonomy verdict above), so a `uses:` ref pinned
+  # to a mutable tag or branch lets that tag's owner repoint what CI executes with no diff visible
   # in this repo — the workflow's own green check is the blast radius. String comparison only:
   # never `eval`, `command -v`, or expand anything read from a workflow or action file. Scans two
   # file classes into one shared counter and one WARN/PASS pair: (1) "$root"/.github/workflows/
-  # *.yml|*.yaml, and (2) every action.yml/action.yaml at any depth under "$root"/.github/actions/
-  # (found via a pruned `find`, .git and node_modules excluded — a vendored JS action's
-  # node_modules could otherwise contribute stray files) — because a workflow that only calls a
-  # local composite action (`uses: ./.github/actions/setup`) would otherwise get a clean PASS
-  # while an unpinned `uses:` inside that composite stays repointable (#179). The per-file
-  # extraction (ci_scan_uses_file) mirrors this repo's own dev/selfcheck.sh assertion 4.24 as an
-  # idiom (comment-stripped by LINE first, so a commented-out unpinned `uses:` line can't
+  # *.yml|*.yaml, and (2) every action.yml/action.yaml anywhere in the repo, found via a
+  # repo-wide `find` pruning `.git`, `node_modules`, and "$root"/.github/workflows (the last so a
+  # workflow file literally named action.yml is never scanned twice) — because a workflow that
+  # only calls a local composite action (`uses: ./tools/ci-setup`) would otherwise get a clean
+  # PASS while an unpinned `uses:` inside that composite stays repointable (#179, #186 — a local
+  # composite action can live anywhere, not just under .github/actions/, so enumeration is
+  # repo-wide rather than scoped to that one directory; this also catches an action.yml not yet
+  # referenced by any workflow, and never turns an untrusted `uses:` ref string into a filesystem
+  # path — the `find` only ever walks paths the doctor already owns). The per-file extraction
+  # (ci_scan_uses_file) mirrors this repo's own dev/selfcheck.sh assertion 4.24 as an idiom
+  # (comment-stripped by LINE first, so a commented-out unpinned `uses:` line can't
   # false-positive, plus a CRLF strip and a surrounding-quote strip that 4.24 doesn't need — a
   # consumer's file may be CRLF and/or quoted, unlike this repo's own) — 4.24's own *scope* stays
-  # workflows-only (dev/selfcheck.sh:806-845), so this check's scope is now wider than 4.24's.
+  # workflows-only (dev/selfcheck.sh:809-855), so this check's scope is now wider than 4.24's.
   # Same skip inside both file classes for local (`./…`, `../…`) and `docker://` refs — not
   # SHA-pinnable / a different pinning syntax, documented here rather than left silent, same as
   # 4.24's own comment on that same gap. Refs found inside an action file are never followed:
-  # coverage of a nested local composite comes from *enumerating* .github/actions/, not from
-  # chasing `./…` refs, so three gaps remain unscanned and are named honestly rather than implied
-  # covered: a local action living outside .github/actions/ (e.g. `./tools/setup`), a symlinked
-  # action directory (`find` does not descend symlinks by default), and the internals of a
-  # reusable workflow owned by another repo (the ref to it is still checked, just not its body).
-  # Never FAILs: this is a WARN-only, advisory check, so the doctor's exit code is unaffected.
+  # coverage of a nested local composite comes from *enumerating* every action.yml/action.yaml in
+  # the repo, not from chasing `./…` refs, so gaps remain unscanned and are named honestly rather
+  # than implied covered: an action metadata file inside a pruned .git/ or node_modules/ tree, a
+  # symlinked action directory (`find` does not descend symlinks by default, so a target outside
+  # the repo is unreachable — and unexecutable by GitHub's own runner either), and the internals
+  # of a reusable workflow owned by another repo (the ref to it is still checked, just not its
+  # body). Never FAILs: this is a WARN-only, advisory check, so the doctor's exit code is
+  # unaffected.
   if $has_merge_policy; then
     ci_uses_total=0
     ci_bad_count=0
@@ -693,22 +699,20 @@ EOF
       [ -f "$wf" ] || continue
       ci_scan_uses_file "$wf"
     done
-    if [ -d "$root/.github/actions" ]; then
-      action_files="$(find "$root/.github/actions" -type f \( -name 'action.yml' -o -name 'action.yaml' \) -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | LC_ALL=C sort)"
-      while IFS= read -r af; do
-        [ -f "$af" ] || continue
-        ci_scan_uses_file "$af"
-      done <<EOF
+    action_files="$(find "$root" \( -name .git -o -name node_modules -o -path "$root/.github/workflows" \) -prune -o -type f \( -name 'action.yml' -o -name 'action.yaml' \) -print 2>/dev/null | LC_ALL=C sort)"
+    while IFS= read -r af; do
+      [ -f "$af" ] || continue
+      ci_scan_uses_file "$af"
+    done <<EOF
 $action_files
 EOF
-    fi
     ci_bad_list="${ci_bad_list%, }"
     if [ "$ci_uses_total" -gt 0 ]; then
       if [ "$ci_bad_count" -gt 0 ]; then
         more=""; [ "$ci_bad_count" -gt 6 ] && more=" (+$((ci_bad_count-6)) more)"
-        wrn "CI action pinning: $ci_bad_count uses: ref(s) in .github/workflows and .github/actions are not pinned to a full 40-hex commit SHA: $ci_bad_list$more — under merge autonomy the cycle merges on 'CI green', so a repointed tag changes what CI runs with no diff in your repo; pin each to a full commit SHA (keep the tag in a trailing comment)"
+        wrn "CI action pinning: $ci_bad_count uses: ref(s) in .github/workflows and in any action.yml/action.yaml in the repo are not pinned to a full 40-hex commit SHA: $ci_bad_list$more — under merge autonomy the cycle merges on 'CI green', so a repointed tag changes what CI runs with no diff in your repo; pin each to a full commit SHA (keep the tag in a trailing comment)"
       else
-        ok "CI action pinning: all $ci_uses_total uses: ref(s) in .github/workflows and .github/actions are pinned to a full commit SHA"
+        ok "CI action pinning: all $ci_uses_total uses: ref(s) in .github/workflows and in any action.yml/action.yaml in the repo are pinned to a full commit SHA"
       fi
     fi
   fi
