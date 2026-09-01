@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 46 assertions total. The gate prints what it checks — run it.
+# Five groups, 47 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -612,8 +612,8 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 465
-issue-cycle 315
+budget_table="issue-implementer 485
+issue-cycle 330
 issue-planner 405
 project-kickoff 215
 test-ratchet 200
@@ -892,6 +892,22 @@ else
     [ -n "$impl_not_planning" ] && msg="$msg association(s) in find-implementation-work.sh but not find-planning-work.sh: $(printf '%s' "$impl_not_planning" | tr '\n' ' ');"
     bad "$msg"
   fi
+fi
+
+# 4.28 — fixed-string presence of the literal '<!-- harness-plan-binding:' marker prefix in the
+# script that writes binding_line, the skill that revalidates and pastes it into a PR body, and
+# the skill that greps for it before an autonomous merge (#174). Modelled on 4.19 — a floor that
+# greps for a marker nobody writes is the exact failure this pins. Proves only that the literal
+# is present in writer, paster, and checker — not that the check actually runs.
+marker='<!-- harness-plan-binding:'
+missing=""
+for f in bin/find-implementation-work.sh skills/issue-implementer/SKILL.md skills/issue-cycle/SKILL.md; do
+  grep -qF -- "$marker" "$root/$f" || missing="$missing $f"
+done
+if [ -z "$missing" ]; then
+  ok "4.28 '$marker' present in bin/find-implementation-work.sh, skills/issue-implementer/SKILL.md, and skills/issue-cycle/SKILL.md"
+else
+  bad "4.28 '$marker' missing from:$missing"
 fi
 
 # ============================================================================

@@ -218,6 +218,7 @@ p_4_25_commented_out() { edit "$1/.github/dependabot.yml" 's|^\( *\)- package-ec
 p_4_25_interval()      { drop "$1/.github/dependabot.yml" '^[[:space:]]*interval:'; }
 p_4_26_drift()      { edit "$1/bin/find-implementation-work.sh" 's/^TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"$/TRUSTED_ASSOCIATIONS="OWNER MEMBER"/'; }
 p_4_26_extraction() { edit "$1/bin/find-planning-work.sh" 's/TRUSTED_ASSOCIATIONS/TRUSTED_ASSOCIATION_LIST/g'; }
+p_4_28()            { edit "$1/skills/issue-cycle/SKILL.md" 's/harness-plan-binding/harness-planbinding/g'; }
 p_4_20_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(gh pr edit:\*\)"'; }
 p_4_20_orphan_grant() {
   local f="$1/templates/repo-settings.json"
@@ -292,6 +293,7 @@ cases=(
   "4.25-interval|4.25|p_4_25_interval|drop the schedule's interval: line"
   "4.26-drift|4.26|p_4_26_drift|drop COLLABORATOR from bin/find-implementation-work.sh's TRUSTED_ASSOCIATIONS= value only"
   "4.26-extraction|4.26|p_4_26_extraction|rename bin/find-planning-work.sh's TRUSTED_ASSOCIATIONS= line so the gate's extraction comes back empty"
+  "4.28|4.28|p_4_28|rename the plan-binding marker in skills/issue-cycle/SKILL.md only so the writer/paster and the checker disagree"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
   "5.3|5.3|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again"

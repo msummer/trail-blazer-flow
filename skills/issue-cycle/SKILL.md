@@ -96,9 +96,11 @@ against the repo's policy. The policy defines *which* PRs qualify; this **hard f
 on top and is not configurable**:
 
 - **Only PRs from the standard flow** — harness branches whose plan was approved (by the human
-  or the auto-approval policy) and whose PR body carries **the verifier's own closing status
-  line** for that issue with `outcome=pass` — or Dependabot PRs of the update classes the policy
-  names. Never a human's PR. A prose "verifier verdict: pass" without that line is **not** green.
+  or the auto-approval policy, mechanically checked against the specific plan comment approved —
+  see *Plan-binding provenance* below) and whose PR body carries **the verifier's own closing
+  status line** for that issue with `outcome=pass` — or Dependabot PRs of the update classes the
+  policy names. Never a human's PR. A prose "verifier verdict: pass" without that line is **not**
+  green.
   - *Verdict provenance, checked mechanically, before guard (a):* with `<n>` the issue number
     taken from the PR's `claude/<n>-…` head branch (never from prose in the body):
     `gh pr view <pr> --json body --jq '(.body // "") | contains("<!-- harness-status: stage=verifier issue=<n> outcome=pass ")' | tr -d '\r'`
@@ -125,6 +127,17 @@ on top and is not configurable**:
   - *Ledger cross-check*, against the pre-advance check above: the issue's `verifier` ledger row
     must read `pass`; a row reading `fail`/`incomplete`/`died` against a pass line in the PR body
     is a contradiction — don't merge, escalate with both pieces of evidence.
+  - *Plan-binding provenance, checked mechanically* (#174), same `<n>`-from-the-head-branch
+    scoping (harness PRs only; Dependabot PRs skip this bullet): run `find-implementation-work.sh
+    --issue <n>` and read `.plan_selection[0].approval.covers_plan` and
+    `.plan_selection[0].binding_line` — the literal `<!-- harness-plan-binding: issue=<n>
+    plan=<url> approved-at=<ts> -->` when covered, `null` otherwise. `covers_plan` must be `true`
+    and `binding_line` non-null — otherwise **not eligible** ("plan binding:
+    `<approval.reason>`"), one-line reason. Otherwise paste `binding_line` literally as the
+    needle of this one-line, substitution-free command:
+    `gh pr view <pr> --json body --jq '(.body // "") | contains("<paste the binding line here>")' | tr -d '\r'`
+    — anything but `true` is **not eligible** ("the PR body does not carry the printed
+    plan-binding line").
 - **CI green on the head commit**, verified fresh (`gh pr checks`), not remembered; **"no checks
   configured" is not green** unless the policy section explicitly opts a no-CI repo in.
 - **Never the governance surface**: any PR touching `CLAUDE.md`, `.claude/`, the repo's

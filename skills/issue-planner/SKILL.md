@@ -332,7 +332,9 @@ gh issue comment <number> --body-file <tempfile>
 ```
 
 The audit comment (normal comment, no marker) must state: that this was an auto-approval under
-the CLAUDE.md policy; which policy conditions it satisfied (one line); how to veto — remove
+the CLAUDE.md policy; which policy conditions it satisfied (one line); the URL of the plan
+comment this approval binds to (#174) — since the label is added right after the plan is posted,
+an auto-approved plan is always covered by its own approval; how to veto — remove
 `plan-approved`, and add `no-auto-approve` to keep this issue manual in future; and, if step 6's
 granted-issue exception approved any decision, the record bullet(s) each such decision cited.
 Include the warning: *"An auto-approved plan may be implemented in the same run — the PR review

@@ -27,6 +27,13 @@
 #   opening "<!-- verifier-verdict -->" (the orchestrator's own archive) is excluded from
 #   trusted_post_plan too; a comment with no authorAssociation field at all is fail-closed
 #   untrusted; and an issue with no trusted plan comment yields plan: null but stays in `ready`.
+#   #174 added plan-binding provenance on the SAME script: each plan_selection entry's
+#   `approval.covers_plan` is true iff the newest `plan-approved` labeling event is not earlier
+#   than the selected plan comment (a plan posted AFTER the label is not covered — the issue's
+#   named failure), the newest of several relabel events wins, ties count as covered, an
+#   unreadable events lookup fails closed (`covers_plan: null`), and `binding_line` is non-null
+#   iff `covers_plan` is `true`. Also pins `--issue <n>` single-issue mode's output shape and its
+#   exit-2 argument validation.
 #
 # Usage: bash dev/planning-tests.sh [name-filter] — same output contract as
 # dev/cleanup-tests.sh, dev/doctor-tests.sh, and dev/selfcheck-tests.sh: one PASS/FAIL line per
@@ -49,6 +56,14 @@
 #   - reject-association      : (optional, presence-only) makes the stub's authorAssociation-
 #                               bearing `gh issue list` call exit 1, exercising
 #                               find-planning-work.sh's fail-closed fallback
+#   - events-<n>.json          : (#174) the `gh api .../issues/<n>/events` payload for ready
+#                               issue <n> — a plain JSON array of GitHub issue-event objects
+#                               ({event, label:{name}, created_at, actor:{login}}); absent means
+#                               no plan-approved labeling event, degrading to
+#                               reason: no-approval-event rather than a hard failure
+#   - reject-events-<n>        : (optional, presence-only, #174) makes the stub's `gh api` call
+#                               for ready issue <n>'s events exit 1, exercising
+#                               find-implementation-work.sh's fail-closed approval-unreadable path
 # The stub tells find-planning-work.sh's two `gh issue list` calls apart, in order: a call
 # whose args contain "authorAssociation" (the needs_initial_plan query, now requesting the new
 # field) is served from initial.json, or made to fail if reject-association is present; a call
@@ -93,9 +108,9 @@ mk_fixture() {
 }
 
 # build_stub_gh DIR — writes an executable DIR/gh (absolute paths to DIR's own initial.json,
-# candidates.txt, ready.json, and issue-<n>.json fixtures baked in via the __DIR__ + sed idiom
-# dev/cleanup-tests.sh's build_stub_gh uses). Deterministic and offline. Dispatch order for
-# `gh issue list ...` matters — see the header note above:
+# candidates.txt, ready.json, issue-<n>.json, and events-<n>.json fixtures baked in via the
+# __DIR__ + sed idiom dev/cleanup-tests.sh's build_stub_gh uses). Deterministic and offline.
+# Dispatch order for `gh issue list ...` matters — see the header note above:
 #   *"authorAssociation"*  -> exit 1 if DIR/reject-association exists (simulates an older gh
 #                             that doesn't support the issue-level field); else cat
 #                             DIR/initial.json (the needs_initial_plan query, #176's new field)
@@ -105,39 +120,66 @@ mk_fixture() {
 #                             any other plain needs_initial_plan-shaped call)
 # `gh issue view <n> --json ...` -> cat DIR/issue-<n>.json, or exit 1 if that file is absent
 # (simulates a failed fetch for that candidate/ready issue). Anything else -> exit 1.
+#
+# `gh api "repos/{owner}/{repo}/issues/<n>/events?per_page=100" --paginate --jq 'EXPR'` (#174,
+# find-implementation-work.sh's plan-binding lookup) -> exit 1 if DIR/reject-events-<n> exists
+# (simulates the events endpoint being unreadable); else, if DIR/events-<n>.json exists (a plain
+# JSON array of GitHub issue-event objects, the shape the real API returns), apply the SAME jq
+# expression the script under test passed as its own --jq argument — `jq -r ".[] | (EXPR)"
+# DIR/events-<n>.json`, extracted from this invocation's own $5 rather than duplicated as a
+# second copy of the filter — reproducing gh's own per-array-element --jq application without the
+# stub needing to track the real script's filter text by hand. No events-<n>.json -> prints
+# nothing (degrades to reason: no-approval-event, not a hard failure) — a fixture that doesn't
+# care about approval binding needs no events-<n>.json at all. The issue number is parsed out of
+# the URL argument ($2) with `sed`, since it appears mid-path, not as its own positional arg.
 build_stub_gh() {
   local dir="$1" tmpl="$dir/gh.tmpl"
   {
     printf '#!%s\n' "$bash_bin"
     cat <<'EOF'
-case "$1 $2" in
-  "issue list")
-    case "$*" in
-      *"authorAssociation"*)
-        if [ -f "__DIR__/reject-association" ]; then
+case "$1" in
+  issue)
+    case "$2" in
+      list)
+        case "$*" in
+          *"authorAssociation"*)
+            if [ -f "__DIR__/reject-association" ]; then
+              exit 1
+            fi
+            cat "__DIR__/initial.json"
+            exit 0 ;;
+          *"pr-open"*)
+            cat "__DIR__/ready.json"
+            exit 0 ;;
+          *"--jq"*)
+            cat "__DIR__/candidates.txt"
+            exit 0 ;;
+          *)
+            cat "__DIR__/initial.json"
+            exit 0 ;;
+        esac
+        ;;
+      view)
+        n="$3"
+        if [ -f "__DIR__/issue-$n.json" ]; then
+          cat "__DIR__/issue-$n.json"
+          exit 0
+        else
           exit 1
         fi
-        cat "__DIR__/initial.json"
-        exit 0 ;;
-      *"pr-open"*)
-        cat "__DIR__/ready.json"
-        exit 0 ;;
-      *"--jq"*)
-        cat "__DIR__/candidates.txt"
-        exit 0 ;;
-      *)
-        cat "__DIR__/initial.json"
-        exit 0 ;;
+        ;;
+      *) exit 1 ;;
     esac
     ;;
-  "issue view")
-    n="$3"
-    if [ -f "__DIR__/issue-$n.json" ]; then
-      cat "__DIR__/issue-$n.json"
-      exit 0
-    else
+  api)
+    n="$(printf '%s' "$2" | sed -nE 's#.*/issues/([0-9]+)/events.*#\1#p')"
+    if [ -f "__DIR__/reject-events-$n" ]; then
       exit 1
     fi
+    if [ -f "__DIR__/events-$n.json" ]; then
+      jq -r ".[] | ($5)" "__DIR__/events-$n.json"
+    fi
+    exit 0
     ;;
   *) exit 1 ;;
 esac
@@ -180,8 +222,23 @@ run_implementation() {
   planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
 }
 
+# run_implementation_args DIR [ARGS...] — same contract as run_implementation, but forwards
+# ARGS... to the script (added for #174's `--issue <n>` mode and its argument-validation path).
+run_implementation_args() {
+  local dir="$1"
+  shift
+  PATH="$dir:$PATH" "$bash_bin" "$root/bin/find-implementation-work.sh" "$@" >"$dir/.stdout" 2>"$dir/.stderr"
+  planning_rc=$?
+  planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
+  planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
+}
+
 # expect_jq QUERY EXPECTED — compact-JSON-compares a jq query run against $planning_out.
 # expect_err/expect_no_err — ASCII-only short-stem substring match against $planning_err.
+# expect_warn_count PATTERN N — counts stderr lines containing the fixed-string PATTERN and
+# fails unless the count is exactly N; unlike expect_err (presence-only), this is how a case
+# pins "no OTHER warn fires" rather than merely "this warn fires" — e.g. a fixture whose only
+# expected diagnostic is the per-issue "warn: issue #<n>:" stem.
 # expect_rc — exit code. All set $__ok=0 and append to $__why on failure.
 __ok=1
 __why=""
@@ -195,6 +252,11 @@ expect_err() {
 }
 expect_no_err() {
   printf '%s\n' "$planning_err" | grep -qF -- "$1" && { __ok=0; __why="${__why}unexpected stderr: $1\n"; }
+}
+expect_warn_count() {
+  local pattern="$1" expected="$2" actual
+  actual="$(printf '%s\n' "$planning_err" | grep -cF -- "$pattern")"
+  [ "$actual" = "$expected" ] || { __ok=0; __why="${__why}warn count for '$pattern': expected $expected, got $actual\n"; }
 }
 expect_rc() {
   [ "$planning_rc" -eq "$1" ] || { __ok=0; __why="${__why}rc: expected $1, got $planning_rc\n"; }
@@ -807,18 +869,247 @@ EOF
   expect_err "could not fetch issue #1"
 }
 
+# ---------------------------------------------------------------------------------------------
+# Part 3 cases (#174), against bin/find-implementation-work.sh — plan-binding approval provenance.
+
+# impl-approval-covers-plan (control) — plan at T0, plan-approved labeled at T1 > T0: covered,
+# binding_line matches the exact expected literal, no warn about the binding.
+case_impl_approval_covers_plan() {
+  local dir; dir="$(mk_fixture impl-approval-covers-plan)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"}
+]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'true'
+  expect_jq '.plan_selection[0].approval.reason' '"covered"'
+  expect_jq '.plan_selection[0].approval.approved_at' '"2026-01-02T00:00:00Z"'
+  expect_jq '.plan_selection[0].approval.approved_by' '"msummer"'
+  expect_jq '.plan_selection[0].binding_line' '"<!-- harness-plan-binding: issue=1 plan=https://example.invalid/1#c1 approved-at=2026-01-02T00:00:00Z -->"'
+  expect_no_err "approval does not cover this plan"
+  expect_no_err "approval unreadable"
+}
+
+# impl-plan-after-approval — plan at T2, label at T1 < T2: not covered — the issue's named
+# failure (a later plan revision must not silently inherit an earlier approval).
+case_impl_plan_after_approval() {
+  local dir; dir="$(mk_fixture impl-plan-after-approval)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v2 (revised after approval)","createdAt":"2026-01-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c2"}
+]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-01T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'false'
+  expect_jq '.plan_selection[0].approval.reason' '"plan-after-approval"'
+  expect_jq '.plan_selection[0].binding_line' 'null'
+  expect_jq '.counts.plan_after_approval' '1'
+  expect_err "postdates the plan-approved label"
+}
+
+# impl-relabel-newest-wins — two labeled plan-approved events (T1, T3) with the plan at T2:
+# covered — the NEWEST event, not the first, decides.
+case_impl_relabel_newest_wins() {
+  local dir; dir="$(mk_fixture impl-relabel-newest-wins)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"}
+]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-01T00:00:00Z","actor":{"login":"first"}},
+ {"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-03T00:00:00Z","actor":{"login":"second"}}]
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'true'
+  expect_jq '.plan_selection[0].approval.approved_at' '"2026-01-03T00:00:00Z"'
+  expect_jq '.plan_selection[0].approval.approved_by' '"second"'
+}
+
+# impl-other-label-event-ignored — the only labeled events are for OTHER labels (pr-open,
+# no-plan), never plan-approved: not covered, reason no-approval-event.
+case_impl_other_label_event_ignored() {
+  local dir; dir="$(mk_fixture impl-other-label-event-ignored)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"}
+]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"pr-open"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"harness"}},
+ {"event":"labeled","label":{"name":"no-plan"},"created_at":"2026-01-03T00:00:00Z","actor":{"login":"harness"}}]
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'false'
+  expect_jq '.plan_selection[0].approval.reason' '"no-approval-event"'
+  expect_jq '.counts.no_approval_event' '1'
+  expect_err "no plan-approved labeling event found"
+}
+
+# impl-approval-events-unreadable — stub gh api fails for issue #1's events lookup: covers_plan
+# null, reason approval-unreadable, binding_line null (the covers_plan: null branch's
+# binding_line, the one previously-untested branch of AC4), counted, warned, and the run still
+# exits 0 with a plan_selection entry for a second, healthy issue (fail-closed per-issue, not
+# per-run).
+case_impl_approval_events_unreadable() {
+  local dir; dir="$(mk_fixture impl-approval-events-unreadable)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"},{"number":2,"title":"Issue two","url":"https://example.invalid/2"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"}
+]}
+EOF
+  : > "$dir/reject-events-1"
+  cat > "$dir/issue-2.json" <<'EOF'
+{"number":2,"title":"Issue two","url":"https://example.invalid/2","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/2#c1"}
+]}
+EOF
+  cat > "$dir/events-2.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'null'
+  expect_jq '.plan_selection[0].approval.reason' '"approval-unreadable"'
+  expect_jq '.plan_selection[0].binding_line' 'null'
+  expect_jq '.counts.approval_unreadable' '1'
+  expect_jq '.plan_selection[1].approval.covers_plan' 'true'
+  expect_err "could not read plan-approved label events"
+}
+
+# impl-no-plan-no-binding — no trusted plan comment: plan null, covers_plan false, reason
+# no-plan, binding_line null, issue still in ready (extends impl-no-trusted-plan). Pins that
+# stderr carries exactly ONE "warn: issue #1:" line (the existing "no maintainer-authored plan
+# comment" one) — the events API is never called when plan is null, so no second,
+# approval-flavoured warn ("approval does not cover this plan" / "bind approval to it") fires;
+# verified by injecting a second such warn into the script's plan=null branch and confirming
+# expect_warn_count catches it (restored after confirming the failure — see the implementer's
+# report).
+case_impl_no_plan_no_binding() {
+  local dir; dir="$(mk_fixture impl-no-plan-no-binding)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"just a regular comment, no marker","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"}
+]}
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].plan' 'null'
+  expect_jq '.plan_selection[0].approval.covers_plan' 'false'
+  expect_jq '.plan_selection[0].approval.reason' '"no-plan"'
+  expect_jq '.plan_selection[0].binding_line' 'null'
+  expect_jq '.ready | length' '1'
+  expect_err "no maintainer-authored plan comment"
+  expect_warn_count "warn: issue #1:" 1
+}
+
+# impl-single-issue-mode — `--issue <n>` against an issue absent from ready.json: one ready
+# entry, one plan_selection entry with a binding_line, same top-level keys as the no-argument
+# form; plus an unknown-flag invocation exiting 2.
+case_impl_single_issue_mode() {
+  local dir; dir="$(mk_fixture impl-single-issue-mode)"
+  cat > "$dir/ready.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/issue-42.json" <<'EOF'
+{"number":42,"title":"Not in the ready query","url":"https://example.invalid/42","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/42#c1"}
+]}
+EOF
+  cat > "$dir/events-42.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  build_stub_gh "$dir"
+  run_implementation_args "$dir" --issue 42
+  expect_rc 0
+  expect_jq '.ready | length' '1'
+  expect_jq '.ready[0].number' '42'
+  expect_jq '.plan_selection | length' '1'
+  expect_jq '.plan_selection[0].number' '42'
+  expect_jq '.plan_selection[0].binding_line' '"<!-- harness-plan-binding: issue=42 plan=https://example.invalid/42#c1 approved-at=2026-01-02T00:00:00Z -->"'
+  expect_jq 'has("counts")' 'true'
+
+  run_implementation_args "$dir" --bogus
+  expect_rc 2
+}
+
+# impl-approval-tie — plan createdAt equal to approved_at (same second): covered — pins the
+# auto-approval path's same-second behaviour (the planner labels immediately after posting).
+case_impl_approval_tie() {
+  local dir; dir="$(mk_fixture impl-approval-tie)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"}
+]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-01T00:00:00Z","actor":{"login":"harness"}}]
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'true'
+  expect_jq '.plan_selection[0].approval.reason' '"covered"'
+}
+
 # impl-output-shape — .ready, .counts.ready, and .counts.truncated (bin/harness-status.sh reads
-# .ready) are still present under their current names, alongside the new plan_selection counts.
+# .ready) are still present under their current names, alongside the new plan_selection counts
+# and, since #174, each plan_selection entry's .approval/.binding_line members and their three
+# new counts keys. One ready issue (with no plan comment, so the approval lookup is never
+# reached) is enough to give plan_selection a non-empty entry to check the new members on.
 case_impl_output_shape() {
   local dir; dir="$(mk_fixture impl-output-shape)"
   cat > "$dir/ready.json" <<'EOF'
-[]
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[]}
 EOF
   build_stub_gh "$dir"
   run_implementation "$dir"
   expect_rc 0
   expect_jq 'has("ready")' 'true'
   expect_jq 'has("plan_selection")' 'true'
+  expect_jq '.plan_selection[0] | has("approval")' 'true'
+  expect_jq '.plan_selection[0] | has("binding_line")' 'true'
   expect_jq '.counts | has("ready")' 'true'
   expect_jq '.counts | has("truncated")' 'true'
   expect_jq '.counts | has("fetch_failures")' 'true'
@@ -828,6 +1119,9 @@ EOF
   expect_jq '.counts | has("untrusted_plan_markers")' 'true'
   expect_jq '.counts | has("verdict_archives_skipped")' 'true'
   expect_jq '.counts | has("missing_association")' 'true'
+  expect_jq '.counts | has("plan_after_approval")' 'true'
+  expect_jq '.counts | has("no_approval_event")' 'true'
+  expect_jq '.counts | has("approval_unreadable")' 'true'
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -860,7 +1154,15 @@ cases=(
   "impl-missing-association-fail-closed|case_impl_missing_association_fail_closed|a post-plan comment with no authorAssociation field: fail-closed untrusted, counted, warned"
   "impl-newest-plan-selected|case_impl_newest_plan_selected|two trusted plan comments: the NEWER one is selected as plan, and only feedback posted after it lands in trusted_post_plan"
   "impl-fetch-failure-survives|case_impl_fetch_failure_survives|one ready issue's gh issue view fails: fetch_failures counted, other ready issues still evaluated"
-  "impl-output-shape|case_impl_output_shape|.ready, .counts.ready, and .counts.truncated are still present under their current names"
+  "impl-approval-covers-plan|case_impl_approval_covers_plan|control: plan posted before the plan-approved label: covered, binding_line matches the exact literal"
+  "impl-plan-after-approval|case_impl_plan_after_approval|plan posted after the plan-approved label: not covered — the issue's named failure"
+  "impl-relabel-newest-wins|case_impl_relabel_newest_wins|two plan-approved labeling events: the NEWEST one, not the first, decides coverage"
+  "impl-other-label-event-ignored|case_impl_other_label_event_ignored|labeled events for other labels only (never plan-approved): not covered, reason no-approval-event"
+  "impl-approval-events-unreadable|case_impl_approval_events_unreadable|the plan-approved events lookup fails for one issue: covers_plan null, fail-closed, other issues unaffected"
+  "impl-no-plan-no-binding|case_impl_no_plan_no_binding|no trusted plan comment: covers_plan false, reason no-plan, exactly one warn line"
+  "impl-single-issue-mode|case_impl_single_issue_mode|--issue <n> against an issue absent from ready.json: single-entry output plus an unknown-flag exit 2"
+  "impl-approval-tie|case_impl_approval_tie|plan createdAt equal to the approval timestamp (same second): covered"
+  "impl-output-shape|case_impl_output_shape|.ready, .counts.ready, and .counts.truncated are still present under their current names, plus #174's approval/binding_line shape"
 )
 
 matched=0

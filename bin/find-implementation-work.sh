@@ -37,12 +37,41 @@
 # the implementer skill skips-and-reports it. A comment with no authorAssociation field at all is
 # treated as untrusted, fail-closed, counted in counts.missing_association, and warned about.
 #
+# #174 adds two more members to each plan_selection entry, binding plan approval to the specific
+# plan comment a human (or the auto-approval policy) actually saw, not just the issue-level
+# plan-approved label — a later revision must not silently inherit an earlier approval:
+#   approval    : {approved_at, approved_by, covers_plan, reason} — approved_at/approved_by come
+#                 from the newest `labeled` event for plan-approved on GitHub's issue-events API
+#                 (null when unknown); covers_plan is true iff that label's newest application is
+#                 not earlier than the selected plan comment's createdAt (the plan comment posted
+#                 after the label fails it); reason is one of covered (covers_plan: true),
+#                 plan-after-approval, no-approval-event, no-plan, plan-url-missing (covers_plan:
+#                 false), or approval-unreadable (covers_plan: null — the events lookup itself
+#                 failed, fail-closed, matching find-planning-work.sh's precedent for an unreadable
+#                 authorAssociation).
+#   binding_line: the literal `<!-- harness-plan-binding: issue=<n> plan=<plan.url>
+#                 approved-at=<approved_at> -->` when and only when covers_plan is true; null in
+#                 every other case. Revalidated by the issue-implementer skill before dispatch and
+#                 again before push, then pasted verbatim into the PR body for the issue-cycle
+#                 merge floor to grep for — see that skill and skills/issue-cycle/SKILL.md.
+# One warn: line per non-covered issue, one distinct ASCII stem per reason — except reason:
+# no-plan, which reuses the existing "no maintainer-authored plan comment" line rather than
+# doubling up.
+#
+# --issue <n> (new): skip the `ready` query and evaluate exactly one issue via `gh issue view`,
+# regardless of its labels — used by the issue-implementer skill for a fresh, per-issue
+# revalidation immediately before dispatch and again before push. Output shape is identical to
+# the no-argument form, with `ready` and `plan_selection` each holding at most one entry. An
+# unknown flag, a non-numeric <n>, or extra arguments print a usage message on stderr and exit 2.
+# No arguments: unchanged behaviour and output shape (bin/harness-status.sh:24 depends on this).
+#
 # counts gains: fetch_failures (a gh issue view failure for one ready issue is survived — that
 # issue gets no plan_selection entry, every other ready issue still gets one), no_trusted_plan,
 # trusted_post_plan, untrusted_post_plan (totals across all issues), untrusted_plan_markers,
 # verdict_archives_skipped (trusted, post-plan, verdict-marker-carrying comments excluded from
-# trusted_post_plan), and missing_association. ready and counts.ready/counts.truncated keep their
-# current names and computation.
+# trusted_post_plan), missing_association, plan_after_approval, no_approval_event, and
+# approval_unreadable (the last three from #174's approval binding, one per corresponding
+# `reason`). ready and counts.ready/counts.truncated keep their current names and computation.
 #
 # Requires: gh (authenticated), jq. Run from anywhere inside the repo.
 set -euo pipefail
@@ -58,26 +87,71 @@ VERDICT_MARKER="<!-- verifier-verdict -->"
 # outside contributor's suggestion, a maintainer comments themselves.
 TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"
 
-ready=$(gh issue list \
-  --search "is:open is:issue label:plan-approved -label:pr-open -label:impl-blocked" \
-  --json number,title,url \
-  --limit "$LIMIT")
+# --issue <n> (#174): a fresh, single-issue run, regardless of the issue's labels — used by the
+# issue-implementer skill to revalidate approval immediately before dispatch and again before
+# push. No arguments: today's behaviour, unchanged.
+single_issue=""
+if [ "$#" -gt 0 ]; then
+  case "$1" in
+    --issue)
+      if [ "$#" -ne 2 ]; then
+        echo "usage: find-implementation-work.sh [--issue <n>]" >&2
+        exit 2
+      fi
+      case "$2" in
+        ''|*[!0-9]*)
+          echo "find-implementation-work.sh: --issue requires a numeric issue number, got '$2'" >&2
+          exit 2
+          ;;
+      esac
+      single_issue="$2"
+      ;;
+    *)
+      echo "usage: find-implementation-work.sh [--issue <n>]" >&2
+      exit 2
+      ;;
+  esac
+fi
 
-ready_numbers=$(printf '%s' "$ready" | jq -r '.[].number')
+fetch_failures=0
+prefetched_issue=""
+if [ -n "$single_issue" ]; then
+  if ! prefetched_issue=$(gh issue view "$single_issue" --json number,title,url,comments 2>/dev/null); then
+    echo "warn: could not fetch issue #$single_issue — skipping it this run" >&2
+    fetch_failures=1
+    ready="[]"
+    ready_numbers=""
+    prefetched_issue=""
+  else
+    ready=$(printf '%s' "$prefetched_issue" | jq -c '[{number: .number, title: .title, url: .url}]')
+    ready_numbers="$single_issue"
+  fi
+else
+  ready=$(gh issue list \
+    --search "is:open is:issue label:plan-approved -label:pr-open -label:impl-blocked" \
+    --json number,title,url \
+    --limit "$LIMIT")
+  ready_numbers=$(printf '%s' "$ready" | jq -r '.[].number')
+fi
 
 plan_selection="[]"
-fetch_failures=0
 no_trusted_plan=0
 trusted_post_plan_total=0
 untrusted_post_plan_total=0
 untrusted_plan_markers=0
 verdict_archives_skipped=0
 missing_association=0
+plan_after_approval=0
+no_approval_event=0
+approval_unreadable=0
 for n in $ready_numbers; do
   # Tolerate per-issue failures: one transient gh/API error must not kill the whole
   # discovery run (matters for unattended/scheduled runs). The issue is simply
-  # reconsidered next time.
-  if ! issue=$(gh issue view "$n" --json number,title,url,comments 2>/dev/null); then
+  # reconsidered next time. In --issue mode, `issue` was already fetched above — reuse it
+  # rather than fetching it twice.
+  if [ -n "$prefetched_issue" ]; then
+    issue="$prefetched_issue"
+  elif ! issue=$(gh issue view "$n" --json number,title,url,comments 2>/dev/null); then
     echo "warn: could not fetch issue #$n — skipping it this run" >&2
     fetch_failures=$((fetch_failures+1))
     continue
@@ -125,8 +199,66 @@ for n in $ready_numbers; do
   plan=$(printf '%s' "$result" | jq -c '.plan')
   trusted_post_plan=$(printf '%s' "$result" | jq -c '.trusted_post_plan')
   untrusted_post_plan=$(printf '%s' "$result" | jq -c '.untrusted_post_plan')
+
+  # #174 — approval binding: bind plan-approved to the SPECIFIC plan comment that was newest
+  # when the label was last applied, not just to the issue-level label. Only makes the events
+  # API call when there is a plan to bind (skips the issues already skipped for no_trusted_plan).
+  approved_at=""
+  approved_by=""
+  covers_plan="false"
+  reason="no-plan"
+  if [ "$plan" != "null" ]; then
+    plan_url=$(printf '%s' "$plan" | jq -r '.url // empty')
+    plan_created=$(printf '%s' "$plan" | jq -r '.createdAt')
+    if [ -z "$plan_url" ]; then
+      reason="plan-url-missing"
+      echo "warn: issue #$n: plan comment has no url — cannot bind approval to it" >&2
+    elif ! events=$(gh api "repos/{owner}/{repo}/issues/$n/events?per_page=100" --paginate --jq '
+        select(.event == "labeled" and .label.name == "plan-approved")
+        | "\(.created_at) \(.actor.login // "unknown")"
+      ' 2>/dev/null); then
+      covers_plan="null"
+      reason="approval-unreadable"
+      echo "warn: issue #$n: could not read plan-approved label events — approval unreadable" >&2
+      approval_unreadable=$((approval_unreadable+1))
+    else
+      # sed, not `grep -v`, to drop blank lines: with `set -o pipefail`, a `grep -v` that
+      # matches nothing (the common "no events" case) exits 1 and would abort the whole script
+      # under `set -e`; `sed` exits 0 regardless of how many lines it deletes.
+      latest=$(printf '%s\n' "$events" | sed '/^$/d' | sort | tail -1)
+      if [ -z "$latest" ]; then
+        reason="no-approval-event"
+        echo "warn: issue #$n: no plan-approved labeling event found — approval does not cover this plan" >&2
+        no_approval_event=$((no_approval_event+1))
+      else
+        approved_at=$(printf '%s' "$latest" | cut -d' ' -f1)
+        approved_by=$(printf '%s' "$latest" | cut -d' ' -f2-)
+        if [[ "$plan_created" > "$approved_at" ]]; then
+          reason="plan-after-approval"
+          echo "warn: issue #$n: plan comment ($plan_created) postdates the plan-approved label ($approved_at) — approval does not cover this plan" >&2
+          plan_after_approval=$((plan_after_approval+1))
+        else
+          covers_plan="true"
+          reason="covered"
+        fi
+      fi
+    fi
+  fi
+
+  binding_line="null"
+  if [ "$covers_plan" = "true" ]; then
+    binding_line=$(jq -n --arg s "<!-- harness-plan-binding: issue=$n plan=$plan_url approved-at=$approved_at -->" '$s')
+  fi
+  approval_json=$(jq -n \
+    --arg at "$approved_at" --arg by "$approved_by" --arg reason "$reason" --argjson covers "$covers_plan" \
+    '{approved_at: (if $at == "" then null else $at end),
+      approved_by: (if $by == "" then null else $by end),
+      covers_plan: $covers,
+      reason: $reason}')
+
   entry=$(jq -n --argjson n "$n" --argjson p "$plan" --argjson tpp "$trusted_post_plan" --argjson upp "$untrusted_post_plan" \
-    '{number: $n, plan: $p, trusted_post_plan: $tpp, untrusted_post_plan: $upp}')
+    --argjson appr "$approval_json" --argjson bl "$binding_line" \
+    '{number: $n, plan: $p, trusted_post_plan: $tpp, untrusted_post_plan: $upp, approval: $appr, binding_line: $bl}')
   plan_selection=$(jq -n --argjson arr "$plan_selection" --argjson e "$entry" '$arr + [$e]')
 
   if [ "$plan" = "null" ]; then
@@ -174,6 +306,9 @@ jq -n \
   --argjson upm "$untrusted_plan_markers" \
   --argjson vas "$verdict_archives_skipped" \
   --argjson ma "$missing_association" \
+  --argjson paa "$plan_after_approval" \
+  --argjson nae "$no_approval_event" \
+  --argjson au "$approval_unreadable" \
   '{ready: $ready,
     plan_selection: $selection,
     counts: {ready: ($ready | length), truncated: (($ready | length) >= $limit),
@@ -183,4 +318,7 @@ jq -n \
              untrusted_post_plan: $upp,
              untrusted_plan_markers: $upm,
              verdict_archives_skipped: $vas,
-             missing_association: $ma}}'
+             missing_association: $ma,
+             plan_after_approval: $paa,
+             no_approval_event: $nae,
+             approval_unreadable: $au}}'
