@@ -16,8 +16,9 @@
 #   issue-author provenance on the SAME script: every needs_initial_plan/needs_revision item now
 #   carries {author, association, trusted_author}, a non-maintainer-authored issue is still
 #   listed (planning is not gated on it) but also appears in the untrusted_issue_authors bucket,
-#   and if the installed gh can't return issue-level authorAssociation the whole run fails closed
-#   (every issue untrusted, one warn line, counts.author_association_unavailable: true). #182
+#   and (#202: association is read from GitHub's REST issues endpoint, since gh has never exposed
+#   an issue-level authorAssociation `--json` field) if that REST lookup fails the whole run fails
+#   closed (every issue untrusted, one warn line, counts.author_association_unavailable: true). #182
 #   added a second, orthogonal exclusion inside the trusted set: a trusted comment containing
 #   "<!-- harness-audit -->" (a harness-authored audit/hygiene record) or "<!-- verifier-verdict
 #   -->" (the orchestrator's own archive) never counts as feedback either, so neither re-opens a
@@ -78,9 +79,16 @@
 #                               script under test, so there's no naming collision); a candidate
 #                               or ready issue with no issue-<n>.json file simulates a failed
 #                               `gh issue view`, exercising the fetch-failures path
-#   - reject-association      : (optional, presence-only) makes the stub's authorAssociation-
-#                               bearing `gh issue list` call exit 1, exercising
-#                               find-planning-work.sh's fail-closed fallback
+#   - rest-issues.json        : (#202) the `gh api repos/{owner}/{repo}/issues?...` REST page
+#                               array find-planning-work.sh reads issue author provenance from —
+#                               a plain array of GitHub issue objects
+#                               ({number, author_association, user:{login}}, optionally a
+#                               {pull_request:{...}} object to be filtered out); absent means an
+#                               empty author map (every issue's association resolves to
+#                               "MISSING", trusted_author: false)
+#   - reject-association      : (optional, presence-only) makes the stub's `gh api .../issues?...`
+#                               REST call exit 1, exercising find-planning-work.sh's fail-closed
+#                               author_association_unavailable path
 #   - events-<n>.json          : (#174) the `gh api .../issues/<n>/events` payload for ready
 #                               issue <n> — a plain JSON array of GitHub issue-event objects
 #                               ({event, label:{name}, created_at, actor:{login}}); absent means
@@ -89,15 +97,19 @@
 #   - reject-events-<n>        : (optional, presence-only, #174) makes the stub's `gh api` call
 #                               for ready issue <n>'s events exit 1, exercising
 #                               find-implementation-work.sh's fail-closed approval-unreadable path
-# The stub tells find-planning-work.sh's two `gh issue list` calls apart, in order: a call
-# whose args contain "authorAssociation" (the needs_initial_plan query, now requesting the new
-# field) is served from initial.json, or made to fail if reject-association is present; a call
-# containing "pr-open" (find-implementation-work.sh's ready query — neither planning search
-# contains this token) is served from ready.json; a call containing "--jq" (the revision
-# candidates query) is served from candidates.txt; anything else (find-planning-work.sh's
-# fallback needs_initial_plan retry, which also lacks "authorAssociation") falls through to
-# initial.json too. Discriminating by `-label:`/`label:` search-string prefix would be wrong —
-# `-label:plan-proposed` contains `label:plan-proposed` as a substring.
+# The stub tells find-planning-work.sh's `gh issue list` calls apart, in order: a call whose args
+# contain "authorAssociation" — real gh has never accepted that field on an issue query, so the
+# stub rejects it exactly as gh does (see build_stub_gh below); neither of find-planning-work.sh's
+# real `gh issue list` calls contains it any more, so this arm exists only to fail a regression
+# that reintroduces the field, never to serve a fixture. A call containing "pr-open"
+# (find-implementation-work.sh's ready query — neither planning search contains this token) is
+# served from ready.json; a call containing "--jq" (the revision candidates query) is served from
+# candidates.txt; anything else (#202: find-planning-work.sh's now-unconditional needs_initial_plan
+# query, which requests only number,title,url,author) falls through to initial.json.
+# Discriminating by `-label:`/`label:` search-string prefix would be wrong — `-label:plan-proposed`
+# contains `label:plan-proposed` as a substring. Issue author provenance (#202) is served
+# separately, over `gh api repos/{owner}/{repo}/issues?...` — see rest-issues.json above and the
+# api) branch in build_stub_gh below.
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -133,34 +145,43 @@ mk_fixture() {
 }
 
 # build_stub_gh DIR — writes an executable DIR/gh (absolute paths to DIR's own initial.json,
-# candidates.txt, ready.json, issue-<n>.json, and events-<n>.json fixtures baked in via the
-# __DIR__ + sed idiom dev/cleanup-tests.sh's build_stub_gh uses). Deterministic and offline.
-# Dispatch order for `gh issue list ...` matters — see the header note above:
-#   *"authorAssociation"*  -> exit 1 if DIR/reject-association exists (simulates an older gh
-#                             that doesn't support the issue-level field); else cat
-#                             DIR/initial.json (the needs_initial_plan query, #176's new field)
+# candidates.txt, ready.json, issue-<n>.json, events-<n>.json, and rest-issues.json fixtures
+# baked in via the __DIR__ + sed idiom dev/cleanup-tests.sh's build_stub_gh uses). Deterministic
+# and offline. Dispatch order for `gh issue list ...` matters — see the header note above:
+#   *"authorAssociation"*  -> exit 1 with gh's real "Unknown JSON field" text (#202: gh has never
+#                             accepted this field on an issue query — this arm exists only to
+#                             fail a regression that reintroduces the field; no fixture serves it)
 #   *"pr-open"*            -> cat DIR/ready.json (find-implementation-work.sh's ready query)
 #   *"--jq"*               -> cat DIR/candidates.txt (revision candidates, one number per line)
-#   anything else          -> cat DIR/initial.json (find-planning-work.sh's fallback retry, and
-#                             any other plain needs_initial_plan-shaped call)
-# `gh issue view <n> --json ...` -> cat DIR/issue-<n>.json, or exit 1 if that file is absent
-# (simulates a failed fetch for that candidate/ready issue). Anything else -> exit 1.
+#   anything else          -> cat DIR/initial.json (find-planning-work.sh's now-unconditional
+#                             needs_initial_plan query, and any other plain needs_initial_plan-
+#                             shaped call)
+# `gh issue view <n> --json ...` -> exit 1 with the same "Unknown JSON field" text if the field
+# list contains "authorAssociation" (same #202 regression guard as above); else cat
+# DIR/issue-<n>.json, or exit 1 if that file is absent (simulates a failed fetch for that
+# candidate/ready issue). Anything else under `issue)` -> exit 1.
 #
-# `gh api "repos/{owner}/{repo}/issues/<n>/events?per_page=100" --paginate --jq 'EXPR'` (#174,
-# find-implementation-work.sh's plan-binding lookup) -> exit 1 if DIR/reject-events-<n> exists
-# (simulates the events endpoint being unreadable); else, if DIR/events-<n>.json exists (a plain
-# JSON array of GitHub issue-event objects — ONE PAGE, the shape the real API returns), apply the
-# SAME jq expression the script under test passed as its own --jq argument, UNCHANGED, straight to
-# that array document — `jq -r "(EXPR)" DIR/events-<n>.json`, extracted from this invocation's own
-# $5 rather than duplicated as a second copy of the filter. This matches real `gh api --jq`'s
-# actual document semantics: the filter runs once against each page's JSON array as-is, with no
-# implicit `.[] | ` prepended by gh — a filter that wants to iterate the page must open with its
-# own `.[] | `, which find-implementation-work.sh's filter now does (#196). Before #196 the
-# script's filter had no `.[] | ` of its own and this stub compensated by prepending one itself —
-# two bugs that canceled out here but not against the real API: there, the script's un-prefixed
-# filter received the whole array where it expected one event object, jq errored ("expected an
-# object but got: array"), gh exited 1, `2>/dev/null` swallowed it, and every issue fail-closed to
-# approval-unreadable (live-verified against this repo's own issue #194: exit 1 before the fix,
+# `gh api ...` has two branches, split on whether the URL ($2) contains "/issues/<n>/events" (#174,
+# find-implementation-work.sh's plan-binding lookup) or "/issues?" (#202, find-planning-work.sh's
+# author-provenance lookup). Both apply the SAME jq expression the script under test passed as its
+# own --jq argument, UNCHANGED, straight to a page-array fixture file — `jq -r "(EXPR)" FILE`,
+# EXPR extracted from this invocation's own $5 rather than duplicated as a second copy of the
+# filter. This matches real `gh api --jq`'s actual document semantics: the filter runs once
+# against each page's JSON array as-is, with no implicit `.[] | ` prepended by gh — a filter that
+# wants to iterate the page must open with its own `.[] | `, which both scripts' filters now do
+# (#196, #202).
+#
+# events branch: `gh api "repos/{owner}/{repo}/issues/<n>/events?per_page=100" --paginate --jq
+# 'EXPR'` -> exit 1 if DIR/reject-events-<n> exists (simulates the events endpoint being
+# unreadable); else, if DIR/events-<n>.json exists (a plain JSON array of GitHub issue-event
+# objects — ONE PAGE, the shape the real API returns), `jq -r "(EXPR)" DIR/events-<n>.json` and
+# (unconditionally) exit 0 — a filter error here is swallowed rather than propagated (see the
+# follow-up filed against this gap in the #202 plan). Before #196 the script's filter had no
+# `.[] | ` of its own and this stub compensated by prepending one itself — two bugs that canceled
+# out here but not against the real API: there, the script's un-prefixed filter received the whole
+# array where it expected one event object, jq errored ("expected an object but got: array"), gh
+# exited 1, `2>/dev/null` swallowed it, and every issue fail-closed to approval-unreadable
+# (live-verified against this repo's own issue #194: exit 1 before the fix,
 # `2026-09-01T11:11:24Z msummer` exit 0 after). MUTATION PROOF (measured 2026-09-01, not
 # predicted): with this stub already fixed, reverting ONLY the script's `.[] | ` prefix (restoring
 # the pre-#196 filter) and re-running `bash dev/planning-tests.sh` dropped the suite from 43 pass/0
@@ -175,6 +196,46 @@ mk_fixture() {
 # a fixture that doesn't care about approval binding needs no events-<n>.json at all. The issue
 # number is parsed out of the URL argument ($2) with `sed`, since it appears mid-path, not as its
 # own positional arg.
+#
+# issues branch (#202): `gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" --paginate
+# --jq 'EXPR'` -> exit 1 if DIR/reject-association exists (simulates the REST issues endpoint
+# being unreadable — find-planning-work.sh's author_association_unavailable path); else, if
+# DIR/rest-issues.json exists (a plain JSON array of GitHub issue objects, optionally including a
+# {pull_request:{...}} entry the real endpoint would also return), `jq -r "(EXPR)"
+# DIR/rest-issues.json`, PROPAGATING jq's exit status (`|| exit 1`) — unlike the events branch
+# above, a filter error here is a hard failure, matching real `gh api`'s own behaviour and closing
+# the #196-class gap the events branch still has (see the follow-up). Absent rest-issues.json
+# prints nothing and exits 0 (empty author map — every issue's association resolves to "MISSING").
+# MUTATION PROOF (a) (measured 2026-09-04): reverting bin/find-planning-work.sh's whole provenance
+# lookup to its pre-#202 shape (the `if ! needs_initial_plan=$(gh issue list ... --json
+# number,title,url,author,authorAssociation ...)` probe with its `view_fields` fallback) and
+# re-running `bash dev/planning-tests.sh` against the SAME (post-#202) fixtures dropped the suite
+# from 54 pass/0 fail to 49 pass/5 fail, failing exactly: initial-untrusted-author-reported (the
+# old fallback's needs_initial_plan carries no authorAssociation field at all now that association
+# data lives only in rest-issues.json, so the old code's own jq maps it to "MISSING" instead of the
+# expected "NONE"), initial-trusted-author-clean and initial-author-map-per-issue (same reason —
+# "MISSING"/false instead of the fixture's real association), revision-trusted-author-clean (the
+# old code's needs_revision join never consults rest-issues.json at all), and
+# author-association-unavailable (the old code's warn text, "could not read issue
+# authorAssociation", no longer matches the new stem this case asserts) — reverted immediately
+# after recording this. revision-untrusted-author-reported did NOT fail under this mutant: its
+# fixture's expected outcome (false) is also what the old code's own untouched
+# comment-level-only-fallback happens to produce — a coincidence of that one fixture, not evidence
+# the mutant is inert. MUTATION PROOF (b) (measured 2026-09-04): deleting only the leading `.[] | `
+# from the script's REST --jq filter (leaving everything else at its current, #202 shape) and
+# re-running the suite dropped it to 50 pass/4 fail, failing exactly:
+# initial-untrusted-author-reported, initial-trusted-author-clean, initial-author-map-per-issue,
+# and revision-trusted-author-clean — the stub's `jq -r "(EXPR)"` then tries to index the whole
+# rest-issues.json ARRAY with `.pull_request` (jq: "Cannot index array with string
+# \"pull_request\""), errors, `|| exit 1` propagates that, and the script's `if !` guard treats it
+# identically to a REST outage (empty map, every covered issue MISSING/untrusted) — reverted
+# immediately after recording this. initial-missing-author-association and
+# author-association-unavailable did NOT fail under this mutant: the former's rest-issues.json is
+# `[]`, which ALSO errors the same way under the mutant (jq still can't index an array), so it
+# fails closed to the exact MISSING/false outcome the case already expects; the latter's
+# reject-association file short-circuits the stub before jq ever runs. Neither is evidence the
+# mutant is inert on those two fixtures — it is caught by every OTHER case whose rest-issues.json
+# is non-empty.
 build_stub_gh() {
   local dir="$1" tmpl="$dir/gh.tmpl"
   {
@@ -186,11 +247,8 @@ case "$1" in
       list)
         case "$*" in
           *"authorAssociation"*)
-            if [ -f "__DIR__/reject-association" ]; then
-              exit 1
-            fi
-            cat "__DIR__/initial.json"
-            exit 0 ;;
+            echo 'Unknown JSON field: "authorAssociation"' >&2
+            exit 1 ;;
           *"pr-open"*)
             cat "__DIR__/ready.json"
             exit 0 ;;
@@ -203,6 +261,11 @@ case "$1" in
         esac
         ;;
       view)
+        case "$*" in
+          *"authorAssociation"*)
+            echo 'Unknown JSON field: "authorAssociation"' >&2
+            exit 1 ;;
+        esac
         n="$3"
         if [ -f "__DIR__/issue-$n.json" ]; then
           cat "__DIR__/issue-$n.json"
@@ -215,14 +278,28 @@ case "$1" in
     esac
     ;;
   api)
-    n="$(printf '%s' "$2" | sed -nE 's#.*/issues/([0-9]+)/events.*#\1#p')"
-    if [ -f "__DIR__/reject-events-$n" ]; then
-      exit 1
-    fi
-    if [ -f "__DIR__/events-$n.json" ]; then
-      jq -r "($5)" "__DIR__/events-$n.json"
-    fi
-    exit 0
+    case "$2" in
+      *"/issues/"*"/events"*)
+        n="$(printf '%s' "$2" | sed -nE 's#.*/issues/([0-9]+)/events.*#\1#p')"
+        if [ -f "__DIR__/reject-events-$n" ]; then
+          exit 1
+        fi
+        if [ -f "__DIR__/events-$n.json" ]; then
+          jq -r "($5)" "__DIR__/events-$n.json"
+        fi
+        exit 0
+        ;;
+      *"/issues?"*)
+        if [ -f "__DIR__/reject-association" ]; then
+          exit 1
+        fi
+        if [ -f "__DIR__/rest-issues.json" ]; then
+          jq -r "($5)" "__DIR__/rest-issues.json" || exit 1
+        fi
+        exit 0
+        ;;
+      *) exit 1 ;;
+    esac
     ;;
   *) exit 1 ;;
 esac
@@ -618,13 +695,18 @@ EOF
 # ---------------------------------------------------------------------------------------------
 # Part 2 cases (#176), against bin/find-planning-work.sh — issue-author provenance.
 
-# initial-untrusted-author-reported — a needs_initial_plan issue opened by a NONE-association
-# author: stays in needs_initial_plan (planning is not gated on authorship), trusted_author:
-# false, and it also appears in untrusted_issue_authors, bucket "needs_initial_plan".
+# initial-untrusted-author-reported — a needs_initial_plan issue whose number is in rest-
+# issues.json as author_association NONE: stays in needs_initial_plan (planning is not gated on
+# authorship), trusted_author: false, and it also appears in untrusted_issue_authors, bucket
+# "needs_initial_plan". Association now lives ONLY in rest-issues.json (#202) — initial.json
+# carries no authorAssociation field at all, matching what real gh returns.
 case_initial_untrusted_author_reported() {
   local dir; dir="$(mk_fixture initial-untrusted-author-reported)"
   cat > "$dir/initial.json" <<'EOF'
-[{"number":10,"title":"Drive-by issue","url":"https://example.invalid/10","author":{"login":"outsider"},"authorAssociation":"NONE"}]
+[{"number":10,"title":"Drive-by issue","url":"https://example.invalid/10","author":{"login":"outsider"}}]
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":10,"author_association":"NONE","user":{"login":"outsider"}}]
 EOF
   printf '' > "$dir/candidates.txt"
   build_stub_gh "$dir"
@@ -638,12 +720,16 @@ EOF
   expect_jq '.counts.untrusted_issue_authors' '1'
 }
 
-# initial-trusted-author-clean (control) — an OWNER-authored issue: trusted_author true, empty
-# untrusted_issue_authors bucket.
+# initial-trusted-author-clean (control) — an issue whose rest-issues.json entry is OWNER:
+# trusted_author true, empty untrusted_issue_authors bucket. This is the case that requires the
+# REST lookup to actually succeed and join correctly — see MUTATION PROOF (a)/(b) above.
 case_initial_trusted_author_clean() {
   local dir; dir="$(mk_fixture initial-trusted-author-clean)"
   cat > "$dir/initial.json" <<'EOF'
-[{"number":11,"title":"Owner issue","url":"https://example.invalid/11","author":{"login":"owner"},"authorAssociation":"OWNER"}]
+[{"number":11,"title":"Owner issue","url":"https://example.invalid/11","author":{"login":"owner"}}]
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":11,"author_association":"OWNER","user":{"login":"owner"}}]
 EOF
   printf '' > "$dir/candidates.txt"
   build_stub_gh "$dir"
@@ -654,12 +740,16 @@ EOF
   expect_jq '.counts.untrusted_issue_authors' '0'
 }
 
-# initial-missing-author-association — the issue object itself carries no authorAssociation key
-# at all: fail-closed untrusted (association "MISSING"), same as a comment missing the field.
+# initial-missing-author-association — the issue is in needs_initial_plan but its number is
+# ABSENT from rest-issues.json (an empty REST page — the REST call succeeded but didn't cover this
+# issue): fail-closed untrusted (association "MISSING"), same as a comment missing the field.
 case_initial_missing_author_association() {
   local dir; dir="$(mk_fixture initial-missing-author-association)"
   cat > "$dir/initial.json" <<'EOF'
 [{"number":12,"title":"No assoc field","url":"https://example.invalid/12","author":{"login":"ghost"}}]
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[]
 EOF
   printf '' > "$dir/candidates.txt"
   build_stub_gh "$dir"
@@ -670,9 +760,49 @@ EOF
   expect_jq '.untrusted_issue_authors | length' '1'
 }
 
+# initial-author-map-per-issue — two needs_initial_plan issues (#20 OWNER-authored, #21
+# NONE-authored) whose rest-issues.json lists them in the OPPOSITE order, plus one
+# {pull_request:{...}} entry in the same page (the shape the real endpoint returns for a PR).
+# Kills "first REST entry wins" and key/value-swap mutants: each issue must get its OWN
+# association/author, keyed by number, not by list position. The PR entry is a control proving
+# the script's `select(.pull_request == null)` filter doesn't corrupt the map — deleting that
+# select alone fails no case here, because the map is only ever looked up by issue number, never
+# iterated positionally.
+case_initial_author_map_per_issue() {
+  local dir; dir="$(mk_fixture initial-author-map-per-issue)"
+  cat > "$dir/initial.json" <<'EOF'
+[
+  {"number":20,"title":"Owner one","url":"https://example.invalid/20","author":{"login":"owner20"}},
+  {"number":21,"title":"Outsider one","url":"https://example.invalid/21","author":{"login":"outsider21"}}
+]
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[
+  {"number":999,"pull_request":{"url":"https://example.invalid/pulls/999"}},
+  {"number":21,"author_association":"NONE","user":{"login":"outsider21"}},
+  {"number":20,"author_association":"OWNER","user":{"login":"owner20"}}
+]
+EOF
+  printf '' > "$dir/candidates.txt"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_initial_plan | length' '2'
+  expect_jq '.needs_initial_plan[0].number' '20'
+  expect_jq '.needs_initial_plan[0].association' '"OWNER"'
+  expect_jq '.needs_initial_plan[0].trusted_author' 'true'
+  expect_jq '.needs_initial_plan[1].number' '21'
+  expect_jq '.needs_initial_plan[1].association' '"NONE"'
+  expect_jq '.needs_initial_plan[1].trusted_author' 'false'
+  expect_jq '.untrusted_issue_authors | length' '1'
+  expect_jq '.untrusted_issue_authors[0].number' '21'
+}
+
 # revision-untrusted-author-reported — a needs_revision issue (real OWNER feedback after an OWNER
-# plan) opened by a NONE-association author: still revised, but its untrusted_issue_authors entry
-# carries bucket "needs_revision".
+# plan) whose rest-issues.json entry is NONE: still revised, but its untrusted_issue_authors entry
+# carries bucket "needs_revision". issue-1.json itself carries no top-level authorAssociation
+# field (#202) — comment-level authorAssociation, used by the feedback/plan-marker gate, is
+# untouched.
 case_revision_untrusted_author_reported() {
   local dir; dir="$(mk_fixture revision-untrusted-author-reported)"
   cat > "$dir/initial.json" <<'EOF'
@@ -680,10 +810,13 @@ case_revision_untrusted_author_reported() {
 EOF
   printf '1\n' > "$dir/candidates.txt"
   cat > "$dir/issue-1.json" <<'EOF'
-{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"outsider"},"authorAssociation":"NONE","comments":[
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"outsider"},"comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
   {"body":"please change X","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"}
 ]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"NONE","user":{"login":"outsider"}}]
 EOF
   build_stub_gh "$dir"
   run_planning "$dir"
@@ -694,10 +827,39 @@ EOF
   expect_jq '.untrusted_issue_authors[0].bucket' '"needs_revision"'
 }
 
-# author-association-unavailable — the stub's authorAssociation-bearing gh issue list call fails
-# (reject-association present, simulating an older gh): one warn line, every issue's
-# trusted_author forced false regardless of its actual (unreachable) association, and
-# counts.author_association_unavailable: true.
+# revision-trusted-author-clean — the non-vacuity control for the revision-side join: a
+# needs_revision issue whose rest-issues.json entry is OWNER. Without this case, a revision-side
+# join wired to always yield "MISSING" still passes revision-untrusted-author-reported (which only
+# asserts false) while silently failing every real maintainer-authored issue.
+case_revision_trusted_author_clean() {
+  local dir; dir="$(mk_fixture revision-trusted-author-clean)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '30\n' > "$dir/candidates.txt"
+  cat > "$dir/issue-30.json" <<'EOF'
+{"number":30,"title":"Issue thirty","url":"https://example.invalid/30","author":{"login":"owner30"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner30"},"authorAssociation":"OWNER"},
+  {"body":"please change Y","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner30"},"authorAssociation":"OWNER"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":30,"author_association":"OWNER","user":{"login":"owner30"}}]
+EOF
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_revision | length' '1'
+  expect_jq '.needs_revision[0].trusted_author' 'true'
+  expect_jq '.untrusted_issue_authors' '[]'
+}
+
+# author-association-unavailable — the stub's REST issues call (gh api .../issues?...) fails
+# (reject-association present, simulating the REST endpoint being unreachable): one warn line,
+# every issue's trusted_author forced false regardless of its actual (unreachable) association,
+# and counts.author_association_unavailable: true. needs_initial_plan itself still succeeds
+# (#202: it's now an unconditional, authorAssociation-free `gh issue list` call, independent of
+# the REST lookup) — only the association join fails closed.
 case_author_association_unavailable() {
   local dir; dir="$(mk_fixture author-association-unavailable)"
   cat > "$dir/initial.json" <<'EOF'
@@ -708,7 +870,7 @@ EOF
   build_stub_gh "$dir"
   run_planning "$dir"
   expect_rc 0
-  expect_err "could not read issue authorAssociation"
+  expect_err "could not read issue author association"
   expect_jq '.counts.author_association_unavailable' 'true'
   expect_jq '.needs_initial_plan[0].trusted_author' 'false'
 }
@@ -1635,11 +1797,13 @@ cases=(
   "no-comments|case_no_comments|control: plan only, nothing posted after it: no revision, nothing untrusted"
   "fetch-failure-survives|case_fetch_failure_survives|one candidate's gh issue view fails: fetch_failures counted, other candidates still evaluated"
   "output-shape|case_output_shape|every existing top-level key and counts field is still present with its current name, plus #176's new keys"
-  "initial-untrusted-author-reported|case_initial_untrusted_author_reported|NONE-authored issue: stays in needs_initial_plan, trusted_author false, reported in untrusted_issue_authors"
-  "initial-trusted-author-clean|case_initial_trusted_author_clean|control: OWNER-authored issue: trusted_author true, empty untrusted_issue_authors"
-  "initial-missing-author-association|case_initial_missing_author_association|the issue object itself has no authorAssociation key: fail-closed untrusted"
-  "revision-untrusted-author-reported|case_revision_untrusted_author_reported|NONE-authored needs_revision issue: still revised, untrusted_issue_authors entry bucket is needs_revision"
-  "author-association-unavailable|case_author_association_unavailable|gh can't return issue authorAssociation: one warn line, every issue trusted_author false, counts flag set"
+  "initial-untrusted-author-reported|case_initial_untrusted_author_reported|NONE-associated issue (rest-issues.json): stays in needs_initial_plan, trusted_author false, reported in untrusted_issue_authors"
+  "initial-trusted-author-clean|case_initial_trusted_author_clean|control: OWNER-associated issue (rest-issues.json): trusted_author true, empty untrusted_issue_authors"
+  "initial-missing-author-association|case_initial_missing_author_association|the issue's number is absent from rest-issues.json: fail-closed untrusted"
+  "initial-author-map-per-issue|case_initial_author_map_per_issue|two issues, reversed rest-issues.json order plus a PR entry: each gets its own association, keyed by number"
+  "revision-untrusted-author-reported|case_revision_untrusted_author_reported|NONE-associated needs_revision issue (rest-issues.json): still revised, untrusted_issue_authors entry bucket is needs_revision"
+  "revision-trusted-author-clean|case_revision_trusted_author_clean|non-vacuity control: OWNER-associated needs_revision issue: trusted_author true, empty untrusted_issue_authors"
+  "author-association-unavailable|case_author_association_unavailable|REST issues endpoint unreachable: one warn line, every issue trusted_author false, counts flag set"
   "impl-untrusted-marker-not-selected|case_impl_untrusted_marker_not_selected|a forged plan comment from an untrusted author is never selected as plan"
   "impl-untrusted-post-plan-not-binding|case_impl_untrusted_post_plan_not_binding|a drive-by comment after a real plan can never reach trusted_post_plan"
   "impl-trusted-post-plan-binding|case_impl_trusted_post_plan_binding|control: MEMBER feedback after an OWNER plan lands in trusted_post_plan"

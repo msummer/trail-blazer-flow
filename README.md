@@ -882,11 +882,15 @@ which needs Claude Code **2.1.85+** (see "Prerequisites").
 new to migrate. What changes is trust and provenance, and every change *narrows* what the harness
 does unattended. (1) Comment- and issue-author provenance: only `OWNER`/`MEMBER`/`COLLABORATOR`
 comments are binding feedback, only maintainer-authored issues can be auto-approved, and
-everything untrusted is surfaced to you in new report buckets instead of silently acted on. The
-installed `gh` (through at least 2.97.0) does not return issue-level `authorAssociation`, so
-issue-author trust fails closed — **plan auto-approval is effectively paused wherever a policy
-exists** until `gh` grows the field; manual approval is unaffected. (2) Harness-authored record
-comments (auto-approval audits, staleness notes on approved plans, interrupted-run/worktree-sweep
+everything untrusted is surfaced to you in new report buckets instead of silently acted on. A bug
+(fixed in #202) had this lookup ask `gh` for an issue-level `authorAssociation` `--json` field it
+has never returned on any version — not a version gap that would close as `gh` caught up — so
+issue-author trust failed closed on every run and **plan auto-approval was effectively paused
+wherever a policy exists**; manual approval was unaffected throughout. The lookup now reads the
+same GitHub-computed association from the REST issues endpoint instead, which does return it
+today, so auto-approval resumes for maintainer-authored issues wherever a policy exists — re-read
+your policy before upgrading if you had come to rely on the (accidental) pause. (2) Harness-authored
+record comments (auto-approval audits, staleness notes on approved plans, interrupted-run/worktree-sweep
 notes, `cleanup-after-merge.sh`'s hygiene comments) now open with `<!-- harness-audit -->` and are
 excluded from feedback detection and from the implementer's binding context — no more phantom
 revisions after an audit comment. One-time transition note: such comments posted by *older*
