@@ -98,8 +98,8 @@ dropped or silently trusted, and an untrusted marker comment never shadows real,
 posted before it (one posted before that plan is dropped with no bucket entry) — plus, since
 #176, the same trust gate applied to WHO OPENED the issue: a non-maintainer-authored issue is
 still planned, but is reported in `untrusted_issue_authors` and never auto-approved, and if the
-installed `gh` can't return issue-level `authorAssociation` the whole run fails closed (every
-issue untrusted, one warn line, `counts.author_association_unavailable: true`) — plus, since
+REST author-association lookup fails the whole run fails closed (every issue untrusted, one warn
+line, `counts.author_association_unavailable: true`) — plus, since
 #182, a trusted comment containing `<!-- harness-audit -->` (a harness-authored audit/hygiene
 record) or `<!-- verifier-verdict -->` (the orchestrator's own archive) never counts as feedback
 either, so neither re-opens a plan for revision (`counts.audit_comments_skipped` /

@@ -33,10 +33,14 @@
 # untrusted_issue_authors array ({number, title, url, author, association, bucket}) — visible so
 # the human sees it, but issue-planner's step 6b hard floor blocks auto-approval on it. Planning
 # itself is NOT gated on issue authorship — a non-maintainer-authored issue is still planned; only
-# auto-approval is blocked. If the installed gh cannot return authorAssociation for issues (an
-# older gh, or a transient API error), the script falls back to its current field list, warns
-# once, sets counts.author_association_unavailable: true, and marks EVERY issue's
-# trusted_author: false for this run (fail-closed) rather than dying or silently trusting.
+# auto-approval is blocked. #202: gh has never exposed an issue-level authorAssociation `--json`
+# field (only on comments), so this association is read from GitHub's REST issues endpoint
+# (author_association) into a number -> {author, association} map built once per run. An open
+# issue absent from the map gets association "MISSING" and trusted_author: false — the same
+# fail-closed rule the comment-side gate uses below. If the REST call itself fails, the script
+# warns once, sets counts.author_association_unavailable: true, and leaves the map empty, so
+# EVERY issue's trusted_author is false for this run (fail-closed) rather than dying or silently
+# trusting.
 #
 # Output (JSON): needs_initial_plan, needs_revision (each item now additionally carries author,
 # association, trusted_author) plus untrusted_comments — an array of {number, title, url,
@@ -80,38 +84,44 @@ VERDICT_MARKER="<!-- verifier-verdict -->"
 # outside contributor's suggestion, a maintainer comments themselves.
 TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"
 
-# Probe once, in an `if !` guard (so `set -e` doesn't abort): request author/authorAssociation
-# on the needs_initial_plan query. On failure — an older gh that doesn't support the issue-level
-# field, or a transient API error — fall back to the current field list, warn once, and mark this
-# whole run fail-closed via author_association_unavailable. view_fields is reused below for the
-# per-candidate `gh issue view` calls so both queries agree on what's available this run.
+# #202: gh has never exposed an issue-level authorAssociation `--json` field, so author
+# provenance is read once per run from GitHub's REST issues endpoint into a number -> {author,
+# association} map, joined into both buckets below by issue number. The leading `.[] | ` in the
+# --jq filter is load-bearing: `gh api --paginate --jq` applies the filter to each page as ONE
+# array document, not once per element (the #196 lesson) — drop it and jq errors on the array,
+# gh exits 1, and this branch fail-closes for the wrong reason instead of building the map.
 author_association_unavailable=false
-if ! needs_initial_plan=$(gh issue list \
-  --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan" \
-  --json number,title,url,author,authorAssociation \
-  --limit "$LIMIT" 2>/dev/null); then
-  echo "warn: could not read issue authorAssociation — every issue author treated as untrusted this run (fail-closed)" >&2
+issue_authors="{}"
+if ! rest_lines=$(gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" --paginate --jq '
+    .[] | select(.pull_request == null)
+    | "\(.number) \(.author_association // "MISSING") \(.user.login // "unknown")"
+  ' 2>/dev/null); then
+  echo "warn: could not read issue author association (REST issues endpoint) — every issue author treated as untrusted this run (fail-closed)" >&2
   author_association_unavailable=true
-  view_fields="number,title,url,comments"
-  needs_initial_plan=$(gh issue list \
-    --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan" \
-    --json number,title,url \
-    --limit "$LIMIT")
 else
-  view_fields="number,title,url,author,authorAssociation,comments"
+  issue_authors=$(printf '%s\n' "$rest_lines" | jq -R -s -c '
+    split("\n") | map(select(length > 0) | split(" ")) | map(select(length >= 3))
+    | map({key: .[0], value: {association: .[1], author: .[2]}}) | from_entries
+  ')
 fi
 
-# Annotate needs_initial_plan items with author/association/trusted_author. When
-# author_association_unavailable is true, .author and .authorAssociation are both absent from
-# every item, so this maps them to "unknown"/"MISSING" and trusted_author: false uniformly —
-# the same fail-closed path, with no separate branch needed.
-needs_initial_plan=$(printf '%s' "$needs_initial_plan" | jq --arg trusted "$TRUSTED_ASSOCIATIONS" '
+needs_initial_plan=$(gh issue list \
+  --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan" \
+  --json number,title,url,author \
+  --limit "$LIMIT")
+
+# Annotate needs_initial_plan items with author/association/trusted_author from the REST map.
+# An issue absent from the map (author_association_unavailable, or simply not returned by the
+# REST call this run) resolves to association "MISSING" and trusted_author: false — fail-closed,
+# the same rule the comment-side gate uses.
+needs_initial_plan=$(printf '%s' "$needs_initial_plan" | jq --arg trusted "$TRUSTED_ASSOCIATIONS" --argjson map "$issue_authors" '
   ($trusted | split(" ")) as $ok
-  | map({number, title, url,
-         author: (.author.login // "unknown"),
-         association: ((.authorAssociation // "MISSING") | ascii_upcase),
-         trusted_author: ( ((.authorAssociation // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null )
-        })
+  | map(($map[(.number|tostring)] // {}) as $p
+        | {number, title, url,
+           author: ($p.author // .author.login // "unknown"),
+           association: (($p.association // "MISSING") | ascii_upcase),
+           trusted_author: ((($p.association // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null)
+          })
 ')
 
 # Candidates for revision: awaiting review, not yet approved, not opted out.
@@ -133,7 +143,7 @@ for n in $candidates; do
   # Tolerate per-issue failures: one transient gh/API error must not kill the whole
   # discovery run (matters for unattended/scheduled runs). The issue is simply
   # reconsidered next time.
-  if ! issue=$(gh issue view "$n" --json "$view_fields" 2>/dev/null); then
+  if ! issue=$(gh issue view "$n" --json number,title,url,author,comments 2>/dev/null); then
     echo "warn: could not fetch issue #$n — skipping it this run" >&2
     fetch_failures=$((fetch_failures+1))
     continue
@@ -177,12 +187,13 @@ for n in $candidates; do
 
   has_feedback=$(printf '%s' "$result" | jq -r '.has_feedback')
   if [ "$has_feedback" = "true" ]; then
-    entry=$(printf '%s' "$issue" | jq --arg trusted "$TRUSTED_ASSOCIATIONS" '
+    entry=$(printf '%s' "$issue" | jq --arg trusted "$TRUSTED_ASSOCIATIONS" --argjson map "$issue_authors" '
       ($trusted | split(" ")) as $ok
+      | ($map[(.number|tostring)] // {}) as $p
       | {number, title, url,
-         author: (.author.login // "unknown"),
-         association: ((.authorAssociation // "MISSING") | ascii_upcase),
-         trusted_author: ( ((.authorAssociation // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null )
+         author: ($p.author // .author.login // "unknown"),
+         association: (($p.association // "MISSING") | ascii_upcase),
+         trusted_author: ((($p.association // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null)
         }')
     needs_revision=$(jq -n --argjson arr "$needs_revision" --argjson e "$entry" '$arr + [$e]')
   fi
