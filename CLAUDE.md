@@ -120,7 +120,10 @@ plan comment posted after the newest `plan-approved` labeling event is not cover
 decides, not the first; equal plan/label timestamps still count as covered; an unreadable events
 lookup fails closed (`covers_plan: null`); and `--issue <n>` single-issue mode (used by the
 implementer skill's fresh per-issue revalidation) returns the identical output shape for exactly
-one issue regardless of its labels, with an unknown flag or non-numeric `<n>` exiting 2. Since
+one issue regardless of its labels, with an unknown flag or non-numeric `<n>` exiting 2 — and,
+since #198, that same `--issue <n>` mode also carries the `covered_by_approval` split (not just
+`binding_line`), the artifact the implementer skill's pre-push re-check (step 2e) diffs to surface
+a trusted comment that arrives after dispatch. Since
 #194 it additionally pins, on BOTH scripts: workstream A, a `has_harness_marker` boolean added to
 each untrusted bucket entry (`untrusted_comments[].comments[]` / `untrusted_post_plan[]`) that
 only ANNOTATES a forged `<!-- harness-audit -->`/`<!-- verifier-verdict -->` marker from an

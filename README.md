@@ -235,7 +235,10 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    report's "Files changed"** (unexplained files = blocker, not a commit), **re-validates the
    plan binding** (#174: a fresh `find-implementation-work.sh --issue <n>` run's `binding_line`
    must still match the one captured before dispatch — otherwise no commit, no push, the blocked
-   path instead, and `plan-approved` removed), commits once, pushes,
+   path instead, and `plan-approved` removed) **and diffs that same fresh run's trusted
+   post-approval comments** (#198) against the set captured before dispatch — a trusted comment
+   that arrived while the implementer worked is surfaced (never binding, never holds the push) in
+   the PR body and the run summary — commits once, pushes,
    opens the PR (`Closes #n`, verification results, **the verifier's own closing status line
    pasted verbatim** — never one the orchestrator composes on its behalf — the re-validated
    `binding_line` pasted verbatim too, a `Mutation probe:`
@@ -1195,7 +1198,12 @@ and `false` when it is later — a maintainer who comments after approving is no
 as having amended the approved plan; the comment is reported to the human (`counts.
 post_approval_comments`, a `warn:` line) instead of becoming a binding `RESOLVED:` decision. To
 make a post-approval comment binding, remove and re-add `plan-approved` — the same audited path
-#174 already documents, not a new surface.
+#174 already documents, not a new surface. A comment that arrives *while the implementer is
+working* is not silently missed either (#198): the pre-push re-validation above diffs that same
+fresh run's uncovered `trusted_post_plan` set against the set captured before dispatch, and any
+newly-arrived entry is quoted verbatim in the PR body and the run summary — still non-binding,
+still never holding the push; the residual race between that re-check and `gh pr create` itself
+is a named, out-of-scope honest limit.
 
 **The body-hash grant pattern is a tripwire, not a control** (see "The CLAUDE.md contract" item
 8). It exists only as a documented convention a consuming repo may adopt in its own CLAUDE.md —
