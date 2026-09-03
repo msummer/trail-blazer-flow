@@ -1753,6 +1753,59 @@ EOF
   expect_jq '.counts.post_approval_comments' '0'
 }
 
+# impl-single-issue-post-approval-comment (#198) — nothing today pins that `--issue <n>` mode (the
+# mode the issue-implementer skill's pre-push re-check, step 2e, actually calls) carries the
+# covered_by_approval split at all: case_impl_single_issue_mode's fixture has no post-plan comments,
+# and every covered_by_approval case above (case_impl_post_approval_comment_not_binding and
+# siblings) runs through batch mode (run_implementation), never --issue <n>. This fixture has a
+# trusted MEMBER comment posted after the plan-approved label, fetched via --issue 7 (an issue
+# number unused by any other fixture in this file, so it can't be confused with the existing
+# --issue 42 case).
+#
+# MUTATION PROOF (measured 2026-09-04): deleting the covered_by_approval remap at
+# bin/find-implementation-work.sh's `trusted_post_plan=$(printf '%s' "$trusted_post_plan" | jq -c
+# --arg at "$approved_at" 'map(. + {covered_by_approval: ...})')` line (so trusted_post_plan entries
+# carry no covered_by_approval field at all) and re-running `bash dev/planning-tests.sh` dropped the
+# suite from 55 pass/0 fail to 51 pass/4 fail, failing exactly: impl-post-approval-comment-not-
+# binding, impl-pre-approval-comment-binding, impl-post-approval-tie-covered, and this case
+# (impl-single-issue-post-approval-comment) — reverted immediately after recording this.
+# impl-post-approval-unknown-approval did NOT fail under this mutant: its fixture has no
+# events-<n>.json, so $approved_at is "" and the case expects covered_by_approval == null; jq's `.`
+# on a field the mutant never added also evaluates to null, so the missing-field default happens to
+# equal that one fixture's expected value — a coincidence of that fixture, not evidence the mutant
+# is inert generally (every OTHER fixture with a non-empty approved_at catches it, including this
+# one). Honest limits: the same mutant also kills three pre-existing batch-mode siblings, so it does
+# not by itself prove this case adds coverage; this case's unique contribution is the `--issue <n>`
+# code path (argument parsing at find-implementation-work.sh:118-138 and the single-issue prefetch
+# at 142-152), which none of those three exercises — case_impl_single_issue_mode is the only other
+# case on that path, and its fixture carries no post-plan comment at all, so it cannot distinguish
+# covered_by_approval from a missing field either. This case's `expect_err` on the per-issue warn
+# line and `counts.post_approval_comments == 1` are also unreached by any --issue <n> case before
+# this one.
+case_impl_single_issue_post_approval_comment() {
+  local dir; dir="$(mk_fixture impl-single-issue-post-approval-comment)"
+  cat > "$dir/ready.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/issue-7.json" <<'EOF'
+{"number":7,"title":"Not in the ready query","url":"https://example.invalid/7","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/7#c1"},
+  {"body":"one more thing","createdAt":"2026-01-03T00:00:00Z","author":{"login":"teammate"},"authorAssociation":"MEMBER","url":"https://example.invalid/7#c2"}
+]}
+EOF
+  cat > "$dir/events-7.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  build_stub_gh "$dir"
+  run_implementation_args "$dir" --issue 7
+  expect_rc 0
+  expect_jq '.plan_selection | length' '1'
+  expect_jq '.plan_selection[0].trusted_post_plan[0].covered_by_approval' 'false'
+  expect_jq '.counts.post_approval_comments' '1'
+  expect_jq '.plan_selection[0].binding_line != null' 'true'
+  expect_err "was posted after the plan-approved label"
+}
+
 # plan-escalation-audit-comment-no-revision — workstream C: the planner skill's step 7 now
 # instructs posting a stalled-stage escalation as a comment opening with <!-- harness-audit -->
 # instead of keeping it summary-only. This fixture is that exact posted comment, from OWNER,
@@ -1837,6 +1890,7 @@ cases=(
   "impl-pre-approval-comment-binding|case_impl_pre_approval_comment_binding|control: a trusted comment posted before the plan-approved label is covered_by_approval: true"
   "impl-post-approval-tie-covered|case_impl_post_approval_tie_covered|a trusted comment's createdAt exactly equal to the approval timestamp is covered (inclusive boundary)"
   "impl-post-approval-unknown-approval|case_impl_post_approval_unknown_approval|no plan-approved labeling event at all: covered_by_approval is null (fail-closed), not counted as uncovered"
+  "impl-single-issue-post-approval-comment|case_impl_single_issue_post_approval_comment|--issue <n> mode — the mode the pre-push re-check uses — carries the covered_by_approval split, not just binding_line"
   "plan-escalation-audit-comment-no-revision|case_plan_escalation_audit_comment_no_revision|workstream C: a step-7 escalation comment opening with harness-audit does not re-open the plan for revision"
 )
 

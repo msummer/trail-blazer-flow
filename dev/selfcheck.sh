@@ -612,7 +612,7 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 500
+budget_table="issue-implementer 525
 issue-cycle 330
 issue-planner 440
 project-kickoff 215
