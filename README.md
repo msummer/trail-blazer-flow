@@ -139,8 +139,11 @@ The `issue-planner` skill:
    it's this run's revision feedback) and an immediate same-run revision; a stale `plan-approved`
    plan gets the same staleness note, but opening with `<!-- harness-audit -->` (it's a record for
    the human, not feedback), plus a prominent flag (the human approved *that* plan — re-approval
-   is theirs). Overlapping plans (same files → merge conflicts) are flagged and excluded from
-   auto-approval.
+   is theirs). Since #208, that `plan-approved` note also carries a
+   `<!-- harness-staleness: issue=<n> prs=<prs> -->` key naming the merged PRs that caused it, and
+   is skipped (never re-posted) once a prior run already recorded that same cause — the flag to
+   the human is never skipped, only the comment. Overlapping plans (same files → merge conflicts)
+   are flagged and excluded from auto-approval.
 6. **Proposes answers and revises in the same run**: for BLOCKING open questions the
    orchestrator can ground in code/measurements, it posts proposed answers as a comment, then
    immediately revises the plan, tagging each folded decision `RESOLVED
@@ -1319,12 +1322,15 @@ same script also computes the approval-binding verdict described in "Approval pr
 (#174). Both
 scripts share a second, orthogonal exclusion inside the trusted set (#182): any trusted comment
 containing `<!-- harness-audit -->` (a harness-authored audit/hygiene record — the planner's
-auto-approval audit trail, its `plan-approved` staleness note, its step-7 stalled-stage escalation
-comment (#194) — whose second line also carries a `<!-- harness-escalation: bucket=<bucket>
-stage=<stage> -->` key, so a repeat run skips re-posting it once the issue's newest
-maintainer-authored escalation comment already records that same key (#199) — the implementer's
-interrupted-run and worktree-sweep notes, `cleanup-after-merge.sh`'s hygiene comments) or
-`<!-- verifier-verdict
+auto-approval audit trail, its `plan-approved` staleness note — whose second line, since #208,
+also carries a `<!-- harness-staleness: issue=<n> prs=<prs> -->` key naming the merged PRs that
+caused the staleness, so a repeat run skips re-posting it once the issue's newest
+maintainer-authored staleness comment already records that same PR set — its step-7 stalled-stage
+escalation comment (#194) — whose second line also carries a `<!-- harness-escalation:
+bucket=<bucket> stage=<stage> -->` key, so a repeat run skips re-posting it once the issue's
+newest maintainer-authored escalation comment already records that same key (#199) — the
+implementer's interrupted-run and worktree-sweep notes, `cleanup-after-merge.sh`'s hygiene
+comments) or `<!-- verifier-verdict
 -->` (the orchestrator's own archive) anywhere in its body is excluded from
 `find-planning-work.sh`'s feedback detection and `find-implementation-work.sh`'s
 `trusted_post_plan` alike — a harness-authored record is never binding context, on either side of

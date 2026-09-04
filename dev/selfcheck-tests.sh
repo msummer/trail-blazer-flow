@@ -235,9 +235,20 @@ p_5_6()               { edit "$1/skills/issue-cycle/SKILL.md" 's/verifier-verdic
 p_5_7()               { edit "$1/skills/issue-implementer/SKILL.md" 's/verifier-verdict-branch: claude/verifier-verdict-branch:claude/'; }
 p_5_8()               { edit "$1/skills/issue-cycle/SKILL.md" 's/outcome=pass ")/outcome=pass")/'; }
 p_5_9()               { edit "$1/skills/issue-cycle/SKILL.md" 's#(\.body // "") | contains("<paste#(.bodyText // "") | contains("<paste#'; }
-p_5_10_order()        { edit "$1/skills/issue-planner/SKILL.md" 's/sort_by(.createdAt) | //'; }
+p_5_10_order()        { edit "$1/skills/issue-planner/SKILL.md" '/harness-escalation/s/sort_by(.createdAt) | //'; }
 p_5_10_key()          { edit "$1/skills/issue-planner/SKILL.md" 's/<!-- harness-escalation: bucket=/<!-- harness-escalation-key: bucket=/'; }
 p_5_10_shadow()       { edit "$1/skills/issue-planner/SKILL.md" 's# | select((\.body // "") | contains("<!-- harness-escalation:"))##'; }
+p_5_11_trust() {
+  edit "$1/skills/issue-planner/SKILL.md" \
+    '/harness-staleness/s/"OWNER","MEMBER","COLLABORATOR"/"OWNER","MEMBER","COLLABORATOR","NONE"/'
+}
+p_5_11_order()        { edit "$1/skills/issue-planner/SKILL.md" '/harness-staleness/s/sort_by(.createdAt) | //'; }
+p_5_11_shadow()       { edit "$1/skills/issue-planner/SKILL.md" 's# | select((\.body // "") | contains("<!-- harness-staleness:"))##'; }
+p_5_11_key()          { edit "$1/skills/issue-planner/SKILL.md" 's/<!-- harness-staleness: issue=/<!-- harness-staleness-key: issue=/'; }
+p_5_11_needle() {
+  edit "$1/skills/issue-planner/SKILL.md" \
+    '/--json comments --jq /s/<!-- harness-staleness:/<!-- harness-/g'
+}
 
 # ---------------------------------------------------------------------------------------------
 # Case table: name|expected-ids (space-separated, empty for a control case)|perturb function
@@ -314,9 +325,14 @@ cases=(
   "5.7|5.7|p_5_7|remove the space after the colon in the writer's verifier-verdict-branch key-line template so it no longer matches the checker's needle"
   "5.8|5.8|p_5_8|delete the trailing space after outcome=pass in the verdict-provenance needle so a longer outcome token (outcome=passed) substring-matches"
   "5.9|5.9|p_5_9|rename .body to .bodyText in the archived-verdict match needle so the extracted program reads a field gh never returns"
-  "5.10-order|5.10|p_5_10_order|drop the sort_by(.createdAt) clause from the escalation de-dup --jq program so array order, not recency, picks the winner"
-  "5.10-key|5.10|p_5_10_key|rename the escalation writer's key-line template only (harness-escalation -> harness-escalation-key) so the checker's round-trip needle no longer selects it"
-  "5.10-shadow|5.10|p_5_10_shadow|delete the inner select((.body // \"\") | contains(\"<!-- harness-escalation:\")) from the candidate array so sort_by/last picks the newest comment of ANY kind, not the newest escalation -- measured: the guard then prints none instead of the escalation's key when a newer keyless comment follows it, so 5.10's newer-keyless-comment-does-not-shadow-escalation fixture fails"
+  "5.10-order|5.10|p_5_10_order|drop the sort_by(.createdAt) clause from the escalation de-dup --jq program (address-scoped to the harness-escalation line only, since #208 added a second guard line sharing this same clause text) so array order, not recency, picks the winner -- measured: the newest-wins-out-of-array-order fixture returns the older stage=dispatch key instead of the newer stage=post key, and 5.11 is unaffected"
+  "5.10-key|5.10|p_5_10_key|rename the escalation writer's key-line template only (harness-escalation -> harness-escalation-key) so the checker's round-trip needle no longer selects it -- measured: round-trip reports 'found 0'"
+  "5.10-shadow|5.10|p_5_10_shadow|delete the inner select((.body // \"\") | contains(\"<!-- harness-escalation:\")) from the candidate array so sort_by/last picks the newest comment of ANY kind, not the newest escalation -- measured: the guard then prints none instead of the escalation's key when a newer keyless comment follows it, so 5.10's newer-keyless-comment-does-not-shadow-escalation fixture fails (extraction itself still succeeds -- the startswith() clause later on the same line still carries the harness-escalation marker)"
+  "5.11-trust|5.11|p_5_11_trust|widen the staleness guard's trust list to include NONE (staleness line only) -- measured: the forged-key-from-NONE-author fixture returns the key instead of 'none'"
+  "5.11-order|5.11|p_5_11_order|drop the sort_by(.createdAt) clause from the staleness de-dup --jq program (staleness line only) so array order, not recency, picks the winner -- measured: the newest-wins-out-of-array-order fixture returns the older prs=12,14 key instead of the newer prs=12,14,16 key"
+  "5.11-shadow|5.11|p_5_11_shadow|delete the inner select((.body // \"\") | contains(\"<!-- harness-staleness:\")) from the candidate array so sort_by/last picks the newest comment of ANY kind -- measured: the newer-keyless-comment-does-not-shadow fixture returns 'none' instead of the staleness key"
+  "5.11-key|5.11|p_5_11_key|rename the staleness writer's key-line template only (harness-staleness -> harness-staleness-key) so the checker's round-trip needle no longer selects it -- measured: round-trip reports 'found 0', same failure mode as 5.10-key"
+  "5.11-needle|5.11|p_5_11_needle|widen the staleness guard's own contains()/startswith() needles from '<!-- harness-staleness:' to '<!-- harness-' (staleness line only, a no-op on the escalation line, which spells a different marker) -- measured: two fixtures fail together -- audit-marker-without-key now returns the bare '<!-- harness-audit -->' line (it starts with the widened prefix) and cross-marker-escalation-key now returns the escalation's own key line (its comment now also matches the widened contains()); extraction itself is unaffected because 5.11's line selection excludes 5.10's harness-escalation marker rather than requiring the now-widened harness-staleness marker"
 )
 
 # ---------------------------------------------------------------------------------------------

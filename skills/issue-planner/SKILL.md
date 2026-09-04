@@ -251,14 +251,24 @@ numbers or vanished functions. When you find one:
   feedback, and because it is also the only signal that re-triggers the revision on a later run if
   this dispatch dies before finishing — marking it with `<!-- harness-audit -->` would hide it
   from both.
-- **`plan-approved` and stale** → post the same staleness note, but opening with
-  `<!-- harness-audit -->`, and do NOT revise (the human approved *that* plan; a revision would
-  need re-approval). Unlike the `plan-proposed` branch, this note is explicitly not anyone's
-  feedback to act on — it goes to the human via the step 7 summary, so marking it keeps it out of
-  the implementer's `trusted_post_plan` (it would otherwise arrive there as an unmarked binding
-  decision). Flag it prominently in the summary so the human decides: implement anyway (the
+- **`plan-approved` and stale** → post the same staleness note, but whose first line is exactly
+  `<!-- harness-audit -->` and whose second line is exactly the key template
+  `<!-- harness-staleness: issue=<n> prs=<prs> -->`, with `<prs>` the merged PR numbers that made
+  the plan stale, **ascending, comma-separated, no spaces, no `#`** (e.g. `12,14`) — a
+  deterministic spelling is what makes the byte-identical comparison below agree across runs and
+  across models. Do NOT revise (the human approved *that* plan; a revision would need
+  re-approval). Unlike the `plan-proposed` branch, this note is explicitly not anyone's feedback
+  to act on — it goes to the human via the step 7 summary, so marking it keeps it out of the
+  implementer's `trusted_post_plan` (it would otherwise arrive there as an unmarked binding
+  decision). **De-dup guard:** before posting, run this one-line, substitution-free command to
+  print the newest maintainer-authored staleness key already on the issue, or `none`:
+  `gh issue view <n> --json comments --jq '[.comments[] | select(((.authorAssociation // "") | ascii_upcase) as $a | (["OWNER","MEMBER","COLLABORATOR"] | index($a)) != null) | select((.body // "") | contains("<!-- harness-staleness:"))] | sort_by(.createdAt) | last | ((.body // "") | split("\n") | map(select(startswith("<!-- harness-staleness:"))) | last // "none")' | tr -d '\r'`
+  If the printed line is byte-identical to the key you are about to post, **skip the comment** —
+  a prior run already recorded this same staleness cause — and say so in the summary, citing the
+  prior note; otherwise post. **The summary flag is never skipped:** flag it prominently every
+  run, whether or not the comment was posted, so the human decides: implement anyway (the
   implementer's standing drift caveat covers small drift) or pull the approval and ask for a
-  revision.
+  revision. At most one such comment per issue per run.
 
 **Flag overlapping plans.** Compare the "Affected areas" sections of the plans you just posted —
 against each other and against any other pending plans (`plan-proposed` / `plan-approved`
