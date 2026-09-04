@@ -941,6 +941,35 @@ showed a clean PASS may newly WARN about an unpinned ref in a local composite ac
 `.github/actions/` (the exact exposure the widening closes) or in action files CI never runs;
 WARN-only, the doctor's exit code is unaffected.
 
+**v2.5.1 → v2.5.2** adds no grant, label, script, or baseline step — the doctor reports nothing
+new to migrate — but **upgrade promptly if you run a "Plan auto-approval policy": it has been
+silently paused since v2.5.0**. (1) **Auto-approval works again (#202).** `find-planning-work.sh`
+read issue-author provenance from a `gh issue list --json authorAssociation` field `gh` has never
+supported, so every run since v2.5.0 fail-closed — `counts.author_association_unavailable: true`,
+every issue `trusted_author: false`, and plan auto-approval paused on every machine wherever a
+policy exists. The lookup now uses GitHub's REST issues endpoint (`author_association`), which
+returns the field today: auto-approval resumes for maintainer-authored issues wherever a "Plan
+auto-approval policy" section exists — a **widening** back to the #176 design intent, so re-read
+your policy before upgrading if you preferred the pause. The fail-closed branch behaves exactly
+as before and now fires only when the REST lookup itself fails. Costs one extra read-only,
+paginated API call per planning run. (2) Post-approval comments are surfaced at the pre-push
+revalidation (#198): the implementer's step 2e compared only the binding line, so a trusted
+comment that arrived while the implementer was working went unmentioned; it now diffs the
+trusted-but-uncovered post-plan set against the one recorded at dispatch and quotes any newly
+arrived comment (author, association, `createdAt`, `url`) in the PR body's verification section
+and the run summary, or in the blocker comment when the binding-line check fails first. Such a
+comment stays non-binding — no `RESOLVED:` decision, no re-dispatch, no push hold — so an empty
+diff leaves behaviour byte-identical. (3) Planner escalation comments are de-duplicated across
+runs (#199): the `<!-- harness-audit -->` escalation the planner posts on an issue that drops out
+of a pass with no recorded outcome now carries a second line,
+`<!-- harness-escalation: bucket=<bucket> stage=<stage> -->`, and is skipped when the newest
+maintainer-authored escalation on the issue already carries the identical key — an issue stalled
+across unattended cycles no longer collects one duplicate per run. The run-summary escalation is
+never suppressed, and only `OWNER`/`MEMBER`/`COLLABORATOR` comments satisfy the guard, so a
+forged key cannot silence a real escalation. One-time transition note: escalation comments
+posted by v2.5.1 carry no key line, so such an issue receives at most one more comment before
+the guard takes effect.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
