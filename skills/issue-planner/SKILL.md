@@ -411,13 +411,23 @@ skipped-with-reason) is an **escalated skipped stage** — report it prominently
 never let it drop silently. This is the standalone-run equivalent of the pre-advance checks
 `issue-cycle` performs when it runs this skill as part of a full pass. **Make the escalation
 durable, not just summary-only (#194):** report it in the run summary AND post it as a comment on
-the stalled issue — regardless of its label state — opening with `<!-- harness-audit -->` and
-naming the issue, the bucket it was discovered in (`needs_initial_plan` or `needs_revision`), and
-the stage that produced no recorded outcome. The marker is what keeps this comment out of
-`find-planning-work.sh`'s feedback detection and `find-implementation-work.sh`'s
-`trusted_post_plan` (#182), so — unlike an unmarked comment from the harness's own trusted `gh`
-identity — it does not spuriously re-open a plan nobody asked to revise. One such comment per
-stalled issue per run.
+the stalled issue — regardless of its label state — whose first line is exactly
+`<!-- harness-audit -->` and whose second line is exactly the key template
+`<!-- harness-escalation: bucket=<bucket> stage=<stage> -->`, naming the issue, the bucket it was
+discovered in (`needs_initial_plan` or `needs_revision`), and the stage that produced no recorded
+outcome — one of `dispatch` (the subagent dispatch produced no plan), `post` (a plan/revision
+existed but was never posted or labelled), or `unknown`. The `<!-- harness-audit -->` marker is
+what keeps this comment out of `find-planning-work.sh`'s feedback detection and
+`find-implementation-work.sh`'s `trusted_post_plan` (#182), so — unlike an unmarked comment from
+the harness's own trusted `gh` identity — it does not spuriously re-open a plan nobody asked to
+revise. **De-dup guard (#199):** before posting, run this one-line, substitution-free command to
+print the newest maintainer-authored escalation key already on the issue, or `none`:
+`gh issue view <n> --json comments --jq '[.comments[] | select(((.authorAssociation // "") | ascii_upcase) as $a | (["OWNER","MEMBER","COLLABORATOR"] | index($a)) != null) | select((.body // "") | contains("<!-- harness-escalation:"))] | sort_by(.createdAt) | last | ((.body // "") | split("\n") | map(select(startswith("<!-- harness-escalation:"))) | last // "none")' | tr -d '\r'`
+If the printed line is byte-identical to the key you are about to post, **skip the comment** —
+a prior run already recorded this exact bucket/stage — and say so in the summary, citing that a
+prior escalation already records it; otherwise post. The summary escalation itself is never
+skipped: every stalled issue is reported there regardless of whether its comment was posted or
+skipped this run. At most one such comment per stalled issue per run.
 
 ## Rules
 

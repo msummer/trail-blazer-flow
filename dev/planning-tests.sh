@@ -1806,12 +1806,16 @@ EOF
   expect_err "was posted after the plan-approved label"
 }
 
-# plan-escalation-audit-comment-no-revision — workstream C: the planner skill's step 7 now
-# instructs posting a stalled-stage escalation as a comment opening with <!-- harness-audit -->
-# instead of keeping it summary-only. This fixture is that exact posted comment, from OWNER,
-# after the plan: it does not trigger a revision. Honest note: this exercises the SAME filter as
-# plan-audit-comment-no-revision (find-planning-work.sh's has_feedback audit exclusion) — its
-# value here is pinning the documented step-7 USAGE of that filter, not independent script
+# plan-escalation-audit-comment-no-revision — workstream C: the planner skill's step 7 posts a
+# stalled-stage escalation as a two-line comment — first line exactly <!-- harness-audit -->,
+# second line the <!-- harness-escalation: bucket=... stage=... --> key the #199 de-dup guard
+# matches on — instead of keeping it summary-only. This fixture is that exact posted comment,
+# from OWNER, after the plan: it does not trigger a revision. Honest note: this exercises the
+# SAME filter as plan-audit-comment-no-revision (find-planning-work.sh's has_feedback audit
+# exclusion), which matches on `contains("<!-- harness-audit -->")` — the added escalation-key
+# second line changes nothing about that filter, since it only ever inspects whether the marker
+# substring is present anywhere in the body. Its value here is pinning the documented step-7
+# USAGE of that filter against the current two-line comment shape, not independent script
 # coverage; no new mutation was run beyond what plan-audit-comment-no-revision already proves,
 # per this case's own honest-limits note.
 case_plan_escalation_audit_comment_no_revision() {
@@ -1823,7 +1827,7 @@ EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
-  {"body":"<!-- harness-audit -->\nescalation: issue #7 (bucket: needs_revision) produced no recorded outcome this run — stage: revision dispatch","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"}
+  {"body":"<!-- harness-audit -->\n<!-- harness-escalation: bucket=needs_revision stage=dispatch -->\nescalation: issue #7 (bucket: needs_revision) produced no recorded outcome this run — stage: dispatch","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"}
 ]}
 EOF
   build_stub_gh "$dir"

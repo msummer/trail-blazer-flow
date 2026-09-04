@@ -234,6 +234,9 @@ p_5_6()               { edit "$1/skills/issue-cycle/SKILL.md" 's/verifier-verdic
 p_5_7()               { edit "$1/skills/issue-implementer/SKILL.md" 's/verifier-verdict-branch: claude/verifier-verdict-branch:claude/'; }
 p_5_8()               { edit "$1/skills/issue-cycle/SKILL.md" 's/outcome=pass ")/outcome=pass")/'; }
 p_5_9()               { edit "$1/skills/issue-cycle/SKILL.md" 's#(\.body // "") | contains("<paste#(.bodyText // "") | contains("<paste#'; }
+p_5_10_order()        { edit "$1/skills/issue-planner/SKILL.md" 's/sort_by(.createdAt) | //'; }
+p_5_10_key()          { edit "$1/skills/issue-planner/SKILL.md" 's/<!-- harness-escalation: bucket=/<!-- harness-escalation-key: bucket=/'; }
+p_5_10_shadow()       { edit "$1/skills/issue-planner/SKILL.md" 's# | select((\.body // "") | contains("<!-- harness-escalation:"))##'; }
 
 # ---------------------------------------------------------------------------------------------
 # Case table: name|expected-ids (space-separated, empty for a control case)|perturb function
@@ -309,6 +312,9 @@ cases=(
   "5.7|5.7|p_5_7|remove the space after the colon in the writer's verifier-verdict-branch key-line template so it no longer matches the checker's needle"
   "5.8|5.8|p_5_8|delete the trailing space after outcome=pass in the verdict-provenance needle so a longer outcome token (outcome=passed) substring-matches"
   "5.9|5.9|p_5_9|rename .body to .bodyText in the archived-verdict match needle so the extracted program reads a field gh never returns"
+  "5.10-order|5.10|p_5_10_order|drop the sort_by(.createdAt) clause from the escalation de-dup --jq program so array order, not recency, picks the winner"
+  "5.10-key|5.10|p_5_10_key|rename the escalation writer's key-line template only (harness-escalation -> harness-escalation-key) so the checker's round-trip needle no longer selects it"
+  "5.10-shadow|5.10|p_5_10_shadow|delete the inner select((.body // \"\") | contains(\"<!-- harness-escalation:\")) from the candidate array so sort_by/last picks the newest comment of ANY kind, not the newest escalation -- measured: the guard then prints none instead of the escalation's key when a newer keyless comment follows it, so 5.10's newer-keyless-comment-does-not-shadow-escalation fixture fails"
 )
 
 # ---------------------------------------------------------------------------------------------

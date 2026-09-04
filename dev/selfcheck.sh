@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 49 assertions total. The gate prints what it checks — run it.
+# Five groups, 50 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -614,7 +614,7 @@ fi
 # read on demand, not on every run.
 budget_table="issue-implementer 525
 issue-cycle 330
-issue-planner 440
+issue-planner 450
 project-kickoff 215
 test-ratchet 200
 harness-setup 185"
@@ -1247,6 +1247,108 @@ if [ "$mn_ok" = "1" ]; then
     ok "5.9 archived-verdict match --jq program: line-present, retries-differ, no-status-line and null-body fixtures all match"
   else
     bad "5.9 archived-verdict match --jq program:$fail_59"
+  fi
+fi
+
+# 5.10 — extract the planner's escalation de-dup --jq program out of skills/issue-planner/
+# SKILL.md (#199, the step-7 pre-post guard) — the actual instruction text, not a copy of it —
+# and execute it with jq against literal offline fixtures, plus a writer/checker round-trip on
+# the escalation key-line template. Read-only, offline: no files written, no gh call. This pins
+# the mechanism (program behaviour + the writer's key-line template agreeing with the checker's
+# own needle), not that the orchestrating model actually runs the guard before posting — the
+# same honesty 4.28's comment uses.
+plan="$root/skills/issue-planner/SKILL.md"
+esc_n="$(grep -c -- '--json comments --jq ' "$plan")"
+esc_line="$(grep -F -- '--json comments --jq ' "$plan" | head -1)"
+esc_prog="$(printf '%s\n' "$esc_line" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
+
+esc_extraction_ok=1
+if [ "$esc_n" != "1" ]; then
+  bad "5.10 escalation de-dup --jq extraction: expected exactly one matching line in skills/issue-planner/SKILL.md, found $esc_n"
+  esc_extraction_ok=0
+elif [ -z "$esc_prog" ]; then
+  bad "5.10 escalation de-dup --jq extraction: extracted program is empty"
+  esc_extraction_ok=0
+else
+  case "$esc_prog" in
+    '[.comments[]'*) : ;;
+    *)
+      bad "5.10 escalation de-dup --jq extraction: extracted program does not start with [.comments[ -- got: $esc_prog"
+      esc_extraction_ok=0
+      ;;
+  esac
+fi
+
+if [ "$esc_extraction_ok" = "1" ]; then
+  # none / audit-comment-with-no-key / single-escalation / newest-wins-out-of-array-order /
+  # null-body / forged-key-from-a-NONE-author / newer-keyless-comment-does-not-shadow-escalation
+  # fixtures.
+  fx_esc_none='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"no marker here at all"}]}'
+  fx_esc_audit_no_key='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\nescalation: issue #7 (bucket: needs_revision) produced no recorded outcome this run"}]}'
+  fx_esc_one='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-escalation: bucket=needs_revision stage=dispatch -->\nescalation: issue #7"}]}'
+  fx_esc_two='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-05T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-escalation: bucket=needs_revision stage=post -->\nescalation: issue #7"},{"authorAssociation":"MEMBER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-escalation: bucket=needs_revision stage=dispatch -->\nescalation: issue #7"}]}'
+  fx_esc_null_body='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":null}]}'
+  fx_esc_forged='{"comments":[{"authorAssociation":"NONE","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-escalation: bucket=needs_revision stage=dispatch -->\nescalation: issue #7"}]}'
+  # A trusted escalation followed by a newer trusted comment that carries no key at all must
+  # still return the escalation's key, not "none" -- the guard's inner select() filters the
+  # candidate array down to escalation comments BEFORE sort_by/last picks the newest one, so a
+  # later plain comment can never bump an escalation out of contention. Measured directly
+  # (2026-09-04): deleting that inner select() from skills/issue-planner/SKILL.md:425 makes this
+  # fixture return "none" instead of the escalation's key line -- i.e. any comment posted after
+  # the escalation would silently defeat the de-dup guard and cause a duplicate escalation
+  # comment, exactly the failure #199 exists to prevent.
+  fx_esc_shadow='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-escalation: bucket=needs_revision stage=dispatch -->\nescalation: issue #7"},{"authorAssociation":"OWNER","createdAt":"2026-02-01T00:00:00Z","body":"thanks, looking into it"}]}'
+
+  fail_510=""
+  out="$(printf '%s' "$fx_esc_none" | jq -r "$esc_prog" 2>&1)"
+  [ "$out" = "none" ] || fail_510="$fail_510 none-fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_esc_audit_no_key" | jq -r "$esc_prog" 2>&1)"
+  [ "$out" = "none" ] || fail_510="$fail_510 audit-comment-without-key fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_esc_one" | jq -r "$esc_prog" 2>&1)"
+  expected='<!-- harness-escalation: bucket=needs_revision stage=dispatch -->'
+  [ "$out" = "$expected" ] || fail_510="$fail_510 single-escalation fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_esc_two" | jq -r "$esc_prog" 2>&1)"
+  expected='<!-- harness-escalation: bucket=needs_revision stage=post -->'
+  [ "$out" = "$expected" ] || fail_510="$fail_510 newest-wins-out-of-array-order fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_esc_null_body" | jq -r "$esc_prog" 2>&1)"
+  [ "$out" = "none" ] || fail_510="$fail_510 null-body fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_esc_forged" | jq -r "$esc_prog" 2>&1)"
+  [ "$out" = "none" ] || fail_510="$fail_510 forged-key-from-NONE-author fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_esc_shadow" | jq -r "$esc_prog" 2>&1)"
+  expected='<!-- harness-escalation: bucket=needs_revision stage=dispatch -->'
+  [ "$out" = "$expected" ] || fail_510="$fail_510 newer-keyless-comment-does-not-shadow-escalation fixture: got '$out';"
+
+  # writer/checker round-trip: exactly one harness-escalation key-line template in the file, the
+  # program's own startswith() needle is a prefix of it, and a fixture comment built from the
+  # substituted template resolves through the program to exactly that line.
+  key_n="$(grep -c -- '<!-- harness-escalation: bucket=' "$plan")"
+  key_tpl="$(grep -o '<!-- harness-escalation: [^`]*-->' "$plan" | head -1)"
+  needle="$(printf '%s' "$esc_prog" | sed -nE 's/.*startswith\("([^"]*)"\).*/\1/p')"
+  if [ "$key_n" != "1" ] || [ -z "$key_tpl" ]; then
+    fail_510="$fail_510 round-trip: expected exactly one harness-escalation key-line template in skills/issue-planner/SKILL.md, found $key_n (extracted: '$key_tpl');"
+  elif [ -z "$needle" ]; then
+    fail_510="$fail_510 round-trip: could not extract a startswith() needle from the escalation program;"
+  else
+    case "$key_tpl" in
+      "$needle"*) : ;;
+      *) fail_510="$fail_510 round-trip: key-line template '$key_tpl' does not start with the program's own needle '$needle';" ;;
+    esac
+    key_line="$(printf '%s' "$key_tpl" | sed -e 's/<bucket>/needs_revision/' -e 's/<stage>/dispatch/')"
+    fx_esc_writer='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n'"$key_line"'\nescalation: issue #7"}]}'
+    out="$(printf '%s' "$fx_esc_writer" | jq -r "$esc_prog" 2>&1)"
+    [ "$out" = "$key_line" ] || fail_510="$fail_510 round-trip: expected '$key_line', got '$out';"
+  fi
+
+  if [ -z "$fail_510" ]; then
+    ok "5.10 escalation de-dup --jq program (#199): none/audit-without-key/single/newest-wins/null-body/forged-NONE-key/newer-keyless-comment-does-not-shadow-escalation fixtures all match, and the writer's key-line template round-trips through the checker's own needle"
+  else
+    bad "5.10 escalation de-dup --jq program:$fail_510"
   fi
 fi
 
