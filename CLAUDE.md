@@ -118,7 +118,9 @@ provenance (#174, the same script's `plan_selection` entry gains `approval`/`bin
 plan comment posted after the newest `plan-approved` labeling event is not covered
 (`covers_plan: false`, `reason: "plan-after-approval"`); the newest of several relabel events
 decides, not the first; equal plan/label timestamps still count as covered; an unreadable events
-lookup fails closed (`covers_plan: null`); and `--issue <n>` single-issue mode (used by the
+lookup — whether the endpoint call itself is rejected, or the returned document errors the
+script's own `--jq` filter (#204) — fails closed (`covers_plan: null`); and `--issue <n>`
+single-issue mode (used by the
 implementer skill's fresh per-issue revalidation) returns the identical output shape for exactly
 one issue regardless of its labels, with an unknown flag or non-numeric `<n>` exiting 2 — and,
 since #198, that same `--issue <n>` mode also carries the `covered_by_approval` split (not just

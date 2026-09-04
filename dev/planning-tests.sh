@@ -93,7 +93,12 @@
 #                               issue <n> — a plain JSON array of GitHub issue-event objects
 #                               ({event, label:{name}, created_at, actor:{login}}); absent means
 #                               no plan-approved labeling event, degrading to
-#                               reason: no-approval-event rather than a hard failure
+#                               reason: no-approval-event rather than a hard failure; present but a
+#                               document the script's own --jq filter cannot process (#204) is a
+#                               hard failure instead — the stub propagates jq's exit status,
+#                               exercising the same fail-closed approval-unreadable path as
+#                               reject-events-<n> below, via a second, distinct route (a bad
+#                               document rather than a rejected call)
 #   - reject-events-<n>        : (optional, presence-only, #174) makes the stub's `gh api` call
 #                               for ready issue <n>'s events exit 1, exercising
 #                               find-implementation-work.sh's fail-closed approval-unreadable path
@@ -174,38 +179,53 @@ mk_fixture() {
 # events branch: `gh api "repos/{owner}/{repo}/issues/<n>/events?per_page=100" --paginate --jq
 # 'EXPR'` -> exit 1 if DIR/reject-events-<n> exists (simulates the events endpoint being
 # unreadable); else, if DIR/events-<n>.json exists (a plain JSON array of GitHub issue-event
-# objects — ONE PAGE, the shape the real API returns), `jq -r "(EXPR)" DIR/events-<n>.json` and
-# (unconditionally) exit 0 — a filter error here is swallowed rather than propagated (see the
-# follow-up filed against this gap in the #202 plan). Before #196 the script's filter had no
-# `.[] | ` of its own and this stub compensated by prepending one itself — two bugs that canceled
-# out here but not against the real API: there, the script's un-prefixed filter received the whole
-# array where it expected one event object, jq errored ("expected an object but got: array"), gh
-# exited 1, `2>/dev/null` swallowed it, and every issue fail-closed to approval-unreadable
-# (live-verified against this repo's own issue #194: exit 1 before the fix,
-# `2026-09-01T11:11:24Z msummer` exit 0 after). MUTATION PROOF (measured 2026-09-01, not
-# predicted): with this stub already fixed, reverting ONLY the script's `.[] | ` prefix (restoring
-# the pre-#196 filter) and re-running `bash dev/planning-tests.sh` dropped the suite from 43 pass/0
-# fail to 37 pass/6 fail, failing exactly: impl-approval-covers-plan, impl-plan-after-approval,
-# impl-relabel-newest-wins, impl-approval-events-unreadable, impl-single-issue-mode, and
-# impl-approval-tie — reverted immediately after recording this. impl-other-label-event-ignored did
-# NOT fail under the mutant: its fixture's two labeled events are for OTHER labels, so
-# `select(.event == "labeled" ...)` applied to the whole array (instead of each element) still
-# yields no match and the same reason: no-approval-event the un-mutated script also produces —
-# a coincidence of that one fixture's expected outcome, not evidence the mutant is inert. No
-# events-<n>.json -> prints nothing (degrades to reason: no-approval-event, not a hard failure) —
-# a fixture that doesn't care about approval binding needs no events-<n>.json at all. The issue
-# number is parsed out of the URL argument ($2) with `sed`, since it appears mid-path, not as its
-# own positional arg.
+# objects — ONE PAGE, the shape the real API returns), `jq -r "(EXPR)" DIR/events-<n>.json || exit
+# 1` — PROPAGATING jq's exit status (#204), structurally symmetric with the /issues? branch below;
+# a filter error against the returned document is a hard failure, not "no events found". Before
+# #196 the script's filter had no `.[] | ` of its own and this stub compensated by prepending one
+# itself — two bugs that canceled out here but not against the real API: there, the script's
+# un-prefixed filter received the whole array where it expected one event object, jq errored
+# ("expected an object but got: array"), gh exited 1, `2>/dev/null` swallowed it, and every issue
+# fail-closed to approval-unreadable (live-verified against this repo's own issue #194: exit 1
+# before the fix, `2026-09-01T11:11:24Z msummer` exit 0 after). MUTATION PROOF A (measured
+# 2026-09-04, not predicted): with the stub's propagation (`|| exit 1`) in place, reverting ONLY
+# it (restoring the unconditional `exit 0` this arm had before #204) and re-running
+# `bash dev/planning-tests.sh` dropped the suite from 56 pass/0 fail to 55 pass/1 fail, failing
+# exactly: impl-approval-events-filter-error — the case #204 added, whose events-<n>.json is a
+# document (a page array whose own element is itself an array) the script's own, unmutated filter
+# cannot process; every other case's events-<n>.json fixture is well-formed, so jq never errors
+# for them and this stub change is otherwise invisible to the suite — reverted immediately after
+# recording this. MUTATION PROOF B (#196-class, measured 2026-09-04, not predicted): with the stub
+# unchanged, deleting the leading `.[] | ` from bin/find-implementation-work.sh's OWN events
+# filter (the script bug #196 fixed, not this stub) and re-running the suite dropped it to
+# 45 pass/11 fail, failing exactly: impl-approval-covers-plan, impl-plan-after-approval,
+# impl-relabel-newest-wins, impl-other-label-event-ignored, impl-approval-events-unreadable,
+# impl-single-issue-mode, impl-approval-tie, impl-post-approval-comment-not-binding,
+# impl-pre-approval-comment-binding, impl-post-approval-tie-covered, and
+# impl-single-issue-post-approval-comment — reverted immediately after recording this.
+# impl-approval-events-filter-error did NOT fail under this script mutant: its events-<n>.json
+# fixture is a page array whose own element is itself an array, so `select(...)` errors on it
+# whether or not the script's own leading `.[] | ` is present — a coincidence of that one
+# fixture's shape (this case's contribution is the stub's status *propagation*, proven by MUTATION
+# PROOF A above, not detection of this particular script mutant), not evidence the mutant is
+# inert; the mutant is caught by the eleven cases above, including
+# impl-other-label-event-ignored, which — now that this arm propagates — also newly fails under
+# it (see that case's own comment). No events-<n>.json -> prints nothing (degrades to reason:
+# no-approval-event, not a hard failure) — a fixture that doesn't care about approval binding
+# needs no events-<n>.json at all, and this remains a genuinely different modelled state from a
+# filter error: the endpoint answered and the filter matched nothing, versus the filter couldn't
+# run at all. The issue number is parsed out of the URL argument ($2) with `sed`, since it appears
+# mid-path, not as its own positional arg.
 #
 # issues branch (#202): `gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" --paginate
 # --jq 'EXPR'` -> exit 1 if DIR/reject-association exists (simulates the REST issues endpoint
 # being unreadable — find-planning-work.sh's author_association_unavailable path); else, if
 # DIR/rest-issues.json exists (a plain JSON array of GitHub issue objects, optionally including a
 # {pull_request:{...}} entry the real endpoint would also return), `jq -r "(EXPR)"
-# DIR/rest-issues.json`, PROPAGATING jq's exit status (`|| exit 1`) — unlike the events branch
-# above, a filter error here is a hard failure, matching real `gh api`'s own behaviour and closing
-# the #196-class gap the events branch still has (see the follow-up). Absent rest-issues.json
-# prints nothing and exits 0 (empty author map — every issue's association resolves to "MISSING").
+# DIR/rest-issues.json`, PROPAGATING jq's exit status (`|| exit 1`) — the same shape the events
+# branch above now uses (#204); a filter error here is a hard failure, matching real `gh api`'s
+# own behaviour. Absent rest-issues.json prints nothing and exits 0 (empty author map — every
+# issue's association resolves to "MISSING").
 # MUTATION PROOF (a) (measured 2026-09-04): reverting bin/find-planning-work.sh's whole provenance
 # lookup to its pre-#202 shape (the `if ! needs_initial_plan=$(gh issue list ... --json
 # number,title,url,author,authorAssociation ...)` probe with its `view_fields` fallback) and
@@ -285,7 +305,7 @@ case "$1" in
           exit 1
         fi
         if [ -f "__DIR__/events-$n.json" ]; then
-          jq -r "($5)" "__DIR__/events-$n.json"
+          jq -r "($5)" "__DIR__/events-$n.json" || exit 1
         fi
         exit 0
         ;;
@@ -1165,7 +1185,10 @@ EOF
 }
 
 # impl-other-label-event-ignored — the only labeled events are for OTHER labels (pr-open,
-# no-plan), never plan-approved: not covered, reason no-approval-event.
+# no-plan), never plan-approved: not covered, reason no-approval-event. Since the stub's events
+# arm now propagates jq's exit status (#204), this case is also one of the eleven that fails
+# under the #196-class mutant (deleting the script's leading `.[] | `) — measured 2026-09-04, see
+# the events-branch header comment's MUTATION PROOF B above.
 case_impl_other_label_event_ignored() {
   local dir; dir="$(mk_fixture impl-other-label-event-ignored)"
   cat > "$dir/ready.json" <<'EOF'
@@ -1222,6 +1245,40 @@ EOF
   expect_jq '.counts.approval_unreadable' '1'
   expect_jq '.plan_selection[1].approval.covers_plan' 'true'
   expect_err "could not read plan-approved label events"
+}
+
+# impl-approval-events-filter-error — the events endpoint answers, but the page document is one
+# the script's OWN, current, unmutated --jq filter cannot process (a page array whose element is
+# itself an array rather than an event object): the stub's jq call errors, propagates its exit
+# status, and the script fails closed identically to impl-approval-events-unreadable's rejected
+# endpoint — the SECOND, distinct route into approval-unreadable (a bad document, not a rejected
+# call). Coincidentally, this fixture's expected outcome is the same as what the #196-class
+# mutant (deleting the script's own leading `.[] | `) produces on it too, so this case does not
+# itself distinguish the mutant from the fix — see the events-branch header comment.
+case_impl_approval_events_filter_error() {
+  local dir; dir="$(mk_fixture impl-approval-events-filter-error)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"}
+]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}}]]
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'null'
+  expect_jq '.plan_selection[0].approval.reason' '"approval-unreadable"'
+  expect_jq '.plan_selection[0].approval.approved_at' 'null'
+  expect_jq '.plan_selection[0].binding_line' 'null'
+  expect_jq '.counts.approval_unreadable' '1'
+  expect_jq '.counts.no_approval_event' '0'
+  expect_err "could not read plan-approved label events"
+  expect_warn_count "no plan-approved labeling event found" 0
 }
 
 # impl-no-plan-no-binding — no trusted plan comment: plan null, covers_plan false, reason
@@ -1875,6 +1932,7 @@ cases=(
   "impl-relabel-newest-wins|case_impl_relabel_newest_wins|two plan-approved labeling events: the NEWEST one, not the first, decides coverage"
   "impl-other-label-event-ignored|case_impl_other_label_event_ignored|labeled events for other labels only (never plan-approved): not covered, reason no-approval-event"
   "impl-approval-events-unreadable|case_impl_approval_events_unreadable|the plan-approved events lookup fails for one issue: covers_plan null, fail-closed, other issues unaffected"
+  "impl-approval-events-filter-error|case_impl_approval_events_filter_error|the events endpoint answers with a document the script's own filter cannot process: covers_plan null, fail-closed, the second distinct route into approval-unreadable"
   "impl-no-plan-no-binding|case_impl_no_plan_no_binding|no trusted plan comment: covers_plan false, reason no-plan, exactly one warn line"
   "impl-single-issue-mode|case_impl_single_issue_mode|--issue <n> against an issue absent from ready.json: single-entry output plus an unknown-flag exit 2"
   "impl-approval-tie|case_impl_approval_tie|plan createdAt equal to the approval timestamp (same second): covered"
