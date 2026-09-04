@@ -1275,8 +1275,11 @@ same script also computes the approval-binding verdict described in "Approval pr
 scripts share a second, orthogonal exclusion inside the trusted set (#182): any trusted comment
 containing `<!-- harness-audit -->` (a harness-authored audit/hygiene record — the planner's
 auto-approval audit trail, its `plan-approved` staleness note, its step-7 stalled-stage escalation
-comment (#194), the implementer's interrupted-run and worktree-sweep notes,
-`cleanup-after-merge.sh`'s hygiene comments) or `<!-- verifier-verdict
+comment (#194) — whose second line also carries a `<!-- harness-escalation: bucket=<bucket>
+stage=<stage> -->` key, so a repeat run skips re-posting it once the issue's newest
+maintainer-authored escalation comment already records that same key (#199) — the implementer's
+interrupted-run and worktree-sweep notes, `cleanup-after-merge.sh`'s hygiene comments) or
+`<!-- verifier-verdict
 -->` (the orchestrator's own archive) anywhere in its body is excluded from
 `find-planning-work.sh`'s feedback detection and `find-implementation-work.sh`'s
 `trusted_post_plan` alike — a harness-authored record is never binding context, on either side of
