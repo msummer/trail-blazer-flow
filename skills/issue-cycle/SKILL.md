@@ -146,6 +146,18 @@ on top and is not configurable**:
 - **Nothing flagged**: if the plan, the verifier's notes, or the implementer's report flags a
   decision needing human sign-off, the PR waits. Any ambiguity about whether the policy covers
   a PR resolves to "no".
+  - *Post-approval comments, checked mechanically* (#206), harness PRs only (Dependabot PRs
+    skip this sub-bullet): reuse the `find-implementation-work.sh --issue <n>` output the
+    *Plan-binding provenance* sub-bullet above already produced — the same run, not a second
+    call. Read `.plan_selection[0].trusted_post_plan[]`: every entry whose `covered_by_approval`
+    is not `true` is a maintainer comment the approval does not cover (write the predicate as
+    "not `true`", never "`false`", so a future `null` fails closed). One or more such entries ⇒
+    **not eligible** — one-line reason `post-approval comment not covered by the approval:
+    <url>` naming each entry's `url` (author + `createdAt` when `url` is null). This is a normal
+    wait, not an escalation (see the pass's closing paragraph): the human merges the PR
+    themselves, or withdraws the comment and lets the next cycle re-evaluate; re-adding
+    `plan-approved` does **not** release it — that moves `approved_at`, so the PR body's older
+    `binding_line` no longer matches and the *Plan-binding provenance* sub-bullet fails instead.
 - **One at a time, re-verified between**: merge, then run `cleanup-after-merge.sh --fix` and
   the baseline refresh before the next merge — if merged `main` goes red, STOP the pass and
   report (two green PRs can still compose badly; sequential re-verification attributes the

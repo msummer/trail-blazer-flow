@@ -537,7 +537,10 @@ subagents need:
    branch, *and* against the approval covering the specific plan comment implemented — the PR
    body's `binding_line` matched against a fresh `find-implementation-work.sh` run (#174) — CI
    green on the head commit, never the governance surface — CLAUDE.md, `.claude/`,
-   policy/ADR docs, CI config — nothing flagged for human decision, one merge at a time with
+   policy/ADR docs, CI config — nothing flagged for human decision, including, read from that
+   same fresh `find-implementation-work.sh --issue <n>` run, any trusted post-plan comment the
+   approval does not cover (`covered_by_approval` not `true`), so a maintainer's late objection
+   parks the PR for you instead of merging past it (#206) — one merge at a time with
    re-verification between, every merge audited in the cycle report). **No section means no
    autonomous merges** — behavior is exactly the
    pre-1.5 default. **"No checks configured" is not green.** A repo with no CI wired up gets a
@@ -1226,13 +1229,26 @@ of scope here). The same binding also governs each trusted post-plan *comment*, 
 and `false` when it is later — a maintainer who comments after approving is not silently treated
 as having amended the approved plan; the comment is reported to the human (`counts.
 post_approval_comments`, a `warn:` line) instead of becoming a binding `RESOLVED:` decision. To
-make a post-approval comment binding, remove and re-add `plan-approved` — the same audited path
-#174 already documents, not a new surface. A comment that arrives *while the implementer is
+make a post-approval comment binding **before a PR exists**, remove and re-add `plan-approved` —
+the same audited path #174 already documents, not a new surface (see below for why this stops
+being the release path once a PR is open). A comment that arrives *while the implementer is
 working* is not silently missed either (#198): the pre-push re-validation above diffs that same
 fresh run's uncovered `trusted_post_plan` set against the set captured before dispatch, and any
 newly-arrived entry is quoted verbatim in the PR body and the run summary — still non-binding,
 still never holding the push; the residual race between that re-check and `gh pr create` itself
-is a named, out-of-scope honest limit.
+is a named, out-of-scope honest limit. Since #206, the merge pass's hard floor goes further: it
+reads that same uncovered `trusted_post_plan` set at merge time, from the identical fresh
+`find-implementation-work.sh --issue <n>` run it already makes for the plan-binding check above,
+so a comment posted even *after* the PR opened is caught too, not just the dispatch-window race
+above. One or more uncovered entries hold the PR in the normal "waits on the human" queue
+(`outcome=not-eligible`), with each entry's comment URL (or author + `createdAt` when the URL is
+null) as the one-line reason — a normal wait, not an escalation. Release path: the human merges
+the PR themselves, or withdraws the comment and lets the next cycle re-evaluate a clean set.
+**Re-adding `plan-approved` does not release an already-open PR** — that only re-binds the plan
+for the *implementer*, before a PR exists (the sentence above); on an open PR it instead moves
+`approval.approved_at`, which invalidates the older `binding_line` already pasted into that PR's
+body, so the *plan-binding* check fails instead of the post-approval-comment one — the PR stays
+held either way.
 
 **The body-hash grant pattern is a tripwire, not a control** (see "The CLAUDE.md contract" item
 8). It exists only as a documented convention a consuming repo may adopt in its own CLAUDE.md —

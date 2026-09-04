@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 50 assertions total. The gate prints what it checks — run it.
+# Five groups, 51 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -613,7 +613,7 @@ fi
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 525
-issue-cycle 330
+issue-cycle 340
 issue-planner 450
 project-kickoff 215
 test-ratchet 200
@@ -961,6 +961,25 @@ else
     [ -n "$impl_not_planning" ] && msg="$msg field(s) in find-implementation-work.sh but not find-planning-work.sh: $(printf '%s' "$impl_not_planning" | tr '\n' ' ');"
     bad "$msg"
   fi
+fi
+
+# 4.30 — fixed-string presence of the two field NAMES the merge floor's new post-approval-comment
+# sub-bullet reads — trusted_post_plan and covered_by_approval — in the script that writes them
+# and both instruction surfaces that read them (#206): bin/find-implementation-work.sh (writer),
+# skills/issue-implementer/SKILL.md (the pre-push revalidation reader #198 added), and
+# skills/issue-cycle/SKILL.md (the merge floor's new reader). Mirrors 4.19/4.28 — a floor that
+# reads a field nobody writes is the exact failure this pins. Proves only that the identifier
+# NAMES agree between writer and both readers, not that the floor's check actually runs.
+missing=""
+for id in trusted_post_plan covered_by_approval; do
+  for f in bin/find-implementation-work.sh skills/issue-implementer/SKILL.md skills/issue-cycle/SKILL.md; do
+    grep -qF -- "$id" "$root/$f" || missing="$missing $f($id)"
+  done
+done
+if [ -z "$missing" ]; then
+  ok "4.30 'trusted_post_plan' and 'covered_by_approval' present in bin/find-implementation-work.sh, skills/issue-implementer/SKILL.md, and skills/issue-cycle/SKILL.md"
+else
+  bad "4.30 identifiers missing from:$missing"
 fi
 
 # ============================================================================
