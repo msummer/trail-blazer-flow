@@ -4,7 +4,10 @@
 # scripts, bin/find-planning-work.sh (#164) and, since #176, bin/find-implementation-work.sh too
 # — not this repo's own gate (that's dev/selfcheck.sh + dev/selfcheck-tests.sh) and not the
 # consumer doctor's harness (dev/doctor-tests.sh). Builds throwaway fixture directories under
-# mktemp, with a stub `gh` on PATH, and runs the REAL script under test against each, pinning:
+# mktemp, with a stub `gh` on PATH, and runs the REAL script under test against each, pinning
+# (since #217: six cases run the stub `gh` directly rather than either discovery script, and two
+# run a deliberately `--json`-mutated COPY of a real script rather than the unmodified script
+# itself — see the field-list-validation paragraph below):
 #
 #   bin/find-planning-work.sh (#164, planner-facing): only a comment whose authorAssociation is
 #   OWNER, MEMBER, or COLLABORATOR ever puts its issue into needs_revision or is honoured as the
@@ -138,16 +141,18 @@
 #   - reject-comment-<id>      : (optional, presence-only, #192) makes the stub's `gh api` call
 #                               for that plan comment's updated_at exit 1, exercising
 #                               find-implementation-work.sh's fail-closed plan-edit-unreadable path
-# The stub tells find-planning-work.sh's `gh issue list` calls apart, in order: a call whose args
-# contain "authorAssociation" — real gh has never accepted that field on an issue query, so the
-# stub rejects it exactly as gh does (see build_stub_gh below); neither of find-planning-work.sh's
-# real `gh issue list` calls contains it any more, so this arm exists only to fail a regression
-# that reintroduces the field, never to serve a fixture. A call containing "pr-open"
-# (find-implementation-work.sh's ready query — neither planning search contains this token) is
-# served from ready.json; a call containing "--jq" (the revision candidates query) is answered by
-# applying the script's own --jq argument to candidates.json with the real jq (#211); anything
-# else (#202: find-planning-work.sh's now-unconditional needs_initial_plan query, which requests
-# only number,title,url,author) falls through to initial.json.
+# Before any of that, EVERY `gh issue list`/`gh issue view` call first runs its `--json` field
+# list through validate_json_fields (#217, see build_stub_gh below): a field real gh does not
+# accept on either subcommand — e.g. "authorAssociation", which gh has never accepted on an issue
+# query — makes the stub print gh's own `Unknown JSON field: "<name>"` line and exit 1, generically,
+# not via a hard-coded special case for that one field. Once a call's field list passes that
+# check, the stub tells find-planning-work.sh's `gh issue list` calls apart, in order: a call
+# containing "pr-open" (find-implementation-work.sh's ready query — neither planning search
+# contains this token) is served from ready.json; a call containing "--jq" (the revision
+# candidates query) is answered by applying the script's own --jq argument to candidates.json with
+# the real jq (#211); anything else (#202: find-planning-work.sh's now-unconditional
+# needs_initial_plan query, which requests only number,title,url,author) falls through to
+# initial.json.
 # Discriminating by `-label:`/`label:` search-string prefix would be wrong — `-label:plan-proposed`
 # contains `label:plan-proposed` as a substring. Issue author provenance (#202) is served
 # separately, over `gh api repos/{owner}/{repo}/issues?...` — see rest-issues.json above and the
@@ -189,10 +194,13 @@ mk_fixture() {
 # build_stub_gh DIR — writes an executable DIR/gh (absolute paths to DIR's own initial.json,
 # candidates.json, ready.json, issue-<n>.json, events-<n>.json, and rest-issues.json fixtures
 # baked in via the __DIR__ + sed idiom dev/cleanup-tests.sh's build_stub_gh uses). Deterministic
-# and offline. Dispatch order for `gh issue list ...` matters — see the header note above:
-#   *"authorAssociation"*  -> exit 1 with gh's real "Unknown JSON field" text (#202: gh has never
-#                             accepted this field on an issue query — this arm exists only to
-#                             fail a regression that reintroduces the field; no fixture serves it)
+# and offline. BOTH `gh issue list ...` and `gh issue view <n> --json ...` first run their --json
+# field list through validate_json_fields (#217, defined just below, against the
+# GH_ISSUE_JSON_FIELDS constant) — an unsupported field, e.g. "authorAssociation" (#202: gh has
+# never accepted that field on an issue query), makes the call exit 1 with gh's own
+# `Unknown JSON field: "<name>"` line on stderr, generically, not via a hard-coded special case
+# for that one field. Only once a call's field list passes that check does dispatch order for
+# `gh issue list ...` matter — see the header note above:
 #   *"pr-open"*            -> cat DIR/ready.json (find-implementation-work.sh's ready query)
 #   *"--jq"*               -> (#211) apply the script's OWN --jq argument (extracted from this
 #                             invocation's own ${10}, guarded by $9 == "--jq") to DIR/candidates.json
@@ -200,10 +208,26 @@ mk_fixture() {
 #   anything else          -> cat DIR/initial.json (find-planning-work.sh's now-unconditional
 #                             needs_initial_plan query, and any other plain needs_initial_plan-
 #                             shaped call)
-# `gh issue view <n> --json ...` -> exit 1 with the same "Unknown JSON field" text if the field
-# list contains "authorAssociation" (same #202 regression guard as above); else cat
-# DIR/issue-<n>.json, or exit 1 if that file is absent (simulates a failed fetch for that
-# candidate/ready issue). Anything else under `issue)` -> exit 1.
+# `gh issue view <n> --json ...`, once past the field-list check, cats DIR/issue-<n>.json, or exits
+# 1 if that file is absent (simulates a failed fetch for that candidate/ready issue). Anything else
+# under `issue)` -> exit 1.
+# SUBSUMPTION PROOF (#217, measured 2026-09-05; re-measured 2026-09-05 when the suite grew to 74
+# cases with the addition of stub-json-missing-json-argument-fails-loud, unaffected on both
+# measurements — its call runs against the stub directly, never through bin/find-planning-work.sh,
+# so a mutation to that script cannot touch it): the generic validator — not a leftover special
+# case — is what now catches an "authorAssociation" regression. With validate_json_fields in place
+# (unmutated) and bin/find-planning-work.sh's OWN needs_initial_plan call mutated in the working
+# tree (`sed 's/--json number,title,url,author /--json number,title,url,author,authorAssociation /'`
+# applied to bin/find-planning-work.sh itself, then reverted byte-identically), re-running
+# `bash dev/planning-tests.sh` dropped the suite from 74 pass/0 fail to 47 pass/27 fail, failing
+# exactly the 27 planner-side cases (the same set MUTATION PROOF B below names): red. With that
+# SAME script mutation still in place, and validate_json_fields's rejection ALSO neutered (M3, see
+# the case comments below) so it always accepts, re-running the suite went back to 69 pass/5 fail —
+# every one of those 27 planner-side cases passed again, and the only failures left are the same
+# five M3-only failures (stub-json-unknown-field-rejected, stub-json-unknown-field-rejected-view,
+# stub-json-author-association-rejected, plan-script-unknown-json-field-fails-loud,
+# impl-script-unknown-json-field-fails-loud): green. Both the script and stub files were restored
+# byte-identically immediately after each measurement.
 #
 # `gh api ...` has THREE branches (#192 adds the third), split on whether the URL ($2) contains
 # "/issues/<n>/events" (#174, find-implementation-work.sh's plan-binding lookup),
@@ -229,7 +253,10 @@ mk_fixture() {
 # flags before --jq than `gh api URL --paginate --jq EXPR` does), guarded by a loud stub error
 # (not a silent misfire) if a future arg-reordering moves --jq off ${9}/${10}. So all four call
 # shapes now apply the script's own filter with the real jq — three arms inside `api)`, one inside
-# `issue list`.
+# `issue list`. Orthogonal to all four (#217): `issue list` and `issue view` calls ALSO pass their
+# --json field list through validate_json_fields before any of the above ever runs — a distinct
+# validation step, not a fifth jq-filter application (see build_stub_gh's own header comment above
+# for that check's contract).
 #
 # LIVE-SHAPE PROBE (measured 2026-09-05, against github.com/msummer/trail-blazer-flow with an
 # authenticated gh): `gh issue list --search "is:open is:issue label:plan-proposed
@@ -323,8 +350,9 @@ mk_fixture() {
 # ("expected an object but got: array"), gh exited 1, `2>/dev/null` swallowed it, and every issue
 # fail-closed to approval-unreadable (live-verified against this repo's own issue #194: exit 1
 # before the fix, `2026-09-01T11:11:24Z msummer` exit 0 after). MUTATION PROOF A (re-measured
-# 2026-09-05, when the suite holds 66 cases — up from 56 at the original 2026-09-04 measurement,
-# via #211's candidates case and #192's nine new cases below): with the stub's propagation (`||
+# 2026-09-05, when the suite held 66 cases — up from 56 at the original 2026-09-04 measurement,
+# via #211's candidates case and #192's nine new cases below; the suite has since grown to 74
+# across #217, none of it touching this arm): with the stub's propagation (`||
 # exit 1`) in place, reverting ONLY it (restoring the unconditional `exit 0` this arm had before
 # #204) and re-running `bash dev/planning-tests.sh` dropped the suite from 66 pass/0 fail to 65
 # pass/1 fail, failing exactly: impl-approval-events-filter-error — the case #204 added, whose
@@ -332,8 +360,9 @@ mk_fixture() {
 # document (a page array whose own element is itself an array) the script's own, unmutated filter
 # cannot process; every other case's events-<n>.json fixture is well-formed, so jq never errors
 # for them and this stub change is otherwise invisible to the suite — reverted immediately after
-# recording this. MUTATION PROOF B (#196-class, re-measured 2026-09-05, when the suite holds 66
-# cases — up from 56 at the original 2026-09-04 measurement; its failing SET genuinely grows, per
+# recording this. MUTATION PROOF B (#196-class, re-measured 2026-09-05, when the suite held 66
+# cases — up from 56 at the original 2026-09-04 measurement (the suite has since grown to 74
+# across #217, none of it touching this arm); its failing SET genuinely grows, per
 # #192's plan, since every new #192 case with an events-<n>.json fixture that asserts an approval
 # outcome now also depends on this filter; re-verified again for #220's fixture-url
 # normalisation — identical 46 pass/20 fail, same failing set): with the stub
@@ -382,8 +411,9 @@ mk_fixture() {
 # number,title,url,author,authorAssociation ...)` probe with its `view_fields` fallback) and
 # re-running `bash dev/planning-tests.sh` against the SAME (post-#202) fixtures dropped the suite
 # from 54 pass/0 fail to 49 pass/5 fail (measured 2026-09-04, when the suite held 54 cases — the
-# suite has since grown to 66 across #204/#211/#192, all additions on the implementer-facing half
-# this planner-side proof does not touch; this proof was not re-run), failing exactly:
+# suite has since grown to 74 across #204/#211/#192/#217, all additions on the implementer-facing
+# half or the --json field-list validation, neither of which this planner-side proof touches; this
+# proof was not re-run), failing exactly:
 # initial-untrusted-author-reported (the
 # old fallback's needs_initial_plan carries no authorAssociation field at all now that association
 # data lives only in rest-issues.json, so the old code's own jq maps it to "MISSING" instead of the
@@ -398,7 +428,7 @@ mk_fixture() {
 # the mutant is inert. MUTATION PROOF (b) (measured 2026-09-04): deleting only the leading `.[] | `
 # from the script's REST --jq filter (leaving everything else at its current, #202 shape) and
 # re-running the suite dropped it to 50 pass/4 fail (measured 2026-09-04, when the suite held 54
-# cases — the suite has since grown to 66 across #204/#211/#192; not re-run), failing exactly:
+# cases — the suite has since grown to 74 across #204/#211/#192/#217; not re-run), failing exactly:
 # initial-untrusted-author-reported, initial-trusted-author-clean, initial-author-map-per-issue,
 # and revision-trusted-author-clean — the stub's `jq -r "(EXPR)"` then tries to index the whole
 # rest-issues.json ARRAY with `.pull_request` (jq: "Cannot index array with string
@@ -410,20 +440,75 @@ mk_fixture() {
 # fails closed to the exact MISSING/false outcome the case already expects; the latter's
 # reject-association file short-circuits the stub before jq ever runs. Neither is evidence the
 # mutant is inert on those two fixtures — it is caught by every OTHER case whose rest-issues.json
-# is non-empty.
+# is non-empty. MUTATION PROOF (a)'s premise — that the stub rejects the old fallback's
+# "authorAssociation" field, forcing it down its own comment-level-only fallback path — held via
+# the now-deleted `*"authorAssociation"*` list) arm at the time it was measured; #217 replaced that
+# arm with the generic validate_json_fields check, which rejects the same field with the identical
+# stderr text and exit status, so this proof's premise (and its recorded totals) are unaffected by
+# that change — not re-run under #217 (out of scope: this arm belongs to the /issues? REST
+# provenance lookup, not the --json field-list validation #217 adds).
 build_stub_gh() {
   local dir="$1" tmpl="$dir/gh.tmpl"
   {
     printf '#!%s\n' "$bash_bin"
     cat <<'EOF'
+# GH_ISSUE_JSON_FIELDS (#217) — gh 2.97.0 (2026-07-31), probed 2026-09-05 against a live repo:
+# `gh issue list --json` and `gh issue view --json` accept the IDENTICAL field set, so one
+# constant models both subcommands; split it if they ever diverge. "authorAssociation" is NOT in
+# it — gh has never exposed that field on an issue query (#202). Real gh's fuller rejection shape
+# (a first stderr line "Unknown JSON field: \"<name>\"", THEN "Available fields:" plus one
+# indented field per line) is modelled here only as far as that first line: neither discovery
+# script reads gh's stderr at all — only the exit status is load-bearing for them; the first line
+# is emitted because this harness's own rejection cases assert it via expect_err (status alone
+# would pass vacuously — LESSONS 2026-08-26) — so the "Available fields:" listing is
+# measured-but-not-emitted.
+GH_ISSUE_JSON_FIELDS="assignees author blockedBy blocking body closed closedAt closedByPullRequestsReferences comments createdAt id isPinned issueType labels milestone number parent projectCards projectItems reactionGroups state stateReason subIssues subIssuesSummary title updatedAt url"
+
+# validate_json_fields "$@" (#217) — scans argv for a literal --json token, takes the NEXT argv
+# token as gh's own comma-separated field list, and rejects the FIRST (leftmost) token not present
+# in GH_ISSUE_JSON_FIELDS with gh's own `Unknown JSON field: "<name>"` line on stderr and exit 1 —
+# left-to-right naming order measured live 2026-09-05 against two simultaneously-unknown fields
+# (`--json bogus1,bogus2` named "bogus1"; `--json number,bogusField` named "bogusField"). Both
+# find-planning-work.sh and find-implementation-work.sh always pass a --json argument on every
+# `issue list`/`issue view` call (verified statically), so a call with none at all is a
+# stub-contract violation, not a silent skip: it fails loud with a distinct diagnostic instead.
+# Called BEFORE either subcommand's existing dispatch, so a rejected field list never reaches (and
+# is never masked by) the pr-open/--jq/fallback branches below. Bash-3.2-portable: no arrays, no
+# `declare -A`, plain `for tok in $list` word-splitting on a function-local `IFS=,`.
+validate_json_fields() {
+  local orig="$*"
+  local list="" found=0 tok
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--json" ]; then
+      shift
+      list="${1:-}"
+      found=1
+      break
+    fi
+    shift
+  done
+  if [ "$found" -ne 1 ]; then
+    echo "stub: no --json argument in: gh $orig" >&2
+    exit 1
+  fi
+  local IFS=,
+  for tok in $list; do
+    case " $GH_ISSUE_JSON_FIELDS " in
+      *" $tok "*) : ;;
+      *)
+        echo "Unknown JSON field: \"$tok\"" >&2
+        exit 1
+        ;;
+    esac
+  done
+}
+
 case "$1" in
   issue)
     case "$2" in
       list)
+        validate_json_fields "$@"
         case "$*" in
-          *"authorAssociation"*)
-            echo 'Unknown JSON field: "authorAssociation"' >&2
-            exit 1 ;;
           *"pr-open"*)
             cat "__DIR__/ready.json"
             exit 0 ;;
@@ -443,11 +528,7 @@ case "$1" in
         esac
         ;;
       view)
-        case "$*" in
-          *"authorAssociation"*)
-            echo 'Unknown JSON field: "authorAssociation"' >&2
-            exit 1 ;;
-        esac
+        validate_json_fields "$@"
         n="$3"
         if [ -f "__DIR__/issue-$n.json" ]; then
           cat "__DIR__/issue-$n.json"
@@ -541,6 +622,31 @@ run_implementation_args() {
   local dir="$1"
   shift
   PATH="$dir:$PATH" "$bash_bin" "$root/bin/find-implementation-work.sh" "$@" >"$dir/.stdout" 2>"$dir/.stderr"
+  planning_rc=$?
+  planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
+  planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
+}
+
+# run_stub_gh DIR [ARGS...] (#217) — same contract as run_planning, but invokes DIR's own stub
+# `gh` directly (built by build_stub_gh) instead of either discovery script, so a case can pin the
+# stub's own --json field-list validation without going through a script at all.
+run_stub_gh() {
+  local dir="$1"
+  shift
+  PATH="$dir:$PATH" "$dir/gh" "$@" >"$dir/.stdout" 2>"$dir/.stderr"
+  planning_rc=$?
+  planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
+  planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
+}
+
+# run_script_at DIR SCRIPT [ARGS...] (#217) — same contract as run_planning, but runs an arbitrary
+# SCRIPT path (e.g. a deliberately `--json`-mutated COPY of a real discovery script) with DIR's
+# stub `gh` prepended to PATH, so an end-to-end case can exercise the mutant without touching
+# bin/ itself.
+run_script_at() {
+  local dir="$1" script="$2"
+  shift 2
+  PATH="$dir:$PATH" "$bash_bin" "$script" "$@" >"$dir/.stdout" 2>"$dir/.stderr"
   planning_rc=$?
   planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
   planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
@@ -1337,7 +1443,8 @@ EOF
 # 2026-09-05, after #220's url normalisation): injecting a second, leaked "plan comment was
 # edited" warn line into the script's plan-after-approval branch itself (simulating a copy-paste
 # bug that fires the new check's warn text on the wrong branch while the final `reason` still
-# legitimately ends up "plan-after-approval") and re-running the suite (66 cases) dropped it to
+# legitimately ends up "plan-after-approval") and re-running the suite (which then held 66 cases,
+# now 74 after #217; not re-run) dropped it to
 # 65 pass/1 fail, failing exactly: impl-plan-after-approval — reverted immediately after
 # recording this. A cruder mutant (forcing every issue through the branch that runs the new check
 # at all, via `if false; then` on the plan_created/approved_at compare) also drops this case
@@ -1611,8 +1718,9 @@ EOF
 # approval): covers_plan false, reason plan-edited-after-approval, binding_line null, counted,
 # warned exactly once — this is the issue's own named user-visible failure: a maintainer edits
 # the approved plan comment in place after approving it, and every identity/timing check still
-# passes. MUTATION PROOF (re-measured 2026-09-05, when the suite holds 66 cases; re-verified again
-# for #220's fixture-url normalisation — identical 55 pass/11 fail, same failing set): flipping the new
+# passes. MUTATION PROOF (re-measured 2026-09-05, when the suite held 66 cases; re-verified again
+# for #220's fixture-url normalisation — identical 55 pass/11 fail, same failing set; not re-run for
+# #217, which adds no fixture on this branch): flipping the new
 # check's comparison operator (`elif [[ "$plan_updated" > "$approved_at" ]]` ->
 # `elif [[ "$plan_updated" < "$approved_at" ]]`) and re-running the suite dropped it to 55
 # pass/11 fail, failing exactly: impl-approval-covers-plan, impl-relabel-newest-wins,
@@ -1698,7 +1806,8 @@ EOF
 # single-character lexicographic compare) — attempting it is a bash syntax error, not a subtler
 # semantic bug, so the actual mutant tested is the behaviourally equivalent
 # `[[ "$plan_updated" > "$approved_at" || "$plan_updated" == "$approved_at" ]]`. MUTATION PROOF
-# (measured 2026-09-05, when the suite holds 66 cases): applying that mutant and re-running the
+# (measured 2026-09-05, when the suite held 66 cases; not re-run for #217, which adds no fixture
+# on this branch): applying that mutant and re-running the
 # suite dropped it to 64 pass/2 fail, failing exactly: impl-approval-tie and
 # impl-plan-edit-tie-covered — reverted immediately after recording this. impl-approval-tie fails
 # too, coincidentally: its own comment-5005.json
@@ -1739,8 +1848,9 @@ EOF
 # marker deliberately — were the stub's reject check dropped or reordered after the file-presence
 # check, this fixture would silently serve that comment and read as covered instead of
 # unreadable, so this pairing (not just an absent comment fixture) is what proves the reject path
-# is actually reached first. MUTATION PROOF (re-measured 2026-09-05, when the suite holds 66
-# cases): removing the stub's own `if [ -f "__DIR__/reject-comment-$id" ]; then exit 1; fi` guard
+# is actually reached first. MUTATION PROOF (re-measured 2026-09-05, when the suite held 66
+# cases; not re-run for #217, which adds no fixture on this branch): removing the stub's own
+# `if [ -f "__DIR__/reject-comment-$id" ]; then exit 1; fi` guard
 # (dev/planning-tests.sh's build_stub_gh) and re-running the suite flipped ONLY this case — it
 # started reading as covered (the valid comment-6004.json got served instead) — dropping the
 # suite to 65 pass/1 fail, failing exactly: impl-plan-edit-lookup-unreadable; reverted immediately
@@ -1780,7 +1890,8 @@ EOF
 # impl-plan-edit-lookup-unreadable's rejected call — the SECOND, distinct route into
 # plan-edit-unreadable (a bad document, not a rejected call), mirroring
 # impl-approval-events-filter-error for the events arm. MUTATION PROOF (re-measured 2026-09-05,
-# when the suite holds 66 cases, honest limit, NOT what was predicted): removing the stub's own
+# when the suite held 66 cases (not re-run for #217, which adds no fixture on this branch), honest
+# limit, NOT what was predicted): removing the stub's own
 # `|| exit 1` after this arm's jq call and re-running the suite left it at 66 pass/0 fail — this
 # case did NOT fail. Unlike the
 # events arm (where an empty result legitimately means "no events" and is never itself a failure
@@ -1825,7 +1936,8 @@ EOF
 # fail-closed guard as an unreadable lookup. Without the `// empty` default, a missing field
 # would print the literal string "null" and be mis-compared against approved_at instead of
 # failing closed — this case pins that guard. MUTATION PROOF (re-measured 2026-09-05, when the
-# suite holds 66 cases): dropping `// empty` from the script's own comments filter
+# suite held 66 cases; not re-run for #217, which adds no fixture on this branch): dropping
+# `// empty` from the script's own comments filter
 # (`--jq '.updated_at // empty'` -> `--jq '.updated_at'`) and re-running the suite dropped it to
 # 65 pass/1 fail, failing exactly: this case (jq -r prints the literal string "null" for the
 # missing field, and "null" lexically
@@ -1863,7 +1975,8 @@ EOF
 # script fails closed WITHOUT ever calling `gh api .../issues/comments/...` at all — pinned by
 # `expect_err "carries no"`, the SPECIFIC id-parse-guard warn stem, not merely the shared
 # plan-edit-unreadable outcome the other two unreadable routes also produce. MUTATION PROOF
-# (re-measured 2026-09-05, when the suite holds 66 cases): neutering just the
+# (re-measured 2026-09-05, when the suite held 66 cases; not re-run for #217, which adds no
+# fixture on this branch): neutering just the
 # `if [ -z "$plan_comment_id" ]; then` guard itself (replacing its condition with `false`,
 # leaving the extraction logic above it untouched) and re-running the suite dropped it to
 # 64 pass/2 fail, failing exactly: this case AND impl-plan-comment-id-non-digits (both fixtures'
@@ -2469,8 +2582,9 @@ EOF
 # --issue 42 case).
 #
 # MUTATION PROOF (measured 2026-09-04, when the suite held 55 cases — it has since grown to 57
-# (#211) and then 66 (#192, including the digits-only-validation fixture added on re-verification);
-# not re-run for any of these, per the accepted-minimum qualification in #192's plan): deleting
+# (#211), then 66 (#192, including the digits-only-validation fixture added on re-verification),
+# and then 74 (#217, --json field-list validation, unrelated to this branch); not re-run for any
+# of these, per the accepted-minimum qualification in #192's plan): deleting
 # the covered_by_approval remap at
 # bin/find-implementation-work.sh's `trusted_post_plan=$(printf '%s' "$trusted_post_plan" | jq -c
 # --arg at "$approved_at" 'map(. + {covered_by_approval: ...})')` line (so trusted_post_plan entries
@@ -2579,6 +2693,263 @@ EOF
 }
 
 # ---------------------------------------------------------------------------------------------
+# Part 6 cases (#217), against build_stub_gh's own validate_json_fields — direct-stub cases run
+# the stub `gh` itself (run_stub_gh), never a discovery script, so the fixture files present are
+# exactly what the invoked call needs; an absent needed fixture also exits 1 on its own (a
+# pre-existing stub behaviour), so every rejection case below asserts the "Unknown JSON field:"
+# stderr line, not exit status alone (LESSONS 2026-08-26).
+
+# stub-json-unknown-field-rejected — `gh issue list` with a --json field list containing an
+# unsupported token ("bogusField") is rejected by validate_json_fields with gh's own line, even
+# though initial.json IS present (so a stub without the check would happily serve it) — the
+# issue's exact bug, direct-stub, list) arm.
+# MUTATION PROOF M1 (measured 2026-09-05, deleting `validate_json_fields "$@"` from the list) arm;
+# re-measured 2026-09-05 when the suite grew to 74 cases with the addition of
+# stub-json-missing-json-argument-fails-loud below): dropped the suite from 74 pass/0 fail to
+# 69 pass/5 fail, failing exactly: this case, stub-json-author-association-rejected,
+# plan-script-unknown-json-field-fails-loud, impl-script-unknown-json-field-fails-loud (an
+# unvalidated list) call now falls through to initial.json/ready.json instead of rejecting — the
+# implementer script's own first call is a list) call, so it fails too), and
+# stub-json-missing-json-argument-fails-loud (its own no-`--json`-at-all call is ALSO a list) call,
+# so with validate_json_fields deleted from that arm it too falls through and is silently served
+# initial.json) — reverted immediately after recording this.
+case_stub_json_unknown_field_rejected() {
+  local dir; dir="$(mk_fixture stub-json-unknown-field-rejected)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  build_stub_gh "$dir"
+  run_stub_gh "$dir" issue list --search "is:open is:issue" --json number,title,url,bogusField --limit 100
+  expect_rc 1
+  expect_empty_out
+  expect_err 'Unknown JSON field: "bogusField"'
+}
+
+# stub-json-unknown-field-rejected-view — the SAME unsupported-field rejection, on the view) arm
+# instead of list) — a separate `case` branch in the stub, so this pins the check is wired to
+# BOTH subcommands, not just one.
+# MUTATION PROOF M2 (measured 2026-09-05, deleting `validate_json_fields "$@"` from the view) arm;
+# re-measured 2026-09-05 when the suite grew to 74 cases with the addition of
+# stub-json-missing-json-argument-fails-loud below, unaffected — its own call is a list) call, not
+# view)): dropped the suite from 74 pass/0 fail to 72 pass/2 fail, failing exactly: this case and
+# stub-json-author-association-rejected (both scripts' first failing call in the end-to-end cases
+# is a list) call, already caught by the list) arm's own validation, so neither end-to-end case
+# is sensitive to the view) arm alone) — reverted immediately after recording this.
+case_stub_json_unknown_field_rejected_view() {
+  local dir; dir="$(mk_fixture stub-json-unknown-field-rejected-view)"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[]}
+EOF
+  build_stub_gh "$dir"
+  run_stub_gh "$dir" issue view 1 --json number,title,url,comments,bogusField
+  expect_rc 1
+  expect_empty_out
+  expect_err 'Unknown JSON field: "bogusField"'
+}
+
+# stub-json-author-association-rejected — the #202 regression, through the NEW generic path
+# instead of the deleted hard-coded arm: "authorAssociation" is rejected on BOTH `gh issue list`
+# and `gh issue view` calls, exercising the same list)/view) call shapes real
+# find-planning-work.sh once used pre-#202.
+# MUTATION PROOF M3 (measured 2026-09-05, neutering validate_json_fields's rejection so it always
+# accepts — the `case " $GH_ISSUE_JSON_FIELDS " in *" $tok "*) : ;; *) ... esac` collapsed to an
+# unconditional `: ;` for every token; re-measured 2026-09-05 when the suite grew to 74 cases with
+# the addition of stub-json-missing-json-argument-fails-loud below, unaffected — its own rejection
+# comes from the found-check above this token loop, not from this loop): dropped the suite from
+# 74 pass/0 fail to 69 pass/5 fail, failing exactly: this case, stub-json-unknown-field-rejected,
+# stub-json-unknown-field-rejected-view, plan-script-unknown-json-field-fails-loud, and
+# impl-script-unknown-json-field-fails-loud — reverted immediately after recording this.
+case_stub_json_author_association_rejected() {
+  local dir; dir="$(mk_fixture stub-json-author-association-rejected)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[]}
+EOF
+  build_stub_gh "$dir"
+  run_stub_gh "$dir" issue list --search "is:open is:issue" --json number,title,url,author,authorAssociation --limit 100
+  expect_rc 1
+  expect_empty_out
+  expect_err 'Unknown JSON field: "authorAssociation"'
+  run_stub_gh "$dir" issue view 1 --json number,title,url,comments,authorAssociation
+  expect_rc 1
+  expect_empty_out
+  expect_err 'Unknown JSON field: "authorAssociation"'
+}
+
+# stub-json-script-field-lists-accepted — the non-vacuity control: all FIVE field-list shapes the
+# two bin/ scripts actually request (see the "Verified facts" note in the plan for #217 — union
+# number/title/url/author/comments; that union is never restated as a single combined literal
+# anywhere in this case, only as the five separate subsets each call below actually passes) are
+# all accepted, and at least one list) call and one view) call are additionally
+# proven to have served their fixture (not merely exited 0). A validator that rejects everything,
+# or an allow-list missing one of these fields, turns the whole harness into a false alarm.
+# MUTATION PROOF M4 (measured 2026-09-05, deleting "comments" — a real field both scripts
+# request — from GH_ISSUE_JSON_FIELDS; re-measured 2026-09-05 when the suite grew to 74 cases with
+# the addition of stub-json-missing-json-argument-fails-loud below, which also survives — its own
+# call carries no --json field list at all, so it never reaches the token loop this mutant
+# touches): dropped the suite from 74 pass/0 fail to 13 pass/61 fail — far beyond just this
+# control case, since "comments" is also in the field list virtually every PRE-EXISTING case's
+# real script call passes to `gh issue view`; only thirteen cases survived: no-comments,
+# output-shape, initial-untrusted-author-reported, initial-trusted-author-clean,
+# initial-missing-author-association, initial-author-map-per-issue,
+# author-association-unavailable, plan-candidates-filter-error, stub-json-unknown-field-rejected,
+# stub-json-check-is-field-list-scoped, plan-script-unknown-json-field-fails-loud,
+# impl-script-unknown-json-field-fails-loud, and stub-json-missing-json-argument-fails-loud — none
+# of which ever calls `gh issue view` with "comments" in its field list. Honest limit: several of
+# those thirteen survive only because their
+# candidate/ready issue's view call now fails closed exactly like a fetch failure, which happens
+# to leave their asserted counts unchanged (e.g. no-comments expects counts.revision: 0 regardless
+# of whether issue #1 was ever fetched) — a coincidence of those particular fixtures' expected
+# values, not evidence the mutant is inert on them; every one of the 61 OTHER cases, including
+# this control, is caught. Reverted immediately after recording this.
+case_stub_json_script_field_lists_accepted() {
+  local dir; dir="$(mk_fixture stub-json-script-field-lists-accepted)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"}}]
+EOF
+  printf '[]\n' > "$dir/ready.json"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[]}
+EOF
+  build_stub_gh "$dir"
+
+  # bin/find-planning-work.sh:110 — needs_initial_plan query.
+  run_stub_gh "$dir" issue list --search "is:open is:issue" --json number,title,url,author --limit 100
+  expect_rc 0
+  expect_jq '.[0].number' '1'
+
+  # bin/find-planning-work.sh:130-131 — revision candidates query, --jq lands at $10 per $9==--jq.
+  run_stub_gh "$dir" issue list --search "is:open is:issue" --json number --limit 100 --jq '.[].number'
+  expect_rc 0
+
+  # bin/find-implementation-work.sh:162 — ready query.
+  run_stub_gh "$dir" issue list --search "is:open is:issue" --json number,title,url --limit 100
+  expect_rc 0
+
+  # bin/find-planning-work.sh:146 — needs_revision issue view.
+  run_stub_gh "$dir" issue view 1 --json number,title,url,author,comments
+  expect_rc 0
+  expect_jq '.number' '1'
+
+  # bin/find-implementation-work.sh:149 and :189 — ready-issue view (identical field list).
+  run_stub_gh "$dir" issue view 1 --json number,title,url,comments
+  expect_rc 0
+}
+
+# stub-json-check-is-field-list-scoped — the check reads the --json field list, not any substring
+# of argv: a --search string containing the literal "authorAssociation" (inside a fake label
+# name) is served normally, since the requested --json field list itself is valid. Pins the
+# deleted hard-coded arm's exact weakness (`case "$*" in *"authorAssociation"*`, which matched
+# ANYWHERE in argv, not just the field list).
+# MUTATION PROOF M5 (measured 2026-09-05, replacing the per-token loop with the deleted arm's own
+# style — `case " $orig " in *"authorAssociation"*) reject ;; esac`, dropping the
+# GH_ISSUE_JSON_FIELDS membership check entirely; re-measured 2026-09-05 when the suite grew to 74
+# cases with the addition of stub-json-missing-json-argument-fails-loud below, unaffected — its own
+# call has no --json argument at all, so it never reaches this replaced check and stays caught by
+# the found-check above it): dropped the suite from 74 pass/0 fail to 69 pass/5 fail, failing
+# exactly: this case (its --search string contains "authorAssociation" as
+# a substring, so the lazy re-implementation wrongly rejects a call whose --json field list is
+# valid), stub-json-unknown-field-rejected and stub-json-unknown-field-rejected-view (a "bogusField"
+# token is no longer checked against anything and is silently accepted), and
+# plan-script-unknown-json-field-fails-loud / impl-script-unknown-json-field-fails-loud (their
+# injected "bogusField" is likewise accepted, so the mutated scripts no longer fail loud).
+# stub-json-author-association-rejected did NOT fail under this mutant — its own fixture is exactly
+# the "authorAssociation" substring this lazy style still happens to catch, a coincidence of that
+# one case, not evidence the mutant is inert; it is caught by the five cases above. Reverted
+# immediately after recording this.
+case_stub_json_check_is_field_list_scoped() {
+  local dir; dir="$(mk_fixture stub-json-check-is-field-list-scoped)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"}}]
+EOF
+  build_stub_gh "$dir"
+  run_stub_gh "$dir" issue list --search "is:open is:issue label:authorAssociation" --json number,title,url,author --limit 100
+  expect_rc 0
+  expect_jq '.[0].number' '1'
+}
+
+# stub-json-missing-json-argument-fails-loud — a `gh issue list` call with no --json argument at
+# all (validate_json_fields's own header comment above states this as a contract: "a call with
+# none at all is a stub-contract violation, not a silent skip: it fails loud with a distinct
+# diagnostic instead") fails loud with that distinct diagnostic instead of falling through to a
+# zero-iteration field-list loop and being silently served a fixture. initial.json IS present (so
+# an absent fixture cannot explain the rejection — the same non-vacuity rule every other rejection
+# case in this Part follows).
+# MUTATION PROOF M7 (measured 2026-09-05, `if [ "$found" -ne 1 ]; then` -> `if false; then` in
+# validate_json_fields): dropped the suite from 74 pass/0 fail to 73 pass/1 fail, failing exactly:
+# this case (the missing-argument call now falls through to the zero-iteration `for tok in $list`
+# loop and is silently served initial.json instead of rejected) — reverted immediately after
+# recording this.
+case_stub_json_missing_json_argument_fails_loud() {
+  local dir; dir="$(mk_fixture stub-json-missing-json-argument-fails-loud)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  build_stub_gh "$dir"
+  run_stub_gh "$dir" issue list --search "is:open is:issue" --limit 100
+  expect_rc 1
+  expect_empty_out
+  expect_err 'stub: no --json argument'
+}
+
+# ---------------------------------------------------------------------------------------------
+# Part 7 cases (#217), end-to-end: a --json-mutated COPY of a real discovery script (never
+# bin/ itself) against the stub, proving the wiring at the script/stub boundary, not just the
+# stub's own dispatch. Each guards its `sed` mutation with `cmp -s` so a future --json spelling
+# change in the target script fails the CASE ("mutation did not apply") instead of silently
+# passing with the mutation never having applied.
+
+# plan-script-unknown-json-field-fails-loud — a `sed`-mutated copy of bin/find-planning-work.sh,
+# with "bogusField," injected right after every "--json " token, run end-to-end against the stub:
+# the FIRST such call the script makes is the needs_initial_plan query
+# (bin/find-planning-work.sh:108-111), an UNGUARDED command-substitution assignment (no
+# `2>/dev/null`), so the stub's rejection kills the whole script under `set -euo pipefail` before
+# any stdout is produced — matching the live #202-class outage this issue names, not a silently
+# empty result. initial.json/candidates.json are `[]` (the run would otherwise succeed) so only
+# the validator's rejection can explain the failure.
+case_plan_script_unknown_json_field_fails_loud() {
+  local dir; dir="$(mk_fixture plan-script-unknown-json-field-fails-loud)"
+  sed 's/--json /--json bogusField,/' "$root/bin/find-planning-work.sh" > "$dir/mutant.sh"
+  if cmp -s "$root/bin/find-planning-work.sh" "$dir/mutant.sh"; then
+    __ok=0
+    __why="${__why}mutation did not apply — the script's --json invocation shape changed\n"
+    return
+  fi
+  printf '[]\n' > "$dir/initial.json"
+  printf '[]\n' > "$dir/candidates.json"
+  build_stub_gh "$dir"
+  run_script_at "$dir" "$dir/mutant.sh"
+  expect_rc 1
+  expect_empty_out
+  expect_err 'Unknown JSON field: "bogusField"'
+}
+
+# impl-script-unknown-json-field-fails-loud — the same mutation and wiring proof against
+# bin/find-implementation-work.sh's BATCH mode (no --issue): the first call the script makes in
+# that mode is the ready query (bin/find-implementation-work.sh:160-163), also an unguarded
+# command-substitution assignment, so it fails exactly the same way. `--issue <n>` mode's view
+# call (:149) is `2>/dev/null`-guarded and would only warn, not fail loud — batch mode is the
+# shape that actually falls closed.
+case_impl_script_unknown_json_field_fails_loud() {
+  local dir; dir="$(mk_fixture impl-script-unknown-json-field-fails-loud)"
+  sed 's/--json /--json bogusField,/' "$root/bin/find-implementation-work.sh" > "$dir/mutant.sh"
+  if cmp -s "$root/bin/find-implementation-work.sh" "$dir/mutant.sh"; then
+    __ok=0
+    __why="${__why}mutation did not apply — the script's --json invocation shape changed\n"
+    return
+  fi
+  printf '[]\n' > "$dir/ready.json"
+  build_stub_gh "$dir"
+  run_script_at "$dir" "$dir/mutant.sh"
+  expect_rc 1
+  expect_empty_out
+  expect_err 'Unknown JSON field: "bogusField"'
+}
+
+# ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
   "untrusted-comment-no-revision|case_untrusted_no_revision|NONE comment after the plan: no revision, reported in untrusted_comments"
@@ -2647,6 +3018,14 @@ cases=(
   "impl-single-issue-post-approval-comment|case_impl_single_issue_post_approval_comment|--issue <n> mode — the mode the pre-push re-check uses — carries the covered_by_approval split, not just binding_line"
   "plan-escalation-audit-comment-no-revision|case_plan_escalation_audit_comment_no_revision|workstream C: a step-7 escalation comment opening with harness-audit does not re-open the plan for revision"
   "plan-candidates-filter-error|case_plan_candidates_filter_error|the revision-candidates query answers with a document the script's own --jq filter cannot process: non-zero exit, empty stdout, fail-loud"
+  "stub-json-unknown-field-rejected|case_stub_json_unknown_field_rejected|an unsupported --json field on gh issue list is rejected with gh's own Unknown JSON field line, even though a fixture would otherwise serve it"
+  "stub-json-unknown-field-rejected-view|case_stub_json_unknown_field_rejected_view|the same unsupported-field rejection on the gh issue view arm, a separate case branch in the stub"
+  "stub-json-author-association-rejected|case_stub_json_author_association_rejected|the #202 authorAssociation regression guard survives the deletion of its hard-coded arm, now via the generic validator, on both subcommands"
+  "stub-json-script-field-lists-accepted|case_stub_json_script_field_lists_accepted|non-vacuity control: all five --json field lists the two bin/ scripts actually request are accepted and serve their fixtures"
+  "stub-json-check-is-field-list-scoped|case_stub_json_check_is_field_list_scoped|the check reads the --json field list, not any substring of argv: a --search string containing 'authorAssociation' is served normally"
+  "plan-script-unknown-json-field-fails-loud|case_plan_script_unknown_json_field_fails_loud|end-to-end: a --json-mutated copy of bin/find-planning-work.sh asking for an unsupported field aborts under set -euo pipefail with no stdout"
+  "impl-script-unknown-json-field-fails-loud|case_impl_script_unknown_json_field_fails_loud|end-to-end: a --json-mutated copy of bin/find-implementation-work.sh (batch mode) asking for an unsupported field aborts the same way"
+  "stub-json-missing-json-argument-fails-loud|case_stub_json_missing_json_argument_fails_loud|a gh issue list call with no --json argument at all fails loud with a distinct diagnostic instead of being silently accepted"
 )
 
 matched=0
