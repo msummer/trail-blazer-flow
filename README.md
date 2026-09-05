@@ -976,6 +976,21 @@ forged key cannot silence a real escalation. One-time transition note: escalatio
 posted by v2.5.1 carry no key line, so such an issue receives at most one more comment before
 the guard takes effect.
 
+**v2.5.2 → v2.6.0** adds no grant, label, script, or baseline step — the doctor reports nothing
+new to migrate. **Approval now also binds to the plan comment's edit state (#192).**
+`find-implementation-work.sh` fetches the selected plan comment's REST `updated_at` and compares
+it against the plan-approved label's timestamp — but only for an issue whose approval would
+otherwise already cover the plan, so this costs one extra read-only API call per *covered* ready
+issue, not per ready issue. Consumer tooling reading this script's JSON may newly see two
+`approval.reason` values it has never seen before, `plan-edited-after-approval` and
+`plan-edit-unreadable`, plus two new `counts` keys, `counts.plan_edited_after_approval` and
+`counts.plan_edit_unreadable` — additive only, no existing key renamed or removed. Behaviour
+**narrows**: a plan comment edited in place after its approval, which every prior version treated
+as still covered, now waits for a human to re-approve it (remove and re-add `plan-approved`)
+instead of being built silently — the same "waits for a human" posture the v2.5.0 approval-binding
+transition (and v2.5.1's fix to it) already established for a plan revised after approval, just
+for one more way a plan can outrun its approval.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -1208,30 +1223,40 @@ misreporting orchestrator can still fabricate them; the gain is that doing so no
 consistent, durably visible artifacts instead of one, raising the cost of asserting a verification
 event that didn't happen rather than eliminating the possibility.
 
-**Approval provenance** (#174). The `plan-approved` label attaches to the *issue*, not to a
-specific plan comment, so a naive read of the label alone can't tell a still-current approval
-from one a later revision has silently outrun. `find-implementation-work.sh` closes that gap with
-an identity-and-freshness binding, computed fresh every time it's asked: it reads the newest
+**Approval provenance** (#174, content binding added by #192). The `plan-approved` label attaches
+to the *issue*, not to a specific plan comment, so a naive read of the label alone can't tell a
+still-current approval from one a later revision has silently outrun — or one whose text has
+since been edited in place. `find-implementation-work.sh` closes that gap with an
+identity-timing-and-content binding, computed fresh every time it's asked: it reads the newest
 `labeled` event for `plan-approved` from GitHub's own issue-events API and compares its timestamp
 against the selected plan comment's `createdAt` — the approval **covers** the plan only when the
 label's newest application is not earlier than the comment (equal timestamps count, so the
-auto-approval path — which labels immediately after posting — always covers its own plan). When
-it does, the script emits a `binding_line` naming the specific plan comment and approval
+auto-approval path — which labels immediately after posting — always covers its own plan) — AND
+(#192) against that same comment's REST `updated_at`: an in-place edit made *after* the approval
+event un-covers the plan too (`reason: "plan-edited-after-approval"`, no `binding_line`, one
+extra read-only API call made only on this otherwise-covered branch), the implementer's gate and
+the merge floor holding exactly as they do for `plan-after-approval`, with no changes of their
+own; an edit made *before* approval stays covered on purpose (the approver read the edited text);
+an unreadable edit-state lookup fails closed (`reason: "plan-edit-unreadable"`). When the plan
+covers, the script emits a `binding_line` naming the specific plan comment and approval
 timestamp; the `issue-implementer` skill revalidates this **before dispatch and again before
-push** — a same-run revision landing in between un-covers the plan, and the skill removes
-`plan-approved` and returns the issue to review rather than build a plan nobody approved — and
-the `issue-cycle` merge pass revalidates it once more, requiring that same `binding_line` verbatim
-in the PR body before an autonomous merge. Honest limit: like verdict provenance above, all three
-checkpoints (the discovery script, the PR body, the merge pass) are orchestrator-written and share
-one `gh` identity, so this raises the cost of asserting an approval that didn't happen rather than
-eliminating it; and it binds the plan comment's *identity* and *timing*, not its *content* — an
-in-place edit of an already-approved comment is not detected (a named follow-up, deliberately out
-of scope here). The same binding also governs each trusted post-plan *comment*, not just the plan
-(#194): `find-implementation-work.sh` marks every `trusted_post_plan` entry
-`covered_by_approval: true` when the comment's `createdAt` is not later than `approval.approved_at`
-and `false` when it is later — a maintainer who comments after approving is not silently treated
-as having amended the approved plan; the comment is reported to the human (`counts.
-post_approval_comments`, a `warn:` line) instead of becoming a binding `RESOLVED:` decision. To
+push** — a same-run revision (or in-place edit) landing in between un-covers the plan, and the
+skill removes `plan-approved` and returns the issue to review rather than build a plan nobody
+approved — and the `issue-cycle` merge pass revalidates it once more, requiring that same
+`binding_line` verbatim in the PR body before an autonomous merge. Honest limit: like verdict
+provenance above, all three checkpoints (the discovery script, the PR body, the merge pass) are
+orchestrator-written and share one `gh` identity, so this raises the cost of asserting an approval
+that didn't happen rather than eliminating it; the edit check itself is a **tripwire, not a
+control**, for the same reason — the same `gh` identity that edits the comment can also re-approve
+it (removing and re-adding `plan-approved` moves `approved_at` past the edit and re-covers it, the
+audited path already documented below), and the comment's content is never hashed or otherwise
+verified, only its *edit timestamp*. The same binding also governs each trusted post-plan
+*comment*, not just the plan (#194): `find-implementation-work.sh` marks every `trusted_post_plan`
+entry `covered_by_approval: true` when the comment's `createdAt` is not later than
+`approval.approved_at` and `false` when it is later — a maintainer who comments after approving is
+not silently treated as having amended the approved plan; the comment is reported to the human
+(`counts.post_approval_comments`, a `warn:` line) instead of becoming a binding `RESOLVED:`
+decision. To
 make a post-approval comment binding **before a PR exists**, remove and re-add `plan-approved` —
 the same audited path #174 already documents, not a new surface (see below for why this stops
 being the release path once a PR is open). A comment that arrives *while the implementer is

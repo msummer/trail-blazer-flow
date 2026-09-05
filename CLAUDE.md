@@ -130,7 +130,17 @@ implementer skill's fresh per-issue revalidation) returns the identical output s
 one issue regardless of its labels, with an unknown flag or non-numeric `<n>` exiting 2 — and,
 since #198, that same `--issue <n>` mode also carries the `covered_by_approval` split (not just
 `binding_line`), the artifact the implementer skill's pre-push re-check (step 2e) diffs to surface
-a trusted comment that arrives after dispatch. Since
+a trusted comment that arrives after dispatch. Since #192 that same `plan_selection` entry's
+`approval` also binds to the selected plan comment's edit state, checked only on the branch that
+would otherwise conclude covered: the plan comment's REST `updated_at` postdating the newest
+`plan-approved` labeling event is not covered (`covers_plan: false`, `reason:
+"plan-edited-after-approval"`, `counts.plan_edited_after_approval`); an edit predating that label,
+or an edit-timestamp tie, both stay covered; three distinct routes — a rejected comments-endpoint
+call, a document the script's own filter cannot process, and an unparseable or missing comment id,
+or an empty `updated_at` field — all fail closed identically (`covers_plan: null`, `reason:
+"plan-edit-unreadable"`, `counts.plan_edit_unreadable`, with `approval.approved_at`/`approved_by`
+still populated since the EVENTS lookup itself succeeded); and `--issue <n>` mode carries the new
+reason too, not just batch mode. Since
 #194 it additionally pins, on BOTH scripts: workstream A, a `has_harness_marker` boolean added to
 each untrusted bucket entry (`untrusted_comments[].comments[]` / `untrusted_post_plan[]`) that
 only ANNOTATES a forged `<!-- harness-audit -->`/`<!-- verifier-verdict -->` marker from an

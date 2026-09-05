@@ -63,11 +63,14 @@
 #                 from the newest `labeled` event for plan-approved on GitHub's issue-events API
 #                 (null when unknown); covers_plan is true iff that label's newest application is
 #                 not earlier than the selected plan comment's createdAt (the plan comment posted
-#                 after the label fails it); reason is one of covered (covers_plan: true),
-#                 plan-after-approval, no-approval-event, no-plan, plan-url-missing (covers_plan:
-#                 false), or approval-unreadable (covers_plan: null — the events lookup itself
-#                 failed, fail-closed, matching find-planning-work.sh's precedent for an unreadable
-#                 authorAssociation).
+#                 after the label fails it) AND the plan comment's own REST updated_at is not later
+#                 than that same approved_at (#192 — an in-place edit of the comment made AFTER
+#                 approval un-covers it too, not just a later revision's own createdAt); reason is
+#                 one of covered (covers_plan: true), plan-after-approval, no-approval-event,
+#                 no-plan, plan-url-missing, plan-edited-after-approval (covers_plan: false), or
+#                 approval-unreadable / plan-edit-unreadable (covers_plan: null — the events lookup
+#                 or, respectively, the plan comment's updated_at lookup itself failed, fail-closed,
+#                 matching find-planning-work.sh's precedent for an unreadable authorAssociation).
 #   binding_line: the literal `<!-- harness-plan-binding: issue=<n> plan=<plan.url>
 #                 approved-at=<approved_at> -->` when and only when covers_plan is true; null in
 #                 every other case. Revalidated by the issue-implementer skill before dispatch and
@@ -75,7 +78,9 @@
 #                 merge floor to grep for — see that skill and skills/issue-cycle/SKILL.md.
 # One warn: line per non-covered issue, one distinct ASCII stem per reason — except reason:
 # no-plan, which reuses the existing "no maintainer-authored plan comment" line rather than
-# doubling up.
+# doubling up, and the two plan-edit-unreadable routes (an unparseable comment id, and a rejected
+# or unprocessable updated_at lookup), which share the same "plan edit state unreadable" stem
+# family since both mean the same thing to a reader: the edit state could not be determined.
 #
 # --issue <n> (new): skip the `ready` query and evaluate exactly one issue via `gh issue view`,
 # regardless of its labels — used by the issue-implementer skill for a fresh, per-issue
@@ -91,10 +96,11 @@
 # post-plan, verdict-marker-carrying comments excluded from trusted_post_plan),
 # audit_comments_skipped (trusted, post-plan, harness-audit-marker-carrying comments excluded from
 # trusted_post_plan the same way), missing_association, plan_after_approval, no_approval_event,
-# and approval_unreadable (the last three from #174's approval binding, one per corresponding
-# `reason`), and post_approval_comments (#194 workstream B, see above — trusted_post_plan entries
-# with covered_by_approval: false). ready and counts.ready/counts.truncated keep their current
-# names and computation.
+# and approval_unreadable (from #174's approval binding, one per corresponding `reason`),
+# post_approval_comments (#194 workstream B, see above — trusted_post_plan entries with
+# covered_by_approval: false), and plan_edited_after_approval / plan_edit_unreadable (#192, one per
+# corresponding `reason` — see the plan_selection[].approval doc above). ready and
+# counts.ready/counts.truncated keep their current names and computation.
 #
 # Requires: gh (authenticated), jq. Run from anywhere inside the repo.
 set -euo pipefail
@@ -171,6 +177,8 @@ plan_after_approval=0
 no_approval_event=0
 approval_unreadable=0
 post_approval_comments=0
+plan_edited_after_approval=0
+plan_edit_unreadable=0
 for n in $ready_numbers; do
   # Tolerate per-issue failures: one transient gh/API error must not kill the whole
   # discovery run (matters for unattended/scheduled runs). The issue is simply
@@ -250,6 +258,19 @@ for n in $ready_numbers; do
   if [ "$plan" != "null" ]; then
     plan_url=$(printf '%s' "$plan" | jq -r '.url // empty')
     plan_created=$(printf '%s' "$plan" | jq -r '.createdAt')
+    # #192 — parse the REST comment id (the `#issuecomment-<id>` suffix of plan_url) up front so
+    # the content-binding check below (inside the branch that would otherwise conclude "covered")
+    # has it ready; digits-only validated here, the same idiom the --issue argument parser above
+    # uses, since this id is interpolated into a `gh api` path.
+    plan_comment_id=""
+    case "$plan_url" in
+      *"#issuecomment-"*)
+        plan_comment_id="${plan_url##*#issuecomment-}"
+        case "$plan_comment_id" in
+          ''|*[!0-9]*) plan_comment_id="" ;;
+        esac
+        ;;
+    esac
     if [ -z "$plan_url" ]; then
       reason="plan-url-missing"
       echo "warn: issue #$n: plan comment has no url — cannot bind approval to it" >&2
@@ -278,8 +299,42 @@ for n in $ready_numbers; do
           echo "warn: issue #$n: plan comment ($plan_created) postdates the plan-approved label ($approved_at) — approval does not cover this plan" >&2
           plan_after_approval=$((plan_after_approval+1))
         else
-          covers_plan="true"
-          reason="covered"
+          # #192 — plan-comment content binding: everything above proves WHICH comment and WHEN,
+          # but an in-place edit of an already-approved comment moves neither its url, createdAt,
+          # nor the plan-approved label. One extra read-only call, made ONLY here (an approval
+          # that would otherwise cover the plan), compares the plan comment's REST updated_at
+          # against the CURRENT (newest) approved_at computed above: an edit strictly after
+          # approval un-covers the plan (a human must re-approve — removing and re-adding
+          # plan-approved moves approved_at past the edit and re-covers it, the same audited path
+          # #174/#194 already document); an edit before approval is covered on purpose (the
+          # approver read the edited text); a tie counts as covered (same inclusive-boundary
+          # convention as the plan_created/approved_at compare above). An unparseable comment id
+          # or an unreadable/unprocessable lookup fails closed, matching #204's precedent for the
+          # events lookup — approved_at/approved_by stay populated in that state, since the events
+          # lookup itself already succeeded.
+          if [ -z "$plan_comment_id" ]; then
+            covers_plan="null"
+            reason="plan-edit-unreadable"
+            echo "warn: issue #$n: plan comment url ($plan_url) carries no #issuecomment-<id> — plan edit state unreadable" >&2
+            plan_edit_unreadable=$((plan_edit_unreadable+1))
+          elif ! plan_updated=$(gh api "repos/{owner}/{repo}/issues/comments/$plan_comment_id" --jq '.updated_at // empty' 2>/dev/null); then
+            covers_plan="null"
+            reason="plan-edit-unreadable"
+            echo "warn: issue #$n: could not read the plan comment's updated_at — plan edit state unreadable" >&2
+            plan_edit_unreadable=$((plan_edit_unreadable+1))
+          elif [ -z "$plan_updated" ]; then
+            covers_plan="null"
+            reason="plan-edit-unreadable"
+            echo "warn: issue #$n: could not read the plan comment's updated_at — plan edit state unreadable" >&2
+            plan_edit_unreadable=$((plan_edit_unreadable+1))
+          elif [[ "$plan_updated" > "$approved_at" ]]; then
+            reason="plan-edited-after-approval"
+            echo "warn: issue #$n: plan comment was edited ($plan_updated) after the plan-approved label ($approved_at) — the approval does not cover the edited text" >&2
+            plan_edited_after_approval=$((plan_edited_after_approval+1))
+          else
+            covers_plan="true"
+            reason="covered"
+          fi
         fi
       fi
     fi
@@ -388,6 +443,8 @@ jq -n \
   --argjson nae "$no_approval_event" \
   --argjson au "$approval_unreadable" \
   --argjson pac "$post_approval_comments" \
+  --argjson peaa "$plan_edited_after_approval" \
+  --argjson peu "$plan_edit_unreadable" \
   '{ready: $ready,
     plan_selection: $selection,
     counts: {ready: ($ready | length), truncated: (($ready | length) >= $limit),
@@ -403,4 +460,6 @@ jq -n \
              plan_after_approval: $paa,
              no_approval_event: $nae,
              approval_unreadable: $au,
-             post_approval_comments: $pac}}'
+             post_approval_comments: $pac,
+             plan_edited_after_approval: $peaa,
+             plan_edit_unreadable: $peu}}'
