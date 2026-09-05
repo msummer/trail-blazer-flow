@@ -24,7 +24,12 @@
 #   -->" (the orchestrator's own archive) never counts as feedback either, so neither re-opens a
 #   plan for revision — counted in counts.audit_comments_skipped / counts.verdict_archives_skipped
 #   respectively, and never applied to the untrusted bucket (a forged marker from an untrusted
-#   author still lands in untrusted_comments, never silently dropped).
+#   author still lands in untrusted_comments, never silently dropped). #211 makes the SAME
+#   script's revision-candidates query faithful too: the stub applies the script's own `--jq
+#   '.[].number'` argument to a JSON page-array fixture with the real jq and propagates jq's exit
+#   status, so a candidates filter that cannot process the returned document is a hard failure
+#   (fail-loud, matching the live set -euo pipefail behaviour) rather than a silently empty
+#   candidate list.
 #
 #   bin/find-implementation-work.sh (#176, implementer-facing): the same trust gate, reused
 #   rather than forked (TRUSTED_ASSOCIATIONS agrees with find-planning-work.sh's — see gate
@@ -70,8 +75,12 @@
 # needed — neither script calls anything but `gh` and `jq` — so each fixture is just a directory
 # holding a stub `gh` (offline, deterministic) plus the JSON payloads it serves:
 #   - initial.json           : the needs_initial_plan query's response (find-planning-work.sh)
-#   - candidates.txt         : the revision candidates query's response — one issue number per
-#                               line, exactly what `gh issue list --jq '.[].number'` would print
+#   - candidates.json         : (#211) the revision candidates query's response — a JSON page
+#                               array of {"number": N} objects, exactly what `gh issue list
+#                               --json number` returns; the stub applies the script's OWN --jq
+#                               argument to this document with the real jq (see build_stub_gh
+#                               below), propagating jq's exit status, so a filter that cannot
+#                               process it is a hard failure, not a silently empty candidate list
 #                               (find-planning-work.sh)
 #   - ready.json              : the ready-issues query's response (find-implementation-work.sh)
 #   - issue-<n>.json          : the `gh issue view` payload for candidate/ready issue <n>, shared
@@ -108,9 +117,10 @@
 # real `gh issue list` calls contains it any more, so this arm exists only to fail a regression
 # that reintroduces the field, never to serve a fixture. A call containing "pr-open"
 # (find-implementation-work.sh's ready query — neither planning search contains this token) is
-# served from ready.json; a call containing "--jq" (the revision candidates query) is served from
-# candidates.txt; anything else (#202: find-planning-work.sh's now-unconditional needs_initial_plan
-# query, which requests only number,title,url,author) falls through to initial.json.
+# served from ready.json; a call containing "--jq" (the revision candidates query) is answered by
+# applying the script's own --jq argument to candidates.json with the real jq (#211); anything
+# else (#202: find-planning-work.sh's now-unconditional needs_initial_plan query, which requests
+# only number,title,url,author) falls through to initial.json.
 # Discriminating by `-label:`/`label:` search-string prefix would be wrong — `-label:plan-proposed`
 # contains `label:plan-proposed` as a substring. Issue author provenance (#202) is served
 # separately, over `gh api repos/{owner}/{repo}/issues?...` — see rest-issues.json above and the
@@ -150,14 +160,16 @@ mk_fixture() {
 }
 
 # build_stub_gh DIR — writes an executable DIR/gh (absolute paths to DIR's own initial.json,
-# candidates.txt, ready.json, issue-<n>.json, events-<n>.json, and rest-issues.json fixtures
+# candidates.json, ready.json, issue-<n>.json, events-<n>.json, and rest-issues.json fixtures
 # baked in via the __DIR__ + sed idiom dev/cleanup-tests.sh's build_stub_gh uses). Deterministic
 # and offline. Dispatch order for `gh issue list ...` matters — see the header note above:
 #   *"authorAssociation"*  -> exit 1 with gh's real "Unknown JSON field" text (#202: gh has never
 #                             accepted this field on an issue query — this arm exists only to
 #                             fail a regression that reintroduces the field; no fixture serves it)
 #   *"pr-open"*            -> cat DIR/ready.json (find-implementation-work.sh's ready query)
-#   *"--jq"*               -> cat DIR/candidates.txt (revision candidates, one number per line)
+#   *"--jq"*               -> (#211) apply the script's OWN --jq argument (extracted from this
+#                             invocation's own ${10}, guarded by $9 == "--jq") to DIR/candidates.json
+#                             with the real jq, propagating jq's exit status (revision candidates)
 #   anything else          -> cat DIR/initial.json (find-planning-work.sh's now-unconditional
 #                             needs_initial_plan query, and any other plain needs_initial_plan-
 #                             shaped call)
@@ -174,7 +186,61 @@ mk_fixture() {
 # filter. This matches real `gh api --jq`'s actual document semantics: the filter runs once
 # against each page's JSON array as-is, with no implicit `.[] | ` prepended by gh — a filter that
 # wants to iterate the page must open with its own `.[] | `, which both scripts' filters now do
-# (#196, #202).
+# (#196, #202). Since #211 the `gh issue list ... --jq` arm above is faithful in exactly the same
+# way, against the SAME page-array document semantics — it just extracts its own filter argument
+# from a different position (${10}, since `issue list --search ... --json ... --limit ... --jq
+# EXPR` puts more flags before --jq than `gh api URL --paginate --jq EXPR` does), guarded by a
+# loud stub error (not a silent misfire) if a future arg-reordering moves --jq off ${9}/${10}. So
+# three arms now apply the script's own filter with the real jq; only the `gh api` framing above
+# still says "two branches" for its own local `$5` extraction, which this paragraph does not
+# change (out of scope — see the plan's "Out of scope").
+#
+# LIVE-SHAPE PROBE (measured 2026-09-05, against github.com/msummer/trail-blazer-flow with an
+# authenticated gh): `gh issue list --search "is:open is:issue label:plan-proposed
+# -label:plan-approved -label:no-plan" --json number --limit 100` returned `[]` at probe time (no
+# matching issues); a broader `--search "is:open is:issue" --json number --limit 3` against the
+# same repo returned `[{"number":213},{"number":211},{"number":192}]` — confirming the response
+# document IS a JSON page array of {"number": N} objects, the shape candidates.json now models.
+# `--jq '.[].number'` against that broader query printed `213`, `211`, `192` (one per line, exit
+# 0); the SAME query with the mutant `--jq '.number'` failed with `gh: expected an object but got:
+# array ([{"number":213},{"number"...])`, exit 1 — decisive evidence gh applies the filter to the
+# WHOLE page array as one document, with no implicit `.[] | ` prepended (LESSONS 2026-09-01 (c));
+# the exact search string above, re-run with the same mutant filter against its own (empty) `[]`
+# result, failed identically (`expected an object but got: array ([])`, exit 1). A query
+# guaranteed to match nothing (`--search "is:open is:issue label:definitely-no-such-label" --json
+# number`) returned `[]`, confirming the empty-fixture shape the six `printf '[]\n'` sites below
+# now use.
+#
+# MUTATION PROOF A (measured 2026-09-05, candidates arm, #211): with the arm's propagation (`||
+# exit 1`) in place, reverting ONLY it (making the arm's jq call unconditional, `exit 0`
+# regardless of jq's status) and re-running `bash dev/planning-tests.sh` dropped the suite from
+# 57 pass/0 fail to 56 pass/1 fail, failing exactly: plan-candidates-filter-error — the case this
+# PR added, whose candidates.json is a page array whose own element is itself an array, which the
+# script's own, unmutated `.[].number` filter cannot process; every other planner case's
+# candidates.json fixture is well-formed, so jq never errors for them and this stub change is
+# otherwise invisible to the suite — reverted immediately after recording this.
+# MUTATION PROOF B (#196-class, the issue's named mutant, measured 2026-09-05): with the stub
+# unchanged, deleting the leading `.[]` from bin/find-planning-work.sh's OWN revision-candidates
+# filter (`--jq '.[].number'` -> `--jq '.number'`) and re-running the suite dropped it to 30
+# pass/27 fail, failing exactly the 27 planner-side cases converted to candidates.json fixtures by
+# this PR: untrusted-comment-no-revision, contributor-comment-no-revision, owner-comment-revision,
+# member-comment-revision, collaborator-comment-revision, lowercase-association-still-trusted,
+# untrusted-marker-does-not-shadow, untrusted-marker-only, mixed-trusted-and-untrusted,
+# missing-association-warns, no-comments, fetch-failure-survives, output-shape,
+# initial-untrusted-author-reported, initial-trusted-author-clean,
+# initial-missing-author-association, initial-author-map-per-issue,
+# revision-untrusted-author-reported, revision-trusted-author-clean,
+# author-association-unavailable, plan-audit-comment-no-revision,
+# plan-verdict-archive-no-revision, plan-audit-does-not-mask-real-feedback,
+# plan-untrusted-audit-marker-still-reported, plan-untrusted-harness-marker-flagged,
+# plan-untrusted-verdict-marker-flagged, and plan-escalation-audit-comment-no-revision — reverted
+# immediately after recording this. plan-candidates-filter-error did NOT fail under this script
+# mutant: its candidates.json fixture (a page array whose own element is itself an array) errors
+# under `.number` exactly as it does under the fixed `.[].number` — the same coincidence
+# impl-approval-events-filter-error documents for the events arm, not evidence the mutant is
+# inert; the mutant is caught by the 27 cases above. Before this PR, this exact mutant left the
+# whole suite green (the `*"--jq"*` arm ignored the filter argument entirely) — that contrast is
+# the whole point of #211.
 #
 # events branch: `gh api "repos/{owner}/{repo}/issues/<n>/events?per_page=100" --paginate --jq
 # 'EXPR'` -> exit 1 if DIR/reject-events-<n> exists (simulates the events endpoint being
@@ -190,15 +256,18 @@ mk_fixture() {
 # before the fix, `2026-09-01T11:11:24Z msummer` exit 0 after). MUTATION PROOF A (measured
 # 2026-09-04, not predicted): with the stub's propagation (`|| exit 1`) in place, reverting ONLY
 # it (restoring the unconditional `exit 0` this arm had before #204) and re-running
-# `bash dev/planning-tests.sh` dropped the suite from 56 pass/0 fail to 55 pass/1 fail, failing
-# exactly: impl-approval-events-filter-error — the case #204 added, whose events-<n>.json is a
+# `bash dev/planning-tests.sh` dropped the suite from 56 pass/0 fail to 55 pass/1 fail (measured
+# 2026-09-04, when the suite held 56 cases — #211 has since added a 57th, unrelated case; this
+# proof was not re-run), failing exactly: impl-approval-events-filter-error — the case #204 added,
+# whose events-<n>.json is a
 # document (a page array whose own element is itself an array) the script's own, unmutated filter
 # cannot process; every other case's events-<n>.json fixture is well-formed, so jq never errors
 # for them and this stub change is otherwise invisible to the suite — reverted immediately after
 # recording this. MUTATION PROOF B (#196-class, measured 2026-09-04, not predicted): with the stub
 # unchanged, deleting the leading `.[] | ` from bin/find-implementation-work.sh's OWN events
 # filter (the script bug #196 fixed, not this stub) and re-running the suite dropped it to
-# 45 pass/11 fail, failing exactly: impl-approval-covers-plan, impl-plan-after-approval,
+# 45 pass/11 fail (measured 2026-09-04, when the suite held 56 cases; not re-run for #211), failing
+# exactly: impl-approval-covers-plan, impl-plan-after-approval,
 # impl-relabel-newest-wins, impl-other-label-event-ignored, impl-approval-events-unreadable,
 # impl-single-issue-mode, impl-approval-tie, impl-post-approval-comment-not-binding,
 # impl-pre-approval-comment-binding, impl-post-approval-tie-covered, and
@@ -230,7 +299,9 @@ mk_fixture() {
 # lookup to its pre-#202 shape (the `if ! needs_initial_plan=$(gh issue list ... --json
 # number,title,url,author,authorAssociation ...)` probe with its `view_fields` fallback) and
 # re-running `bash dev/planning-tests.sh` against the SAME (post-#202) fixtures dropped the suite
-# from 54 pass/0 fail to 49 pass/5 fail, failing exactly: initial-untrusted-author-reported (the
+# from 54 pass/0 fail to 49 pass/5 fail (measured 2026-09-04, when the suite held 54 cases — the
+# suite has since grown to 57 across #204/#211; this proof was not re-run), failing exactly:
+# initial-untrusted-author-reported (the
 # old fallback's needs_initial_plan carries no authorAssociation field at all now that association
 # data lives only in rest-issues.json, so the old code's own jq maps it to "MISSING" instead of the
 # expected "NONE"), initial-trusted-author-clean and initial-author-map-per-issue (same reason —
@@ -243,7 +314,8 @@ mk_fixture() {
 # comment-level-only-fallback happens to produce — a coincidence of that one fixture, not evidence
 # the mutant is inert. MUTATION PROOF (b) (measured 2026-09-04): deleting only the leading `.[] | `
 # from the script's REST --jq filter (leaving everything else at its current, #202 shape) and
-# re-running the suite dropped it to 50 pass/4 fail, failing exactly:
+# re-running the suite dropped it to 50 pass/4 fail (measured 2026-09-04, when the suite held 54
+# cases; not re-run for #211), failing exactly:
 # initial-untrusted-author-reported, initial-trusted-author-clean, initial-author-map-per-issue,
 # and revision-trusted-author-clean — the stub's `jq -r "(EXPR)"` then tries to index the whole
 # rest-issues.json ARRAY with `.pull_request` (jq: "Cannot index array with string
@@ -273,7 +345,14 @@ case "$1" in
             cat "__DIR__/ready.json"
             exit 0 ;;
           *"--jq"*)
-            cat "__DIR__/candidates.txt"
+            # gh issue list --search S --json number --limit N --jq EXPR => $9=--jq, ${10}=EXPR
+            if [ "${9:-}" != "--jq" ]; then
+              echo "stub: expected --jq at arg 9 of: gh $*" >&2
+              exit 1
+            fi
+            if [ -f "__DIR__/candidates.json" ]; then
+              jq -r "(${10})" "__DIR__/candidates.json" || exit 1
+            fi
             exit 0 ;;
           *)
             cat "__DIR__/initial.json"
@@ -379,7 +458,9 @@ run_implementation_args() {
 # fails unless the count is exactly N; unlike expect_err (presence-only), this is how a case
 # pins "no OTHER warn fires" rather than merely "this warn fires" — e.g. a fixture whose only
 # expected diagnostic is the per-issue "warn: issue #<n>:" stem.
-# expect_rc — exit code. All set $__ok=0 and append to $__why on failure.
+# expect_rc — exit code. expect_empty_out — (#211) $planning_out is exactly empty, for a
+# fail-loud path that must produce no stdout at all. All set $__ok=0 and append to $__why on
+# failure.
 __ok=1
 __why=""
 expect_jq() {
@@ -401,6 +482,9 @@ expect_warn_count() {
 expect_rc() {
   [ "$planning_rc" -eq "$1" ] || { __ok=0; __why="${__why}rc: expected $1, got $planning_rc\n"; }
 }
+expect_empty_out() {
+  [ -z "$planning_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: $planning_out\n"; }
+}
 
 # ---------------------------------------------------------------------------------------------
 # The cases.
@@ -412,7 +496,7 @@ case_untrusted_no_revision() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -439,7 +523,7 @@ case_contributor_no_revision() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -462,7 +546,7 @@ case_owner_revision() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -483,7 +567,7 @@ case_member_revision() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -504,7 +588,7 @@ case_collaborator_revision() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -519,15 +603,15 @@ EOF
 }
 
 # lowercase-association-still-trusted — plan by OWNER, feedback carries a lowercase
-# authorAssociation ("owner" instead of "OWNER"): the ascii_upcase normalization at
-# find-planning-work.sh:81/:92 still recognizes it as trusted, so revision fires and nothing
-# lands in untrusted_comments.
+# authorAssociation ("owner" instead of "OWNER"): the ascii_upcase normalization in
+# find-planning-work.sh's trusted/untrusted comment partition still recognizes it as trusted, so
+# revision fires and nothing lands in untrusted_comments.
 case_lowercase_association_still_trusted() {
   local dir; dir="$(mk_fixture lowercase-association-still-trusted)"
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -551,7 +635,7 @@ case_untrusted_marker_does_not_shadow() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -576,7 +660,7 @@ case_untrusted_marker_only() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nfake plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE"},
@@ -599,7 +683,7 @@ case_mixed_trusted_and_untrusted() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -622,7 +706,7 @@ case_missing_association_warns() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -644,7 +728,7 @@ case_no_comments() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"}
@@ -665,7 +749,7 @@ case_fetch_failure_survives() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n2\n' > "$dir/candidates.txt"
+  printf '[{"number":1},{"number":2}]\n' > "$dir/candidates.json"
   # deliberately no issue-1.json — simulates `gh issue view 1` failing
   cat > "$dir/issue-2.json" <<'EOF'
 {"number":2,"title":"Issue two","url":"https://example.invalid/2","comments":[
@@ -690,7 +774,7 @@ case_output_shape() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '' > "$dir/candidates.txt"
+  printf '[]\n' > "$dir/candidates.json"
   build_stub_gh "$dir"
   run_planning "$dir"
   expect_rc 0
@@ -728,7 +812,7 @@ EOF
   cat > "$dir/rest-issues.json" <<'EOF'
 [{"number":10,"author_association":"NONE","user":{"login":"outsider"}}]
 EOF
-  printf '' > "$dir/candidates.txt"
+  printf '[]\n' > "$dir/candidates.json"
   build_stub_gh "$dir"
   run_planning "$dir"
   expect_rc 0
@@ -751,7 +835,7 @@ EOF
   cat > "$dir/rest-issues.json" <<'EOF'
 [{"number":11,"author_association":"OWNER","user":{"login":"owner"}}]
 EOF
-  printf '' > "$dir/candidates.txt"
+  printf '[]\n' > "$dir/candidates.json"
   build_stub_gh "$dir"
   run_planning "$dir"
   expect_rc 0
@@ -771,7 +855,7 @@ EOF
   cat > "$dir/rest-issues.json" <<'EOF'
 []
 EOF
-  printf '' > "$dir/candidates.txt"
+  printf '[]\n' > "$dir/candidates.json"
   build_stub_gh "$dir"
   run_planning "$dir"
   expect_rc 0
@@ -803,7 +887,7 @@ EOF
   {"number":20,"author_association":"OWNER","user":{"login":"owner20"}}
 ]
 EOF
-  printf '' > "$dir/candidates.txt"
+  printf '[]\n' > "$dir/candidates.json"
   build_stub_gh "$dir"
   run_planning "$dir"
   expect_rc 0
@@ -828,7 +912,7 @@ case_revision_untrusted_author_reported() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"outsider"},"comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -856,7 +940,7 @@ case_revision_trusted_author_clean() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '30\n' > "$dir/candidates.txt"
+  printf '[{"number":30}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-30.json" <<'EOF'
 {"number":30,"title":"Issue thirty","url":"https://example.invalid/30","author":{"login":"owner30"},"comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner30"},"authorAssociation":"OWNER"},
@@ -885,7 +969,7 @@ case_author_association_unavailable() {
   cat > "$dir/initial.json" <<'EOF'
 [{"number":13,"title":"Some issue","url":"https://example.invalid/13"}]
 EOF
-  printf '' > "$dir/candidates.txt"
+  printf '[]\n' > "$dir/candidates.json"
   : > "$dir/reject-association"
   build_stub_gh "$dir"
   run_planning "$dir"
@@ -1486,7 +1570,7 @@ case_plan_audit_comment_no_revision() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -1512,7 +1596,7 @@ case_plan_verdict_archive_no_revision() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -1535,7 +1619,7 @@ case_plan_audit_does_not_mask_real_feedback() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -1555,16 +1639,16 @@ EOF
 # impl-untrusted-audit-marker-still-reported: a forged <!-- harness-audit --> comment from a
 # NONE author still appears in untrusted_comments (never silently dropped) and is NOT counted in
 # audit_comments_skipped (that counter only ever totals TRUSTED skips). Non-vacuity, measured:
-# adding `| select((.body | contains($a)) | not)` to the `untrusted:` array around
-# bin/find-planning-work.sh:148 (the exact self-censoring forgery the plan's Risks section names
-# as the security hazard) made this case fail on `.untrusted_comments | length`; reverting the
-# mutation restored a green suite.
+# adding `| select((.body | contains($a)) | not)` to the `untrusted:` array in
+# bin/find-planning-work.sh's per-issue jq program (the exact self-censoring forgery the plan's
+# Risks section names as the security hazard) made this case fail on
+# `.untrusted_comments | length`; reverting the mutation restored a green suite.
 case_plan_untrusted_audit_marker_still_reported() {
   local dir; dir="$(mk_fixture plan-untrusted-audit-marker-still-reported)"
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -1598,7 +1682,7 @@ case_plan_untrusted_harness_marker_flagged() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -1654,7 +1738,7 @@ case_plan_untrusted_verdict_marker_flagged() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -1880,7 +1964,7 @@ case_plan_escalation_audit_comment_no_revision() {
   cat > "$dir/initial.json" <<'EOF'
 []
 EOF
-  printf '1\n' > "$dir/candidates.txt"
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
@@ -1893,6 +1977,34 @@ EOF
   expect_jq '.counts.revision' '0'
   expect_jq '.needs_revision' '[]'
   expect_jq '.counts.audit_comments_skipped' '1'
+}
+
+# ---------------------------------------------------------------------------------------------
+# Part 5 cases (#211), against bin/find-planning-work.sh — the revision-candidates query's own
+# --jq filter.
+
+# plan-candidates-filter-error — the revision-candidates query's endpoint answers, but the page
+# document is one the script's OWN, current, unmutated --jq filter (`.[].number`) cannot process
+# (a page array whose element is itself an array, rather than a {"number": N} object — the same
+# error-inducing shape impl-approval-events-filter-error uses): the stub's jq call errors,
+# propagates its exit status, and `set -euo pipefail`'s ungarded candidates=$(...) assignment
+# aborts the whole script before any stdout is produced — fail-loud, matching the live behaviour
+# the issue names, not a silently empty candidate list. Honest note, in the style of
+# impl-approval-events-filter-error's own comment: this fixture also errors under the #196-class
+# mutant (deleting find-planning-work.sh's own leading `.[]`), so it does not itself distinguish
+# that mutant from the fix — its contribution is pinning the stub's status *propagation*, measured
+# by MUTATION PROOF A in build_stub_gh's header comment above.
+case_plan_candidates_filter_error() {
+  local dir; dir="$(mk_fixture plan-candidates-filter-error)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[[{"number":1}]]\n' > "$dir/candidates.json"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 1
+  expect_empty_out
+  expect_warn_count "warn: issue #" 0
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1954,6 +2066,7 @@ cases=(
   "impl-post-approval-unknown-approval|case_impl_post_approval_unknown_approval|no plan-approved labeling event at all: covered_by_approval is null (fail-closed), not counted as uncovered"
   "impl-single-issue-post-approval-comment|case_impl_single_issue_post_approval_comment|--issue <n> mode — the mode the pre-push re-check uses — carries the covered_by_approval split, not just binding_line"
   "plan-escalation-audit-comment-no-revision|case_plan_escalation_audit_comment_no_revision|workstream C: a step-7 escalation comment opening with harness-audit does not re-open the plan for revision"
+  "plan-candidates-filter-error|case_plan_candidates_filter_error|the revision-candidates query answers with a document the script's own --jq filter cannot process: non-zero exit, empty stdout, fail-loud"
 )
 
 matched=0
