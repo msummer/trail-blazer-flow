@@ -1011,6 +1011,31 @@ next run's fresh check, both before dispatch (step 2a) and again before push (st
 already-staged tree is checkpointed as `wip: checkpoint binding-recheck` rather than lost). No
 new grant, label, script, or baseline step; `bin/find-implementation-work.sh`'s tri-state and its
 `counts` keys are unchanged — only the `issue-implementer` skill's remedy changes.
+**Under merge autonomy the hard floor is stricter (#206).** The merge pass now reads the uncovered
+`trusted_post_plan` set from the same fresh `find-implementation-work.sh --issue <n>` run it already
+makes for the plan-binding check: a maintainer (`OWNER`/`MEMBER`/`COLLABORATOR`) comment posted on
+the issue after its `plan-approved` label — even after the PR opened — holds that PR in the normal
+"waits on the human" queue (`outcome=not-eligible`, one-line reason naming the comment's URL).
+Behaviour **narrows**: no PR merges past a post-approval comment the approval does not cover.
+Release path in this version: merge the PR yourself, or withdraw the comment and let the next cycle
+re-evaluate; re-adding `plan-approved` does **not** release an open PR (it moves
+`approval.approved_at`, so the PR body's older binding line no longer matches — see "Merge
+autonomy policy"). One-time transition note: a PR already open when your repo picks up this
+version is held if its issue carries any such comment — one manual merge, exactly like the v2.2.0
+transition. Heads-up: #213 (approved, planned for the next release) is expected to let re-approval
+of the *same* plan release a held PR, so do not build a habit around the interim rule. **Planner
+staleness notes are de-duplicated across runs (#208).** The `<!-- harness-audit -->` note the
+planner posts on a `plan-approved` issue whose plan predates merged PRs that touched its Affected
+areas now carries a second line, `<!-- harness-staleness: issue=<n> prs=<prs> -->`, and is skipped
+when the issue's newest maintainer-authored staleness note already carries the identical key — an
+approved-but-stale plan no longer collects one duplicate note per unattended cycle. The run-summary
+flag is never suppressed, and only `OWNER`/`MEMBER`/`COLLABORATOR` comments satisfy the guard.
+One-time transition note: notes posted by earlier versions carry no key line, so such an issue
+receives at most one more note before the guard takes effect. Repo-internal only, no consumer
+effect: `dev/planning-tests.sh`'s stub `gh` now propagates jq errors on its events and candidates
+arms (#204, #211) and validates every `gh issue … --json` field list against gh's documented set
+(#217), its fixtures use GitHub's real comment-url shape under new gate assertion 4.31 (#220), and
+the macOS CI job's timeout is 10 minutes (#224).
 
 ## The per-repo settings file (required)
 
