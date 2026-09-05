@@ -193,3 +193,11 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   trailing tag comment.
 - Release ritual: bump `version` in `.claude-plugin/plugin.json` and create the matching
   `vX.Y.Z` annotated tag, in the same commit — see the README's "Updating".
+- **Fixture comment urls in `dev/planning-tests.sh` use GitHub's real shape**,
+  `https://example.invalid/<issue>#issuecomment-<id>`, never the invented `...#c<n>` form —
+  a future URL-parsing change could otherwise pass the whole fixture suite against a shape no
+  real GitHub comment url has and fail closed on every live run (#220), with one deliberate,
+  gate-required exception (the `impl-plan-comment-id-unparseable` fixture, documented in that
+  file's header comment). Assertion 4.31 enforces this mechanically for the full-url literal
+  values in that one file only; it does not check the id-allocation scheme (documented in the
+  file's own header comment) or a bare `#c<n>` mention in prose.

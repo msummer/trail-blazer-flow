@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 52 assertions total. The gate prints what it checks — run it.
+# Five groups, 53 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -980,6 +980,36 @@ if [ -z "$missing" ]; then
   ok "4.30 'trusted_post_plan' and 'covered_by_approval' present in bin/find-implementation-work.sh, skills/issue-implementer/SKILL.md, and skills/issue-cycle/SKILL.md"
 else
   bad "4.30 identifiers missing from:$missing"
+fi
+
+# 4.31 — every fixture comment url literal in dev/planning-tests.sh (fixture JSON "url" values
+# and the expect_jq literals that echo them) carries GitHub's real `#issuecomment-` fragment
+# (a substring check only — the id's digit-ness is deliberately NOT verified here;
+# impl-plan-comment-id-non-digits ships `#issuecomment-12x3` on purpose to pin
+# bin/find-implementation-work.sh's own digits-only guard), except the one documented,
+# deliberately-unparseable exception (impl-plan-comment-id-unparseable's `#c1` fragment) that
+# pins the outer `#issuecomment-` presence gate in bin/find-implementation-work.sh (#220).
+# Without this, a future fixture could reintroduce the old, invented `...#c<n>` shape and pass
+# the whole planning-tests suite while behaving differently against a real GitHub comment url on
+# a live run — the #196 failure class. This checks ONLY the full-url literal values in
+# dev/planning-tests.sh, nothing else: not the id-allocation scheme documented in that file's own
+# header comment, and not a bare `#c<n>` mention in prose (no full url).
+urls="$(grep -oE 'https://example\.invalid/[0-9]+#[^"[:space:]]+' "$root/dev/planning-tests.sh" | sort -u)"
+if [ -z "$urls" ]; then
+  bad "4.31 dev/planning-tests.sh fixture comment url extraction failed (structure changed)"
+else
+  invented="$(printf '%s\n' "$urls" | grep -v '#issuecomment-' || true)"
+  allowed="https://example.invalid/1#c1"
+  unexpected="$(comm -23 <(_lines "$invented") <(_lines "$allowed"))"
+  missing_exception="$(comm -13 <(_lines "$invented") <(_lines "$allowed"))"
+  if [ -z "$unexpected" ] && [ -z "$missing_exception" ]; then
+    ok "4.31 dev/planning-tests.sh fixture comment urls all carry a #issuecomment- fragment, except the one documented #c1 exception"
+  else
+    msg="4.31 dev/planning-tests.sh fixture comment url shape drift:"
+    [ -n "$unexpected" ] && msg="$msg unexpected invented-shape url(s): $(printf '%s' "$unexpected" | tr '\n' ' ');"
+    [ -n "$missing_exception" ] && msg="$msg documented #c1 exception missing: $(printf '%s' "$missing_exception" | tr '\n' ' ');"
+    bad "$msg"
+  fi
 fi
 
 # ============================================================================

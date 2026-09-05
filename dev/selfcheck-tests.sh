@@ -223,6 +223,11 @@ p_4_28()            { edit "$1/skills/issue-cycle/SKILL.md" 's/harness-plan-bind
 p_4_29_drift()      { edit "$1/bin/find-implementation-work.sh" 's/has_harness_marker/has_harness_flag/g'; }
 p_4_29_extraction() { edit "$1/bin/find-planning-work.sh" 's/has_plan_marker/HAS_PLAN_MARKER/g; s/has_harness_marker/HAS_HARNESS_MARKER/g'; }
 p_4_30()            { edit "$1/skills/issue-cycle/SKILL.md" 's/covered_by_approval/coveredby_approval/'; }
+p_4_31()            { edit "$1/dev/planning-tests.sh" 's/#issuecomment-7001/#c9/'; }
+p_4_31_extraction() { edit "$1/dev/planning-tests.sh" 's/example\.invalid/example.test/g'; }
+p_4_31_prose() {
+  printf '      # historical: this fixture used to carry the old `#c1` shape\n' | append "$1/dev/planning-tests.sh"
+}
 p_4_20_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(gh pr edit:\*\)"'; }
 p_4_20_orphan_grant() {
   local f="$1/templates/repo-settings.json"
@@ -316,6 +321,9 @@ cases=(
   "4.29-drift|4.29|p_4_29_drift|rename has_harness_marker to has_harness_flag in bin/find-implementation-work.sh only"
   "4.29-extraction|4.29|p_4_29_extraction|rename both has_*marker field declarations in bin/find-planning-work.sh so the gate's extraction comes back empty"
   "4.30|4.30|p_4_30|rename covered_by_approval in skills/issue-cycle/SKILL.md only, so the merge floor's reader and bin/find-implementation-work.sh's writer disagree"
+  "4.31|4.31|p_4_31|rewrite one normalised fixture comment url in dev/planning-tests.sh back to an invented #c<n> fragment"
+  "4.31-extraction|4.31|p_4_31_extraction|rewrite the fixture url host in dev/planning-tests.sh so the gate's extraction comes back empty"
+  "4.31-prose||p_4_31_prose|control: a #-comment mentioning the invented \`#c1\` shape in prose is not flagged"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
   "5.3|5.3|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again"

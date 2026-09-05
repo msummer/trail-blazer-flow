@@ -252,8 +252,30 @@ mk_fixture() {
 # `https://github.com/msummer/trail-blazer-flow/issues/192#issuecomment-5489844091`,
 # `...#issuecomment-5549839439`, and `...#issuecomment-5550011581` — confirming each comment url
 # ends `#issuecomment-<digits>`, the shape the new plan_comment_id parse in
-# bin/find-implementation-work.sh relies on and the shape the nine retrofitted covered fixtures
-# below now use in place of the old, invented `...#c<k>` form.
+# bin/find-implementation-work.sh relies on. #192 retrofitted that shape onto the nine covered
+# fixtures that already existed at the time; #220 finished the job and normalised every OTHER
+# fixture comment url in this file the same way, leaving exactly one deliberate exception (see
+# the id-scheme note immediately below).
+#
+# FIXTURE COMMENT-URL ID SCHEME (#220): every fixture comment url in this file is
+# `https://example.invalid/<issue>#issuecomment-<id>`, where <id> is a synthetic number drawn
+# from a per-workstream block — 5000 = #192's retrofit of the fixtures that already existed,
+# 6000 = #192's own new cases, 7000 = #220's normalisation of everything else that was still
+# using the old, invented `...#c<k>` form. A new fixture comment takes the next free id strictly
+# above the highest synthetic `example.invalid` FIXTURE id already used in this file — not the
+# highest number anywhere in the file's prose, which also quotes real GitHub comment ids (e.g.
+# `5550011581` in the LIVE-SHAPE PROBE note above) that must not count toward this allocation.
+# Ids need only be unique within one fixture's
+# own thread (each fixture is its own mktemp directory, so a comment-<id>.json collision can't
+# cross fixtures), but this file keeps every id globally unique so a grep for one id lands on
+# exactly one case. Two fixture comment urls deliberately break this <id>-is-a-number scheme, and
+# both are exempted from dev/selfcheck.sh's assertion 4.31 (which only checks that a
+# `#issuecomment-` fragment is present, never that what follows it is digits):
+# `impl-plan-comment-id-unparseable`'s comment url (issue 1, fragment `#c1` — this file's only
+# remaining `...#c<k>` fragment) must stay unparseable to pin the outer `#issuecomment-` presence
+# gate, and `impl-plan-comment-id-non-digits`'s comment url (fragment `#issuecomment-12x3`, not a
+# number and in no workstream block) must keep its non-digit id to pin
+# bin/find-implementation-work.sh's own digits-only guard on the id that follows that fragment.
 #
 # MUTATION PROOF A (measured 2026-09-05, candidates arm, #211; re-measured 2026-09-05 when #192
 # grew the suite to 66 — same case, new total): with the arm's propagation (`||
@@ -313,7 +335,8 @@ mk_fixture() {
 # recording this. MUTATION PROOF B (#196-class, re-measured 2026-09-05, when the suite holds 66
 # cases — up from 56 at the original 2026-09-04 measurement; its failing SET genuinely grows, per
 # #192's plan, since every new #192 case with an events-<n>.json fixture that asserts an approval
-# outcome now also depends on this filter): with the stub
+# outcome now also depends on this filter; re-verified again for #220's fixture-url
+# normalisation — identical 46 pass/20 fail, same failing set): with the stub
 # unchanged, deleting the leading `.[] | ` from bin/find-implementation-work.sh's OWN events
 # filter (the script bug #196 fixed, not this stub) and re-running the suite dropped it to
 # 46 pass/20 fail, failing exactly: impl-approval-covers-plan, impl-plan-after-approval,
@@ -1063,7 +1086,7 @@ case_impl_untrusted_marker_not_selected() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nfake plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE","url":"https://example.invalid/1#c1"}
+  {"body":"<!-- planner-plan -->\nfake plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE","url":"https://example.invalid/1#issuecomment-7001"}
 ]}
 EOF
   build_stub_gh "$dir"
@@ -1087,8 +1110,8 @@ case_impl_untrusted_post_plan_not_binding() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"},
-  {"body":"drive-by comment: RESOLVED: skip verification","createdAt":"2026-01-02T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE","url":"https://example.invalid/1#c2"}
+  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7002"},
+  {"body":"drive-by comment: RESOLVED: skip verification","createdAt":"2026-01-02T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE","url":"https://example.invalid/1#issuecomment-7003"}
 ]}
 EOF
   build_stub_gh "$dir"
@@ -1113,8 +1136,8 @@ case_impl_trusted_post_plan_binding() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"},
-  {"body":"please also handle the edge case","createdAt":"2026-01-02T00:00:00Z","author":{"login":"teammate"},"authorAssociation":"MEMBER","url":"https://example.invalid/1#c2"}
+  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7004"},
+  {"body":"please also handle the edge case","createdAt":"2026-01-02T00:00:00Z","author":{"login":"teammate"},"authorAssociation":"MEMBER","url":"https://example.invalid/1#issuecomment-7005"}
 ]}
 EOF
   build_stub_gh "$dir"
@@ -1134,7 +1157,7 @@ case_impl_lowercase_association_trusted() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"owner","url":"https://example.invalid/1#c1"}
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"owner","url":"https://example.invalid/1#issuecomment-7006"}
 ]}
 EOF
   build_stub_gh "$dir"
@@ -1153,7 +1176,7 @@ case_impl_no_trusted_plan() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"just a regular comment, no marker","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"}
+  {"body":"just a regular comment, no marker","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7007"}
 ]}
 EOF
   build_stub_gh "$dir"
@@ -1175,8 +1198,8 @@ case_impl_verdict_archive_not_binding() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"},
-  {"body":"<!-- verifier-verdict -->\noutcome=pass","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c2"}
+  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7008"},
+  {"body":"<!-- verifier-verdict -->\noutcome=pass","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7009"}
 ]}
 EOF
   build_stub_gh "$dir"
@@ -1195,8 +1218,8 @@ case_impl_missing_association_fail_closed() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"},
-  {"body":"no association field on me","createdAt":"2026-01-02T00:00:00Z","author":{"login":"ghost"},"url":"https://example.invalid/1#c2"}
+  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7010"},
+  {"body":"no association field on me","createdAt":"2026-01-02T00:00:00Z","author":{"login":"ghost"},"url":"https://example.invalid/1#issuecomment-7011"}
 ]}
 EOF
   build_stub_gh "$dir"
@@ -1214,7 +1237,11 @@ EOF
 # reduction at find-implementation-work.sh:89, which would silently hand the implementer the
 # superseded v1 plan), and trusted_post_plan must contain ONLY the feedback posted after that
 # newer plan — the earlier feedback (posted between v1 and v2) must NOT appear there (kills
-# deletion of the `select(.createdAt > $lastPlan)` ordering filter at :103).
+# deletion of the `select(.createdAt > $lastPlan)` ordering filter at :103). MUTATION PROOF
+# (measured 2026-09-05, re-verified after #220's fixture-url normalisation): deleting that
+# `select(.createdAt > $lastPlan)` clause and re-running the suite dropped it to 65 pass/1 fail,
+# failing exactly this case — proving the `select(.url == ".../7013")] | length' '0'` assertion
+# above is not vacuous — reverted immediately after recording this.
 case_impl_newest_plan_selected() {
   local dir; dir="$(mk_fixture impl-newest-plan-selected)"
   cat > "$dir/ready.json" <<'EOF'
@@ -1222,20 +1249,20 @@ case_impl_newest_plan_selected() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"},
-  {"body":"early feedback, posted before the revision","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c2"},
-  {"body":"<!-- planner-plan -->\nplan v2 (revised)","createdAt":"2026-01-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c3"},
-  {"body":"late feedback, posted after the revision","createdAt":"2026-01-04T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c4"}
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7012"},
+  {"body":"early feedback, posted before the revision","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7013"},
+  {"body":"<!-- planner-plan -->\nplan v2 (revised)","createdAt":"2026-01-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7014"},
+  {"body":"late feedback, posted after the revision","createdAt":"2026-01-04T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7015"}
 ]}
 EOF
   build_stub_gh "$dir"
   run_implementation "$dir"
   expect_rc 0
   expect_jq '.plan_selection[0].plan.createdAt' '"2026-01-03T00:00:00Z"'
-  expect_jq '.plan_selection[0].plan.url' '"https://example.invalid/1#c3"'
+  expect_jq '.plan_selection[0].plan.url' '"https://example.invalid/1#issuecomment-7014"'
   expect_jq '.plan_selection[0].trusted_post_plan | length' '1'
-  expect_jq '.plan_selection[0].trusted_post_plan[0].url' '"https://example.invalid/1#c4"'
-  expect_jq '[.plan_selection[0].trusted_post_plan[] | select(.url == "https://example.invalid/1#c2")] | length' '0'
+  expect_jq '.plan_selection[0].trusted_post_plan[0].url' '"https://example.invalid/1#issuecomment-7015"'
+  expect_jq '[.plan_selection[0].trusted_post_plan[] | select(.url == "https://example.invalid/1#issuecomment-7013")] | length' '0'
 }
 
 # impl-fetch-failure-survives (regression control) — the stub gh fails `issue view` for ready
@@ -1248,7 +1275,7 @@ EOF
   # deliberately no issue-1.json — simulates `gh issue view 1` failing
   cat > "$dir/issue-2.json" <<'EOF'
 {"number":2,"title":"Issue two","url":"https://example.invalid/2","comments":[
-  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/2#c1"}
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/2#issuecomment-7016"}
 ]}
 EOF
   build_stub_gh "$dir"
@@ -1304,19 +1331,24 @@ EOF
 # failure (a later plan revision must not silently inherit an earlier approval). #192:
 # expect_warn_count "plan comment was edited" 0 pins that the new plan-comment-edit check is
 # never reached (and so no gh api .../issues/comments/<id> call is made) on a branch that already
-# concludes uncovered for another reason — this fixture's issue-1.json still carries the old,
-# invented `#c2` url with no matching comment fixture. MUTATION PROOF (measured 2026-09-05):
-# injecting a second, leaked "plan comment was edited" warn line into the script's
-# plan-after-approval branch itself (simulating a copy-paste bug that fires the new check's warn
-# text on the wrong branch while the final `reason` still legitimately ends up
-# "plan-after-approval") and re-running the suite (re-measured 2026-09-05, when the suite holds
-# 66 cases) dropped it to 65 pass/1 fail, failing exactly:
-# impl-plan-after-approval — reverted immediately after recording this. A cruder mutant (forcing
-# every issue through the branch that runs the new check at all, via `if false; then` on the
-# plan_created/approved_at compare) also drops this case, but via the PRE-EXISTING `reason`
-# assertion (this fixture's id-less url makes the new check fail closed to
-# plan-edit-unreadable instead), not the new expect_warn_count line — recorded for completeness,
-# not claimed as this line's own proof.
+# concludes uncovered for another reason — this fixture's issue-1.json now carries a normalised
+# (#220), parseable `#issuecomment-7017` url with no matching comment-7017.json fixture; the
+# never-reached check makes that fixture's absence irrelevant. MUTATION PROOF (re-measured
+# 2026-09-05, after #220's url normalisation): injecting a second, leaked "plan comment was
+# edited" warn line into the script's plan-after-approval branch itself (simulating a copy-paste
+# bug that fires the new check's warn text on the wrong branch while the final `reason` still
+# legitimately ends up "plan-after-approval") and re-running the suite (66 cases) dropped it to
+# 65 pass/1 fail, failing exactly: impl-plan-after-approval — reverted immediately after
+# recording this. A cruder mutant (forcing every issue through the branch that runs the new check
+# at all, via `if false; then` on the plan_created/approved_at compare) also drops this case
+# (re-measured 2026-09-05: still 65 pass/1 fail, failing exactly impl-plan-after-approval), but
+# via the PRE-EXISTING `reason` assertion — with the url now parseable, the route to that same
+# outcome changed: `plan_comment_id` resolves to "7017" (no longer empty), so the mutant sends
+# execution into a REAL `gh api .../issues/comments/7017` call, which the stub 404s (no
+# comment-7017.json fixture in this directory), yielding "could not read the plan comment's
+# updated_at" instead of the id-less-url guard's "carries no #issuecomment-<id>" — but the final
+# `reason` is still "plan-edit-unreadable" either way, so this case's own assertions do not
+# distinguish the two routes; recorded for completeness, not claimed as this line's own proof.
 case_impl_plan_after_approval() {
   local dir; dir="$(mk_fixture impl-plan-after-approval)"
   cat > "$dir/ready.json" <<'EOF'
@@ -1324,7 +1356,7 @@ case_impl_plan_after_approval() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nplan v2 (revised after approval)","createdAt":"2026-01-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c2"}
+  {"body":"<!-- planner-plan -->\nplan v2 (revised after approval)","createdAt":"2026-01-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7017"}
 ]}
 EOF
   cat > "$dir/events-1.json" <<'EOF'
@@ -1382,7 +1414,7 @@ case_impl_other_label_event_ignored() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"}
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7018"}
 ]}
 EOF
   cat > "$dir/events-1.json" <<'EOF'
@@ -1404,7 +1436,9 @@ EOF
 # exits 0 with a plan_selection entry for a second, healthy issue (fail-closed per-issue, not
 # per-run). Issue #2's plan comment is retrofitted for #192 (see impl-approval-covers-plan's
 # comment) — it is the one that reaches "covered" here; issue #1 fails closed before the new
-# check is ever reached, so its comment url is deliberately left at the old `#c1` shape.
+# plan-comment-edit check is ever reached (the events lookup itself fails first), so its comment
+# url is normalised (#220, `#issuecomment-7019`) like every other fixture in this file — the url
+# shape is irrelevant to this case's outcome either way.
 case_impl_approval_events_unreadable() {
   local dir; dir="$(mk_fixture impl-approval-events-unreadable)"
   cat > "$dir/ready.json" <<'EOF'
@@ -1412,7 +1446,7 @@ case_impl_approval_events_unreadable() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"}
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7019"}
 ]}
 EOF
   : > "$dir/reject-events-1"
@@ -1453,7 +1487,7 @@ case_impl_approval_events_filter_error() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"}
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7020"}
 ]}
 EOF
   cat > "$dir/events-1.json" <<'EOF'
@@ -1488,7 +1522,7 @@ case_impl_no_plan_no_binding() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"just a regular comment, no marker","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"}
+  {"body":"just a regular comment, no marker","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7021"}
 ]}
 EOF
   build_stub_gh "$dir"
@@ -1577,7 +1611,8 @@ EOF
 # approval): covers_plan false, reason plan-edited-after-approval, binding_line null, counted,
 # warned exactly once — this is the issue's own named user-visible failure: a maintainer edits
 # the approved plan comment in place after approving it, and every identity/timing check still
-# passes. MUTATION PROOF (re-measured 2026-09-05, when the suite holds 66 cases): flipping the new
+# passes. MUTATION PROOF (re-measured 2026-09-05, when the suite holds 66 cases; re-verified again
+# for #220's fixture-url normalisation — identical 55 pass/11 fail, same failing set): flipping the new
 # check's comparison operator (`elif [[ "$plan_updated" > "$approved_at" ]]` ->
 # `elif [[ "$plan_updated" < "$approved_at" ]]`) and re-running the suite dropped it to 55
 # pass/11 fail, failing exactly: impl-approval-covers-plan, impl-relabel-newest-wins,
@@ -1821,9 +1856,11 @@ EOF
   expect_err "plan edit state unreadable"
 }
 
-# impl-plan-comment-id-unparseable — the plan comment's url deliberately keeps the OLD, invented
-# `#c1` shape (no #issuecomment-<id> suffix): plan_comment_id parses to empty, so the script
-# fails closed WITHOUT ever calling `gh api .../issues/comments/...` at all — pinned by
+# impl-plan-comment-id-unparseable — the plan comment's url deliberately keeps the old, invented
+# `#c1` shape (no #issuecomment-<id> suffix) — since #220 normalised every other fixture comment
+# url in this file to GitHub's real shape, this is now the file's SINGLE documented exception
+# (and the one literal assertion 4.31 allow-lists): plan_comment_id parses to empty, so the
+# script fails closed WITHOUT ever calling `gh api .../issues/comments/...` at all — pinned by
 # `expect_err "carries no"`, the SPECIFIC id-parse-guard warn stem, not merely the shared
 # plan-edit-unreadable outcome the other two unreadable routes also produce. MUTATION PROOF
 # (re-measured 2026-09-05, when the suite holds 66 cases): neutering just the
@@ -1879,7 +1916,8 @@ EOF
 # dropped it to 65 pass/1 fail, failing exactly: impl-plan-comment-id-non-digits — with the guard
 # relaxed, plan_comment_id becomes the literal string "12x3", the script calls
 # `gh api .../issues/comments/12x3 --jq '.updated_at // empty'`, and the stub's own id-extraction
-# regex (`sed -nE 's#.*/issues/comments/([0-9]+).*#\1#p'`, ~line 449) greedily captures the
+# regex (`sed -nE 's#.*/issues/comments/([0-9]+).*#\1#p'`, in the stub's
+# `*"/issues/comments/"*)` arm) greedily captures the
 # LEADING digits "12" (its trailing `.*` absorbs the non-digit "x3"), so the stub looks for a
 # `comment-12.json` fixture that does not exist in this directory and exits 1 — the script prints
 # "could not read the plan comment's updated_at" instead of "carries no", which is exactly what
@@ -2006,8 +2044,8 @@ case_impl_audit_comment_not_binding() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"},
-  {"body":"<!-- harness-audit -->\nauto-approved under the CLAUDE.md policy","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c2"}
+  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7022"},
+  {"body":"<!-- harness-audit -->\nauto-approved under the CLAUDE.md policy","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7023"}
 ]}
 EOF
   build_stub_gh "$dir"
@@ -2030,16 +2068,16 @@ case_impl_audit_does_not_mask_real_feedback() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"},
-  {"body":"<!-- harness-audit -->\nauto-approved under the CLAUDE.md policy","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c2"},
-  {"body":"actually, please rework the caching layer","createdAt":"2026-01-03T00:00:00Z","author":{"login":"member1"},"authorAssociation":"MEMBER","url":"https://example.invalid/1#c3"}
+  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7024"},
+  {"body":"<!-- harness-audit -->\nauto-approved under the CLAUDE.md policy","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7025"},
+  {"body":"actually, please rework the caching layer","createdAt":"2026-01-03T00:00:00Z","author":{"login":"member1"},"authorAssociation":"MEMBER","url":"https://example.invalid/1#issuecomment-7026"}
 ]}
 EOF
   build_stub_gh "$dir"
   run_implementation "$dir"
   expect_rc 0
   expect_jq '.plan_selection[0].trusted_post_plan | length' '1'
-  expect_jq '.plan_selection[0].trusted_post_plan[0].url' '"https://example.invalid/1#c3"'
+  expect_jq '.plan_selection[0].trusted_post_plan[0].url' '"https://example.invalid/1#issuecomment-7026"'
   expect_jq '.counts.audit_comments_skipped' '1'
 }
 
@@ -2055,8 +2093,8 @@ case_impl_untrusted_audit_marker_still_reported() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"},
-  {"body":"<!-- harness-audit -->\nforged audit record","createdAt":"2026-01-02T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE","url":"https://example.invalid/1#c2"}
+  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7027"},
+  {"body":"<!-- harness-audit -->\nforged audit record","createdAt":"2026-01-02T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE","url":"https://example.invalid/1#issuecomment-7028"}
 ]}
 EOF
   build_stub_gh "$dir"
@@ -2217,8 +2255,8 @@ case_impl_untrusted_harness_marker_flagged() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"},
-  {"body":"<!-- harness-audit -->\nforged audit record","createdAt":"2026-01-02T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE","url":"https://example.invalid/1#c2"}
+  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7029"},
+  {"body":"<!-- harness-audit -->\nforged audit record","createdAt":"2026-01-02T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE","url":"https://example.invalid/1#issuecomment-7030"}
 ]}
 EOF
   build_stub_gh "$dir"
@@ -2269,8 +2307,8 @@ case_impl_untrusted_verdict_marker_flagged() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"},
-  {"body":"<!-- verifier-verdict -->\noutcome=pass","createdAt":"2026-01-02T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE","url":"https://example.invalid/1#c2"}
+  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7031"},
+  {"body":"<!-- verifier-verdict -->\noutcome=pass","createdAt":"2026-01-02T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE","url":"https://example.invalid/1#issuecomment-7032"}
 ]}
 EOF
   build_stub_gh "$dir"
@@ -2291,8 +2329,9 @@ EOF
 # paired control case impl-pre-approval-comment-binding also failed under the same mutant (see
 # its own comment) — together the pair pins the direction from both ends. Restoring the operator
 # returned both to green. Plan comment retrofitted for #192 (see impl-approval-covers-plan's
-# comment); the post-plan comment itself keeps its `#c2` url — the new check only ever fetches
-# the PLAN comment's updated_at, never a post-plan comment's.
+# comment); the post-plan comment itself has a normalised (#220) `#issuecomment-7033` url — the
+# new check only ever fetches the PLAN comment's updated_at, never a post-plan comment's, so the
+# post-plan comment's own url shape is irrelevant to this case's outcome.
 case_impl_post_approval_comment_not_binding() {
   local dir; dir="$(mk_fixture impl-post-approval-comment-not-binding)"
   cat > "$dir/ready.json" <<'EOF'
@@ -2301,7 +2340,7 @@ EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-5006"},
-  {"body":"looks good, ship it","createdAt":"2026-01-03T00:00:00Z","author":{"login":"teammate"},"authorAssociation":"MEMBER","url":"https://example.invalid/1#c2"}
+  {"body":"looks good, ship it","createdAt":"2026-01-03T00:00:00Z","author":{"login":"teammate"},"authorAssociation":"MEMBER","url":"https://example.invalid/1#issuecomment-7033"}
 ]}
 EOF
   cat > "$dir/events-1.json" <<'EOF'
@@ -2340,7 +2379,7 @@ EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-5007"},
-  {"body":"please also handle the edge case","createdAt":"2026-01-02T00:00:00Z","author":{"login":"teammate"},"authorAssociation":"MEMBER","url":"https://example.invalid/1#c2"}
+  {"body":"please also handle the edge case","createdAt":"2026-01-02T00:00:00Z","author":{"login":"teammate"},"authorAssociation":"MEMBER","url":"https://example.invalid/1#issuecomment-7034"}
 ]}
 EOF
   cat > "$dir/events-1.json" <<'EOF'
@@ -2374,7 +2413,7 @@ EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-5008"},
-  {"body":"same-second follow-up","createdAt":"2026-01-02T00:00:00Z","author":{"login":"teammate"},"authorAssociation":"MEMBER","url":"https://example.invalid/1#c2"}
+  {"body":"same-second follow-up","createdAt":"2026-01-02T00:00:00Z","author":{"login":"teammate"},"authorAssociation":"MEMBER","url":"https://example.invalid/1#issuecomment-7035"}
 ]}
 EOF
   cat > "$dir/events-1.json" <<'EOF'
@@ -2407,8 +2446,8 @@ case_impl_post_approval_unknown_approval() {
 EOF
   cat > "$dir/issue-1.json" <<'EOF'
 {"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
-  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#c1"},
-  {"body":"please also handle the edge case","createdAt":"2026-01-02T00:00:00Z","author":{"login":"teammate"},"authorAssociation":"MEMBER","url":"https://example.invalid/1#c2"}
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7036"},
+  {"body":"please also handle the edge case","createdAt":"2026-01-02T00:00:00Z","author":{"login":"teammate"},"authorAssociation":"MEMBER","url":"https://example.invalid/1#issuecomment-7037"}
 ]}
 EOF
   # deliberately no events-1.json — no plan-approved labeling event found
@@ -2460,7 +2499,7 @@ EOF
   cat > "$dir/issue-7.json" <<'EOF'
 {"number":7,"title":"Not in the ready query","url":"https://example.invalid/7","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/7#issuecomment-5009"},
-  {"body":"one more thing","createdAt":"2026-01-03T00:00:00Z","author":{"login":"teammate"},"authorAssociation":"MEMBER","url":"https://example.invalid/7#c2"}
+  {"body":"one more thing","createdAt":"2026-01-03T00:00:00Z","author":{"login":"teammate"},"authorAssociation":"MEMBER","url":"https://example.invalid/7#issuecomment-7038"}
 ]}
 EOF
   cat > "$dir/events-7.json" <<'EOF'
