@@ -21,7 +21,7 @@ jobs:
 
   selfcheck-macos:
     runs-on: macos-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Apple's /bin/bash is 3.2.57 (last GPLv2 bash). Put /bin first so bare `bash` — including
