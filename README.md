@@ -203,10 +203,14 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    comment posted after the `plan-approved` label is `covered_by_approval: false`, reported to the
    human instead of folded in as a binding decision, per #194 — taken from that fresh, per-issue
    run, not read from the thread by hand) + `LESSONS.md` entries.
-   **Plan-binding gate (#174):** the approval must cover the specific plan comment selected — the
-   newest `plan-approved` labeling event must not be earlier than that comment; if it doesn't
-   (e.g. the plan was revised after approval), the issue is **not dispatched**: `plan-approved` is
-   removed and an audit comment posted, naming why. Missing a BLOCKING answer → don't dispatch;
+   **Plan-binding gate (#174, split by verdict since #219):** the approval must cover the specific
+   plan comment selected — the newest `plan-approved` labeling event must not be earlier than that
+   comment; if it demonstrably doesn't (e.g. the plan was revised after approval), the issue is
+   **not dispatched**: `plan-approved` is removed and a revision-triggering comment posted, naming
+   why. If the verdict is merely **unknown** instead — a GitHub API call failed — the issue is
+   still not dispatched, but nothing destructive happens: no label is removed, no
+   revision-triggering comment is posted; a `<!-- harness-audit -->`-marked comment records the
+   hold and the issue stays queued for the next run. Missing a BLOCKING answer → don't dispatch;
    ask the human.
    Before reporting, the subagent runs a mandatory evidence pass — sweeping the repo for every
    claim its diff falsifies, mutation-checking each new or rewritten test, pasting every number
@@ -237,11 +241,15 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    tree itself, which is untouched), stages everything, **reconciles the staged list against the
    report's "Files changed"** (unexplained files = blocker, not a commit), **re-validates the
    plan binding** (#174: a fresh `find-implementation-work.sh --issue <n>` run's `binding_line`
-   must still match the one captured before dispatch — otherwise no commit, no push, the blocked
-   path instead, and `plan-approved` removed) **and diffs that same fresh run's trusted
-   post-approval comments** (#198) against the set captured before dispatch — a trusted comment
-   that arrived while the implementer worked is surfaced (never binding, never holds the push) in
-   the PR body and the run summary — commits once, pushes,
+   must still match the one captured before dispatch — split by verdict since #219: if it
+   demonstrably doesn't (`covers_plan: false`), no commit, no push, the blocked path instead, and
+   `plan-approved` removed; if the verdict is unknown instead, no commit, no push, but nothing
+   destructive — `plan-approved` stays, the already-staged tree is committed as a `wip: checkpoint
+   binding-recheck` commit so the branch resumes next run, and a `<!-- harness-audit -->`-marked
+   comment records the hold) **and diffs that same fresh run's trusted post-approval comments**
+   (#198) against the set captured before dispatch — a trusted comment that arrived while the
+   implementer worked is surfaced (never binding, never holds the push) in the PR body when a PR
+   exists, or in the blocker/hold comment otherwise, and the run summary — commits once, pushes,
    opens the PR (`Closes #n`, verification results, **the verifier's own closing status line
    pasted verbatim** — never one the orchestrator composes on its behalf — the re-validated
    `binding_line` pasted verbatim too, a `Mutation probe:`
@@ -989,7 +997,20 @@ issue, not per ready issue. Consumer tooling reading this script's JSON may newl
 as still covered, now waits for a human to re-approve it (remove and re-add `plan-approved`)
 instead of being built silently — the same "waits for a human" posture the v2.5.0 approval-binding
 transition (and v2.5.1's fix to it) already established for a plan revised after approval, just
-for one more way a plan can outrun its approval.
+for one more way a plan can outrun its approval. **Behaviour also widens for an unknown approval
+verdict (#219).** Every prior version treated `approval.covers_plan` values `false` and `null`
+identically: an unreadable GitHub API call (`reason: "approval-unreadable"` or
+`"plan-edit-unreadable"`, or a `plan_selection` entry missing entirely) triggered the same
+destructive remedy as a demonstrably-uncovered plan — `plan-approved` removed and a
+revision-triggering comment posted — so one transient outage during an unattended run could strip
+approval from every ready issue. The `issue-implementer` skill now splits its remedy by verdict:
+a demonstrably-uncovered plan (`covers_plan: false`) is byte-identical to before; an *unknown*
+verdict instead holds non-destructively — no label change, no revision-triggering comment, one
+`<!-- harness-audit -->`-marked comment recording the hold, and the issue stays queued for the
+next run's fresh check, both before dispatch (step 2a) and again before push (step 2e, where the
+already-staged tree is checkpointed as `wip: checkpoint binding-recheck` rather than lost). No
+new grant, label, script, or baseline step; `bin/find-implementation-work.sh`'s tri-state and its
+`counts` keys are unchanged — only the `issue-implementer` skill's remedy changes.
 
 ## The per-repo settings file (required)
 
@@ -1237,13 +1258,27 @@ event un-covers the plan too (`reason: "plan-edited-after-approval"`, no `bindin
 extra read-only API call made only on this otherwise-covered branch), the implementer's gate and
 the merge floor holding exactly as they do for `plan-after-approval`, with no changes of their
 own; an edit made *before* approval stays covered on purpose (the approver read the edited text);
-an unreadable edit-state lookup fails closed (`reason: "plan-edit-unreadable"`). When the plan
-covers, the script emits a `binding_line` naming the specific plan comment and approval
+an unreadable edit-state lookup fails closed to `covers_plan: null`, an **unknown** verdict
+(`reason: "plan-edit-unreadable"`), the same tri-state `approval-unreadable` already used. When
+the plan covers, the script emits a `binding_line` naming the specific plan comment and approval
 timestamp; the `issue-implementer` skill revalidates this **before dispatch and again before
-push** — a same-run revision (or in-place edit) landing in between un-covers the plan, and the
-skill removes `plan-approved` and returns the issue to review rather than build a plan nobody
-approved — and the `issue-cycle` merge pass revalidates it once more, requiring that same
-`binding_line` verbatim in the PR body before an autonomous merge. Honest limit: like verdict
+push**, splitting its remedy by verdict since #219: a same-run revision (or in-place edit)
+landing in between and demonstrably un-covering the plan (`covers_plan: false`) makes the skill
+remove `plan-approved` and return the issue to review rather than build a plan nobody approved;
+an **unknown** verdict — a GitHub API call failed, so a same-run outage is indistinguishable from
+one that revoked nothing — instead holds non-destructively: no label is touched; before dispatch,
+the issue is simply left undispatched for the next run to re-check; before push, the
+already-staged, already-implemented tree is checkpointed (`wip: checkpoint binding-recheck`)
+rather than discarded. Either way one `<!-- harness-audit -->`-marked comment records the hold,
+and the issue stays queued for the next run's fresh check rather than being bounced back to the
+human. One accepted consequence of the pre-push hold: a held issue keeps `plan-approved`, gains no
+`impl-blocked`,
+and so is reported as a `contradiction` by `issue-cycle`'s closing reconciliation (its chain
+otherwise shows the implementer complete and the verifier passing) — expected, not a bug, and
+`issue-cycle` treats a `contradiction` as "report with evidence, unfinished," never an escalation.
+The `issue-cycle` merge pass revalidates the covered case once more, requiring that same
+`binding_line` verbatim in the PR body before an autonomous merge — the held case never reaches a
+PR, so the merge pass never sees it. Honest limit: like verdict
 provenance above, all three checkpoints (the discovery script, the PR body, the merge pass) are
 orchestrator-written and share one `gh` identity, so this raises the cost of asserting an approval
 that didn't happen rather than eliminating it; the edit check itself is a **tripwire, not a

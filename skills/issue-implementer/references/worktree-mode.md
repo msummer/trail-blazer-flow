@@ -53,8 +53,10 @@ the branch exists and already carries the work, so a resumed dispatch is exactly
 issue-implementer skill's step 2c's relaunch with `-C <worktree>` in front of the git commands.
 
 **Every worktree reaches a terminal state before the swarm ends** — PR open with a CI outcome
-recorded, `impl-blocked` via the issue-implementer skill's step 2f, or a stage escalated as
-failed after the ladder — and every one leaves a status line and a ledger record. Exhausting the
+recorded, `impl-blocked` via the issue-implementer skill's step 2f, a stage escalated as failed
+after the ladder, or held on an unknown approval-binding verdict per the issue-implementer
+skill's step 2e (#219, a `wip: checkpoint binding-recheck` commit with `plan-approved` untouched,
+not a stage failure) — and every one leaves a status line and a ledger record. Exhausting the
 ladder or the resume cap in one worktree routes that issue to the blocked path and leaves the
 rest of the swarm running; it never ends the swarm. A worktree you launched and never accounted
 for is exactly the failure this loop exists to prevent.
@@ -177,9 +179,10 @@ e. **As each implementer completes, run the issue-implementer skill's steps 2d�
    `git -C <worktree> push -u origin "claude/<number>-<slug>"`.
 
 f. **Clean up each worktree once its issue is terminal** — its PR is open *and* its deferred CI
-   watch (plus any CI-fix attempt) has drained, or it took the blocked path and its `wip:` commit
-   exists. Removing it earlier breaks the CI-fix attempt, which re-dispatches into it. The branch
-   lives on in the repo:
+   watch (plus any CI-fix attempt) has drained, it took the blocked path and its `wip:` commit
+   exists, or it held on an unknown approval-binding verdict and its `wip: checkpoint
+   binding-recheck` commit exists (#219). Removing it earlier breaks the CI-fix attempt, which
+   re-dispatches into it. The branch lives on in the repo:
 ```bash
 git worktree remove "../<repo-dirname>-wt-<number>"
 ```

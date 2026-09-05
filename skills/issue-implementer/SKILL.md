@@ -104,7 +104,8 @@ reported, and always for merge — keeping `issue-cycle`'s ledger reconciliation
 All checkpoints keep the `wip:` prefix so branch classification (step 2b) stays a simple grep:
 
 - `wip: checkpoint <stage> (#<n>)` — a stage-boundary checkpoint (after the implementer returns
-  `complete`, after each kickback round, after the CI-fix dispatch).
+  `complete`, after each kickback round, after the CI-fix dispatch, after step 2e holds on an
+  unknown approval-binding verdict — `binding-recheck` — see #219).
 - `wip: <stage> died (#<n>)` — a hard death: the retry ladder exhausted with no usable report.
 - `wip: context exhausted (#<n>)` — a clean early exit (`status: incomplete`).
 - `wip: interrupted run (#<n>)` — pre-flight crash recovery (step 0).
@@ -240,16 +241,27 @@ verbatim in the step 3 summary instead of folding them in (`has_plan_marker: tru
 means someone forged a plan comment without repo authority; `has_harness_marker: true` means
 someone forged a harness-authored record — call either out too).
 
-**Approval-binding gate (#174).** If `approval.covers_plan` is not `true` — including `plan: null`
-(`reason: no-plan`) and this issue having **no** `plan_selection` entry at all (its `gh issue
-view` failed inside the discovery script) — do **not** dispatch: `gh issue edit <number>
---remove-label plan-approved`, post an audit comment (normal comment, no marker — it is
-deliberately revision-triggering feedback the next planner run should act on) naming the reason
-(`approval.reason`), the plan comment's URL if there is one, and the approval timestamp if there
-is one (`approval.approved_at`), then record the skip and its reason for step 3. Never fall back to
-reading the thread by hand to approve one anyway. If any `trusted_post_plan` comment contradicts
-the plan outright — covered or uncovered by the approval alike — treat the issue as mislabelled
-and ask the human instead of dispatching.
+**Approval-binding gate (#174, split by verdict since #219).** If `approval.covers_plan` is not
+`true`, never dispatch — unconditionally, regardless of which verdict below applies:
+
+- **`false` — the approval demonstrably does not cover this plan** (`reason` one of `no-plan`,
+  `plan-url-missing`, `no-approval-event`, `plan-after-approval`, `plan-edited-after-approval`):
+  `gh issue edit <number> --remove-label plan-approved`, then post a deliberately unmarked,
+  revision-triggering comment (no marker — the next planner run should act on it) naming the
+  reason (`approval.reason`), the plan comment's URL if there is one, and the approval timestamp
+  if there is one (`approval.approved_at`).
+- **unknown — the verdict is unknown because a GitHub API call failed**, covering `reason`
+  `approval-unreadable` or `plan-edit-unreadable`, this issue having **no** `plan_selection` entry
+  at all (its `gh issue view` failed inside the discovery script), or the discovery script itself
+  exiting non-zero or returning unparseable JSON: an outage is not a withdrawn approval — change
+  **no** labels and post **no** revision-triggering comment. Post one comment whose first line is
+  exactly `<!-- harness-audit -->`, naming the reason and stating that no labels were changed and
+  the issue stays queued for the next run.
+
+Record the skip, its reason, and which branch ran for step 3. Never fall back to reading the
+thread by hand to approve one anyway. If any `trusted_post_plan` comment contradicts the plan
+outright — covered or uncovered by the approval alike — treat the issue as mislabelled and ask
+the human instead of dispatching.
 
 b. **Branch off a fresh default branch:**
 ```bash
@@ -362,13 +374,24 @@ git status --porcelain   # review this list
      issue as blocked rather than commit files the report can't account for.
 
      **Re-validate the plan binding (#174) before committing.** Run `find-implementation-work.sh
-     --issue <number>` once more; its `binding_line` must be non-null and identical, byte for
-     byte, to the one captured at step 2a. If it isn't — a same-run revision landed after
-     dispatch, or the approval was revoked while the implementer worked — do NOT commit or push:
-     take step 2f's blocked path (reason: "approval no longer covers the implemented plan"),
-     additionally `gh issue edit <number> --remove-label plan-approved`, and report the
-     newly-arrived comments the diff below finds (if any) in the blocker comment and step 3
-     summary instead of a PR body, since no PR exists.
+     --issue <number>` once more; if `approval.covers_plan` is `true` and `binding_line` is
+     non-null and identical, byte for byte, to the one captured at step 2a, proceed to commit
+     below. Otherwise apply the same split as step 2a's approval-binding gate:
+     - **`false`** — a same-run revision landed after dispatch, or the approval was revoked while
+       the implementer worked: unchanged — do NOT commit or push: take step 2f's blocked path
+       (reason: "approval no longer covers the implemented plan"), additionally `gh issue edit
+       <number> --remove-label plan-approved`, and report the newly-arrived comments the diff
+       below finds (if any) in the blocker comment and step 3 summary instead of a PR body, since
+       no PR exists.
+     - **unknown** (same three triggers as step 2a): do not commit the `feat:` commit, do not
+       push, do not open a PR; leave `plan-approved` alone and add **no** `impl-blocked`. The tree
+       is already staged and HEAD already sits at the merge base (the collapse above already
+       ran), so commit it as-is: `git commit -m "wip: checkpoint binding-recheck (#<number>)"` —
+       so step 2b's classification rule **resumes** this branch next run. Post one `<!--
+       harness-audit -->` comment recording the hold and its reason, including the newly-arrived
+       comments the diff below finds (if any) — there is no PR to report them in. Skip the rest of
+       step 2e (no follow-up filing, no CI watch), `git checkout <default-branch>`, and go to step
+       2g.
 
      **Diff post-approval comments (#198).** From this SAME re-run — regardless of the binding
      outcome above, since it's already fetched — take `trusted_post_plan`'s uncovered set
@@ -378,11 +401,12 @@ git status --porcelain   # review this list
      (unknown-approval) entry. An entry present now and absent at step 2a arrived while the
      implementer worked and was never seen; it stays non-binding — never a `RESOLVED:` decision,
      never a re-dispatch, and it never holds the push. The binding check above keeps precedence
-     over WHERE this gets reported, not whether: if it passed, quote each newly-arrived entry
-     verbatim (author, association, `createdAt`, `url`) in the PR body's verification section
-     (below) and the step 3 summary; if it failed, quote them in the blocker comment and step 3
-     summary instead (per above) — there is no PR to put them in. An empty diff changes nothing:
-     no extra PR-body line, no extra summary bullet.
+     over WHERE this gets reported, not whether: if it passed (`true`), quote each newly-arrived
+     entry verbatim (author, association, `createdAt`, `url`) in the PR body's verification
+     section (below) and the step 3 summary; if it failed (`false`) or the verdict was unknown,
+     quote them in the blocker comment or the `<!-- harness-audit -->` hold comment (per above)
+     and the step 3 summary instead — there is no PR body in either non-push case. An empty diff
+     changes nothing: no extra PR-body line, no extra summary bullet.
 
      Once clean, commit, push, open the PR, and label the issue:
 ```bash
@@ -484,8 +508,10 @@ verification rounds (1 = clean; 2–3 = kickbacks — say what the verifier caug
 retries per stage, resume relaunches out of the cap of 2), CI status (pass / fixed after 1
 attempt / fail / no checks), and any issues skipped and why — a stage with no recorded outcome is
 a gap to report, never a silent skip (a `plan: null`, a missing `plan_selection` entry, or
-`approval.covers_plan` not `true` at step 2a or step 2e — named by `approval.reason` — are all
-skip reasons here). This is the human-facing form of the dispatch ledger `issue-cycle`
+`approval.covers_plan` not `true` at step 2a or step 2e — named by `approval.reason`, together
+with which remedy ran: `plan-approved` removed for the `false` verdict, or left untouched behind
+an `<!-- harness-audit -->` hold for the unknown verdict — are all skip reasons here). This is the
+human-facing form of the dispatch ledger `issue-cycle`
 maintains across a full pass; build it the same way standalone. Also note: any crash recovery or
 wip-branch resume/reset (say which), whether the baseline was refreshed (and its new numbers),
 whether discovery reported `truncated: true` (run again after this batch), and — per issue where
