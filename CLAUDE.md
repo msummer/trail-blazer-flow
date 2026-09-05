@@ -108,7 +108,13 @@ either, so neither re-opens a plan for revision (`counts.audit_comments_skipped`
 revision-candidates query itself: the stub applies `find-planning-work.sh`'s own `--jq
 '.[].number'` argument with the real `jq` to a JSON page-array fixture and propagates jq's exit
 status, so a candidates filter that cannot process the returned document aborts the run under the
-script's `set -euo pipefail` instead of silently yielding an empty candidate list. For
+script's `set -euo pipefail` instead of silently yielding an empty candidate list. Since #217 the
+stub's `gh issue list`/`gh issue view` calls also validate their `--json` field list generically —
+against gh's own documented field set for those two subcommands (identical in the probed gh
+version) — rejecting an unsupported field with `Unknown JSON field: "<name>"` and exit 1, replacing
+(and subsuming) the earlier hard-coded arms that special-cased only `authorAssociation`; a
+discovery-script change asking `gh` for a field it does not support now turns this repo's own CI
+red instead of the stub silently serving the fixture anyway. For
 `bin/find-implementation-work.sh` (#176,
 reusing the identical trust gate rather than forking it) it pins the implementer-side
 plan-selection artifact: a plan-marker comment from an untrusted author is never selected as
