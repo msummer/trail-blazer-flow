@@ -104,7 +104,12 @@ line, `counts.author_association_unavailable: true`) — plus, since
 record) or `<!-- verifier-verdict -->` (the orchestrator's own archive) never counts as feedback
 either, so neither re-opens a plan for revision (`counts.audit_comments_skipped` /
 `counts.verdict_archives_skipped`), while a forged marker from an untrusted author still lands in
-`untrusted_comments`, never silently dropped. For `bin/find-implementation-work.sh` (#176,
+`untrusted_comments`, never silently dropped. Since #211 the same faithfulness applies to the
+revision-candidates query itself: the stub applies `find-planning-work.sh`'s own `--jq
+'.[].number'` argument with the real `jq` to a JSON page-array fixture and propagates jq's exit
+status, so a candidates filter that cannot process the returned document aborts the run under the
+script's `set -euo pipefail` instead of silently yielding an empty candidate list. For
+`bin/find-implementation-work.sh` (#176,
 reusing the identical trust gate rather than forking it) it pins the implementer-side
 plan-selection artifact: a plan-marker comment from an untrusted author is never selected as
 `plan`; an untrusted post-plan comment never lands in `trusted_post_plan`; a trusted post-plan
