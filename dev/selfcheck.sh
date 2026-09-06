@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 53 assertions total. The gate prints what it checks — run it.
+# Five groups, 54 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -612,7 +612,7 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 555
+budget_table="issue-implementer 575
 issue-cycle 340
 issue-planner 460
 project-kickoff 215
@@ -1010,6 +1010,25 @@ else
     [ -n "$missing_exception" ] && msg="$msg documented #c1 exception missing: $(printf '%s' "$missing_exception" | tr '\n' ' ');"
     bad "$msg"
   fi
+fi
+
+# 4.33 (4.32 is reserved for #213's approved plan; assertion ids are allocated at plan time and
+# never renumbered) — fixed-string presence of the reason name approval-label-absent (#229) in
+# the script that writes it and the one instruction surface that names it individually:
+# bin/find-implementation-work.sh (writer) and skills/issue-implementer/SKILL.md (the pre-push
+# revalidation reader, steps 2a/2e). Modelled on 4.30 — proves only that the reason NAME agrees
+# between writer and reader, not that either behaves correctly. skills/issue-cycle/SKILL.md is
+# deliberately excluded: the merge floor's Plan-binding provenance bullet prints
+# `plan binding: <approval.reason>` verbatim and never names an individual reason string, so
+# there is nothing for this fixed-string check to pin there.
+missing=""
+for f in bin/find-implementation-work.sh skills/issue-implementer/SKILL.md; do
+  grep -qF -- "approval-label-absent" "$root/$f" || missing="$missing $f"
+done
+if [ -z "$missing" ]; then
+  ok "4.33 'approval-label-absent' present in bin/find-implementation-work.sh and skills/issue-implementer/SKILL.md"
+else
+  bad "4.33 'approval-label-absent' missing from:$missing"
 fi
 
 # ============================================================================

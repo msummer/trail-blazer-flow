@@ -228,6 +228,7 @@ p_4_31_extraction() { edit "$1/dev/planning-tests.sh" 's/example\.invalid/exampl
 p_4_31_prose() {
   printf '      # historical: this fixture used to carry the old `#c1` shape\n' | append "$1/dev/planning-tests.sh"
 }
+p_4_33()            { edit "$1/skills/issue-implementer/SKILL.md" 's/approval-label-absent/approval-label-missing/g'; }
 p_4_20_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(gh pr edit:\*\)"'; }
 p_4_20_orphan_grant() {
   local f="$1/templates/repo-settings.json"
@@ -324,6 +325,7 @@ cases=(
   "4.31|4.31|p_4_31|rewrite one normalised fixture comment url in dev/planning-tests.sh back to an invented #c<n> fragment"
   "4.31-extraction|4.31|p_4_31_extraction|rewrite the fixture url host in dev/planning-tests.sh so the gate's extraction comes back empty"
   "4.31-prose||p_4_31_prose|control: a #-comment mentioning the invented \`#c1\` shape in prose is not flagged"
+  "4.33|4.33|p_4_33|rename the approval-label-absent reason in skills/issue-implementer/SKILL.md only, so the reader and bin/find-implementation-work.sh's writer disagree"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
   "5.3|5.3|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again"

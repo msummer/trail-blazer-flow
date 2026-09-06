@@ -66,11 +66,15 @@
 #                 after the label fails it) AND the plan comment's own REST updated_at is not later
 #                 than that same approved_at (#192 — an in-place edit of the comment made AFTER
 #                 approval un-covers it too, not just a later revision's own createdAt); reason is
-#                 one of covered (covers_plan: true), plan-after-approval, no-approval-event,
-#                 no-plan, plan-url-missing, plan-edited-after-approval (covers_plan: false), or
-#                 approval-unreadable / plan-edit-unreadable (covers_plan: null — the events lookup
-#                 or, respectively, the plan comment's updated_at lookup itself failed, fail-closed,
-#                 matching find-planning-work.sh's precedent for an unreadable authorAssociation).
+#                 one of covered (covers_plan: true), approval-label-absent, plan-after-approval,
+#                 no-approval-event, no-plan, plan-url-missing, plan-edited-after-approval
+#                 (covers_plan: false), or approval-unreadable / plan-edit-unreadable (covers_plan:
+#                 null — the events lookup or, respectively, the plan comment's updated_at lookup
+#                 itself failed, fail-closed, matching find-planning-work.sh's precedent for an
+#                 unreadable authorAssociation). approval-label-absent (#229) fires when the
+#                 plan-approved label is not on the issue's CURRENT label set — this beats every
+#                 other reason including no-plan, since the human's withdrawal is the most
+#                 actionable fact regardless of whether a trusted plan comment also exists.
 #   binding_line: the literal `<!-- harness-plan-binding: issue=<n> plan=<plan.url>
 #                 approved-at=<approved_at> -->` when and only when covers_plan is true; null in
 #                 every other case. Revalidated by the issue-implementer skill before dispatch and
@@ -81,11 +85,16 @@
 # doubling up, and the two plan-edit-unreadable routes (an unparseable comment id, and a rejected
 # or unprocessable updated_at lookup), which share the same "plan edit state unreadable" stem
 # family since both mean the same thing to a reader: the edit state could not be determined.
+# approval-label-absent (#229) gets its own distinct stem, "the plan-approved label is not on the
+# issue now"; when it also wins precedence over no-plan, the "no maintainer-authored plan comment"
+# warn still fires too, so nothing about the missing plan comment is hidden by the label check.
 #
 # --issue <n> (new): skip the `ready` query and evaluate exactly one issue via `gh issue view`,
-# regardless of its labels — used by the issue-implementer skill for a fresh, per-issue
-# revalidation immediately before dispatch and again before push. Output shape is identical to
-# the no-argument form, with `ready` and `plan_selection` each holding at most one entry. An
+# regardless of its labels — this fetch still happens no matter what labels the issue carries —
+# used by the issue-implementer skill for a fresh, per-issue revalidation immediately before
+# dispatch and again before push. Output shape is identical to the no-argument form, with `ready`
+# and `plan_selection` each holding at most one entry; the resulting VERDICT does now depend on
+# the issue's current label set (#229 — see approval.reason: approval-label-absent above). An
 # unknown flag, a non-numeric <n>, or extra arguments print a usage message on stderr and exit 2.
 # No arguments: unchanged behaviour and output shape (bin/harness-status.sh:24 depends on this).
 #
@@ -98,9 +107,11 @@
 # trusted_post_plan the same way), missing_association, plan_after_approval, no_approval_event,
 # and approval_unreadable (from #174's approval binding, one per corresponding `reason`),
 # post_approval_comments (#194 workstream B, see above — trusted_post_plan entries with
-# covered_by_approval: false), and plan_edited_after_approval / plan_edit_unreadable (#192, one per
-# corresponding `reason` — see the plan_selection[].approval doc above). ready and
-# counts.ready/counts.truncated keep their current names and computation.
+# covered_by_approval: false), plan_edited_after_approval / plan_edit_unreadable (#192, one per
+# corresponding `reason` — see the plan_selection[].approval doc above), and
+# approval_label_absent (#229, one per issue where the plan-approved label is not currently on the
+# issue — see approval.reason above). ready and counts.ready/counts.truncated keep their current
+# names and computation.
 #
 # Requires: gh (authenticated), jq. Run from anywhere inside the repo.
 set -euo pipefail
@@ -117,9 +128,10 @@ AUDIT_MARKER="<!-- harness-audit -->"
 # outside contributor's suggestion, a maintainer comments themselves.
 TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"
 
-# --issue <n> (#174): a fresh, single-issue run, regardless of the issue's labels — used by the
-# issue-implementer skill to revalidate approval immediately before dispatch and again before
-# push. No arguments: today's behaviour, unchanged.
+# --issue <n> (#174): a fresh, single-issue run — the EVALUATION always happens regardless of the
+# issue's labels, but since #229 the resulting VERDICT depends on whether plan-approved is
+# currently on the issue. Used by the issue-implementer skill to revalidate approval immediately
+# before dispatch and again before push. No arguments: today's behaviour, unchanged.
 single_issue=""
 if [ "$#" -gt 0 ]; then
   case "$1" in
@@ -146,7 +158,7 @@ fi
 fetch_failures=0
 prefetched_issue=""
 if [ -n "$single_issue" ]; then
-  if ! prefetched_issue=$(gh issue view "$single_issue" --json number,title,url,comments 2>/dev/null); then
+  if ! prefetched_issue=$(gh issue view "$single_issue" --json number,title,url,comments,labels 2>/dev/null); then
     echo "warn: could not fetch issue #$single_issue — skipping it this run" >&2
     fetch_failures=1
     ready="[]"
@@ -179,6 +191,7 @@ approval_unreadable=0
 post_approval_comments=0
 plan_edited_after_approval=0
 plan_edit_unreadable=0
+approval_label_absent=0
 for n in $ready_numbers; do
   # Tolerate per-issue failures: one transient gh/API error must not kill the whole
   # discovery run (matters for unattended/scheduled runs). The issue is simply
@@ -186,11 +199,19 @@ for n in $ready_numbers; do
   # rather than fetching it twice.
   if [ -n "$prefetched_issue" ]; then
     issue="$prefetched_issue"
-  elif ! issue=$(gh issue view "$n" --json number,title,url,comments 2>/dev/null); then
+  elif ! issue=$(gh issue view "$n" --json number,title,url,comments,labels 2>/dev/null); then
     echo "warn: could not fetch issue #$n — skipping it this run" >&2
     fetch_failures=$((fetch_failures+1))
     continue
   fi
+  # #229 — current label state, read from the SAME issue document as everything else here (no
+  # extra API call): tolerant of both a `{"name": "..."}` object element (gh's real shape, live-
+  # probed 2026-09-06) and a bare-string element, fail-closed to absent when the labels key is
+  # missing entirely or an element's name can't be determined.
+  has_approval_label=$(printf '%s' "$issue" | jq -r '
+    [ (.labels // [])[] | if type == "object" then (.name // "") else tostring end ]
+    | index("plan-approved") != null')
+
   result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg v "$VERDICT_MARKER" --arg a "$AUDIT_MARKER" --arg trusted "$TRUSTED_ASSOCIATIONS" '
     ($trusted | split(" ")) as $ok
     | (.comments // []) as $c
@@ -244,7 +265,9 @@ for n in $ready_numbers; do
 
   # #174 — approval binding: bind plan-approved to the SPECIFIC plan comment that was newest
   # when the label was last applied, not just to the issue-level label. Only makes the events
-  # API call when there is a plan to bind (skips the issues already skipped for no_trusted_plan).
+  # API call when there is a plan to bind (skips the issues already skipped for no_trusted_plan)
+  # AND the plan-approved label is currently on the issue (#229's pre-filter above skips this
+  # whole branch, and its events/plan-edit lookups below, at zero extra API cost, when it isn't).
   # #196 — the --jq filter below MUST open with `.[] | `: `gh api --paginate --jq 'EXPR'` applies
   # EXPR once to each page's response document AS-IS (a JSON array of event objects), not once per
   # element — gh never prepends its own `.[] | `. Without the leading `.[] | `, `select(...)` runs
@@ -255,7 +278,16 @@ for n in $ready_numbers; do
   approved_by=""
   covers_plan="false"
   reason="no-plan"
-  if [ "$plan" != "null" ]; then
+  # #229 — the pre-filter: current label state is the authority, checked BEFORE the events lookup
+  # and the #192 plan-edit lookup below, so a withdrawn approval costs zero further API calls.
+  # Wins over no-plan (the most actionable fact — "the human withdrew approval" — regardless of
+  # whether a trusted plan comment also happens to be missing); the separate "no maintainer-
+  # authored plan comment" warn and counts.no_trusted_plan below still fire independently.
+  if [ "$has_approval_label" != "true" ]; then
+    reason="approval-label-absent"
+    echo "warn: issue #$n: the plan-approved label is not on the issue now — approval withdrawn or never applied; not eligible" >&2
+    approval_label_absent=$((approval_label_absent+1))
+  elif [ "$plan" != "null" ]; then
     plan_url=$(printf '%s' "$plan" | jq -r '.url // empty')
     plan_created=$(printf '%s' "$plan" | jq -r '.createdAt')
     # #192 — parse the REST comment id (the `#issuecomment-<id>` suffix of plan_url) up front so
@@ -445,6 +477,7 @@ jq -n \
   --argjson pac "$post_approval_comments" \
   --argjson peaa "$plan_edited_after_approval" \
   --argjson peu "$plan_edit_unreadable" \
+  --argjson ala "$approval_label_absent" \
   '{ready: $ready,
     plan_selection: $selection,
     counts: {ready: ($ready | length), truncated: (($ready | length) >= $limit),
@@ -462,4 +495,5 @@ jq -n \
              approval_unreadable: $au,
              post_approval_comments: $pac,
              plan_edited_after_approval: $peaa,
-             plan_edit_unreadable: $peu}}'
+             plan_edit_unreadable: $peu,
+             approval_label_absent: $ala}}'

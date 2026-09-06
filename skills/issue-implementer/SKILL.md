@@ -245,11 +245,19 @@ someone forged a harness-authored record — call either out too).
 `true`, never dispatch — unconditionally, regardless of which verdict below applies:
 
 - **`false` — the approval demonstrably does not cover this plan** (`reason` one of `no-plan`,
-  `plan-url-missing`, `no-approval-event`, `plan-after-approval`, `plan-edited-after-approval`):
-  `gh issue edit <number> --remove-label plan-approved`, then post a deliberately unmarked,
-  revision-triggering comment (no marker — the next planner run should act on it) naming the
-  reason (`approval.reason`), the plan comment's URL if there is one, and the approval timestamp
-  if there is one (`approval.approved_at`).
+  `plan-url-missing`, `no-approval-event`, `plan-after-approval`, `plan-edited-after-approval`, or
+  `approval-label-absent`):
+  - **`approval-label-absent` (#229) — the human's own withdrawal, not a stale plan.** The
+    `plan-approved` label is not currently on the issue, so there is nothing to remove and no
+    revision to trigger: change **no** labels and post **no** revision-triggering comment. Post
+    one comment whose first line is exactly `<!-- harness-audit -->` naming the withdrawal and
+    stating the issue stays queued — it resumes via step 2b's classification rule once a human
+    re-adds `plan-approved`. Still definitively not eligible, never "retry later" — only the
+    remedy differs from every other `false` reason below.
+  - **Every other `false` reason:** `gh issue edit <number> --remove-label plan-approved`, then
+    post a deliberately unmarked, revision-triggering comment (no marker — the next planner run
+    should act on it) naming the reason (`approval.reason`), the plan comment's URL if there is
+    one, and the approval timestamp if there is one (`approval.approved_at`).
 - **unknown — the verdict is unknown because a GitHub API call failed**, covering `reason`
   `approval-unreadable` or `plan-edit-unreadable`, this issue having **no** `plan_selection` entry
   at all (its `gh issue view` failed inside the discovery script), or the discovery script itself
@@ -377,12 +385,24 @@ git status --porcelain   # review this list
      --issue <number>` once more; if `approval.covers_plan` is `true` and `binding_line` is
      non-null and identical, byte for byte, to the one captured at step 2a, proceed to commit
      below. Otherwise apply the same split as step 2a's approval-binding gate:
-     - **`false`** — a same-run revision landed after dispatch, or the approval was revoked while
-       the implementer worked: unchanged — do NOT commit or push: take step 2f's blocked path
-       (reason: "approval no longer covers the implemented plan"), additionally `gh issue edit
-       <number> --remove-label plan-approved`, and report the newly-arrived comments the diff
-       below finds (if any) in the blocker comment and step 3 summary instead of a PR body, since
-       no PR exists.
+     - **`false`, every reason except `approval-label-absent`** — a same-run revision landed
+       after dispatch: unchanged — do NOT commit or push: take step 2f's blocked path (reason:
+       "approval no longer covers the implemented plan"), additionally `gh issue edit <number>
+       --remove-label plan-approved`, and report the newly-arrived comments the diff below finds
+       (if any) in the blocker comment and step 3 summary instead of a PR body, since no PR
+       exists.
+     - **`false` — `approval-label-absent` (#229) — the approval was revoked while the
+       implementer worked,** the one `false` reason with a non-destructive remedy: no label to
+       remove (it's already gone), no revision-triggering comment (nothing to revise), and —
+       unlike the reason above — NOT step 2f's blocked path and NOT `impl-blocked`. Keep the WIP
+       checkpoint exactly as the unknown-verdict branch below does: the tree is already staged and
+       HEAD already sits at the merge base (the collapse above already ran), so commit it as-is:
+       `git commit -m "wip: checkpoint binding-recheck (#<number>)"` — no `feat:` commit, no push,
+       no PR — so step 2b's classification rule **resumes** this branch next run once a human
+       re-adds `plan-approved`. Post one `<!-- harness-audit -->` comment naming the withdrawal,
+       including the newly-arrived comments the diff below finds (if any) — there is no PR to
+       report them in. Skip the rest of step 2e (no follow-up filing, no CI watch), `git checkout
+       <default-branch>`, and go to step 2g.
      - **unknown** (same three triggers as step 2a): do not commit the `feat:` commit, do not
        push, do not open a PR; leave `plan-approved` alone and add **no** `impl-blocked`. The tree
        is already staged and HEAD already sits at the merge base (the collapse above already
@@ -509,8 +529,9 @@ retries per stage, resume relaunches out of the cap of 2), CI status (pass / fix
 attempt / fail / no checks), and any issues skipped and why — a stage with no recorded outcome is
 a gap to report, never a silent skip (a `plan: null`, a missing `plan_selection` entry, or
 `approval.covers_plan` not `true` at step 2a or step 2e — named by `approval.reason`, together
-with which remedy ran: `plan-approved` removed for the `false` verdict, or left untouched behind
-an `<!-- harness-audit -->` hold for the unknown verdict — are all skip reasons here). This is the
+with which remedy ran: `plan-approved` removed for most `false` reasons, or left untouched behind
+an `<!-- harness-audit -->` hold for the unknown verdict or the `approval-label-absent` `false`
+reason — are all skip reasons here). This is the
 human-facing form of the dispatch ledger `issue-cycle`
 maintains across a full pass; build it the same way standalone. Also note: any crash recovery or
 wip-branch resume/reset (say which), whether the baseline was refreshed (and its new numbers),
