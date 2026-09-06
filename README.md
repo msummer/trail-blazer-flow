@@ -203,15 +203,20 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    comment posted after the `plan-approved` label is `covered_by_approval: false`, reported to the
    human instead of folded in as a binding decision, per #194 — taken from that fresh, per-issue
    run, not read from the thread by hand) + `LESSONS.md` entries.
-   **Plan-binding gate (#174, split by verdict since #219):** the approval must cover the specific
-   plan comment selected — the newest `plan-approved` labeling event must not be earlier than that
-   comment; if it demonstrably doesn't (e.g. the plan was revised after approval), the issue is
-   **not dispatched**: `plan-approved` is removed and a revision-triggering comment posted, naming
-   why. If the verdict is merely **unknown** instead — a GitHub API call failed — the issue is
-   still not dispatched, but nothing destructive happens: no label is removed, no
-   revision-triggering comment is posted; a `<!-- harness-audit -->`-marked comment records the
-   hold and the issue stays queued for the next run. Missing a BLOCKING answer → don't dispatch;
-   ask the human.
+   **Plan-binding gate (#174, split by verdict since #219; #229 adds a label pre-filter, checked
+   first, at zero extra API cost):** `plan-approved` must currently be on the issue — its absence
+   ("approval-label-absent") means the human withdrew (or never applied) it, so the issue is
+   **not dispatched**, but the remedy is non-destructive: no label change (nothing to remove), no
+   revision-triggering comment (nothing to revise); a `<!-- harness-audit -->`-marked comment
+   records the withdrawal, and the issue resumes automatically once a human re-adds the label. If
+   the label IS present, the approval must also cover the specific plan comment selected — the
+   newest `plan-approved` labeling event must not be earlier than that comment; if it demonstrably
+   doesn't (e.g. the plan was revised after approval), the issue is **not dispatched**:
+   `plan-approved` is removed and a revision-triggering comment posted, naming why. If the verdict
+   is merely **unknown** instead — a GitHub API call failed — the issue is still not dispatched,
+   but nothing destructive happens: no label is removed, no revision-triggering comment is posted;
+   a `<!-- harness-audit -->`-marked comment records the hold and the issue stays queued for the
+   next run. Missing a BLOCKING answer → don't dispatch; ask the human.
    Before reporting, the subagent runs a mandatory evidence pass — sweeping the repo for every
    claim its diff falsifies, mutation-checking each new or rewritten test, pasting every number
    from command output — and records it in its report's Evidence block.
@@ -241,10 +246,16 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    tree itself, which is untouched), stages everything, **reconciles the staged list against the
    report's "Files changed"** (unexplained files = blocker, not a commit), **re-validates the
    plan binding** (#174: a fresh `find-implementation-work.sh --issue <n>` run's `binding_line`
-   must still match the one captured before dispatch — split by verdict since #219: if it
-   demonstrably doesn't (`covers_plan: false`), no commit, no push, the blocked path instead, and
-   `plan-approved` removed; if the verdict is unknown instead, no commit, no push, but nothing
-   destructive — `plan-approved` stays, the already-staged tree is committed as a `wip: checkpoint
+   must still match the one captured before dispatch — split by verdict since #219, plus #229's
+   label check: if the label is currently absent (`approval-label-absent` — the human's own
+   withdrawal), no commit, no push, no PR, and no `impl-blocked` either — instead the
+   already-staged tree is committed as a `wip: checkpoint binding-recheck` commit exactly as the
+   unknown-verdict branch below does, so the branch resumes next run once a human re-adds the
+   label, and a `<!-- harness-audit -->`-marked comment records the withdrawal; if the label IS
+   present but demonstrably doesn't cover the plan (`covers_plan: false` for any other reason), no
+   commit, no push, the blocked path instead, and `plan-approved` removed; if the verdict is
+   unknown instead, no commit, no push, but nothing destructive — `plan-approved` stays, the
+   already-staged tree is committed as a `wip: checkpoint
    binding-recheck` commit so the branch resumes next run, and a `<!-- harness-audit -->`-marked
    comment records the hold) **and diffs that same fresh run's trusted post-approval comments**
    (#198) against the set captured before dispatch — a trusted comment that arrived while the
@@ -494,7 +505,13 @@ its source PR; both are harness-authored, so both also carry `no-auto-approve`. 
 can also come back off: the `issue-implementer` skill removes it (with an audit comment) when the
 approval no longer covers the freshest plan comment — a same-run revision landed after the label
 was applied (#174) — returning the issue to the human's review queue rather than building the
-wrong version. Humans gate
+wrong version. A human can also remove `plan-approved` directly, at any time, to veto an issue
+mid-flight (#229): the harness never removes a label the human didn't ask it to here, but it
+DOES honour the removal — dispatch, the pre-push recheck, and (under a merge autonomy policy) the
+autonomous merge floor all re-check the label's CURRENT state and halt at the next check they run,
+non-destructively (no label change, no revision-triggering comment — just a
+`<!-- harness-audit -->` comment noting the withdrawal); the issue resumes automatically once a
+human re-adds `plan-approved`. Humans gate
 twice: plan approval and PR merge — each manual unless the repo's CLAUDE.md explicitly
 delegates it (see "The CLAUDE.md contract"; merge delegation additionally requires the human
 to lift the `gh pr merge` deny).
@@ -1037,6 +1054,24 @@ arms (#204, #211) and validates every `gh issue … --json` field list against g
 (#217), its fixtures use GitHub's real comment-url shape under new gate assertion 4.31 (#220), and
 the macOS CI job's timeout is 10 minutes (#224).
 
+**v2.6.0 → v2.6.1** adds no grant, label, script, or baseline step — the doctor reports nothing
+new to migrate. **Approval now also requires `plan-approved` to be currently on the issue (#229).**
+`find-implementation-work.sh` fetches `labels` on the same `gh issue view` call it already makes
+and checks first, before the events lookup and before #192's plan-edit lookup, at zero extra API
+cost: `plan-approved` absent from the issue's current labels is a new `approval.reason` value,
+`approval-label-absent`, and a new `counts` key, `counts.approval_label_absent` — additive only, no
+existing key renamed or removed. Behaviour **narrows**: a maintainer who removes `plan-approved` to
+veto an issue mid-flight — previously undetected between the historical labeling event this script
+already read and the label's current state — now halts dispatch, the pre-push recheck, and (under
+a merge autonomy policy) the autonomous merge floor at the next check each one runs, since
+all three read `approval.reason` for this same issue. The remedy is **non-destructive**, unlike
+every other `false` reason: no label change (there's nothing to remove), no revision-triggering
+comment (there's nothing to revise) — instead the `issue-implementer` skill posts one
+`<!-- harness-audit -->`-marked comment naming the withdrawal and, at the pre-push recheck, keeps
+the already-implemented tree as a `wip: checkpoint binding-recheck` commit rather than discarding
+it, so the branch resumes automatically via the normal WIP-branch classification rule once a human
+re-adds `plan-approved`. No new grant, label, script, or baseline step.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -1269,11 +1304,17 @@ misreporting orchestrator can still fabricate them; the gain is that doing so no
 consistent, durably visible artifacts instead of one, raising the cost of asserting a verification
 event that didn't happen rather than eliminating the possibility.
 
-**Approval provenance** (#174, content binding added by #192). The `plan-approved` label attaches
+**Approval provenance** (#174, content binding added by #192, current-label-state pre-filter added
+by #229). The `plan-approved` label attaches
 to the *issue*, not to a specific plan comment, so a naive read of the label alone can't tell a
 still-current approval from one a later revision has silently outrun — or one whose text has
-since been edited in place. `find-implementation-work.sh` closes that gap with an
-identity-timing-and-content binding, computed fresh every time it's asked: it reads the newest
+since been edited in place. The single cheapest check runs first, at zero extra API cost, reading
+a field on a call `find-implementation-work.sh` already makes: is `plan-approved` currently in the
+issue's `labels`? Its absence (`reason: "approval-label-absent"`) means the human withdrew the
+approval, or never applied it, and short-circuits everything below — no events lookup, no
+plan-edit lookup, `covers_plan: false`, `binding_line: null`. Only once the label is confirmed
+present does `find-implementation-work.sh` compute an
+identity-timing-and-content binding, fresh every time it's asked: it reads the newest
 `labeled` event for `plan-approved` from GitHub's own issue-events API and compares its timestamp
 against the selected plan comment's `createdAt` — the approval **covers** the plan only when the
 label's newest application is not earlier than the comment (equal timestamps count, so the

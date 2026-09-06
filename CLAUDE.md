@@ -133,7 +133,9 @@ lookup — whether the endpoint call itself is rejected, or the returned documen
 script's own `--jq` filter (#204) — fails closed (`covers_plan: null`); and `--issue <n>`
 single-issue mode (used by the
 implementer skill's fresh per-issue revalidation) returns the identical output shape for exactly
-one issue regardless of its labels, with an unknown flag or non-numeric `<n>` exiting 2 — and,
+one issue — the fetch itself always happens regardless of the issue's labels, but since #229 the
+resulting verdict depends on the issue's CURRENT label set (see below) — with an unknown flag or
+non-numeric `<n>` exiting 2 — and,
 since #198, that same `--issue <n>` mode also carries the `covered_by_approval` split (not just
 `binding_line`), the artifact the implementer skill's pre-push re-check (step 2e) diffs to surface
 a trusted comment that arrives after dispatch. Since #192 that same `plan_selection` entry's
@@ -156,7 +158,20 @@ workstream B, `find-implementation-work.sh`'s `trusted_post_plan[].covered_by_ap
 total, `counts.trusted_post_plan` still the grand total); and workstream C, that the planner
 skill's step-7 stalled-stage escalation — now posted as an issue comment opening with
 `<!-- harness-audit -->` rather than kept summary-only — exercises the existing audit-marker
-exclusion and does not re-open the plan for revision. It runs in CI as the sixth and last step, but it
+exclusion and does not re-open the plan for revision. Since #229 it additionally pins, on
+`bin/find-implementation-work.sh` only, a pre-filter checked BEFORE the #174 events lookup and the
+#192 plan-edit lookup: `plan-approved` absent from the issue's CURRENT `labels` (fetched on the
+same `gh issue view` call both modes already make, tolerant of gh's real `{"name": "..."}` element
+shape and fail-closed on a missing `labels` key or an empty array) sets `covers_plan: false`,
+`reason: "approval-label-absent"`, `binding_line: null`, and `counts.approval_label_absent`, and —
+the short-circuit this pins mechanically via a stub call-log line count, not merely inferred from
+the final JSON — makes NEITHER the events lookup NOR the plan-edit lookup, so a withdrawn approval
+costs zero further API calls (a positive-control fixture asserts a non-zero call count on a
+covered path, so the zero-call assertions can't pass vacuously). This reason wins precedence over
+`no-plan` — the human's withdrawal is the more actionable fact — but the separate "no
+maintainer-authored plan comment" warn and `counts.no_trusted_plan` still fire too, so the
+missing-plan fact is never hidden; `--issue <n>` mode carries the same pre-filter and short-circuit.
+It runs in CI as the sixth and last step, but it
 is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh` or
 `bin/find-implementation-work.sh` changes.
 
