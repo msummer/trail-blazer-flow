@@ -127,17 +127,26 @@ on top and is not configurable**:
   - *Ledger cross-check*, against the pre-advance check above: the issue's `verifier` ledger row
     must read `pass`; a row reading `fail`/`incomplete`/`died` against a pass line in the PR body
     is a contradiction — don't merge, escalate with both pieces of evidence.
-  - *Plan-binding provenance, checked mechanically* (#174), same `<n>`-from-the-head-branch
-    scoping (harness PRs only; Dependabot PRs skip this bullet): run `find-implementation-work.sh
-    --issue <n>` and read `.plan_selection[0].approval.covers_plan` and
-    `.plan_selection[0].binding_line` — the literal `<!-- harness-plan-binding: issue=<n>
-    plan=<url> approved-at=<ts> -->` when covered, `null` otherwise. `covers_plan` must be `true`
-    and `binding_line` non-null — otherwise **not eligible** ("plan binding:
-    `<approval.reason>`"), one-line reason. Otherwise paste `binding_line` literally as the
-    needle of this one-line, substitution-free command:
-    `gh pr view <pr> --json body --jq '(.body // "") | contains("<paste the binding line here>")' | tr -d '\r'`
-    — anything but `true` is **not eligible** ("the PR body does not carry the printed
-    plan-binding line").
+  - *Plan-binding provenance, checked mechanically* (#174, extended #213), same
+    `<n>`-from-the-head-branch scoping (harness PRs only; Dependabot PRs skip this bullet): run
+    `find-implementation-work.sh --issue <n>` and read `.plan_selection[0].approval.covers_plan`
+    — must be `true`, otherwise **not eligible** ("plan binding: `<approval.reason>`"), one-line
+    reason. Otherwise read `.plan_selection[0].approval.approved_at_history[]` — newest first,
+    deduplicated, one entry per real `plan-approved` labeling event, each `{approved_at,
+    approved_by, binding_line}` with entry `[0]`'s `binding_line` identical to the top-level
+    `.plan_selection[0].binding_line`: the literal `<!-- harness-plan-binding: issue=<n>
+    plan=<url> approved-at=<ts> -->`. An empty history is **not eligible** the same way as a
+    non-covered plan. Otherwise walk the array **newest first**, pasting each entry's
+    `binding_line` literally as the needle of this one-line, substitution-free command, stopping
+    at the first `true`:
+    `gh pr view <pr> --json body --jq '(.body // "") | contains("<paste one binding line here>")' | tr -d '\r'`
+    — the first `true` **releases the PR** (#213: a PR body written under an *earlier* approval of
+    this same plan is accepted, not just the freshest one); cite that entry's `approved_at` and
+    `approved_by` as merge evidence. Every entry `false`, including an empty history, is **not
+    eligible** — "the PR body's binding line matches no `plan-approved` event for this plan —
+    re-approve that plan to release it". A binding line naming a different plan URL, or an
+    `approved_at` absent from the history, can therefore never match — the walk only ever pastes
+    strings this issue's own history actually produced.
 - **CI green on the head commit**, verified fresh (`gh pr checks`), not remembered; **"no checks
   configured" is not green** unless the policy section explicitly opts a no-CI repo in.
 - **Never the governance surface**: any PR touching `CLAUDE.md`, `.claude/`, the repo's
@@ -155,15 +164,21 @@ on top and is not configurable**:
     **not eligible** — one-line reason `post-approval comment not covered by the approval:
     <url>` naming each entry's `url` (author + `createdAt` when `url` is null). This is a normal
     wait, not an escalation (see the pass's closing paragraph): the human merges the PR
-    themselves, or withdraws the comment and lets the next cycle re-evaluate; re-adding
-    `plan-approved` does **not** release it — that moves `approved_at`, so the PR body's older
-    `binding_line` no longer matches and the *Plan-binding provenance* sub-bullet fails instead.
+    themselves, withdraws the comment and lets the next cycle re-evaluate, **or re-adds
+    `plan-approved`** — a re-approval covers every comment posted before it, and (#213) the PR
+    body's older `binding_line` stays acceptable to the *Plan-binding provenance* sub-bullet
+    above, so re-approving the same plan **releases** an already-open PR. A comment meant to
+    actually change the PR is expressed by **closing the PR first, then re-approving**, so the
+    comment binds the next dispatch instead of being silently released underneath it — re-approval
+    alone never re-implements anything.
 - **One at a time, re-verified between**: merge, then run `cleanup-after-merge.sh --fix` and
   the baseline refresh before the next merge — if merged `main` goes red, STOP the pass and
   report (two green PRs can still compose badly; sequential re-verification attributes the
   breakage). Match the repo's existing merge method (merge/squash/rebase) from recent history.
 - **Every autonomous merge is audited**: it appears in the cycle report with its evidence —
-  PR link, verifier verdict, the archived verdict comment's URL, CI run — never merged silently.
+  PR link, verifier verdict, the archived verdict comment's URL, CI run, and the matched
+  plan-approved event (`approved_at` + `approved_by` from *Plan-binding provenance* above) —
+  never merged silently.
 
 **Pre-first-merge deploy recheck.** Active only when guard (e)'s "Post-merge verification"
 sub-block is declared — no sub-block, this step does not exist, silently, exactly like guard (e)

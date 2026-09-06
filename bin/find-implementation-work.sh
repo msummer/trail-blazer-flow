@@ -59,27 +59,46 @@
 # #174 adds two more members to each plan_selection entry, binding plan approval to the specific
 # plan comment a human (or the auto-approval policy) actually saw, not just the issue-level
 # plan-approved label — a later revision must not silently inherit an earlier approval:
-#   approval    : {approved_at, approved_by, covers_plan, reason} — approved_at/approved_by come
-#                 from the newest `labeled` event for plan-approved on GitHub's issue-events API
-#                 (null when unknown); covers_plan is true iff that label's newest application is
-#                 not earlier than the selected plan comment's createdAt (the plan comment posted
-#                 after the label fails it) AND the plan comment's own REST updated_at is not later
-#                 than that same approved_at (#192 — an in-place edit of the comment made AFTER
-#                 approval un-covers it too, not just a later revision's own createdAt); reason is
-#                 one of covered (covers_plan: true), approval-label-absent, plan-after-approval,
-#                 no-approval-event, no-plan, plan-url-missing, plan-edited-after-approval
-#                 (covers_plan: false), or approval-unreadable / plan-edit-unreadable (covers_plan:
-#                 null — the events lookup or, respectively, the plan comment's updated_at lookup
-#                 itself failed, fail-closed, matching find-planning-work.sh's precedent for an
-#                 unreadable authorAssociation). approval-label-absent (#229) fires when the
-#                 plan-approved label is not on the issue's CURRENT label set — this beats every
-#                 other reason including no-plan, since the human's withdrawal is the most
-#                 actionable fact regardless of whether a trusted plan comment also exists.
-#   binding_line: the literal `<!-- harness-plan-binding: issue=<n> plan=<plan.url>
-#                 approved-at=<approved_at> -->` when and only when covers_plan is true; null in
-#                 every other case. Revalidated by the issue-implementer skill before dispatch and
-#                 again before push, then pasted verbatim into the PR body for the issue-cycle
-#                 merge floor to grep for — see that skill and skills/issue-cycle/SKILL.md.
+#   approval    : {approved_at, approved_by, covers_plan, reason, approved_at_history} —
+#                 approved_at/approved_by come from the newest `labeled` event for plan-approved on
+#                 GitHub's issue-events API (null when unknown); covers_plan is true iff that
+#                 label's newest application is not earlier than the selected plan comment's
+#                 createdAt (the plan comment posted after the label fails it) AND the plan
+#                 comment's own REST updated_at is not later than that same approved_at (#192 — an
+#                 in-place edit of the comment made AFTER approval un-covers it too, not just a
+#                 later revision's own createdAt); reason is one of covered (covers_plan: true),
+#                 approval-label-absent, plan-after-approval, no-approval-event, no-plan,
+#                 plan-url-missing, plan-edited-after-approval (covers_plan: false), or
+#                 approval-unreadable / plan-edit-unreadable (covers_plan: null — the events lookup
+#                 or, respectively, the plan comment's updated_at lookup itself failed, fail-closed,
+#                 matching find-planning-work.sh's precedent for an unreadable authorAssociation).
+#                 approval-label-absent (#229) fires when the plan-approved label is not on the
+#                 issue's CURRENT label set — this beats every other reason including no-plan,
+#                 since the human's withdrawal is the most actionable fact regardless of whether a
+#                 trusted plan comment also exists.
+#   approved_at_history (#213): every real plan-approved `labeled` event for this issue, newest
+#                 first, deduplicated, as {approved_at, approved_by, binding_line} — so a PR body
+#                 written under an EARLIER approval of the same plan still has a binding line the
+#                 merge floor recognises after a later, unrelated re-approval (removing and
+#                 re-adding plan-approved to bind a post-approval comment, per skills/issue-cycle/
+#                 SKILL.md's *Post-approval comments* rule, no longer permanently strands an open
+#                 PR). Each entry's binding_line is built exactly like the top-level one below, but
+#                 is null on every entry when covers_plan is not true (nothing pasteable for a plan
+#                 that isn't covered) — entry [0]'s approved_at/approved_by/binding_line are always
+#                 identical to approval's own top-level approved_at/approved_by/binding_line (one
+#                 template, derived once, not two). The events lookup being unreadable, or
+#                 returning no plan-approved event at all, or the approval-label-absent pre-filter
+#                 above short-circuiting before the events lookup ever runs, all yield [] — an
+#                 events-readable-but-not-covered issue (plan-after-approval, plan-edited-after-
+#                 approval, or the plan-edit lookup itself being unreadable) still yields a
+#                 non-empty history, just with every binding_line null.
+#   binding_line: derived from approved_at_history[0].binding_line — the literal
+#                 `<!-- harness-plan-binding: issue=<n> plan=<plan.url> approved-at=<approved_at>
+#                 -->` when and only when covers_plan is true; null in every other case. Revalidated
+#                 by the issue-implementer skill before dispatch and again before push, then pasted
+#                 verbatim into the PR body for the issue-cycle merge floor to grep for; the floor
+#                 itself (since #213) walks the whole approved_at_history array instead of matching
+#                 only this one field — see that skill and skills/issue-cycle/SKILL.md.
 # One warn: line per non-covered issue, one distinct ASCII stem per reason — except reason:
 # no-plan, which reuses the existing "no maintainer-authored plan comment" line rather than
 # doubling up, and the two plan-edit-unreadable routes (an unparseable comment id, and a rejected
@@ -278,6 +297,16 @@ for n in $ready_numbers; do
   approved_by=""
   covers_plan="false"
   reason="no-plan"
+  # #213 — plan_url is read unconditionally below (even outside the branch that assigns it) to
+  # build approved_at_history's binding_line, and history_json/approved_at_history feed the same
+  # unconditional jq call; under `set -u` a stale value surviving from the PREVIOUS issue in this
+  # loop (rather than this issue's own state) would silently leak across iterations instead of
+  # aborting, so all three get an explicit per-iteration reset alongside the ones above. The
+  # approval-label-absent pre-filter below and any other branch that never re-assigns them leaves
+  # approved_at_history at its reset value, "[]" — see the plan_selection[].approval doc above.
+  plan_url=""
+  history_json="[]"
+  approved_at_history="[]"
   # #229 — the pre-filter: current label state is the authority, checked BEFORE the events lookup
   # and the #192 plan-edit lookup below, so a withdrawn approval costs zero further API calls.
   # Wins over no-plan (the most actionable fact — "the human withdrew approval" — regardless of
@@ -319,6 +348,22 @@ for n in $ready_numbers; do
       # matches nothing (the common "no events" case) exits 1 and would abort the whole script
       # under `set -e`; `sed` exits 0 regardless of how many lines it deletes.
       latest=$(printf '%s\n' "$events" | sed '/^$/d' | sort | tail -1)
+      # #213 — expose every real plan-approved labeling event, not just the newest, so the merge
+      # floor can accept a PR body written under an earlier approval of the same plan: same
+      # $events, same blank-line drop as $latest above; `unique` sorts ascending and dedupes
+      # byte-identical event lines (two labeled events with the same created_at and actor collapse
+      # to one), `reverse` makes the result newest-first, so history_json's first element is always
+      # the SAME event $latest picks via `sort | tail -1`. `(. / " ")` splits "<created_at> <actor>"
+      # the same way `cut -d' ' -f1` / `-f2-` do below, so approved_at derived from $latest and
+      # from history_json[0] always agree. approved_by can differ from history_json[0]'s in the
+      # narrow case of two plan-approved events sharing the identical created_at second with
+      # different actor logins: shell `sort` (locale collation) and jq's `unique` (codepoint
+      # order) can then order those two event lines differently, picking a different login as
+      # "last" — approved_at itself is untouched, so the merge floor (which matches on approved_at,
+      # never approved_by) is unaffected.
+      history_json=$(printf '%s\n' "$events" | jq -R -s '
+        split("\n") | map(select(length > 0)) | unique | reverse
+        | map((. / " ") as $p | {approved_at: $p[0], approved_by: ($p[1:] | join(" "))})')
       if [ -z "$latest" ]; then
         reason="no-approval-event"
         echo "warn: issue #$n: no plan-approved labeling event found — approval does not cover this plan" >&2
@@ -372,16 +417,24 @@ for n in $ready_numbers; do
     fi
   fi
 
-  binding_line="null"
-  if [ "$covers_plan" = "true" ]; then
-    binding_line=$(jq -n --arg s "<!-- harness-plan-binding: issue=$n plan=$plan_url approved-at=$approved_at -->" '$s')
-  fi
+  # #213 — decorate every history entry with the binding_line it would carry if IT were the
+  # accepted approval (null when $covers_plan isn't "true": nothing is pasteable for a plan that
+  # isn't covered), then derive the top-level binding_line from entry [0] — one template, not two.
+  # `.[0].binding_line` on an empty array is jq's `null`, exactly the JSON `null` the existing
+  # `--argjson bl` consumer below already expects for every non-covered case.
+  approved_at_history=$(printf '%s' "$history_json" | jq -c --arg n "$n" --arg pu "$plan_url" --arg covers "$covers_plan" '
+    map(. + {binding_line: (if $covers == "true"
+      then "<!-- harness-plan-binding: issue=" + $n + " plan=" + $pu + " approved-at=" + .approved_at + " -->"
+      else null end)})')
+  binding_line=$(printf '%s' "$approved_at_history" | jq -c '.[0].binding_line')
   approval_json=$(jq -n \
     --arg at "$approved_at" --arg by "$approved_by" --arg reason "$reason" --argjson covers "$covers_plan" \
+    --argjson history "$approved_at_history" \
     '{approved_at: (if $at == "" then null else $at end),
       approved_by: (if $by == "" then null else $by end),
       covers_plan: $covers,
-      reason: $reason}')
+      reason: $reason,
+      approved_at_history: $history}')
 
   # #194 workstream B — bind each trusted_post_plan comment to the SAME approval this entry's
   # binding_line uses: covered_by_approval is true when the comment did not arrive after the

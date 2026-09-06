@@ -563,7 +563,9 @@ subagents need:
    line — not prose — checked mechanically and cross-checked against the dispatch ledger *and*
    against the verifier's verdict archived verbatim as an issue comment for that PR's head
    branch, *and* against the approval covering the specific plan comment implemented — the PR
-   body's `binding_line` matched against a fresh `find-implementation-work.sh` run (#174) — CI
+   body carrying one of a fresh `find-implementation-work.sh` run's `approval.approved_at_history[]`
+   `binding_line` values verbatim, newest first, so a body written under an earlier approval of the
+   same plan still qualifies (#174, extended #213) — CI
    green on the head commit, never the governance surface — CLAUDE.md, `.claude/`,
    policy/ADR docs, CI config — nothing flagged for human decision, including, read from that
    same fresh `find-implementation-work.sh --issue <n>` run, any trusted post-plan comment the
@@ -1072,6 +1074,32 @@ the already-implemented tree as a `wip: checkpoint binding-recheck` commit rathe
 it, so the branch resumes automatically via the normal WIP-branch classification rule once a human
 re-adds `plan-approved`. No new grant, label, script, or baseline step.
 
+**Re-approving the same plan now releases a held PR under merge autonomy (#213).** The interim
+rule shipped in v2.6.0 — "re-adding `plan-approved` does not release an already-open PR" — is
+reversed: `find-implementation-work.sh`'s `plan_selection[].approval` gains an additive
+`approved_at_history[]` array (newest first, deduplicated, one `{approved_at, approved_by,
+binding_line}` entry per real `plan-approved` labeling event the events API returns, each entry's
+`binding_line` built for the plan selected *now*; entry `[0]`'s `approved_at`/`approved_by` equal
+the top-level fields by construction (both resolve to the same newest event), and entry `[0]`'s
+`binding_line` is what the top-level `binding_line` is now derived from — one template, not two).
+The `issue-cycle` merge floor's *Plan-binding provenance* check
+walks that array newest first, pasting each entry's `binding_line` into the same
+substitution-free `contains(...)` needle it already used, stopping at the first match: a PR body
+written under an *earlier* approval of the same plan is now accepted, so removing and re-adding
+`plan-approved` — the README's own documented way to bind a post-approval comment (see "Merge
+autonomy policy" → *Post-approval comments*) — releases an already-open PR instead of stranding it
+forever. Behaviour **widens** on this one axis only: a maintainer who comments on an open PR's
+issue and then re-approves the same plan releases that PR **without the comment having been
+implemented**. The documented remedy, unchanged in spirit from before: **close the PR first, then
+re-approve**, so the comment binds the next dispatch instead of being silently released underneath
+it. Every other fail-closed axis is unchanged — a different plan comment's url, a timestamp
+matching no real labeling event, an empty history, or an unreadable events lookup all still hold
+the PR. `skills/issue-implementer/SKILL.md`'s pre-push re-check (step 2e) is deliberately
+unchanged: a bare re-approval landing *during* implementation still returns the issue to review,
+same as today (that pre-PR/post-PR boundary is stated only here, not restated in "Approval
+provenance" below) — see "Approval provenance" below for the release mechanism itself. No new
+grant, label, script, or baseline step.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -1342,9 +1370,11 @@ human. One accepted consequence of the pre-push hold: a held issue keeps `plan-a
 and so is reported as a `contradiction` by `issue-cycle`'s closing reconciliation (its chain
 otherwise shows the implementer complete and the verifier passing) — expected, not a bug, and
 `issue-cycle` treats a `contradiction` as "report with evidence, unfinished," never an escalation.
-The `issue-cycle` merge pass revalidates the covered case once more, requiring that same
-`binding_line` verbatim in the PR body before an autonomous merge — the held case never reaches a
-PR, so the merge pass never sees it. Honest limit: like verdict
+The `issue-cycle` merge pass revalidates the covered case once more, requiring that the PR body
+carry one of `approval.approved_at_history[]`'s `binding_line` values verbatim before an
+autonomous merge (#213 — see below for why the check now accepts more than just the freshest
+`binding_line`) — the held case never reaches a PR, so the merge pass never sees it. Honest limit:
+like verdict
 provenance above, all three checkpoints (the discovery script, the PR body, the merge pass) are
 orchestrator-written and share one `gh` identity, so this raises the cost of asserting an approval
 that didn't happen rather than eliminating it; the edit check itself is a **tripwire, not a
@@ -1359,8 +1389,9 @@ not silently treated as having amended the approved plan; the comment is reporte
 (`counts.post_approval_comments`, a `warn:` line) instead of becoming a binding `RESOLVED:`
 decision. To
 make a post-approval comment binding **before a PR exists**, remove and re-add `plan-approved` —
-the same audited path #174 already documents, not a new surface (see below for why this stops
-being the release path once a PR is open). A comment that arrives *while the implementer is
+the same audited path #174 already documents, not a new surface (see below — since #213, this
+same act also releases an already-open PR, provided the plan itself is unchanged). A comment that
+arrives *while the implementer is
 working* is not silently missed either (#198): the pre-push re-validation above diffs that same
 fresh run's uncovered `trusted_post_plan` set against the set captured before dispatch, and any
 newly-arrived entry is quoted verbatim in the PR body and the run summary — still non-binding,
@@ -1372,12 +1403,18 @@ so a comment posted even *after* the PR opened is caught too, not just the dispa
 above. One or more uncovered entries hold the PR in the normal "waits on the human" queue
 (`outcome=not-eligible`), with each entry's comment URL (or author + `createdAt` when the URL is
 null) as the one-line reason — a normal wait, not an escalation. Release path: the human merges
-the PR themselves, or withdraws the comment and lets the next cycle re-evaluate a clean set.
-**Re-adding `plan-approved` does not release an already-open PR** — that only re-binds the plan
-for the *implementer*, before a PR exists (the sentence above); on an open PR it instead moves
-`approval.approved_at`, which invalidates the older `binding_line` already pasted into that PR's
-body, so the *plan-binding* check fails instead of the post-approval-comment one — the PR stays
-held either way.
+the PR themselves, withdraws the comment and lets the next cycle re-evaluate a clean set, **or
+re-adds `plan-approved` (#213)** — since re-approving covers every comment posted before it (the
+same rule the sentence above already states for the pre-PR case), and since the *plan-binding*
+check above now accepts a PR body written under any real earlier approval of the same plan, not
+just the freshest one, re-approval also **releases an already-open PR**. This is a deliberate
+widening: a maintainer who comments on an open PR's issue and then re-approves the same plan
+releases that PR **without the comment having been implemented**. The documented remedy is
+ordering, not a new marker: **close the PR first, then re-approve** — the comment then binds the
+next dispatch instead of being silently released underneath the old one. A different plan
+comment's url, a timestamp matching no real `plan-approved` labeling event, an empty approval
+history, or an unreadable events lookup all still hold the PR exactly as before — re-approval only
+ever pastes a needle this issue's own history actually produced.
 
 **The body-hash grant pattern is a tripwire, not a control** (see "The CLAUDE.md contract" item
 8). It exists only as a documented convention a consuming repo may adopt in its own CLAUDE.md —
