@@ -274,13 +274,25 @@ someone forged a harness-authored record — call either out too).
   `approval-unreadable`, `plan-edit-unreadable`, or `decision-edit-unreadable` (#230),
   this issue having **no** `plan_selection` entry
   at all (its `gh issue view` failed inside the discovery script), or the discovery script itself
-  exiting non-zero or returning unparseable JSON: an outage is not a withdrawn approval — change
+  exiting non-zero or returning unparseable JSON.
+  **Retry once before concluding unknown (any of the three triggers above).** An unknown verdict
+  is an API failure, not a fact about the approval, so re-check once before concluding it:
+  `sleep 30` (the "Resilient dispatch" ladder's first rung, cited above, not its other rungs),
+  then run `find-implementation-work.sh --issue <number>` once more; if `sleep` is denied,
+  perform that one re-run immediately and report "backoff unavailable — grant `Bash(sleep:*)`"
+  per the ladder's own fallback. Use **that** run's `plan_selection` entry for everything step 2a
+  reads from it — `plan`, `trusted_post_plan`, `untrusted_post_plan`, `approval`, `binding_line`,
+  and the uncovered set recorded for step 2e's #198 diff — exactly as if it were the first run: a
+  determinate `true` or `false` second verdict is acted on normally, including the `false`
+  remedies above. At most ONE such re-run per issue per stage per run; it consumes no ladder
+  retry, kickback, or resume relaunch. Still unknown after this one retry: an outage is not a
+  withdrawn approval — change
   **no** labels and post **no** revision-triggering comment. Post one comment whose first line is
   exactly `<!-- harness-audit -->` and whose second line is exactly the key template
   `<!-- harness-hold: issue=<n> stage=<stage> reason=<reason> comments=<ids> -->`, naming the
   reason and stating that no labels were changed and the issue stays queued for the next run.
-  `<stage>` is `2a` or `2e`; `<reason>` is `approval.reason` when the entry has one
-  (`approval-unreadable`, `plan-edit-unreadable`, `decision-edit-unreadable`), the literal
+  `<stage>` is `2a` or `2e`; `<reason>` is the **post-retry** `approval.reason` when the entry has
+  one (`approval-unreadable`, `plan-edit-unreadable`, `decision-edit-unreadable`), the literal
   `no-plan-selection-entry` when the issue has no `plan_selection` entry, or the literal
   `discovery-unreadable` when the script exited non-zero or returned unparseable JSON; `<ids>` is
   every `#issuecomment-<id>` id this hold's body names, **ascending, comma-separated, no spaces,
@@ -414,7 +426,10 @@ git status --porcelain   # review this list
      issue as blocked rather than commit files the report can't account for.
 
      **Re-validate the plan binding (#174) before committing.** Run `find-implementation-work.sh
-     --issue <number>` once more; if `approval.covers_plan` is `true` and `binding_line` is
+     --issue <number>` once more (if its verdict is unknown, the **unknown** branch below applies
+     step 2a's bounded retry, and the retry run — not this initial one — is the run whose
+     `binding_line` and `approval` are what this comparison ultimately uses); if
+     `approval.covers_plan` is `true` and `binding_line` is
      non-null and identical, byte for byte, to the one captured at step 2a, proceed to commit
      below. Otherwise apply the same split as step 2a's approval-binding gate:
      - **`false`, every reason except `approval-label-absent`** — a same-run revision landed
@@ -436,7 +451,9 @@ git status --porcelain   # review this list
        report them in. Skip the rest of step 2e (no follow-up filing, no CI watch), `git checkout
        <default-branch>`, and go to step 2g. Like step 2a's `approval-label-absent` hold, this one
        carries **no** de-dup key and is never skipped, for the same reason.
-     - **unknown** (same three triggers as step 2a): do not commit the `feat:` commit, do not
+     - **unknown** (same three triggers as step 2a): apply step 2a's bounded retry first, with
+       `stage=2e`; a determinate second verdict takes the corresponding branch above instead of
+       this one. Still unknown after the retry: do not commit the `feat:` commit, do not
        push, do not open a PR; leave `plan-approved` alone and add **no** `impl-blocked`. The tree
        is already staged and HEAD already sits at the merge base (the collapse above already
        ran), so commit it as-is: `git commit -m "wip: checkpoint binding-recheck (#<number>)"` —
@@ -446,7 +463,8 @@ git status --porcelain   # review this list
        step 2e (no follow-up filing, no CI watch), `git checkout <default-branch>`, and go to step
        2g.
 
-     **Diff post-approval comments (#198).** From this SAME re-run — regardless of the binding
+     **Diff post-approval comments (#198).** From this SAME re-run (the retry run, when step 2a's
+     bounded retry ran) — regardless of the binding
      outcome above, since it's already fetched — take `trusted_post_plan`'s uncovered set
      (`covered_by_approval` not `true`, keyed the same way as step 2a's set) and diff it against
      the set recorded there. Diff **entries**, never `counts.post_approval_comments` — since #230
@@ -569,7 +587,10 @@ a gap to report, never a silent skip (a `plan: null`, a missing `plan_selection`
 `approval.covers_plan` not `true` at step 2a or step 2e — named by `approval.reason`, together
 with which remedy ran: `plan-approved` removed for most `false` reasons, or left untouched behind
 an `<!-- harness-audit -->` hold for the unknown verdict or the `approval-label-absent` `false`
-reason — are all skip reasons here). The unknown-verdict hold's de-dup guard may skip the
+reason — are all skip reasons here). Report step 2a's bounded retry either way, for every issue it
+ran on: whether the second run resolved the verdict (say to `true`/dispatch or to a `false`
+remedy) or the hold stood after it (still `approval.reason`-named, post-retry). The unknown-verdict
+hold's de-dup guard may skip the
 **comment** — never this summary flag: report the hold every run whether or not the comment was
 posted, citing the prior hold when it was skipped. This is the
 human-facing form of the dispatch ledger `issue-cycle`

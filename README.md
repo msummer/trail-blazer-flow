@@ -216,7 +216,9 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    newest `plan-approved` labeling event must not be earlier than that comment; if it demonstrably
    doesn't (e.g. the plan was revised after approval), the issue is **not dispatched**:
    `plan-approved` is removed and a revision-triggering comment posted, naming why. If the verdict
-   is merely **unknown** instead — a GitHub API call failed — the issue is still not dispatched,
+   is merely **unknown** instead — a GitHub API call failed — the issue is re-checked once (a
+   `sleep 30` wait, then one more lookup, #223) before the verdict is concluded; still unknown
+   after that retry, the issue is still not dispatched,
    but nothing destructive happens: no label is removed, no revision-triggering comment is posted;
    a `<!-- harness-audit -->`-marked comment, keyed and de-duplicated across runs (#222 — see
    "Approval provenance"), records the hold and the issue stays queued for the
@@ -258,11 +260,12 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    label, and a `<!-- harness-audit -->`-marked comment records the withdrawal; if the label IS
    present but demonstrably doesn't cover the plan (`covers_plan: false` for any other reason), no
    commit, no push, the blocked path instead, and `plan-approved` removed; if the verdict is
-   unknown instead, no commit, no push, but nothing destructive — `plan-approved` stays, the
+   unknown instead, the same one-retry re-check as step 2 runs first (#223); still unknown after
+   it, no commit, no push, but nothing destructive — `plan-approved` stays, the
    already-staged tree is committed as a `wip: checkpoint
    binding-recheck` commit so the branch resumes next run, and a `<!-- harness-audit -->`-marked
    comment, keyed and de-duplicated the same way (#222 — see "Approval provenance"), records the
-   hold) **and diffs that same fresh run's trusted post-approval comments**
+   hold) **and diffs that same fresh run's (the retry run, when one ran) trusted post-approval comments**
    (#198) against the set captured before dispatch — a trusted comment that arrived while the
    implementer worked is surfaced (never binding, never holds the push) in the PR body when a PR
    exists, or in the blocker/hold comment otherwise, and the run summary — commits once, pushes,
@@ -1151,6 +1154,17 @@ any issue without `plan-approved`, so that hold cannot repeat across scheduled r
 would suppress a genuine *second* withdrawal notice after a re-approval. One-time transition note:
 hold comments posted by v2.6.1 and earlier carry no key line, so such an issue receives at most one
 more hold comment before the guard takes effect. No new grant, label, script, or baseline step.
+**The implementer also retries an unknown verdict once before concluding it (#223):** at step 2a
+and again at step 2e, before treating any of the three unknown triggers as final, the skill waits
+`sleep 30` (the "Resilient dispatch" ladder's first rung) and re-runs
+`find-implementation-work.sh --issue <n>` exactly once more, using that run's result for
+everything the step reads — so a single momentary API blip no longer holds an otherwise-ready,
+already-approved issue for the whole run. A determinate second verdict is acted on exactly as a
+first-run verdict would be, including a `false` verdict's remedy; only a verdict still unknown
+after the retry holds, keyed by the post-retry `approval.reason`. This adds no grant
+(`Bash(sleep:*)` is already in `templates/repo-settings.json`), no label, no script, and no
+baseline step; the only observable cost is one extra read-only discovery run plus up to 30s of
+added wall clock, per held issue, per checkpoint.
 
 ## The per-repo settings file (required)
 
@@ -1412,7 +1426,10 @@ push**, splitting its remedy by verdict since #219: a same-run revision (or in-p
 landing in between and demonstrably un-covering the plan (`covers_plan: false`) makes the skill
 remove `plan-approved` and return the issue to review rather than build a plan nobody approved;
 an **unknown** verdict — a GitHub API call failed, so a same-run outage is indistinguishable from
-one that revoked nothing — instead holds non-destructively: no label is touched; before dispatch,
+one that revoked nothing — first gets one bounded re-check at both checkpoints (`sleep 30`, then
+`find-implementation-work.sh --issue <n>` once more, #223) before the verdict is concluded; only a
+verdict still unknown after that retry holds
+non-destructively: no label is touched; before dispatch,
 the issue is simply left undispatched for the next run to re-check; before push, the
 already-staged, already-implemented tree is checkpointed (`wip: checkpoint binding-recheck`)
 rather than discarded. Either way one `<!-- harness-audit -->`-marked comment records the hold —
