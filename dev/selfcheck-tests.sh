@@ -257,6 +257,17 @@ p_5_11_needle() {
   edit "$1/skills/issue-planner/SKILL.md" \
     '/--json comments --jq /s/<!-- harness-staleness:/<!-- harness-/g'
 }
+p_5_12_trust() {
+  edit "$1/skills/issue-implementer/SKILL.md" \
+    '/harness-hold/s/"OWNER","MEMBER","COLLABORATOR"/"OWNER","MEMBER","COLLABORATOR","NONE"/'
+}
+p_5_12_order()        { edit "$1/skills/issue-implementer/SKILL.md" '/harness-hold/s/sort_by(.createdAt) | //'; }
+p_5_12_shadow()       { edit "$1/skills/issue-implementer/SKILL.md" 's# | select((\.body // "") | contains("<!-- harness-hold:"))##'; }
+p_5_12_key()          { edit "$1/skills/issue-implementer/SKILL.md" 's/<!-- harness-hold: issue=/<!-- harness-hold-key: issue=/'; }
+p_5_12_needle() {
+  edit "$1/skills/issue-implementer/SKILL.md" \
+    '/--json comments --jq /s/<!-- harness-hold:/<!-- harness-/g'
+}
 
 # ---------------------------------------------------------------------------------------------
 # Case table: name|expected-ids (space-separated, empty for a control case)|perturb function
@@ -347,6 +358,11 @@ cases=(
   "5.11-shadow|5.11|p_5_11_shadow|delete the inner select((.body // \"\") | contains(\"<!-- harness-staleness:\")) from the candidate array so sort_by/last picks the newest comment of ANY kind -- measured: the newer-keyless-comment-does-not-shadow fixture returns 'none' instead of the staleness key"
   "5.11-key|5.11|p_5_11_key|rename the staleness writer's key-line template only (harness-staleness -> harness-staleness-key) so the checker's round-trip needle no longer selects it -- measured: round-trip reports 'found 0', same failure mode as 5.10-key"
   "5.11-needle|5.11|p_5_11_needle|widen the staleness guard's own contains()/startswith() needles from '<!-- harness-staleness:' to '<!-- harness-' (staleness line only, a no-op on the escalation line, which spells a different marker) -- measured: two fixtures fail together -- audit-marker-without-key now returns the bare '<!-- harness-audit -->' line (it starts with the widened prefix) and cross-marker-escalation-key now returns the escalation's own key line (its comment now also matches the widened contains()); extraction itself is unaffected because 5.11's line selection excludes 5.10's harness-escalation marker rather than requiring the now-widened harness-staleness marker"
+  "5.12-trust|5.12|p_5_12_trust|widen the hold guard's trust list to include NONE (hold line only) -- measured: the forged-key-from-NONE-author fixture returns the key instead of 'none'"
+  "5.12-order|5.12|p_5_12_order|drop the sort_by(.createdAt) clause from the hold de-dup --jq program (hold line only) so array order, not recency, picks the winner -- measured: the newest-wins-out-of-array-order fixture returns the older stage=2a key instead of the newer stage=2e key"
+  "5.12-shadow|5.12|p_5_12_shadow|delete the inner select((.body // \"\") | contains(\"<!-- harness-hold:\")) from the candidate array so sort_by/last picks the newest comment of ANY kind -- measured: the newer-keyless-comment-does-not-shadow-hold fixture returns 'none' instead of the hold key"
+  "5.12-key|5.12|p_5_12_key|rename the hold writer's key-line template only (harness-hold -> harness-hold-key) so the checker's round-trip needle no longer selects it -- measured: round-trip reports 'found 0', same failure mode as 5.10-key/5.11-key"
+  "5.12-needle|5.12|p_5_12_needle|widen the hold guard's own contains()/startswith() needles from '<!-- harness-hold:' to '<!-- harness-' (the guard's own line, this file's only such line) -- measured: two fixtures fail together -- audit-comment-without-key now returns the bare '<!-- harness-audit -->' line (it starts with the widened prefix) and cross-marker-staleness-key now returns the staleness note's own key line (its comment now also matches the widened contains()); extraction itself is unaffected since selection is a plain positive match on '--json comments --jq ', not on the harness-hold marker"
 )
 
 # ---------------------------------------------------------------------------------------------
