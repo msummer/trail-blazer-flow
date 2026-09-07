@@ -218,7 +218,8 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    `plan-approved` is removed and a revision-triggering comment posted, naming why. If the verdict
    is merely **unknown** instead — a GitHub API call failed — the issue is still not dispatched,
    but nothing destructive happens: no label is removed, no revision-triggering comment is posted;
-   a `<!-- harness-audit -->`-marked comment records the hold and the issue stays queued for the
+   a `<!-- harness-audit -->`-marked comment, keyed and de-duplicated across runs (#222 — see
+   "Approval provenance"), records the hold and the issue stays queued for the
    next run. Missing a BLOCKING answer → don't dispatch; ask the human.
    Before reporting, the subagent runs a mandatory evidence pass — sweeping the repo for every
    claim its diff falsifies, mutation-checking each new or rewritten test, pasting every number
@@ -260,7 +261,8 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    unknown instead, no commit, no push, but nothing destructive — `plan-approved` stays, the
    already-staged tree is committed as a `wip: checkpoint
    binding-recheck` commit so the branch resumes next run, and a `<!-- harness-audit -->`-marked
-   comment records the hold) **and diffs that same fresh run's trusted post-approval comments**
+   comment, keyed and de-duplicated the same way (#222 — see "Approval provenance"), records the
+   hold) **and diffs that same fresh run's trusted post-approval comments**
    (#198) against the set captured before dispatch — a trusted comment that arrived while the
    implementer worked is surfaced (never binding, never holds the push) in the PR body when a PR
    exists, or in the blocker/hold comment otherwise, and the run summary — commits once, pushes,
@@ -1133,6 +1135,23 @@ comment that was quietly edited some time ago will newly report `covers_plan: fa
 lose `plan-approved` (or hold, for the unknown verdict) — this is the intended tripwire firing
 retroactively, not a regression. No new grant, label, script, or baseline step.
 
+**v2.6.1 → v2.7.0** adds no grant, label, script, or baseline step — the doctor reports nothing
+new to migrate. **The implementer's unknown-verdict hold comment is de-duplicated across runs
+(#222), the same treatment #199 and #208 already gave the planner's escalation and staleness
+notes.** The `<!-- harness-audit -->` comment `issue-implementer` posts at step 2a and step 2e
+when `approval.covers_plan` is unknown (a GitHub API call failed) now carries a second line,
+`<!-- harness-hold: issue=<n> stage=<stage> reason=<reason> comments=<ids> -->`, and is skipped
+when the issue's newest maintainer-authored hold comment already carries the identical key — an
+issue held across an unattended multi-hour outage no longer collects one duplicate hold per
+scheduled cycle. The run-summary flag is never suppressed — every held issue is still reported
+every run, whether or not the comment posted — and only `OWNER`/`MEMBER`/`COLLABORATOR` comments
+satisfy the guard, so a forged key cannot silence a real hold. The `approval-label-absent` hold
+(#229, the human's own withdrawal) is deliberately **not** keyed: batch discovery already excludes
+any issue without `plan-approved`, so that hold cannot repeat across scheduled runs, and keying it
+would suppress a genuine *second* withdrawal notice after a re-approval. One-time transition note:
+hold comments posted by v2.6.1 and earlier carry no key line, so such an issue receives at most one
+more hold comment before the guard takes effect. No new grant, label, script, or baseline step.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -1396,8 +1415,17 @@ an **unknown** verdict — a GitHub API call failed, so a same-run outage is ind
 one that revoked nothing — instead holds non-destructively: no label is touched; before dispatch,
 the issue is simply left undispatched for the next run to re-check; before push, the
 already-staged, already-implemented tree is checkpointed (`wip: checkpoint binding-recheck`)
-rather than discarded. Either way one `<!-- harness-audit -->`-marked comment records the hold,
-and the issue stays queued for the next run's fresh check rather than being bounced back to the
+rather than discarded. Either way one `<!-- harness-audit -->`-marked comment records the hold —
+its second line carrying the key `<!-- harness-hold: issue=<n> stage=<stage> reason=<reason>
+comments=<ids> -->` (#222, the same de-dup treatment #199 and #208 already gave the planner's
+escalation and staleness notes) — and is skipped when the issue's newest maintainer-authored hold
+comment already carries the identical key, so a multi-hour outage no longer buries the issue under
+one duplicate hold per scheduled cycle; the run-summary flag is never suppressed, only the comment
+is, and only `OWNER`/`MEMBER`/`COLLABORATOR` comments satisfy the guard, so a forged key cannot
+silence a real hold. The `approval-label-absent` hold above is deliberately unkeyed: batch
+discovery already excludes any issue without `plan-approved`, so it cannot repeat across scheduled
+runs, and keying it would suppress a genuine second withdrawal notice after a re-approval. Either
+way, the issue stays queued for the next run's fresh check rather than being bounced back to the
 human. One accepted consequence of the pre-push hold: a held issue keeps `plan-approved`, gains no
 `impl-blocked`,
 and so is reported as a `contradiction` by `issue-cycle`'s closing reconciliation (its chain
@@ -1539,6 +1567,10 @@ maintainer-authored staleness comment already records that same PR set — its s
 escalation comment (#194) — whose second line also carries a `<!-- harness-escalation:
 bucket=<bucket> stage=<stage> -->` key, so a repeat run skips re-posting it once the issue's
 newest maintainer-authored escalation comment already records that same key (#199) — the
+implementer's unknown-verdict hold comment (see "Approval provenance" above) — whose second line
+also carries a `<!-- harness-hold: issue=<n> stage=<stage> reason=<reason> comments=<ids> -->`
+key, so a repeat run skips re-posting it once the issue's newest maintainer-authored hold comment
+already records that same key (#222) — the
 implementer's interrupted-run and worktree-sweep notes, `cleanup-after-merge.sh`'s hygiene
 comments) or `<!-- verifier-verdict
 -->` (the orchestrator's own archive) anywhere in its body is excluded from

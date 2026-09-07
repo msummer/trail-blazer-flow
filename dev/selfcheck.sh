@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 56 assertions total. The gate prints what it checks — run it.
+# Five groups, 57 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -612,7 +612,7 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 595
+budget_table="issue-implementer 620
 issue-cycle 355
 issue-planner 460
 project-kickoff 215
@@ -1563,6 +1563,114 @@ if [ "$stale_extraction_ok" = "1" ]; then
     ok "5.11 staleness de-dup --jq program (#208): none/audit-marker-without-key/cross-marker-escalation-key/single-with-trailing-prose/newest-wins/null-body/forged-NONE-key/newer-keyless-comment-does-not-shadow fixtures all match, and the writer's key-line template round-trips through the checker's own needle"
   else
     bad "5.11 staleness de-dup --jq program:$fail_511"
+  fi
+fi
+
+# 5.12 — extract the implementer's unknown-verdict hold de-dup --jq program out of
+# skills/issue-implementer/SKILL.md (#222, the step 2a/2e unknown-verdict pre-post guard) — the
+# actual instruction text, not a copy of it — and execute it with jq against literal offline
+# fixtures, plus a writer/checker round-trip on the hold key-line template. Read-only, offline: no
+# files written, no gh call. This pins the mechanism (program behaviour + the writer's key-line
+# template agreeing with the checker's own needle), not that the orchestrating model actually
+# runs the guard before posting, and not the <reason>/<ids> spelling rules (prose, unpinnable
+# under CLAUDE.md's machine-parsed-artifacts rule) — the same honesty 5.10's and 5.11's comments
+# use. Unlike 5.10/5.11, which share one file and so scope their selection to their own marker,
+# skills/issue-implementer/SKILL.md currently carries no other `--json comments --jq ` line (its
+# only `--json` occurrences are `gh repo view --json defaultBranchRef` and `gh issue view
+# <number> --json number,title,body,url,comments`), so a plain positive
+# `grep -F -- '--json comments --jq '` selects the new guard line with exactly one match; a wrong
+# count, an empty extraction, or a program not starting with `[.comments[` all FAIL loudly rather
+# than skip. A fresh file variable is used rather than reusing $impl (assigned only inside
+# 5.5-5.7's extraction_ok block, unset here under set -u); $q (assigned at top level, above) is
+# safe to reuse.
+hold_file="$root/skills/issue-implementer/SKILL.md"
+hold_n="$(grep -cF -- '--json comments --jq ' "$hold_file")"
+hold_line="$(grep -F -- '--json comments --jq ' "$hold_file" | head -1)"
+hold_prog="$(printf '%s\n' "$hold_line" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
+
+hold_extraction_ok=1
+if [ "$hold_n" != "1" ]; then
+  bad "5.12 hold de-dup --jq extraction: expected exactly one '--json comments --jq ' line in skills/issue-implementer/SKILL.md, found $hold_n"
+  hold_extraction_ok=0
+elif [ -z "$hold_prog" ]; then
+  bad "5.12 hold de-dup --jq extraction: extracted program is empty"
+  hold_extraction_ok=0
+else
+  case "$hold_prog" in
+    '[.comments[]'*) : ;;
+    *)
+      bad "5.12 hold de-dup --jq extraction: extracted program does not start with [.comments[ -- got: $hold_prog"
+      hold_extraction_ok=0
+      ;;
+  esac
+fi
+
+if [ "$hold_extraction_ok" = "1" ]; then
+  # none / audit-comment-without-key / cross-marker-staleness-key / single-with-trailing-prose /
+  # newest-wins-out-of-array-order / null-body / forged-key-from-a-NONE-author /
+  # newer-keyless-comment-does-not-shadow-hold fixtures.
+  fx_hold_none='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"no marker here at all"}]}'
+  fx_hold_audit_no_key='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\nan API call failed; no labels changed, issue stays queued"}]}'
+  fx_hold_cross='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-staleness: issue=7 prs=12,14 -->\nStaleness note"}]}'
+  fx_hold_one='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-hold: issue=7 stage=2a reason=approval-unreadable comments=none -->\nan API call failed"}]}'
+  fx_hold_two='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-05T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-hold: issue=7 stage=2e reason=approval-unreadable comments=none -->"},{"authorAssociation":"MEMBER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-hold: issue=7 stage=2a reason=approval-unreadable comments=none -->"}]}'
+  fx_hold_null_body='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":null}]}'
+  fx_hold_forged='{"comments":[{"authorAssociation":"NONE","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-hold: issue=7 stage=2a reason=approval-unreadable comments=none -->"}]}'
+  fx_hold_shadow='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-hold: issue=7 stage=2a reason=approval-unreadable comments=none -->"},{"authorAssociation":"OWNER","createdAt":"2026-02-01T00:00:00Z","body":"thanks, looking into it"}]}'
+
+  fail_512=""
+  out="$(printf '%s' "$fx_hold_none" | jq -r "$hold_prog" 2>&1)"
+  [ "$out" = "none" ] || fail_512="$fail_512 none-fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_hold_audit_no_key" | jq -r "$hold_prog" 2>&1)"
+  [ "$out" = "none" ] || fail_512="$fail_512 audit-comment-without-key fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_hold_cross" | jq -r "$hold_prog" 2>&1)"
+  [ "$out" = "none" ] || fail_512="$fail_512 cross-marker-staleness-key fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_hold_one" | jq -r "$hold_prog" 2>&1)"
+  expected='<!-- harness-hold: issue=7 stage=2a reason=approval-unreadable comments=none -->'
+  [ "$out" = "$expected" ] || fail_512="$fail_512 single-with-trailing-prose fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_hold_two" | jq -r "$hold_prog" 2>&1)"
+  expected='<!-- harness-hold: issue=7 stage=2e reason=approval-unreadable comments=none -->'
+  [ "$out" = "$expected" ] || fail_512="$fail_512 newest-wins-out-of-array-order fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_hold_null_body" | jq -r "$hold_prog" 2>&1)"
+  [ "$out" = "none" ] || fail_512="$fail_512 null-body fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_hold_forged" | jq -r "$hold_prog" 2>&1)"
+  [ "$out" = "none" ] || fail_512="$fail_512 forged-key-from-NONE-author fixture: got '$out';"
+
+  out="$(printf '%s' "$fx_hold_shadow" | jq -r "$hold_prog" 2>&1)"
+  expected='<!-- harness-hold: issue=7 stage=2a reason=approval-unreadable comments=none -->'
+  [ "$out" = "$expected" ] || fail_512="$fail_512 newer-keyless-comment-does-not-shadow-hold fixture: got '$out';"
+
+  # writer/checker round-trip: exactly one harness-hold key-line template in the file, the
+  # program's own startswith() needle is a prefix of it, and a fixture comment built from the
+  # substituted template resolves through the program to exactly that line.
+  hold_key_n="$(grep -c -- '<!-- harness-hold: issue=' "$hold_file")"
+  hold_key_tpl="$(grep -o '<!-- harness-hold: [^`]*-->' "$hold_file" | head -1)"
+  hold_needle="$(printf '%s' "$hold_prog" | sed -nE 's/.*startswith\("([^"]*)"\).*/\1/p')"
+  if [ "$hold_key_n" != "1" ] || [ -z "$hold_key_tpl" ]; then
+    fail_512="$fail_512 round-trip: expected exactly one harness-hold key-line template in skills/issue-implementer/SKILL.md, found $hold_key_n (extracted: '$hold_key_tpl');"
+  elif [ -z "$hold_needle" ]; then
+    fail_512="$fail_512 round-trip: could not extract a startswith() needle from the hold program;"
+  else
+    case "$hold_key_tpl" in
+      "$hold_needle"*) : ;;
+      *) fail_512="$fail_512 round-trip: key-line template '$hold_key_tpl' does not start with the program's own needle '$hold_needle';" ;;
+    esac
+    hold_key_line="$(printf '%s' "$hold_key_tpl" | sed -e 's/<n>/7/' -e 's/<stage>/2a/' -e 's/<reason>/approval-unreadable/' -e 's/<ids>/none/')"
+    fx_hold_writer='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n'"$hold_key_line"'\nan API call failed"}]}'
+    out="$(printf '%s' "$fx_hold_writer" | jq -r "$hold_prog" 2>&1)"
+    [ "$out" = "$hold_key_line" ] || fail_512="$fail_512 round-trip: expected '$hold_key_line', got '$out';"
+  fi
+
+  if [ -z "$fail_512" ]; then
+    ok "5.12 hold de-dup --jq program (#222): none/audit-without-key/cross-marker-staleness-key/single-with-trailing-prose/newest-wins/null-body/forged-NONE-key/newer-keyless-comment-does-not-shadow-hold fixtures all match, and the writer's key-line template round-trips through the checker's own needle"
+  else
+    bad "5.12 hold de-dup --jq program:$fail_512"
   fi
 fi
 

@@ -258,7 +258,10 @@ someone forged a harness-authored record — call either out too).
     one comment whose first line is exactly `<!-- harness-audit -->` naming the withdrawal and
     stating the issue stays queued — it resumes via step 2b's classification rule once a human
     re-adds `plan-approved`. Still definitively not eligible, never "retry later" — only the
-    remedy differs from every other `false` reason below.
+    remedy differs from every other `false` reason below. This hold carries **no** de-dup key and
+    is never skipped: `find-implementation-work.sh`'s batch search excludes any issue without
+    `plan-approved`, so this hold cannot repeat across scheduled runs, and keying it would
+    suppress a genuine *second* withdrawal notice after a re-approval.
   - **Every other `false` reason:** `gh issue edit <number> --remove-label plan-approved`, then
     post a deliberately unmarked, revision-triggering comment (no marker — the next planner run
     should act on it) naming the reason (`approval.reason`), the plan comment's URL if there is
@@ -273,10 +276,27 @@ someone forged a harness-authored record — call either out too).
   at all (its `gh issue view` failed inside the discovery script), or the discovery script itself
   exiting non-zero or returning unparseable JSON: an outage is not a withdrawn approval — change
   **no** labels and post **no** revision-triggering comment. Post one comment whose first line is
-  exactly `<!-- harness-audit -->`, naming the reason and stating that no labels were changed and
-  the issue stays queued for the next run. When `reason` is `decision-edit-unreadable` (#230), the
+  exactly `<!-- harness-audit -->` and whose second line is exactly the key template
+  `<!-- harness-hold: issue=<n> stage=<stage> reason=<reason> comments=<ids> -->`, naming the
+  reason and stating that no labels were changed and the issue stays queued for the next run.
+  `<stage>` is `2a` or `2e`; `<reason>` is `approval.reason` when the entry has one
+  (`approval-unreadable`, `plan-edit-unreadable`, `decision-edit-unreadable`), the literal
+  `no-plan-selection-entry` when the issue has no `plan_selection` entry, or the literal
+  `discovery-unreadable` when the script exited non-zero or returned unparseable JSON; `<ids>` is
+  every `#issuecomment-<id>` id this hold's body names, **ascending, comma-separated, no spaces,
+  no `#`**, the literal `none` when it names none, and the literal `no-id` for a named comment
+  whose url carries no parseable `#issuecomment-<id>` — a deterministic spelling is what makes the
+  byte-identical comparison below agree across runs and across models, and putting the named ids
+  in the key is what stops a hold that carries a *new* comment url from being suppressed. When
+  `reason` is `decision-edit-unreadable` (#230), the
   comment must also name the `url` of every `trusted_post_plan` entry whose
   `covered_by_approval_reason` is `"decision-edit-unreadable"`.
+  **De-dup guard:** before posting, run this one-line, substitution-free command to print the
+  newest maintainer-authored hold key already on the issue, or `none`:
+  `gh issue view <n> --json comments --jq '[.comments[] | select(((.authorAssociation // "") | ascii_upcase) as $a | (["OWNER","MEMBER","COLLABORATOR"] | index($a)) != null) | select((.body // "") | contains("<!-- harness-hold:"))] | sort_by(.createdAt) | last | ((.body // "") | split("\n") | map(select(startswith("<!-- harness-hold:"))) | last // "none")' | tr -d '\r'`
+  If the printed line is byte-identical to the key you are about to post, **skip the comment** —
+  a prior run already recorded this same hold — and say so in the summary, citing the prior hold;
+  otherwise post. At most one such comment per issue per run.
 
 Record the skip, its reason, and which branch ran for step 3. Never fall back to reading the
 thread by hand to approve one anyway. If any `trusted_post_plan` comment contradicts the plan
@@ -414,13 +434,14 @@ git status --porcelain   # review this list
        re-adds `plan-approved`. Post one `<!-- harness-audit -->` comment naming the withdrawal,
        including the newly-arrived comments the diff below finds (if any) — there is no PR to
        report them in. Skip the rest of step 2e (no follow-up filing, no CI watch), `git checkout
-       <default-branch>`, and go to step 2g.
+       <default-branch>`, and go to step 2g. Like step 2a's `approval-label-absent` hold, this one
+       carries **no** de-dup key and is never skipped, for the same reason.
      - **unknown** (same three triggers as step 2a): do not commit the `feat:` commit, do not
        push, do not open a PR; leave `plan-approved` alone and add **no** `impl-blocked`. The tree
        is already staged and HEAD already sits at the merge base (the collapse above already
        ran), so commit it as-is: `git commit -m "wip: checkpoint binding-recheck (#<number>)"` —
-       so step 2b's classification rule **resumes** this branch next run. Post one `<!--
-       harness-audit -->` comment recording the hold and its reason, including the newly-arrived
+       so step 2b's classification rule **resumes** this branch next run. Post the hold comment
+       behind step 2a's de-dup guard, with `stage=2e`, including the newly-arrived
        comments the diff below finds (if any) — there is no PR to report them in. Skip the rest of
        step 2e (no follow-up filing, no CI watch), `git checkout <default-branch>`, and go to step
        2g.
@@ -440,9 +461,10 @@ git status --porcelain   # review this list
      over WHERE this gets reported, not whether: if it passed (`true`), quote each newly-arrived
      entry verbatim (author, association, `createdAt`, `url`) in the PR body's verification
      section (below) and the step 3 summary; if it failed (`false`) or the verdict was unknown,
-     quote them in the blocker comment or the `<!-- harness-audit -->` hold comment (per above)
-     and the step 3 summary instead — there is no PR body in either non-push case. An empty diff
-     changes nothing: no extra PR-body line, no extra summary bullet.
+     quote them in the blocker comment or, when it was posted (the de-dup guard above may have
+     skipped it), the hold comment, and the step 3 summary instead either way — there is no PR
+     body in either non-push case. An empty diff changes nothing: no extra PR-body line, no extra
+     summary bullet.
 
      Once clean, commit, push, open the PR, and label the issue:
 ```bash
@@ -547,7 +569,9 @@ a gap to report, never a silent skip (a `plan: null`, a missing `plan_selection`
 `approval.covers_plan` not `true` at step 2a or step 2e — named by `approval.reason`, together
 with which remedy ran: `plan-approved` removed for most `false` reasons, or left untouched behind
 an `<!-- harness-audit -->` hold for the unknown verdict or the `approval-label-absent` `false`
-reason — are all skip reasons here). This is the
+reason — are all skip reasons here). The unknown-verdict hold's de-dup guard may skip the
+**comment** — never this summary flag: report the hold every run whether or not the comment was
+posted, citing the prior hold when it was skipped. This is the
 human-facing form of the dispatch ledger `issue-cycle`
 maintains across a full pass; build it the same way standalone. Also note: any crash recovery or
 wip-branch resume/reset (say which), whether the baseline was refreshed (and its new numbers),
