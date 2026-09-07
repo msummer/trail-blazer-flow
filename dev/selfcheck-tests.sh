@@ -230,6 +230,7 @@ p_4_31_prose() {
 }
 p_4_32()            { edit "$1/skills/issue-cycle/SKILL.md" 's/approved_at_history/approved_athistory/g'; }
 p_4_33()            { edit "$1/skills/issue-implementer/SKILL.md" 's/approval-label-absent/approval-label-missing/g'; }
+p_4_34()            { edit "$1/skills/issue-implementer/SKILL.md" 's/decision-edited-after-approval/decision-edited-post-approval/g'; }
 p_4_20_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(gh pr edit:\*\)"'; }
 p_4_20_orphan_grant() {
   local f="$1/templates/repo-settings.json"
@@ -328,6 +329,7 @@ cases=(
   "4.31-prose||p_4_31_prose|control: a #-comment mentioning the invented \`#c1\` shape in prose is not flagged"
   "4.32|4.32|p_4_32|rename approved_at_history in skills/issue-cycle/SKILL.md only, so the merge floor's reader and bin/find-implementation-work.sh's writer disagree"
   "4.33|4.33|p_4_33|rename the approval-label-absent reason in skills/issue-implementer/SKILL.md only, so the reader and bin/find-implementation-work.sh's writer disagree"
+  "4.34|4.34|p_4_34|rename the decision-edited-after-approval reason in skills/issue-implementer/SKILL.md only, so the reader and bin/find-implementation-work.sh's writer disagree"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
   "5.3|5.3|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again"

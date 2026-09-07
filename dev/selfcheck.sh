@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 55 assertions total. The gate prints what it checks — run it.
+# Five groups, 56 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -612,7 +612,7 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 575
+budget_table="issue-implementer 595
 issue-cycle 355
 issue-planner 460
 project-kickoff 215
@@ -1047,6 +1047,27 @@ if [ -z "$missing" ]; then
   ok "4.33 'approval-label-absent' present in bin/find-implementation-work.sh and skills/issue-implementer/SKILL.md"
 else
   bad "4.33 'approval-label-absent' missing from:$missing"
+fi
+
+# 4.34 — fixed-string presence of the two reason names decision-edited-after-approval and
+# decision-edit-unreadable (#230) in the script that writes them and the one instruction surface
+# that names them individually: bin/find-implementation-work.sh (writer) and
+# skills/issue-implementer/SKILL.md (the pre-push revalidation reader, steps 2a/2e). Modelled on
+# 4.33 — proves only that the reason NAMES agree between writer and reader, not that either
+# behaves correctly. skills/issue-cycle/SKILL.md is deliberately excluded, for the identical
+# reason 4.33 documents: the merge floor's Plan-binding provenance bullet prints
+# `plan binding: <approval.reason>` verbatim and never names an individual reason string, so
+# there is nothing for this fixed-string check to pin there.
+missing=""
+for f in bin/find-implementation-work.sh skills/issue-implementer/SKILL.md; do
+  for name in "decision-edited-after-approval" "decision-edit-unreadable"; do
+    grep -qF -- "$name" "$root/$f" || missing="$missing $f:$name"
+  done
+done
+if [ -z "$missing" ]; then
+  ok "4.34 'decision-edited-after-approval' and 'decision-edit-unreadable' present in bin/find-implementation-work.sh and skills/issue-implementer/SKILL.md"
+else
+  bad "4.34 decision-edit reason name(s) missing from:$missing"
 fi
 
 # ============================================================================

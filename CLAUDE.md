@@ -181,6 +181,33 @@ not-covered plan (`plan-after-approval`) still yields a non-empty history whose 
 `binding_line` is null; the events lookup being unreadable, evaluated alongside a healthy sibling
 issue, yields `[]` for the unreadable issue only — pinning the same per-iteration reset the #229
 pre-filter above also depends on; and `--issue <n>` mode carries the same field, same shape.
+Since #230 it additionally pins, on `bin/find-implementation-work.sh` only, decision-comment
+content binding: on the branch that would otherwise conclude a `trusted_post_plan` entry
+`covered_by_approval: true` (after #229's label pre-filter and #192's plan-edit check both pass),
+the script fetches that COVERED comment's own REST `updated_at` and compares it against
+`approval.approved_at`, the same idiom #192 already uses for the plan comment — never for an
+already-uncovered entry, and never on an already-uncovered issue. A covered comment edited
+strictly after approval flips that entry `covered_by_approval: false` and adds a new field,
+`covered_by_approval_reason: "decision-edited-after-approval"`, collapsing the issue-level verdict
+the same way (`covers_plan: false`, `counts.decision_edited_after_approval`); an entry whose own
+edit state cannot be established (no parseable comment id, a rejected lookup, a document the
+script's own filter cannot process, or an empty `updated_at`) collapses the verdict to **unknown**
+instead (`covers_plan: null`, `covered_by_approval_reason: "decision-edit-unreadable"`,
+`counts.decision_edit_unreadable`), with edited beating unreadable when one issue has both;
+`approval.approved_at`/`approved_by` stay populated in both new states. Coverage: edited-after vs.
+edited-before vs. an inclusive edit-timestamp tie (three sides of the comparison and its boundary);
+a `null` url vs. a non-digits comment id (discriminating the outer `#issuecomment-` presence gate
+from the inner digits-only guard, same split #192's own pair pins for the plan comment); a
+rejected lookup vs. a filter-error document vs. a missing `updated_at` (three routes converging on
+one fail-closed state); edited-plus-unreadable on one issue (pins precedence); and
+`expect_api_calls` proofs for zero/one/two covered comments (pins the placement discipline
+mechanically — an uncovered comment, or an issue already uncovered for another reason, is never
+looked up); plus `--issue <n>` mode carrying both new reasons. `dev/selfcheck.sh`'s assertion 4.34
+pins only that `bin/find-implementation-work.sh` and `skills/issue-implementer/SKILL.md` spell
+both new reason strings identically, the same fixed-string-agreement contract as 4.33 —
+`skills/issue-cycle/SKILL.md` is excluded for the identical, already-documented reason (its
+*Plan-binding provenance* bullet prints `approval.reason` verbatim and names no individual
+reason).
 It runs in CI as the sixth and last step, but it
 is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh` or
 `bin/find-implementation-work.sh` changes.
