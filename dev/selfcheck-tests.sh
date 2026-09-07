@@ -218,6 +218,10 @@ p_4_25_commented_out() { edit "$1/.github/dependabot.yml" 's|^\( *\)- package-ec
 p_4_25_interval()      { drop "$1/.github/dependabot.yml" '^[[:space:]]*interval:'; }
 p_4_26_drift()      { edit "$1/bin/find-implementation-work.sh" 's/^TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"$/TRUSTED_ASSOCIATIONS="OWNER MEMBER"/'; }
 p_4_26_extraction() { edit "$1/bin/find-planning-work.sh" 's/TRUSTED_ASSOCIATIONS/TRUSTED_ASSOCIATION_LIST/g'; }
+p_4_26_drift_cleanup()      { edit "$1/bin/cleanup-after-merge.sh" 's/^TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"$/TRUSTED_ASSOCIATIONS="OWNER MEMBER"/'; }
+p_4_26_extraction_cleanup() { edit "$1/bin/cleanup-after-merge.sh" 's/TRUSTED_ASSOCIATIONS/TRUSTED_ASSOCIATION_LIST/g'; }
+p_4_35_drift()      { edit "$1/bin/cleanup-after-merge.sh" 's/^MULTI_PR_LABEL="multi-pr"$/MULTI_PR_LABEL="mlti-pr"/'; }
+p_4_35_extraction() { edit "$1/bin/cleanup-after-merge.sh" 's/MULTI_PR_LABEL/MULTI_PR_LABEL_NAME/g'; }
 p_4_27()            { edit "$1/bin/cleanup-after-merge.sh" 's/harness-audit/harness-audited/g'; }
 p_4_28()            { edit "$1/skills/issue-cycle/SKILL.md" 's/harness-plan-binding/harness-planbinding/g'; }
 p_4_29_drift()      { edit "$1/bin/find-implementation-work.sh" 's/has_harness_marker/has_harness_flag/g'; }
@@ -330,6 +334,8 @@ cases=(
   "4.25-interval|4.25|p_4_25_interval|drop the schedule's interval: line"
   "4.26-drift|4.26|p_4_26_drift|drop COLLABORATOR from bin/find-implementation-work.sh's TRUSTED_ASSOCIATIONS= value only"
   "4.26-extraction|4.26|p_4_26_extraction|rename bin/find-planning-work.sh's TRUSTED_ASSOCIATIONS= line so the gate's extraction comes back empty"
+  "4.26-drift-cleanup|4.26|p_4_26_drift_cleanup|drop COLLABORATOR from bin/cleanup-after-merge.sh's TRUSTED_ASSOCIATIONS= value only"
+  "4.26-extraction-cleanup|4.26|p_4_26_extraction_cleanup|rename bin/cleanup-after-merge.sh's TRUSTED_ASSOCIATIONS= line so the gate's extraction comes back empty"
   "4.27|4.27|p_4_27|rename the harness-audit marker in bin/cleanup-after-merge.sh only, so the writers and consumers disagree"
   "4.28|4.28|p_4_28|rename the plan-binding marker in skills/issue-cycle/SKILL.md only so the writer/paster and the checker disagree"
   "4.29-drift|4.29|p_4_29_drift|rename has_harness_marker to has_harness_flag in bin/find-implementation-work.sh only"
@@ -341,6 +347,8 @@ cases=(
   "4.32|4.32|p_4_32|rename approved_at_history in skills/issue-cycle/SKILL.md only, so the merge floor's reader and bin/find-implementation-work.sh's writer disagree"
   "4.33|4.33|p_4_33|rename the approval-label-absent reason in skills/issue-implementer/SKILL.md only, so the reader and bin/find-implementation-work.sh's writer disagree"
   "4.34|4.34|p_4_34|rename the decision-edited-after-approval reason in skills/issue-implementer/SKILL.md only, so the reader and bin/find-implementation-work.sh's writer disagree"
+  "4.35-drift|4.35|p_4_35_drift|rewrite bin/cleanup-after-merge.sh's MULTI_PR_LABEL value to a label bin/setup-labels.sh doesn't create (characters changed inside the token, not a suffix)"
+  "4.35-extraction|4.35|p_4_35_extraction|rename bin/cleanup-after-merge.sh's MULTI_PR_LABEL identifier so the gate's extraction comes back empty"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
   "5.3|5.3|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again"

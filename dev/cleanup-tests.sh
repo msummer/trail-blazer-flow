@@ -5,10 +5,23 @@
 # doctor's harness (dev/doctor-tests.sh). Builds throwaway git repos under mktemp, with a stub
 # `gh` (and, where needed, a stub `git`) on PATH, and runs the REAL bin/cleanup-after-merge.sh
 # (no copy — the script has no $0-relative path, unlike bin/check-harness.sh) against each,
-# pinning the multi-PR KEEP behaviour (#106) and the best-effort pre-flight (#77, #111, #132):
-# a failed `gh repo view` (default-branch lookup), `git branch --show-current` (current-branch
-# lookup), `gh pr list`, or `git pull --ff-only` is reported (WARN) and survived rather than
-# aborting the run before any output, that would otherwise only be hand-verified.
+# pinning the multi-PR KEEP behaviour (#106, revised by #231) and the best-effort pre-flight
+# (#77, #111, #132): a failed `gh repo view` (default-branch lookup), `git branch --show-current`
+# (current-branch lookup), `gh pr list`, or `git pull --ff-only` is reported (WARN) and survived
+# rather than aborting the run before any output, that would otherwise only be hand-verified.
+#
+# Since #231, the multi-PR KEEP signal is label-primary and the comment-marker path is
+# trust-gated: the `multi-pr` label on the issue itself is the primary KEEP signal (read from
+# the same `gh issue list --json number,title,labels` fetch the script already makes); the
+# `<!-- harness-multi-pr -->` marker is honoured only in a comment whose `authorAssociation` is
+# OWNER/MEMBER/COLLABORATOR (case-insensitively), with a comment carrying no `authorAssociation`
+# field treated as untrusted (fail-closed) — an ignored untrusted marker prints exactly one WARN
+# line naming the comment's association and url, in both `--fix` and report-only modes; and the
+# issue-BODY marker is no longer honoured at all (an issue relying on it now closes on the
+# normal path). `build_stub_gh`'s `issue list` arm projects the requested `--json` field list
+# (see its own comment below) so a fixture can distinguish "the script requested labels" from
+# "the script didn't" — proving the label case can't pass vacuously if the script stops asking
+# for `labels`.
 #
 # Usage: bash dev/cleanup-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh and dev/doctor-tests.sh: one PASS/FAIL line per case, a
@@ -102,8 +115,17 @@ mk_repo_with_origin() {
 # Otherwise: `issue list` cats DIR/issues.json when invoked with the literal `--label pr-open`
 # flag pair (the label-hygiene query) and prints `[]` for any other `issue list` invocation
 # (the follow-ups query, never exercised by these fixtures since their prs.json carries no
-# CLOSED entry); `issue view` cats DIR/comments.json (the `--json comments`-shaped payload the
-# marker lookup expects); `issue comment|edit|close` append the full `"$*"` line to
+# CLOSED entry) — since #231, the label-hygiene arm additionally PROJECTS the real jq's own
+# `with_entries(select(...))` idiom over DIR/issues.json against whatever field list followed a
+# literal `--json` token in the invocation, the same document-semantics faithfulness #196 (LESSON
+# 2026-09-01(c)) requires: a fixture whose script drops `labels` from its own `--json` list gets
+# back objects with no `labels` key at all, not a stub that silently keeps serving it — which is
+# what makes the `keep-multi-pr-label` case's mutation proof possible. Field projection is
+# applied to the `issue list` arm only (its field list is the one that's load-bearing for a
+# fixture verdict); `pr list` and `issue view` stay as-is, and generic field-NAME validation
+# (rejecting an unsupported field the way #217 taught `dev/planning-tests.sh` to) is a follow-up,
+# not modelled here. `issue view` cats DIR/comments.json (the `--json comments`-shaped payload
+# the marker lookup expects); `issue comment|edit|close` append the full `"$*"` line to
 # DIR/gh-calls.log and exit 0 — the machine-derived payload every case's assertions read back.
 # Anything else exits 1. The `__DIR__` placeholder + sed substitution step stays for the
 # fixed part of the script (unchanged from before REPO_MODE/PR_MODE existed).
@@ -131,8 +153,22 @@ build_stub_gh() {
   issue)
     case "$2" in
       list)
+        fields=""
+        prev=""
+        for a in "$@"; do
+          if [ "$prev" = "--json" ]; then
+            fields="$a"
+          fi
+          prev="$a"
+        done
         case "$*" in
-          *"--label pr-open"*) cat "__DIR__/issues.json" ;;
+          *"--label pr-open"*)
+            if [ -n "$fields" ]; then
+              jq -c --arg f "$fields" 'map(with_entries(select(.key as $k | (($f | split(",")) | index($k)) != null)))' "__DIR__/issues.json"
+            else
+              cat "__DIR__/issues.json"
+            fi
+            ;;
           *) printf '[]' ;;
         esac
         exit 0 ;;
@@ -215,6 +251,13 @@ expect_no_call() {
 expect_calls_empty() {
   [ -z "$calls" ] || { __ok=0; __why="${__why}expected no gh mutation calls, got: $calls\n"; }
 }
+# expect_count NEEDLE N — asserts $cleanup_out contains exactly N lines matching NEEDLE
+# (fixed-string, grep -cF), mechanically pinning "exactly one WARN" rather than mere presence.
+expect_count() {
+  local needle="$1" want="$2" got
+  got="$(printf '%s\n' "$cleanup_out" | grep -cF -- "$needle")"
+  [ "$got" -eq "$want" ] || { __ok=0; __why="${__why}count: expected $want of '$needle', got $got\n"; }
+}
 
 # ---------------------------------------------------------------------------------------------
 # The cases.
@@ -266,18 +309,54 @@ EOF
   expect_no_call "issue comment"
 }
 
-# keep-marker-body — Closes #7 present, no sibling, but the issue body carries
-# <!-- harness-multi-pr -->: no close.
-case_keep_marker_body() {
-  local dir; dir="$(mk_repo keep-marker-body)"
+# close-marker-body-only (#231) — Closes #7 present, no sibling, and the issue BODY carries
+# <!-- harness-multi-pr -->: the body marker is no longer a KEEP signal (the maintainer-agreed
+# Decision replaced it with the multi-pr label, since cleanup has no author-association lookup
+# for the issue itself), so this now takes the ordinary close path — same fixture as the old
+# keep-marker-body case, inverted expectations. Mutation proof (step 13(d)): restoring ONLY the
+# deleted body-marker `elif` (re-adding `issue_body=$(printf '%s' "$issue" | jq -r '.body //
+# ""'...)` plus the elif reading it) left this fixture PASSING (measured: 17 pass, 0 fail) — a
+# surviving mutant, because `--json number,title,labels` no longer requests `body` at all, so
+# the stub's own field projection (see build_stub_gh above) strips the key and `issue_body`
+# reads empty regardless of the elif's presence; a real `gh` would behave identically. The
+# meaningful, measured mutant instead restores the whole removed code path together — the elif
+# AND `body` back in the `--json` field list (`--json number,title,labels,body`) — which makes
+# this fixture, and only this fixture, FAIL (measured: 16 pass, 1 fail): the issue reports KEEP
+# and "issue close" is never called. (Both figures re-measured against the 17-case suite after
+# #231's warn-untrusted-marker-no-fix case was added; the case totals here move in lockstep with
+# the suite's case count, not with this fixture's own behaviour.)
+case_close_marker_body_only() {
+  local dir; dir="$(mk_repo close-marker-body-only)"
   cat > "$dir/prs.json" <<'EOF'
 [{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
 EOF
   cat > "$dir/issues.json" <<'EOF'
-[{"number":7,"title":"Planned split","body":"Splitting this on purpose.\n<!-- harness-multi-pr -->\n"}]
+[{"number":7,"title":"Planned split","labels":[],"body":"Splitting this on purpose.\n<!-- harness-multi-pr -->\n"}]
 EOF
   cat > "$dir/comments.json" <<'EOF'
 {"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "FIXED #7 (Planned split): PR #12 merged"
+  expect_call "issue close"
+}
+
+# keep-marker-comment (#231: gains a trusted association) — Closes #7 present, no sibling, no
+# multi-pr label, but a comment from an OWNER carries <!-- harness-multi-pr -->: no close. The
+# only case that needs the marker to be found via the extra `gh issue view` call rather than a
+# cheaper signal, and the first of the trust-gate cases (an OWNER comment IS honoured).
+case_keep_marker_comment() {
+  local dir; dir="$(mk_repo keep-marker-comment)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Planned split","labels":[],"body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"Heads up, splitting this one.\n<!-- harness-multi-pr -->\n","authorAssociation":"OWNER","url":"https://example.invalid/7#issuecomment-9001"}]}
 EOF
   build_stub_gh "$dir"
   run_cleanup "$dir" --fix
@@ -286,24 +365,130 @@ EOF
   expect_no_call "issue close"
 }
 
-# keep-marker-comment — Closes #7 present, no sibling, no marker in the issue body, but a
-# comment carries <!-- harness-multi-pr -->: no close. The only case that needs the marker to
-# be found via the extra `gh issue view` call rather than the already-fetched issue body.
-case_keep_marker_comment() {
-  local dir; dir="$(mk_repo keep-marker-comment)"
+# keep-multi-pr-label (#231) — the issue itself carries the multi-pr label (gh's real
+# {"name": "..."} label-element shape), Closes #7 present, no sibling, no comment marker at
+# all: no close. The primary signal — proves the label alone is sufficient, no comment fetch
+# needed. Mutation proof (step 13(a), measured against this diff): dropping `labels` from
+# bin/cleanup-after-merge.sh's `gh issue list --json` field list makes this fixture FAIL (the
+# stub's field projection then serves an issue object with no labels key at all, so
+# has_multi_pr_label reads false and the issue closes instead of KEEPing).
+case_keep_multi_pr_label() {
+  local dir; dir="$(mk_repo keep-multi-pr-label)"
   cat > "$dir/prs.json" <<'EOF'
 [{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
 EOF
   cat > "$dir/issues.json" <<'EOF'
-[{"number":7,"title":"Planned split","body":""}]
+[{"number":7,"title":"Labelled split","labels":[{"name":"multi-pr"}],"body":""}]
 EOF
   cat > "$dir/comments.json" <<'EOF'
-{"comments":[{"body":"Heads up, splitting this one.\n<!-- harness-multi-pr -->\n"}]}
+{"comments":[]}
 EOF
   build_stub_gh "$dir"
   run_cleanup "$dir" --fix
   expect_rc 0
-  expect "KEEP  #7 (Planned split): PR #12 merged as part of a multi-PR issue"
+  expect "KEEP  #7 (Labelled split): PR #12 merged as part of a multi-PR issue (the issue carries the multi-pr label)"
+  expect_no_call "issue close"
+}
+
+# close-untrusted-comment-marker (#231) — a comment carries <!-- harness-multi-pr --> but its
+# authorAssociation is NONE: the marker is ignored (not a KEEP signal) and the issue closes on
+# the normal path, plus exactly one WARN line naming the comment's association and url.
+# Mutation proof (step 13(b), measured against this diff): deleting the trusted `select`
+# clause (so ANY marker-carrying comment counts as trusted) makes this fixture FAIL — the issue
+# KEEPs instead of closing.
+case_close_untrusted_comment_marker() {
+  local dir; dir="$(mk_repo close-untrusted-comment-marker)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Forged split","labels":[],"body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"Heads up, splitting this one.\n<!-- harness-multi-pr -->\n","authorAssociation":"NONE","url":"https://example.invalid/7#issuecomment-9002"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "FIXED #7 (Forged split): PR #12 merged"
+  expect_call "issue close"
+  expect_count "ignoring a harness-multi-pr marker from an untrusted comment author" 1
+  expect "(NONE) at https://example.invalid/7#issuecomment-9002"
+}
+
+# warn-untrusted-marker-no-fix (#231) — the close-untrusted-comment-marker fixture, run WITHOUT
+# --fix: the same untrusted-marker WARN still prints exactly once, naming the comment's
+# association and url, and no gh mutation call is made at all — proving the WARN is not gated
+# behind --fix (RESOLVED: the untrusted-marker WARN prints in report-only mode as well as
+# --fix). Mutation proof (measured against this diff): wrapping the WARN echo at
+# bin/cleanup-after-merge.sh:239 in `if $FIX; then ... fi` makes this fixture, and only this
+# fixture, FAIL (measured: 16 pass, 1 fail) — the "ignoring a harness-multi-pr marker" WARN line
+# disappears (count 0, not 1) when the run is report-only.
+case_warn_untrusted_marker_no_fix() {
+  local dir; dir="$(mk_repo warn-untrusted-marker-no-fix)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Forged split","labels":[],"body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"Heads up, splitting this one.\n<!-- harness-multi-pr -->\n","authorAssociation":"NONE","url":"https://example.invalid/7#issuecomment-9002"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir"
+  expect_rc 0
+  expect_count "ignoring a harness-multi-pr marker from an untrusted comment author" 1
+  expect "(NONE) at https://example.invalid/7#issuecomment-9002"
+  expect_calls_empty
+}
+
+# close-missing-association-marker (#231) — same as close-untrusted-comment-marker, but the
+# comment object has NO authorAssociation key at all: fail-closed the same way (same rule as
+# both discovery scripts), one WARN naming the MISSING sentinel. Mutation proof (step 13(c),
+# measured against this diff): deleting the untrusted `select`/WARN loop makes this fixture
+# FAIL — the "ignoring a harness-multi-pr marker" WARN line disappears (count 0, not 1).
+case_close_missing_association_marker() {
+  local dir; dir="$(mk_repo close-missing-association-marker)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"No association","labels":[],"body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"Heads up, splitting this one.\n<!-- harness-multi-pr -->\n","url":"https://example.invalid/7#issuecomment-9003"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "FIXED #7 (No association): PR #12 merged"
+  expect_call "issue close"
+  expect_count "ignoring a harness-multi-pr marker from an untrusted comment author" 1
+  expect "(MISSING) at https://example.invalid/7#issuecomment-9003"
+}
+
+# keep-marker-comment-lowercase-assoc (#231) — a comment's authorAssociation is "owner"
+# (lowercase, as GitHub never actually sends it, but pins the ascii_upcase normalisation no
+# other fixture distinguishes): still trusted, still KEEP. Mutation proof (step 13(e), measured
+# against this diff): deleting `ascii_upcase` from the trust check makes this fixture FAIL — the
+# lowercase association no longer matches the uppercase TRUSTED_ASSOCIATIONS list, so the
+# marker is treated as untrusted and the issue closes instead of KEEPing.
+case_keep_marker_comment_lowercase_assoc() {
+  local dir; dir="$(mk_repo keep-marker-comment-lowercase-assoc)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Lowercase assoc","labels":[],"body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"Heads up, splitting this one.\n<!-- harness-multi-pr -->\n","authorAssociation":"owner","url":"https://example.invalid/7#issuecomment-9004"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "KEEP  #7 (Lowercase assoc): PR #12 merged as part of a multi-PR issue"
   expect_no_call "issue close"
 }
 
@@ -485,8 +670,13 @@ EOF
 cases=(
   "keep-part-of|case_keep_part_of|MERGED PR body says Part of #n: issue left open, pr-open removed to re-queue"
   "keep-open-sibling|case_keep_open_sibling|a lower-numbered OPEN sibling PR: issue left open, no label edit at all"
-  "keep-marker-body|case_keep_marker_body|<!-- harness-multi-pr --> in the issue body: issue left open"
-  "keep-marker-comment|case_keep_marker_comment|<!-- harness-multi-pr --> only in a comment: issue left open"
+  "close-marker-body-only|case_close_marker_body_only|<!-- harness-multi-pr --> in the issue body only (no longer honoured): issue closed on the normal path"
+  "keep-marker-comment|case_keep_marker_comment|<!-- harness-multi-pr --> in a comment from an OWNER: trusted, issue left open"
+  "keep-multi-pr-label|case_keep_multi_pr_label|the multi-pr label on the issue: primary signal, issue left open, no comment fetch"
+  "close-untrusted-comment-marker|case_close_untrusted_comment_marker|<!-- harness-multi-pr --> from a NONE-association comment: ignored, issue closed, exactly one WARN naming the comment"
+  "warn-untrusted-marker-no-fix|case_warn_untrusted_marker_no_fix|the untrusted-marker fixture run WITHOUT --fix: the same WARN still prints once, no gh mutation call"
+  "close-missing-association-marker|case_close_missing_association_marker|<!-- harness-multi-pr --> from a comment with no authorAssociation field: fail-closed untrusted, same as NONE"
+  "keep-marker-comment-lowercase-assoc|case_keep_marker_comment_lowercase_assoc|<!-- harness-multi-pr --> from a lowercase 'owner' association: still trusted (ascii_upcase), issue left open"
   "keep-wrong-issue-number|case_keep_wrong_issue_number|Closes #70 does not satisfy issue #7: issue left open"
   "close-normal|case_close_normal|control: Closes #7, no sibling, no marker: issue closed"
   "keep-no-fix|case_keep_no_fix|KEEP fixture run without --fix: no gh mutation call, KEEP line still printed"

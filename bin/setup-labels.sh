@@ -17,6 +17,9 @@
 #   test-ratchet    -> provenance: filed by the test-ratchet skill under the repo's CLAUDE.md
 #                      "Test-suite ratchet policy". Harness-authored, so it also gets
 #                      no-auto-approve; close it as "not planned" to veto that gap for good.
+#   multi-pr        -> human-applied: the primary signal cleanup-after-merge.sh reads to leave
+#                      a multi-PR issue open when one of its slices merges (the issue-body
+#                      marker is no longer honoured; a maintainer comment marker still is).
 #
 # Requesting plan changes does NOT use a label — just comment on the issue and the planner
 # revises on its next run. Approval and the implementation states ARE labels (unambiguous signals).
@@ -40,6 +43,7 @@ create_or_update "impl-blocked"    "B60205" "Implementation hit a blocker; needs
 create_or_update "no-plan"         "EEEEEE" "Excluded from the planning workflow; the planner ignores this issue"
 create_or_update "no-auto-approve" "FBCA04" "Never auto-approve this issue's plans; approval must be manual"
 create_or_update "test-ratchet"    "006B75" "Filed by the test-suite ratchet; harness-authored coverage work"
+create_or_update "multi-pr"        "C5DEF5" "Multi-PR issue: cleanup leaves it open when a slice's PR merges"
 
 echo "Labels are set up."
 echo "Note: the old 'plan-changes-requested' label is no longer used. Delete it if you like:"

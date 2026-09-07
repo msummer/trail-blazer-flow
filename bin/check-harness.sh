@@ -207,11 +207,11 @@ existing=""
 if $gh_ready; then
   existing="$(gh label list --limit 200 --json name --jq '.[].name' 2>/dev/null | tr -d '\r' || true)"
   missing=""
-  for l in plan-proposed plan-approved pr-open impl-blocked no-plan no-auto-approve test-ratchet; do
+  for l in plan-proposed plan-approved pr-open impl-blocked no-plan no-auto-approve test-ratchet multi-pr; do
     echo "$existing" | grep -qx "$l" || missing="$missing $l"
   done
   if [ -z "$missing" ]; then
-    ok "all 7 lifecycle labels exist"
+    ok "all 8 lifecycle labels exist"
   else
     bad "missing labels:$missing — run: setup-labels.sh"
   fi

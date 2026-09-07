@@ -510,8 +510,8 @@ gh issue edit <number> --add-label pr-open
      (a deliberately multi-PR split): write `Part of #<number>` (plus `PR <k> of <m>` when the
      total is known) instead of a closing keyword, so `cleanup-after-merge.sh` leaves the issue
      open after this slice merges; only the PR that finishes the issue carries `Closes
-     #<number>`. A human who plans the split up front can put `<!-- harness-multi-pr -->` in the
-     issue body or a comment as the same opt-out.
+     #<number>`. A human who plans the split up front applies the `multi-pr` label — or posts
+     `<!-- harness-multi-pr -->` in a maintainer comment — as the same opt-out.
 
      **File the plan's follow-ups.** File each entry whose justification names a concrete failure
      a user of this software would experience — `gh issue create --label no-auto-approve`, with

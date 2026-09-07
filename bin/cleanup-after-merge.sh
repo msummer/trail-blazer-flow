@@ -24,8 +24,10 @@
 #        - PR merged, closing keyword present, no multi-PR signal -> issue should have
 #          auto-closed but didn't; close it
 #        - PR merged but the issue looks like one slice of a multi-PR issue (no closing
-#          keyword, a "Part of #n" / "PR k of m" marker, an OPEN sibling PR, or a
-#          <!-- harness-multi-pr --> opt-out) -> KEEP, leave the issue open
+#          keyword, a "Part of #n" / "PR k of m" marker, an OPEN sibling PR, the multi-pr
+#          label, or a maintainer (OWNER/MEMBER/COLLABORATOR) comment carrying
+#          <!-- harness-multi-pr -->) -> KEEP, leave the issue open. The issue-body marker is
+#          no longer honoured; an untrusted comment's marker is ignored and WARNed instead.
 #        - PR closed WITHOUT merging       -> stale pr-open; the issue should requeue
 #        - PR still open                   -> fine, awaiting review
 #   4. Follow-ups filed from a claude/* PR that was closed WITHOUT merging (skipped, with a
@@ -41,10 +43,13 @@
 # implementer as human decision text):
 #   - PR merged, issue still open, closing keyword present, no multi-PR signal -> comment,
 #     remove pr-open, close the issue (audited with a marked issue comment)
-#   - PR merged but a multi-PR signal is present (KEEP) -> issue stays open; pr-open is
-#     removed (and the issue commented, once, with the same marker) only when no other
+#   - PR merged but a multi-PR signal is present (KEEP: the multi-pr label, or a maintainer
+#     comment carrying <!-- harness-multi-pr -->) -> issue stays open; pr-open is removed
+#     (and the issue commented, once, with the same marker) only when no other
 #     claude/<n>-* PR is still open, so the issue re-queues for its next slice — a human closes
-#     it by hand if the work is actually finished
+#     it by hand if the work is actually finished. A harness-multi-pr marker from an untrusted
+#     comment author is ignored (never a KEEP signal) and WARNed, in both --fix and report-only
+#     modes, naming the comment's url and association.
 #   - PR closed without merging    -> comment, remove pr-open (requeues the issue; the
 #     old claude/* branch is left alone — the implementer's branch-exists logic decides
 #     whether it can be reset or needs a human)
@@ -59,6 +64,19 @@ FIX=false
 [[ "${1:-}" == "--fix" ]] && FIX=true
 
 AUDIT_MARKER='<!-- harness-audit -->'
+
+# GitHub's authorAssociation enum: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR,
+# FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, NONE. Only the first three carry repo authority, so only
+# a comment from one of them can make the <!-- harness-multi-pr --> marker below a KEEP signal;
+# everything else (including a comment with no authorAssociation at all) is untrusted and WARNed
+# instead. Must stay identical to bin/find-planning-work.sh's and bin/find-implementation-work.sh's
+# TRUSTED_ASSOCIATIONS (gate assertion 4.26, extended to all three scripts).
+TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"
+
+# The primary multi-PR signal: a label on the issue itself (permission-controlled, visible),
+# created by bin/setup-labels.sh (gate assertion 4.35 pins that this value is one of the labels
+# that script creates).
+MULTI_PR_LABEL="multi-pr"
 
 default_branch_known=true
 default_branch="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null | tr -d '\r' || true)"
@@ -135,7 +153,7 @@ fi
 issues=""
 issues_ok=true
 if $prs_ok; then
-  if ! issues="$(gh issue list --label pr-open --state open --json number,title,body --limit 100 2>/dev/null)" \
+  if ! issues="$(gh issue list --label pr-open --state open --json number,title,labels --limit 100 2>/dev/null)" \
      || ! printf '%s' "$issues" | jq -e . >/dev/null 2>&1; then
     issues_ok=false
     echo "WARN    could not fetch issues labelled pr-open (gh issue list failed — rate limit, auth, or network?) — skipping pr-open label hygiene."
@@ -160,10 +178,15 @@ if $prs_ok && $issues_ok; then
       case "$state" in
         MERGED)
           pr_body=$(printf '%s' "$match" | jq -r '.body // ""' | tr -d '\r')
-          issue_body=$(printf '%s' "$issue" | jq -r '.body // ""' | tr -d '\r')
           open_siblings=$(printf '%s' "$prs" | jq --arg p "claude/${n}-" \
             '[.[] | select((.headRefName | startswith($p)) and .state == "OPEN")] | length')
           marker='<!-- harness-multi-pr -->'
+          # Tolerant of gh's real {"name": "..."} label-element shape and a bare-string element,
+          # and of a missing labels key entirely (same idiom as
+          # bin/find-implementation-work.sh:273-275's plan-approved-label check).
+          has_multi_pr_label=$(printf '%s' "$issue" | jq -r --arg l "$MULTI_PR_LABEL" '
+            [ (.labels // [])[] | if type == "object" then (.name // "") else tostring end ]
+            | index($l) != null')
 
           # Number-bounded so e.g. "Closes #70" can never satisfy issue #7.
           part_of_pat="(^|[^0-9])part of #${n}([^0-9]|\$)"
@@ -179,14 +202,44 @@ if $prs_ok && $issues_ok; then
             keep_reason="the PR body has no Closes/Fixes/Resolves #${n} keyword"
           elif [[ "$open_siblings" -gt 0 ]]; then
             keep_reason="another claude/${n}-* PR is still open"
-          elif printf '%s\n' "$issue_body" | grep -qF -- "$marker"; then
-            keep_reason="the issue carries the harness-multi-pr marker"
+          elif [[ "$has_multi_pr_label" == "true" ]]; then
+            keep_reason="the issue carries the multi-pr label"
           else
             # Only fetched when every cheaper signal above came up empty — the marker may
-            # still be sitting in a comment rather than the issue body itself.
-            issue_comments=$(gh issue view "$n" --json comments 2>/dev/null | jq -r '.comments[]?.body // empty' || echo "")
-            if printf '%s\n' "$issue_comments" | grep -qF -- "$marker"; then
-              keep_reason="the issue carries the harness-multi-pr marker"
+            # still be sitting in a maintainer comment. Fetched once; a failed or malformed
+            # fetch fails closed to the empty document (no marker found), same behaviour as
+            # before this change. Trust-gated: only an OWNER/MEMBER/COLLABORATOR comment's
+            # marker counts as KEEP (TRUSTED_ASSOCIATIONS, matching both discovery scripts); an
+            # untrusted marker (including one with no authorAssociation at all — fail-closed) is
+            # ignored here but WARNed below so the maintainer sees the attempt.
+            issue_comments_doc="$(gh issue view "$n" --json comments 2>/dev/null || echo '{"comments":[]}')"
+            printf '%s' "$issue_comments_doc" | jq -e . >/dev/null 2>&1 || issue_comments_doc='{"comments":[]}'
+
+            trusted_hits=$(printf '%s' "$issue_comments_doc" | jq -r --arg m "$marker" --arg trusted "$TRUSTED_ASSOCIATIONS" '
+              ($trusted | split(" ")) as $ok
+              | [ (.comments // [])[]
+                  | select((.body // "") | contains($m))
+                  | select(((.authorAssociation // "") | ascii_upcase) as $a | ($ok | index($a)) != null) ]
+              | length' || true)
+            untrusted_marker_lines=$(printf '%s' "$issue_comments_doc" | jq -r --arg m "$marker" --arg trusted "$TRUSTED_ASSOCIATIONS" '
+              ($trusted | split(" ")) as $ok
+              | (.comments // [])[]
+              | select((.body // "") | contains($m))
+              | select(((.authorAssociation // "") | ascii_upcase) as $a | ($ok | index($a)) == null)
+              | (.authorAssociation // "MISSING") + " " + (.url // "(no url)")' || true)
+
+            if [[ "${trusted_hits:-0}" -gt 0 ]]; then
+              keep_reason="a maintainer comment carries the harness-multi-pr marker"
+            fi
+            if [[ -n "$untrusted_marker_lines" ]]; then
+              while IFS= read -r hitline; do
+                [[ -n "$hitline" ]] || continue
+                assoc="${hitline%% *}"
+                hit_url="${hitline#* }"
+                echo "WARN  #${n} (${title}): ignoring a harness-multi-pr marker from an untrusted comment author (${assoc}) at ${hit_url} — apply the multi-pr label instead if this really is a multi-PR split"
+              done <<EOF
+$untrusted_marker_lines
+EOF
             fi
           fi
 

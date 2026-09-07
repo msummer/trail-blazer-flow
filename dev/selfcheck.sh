@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 57 assertions total. The gate prints what it checks — run it.
+# Five groups, 58 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -674,9 +674,10 @@ else
 fi
 
 # 4.17 — the literal harness-multi-pr marker appears in the script, the README, and the
-# implementer skill (fixed-string). Mirrors 4.1/4.5/4.16 — a human plans a multi-PR issue split
-# up front by putting this marker in the issue body or a comment, so cleanup-after-merge.sh's
-# label hygiene never closes it after the first slice merges.
+# implementer skill (fixed-string). Mirrors 4.1/4.5/4.16 — since #231 the marker is honoured
+# only in a maintainer (OWNER/MEMBER/COLLABORATOR) comment, not the issue body; the multi-pr
+# label is the primary way a human plans a multi-PR issue split up front, so
+# cleanup-after-merge.sh's label hygiene never closes it after the first slice merges.
 marker='<!-- harness-multi-pr -->'
 missing=""
 grep -qF -- "$marker" "$root/bin/cleanup-after-merge.sh" || missing="$missing bin/cleanup-after-merge.sh"
@@ -880,26 +881,33 @@ else
   fi
 fi
 
-# 4.26 — the two discovery scripts' TRUSTED_ASSOCIATIONS declarations agree (#176 extended
-# bin/find-implementation-work.sh with the same trust gate bin/find-planning-work.sh already
-# has, rather than forking it — this pins that they didn't drift apart). Anchored single-line
-# extraction on both sides, same idiom as 2.5(a)/4.13 — an empty extraction on either side FAILs
-# loudly ("structure changed") rather than passing vacuously; a non-empty extraction is
-# normalised (space-separated -> one association per line, sorted, de-duplicated) and compared
-# both directions with comm.
+# 4.26 — all three scripts' TRUSTED_ASSOCIATIONS declarations agree: the two discovery scripts
+# (#176 extended bin/find-implementation-work.sh with the same trust gate
+# bin/find-planning-work.sh already has, rather than forking it) plus, since #231,
+# bin/cleanup-after-merge.sh's comment-marker trust gate — this pins that none of the three
+# drifted apart. Anchored single-line extraction on all three sides, same idiom as 2.5(a)/4.13 —
+# an empty extraction on ANY side FAILs loudly ("structure changed") rather than passing
+# vacuously; a non-empty extraction is normalised (space-separated -> one association per line,
+# sorted, de-duplicated) and compared both directions with comm, twice: planning<->implementation
+# (as before) and cleanup<->planning (the second pair).
 planning_trusted="$(sed -nE 's/^TRUSTED_ASSOCIATIONS="([^"]*)"$/\1/p' "$root/bin/find-planning-work.sh" | tr ' ' '\n' | grep -v '^$' | sort -u)"
 impl_trusted="$(sed -nE 's/^TRUSTED_ASSOCIATIONS="([^"]*)"$/\1/p' "$root/bin/find-implementation-work.sh" | tr ' ' '\n' | grep -v '^$' | sort -u)"
-if [ -z "$planning_trusted" ] || [ -z "$impl_trusted" ]; then
-  bad "4.26 TRUSTED_ASSOCIATIONS extraction failed — bin/find-planning-work.sh's or bin/find-implementation-work.sh's TRUSTED_ASSOCIATIONS= line didn't match (structure changed)"
+cleanup_trusted="$(sed -nE 's/^TRUSTED_ASSOCIATIONS="([^"]*)"$/\1/p' "$root/bin/cleanup-after-merge.sh" | tr ' ' '\n' | grep -v '^$' | sort -u)"
+if [ -z "$planning_trusted" ] || [ -z "$impl_trusted" ] || [ -z "$cleanup_trusted" ]; then
+  bad "4.26 TRUSTED_ASSOCIATIONS extraction failed — bin/find-planning-work.sh's, bin/find-implementation-work.sh's, or bin/cleanup-after-merge.sh's TRUSTED_ASSOCIATIONS= line didn't match (structure changed)"
 else
   planning_not_impl="$(comm -23 <(_lines "$planning_trusted") <(_lines "$impl_trusted"))"
   impl_not_planning="$(comm -13 <(_lines "$planning_trusted") <(_lines "$impl_trusted"))"
-  if [ -z "$planning_not_impl" ] && [ -z "$impl_not_planning" ]; then
-    ok "4.26 bin/find-planning-work.sh and bin/find-implementation-work.sh agree on TRUSTED_ASSOCIATIONS"
+  cleanup_not_planning="$(comm -23 <(_lines "$cleanup_trusted") <(_lines "$planning_trusted"))"
+  planning_not_cleanup="$(comm -13 <(_lines "$cleanup_trusted") <(_lines "$planning_trusted"))"
+  if [ -z "$planning_not_impl" ] && [ -z "$impl_not_planning" ] && [ -z "$cleanup_not_planning" ] && [ -z "$planning_not_cleanup" ]; then
+    ok "4.26 bin/find-planning-work.sh, bin/find-implementation-work.sh, and bin/cleanup-after-merge.sh agree on TRUSTED_ASSOCIATIONS"
   else
     msg="4.26 TRUSTED_ASSOCIATIONS drift:"
     [ -n "$planning_not_impl" ] && msg="$msg association(s) in find-planning-work.sh but not find-implementation-work.sh: $(printf '%s' "$planning_not_impl" | tr '\n' ' ');"
     [ -n "$impl_not_planning" ] && msg="$msg association(s) in find-implementation-work.sh but not find-planning-work.sh: $(printf '%s' "$impl_not_planning" | tr '\n' ' ');"
+    [ -n "$cleanup_not_planning" ] && msg="$msg association(s) in cleanup-after-merge.sh but not find-planning-work.sh: $(printf '%s' "$cleanup_not_planning" | tr '\n' ' ');"
+    [ -n "$planning_not_cleanup" ] && msg="$msg association(s) in find-planning-work.sh but not cleanup-after-merge.sh: $(printf '%s' "$planning_not_cleanup" | tr '\n' ' ');"
     bad "$msg"
   fi
 fi
@@ -1068,6 +1076,23 @@ if [ -z "$missing" ]; then
   ok "4.34 'decision-edited-after-approval' and 'decision-edit-unreadable' present in bin/find-implementation-work.sh and skills/issue-implementer/SKILL.md"
 else
   bad "4.34 decision-edit reason name(s) missing from:$missing"
+fi
+
+# 4.35 (#231) — bin/cleanup-after-merge.sh's MULTI_PR_LABEL value is one of the labels
+# bin/setup-labels.sh actually creates: an anchored single-line extraction of MULTI_PR_LABEL="…"
+# from the former, compared with the same create_or_update "…" extraction 4.6 already uses on
+# the latter. Either extraction coming back empty FAILs loudly ("structure changed") rather than
+# passing vacuously — an empty MULTI_PR_LABEL would otherwise make the membership grep below
+# match every line. Proves only that the LITERAL VALUE cleanup reads names a label setup-labels.sh
+# creates, not that either script's logic around that label is correct.
+cleanup_multi_pr_label="$(sed -nE 's/^MULTI_PR_LABEL="([^"]*)"$/\1/p' "$root/bin/cleanup-after-merge.sh")"
+setup_labels_created="$(sed -nE 's/^create_or_update "([^"]+)".*/\1/p' "$root/bin/setup-labels.sh")"
+if [ -z "$cleanup_multi_pr_label" ] || [ -z "$setup_labels_created" ]; then
+  bad "4.35 MULTI_PR_LABEL/create_or_update extraction failed — bin/cleanup-after-merge.sh's MULTI_PR_LABEL= line or bin/setup-labels.sh's create_or_update lines didn't match (structure changed)"
+elif printf '%s\n' "$setup_labels_created" | grep -qx -- "$cleanup_multi_pr_label"; then
+  ok "4.35 bin/cleanup-after-merge.sh's MULTI_PR_LABEL ('$cleanup_multi_pr_label') is created by bin/setup-labels.sh"
+else
+  bad "4.35 bin/cleanup-after-merge.sh's MULTI_PR_LABEL ('$cleanup_multi_pr_label') is not among the labels bin/setup-labels.sh creates"
 fi
 
 # ============================================================================
