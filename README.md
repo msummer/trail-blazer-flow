@@ -201,7 +201,10 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    **resolved answers to every open question** (as `RESOLVED:` decisions built ONLY from the trusted
    post-plan comments that `find-implementation-work.sh` marks `covered_by_approval: true` — a
    comment posted after the `plan-approved` label is `covered_by_approval: false`, reported to the
-   human instead of folded in as a binding decision, per #194 — taken from that fresh, per-issue
+   human instead of folded in as a binding decision, per #194; since #230, a comment that WAS
+   covered but was itself edited in place after approval is also un-covered
+   (`covered_by_approval_reason: "decision-edited-after-approval"`), and one whose own edit state
+   cannot be established is un-covered too (`"decision-edit-unreadable"`) — taken from that fresh, per-issue
    run, not read from the thread by hand) + `LESSONS.md` entries.
    **Plan-binding gate (#174, split by verdict since #219; #229 adds a label pre-filter, checked
    first, at zero extra API cost):** `plan-approved` must currently be on the issue — its absence
@@ -504,7 +507,9 @@ follow-up the implementer files carries a `<!-- harness-follow-up: PR #<n> -->` 
 its source PR; both are harness-authored, so both also carry `no-auto-approve`. `plan-approved`
 can also come back off: the `issue-implementer` skill removes it (with an audit comment) when the
 approval no longer covers the freshest plan comment — a same-run revision landed after the label
-was applied (#174) — returning the issue to the human's review queue rather than building the
+was applied (#174), the plan comment was itself edited in place after approval (#192), or, since
+#230, a covered trusted decision comment was edited in place after approval — returning the issue
+to the human's review queue rather than building the
 wrong version. A human can also remove `plan-approved` directly, at any time, to veto an issue
 mid-flight (#229): the harness never removes a label the human didn't ask it to here, but it
 DOES honour the removal — dispatch, the pre-push recheck, and (under a merge autonomy policy) the
@@ -1100,6 +1105,34 @@ same as today (that pre-PR/post-PR boundary is stated only here, not restated in
 provenance" below) — see "Approval provenance" below for the release mechanism itself. No new
 grant, label, script, or baseline step.
 
+**Approval binding now also checks every COVERED trusted decision comment's own edit timestamp,
+not just the plan comment's (#230).** `find-implementation-work.sh`, on the branch that would
+otherwise conclude a `trusted_post_plan` entry `covered_by_approval: true` (#194 workstream B —
+after #229's label pre-filter and #192's plan-edit check both pass), fetches that comment's own
+REST `updated_at` (one extra read-only `gh api` call per *covered* comment, never per uncovered
+one) and compares it against `approval.approved_at`, the same idiom #192 already uses for the plan
+comment itself. A covered comment edited strictly *after* approval flips that entry to
+`covered_by_approval: false` and adds a new per-entry field, `covered_by_approval_reason:
+"decision-edited-after-approval"` — additive only — and collapses the ISSUE-LEVEL verdict the same
+way: `approval.covers_plan: false`, `approval.reason: "decision-edited-after-approval"`, a new
+`counts.decision_edited_after_approval` key. An entry whose own edit state cannot be established
+(no parseable comment id, a rejected lookup, or an unreadable `updated_at`) collapses the verdict
+to **unknown** instead: `covers_plan: null`, `reason: "decision-edit-unreadable"`,
+`covered_by_approval_reason: "decision-edit-unreadable"`, a new `counts.decision_edit_unreadable`
+key — edited wins precedence when an issue has both. `approval.approved_at`/`approved_by` stay
+populated in both new states (the events lookup itself succeeded), matching #192's precedent.
+Behaviour **narrows** on one existing key: `counts.post_approval_comments` now excludes an entry
+whose `false` comes from its own edit (`covered_by_approval_reason` non-null) rather than merely
+postdating the label — the same comment is no longer double-reported under two different reasons,
+but a warn-line count some tooling may have relied on can now read lower for an issue with an
+edited decision comment. Remedy, unchanged in spirit from #192: **remove and re-add
+`plan-approved`** — the human re-reads the edited decision and re-approves, moving `approved_at`
+past the edit and re-covering it, the same audited path already documented above. One-time
+transition note: on the first discovery run after upgrading, an issue with a covered decision
+comment that was quietly edited some time ago will newly report `covers_plan: false` or `null` and
+lose `plan-approved` (or hold, for the unknown verdict) — this is the intended tripwire firing
+retroactively, not a regression. No new grant, label, script, or baseline step.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -1387,7 +1420,21 @@ entry `covered_by_approval: true` when the comment's `createdAt` is not later th
 `approval.approved_at` and `false` when it is later — a maintainer who comments after approving is
 not silently treated as having amended the approved plan; the comment is reported to the human
 (`counts.post_approval_comments`, a `warn:` line) instead of becoming a binding `RESOLVED:`
-decision. To
+decision. Since #230, the same content-edit binding #192 applies to the plan comment ALSO applies
+to every decision comment workstream B marked covered: one extra read-only REST call per *covered*
+comment (never an already-uncovered one, and never on an already-uncovered issue) compares its own
+`updated_at` against `approval.approved_at` — a covered decision comment edited in place strictly
+*after* approval flips that entry to `covered_by_approval: false`,
+`covered_by_approval_reason: "decision-edited-after-approval"`, and collapses the ISSUE-LEVEL
+verdict to `covers_plan: false` too (the same `RESOLVED:` decision nobody actually approved, #192's
+gap closed for decisions as well as the plan); an entry whose own edit state cannot be established
+(an unparseable comment id, a rejected lookup, or an unreadable `updated_at`) instead collapses the
+verdict to **unknown** (`covered_by_approval_reason: "decision-edit-unreadable"`), with edited
+beating unreadable when an issue has both. `counts.post_approval_comments` keeps its name but
+narrows: it now counts only entries whose `false` comes from postdating the label, not from their
+own edit (which is counted separately, `counts.decision_edited_after_approval` /
+`counts.decision_edit_unreadable`) — the same tripwire-not-a-control caveat as the plan-comment
+check applies identically here (a re-approval, not a content hash, is the remedy). To
 make a post-approval comment binding **before a PR exists**, remove and re-add `plan-approved` —
 the same audited path #174 already documents, not a new surface (see below — since #213, this
 same act also releases an already-open PR, provided the plan itself is unchanged). A comment that
