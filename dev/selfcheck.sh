@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 54 assertions total. The gate prints what it checks — run it.
+# Five groups, 55 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -613,7 +613,7 @@ fi
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 575
-issue-cycle 340
+issue-cycle 355
 issue-planner 460
 project-kickoff 215
 test-ratchet 200
@@ -1012,8 +1012,26 @@ else
   fi
 fi
 
-# 4.33 (4.32 is reserved for #213's approved plan; assertion ids are allocated at plan time and
-# never renumbered) — fixed-string presence of the reason name approval-label-absent (#229) in
+# 4.32 — fixed-string presence of the field name approved_at_history (#213) in the script that
+# writes it and the merge floor's Plan-binding provenance sub-bullet, the one instruction surface
+# that walks it: bin/find-implementation-work.sh (writer) and skills/issue-cycle/SKILL.md (the
+# floor's reader). Modelled on 4.30/4.28 — a floor that walks a field nobody writes is the exact
+# failure this pins. Proves only that the writer and the floor agree on the field NAME, not that
+# the newest-first walk, the dedup, or the release-on-match behaviour actually runs.
+missing=""
+for f in bin/find-implementation-work.sh skills/issue-cycle/SKILL.md; do
+  grep -qF -- "approved_at_history" "$root/$f" || missing="$missing $f"
+done
+if [ -z "$missing" ]; then
+  ok "4.32 'approved_at_history' present in bin/find-implementation-work.sh and skills/issue-cycle/SKILL.md"
+else
+  bad "4.32 'approved_at_history' missing from:$missing"
+fi
+
+# 4.33 (numbered ahead of 4.32 because assertion ids are allocated at plan time and never
+# renumbered — 4.32 was reserved for #213's plan before #213 was implemented, and now lands
+# immediately above once #213 itself is implemented) — fixed-string presence of the reason name
+# approval-label-absent (#229) in
 # the script that writes it and the one instruction surface that names it individually:
 # bin/find-implementation-work.sh (writer) and skills/issue-implementer/SKILL.md (the pre-push
 # revalidation reader, steps 2a/2e). Modelled on 4.30 — proves only that the reason NAME agrees

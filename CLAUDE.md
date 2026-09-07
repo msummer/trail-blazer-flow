@@ -171,6 +171,16 @@ covered path, so the zero-call assertions can't pass vacuously). This reason win
 `no-plan` — the human's withdrawal is the more actionable fact — but the separate "no
 maintainer-authored plan comment" warn and `counts.no_trusted_plan` still fire too, so the
 missing-plan fact is never hidden; `--issue <n>` mode carries the same pre-filter and short-circuit.
+Since #213 it additionally pins, on `bin/find-implementation-work.sh` only, the additive
+`approval.approved_at_history[]` array a merge floor now walks to accept a PR body written under
+an earlier approval of the same plan: one real `plan-approved` labeling event yields one entry
+agreeing with `approval`'s own top-level `approved_at`/`approved_by`/`binding_line`; three events
+posted OUT OF ORDER in the fixture still resolve newest-first (entry `[0]` matches what the
+existing newest-wins compare already picks); two byte-identical events dedupe to one entry; a
+not-covered plan (`plan-after-approval`) still yields a non-empty history whose every entry's
+`binding_line` is null; the events lookup being unreadable, evaluated alongside a healthy sibling
+issue, yields `[]` for the unreadable issue only — pinning the same per-iteration reset the #229
+pre-filter above also depends on; and `--issue <n>` mode carries the same field, same shape.
 It runs in CI as the sixth and last step, but it
 is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh` or
 `bin/find-implementation-work.sh` changes.

@@ -96,6 +96,22 @@
 #   below it is always fresher). This reason wins precedence over no-plan — the human's withdrawal
 #   is the more actionable fact — but the separate "no maintainer-authored plan comment" warn and
 #   counts.no_trusted_plan still fire too, so the missing-plan fact is never hidden.
+#   #213 adds approval.approved_at_history[] on the SAME script (bin/find-implementation-work.sh):
+#   every real plan-approved `labeled` event for the issue, newest first, deduplicated, as
+#   {approved_at, approved_by, binding_line} — so a PR body written under an EARLIER approval of
+#   the same plan still has a binding line the issue-cycle merge floor recognises after a later,
+#   unrelated re-approval (see skills/issue-cycle/SKILL.md's *Plan-binding provenance* and
+#   *Post-approval comments* sub-bullets — re-adding plan-approved to bind a post-approval comment
+#   no longer permanently strands an open PR). Pinned here: a single labeled event => one entry
+#   matching approval's own top-level approved_at/approved_by/binding_line; three events posted
+#   OUT OF ORDER in the fixture => newest-first ordering (entry [0] is the newest, matching what
+#   $latest already picked); two byte-identical events => deduplicated to one entry; covers_plan
+#   not true (plan-after-approval) => every entry's binding_line is null even though the history
+#   itself is non-empty; the events lookup being unreadable (reject-events-<n>), evaluated
+#   alongside a healthy sibling issue, => approved_at_history: [] for the unreadable issue only —
+#   pinning the same per-iteration reset #229's approval-label-absent pre-filter also depends on
+#   (a stale value must never leak from one ready issue's loop iteration into the next); and
+#   --issue <n> single-issue mode carries the same field, same shape.
 #
 # Usage: bash dev/planning-tests.sh [name-filter] — same output contract as
 # dev/cleanup-tests.sh, dev/doctor-tests.sh, and dev/selfcheck-tests.sh: one PASS/FAIL line per
@@ -227,8 +243,9 @@ mk_fixture() {
 # cases with the addition of stub-json-missing-json-argument-fails-loud, unaffected on both
 # measurements — its call runs against the stub directly, never through bin/find-planning-work.sh,
 # so a mutation to that script cannot touch it; the suite has since grown to 79 across #229's five
-# new find-implementation-work.sh label-pre-filter fixtures, none of which touch
-# find-planning-work.sh or the needs_initial_plan call this proof mutates — not re-run): the
+# new find-implementation-work.sh label-pre-filter fixtures, then 85 across #213's six approval-
+# history fixtures, none of which touch find-planning-work.sh or the needs_initial_plan call this
+# proof mutates — not re-run): the
 # generic validator — not a leftover special
 # case — is what now catches an "authorAssociation" regression. With validate_json_fields in place
 # (unmutated) and bin/find-planning-work.sh's OWN needs_initial_plan call mutated in the working
@@ -380,35 +397,50 @@ mk_fixture() {
 # before the fix, `2026-09-01T11:11:24Z msummer` exit 0 after). MUTATION PROOF A (re-measured
 # 2026-09-05, when the suite held 66 cases — up from 56 at the original 2026-09-04 measurement,
 # via #211's candidates case and #192's nine new cases below; the suite has since grown to 74
-# across #217, now 79 across #229's five new label-pre-filter fixtures too — two of them
+# across #217, then 79 across #229's five new label-pre-filter fixtures too — two of them
 # (impl-approval-label-absent, impl-approval-label-absent-single-issue) carry an events-<n>.json
 # but never reach this arm at all, since has_approval_label short-circuits before it — none of it
-# touching this arm; not re-run): with the stub's propagation (`||
+# touching this arm; RE-MEASURED again 2026-09-06 when #213's six new approval-history fixtures
+# grew the suite to 85 — every one of them carries a well-formed events-<n>.json document, so this
+# stub-propagation mutant stays invisible to them too): with the stub's propagation (`||
 # exit 1`) in place, reverting ONLY it (restoring the unconditional `exit 0` this arm had before
-# #204) and re-running `bash dev/planning-tests.sh` dropped the suite from 66 pass/0 fail to 65
-# pass/1 fail, failing exactly: impl-approval-events-filter-error — the case #204 added, whose
+# #204) and re-running `bash dev/planning-tests.sh` (now 85 cases) dropped the suite to 84 pass/1
+# fail, failing exactly: impl-approval-events-filter-error, the identical single-case result as the
+# original 66-case measurement (65 pass/1 fail) scaled up — the case #204 added, whose
 # events-<n>.json is a
 # document (a page array whose own element is itself an array) the script's own, unmutated filter
 # cannot process; every other case's events-<n>.json fixture is well-formed, so jq never errors
 # for them and this stub change is otherwise invisible to the suite — reverted immediately after
 # recording this. MUTATION PROOF B (#196-class, re-measured 2026-09-05, when the suite held 66
 # cases — up from 56 at the original 2026-09-04 measurement (the suite has since grown to 74
-# across #217, now 79 across #229 — same short-circuit reasoning as MUTATION PROOF A above, not
+# across #217, then 79 across #229 — same short-circuit reasoning as MUTATION PROOF A above, not
 # re-run); its failing SET genuinely grows, per
 # #192's plan, since every new #192 case with an events-<n>.json fixture that asserts an approval
 # outcome now also depends on this filter; re-verified again for #220's fixture-url
-# normalisation — identical 46 pass/20 fail, same failing set): with the stub
+# normalisation — identical 46 pass/20 fail, same failing set; RE-MEASURED again 2026-09-06 when
+# #213's six new approval-history fixtures grew the suite to 85 — the same reasoning applies to
+# every one of them too, since each carries an events-<n>.json fixture asserting a real
+# approved_at/approved_at_history outcome): with the stub
 # unchanged, deleting the leading `.[] | ` from bin/find-implementation-work.sh's OWN events
-# filter (the script bug #196 fixed, not this stub) and re-running the suite dropped it to
-# 46 pass/20 fail, failing exactly: impl-approval-covers-plan, impl-plan-after-approval,
+# filter (the script bug #196 fixed, not this stub) and re-running the suite (now 85 cases) dropped
+# it to 59 pass/26 fail, failing exactly the same twenty cases as the 46 pass/20 fail measurement
+# above PLUS all six #213 cases: impl-approval-history-single-event,
+# impl-approval-history-newest-first, impl-approval-history-dedup,
+# impl-approval-history-not-covered, impl-approval-history-unreadable, and
+# impl-single-issue-approval-history — every one of them fails closed to approval-unreadable
+# before its own approved_at_history assertions are ever reached, for the identical reason as the
+# nine #192 cases below — reverted immediately after recording this. The original twenty-case
+# measurement (46 pass/20 fail, failing exactly: impl-approval-covers-plan,
+# impl-plan-after-approval,
 # impl-relabel-newest-wins, impl-other-label-event-ignored, impl-approval-events-unreadable,
 # impl-single-issue-mode, impl-approval-tie, impl-plan-edited-after-approval,
 # impl-plan-edited-before-approval, impl-plan-edit-tie-covered, impl-plan-edit-lookup-unreadable,
 # impl-plan-edit-filter-error, impl-plan-edit-missing-updated-at, impl-plan-comment-id-
 # unparseable, impl-plan-comment-id-non-digits, impl-single-issue-plan-edited-after-approval,
 # impl-post-approval-comment-not-binding, impl-pre-approval-comment-binding,
-# impl-post-approval-tie-covered, and impl-single-issue-post-approval-comment — reverted
-# immediately after recording this. The NINE #192 cases above (impl-plan-edited-after-approval
+# impl-post-approval-tie-covered, and impl-single-issue-post-approval-comment) is reproduced here
+# for reference; reverted immediately after recording this too. The NINE #192 cases above
+# (impl-plan-edited-after-approval
 # through impl-single-issue-plan-edited-after-approval, including impl-plan-comment-id-non-digits,
 # which sits between impl-plan-comment-id-unparseable and impl-single-issue-plan-edited-after-
 # approval in the case registry) fail here for the SAME reason as the pre-existing ones: they all
@@ -420,9 +452,9 @@ mk_fixture() {
 # whether or not the script's own leading `.[] | ` is present — a coincidence of that one
 # fixture's shape (this case's contribution is the stub's status *propagation*, proven by MUTATION
 # PROOF A above, not detection of this particular script mutant), not evidence the mutant is
-# inert; the mutant is caught by the twenty cases above, including
-# impl-other-label-event-ignored, which — now that this arm propagates — also newly fails under
-# it (see that case's own comment). No events-<n>.json -> prints nothing (degrades to reason:
+# inert; the mutant is caught by the twenty-six cases above (the original twenty plus #213's six),
+# including impl-other-label-event-ignored, which — now that this arm propagates — also newly
+# fails under it (see that case's own comment). No events-<n>.json -> prints nothing (degrades to reason:
 # no-approval-event, not a hard failure) — a fixture that doesn't care about approval binding
 # needs no events-<n>.json at all, and this remains a genuinely different modelled state from a
 # filter error: the endpoint answered and the filter matched nothing, versus the filter couldn't
@@ -443,9 +475,9 @@ mk_fixture() {
 # number,title,url,author,authorAssociation ...)` probe with its `view_fields` fallback) and
 # re-running `bash dev/planning-tests.sh` against the SAME (post-#202) fixtures dropped the suite
 # from 54 pass/0 fail to 49 pass/5 fail (measured 2026-09-04, when the suite held 54 cases — the
-# suite has since grown to 74 across #204/#211/#192/#217, now 79 across #229 too, all additions on
-# the implementer-facing half or the --json field-list validation, none of which this
-# planner-side proof touches; this proof was not re-run), failing exactly:
+# suite has since grown to 74 across #204/#211/#192/#217, then 79 across #229, then 85 across
+# #213, all additions on the implementer-facing half or the --json field-list validation, none of
+# which this planner-side proof touches; this proof was not re-run), failing exactly:
 # initial-untrusted-author-reported (the
 # old fallback's needs_initial_plan carries no authorAssociation field at all now that association
 # data lives only in rest-issues.json, so the old code's own jq maps it to "MISSING" instead of the
@@ -460,7 +492,8 @@ mk_fixture() {
 # the mutant is inert. MUTATION PROOF (b) (measured 2026-09-04): deleting only the leading `.[] | `
 # from the script's REST --jq filter (leaving everything else at its current, #202 shape) and
 # re-running the suite dropped it to 50 pass/4 fail (measured 2026-09-04, when the suite held 54
-# cases — the suite has since grown to 74 across #204/#211/#192/#217, now 79 across #229; not
+# cases — the suite has since grown to 74 across #204/#211/#192/#217, then 79 across #229, then 85
+# across #213 (same implementer-facing/field-list additions, same non-involvement); not
 # re-run), failing exactly:
 # initial-untrusted-author-reported, initial-trusted-author-clean, initial-author-map-per-issue,
 # and revision-trusted-author-clean — the stub's `jq -r "(EXPR)"` then tries to index the whole
@@ -1514,10 +1547,14 @@ EOF
 # edited" warn line into the script's plan-after-approval branch itself (simulating a copy-paste
 # bug that fires the new check's warn text on the wrong branch while the final `reason` still
 # legitimately ends up "plan-after-approval") and re-running the suite (which then held 66 cases,
-# 74 after #217, now 79 after #229's five new label-pre-filter fixtures — none of which reach this
-# branch at all, since their own has_approval_label check short-circuits before it; not re-run)
+# 74 after #217, then 79 after #229's five new label-pre-filter fixtures — none of which reach this
+# branch at all, since their own has_approval_label check short-circuits before it; RE-MEASURED
+# again 2026-09-06 against the 85-case suite that now also includes #213's
+# impl-approval-history-not-covered — which DOES reach this same plan-after-approval branch but
+# asserts nothing about "plan comment was edited", so the leaked warn text is invisible to it too)
 # dropped it to
-# 65 pass/1 fail, failing exactly: impl-plan-after-approval — reverted immediately after
+# 84 pass/1 fail, failing exactly: impl-plan-after-approval, the identical single-case result as
+# the original 66-case measurement (65 pass/1 fail) scaled up — reverted immediately after
 # recording this. A cruder mutant (forcing every issue through the branch that runs the new check
 # at all, via `if false; then` on the plan_created/approved_at compare) also drops this case
 # (re-measured 2026-09-05: still 65 pass/1 fail, failing exactly impl-plan-after-approval), but
@@ -2174,10 +2211,12 @@ EOF
 # .ready) are still present under their current names, alongside the new plan_selection counts
 # and, since #174, each plan_selection entry's .approval/.binding_line members and their six
 # new counts keys (plan_after_approval, no_approval_event, approval_unreadable, #192's
-# plan_edited_after_approval and plan_edit_unreadable, plus #229's approval_label_absent). One
-# ready issue (with no plan comment, so the approval lookup — including #192's plan-comment-edit
-# lookup — is never reached) is enough to give plan_selection a non-empty entry to check the new
-# members on; the new counts keys are always present regardless of whether that lookup ran.
+# plan_edited_after_approval and plan_edit_unreadable, plus #229's approval_label_absent). Since
+# #213, also pins that .approval carries approved_at_history (present as a key regardless of
+# whether it ends up empty). One ready issue (with no plan comment, so the approval lookup —
+# including #192's plan-comment-edit lookup — is never reached) is enough to give plan_selection a
+# non-empty entry to check the new members on; the new counts keys are always present regardless
+# of whether that lookup ran.
 case_impl_output_shape() {
   local dir; dir="$(mk_fixture impl-output-shape)"
   cat > "$dir/ready.json" <<'EOF'
@@ -2193,6 +2232,7 @@ EOF
   expect_jq 'has("plan_selection")' 'true'
   expect_jq '.plan_selection[0] | has("approval")' 'true'
   expect_jq '.plan_selection[0] | has("binding_line")' 'true'
+  expect_jq '.plan_selection[0].approval | has("approved_at_history")' 'true'
   expect_jq '.counts | has("ready")' 'true'
   expect_jq '.counts | has("truncated")' 'true'
   expect_jq '.counts | has("fetch_failures")' 'true'
@@ -2656,8 +2696,10 @@ EOF
 #
 # MUTATION PROOF (measured 2026-09-04, when the suite held 55 cases — it has since grown to 57
 # (#211), then 66 (#192, including the digits-only-validation fixture added on re-verification),
-# then 74 (#217, --json field-list validation, unrelated to this branch), and now 79 (#229's label
-# pre-filter fixtures, also unrelated to this remap); not re-run for any
+# then 74 (#217, --json field-list validation, unrelated to this branch), then 79 (#229's label
+# pre-filter fixtures, also unrelated to this remap), and now 85 (#213's approval-history
+# fixtures, likewise unrelated — they touch approved_at_history and binding_line, never
+# covered_by_approval); not re-run for any
 # of these, per the accepted-minimum qualification in #192's plan): deleting
 # the covered_by_approval remap at
 # bin/find-implementation-work.sh's `trusted_post_plan=$(printf '%s' "$trusted_post_plan" | jq -c
@@ -2780,7 +2822,8 @@ EOF
 # MUTATION PROOF M1 (measured 2026-09-05, deleting `validate_json_fields "$@"` from the list) arm;
 # re-measured 2026-09-05 when the suite grew to 74 cases with the addition of
 # stub-json-missing-json-argument-fails-loud below; the suite has since grown to 79 across #229's
-# five new label-pre-filter fixtures, none of which ever passes an unsupported --json field to a
+# five new label-pre-filter fixtures, then 85 across #213's six approval-history fixtures, none of
+# which ever passes an unsupported --json field to a
 # list) call — not re-run): dropped the suite from 74 pass/0 fail to
 # 69 pass/5 fail, failing exactly: this case, stub-json-author-association-rejected,
 # plan-script-unknown-json-field-fails-loud, impl-script-unknown-json-field-fails-loud (an
@@ -2807,7 +2850,8 @@ EOF
 # MUTATION PROOF M2 (measured 2026-09-05, deleting `validate_json_fields "$@"` from the view) arm;
 # re-measured 2026-09-05 when the suite grew to 74 cases with the addition of
 # stub-json-missing-json-argument-fails-loud below, unaffected — its own call is a list) call, not
-# view)); the suite has since grown to 79 across #229's five new label-pre-filter fixtures, whose
+# view)); the suite has since grown to 79 across #229's five new label-pre-filter fixtures, then
+# 85 across #213's six approval-history fixtures, whose
 # view) calls all request only accepted fields (number,title,url,comments,labels) — not re-run):
 # dropped the suite from 74 pass/0 fail to 72 pass/2 fail, failing exactly: this case and
 # stub-json-author-association-rejected (both scripts' first failing call in the end-to-end cases
@@ -2834,8 +2878,8 @@ EOF
 # unconditional `: ;` for every token; re-measured 2026-09-05 when the suite grew to 74 cases with
 # the addition of stub-json-missing-json-argument-fails-loud below, unaffected — its own rejection
 # comes from the found-check above this token loop, not from this loop; the suite has since grown
-# to 79 across #229, likewise unaffected — an always-accepting validator changes nothing for a
-# fixture whose field list was already valid — not re-run): dropped the suite from
+# to 79 across #229, then 85 across #213, likewise unaffected — an always-accepting validator
+# changes nothing for a fixture whose field list was already valid — not re-run): dropped the suite from
 # 74 pass/0 fail to 69 pass/5 fail, failing exactly: this case, stub-json-unknown-field-rejected,
 # stub-json-unknown-field-rejected-view, plan-script-unknown-json-field-fails-loud, and
 # impl-script-unknown-json-field-fails-loud — reverted immediately after recording this.
@@ -2872,8 +2916,17 @@ EOF
 # touches; re-measured again 2026-09-06 when #229 grew the suite to 79 cases by adding "labels" to
 # the same two `gh issue view` calls and five new label-pre-filter fixtures — same 13 survivors,
 # fail count grew from 61 to 66, exactly the five new #229 cases joining the caught set, since
-# every one of them also goes through a real `gh issue view ... --json ...,comments,labels` call):
-# dropped the suite from 79 pass/0 fail to 13 pass/66 fail — far beyond just this
+# every one of them also goes through a real `gh issue view ... --json ...,comments,labels` call;
+# RE-MEASURED once more 2026-09-06 when #213 grew the suite to 85 cases with six new
+# approval-history fixtures — same 13 survivors again, fail count grew from 66 to 72, exactly the
+# six new #213 cases joining the caught set (each goes through the identical
+# `gh issue view ... --json ...,comments,labels` call), including impl-output-shape, which was
+# ALREADY caught before this PR's own added assertion — with the fetch failing closed,
+# `plan_selection` is `[]`, so `.plan_selection[0].approval | has("approved_at_history")` resolves
+# through jq's `null | has(...)` (which is `false`, not an error) exactly like its two
+# PRE-EXISTING `has(...)` assertions already did, so this PR's new clause changes nothing about
+# whether the case fails under this mutant): dropped the suite (85 cases) from 85 pass/0 fail to
+# 13 pass/72 fail — far beyond just this
 # control case, since "comments" is also in the field list virtually every PRE-EXISTING case's
 # real script call passes to `gh issue view`; only thirteen cases survived: no-comments,
 # output-shape, initial-untrusted-author-reported, initial-trusted-author-clean,
@@ -2886,7 +2939,7 @@ EOF
 # candidate/ready issue's view call now fails closed exactly like a fetch failure, which happens
 # to leave their asserted counts unchanged (e.g. no-comments expects counts.revision: 0 regardless
 # of whether issue #1 was ever fetched) — a coincidence of those particular fixtures' expected
-# values, not evidence the mutant is inert on them; every one of the 66 OTHER cases, including
+# values, not evidence the mutant is inert on them; every one of the 72 OTHER cases, including
 # this control, is caught. Reverted immediately after recording this.
 case_stub_json_script_field_lists_accepted() {
   local dir; dir="$(mk_fixture stub-json-script-field-lists-accepted)"
@@ -2934,8 +2987,9 @@ EOF
 # GH_ISSUE_JSON_FIELDS membership check entirely; re-measured 2026-09-05 when the suite grew to 74
 # cases with the addition of stub-json-missing-json-argument-fails-loud below, unaffected — its own
 # call has no --json argument at all, so it never reaches this replaced check and stays caught by
-# the found-check above it; the suite has since grown to 79 across #229, likewise unaffected — none
-# of its five fixtures' --search strings or --json field lists contain the "authorAssociation"
+# the found-check above it; the suite has since grown to 79 across #229, then 85 across #213,
+# likewise unaffected — none
+# of their fixtures' --search strings or --json field lists contain the "authorAssociation"
 # substring this lazy re-implementation still catches — not re-run): dropped the suite from
 # 74 pass/0 fail to 69 pass/5 fail, failing
 # exactly: this case (its --search string contains "authorAssociation" as
@@ -2967,8 +3021,8 @@ EOF
 # an absent fixture cannot explain the rejection — the same non-vacuity rule every other rejection
 # case in this Part follows).
 # MUTATION PROOF M7 (measured 2026-09-05, `if [ "$found" -ne 1 ]; then` -> `if false; then` in
-# validate_json_fields; the suite has since grown to 79 across #229, unaffected — none of its five
-# fixtures' calls omits a --json argument — not re-run): dropped the suite from 74 pass/0 fail to
+# validate_json_fields; the suite has since grown to 79 across #229, then 85 across #213,
+# unaffected — none of these fixtures' calls omits a --json argument — not re-run): dropped the suite from 74 pass/0 fail to
 # 73 pass/1 fail, failing exactly:
 # this case (the missing-argument call now falls through to the zero-iteration `for tok in $list`
 # loop and is silently served initial.json instead of rejected) — reverted immediately after
@@ -3233,6 +3287,308 @@ EOF
 }
 
 # ---------------------------------------------------------------------------------------------
+# Part 9 cases (#213), against bin/find-implementation-work.sh — approval history exposure: the
+# merge floor needs every real plan-approved labeling event for the issue, not just the newest, so
+# a PR body written under an EARLIER approval of the same plan still has a binding line the floor
+# recognises after a later, unrelated re-approval. One fixture per distinguishing clause of the
+# history builder (LESSONS 2026-09-04): the dedup (unique), the ordering (reverse), the
+# covered-vs-not conditional on each entry's binding_line, and the per-iteration reset that keeps
+# one issue's history from leaking into the next — plus the field's presence in --issue <n> mode,
+# the single-issue callers actually run. Regression safety for the binding_line literal itself is
+# NOT re-asserted here: case_impl_approval_covers_plan and case_impl_single_issue_mode already pin
+# the exact byte-for-byte string, and each case below cross-checks its own top-level binding_line
+# against approved_at_history[0].binding_line instead of restating the literal.
+#
+# MEASURED MUTANTS (2026-09-06), applied one at a time to bin/find-implementation-work.sh and
+# reverted byte-identically immediately after each measurement, full suite
+# (`bash dev/planning-tests.sh`) re-run after each — the suite held 85 cases (79 before this PR's
+# six new ones) at the time of measurement:
+#   (a) drop `approved_at_history: $history` from the approval_json jq -n object entirely: this
+#       is NOT clause-exclusive — every case that reads .approval.approved_at_history at all reads
+#       through jq's `null` for a missing key, so length/has() assertions everywhere resolve to
+#       0/false instead of failing loudly. Measured: dropped the suite to 78 pass/7 fail, failing
+#       EXACTLY impl-output-shape, impl-approval-history-single-event,
+#       impl-approval-history-newest-first, impl-approval-history-dedup,
+#       impl-approval-history-not-covered, impl-approval-history-unreadable, and
+#       impl-single-issue-approval-history — every one of this PR's seven new/touched assertions on
+#       the field, and no pre-existing case — reverted immediately.
+#   (b) change `unique | reverse` to `unique` (history_json line only): dropped the suite to 83
+#       pass/2 fail, failing EXACTLY impl-approval-history-newest-first (entry [0]'s approved_at
+#       becomes the OLDEST event instead of the newest) and impl-approval-history-not-covered
+#       (its own entry-[0]-is-the-newest assertions, over two events, are ordering-sensitive too;
+#       impl-single-issue-approval-history and impl-approval-history-dedup each carry only ONE
+#       history entry, so ordering is vacuous for both and neither fails) — reverted immediately.
+#   (c) change `unique` to `sort` (history_json line only, same site as (b)): dropped the suite to
+#       84 pass/1 fail, failing EXACTLY impl-approval-history-dedup (two byte-identical event lines
+#       survive `sort`, which does not remove duplicates, so length is 2 instead of 1) — reverted
+#       immediately.
+#   (d) make the per-entry binding_line conditional unconditional (`(if $covers == "true" then X
+#       else null end)` -> bare `X`, approved_at_history's decorator only): this is NOT
+#       clause-exclusive either — the top-level binding_line is now DERIVED from
+#       approved_at_history[0].binding_line, so any not-covered fixture that asserts the top-level
+#       binding_line is null also catches it. Measured: dropped the suite to 78 pass/7 fail, failing
+#       EXACTLY impl-plan-after-approval, impl-plan-edited-after-approval,
+#       impl-plan-edit-lookup-unreadable, impl-plan-comment-id-unparseable,
+#       impl-plan-comment-id-non-digits, impl-single-issue-plan-edited-after-approval (six
+#       PRE-EXISTING #192/#174 cases, all of which already assert `binding_line: null` on a
+#       not-covered path — this refactor's own regression net), plus this PR's
+#       impl-approval-history-not-covered — reverted immediately.
+#   (e) delete the two per-iteration resets `history_json="[]"` and `approved_at_history="[]"`
+#       from inside the `for n in $ready_numbers` loop with NO replacement at all (not even a
+#       pre-loop default): under `set -u`, any fixture whose FIRST evaluated issue never reaches
+#       the events-readable branch (which is the only place these two variables would otherwise
+#       get assigned) hits "unbound variable" and the whole script aborts — far broader than the
+#       leak this reset is meant to catch. Measured: dropped the suite to 73 pass/12 fail, failing
+#       12 fixtures whose first-or-only ready issue skips that branch (impl-untrusted-marker-not-
+#       selected, impl-no-trusted-plan, impl-approval-events-unreadable, impl-approval-events-
+#       filter-error, impl-no-plan-no-binding, impl-output-shape, all five impl-approval-label-*
+#       cases, and impl-approval-history-unreadable) — reverted immediately. This conflates the
+#       reset's OWN failure mode with an unrelated `set -u` safety net, so it is not the mutant
+#       recorded as this case's proof. The clause-exclusive version instead adds the two variables'
+#       "[]" default ONCE, immediately before the loop (so a fixture's first-ever iteration is
+#       never unbound), and drops them ONLY from the per-iteration reset inside the loop — the
+#       exact shape of "someone forgot these two lines in the reset block, but they're still
+#       initialized somewhere". Measured: dropped the suite to 84 pass/1 fail, failing EXACTLY
+#       impl-approval-history-unreadable (issue #2's approved_at_history, expected [], instead
+#       inherits issue #1's non-empty history verbatim from the previous loop iteration, since the
+#       approval-unreadable branch never reassigns either variable) — reverted immediately.
+#   (f) (measured 2026-09-07, #213 kickback round 2) pass `--arg at "$approved_at"` to the
+#       approved_at_history decorator's jq and use $at in place of .approved_at inside the
+#       binding_line template (that jq invocation only): every entry's binding_line then carries
+#       the NEWEST approval's timestamp instead of its own — a mutant the suite's ORIGINAL
+#       impl-approval-history-newest-first assertions could not catch, since entry [0] IS the
+#       newest (its [0]==[0] cross-check stays vacuously true) and the plan-url contains() check
+#       never inspects approved_at at all. Measured: dropped the suite to 84 pass/1 fail, failing
+#       EXACTLY impl-approval-history-newest-first — specifically its entry-[1]-full-literal
+#       assertion and its all-entries relational check (each entry's binding_line against ITS OWN
+#       approved_at), both added in response to this exact mutant — reverted immediately (diff and
+#       sha256 against a pre-mutation copy of bin/find-implementation-work.sh both confirmed
+#       byte-identical). Re-running mutants (a)-(e) above was not needed: adding assertions to a
+#       case already in a mutant's failing set does not change that mutant's failing set, and none
+#       of (a)-(e) touch the .approved_at term this mutant replaces.
+# See case_impl_approval_covers_plan's own comment for this file's precedent on recording a
+# positive control before trusting a zero/empty-state assertion; that same control (2 gh api calls
+# on a covered path) is reused unmodified here, not re-measured.
+
+# impl-approval-history-single-event — one labeled plan-approved event: approved_at_history holds
+# exactly that event, and its fields agree with the top-level approval.approved_at/approved_by and
+# binding_line entry-[0]-derives-the-top-level invariant (RESOLVED Q2).
+case_impl_approval_history_single_event() {
+  local dir; dir="$(mk_fixture impl-approval-history-single-event)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-05-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7043"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-05-02T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  cat > "$dir/comment-7043.json" <<'EOF'
+{"created_at":"2026-05-01T00:00:00Z","updated_at":"2026-05-01T00:00:00Z"}
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'true'
+  expect_jq '.plan_selection[0].approval.approved_at_history | length' '1'
+  expect_jq '.plan_selection[0].approval.approved_at_history[0].approved_at == .plan_selection[0].approval.approved_at' 'true'
+  expect_jq '.plan_selection[0].approval.approved_at_history[0].approved_by == .plan_selection[0].approval.approved_by' 'true'
+  expect_jq '.plan_selection[0].approval.approved_at_history[0].binding_line == .plan_selection[0].binding_line' 'true'
+}
+
+# impl-approval-history-newest-first — three plan-approved labeling events written OUT OF ORDER
+# in the fixture (T1, T3, T2), plan at T0: approved_at_history is newest-first regardless of
+# fixture order (entry [0] is T3, entry [2] is T1), agreeing with approval.approved_at (which
+# $latest, computed independently via `sort | tail -1`, also resolves to T3); every entry's
+# binding_line embeds the CURRENT plan's url (RESOLVED Q2's "each entry's binding_line is built
+# for the plan selected NOW" — a different plan url could never match at the merge floor). The
+# ONLY multi-event covered fixture in this suite, so it alone can pin that a NON-newest entry's
+# binding_line embeds THAT entry's own approved_at rather than the newest event's — see the full
+# literal on entry [1] and the all-entries relational check inside the case body, and mutant (f)
+# in the MEASURED MUTANTS block above.
+case_impl_approval_history_newest_first() {
+  local dir; dir="$(mk_fixture impl-approval-history-newest-first)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-05-10T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7044"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-05-11T00:00:00Z","actor":{"login":"first"}},
+ {"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-05-13T00:00:00Z","actor":{"login":"third"}},
+ {"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-05-12T00:00:00Z","actor":{"login":"second"}}]
+EOF
+  cat > "$dir/comment-7044.json" <<'EOF'
+{"created_at":"2026-05-10T00:00:00Z","updated_at":"2026-05-10T00:00:00Z"}
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'true'
+  expect_jq '.plan_selection[0].approval.approved_at_history | length' '3'
+  expect_jq '.plan_selection[0].approval.approved_at_history[0].approved_at' '"2026-05-13T00:00:00Z"'
+  expect_jq '.plan_selection[0].approval.approved_at_history[2].approved_at' '"2026-05-11T00:00:00Z"'
+  expect_jq '.plan_selection[0].approval.approved_at' '"2026-05-13T00:00:00Z"'
+  expect_jq '.plan_selection[0].approval.approved_at_history[0].binding_line == .plan_selection[0].binding_line' 'true'
+  expect_jq '[.plan_selection[0].approval.approved_at_history[].binding_line | contains("plan=https://example.invalid/1#issuecomment-7044")] | all' 'true'
+  # A NON-newest entry's binding_line must embed THAT entry's own approved_at, not the newest
+  # one's — the tautological [0]==[0] check above and the plan-url-only contains() check cannot
+  # catch a decorator that stamps every entry with $approved_at (the newest) instead of its own
+  # .approved_at. Full literal for entry [1] plus an all-entries relational check (each entry
+  # compared against ITS OWN approved_at, not a fixed string) together pin this totally.
+  # MEASURED (#213 kickback): mutant `--arg at "$approved_at"` in place of `.approved_at` inside
+  # bin/find-implementation-work.sh's approved_at_history decorator jq made every entry's
+  # binding_line carry the newest event's timestamp; re-running `bash dev/planning-tests.sh`
+  # failed exactly impl-approval-history-newest-first (85 -> 84 pass, 1 fail), every other case
+  # unaffected; reverted byte-identically (diff + sha256 both confirmed empty/matching) before
+  # this file was committed.
+  expect_jq '.plan_selection[0].approval.approved_at_history[1].binding_line' '"<!-- harness-plan-binding: issue=1 plan=https://example.invalid/1#issuecomment-7044 approved-at=2026-05-12T00:00:00Z -->"'
+  expect_jq '.plan_selection[0].approval.approved_at_history | all(.binding_line == "<!-- harness-plan-binding: issue=1 plan=https://example.invalid/1#issuecomment-7044 approved-at=" + .approved_at + " -->")' 'true'
+}
+
+# impl-approval-history-dedup — two byte-identical labeled plan-approved events (same created_at,
+# same actor — e.g. two labeling webhooks for one human action): collapses to ONE history entry,
+# not two.
+case_impl_approval_history_dedup() {
+  local dir; dir="$(mk_fixture impl-approval-history-dedup)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-05-20T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7045"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-05-21T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-05-21T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  cat > "$dir/comment-7045.json" <<'EOF'
+{"created_at":"2026-05-20T00:00:00Z","updated_at":"2026-05-20T00:00:00Z"}
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'true'
+  expect_jq '.plan_selection[0].approval.approved_at_history | length' '1'
+}
+
+# impl-approval-history-not-covered — plan posted AFTER the newest plan-approved label
+# (covers_plan: false, reason: plan-after-approval), with TWO labeling events on record: every
+# history entry's binding_line is null (nothing pasteable for a plan that isn't covered) even
+# though the history itself is non-empty and still carries real approved_at/approved_by pairs,
+# newest first — a non-vacuous "every entry" check (a single-entry array would trivially satisfy
+# it).
+case_impl_approval_history_not_covered() {
+  local dir; dir="$(mk_fixture impl-approval-history-not-covered)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v2 (posted after both approvals)","createdAt":"2026-06-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7046"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-06-01T00:00:00Z","actor":{"login":"alice"}},
+ {"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-06-02T00:00:00Z","actor":{"login":"bob"}}]
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'false'
+  expect_jq '.plan_selection[0].approval.reason' '"plan-after-approval"'
+  expect_jq '.plan_selection[0].binding_line' 'null'
+  expect_jq '.plan_selection[0].approval.approved_at_history | length' '2'
+  expect_jq '[.plan_selection[0].approval.approved_at_history[].binding_line]' '[null,null]'
+  expect_jq '.plan_selection[0].approval.approved_at_history[0].approved_at' '"2026-06-02T00:00:00Z"'
+  expect_jq '.plan_selection[0].approval.approved_at_history[0].approved_by' '"bob"'
+  expect_jq '.plan_selection[0].approval.approved_at_history[1].approved_by' '"alice"'
+}
+
+# impl-approval-history-unreadable — TWO ready issues: #1 healthy (a real, covered approval
+# history), #2 carrying reject-events-2 (the events lookup itself is rejected). Pins BOTH that
+# issue #2's approved_at_history fails closed to [] (not merely covers_plan: null) AND, more
+# importantly, that issue #1's history — computed and consumed in the PREVIOUS loop iteration —
+# never leaks into issue #2's entry: the per-iteration reset this depends on is the same one
+# #229's approval-label-absent pre-filter already relies on, now exercised on the history
+# variables specifically.
+case_impl_approval_history_unreadable() {
+  local dir; dir="$(mk_fixture impl-approval-history-unreadable)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"},{"number":2,"title":"Issue two","url":"https://example.invalid/2"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-07-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7047"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-07-02T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  cat > "$dir/comment-7047.json" <<'EOF'
+{"created_at":"2026-07-01T00:00:00Z","updated_at":"2026-07-01T00:00:00Z"}
+EOF
+  cat > "$dir/issue-2.json" <<'EOF'
+{"number":2,"title":"Issue two","url":"https://example.invalid/2","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-07-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/2#issuecomment-7048"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  : > "$dir/reject-events-2"
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'true'
+  expect_jq '.plan_selection[0].approval.approved_at_history | length' '1'
+  expect_jq '.plan_selection[1].approval.covers_plan' 'null'
+  expect_jq '.plan_selection[1].approval.reason' '"approval-unreadable"'
+  expect_jq '.plan_selection[1].approval.approved_at_history' '[]'
+  expect_jq '.plan_selection[1].binding_line' 'null'
+  expect_err "could not read plan-approved label events"
+}
+
+# impl-single-issue-approval-history — `--issue <n>` mode, the mode BOTH single-issue callers (the
+# implementer skill's pre-push recheck and issue-cycle's merge floor) actually run: the same
+# per-iteration loop body executes regardless of how ready_numbers was populated, so no branch
+# specific to --issue <n> exists for a mutant to hide behind — this case's own regression coverage
+# is mutant (a) above (see the MEASURED MUTANTS block), whose recorded failing set names it
+# explicitly. Mutants (b), (c), and (d) are each vacuous for this case: its single covered history
+# entry gives (b)'s ordering and (c)'s dedup nothing to distinguish (one entry sorts and dedupes
+# the same either way), and its covered path never reaches (d)'s null branch — measured: this case
+# passes under (b), (c), and (d) alike. Issue 55 is unused elsewhere in this file.
+case_impl_single_issue_approval_history() {
+  local dir; dir="$(mk_fixture impl-single-issue-approval-history)"
+  cat > "$dir/ready.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/issue-55.json" <<'EOF'
+{"number":55,"title":"Not in the ready query","url":"https://example.invalid/55","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-08-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/55#issuecomment-7049"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  cat > "$dir/events-55.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-08-02T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  cat > "$dir/comment-7049.json" <<'EOF'
+{"created_at":"2026-08-01T00:00:00Z","updated_at":"2026-08-01T00:00:00Z"}
+EOF
+  build_stub_gh "$dir"
+  run_implementation_args "$dir" --issue 55
+  expect_rc 0
+  expect_jq '.plan_selection | length' '1'
+  expect_jq '. | has("counts")' 'true'
+  expect_jq '.plan_selection[0].approval.covers_plan' 'true'
+  expect_jq '.plan_selection[0].approval.approved_at_history | length' '1'
+  expect_jq '.plan_selection[0].approval.approved_at_history[0].binding_line == .plan_selection[0].binding_line' 'true'
+}
+
+# ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
   "untrusted-comment-no-revision|case_untrusted_no_revision|NONE comment after the plan: no revision, reported in untrusted_comments"
@@ -3282,7 +3638,7 @@ cases=(
   "impl-plan-comment-id-unparseable|case_impl_plan_comment_id_unparseable|the plan comment's url carries no #issuecomment-<id> suffix: fails closed without ever calling the comments endpoint"
   "impl-plan-comment-id-non-digits|case_impl_plan_comment_id_non_digits|the plan comment's url has an #issuecomment- suffix that is NOT purely digits: pins the digits-only validation itself, distinct from the outer suffix-presence check"
   "impl-single-issue-plan-edited-after-approval|case_impl_single_issue_plan_edited_after_approval|--issue <n> mode carries the new plan-edited-after-approval reason too, not just batch mode"
-  "impl-output-shape|case_impl_output_shape|.ready, .counts.ready, and .counts.truncated are still present under their current names, plus #182's audit count and #174's approval/binding_line shape"
+  "impl-output-shape|case_impl_output_shape|.ready, .counts.ready, and .counts.truncated are still present under their current names, plus #182's audit count, #174's approval/binding_line shape, and #213's approved_at_history key"
   "impl-audit-comment-not-binding|case_impl_audit_comment_not_binding|an OWNER harness-audit comment after the plan is excluded from trusted_post_plan and counted"
   "impl-audit-does-not-mask-real-feedback|case_impl_audit_does_not_mask_real_feedback|control: genuine MEMBER feedback after an audit comment still reaches trusted_post_plan"
   "impl-untrusted-audit-marker-still-reported|case_impl_untrusted_audit_marker_still_reported|a forged harness-audit marker from a NONE author is still reported in untrusted_post_plan, never counted"
@@ -3314,6 +3670,12 @@ cases=(
   "impl-approval-label-key-missing|case_impl_approval_label_key_missing|the fetched issue document has no labels key at all: the // [] guard fails closed instead of crashing under set -euo pipefail"
   "impl-approval-label-absent-no-plan|case_impl_approval_label_absent_no_plan|label absent AND no trusted plan comment: reason is approval-label-absent, not no-plan, but the no-plan warn and count still fire too"
   "impl-approval-label-absent-single-issue|case_impl_approval_label_absent_single_issue|--issue <n> mode — the mode both single-issue callers actually run — carries the same label pre-filter and short-circuit"
+  "impl-approval-history-single-event|case_impl_approval_history_single_event|one plan-approved labeling event: approved_at_history holds exactly it, agreeing with approval's own top-level fields"
+  "impl-approval-history-newest-first|case_impl_approval_history_newest_first|three labeling events written out of order in the fixture: approved_at_history is newest-first regardless, and every entry's binding_line embeds the current plan url"
+  "impl-approval-history-dedup|case_impl_approval_history_dedup|two byte-identical labeling events collapse to one history entry, not two"
+  "impl-approval-history-not-covered|case_impl_approval_history_not_covered|plan posted after the newest label: every (of two) history entries carries a null binding_line even though approved_at/approved_by are still populated"
+  "impl-approval-history-unreadable|case_impl_approval_history_unreadable|the events lookup fails for one of two ready issues: that issue's approved_at_history fails closed to [], the healthy sibling's history is unaffected by the per-iteration reset"
+  "impl-single-issue-approval-history|case_impl_single_issue_approval_history|--issue <n> mode carries approved_at_history with the same shape as batch mode"
 )
 
 matched=0
