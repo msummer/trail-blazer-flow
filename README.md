@@ -341,11 +341,18 @@ repairing them.
 A merged `claude/<n>-*` PR only closes its issue when the PR body carries a closing keyword
 (`Closes`/`Fixes`/`Resolves #<n>`) for that issue and no multi-PR signal is present. A PR that
 delivers only part of an issue — its body says `Part of #<n>` / `PR <k> of <m>`, another
-`claude/<n>-*` PR is still open, or the issue body/a comment carries a
-`<!-- harness-multi-pr -->` marker — leaves the issue open (reported as `KEEP`) instead of
-closing it. `--fix` still drops `pr-open` in that case, but only once no other `claude/<n>-*`
-PR is open, so the issue re-queues for its next slice; a human closes it by hand if the work is
-actually finished.
+`claude/<n>-*` PR is still open, the issue carries the `multi-pr` label, or a maintainer
+(`OWNER`/`MEMBER`/`COLLABORATOR`) comment carries a `<!-- harness-multi-pr -->` marker — leaves
+the issue open (reported as `KEEP`) instead of closing it. The `multi-pr` label (applied by
+hand, created by `setup-labels.sh`) is the primary signal — permission-controlled and visible in
+the issue's label list, unlike an HTML comment. The comment-marker path still works but is
+trust-gated (#231): a marker posted by anyone else is ignored and reported as one `WARN` line
+naming the comment, and the issue's BODY carrying the marker is no longer honoured at all (a
+maintainer has no way to prove they authored the issue body the way a comment carries its own
+`authorAssociation`) — an issue that relied on the body marker before v2.7.0 needs the
+`multi-pr` label applied instead. `--fix` still drops `pr-open` in the KEEP case, but only once
+no other `claude/<n>-*` PR is open, so the issue re-queues for its next slice; a human closes it
+by hand if the work is actually finished.
 
 ### The steady state, as one command ("run the cycle")
 
@@ -509,7 +516,10 @@ planning entirely (tracking/discussion/question issues — also applied automati
 `no-auto-approve` to keep an individual issue's approval manual even when CLAUDE.md defines an
 auto-approval policy. `test-ratchet` marks an issue the test-suite ratchet filed, and a plan
 follow-up the implementer files carries a `<!-- harness-follow-up: PR #<n> -->` marker naming
-its source PR; both are harness-authored, so both also carry `no-auto-approve`. `plan-approved`
+its source PR; both are harness-authored, so both also carry `no-auto-approve`. `multi-pr`
+(#231) is human-applied to a deliberately multi-PR issue: it's the primary signal
+`cleanup-after-merge.sh` reads to leave the issue open when one of its slices merges, read only
+by that script — nothing else in the lifecycle touches it. `plan-approved`
 can also come back off: the `issue-implementer` skill removes it (with an audit comment) when the
 approval no longer covers the freshest plan comment — a same-run revision landed after the label
 was applied (#174), the plan comment was itself edited in place after approval (#192), or, since
@@ -1138,8 +1148,10 @@ comment that was quietly edited some time ago will newly report `covers_plan: fa
 lose `plan-approved` (or hold, for the unknown verdict) — this is the intended tripwire firing
 retroactively, not a regression. No new grant, label, script, or baseline step.
 
-**v2.6.1 → v2.7.0** adds no grant, label, script, or baseline step — the doctor reports nothing
-new to migrate. **The implementer's unknown-verdict hold comment is de-duplicated across runs
+**v2.6.1 → v2.7.0** requires one consumer action: **re-run `bin/setup-labels.sh`** to create the
+new `multi-pr` label (until then, `check-harness.sh` reports it missing — see below). Nothing
+else in this train adds a grant, script, or baseline step. **The implementer's unknown-verdict
+hold comment is de-duplicated across runs
 (#222), the same treatment #199 and #208 already gave the planner's escalation and staleness
 notes.** The `<!-- harness-audit -->` comment `issue-implementer` posts at step 2a and step 2e
 when `approval.covers_plan` is unknown (a GitHub API call failed) now carries a second line,
@@ -1165,6 +1177,17 @@ after the retry holds, keyed by the post-retry `approval.reason`. This adds no g
 (`Bash(sleep:*)` is already in `templates/repo-settings.json`), no label, no script, and no
 baseline step; the only observable cost is one extra read-only discovery run plus up to 30s of
 added wall clock, per held issue, per checkpoint.
+**Multi-PR cleanup is now label-primary and the comment-marker path is trust-gated (#231):** the
+new `multi-pr` label on the issue (see "Label lifecycle") is the primary signal
+`cleanup-after-merge.sh` reads to leave a multi-PR issue open when one of its slices merges — the
+consumer action named above. The `<!-- harness-multi-pr -->` **comment** marker is still honoured,
+but only from an `OWNER`/`MEMBER`/`COLLABORATOR` comment; a marker from anyone else is ignored and
+reported as one `WARN` line naming the comment, instead of silently trusted. The
+**issue-body** marker is no longer honoured at all — cleanup has no author-association lookup for
+the issue itself, so it cannot gate that path the way it gates a comment's. One-time transition
+note: any issue that relied on the body marker before this release needs the `multi-pr` label
+applied by hand; without it, that issue closes on the normal path the next time its slice's PR
+merges — the intended, documented behaviour change, not a bug.
 
 ## The per-repo settings file (required)
 
@@ -1571,10 +1594,19 @@ non-maintainer-authored (or association-unreadable) issue is reported in `untrus
 and can never be auto-approved, though it is still planned (#176). `find-implementation-work.sh`
 enforces the implementer-facing half the same way: it selects each ready issue's approved plan
 comment and binding post-plan comments itself, using the identical trust gate (gate assertion
-4.26 pins that the two scripts' trusted-association lists agree), so the `issue-implementer`
-orchestrator reads a filtered artifact instead of applying the rule from memory (#176) — the
-same script also computes the approval-binding verdict described in "Approval provenance" above
-(#174). Both
+4.26 pins that the two discovery scripts' trusted-association lists agree), so the
+`issue-implementer` orchestrator reads a filtered artifact instead of applying the rule from
+memory (#176) — the same script also computes the approval-binding verdict described in
+"Approval provenance" above (#174). `cleanup-after-merge.sh` applies the identical trust gate to
+a narrower, third question (#231): whether a `<!-- harness-multi-pr -->` marker posted in an
+issue COMMENT is honoured as a multi-PR `KEEP` signal — the same OWNER/MEMBER/COLLABORATOR list
+(4.26 extended to all three scripts), the same `ascii_upcase`-normalised comparison, and the same
+fail-closed-on-missing-`authorAssociation` rule; an ignored, untrusted marker prints one `WARN`
+line naming the comment's url and association instead of being silently dropped. Cleanup has no
+REST author-association lookup for the issue itself, though, so it cannot gate an issue-BODY
+marker the way the two discovery scripts gate the issue AUTHOR — it simply stopped honouring
+that path; a human-applied `multi-pr` label is the primary, permission-controlled signal instead
+(see "Label lifecycle"). Both
 scripts share a second, orthogonal exclusion inside the trusted set (#182): any trusted comment
 containing `<!-- harness-audit -->` (a harness-authored audit/hygiene record — the planner's
 auto-approval audit trail, its `plan-approved` staleness note — whose second line, since #208,
@@ -1609,7 +1641,9 @@ assertion 4.27 pins the marker's presence in every writer and consumer). Three c
 stay deliberately unmarked because they *are* the feedback that drives a subsequent dispatch, not
 a record of one: the planner's `plan-proposed` staleness note, its proposed-answers comment, and
 the implementer's blocked-path comment (which step 2b explicitly reads back into the retry
-dispatch). The honest limit: this mechanical coverage is planner- and implementer-side only; the
+dispatch). The honest limit: this mechanical coverage (the `has_harness_marker` annotation, the
+`<!-- harness-audit -->` exclusion) is planner- and implementer-side only, and stays that way for
+`cleanup-after-merge.sh` too — its comment-marker trust gate (#231, above) is real, but the
 verifier-side half of the untrusted-data rule is still prompt-enforced, not mechanically checked.
 
 ## Distribution

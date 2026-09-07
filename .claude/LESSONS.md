@@ -74,3 +74,9 @@ bites: 1–3 lines, written as an instruction to a future agent.
   restores is invisible to `diff`/`cp` and gets silently discarded by the next revert. Verify every
   restore with a full (non-truncated) `diff <backup> <file>` showing exactly the one mutated hunk,
   never `diff | head`, which can hide a bigger discard.
+- 2026-09-08: When an acceptance criterion names two modes or branches ("in both `--fix` and
+  report-only modes", "at step 2a and step 2e"), the plan's fixture list must carry one case per
+  mode — a criterion the fixture list covers only on one side ships with a surviving mutant on the
+  other. On #231 the plan enumerated five `--fix` fixtures for a criterion that named both modes;
+  the verifier's `if $FIX` wrap survived all six suites and cost a verification round. Derive the
+  fixture set from the criterion's own enumeration, not from the happy path.
