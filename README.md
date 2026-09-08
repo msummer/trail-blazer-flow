@@ -1266,7 +1266,11 @@ see "Safety model"'s live-probe record): the `agent_type` spelling a plugin suba
 `PreToolUse` stdin is the namespaced form, and this hook's `deny` does outrank
 `git-c-guard.sh`'s `allow` for the same call. Both `agent_type` spellings still ship — the
 namespaced one being the confirmed live form, the bare one retained as insurance against a future
-de-namespacing — and nothing about the hook's behaviour changed.
+de-namespacing — and nothing about the hook's behaviour changed. No consumer action either for
+#255/#262's fix: `bin/check-harness.sh`'s piped `grep -q`/`find | grep -q` readers (the doctor's
+own verdict-affecting checks — a marker-file lookup, an allow-list membership test) are rewritten
+as here-strings or capture-then-test, so a writer killed by SIGPIPE under `pipefail` can no longer
+invert one of the doctor's checks and report a false verdict on your repo.
 
 ## The per-repo settings file (required)
 

@@ -256,9 +256,14 @@ while IFS=' ' read -r d fl t; do
 done <<EOF
 $body_map
 EOF
-has_heading() { printf '%s\n' "$all_headings" | grep -qxF -- "$1"; }
-has_in_section() { printf '%s\n' "$in_section" | grep -qxF -- "$1"; }
-has_content() { printf '%s\n' "$filled_in" | grep -qxF -- "$1"; }
+# Here-strings, not a `printf` writer piped into `grep`'s quiet mode (#255): that early-exit
+# reader exits on its first match, which can send the printf writer SIGPIPE and, under this
+# file's `set -uo pipefail`, turn a genuine match into a reported pipeline failure — a here-string
+# has no writer process, so no SIGPIPE is possible, and it appends exactly one trailing newline,
+# the same as the piped printf did, so grep's literal membership-test semantics are unchanged.
+has_heading() { grep -qxF -- "$1" <<<"$all_headings"; }
+has_in_section() { grep -qxF -- "$1" <<<"$in_section"; }
+has_content() { grep -qxF -- "$1" <<<"$filled_in"; }
 
 echo "== decision record: issue #$issue =="
 p=0; f=0

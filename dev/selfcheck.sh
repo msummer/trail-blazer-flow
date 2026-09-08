@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 63 assertions total. The gate prints what it checks — run it.
+# Five groups, 64 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -121,6 +121,37 @@ else
   bad "1.6 'eval' found in hooks/*.sh —$bad_list"
 fi
 
+# 1.7 — no writer piped into grep's quiet/count/exact-line mode (any flag cluster containing a
+# 'q', or --quiet) anywhere in bin/*.sh, dev/*.sh, or hooks/*.sh (#255): every script in these
+# three directories runs `set -uo pipefail` (1.2), under which grep's quiet mode — it exits as
+# soon as it finds its first match — can send its upstream writer SIGPIPE, and pipefail then
+# reports the pipeline as FAILED even though the grep genuinely matched, inverting whatever
+# ||/&&/if/elif/! verdict was built on that exit status (proven live: dev/selfcheck-tests.sh's own
+# run_case, CI run 34268473009 — a broken-pipe diagnostic from the writer, immediately before a
+# spurious FAIL). The fix swept by this PR is a here-string for a variable-fed site, or a
+# capture-then-test for a command-fed one — neither has a writer process, so neither can be
+# SIGPIPE'd. Full-line comments are stripped first (1.4's idiom), so documenting the banned shape
+# in a comment, on its own line, is exempt. Unlike 1.4, this DOES scan dev/*.sh (that is where the
+# proven flake lives), so this assertion self-scans: the pattern below and both message strings
+# below were written to contain no live pipe-character-then-grep-then-q-flag sequence on any
+# non-comment line of this very file — confirmed by running this assertion against a clean tree.
+# Known limitation: this pattern catches only the piped-into-grep's-quiet-mode shape — it does not
+# catch a different early-exit reader (`awk ... exit`, `| head -N`) that could exhibit the
+# identical SIGPIPE-under-pipefail failure mode; #255's own PR body inventories this repo's
+# `| head -N` sites and found them all inert (assignment-only, status never read).
+forbidden_pipeq_pat='\|[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+(-[A-Za-z]*q[A-Za-z]*|--quiet)([[:space:]]|$)'
+bad_list=""
+for s in "$root"/bin/*.sh "$root"/dev/*.sh "$root"/hooks/*.sh; do
+  [ -f "$s" ] || continue
+  hits="$(grep -vnE '^[[:space:]]*#' "$s" | grep -E "$forbidden_pipeq_pat")"
+  [ -z "$hits" ] || bad_list="$bad_list $s: $(printf '%s' "$hits" | tr '\n' ' ');"
+done
+if [ -z "$bad_list" ]; then
+  ok "1.7 no writer piped into grep's quiet mode (a -q/-c/-x flag cluster containing 'q', or --quiet) in bin/*.sh, dev/*.sh, or hooks/*.sh (#255)"
+else
+  bad "1.7 pipeline(s) writing into grep's quiet mode found —$bad_list"
+fi
+
 # 1.5 — no unguarded 'git branch -d/-D/--delete' in bin/*.sh: a bare delete aborts the whole
 # script the moment git refuses (e.g. a stale worktree still holds the branch) under
 # 'set -euo pipefail' — see cleanup-after-merge.sh's history. A delete is safe only when its
@@ -166,7 +197,7 @@ fi
 
 # 2.2 — plugin.json .version matches semver X.Y.Z.
 version="$(jq -r '.version // empty' "$plugin_json" 2>/dev/null)"
-if printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+if grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' <<<"$version"; then
   ok "2.2 plugin.json .version ('$version') matches ^[0-9]+\\.[0-9]+\\.[0-9]+\$"
 else
   bad "2.2 plugin.json .version ('$version') does not match ^[0-9]+\\.[0-9]+\\.[0-9]+\$"
@@ -221,7 +252,7 @@ if [ -z "$hook_subs" ]; then
 else
   missing_bare=""
   for sub in $hook_subs; do
-    printf '%s\n' "$allow_raw" | grep -qF -- "Bash(git $sub" || missing_bare="$missing_bare $sub"
+    grep -qF -- "Bash(git $sub" <<<"$allow_raw" || missing_bare="$missing_bare $sub"
   done
   if [ -n "$missing_bare" ] || [ "$c_allow_present" -ne 0 ]; then
     msg="2.5 permission mirror (allow) broken:"
@@ -351,7 +382,7 @@ for f in "$root"/agents/*.md; do
   base="$(basename "$f" .md)"
   fm="$(frontmatter_text "$f")"
   for k in 'name:' 'description:' 'tools:' 'model:'; do
-    printf '%s\n' "$fm" | grep -q "^$k" || bad_list="$bad_list $f(missing '$k')"
+    grep -q "^$k" <<<"$fm" || bad_list="$bad_list $f(missing '$k')"
   done
   name_field="$(printf '%s\n' "$fm" | sed -n 's/^name: *//p' | head -1 | tr -d '[:space:]')"
   [ "$name_field" = "$base" ] || bad_list="$bad_list $f(name='$name_field' != '$base')"
@@ -384,7 +415,7 @@ for f in "$root"/agents/*.md; do
     continue
   fi
 
-  if ! printf '%s' "$hs_text" | grep -qE "^<!-- harness-status: stage=${base} issue=<n> outcome=<[A-Za-z|-]+> retries=<k> harness=<version> -->\$"; then
+  if ! grep -qE "^<!-- harness-status: stage=${base} issue=<n> outcome=<[A-Za-z|-]+> retries=<k> harness=<version> -->\$" <<<"$hs_text"; then
     bad_list="$bad_list $f(status line doesn't match the canonical grammar for stage=$base)"
   fi
 done
@@ -624,7 +655,7 @@ else
   skill_not_script="$(comm -13 <(_lines "$agent_stages") <(_lines "$skill_stages"))"
   [ -n "$script_not_skill" ] && bad_list="$bad_list stage(s) the script accepts with no status-line alternative: $(printf '%s' "$script_not_skill" | tr '\n' ' ');"
   [ -n "$skill_not_script" ] && bad_list="$bad_list status-line stage(s) the script would reject: $(printf '%s' "$skill_not_script" | tr '\n' ' ');"
-  printf '%s\n' "$script_stages" | grep -qxF -- "seed" || bad_list="$bad_list documented ledger-only stage 'seed' no longer accepted by the script;"
+  grep -qxF -- "seed" <<<"$script_stages" || bad_list="$bad_list documented ledger-only stage 'seed' no longer accepted by the script;"
 fi
 for f in "$root"/agents/*.md; do
   hs_text="$(grep '<!-- harness-status:' "$f" | head -1)"
@@ -795,7 +826,11 @@ skill_pr_subs_noexc="$(comm -23 <(_lines "$skill_pr_subs") <(_lines "merge"))"
 subs_without_grant="$(comm -23 <(_lines "$skill_pr_subs_noexc") <(_lines "$allow_pr_subs"))"
 grants_without_sub="$(comm -13 <(_lines "$skill_pr_subs_noexc") <(_lines "$allow_pr_subs"))"
 deny_has_merge="no"
-jq -r '.permissions.deny[]? // empty' "$settings_json" 2>/dev/null | grep -qxF 'Bash(gh pr merge:*)' && deny_has_merge="yes"
+# Capture-then-test (#255), not `jq` piped into `grep`'s quiet mode: that early-exit reader exits
+# on its first match, which can send jq SIGPIPE and, under this file's `set -uo pipefail`, turn a
+# genuine match into a reported pipeline failure. Capturing first removes the pipe entirely.
+deny_pr_raw="$(jq -r '.permissions.deny[]? // empty' "$settings_json" 2>/dev/null)"
+grep -qxF 'Bash(gh pr merge:*)' <<<"$deny_pr_raw" && deny_has_merge="yes"
 if [ -z "$subs_without_grant" ] && [ -z "$grants_without_sub" ] && [ "$deny_has_merge" = "yes" ]; then
   ok "4.20 'gh pr <sub>' <-> templates/repo-settings.json allow-list bijection holds ('merge' excepted, still denied)"
 else
@@ -916,9 +951,9 @@ if [ ! -f "$dbot" ]; then
 else
   dbot_body="$(grep -vE '^[[:space:]]*#' "$dbot")"
   miss_25=""
-  printf '%s\n' "$dbot_body" | grep -qE '^[[:space:]]*-?[[:space:]]*package-ecosystem:[[:space:]]*"?github-actions"?[[:space:]]*$' \
+  grep -qE '^[[:space:]]*-?[[:space:]]*package-ecosystem:[[:space:]]*"?github-actions"?[[:space:]]*$' <<<"$dbot_body" \
     || miss_25="$miss_25 no uncommented package-ecosystem: \"github-actions\" line;"
-  printf '%s\n' "$dbot_body" | grep -qE '^[[:space:]]*interval:' \
+  grep -qE '^[[:space:]]*interval:' <<<"$dbot_body" \
     || miss_25="$miss_25 no uncommented interval: line;"
   if [ -n "$miss_25" ]; then
     bad "4.25 .github/dependabot.yml missing:$miss_25"
@@ -1135,7 +1170,7 @@ cleanup_multi_pr_label="$(sed -nE 's/^MULTI_PR_LABEL="([^"]*)"$/\1/p' "$root/bin
 setup_labels_created="$(sed -nE 's/^create_or_update "([^"]+)".*/\1/p' "$root/bin/setup-labels.sh")"
 if [ -z "$cleanup_multi_pr_label" ] || [ -z "$setup_labels_created" ]; then
   bad "4.35 MULTI_PR_LABEL/create_or_update extraction failed — bin/cleanup-after-merge.sh's MULTI_PR_LABEL= line or bin/setup-labels.sh's create_or_update lines didn't match (structure changed)"
-elif printf '%s\n' "$setup_labels_created" | grep -qx -- "$cleanup_multi_pr_label"; then
+elif grep -qx -- "$cleanup_multi_pr_label" <<<"$setup_labels_created"; then
   ok "4.35 bin/cleanup-after-merge.sh's MULTI_PR_LABEL ('$cleanup_multi_pr_label') is created by bin/setup-labels.sh"
 else
   bad "4.35 bin/cleanup-after-merge.sh's MULTI_PR_LABEL ('$cleanup_multi_pr_label') is not among the labels bin/setup-labels.sh creates"
@@ -1167,7 +1202,7 @@ else
       esac
     done
     for req in acquire release; do
-      printf '%s\n' "$skill_toks" | grep -qx "$req" || bad_list="$bad_list $f missing '$req';"
+      grep -qx "$req" <<<"$skill_toks" || bad_list="$bad_list $f missing '$req';"
     done
   done
   if [ -z "$bad_list" ]; then
@@ -1931,7 +1966,7 @@ out="$(bash "$rl" <(printf '%s\n' '<!-- harness-status: stage=merge issue=17 out
 
 out="$(bash "$rl" <(printf '%s\n' '<!-- harness-status: stage=planner issue=17 outcome=plan-posted retries=0 bogus=1 -->') \
                   <(printf '%s' "$empty_status_fixture") 2>&1)"; rc=$?
-if [ "$rc" -ne 2 ] || ! printf '%s' "$out" | grep -qF -- "malformed harness-status line"; then
+if [ "$rc" -ne 2 ] || ! grep -qF -- "malformed harness-status line" <<<"$out"; then
   fail_513="$fail_513 unrecognised trailing token 'bogus=1': expected rc=2 and 'malformed harness-status line' on stderr, got rc=$rc output='$out';"
 fi
 

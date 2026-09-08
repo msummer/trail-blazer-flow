@@ -227,26 +227,53 @@ run_cleanup() {
   calls="$(cat "$dir/gh-calls.log" 2>/dev/null || true)"
 }
 
+# needle_required NAME NEEDLE (#262) — guards every needle-taking helper below: an empty NEEDLE
+# degenerates `grep -qF -- ""`/`grep -cF -- ""` into an unconditional match (expect "" always
+# passes, expect_absent "" always fails, expect_count's count becomes a total-line count), so
+# treat an empty needle as a harness bug IN THE CASE, not a fact about the script under test.
+# Sets $__ok=0, appends "<NAME>: empty needle (harness bug)\n" to $__why, and returns 1; returns 0
+# when the needle is non-empty. Callers do `needle_required <own-name> "$1" || return 0` —
+# returning 0 to the CALLER's caller (not 1), so a guarded helper never leaves a stray non-zero
+# exit status behind for an `&&`/`||`/`if` chain built on it.
+needle_required() {
+  if [ -z "$2" ]; then
+    __ok=0
+    __why="${__why}$1: empty needle (harness bug)\n"
+    return 1
+  fi
+  return 0
+}
+
 # expect/expect_absent/expect_rc — assert against $cleanup_out/$cleanup_rc.
 # expect_call/expect_no_call/expect_calls_empty — assert against $calls (the gh-calls.log
 # payload). All set $__ok=0 and append to $__why on failure. ASCII-only short stems: stop
-# before the script's em dashes.
+# before the script's em dashes. expect/expect_absent/expect_call/expect_no_call/expect_count are
+# guarded by needle_required (#262). Fed via a here-string (`<<<"$cleanup_out"`/`<<<"$calls"`,
+# #255) rather than piping a `printf '%s\n' ...` writer into `grep`'s quiet mode: that early-exit
+# reader exits on its first match, which can send the printf writer SIGPIPE and, under this file's
+# `set -uo pipefail`, turn a genuine match into a reported pipeline failure — a here-string has no
+# writer process, so no SIGPIPE is possible, and it appends exactly one trailing newline, the same
+# as the piped printf did, so grep's fixed-string/count semantics are unchanged.
 __ok=1
 __why=""
 expect() {
-  printf '%s\n' "$cleanup_out" | grep -qF -- "$1" || { __ok=0; __why="${__why}missing: $1\n"; }
+  needle_required expect "$1" || return 0
+  grep -qF -- "$1" <<<"$cleanup_out" || { __ok=0; __why="${__why}missing: $1\n"; }
 }
 expect_absent() {
-  printf '%s\n' "$cleanup_out" | grep -qF -- "$1" && { __ok=0; __why="${__why}unexpected: $1\n"; }
+  needle_required expect_absent "$1" || return 0
+  grep -qF -- "$1" <<<"$cleanup_out" && { __ok=0; __why="${__why}unexpected: $1\n"; }
 }
 expect_rc() {
   [ "$cleanup_rc" -eq "$1" ] || { __ok=0; __why="${__why}rc: expected $1, got $cleanup_rc\n"; }
 }
 expect_call() {
-  printf '%s\n' "$calls" | grep -qF -- "$1" || { __ok=0; __why="${__why}missing gh call: $1\n"; }
+  needle_required expect_call "$1" || return 0
+  grep -qF -- "$1" <<<"$calls" || { __ok=0; __why="${__why}missing gh call: $1\n"; }
 }
 expect_no_call() {
-  printf '%s\n' "$calls" | grep -qF -- "$1" && { __ok=0; __why="${__why}unexpected gh call: $1\n"; }
+  needle_required expect_no_call "$1" || return 0
+  grep -qF -- "$1" <<<"$calls" && { __ok=0; __why="${__why}unexpected gh call: $1\n"; }
 }
 expect_calls_empty() {
   [ -z "$calls" ] || { __ok=0; __why="${__why}expected no gh mutation calls, got: $calls\n"; }
@@ -255,7 +282,8 @@ expect_calls_empty() {
 # (fixed-string, grep -cF), mechanically pinning "exactly one WARN" rather than mere presence.
 expect_count() {
   local needle="$1" want="$2" got
-  got="$(printf '%s\n' "$cleanup_out" | grep -cF -- "$needle")"
+  needle_required expect_count "$needle" || return 0
+  got="$(grep -cF -- "$needle" <<<"$cleanup_out")"
   [ "$got" -eq "$want" ] || { __ok=0; __why="${__why}count: expected $want of '$needle', got $got\n"; }
 }
 
@@ -665,6 +693,39 @@ EOF
   expect "Reminder:"
 }
 
+# empty-needle-guard (#262-1) — exercises every guarded helper in this file (expect, expect_absent,
+# expect_call, expect_no_call, expect_count) with an empty needle, and asserts the guard fired for
+# each: sets $cleanup_out/$calls to fixed non-empty values first (so a non-guarded regression
+# couldn't pass vacuously against empty captured output), calls all five with "", then checks the
+# ACCUMULATED __ok/__why saved off before this case's own __ok/__why are reset by the runner loop.
+# Measured mutant: delete `needle_required expect_count "$needle" || return 0` from expect_count
+# only — `bash dev/cleanup-tests.sh` goes from 18 pass, 0 fail to 17 pass, 1 fail, failing exactly:
+# empty-needle-guard (saved_why no longer names "expect_count:").
+case_empty_needle_guard() {
+  local saved_ok saved_why
+  cleanup_out="fixture output for the empty-needle guard (#262)"
+  calls="fixture gh call for the empty-needle guard (#262)"
+  __ok=1; __why=""
+  expect ""
+  expect_absent ""
+  expect_call ""
+  expect_no_call ""
+  expect_count "" 0
+  saved_ok="$__ok"
+  saved_why="$__why"
+  __ok=1; __why=""
+  if [ "$saved_ok" -ne 0 ]; then
+    __ok=0; __why="${__why}empty-needle guard never fired (saved_ok=$saved_ok)\n"
+  fi
+  local helper
+  for helper in expect expect_absent expect_call expect_no_call expect_count; do
+    case "$saved_why" in
+      *"$helper: empty needle"*) : ;;
+      *) __ok=0; __why="${__why}$helper's empty-needle guard did not name itself: '$saved_why'\n" ;;
+    esac
+  done
+}
+
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
@@ -685,6 +746,7 @@ cases=(
   "repo-view-failure-continues|case_repo_view_failure_continues|gh repo view fails: rc 0, WARN, sync skipped, run reaches label hygiene"
   "current-branch-failure-continues|case_current_branch_failure_continues|git branch --show-current fails: rc 0, WARN, sync skipped, run continues"
   "pr-list-failure-continues|case_pr_list_failure_continues|gh pr list fails: rc 0, WARN, run still reaches the closing reminder"
+  "empty-needle-guard|case_empty_needle_guard|#262: expect/expect_absent/expect_call/expect_no_call/expect_count all refuse an empty needle"
 )
 
 matched=0
@@ -705,6 +767,12 @@ for row in "${cases[@]}"; do
   else
     case_bad "$name" "$desc"
     printf '%b' "$__why" | sed 's/^/    /'
+    # #255 — bounded diagnostics: surface bin/cleanup-after-merge.sh's own captured output (never
+    # a full-consumption `head`) so a shell-level diagnostic that leaked into $cleanup_out isn't
+    # silently discarded.
+    if [ -n "$cleanup_out" ]; then
+      printf '%s\n' "$cleanup_out" | sed -n '1,40p' | sed 's/^/    | /'
+    fi
   fi
 done
 

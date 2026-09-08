@@ -194,11 +194,17 @@ if $prs_ok && $issues_ok; then
           close_pat="(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]*#${n}([^0-9]|\$)"
 
           keep_reason=""
-          if printf '%s\n' "$pr_body" | grep -qiE "$part_of_pat"; then
+          # Here-strings, not a `printf` writer piped into `grep`'s quiet mode (#255): that
+          # early-exit reader exits on its first match, which can send the printf writer SIGPIPE
+          # and, under this script's `set -euo pipefail`, turn a genuine match into a reported
+          # pipeline failure — a here-string has no writer process, so no SIGPIPE is possible, and
+          # it appends exactly one trailing newline, the same as the piped printf did, so grep's
+          # regex semantics are unchanged.
+          if grep -qiE "$part_of_pat" <<<"$pr_body"; then
             keep_reason="the PR body marks it as one of several ('Part of #${n}')"
-          elif printf '%s\n' "$pr_body" | grep -qiE "$slice_pat"; then
+          elif grep -qiE "$slice_pat" <<<"$pr_body"; then
             keep_reason="the PR body marks it as one of several ('PR k of m')"
-          elif ! printf '%s\n' "$pr_body" | grep -qiE "$close_pat"; then
+          elif ! grep -qiE "$close_pat" <<<"$pr_body"; then
             keep_reason="the PR body has no Closes/Fixes/Resolves #${n} keyword"
           elif [[ "$open_siblings" -gt 0 ]]; then
             keep_reason="another claude/${n}-* PR is still open"
