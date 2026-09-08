@@ -75,16 +75,26 @@ proving the branch-protection section never reads its policy-activation flag whi
 `dev/selfcheck.sh` itself — run it by hand whenever `bin/check-harness.sh` or
 `bin/check-decision-record.sh` changes.
 
-`dev/hook-tests.sh` is a separate negative-test harness for the plugin-shipped PreToolUse guard
-hook (`hooks/git-c-guard.sh`, #150): it feeds fixture stdin JSON straight into the real script
-and pins its verdict — allow, or no opinion (empty stdout) — for every conforming `git -C
-<worktree> <subcommand>` form and every rejection case (an injected `-c`/`--exec-path`, the
-attached `-C<path>` form, a non-worktree path, an unknown subcommand, command substitution, an
+`dev/hook-tests.sh` is a separate negative-test harness for BOTH of this repo's plugin-shipped
+PreToolUse hooks. For `hooks/git-c-guard.sh` (#150) it feeds fixture stdin JSON straight into the
+real script and pins its verdict — allow, or no opinion (empty stdout) — for every conforming
+`git -C <worktree> <subcommand>` form and every rejection case (an injected `-c`/`--exec-path`,
+the attached `-C<path>` form, a non-worktree path, an unknown subcommand, command substitution, an
 unquoted shell metacharacter, an unterminated quote, the wrong tool, malformed stdin, and
 `permission_mode: "plan"`), plus a booby-trapped `git`/`rm` on `PATH` proving the guard never
-executes anything against the untrusted path it is validating. It runs in CI as the fourth step,
-but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
-`hooks/git-c-guard.sh` changes.
+executes anything against the untrusted path it is validating. For `hooks/agent-boundary.sh`
+(#235, the implementer/verifier git+gh boundary) it feeds fixture stdin JSON carrying `agent_type`
+straight into that real script and pins its verdict — deny (exit 2, empty stdout, one stderr line
+naming the role and the blocked command), or no opinion (exit 0, empty stdout, empty stderr) — for
+the implementer role (denies any `git`/`gh`, in both the bare and `trail-blazer-flow:`-namespaced
+`agent_type` spellings, across composite/quoted/prefixed command forms), the verifier role (denies
+`gh` and every non-read-only `git` subcommand — an unlisted subcommand, a global option before the
+subcommand, and a bare `git` all fail closed — while its read-only git subcommands pass), and every
+role-agnostic no-opinion edge (no `agent_type` key, an unrecognised role, `permission_mode:
+"plan"`, the wrong tool, malformed stdin, and `tool_input.command` absent), plus the same
+booby-trapped `git`/`rm`/`gh` idiom proving this hook likewise executes nothing. It runs in CI as
+the fourth step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
+`hooks/git-c-guard.sh` or `hooks/agent-boundary.sh` changes.
 
 `dev/cleanup-tests.sh` is a separate negative-test harness for `bin/cleanup-after-merge.sh`: it
 builds throwaway fixture git repos under `mktemp`, with a stub `gh` and stub `git` on `PATH`, and

@@ -159,6 +159,49 @@ p_2_7_missing_script() {
 }
 p_2_7_if_value()   { edit "$1/hooks/hooks.json" 's/Bash(git -C \*)/Bash(git *)/'; }
 p_2_7_if_missing() { edit "$1/hooks/hooks.json" 's/"if":/"iff":/'; }
+# p_2_7_boundary_if_added (#235) — add an "if" key to the SECOND (agent-boundary.sh) handler
+# only, located by the literal substring "agent-boundary.sh" (present nowhere else in
+# hooks/hooks.json), so the git-c-guard.sh handler's own "if" stays untouched. Reworked 2.7's
+# basename-keyed table expects "-none-" for agent-boundary.sh (the if field is permission-rule
+# syntax over tool input and cannot see agent_type — see the hook's own header), so any if value
+# here trips clause (c).
+p_2_7_boundary_if_added() {
+  local f="$1/hooks/hooks.json"
+  awk '{print} /"command":.*agent-boundary\.sh/ && !done {print "            \"if\": \"Bash(git *)\","; done=1}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+# p_2_7_boundary_missing_script (#235) — repoint the SECOND handler's command at a nonexistent
+# file, the mirror of p_2_7_missing_script (which targets the FIRST/git-c-guard.sh handler) —
+# "agent-boundary.sh" is unique to that one handler's command string.
+p_2_7_boundary_missing_script() { edit "$1/hooks/hooks.json" 's#agent-boundary\.sh#nonexistent-boundary.sh#'; }
+# p_2_7_matcher (#235) — change ONLY the SECOND '"matcher": "Bash"' occurrence (an awk counter,
+# not a blanket sed, since the plain string "Bash" also now appears inside hooks.json's
+# .description prose) to "Write", tripping reworked 2.7's new every-entry matcher clause (a)
+# without touching the first entry's matcher or any command/if text.
+p_2_7_matcher() {
+  local f="$1/hooks/hooks.json"
+  awk '{ if ($0 ~ /"matcher": "Bash"/) { n++; if (n == 2) sub(/"Bash"/, "\"Write\"") } print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+# p_2_7_orphan_hook_script (#235) — add a NEW hooks/*.sh file that hooks.json never registers.
+# Deliberately shaped to still pass 1.1 (bash -n), 1.2 (shebang + 'set -' line), 1.4 (no
+# GNU-only construct), and 1.6 (no eval), so its expected failing set is exactly {2.7} — reworked
+# 2.7's new hooks/*.sh-to-registration reverse-bijection clause (d) is the only assertion an
+# unregistered-but-otherwise-conforming hook script can trip.
+p_2_7_orphan_hook_script() {
+  local f="$1/hooks/orphan-hook.sh"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -uo pipefail\n'
+    printf 'exit 0\n'
+  } > "$f"
+  chmod +x "$f"
+}
+# p_4_39_* (#235) — perturbations named directly in the approved plan (LESSON 2026-09-04b:
+# characters changed inside the identifier, never a suffix appended): AGENT_TYPES_IMPLEMENTOR,
+# verifer, trail-blazer-flo:implementer.
+p_4_39_extraction() { edit "$1/hooks/agent-boundary.sh" 's/AGENT_TYPES_IMPLEMENTER/AGENT_TYPES_IMPLEMENTOR/g'; }
+p_4_39_unknown_agent() { edit "$1/hooks/agent-boundary.sh" 's/^AGENT_TYPES_VERIFIER="verifier trail-blazer-flow:verifier"$/AGENT_TYPES_VERIFIER="verifer trail-blazer-flow:verifier"/'; }
+p_4_39_namespace() { edit "$1/hooks/agent-boundary.sh" 's/trail-blazer-flow:implementer/trail-blazer-flo:implementer/'; }
+p_4_39_missing_spelling() { edit "$1/hooks/agent-boundary.sh" 's/^AGENT_TYPES_IMPLEMENTER="implementer trail-blazer-flow:implementer"$/AGENT_TYPES_IMPLEMENTER="implementer"/'; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -332,15 +375,19 @@ cases=(
   "1.6|1.6|p_1_6|append a bare 'eval \"\$x\"' line to hooks/git-c-guard.sh"
   "1.6-comment||p_1_6_comment|control: a single #-comment naming eval is not flagged"
   "2.1|2.1 2.3|p_2_1|prepend a stray '{' to marketplace.json (invalid JSON; blanks 2.3's jq read too)"
-  "2.1-hooks|2.1 2.7|p_2_1_hooks|prepend a stray '{' to hooks/hooks.json (invalid JSON; blanks 2.7's jq read too)"
+  "2.1-hooks|2.1 2.7|p_2_1_hooks|prepend a stray '{' to hooks/hooks.json (invalid JSON; blanks 2.7's jq read too, now against reworked 2.7) -- re-measured post-#235: '2.7 hooks/hooks.json structure: .hooks.PreToolUse extraction failed or came back empty (structure changed)'"
   "2.4-missing-grant|2.4|p_2_4_missing_grant|drop the Bash(harness-status.sh:*) allow entry"
   "2.4-orphan-grant|2.4|p_2_4_orphan_grant|add an allow entry for a bin/ script that doesn't exist"
   "2.5-missing-bare|2.5|p_2_5_missing_bare|drop the Bash(git commit:*) allow entry"
   "2.5-c-allow-returns|2.5|p_2_5_c_allow_returns|re-insert a legacy Bash(git -C * status *) allow entry #150 deleted"
   "2.5-extraction|2.5|p_2_5_extraction|rename hooks/git-c-guard.sh's GIT_C_SUBCOMMANDS= line so the gate's extraction comes back empty"
-  "2.7-missing-script|2.7|p_2_7_missing_script|repoint hooks.json's command at a nonexistent script"
-  "2.7-if-value|2.7|p_2_7_if_value|widen hooks.json's handler if filter to Bash(git *)"
-  "2.7-if-missing|2.7|p_2_7_if_missing|rename the handler's \"if\" key so the gate's extraction comes back short"
+  "2.7-missing-script|2.7|p_2_7_missing_script|repoint hooks.json's git-c-guard.sh command at a nonexistent script -- re-measured against reworked 2.7: now also trips the new reverse-bijection clause (d), since git-c-guard.sh's real file on disk is no longer named by any handler -- measured: '2.7 hooks/hooks.json structure broken: command handler(s) resolve to a nonexistent file: .../hooks/nonexistent.sh; hooks/*.sh file(s) not registered by any handler: git-c-guard.sh;'"
+  "2.7-if-value|2.7|p_2_7_if_value|widen hooks.json's git-c-guard.sh handler's if filter to Bash(git *) -- re-measured against reworked 2.7's basename-keyed table: measured: \"2.7 hooks/hooks.json structure broken: git-c-guard.sh's if is 'Bash(git *)', expected 'Bash(git -C *)';\""
+  "2.7-if-missing|2.7|p_2_7_if_missing|rename the git-c-guard.sh handler's \"if\" key so the gate's extraction defaults it to \"-none-\" -- re-measured against reworked 2.7 (no longer a length mismatch, since a missing if now defaults cleanly to \"-none-\"; it fails via the basename-keyed table's mismatch instead): measured: \"2.7 hooks/hooks.json structure broken: git-c-guard.sh's if is '-none-', expected 'Bash(git -C *)';\""
+  "2.7-boundary-if-added|2.7|p_2_7_boundary_if_added|add an \"if\" key to hooks.json's agent-boundary.sh handler, which reworked 2.7 expects to carry none (\"-none-\")"
+  "2.7-boundary-missing-script|2.7|p_2_7_boundary_missing_script|repoint hooks.json's agent-boundary.sh handler at a nonexistent script"
+  "2.7-matcher|2.7|p_2_7_matcher|change the second PreToolUse entry's matcher from Bash to Write"
+  "2.7-orphan-hook-script|2.7|p_2_7_orphan_hook_script|add a syntactically valid hooks/*.sh file that hooks.json never registers (1.1/1.2/1.4/1.6 stay green)"
   "2.6|2.6|p_2_6|drop the Bash(git -C * clean*) deny entry"
   "3.4|3.4|p_3_4|agents/planner.md's harness-status line: retries=<k> becomes retries=<kk>"
   "4.2-empty-desc|4.2|p_4_2_empty_desc|delete project-kickoff/SKILL.md's folded description body"
@@ -398,6 +445,10 @@ cases=(
   "4.37-extraction|4.37|p_4_37_extraction|rename bin/harness-version.sh's HARNESS_VERSION_STEM identifier throughout so the gate's anchored extraction comes back empty -- measured: '4.37 bin/harness-version.sh's HARNESS_VERSION_STEM= or HARNESS_STATUS_FIELD= line didn't match (structure changed) — extraction failed'"
   "4.38-stem|4.38|p_4_38_stem|rewrite 'protection' to 'protecton' inside every occurrence of the strict WARN stem in dev/doctor-tests.sh only (characters changed inside the token, not a suffix) -- measured: '4.38 branch-protection WARN stem literal(s) missing from: dev/doctor-tests.sh(strict);'"
   "4.38-extraction|4.38|p_4_38_extraction|rename bin/check-harness.sh's PROTECTION_STRICT_WARN_STEM identifier throughout so the gate's anchored extraction comes back empty -- measured: '4.38 bin/check-harness.sh's PROTECTION_STRICT_WARN_STEM= or PROTECTION_CHECKS_WARN_STEM= line didn't match (structure changed) — extraction failed'"
+  "4.39-extraction|4.39|p_4_39_extraction|rename hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER identifier throughout so the gate's anchored extraction comes back empty"
+  "4.39-unknown-agent|4.39|p_4_39_unknown_agent|typo AGENT_TYPES_VERIFIER's bare spelling to 'verifer', naming an agents/*.md file that doesn't exist"
+  "4.39-namespace|4.39|p_4_39_namespace|typo the namespaced spelling's plugin-name prefix to 'trail-blazer-flo', no longer matching plugin.json's .name"
+  "4.39-missing-spelling|4.39|p_4_39_missing_spelling|drop the namespaced spelling from AGENT_TYPES_IMPLEMENTER, leaving only the bare form"
   "5.13-harness-pass|5.13|p_5_13_harness_pass|disable only the harness-only sed pass in bin/reconcile-ledger.sh (retries=([^ ]+) (harness= anchor) so a harness-only status line falls through to the malformed-line die -- measured: 'harness-only planner line: expected silence/rc=0, got rc=2 output=...malformed harness-status line...'"
   "5.13-deploy-harness-pass|5.13|p_5_13_deploy_harness_pass|disable only the deploy+harness sed pass in bin/reconcile-ledger.sh ((deploy=[^ ]+) (harness= anchor) so a deploy+harness status line falls through to the malformed-line die -- measured: 'deploy+harness merge line: expected silence/rc=0, got rc=2 output=...malformed harness-status line...'"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"

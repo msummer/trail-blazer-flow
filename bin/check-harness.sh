@@ -583,13 +583,17 @@ EOF
   fi
 fi
 
-# --- disableAllHooks (#150) -------------------------------------------------------------------
+# --- disableAllHooks (#150, #235) --------------------------------------------------------------
 # A true value in ANY of the three settings files silently disables every hook, including the
 # plugin's `git -C` guard hook — worktree-parallel mode's `git -C` commands then prompt in
-# default mode (or, headless, stall unattended, since a subagent can't answer a prompt). Never
-# FAILs: disabling hooks is a legitimate choice, this just names the consequence.
+# default mode (or, headless, stall unattended, since a subagent can't answer a prompt) — AND the
+# implementer/verifier agent-boundary hook (#235), whose absence is a DIFFERENT failure shape: it
+# never prompts, it just goes silently missing, so a misbehaving implementer/verifier subagent's
+# `git`/`gh` command executes under the session-wide permission allow list exactly as if the
+# mechanical boundary had never shipped. Never FAILs: disabling hooks is a legitimate choice, this
+# just names both consequences.
 if [ -n "$disable_hooks_src" ]; then
-  wrn "disableAllHooks: true in $disable_hooks_src — the plugin's git -C guard hook (and every other hook) cannot run, so worktree-parallel mode's git -C commands prompt in default mode and an unattended run stalls"
+  wrn "disableAllHooks: true in $disable_hooks_src — the plugin's git -C guard hook (and every other hook) cannot run, so worktree-parallel mode's git -C commands prompt in default mode and an unattended run stalls; the implementer/verifier agent-boundary hook also cannot run, so its git/gh denial is silently absent rather than a prompt — a misbehaving subagent's git/gh command then executes under the ordinary permission allow list"
 fi
 
 # --- policy activation state (informational) -------------------------------------

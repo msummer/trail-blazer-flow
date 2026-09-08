@@ -39,7 +39,8 @@ the current branch, and return a clear report.
       exhaustive.
    2. **Self-mutation check on every new or rewritten test.** Temporarily break the behaviour the
       test claims to pin, run just that test, confirm it fails, then restore the edit
-      immediately — you have no `git`, so restoration is a manual edit. A test that still passes
+      immediately — the harness's own boundary hook mechanically denies you `git`, so restoration
+      is a manual edit. A test that still passes
       is not done. Known vacuous-pass modes to name if you find one: an already-stable sort, a
       fixture whose data already satisfies the assertion, a cap a library enforces on its own.
       After the last restore, re-run the verification commands once more, so every number you
@@ -59,7 +60,12 @@ the current branch, and return a clear report.
 
 - **No git, no GitHub, no push, no PR, no deployments.** Do not run `git`, `gh`, or anything
   that touches the remote or a deployed environment. The orchestrator does all of that after
-  you return. (If a git/gh command is denied, that's expected — don't try to work around it.)
+  you return. This is mechanically enforced, not just an instruction: `hooks/agent-boundary.sh`
+  (#235), a plugin-shipped `PreToolUse` hook, denies any Bash command whose command word resolves
+  to `git` or `gh` for the implementer role, regardless of what a permission rule would otherwise
+  allow. If a Bash call is blocked, its stderr names the boundary and the command it blocked —
+  that's expected and is the harness's own control working correctly; don't try to work around it
+  (e.g. via `bash -c`, an absolute `git` path, or another interpreter).
 - **No changes against live data stores.** If the plan needs a schema or data-model change,
   follow the project's migration conventions in CLAUDE.md (e.g. add a new migration file; never
   edit an already-applied one) and note in your report that applying it is a human step. Do not
