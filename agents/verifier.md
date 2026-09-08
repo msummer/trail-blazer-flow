@@ -149,8 +149,9 @@ finding.
 Return exactly this structure (Markdown), and nothing before or after it. The closing status
 line's `issue` and `retries` values come from the orchestrator's prompt (the issue number, and
 `Dispatch attempt: <k>` if present — echo `retries=<k-1>`, or `retries=0` if the prompt states no
-attempt number); set `outcome` to match your Verdict (`pass`/`fail`), or `incomplete` per the
-constraint above:
+attempt number); `harness` comes from the prompt's `Harness version: <version>` line — echo
+`harness=<version>`, or `harness=unknown` if the prompt is silent; set `outcome` to match your
+Verdict (`pass`/`fail`), or `incomplete` per the constraint above:
 
 ```
 ## Verdict
@@ -179,5 +180,5 @@ CLAUDE.md).
 ## Notes for the PR reviewer
 Observations worth a human's attention that are not conformance violations (or "None").
 
-<!-- harness-status: stage=verifier issue=<n> outcome=<pass|fail|incomplete|died> retries=<k> -->
+<!-- harness-status: stage=verifier issue=<n> outcome=<pass|fail|incomplete|died> retries=<k> harness=<version> -->
 ```

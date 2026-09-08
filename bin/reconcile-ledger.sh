@@ -12,7 +12,7 @@
 #
 # LEDGER RECORDS — one per line, whitespace-separated; blank lines and #-comments ignored:
 #
-#   <issue> <stage> <outcome> [retries] [deploy=<slug>] [further fields, ignored]
+#   <issue> <stage> <outcome> [retries] [deploy=<slug>] [harness=<version>] [further fields, ignored]
 #
 #   issue    bare integer
 #   stage    seed | planner | implementer | verifier | merge
@@ -28,7 +28,9 @@
 #
 # A verbatim agent status line counts as a record:
 #   <!-- harness-status: stage=planner issue=17 outcome=plan-posted retries=0 -->
+#   <!-- harness-status: stage=planner issue=17 outcome=plan-posted retries=0 harness=2.7.0 -->
 #   <!-- harness-status: stage=merge issue=17 outcome=merged retries=0 deploy=verified -->
+#   <!-- harness-status: stage=merge issue=17 outcome=merged retries=0 deploy=verified harness=2.7.0 -->
 #
 # Write a record only for a stage the run actually DISPATCHED — a stage the run never reached
 # is ABSENT, not '-'. For the same issue+stage the LAST record wins (append-friendly).
@@ -111,16 +113,24 @@ else
   raw="$(cat "$ledger_src")"
 fi
 
-# CR-safe; rewrite agent status lines into plain records; drop comments and blanks. Two
-# sed -E passes, not one optional-group expression: the deploy-bearing form is matched and
-# rewritten FIRST (its result no longer contains '<!--', so the second pass — today's
-# no-deploy form — cannot re-match it and leaves it alone); a line with no deploy field never
-# matches the first pass and falls through to the second, unchanged. Preferred over a single
-# expression with a back-reference to a possibly-unmatched capture, whose behavior under BSD
-# sed -E is unverified.
+# CR-safe; rewrite agent status lines into plain records; drop comments and blanks. Four
+# sed -E passes, not one optional-group expression: both-fields, deploy-only, harness-only,
+# neither. The four accepted forms are mutually exclusive — each pass anchors its match on
+# " -->" immediately after its own last captured field, so a line carrying a trailing field a
+# given pass doesn't expect (e.g. the both-fields line against the deploy-only pass) simply
+# doesn't match that pass at all and falls through unchanged, rather than matching short and
+# stranding the extra field. Each pass that DOES match rewrites the line to a plain record that
+# no longer contains '<!--', so a line already rewritten by an earlier pass can never be
+# re-matched by a later one. Listing most-specific-first is defensive convention, not
+# load-bearing: swapping the both-fields and deploy-only passes still parses every accepted form
+# identically (measured — see dev/selfcheck.sh's 5.13). Preferred over a single expression with
+# a back-reference to a possibly-unmatched capture, whose behavior under BSD sed -E is
+# unverified.
 norm="$(printf '%s\n' "$raw" \
   | tr -d '\r' \
+  | sed -E 's/^.*<!-- harness-status: stage=([^ ]+) issue=([0-9]+) outcome=([^ ]+) retries=([^ ]+) (deploy=[^ ]+) (harness=[^ ]+) -->.*$/\2 \1 \3 \4 \5 \6/' \
   | sed -E 's/^.*<!-- harness-status: stage=([^ ]+) issue=([0-9]+) outcome=([^ ]+) retries=([^ ]+) (deploy=[^ ]+) -->.*$/\2 \1 \3 \4 \5/' \
+  | sed -E 's/^.*<!-- harness-status: stage=([^ ]+) issue=([0-9]+) outcome=([^ ]+) retries=([^ ]+) (harness=[^ ]+) -->.*$/\2 \1 \3 \4 \5/' \
   | sed -E 's/^.*<!-- harness-status: stage=([^ ]+) issue=([0-9]+) outcome=([^ ]+) retries=([^ ]+) -->.*$/\2 \1 \3 \4/' \
   | grep -v '^[[:space:]]*#' \
   | grep -v '^[[:space:]]*$')"

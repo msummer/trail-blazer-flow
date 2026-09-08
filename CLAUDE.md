@@ -60,8 +60,10 @@ fence-delimiter-skipping span hunt, the verification baseline's short-SHA-as-pre
 `.claude/settings.json`, and (#175, gated on a "Merge autonomy policy" section, widened by #179
 and #186) a WARN naming any `uses:` ref in a consumer's `.github/workflows/*.yml`/`*.yaml` and in
 any `action.yml`/`action.yaml` anywhere in the repo — local (`./…`, `../…`) and `docker://` refs
-excepted in both — not pinned to a full 40-hex commit SHA) that would otherwise only be
-hand-verified. It runs in CI as the third step, but it is not part of
+excepted in both — not pinned to a full 40-hex commit SHA, and (#233) the installed harness
+version report — `bin/harness-version.sh`'s printed `<version> <sha>` line surfaced verbatim as a
+PASS when resolvable, a WARN (never a FAIL) naming the expected fixed path when it isn't) that
+would otherwise only be hand-verified. It runs in CI as the third step, but it is not part of
 `dev/selfcheck.sh` itself — run it by hand whenever `bin/check-harness.sh` or
 `bin/check-decision-record.sh` changes.
 

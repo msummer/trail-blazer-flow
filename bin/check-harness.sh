@@ -30,8 +30,9 @@
 # repo's default branch, whether any of the three settings files disables all hooks (silently
 # disabling the plugin's `git -C` guard hook, and every other hook), whether
 # `.claude/settings.json` still carries legacy `Bash(git -C * <sub> *)` allow entries the guard
-# hook now supersedes (#150 — Claude Code 2.1.246+ warns about these at startup), and branch
-# protection.
+# hook now supersedes (#150 — Claude Code 2.1.246+ warns about these at startup), the installed
+# harness plugin's own version and short commit SHA (#233, via bin/harness-version.sh, run by a
+# fixed path — never derived from repo content), and branch protection.
 #
 # The test-suite-ratchet check never executes, evals, or shells out to anything read from
 # CLAUDE.md: it only looks up the measurement command's first word with `command -v` (a lookup,
@@ -243,6 +244,21 @@ case "$(uname -s)" in
     fi
     ;;
 esac
+
+# --- harness version (#233) -----------------------------------------------------
+# Runs bin/harness-version.sh by a FIXED path — $script_dir/harness-version.sh, alongside this
+# script — never a path derived from repo content, so the doctor's guarantee that it never
+# executes anything read from CLAUDE.md stays untouched. Reports the script's own printed
+# "<version> <sha>" line verbatim on success. Missing, non-executable, or a non-zero exit (e.g. no
+# .claude-plugin/plugin.json alongside a repo that copied the harness's bin/ scripts into its own
+# .claude/ rather than installing the plugin) is a WARN, never a FAIL — this doctor never blocks a
+# run on a fact this cosmetic.
+hv_script="$script_dir/harness-version.sh"
+if [ -x "$hv_script" ] && hv_out="$("$hv_script" 2>/dev/null)" && [ -n "$hv_out" ]; then
+  ok "harness version: $hv_out"
+else
+  wrn "could not determine the installed harness version — expected $hv_script to print '<version> <sha>' (run it directly for the diagnostic)"
+fi
 
 # --- CLAUDE.md ----------------------------------------------------------------
 if [ -f "$root/CLAUDE.md" ]; then

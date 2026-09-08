@@ -53,6 +53,7 @@ or share).
 │   ├── harness-status.sh          # who acts next: harness queues vs. items waiting on the human
 │   ├── reconcile-ledger.sh        # reconciles a cycle's dispatch ledger against live state
 │   ├── harness-lock.sh            # single-flight lock: at most one active cycle per checkout
+│   ├── harness-version.sh         # prints the installed plugin's "<version> <sha>", one line
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
 │   ├── hooks.json                 # registers the PreToolUse guard below
@@ -321,7 +322,9 @@ skill's "Resilient dispatch", cited by name from `issue-planner`/`issue-cycle`):
 checkpointing with resume-not-restart, bounded exponential backoff before a stage escalates as
 **failed**, a clean exit on context exhaustion under a capped relaunch budget, a status-line-fed
 dispatch ledger reconciled by `reconcile-ledger.sh`, and merge guards — see "The steady state"
-below for the ledger and the guards.
+below for the ledger and the guards. Every status line also carries a trailing `harness=<version>`
+field (#233) — the installed plugin revision that produced it, from `harness-version.sh` — which
+`reconcile-ledger.sh` accepts as an optional trailing field but doesn't otherwise interpret.
 
 ### After the human merges
 
@@ -864,6 +867,18 @@ author's latest commit sight-unseen. If you'd rather vet updates first, set
 you've reviewed what changed. The published `vX.Y.Z` tags give you known-good points to compare
 against or roll back to.
 
+**Which revision produced a given plan comment, verdict, or PR (#233).** Four durable harness
+artifacts — the planner's plan comment, the verifier-verdict archive comment, the PR body, and the
+`issue-cycle` report header — record the installed plugin's `<version> <sha>` (via
+`bin/harness-version.sh`; the doctor reports it too), so a consumer who sees behaviour differ from
+last week's run can tell exactly which revision produced each of those four. Every
+`<!-- harness-status: ... -->` line also carries a trailing `harness=<version>` field (see
+"Resilience" above) — but that field is the `<version>` half only, no sha, so it narrows a run
+to a released version, not to an exact commit; check one of the four sha-carrying artifacts from
+the same run for that. To pin to a known revision instead of trusting `autoUpdate`, see
+"Heads-up for testers" above. The published `vX.Y.Z` annotated tags are the anchors to diff a
+recorded `<version>` against, or to roll back to.
+
 ### Updating an already-onboarded repo (per-repo migration)
 
 An update replaces the plugin's skills/agents/scripts everywhere, but the **project-side
@@ -1150,11 +1165,16 @@ comment that was quietly edited some time ago will newly report `covers_plan: fa
 lose `plan-approved` (or hold, for the unknown verdict) — this is the intended tripwire firing
 retroactively, not a regression. No new grant, label, script, or baseline step.
 
-**v2.6.1 → v2.7.0** requires two consumer actions: **re-run `bin/setup-labels.sh`** to create the
-new `multi-pr` label (until then, `check-harness.sh` reports it missing — see below), and
-**re-copy the permissions block** from `templates/repo-settings.json` to pick up the new
-`"Bash(harness-lock.sh:*)"` allow entry the single-flight lock needs (#232, below) — until then,
-`check-harness.sh` WARNs "settings.json allow-list missing 1 template entries". **The implementer's unknown-verdict
+**v2.6.1 → v2.7.0** requires three consumer actions: **re-run `bin/setup-labels.sh`** to create the
+new `multi-pr` label (until then, `check-harness.sh` reports it missing — see below); **re-copy
+the permissions block** from `templates/repo-settings.json` to pick up the two new allow entries —
+`"Bash(harness-lock.sh:*)"` the single-flight lock needs (#232, below) and
+`"Bash(harness-version.sh:*)"` the harness-version report needs (#233, below) — until then,
+`check-harness.sh` WARNs "settings.json allow-list missing 2 template entries"; and **no action**
+for the version-provenance lines themselves (#233) — every new `harness=<version>` status-line
+field and `<!-- harness-version: ... -->` marker line is purely additive, so an existing ledger
+record, archived verdict, or PR body with neither keeps parsing exactly as before. **The
+implementer's unknown-verdict
 hold comment is de-duplicated across runs
 (#222), the same treatment #199 and #208 already gave the planner's escalation and staleness
 notes.** The `<!-- harness-audit -->` comment `issue-implementer` posts at step 2a and step 2e
@@ -1415,7 +1435,7 @@ CI run itself — its only edits anywhere in this pipeline are harness bookkeepi
 (`.claude/LESSONS.md`, the PR body, issue comments) — and the merge pass's hard floor requires
 three artifacts to agree before any autonomous merge: the PR body carries the verifier's own
 closing status line (`<!-- harness-status: stage=verifier issue=<n> outcome=pass retries=<k>
--->`) verbatim, checked mechanically (`gh pr view … --jq 'contains(...)'`); the dispatch ledger's
+harness=<version> -->`) verbatim, checked mechanically (`gh pr view … --jq 'contains(...)'`); the dispatch ledger's
 `verifier` row for that issue reads `pass`; and the verifier's verdict is separately archived,
 also verbatim, as an issue comment opening with `<!-- verifier-verdict -->` — posted by the
 orchestrator after every verifier pass, including a CI-fix re-verification — whose second line

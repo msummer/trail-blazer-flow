@@ -70,7 +70,8 @@ checkout's very next invocation until a human runs `release --force`.
 
 Run the issue-implementer skill's pre-flight (step 0) **up front**: gh auth, dirty-tree /
 crash-recovery rules (incl. the stale-worktree sweep, before the hygiene script),
-`cleanup-after-merge.sh --fix`, and the **baseline refresh** — before planning too, since a red
+`cleanup-after-merge.sh --fix`, `harness-version.sh` (its printed `<version> <sha>` feeds every
+artifact this run posts), and the **baseline refresh** — before planning too, since a red
 default branch STOPs the cycle with a report (planning wastes a round; implementing is forbidden
 anyway). Missing `.claude/BASELINE.md` → warn once (harness-setup) and continue; it degrades
 comparisons, doesn't block the cycle.
@@ -277,11 +278,12 @@ since production is unverified and whether to merge onto it is the human's call.
 Fill in the `merged` ledger column **for every PR the pass evaluated** and emit the merge
 stage's status line yourself (there is no merge agent) — `stage=merge`, `issue=<n>`,
 `retries=0` (the merge pass doesn't retry through the ladder — a denial or base mismatch is a
-policy/config fact, not a transient failure), and an outcome from the issue-implementer skill's
-"Resilient dispatch" vocabulary for `merge`. When guard (e) ran, the status line and ledger row
-also carry a trailing `deploy=<verified|pending|failed>` field, e.g.
-`<!-- harness-status: stage=merge issue=<n> outcome=merged retries=0 deploy=verified -->`; no
-field is emitted when there is no declaration or the outcome is not `merged`.
+policy/config fact, not a transient failure), an outcome from the issue-implementer skill's
+"Resilient dispatch" vocabulary for `merge`, and `harness=<version>` (step 0's printed value,
+always last). When guard (e) ran, the status line and ledger row also carry a trailing
+`deploy=<verified|pending|failed>` field before it, e.g.
+`<!-- harness-status: stage=merge issue=<n> outcome=merged retries=0 deploy=verified harness=<version> -->`;
+no deploy field is emitted when there is no declaration or the outcome is not `merged`.
 
 PRs that fail any check (guard or policy) simply stay in the "waits on the human" queue with a
 one-line reason — a normal outcome, not an error (the loud escalations above are for cases
@@ -305,7 +307,8 @@ in "what this cycle did" — issue links, the measurement figure, and that each 
 ### 5. Close the loop
 
 The report's **first line** is `run-id: <id>` — the id `harness-lock.sh acquire` printed at step
-0 (never re-derived; a future run-journal keys off this same value).
+0 (never re-derived; a future run-journal keys off this same value) — and its **second line** is
+`harness: <version> <sha>`, step 0's `harness-version.sh` output pasted verbatim.
 
 ```bash
 harness-status.sh

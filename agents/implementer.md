@@ -93,7 +93,8 @@ the current branch, and return a clear report.
 Return exactly this structure (Markdown), and nothing before or after it. The closing status
 line's `issue` and `retries` values come from the orchestrator's prompt (the issue number, and
 `Dispatch attempt: <k>` if present — echo `retries=<k-1>`, or `retries=0` if the prompt states no
-attempt number):
+attempt number); `harness` comes from the prompt's `Harness version: <version>` line — echo
+`harness=<version>`, or `harness=unknown` if the prompt is silent:
 
 ```
 ## Status
@@ -143,5 +144,5 @@ changes, half-finished edits, open threads of investigation) the next context ne
 without re-deriving it. Leave the tree exactly as you stopped it — the orchestrator checkpoints
 it before relaunching.
 
-<!-- harness-status: stage=implementer issue=<n> outcome=<complete|blocked|incomplete|died> retries=<k> -->
+<!-- harness-status: stage=implementer issue=<n> outcome=<complete|blocked|incomplete|died> retries=<k> harness=<version> -->
 ```

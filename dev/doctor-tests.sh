@@ -39,7 +39,10 @@
 # .github/workflows/ so a local composite action is found regardless of where it lives, and a
 # workflow file literally named action.yml is never double-counted) — local (./…, ../…) and
 # docker:// refs excepted in both file classes — not pinned to a full 40-hex commit SHA,
-# comment-stripped by line, string comparison only, never executed.
+# comment-stripped by line, string comparison only, never executed, and (#233) the installed
+# harness version report — bin/harness-version.sh's printed "<version> <sha>" line surfaced
+# verbatim as a PASS when resolvable, a WARN (never a FAIL) naming the expected fixed path when
+# it isn't.
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -155,6 +158,10 @@ mk_repo() {
   chmod +x "$dir/bin/check-harness.sh"
   cp "$root/bin/check-decision-record.sh" "$dir/bin/check-decision-record.sh"
   chmod +x "$dir/bin/check-decision-record.sh"
+  cp "$root/bin/harness-version.sh" "$dir/bin/harness-version.sh"
+  chmod +x "$dir/bin/harness-version.sh"
+  mkdir -p "$dir/.claude-plugin"
+  cp "$root/.claude-plugin/plugin.json" "$dir/.claude-plugin/plugin.json"
   cp "$root/templates/repo-settings.json" "$dir/templates/repo-settings.json"
   {
     printf '# CLAUDE.md\n\n## Verification\n\nRun `true` to verify. (fixture stub)\n'
@@ -400,7 +407,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 59 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
+# The 61 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
 # unasserted below. Every fixture except the three baseline-* ones also emits a no-baseline WARN
 # (also unasserted); the baseline-* fixtures write their own .claude/BASELINE.md instead, via
 # seed_commit/point_origin_ref/write_baseline, so they exercise the baseline compare itself.
@@ -1485,6 +1492,32 @@ case_baseline_too_short() {
   expect_absent "verification baseline recorded (BASELINE.md at"
 }
 
+# version-report / version-unresolvable (#233) — bin/check-harness.sh's "harness version" section
+# runs bin/harness-version.sh (mk_repo now copies it, plus a real .claude-plugin/plugin.json,
+# into every fixture) by a fixed path and reports its printed "<version> <sha>" line verbatim as
+# one PASS; missing/unresolvable is a WARN, never a FAIL. The expected version is measured at
+# TEST time from THIS checkout's real .claude-plugin/plugin.json (jq -r .version), never
+# hand-typed, so a release version bump can't break this case; the trailing space after the
+# version in the `expect` needle is deliberate — it matches regardless of whether the fixture's
+# fresh, commit-less git-init resolves a short SHA or "-".
+case_version_report() {
+  local dir want
+  dir="$(mk_repo version-report base verbatim)"
+  want="$(jq -r '.version' "$root/.claude-plugin/plugin.json")"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "harness version: $want "
+}
+
+case_version_unresolvable() {
+  local dir
+  dir="$(mk_repo version-unresolvable base verbatim)"
+  rm -f "$dir/.claude-plugin/plugin.json"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "could not determine the installed harness version"
+}
+
 # ---------------------------------------------------------------------------------------------
 stub_gh_dir="$tmpbase/stub-gh"
 build_stub_gh "$stub_gh_dir"
@@ -1568,6 +1601,8 @@ cases=(
   "baseline-too-short|case_baseline_too_short|verification baseline: recorded value under 7 hex characters -> malformed WARN, not recorded, not behind"
   "hooks-disabled|case_hooks_disabled|disableAllHooks: true in settings.local.json -> WARN naming the file and the guard-hook consequence"
   "stale-c-allows|case_stale_c_allows|legacy Bash(git -C * ...) allow entries still present -> WARN naming them and the guard hook that supersedes them"
+  "version-report|case_version_report|harness version: bin/harness-version.sh's printed line reported verbatim as a PASS"
+  "version-unresolvable|case_version_unresolvable|harness version: no .claude-plugin/plugin.json -> WARN, never FAIL"
 )
 
 matched=0
