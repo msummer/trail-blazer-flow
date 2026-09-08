@@ -24,10 +24,11 @@ It prints a `PASS`/`FAIL` line per assertion (grouped and labelled in its own ou
 CI on every pull request (`.github/workflows/selfcheck.yml`, two jobs — `selfcheck` on
 `ubuntu-latest` and `selfcheck-macos` on `macos-latest`, which prepends `/bin` to `PATH` so the
 same commands run under Apple's bash 3.2 instead of a newer bash); a red check means one of the
-jobs' six commands failed — reproduce locally with `bash dev/selfcheck.sh`,
+jobs' seven commands failed — reproduce locally with `bash dev/selfcheck.sh`,
 `bash dev/selfcheck-tests.sh`, `bash dev/doctor-tests.sh`, `bash dev/hook-tests.sh`,
-`bash dev/cleanup-tests.sh`, and `bash dev/planning-tests.sh` (on a Mac, prefix each with
-`PATH=/bin:$PATH` to match the macOS job's shell, e.g. `PATH=/bin:$PATH bash dev/selfcheck.sh`).
+`bash dev/cleanup-tests.sh`, `bash dev/planning-tests.sh`, and `bash dev/lock-tests.sh` (on a
+Mac, prefix each with `PATH=/bin:$PATH` to match the macOS job's shell, e.g.
+`PATH=/bin:$PATH bash dev/selfcheck.sh`).
 There is no test suite and no build step: this repo is Markdown instruction files, Bash scripts,
 and JSON manifests. The gate prints what it checks — run it. A change the gate can't catch needs
 a new assertion in the gate, not a waiver, subject to the machine-parsed-artifacts rule below.
@@ -211,9 +212,27 @@ both new reason strings identically, the same fixed-string-agreement contract as
 `skills/issue-cycle/SKILL.md` is excluded for the identical, already-documented reason (its
 *Plan-binding provenance* bullet prints `approval.reason` verbatim and names no individual
 reason).
-It runs in CI as the sixth and last step, but it
+It runs in CI as the sixth step, but it
 is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh` or
 `bin/find-implementation-work.sh` changes.
+
+`dev/lock-tests.sh` is a separate negative-test harness for `bin/harness-lock.sh` (#232), the
+single-flight lock that guards against two harness cycles running concurrently in one checkout.
+It builds throwaway git repos (and, for the shared-lock case, a `git worktree add`-ed sibling)
+under `mktemp`, with `CLAUDE_PID` set explicitly per fixture, and runs the real
+`bin/harness-lock.sh` against them, pinning: a fresh `acquire` creates the six-file lock
+(`run-id`, `pid`, `host`, `started-at`, `harness-version`, `checkout-path`) and prints
+`run-id=<id>` as the last stdout line; a second `acquire` against a live, same-host holder (or
+any different-host holder) refuses (exit 3) with the holder record; a same-host holder whose pid
+is no longer alive is reclaimed (exit 0, one audit line first); a lock record with a missing or
+non-digits `pid`/`host` file refuses rather than reclaiming, naming `release --force`; `release
+<run-id>` removes the lock only on a matching id, `release --force` removes it regardless,
+`release` with neither exits 2; `status` always exits 0; a worktree of the same checkout shares
+one lock (`git rev-parse --git-common-dir`); and the recorded pid is `${CLAUDE_PID:-$PPID}` (the
+Claude Code session process, since a Bash tool call's own `$PPID` dies before the next call —
+see the script's own header for the measured rationale), including the fallback to `$PPID` when
+`CLAUDE_PID` is unset or non-digits. It runs in CI as the seventh and last step, but it is not
+part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/harness-lock.sh` changes.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor; see the README's "Working on the harness itself" for why.

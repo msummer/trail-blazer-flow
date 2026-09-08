@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 58 assertions total. The gate prints what it checks — run it.
+# Five groups, 59 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -612,9 +612,9 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 640
-issue-cycle 355
-issue-planner 460
+budget_table="issue-implementer 670
+issue-cycle 390
+issue-planner 490
 project-kickoff 215
 test-ratchet 200
 harness-setup 185"
@@ -1093,6 +1093,42 @@ elif printf '%s\n' "$setup_labels_created" | grep -qx -- "$cleanup_multi_pr_labe
   ok "4.35 bin/cleanup-after-merge.sh's MULTI_PR_LABEL ('$cleanup_multi_pr_label') is created by bin/setup-labels.sh"
 else
   bad "4.35 bin/cleanup-after-merge.sh's MULTI_PR_LABEL ('$cleanup_multi_pr_label') is not among the labels bin/setup-labels.sh creates"
+fi
+
+# 4.36 (#232) — lock subcommand vocabulary <-> skill invocations. Extracts bin/harness-lock.sh's
+# LOCK_SUBCOMMANDS="..." line with an anchored sed -nE (the 2.5/4.13/4.35 idiom: an empty
+# extraction FAILs loudly, "structure changed", never a vacuous pass), then extracts every
+# `harness-lock\.sh [a-z][a-z-]*` token that appears in the three orchestrating SKILL.md files.
+# Fails if (a) any extracted skill token is not in the script's own subcommand list — this
+# constrains prose: a skill must never write the script name followed by an ordinary lowercase
+# word that isn't one of its real subcommands — or (b) any of the three skills is missing both
+# 'acquire' and 'release' (a skill that only ever queries status, never actually taking or
+# releasing the lock, would defeat the single-flight guard). Proves only that the three skills'
+# prose names subcommands the script actually implements, not that acquire/release are called at
+# the right point in each skill's procedure.
+lock_subs="$(sed -nE 's/^LOCK_SUBCOMMANDS="([^"]*)"$/\1/p' "$root/bin/harness-lock.sh")"
+if [ -z "$lock_subs" ]; then
+  bad "4.36 bin/harness-lock.sh's LOCK_SUBCOMMANDS= line didn't match (structure changed) — extraction failed"
+else
+  bad_list=""
+  for f in skills/issue-cycle/SKILL.md skills/issue-planner/SKILL.md skills/issue-implementer/SKILL.md; do
+    [ -f "$root/$f" ] || { bad_list="$bad_list $f missing;"; continue; }
+    skill_toks="$(grep -oE 'harness-lock\.sh [a-z][a-z-]*' "$root/$f" | awk '{print $2}' | sort -u)"
+    for t in $skill_toks; do
+      case " $lock_subs " in
+        *" $t "*) ;;
+        *) bad_list="$bad_list $f names unknown subcommand '$t';" ;;
+      esac
+    done
+    for req in acquire release; do
+      printf '%s\n' "$skill_toks" | grep -qx "$req" || bad_list="$bad_list $f missing '$req';"
+    done
+  done
+  if [ -z "$bad_list" ]; then
+    ok "4.36 bin/harness-lock.sh's LOCK_SUBCOMMANDS ('$lock_subs') agrees with the three orchestrating skills' invocations (each names acquire and release)"
+  else
+    bad "4.36 lock subcommand/skill disagreement:$bad_list"
+  fi
 fi
 
 # ============================================================================

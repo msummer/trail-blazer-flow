@@ -100,6 +100,25 @@ append it: 1–3 lines, dated, written as an instruction to a future agent.
 
 ### 0. Pre-flight: sync & hygiene
 
+**Single-flight lock — the literal first action of this step, before anything else below.**
+Skip this whole block ONLY when `issue-cycle` is running you as its step 1 (it already acquired
+at its own step 0 — the outermost run owns the lock; acquire is deliberately not
+same-pid-idempotent, so a second acquire from the same live session would itself refuse and
+abort the run). Running standalone, run:
+```bash
+harness-lock.sh acquire
+```
+Exit 0: its LAST output line is `run-id=<id>` — copy that id literally. It is this run's
+identity: report it as the summary's first line, `run-id: <id>` (step 7), and paste the SAME id
+literally into the closing `release` call at step 7 — never re-derived. Exit 3: the command's own
+output IS the holder record (no separate `status` call needed) — abort the run immediately,
+before any mutating command below runs (including `cleanup-after-merge.sh --fix` next), and
+report the holder record plus the exact remedy, `harness-lock.sh release --force`. **Release
+before every exit:** when you did acquire here (standalone), release it on every STOP/abort path
+too, not only at step 7's normal close — the recorded pid is the Claude Code session, which
+outlives the run; a lock left unreleased blocks this checkout's very next invocation until a
+human runs `release --force`.
+
 Plans must be written against current code, and the queue state must be clean before you read
 it:
 
@@ -385,6 +404,10 @@ saw pre-implementation.
 
 ### 7. Summarise
 
+When you acquired the lock yourself at step 0 (standalone run), the report's **first line** is
+`run-id: <id>` — the id `harness-lock.sh acquire` printed there (never re-derived). Omit this
+line when `issue-cycle` acquired it instead (composed run) — its own report carries the line.
+
 Report a short table of what you did: issue number, title, action (planned / revised /
 auto-revised with proposed answers / auto-approved), the comment URL, and the open-question
 count split BLOCKING / ADVISORY. Note any issues you skipped and why, any stale or overlapping
@@ -438,6 +461,13 @@ a prior run already recorded this exact bucket/stage — and say so in the summa
 prior escalation already records it; otherwise post. The summary escalation itself is never
 skipped: every stalled issue is reported there regardless of whether its comment was posted or
 skipped this run. At most one such comment per stalled issue per run.
+
+**Release the lock — the literal last action of this step, after the report above** — but only
+when you acquired it yourself at step 0 (standalone run; `issue-cycle` releases its own at its
+own step 5). Paste step 0's own run id literally:
+```bash
+harness-lock.sh release <run-id>
+```
 
 ## Rules
 

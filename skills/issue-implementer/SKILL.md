@@ -151,6 +151,25 @@ work is preserved either way.
 
 ### 0. Pre-flight (once, before any issue)
 
+**Single-flight lock — the literal first action of this step, before anything else below.**
+Skip this whole block ONLY when `issue-cycle` is running you as its step 2 (it already acquired
+at its own step 0 — the outermost run owns the lock; acquire is deliberately not
+same-pid-idempotent, so a second acquire from the same live session would itself refuse and
+abort the run). Running standalone, run:
+```bash
+harness-lock.sh acquire
+```
+Exit 0: its LAST output line is `run-id=<id>` — copy that id literally. It is this run's
+identity: report it as the summary's first line, `run-id: <id>` (step 3), and paste the SAME id
+literally into the closing `release` call at the end of step 3 — never re-derived. Exit 3: the
+command's own output IS the holder record (no separate `status` call needed) — abort the run
+immediately, before any mutating command below runs, and report the holder record plus the exact
+remedy, `harness-lock.sh release --force`. **Release before every exit:** when you did acquire
+here (standalone), release it on every STOP/abort path too (a dirty-tree stop, an exhausted
+retry ladder, `status: died`) — not only at step 3's normal close — because the recorded pid is
+the Claude Code session, which outlives the run; a lock left unreleased blocks this checkout's
+very next invocation until a human runs `release --force`.
+
 ```bash
 gh auth status                 # must be authenticated
 git status --porcelain         # see the dirty-tree rules below
@@ -579,6 +598,10 @@ g. Move to the next issue (back to step 2a).
 
 ### 3. Summarise
 
+When you acquired the lock yourself at step 0 (standalone run), the report's **first line** is
+`run-id: <id>` — the id `harness-lock.sh acquire` printed there (never re-derived). Omit this
+line when `issue-cycle` acquired it instead (composed run) — its own report carries the line.
+
 Report a table: issue number, title, outcome (PR opened → link / blocked → branch name),
 verification rounds (1 = clean; 2–3 = kickbacks — say what the verifier caught), retries (ladder
 retries per stage, resume relaunches out of the cap of 2), CI status (pass / fixed after 1
@@ -610,6 +633,13 @@ merely postdates approval (`covered_by_approval_reason: null`) from one uncovere
 itself EDITED after approval or its own edit state could not be read
 (`covered_by_approval_reason: "decision-edited-after-approval"` or `"decision-edit-unreadable"`) —
 name which, since the latter is the more actionable fact for the human re-reading the thread.
+
+**Release the lock — the literal last action of this step, after the report above** — but only
+when you acquired it yourself at step 0 (standalone run; `issue-cycle` releases its own at its
+own step 5). Paste step 0's own run id literally:
+```bash
+harness-lock.sh release <run-id>
+```
 
 ## Worktree-parallel mode (optional)
 

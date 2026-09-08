@@ -21,6 +21,7 @@
       "Bash(check-decision-record.sh:*)",
       "Bash(harness-status.sh:*)",
       "Bash(reconcile-ledger.sh:*)",
+      "Bash(harness-lock.sh:*)",
       "Bash(gh auth status:*)",
       "Bash(gh issue list:*)",
       "Bash(gh issue view:*)",
