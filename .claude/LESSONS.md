@@ -86,3 +86,9 @@ bites: 1–3 lines, written as an instruction to a future agent.
   stream with stream-specific helpers; say in the runner comment which claims are asserted
   per-stream and which only against the merged capture. On #232 this class cost two of three
   verification rounds (round 1: usage-on-stderr; round 2: run-id-on-stdout).
+- 2026-09-08 (c): A `see "X" above/below` cross-reference must name a heading that exists in the SAME
+  file — run `grep -n '^#' <file>` and pin both the name and the direction word against the line
+  numbers before writing it — and cite a section that lives in another file qualified (the
+  implementer skill's "Status line" section). A fix that repairs one claim in a paragraph can introduce a
+  fresh dangling one: on #233 the round-1 fix to the README's "Updating" paragraph pointed at a
+  "Status line" section only `skills/issue-implementer/SKILL.md` has, costing a third round.

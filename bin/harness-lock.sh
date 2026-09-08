@@ -49,8 +49,10 @@
 # pid (the session) outlives the interrupted run.
 #
 # Read-only except its own lock directory: never touches the tracked working tree, makes no
-# network call. #233 (bin/harness-version.sh, if it lands) may later replace the direct
-# `jq .version` read below without changing this file's six-file layout.
+# network call. #233 landed bin/harness-version.sh; this file's own direct `jq .version` read
+# below is deliberately retained rather than shelling out to that script — one extra process per
+# acquire for a single field isn't worth it, and this file's six-file lock-record layout is
+# unaffected either way.
 set -uo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"

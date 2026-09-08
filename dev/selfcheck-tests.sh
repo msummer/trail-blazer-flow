@@ -187,10 +187,13 @@ p_4_13_outcome()      { edit "$1/agents/verifier.md" 's/outcome=<pass|fail|incom
 p_4_13_extraction()   { edit "$1/bin/reconcile-ledger.sh" 's/STAGES/STAGE_LIST/g'; }
 p_4_13_deploy_script() { edit "$1/bin/reconcile-ledger.sh" 's/^DEPLOY_OUTCOMES="verified pending failed"$/DEPLOY_OUTCOMES="verified pending failed extra"/'; }
 p_4_13_deploy_skill() { edit "$1/skills/issue-implementer/SKILL.md" 's/deploy=<verified|pending|failed>/deploy=<verified|pending|failed|extra>/'; }
-# p_5_3: break ONLY the deploy-bearing sed's capture (its literal "(deploy=[^ ]+) -->" text,
-# matched via -E since escaping that as BRE data would be unreadable) so a verbatim deploy
-# status line no longer matches either sed pass and falls through to the malformed-line die —
-# the plain-field 5.1/5.2/5.4 ledger forms never touch this sed at all, so they're unaffected.
+# p_5_3: break ONLY the deploy-only sed's capture (its literal "(deploy=[^ ]+) -->" text, matched
+# via -E since escaping that as BRE data would be unreadable — this text is unique to the
+# deploy-only pass; the both-fields pass has a harness= capture between deploy= and " -->", so it
+# doesn't share this literal substring) so a verbatim deploy-only status line no longer matches
+# any of the four passes and falls through to the malformed-line die — the plain-field 5.1/5.2/5.4
+# ledger forms never touch this sed at all, so they're unaffected. Also trips 5.13's
+# legacy-deploy-only sub-check (same sed, same fixture shape), hence the {5.3 5.13} expected set.
 p_5_3() {
   local f="$1/bin/reconcile-ledger.sh"
   sed -E 's/\(deploy=\[\^ \]\+\) -->/(deployX=[^ ]+) -->/' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
@@ -238,6 +241,34 @@ p_4_34()            { edit "$1/skills/issue-implementer/SKILL.md" 's/decision-ed
 p_4_36_rename()          { edit "$1/skills/issue-cycle/SKILL.md" 's/harness-lock\.sh release/harness-lock.sh relase/g'; }
 p_4_36_missing_acquire() { drop "$1/skills/issue-planner/SKILL.md" 'harness-lock\.sh acquire'; }
 p_4_36_extraction()      { edit "$1/bin/harness-lock.sh" 's/LOCK_SUBCOMMANDS/LOCK_SUBCOMMAND_LIST/g'; }
+# rewrite characters INSIDE the token, never append a suffix (LESSON 2026-09-04b). p_4_37_stem
+# and p_4_37_field each target ONE writer file only, so the gate's missing-list names exactly
+# that one site.
+p_4_37_stem()       { edit "$1/skills/issue-planner/SKILL.md" 's/<!-- harness-version:/<!-- harnessversion:/'; }
+p_4_37_field()      { edit "$1/skills/issue-cycle/SKILL.md" 's/harness=<version>/harness_<version>/g'; }
+p_4_37_extraction() { edit "$1/bin/harness-version.sh" 's/HARNESS_VERSION_STEM/HARNESS_VERSION_STEMX/g'; }
+# p_5_13_harness_pass / p_5_13_deploy_harness_pass: disable exactly ONE of the four-pass sed
+# ladder's two NEW passes (bin/reconcile-ledger.sh), each located by a literal substring unique
+# to that one pass's regex (never the other three) via awk's index(), so the other pass and the
+# two pre-existing passes are untouched. Disabling either pass makes its own line fall through
+# every remaining pass (a harness-bearing line never matches the plain/no-harness passes either,
+# since those require " -->" immediately after retries=, not "... harness=<v> -->") straight into
+# the malformed-line die — same failure mode as p_5_3 above, on the two new forms instead of the
+# pre-existing deploy-only one.
+p_5_13_harness_pass() {
+  local f="$1/bin/reconcile-ledger.sh"
+  awk '
+    index($0, "retries=([^ ]+) (harness=") > 0 { gsub(/harness=/, "harnessX=") }
+    { print }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+p_5_13_deploy_harness_pass() {
+  local f="$1/bin/reconcile-ledger.sh"
+  awk '
+    index($0, "(deploy=[^ ]+) (harness=") > 0 { gsub(/harness=/, "harnessX=") }
+    { print }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
 p_4_20_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(gh pr edit:\*\)"'; }
 p_4_20_orphan_grant() {
   local f="$1/templates/repo-settings.json"
@@ -355,9 +386,14 @@ cases=(
   "4.36-rename|4.36|p_4_36_rename|rewrite 'release' to 'relase' inside every 'harness-lock.sh release' mention in skills/issue-cycle/SKILL.md only, so the script's subcommand list and that skill's invocations disagree (characters changed inside the token, not a suffix)"
   "4.36-missing-acquire|4.36|p_4_36_missing_acquire|delete every 'harness-lock.sh acquire' line from skills/issue-planner/SKILL.md so it never names the acquire subcommand"
   "4.36-extraction|4.36|p_4_36_extraction|rename bin/harness-lock.sh's LOCK_SUBCOMMANDS= line so the gate's extraction comes back empty"
+  "4.37-stem|4.37|p_4_37_stem|rewrite '<!-- harness-version:' to '<!-- harnessversion:' in skills/issue-planner/SKILL.md only -- measured: '4.37 harness-version literal(s) missing from: skills/issue-planner/SKILL.md(stem);'"
+  "4.37-field|4.37|p_4_37_field|rewrite 'harness=<version>' to 'harness_<version>' throughout skills/issue-cycle/SKILL.md only (scoped there, so 3.4's agent-template grammar check is unaffected) -- measured: '4.37 harness-version literal(s) missing from: skills/issue-cycle/SKILL.md(field);'"
+  "4.37-extraction|4.37|p_4_37_extraction|rename bin/harness-version.sh's HARNESS_VERSION_STEM identifier throughout so the gate's anchored extraction comes back empty -- measured: '4.37 bin/harness-version.sh's HARNESS_VERSION_STEM= or HARNESS_STATUS_FIELD= line didn't match (structure changed) — extraction failed'"
+  "5.13-harness-pass|5.13|p_5_13_harness_pass|disable only the harness-only sed pass in bin/reconcile-ledger.sh (retries=([^ ]+) (harness= anchor) so a harness-only status line falls through to the malformed-line die -- measured: 'harness-only planner line: expected silence/rc=0, got rc=2 output=...malformed harness-status line...'"
+  "5.13-deploy-harness-pass|5.13|p_5_13_deploy_harness_pass|disable only the deploy+harness sed pass in bin/reconcile-ledger.sh ((deploy=[^ ]+) (harness= anchor) so a deploy+harness status line falls through to the malformed-line die -- measured: 'deploy+harness merge line: expected silence/rc=0, got rc=2 output=...malformed harness-status line...'"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
   "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
-  "5.3|5.3|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again"
+  "5.3|5.3 5.13|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again -- measured (post-#233): this same pass also serves 5.13's 'legacy merge line with deploy= only' sub-check, so it fails alongside 5.3 now"
   "5.4|5.4|p_5_4|reword the deploy-specific unknown-outcome explanation 5.4 compares literally"
   "5.5|5.5|p_5_5|drop the sort_by(.createdAt) clause from the archived-verdict --jq program so array order, not recency, picks the winner"
   "5.6|5.6|p_5_6|drop the archived-verdict key needle's trailing ' -->' so a shorter branch name substring-matches a longer sibling branch's key line"

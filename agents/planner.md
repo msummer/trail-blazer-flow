@@ -86,7 +86,9 @@ act on. You return a plan as text.
 Return exactly this structure (Markdown), and nothing before or after it. The closing status
 line's `issue` and `retries` values come from the orchestrator's prompt (the issue number, and
 `Dispatch attempt: <k>` if present — echo `retries=<k-1>`, or `retries=0` if the prompt states no
-attempt number); set `outcome` to `plan-revised` if this dispatch was a revision, `plan-posted`
+attempt number); `harness` comes from the prompt's `Harness version: <version>` line — echo
+`harness=<version>`, or `harness=unknown` if the prompt is silent; set `outcome` to
+`plan-revised` if this dispatch was a revision, `plan-posted`
 for an initial plan, or `incomplete` per the constraint above:
 
 ```
@@ -169,5 +171,5 @@ none.
 ## Out of scope
 What this plan deliberately does not cover.
 
-<!-- harness-status: stage=planner issue=<n> outcome=<plan-posted|plan-revised|incomplete|died> retries=<k> -->
+<!-- harness-status: stage=planner issue=<n> outcome=<plan-posted|plan-revised|incomplete|died> retries=<k> harness=<version> -->
 ```

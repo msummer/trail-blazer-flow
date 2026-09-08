@@ -83,7 +83,7 @@ status line carries the right `retries` value.
 
 Every `planner`, `implementer`, and `verifier` report ends with one machine-readable line:
 
-`<!-- harness-status: stage=<planner|implementer|verifier|merge> issue=<n> outcome=<slug> retries=<k> [deploy=<verified|pending|failed>] -->`
+`<!-- harness-status: stage=<planner|implementer|verifier|merge> issue=<n> outcome=<slug> retries=<k> [deploy=<verified|pending|failed>] [harness=<version>] -->`
 
 - `stage` — the pipeline stage (`merge` has no agent; the orchestrator emits its line directly —
   see `issue-cycle`'s merge guards); `issue` — the GitHub issue number.
@@ -95,6 +95,12 @@ Every `planner`, `implementer`, and `verifier` report ends with one machine-read
 - `deploy` — optional, valid only with `stage=merge`: emitted by the cycle's merge pass when the
   repo declares post-merge verification (`issue-cycle`'s merge-pass guard (e)), values as in the
   grammar line above.
+- `harness` (#233) — the installed harness version, from `harness-version.sh`'s printed
+  `<version> <sha>` (step 0), the `<version>` half only; agents echo it from the prompt's
+  `Harness version: <version>` line, defaulting to `unknown` when the prompt is silent; always
+  last on the line. Required on every agent-emitted line (the orchestrator's own merge-stage line
+  always carries it too); `reconcile-ledger.sh`'s parser tolerates it as optional trailing input,
+  so a line from before this field existed still parses.
 
 The orchestrator emits this line itself, on the stage's behalf, whenever a stage died or never
 reported, and always for merge — keeping `issue-cycle`'s ledger reconciliation checkable.
@@ -169,6 +175,15 @@ here (standalone), release it on every STOP/abort path too (a dirty-tree stop, a
 retry ladder, `status: died`) — not only at step 3's normal close — because the recorded pid is
 the Claude Code session, which outlives the run; a lock left unreleased blocks this checkout's
 very next invocation until a human runs `release --force`.
+
+**Harness version** — always run, regardless of who acquired the lock above: unlike `acquire`,
+this is read-only and idempotent, so a composed run under `issue-cycle` re-runs it here rather
+than inheriting its value.
+```bash
+harness-version.sh
+```
+Its one printed line, `<version> <sha>`, is pasted verbatim as `Harness version: <version>` into
+every dispatch prompt below and carried into every durable artifact this run produces.
 
 ```bash
 gh auth status                 # must be authenticated
@@ -374,7 +389,8 @@ c. **Dispatch the `implementer` subagent** (Task tool). It starts from a fresh c
      your report."*
    - the instruction *"Implement this approved plan on the current branch following your process
      and constraints. Return your report."*
-   - the dispatch attempt number ("Dispatch attempt: `<k>`", starting at 1).
+   - the dispatch attempt number ("Dispatch attempt: `<k>`", starting at 1) and "Harness version:
+     `<version>`" (step 0's printed value).
    If a BLOCKING question has no answer anywhere in the thread, do NOT dispatch — treat the issue
    as mislabelled and ask the human. If the dispatch itself fails, retry per the "Resilient
    dispatch" ladder rather than treating it as a blocker.
@@ -397,18 +413,20 @@ e. **Dispatch the `verifier` subagent** (Task tool, `agents/verifier.md`) — th
    mechanical checks can't provide, retried per the "Resilient dispatch" ladder if the dispatch
    itself fails. Its prompt must contain: the issue, the full approved plan (Acceptance criteria
    + Verified facts + `RESOLVED:` decisions), the implementer's report, the dispatch attempt
-   number, `git diff <default-branch>...HEAD --stat` (three-dot, from the merge base; non-empty
+   number, "Harness version: `<version>`" (step 0's printed value),
+   `git diff <default-branch>...HEAD --stat` (three-dot, from the merge base; non-empty
    because of step 2c's checkpoint), the declared autonomy reserve globs — pasted one per line
    from CLAUDE.md's `## Autonomy reserve` fenced block, or the literal `none declared` — plus the
    plan's "Reserve touch list" (or that it has none), which feed the verifier's `## Reserve touch
    check`, and *"Verify this implementation against the plan and acceptance criteria following
    your process. Return your verdict."*
    - **Verdict `pass`:** archive it first, then carry it. Archive: `gh issue comment <number>
-     --body-file <tempfile>`, whose temp file's first line is exactly `<!-- verifier-verdict -->`
-     and second line is exactly `<!-- verifier-verdict-branch: claude/<number>-<slug> -->` (this
+     --body-file <tempfile>`, whose temp file's first line is exactly `<!-- verifier-verdict -->`,
+     second line is exactly `<!-- verifier-verdict-branch: claude/<number>-<slug> -->` (this
      PR's head branch, from step 2b — the key the merge floor matches on, so a multi-PR issue's
-     slices don't shadow each other), followed by the verdict verbatim (including its closing
-     status line). Do this after **every** verifier pass — this one and any CI-fix
+     slices don't shadow each other), and third line is exactly `<!-- harness-version: <version>
+     <sha> -->` (step 0's printed value, pasted literally), followed by the verdict verbatim
+     (including its closing status line). Do this after **every** verifier pass — this one and any CI-fix
      re-verification below, not just the first — because the merge floor matches the *latest*
      archived comment **for this head branch** against the PR body. Then
      carry its closing status line — verbatim — a `Mutation probe:` line carrying its
@@ -513,12 +531,14 @@ gh issue edit <number> --add-label pr-open
      The PR body (the temp file) must include: a one-paragraph summary; `Closes #<number>`; the
      files changed; the verification results; **the verifier's own closing status line, pasted
      verbatim — never one you compose on its behalf** —
-     `<!-- harness-status: stage=verifier issue=<number> outcome=pass retries=<k> -->` — from the
+     `<!-- harness-status: stage=verifier issue=<number> outcome=pass retries=<k> harness=<version> -->`
+     — from the
      verdict that reviewed the **final** tree, after the last kickback (a kickback round's `fail`
      line is replaced, not appended — and so is a CI-fix round's fresh line below: never leave a
      superseded one in the body); **the `binding_line` just re-validated above, pasted verbatim —
      never one you compose on its behalf** (`<!-- harness-plan-binding: issue=<number>
-     plan=<url> approved-at=<ts> -->`); any post-approval comment the diff above (#198) found had
+     plan=<url> approved-at=<ts> -->`); **the version line, pasted verbatim from step 0** (`<!--
+     harness-version: <version> <sha> -->`); any post-approval comment the diff above (#198) found had
      arrived after dispatch, quoted verbatim (author, association, `createdAt`, `url`) in this
      same verification section and flagged as not folded into the implemented work (omit this
      item entirely when that diff was empty); a `Mutation probe:` line carrying that same verdict's

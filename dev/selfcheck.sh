@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 59 assertions total. The gate prints what it checks — run it.
+# Five groups, 61 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -317,8 +317,8 @@ else
 fi
 
 # 3.4 — exactly one harness-status line, inside the fence, matching the canonical grammar with
-# stage == the frontmatter name. bin/reconcile-ledger.sh:~95's `sed -E` is the consumer of this
-# grammar — a drift here breaks its status-line-to-record rewrite.
+# stage == the frontmatter name. bin/reconcile-ledger.sh's status-line-to-record sed ladder (see
+# its own header) is the consumer of this grammar — a drift here breaks that rewrite.
 bad_list=""
 for f in "$root"/agents/*.md; do
   base="$(basename "$f" .md)"
@@ -338,7 +338,7 @@ for f in "$root"/agents/*.md; do
     continue
   fi
 
-  if ! printf '%s' "$hs_text" | grep -qE "^<!-- harness-status: stage=${base} issue=<n> outcome=<[A-Za-z|-]+> retries=<k> -->\$"; then
+  if ! printf '%s' "$hs_text" | grep -qE "^<!-- harness-status: stage=${base} issue=<n> outcome=<[A-Za-z|-]+> retries=<k> harness=<version> -->\$"; then
     bad_list="$bad_list $f(status line doesn't match the canonical grammar for stage=$base)"
   fi
 done
@@ -612,9 +612,9 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 670
-issue-cycle 390
-issue-planner 490
+budget_table="issue-implementer 690
+issue-cycle 395
+issue-planner 505
 project-kickoff 215
 test-ratchet 200
 harness-setup 185"
@@ -1101,8 +1101,8 @@ fi
 # `harness-lock\.sh [a-z][a-z-]*` token that appears in the three orchestrating SKILL.md files.
 # Fails if (a) any extracted skill token is not in the script's own subcommand list — this
 # constrains prose: a skill must never write the script name followed by an ordinary lowercase
-# word that isn't one of its real subcommands — or (b) any of the three skills is missing both
-# 'acquire' and 'release' (a skill that only ever queries status, never actually taking or
+# word that isn't one of its real subcommands — or (b) any of the three skills is missing either
+# 'acquire' or 'release' (a skill that only ever queries status, never actually taking or
 # releasing the lock, would defeat the single-flight guard). Proves only that the three skills'
 # prose names subcommands the script actually implements, not that acquire/release are called at
 # the right point in each skill's procedure.
@@ -1128,6 +1128,38 @@ else
     ok "4.36 bin/harness-lock.sh's LOCK_SUBCOMMANDS ('$lock_subs') agrees with the three orchestrating skills' invocations (each names acquire and release)"
   else
     bad "4.36 lock subcommand/skill disagreement:$bad_list"
+  fi
+fi
+
+# 4.37 (#233) — fixed-string presence of the two literals bin/harness-version.sh defines,
+# HARNESS_VERSION_STEM (the `<!-- harness-version:` marker prefix) and HARNESS_STATUS_FIELD (the
+# `harness=<version>` status-line field), extracted from the script itself with the same anchored
+# sed -nE idiom as 2.5/4.13/4.35/4.36 — either extraction coming back empty FAILs loudly
+# ("structure changed") rather than passing vacuously. The stem must appear in the two writer
+# surfaces that post a `<!-- harness-version: ... -->` line (skills/issue-planner/SKILL.md,
+# skills/issue-implementer/SKILL.md); the status field must appear in the one reader that parses
+# it (bin/reconcile-ledger.sh) and every surface that writes or documents a harness-status line
+# carrying it (skills/issue-implementer/SKILL.md, skills/issue-cycle/SKILL.md, and the three
+# agents/*.md templates). Both clauses fold into one missing list. Proves only that the two
+# literals are spelled identically across writer and reader files, not that either the marker or
+# the field behaves correctly at runtime — the same honest limit 4.33/4.34's comments state.
+hv="$root/bin/harness-version.sh"
+hv_stem="$(sed -nE 's/^HARNESS_VERSION_STEM="([^"]*)"$/\1/p' "$hv")"
+hv_field="$(sed -nE 's/^HARNESS_STATUS_FIELD="([^"]*)"$/\1/p' "$hv")"
+if [ -z "$hv_stem" ] || [ -z "$hv_field" ]; then
+  bad "4.37 bin/harness-version.sh's HARNESS_VERSION_STEM= or HARNESS_STATUS_FIELD= line didn't match (structure changed) — extraction failed"
+else
+  missing=""
+  for f in skills/issue-planner/SKILL.md skills/issue-implementer/SKILL.md; do
+    grep -qF -- "$hv_stem" "$root/$f" || missing="$missing $f(stem);"
+  done
+  for f in bin/reconcile-ledger.sh skills/issue-implementer/SKILL.md skills/issue-cycle/SKILL.md agents/planner.md agents/implementer.md agents/verifier.md; do
+    grep -qF -- "$hv_field" "$root/$f" || missing="$missing $f(field);"
+  done
+  if [ -z "$missing" ]; then
+    ok "4.37 bin/harness-version.sh's HARNESS_VERSION_STEM ('$hv_stem') and HARNESS_STATUS_FIELD ('$hv_field') both agree with the writer/reader surfaces"
+  else
+    bad "4.37 harness-version literal(s) missing from:$missing"
   fi
 fi
 
@@ -1165,7 +1197,7 @@ fi
 empty_status_fixture='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{}}'
 
 # 5.3 — a verbatim merge status line carrying deploy=verified parses into a record (proves the
-# two-sed rewrite end to end) and a valid deploy value produces no discrepancy -> silence, exit 0.
+# four-pass rewrite end to end) and a valid deploy value produces no discrepancy -> silence, exit 0.
 out="$(bash "$rl" <(printf '%s\n' '<!-- harness-status: stage=merge issue=17 outcome=merged retries=0 deploy=verified -->') \
                   <(printf '%s' "$empty_status_fixture") 2>&1)"; rc=$?
 if [ -z "$out" ] && [ "$rc" -eq 0 ]; then
@@ -1733,6 +1765,48 @@ if [ "$hold_extraction_ok" = "1" ]; then
   else
     bad "5.12 hold de-dup --jq program:$fail_512"
   fi
+fi
+
+# 5.13 (#233) — executes bin/reconcile-ledger.sh (reusing $rl and the empty-queue
+# $empty_status_fixture from 5.3/5.4 above) against literal offline status-line fixtures covering
+# every accepted form of the new harness= trailing field and the one rejected form (not just that
+# the two literals agree, which 4.37 already covers): a planner line with a trailing harness= and
+# no deploy=; a merge line with both deploy= and harness=; both legacy forms with neither field —
+# each of the four extracts to a clean record with no discrepancy, exit 0 — and a planner line
+# with an unrecognised trailing token, which must still die loudly with "malformed harness-status
+# line" and exit 2 rather than being silently accepted as a fifth harness-style field. This does
+# NOT pin the ladder's most-specific-first ORDERING — that ordering is not load-bearing (see the
+# comment above the sed ladder in bin/reconcile-ledger.sh): swapping the both-fields and
+# deploy-only passes leaves all four fixtures below parsing identically and the gate green
+# (measured).
+fail_513=""
+
+out="$(bash "$rl" <(printf '%s\n' '<!-- harness-status: stage=planner issue=17 outcome=plan-posted retries=0 harness=2.7.0 -->') \
+                  <(printf '%s' "$empty_status_fixture") 2>&1)"; rc=$?
+[ -z "$out" ] && [ "$rc" -eq 0 ] || fail_513="$fail_513 harness-only planner line: expected silence/rc=0, got rc=$rc output='$out';"
+
+out="$(bash "$rl" <(printf '%s\n' '<!-- harness-status: stage=merge issue=17 outcome=merged retries=0 deploy=verified harness=2.7.0 -->') \
+                  <(printf '%s' "$empty_status_fixture") 2>&1)"; rc=$?
+[ -z "$out" ] && [ "$rc" -eq 0 ] || fail_513="$fail_513 deploy+harness merge line: expected silence/rc=0, got rc=$rc output='$out';"
+
+out="$(bash "$rl" <(printf '%s\n' '<!-- harness-status: stage=planner issue=17 outcome=plan-posted retries=0 -->') \
+                  <(printf '%s' "$empty_status_fixture") 2>&1)"; rc=$?
+[ -z "$out" ] && [ "$rc" -eq 0 ] || fail_513="$fail_513 legacy planner line (no harness=): expected silence/rc=0, got rc=$rc output='$out';"
+
+out="$(bash "$rl" <(printf '%s\n' '<!-- harness-status: stage=merge issue=17 outcome=merged retries=0 deploy=verified -->') \
+                  <(printf '%s' "$empty_status_fixture") 2>&1)"; rc=$?
+[ -z "$out" ] && [ "$rc" -eq 0 ] || fail_513="$fail_513 legacy merge line with deploy= only: expected silence/rc=0, got rc=$rc output='$out';"
+
+out="$(bash "$rl" <(printf '%s\n' '<!-- harness-status: stage=planner issue=17 outcome=plan-posted retries=0 bogus=1 -->') \
+                  <(printf '%s' "$empty_status_fixture") 2>&1)"; rc=$?
+if [ "$rc" -ne 2 ] || ! printf '%s' "$out" | grep -qF -- "malformed harness-status line"; then
+  fail_513="$fail_513 unrecognised trailing token 'bogus=1': expected rc=2 and 'malformed harness-status line' on stderr, got rc=$rc output='$out';"
+fi
+
+if [ -z "$fail_513" ]; then
+  ok "5.13 reconcile-ledger.sh's four-pass sed ladder: harness-only, deploy+harness, and both legacy forms all parse cleanly; an unrecognised trailing token still dies"
+else
+  bad "5.13 reconcile-ledger.sh harness-field sed ladder:$fail_513"
 fi
 
 # ============================================================================

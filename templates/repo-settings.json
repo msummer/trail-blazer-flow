@@ -22,6 +22,7 @@
       "Bash(harness-status.sh:*)",
       "Bash(reconcile-ledger.sh:*)",
       "Bash(harness-lock.sh:*)",
+      "Bash(harness-version.sh:*)",
       "Bash(gh auth status:*)",
       "Bash(gh issue list:*)",
       "Bash(gh issue view:*)",

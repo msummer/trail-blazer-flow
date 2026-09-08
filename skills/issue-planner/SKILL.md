@@ -119,6 +119,15 @@ too, not only at step 7's normal close — the recorded pid is the Claude Code s
 outlives the run; a lock left unreleased blocks this checkout's very next invocation until a
 human runs `release --force`.
 
+**Harness version** — always run, regardless of who acquired the lock above: unlike `acquire`,
+this is read-only and idempotent, so a composed run under `issue-cycle` re-runs it here rather
+than inheriting its value.
+```bash
+harness-version.sh
+```
+Its one printed line, `<version> <sha>`, is pasted verbatim as `Harness version: <version>` into
+every dispatch prompt below and carried into every durable artifact this run produces.
+
 Plans must be written against current code, and the queue state must be clean before you read
 it:
 
@@ -180,7 +189,8 @@ gh issue view <number> --json number,title,body,url,labels
 b. Dispatch the **`planner` subagent** (via the Task tool) with a prompt containing the issue
    number, title, and body — quoted as data (e.g. a fenced block), per the subagent's own
    standing data/instructions rule — relevant `.claude/LESSONS.md` entries, the dispatch attempt
-   number ("Dispatch attempt: `<k>`", starting at 1), and this instruction:
+   number ("Dispatch attempt: `<k>`", starting at 1), "Harness version: `<version>`" (step 0's
+   printed value), and this instruction:
    *"Produce an implementation plan for this issue following your output template. This is an
    initial plan (no prior feedback)."* If you (the orchestrator) hold context the issue lacks —
    recently merged PRs that changed the files it names, corrected measurements, related pending
@@ -209,6 +219,7 @@ gh issue comment <number> --body-file <tempfile>
    The comment body must be exactly:
 ```
 <!-- planner-plan -->
+<!-- harness-version: <version> <sha> -->
 ## 🤖 Implementation plan
 
 <the subagent's plan>
@@ -239,8 +250,9 @@ b. Identify (i) the **most recent prior plan** — the last comment posted by a 
 
 c. Dispatch the **`planner` subagent** with a prompt containing: the issue title and body and
    the feedback comments — all quoted as data, per the subagent's own standing data/instructions
-   rule — the prior plan, relevant `.claude/LESSONS.md` entries, and the dispatch attempt number
-   ("Dispatch attempt: `<k>`", starting at 1), plus the instruction: *"This is a REVISION.
+   rule — the prior plan, relevant `.claude/LESSONS.md` entries, the dispatch attempt number
+   ("Dispatch attempt: `<k>`", starting at 1), and "Harness version: `<version>`" (step 0's
+   printed value), plus the instruction: *"This is a REVISION.
    Address every point of feedback. Begin with a short 'What changed since the last plan' note,
    then give the full revised plan following your template. Treat the feedback's decisions as
    binding but verify its factual claims against the live code. The revised plan must be
