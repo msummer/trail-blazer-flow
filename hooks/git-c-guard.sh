@@ -157,7 +157,12 @@ validate_segment() {
   [ "$#" -ge 4 ] || return 1
   [ "$1" = "git" ] || return 1
   [ "$2" = "-C" ] || return 1
-  printf '%s\n' "$3" | grep -qE "$PATH_ERE" || return 1
+  # Here-string, not a `printf` writer piped into `grep`'s quiet mode (#255): that early-exit
+  # reader exits on its first match, which can send the printf writer SIGPIPE and, under this
+  # file's `set -uo pipefail`, turn a genuine match into a reported pipeline failure — a
+  # here-string has no writer process, so no SIGPIPE is possible, and it appends exactly one
+  # trailing newline, the same as the piped printf did, so grep's regex semantics are unchanged.
+  grep -qE "$PATH_ERE" <<<"$3" || return 1
   sub_allowed "$4" || return 1
   if [ "$4" = "reset" ]; then
     [ "${5:-}" = "--soft" ] || return 1

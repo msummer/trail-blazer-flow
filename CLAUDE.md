@@ -71,7 +71,11 @@ count via `max(checks|length, contexts|length)` (WARN when zero, including when
 (informational PASS either way) — all three WARN-only, never FAIL, silent with no policy section,
 and the doctor completing (its `== summary:` footer printing) on a repo with no CLAUDE.md at all,
 proving the branch-protection section never reads its policy-activation flag while unset under
-`set -u`) that would otherwise only be hand-verified. It runs in CI as the third step, but it is not part of
+`set -u`) that would otherwise only be hand-verified, and (#262-2) `bin/harness-version.sh`'s own
+`.git`-presence guard, run directly rather than through the doctor: a cache-shaped copy of the
+script nested two directories inside an enclosing repo with a resolvable HEAD prints `<version> -`
+and never that enclosing repo's short SHA, paired with a non-vacuity control whose plugin root is
+itself the checkout (prints that checkout's own short SHA). It runs in CI as the third step, but it is not part of
 `dev/selfcheck.sh` itself — run it by hand whenever `bin/check-harness.sh` or
 `bin/check-decision-record.sh` changes.
 
@@ -280,6 +284,22 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   `readlink -f`, `mapfile`/`readarray`, `declare -A`). Enforced mechanically on `bin/*.sh`
   (assertion 1.4); `dev/*.sh` follows the same rule by convention, and is exercised under
   BSD/bash 3.2 by the `selfcheck-macos` CI job.
+- **No writer piped into `grep`'s quiet mode** (a `-q`/`-c`/`-x` flag cluster containing `q`, or
+  `--quiet`) in `bin/*.sh`, `dev/*.sh`, or `hooks/*.sh`: every script in these three directories
+  runs `set -uo pipefail`, under which that early-exit reader can send its upstream writer
+  SIGPIPE and turn a genuine match into a reported pipeline failure (#255 — proven live,
+  `dev/selfcheck-tests.sh`'s own `run_case`, CI run 34268473009). Use a here-string for a
+  variable-fed site, or a capture-then-test for a command-fed one, instead. Enforced mechanically
+  (assertion 1.7) for exactly that shape, including scanning `dev/*.sh` (unlike 1.4/1.5/1.6, which
+  are `bin/`/`hooks/`-only by design) — a different early-exit reader (`awk ... exit`, `| head -N`)
+  is not caught by this assertion.
+- **A fixture harness's `expect`-family helper must refuse an empty needle.** `grep -qF -- ""`
+  (or `-cF`) matches every line unconditionally, so an empty needle silently makes `expect ""`
+  always pass and `expect_absent ""` always fail regardless of what was captured (#262).
+  `dev/doctor-tests.sh`, `dev/cleanup-tests.sh`, `dev/lock-tests.sh`, and `dev/planning-tests.sh`
+  each guard every needle-taking helper with a `needle_required` check that fails the case
+  instead; `dev/hook-tests.sh` needs no guard (its only substring test hand-types the literal
+  inline, never through a needle-taking helper).
 - The README is part of "done": every factual claim it makes about this repo's behavior must be
   checkable against the code (the verifier's Documentation changes check applies to docs).
 - Every `uses:` step in `.github/workflows/` is pinned to a full 40-hex commit SHA, with the

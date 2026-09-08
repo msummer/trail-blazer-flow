@@ -50,7 +50,10 @@
 # count via max(checks|length, contexts|length) (WARN when zero, including when
 # required_status_checks itself is absent), and required PR reviews (informational PASS either
 # way) — WARN-only, never FAIL, silent with no policy section, and unaffected by (never reading)
-# $has_merge_policy while unset on a repo with no CLAUDE.md at all.
+# $has_merge_policy while unset on a repo with no CLAUDE.md at all, and (#262-2) bin/harness-
+# version.sh's own `.git`-presence guard: run directly (not through the doctor), a cache-shaped
+# copy nested inside an enclosing repo with a resolvable HEAD prints "<version> -", never that
+# repo's short sha, paired with a non-vacuity control whose plugin root is itself the checkout.
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -425,16 +428,63 @@ run_record_check() {
   doctor_rc=$?
 }
 
+# run_version_script SCRIPT (#262-2) — same never-a-command-substitution idiom as run_doctor, but
+# captures stdout and stderr to SEPARATE files (.claude/LESSONS.md 2026-09-08(b): a capture that
+# merges both streams cannot pin a criterion that names a stream), leaving $version_out/
+# $version_err/$version_rc set as globals. Also copies a merged view into $doctor_out/$doctor_rc
+# so a failing version-* case's captured output still reaches the generic runner loop's
+# diagnostics dump below.
+version_out=""
+version_err=""
+version_rc=0
+run_version_script() {
+  local script="$1" outfile errfile
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  "$bash_bin" "$script" >"$outfile" 2>"$errfile"
+  version_rc=$?
+  version_out="$(cat "$outfile")"
+  version_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $version_out
+ERR: $version_err"
+  doctor_rc=$version_rc
+}
+
+# needle_required NAME NEEDLE (#262) — guards every needle-taking helper below: an empty NEEDLE
+# degenerates `grep -qF -- ""` into an unconditional match (expect "" always passes,
+# expect_absent "" always fails, regardless of $doctor_out), so treat an empty needle as a harness
+# bug IN THE CASE, not a fact about the script under test. Sets $__ok=0, appends
+# "<NAME>: empty needle (harness bug)\n" to $__why, and returns 1; returns 0 when the needle is
+# non-empty. Callers do `needle_required <own-name> "$1" || return 0` — returning 0 to the
+# CALLER's caller (not 1), so a guarded helper never leaves a stray non-zero exit status behind
+# for an `&&`/`||`/`if` chain built on it.
+needle_required() {
+  if [ -z "$2" ]; then
+    __ok=0
+    __why="${__why}$1: empty needle (harness bug)\n"
+    return 1
+  fi
+  return 0
+}
+
 # expect/expect_absent/expect_rc/expect_no_file — assert against $doctor_out/$doctor_rc, setting
 # $__ok=0 and appending to $__why on failure. ASCII-only short stems: stop before the doctor's
-# em dashes.
+# em dashes. expect/expect_absent are guarded by needle_required (#262). Fed via a here-string
+# (`<<<"$doctor_out"`, #255) rather than piping a `printf '%s\n' "$doctor_out"` writer into
+# `grep`'s quiet mode: that early-exit reader exits on its first match, which can send the printf
+# writer SIGPIPE and, under this file's `set -uo pipefail`, turn a genuine match into a reported
+# pipeline failure — a here-string has no writer process, so no SIGPIPE is possible, and it
+# appends exactly one trailing newline, the same as the piped printf did, so grep's fixed-string
+# semantics are unchanged.
 __ok=1
 __why=""
 expect() {
-  printf '%s\n' "$doctor_out" | grep -qF -- "$1" || { __ok=0; __why="${__why}missing: $1\n"; }
+  needle_required expect "$1" || return 0
+  grep -qF -- "$1" <<<"$doctor_out" || { __ok=0; __why="${__why}missing: $1\n"; }
 }
 expect_absent() {
-  printf '%s\n' "$doctor_out" | grep -qF -- "$1" && { __ok=0; __why="${__why}unexpected: $1\n"; }
+  needle_required expect_absent "$1" || return 0
+  grep -qF -- "$1" <<<"$doctor_out" && { __ok=0; __why="${__why}unexpected: $1\n"; }
 }
 expect_rc() {
   [ "$doctor_rc" -eq "$1" ] || { __ok=0; __why="${__why}rc: expected $1, got $doctor_rc\n"; }
@@ -444,7 +494,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 68 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
+# The 71 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
 # unasserted below. Every fixture except the three baseline-* ones also emits a no-baseline WARN
 # (also unasserted); the baseline-* fixtures write their own .claude/BASELINE.md instead, via
 # seed_commit/point_origin_ref/write_baseline, so they exercise the baseline compare itself.
@@ -1556,6 +1606,59 @@ case_version_unresolvable() {
   expect "could not determine the installed harness version"
 }
 
+# version-cache-under-repo / version-plugin-root-checkout (#262-2) — pins bin/harness-version.sh's
+# `.git`-presence guard (script line ~101: `[ -e "$plugin_root/.git" ]`) directly, rather than
+# through the doctor: a fixture-version copy of the script (never the real jq -r .version, since
+# .claude-plugin/plugin.json here is a throwaway fixture file, not this checkout's own) is placed
+# two directories deep (cache/tbf/bin/) inside an ENCLOSING repo with a resolvable HEAD — the
+# exact "a repo that copies the harness's bin/ scripts" shape the script's own header warns about
+# (without the guard, `git -C <plugin_root> rev-parse` walks UP and finds the enclosing repo's
+# .git). version-plugin-root-checkout is the non-vacuity control: the same fixture-version script,
+# with the plugin root ITSELF the git checkout, so its own resolvable HEAD's short SHA is expected
+# output, proving the harness can observe a real SHA at all. Measured mutant (delete
+# `&& [ -e "$plugin_root/.git" ]` from bin/harness-version.sh's `if command -v git >/dev/null
+# 2>&1 && [ -e "$plugin_root/.git" ]; then` line): `bash dev/doctor-tests.sh` goes from 71 pass, 0
+# fail to 70 pass, 1 fail — failing exactly: version-cache-under-repo (its stdout now contains the
+# enclosing repo's short SHA instead of "-"); version-plugin-root-checkout stays green (its own
+# checkout's SHA is the enclosing repo either way, so the mutant is a no-op there — the pairing
+# that makes version-cache-under-repo's fail non-vacuous).
+case_version_cache_under_repo() {
+  local dir cache repo_sha
+  dir="$tmpbase/version-cache-under-repo"
+  mkdir -p "$dir"
+  (cd "$dir" && git init -q) >/dev/null
+  seed_commit "$dir" >/dev/null
+  repo_sha="$(cd "$dir" && git rev-parse --short HEAD)"
+  cache="$dir/cache/tbf"
+  mkdir -p "$cache/bin" "$cache/.claude-plugin"
+  cp "$root/bin/harness-version.sh" "$cache/bin/harness-version.sh"
+  chmod +x "$cache/bin/harness-version.sh"
+  printf '{"version": "0.0.0-fixture"}\n' > "$cache/.claude-plugin/plugin.json"
+  run_version_script "$cache/bin/harness-version.sh"
+  [ "$version_out" = "0.0.0-fixture -" ] || { __ok=0; __why="${__why}stdout: expected '0.0.0-fixture -', got '$version_out'\n"; }
+  [ -z "$version_err" ] || { __ok=0; __why="${__why}stderr: expected empty, got '$version_err'\n"; }
+  [ "$version_rc" -eq 0 ] || { __ok=0; __why="${__why}rc: expected 0, got $version_rc\n"; }
+  case "$version_out" in
+    *"$repo_sha"*) __ok=0; __why="${__why}stdout unexpectedly carries the enclosing repo's short sha ($repo_sha) — the .git-presence guard did not stop git from walking up to it\n" ;;
+  esac
+}
+
+case_version_plugin_root_checkout() {
+  local dir repo_sha
+  dir="$tmpbase/version-plugin-root-checkout"
+  mkdir -p "$dir/bin" "$dir/.claude-plugin"
+  (cd "$dir" && git init -q) >/dev/null
+  cp "$root/bin/harness-version.sh" "$dir/bin/harness-version.sh"
+  chmod +x "$dir/bin/harness-version.sh"
+  printf '{"version": "0.0.0-fixture"}\n' > "$dir/.claude-plugin/plugin.json"
+  seed_commit "$dir" >/dev/null
+  repo_sha="$(cd "$dir" && git rev-parse --short HEAD)"
+  run_version_script "$dir/bin/harness-version.sh"
+  [ "$version_out" = "0.0.0-fixture $repo_sha" ] || { __ok=0; __why="${__why}stdout: expected '0.0.0-fixture $repo_sha', got '$version_out'\n"; }
+  [ -z "$version_err" ] || { __ok=0; __why="${__why}stderr: expected empty, got '$version_err'\n"; }
+  [ "$version_rc" -eq 0 ] || { __ok=0; __why="${__why}rc: expected 0, got $version_rc\n"; }
+}
+
 # --- branch protection reporting (#234, review F4) -------------------------------------------
 # The two WARN stems below are hand-typed literals that must match bin/check-harness.sh's
 # PROTECTION_STRICT_WARN_STEM / PROTECTION_CHECKS_WARN_STEM verbatim — dev/selfcheck.sh
@@ -1721,6 +1824,35 @@ build_stub_gh "$stub_gh_alt_dir" "$alt_branch"
 tmpl_branch_ops="$(jq -r '.permissions.deny[]? // empty' "$root/templates/repo-settings.json" \
   | sed -n 's/^Bash(git \(.*\) main:\*)$/\1/p' | sort -u)"
 
+# empty-needle-guard (#262-1) — exercises every guarded helper in this file (expect, expect_absent)
+# with an empty needle, and asserts the guard fired for each: sets $doctor_out to a fixed non-empty
+# value first (so a non-guarded regression couldn't pass vacuously against empty captured output),
+# calls both helpers with "", then checks the ACCUMULATED __ok/__why saved off before this case's
+# own __ok/__why are reset by the runner loop. Measured mutant: delete `needle_required expect
+# "$1" || return 0` from expect() only — `bash dev/doctor-tests.sh` goes from 71 pass, 0 fail to
+# 70 pass, 1 fail, failing exactly: empty-needle-guard (saved_why no longer names "expect:").
+case_empty_needle_guard() {
+  local saved_ok saved_why
+  doctor_out="fixture output for the empty-needle guard (#262)"
+  __ok=1; __why=""
+  expect ""
+  expect_absent ""
+  saved_ok="$__ok"
+  saved_why="$__why"
+  __ok=1; __why=""
+  if [ "$saved_ok" -ne 0 ]; then
+    __ok=0; __why="${__why}empty-needle guard never fired (saved_ok=$saved_ok)\n"
+  fi
+  case "$saved_why" in
+    *"expect: empty needle"*) : ;;
+    *) __ok=0; __why="${__why}expect's empty-needle guard did not name itself: '$saved_why'\n" ;;
+  esac
+  case "$saved_why" in
+    *"expect_absent: empty needle"*) : ;;
+    *) __ok=0; __why="${__why}expect_absent's empty-needle guard did not name itself: '$saved_why'\n" ;;
+  esac
+}
+
 # name|fn|desc
 cases=(
   "settings-missing|case_settings_missing|settings block: file missing"
@@ -1784,6 +1916,8 @@ cases=(
   "stale-c-allows|case_stale_c_allows|legacy Bash(git -C * ...) allow entries still present -> WARN naming them and the guard hook that supersedes them"
   "version-report|case_version_report|harness version: bin/harness-version.sh's printed line reported verbatim as a PASS"
   "version-unresolvable|case_version_unresolvable|harness version: no .claude-plugin/plugin.json -> WARN, never FAIL"
+  "version-cache-under-repo|case_version_cache_under_repo|harness-version.sh's .git-presence guard: a cache-shaped copy nested inside an enclosing repo prints '<version> -', never that repo's short sha (#262-2)"
+  "version-plugin-root-checkout|case_version_plugin_root_checkout|non-vacuity control: the plugin root itself a checkout prints '<version> <that checkout's short sha>' (#262-2)"
   "protection-strict-true|case_protection_strict_true|branch protection (#234): healthy document -> strict PASS, both WARN stems absent, reviews configured"
   "protection-strict-false|case_protection_strict_false|branch protection (#234): strict false -> strict WARN, contexts WARN absent, reviews not configured"
   "protection-zero-contexts|case_protection_zero_contexts|branch protection (#234): zero required contexts -> contexts WARN, strict WARN absent"
@@ -1791,6 +1925,7 @@ cases=(
   "protection-no-policy|case_protection_no_policy|branch protection (#234): no Merge autonomy policy section -> neither WARN stem, today's PASS line unchanged"
   "protection-endpoint-fails|case_protection_endpoint_fails|branch protection (#234): protection endpoint call fails -> today's WARN only"
   "protection-no-claude-md|case_protection_no_claude_md|branch protection (#234): no CLAUDE.md at all -> set -u hoist proven by the summary footer still printing"
+  "empty-needle-guard|case_empty_needle_guard|#262: expect/expect_absent both refuse an empty needle rather than degenerating into an unconditional match/never-match"
 )
 
 matched=0
@@ -1811,6 +1946,12 @@ for row in "${cases[@]}"; do
   else
     case_bad "$name" "$desc"
     printf '%b' "$__why" | sed 's/^/    /'
+    # #255 — bounded diagnostics: surface the doctor/check-decision-record script's own captured
+    # output (never a full-consumption `head`) so a shell-level diagnostic (e.g. a broken-pipe
+    # message) that leaked into $doctor_out isn't silently discarded.
+    if [ -n "$doctor_out" ]; then
+      printf '%s\n' "$doctor_out" | sed -n '1,40p' | sed 's/^/    | /'
+    fi
   fi
 done
 

@@ -28,8 +28,15 @@
 set -euo pipefail
 
 create_or_update() {
-  local name="$1" color="$2" desc="$3"
-  if gh label list --limit 200 --json name --jq '.[].name' | tr -d '\r' | grep -qx "$name"; then
+  local name="$1" color="$2" desc="$3" existing
+  # Capture first, then a here-string membership test (#255) — not `gh label list | tr ... |
+  # grep -qx ...`, whose `grep -qx` would exit on its first match and could send the upstream `gh`
+  # a SIGPIPE, which `set -euo pipefail` would then report as a failed pipeline even on a genuine
+  # match. The capture itself stays inside the `if` condition (`if existing="$(...)" && grep ...;
+  # then`), preserving today's `set -e` exemption: a failing `gh label list` still falls through to
+  # the `else` (create) branch instead of aborting the whole script, exactly as the old pipeline's
+  # non-zero exit status did.
+  if existing="$(gh label list --limit 200 --json name --jq '.[].name' | tr -d '\r')" && grep -qx -- "$name" <<<"$existing"; then
     gh label edit "$name" --color "$color" --description "$desc"
   else
     gh label create "$name" --color "$color" --description "$desc"

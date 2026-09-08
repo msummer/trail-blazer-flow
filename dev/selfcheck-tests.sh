@@ -13,7 +13,10 @@
 # <id> " lines is present verbatim, and that the exit code is 1 (0 for the declared control
 # cases, whose expected set is empty and which exist to prove a perturbation is NOT falsely
 # flagged). Same output contract as the gate: one PASS/FAIL line per case, a
-# `== summary: N pass, M fail ==` footer, exit 0 iff nothing failed.
+# `== summary: N pass, M fail ==` footer, exit 0 iff nothing failed. A failing case ALSO prints
+# (bounded, #255) any captured gate line that is neither a PASS/FAIL line nor one of the gate's
+# own banners nor blank — surfacing a shell-level diagnostic (e.g. a SIGPIPE broken-pipe message)
+# that the FAIL-line dump alone would otherwise discard.
 #
 # This is one of several dev/*.sh scripts that write files — dev/doctor-tests.sh,
 # dev/hook-tests.sh, dev/cleanup-tests.sh, dev/planning-tests.sh, and dev/lock-tests.sh also do
@@ -123,6 +126,24 @@ p_1_1_hooks()          { printf 'if [\n' | append "$1/hooks/git-c-guard.sh"; }
 p_1_6()                { printf 'eval "$x"\n' | append "$1/hooks/git-c-guard.sh"; }
 p_1_6_comment() {
   printf '# mentions eval here only, in a comment\n' | append "$1/hooks/git-c-guard.sh"
+}
+# p_1_7/p_1_7_dev inject a live printf writer piped into grep's quiet mode (#255's banned shape)
+# into a throwaway target file. The injected text is built from a format string whose OWN literal source
+# (right here, in this file) never carries the pipe character immediately next to the word
+# "grep" — "grep" is substituted in at runtime via %s — so this perturbation function's own
+# source line stays clean of the very shape 1.7 forbids, and running assertion 1.7 against THIS
+# checkout (not just the perturbed copy) never self-flags this file.
+p_1_7()     { printf 'printf "%%s" "$x" | %s -qF -- "y"\n' grep | append "$1/bin/harness-status.sh"; }
+# p_1_7_dev is not a twin of p_1_7: it is the only case that proves 1.7's loop scans the dev/*.sh
+# glob too, not just bin/*.sh — 1.4 deliberately does NOT scan dev/*.sh (its own comment says why),
+# so this is the novel half of 1.7's coverage versus 1.4/1.5/1.6's bin/hooks-only scope.
+p_1_7_dev() { printf 'printf "%%s" "$x" | %s -qF -- "y"\n' grep | append "$1/dev/selfcheck-tests.sh"; }
+# p_1_7_comment — same obfuscation trick, so the CONTROL fixture's injected comment line (which
+# must contain the literal banned shape, for 1.4/1.6-comment's same reason) doesn't make this
+# perturbation function's own source line trip 1.7 either.
+p_1_7_comment() {
+  printf '# example only: "$x" %s grep -q "y" (comment text, not real code)\n' '|' \
+    | append "$1/bin/harness-status.sh"
 }
 p_2_1() {
   # PREPEND the stray '{' (not append): jq streams top-level values, so appending garbage
@@ -374,6 +395,11 @@ cases=(
   "1.1-hooks|1.1|p_1_1_hooks|append a stray 'if [' to hooks/git-c-guard.sh (proves the glob extension)"
   "1.6|1.6|p_1_6|append a bare 'eval \"\$x\"' line to hooks/git-c-guard.sh"
   "1.6-comment||p_1_6_comment|control: a single #-comment naming eval is not flagged"
+  "1.7|1.7|p_1_7|append a live printf writer piped into grep's quiet mode to bin/harness-status.sh (#255's banned shape)"
+  # 1.7-dev is not a twin of 1.7: it is the only case that proves 1.7's loop still scans the
+  # dev/*.sh glob, unlike 1.4/1.5/1.6 which are bin/hooks-only by design.
+  "1.7-dev|1.7|p_1_7_dev|append the same pipeline to dev/selfcheck-tests.sh itself (proves the dev/ glob extension)"
+  "1.7-comment||p_1_7_comment|control: a single #-comment naming the pipe-into-grep-q shape is not flagged"
   "2.1|2.1 2.3|p_2_1|prepend a stray '{' to marketplace.json (invalid JSON; blanks 2.3's jq read too)"
   "2.1-hooks|2.1 2.7|p_2_1_hooks|prepend a stray '{' to hooks/hooks.json (invalid JSON; blanks 2.7's jq read too, now against reworked 2.7) -- re-measured post-#235: '2.7 hooks/hooks.json structure: .hooks.PreToolUse extraction failed or came back empty (structure changed)'"
   "2.4-missing-grant|2.4|p_2_4_missing_grant|drop the Bash(harness-status.sh:*) allow entry"
@@ -478,7 +504,7 @@ cases=(
 # ---------------------------------------------------------------------------------------------
 run_case() {
   local name="$1" expected="$2" perturb="$3" desc="$4"
-  local dir out observed exp_norm obs_norm literal_ok eid
+  local dir out observed exp_norm obs_norm literal_ok eid diag
   dir="$(fresh_copy "$name")"
   if [ "$perturb" != "none" ]; then
     "$perturb" "$dir"
@@ -497,7 +523,14 @@ run_case() {
     [ "$gate_rc" -eq 1 ] || ok=0
     literal_ok=0
     for eid in $exp_norm; do
-      printf '%s\n' "$out" | grep -qE "^  FAIL  ${eid} " && { literal_ok=1; break; }
+      # Here-string, not a `printf` writer piped into `grep`'s quiet mode (#255): that early-exit
+      # reader exits on its first match, which can send the printf writer SIGPIPE and, under this
+      # file's `set -uo pipefail` (line 36), turn a genuine MATCH into a reported pipeline failure
+      # (CI run 34268473009 caught this exact line: "printf: write error: Broken pipe" immediately
+      # before a spurious FAIL). `<<<"$out"` is fed to grep directly — no writer process, so no
+      # SIGPIPE is possible — and appends exactly one trailing newline, the same as the piped
+      # printf did, so grep's regex/quiet semantics are unchanged.
+      grep -qE "^  FAIL  ${eid} " <<<"$out" && { literal_ok=1; break; }
     done
     [ "$literal_ok" -eq 1 ] || ok=0
   fi
@@ -508,6 +541,16 @@ run_case() {
     case_bad "$name" "$desc"
     echo "    expected: {$exp_norm}  observed: {$obs_norm}  rc=$gate_rc"
     printf '%s\n' "$out" | grep '^  FAIL  ' | sed 's/^/    /'
+    # #255 — bounded diagnostics: surface any gate-emitted line that is NEITHER a "  PASS  "/
+    # "  FAIL  " line NOR one of the gate's own "=="/"--" banners NOR blank, so a shell-level
+    # diagnostic (e.g. the SIGPIPE-under-pipefail broken-pipe message CI run 34268473009 caught,
+    # which today's `case_bad`/FAIL-line dump above would silently discard) reaches this harness's
+    # own output. Bounded to 40 lines via a full-consumption `sed -n '1,40p'` (never `head`),
+    # printed only when non-empty.
+    diag="$(grep -vE '^(  (PASS|FAIL)  |==|--)' <<<"$out" | grep -v '^[[:space:]]*$')"
+    if [ -n "$diag" ]; then
+      printf '%s\n' "$diag" | sed -n '1,40p' | sed 's/^/    | /'
+    fi
   fi
 }
 

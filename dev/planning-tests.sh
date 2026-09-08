@@ -784,6 +784,22 @@ run_script_at() {
 # ] && wc -l` tail, which would leave the function's own exit status non-zero under `set -uo
 # pipefail` whenever the file is absent (the common, EXPECTED case for a label-absent fixture) and
 # silently break every case run after it. All set $__ok=0 and append to $__why on failure.
+# needle_required NAME NEEDLE (#262) — guards every needle-taking helper below: an empty NEEDLE
+# degenerates `grep -qF -- ""`/`grep -cF -- ""` into an unconditional match, so treat an empty
+# needle as a harness bug IN THE CASE, not a fact about the script under test. Sets $__ok=0,
+# appends "<NAME>: empty needle (harness bug)\n" to $__why, and returns 1; returns 0 when the
+# needle is non-empty. Callers do `needle_required <own-name> "$1" || return 0` — returning 0 to
+# the CALLER's caller (not 1), so a guarded helper never leaves a stray non-zero exit status
+# behind for an `&&`/`||`/`if` chain built on it.
+needle_required() {
+  if [ -z "$2" ]; then
+    __ok=0
+    __why="${__why}$1: empty needle (harness bug)\n"
+    return 1
+  fi
+  return 0
+}
+
 __ok=1
 __why=""
 expect_jq() {
@@ -791,15 +807,25 @@ expect_jq() {
   actual="$(printf '%s' "$planning_out" | jq -c "$query" 2>&1)"
   [ "$actual" = "$expected" ] || { __ok=0; __why="${__why}jq $query: expected $expected, got $actual\n"; }
 }
+# expect_err/expect_no_err/expect_warn_count are guarded by needle_required (#262) and fed via a
+# here-string (`<<<"$planning_err"`, #255) rather than piping a `printf '%s\n' ...` writer into
+# `grep`'s quiet mode: that early-exit reader exits on its first match, which can send the printf
+# writer SIGPIPE and, under this file's `set -uo pipefail`, turn a genuine match into a reported
+# pipeline failure — a here-string has no writer process, so no SIGPIPE is possible, and it
+# appends exactly one trailing newline, the same as the piped printf did, so grep's fixed-string/
+# count semantics are unchanged.
 expect_err() {
-  printf '%s\n' "$planning_err" | grep -qF -- "$1" || { __ok=0; __why="${__why}missing stderr: $1\n"; }
+  needle_required expect_err "$1" || return 0
+  grep -qF -- "$1" <<<"$planning_err" || { __ok=0; __why="${__why}missing stderr: $1\n"; }
 }
 expect_no_err() {
-  printf '%s\n' "$planning_err" | grep -qF -- "$1" && { __ok=0; __why="${__why}unexpected stderr: $1\n"; }
+  needle_required expect_no_err "$1" || return 0
+  grep -qF -- "$1" <<<"$planning_err" && { __ok=0; __why="${__why}unexpected stderr: $1\n"; }
 }
 expect_warn_count() {
   local pattern="$1" expected="$2" actual
-  actual="$(printf '%s\n' "$planning_err" | grep -cF -- "$pattern")"
+  needle_required expect_warn_count "$pattern" || return 0
+  actual="$(grep -cF -- "$pattern" <<<"$planning_err")"
   [ "$actual" = "$expected" ] || { __ok=0; __why="${__why}warn count for '$pattern': expected $expected, got $actual\n"; }
 }
 expect_rc() {
@@ -4335,6 +4361,36 @@ EOF
   expect_jq '.plan_selection[0].approval.approved_at_history[0].binding_line == .plan_selection[0].binding_line' 'true'
 }
 
+# empty-needle-guard (#262-1) — exercises every guarded helper in this file (expect_err,
+# expect_no_err, expect_warn_count) with an empty needle, and asserts the guard fired for each:
+# sets $planning_err to a fixed non-empty value first (so a non-guarded regression couldn't pass
+# vacuously against empty captured output), calls all three with "", then checks the ACCUMULATED
+# __ok/__why saved off before this case's own __ok/__why are reset by the runner loop. Measured
+# mutant: delete `needle_required expect_no_err "$1" || return 0` from expect_no_err only —
+# `bash dev/planning-tests.sh` goes from 98 pass, 0 fail to 97 pass, 1 fail, failing exactly:
+# empty-needle-guard (saved_why no longer names "expect_no_err:").
+case_empty_needle_guard() {
+  local saved_ok saved_why
+  planning_err="fixture stderr for the empty-needle guard (#262)"
+  __ok=1; __why=""
+  expect_err ""
+  expect_no_err ""
+  expect_warn_count "" 0
+  saved_ok="$__ok"
+  saved_why="$__why"
+  __ok=1; __why=""
+  if [ "$saved_ok" -ne 0 ]; then
+    __ok=0; __why="${__why}empty-needle guard never fired (saved_ok=$saved_ok)\n"
+  fi
+  local helper
+  for helper in expect_err expect_no_err expect_warn_count; do
+    case "$saved_why" in
+      *"$helper: empty needle"*) : ;;
+      *) __ok=0; __why="${__why}$helper's empty-needle guard did not name itself: '$saved_why'\n" ;;
+    esac
+  done
+}
+
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
@@ -4435,6 +4491,7 @@ cases=(
   "impl-approval-history-not-covered|case_impl_approval_history_not_covered|plan posted after the newest label: every (of two) history entries carries a null binding_line even though approved_at/approved_by are still populated"
   "impl-approval-history-unreadable|case_impl_approval_history_unreadable|the events lookup fails for one of two ready issues: that issue's approved_at_history fails closed to [], the healthy sibling's history is unaffected by the per-iteration reset"
   "impl-single-issue-approval-history|case_impl_single_issue_approval_history|--issue <n> mode carries approved_at_history with the same shape as batch mode"
+  "empty-needle-guard|case_empty_needle_guard|#262: expect_err/expect_no_err/expect_warn_count all refuse an empty needle"
 )
 
 matched=0
@@ -4455,6 +4512,12 @@ for row in "${cases[@]}"; do
   else
     case_bad "$name" "$desc"
     printf '%b' "$__why" | sed 's/^/    /'
+    # #255 — bounded diagnostics: surface the discovery script's own captured stderr (never a
+    # full-consumption `head`) so a shell-level diagnostic that leaked there isn't silently
+    # discarded.
+    if [ -n "$planning_err" ]; then
+      printf '%s\n' "$planning_err" | sed -n '1,40p' | sed 's/^/    | /'
+    fi
   fi
 done
 

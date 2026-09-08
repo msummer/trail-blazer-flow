@@ -26,7 +26,7 @@
 # $$) — so wrapping the invocation in a subshell would fork an extra process whose pid becomes
 # bin/harness-lock.sh's own $PPID, which would never equal this file's own top-level $$, breaking
 # cases 19/20's fallback-pid assertion (case 19's own comment below records the measured proof).
-# Avoiding subshells everywhere (not just for 19/20) keeps one runner for all 20 cases instead of
+# Avoiding subshells everywhere (not just for 19/20) keeps one runner for all 21 cases instead of
 # a second, parallel helper.
 #
 # CLAUDE_PID PER FIXTURE (RESOLVED): every case passes an explicit CLAUDE_PID value to run_lock —
@@ -189,40 +189,74 @@ run_lock() {
 # named in the runner-shape comment above that is asserted per-stream this way; state=/lock-path=,
 # released=, and the stale-reclaim audit line are still asserted only against the merged $lock_out
 # (see that comment) because no acceptance criterion in this file names a stream for them.
-__ok=1
-__why=""
+# needle_required NAME NEEDLE (#262) — guards every needle-taking helper below: an empty NEEDLE
+# degenerates `grep -qF -- ""`/`grep -cF -- ""` into an unconditional match (and, for
+# expect_last_line_prefix, `case "$last" in ""*)` degenerates to the unconditional `*)`), so treat
+# an empty needle as a harness bug IN THE CASE, not a fact about the script under test. Sets
+# $__ok=0, appends "<NAME>: empty needle (harness bug)\n" to $__why, and returns 1; returns 0 when
+# the needle is non-empty. Callers do `needle_required <own-name> "$1" || return 0` — returning 0
+# to the CALLER's caller (not 1), so a guarded helper never leaves a stray non-zero exit status
+# behind for an `&&`/`||`/`if` chain built on it.
+needle_required() {
+  if [ -z "$2" ]; then
+    __ok=0
+    __why="${__why}$1: empty needle (harness bug)\n"
+    return 1
+  fi
+  return 0
+}
+
+# All nine needle-taking helpers below are guarded by needle_required (#262). expect/
+# expect_absent/expect_out/expect_err/expect_absent_out/expect_absent_err are fed via a
+# here-string (`<<<"$lock_out"`/`<<<"$lock_stdout"`/`<<<"$lock_stderr"`, #255) rather than piping a
+# `printf '%s\n' ...` writer into `grep`'s quiet mode: that early-exit reader exits on its first
+# match, which can send the printf writer SIGPIPE and, under this file's `set -uo pipefail`, turn
+# a genuine match into a reported pipeline failure — a here-string has no writer process, so no
+# SIGPIPE is possible, and it appends exactly one trailing newline, the same as the piped printf
+# did, so grep's fixed-string semantics are unchanged. expect_count/expect_count_err's `-cF`
+# counters move to the same here-string idiom for uniformity — they are not early-exit readers, so
+# not a SIGPIPE exposure.
 expect() {
-  printf '%s\n' "$lock_out" | grep -qF -- "$1" || { __ok=0; __why="${__why}missing: $1\n"; }
+  needle_required expect "$1" || return 0
+  grep -qF -- "$1" <<<"$lock_out" || { __ok=0; __why="${__why}missing: $1\n"; }
 }
 expect_absent() {
-  printf '%s\n' "$lock_out" | grep -qF -- "$1" && { __ok=0; __why="${__why}unexpected: $1\n"; }
+  needle_required expect_absent "$1" || return 0
+  grep -qF -- "$1" <<<"$lock_out" && { __ok=0; __why="${__why}unexpected: $1\n"; }
 }
 expect_out() {
-  printf '%s\n' "$lock_stdout" | grep -qF -- "$1" || { __ok=0; __why="${__why}missing on stdout: $1\n"; }
+  needle_required expect_out "$1" || return 0
+  grep -qF -- "$1" <<<"$lock_stdout" || { __ok=0; __why="${__why}missing on stdout: $1\n"; }
 }
 expect_err() {
-  printf '%s\n' "$lock_stderr" | grep -qF -- "$1" || { __ok=0; __why="${__why}missing on stderr: $1\n"; }
+  needle_required expect_err "$1" || return 0
+  grep -qF -- "$1" <<<"$lock_stderr" || { __ok=0; __why="${__why}missing on stderr: $1\n"; }
 }
 expect_absent_out() {
-  printf '%s\n' "$lock_stdout" | grep -qF -- "$1" && { __ok=0; __why="${__why}unexpected on stdout: $1\n"; }
+  needle_required expect_absent_out "$1" || return 0
+  grep -qF -- "$1" <<<"$lock_stdout" && { __ok=0; __why="${__why}unexpected on stdout: $1\n"; }
 }
 expect_absent_err() {
-  printf '%s\n' "$lock_stderr" | grep -qF -- "$1" && { __ok=0; __why="${__why}unexpected on stderr: $1\n"; }
+  needle_required expect_absent_err "$1" || return 0
+  grep -qF -- "$1" <<<"$lock_stderr" && { __ok=0; __why="${__why}unexpected on stderr: $1\n"; }
 }
 expect_rc() {
   [ "$lock_rc" -eq "$1" ] || { __ok=0; __why="${__why}rc: expected $1, got $lock_rc\n"; }
 }
 expect_count() {
   local needle="$1" want="$2" got
-  got="$(printf '%s\n' "$lock_out" | grep -cF -- "$needle")"
+  needle_required expect_count "$needle" || return 0
+  got="$(grep -cF -- "$needle" <<<"$lock_out")"
   [ "$got" -eq "$want" ] || { __ok=0; __why="${__why}count: expected $want of '$needle', got $got\n"; }
 }
 expect_count_err() {
   local needle="$1" want="$2" got
-  got="$(printf '%s\n' "$lock_stderr" | grep -cF -- "$needle")"
+  needle_required expect_count_err "$needle" || return 0
+  got="$(grep -cF -- "$needle" <<<"$lock_stderr")"
   [ "$got" -eq "$want" ] || { __ok=0; __why="${__why}count(stderr): expected $want of '$needle', got $got\n"; }
 }
 expect_last_line_prefix() {
+  needle_required expect_last_line_prefix "$1" || return 0
   local last
   last="$(printf '%s\n' "$lock_stdout" | grep -v '^$' | tail -1)"
   case "$last" in
@@ -247,25 +281,29 @@ run_id_from_out() { printf '%s\n' "$lock_stdout" | sed -n 's/^run-id=//p' | tail
 # instruction to "record the measured set honestly" when a mutant fails several cases.
 
 # 1. acquire-fresh (control). Mutant: write_record — drop the `pid` file (delete
-# `printf '%s' "$p" > "$lockdir/pid"`). Measured 2026-09-08 (re-measured after the #232 kickback 2
-# stdout-only helper change below — figure unchanged): 17 pass, 3 fail — acquire-fresh (this case,
-# via the missing/empty pid file and the pid==$$ check), fallback-ppid-when-unset,
-# fallback-ppid-when-garbage (both check the pid file's content too).
+# `printf '%s' "$p" > "$lockdir/pid"`). Re-measured 2026-09-09 (after #262's empty-needle guard
+# added a 21st case, empty-needle-guard, unaffected by this mutant): 18 pass, 3 fail — acquire-fresh
+# (this case, via the missing/empty pid file and the pid==$$ check), fallback-ppid-when-unset,
+# fallback-ppid-when-garbage (both check the pid file's content too, via a plain `[ "$got" = "$$"
+# ]` compare, not an `expect*` helper — unaffected by the #262 guard).
 #
 # Second mutant (#232 kickback 2 finding — the "run-id=<id> as the LAST line of stdout"
 # acceptance criterion was only checked against the merged stdout+stderr capture, so a mutant
 # moving the fresh-acquire echo to stderr survived): line 178's
 # `echo "run-id=$(cat "$lockdir/run-id")"` -> `... >&2`. Fixed by pointing `expect_last_line_prefix`
 # and `run_id_from_out` at $lock_stdout alone (both were reading the merged $lock_out before) and
-# adding `expect_out "run-id="` / `expect_absent_err "run-id="` here. Measured 2026-09-08: 17
-# pass, 3 fail — acquire-fresh (this case, all three of the new/repointed assertions), plus
-# release-own-run-id and release-wrong-run-id (both call run_id_from_out right after this same
-# fresh-acquire path; with run-id no longer on stdout, run_id_from_out now returns empty for them
-# too — release-own-run-id then releases with an empty argument (usage triggers, rc 2 instead of
-# 0); release-wrong-run-id's own trailing "$now" = "$rid" check now sees $rid="" against the real
-# stored id and fails "run-id changed on mismatch"). release-force stays green despite the same
-# empty $rid: `expect "$rid"` degenerates to `grep -qF -- ""`, which matches unconditionally, and
-# release-force's --force path never uses $rid as an argument the way release-own-run-id does.
+# adding `expect_out "run-id="` / `expect_absent_err "run-id="` here. Re-measured 2026-09-09 (#262
+# changed this mutant's failing set — see below): 16 pass, 5 fail — acquire-fresh (this case, all
+# three of the new/repointed assertions), release-own-run-id and release-wrong-run-id (both call
+# run_id_from_out right after this same fresh-acquire path; with run-id no longer on stdout,
+# run_id_from_out now returns empty for them too — release-own-run-id then releases with an empty
+# argument (usage triggers, rc 2 instead of 0); release-wrong-run-id's own trailing "$now" = "$rid"
+# check now sees $rid="" against the real stored id and fails "run-id changed on mismatch"), PLUS
+# two cases that used to stay green precisely because $rid was empty and are caught by #262's guard
+# now: release-force (its `expect "$rid"` used to degenerate to `grep -qF -- ""`, an unconditional
+# match; needle_required now marks it `expect: empty needle (harness bug)` instead) and
+# status-free-and-held (same shape: it also calls `run_id_from_out` after a fresh acquire and
+# asserts `expect "$rid"`).
 case_acquire_fresh() {
   local dir; dir="$(mk_repo acquire-fresh)"
   run_lock "$dir" "$$" acquire
@@ -581,6 +619,47 @@ case_fallback_ppid_when_garbage() {
   [ "$got" = "$$" ] || { __ok=0; __why="${__why}pid: expected \$\$ ($$), got '$got'\n"; }
 }
 
+# 21. empty-needle-guard (#262-1) — exercises every guarded helper in this file (expect,
+# expect_absent, expect_out, expect_err, expect_absent_out, expect_absent_err, expect_count,
+# expect_count_err, expect_last_line_prefix) with an empty needle, and asserts the guard fired for
+# each: sets $lock_out/$lock_stdout/$lock_stderr to fixed non-empty values first (so a
+# non-guarded regression couldn't pass vacuously against empty captured output), calls all nine
+# with "", then checks the ACCUMULATED __ok/__why saved off before this case's own __ok/__why are
+# reset by the runner loop. Measured mutant: delete `needle_required expect_last_line_prefix "$1"
+# || return 0` from expect_last_line_prefix only — `bash dev/lock-tests.sh` goes from 21 pass, 0
+# fail to 20 pass, 1 fail, failing exactly: empty-needle-guard (saved_why no longer names
+# "expect_last_line_prefix:").
+case_empty_needle_guard() {
+  local saved_ok saved_why
+  lock_out="fixture output for the empty-needle guard (#262)"
+  lock_stdout="fixture stdout for the empty-needle guard (#262)"
+  lock_stderr="fixture stderr for the empty-needle guard (#262)"
+  __ok=1; __why=""
+  expect ""
+  expect_absent ""
+  expect_out ""
+  expect_err ""
+  expect_absent_out ""
+  expect_absent_err ""
+  expect_count "" 0
+  expect_count_err "" 0
+  expect_last_line_prefix ""
+  saved_ok="$__ok"
+  saved_why="$__why"
+  __ok=1; __why=""
+  if [ "$saved_ok" -ne 0 ]; then
+    __ok=0; __why="${__why}empty-needle guard never fired (saved_ok=$saved_ok)\n"
+  fi
+  local helper
+  for helper in expect expect_absent expect_out expect_err expect_absent_out expect_absent_err \
+                expect_count expect_count_err expect_last_line_prefix; do
+    case "$saved_why" in
+      *"$helper: empty needle"*) : ;;
+      *) __ok=0; __why="${__why}$helper's empty-needle guard did not name itself: '$saved_why'\n" ;;
+    esac
+  done
+}
+
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
@@ -604,6 +683,7 @@ cases=(
   "harness-version-recorded|case_harness_version_recorded|after acquire, harness-version equals jq -r .version of .claude-plugin/plugin.json"
   "fallback-ppid-when-unset|case_fallback_ppid_when_unset|acquire with CLAUDE_PID unset via bash -c 'unset …; exec \"\$@\"': rc 0, recorded pid == this harness's own \$\$"
   "fallback-ppid-when-garbage|case_fallback_ppid_when_garbage|CLAUDE_PID=not-a-pid: rc 0, recorded pid == this harness's own \$\$, exactly one note= line"
+  "empty-needle-guard|case_empty_needle_guard|#262: all nine needle-taking helpers refuse an empty needle"
 )
 
 matched=0
@@ -624,6 +704,12 @@ for row in "${cases[@]}"; do
   else
     case_bad "$name" "$desc"
     printf '%b' "$__why" | sed 's/^/    /'
+    # #255 — bounded diagnostics: surface bin/harness-lock.sh's own captured stderr (never a
+    # full-consumption `head`) so a shell-level diagnostic that leaked there isn't silently
+    # discarded.
+    if [ -n "$lock_stderr" ]; then
+      printf '%s\n' "$lock_stderr" | sed -n '1,40p' | sed 's/^/    | /'
+    fi
   fi
 done
 

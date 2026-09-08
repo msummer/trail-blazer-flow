@@ -111,15 +111,23 @@ claude_md_section() {
 # live "ideally under a clearly labelled 'Verification' section" (not an exact title, unlike the
 # policy sections above), so this is a looser, case-insensitive prefix match, not
 # has_policy_section's exact one.
+# Capture-then-test (#255), not the awk piped into `grep`'s quiet mode: that early-exit reader
+# exits on its first match, which can send the awk writer SIGPIPE — awk's own `exit` already
+# makes it an early-exit reader of $root/CLAUDE.md too, but that's a direct file read, not a pipe,
+# so it carries no writer to signal — and, under this file's `set -uo pipefail`, a piped `grep -q`
+# on top could turn a genuine match into a reported pipeline failure. Capturing first removes the
+# second pipe entirely.
 has_verification_heading() {
-  awk '
+  local hit
+  hit="$(awk '
     /^#+[[:space:]]/ {
       h = $0
       sub(/^#+[[:space:]]+/, "", h)
       sub(/[[:space:]]+$/, "", h)
       if (tolower(h) ~ /^verification/) { print "found"; exit }
     }
-  ' "$root/CLAUDE.md" | grep -q .
+  ' "$root/CLAUDE.md")"
+  [ -n "$hit" ]
 }
 
 # claude_md_verification_scope — depth-aware, fence-aware slice (same shape as
@@ -212,7 +220,10 @@ if $gh_ready; then
   existing="$(gh label list --limit 200 --json name --jq '.[].name' 2>/dev/null | tr -d '\r' || true)"
   missing=""
   for l in plan-proposed plan-approved pr-open impl-blocked no-plan no-auto-approve test-ratchet multi-pr; do
-    echo "$existing" | grep -qx "$l" || missing="$missing $l"
+    # Here-string, not an `echo` writer piped into `grep`'s quiet mode (#255): that early-exit
+    # reader exits on its first match, which can send the echo writer SIGPIPE and, under this
+    # file's `set -uo pipefail`, turn a genuine match into a reported pipeline failure.
+    grep -qx -- "$l" <<<"$existing" || missing="$missing $l"
   done
   if [ -z "$missing" ]; then
     ok "all 8 lifecycle labels exist"
@@ -224,7 +235,7 @@ else
 fi
 
 # --- harness scripts executable (auto-fix) -------------------------------------
-# The harness scripts live alongside this one (the plugin's bin/, or .claude copies).
+# The harness scripts live alongside this one (the plugin's bin/).
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
@@ -397,14 +408,19 @@ else
   deny_raw="$(jq -r '.permissions.deny[]? // empty' "$settings" 2>/dev/null)"
   allow_list_read=true
 
-  has_marker() { find "$root" -maxdepth 2 -name "$1" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | grep -q .; }
+  # Capture-then-test (#255), not a `find` writer piped into `grep`'s quiet mode: that early-exit
+  # reader exits on its first match, which can send the find writer SIGPIPE and, under this file's
+  # `set -uo pipefail`, turn a genuine match (a marker file present) into a reported pipeline
+  # failure — a false "not found" verdict on the consumer's own repo, not just a CI flake.
+  has_marker() { [ -n "$(find "$root" -maxdepth 2 -name "$1" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null)" ]; }
   # allow_has tests $allow_union (the three-file union), not $allow_raw — it judges effective
   # permission, matching the WARN/PASS text below. It is still defined only inside this
   # .claude/settings.json-readable else branch, so the toolchain block as a whole stays gated on
   # that file being present and parseable, exactly like the post-merge allow-entry check's
   # allow_list_read gate further down (see its rationale comment) — even though the values it
-  # tests come from the union.
-  allow_has()  { printf '%s\n' "$allow_union" | grep -qE "^Bash\\(($1)"; }
+  # tests come from the union. Here-string, not a `printf` writer piped into `grep`'s quiet mode
+  # (#255): same SIGPIPE exposure as has_marker above, removed the same way.
+  allow_has()  { grep -qE "^Bash\\(($1)" <<<"$allow_union"; }
   tool_warns=0
   # tool_warn MARKER_TEXT TOOLS — one uniform WARN for the six toolchain marker checks below:
   # scope (the three-file union, named via $read_list) and remediation (which file to edit,
@@ -484,7 +500,10 @@ EOF
   # plugin entries and legacy .claude-path entries (e.g.
   # "Bash(.claude/scripts/find-planning-work.sh:*)"), which contain the script name but not as
   # a prefix of the entry.
-  if printf '%s\n' "$allow_raw" | grep -qF -- "find-planning-work.sh"; then
+  # Here-string, not a `printf` writer piped into `grep`'s quiet mode (#255): that early-exit
+  # reader exits on its first match, which can send the printf writer SIGPIPE and, under this
+  # file's `set -uo pipefail`, turn a genuine match into a reported pipeline failure.
+  if grep -qF -- "find-planning-work.sh" <<<"$allow_raw"; then
     ok "harness script commands are in the allow-list"
   else
     wrn "harness script commands (e.g. find-planning-work.sh) not found in .claude/settings.json's allow-list — copy the permissions block from the plugin's templates/repo-settings.json"
@@ -503,7 +522,9 @@ EOF
       n_missing=0; out_missing=""
       while IFS= read -r e; do
         [ -n "$e" ] || continue
-        printf '%s\n' "$2" | grep -qxF -- "$e" && continue
+        # Here-string, not a `printf` writer piped into `grep`'s quiet mode (#255): same SIGPIPE
+        # exposure as the sentinel check above, removed the same way.
+        grep -qxF -- "$e" <<<"$2" && continue
         n_missing=$((n_missing+1))
         [ "$n_missing" -le 6 ] && out_missing="$out_missing$e, "
       done <<EOF
@@ -759,10 +780,17 @@ EOF
   if $has_merge_policy; then
     merge_sec="$(claude_md_section "Merge autonomy policy")"
     postdeploy_found=false
-    if printf '%s\n' "$merge_sec" | awk '
+    # Here-string into awk, then capture-then-test (#255), not a `printf` writer piped through
+    # `awk` into `grep`'s quiet mode: awk's own `exit` already makes it an early-exit reader, and
+    # the trailing quiet-mode grep is a second one — either can send its upstream writer SIGPIPE
+    # and, under this file's `set -uo pipefail`, turn a genuine match into a reported pipeline
+    # failure. The here-string removes the first pipe's writer process entirely; capturing awk's
+    # own output and testing it with `[ -n ... ]` removes the second.
+    postdeploy_hit="$(awk '
       /^```/ { infence = !infence; next }
       !infence && /^#+[[:space:]]+Post-merge verification[[:space:]]*$/ { print "found"; exit }
-    ' | grep -q .; then
+    ' <<<"$merge_sec")"
+    if [ -n "$postdeploy_hit" ]; then
       postdeploy_found=true
     fi
 
@@ -805,8 +833,12 @@ EOF
             case "$tok" in
               '#'*) continue ;;
             esac
-            printf '%s' "$tok" | grep -qE '^[A-Za-z0-9._/-][A-Za-z0-9._/+-]*$' || continue
-            printf '%s\n' "$pd_seen" | grep -qxF -- "$tok" && continue
+            # Here-strings, not a `printf` writer piped into `grep`'s quiet mode (#255): that
+            # early-exit reader exits on its first match, which can send the printf writer
+            # SIGPIPE and, under this file's `set -uo pipefail`, turn a genuine match into a
+            # reported pipeline failure.
+            grep -qE '^[A-Za-z0-9._/-][A-Za-z0-9._/+-]*$' <<<"$tok" || continue
+            grep -qxF -- "$tok" <<<"$pd_seen" && continue
             pd_seen="${pd_seen}${tok}"$'\n'
             pd_checked=$((pd_checked+1))
             if entry_has "$allow_union" "Bash($tok"; then
@@ -852,7 +884,9 @@ EOF
       wrn "test-suite ratchet: 'Test-suite ratchet policy' section present but names no backtick-quoted measurement command ('No command ⇒ no ratchet') — the ratchet won't run until one is added"
     else
       tok="$(printf '%s' "$span" | awk '{print $1}')"
-      if printf '%s' "$tok" | grep -qE '^[A-Za-z0-9._/-][A-Za-z0-9._/+-]*$'; then
+      # Here-string, not a `printf` writer piped into `grep`'s quiet mode (#255): same SIGPIPE
+      # exposure as the post-merge token check above, removed the same way.
+      if grep -qE '^[A-Za-z0-9._/-][A-Za-z0-9._/+-]*$' <<<"$tok"; then
         if command -v "$tok" >/dev/null 2>&1; then
           ok "test-suite ratchet: measurement command \`$span\` found (the doctor only looks it up — command -v, never runs it; the harness-setup skill runs it once, with a human present)"
         else
@@ -911,7 +945,9 @@ EOF
 
     if [ -n "$scoped_grant_label" ]; then
       if $gh_ready; then
-        if printf '%s\n' "$existing" | grep -qx "$scoped_grant_label"; then
+        # Here-string, not a `printf` writer piped into `grep`'s quiet mode (#255): same SIGPIPE
+        # exposure as the lifecycle-labels check above, removed the same way.
+        if grep -qx -- "$scoped_grant_label" <<<"$existing"; then
           :
         else
           wrn "scoped autonomy: grant label '$scoped_grant_label' does not exist on this repo — run: gh label create \"$scoped_grant_label\" (the harness never applies or removes it, only reports whether it exists)"
