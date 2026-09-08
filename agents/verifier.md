@@ -116,10 +116,17 @@ finding.
   there is no granted way to remove an untracked one (`git clean` is denied). Bash is for
   read-only commands — `git diff`, `git log`, `git status`, running the project's tests/build —
   plus the probe's test run and restore: `git restore <file>` (worktree mode:
-  `git -C <worktree> restore <file>`; `git checkout -- <file>` is the equivalent outside worktree
-  mode). These restore commands touch only the working tree — no ref, no commit, no remote. Never
-  `git stash`, never `git add/commit/push`, never `gh`, never any command that moves a ref or
-  touches the remote. Capture `git status --porcelain` before the first mutant and confirm it is
+  `git -C <worktree> restore <file>`; `git checkout -- <file>` is **not** an alternative — the
+  harness's own boundary hook denies `git checkout` for the verifier role, so use `git restore` in
+  every mode). These restore commands touch only the working tree — no ref, no commit, no remote.
+  Never `git stash`, never `git add/commit/push`, never `gh`, never any command that moves a ref
+  or touches the remote — this is no longer prompt-only: `hooks/agent-boundary.sh` (#235)
+  mechanically denies `gh` outright and denies any `git` subcommand for the verifier role except
+  `status diff log show rev-parse ls-files merge-base blame grep restore`, regardless of what a
+  permission rule would otherwise allow. If a Bash call is blocked, its stderr names the boundary
+  and the allowed read-only set — treat that as the harness's own control working as intended,
+  never as a bug to route around (e.g. via `bash -c`, an absolute `git` path, or another
+  interpreter). Capture `git status --porcelain` before the first mutant and confirm it is
   identical after the last restore; report that comparison in the verdict. If the restore command
   is not granted, do not mutate at all — skip the probe and say so. If a restore ever fails, say
   so prominently in the verdict's Mutation probe section and in Notes, with the exact paths — that

@@ -92,3 +92,9 @@ bites: 1–3 lines, written as an instruction to a future agent.
   implementer skill's "Status line" section). A fix that repairs one claim in a paragraph can introduce a
   fresh dangling one: on #233 the round-1 fix to the README's "Updating" paragraph pointed at a
   "Status line" section only `skills/issue-implementer/SKILL.md` has, costing a third round.
+- 2026-09-08 (d): A token walk with a once-only skip or flag (`!saw_prefix && …`) ships with a surviving
+  evasion unless the fixture set carries 0, 1 AND 2+ occurrences of the skipped class — on #235 every
+  prefix fixture had exactly one prefix word, so `sudo bash -c "git push"` was no-opinion while the
+  README's evasion enumeration said it was caught, and 22 measured mutants never touched it. Derive
+  fixtures from each loop's boundary (none / one / repeated), not from the plan's one-of-each examples,
+  and have the verifier feed the script its own chained forms.

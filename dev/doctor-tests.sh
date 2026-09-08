@@ -31,7 +31,9 @@
 # mistaken for the quoted command), the verification baseline's short-SHA-as-prefix compare (an
 # abbreviated recorded commit of 7+ hex characters is accepted; fewer is a malformed-value WARN),
 # the disableAllHooks: true WARN across the three settings files (#150 — silently disables the
-# plugin's git -C guard hook, and every other hook), the stale-legacy-'-C'-allow-entry WARN on
+# plugin's git -C guard hook, and every other hook, including (#235) the implementer/verifier
+# agent-boundary hook, whose absence is silent rather than a prompt), the
+# stale-legacy-'-C'-allow-entry WARN on
 # .claude/settings.json (#150 — the entries the guard hook now supersedes), and (#175, ex-#166,
 # widened by #179, widened again by #186) the CI action pinning WARN — gated on a "Merge autonomy
 # policy" section, it lists any `uses:` ref in .github/workflows/*.yml|*.yaml AND in any
@@ -475,9 +477,10 @@ case_settings_parsed() {
   expect_absent "legacy 'Bash(git -C ...)' entries"
 }
 
-# hooks-disabled (#150) — disableAllHooks: true in .claude/settings.local.json (a file the
+# hooks-disabled (#150, #235) — disableAllHooks: true in .claude/settings.local.json (a file the
 # doctor already reads for the merge-autonomy scan) silently disables the plugin's git -C guard
-# hook, and every other hook; WARN, never FAIL.
+# hook and every other hook, including the implementer/verifier agent-boundary hook — whose
+# absence is silent rather than a prompt, unlike the guard hook's; WARN, never FAIL.
 case_hooks_disabled() {
   local dir; dir="$(mk_repo hooks-disabled base verbatim)"
   printf '{"disableAllHooks": true}' > "$dir/.claude/settings.local.json"
@@ -1777,7 +1780,7 @@ cases=(
   "baseline-short-sha|case_baseline_short_sha|verification baseline: 7-hex-char recorded value that prefixes the remote tip -> recorded, not behind"
   "baseline-behind|case_baseline_behind|verification baseline: 7-hex-char recorded value that does NOT prefix the remote tip -> still behind"
   "baseline-too-short|case_baseline_too_short|verification baseline: recorded value under 7 hex characters -> malformed WARN, not recorded, not behind"
-  "hooks-disabled|case_hooks_disabled|disableAllHooks: true in settings.local.json -> WARN naming the file and the guard-hook consequence"
+  "hooks-disabled|case_hooks_disabled|disableAllHooks: true in settings.local.json -> WARN naming the file, the guard-hook consequence, and the agent-boundary hook's silent-absence consequence"
   "stale-c-allows|case_stale_c_allows|legacy Bash(git -C * ...) allow entries still present -> WARN naming them and the guard hook that supersedes them"
   "version-report|case_version_report|harness version: bin/harness-version.sh's printed line reported verbatim as a PASS"
   "version-unresolvable|case_version_unresolvable|harness version: no .claude-plugin/plugin.json -> WARN, never FAIL"

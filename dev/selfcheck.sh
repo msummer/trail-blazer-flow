@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 62 assertions total. The gate prints what it checks — run it.
+# Five groups, 63 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -252,46 +252,92 @@ else
   bad "$msg"
 fi
 
-# 2.7 — hooks/hooks.json structure ↔ filesystem: parses (2.1 already checked); .hooks.PreToolUse
-# is a non-empty array; its first element's .matcher == "Bash"; every type=="command" handler's
-# .command, with ${CLAUDE_PLUGIN_ROOT} textually replaced by $root and the surrounding
-# 'bash "' / '"' stripped, names a file that exists; and every type=="command" handler's `if`
-# field (jq's `.["if"]`, since `if` is a jq keyword) equals the literal Bash(git -C *) (#155) —
-# same shape as this assertion's own `.matcher == "Bash"` comparison: a jq-extracted JSON value
-# compared to a script literal. Fails loudly on an empty extraction rather than a vacuous pass,
-# same guard as 2.5/4.13: a missing or renamed "if" key makes handler_ifs shorter than
-# handler_cmds, which the count comparison in this same clause catches instead of silently
-# reading as zero mismatches.
+# 2.7 (reworked #235) — hooks/hooks.json structure ↔ filesystem, both directions. Parses (2.1
+# already checked); .hooks.PreToolUse is a non-empty array. Four clauses, folded into one
+# assertion so the count stays unchanged:
+#   (a) EVERY .hooks.PreToolUse[] element's .matcher == "Bash" (widened from the old first-element-
+#       only check, now that a second entry exists — hooks/agent-boundary.sh, #235);
+#   (b) every type=="command" handler's .command, with ${CLAUDE_PLUGIN_ROOT} textually replaced by
+#       $root and the surrounding 'bash "' / '"' stripped, names a file that exists;
+#   (c) each handler's "if" (jq's `.["if"]`, since `if` is a jq keyword; an absent/empty value
+#       normalises to the sentinel "-none-") equals what a basename-keyed expectation table says
+#       that script should carry — git-c-guard.sh -> "Bash(git -C *)" (#155), agent-boundary.sh ->
+#       "-none-" (the `if` field is permission-rule syntax over tool input only and cannot see
+#       agent_type — see hooks/agent-boundary.sh's header) — with an unregistered basename FAILing
+#       loudly ("add its expected if to this table") rather than silently passing;
+#   (d) every hooks/*.sh file on disk is named by some handler's .command (the reverse direction:
+#       an orphan hook script — shipped but never registered — is exactly this issue's failure
+#       mode, since an unregistered hook never fires).
+# Extracts handler_cmds and handler_ifs into indexed arrays (bash 3.2 indexed arrays are fine —
+# only declare -A is banned) and FAILs loudly if either comes back empty or their lengths differ,
+# the same guard 2.5/4.13 use for an empty/short extraction rather than a vacuous pass.
 pretooluse_n="$(jq -r '.hooks.PreToolUse? // [] | length' "$hooks_json" 2>/dev/null)"
-first_matcher="$(jq -r '.hooks.PreToolUse[0].matcher? // empty' "$hooks_json" 2>/dev/null)"
+bad_matcher_n="$(jq -r '[.hooks.PreToolUse[]?.matcher? // empty | select(. != "Bash")] | length' "$hooks_json" 2>/dev/null)"
 handler_cmds="$(jq -r '.hooks.PreToolUse[]?.hooks[]? | select(.type == "command") | .command // empty' "$hooks_json" 2>/dev/null)"
-expected_if='Bash(git -C *)'
-handler_ifs="$(jq -r '.hooks.PreToolUse[]?.hooks[]? | select(.type == "command") | .["if"] // empty' "$hooks_json" 2>/dev/null)"
-if [ -z "$pretooluse_n" ] || [ "$pretooluse_n" -eq 0 ] || [ -z "$handler_cmds" ]; then
+handler_ifs_raw="$(jq -r '.hooks.PreToolUse[]?.hooks[]? | select(.type == "command") | .["if"] // "-none-"' "$hooks_json" 2>/dev/null)"
+if [ -z "$pretooluse_n" ] || [ "$pretooluse_n" -eq 0 ] || [ -z "$handler_cmds" ] || [ -z "$handler_ifs_raw" ]; then
   bad "2.7 hooks/hooks.json structure: .hooks.PreToolUse extraction failed or came back empty (structure changed)"
-elif [ "$first_matcher" != "Bash" ]; then
-  bad "2.7 hooks/hooks.json structure: .hooks.PreToolUse[0].matcher is '$first_matcher', expected 'Bash'"
+elif [ -n "$bad_matcher_n" ] && [ "$bad_matcher_n" -ne 0 ]; then
+  bad "2.7 hooks/hooks.json structure: $bad_matcher_n .hooks.PreToolUse[] element(s) have a .matcher other than 'Bash'"
 else
-  missing_script=""
-  while IFS= read -r hc; do
-    [ -n "$hc" ] || continue
-    resolved="${hc//\$\{CLAUDE_PLUGIN_ROOT\}/$root}"
-    path="$(printf '%s' "$resolved" | sed -E 's/^bash "//; s/"$//')"
-    [ -f "$path" ] || missing_script="$missing_script $path"
-  done <<EOF
+  cmd_arr=()
+  while IFS= read -r hc; do cmd_arr+=("$hc"); done <<EOF
 $handler_cmds
 EOF
-  cmd_n="$(printf '%s\n' "$handler_cmds" | grep -c '[^[:space:]]')"
-  if_ok_n="$(printf '%s\n' "$handler_ifs" | grep -c -x -F -- "$expected_if")"
-  bad_if=""
-  [ "$if_ok_n" -eq "$cmd_n" ] || bad_if=" only $if_ok_n of $cmd_n command handler(s) carry \"if\": \"$expected_if\";"
-  if [ -z "$missing_script" ] && [ -z "$bad_if" ]; then
-    ok "2.7 hooks/hooks.json structure: PreToolUse present with matcher 'Bash', every command handler resolves to an existing file and carries \"if\": \"$expected_if\""
+  if_arr=()
+  while IFS= read -r hi; do
+    [ -n "$hi" ] || hi="-none-"
+    if_arr+=("$hi")
+  done <<EOF
+$handler_ifs_raw
+EOF
+  if [ "${#cmd_arr[@]}" -eq 0 ] || [ "${#cmd_arr[@]}" -ne "${#if_arr[@]}" ]; then
+    bad "2.7 hooks/hooks.json structure: handler_cmds (${#cmd_arr[@]}) and handler_ifs (${#if_arr[@]}) came back different lengths (structure changed) — extraction failed"
   else
-    msg="2.7 hooks/hooks.json structure broken:"
-    [ -n "$missing_script" ] && msg="$msg command handler(s) resolve to a nonexistent file:$missing_script;"
-    [ -n "$bad_if" ] && msg="$msg$bad_if"
-    bad "$msg"
+    missing_script=""
+    bad_if=""
+    registered_basenames=""
+    idx=0
+    while [ "$idx" -lt "${#cmd_arr[@]}" ]; do
+      hc="${cmd_arr[$idx]}"
+      hi="${if_arr[$idx]}"
+      resolved="${hc//\$\{CLAUDE_PLUGIN_ROOT\}/$root}"
+      path="$(printf '%s' "$resolved" | sed -E 's/^bash "//; s/"$//')"
+      base="$(basename "$path" 2>/dev/null)"
+      registered_basenames="$registered_basenames $base"
+      if [ -f "$path" ]; then
+        expect_if=""
+        case "$base" in
+          git-c-guard.sh) expect_if='Bash(git -C *)' ;;
+          agent-boundary.sh) expect_if='-none-' ;;
+          *) bad_if="$bad_if $base has no expected-if table entry (add its expected if to this table);" ;;
+        esac
+        if [ -n "$expect_if" ] && [ "$hi" != "$expect_if" ]; then
+          bad_if="$bad_if $base's if is '$hi', expected '$expect_if';"
+        fi
+      else
+        missing_script="$missing_script $path"
+      fi
+      idx=$((idx + 1))
+    done
+    orphan_scripts=""
+    for f in "$root"/hooks/*.sh; do
+      [ -f "$f" ] || continue
+      fb="$(basename "$f")"
+      case " $registered_basenames " in
+        *" $fb "*) ;;
+        *) orphan_scripts="$orphan_scripts $fb" ;;
+      esac
+    done
+    if [ -z "$missing_script" ] && [ -z "$bad_if" ] && [ -z "$orphan_scripts" ]; then
+      ok "2.7 hooks/hooks.json structure: every PreToolUse entry's matcher is 'Bash', every command handler resolves to an existing file and carries its expected \"if\", and every hooks/*.sh file is registered"
+    else
+      msg="2.7 hooks/hooks.json structure broken:"
+      [ -n "$missing_script" ] && msg="$msg command handler(s) resolve to a nonexistent file:$missing_script;"
+      [ -n "$bad_if" ] && msg="$msg$bad_if"
+      [ -n "$orphan_scripts" ] && msg="$msg hooks/*.sh file(s) not registered by any handler:$orphan_scripts;"
+      bad "$msg"
+    fi
   fi
 fi
 
@@ -1189,6 +1235,63 @@ else
     ok "4.38 bin/check-harness.sh's PROTECTION_STRICT_WARN_STEM ('$ch_strict_stem') and PROTECTION_CHECKS_WARN_STEM ('$ch_checks_stem') both agree with dev/doctor-tests.sh"
   else
     bad "4.38 branch-protection WARN stem literal(s) missing from:$missing"
+  fi
+fi
+
+# 4.39 (#235) — hooks/agent-boundary.sh's agent_type vocabulary <-> agents/*.md and plugin.json's
+# name. Extracts AGENT_TYPES_IMPLEMENTER= and AGENT_TYPES_VERIFIER= with the same anchored
+# sed -nE idiom as 2.5/4.13/4.35/4.36/4.37/4.38 — either extraction coming back empty FAILs
+# loudly ("structure changed") rather than passing vacuously. Each space-delimited value in
+# either list must be either a bare X, requiring agents/X.md to exist with frontmatter name: X
+# (same frontmatter_text + sed idiom as 3.1), or <plugin.json .name>:X, requiring the same
+# agents/X.md / name: X condition on the part after the colon; and each list must carry at least
+# one bare-form AND at least one namespaced-form entry ("both spellings"), since #235 shipped
+# both because the live agent_type spelling a trail-blazer-flow subagent receives in PreToolUse
+# stdin was not captured (see the hook's own header). This proves only that the hook's vocabulary
+# agrees with the agent files and the plugin's own name — not that either spelling is the one
+# Claude Code actually sends at runtime, the same honest limit 4.33/4.34/4.37/4.38's comments
+# state.
+ab="$root/hooks/agent-boundary.sh"
+ab_impl="$(sed -nE 's/^AGENT_TYPES_IMPLEMENTER="([^"]*)"$/\1/p' "$ab")"
+ab_verif="$(sed -nE 's/^AGENT_TYPES_VERIFIER="([^"]*)"$/\1/p' "$ab")"
+if [ -z "$ab_impl" ] || [ -z "$ab_verif" ]; then
+  bad "4.39 hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER= or AGENT_TYPES_VERIFIER= line didn't match (structure changed) — extraction failed"
+else
+  ab_plugin_name="$(jq -r '.name // empty' "$plugin_json" 2>/dev/null)"
+  bad_list=""
+  for pair in "AGENT_TYPES_IMPLEMENTER $ab_impl" "AGENT_TYPES_VERIFIER $ab_verif"; do
+    listname="${pair%% *}"
+    values="${pair#* }"
+    bare_n=0
+    ns_n=0
+    for v in $values; do
+      case "$v" in
+        *:*)
+          vp="${v%%:*}"
+          vagent="${v#*:}"
+          ns_n=$((ns_n + 1))
+          [ "$vp" = "$ab_plugin_name" ] || bad_list="$bad_list $listname value '$v' has namespace '$vp', expected plugin.json .name '$ab_plugin_name';"
+          ;;
+        *)
+          vagent="$v"
+          bare_n=$((bare_n + 1))
+          ;;
+      esac
+      af="$root/agents/$vagent.md"
+      if [ -f "$af" ]; then
+        fm_name="$(frontmatter_text "$af" | sed -n 's/^name: *//p' | head -1 | tr -d '[:space:]')"
+        [ "$fm_name" = "$vagent" ] || bad_list="$bad_list $listname value '$v' names agents/$vagent.md but its frontmatter name is '$fm_name';"
+      else
+        bad_list="$bad_list $listname value '$v' names agents/$vagent.md, which doesn't exist;"
+      fi
+    done
+    [ "$bare_n" -ge 1 ] || bad_list="$bad_list $listname has no bare-form spelling;"
+    [ "$ns_n" -ge 1 ] || bad_list="$bad_list $listname has no namespaced-form spelling;"
+  done
+  if [ -z "$bad_list" ]; then
+    ok "4.39 hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER ('$ab_impl') and AGENT_TYPES_VERIFIER ('$ab_verif') both agree with agents/*.md and plugin.json's name, each carrying both spellings"
+  else
+    bad "4.39 agent_type vocabulary disagreement:$bad_list"
   fi
 fi
 

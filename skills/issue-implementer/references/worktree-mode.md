@@ -171,7 +171,14 @@ e. **As each implementer completes, run the issue-implementer skill's steps 2d�
      `<repo-dirname>-wt-<number>` path and stays silent otherwise; a permission prompt on any of
      them means the plugin is disabled, out of date, or a settings file has `disableAllHooks:
      true` — finish that issue sequentially instead and tell the human what `check-harness.sh`
-     reports;
+     reports. The verifier's two `-C` reads above (`diff`, `log`) also clear the second plugin
+     hook, `hooks/agent-boundary.sh` (#235, the implementer/verifier git+gh boundary — see the
+     README's "Safety model"), since both are on its read-only list; an outright **block** (exit
+     2, with a stderr line naming the boundary) on any of these `-C` commands has a different
+     cause than the three listed above — it means the agent-boundary hook correctly denied a
+     command outside the issuing role's allowed set (e.g. a verifier attempting one of the
+     mutating forms, which are the orchestrator's own job, never the verifier's) — and is not
+     itself a sign of a broken installation;
    - **the checkpoint lands in the worktree, not the main checkout**, which stays on the default
      branch, untouched, for the whole swarm;
    - **the worktree path travels in every prompt** (the verifier's included) and in every

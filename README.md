@@ -34,8 +34,8 @@ or share).
 │   └── marketplace.json          # this repo doubles as its own marketplace
 ├── agents/
 │   ├── planner.md                # read-only planning subagent (Opus 5)
-│   ├── implementer.md            # code-writing subagent (Sonnet 5); no git/network
-│   └── verifier.md               # plan-conformance reviewer (Opus 5); fresh context; restores anything it mutates
+│   ├── implementer.md            # code-writing subagent (Sonnet 5); no git/gh, mechanically enforced (hooks/agent-boundary.sh)
+│   └── verifier.md               # plan-conformance reviewer (Opus 5); fresh context; restores anything it mutates; read-only git only, no gh, mechanically enforced
 ├── skills/
 │   ├── project-kickoff/SKILL.md  # greenfield on-ramp: interview → brief + CLAUDE.md + repo + backlog
 │   ├── harness-setup/SKILL.md    # one-time repo onboarding: doctor + CLAUDE.md audit + baseline
@@ -56,18 +56,19 @@ or share).
 │   ├── harness-version.sh         # prints the installed plugin's "<version> <sha>", one line
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
-│   ├── hooks.json                 # registers the PreToolUse guard below
-│   └── git-c-guard.sh             # approves only the exact git -C <worktree> <subcommand> forms worktree-parallel mode issues
+│   ├── hooks.json                 # registers the two PreToolUse hooks below
+│   ├── git-c-guard.sh             # approves only the exact git -C <worktree> <subcommand> forms worktree-parallel mode issues
+│   └── agent-boundary.sh          # mechanically denies git/gh Bash commands for the implementer/verifier subagents (#235)
 ├── dev/
 │   ├── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
 │   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
 │   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh (not run by the gate)
-│   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh (not run by the gate)
+│   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh AND hooks/agent-boundary.sh (not run by the gate)
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 │   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
 │   └── lock-tests.sh             # fixture-based negative-test harness for bin/harness-lock.sh (not run by the gate)
 ├── .github/
-│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the guard hook's negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
+│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the two hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
 │   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
@@ -1249,6 +1250,15 @@ exactly `true`), the number of required status check contexts (WARN when zero), 
 required PR reviews are configured (informational) — none of the three can FAIL, and with no
 policy section the doctor's protection output is unchanged. No new grant, label, script, or
 baseline step.
+**The implementer/verifier "no git, no gh" boundary is now mechanically enforced (#235, review
+F3):** a second plugin-shipped `PreToolUse` hook, `hooks/agent-boundary.sh` (see "Safety model"
+for its full contract), denies `git`/`gh` Bash commands for those two subagent roles. Consumers
+get it automatically with the plugin update — **no grant, no label, no script, no baseline step,
+and no settings re-copy for this issue.** The boundary applies only to this plugin's own
+`implementer`/`verifier` subagents, never to the main session, the planner, or any other agent,
+and it can only **remove** permission a settings file would otherwise have granted — it never adds
+any. A Claude Code that does not supply `agent_type` in `PreToolUse` stdin simply leaves the hook
+silent, the same status quo as before this release — never a new block.
 
 ## The per-repo settings file (required)
 
@@ -1323,7 +1333,14 @@ secrets) — never commit it.
 ## Safety model
 
 The implementer subagent can edit files and run the build tool, but does **no** git or network —
-the orchestrator does all git/GitHub. The verifier subagent writes nothing durable: its mutation
+the orchestrator does all git/GitHub. The **git/gh** half of that is mechanically enforced, not
+just prompt convention (#235, review F3): a second plugin-shipped `PreToolUse` hook,
+`hooks/agent-boundary.sh` (its full contract is further down in this section), denies any Bash
+command whose command-position word resolves to `git`/`gh` for the implementer subagent. The
+**network** half remains a prompt-level rule only — blocking it by command pattern is not
+enforceable without also breaking dependency installs during verification, so #235 left it out of
+scope. The verifier subagent writes nothing
+durable: its mutation
 probe edits an already-tracked file inside the tree under review, runs the tests, restores it
 with `git restore <file>` (working tree only — never a commit, ref, or push), and re-checks
 `git status --porcelain` against its pre-probe output before returning; if the repo doesn't grant
@@ -1377,7 +1394,8 @@ new directory can execute that directory's hooks; `cd`-with-`git` is therefore n
 escape hatch for either the template or the guard. Hooks shipped by a plugin fire inside
 subagents too (carrying `agent_id`/`agent_type` alongside the usual fields), which matters here
 because the implementer and verifier subagents issue most of the `-C` commands, not just the
-orchestrator. The guard fails open in every direction: no `jq` on `PATH`, the plugin disabled or
+orchestrator — and it is also the mechanism `hooks/agent-boundary.sh` (#235, below) reads to
+resolve which role, if any, issued a given Bash call. The guard fails open in every direction: no `jq` on `PATH`, the plugin disabled or
 not yet updated, `disableAllHooks: true` in any of the three settings files, or a headless
 `--bare` run all leave a `-C` call unapproved by the hook — a prompt in default mode (or a
 recorded denial headless), never a silent bypass. Below the `if` gate's 2.1.85 floor (see
@@ -1455,6 +1473,58 @@ The seven `Bash(git -C * …)` deny mirrors were present throughout and produced
 row above — Claude Code 2.1.246's startup scan is allow-only. The one item this probe left
 unconfirmed is the Windows/Git-Bash spot-check of row (a) — see "Prerequisites" and the Windows
 section below.
+
+**Two PreToolUse hooks.** `hooks/git-c-guard.sh` above is one of two plugin-shipped `PreToolUse`
+Bash hooks registered in `hooks/hooks.json`; the second, `hooks/agent-boundary.sh` (#235, review
+F3), is what the "no git, no gh" caveat earlier in this section now names. It reads each Bash
+call's `agent_type` from the hook's own stdin JSON — the field a `PreToolUse` handler's `if` gate
+cannot see, which is why this handler carries no `if` at all, unlike the guard hook's — and
+resolves it against a role (both the bare `implementer`/`verifier` and the namespaced
+`trail-blazer-flow:implementer`/`trail-blazer-flow:verifier` spellings are matched, since the
+exact live spelling a plugin subagent receives was not captured live — see the honest limits
+below). For the implementer role it denies (exit 2, one stderr line, empty stdout) any Bash
+command whose parsed command-position word resolves to `git` or `gh`, regardless of `git`
+subcommand — the implementer needs neither. For the verifier role it denies `gh` outright and
+denies `git` unless the resolved subcommand is one of `status diff log show rev-parse ls-files
+merge-base blame grep restore`; an unlisted subcommand, a global option before the subcommand, and
+a bare `git` all deny too — fail-closed, not an enumerated allow-list of "safe" subcommands. Every
+other case — the main session (no `agent_type`), the planner or another agent, `permission_mode:
+"plan"`, malformed stdin, another tool, or `tool_input.command` absent — is "no opinion" (exit 0,
+empty stdout, empty stderr), the same convention `git-c-guard.sh` uses; a blocked call's stderr
+names the role and the command it blocked, since a subagent can't answer a permission prompt the
+way an interactive session could. Pinned by 49 fixture cases in `dev/hook-tests.sh`, including the
+same never-executes-anything guarantee (a booby-trapped `git`/`gh`/`rm` on `PATH` proves nothing
+runs) and the same fail-open properties as the guard hook: the plugin disabled, `disableAllHooks:
+true`, no `jq` on `PATH`, an unresolved `${CLAUDE_PLUGIN_ROOT}` on Windows, or a Claude Code that
+omits `agent_type` all leave this hook silent — but unlike the guard hook (whose non-firing
+degrades to an ordinary permission prompt), this hook's non-firing removes a control with **no**
+visible sign, since nothing else in the permission model was narrowing the implementer/verifier's
+`git`/`gh` surface to begin with. The scan is deliberately quote-blind (it strips quote characters
+rather than tracking quote state, the same trade-off `git-c-guard.sh` makes in the opposite
+direction) and processes `tool_input.command` one line at a time, so two over-blocking classes are
+expected and documented in the script's own header: a literal `git`/`gh` word starting a quoted
+span right after a separator (e.g. `echo "a; git push"`) denies, and — more consequentially for
+this repo's own contributors — **any line of a multi-line Bash command that begins with
+`git`/`gh`** is a command-position token after its own newline break and denies, including a
+heredoc line that merely *writes* a fixture file containing the text `git push`; the remedy is to
+write such file content through the Write/Edit tools rather than a Bash heredoc. Known evasions,
+documented rather than hidden: `$(which git) push` (the literal `git` token is never in command
+position), `sudo -u foo git push` (the argument to `-u` becomes the resolved command word instead
+of `git`), and interpreter indirection outside the recognised prefix words (`env`, `command`,
+`builtin`, `exec`, `sudo`, `nohup`, `time`, `nice`, `stdbuf`, `xargs`, `bash`, `sh`, `zsh`, `ksh`,
+`dash`) — this is a tripwire against an off-script subagent, the same framing this document
+already uses for the body-hash grant pattern, not a sandbox against a determined adversary. Two
+honest limits, both unresolved as of #235 and named in a follow-up issue: the exact `agent_type`
+string a `trail-blazer-flow` plugin subagent receives in `PreToolUse` stdin was not captured live
+in the planning session (the current Claude Code hooks reference, fetched 2026-09-08, documents
+`agent_type` as present "when the session uses `--agent` or the hook fires inside a subagent" and
+lists namespaced `plugin-name:agent-name` forms in its matcher-patterns table, but does not state
+the `PreToolUse` stdin spelling explicitly — hence both spellings ship); and whether this hook's
+`deny` outranks `git-c-guard.sh`'s `allow` for the same call is also unverified — both are
+`PreToolUse` Bash handlers, and if `allow` ever won, the ten `git -C <worktree> <subcommand>`
+forms worktree-parallel mode issues would bypass this boundary for exactly those forms, the
+narrowest possible failure (`dev/hook-tests.sh`'s own `git -C <worktree> push`/`commit` cases pin
+this hook's own verdict regardless of that composition question).
 
 **Verdict provenance.** The kickback loop is enforced the same way as the rest of this section:
 the orchestrator never edits a source, test, or doc file to resolve a verifier finding or a red
@@ -1602,10 +1672,19 @@ anything. Separately, and unconditionally: the harness never applies or removes 
 grant label itself, on any issue — `check-harness.sh` and `check-decision-record.sh` only report
 whether the label exists and whether the declared record is present.
 
-Two honest caveats. First, the implementer's "no git" rule is enforced by prompt, not by
-permissions: the settings allow-list must permit git for the orchestrator, and permission
-grants are session-wide, so a misbehaving subagent *could* run git — the staged-file
-reconciliation and branch isolation are what bound the damage. Second, plan auto-approval and
+Two honest caveats. First, the implementer/verifier "no git, no gh" rule is mechanically
+enforced, not just prompt convention (#235, review F3): the settings allow-list must still permit
+`git`/`gh` for the orchestrator, and permission grants are session-wide — but a second
+plugin-shipped `PreToolUse` hook, `hooks/agent-boundary.sh`, reads each Bash call's `agent_type`
+and denies (exit 2, before permission rules are even evaluated) any command whose command-position
+word resolves to `git`/`gh` for the implementer, or to `gh`/a non-read-only `git` subcommand for
+the verifier; see "Safety model" for the full contract, including its honest limits (the exact
+live `agent_type` spelling and the hook's precedence against `git-c-guard.sh`'s `allow` are both
+unverified) and its no-opinion edges (the main
+session, any other agent, `permission_mode: "plan"`, and a Claude Code that omits `agent_type`
+altogether all leave the hook silent — the same session-wide allow list this caveat used to
+describe in full, now narrowed to exactly those cases). The staged-file reconciliation and branch
+isolation remain the backstop for whatever this mechanical boundary doesn't reach. Second, plan auto-approval and
 merge autonomy (each opt-in via `CLAUDE.md` — see "The CLAUDE.md contract" items 4–5)
 deliberately trade human gates for throughput on low-risk work. Their hard floors are not
 configurable by the policy section — the one exception is itself part of the floor's fixed
@@ -1827,13 +1906,16 @@ Windows specifics worth knowing:
   Bash runs the scripts via their shebang, so the check reports that and moves on. The
   harness's `gh`-output parsing also strips stray `\r` defensively, in case a CRLF-translating
   layer sits between `gh` and Bash.
-- **The `git -C` guard hook's `${CLAUDE_PLUGIN_ROOT}` path.** `hooks/hooks.json` invokes the
-  guard as `bash "${CLAUDE_PLUGIN_ROOT}/hooks/git-c-guard.sh"`; if Claude Code ever exports that
+- **Both hooks' `${CLAUDE_PLUGIN_ROOT}` path.** `hooks/hooks.json` invokes each hook the same way
+  — e.g. `bash "${CLAUDE_PLUGIN_ROOT}/hooks/git-c-guard.sh"`; if Claude Code ever exports that
   variable in backslash form on Windows, the quoted path could fail to resolve under Git Bash and
-  the hook simply never runs for that session — fail-safe (worktree-mode `git -C` commands then
-  prompt, same as if the plugin were disabled), but a Windows spot-check of the hook actually
-  firing is worth doing before relying on unattended worktree-parallel mode there (the probe
-  table under "Safety model" covers macOS only).
+  a hook simply never runs for that session. For `git-c-guard.sh` this is fail-safe (worktree-mode
+  `git -C` commands then prompt, same as if the plugin were disabled). For `hooks/agent-boundary.sh`
+  (#235) it is **not**: its non-firing is silent, not a prompt — it just removes the mechanical
+  implementer/verifier "no git, no gh" boundary, with nothing visible marking the loss, since it
+  was the only thing narrowing that surface. A Windows spot-check of both hooks actually firing is
+  worth doing before relying on unattended worktree-parallel mode there (the probe table under
+  "Safety model" covers macOS only).
 
 ### Windows: first-run smoke test
 
