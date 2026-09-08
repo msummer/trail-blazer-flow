@@ -1245,12 +1245,12 @@ fi
 # either list must be either a bare X, requiring agents/X.md to exist with frontmatter name: X
 # (same frontmatter_text + sed idiom as 3.1), or <plugin.json .name>:X, requiring the same
 # agents/X.md / name: X condition on the part after the colon; and each list must carry at least
-# one bare-form AND at least one namespaced-form entry ("both spellings"), since #235 shipped
-# both because the live agent_type spelling a trail-blazer-flow subagent receives in PreToolUse
-# stdin was not captured (see the hook's own header). This proves only that the hook's vocabulary
-# agrees with the agent files and the plugin's own name — not that either spelling is the one
-# Claude Code actually sends at runtime, the same honest limit 4.33/4.34/4.37/4.38's comments
-# state.
+# one bare-form AND at least one namespaced-form entry ("both spellings"): the namespaced form is
+# the spelling measured live on 2026-09-08 (Claude Code 2.1.263, #259), and the bare form is
+# retained as insurance against a future de-namespacing (see the hook's own header). This proves
+# only that the hook's vocabulary agrees with the agent files and the plugin's own name — not that
+# either spelling is the one Claude Code actually sends at runtime, the same honest limit
+# 4.33/4.34/4.37/4.38's comments state.
 ab="$root/hooks/agent-boundary.sh"
 ab_impl="$(sed -nE 's/^AGENT_TYPES_IMPLEMENTER="([^"]*)"$/\1/p' "$ab")"
 ab_verif="$(sed -nE 's/^AGENT_TYPES_VERIFIER="([^"]*)"$/\1/p' "$ab")"

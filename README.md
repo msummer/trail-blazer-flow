@@ -1260,6 +1260,14 @@ and it can only **remove** permission a settings file would otherwise have grant
 any. A Claude Code that does not supply `agent_type` in `PreToolUse` stdin simply leaves the hook
 silent, the same status quo as before this release — never a new block.
 
+**v2.7.0 → v2.7.1** adds no grant, label, script, or baseline step — the doctor reports nothing
+new to migrate. #235's two documented limits are now measured (2026-09-08, Claude Code 2.1.263 —
+see "Safety model"'s live-probe record): the `agent_type` spelling a plugin subagent sends in
+`PreToolUse` stdin is the namespaced form, and this hook's `deny` does outrank
+`git-c-guard.sh`'s `allow` for the same call. Both `agent_type` spellings still ship — the
+namespaced one being the confirmed live form, the bare one retained as insurance against a future
+de-namespacing — and nothing about the hook's behaviour changed.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -1480,10 +1488,11 @@ F3), is what the "no git, no gh" caveat earlier in this section now names. It re
 call's `agent_type` from the hook's own stdin JSON — the field a `PreToolUse` handler's `if` gate
 cannot see, which is why this handler carries no `if` at all, unlike the guard hook's — and
 resolves it against a role (both the bare `implementer`/`verifier` and the namespaced
-`trail-blazer-flow:implementer`/`trail-blazer-flow:verifier` spellings are matched, since the
-exact live spelling a plugin subagent receives was not captured live — see the honest limits
-below). For the implementer role it denies (exit 2, one stderr line, empty stdout) any Bash
-command whose parsed command-position word resolves to `git` or `gh`, regardless of `git`
+`trail-blazer-flow:implementer`/`trail-blazer-flow:verifier` spellings are matched — the
+namespaced form is the live spelling, confirmed by the live-probe record below; the bare form is
+retained as insurance against a future de-namespacing). For the implementer role it denies
+(exit 2, one stderr line, empty stdout) any Bash command whose parsed command-position word
+resolves to `git` or `gh`, regardless of `git`
 subcommand — the implementer needs neither. For the verifier role it denies `gh` outright and
 denies `git` unless the resolved subcommand is one of `status diff log show rev-parse ls-files
 merge-base blame grep restore`; an unlisted subcommand, a global option before the subcommand, and
@@ -1513,18 +1522,30 @@ position), `sudo -u foo git push` (the argument to `-u` becomes the resolved com
 of `git`), and interpreter indirection outside the recognised prefix words (`env`, `command`,
 `builtin`, `exec`, `sudo`, `nohup`, `time`, `nice`, `stdbuf`, `xargs`, `bash`, `sh`, `zsh`, `ksh`,
 `dash`) — this is a tripwire against an off-script subagent, the same framing this document
-already uses for the body-hash grant pattern, not a sandbox against a determined adversary. Two
-honest limits, both unresolved as of #235 and named in a follow-up issue: the exact `agent_type`
-string a `trail-blazer-flow` plugin subagent receives in `PreToolUse` stdin was not captured live
-in the planning session (the current Claude Code hooks reference, fetched 2026-09-08, documents
-`agent_type` as present "when the session uses `--agent` or the hook fires inside a subagent" and
-lists namespaced `plugin-name:agent-name` forms in its matcher-patterns table, but does not state
-the `PreToolUse` stdin spelling explicitly — hence both spellings ship); and whether this hook's
-`deny` outranks `git-c-guard.sh`'s `allow` for the same call is also unverified — both are
-`PreToolUse` Bash handlers, and if `allow` ever won, the ten `git -C <worktree> <subcommand>`
-forms worktree-parallel mode issues would bypass this boundary for exactly those forms, the
-narrowest possible failure (`dev/hook-tests.sh`'s own `git -C <worktree> push`/`commit` cases pin
-this hook's own verdict regardless of that composition question).
+already uses for the body-hash grant pattern, not a sandbox against a determined adversary.
+
+**Live-probe record (#259).** The two limits #235 shipped unresolved were closed by a probe the
+maintainer ran on 2026-09-08 against Claude Code **2.1.263** (plugin 2.7.0 from the marketplace
+cache), on macOS: a temporary logging `PreToolUse` hook (matcher `Bash`, appending each call's
+stdin JSON to a log file) declared in `.claude/settings.local.json` alongside the plugin's own two
+hooks, then one `implementer` and one `verifier` subagent each dispatched via the Agent tool to
+run a single `git -C <repo> status --porcelain`. Captured stdin carried `agent_type` as the
+namespaced `trail-blazer-flow:implementer` / `trail-blazer-flow:verifier` form for both roles
+(alongside `agent_id`, `tool_name: "Bash"`, and `permission_mode: "auto"`) — the current Claude
+Code hooks reference documents `agent_type` as present "when the session uses `--agent` or the
+hook fires inside a subagent" and lists namespaced `plugin-name:agent-name` forms in its
+matcher-patterns table, but had not stated the `PreToolUse` stdin spelling explicitly until this
+probe. Both spellings still ship: the namespaced form is now the confirmed live value, and the
+bare form is retained as insurance against a future de-namespacing, not as a hedge against an
+unknown one. Replaying the implementer's captured stdin through both installed hooks,
+`git-c-guard.sh` emitted `allow` (rc 0) for the identical `git -C <worktree> status --porcelain`
+call and this hook exited 2 (deny); Claude Code's composed verdict was a **block** — the
+implementer reported the call never ran — while the verifier's identical read-only call **ran**
+(then failed on a nonexistent path, rc 128, unrelated to this hook). Scope: one Claude Code
+version, one platform (macOS), one install shape (marketplace cache) — not verified across
+versions, platforms, or install shapes; the Windows spot-check named under "Prerequisites" is
+still open, and `dev/hook-tests.sh`'s own `git -C <worktree> push`/`commit` cases keep pinning
+this hook's OWN verdict independent of that composition.
 
 **Verdict provenance.** The kickback loop is enforced the same way as the rest of this section:
 the orchestrator never edits a source, test, or doc file to resolve a verifier finding or a red
@@ -1678,9 +1699,9 @@ enforced, not just prompt convention (#235, review F3): the settings allow-list 
 plugin-shipped `PreToolUse` hook, `hooks/agent-boundary.sh`, reads each Bash call's `agent_type`
 and denies (exit 2, before permission rules are even evaluated) any command whose command-position
 word resolves to `git`/`gh` for the implementer, or to `gh`/a non-read-only `git` subcommand for
-the verifier; see "Safety model" for the full contract, including its honest limits (the exact
-live `agent_type` spelling and the hook's precedence against `git-c-guard.sh`'s `allow` are both
-unverified) and its no-opinion edges (the main
+the verifier; see "Safety model" for the full contract, including its live-probe record
+(2026-09-08, Claude Code 2.1.263: the namespaced `agent_type` spelling, and this hook's `deny`
+beating `git-c-guard.sh`'s `allow` on the same call) and its no-opinion edges (the main
 session, any other agent, `permission_mode: "plan"`, and a Claude Code that omits `agent_type`
 altogether all leave the hook silent — the same session-wide allow list this caveat used to
 describe in full, now narrowed to exactly those cases). The staged-file reconciliation and branch

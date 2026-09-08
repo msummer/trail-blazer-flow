@@ -15,21 +15,23 @@
 # flags (this repo's CLAUDE.md portability convention); exercised under Apple's bash 3.2 by the
 # selfcheck-macos CI job, same as bin/*.sh and hooks/git-c-guard.sh.
 #
-# Two honest limits, unresolved as of #235 (see the plan's Risks and the follow-up it files):
-#   - The exact `agent_type` string a trail-blazer-flow plugin subagent receives in PreToolUse
-#     stdin was not captured live in this session (three probe routes were denied by the auto-mode
-#     permission classifier) — only documented evidence that plugin agents can appear in the
-#     namespaced `plugin-name:agent-name` form. Both the bare and the `trail-blazer-flow:`-prefixed
-#     spellings are matched below so the hook fires either way; if the live value is neither, this
-#     hook is inert and removes no permission it would otherwise have removed (see the README's
-#     Safety model and the fail-open note there).
-#   - Whether this hook's exit 2 outranks hooks/git-c-guard.sh's "allow" for the same Bash call is
-#     also unverified — both are PreToolUse Bash handlers, registered as two separate hooks.json
-#     entries (see hooks/hooks.json's description for why this handler carries no "if" gate). If
-#     an "allow" from one hook ever outranks a "deny" from another, the ten `git -C <worktree>
-#     <subcommand>` forms worktree-parallel mode issues would bypass this boundary — the narrowest
-#     possible failure, and dev/hook-tests.sh's `git -C <wt> push`/`git -C <wt> commit` cases still
-#     pin this hook's OWN verdict regardless of composition.
+# Live-probe record, #259 (maintainer-measured 2026-09-08 against Claude Code 2.1.263, plugin
+# 2.7.0 from the marketplace cache -- one Claude Code version, one platform (macOS), one install
+# shape; not re-verified across versions, platforms, or install shapes):
+#   - The `agent_type` string a trail-blazer-flow plugin subagent sends in PreToolUse stdin is the
+#     namespaced `trail-blazer-flow:<agent-name>` form, captured live via a temporary logging
+#     PreToolUse hook on the maintainer's session. Both the namespaced and bare spellings are
+#     still matched below -- the bare form is insurance against a future de-namespacing (the
+#     maintainer's decision on #259), not a hedge against an unknown live value. A Claude Code
+#     that ever sends neither spelling leaves this hook inert, removing no permission it would
+#     otherwise have removed (see the README's Safety model and the fail-open note there).
+#   - This hook's exit 2 does outrank hooks/git-c-guard.sh's "allow" for the same Bash call:
+#     replaying one identical `git -C <worktree> status --porcelain` call through both installed
+#     hooks, the guard emitted allow (rc 0) and this hook exited 2 (deny); Claude Code's composed
+#     verdict was a block for the implementer -- the call never ran -- while the verifier's
+#     identical read-only call ran (see hooks/hooks.json's description for why this handler
+#     carries no "if" gate). dev/hook-tests.sh's `git -C <wt> push`/`git -C <wt> commit` cases
+#     still pin this hook's OWN verdict independent of that composition.
 #
 # Contract: read the PreToolUse hook JSON on stdin; print nothing and exit 0 ("no opinion") unless
 # the call is a Bash command from a recognised implementer/verifier agent_type that the role policy

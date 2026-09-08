@@ -95,8 +95,11 @@ expect_rc() {
 # ---------------------------------------------------------------------------------------------
 # hooks/agent-boundary.sh (#235) fixture builders and assertions. Documented vs. assumed stdin
 # field names (LESSON 2026-09-01c): tool_name, tool_input.command, agent_id, agent_type, and
-# permission_mode are all documented PreToolUse hook input fields (see the plan's Verified facts
-# and the probe record); this harness never invents an undocumented field.
+# permission_mode are all documented PreToolUse hook input fields; this harness never invents an
+# undocumented field. agent_type, agent_id, tool_name: "Bash", and permission_mode: "auto" were
+# also observed together in a live capture on 2026-09-08 (Claude Code 2.1.263, #259), with the
+# observed agent_type being the namespaced form, which the fixtures below exercise alongside the
+# bare form.
 
 mk_agent_cmd() { jq -n --arg agent "$1" --arg cmd "$2" '{tool_name: "Bash", agent_type: $agent, tool_input: {command: $cmd}}'; }
 mk_agent_cmd_mode() { jq -n --arg agent "$1" --arg cmd "$2" --arg mode "$3" '{tool_name: "Bash", agent_type: $agent, tool_input: {command: $cmd}, permission_mode: $mode}'; }
@@ -279,9 +282,9 @@ case_ib_gh_pr_ns()    { run_boundary "$(mk_agent_cmd 'trail-blazer-flow:implemen
 case_ib_gh_issue_edit() { run_boundary "$(mk_agent_cmd 'implementer' 'gh issue edit 1 --add-label plan-approved')"; expect_deny; }
 case_ib_git_c_push() {
   # The exact git -C <worktree> push form hooks/git-c-guard.sh's own allow cases approve
-  # (dev/hook-tests.sh's case_push_upstream above) — this hook must deny it regardless of
-  # composition with that other hook (see hooks/agent-boundary.sh's header on the unverified
-  # hook-vs-hook precedence).
+  # (dev/hook-tests.sh's case_push_upstream above) — this hook must deny it. Composition with
+  # that other hook was separately measured live on 2026-09-08 (deny beat allow — see
+  # hooks/agent-boundary.sh's header); this fixture pins THIS hook's own verdict independently.
   run_boundary "$(mk_agent_cmd 'implementer' 'git -C ../demo-wt-1 push -u origin claude/1-x')"
   expect_deny
 }
