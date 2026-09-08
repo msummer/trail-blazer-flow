@@ -80,3 +80,9 @@ bites: 1–3 lines, written as an instruction to a future agent.
   other. On #231 the plan enumerated five `--fix` fixtures for a criterion that named both modes;
   the verifier's `if $FIX` wrap survived all six suites and cost a verification round. Derive the
   fixture set from the criterion's own enumeration, not from the happy path.
+- 2026-09-08 (b): A fixture runner that captures `> out 2>&1` cannot pin any criterion that names a
+  stream ("usage on stderr", "`run-id=` as the last line of stdout") — a `>&2` redirect mutant
+  survives the whole suite. Capture stdout and stderr to separate files and assert on the named
+  stream with stream-specific helpers; say in the runner comment which claims are asserted
+  per-stream and which only against the merged capture. On #232 this class cost two of three
+  verification rounds (round 1: usage-on-stderr; round 2: run-id-on-stdout).

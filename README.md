@@ -52,6 +52,7 @@ or share).
 │   ├── find-implementation-work.sh
 │   ├── harness-status.sh          # who acts next: harness queues vs. items waiting on the human
 │   ├── reconcile-ledger.sh        # reconciles a cycle's dispatch ledger against live state
+│   ├── harness-lock.sh            # single-flight lock: at most one active cycle per checkout
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
 │   ├── hooks.json                 # registers the PreToolUse guard below
@@ -62,9 +63,10 @@ or share).
 │   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh (not run by the gate)
 │   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh (not run by the gate)
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
-│   └── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
+│   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
+│   └── lock-tests.sh             # fixture-based negative-test harness for bin/harness-lock.sh (not run by the gate)
 ├── .github/
-│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the guard hook's negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
+│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the guard hook's negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
 │   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
@@ -1148,9 +1150,11 @@ comment that was quietly edited some time ago will newly report `covers_plan: fa
 lose `plan-approved` (or hold, for the unknown verdict) — this is the intended tripwire firing
 retroactively, not a regression. No new grant, label, script, or baseline step.
 
-**v2.6.1 → v2.7.0** requires one consumer action: **re-run `bin/setup-labels.sh`** to create the
-new `multi-pr` label (until then, `check-harness.sh` reports it missing — see below). Nothing
-else in this train adds a grant, script, or baseline step. **The implementer's unknown-verdict
+**v2.6.1 → v2.7.0** requires two consumer actions: **re-run `bin/setup-labels.sh`** to create the
+new `multi-pr` label (until then, `check-harness.sh` reports it missing — see below), and
+**re-copy the permissions block** from `templates/repo-settings.json` to pick up the new
+`"Bash(harness-lock.sh:*)"` allow entry the single-flight lock needs (#232, below) — until then,
+`check-harness.sh` WARNs "settings.json allow-list missing 1 template entries". **The implementer's unknown-verdict
 hold comment is de-duplicated across runs
 (#222), the same treatment #199 and #208 already gave the planner's escalation and staleness
 notes.** The `<!-- harness-audit -->` comment `issue-implementer` posts at step 2a and step 2e
@@ -1188,6 +1192,16 @@ the issue itself, so it cannot gate that path the way it gates a comment's. One-
 note: any issue that relied on the body marker before this release needs the `multi-pr` label
 applied by hand; without it, that issue closes on the normal path the next time its slice's PR
 merges — the intended, documented behaviour change, not a bug.
+**A single-flight lock now guards against two harness cycles running concurrently in one
+checkout (#232):** the `issue-cycle`, `issue-planner`, and `issue-implementer` skills each
+acquire `bin/harness-lock.sh` (new script, the consumer action named above) at their own step 0
+— unless they're being run as part of `issue-cycle`, which acquires once for the whole composed
+run — and release it at their closing step, and on every STOP/abort path too. A refused acquire
+(the lock already held) aborts the run loudly, before any tree-mutating command, with the
+holder's record and the `harness-lock.sh release --force` remedy. See "Safety model" below for
+the mechanism (the atomic `mkdir`, the reclaim rule, the recorded-pid rationale, and the honest
+limits) and CLAUDE.md's "Verification" section for `dev/lock-tests.sh`, the new seventh CI
+command.
 
 ## The per-repo settings file (required)
 
@@ -1646,6 +1660,41 @@ dispatch). The honest limit: this mechanical coverage (the `has_harness_marker` 
 `cleanup-after-merge.sh` too — its comment-marker trust gate (#231, above) is real, but the
 verifier-side half of the untrusted-data rule is still prompt-enforced, not mechanically checked.
 
+**One active cycle per checkout (#232).** `bin/harness-lock.sh` is a single-flight lock: an
+atomic `mkdir` of `<git-common-dir>/trail-blazer/lock` (`git rev-parse --git-common-dir`, so
+every worktree of one checkout — including a worktree-parallel swarm — shares a single lock;
+never inside the tracked working tree, never committed). The lock directory holds six plain
+files: `run-id`, `pid`, `host`, `started-at`, `harness-version`, `checkout-path`. The
+`issue-cycle`, `issue-planner`, and `issue-implementer` skills each `acquire` it at their own
+step 0 and `release` it at their closing step — except that the outermost run owns the lock:
+when `issue-cycle` runs the planner or implementer's own step 0 as part of a composed pass, that
+sub-skill's acquire/release are skipped, because `acquire` is deliberately not
+same-pid-idempotent (a second acquire from the same live session would itself refuse and abort
+the run). A refused acquire aborts the run loudly, before any tree-mutating command, printing the
+holder record and the exact `harness-lock.sh release --force` remedy; the lock is released on
+every STOP/abort path too, not only the normal close, since the recorded pid outlives the run
+that acquired it. The recorded pid is `${CLAUDE_PID:-$PPID}`: under Claude Code, `CLAUDE_PID` is
+the long-lived session process (exported to every Bash tool call), while a Bash tool call's own
+`$PPID` is already dead by the time the next call starts — measured live (two separate Bash tool
+invocations, same `CLAUDE_PID`, the second `acquire` refusing rather than reclaiming); recording
+bare `$PPID` would make the very next `acquire` see a dead pid and reclaim its own lock, an inert
+guard. `$PPID` remains the fallback for a human running the script by hand from an interactive
+shell. **Reclaim rule:** a lock held by a live process on the SAME host, or by ANY process on a
+DIFFERENT host, refuses; a same-host holder whose pid is no longer alive is reclaimed
+automatically (one audit line quoting the stale record); a record with a missing or non-digits
+`pid`/`host` file always refuses rather than reclaiming — the remedy is always
+`harness-lock.sh release --force`. **Honest limits:** this is an advisory lock, not a kernel
+mutex — `mkdir` atomicity holds on a local filesystem only, not a synced/shared network volume;
+liveness is same-host only, so a lock held on a different machine is never inspected, only
+refused; a dead pid recycled by an unrelated process before the next check fails CLOSED (refuses,
+never silently reclaims); and a run interrupted (Ctrl-C, crash) inside a still-live Claude Code
+session leaves its lock held until that session exits or a human runs `release --force`, since
+the recorded pid is the session, not the interrupted run. `dev/lock-tests.sh` pins the script's
+own behavior above — the acquire/reclaim/release/status semantics, the shared-worktree lock path,
+and the recorded-pid rule; see CLAUDE.md's "Verification" section. The skills' acquire-at-step-0 /
+release-at-close-or-abort placement is prompt-enforced, not mechanically checked — gate assertion
+4.36 pins only the subcommand vocabulary the three skills invoke against `LOCK_SUBCOMMANDS`.
+
 ## Distribution
 
 This repo **is the plugin and its own marketplace** (`.claude-plugin/plugin.json` +
@@ -1674,10 +1723,10 @@ bash dev/selfcheck.sh
 
 It prints a `PASS`/`FAIL` line per assertion and a `== summary: N pass, M fail ==` footer — run
 it to see exactly what it checks. There is no test suite and no build step: this repo is
-Markdown instruction files, Bash scripts, and JSON manifests. The gate and its five negative-test
+Markdown instruction files, Bash scripts, and JSON manifests. The gate and its six negative-test
 harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tests.sh`, `dev/hook-tests.sh`,
-`dev/cleanup-tests.sh`, `dev/planning-tests.sh`) all run in CI on every pull request — see this
-repo's `CLAUDE.md` "Verification" section for the exact commands and jobs.
+`dev/cleanup-tests.sh`, `dev/planning-tests.sh`, `dev/lock-tests.sh`) all run in CI on every pull
+request — see this repo's `CLAUDE.md` "Verification" section for the exact commands and jobs.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor. Onboarding it here would mean checking in a `.claude/settings.json` that

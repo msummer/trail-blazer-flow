@@ -11,7 +11,10 @@ small/medium disjoint issues is the sweet spot; a fifth eligible issue waits for
 rather than widening the fan-out — beyond 4, queue depth beats fan-out. Only implementer
 dispatches fan out. The mechanical checks, the verifier dispatch, the commit/push/PR sequence
 and the blocked path all stay **serialized**, one worktree at a time: they share the main
-checkout's toolchain (the issue-implementer skill's step 2d) and your own git/`gh` hands.
+checkout's toolchain (the issue-implementer skill's step 2d) and your own git/`gh` hands. All of
+a swarm's worktrees share the single lock `SKILL.md`'s step 0 acquired for the main checkout
+(`harness-lock.sh` resolves the same `<git-common-dir>` from any worktree) — one run is one
+holder, acquired once before the fan-out and released once after it, never per worktree.
 
 ## Supervisor loop
 

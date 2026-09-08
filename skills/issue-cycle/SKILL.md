@@ -48,6 +48,26 @@ summed per stage), wall-clock duration (`unknown` if no clock), final state, esc
 
 ### 0. Pre-flight
 
+**Single-flight lock — the literal first action of this step, before anything else below
+(including the implementer's own step 0 next).** Run:
+```bash
+harness-lock.sh acquire
+```
+Exit 0: its LAST output line is `run-id=<id>` — copy that id literally. It is this run's
+identity: report it as the summary's first line, `run-id: <id>` (step 5), and paste the SAME id
+literally into the closing `release` call — never re-derived. Exit 3: the command's own output
+IS the holder record (no separate `status` call needed) — abort the run immediately, before any
+mutating command runs (including the fast-forward inside `cleanup-after-merge.sh --fix` below),
+and report the holder record plus the exact remedy, `harness-lock.sh release --force`.
+**Ownership:** `issue-cycle` is the outermost run, so it alone acquires and releases — when it
+runs `issue-planner`'s or `issue-implementer`'s own step 0 as part of this pass (steps 1/2
+below), skip THEIR acquire/release (acquire is deliberately not same-pid-idempotent: a second
+acquire from this same live session would itself refuse and abort the run). **Release before
+every exit:** this lock is released at step 5's close AND on every STOP/abort path in this skill
+or a sub-skill it runs (red baseline, exhausted retry ladder, dirty-tree stop) — the recorded pid
+is the Claude Code session, which outlives the run, so a lock left unreleased here blocks this
+checkout's very next invocation until a human runs `release --force`.
+
 Run the issue-implementer skill's pre-flight (step 0) **up front**: gh auth, dirty-tree /
 crash-recovery rules (incl. the stale-worktree sweep, before the hygiene script),
 `cleanup-after-merge.sh --fix`, and the **baseline refresh** — before planning too, since a red
@@ -284,6 +304,9 @@ in "what this cycle did" — issue links, the measurement figure, and that each 
 
 ### 5. Close the loop
 
+The report's **first line** is `run-id: <id>` — the id `harness-lock.sh acquire` printed at step
+0 (never re-derived; a future run-journal keys off this same value).
+
 ```bash
 harness-status.sh
 ```
@@ -301,7 +324,9 @@ reconcile-ledger.sh - <<'LEDGER'
 LEDGER
 ```
 This heredoc form is covered by the single `Bash(reconcile-ledger.sh:*)` grant — a heredoc body
-is not split into separately-matched subcommands — verified live; see README "Safety model".
+is not split into separately-matched subcommands — verified live; see README "Safety model". The
+run id from step 0 is never pasted into this heredoc — it is not a ledger record and
+`reconcile-ledger.sh` dies on any line that doesn't start with an issue number.
 No output, exit 0 → every queued issue accounted for. Otherwise one line per discrepancy, exit 1
 (expected, not a tool failure); `reconcile-ledger.sh`'s own output defines each code. Per class:
 `stage-skipped` / `outcome-missing` / `unknown-outcome` → escalate. `contradiction` → report
@@ -322,15 +347,26 @@ issues (blocker, one line each) — copy-paste actionable. Nothing done and noth
 "all quiet" in one line and stop (still an empty ledger, not a skipped reconciliation — only
 applies when there was truly nothing to seed).
 
+**Release the lock — the literal last action of this step, after the report above,** pasting
+step 0's own run id literally:
+```bash
+harness-lock.sh release <run-id>
+```
+
 ## Unattended operation
 
 - **Recurring runs:** pair with `/loop` (e.g. "loop the issue-cycle every 30m") or a scheduled
   routine; each invocation stays ONE bounded pass — recurrence is the wrapper's job, never this
   skill's (never polls for new work or repeats a pass; the merge pass's declared deploy waits —
   guard (e) and the pre-first-merge recheck — are the two bounded exceptions).
-- **Single-flight:** never start a cycle while another runs in the same checkout (they'd share a
-  working tree exactly like two implementers would); if evidence of a live concurrent run
-  appears, stop and say so.
+- **Single-flight:** mechanically enforced by `harness-lock.sh`, an atomic `mkdir` under
+  `<git-common-dir>/trail-blazer/lock` acquired at step 0 and released at step 5 (see step 0
+  above for the full ownership/abort/release-before-every-exit rules) — never start a cycle while
+  another runs in the same checkout (they'd share a working tree exactly like two implementers
+  would). Four semantics: a live holder on this host, or any holder on a different host, refuses;
+  a same-host holder whose process is no longer alive is reclaimed automatically (one audit line
+  printed); a refused acquire aborts the run loudly with the holder record and the
+  `harness-lock.sh release --force` remedy, before any mutating command runs.
 - **Human-latency, not machine-latency, is the throughput limit.** The cycle keeps the queues
   drained; the report's "waits on the human" half is the backlog that matters — say so explicitly
   if the same items recur rather than repeating the list mechanically.
