@@ -39,10 +39,16 @@
 # .github/workflows/ so a local composite action is found regardless of where it lives, and a
 # workflow file literally named action.yml is never double-counted) — local (./…, ../…) and
 # docker:// refs excepted in both file classes — not pinned to a full 40-hex commit SHA,
-# comment-stripped by line, string comparison only, never executed, and (#233) the installed
+# comment-stripped by line, string comparison only, never executed, (#233) the installed
 # harness version report — bin/harness-version.sh's printed "<version> <sha>" line surfaced
 # verbatim as a PASS when resolvable, a WARN (never a FAIL) naming the expected fixed path when
-# it isn't.
+# it isn't, and (#234, review F4) the branch-protection document's up-to-date strictness — only
+# under a "Merge autonomy policy" section and a successful protection endpoint call,
+# required_status_checks.strict (WARN when not exactly true), the required-status-check-context
+# count via max(checks|length, contexts|length) (WARN when zero, including when
+# required_status_checks itself is absent), and required PR reviews (informational PASS either
+# way) — WARN-only, never FAIL, silent with no policy section, and unaffected by (never reading)
+# $has_merge_policy while unset on a repo with no CLAUDE.md at all.
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -337,20 +343,45 @@ EOF
   printf '.claude/BASELINE.md\n' >> "$dir/.gitignore"
 }
 
-# build_stub_gh DIR [BRANCH] [EXTRA_LABEL] — a deterministic, offline gh: auth always succeeds;
-# repo view returns the fixture's fake nameWithOwner and BRANCH (default "main") as
-# defaultBranchRef; label list returns the eight lifecycle labels (extracted from
+# build_stub_gh DIR [BRANCH] [EXTRA_LABEL] [PROTECTION_MODE] — a deterministic, offline gh: auth
+# always succeeds; repo view returns the fixture's fake nameWithOwner and BRANCH (default "main")
+# as defaultBranchRef; label list returns the eight lifecycle labels (extracted from
 # bin/setup-labels.sh via the same sed idiom dev/selfcheck.sh's 4.6 uses — no second hard-coded
 # copy) plus EXTRA_LABEL, if given (so a fixture repo can "have" a scoped-autonomy grant label);
 # issue view returns DIR/gh-issue-body.json verbatim (a case writes that file before calling
-# check-decision-record.sh against this stub); api (branch protection) succeeds; anything else
-# fails. FAIL-free by design — no real network call, no gh-driven FAIL, ever, which is what makes
-# the WARN-never-affects-exit pin (drift-missing-entries) meaningful.
+# check-decision-record.sh against this stub); api (branch protection) serves DIR/gh-protection.json
+# and exits 0, EXCEPT PROTECTION_MODE "fail", which exits 1 with no document (the pre-#234
+# behaviour); anything else fails. PROTECTION_MODE (default "healthy") selects which document
+# api serves — healthy (required_status_checks.strict true, one entry each in checks/contexts,
+# required_pull_request_reviews present — modelled on a live `gh api
+# .../branches/main/protection` response, LESSON 2026-09-01(c)), strict-false (strict false,
+# checks/contexts non-empty, required_pull_request_reviews absent), zero-contexts (strict true,
+# checks/contexts both empty), no-status-checks (required_status_checks key itself absent), or
+# fail (see above). Making "healthy" the default means every one of the ~60 pre-#234 fixtures
+# that reaches the branch-protection section now gets PASS lines there instead of the ad hoc
+# empty-body WARNs an unparsed document produced before this stub understood protection
+# documents at all — FAIL-free by design either way — no real network call, no gh-driven FAIL,
+# ever, which is what makes the WARN-never-affects-exit pin (drift-missing-entries) meaningful.
 build_stub_gh() {
-  local dir="$1" branch="${2:-main}" extra_label="${3:-}"
+  local dir="$1" branch="${2:-main}" extra_label="${3:-}" protection="${4:-healthy}"
   mkdir -p "$dir"
   sed -nE 's/^create_or_update "([^"]+)".*/\1/p' "$root/bin/setup-labels.sh" | sort -u > "$dir/gh-labels.txt"
   [ -n "$extra_label" ] && printf '%s\n' "$extra_label" >> "$dir/gh-labels.txt"
+  case "$protection" in
+    healthy)
+      printf '%s\n' '{"url":"https://api.github.com/repos/acme/demo/branches/main/protection","required_status_checks":{"url":"https://api.github.com/repos/acme/demo/branches/main/protection/required_status_checks","strict":true,"contexts":["selfcheck","selfcheck-macos"],"contexts_url":"https://api.github.com/repos/acme/demo/branches/main/protection/required_status_checks/contexts","checks":[{"context":"selfcheck","app_id":15368},{"context":"selfcheck-macos","app_id":15368}]},"required_pull_request_reviews":{"url":"https://api.github.com/repos/acme/demo/branches/main/protection/required_pull_request_reviews","dismiss_stale_reviews":false,"require_code_owner_reviews":false,"require_last_push_approval":false,"required_approving_review_count":0},"enforce_admins":{"url":"https://api.github.com/repos/acme/demo/branches/main/protection/enforce_admins","enabled":false}}' \
+        > "$dir/gh-protection.json" ;;
+    strict-false)
+      printf '%s\n' '{"url":"https://api.github.com/repos/acme/demo/branches/main/protection","required_status_checks":{"url":"https://api.github.com/repos/acme/demo/branches/main/protection/required_status_checks","strict":false,"contexts":["selfcheck","selfcheck-macos"],"contexts_url":"https://api.github.com/repos/acme/demo/branches/main/protection/required_status_checks/contexts","checks":[{"context":"selfcheck","app_id":15368},{"context":"selfcheck-macos","app_id":15368}]},"enforce_admins":{"url":"https://api.github.com/repos/acme/demo/branches/main/protection/enforce_admins","enabled":false}}' \
+        > "$dir/gh-protection.json" ;;
+    zero-contexts)
+      printf '%s\n' '{"url":"https://api.github.com/repos/acme/demo/branches/main/protection","required_status_checks":{"url":"https://api.github.com/repos/acme/demo/branches/main/protection/required_status_checks","strict":true,"contexts":[],"contexts_url":"https://api.github.com/repos/acme/demo/branches/main/protection/required_status_checks/contexts","checks":[]},"required_pull_request_reviews":{"url":"https://api.github.com/repos/acme/demo/branches/main/protection/required_pull_request_reviews","dismiss_stale_reviews":false,"require_code_owner_reviews":false,"require_last_push_approval":false,"required_approving_review_count":0},"enforce_admins":{"url":"https://api.github.com/repos/acme/demo/branches/main/protection/enforce_admins","enabled":false}}' \
+        > "$dir/gh-protection.json" ;;
+    no-status-checks)
+      printf '%s\n' '{"url":"https://api.github.com/repos/acme/demo/branches/main/protection","enforce_admins":{"url":"https://api.github.com/repos/acme/demo/branches/main/protection/enforce_admins","enabled":false}}' \
+        > "$dir/gh-protection.json" ;;
+    fail) : ;;
+  esac
   { printf '#!%s\n' "$bash_bin"; cat <<'EOF'
 case "$1" in
   auth) exit 0 ;;
@@ -358,7 +389,11 @@ EOF
   printf '  repo) case "$*" in *nameWithOwner*) echo acme/demo ;; *) echo %s ;; esac; exit 0 ;;\n' "$branch"
   printf '  label) cat "%s/gh-labels.txt"; exit 0 ;;\n' "$dir"
   printf '  issue) cat "%s/gh-issue-body.json"; exit 0 ;;\n' "$dir"
-  printf '  api) exit 0 ;;\n  *) exit 1 ;;\nesac\n'
+  if [ "$protection" = "fail" ]; then
+    printf '  api) exit 1 ;;\n  *) exit 1 ;;\nesac\n'
+  else
+    printf '  api) cat "%s/gh-protection.json"; exit 0 ;;\n  *) exit 1 ;;\nesac\n' "$dir"
+  fi
   } > "$dir/gh"
   chmod +x "$dir/gh"
 }
@@ -407,7 +442,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 61 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
+# The 68 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
 # unasserted below. Every fixture except the three baseline-* ones also emits a no-baseline WARN
 # (also unasserted); the baseline-* fixtures write their own .claude/BASELINE.md instead, via
 # seed_commit/point_origin_ref/write_baseline, so they exercise the baseline compare itself.
@@ -1518,6 +1553,149 @@ case_version_unresolvable() {
   expect "could not determine the installed harness version"
 }
 
+# --- branch protection reporting (#234, review F4) -------------------------------------------
+# The two WARN stems below are hand-typed literals that must match bin/check-harness.sh's
+# PROTECTION_STRICT_WARN_STEM / PROTECTION_CHECKS_WARN_STEM verbatim — dev/selfcheck.sh
+# assertion 4.38 pins that agreement mechanically. Each case's comment states the single-clause
+# mutant actually run against bin/check-harness.sh and its measured result.
+
+# protection-strict-true — merge policy + the stub's default "healthy" protection document
+# (required_status_checks.strict true, non-empty checks/contexts, required_pull_request_reviews
+# present): the strict PASS line prints, neither WARN stem prints, and the reviews line reads
+# "configured". Measured mutant: inverting the strict compare (`= "true"` -> `= "false"` on the
+# `if [ "$strict" = "true" ]` line) -- measured: `bash dev/doctor-tests.sh` reports "64 pass, 4
+# fail", the four failures being protection-strict-true, protection-strict-false,
+# protection-zero-contexts, and protection-no-status-checks (every fixture whose document
+# reaches the strict compare flips).
+case_protection_strict_true() {
+  local dir; dir="$(mk_repo protection-strict-true merge verbatim)"
+  local ghdir="$tmpbase/protection-strict-true-gh"
+  build_stub_gh "$ghdir" main "" healthy
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect "branch protection: up-to-date branches are required before merge"
+  expect_absent "branch protection: up-to-date branches are not required"
+  expect_absent "branch protection: zero required status check contexts"
+  expect "branch protection: required PR reviews are configured"
+}
+
+# protection-strict-false — strict false, non-empty checks/contexts, required_pull_request_reviews
+# absent: the strict WARN stem prints, the contexts WARN stem is absent (contexts are non-zero),
+# and the reviews line reads "not configured". Measured mutant: the reviews jq filter's `if
+# .required_pull_request_reviews then "configured" else "not configured" end` replaced by the
+# constant "configured" -- measured: `bash dev/doctor-tests.sh` reports "67 pass, 1 fail", only
+# protection-strict-false (the only new case whose fixture has required_pull_request_reviews
+# absent and asserts the "not configured" line).
+case_protection_strict_false() {
+  local dir; dir="$(mk_repo protection-strict-false merge verbatim)"
+  local ghdir="$tmpbase/protection-strict-false-gh"
+  build_stub_gh "$ghdir" main "" strict-false
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect "branch protection: up-to-date branches are not required"
+  expect_absent "branch protection: zero required status check contexts"
+  expect "branch protection: required PR reviews are not configured"
+}
+
+# protection-zero-contexts — strict true, both checks and contexts empty: the contexts WARN stem
+# prints, the strict WARN stem is absent. Measured mutant: the context-count comparison's `-gt 0`
+# widened to `-ge 0` (`if [ "$ctx_count" -ge 0 ]`, true for the zero count this fixture and
+# protection-no-status-checks both produce) -- measured: `bash dev/doctor-tests.sh` reports "66
+# pass, 2 fail" — protection-zero-contexts (its own contexts WARN goes missing) and
+# protection-no-status-checks (its contexts WARN also goes missing, so its "both WARN stems"
+# assertion fails too; its strict WARN, from a different clause, is unaffected).
+case_protection_zero_contexts() {
+  local dir; dir="$(mk_repo protection-zero-contexts merge verbatim)"
+  local ghdir="$tmpbase/protection-zero-contexts-gh"
+  build_stub_gh "$ghdir" main "" zero-contexts
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect "branch protection: zero required status check contexts"
+  expect_absent "branch protection: up-to-date branches are not required"
+}
+
+# protection-no-status-checks — the protection document's required_status_checks key is entirely
+# absent (not merely empty): both WARN stems print (fail-closed — an absent key is not treated as
+# "nothing required, so nothing to warn about"). Measured mutant: a guard added before the whole
+# strict/contexts/reviews block requiring `.required_status_checks != null`
+# (`if $has_merge_policy && $jq_ready && printf '%s' "$prot" | jq -e '.required_status_checks !=
+# null' >/dev/null 2>&1; then`), which skips the block entirely for this fixture's document only
+# -- measured: `bash dev/doctor-tests.sh` reports "67 pass, 1 fail", only
+# protection-no-status-checks (every other fixture's document has a non-null
+# required_status_checks key, so the added guard never trips for them).
+case_protection_no_status_checks() {
+  local dir; dir="$(mk_repo protection-no-status-checks merge verbatim)"
+  local ghdir="$tmpbase/protection-no-status-checks-gh"
+  build_stub_gh "$ghdir" main "" no-status-checks
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect "branch protection: up-to-date branches are not required"
+  expect "branch protection: zero required status check contexts"
+}
+
+# protection-no-policy — no "Merge autonomy policy" section at all (base variant), fed the
+# strict-false protection document: today's single "branch protection enabled on main" PASS line
+# prints and neither new stem prints — the widened report is silent without the policy gate,
+# byte-for-byte the pre-#234 behaviour. Measured mutant: dropping the `$has_merge_policy` gate
+# (`if $has_merge_policy && $jq_ready; then` -> `if $jq_ready; then`) -- measured: `bash
+# dev/doctor-tests.sh` reports "67 pass, 1 fail", only protection-no-policy (the strict-false
+# document now produces its WARN even with no policy section declared).
+case_protection_no_policy() {
+  local dir; dir="$(mk_repo protection-no-policy base verbatim)"
+  local ghdir="$tmpbase/protection-no-policy-gh"
+  build_stub_gh "$ghdir" main "" strict-false
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect_absent "branch protection: up-to-date branches are not required"
+  expect_absent "branch protection: zero required status check contexts"
+  expect "branch protection enabled on main"
+}
+
+# protection-endpoint-fails — the protection endpoint call itself fails (stub `api) exit 1`, no
+# document at all): today's "no branch protection detected on main" WARN prints and neither new
+# stem prints (the widened report never runs — there is no document to read). Measured mutant:
+# appending `|| true` to the api-capturing condition (`if [ -n "$repo_slug" ] && prot="$(gh api
+# ... 2>/dev/null)"; then` -> `... 2>/dev/null)" || true; then`), which makes the branch always
+# taken regardless of gh's exit status -- measured: `bash dev/doctor-tests.sh` reports "67 pass,
+# 1 fail", only protection-endpoint-fails (the doctor now claims "branch protection enabled on
+# main" instead of the no-protection WARN; every other new fixture's `gh api` call already
+# succeeds, so `|| true` changes nothing for them).
+case_protection_endpoint_fails() {
+  local dir; dir="$(mk_repo protection-endpoint-fails merge verbatim)"
+  local ghdir="$tmpbase/protection-endpoint-fails-gh"
+  build_stub_gh "$ghdir" main "" fail
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect "no branch protection detected on main"
+  expect_absent "branch protection: up-to-date branches are not required"
+  expect_absent "branch protection: zero required status check contexts"
+}
+
+# protection-no-claude-md — no CLAUDE.md at all (removed after mk_repo, the only case that does
+# so): the pre-existing "no CLAUDE.md" FAIL still fires (rc 1) and the `== summary:` footer still
+# prints — the discriminator that proves the branch-protection section never reads
+# $has_merge_policy while unset under `set -u` (a hard abort cannot produce that footer). Neither
+# new WARN stem prints (has_merge_policy is false with no CLAUDE.md to declare the policy
+# section). Measured mutant: deleting the hoisted top-level `has_merge_policy=false` line (the
+# assignment inside the CLAUDE.md-exists branch stays, so every other fixture — which always has
+# a CLAUDE.md — is unaffected) -- measured: `bash dev/doctor-tests.sh` reports "67 pass, 1 fail",
+# only protection-no-claude-md, with reason "missing: == summary:" (the doctor now dies with an
+# unbound-variable error under `set -u` before reaching the branch-protection section's summary
+# footer at all; `expect_rc 1` still happens to pass, since bash's own unbound-variable abort
+# also exits 1 — the footer-presence assertion is what actually catches the crash).
+case_protection_no_claude_md() {
+  local dir; dir="$(mk_repo protection-no-claude-md merge verbatim)"
+  rm -f "$dir/CLAUDE.md"
+  local ghdir="$tmpbase/protection-no-claude-md-gh"
+  build_stub_gh "$ghdir" main "" healthy
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 1
+  expect "no CLAUDE.md"
+  expect "== summary:"
+  expect_absent "branch protection: up-to-date branches are not required"
+  expect_absent "branch protection: zero required status check contexts"
+}
+
 # ---------------------------------------------------------------------------------------------
 stub_gh_dir="$tmpbase/stub-gh"
 build_stub_gh "$stub_gh_dir"
@@ -1603,6 +1781,13 @@ cases=(
   "stale-c-allows|case_stale_c_allows|legacy Bash(git -C * ...) allow entries still present -> WARN naming them and the guard hook that supersedes them"
   "version-report|case_version_report|harness version: bin/harness-version.sh's printed line reported verbatim as a PASS"
   "version-unresolvable|case_version_unresolvable|harness version: no .claude-plugin/plugin.json -> WARN, never FAIL"
+  "protection-strict-true|case_protection_strict_true|branch protection (#234): healthy document -> strict PASS, both WARN stems absent, reviews configured"
+  "protection-strict-false|case_protection_strict_false|branch protection (#234): strict false -> strict WARN, contexts WARN absent, reviews not configured"
+  "protection-zero-contexts|case_protection_zero_contexts|branch protection (#234): zero required contexts -> contexts WARN, strict WARN absent"
+  "protection-no-status-checks|case_protection_no_status_checks|branch protection (#234): required_status_checks key absent -> both WARN stems"
+  "protection-no-policy|case_protection_no_policy|branch protection (#234): no Merge autonomy policy section -> neither WARN stem, today's PASS line unchanged"
+  "protection-endpoint-fails|case_protection_endpoint_fails|branch protection (#234): protection endpoint call fails -> today's WARN only"
+  "protection-no-claude-md|case_protection_no_claude_md|branch protection (#234): no CLAUDE.md at all -> set -u hoist proven by the summary footer still printing"
 )
 
 matched=0

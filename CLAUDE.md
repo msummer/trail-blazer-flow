@@ -60,10 +60,18 @@ fence-delimiter-skipping span hunt, the verification baseline's short-SHA-as-pre
 `.claude/settings.json`, and (#175, gated on a "Merge autonomy policy" section, widened by #179
 and #186) a WARN naming any `uses:` ref in a consumer's `.github/workflows/*.yml`/`*.yaml` and in
 any `action.yml`/`action.yaml` anywhere in the repo — local (`./…`, `../…`) and `docker://` refs
-excepted in both — not pinned to a full 40-hex commit SHA, and (#233) the installed harness
+excepted in both — not pinned to a full 40-hex commit SHA, (#233) the installed harness
 version report — `bin/harness-version.sh`'s printed `<version> <sha>` line surfaced verbatim as a
-PASS when resolvable, a WARN (never a FAIL) naming the expected fixed path when it isn't) that
-would otherwise only be hand-verified. It runs in CI as the third step, but it is not part of
+PASS when resolvable, a WARN (never a FAIL) naming the expected fixed path when it isn't, and
+(#234, review F4) the branch-protection document's up-to-date strictness — only when a "Merge
+autonomy policy" section is declared and the protection endpoint call succeeds,
+`required_status_checks.strict` (WARN when not exactly `true`), the required-status-check-context
+count via `max(checks|length, contexts|length)` (WARN when zero, including when
+`required_status_checks` itself is absent from the document), and required PR reviews
+(informational PASS either way) — all three WARN-only, never FAIL, silent with no policy section,
+and the doctor completing (its `== summary:` footer printing) on a repo with no CLAUDE.md at all,
+proving the branch-protection section never reads its policy-activation flag while unset under
+`set -u`) that would otherwise only be hand-verified. It runs in CI as the third step, but it is not part of
 `dev/selfcheck.sh` itself — run it by hand whenever `bin/check-harness.sh` or
 `bin/check-decision-record.sh` changes.
 

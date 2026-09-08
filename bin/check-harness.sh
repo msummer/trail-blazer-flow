@@ -32,7 +32,10 @@
 # `.claude/settings.json` still carries legacy `Bash(git -C * <sub> *)` allow entries the guard
 # hook now supersedes (#150 — Claude Code 2.1.246+ warns about these at startup), the installed
 # harness plugin's own version and short commit SHA (#233, via bin/harness-version.sh, run by a
-# fixed path — never derived from repo content), and branch protection.
+# fixed path — never derived from repo content), and branch protection — presence, plus, only
+# when a "Merge autonomy policy" section is declared and the protection endpoint call succeeds,
+# whether required_status_checks.strict is true, the number of required status check contexts,
+# and whether required PR reviews are configured (#234 — all three WARN-only, never FAIL).
 #
 # The test-suite-ratchet check never executes, evals, or shells out to anything read from
 # CLAUDE.md: it only looks up the measurement command's first word with `command -v` (a lookup,
@@ -596,6 +599,11 @@ fi
 # itself is any good (that quality judgment stays with the harness-setup skill), and never
 # auto-fixes anything: every WARN below names the human's edit. Enterprise/managed settings are
 # not read by this script at all.
+# Hoisted above the CLAUDE.md-exists check below (rather than left to the assignment inside it)
+# so the "# --- branch protection ---" section further down can read it under `set -u` even on a
+# repo with no CLAUDE.md at all (#234) — the policy-gated branch-protection report is otherwise
+# reachable with $has_merge_policy never assigned.
+has_merge_policy=false
 if [ ! -f "$root/CLAUDE.md" ]; then
   wrn "policy activation checks skipped (no CLAUDE.md)"
 else
@@ -951,10 +959,44 @@ else
 fi
 
 # --- branch protection ----------------------------------------------------------
+# The two WARN stems below (#234) are matched verbatim against dev/doctor-tests.sh by
+# dev/selfcheck.sh assertion 4.38 — keep them anchored, top-level `NAME="..."` literals so the
+# assertion's sed extraction keeps working, and never let either contain the substring "no
+# checks configured" (a different, unrelated WARN a few hundred lines above) or "branch
+# protection enabled on" (the PASS line just below).
+PROTECTION_STRICT_WARN_STEM="branch protection: up-to-date branches are not required"
+PROTECTION_CHECKS_WARN_STEM="branch protection: zero required status check contexts"
 if $gh_ready && [ -n "$default_branch" ]; then
   repo_slug="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null | tr -d '\r' || true)"
-  if [ -n "$repo_slug" ] && gh api "repos/$repo_slug/branches/$default_branch/protection" >/dev/null 2>&1; then
+  if [ -n "$repo_slug" ] && prot="$(gh api "repos/$repo_slug/branches/$default_branch/protection" 2>/dev/null)"; then
     ok "branch protection enabled on $default_branch"
+    # Only when the consumer opted into merge autonomy AND jq is available: read the protection
+    # document itself (through jq only — never a raw-text grep/sed/awk of $prot) and report on
+    # exactly the fields the merge floor's up-to-date rail and CI-greenness check care about.
+    # WARN-only, never FAIL — an unparseable document collapses both signals closed (both WARNs
+    # fire) rather than silently passing.
+    if $has_merge_policy && $jq_ready; then
+      strict="$(printf '%s' "$prot" | jq -r 'if .required_status_checks.strict == true then "true" else "false" end' 2>/dev/null || true)"
+      if [ "$strict" = "true" ]; then
+        ok "branch protection: up-to-date branches are required before merge (required_status_checks.strict)"
+      else
+        wrn "$PROTECTION_STRICT_WARN_STEM — a PR can merge whose CI ran against a base the default branch has since moved past; the merge floor's own up-to-date rail mitigates this on the harness side, but GitHub itself won't enforce it"
+      fi
+      ctx_count="$(printf '%s' "$prot" | jq -r '[((.required_status_checks.checks // []) | length), ((.required_status_checks.contexts // []) | length)] | max' 2>/dev/null || true)"
+      case "$ctx_count" in
+        ''|*[!0-9]*) ctx_count=0 ;;
+      esac
+      if [ "$ctx_count" -gt 0 ]; then
+        ok "branch protection: $ctx_count required status check context(s) configured"
+      else
+        wrn "$PROTECTION_CHECKS_WARN_STEM — a green mergeStateStatus proves nothing about CI when nothing is required to pass before merge"
+      fi
+      reviews="$(printf '%s' "$prot" | jq -r 'if .required_pull_request_reviews then "configured" else "not configured" end' 2>/dev/null || true)"
+      case "$reviews" in
+        configured) ok "branch protection: required PR reviews are configured" ;;
+        *) ok "branch protection: required PR reviews are not configured" ;;
+      esac
+    fi
   else
     wrn "no branch protection detected on $default_branch (or no admin scope to check) — recommended: require a PR before merge; it's the real backstop behind the deny-list"
   fi
