@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 61 assertions total. The gate prints what it checks — run it.
+# Five groups, 62 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -613,7 +613,7 @@ fi
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 690
-issue-cycle 395
+issue-cycle 420
 issue-planner 505
 project-kickoff 215
 test-ratchet 200
@@ -1160,6 +1160,35 @@ else
     ok "4.37 bin/harness-version.sh's HARNESS_VERSION_STEM ('$hv_stem') and HARNESS_STATUS_FIELD ('$hv_field') both agree with the writer/reader surfaces"
   else
     bad "4.37 harness-version literal(s) missing from:$missing"
+  fi
+fi
+
+# 4.38 (#234, review F4) — fixed-string presence of the two literals bin/check-harness.sh
+# defines, PROTECTION_STRICT_WARN_STEM and PROTECTION_CHECKS_WARN_STEM (the doctor's two
+# branch-protection WARN stems), extracted from the script itself with the same anchored
+# sed -nE idiom as 2.5/4.13/4.35/4.36/4.37 — either extraction coming back empty FAILs loudly
+# ("structure changed") rather than passing vacuously. Each stem must appear verbatim in
+# dev/doctor-tests.sh, which hand-types both to assert on the doctor's WARN lines. This proves
+# only that the two literals are spelled identically between the script and its negative-test
+# harness, not that either WARN's behavior is correct at runtime — the same honest limit
+# 4.33/4.34/4.37's comments state. No assertion pins the merge floor's `PR is behind …` reason
+# prose against the README — that stem is English prose duplicated across an instruction file
+# and a doc, and CLAUDE.md's machine-parsed-artifacts rule resolves duplicated spec text by
+# deleting a copy, never by pinning both; this assertion instead pins the CLAUDE.md-compliant
+# script-to-script pair.
+ch="$root/bin/check-harness.sh"
+ch_strict_stem="$(sed -nE 's/^PROTECTION_STRICT_WARN_STEM="([^"]*)"$/\1/p' "$ch")"
+ch_checks_stem="$(sed -nE 's/^PROTECTION_CHECKS_WARN_STEM="([^"]*)"$/\1/p' "$ch")"
+if [ -z "$ch_strict_stem" ] || [ -z "$ch_checks_stem" ]; then
+  bad "4.38 bin/check-harness.sh's PROTECTION_STRICT_WARN_STEM= or PROTECTION_CHECKS_WARN_STEM= line didn't match (structure changed) — extraction failed"
+else
+  missing=""
+  grep -qF -- "$ch_strict_stem" "$root/dev/doctor-tests.sh" || missing="$missing dev/doctor-tests.sh(strict);"
+  grep -qF -- "$ch_checks_stem" "$root/dev/doctor-tests.sh" || missing="$missing dev/doctor-tests.sh(checks);"
+  if [ -z "$missing" ]; then
+    ok "4.38 bin/check-harness.sh's PROTECTION_STRICT_WARN_STEM ('$ch_strict_stem') and PROTECTION_CHECKS_WARN_STEM ('$ch_checks_stem') both agree with dev/doctor-tests.sh"
+  else
+    bad "4.38 branch-protection WARN stem literal(s) missing from:$missing"
   fi
 fi
 

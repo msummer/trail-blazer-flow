@@ -591,7 +591,12 @@ subagents need:
    body carrying one of a fresh `find-implementation-work.sh` run's `approval.approved_at_history[]`
    `binding_line` values verbatim, newest first, so a body written under an earlier approval of the
    same plan still qualifies (#174, extended #213) — CI
-   green on the head commit, never the governance surface — CLAUDE.md, `.claude/`,
+   green on the head commit, its head mechanically checked to contain the default branch's
+   current tip (`git merge-base --is-ancestor`) immediately before each PR's own merge attempt,
+   otherwise held with "PR is behind `<default>` at `<short-sha>` — update the branch and let CI
+   re-run" (#234, review F4 — because merges are sequential, every PR queued behind the first one
+   in a pass holds this way by construction, expected rather than an error, until the pre-named
+   auto-update follow-up ships) — never the governance surface — CLAUDE.md, `.claude/`,
    policy/ADR docs, CI config — nothing flagged for human decision, including, read from that
    same fresh `find-implementation-work.sh --issue <n>` run, any trusted post-plan comment the
    approval does not cover (`covered_by_approval` not `true`), so a maintainer's late objection
@@ -603,7 +608,11 @@ subagents need:
    same as red: no PR qualifies for the merge pass unless your "Merge autonomy policy" section
    explicitly opts a no-CI repo in. Absent that opt-in, the PR simply waits, with the reason
    recorded in the cycle report. Recommended pairing: branch protection with required status
-   checks, so the policy has a technical rail under it, not just prompt adherence.
+   checks, so the policy has a technical rail under it, not just prompt adherence — once a
+   "Merge autonomy policy" section is present, `check-harness.sh` reads the protection document
+   itself and WARNs (never FAILs) when `required_status_checks.strict` isn't exactly `true`, when
+   zero status check contexts are required, and reports informationally whether required PR
+   reviews are configured (#234).
    `check-harness.sh` judges activation from *effective* merge-permission state — across
    `.claude/settings.json`, `.claude/settings.local.json`, and your user-level settings file —
    and reports off, active (with a note when no `.github/workflows` file is found, naming the
@@ -1222,6 +1231,24 @@ holder's record and the `harness-lock.sh release --force` remedy. See "Safety mo
 the mechanism (the atomic `mkdir`, the reclaim rule, the recorded-pid rationale, and the honest
 limits) and CLAUDE.md's "Verification" section for `dev/lock-tests.sh`, the new seventh CI
 command.
+**The merge pass's hard floor gains a mechanical up-to-date rail (#234, review F4):** before
+attempting each PR's merge, the cycle now confirms the default branch's current tip is contained
+in that PR's head commit (`git merge-base --is-ancestor`, re-checked per PR, immediately before
+that PR's own merge attempt — the tip moves after every merge in the pass); a PR whose head does
+not contain it is held with "PR is behind `<default>` at `<short-sha>` — update the branch and
+let CI re-run" rather than merged on CI that ran against a base the default branch has since
+moved past. **Behavior narrows, never widens:** this only ever holds a PR autonomous merge would
+previously have taken. Because the pass merges one at a time with re-verification between, every
+PR queued behind the first merge of a pass is behind by construction and holds this way too —
+expected, not an error; auto-updating the held branch and waiting for its CI is a **named,
+tracked follow-up**, not shipped here, so a queue with several ready PRs still drains at one merge
+per cycle until it lands. The doctor also gains WARN-only reporting: only when a "Merge autonomy
+policy" section is declared and the protection endpoint call succeeds, `check-harness.sh` now
+reads the protection document itself and reports `required_status_checks.strict` (WARN when not
+exactly `true`), the number of required status check contexts (WARN when zero), and whether
+required PR reviews are configured (informational) — none of the three can FAIL, and with no
+policy section the doctor's protection output is unchanged. No new grant, label, script, or
+baseline step.
 
 ## The per-repo settings file (required)
 
@@ -1590,8 +1617,9 @@ human, per issue, and the harness never applies it, so an uncitable answer still
 use is audited (issue comment; cycle report). With only auto-approval enabled, a bad
 auto-approval costs a wasted PR, not a bad merge. With merge
 autonomy also enabled, the backstop is the merge pass's hard floor (standard-flow PRs only,
-green CI, protected governance surface, sequential re-verification) — and on a repo with
-branch protection + required checks, that floor is a technical rail, not just policy. Enable
+green CI on a head that mechanically contains the default branch's current tip (#234), protected
+governance surface, sequential re-verification) — and on a repo with branch protection + required
+checks, that floor is a technical rail, not just policy. Enable
 merge autonomy only where a bad merge is cheap to revert (e.g. a default branch that doesn't
 auto-deploy) — or, on a repo whose default branch does auto-deploy, declare a "Post-merge
 verification" sub-block (see "The CLAUDE.md contract" item 5) so "merged" stops standing in for

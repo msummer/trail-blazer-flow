@@ -247,6 +247,13 @@ p_4_36_extraction()      { edit "$1/bin/harness-lock.sh" 's/LOCK_SUBCOMMANDS/LOC
 p_4_37_stem()       { edit "$1/skills/issue-planner/SKILL.md" 's/<!-- harness-version:/<!-- harnessversion:/'; }
 p_4_37_field()      { edit "$1/skills/issue-cycle/SKILL.md" 's/harness=<version>/harness_<version>/g'; }
 p_4_37_extraction() { edit "$1/bin/harness-version.sh" 's/HARNESS_VERSION_STEM/HARNESS_VERSION_STEMX/g'; }
+# p_4_38_stem rewrites characters INSIDE the strict WARN stem (protection -> protecton), scoped
+# to the exact stem phrase so unrelated "branch protection" mentions elsewhere in
+# dev/doctor-tests.sh stay untouched, and to dev/doctor-tests.sh only, never
+# bin/check-harness.sh's own definition (LESSON 2026-09-04b: characters changed inside the
+# token, not a suffix appended).
+p_4_38_stem()       { edit "$1/dev/doctor-tests.sh" 's/branch protection: up-to-date branches are not required/branch protecton: up-to-date branches are not required/g'; }
+p_4_38_extraction() { edit "$1/bin/check-harness.sh" 's/PROTECTION_STRICT_WARN_STEM/PROTECTION_STRICT_WARN_STEMX/g'; }
 # p_5_13_harness_pass / p_5_13_deploy_harness_pass: disable exactly ONE of the four-pass sed
 # ladder's two NEW passes (bin/reconcile-ledger.sh), each located by a literal substring unique
 # to that one pass's regex (never the other three) via awk's index(), so the other pass and the
@@ -389,6 +396,8 @@ cases=(
   "4.37-stem|4.37|p_4_37_stem|rewrite '<!-- harness-version:' to '<!-- harnessversion:' in skills/issue-planner/SKILL.md only -- measured: '4.37 harness-version literal(s) missing from: skills/issue-planner/SKILL.md(stem);'"
   "4.37-field|4.37|p_4_37_field|rewrite 'harness=<version>' to 'harness_<version>' throughout skills/issue-cycle/SKILL.md only (scoped there, so 3.4's agent-template grammar check is unaffected) -- measured: '4.37 harness-version literal(s) missing from: skills/issue-cycle/SKILL.md(field);'"
   "4.37-extraction|4.37|p_4_37_extraction|rename bin/harness-version.sh's HARNESS_VERSION_STEM identifier throughout so the gate's anchored extraction comes back empty -- measured: '4.37 bin/harness-version.sh's HARNESS_VERSION_STEM= or HARNESS_STATUS_FIELD= line didn't match (structure changed) — extraction failed'"
+  "4.38-stem|4.38|p_4_38_stem|rewrite 'protection' to 'protecton' inside every occurrence of the strict WARN stem in dev/doctor-tests.sh only (characters changed inside the token, not a suffix) -- measured: '4.38 branch-protection WARN stem literal(s) missing from: dev/doctor-tests.sh(strict);'"
+  "4.38-extraction|4.38|p_4_38_extraction|rename bin/check-harness.sh's PROTECTION_STRICT_WARN_STEM identifier throughout so the gate's anchored extraction comes back empty -- measured: '4.38 bin/check-harness.sh's PROTECTION_STRICT_WARN_STEM= or PROTECTION_CHECKS_WARN_STEM= line didn't match (structure changed) — extraction failed'"
   "5.13-harness-pass|5.13|p_5_13_harness_pass|disable only the harness-only sed pass in bin/reconcile-ledger.sh (retries=([^ ]+) (harness= anchor) so a harness-only status line falls through to the malformed-line die -- measured: 'harness-only planner line: expected silence/rc=0, got rc=2 output=...malformed harness-status line...'"
   "5.13-deploy-harness-pass|5.13|p_5_13_deploy_harness_pass|disable only the deploy+harness sed pass in bin/reconcile-ledger.sh ((deploy=[^ ]+) (harness= anchor) so a deploy+harness status line falls through to the malformed-line die -- measured: 'deploy+harness merge line: expected silence/rc=0, got rc=2 output=...malformed harness-status line...'"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"

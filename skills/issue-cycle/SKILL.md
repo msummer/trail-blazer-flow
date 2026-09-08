@@ -170,6 +170,31 @@ on top and is not configurable**:
     strings this issue's own history actually produced.
 - **CI green on the head commit**, verified fresh (`gh pr checks`), not remembered; **"no checks
   configured" is not green** unless the policy section explicitly opts a no-CI repo in.
+- **Head contains the default branch's tip**, checked mechanically, per PR, immediately before
+  guard (a) for that PR (re-evaluated after every merge — the tip moves). Applies to every PR
+  this pass evaluates, harness and Dependabot PRs alike — no "harness PRs only" carve-out. Three
+  separate Bash calls, no substitution: `git fetch origin`; then `git rev-parse
+  origin/<default-branch>` — copy the printed 40-char SHA literally; then `gh pr view <pr>
+  --json headRefOid,mergeStateStatus --jq '.headRefOid, .mergeStateStatus' | tr -d '\r'` — prints
+  the head OID, then the merge state; then `git merge-base --is-ancestor <paste the base tip
+  here> <paste the head OID here>`.
+  - *Verdict:* exit 0 ⇒ the head contains the tip, continue. **Any non-zero exit ⇒ not
+    eligible**, one-line reason `PR is behind <default> at <short-sha> — update the branch and
+    let CI re-run` (`<short-sha>` = the first 12 characters of the base tip SHA). If git errored
+    rather than answered (e.g. the head object isn't present locally), quote its message as
+    evidence alongside the same reason. Record the base tip SHA and the PR's head OID this rail
+    compared as evidence in the cycle report for this PR's row, merged or held alike (see *Every
+    autonomous merge is audited* below for the merged case).
+  - *Advisory `mergeStateStatus` clause:* `DIRTY` or `BLOCKED` ⇒ **not eligible**, one-line
+    reason naming the value; every other value — including `UNKNOWN` (which even a merged PR
+    reports), `CLEAN`, `UNSTABLE`, `BEHIND`, `HAS_HOOKS` — is not a signal this clause acts on.
+    This clause is advisory, since its semantics depend on protection settings; the ancestor
+    check above is the required rail.
+  - Because merges are sequential with re-verification between, after the first merge of a pass
+    every other queued PR is behind by construction and holds with this reason — expected, not
+    an error.
+  - This rail subsumes conflict detection: a head that already contains the base tip cannot
+    conflict with it.
 - **Never the governance surface**: any PR touching `CLAUDE.md`, `.claude/`, the repo's
   policy/ADR documents, or CI configuration waits for the human regardless of what the policy
   says — the autonomy boundary only moves with a human in the loop.
@@ -192,14 +217,16 @@ on top and is not configurable**:
     actually change the PR is expressed by **closing the PR first, then re-approving**, so the
     comment binds the next dispatch instead of being silently released underneath it — re-approval
     alone never re-implements anything.
-- **One at a time, re-verified between**: merge, then run `cleanup-after-merge.sh --fix` and
-  the baseline refresh before the next merge — if merged `main` goes red, STOP the pass and
-  report (two green PRs can still compose badly; sequential re-verification attributes the
-  breakage). Match the repo's existing merge method (merge/squash/rebase) from recent history.
+- **One at a time, re-verified between**: the up-to-date rail above is the pre-merge half — every
+  PR merges against a base its own CI actually ran on; merge, then run `cleanup-after-merge.sh
+  --fix` and the baseline refresh before the next merge — if merged `main` goes red, STOP the
+  pass and report (two green, up-to-date PRs can still compose badly; sequential re-verification
+  is the post-merge backstop that attributes the breakage). Match the repo's existing merge
+  method (merge/squash/rebase) from recent history.
 - **Every autonomous merge is audited**: it appears in the cycle report with its evidence —
-  PR link, verifier verdict, the archived verdict comment's URL, CI run, and the matched
-  plan-approved event (`approved_at` + `approved_by` from *Plan-binding provenance* above) —
-  never merged silently.
+  PR link, verifier verdict, the archived verdict comment's URL, CI run, the matched
+  plan-approved event (`approved_at` + `approved_by` from *Plan-binding provenance* above), and
+  the up-to-date rail's base tip SHA and PR head OID — never merged silently.
 
 **Pre-first-merge deploy recheck.** Active only when guard (e)'s "Post-merge verification"
 sub-block is declared — no sub-block, this step does not exist, silently, exactly like guard (e)
