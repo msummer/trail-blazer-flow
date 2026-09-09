@@ -56,19 +56,20 @@ or share).
 │   ├── harness-version.sh         # prints the installed plugin's "<version> <sha>", one line
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
-│   ├── hooks.json                 # registers the two PreToolUse hooks below
+│   ├── hooks.json                 # registers the three PreToolUse hooks below
 │   ├── git-c-guard.sh             # approves only the exact git -C <worktree> <subcommand> forms worktree-parallel mode issues
-│   └── agent-boundary.sh          # mechanically denies git/gh Bash commands for the implementer/verifier subagents (#235)
+│   ├── agent-boundary.sh          # mechanically denies git/gh Bash commands for the implementer/verifier subagents (#235)
+│   └── push-guard.sh              # mechanically denies any git push whose destination is the default branch, every session (#260)
 ├── dev/
 │   ├── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
 │   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
 │   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh (not run by the gate)
-│   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh AND hooks/agent-boundary.sh (not run by the gate)
+│   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh, hooks/agent-boundary.sh, AND hooks/push-guard.sh (not run by the gate)
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 │   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
 │   └── lock-tests.sh             # fixture-based negative-test harness for bin/harness-lock.sh (not run by the gate)
 ├── .github/
-│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the two hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
+│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the three hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
 │   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
@@ -857,6 +858,13 @@ git push origin main
 git push origin vX.Y.Z
 ```
 
+Since v2.7.1, `hooks/push-guard.sh` (#260) denies that `git push origin main` step from inside a
+Claude Code session with the plugin enabled (it resolves `main` as this repo's own default
+branch and denies unconditionally) — run the release ritual from a plain terminal outside Claude
+Code, or ship the release via a `release/vX.Y.Z` PR instead (the shape v2.7.0 itself shipped
+through). The `git push origin vX.Y.Z` tag push is unaffected — it targets a tag ref, never a
+branch, so this hook's destination check never matches it.
+
 That is the whole release process. The `version` field on the default branch is what actually
 drives updates; the matching `vX.Y.Z` **annotated tag is an immutable anchor** for
 rollback/bisect (and pinning), not the update trigger — so always tag in the same step as the
@@ -1260,8 +1268,21 @@ and it can only **remove** permission a settings file would otherwise have grant
 any. A Claude Code that does not supply `agent_type` in `PreToolUse` stdin simply leaves the hook
 silent, the same status quo as before this release — never a new block.
 
-**v2.7.0 → v2.7.1** adds no grant, label, script, or baseline step — the doctor reports nothing
-new to migrate. #235's two documented limits are now measured (2026-09-08, Claude Code 2.1.263 —
+**v2.7.0 → v2.7.1 adds a new mechanical block** (#260), not just measurements and a SIGPIPE fix:
+a third plugin-shipped `PreToolUse` hook, `hooks/push-guard.sh`, now denies any `git push` whose
+destination resolves to your repo's default branch, inside **any** Claude Code session with the
+plugin enabled — the main session included, unlike `hooks/agent-boundary.sh`, which only governs
+the implementer/verifier subagents. If your workflow ever pushes to the default branch directly
+from inside a Claude Code session (uncommon with branch protection enabled, but possible without
+it, or via an `admin` bypass — see this repo's own release ritual above), that push is now
+blocked. Two escape hatches: run that push from a plain terminal outside Claude Code, or set
+`disableAllHooks: true` in a settings file — which also disables `git-c-guard.sh`'s and
+`agent-boundary.sh`'s controls, so use it narrowly and briefly, not as a standing setting. No
+grant, label, script, or baseline step is needed either way: the hook is plugin behaviour, not a
+permission entry, so it applies automatically with the plugin update and the doctor reports
+nothing to migrate for it. Everything else in this release adds no grant, label, script, or
+baseline step either — the doctor reports nothing new to migrate for the rest. #235's two
+documented limits are now measured (2026-09-08, Claude Code 2.1.263 —
 see "Safety model"'s live-probe record): the `agent_type` spelling a plugin subagent sends in
 `PreToolUse` stdin is the namespaced form, and this hook's `deny` does outrank
 `git-c-guard.sh`'s `allow` for the same call. Both `agent_type` spellings still ship — the
@@ -1357,7 +1378,10 @@ probe edits an already-tracked file inside the tree under review, runs the tests
 with `git restore <file>` (working tree only — never a commit, ref, or push), and re-checks
 `git status --porcelain` against its pre-probe output before returning; if the repo doesn't grant
 the restore, it skips the probe and says so. Guarantees: branch isolation (work never lands on the
-default branch directly), a deny-list (no merge by default, no force-push, no `reset --hard`,
+default branch directly — mechanically enforced for any push refspec, not just the
+pattern-matched deny entries below, by the third plugin-shipped `PreToolUse` hook,
+`hooks/push-guard.sh` (#260, main session included, described further down in this section)), a
+deny-list (no merge by default, no force-push, no `reset --hard`,
 no `rm -rf`), independent re-verification + staged-file reconciliation before every commit, and
 **human review of every PR before merge unless the repo has double-opted-in to merge autonomy**
 (CLAUDE.md policy + lifted deny — see "The CLAUDE.md contract"). The deny-list is best-effort pattern matching; branch protection +
@@ -1486,9 +1510,9 @@ row above — Claude Code 2.1.246's startup scan is allow-only. The one item thi
 unconfirmed is the Windows/Git-Bash spot-check of row (a) — see "Prerequisites" and the Windows
 section below.
 
-**Two PreToolUse hooks.** `hooks/git-c-guard.sh` above is one of two plugin-shipped `PreToolUse`
-Bash hooks registered in `hooks/hooks.json`; the second, `hooks/agent-boundary.sh` (#235, review
-F3), is what the "no git, no gh" caveat earlier in this section now names. It reads each Bash
+**Three PreToolUse hooks.** `hooks/git-c-guard.sh` above is one of three plugin-shipped
+`PreToolUse` Bash hooks registered in `hooks/hooks.json`; the second, `hooks/agent-boundary.sh`
+(#235, review F3), is what the "no git, no gh" caveat earlier in this section now names. It reads each Bash
 call's `agent_type` from the hook's own stdin JSON — the field a `PreToolUse` handler's `if` gate
 cannot see, which is why this handler carries no `if` at all, unlike the guard hook's — and
 resolves it against a role (both the bare `implementer`/`verifier` and the namespaced
@@ -1527,6 +1551,36 @@ of `git`), and interpreter indirection outside the recognised prefix words (`env
 `builtin`, `exec`, `sudo`, `nohup`, `time`, `nice`, `stdbuf`, `xargs`, `bash`, `sh`, `zsh`, `ksh`,
 `dash`) — this is a tripwire against an off-script subagent, the same framing this document
 already uses for the body-hash grant pattern, not a sandbox against a determined adversary.
+
+**The third hook, `hooks/push-guard.sh` (#260), governs every session — main session included,**
+unlike `hooks/agent-boundary.sh` above, which only governs the implementer/verifier subagents.
+It closes the gap the settings template's own default-branch deny entries leave open: those two
+entries (`Bash(git push origin main:*)` and its `-C` mirror) are prefix-matched, so a refspec
+spelling such as `git push origin HEAD:main`, `git push origin +HEAD:refs/heads/main`, a remote
+other than `origin`, or `git push origin :main` slips past them. This hook instead parses the
+`git push` refspec itself: it denies (exit 2, one stderr line naming the blocked destination,
+empty stdout) any push whose resolved DESTINATION — after stripping a leading `+`, taking
+everything after a refspec's first `:`, and substituting `HEAD`/`@` with the current branch — is
+the repo's default branch, or unconditionally denies `--all`/`--mirror` (both push every local
+branch, including the default one). The default branch is resolved by reading (never executing)
+the current repo's `refs/remotes/origin/HEAD` symref, located by walking up from the PreToolUse
+hook's own `cwd` field (a documented stdin field; this hook falls back to `$PWD` when `cwd` is
+absent) through at most 64 parent directories, following a worktree pointer file
+(`gitdir: <path>`) when `.git` is a file rather than a directory — the same shape
+`hooks/git-c-guard.sh`'s worktree-parallel forms use. An unconditional fallback deny set,
+`main`/`master`, is always in force in addition to whatever default branch actually resolves, so
+the hook still denies a plain `git push origin main` even with no `cwd`, an unreadable `.git`, or
+a `-C <other-checkout>` push (deliberately never resolved against the untrusted `-C` path itself —
+see the hook's own header for the full evasion/over-blocking inventory). It enforces only the
+"deny the default branch" half of this issue's Decision, not an allow-list of
+`claude/<n>-<slug>` destinations — that would also deny a `release/vX.Y.Z` branch, an annotated
+tag push, or any ordinary `git push origin feature/x` a human runs in any plugin-enabled session,
+for no matching safety gain. Pinned by fixture in `dev/hook-tests.sh`, including the same
+never-executes-anything guarantee and a byte-identical-file-listing fixture proving this hook only
+reads the filesystem, never writes to it. Composition with the deny-outranks-allow mechanism
+`hooks/agent-boundary.sh`'s live-probe record establishes below was **not** separately
+re-measured for this third hook — it uses the identical mechanism, but only two hooks were ever
+replayed together live.
 
 **Live-probe record (#259).** The two limits #235 shipped unresolved were closed by a probe the
 maintainer ran on 2026-09-08 against Claude Code **2.1.263** (plugin 2.7.0 from the marketplace
@@ -1931,16 +1985,17 @@ Windows specifics worth knowing:
   Bash runs the scripts via their shebang, so the check reports that and moves on. The
   harness's `gh`-output parsing also strips stray `\r` defensively, in case a CRLF-translating
   layer sits between `gh` and Bash.
-- **Both hooks' `${CLAUDE_PLUGIN_ROOT}` path.** `hooks/hooks.json` invokes each hook the same way
-  — e.g. `bash "${CLAUDE_PLUGIN_ROOT}/hooks/git-c-guard.sh"`; if Claude Code ever exports that
+- **All three hooks' `${CLAUDE_PLUGIN_ROOT}` path.** `hooks/hooks.json` invokes each hook the same
+  way — e.g. `bash "${CLAUDE_PLUGIN_ROOT}/hooks/git-c-guard.sh"`; if Claude Code ever exports that
   variable in backslash form on Windows, the quoted path could fail to resolve under Git Bash and
   a hook simply never runs for that session. For `git-c-guard.sh` this is fail-safe (worktree-mode
   `git -C` commands then prompt, same as if the plugin were disabled). For `hooks/agent-boundary.sh`
-  (#235) it is **not**: its non-firing is silent, not a prompt — it just removes the mechanical
-  implementer/verifier "no git, no gh" boundary, with nothing visible marking the loss, since it
-  was the only thing narrowing that surface. A Windows spot-check of both hooks actually firing is
-  worth doing before relying on unattended worktree-parallel mode there (the probe table under
-  "Safety model" covers macOS only).
+  (#235) and `hooks/push-guard.sh` (#260) it is **not**: their non-firing is silent, not a prompt —
+  it just removes the mechanical implementer/verifier "no git, no gh" boundary, or the
+  default-branch push guard, with nothing visible marking the loss, since each was the only thing
+  narrowing its own surface. A Windows spot-check of all three hooks actually firing is worth doing
+  before relying on unattended worktree-parallel mode there (the probe table under "Safety model"
+  covers macOS only).
 
 ### Windows: first-run smoke test
 

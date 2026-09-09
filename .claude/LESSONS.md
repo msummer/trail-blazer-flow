@@ -98,3 +98,14 @@ bites: 1–3 lines, written as an instruction to a future agent.
   README's evasion enumeration said it was caught, and 22 measured mutants never touched it. Derive
   fixtures from each loop's boundary (none / one / repeated), not from the plan's one-of-each examples,
   and have the verifier feed the script its own chained forms.
+- 2026-09-09: A script header's "documented evasions / under-blocking classes" inventory is a set of factual claims
+  about the code — measure EVERY named class against the real script (feed it the exact command, record the rc)
+  before writing it, and re-measure after any tokenizer edit. On #260 the shipped header named an attached
+  `--git-dir=<path>` form as an evasion that the parser in fact denied, and omitted the real class the plan named
+  (an unlisted two-token global option, `git --foo bar push …`); one verification round. Same rule as LESSON
+  2026-09-01, applied to "what this control does NOT catch" claims, which reviewers read most closely.
+- 2026-09-09 (b): For any script with raw-stdin fast paths (a substring test that exits before parsing), EVERY
+  no-opinion fixture's raw stdin must contain every fast-path substring — or its case row must name the fast path
+  that excludes it and state that the slow path re-derives the same verdict. On #260 `bash hooks/push-guard.sh`
+  carried `push` but not `git`, so the case exited at fast path 2 while its comment claimed to exercise the
+  tokenizer's basename step; LESSON 2026-08-26 stated this for `git -C` only — it is general.

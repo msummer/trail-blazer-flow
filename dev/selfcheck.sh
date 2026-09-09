@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 64 assertions total. The gate prints what it checks — run it.
+# Five groups, 65 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -292,10 +292,11 @@ fi
 #       $root and the surrounding 'bash "' / '"' stripped, names a file that exists;
 #   (c) each handler's "if" (jq's `.["if"]`, since `if` is a jq keyword; an absent/empty value
 #       normalises to the sentinel "-none-") equals what a basename-keyed expectation table says
-#       that script should carry — git-c-guard.sh -> "Bash(git -C *)" (#155), agent-boundary.sh ->
-#       "-none-" (the `if` field is permission-rule syntax over tool input only and cannot see
-#       agent_type — see hooks/agent-boundary.sh's header) — with an unregistered basename FAILing
-#       loudly ("add its expected if to this table") rather than silently passing;
+#       that script should carry — git-c-guard.sh -> "Bash(git -C *)" (#155), agent-boundary.sh and
+#       push-guard.sh (#260) -> "-none-" (the `if` field is permission-rule syntax over tool input
+#       only and cannot see agent_type or a `-C`/`env`/`bash -c`-wrapped push — see each hook's own
+#       header) — with an unregistered basename FAILing loudly ("add its expected if to this
+#       table") rather than silently passing;
 #   (d) every hooks/*.sh file on disk is named by some handler's .command (the reverse direction:
 #       an orphan hook script — shipped but never registered — is exactly this issue's failure
 #       mode, since an unregistered hook never fires).
@@ -341,6 +342,7 @@ EOF
         case "$base" in
           git-c-guard.sh) expect_if='Bash(git -C *)' ;;
           agent-boundary.sh) expect_if='-none-' ;;
+          push-guard.sh) expect_if='-none-' ;;
           *) bad_if="$bad_if $base has no expected-if table entry (add its expected if to this table);" ;;
         esac
         if [ -n "$expect_if" ] && [ "$hi" != "$expect_if" ]; then
@@ -1327,6 +1329,58 @@ else
     ok "4.39 hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER ('$ab_impl') and AGENT_TYPES_VERIFIER ('$ab_verif') both agree with agents/*.md and plugin.json's name, each carrying both spellings"
   else
     bad "4.39 agent_type vocabulary disagreement:$bad_list"
+  fi
+fi
+
+# 4.40 (#260) — hooks/push-guard.sh's default-branch-fallback vocabulary <-> the settings
+# template's own default-branch deny entries, and <-> hooks/agent-boundary.sh's tokenizer
+# vocabulary. Three clauses, folded into one assertion so the count stays unchanged:
+#   (a) PUSH_DEFAULT_BRANCH_FALLBACK="..." extracts non-empty from hooks/push-guard.sh with the
+#       same anchored sed -nE idiom as 2.5/4.13/4.35-4.39 — an empty extraction FAILs loudly
+#       ("structure changed"), never a vacuous pass;
+#   (b) every branch name extracted from templates/repo-settings.json's deny array via the
+#       anchored pattern ^Bash\(git push origin (.*):\*\)$ is a member of that fallback list — the
+#       belt-and-braces settings entries (CLAUDE.md: not modified by #260, "stay as
+#       belt-and-braces") name a branch the hook's own unconditional fallback must also cover, so
+#       the two controls agree on what "the default branch" means even when push-guard.sh's own
+#       repo-resolution step finds nothing readable; an empty extraction here FAILs loudly too
+#       (JSON↔script agreement, the 2.5/2.6 idiom);
+#   (c) hooks/push-guard.sh's PREFIX_WORDS="..." value is byte-identical to
+#       hooks/agent-boundary.sh's own PREFIX_WORDS="..." value (script↔script, the 4.26 idiom) —
+#       the two hooks inline near-twin tokenizers (see either hook's header) and must agree on
+#       which interpreter-indirection words to skip; either extraction coming back empty FAILs
+#       loudly too.
+# Proves only that these three vocabularies are spelled identically across the named files, not
+# that push-guard.sh's runtime behavior is correct — the same honest limit 4.33/4.34/4.37/4.38/
+# 4.39's comments state.
+pg="$root/hooks/push-guard.sh"
+pg_fallback="$(sed -nE 's/^PUSH_DEFAULT_BRANCH_FALLBACK="([^"]*)"$/\1/p' "$pg")"
+if [ -z "$pg_fallback" ]; then
+  bad "4.40 hooks/push-guard.sh's PUSH_DEFAULT_BRANCH_FALLBACK= line didn't match (structure changed) — extraction failed"
+else
+  template_push_branches="$(printf '%s\n' "$deny_raw" | sed -nE 's/^Bash\(git push origin (.*):\*\)$/\1/p' | sort -u)"
+  if [ -z "$template_push_branches" ]; then
+    bad "4.40 templates/repo-settings.json: no 'Bash(git push origin <branch>:*)' deny entry extracted (structure changed) — extraction failed"
+  else
+    missing=""
+    for b in $template_push_branches; do
+      case " $pg_fallback " in
+        *" $b "*) ;;
+        *) missing="$missing $b" ;;
+      esac
+    done
+    pg_prefix="$(sed -nE 's/^PREFIX_WORDS="([^"]*)"$/\1/p' "$pg")"
+    ab_prefix="$(sed -nE 's/^PREFIX_WORDS="([^"]*)"$/\1/p' "$root/hooks/agent-boundary.sh")"
+    if [ -z "$pg_prefix" ] || [ -z "$ab_prefix" ]; then
+      bad "4.40 hooks/push-guard.sh's or hooks/agent-boundary.sh's PREFIX_WORDS= line didn't match (structure changed) — extraction failed"
+    elif [ -n "$missing" ] || [ "$pg_prefix" != "$ab_prefix" ]; then
+      msg="4.40 push-guard vocabulary disagreement:"
+      [ -n "$missing" ] && msg="$msg templates/repo-settings.json deny branch(es) not in PUSH_DEFAULT_BRANCH_FALLBACK ('$pg_fallback'):$missing;"
+      [ "$pg_prefix" != "$ab_prefix" ] && msg="$msg PREFIX_WORDS differs between hooks/push-guard.sh ('$pg_prefix') and hooks/agent-boundary.sh ('$ab_prefix');"
+      bad "$msg"
+    else
+      ok "4.40 hooks/push-guard.sh's PUSH_DEFAULT_BRANCH_FALLBACK ('$pg_fallback') covers every templates/repo-settings.json default-branch deny entry, and its PREFIX_WORDS agrees with hooks/agent-boundary.sh's"
+    fi
   fi
 fi
 

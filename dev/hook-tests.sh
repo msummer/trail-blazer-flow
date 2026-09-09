@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# hook-tests.sh — fixture-based negative-test harness for the two plugin-shipped PreToolUse
+# hook-tests.sh — fixture-based negative-test harness for the three plugin-shipped PreToolUse
 # hooks, in the style of dev/doctor-tests.sh: feeds fixture stdin JSON straight into the real
 # script and pins its verdict.
 #
@@ -19,19 +19,35 @@
 # role-agnostic no opinion, and the same booby-trapped `git`/`rm` idiom proving the boundary
 # never executes anything either.
 #
+# hooks/push-guard.sh (#260) has the same two observable verdicts as agent-boundary.sh — deny
+# (exit 2, empty stdout, exactly one stderr line naming the blocked destination) or no opinion
+# (exit 0, empty stdout, empty stderr) — for every case listed in the approved #260 plan's
+# "Testing approach": one deny case per refspec-parsing clause/boundary (a non-`origin` remote, a
+# URL remote containing a colon, a full `refs/heads/…` refspec, `:main`, `--delete`,
+# `--all`/`--mirror`, an option before/after the remote or refspec, 0/1/2+ occurrences of a
+# skipped option/prefix-word/global-option class, the `git -C <worktree> push origin main` form
+# `git-c-guard.sh` itself would allow, and the `main`/`master` fallback pair), a default-branch
+# symref read against a fixture repo (base/subdirectory/worktree-pointer-file `cwd` variants),
+# every documented no-opinion shape (including the two exact forms this harness itself issues),
+# role-agnostic no-opinion edges, and the same booby-trapped `git`/`gh`/`rm` idiom plus a
+# byte-identical-file-listing fixture proving this hook reads the filesystem but never writes to
+# or executes anything on it.
+#
 # Usage: bash dev/hook-tests.sh [name-filter] — same output contract as dev/selfcheck-tests.sh
 # and dev/doctor-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==`
 # footer, exit 0 iff nothing failed; a filter with no match exits 1.
 #
 # Every write happens under one `mktemp -d` root, removed via an EXIT trap; this repo's own
-# hooks/git-c-guard.sh and hooks/agent-boundary.sh are read-only here — each script is run
-# directly, never copied or edited.
+# hooks/git-c-guard.sh, hooks/agent-boundary.sh, and hooks/push-guard.sh are read-only here —
+# each script is run directly, never copied or edited (push-guard.sh's own fixture-repo builder
+# below writes ONLY under that same mktemp root, never inside this checkout).
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 filter="${1:-}"
 guard="$root/hooks/git-c-guard.sh"
 boundary="$root/hooks/agent-boundary.sh"
+push_guard="$root/hooks/push-guard.sh"
 
 tmpbase="$(mktemp -d)"
 cleanup() {
@@ -450,6 +466,305 @@ case_boundary_never_executes_noop() {
 }
 
 # ---------------------------------------------------------------------------------------------
+# hooks/push-guard.sh (#260) fixture builders, runner, and assertions.
+
+mk_push_cmd() { jq -n --arg cmd "$1" '{tool_name: "Bash", tool_input: {command: $cmd}}'; }
+mk_push_cmd_cwd() { jq -n --arg cmd "$1" --arg cwd "$2" '{tool_name: "Bash", tool_input: {command: $cmd}, cwd: $cwd}'; }
+mk_push_cmd_mode() { jq -n --arg cmd "$1" --arg mode "$2" '{tool_name: "Bash", tool_input: {command: $cmd}, permission_mode: $mode}'; }
+mk_push_tool() { jq -n --arg tool "$1" --arg cmd "$2" '{tool_name: $tool, tool_input: {command: $cmd}}'; }
+# mk_push_missing_command — tool_input.command absent, but the raw JSON still contains both the
+# literal 'push' and 'git' substrings (in an unrelated field) so this case actually reaches the
+# "cmd empty" check instead of passing vacuously via either raw-stdin fast path (LESSON
+# 2026-08-26's analogue, mirroring mk_agent_missing_command above).
+mk_push_missing_command() { jq -n --arg note 'was going to run git push origin main' '{tool_name: "Bash", tool_input: {}, note: $note}'; }
+
+# mk_fixture_repo DIR DEFAULT_BRANCH CURRENT — builds an ordinary (non-worktree) .git directory
+# under DIR: refs/remotes/origin/HEAD names DEFAULT_BRANCH; HEAD names CURRENT, unless CURRENT is
+# "detached" (a raw 40-hex SHA, no symref — an unresolvable current branch) or "unreadable" (no
+# HEAD file at all). Writes only under DIR, which every caller places under $tmpbase.
+mk_fixture_repo() {
+  local dir="$1" default_branch="$2" current="$3"
+  mkdir -p "$dir/.git/refs/remotes/origin"
+  printf 'ref: refs/remotes/origin/%s\n' "$default_branch" > "$dir/.git/refs/remotes/origin/HEAD"
+  case "$current" in
+    detached) printf '0123456789abcdef0123456789abcdef01234567\n' > "$dir/.git/HEAD" ;;
+    unreadable) : ;;
+    *) printf 'ref: refs/heads/%s\n' "$current" > "$dir/.git/HEAD" ;;
+  esac
+}
+
+# mk_fixture_worktree MAINDIR WTDIR DEFAULT_BRANCH WT_BRANCH — builds a main checkout under
+# MAINDIR (refs/remotes/origin/HEAD only) and a worktree pointer file at WTDIR/.git
+# (gitdir: MAINDIR/.git/worktrees/wt1) whose own HEAD names WT_BRANCH — the same worktree-pointer
+# shape hooks/git-c-guard.sh's own `-C <worktree>` forms navigate into.
+mk_fixture_worktree() {
+  local main="$1" wt="$2" default_branch="$3" wt_branch="$4"
+  mkdir -p "$main/.git/refs/remotes/origin" "$main/.git/worktrees/wt1"
+  printf 'ref: refs/remotes/origin/%s\n' "$default_branch" > "$main/.git/refs/remotes/origin/HEAD"
+  mkdir -p "$wt"
+  printf 'gitdir: %s/.git/worktrees/wt1\n' "$main" > "$wt/.git"
+  printf 'ref: refs/heads/%s\n' "$wt_branch" > "$main/.git/worktrees/wt1/HEAD"
+}
+
+# run_push_guard JSON [PATHVAL] — runs the real push-guard script against JSON on stdin, with
+# PATH set to PATHVAL (defaults to this process's own PATH), leaving $push_out (stdout)/
+# $push_err (stderr, read back from a file under $tmpbase)/$push_rc set as globals. Same "call as
+# a plain statement, read the globals after" idiom as run_boundary above.
+push_out=""
+push_err=""
+push_rc=0
+run_push_guard() {
+  local json="$1" pathval="${2:-$PATH}" errfile="$tmpbase/push-guard-stderr"
+  push_out="$(printf '%s' "$json" | PATH="$pathval" "$bash_bin" "$push_guard" 2>"$errfile")"
+  push_rc=$?
+  push_err="$(cat "$errfile" 2>/dev/null)"
+  rm -f "$errfile"
+}
+
+# expect_push_deny/expect_push_no_opinion — assert against $push_out/$push_err/$push_rc.
+# PUSH_DENY_STEM's literal text is hand-typed here (not extracted from the script), the same
+# convention expect_deny above uses for agent-boundary.sh's DENY_STEM.
+expect_push_deny() {
+  [ "$push_rc" -eq 2 ] || { __ok=0; __why="${__why}rc: expected 2, got $push_rc\n"; }
+  [ -z "$push_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$push_out'\n"; }
+  local err_lines
+  err_lines="$(printf '%s\n' "$push_err" | grep -c '[^[:space:]]')"
+  [ "$err_lines" -eq 1 ] || { __ok=0; __why="${__why}expected exactly 1 non-blank stderr line, got $err_lines: '$push_err'\n"; }
+  case "$push_err" in
+    *"trail-blazer-flow push guard:"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain the PUSH_DENY_STEM literal 'trail-blazer-flow push guard:': '$push_err'\n" ;;
+  esac
+}
+expect_push_no_opinion() {
+  [ "$push_rc" -eq 0 ] || { __ok=0; __why="${__why}rc: expected 0, got $push_rc\n"; }
+  [ -z "$push_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$push_out'\n"; }
+  [ -z "$push_err" ] || { __ok=0; __why="${__why}expected empty stderr, got: '$push_err'\n"; }
+}
+
+# --- deny: plain command and refspec-parsing clauses, derived from the parser's boundaries
+# (LESSON 2026-09-04), not from happy paths -------------------------------------------------------
+case_pd_origin_main()       { run_push_guard "$(mk_push_cmd 'git push origin main')"; expect_push_deny; }
+case_pd_head_colon_main()   { run_push_guard "$(mk_push_cmd 'git push origin HEAD:main')"; expect_push_deny; }
+case_pd_plus_head_refs()    { run_push_guard "$(mk_push_cmd 'git push origin +HEAD:refs/heads/main')"; expect_push_deny; }
+case_pd_nonorigin_remote()  { run_push_guard "$(mk_push_cmd 'git push upstream HEAD:main')"; expect_push_deny; }
+case_pd_url_remote_colon()  { run_push_guard "$(mk_push_cmd 'git push git@github.com:o/r.git HEAD:main')"; expect_push_deny; }
+case_pd_refspec_full()      { run_push_guard "$(mk_push_cmd 'git push origin refs/heads/x:refs/heads/main')"; expect_push_deny; }
+case_pd_colon_main()        { run_push_guard "$(mk_push_cmd 'git push origin :main')"; expect_push_deny; }
+case_pd_plus_main_no_colon() {
+  # Isolates the leading-'+' strip from the colon-split: a colon-BEARING token like
+  # "+HEAD:refs/heads/main" still resolves correctly even without stripping '+' first, because
+  # the colon-split alone discards everything before and including the first ':'. Only a
+  # colon-LESS forced refspec like "+main" needs the strip on its own.
+  run_push_guard "$(mk_push_cmd 'git push origin +main')"
+  expect_push_deny
+}
+case_pd_delete_main()       { run_push_guard "$(mk_push_cmd 'git push origin --delete main')"; expect_push_deny; }
+case_pd_opt_before_remote() { run_push_guard "$(mk_push_cmd 'git push --force origin main')"; expect_push_deny; }
+case_pd_opt_after_refspec() { run_push_guard "$(mk_push_cmd 'git push origin main --force')"; expect_push_deny; }
+case_pd_o_one()              { run_push_guard "$(mk_push_cmd 'git push -o ci.skip origin main')"; expect_push_deny; }
+case_pd_o_two()              { run_push_guard "$(mk_push_cmd 'git push -o a -o b origin main')"; expect_push_deny; }
+case_pd_all()                { run_push_guard "$(mk_push_cmd 'git push --all origin')"; expect_push_deny; }
+case_pd_mirror()             { run_push_guard "$(mk_push_cmd 'git push --mirror origin')"; expect_push_deny; }
+case_pd_c_worktree()         { run_push_guard "$(mk_push_cmd 'git -C ../demo-wt-1 push origin main')"; expect_push_deny; }
+case_pd_composite_and()      { run_push_guard "$(mk_push_cmd 'pytest && git push origin main')"; expect_push_deny; }
+case_pd_prefix_one()         { run_push_guard "$(mk_push_cmd 'env git push origin main')"; expect_push_deny; }
+case_pd_prefix_two() {
+  # TWO chained PREFIX_WORDS tokens (sudo, then bash) — the M23-class regression
+  # hooks/agent-boundary.sh's own fixtures pin for its twin tokenizer; push-guard.sh's scan must
+  # not regress the same way (0/1/2+ occurrences of a skipped class — LESSON 2026-09-08d).
+  run_push_guard "$(mk_push_cmd 'sudo bash -c "git push origin main"')"
+  expect_push_deny
+}
+case_pd_assignment()         { run_push_guard "$(mk_push_cmd 'FOO=1 git push origin main')"; expect_push_deny; }
+case_pd_abs_path()           { run_push_guard "$(mk_push_cmd '/usr/bin/git push origin main')"; expect_push_deny; }
+case_pd_global_opt_value()   { run_push_guard "$(mk_push_cmd 'git -c core.pager=cat push origin main')"; expect_push_deny; }
+case_pd_global_opt_two() {
+  # TWO chained GIT_GLOBAL_OPTS_WITH_VALUE tokens (-c <value>, then -C <value>) before the
+  # subcommand — the 0/1/2+ boundary LESSON 2026-09-08(d) asks for on this skipped class too.
+  run_push_guard "$(mk_push_cmd 'git -c core.pager=cat -C ../demo-wt-1 push origin main')"
+  expect_push_deny
+}
+case_pd_origin_master()      { run_push_guard "$(mk_push_cmd 'git push origin master')"; expect_push_deny; }
+case_pd_n1_refspec() {
+  # A single non-option argument after "push" is evaluated BOTH as the current branch AND,
+  # defensively, as a refspec destination in its own right (a remote literally named "main" is
+  # treated as if it might be a branch — see the hook's own header). Isolates that second
+  # evaluation from the first with an explicit fixture repo whose CURRENT branch is feature/x (a
+  # real, resolvable, non-deny-set value, not an ambient/unresolvable one) — only the
+  # refspec-as-destination check on "main" itself can explain this deny.
+  local dir="$tmpbase/repo-n1-refspec"
+  mk_fixture_repo "$dir" main feature/x
+  run_push_guard "$(mk_push_cmd_cwd 'git push main' "$dir")"
+  expect_push_deny
+}
+
+# --- deny: default-branch symref resolution against fixture repos --------------------------------
+case_pd_trunk_base() {
+  local dir="$tmpbase/repo-trunk-base"
+  mk_fixture_repo "$dir" trunk main
+  run_push_guard "$(mk_push_cmd_cwd 'git push origin trunk' "$dir")"
+  expect_push_deny
+}
+case_pd_trunk_subdir() {
+  local dir="$tmpbase/repo-trunk-subdir"
+  mk_fixture_repo "$dir" trunk main
+  mkdir -p "$dir/sub"
+  run_push_guard "$(mk_push_cmd_cwd 'git push origin trunk' "$dir/sub")"
+  expect_push_deny
+}
+case_pd_trunk_worktree() {
+  local main="$tmpbase/repo-trunk-wt-main" wt="$tmpbase/repo-trunk-wt-pointer"
+  mk_fixture_worktree "$main" "$wt" trunk "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'git push origin trunk' "$wt")"
+  expect_push_deny
+}
+case_pd_head_on_main() {
+  local dir="$tmpbase/repo-head-main"
+  mk_fixture_repo "$dir" main main
+  run_push_guard "$(mk_push_cmd_cwd 'git push origin HEAD' "$dir")"
+  expect_push_deny
+}
+case_pd_bare_on_main() {
+  local dir="$tmpbase/repo-bare-main"
+  mk_fixture_repo "$dir" main main
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_no_cwd_fallback() {
+  # No 'cwd' key at all in stdin (mk_push_cmd emits none): must still deny via the unconditional
+  # PUSH_DEFAULT_BRANCH_FALLBACK, regardless of what $PWD resolves to.
+  run_push_guard "$(mk_push_cmd 'git push origin main')"
+  expect_push_deny
+}
+
+# --- no opinion: the shapes this harness itself issues, and every other non-default destination --
+case_pn_push_upstream_claude()   { run_push_guard "$(mk_push_cmd 'git push -u origin "claude/17-a"')"; expect_push_no_opinion; }
+case_pn_c_push_upstream_claude() { run_push_guard "$(mk_push_cmd 'git -C ../demo-wt-1 push -u origin "claude/17-a"')"; expect_push_no_opinion; }
+case_pn_release_branch()         { run_push_guard "$(mk_push_cmd 'git push origin release/v2.7.1')"; expect_push_no_opinion; }
+case_pn_tag_shaped_version()     { run_push_guard "$(mk_push_cmd 'git push origin v2.7.0')"; expect_push_no_opinion; }
+case_pn_feature_branch()         { run_push_guard "$(mk_push_cmd 'git push origin feature/x')"; expect_push_no_opinion; }
+case_pn_main_ish() {
+  # Exact-match, not prefix — mirroring the "mainline" concern bin/check-harness.sh:585 documents
+  # for its own default-branch literal.
+  run_push_guard "$(mk_push_cmd 'git push origin main-ish')"
+  expect_push_no_opinion
+}
+case_pn_refs_tags() { run_push_guard "$(mk_push_cmd 'git push origin refs/tags/v1.0')"; expect_push_no_opinion; }
+case_pn_head_on_claude() {
+  local dir="$tmpbase/repo-head-claude"
+  mk_fixture_repo "$dir" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'git push origin HEAD' "$dir")"
+  expect_push_no_opinion
+}
+case_pn_bare_on_claude() {
+  local dir="$tmpbase/repo-bare-claude"
+  mk_fixture_repo "$dir" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_pn_bare_detached() {
+  local dir="$tmpbase/repo-detached"
+  mk_fixture_repo "$dir" main detached
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_pn_trunk_no_repo() {
+  local dir="$tmpbase/norepo"
+  mkdir -p "$dir"
+  run_push_guard "$(mk_push_cmd_cwd 'git push origin trunk' "$dir")"
+  expect_push_no_opinion
+}
+case_pn_grep_arg() {
+  # Control proving the command-position rule: 'git'/'push' appear only inside grep's own
+  # argument, never as a command word/subcommand.
+  run_push_guard "$(mk_push_cmd 'grep -rn "git push origin main" .')"
+  expect_push_no_opinion
+}
+case_pn_bash_script() {
+  # Control proving exact-match, not substring-match: the command word after the "bash" prefix
+  # skip is "hooks/push-guard.sh" (basename "push-guard.sh"), which CONTAINS "push" but is not
+  # "git". The trailing shell comment supplies a literal "git" token so the raw stdin JSON
+  # contains BOTH "push" and "git" (LESSON — a fixture whose raw JSON is missing either literal
+  # exits at one of the two raw-stdin fast paths above and never reaches the tokenizer, which
+  # would make this case's own claim about normalize()'s basename step vacuous); the comment
+  # text itself is never reached by emit_segment, since cmdword already resolves (to
+  # "push-guard.sh") from the tokens before it.
+  run_push_guard "$(mk_push_cmd 'bash hooks/push-guard.sh # not a git push')"
+  expect_push_no_opinion
+}
+case_pn_o_value_two_token_remote() {
+  # Isolates PUSH_OPTS_WITH_VALUE's pair semantics: "-o v" must be skipped as EXACTLY two tokens,
+  # so "main" lands at position 0 of the remaining tokens — the remote, per step 8, which is
+  # NEVER itself evaluated as a destination (it may be a URL containing a colon) — leaving only
+  # "other" evaluated, which isn't a deny-set member. A skip that consumed only one token would
+  # instead treat "v" as the remote and evaluate BOTH "main" and "other" as candidate refspecs,
+  # wrongly denying on "main".
+  run_push_guard "$(mk_push_cmd 'git push -o v main other')"
+  expect_push_no_opinion
+}
+
+# --- role-agnostic no-opinion edges ----------------------------------------------------------------
+case_pr_plan_mode()      { run_push_guard "$(mk_push_cmd_mode 'git push origin main' 'plan')"; expect_push_no_opinion; }
+case_pr_wrong_tool()     { run_push_guard "$(mk_push_tool 'Read' 'git push origin main')"; expect_push_no_opinion; }
+case_pr_malformed_json() {
+  # Deliberately contains both literal substrings 'push' and 'git' so this exercises jq's own
+  # parse failure rather than passing vacuously via either raw-stdin fast path.
+  run_push_guard 'not json at all, but mentions push and git anyway'
+  expect_push_no_opinion
+}
+case_pr_missing_command() { run_push_guard "$(mk_push_missing_command)"; expect_push_no_opinion; }
+
+# --- never-executes / reads-only --------------------------------------------------------------
+case_push_never_executes_deny() {
+  local trapdir="$tmpbase/trapbin-push-deny" sentinel="$tmpbase/sentinel-push-deny"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  run_push_guard "$(mk_push_cmd 'git push origin main')" "$trapdir:$PATH"
+  expect_push_deny
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+case_push_never_executes_noop() {
+  local trapdir="$tmpbase/trapbin-push-noop" sentinel="$tmpbase/sentinel-push-noop"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  run_push_guard "$(mk_push_cmd 'git push origin feature/x')" "$trapdir:$PATH"
+  expect_push_no_opinion
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+case_push_reads_only() {
+  # This is the first hook in this repo that reads the filesystem (git-c-guard.sh and
+  # agent-boundary.sh never do) — pin that it only reads: a fixture repo's recursive file listing
+  # must be byte-identical before and after a run, deny path included. No portable, reliably
+  # non-hanging FIFO fixture was added for the [ -f ] guard itself (the plan's optional case) —
+  # the guard is exercised implicitly by every fixture-repo case above, all of which read ordinary
+  # regular files.
+  local dir="$tmpbase/repo-reads-only"
+  mk_fixture_repo "$dir" main feature/x
+  local before after
+  before="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  run_push_guard "$(mk_push_cmd_cwd 'git push origin main' "$dir")"
+  after="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  expect_push_deny
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}fixture repo's file listing changed — push-guard.sh wrote to or altered a file it should only read\n"; }
+}
+
+# ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
   "status-rel|case_status_rel|allow: relative sibling path, status"
@@ -597,6 +912,109 @@ cases=(
   "role-noop-missing-command|case_ra_missing_command|role-agnostic no opinion: tool_input.command absent -- measured: M18, 81 pass 1 fail"
   "boundary-never-executes-deny|case_boundary_never_executes_deny|deny, AND the boundary never invokes git/gh/rm on the booby-trapped PATH — sentinel absent -- measured: M1/M2, 55 pass 27 fail"
   "boundary-never-executes-noop|case_boundary_never_executes_noop|no opinion, AND the boundary never invokes git/gh/rm on the booby-trapped PATH — sentinel absent -- measured: M13b, 80 pass 2 fail (with verif-noop-status)"
+  # --- hooks/push-guard.sh (#260) cases -----------------------------------------------------------
+  # Mutation-proof table (LESSON 2026-09-01, LESSON 2026-09-07(b)): each row below cites one of
+  # the mutants actually applied to hooks/push-guard.sh via a Python literal-string replace
+  # asserting exactly one occurrence (never a regex, to avoid a silent no-op substitution), with
+  # the observed `bash dev/hook-tests.sh push` pass/fail delta measured against this file's
+  # 56-case push-* set, then restored and verified with a full `diff` before the next mutation.
+  # M1/M2 (the two raw-stdin fast paths) are coarse — breaking either silences the WHOLE hook, so
+  # they only distinguish a deny-verdict case from everything else, never one deny case from
+  # another:
+  #   M1  fast path 1 pattern corrupted (*push* -> *pushX*)                -> 23 pass, 33 fail
+  #   M2  fast path 2 pattern corrupted (*git* -> *gitX*)                  -> 23 pass, 33 fail
+  #       (M1 and M2 fail the identical 33-case set: every push-deny-* case plus
+  #       push-never-executes-deny and push-never-executes-reads-only)
+  #   M3  the .tool_name == "Bash" check disabled                         -> 55 pass,  1 fail
+  #   M4  the .permission_mode == "plan" check disabled                   -> 55 pass,  1 fail
+  #   M5  PREFIX_WORDS emptied                                            -> 54 pass,  2 fail
+  #   M6  GIT_GLOBAL_OPTS_WITH_VALUE skip changed from j+=2 to j+=1       -> 53 pass,  3 fail
+  #   M7  PREFIX_WORDS once-only regression (the agent-boundary.sh M23    -> 55 pass,  1 fail
+  #       class: !saw_prefix && (norm in prefix_set), so only the FIRST
+  #       recognised token in a segment is skipped instead of every one)
+  #   M8  PUSH_ALL_REFS_OPTS emptied                                      -> 54 pass,  2 fail
+  #   M9  PUSH_OPTS_WITH_VALUE skip changed from idx+=2 to idx+=1         -> 55 pass,  1 fail
+  #   M10 the leading-'+' strip removed                                   -> 55 pass,  1 fail
+  #   M11 the colon-split removed (dest always = the whole token)         -> 50 pass,  6 fail
+  #   M12 the HEAD/@ -> current-branch substitution removed               -> 55 pass,  1 fail
+  #   M13 the refs/heads/ prefix-strip removed                            -> 54 pass,  2 fail
+  #   M14 current_branch resolution forced empty                         -> 54 pass,  2 fail
+  #   M15 default_branch resolution forced empty                         -> 53 pass,  3 fail
+  #   M16 PUSH_DEFAULT_BRANCH_FALLBACK emptied                            -> 55 pass,  1 fail
+  #   M17 the worktree common-dir derivation broken (never strips        -> 55 pass,  1 fail
+  #       /worktrees/* from gitdir)
+  #   M18 the upward .git walk disabled (dir="$parent" -> dir="$dir",     -> 55 pass,  1 fail
+  #       so it never leaves the starting directory)
+  #   M19 is_deny_member widened from an exact word match to a per-      -> 55 pass,  1 fail
+  #       member PREFIX match (main* matches "main-ish")
+  #   M20 the "refs/* (a tag, a note) -> skip" clause changed to a       -> 56 pass,  0 fail
+  #       no-op (dest left unchanged) -- NOT flipped: confirms
+  #       push-noop-refs-tags is unaffected because this implementation
+  #       only ever strips the "refs/heads/" prefix specifically, so an
+  #       un-skipped tag ref's full literal path can never coincidentally
+  #       equal a plain branch name in the deny set
+  #   M21 normalize()'s basename-after-last-/ step removed                -> 55 pass,  1 fail
+  #   M22 tool_input.command's jq default changed from empty to a real   -> 55 pass,  1 fail
+  #       command string
+  # Nine fixtures are, verified by direct measurement, NOT flipped by any of M1-M22: their
+  # destination never coincides with a deny-set member under any of these mutants (the two
+  # release-blocker positive controls this harness itself issues, an ordinary feature/release/tag
+  # branch, a fixture repo whose current branch is a non-default claude/<n>-<slug> branch, a
+  # detached HEAD, cwd resolving to no repo at all, and the malformed-JSON control, whose failure
+  # mode is jq's own parse error regardless of which downstream check runs); their comment below
+  # says so instead of citing a mutant that was never observed to fail them.
+  "push-deny-origin-main|case_pd_origin_main|deny: git push origin main (the plain form) -- measured: M1/M2, 23 pass 33 fail"
+  "push-deny-head-colon-main|case_pd_head_colon_main|deny: git push origin HEAD:main (HEAD substituted via the current branch, then the dest side of the colon read directly) -- measured: M1/M2, 23 pass 33 fail (also M11, 50 pass 6 fail)"
+  "push-deny-plus-head-refs-main|case_pd_plus_head_refs|deny: git push origin +HEAD:refs/heads/main (leading + stripped, refs/heads/ prefix stripped) -- measured: M1/M2, 23 pass 33 fail (also M11 and M13, each 50/54 pass)"
+  "push-deny-nonorigin-remote|case_pd_nonorigin_remote|deny: git push upstream HEAD:main (remote other than origin is never itself evaluated as a destination) -- measured: M1/M2, 23 pass 33 fail (also M11, 50 pass 6 fail)"
+  "push-deny-url-remote-colon|case_pd_url_remote_colon|deny: git push git@github.com:o/r.git HEAD:main (a URL remote containing a colon is skipped as tokens[0], never evaluated as a destination) -- measured: M1/M2, 23 pass 33 fail (also M11, 50 pass 6 fail)"
+  "push-deny-refspec-full|case_pd_refspec_full|deny: git push origin refs/heads/x:refs/heads/main (full src:dst refspec, dst read after the FIRST colon) -- measured: M1/M2, 23 pass 33 fail (also M11 and M13, each 50/54 pass)"
+  "push-deny-colon-main|case_pd_colon_main|deny: git push origin :main (empty source, dest read after the colon) -- measured: M1/M2, 23 pass 33 fail (also M11, 50 pass 6 fail)"
+  "push-deny-delete-main|case_pd_delete_main|deny: git push origin --delete main (--delete is skipped as an ordinary dashed option) -- measured: M1/M2, 23 pass 33 fail"
+  "push-deny-opt-before-remote|case_pd_opt_before_remote|deny: git push --force origin main (option BEFORE the remote) -- measured: M1/M2, 23 pass 33 fail"
+  "push-deny-opt-after-refspec|case_pd_opt_after_refspec|deny: git push origin main --force (option AFTER the refspec) -- measured: M1/M2, 23 pass 33 fail"
+  "push-deny-o-one|case_pd_o_one|deny: git push -o ci.skip origin main (ONE -o value occurrence, skipped as a pair) -- measured: M1/M2, 23 pass 33 fail"
+  "push-deny-o-two|case_pd_o_two|deny: git push -o a -o b origin main (TWO -o value occurrences, the 0/1/2+ boundary -- LESSON 2026-09-08d) -- measured: M1/M2, 23 pass 33 fail"
+  "push-deny-all|case_pd_all|deny: git push --all origin (unconditional -- pushes every ref, including the default branch) -- measured: M1/M2, 23 pass 33 fail (also M8, 54 pass 2 fail)"
+  "push-deny-mirror|case_pd_mirror|deny: git push --mirror origin (unconditional, same reason as --all) -- measured: M1/M2, 23 pass 33 fail (also M8, 54 pass 2 fail)"
+  "push-deny-c-worktree|case_pd_c_worktree|deny: git -C ../demo-wt-1 push origin main (the exact form hooks/git-c-guard.sh's own allow cases approve -- composition with that hook's allow was NOT re-measured, see hooks/hooks.json's .description) -- measured: M1/M2, 23 pass 33 fail (also M6, 53 pass 3 fail)"
+  "push-deny-composite-and|case_pd_composite_and|deny: pytest && git push origin main (second && segment) -- measured: M1/M2, 23 pass 33 fail"
+  "push-deny-prefix-one|case_pd_prefix_one|deny: env git push origin main (ONE PREFIX_WORDS token) -- measured: M1/M2, 23 pass 33 fail (also M5, 54 pass 2 fail)"
+  "push-deny-prefix-two|case_pd_prefix_two|deny: sudo bash -c \"git push origin main\" (TWO chained PREFIX_WORDS tokens -- the M23 class) -- measured: M1/M2, 23 pass 33 fail (also M5, 54 pass 2 fail; also M7, 55 pass 1 fail)"
+  "push-deny-assignment|case_pd_assignment|deny: FOO=1 git push origin main (assignment-prefix skip) -- measured: M1/M2, 23 pass 33 fail"
+  "push-deny-abs-path|case_pd_abs_path|deny: /usr/bin/git push origin main (basename normalisation) -- measured: M1/M2, 23 pass 33 fail (also M21, 55 pass 1 fail)"
+  "push-deny-global-opt-value|case_pd_global_opt_value|deny: git -c core.pager=cat push origin main (ONE git global option with a separate value before the subcommand) -- measured: M1/M2, 23 pass 33 fail (also M6, 53 pass 3 fail)"
+  "push-deny-global-opt-two|case_pd_global_opt_two|deny: git -c core.pager=cat -C ../demo-wt-1 push origin main (TWO chained global-option-with-value pairs, the 0/1/2+ boundary -- LESSON 2026-09-08d) -- measured: M1/M2, 23 pass 33 fail (also M6, 53 pass 3 fail)"
+  "push-deny-origin-master|case_pd_origin_master|deny: git push origin master (the second PUSH_DEFAULT_BRANCH_FALLBACK member) -- measured: M1/M2, 23 pass 33 fail (also M16, 55 pass 1 fail)"
+  "push-deny-n1-refspec|case_pd_n1_refspec|deny: git push main against a fixture repo whose current branch is feature/x (n==1 -- the single argument is ALSO evaluated as a refspec destination, isolated from a real, non-denying current branch) -- measured: M1/M2, 23 pass 33 fail"
+  "push-deny-trunk-base|case_pd_trunk_base|deny: git push origin trunk against a fixture repo whose refs/remotes/origin/HEAD symref names trunk (default-branch resolution, base cwd) -- measured: M1/M2, 23 pass 33 fail (also M15, 53 pass 3 fail)"
+  "push-deny-trunk-subdir|case_pd_trunk_subdir|deny: same trunk fixture repo, cwd a SUBDIRECTORY of it (the upward .git walk) -- measured: M1/M2, 23 pass 33 fail (also M15, 53 pass 3 fail; also M18, 55 pass 1 fail)"
+  "push-deny-trunk-worktree|case_pd_trunk_worktree|deny: same trunk default branch, cwd a WORKTREE POINTER FILE (gitdir: ... resolution, common-dir derivation) -- measured: M1/M2, 23 pass 33 fail (also M15, 53 pass 3 fail; also M17, 55 pass 1 fail)"
+  "push-deny-head-on-main|case_pd_head_on_main|deny: git push origin HEAD against a fixture repo whose HEAD is main (current-branch resolution, HEAD substitution) -- measured: M1/M2, 23 pass 33 fail (also M12, 55 pass 1 fail; also M14, 54 pass 2 fail)"
+  "push-deny-bare-on-main|case_pd_bare_on_main|deny: bare git push against the same HEAD-is-main fixture repo (n==0, destination is the current branch) -- measured: M1/M2, 23 pass 33 fail (also M14, 54 pass 2 fail)"
+  "push-deny-no-cwd-fallback|case_pd_no_cwd_fallback|deny: git push origin main with NO cwd key at all in stdin (must still deny via the unconditional fallback) -- measured: M1/M2, 23 pass 33 fail"
+  "push-deny-plus-main-no-colon|case_pd_plus_main_no_colon|deny: git push origin +main (colon-LESS forced refspec -- isolates the leading-+ strip from the colon-split) -- measured: M1/M2, 23 pass 33 fail (also M10, 55 pass 1 fail)"
+  "push-noop-upstream-claude|case_pn_push_upstream_claude|no opinion: git push -u origin \"claude/17-a\" (the exact shape skills/issue-implementer/SKILL.md:527 issues -- a deny here is a release blocker) -- measured: not flipped by M1-M22 (destination \"claude/17-a\" never coincides with a deny-set member under any of these mutants)"
+  "push-noop-c-upstream-claude|case_pn_c_push_upstream_claude|no opinion: git -C ../demo-wt-1 push -u origin \"claude/17-a\" (the exact shape worktree-mode.md:189 issues -- a deny here is a release blocker) -- measured: not flipped by M1-M22, same reason as push-noop-upstream-claude"
+  "push-noop-release-branch|case_pn_release_branch|no opinion: git push origin release/v2.7.1 (this repo's own release-ritual branch shape) -- measured: not flipped by M1-M22 (destination never coincides with a deny-set member under any of these mutants)"
+  "push-noop-tag-shaped-version|case_pn_tag_shaped_version|no opinion: git push origin v2.7.0 (a tag-shaped destination, not the default branch) -- measured: not flipped by M1-M22, same reason as push-noop-release-branch"
+  "push-noop-feature-branch|case_pn_feature_branch|no opinion: git push origin feature/x (an ordinary feature branch) -- measured: not flipped by M1-M22, same reason as push-noop-release-branch"
+  "push-noop-main-ish|case_pn_main_ish|no opinion: git push origin main-ish (exact match required, not a prefix match) -- measured: M19, 55 pass 1 fail"
+  "push-noop-refs-tags|case_pn_refs_tags|no opinion: git push origin refs/tags/v1.0 (a tag ref is skipped, never a branch destination) -- measured: M20, 56 pass 0 fail (NOT flipped -- see the table header note on M20)"
+  "push-noop-head-on-claude|case_pn_head_on_claude|no opinion: git push origin HEAD against a fixture repo whose HEAD is claude/17-a (current branch resolves, but isn't in the deny set) -- measured: not flipped by M1-M22 (the resolved destination \"claude/17-a\" never coincides with a deny-set member under any of these mutants, including M12/M14's HEAD-substitution mutants, which only affect the SEPARATE push-deny-head-on-main fixture's fixture repo)"
+  "push-noop-bare-on-claude|case_pn_bare_on_claude|no opinion: bare git push against the same claude/17-a fixture repo -- measured: not flipped by M1-M22, same reason as push-noop-head-on-claude"
+  "push-noop-bare-detached|case_pn_bare_detached|no opinion: bare git push against a fixture repo with a DETACHED HEAD (current branch unresolvable -- a documented limit, not denied) -- measured: not flipped by M1-M22 (current_branch is already empty by construction here, so M14's force-empty mutant changes nothing observable)"
+  "push-noop-trunk-no-repo|case_pn_trunk_no_repo|no opinion: git push origin trunk with cwd resolving to NO repo at all (the 64-level upward walk finds nothing; falls back to the fallback set alone, which trunk isn't in) -- measured: not flipped by M1-M22 (no .git is ever found here, so M15/M17/M18's resolution mutants change nothing observable)"
+  "push-noop-grep-arg|case_pn_grep_arg|no opinion: grep -rn \"git push origin main\" . (git/push as grep's own argument, never a command word) -- measured: not flipped by M1-M22 (the command-word AND subcommand checks both independently require an exact \"git\"/\"push\" resolution; no single-clause mutant here defeats both layers at once)"
+  "push-noop-bash-script|case_pn_bash_script|no opinion: bash hooks/push-guard.sh # not a git push (basename contains, but isn't, \"git\"; the trailing comment supplies the raw-stdin \"git\" literal so this case actually reaches the tokenizer) -- measured: not flipped by M1-M22, including M21 (removing the basename step here still leaves the FULL path \"hooks/push-guard.sh\", not \"git\") and M5/M7 (PREFIX_WORDS emptied or made once-only still leaves the resolved command word as \"bash\" or \"push-guard.sh\", neither \"git\")"
+  "push-noop-plan-mode|case_pr_plan_mode|role-agnostic no opinion: git push origin main under permission_mode: \"plan\" -- measured: M4, 55 pass 1 fail"
+  "push-noop-wrong-tool|case_pr_wrong_tool|role-agnostic no opinion: tool_name is \"Read\", not \"Bash\" -- measured: M3, 55 pass 1 fail"
+  "push-noop-malformed-json|case_pr_malformed_json|role-agnostic no opinion: unparseable stdin (carries both push and git substrings) -- measured: not flipped by M1-M22, including M3/M4 (jq's own parse failure independently yields empty extractions regardless of which downstream check runs)"
+  "push-noop-missing-command|case_pr_missing_command|role-agnostic no opinion: tool_input.command absent -- measured: M22, 55 pass 1 fail"
+  "push-never-executes-deny|case_push_never_executes_deny|deny, AND push-guard.sh never invokes git/gh/rm on the booby-trapped PATH — sentinel absent -- measured: M1/M2, 23 pass 33 fail"
+  "push-never-executes-noop|case_push_never_executes_noop|no opinion, AND push-guard.sh never invokes git/gh/rm on the booby-trapped PATH — sentinel absent -- measured: not flipped by M1-M22 (its command's destination, feature/x, never coincides with a deny-set member under any of these mutants)"
+  "push-never-executes-reads-only|case_push_reads_only|deny, AND a fixture repo's recursive file listing is byte-identical before/after — this hook reads the filesystem but never writes to it -- measured: M1/M2, 23 pass 33 fail"
+  "push-noop-o-value-two-token-remote|case_pn_o_value_two_token_remote|no opinion: git push -o v main other (isolates PUSH_OPTS_WITH_VALUE's two-token skip: main lands as the never-evaluated remote, not a refspec) -- measured: M9, 55 pass 1 fail"
 )
 
 matched=0
