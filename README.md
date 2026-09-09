@@ -257,13 +257,19 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    tree itself, which is untouched), stages everything, **reconciles the staged list against the
    report's "Files changed"** (unexplained files = blocker, not a commit), **re-validates the
    plan binding** (#174: a fresh `find-implementation-work.sh --issue <n>` run's `binding_line`
-   must still match the one captured before dispatch — split by verdict since #219, plus #229's
+   must either still match the one captured before dispatch, or come from a **same-plan
+   re-approval** (#238: `covers_plan: true` naming the *same* `plan.url`, only the `approved-at=`
+   field moved — a human removed and re-added `plan-approved` while the implementer worked) — in
+   which case that fresh line, not the earlier one, is what the PR body carries — split by verdict
+   since #219, plus #229's
    label check: if the label is currently absent (`approval-label-absent` — the human's own
    withdrawal), no commit, no push, no PR, and no `impl-blocked` either — instead the
    already-staged tree is committed as a `wip: checkpoint binding-recheck` commit exactly as the
    unknown-verdict branch below does, so the branch resumes next run once a human re-adds the
    label, and a `<!-- harness-audit -->`-marked comment records the withdrawal; if the label IS
-   present but demonstrably doesn't cover the plan (`covers_plan: false` for any other reason), no
+   present but demonstrably doesn't cover the plan (`covers_plan: false` for any other reason, **or
+   `covers_plan: true` naming a *different* plan comment (#238)** — a change of plan, not a
+   re-approval), no
    commit, no push, the blocked path instead, and `plan-approved` removed; if the verdict is
    unknown instead, the same one-retry re-check as step 2 runs first (#223); still unknown after
    it, no commit, no push, but nothing destructive — `plan-approved` stays, the
@@ -273,7 +279,10 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    hold) **and diffs that same fresh run's (the retry run, when one ran) trusted post-approval comments**
    (#198) against the set captured before dispatch — a trusted comment that arrived while the
    implementer worked is surfaced (never binding, never holds the push) in the PR body when a PR
-   exists, or in the blocker/hold comment otherwise, and the run summary — commits once, pushes,
+   exists, or in the blocker/hold comment otherwise, and the run summary; **on a same-plan
+   re-approval the diff also surfaces (#238) any comment the re-approval itself newly covered,
+   flagged as covered by the re-approval but not implemented — the human decides whether the PR is
+   still what they want** — commits once, pushes,
    opens the PR (`Closes #n`, verification results, **the verifier's own closing status line
    pasted verbatim** — never one the orchestrator composes on its behalf — the re-validated
    `binding_line` pasted verbatim too, a `Mutation probe:`
@@ -1156,11 +1165,11 @@ implemented**. The documented remedy, unchanged in spirit from before: **close t
 re-approve**, so the comment binds the next dispatch instead of being silently released underneath
 it. Every other fail-closed axis is unchanged — a different plan comment's url, a timestamp
 matching no real labeling event, an empty history, or an unreadable events lookup all still hold
-the PR. `skills/issue-implementer/SKILL.md`'s pre-push re-check (step 2e) is deliberately
-unchanged: a bare re-approval landing *during* implementation still returns the issue to review,
-same as today (that pre-PR/post-PR boundary is stated only here, not restated in "Approval
-provenance" below) — see "Approval provenance" below for the release mechanism itself. No new
-grant, label, script, or baseline step.
+the PR. At this version, `skills/issue-implementer/SKILL.md`'s pre-push re-check (step 2e) was
+deliberately left unchanged: a bare re-approval landing *during* implementation still returned the
+issue to review, same as before this release. **Superseded in v2.7.1 by #238**: step 2e now
+accepts a same-plan re-approval too — see "Approval provenance" below for the current rule and the
+release mechanism itself. No new grant, label, script, or baseline step.
 
 **Approval binding now also checks every COVERED trusted decision comment's own edit timestamp,
 not just the plan comment's (#230).** `find-implementation-work.sh`, on the branch that would
@@ -1319,7 +1328,18 @@ or a manual merge. Behaviour **widens** on exactly one axis: a PR a transient un
 previously have held for the rest of the pass can now merge in the same pass; a verdict still
 unknown after the one retry still holds the PR **not eligible**, fail-closed exactly as before.
 Cost is up to 30s plus one extra read-only discovery run, paid only on the PRs whose plan-binding
-verdict comes back unknown.
+verdict comes back unknown. **#238 IS a consumer-visible behaviour change**, though it too needs no
+grant, label, script, or baseline step: `skills/issue-implementer/SKILL.md`'s pre-push re-check
+(step 2e) now accepts a **same-plan re-approval** landing while the implementer works — a human
+removing and re-adding `plan-approved` without changing the approved plan comment. Behaviour
+**widens**: the run no longer aborts, `plan-approved` is no longer removed, and this run's fresh
+`binding_line` (not the one captured before dispatch) is what goes into the PR body. Any comment
+the re-approval newly covers is surfaced verbatim (author, association, `createdAt`, `url`) in the
+PR body and the run summary, flagged as covered by the re-approval but **not** implemented — the
+human decides whether the PR is still what they want. A re-approval naming a *different* plan
+comment is unchanged: a real change of plan, not a re-approval, still returns the issue to review
+with `plan-approved` removed. The documented remedy for a comment the re-approval releases without
+implementing it is unchanged from #213: **close the PR first, then re-approve**.
 
 ## The per-repo settings file (required)
 
@@ -1686,6 +1706,12 @@ timestamp; the `issue-implementer` skill revalidates this **before dispatch and 
 push**, splitting its remedy by verdict since #219: a same-run revision (or in-place edit)
 landing in between and demonstrably un-covering the plan (`covers_plan: false`) makes the skill
 remove `plan-approved` and return the issue to review rather than build a plan nobody approved;
+**at the pre-push re-check only, a same-plan re-approval is accepted instead (#238)** —
+`covers_plan: true` still naming the *same* plan comment, only `approved_at` moved because a human
+removed and re-added `plan-approved` while the implementer worked — and the run proceeds, pasting
+this run's fresh `binding_line`, never the one captured before dispatch, into the PR body; a
+`covers_plan: true` verdict naming a *different* plan comment is a real change of plan, not a
+re-approval, and still returns the issue to review exactly as before, with `plan-approved` removed;
 an **unknown** verdict — a GitHub API call failed, so a same-run outage is indistinguishable from
 one that revoked nothing — first gets one bounded re-check at both checkpoints (`sleep 30`, then
 `find-implementation-work.sh --issue <n>` once more, #223) before the verdict is concluded; only a
@@ -1754,7 +1780,12 @@ arrives *while the implementer is
 working* is not silently missed either (#198): the pre-push re-validation above diffs that same
 fresh run's uncovered `trusted_post_plan` set against the set captured before dispatch, and any
 newly-arrived entry is quoted verbatim in the PR body and the run summary — still non-binding,
-still never holding the push; the residual race between that re-check and `gh pr create` itself
+still never holding the push; **on a same-plan re-approval (#238), that same re-check also
+surfaces any comment the re-approval itself newly covered** — one whose `covered_by_approval`
+flips to `true` and whose `createdAt` postdates the `approval.approved_at` captured before
+dispatch — quoted verbatim in the PR body and the run summary and flagged as covered by the
+re-approval but **not** implemented, so the human decides whether the PR is still what they want;
+the residual race between that re-check and `gh pr create` itself
 is a named, out-of-scope honest limit. Since #206, the merge pass's hard floor goes further: it
 reads that same uncovered `trusted_post_plan` set at merge time, from the identical fresh
 `find-implementation-work.sh --issue <n>` run it already makes for the plan-binding check above

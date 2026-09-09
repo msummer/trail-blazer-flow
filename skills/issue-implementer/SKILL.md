@@ -465,10 +465,31 @@ git status --porcelain   # review this list
      **Re-validate the plan binding (#174) before committing.** Run `find-implementation-work.sh
      --issue <number>` once more (if its verdict is unknown, the **unknown** branch below applies
      step 2a's bounded retry, and the retry run — not this initial one — is the run whose
-     `binding_line` and `approval` are what this comparison ultimately uses); if
-     `approval.covers_plan` is `true` and `binding_line` is
-     non-null and identical, byte for byte, to the one captured at step 2a, proceed to commit
-     below. Otherwise apply the same split as step 2a's approval-binding gate:
+     `binding_line`, `approval`, and `plan` are what this comparison ultimately uses). Route by
+     `approval.covers_plan`, `binding_line`, and `plan.url` against what step 2a captured:
+     - **`true`, `binding_line` non-null and byte-identical to the one captured at step 2a** —
+       nothing moved; proceed to commit below (today's happy path, unchanged).
+     - **`true`, `binding_line` non-null but different, and `plan.url` identical to the one in step
+       2a's captured `plan` entry (#238)** — a same-plan re-approval landed while you worked: a
+       human removed and re-added `plan-approved`, moving only the `approved-at=` field of the
+       binding line. This is **not** a blocker — proceed to commit below exactly as the branch
+       above does, but paste **this run's** `binding_line` into the PR body, never step 2a's, and
+       report the re-approval (this run's `approval.approved_at` and `approved_by`) in the step 3
+       summary. Reason: the merge floor walks `approved_at_history[]` newest-first and accepts any
+       real approval of this same plan, so either line would release the PR — the fresh one is the
+       truthful one. A comment the re-approval newly covers is surfaced by the diff below and is
+       never silently released.
+     - **`true` but `plan.url` differs from the one captured at step 2a (#238)** — a *different*
+       plan comment was posted and approved while you worked: a change of plan, not a
+       re-approval. Take the same blocked path as the first `false` branch below (step 2f, plus
+       `gh issue edit <number> --remove-label plan-approved` and the newly-arrived comments
+       reported in the blocker comment and step 3 summary), with the reason "a different plan was
+       approved after dispatch" rather than "approval no longer covers the implemented plan".
+       Removing the label here is deliberate: the fresh approval belongs to a plan this branch did
+       not implement.
+     - **`true` but `binding_line` is null** (fail-closed insurance; not currently producible,
+       since `binding_line` is non-null iff `covers_plan` is `true`) — treat this exactly as the
+       **unknown** branch below.
      - **`false`, every reason except `approval-label-absent`** — a same-run revision landed
        after dispatch: unchanged — do NOT commit or push: take step 2f's blocked path (reason:
        "approval no longer covers the implemented plan"), additionally `gh issue edit <number>
@@ -512,14 +533,27 @@ git status --porcelain   # review this list
      counted separately (`counts.decision_edited_after_approval`). An entry present now and
      absent at step 2a arrived while the implementer worked and was never seen; it stays
      non-binding — never a `RESOLVED:` decision, never a re-dispatch, and it never holds the
-     push. The binding check above keeps precedence
-     over WHERE this gets reported, not whether: if it passed (`true`), quote each newly-arrived
-     entry verbatim (author, association, `createdAt`, `url`) in the PR body's verification
-     section (below) and the step 3 summary; if it failed (`false`) or the verdict was unknown,
-     quote them in the blocker comment or, when it was posted (the de-dup guard above may have
-     skipped it), the hold comment, and the step 3 summary instead either way — there is no PR
-     body in either non-push case. An empty diff changes nothing: no extra PR-body line, no extra
-     summary bullet.
+     push.
+
+     **Newly-covered comments (#238).** When the same-plan re-approval branch above ran, also take
+     from this SAME fresh run every `trusted_post_plan` entry whose `covered_by_approval` is `true`
+     AND whose `createdAt` is later than the `approval.approved_at` captured at step 2a — a comment
+     that was uncovered (or did not exist) when you were dispatched, so it was never folded into
+     the implemented work, but that this run's re-approval now covers. Quote each verbatim (author,
+     association, `createdAt`, `url`) in the PR body's verification section and the step 3 summary,
+     flagged: *covered by the re-approval but not implemented — the human decides whether the PR is
+     still what they want.* On the byte-identical-`binding_line` branch this set is empty by
+     construction (nothing moved), so that path gains no extra work and no extra PR-body line.
+
+     Report by **outcome**, not by the raw `covers_plan` value, since a `true` verdict can now take
+     either path: on the two branches above that proceed to commit (byte-identical, and the
+     same-plan re-approval), quote each newly-arrived entry verbatim (author, association,
+     `createdAt`, `url`) in the PR body's verification section (below) and the step 3 summary; on
+     the branches that do not push — the blocked path (including the different-`plan.url` branch
+     above) and the unknown-verdict hold — quote them in the blocker comment or, when it was posted
+     (the de-dup guard above may have skipped it), the hold comment, and the step 3 summary instead
+     either way — there is no PR body in either non-push case. An empty diff changes nothing: no
+     extra PR-body line, no extra summary bullet.
 
      Once clean, commit, push, open the PR, and label the issue:
 ```bash
@@ -536,12 +570,17 @@ gh issue edit <number> --add-label pr-open
      verdict that reviewed the **final** tree, after the last kickback (a kickback round's `fail`
      line is replaced, not appended — and so is a CI-fix round's fresh line below: never leave a
      superseded one in the body); **the `binding_line` just re-validated above, pasted verbatim —
-     never one you compose on its behalf** (`<!-- harness-plan-binding: issue=<number>
+     never one you compose on its behalf** — this run's own fresh line, which differs from step
+     2a's exactly when step 2e's same-plan re-approval branch ran (#238) —
+     (`<!-- harness-plan-binding: issue=<number>
      plan=<url> approved-at=<ts> -->`); **the version line, pasted verbatim from step 0** (`<!--
-     harness-version: <version> <sha> -->`); any post-approval comment the diff above (#198) found had
-     arrived after dispatch, quoted verbatim (author, association, `createdAt`, `url`) in this
-     same verification section and flagged as not folded into the implemented work (omit this
-     item entirely when that diff was empty); a `Mutation probe:` line carrying that same verdict's
+     harness-version: <version> <sha> -->`); any post-approval comment step 2e's diff above (#198)
+     found — arrived after dispatch, or newly covered by a same-plan re-approval (#238) — quoted
+     verbatim (author, association, `createdAt`, `url`) in this same verification section, flagged
+     per direction: arrived after dispatch ⇒ *not folded into the implemented work*; newly covered
+     ⇒ *covered by the re-approval but not implemented — the human decides whether the PR is still
+     what they want* (omit this item entirely when that diff was empty); a `Mutation probe:` line
+     carrying that same verdict's
      `## Mutation probe` content (the `k/n killed; survivors: …` form, or its skip reason); the
      implementer's Evidence block condensed to its **Claims swept** and **Mutation checks**
      lines, copied from the report; any schema changes needing application; and the reviewer
@@ -630,7 +669,10 @@ a gap to report, never a silent skip (a `plan: null`, a missing `plan_selection`
 `approval.covers_plan` not `true` at step 2a or step 2e — named by `approval.reason`, together
 with which remedy ran: `plan-approved` removed for most `false` reasons, or left untouched behind
 an `<!-- harness-audit -->` hold for the unknown verdict or the `approval-label-absent` `false`
-reason — are all skip reasons here). Report step 2a's bounded retry either way, for every issue it
+reason — are all skip reasons here). Report a same-plan re-approval accepted at step 2e (#238)
+too, for every issue where it ran: the fresh `approval.approved_at`/`approved_by`, and that the
+fresh `binding_line` — never step 2a's — is what went into the PR body. Report step 2a's bounded
+retry either way, for every issue it
 ran on: whether the second run resolved the verdict (say to `true`/dispatch or to a `false`
 remedy) or the hold stood after it (still `approval.reason`-named, post-retry). The unknown-verdict
 hold's de-dup guard may skip the
@@ -648,7 +690,12 @@ quoted verbatim — it was seen but never folded into a `RESOLVED:` decision, so
 know it exists. Distinguish those already known at step 2a from any entry step 2e's diff (#198)
 found had arrived after dispatch — the latter are also quoted in the PR body's verification
 section, if a PR was opened; omit this distinction entirely for an issue where that diff was
-empty. Also distinguish, by `covered_by_approval_reason` (#230), an entry uncovered because it
+empty. On an issue where step 2e's same-plan re-approval branch ran (#238), distinguish a third
+category too — a separate, `covered_by_approval: true` population, not part of the uncovered set
+above — every entry that diff found the re-approval newly covered: quote each verbatim (author,
+association, `createdAt`, `url`), flagged *covered by the re-approval but not implemented — the
+human decides whether the PR is still what they want*; omit this third category's line entirely
+when it is empty. Also distinguish, by `covered_by_approval_reason` (#230), an entry uncovered because it
 merely postdates approval (`covered_by_approval_reason: null`) from one uncovered because it was
 itself EDITED after approval or its own edit state could not be read
 (`covered_by_approval_reason: "decision-edited-after-approval"` or `"decision-edit-unreadable"`) —
