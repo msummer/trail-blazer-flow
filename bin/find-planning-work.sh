@@ -37,10 +37,13 @@
 # field (only on comments), so this association is read from GitHub's REST issues endpoint
 # (author_association) into a number -> {author, association} map built once per run. An open
 # issue absent from the map gets association "MISSING" and trusted_author: false — the same
-# fail-closed rule the comment-side gate uses below. If the REST call itself fails, the script
-# warns once, sets counts.author_association_unavailable: true, and leaves the map empty, so
-# EVERY issue's trusted_author is false for this run (fail-closed) rather than dying or silently
-# trusting.
+# fail-closed rule the comment-side gate uses below. #246: if the REST call fails, the script
+# retries it once after a single bounded backoff before giving up — mirroring the shape #223 (PR
+# #244) gave the implementer side's re-run. Only if BOTH attempts fail does the script warn, set
+# counts.author_association_unavailable: true, and leave the map empty, so EVERY issue's
+# trusted_author is false for this run (fail-closed) rather than dying or silently trusting; a
+# retry that succeeds sets counts.author_association_retried: true but never
+# author_association_unavailable, and the map is built from the SECOND attempt's output.
 #
 # Output (JSON): needs_initial_plan, needs_revision (each item now additionally carries author,
 # association, trusted_author) plus untrusted_comments — an array of {number, title, url,
@@ -60,7 +63,9 @@
 # "<!-- harness-audit -->" / "<!-- verifier-verdict -->" respectively, excluded from has_feedback so
 # neither re-opens a plan for revision — this trusted-side counter is unrelated to
 # untrusted_harness_markers, which only ever counts the untrusted bucket), untrusted_issue_authors
-# (count of the array above), and author_association_unavailable (boolean, see above).
+# (count of the array above), author_association_unavailable (boolean, see above), and (#246)
+# author_association_retried (boolean, true iff the first REST attempt failed, regardless of
+# whether the retry succeeded — so retried && !unavailable is exactly "a blip was absorbed").
 #
 # Skipped automatically:
 #   - plan-proposed with no newer trusted non-plan comment -> awaiting your review, nothing to do
@@ -85,20 +90,42 @@ VERDICT_MARKER="<!-- verifier-verdict -->"
 TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"
 
 # #202: gh has never exposed an issue-level authorAssociation `--json` field, so author
-# provenance is read once per run from GitHub's REST issues endpoint into a number -> {author,
-# association} map, joined into both buckets below by issue number. The leading `.[] | ` in the
-# --jq filter is load-bearing: `gh api --paginate --jq` applies the filter to each page as ONE
-# array document, not once per element (the #196 lesson) — drop it and jq errors on the array,
-# gh exits 1, and this branch fail-closes for the wrong reason instead of building the map.
-author_association_unavailable=false
-issue_authors="{}"
-if ! rest_lines=$(gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" --paginate --jq '
+# provenance is read from GitHub's REST issues endpoint into a number -> {author, association}
+# map, joined into both buckets below by issue number. read_issue_authors is the ONE copy of that
+# REST call (below, retried on failure) — the leading `.[] | ` in its --jq filter is load-bearing:
+# `gh api --paginate --jq` applies the filter to each page as ONE array document, not once per
+# element (the #196 lesson) — drop it and jq errors on the array, gh exits 1, and this branch
+# fail-closes for the wrong reason instead of building the map.
+read_issue_authors() {
+  gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" --paginate --jq '
     .[] | select(.pull_request == null)
     | "\(.number) \(.author_association // "MISSING") \(.user.login // "unknown")"
-  ' 2>/dev/null); then
-  echo "warn: could not read issue author association (REST issues endpoint) — every issue author treated as untrusted this run (fail-closed)" >&2
-  author_association_unavailable=true
-else
+  ' 2>/dev/null
+}
+
+# #246: one bounded retry of read_issue_authors before fail-closing the whole run — the common
+# transient-API-blip case would otherwise cost an entire unattended cycle's auto-approval floor
+# (skills/issue-planner/SKILL.md step 6b), mirroring the shape #223 (PR #244) gave the implementer
+# side's own re-run. ASSOCIATION_RETRY_SLEEP is the single backoff constant; the sleep is guarded
+# (`|| true`) so a failing `sleep` itself can never abort the run under this script's own
+# set -euo pipefail (M3's fixture in dev/planning-tests.sh pins the guard). The map is built once, from whichever
+# attempt succeeded (never from a failed attempt's empty capture) — guarded on
+# author_association_unavailable being false rather than on $rest_lines' post-failure value.
+ASSOCIATION_RETRY_SLEEP=30
+author_association_unavailable=false
+author_association_retried=false
+issue_authors="{}"
+if ! rest_lines=$(read_issue_authors); then
+  author_association_retried=true
+  sleep "$ASSOCIATION_RETRY_SLEEP" || true
+  if rest_lines=$(read_issue_authors); then
+    echo "warn: issue author association lookup failed once — retried after 30s and succeeded (transient API blip absorbed)" >&2
+  else
+    echo "warn: could not read issue author association (REST issues endpoint) — every issue author treated as untrusted this run (fail-closed)" >&2
+    author_association_unavailable=true
+  fi
+fi
+if [ "$author_association_unavailable" = false ]; then
   issue_authors=$(printf '%s\n' "$rest_lines" | jq -R -s -c '
     split("\n") | map(select(length > 0) | split(" ")) | map(select(length >= 3))
     | map({key: .[0], value: {association: .[1], author: .[2]}}) | from_entries
@@ -275,6 +302,7 @@ jq -n \
   --argjson vas "$verdict_archives_skipped" \
   --argjson uiac "$untrusted_issue_author_count" \
   --argjson aau "$author_association_unavailable" \
+  --argjson aar "$author_association_retried" \
   '{needs_initial_plan: $initial, needs_revision: $revision, untrusted_comments: $untrusted,
     untrusted_issue_authors: $uia,
     counts: {initial: ($initial | length), revision: ($revision | length),
@@ -287,4 +315,5 @@ jq -n \
              audit_comments_skipped: $acs,
              verdict_archives_skipped: $vas,
              untrusted_issue_authors: $uiac,
-             author_association_unavailable: $aau}}'
+             author_association_unavailable: $aau,
+             author_association_retried: $aar}}'

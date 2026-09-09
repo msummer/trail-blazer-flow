@@ -173,8 +173,12 @@ script's stderr, say so too — it can mean the harness's own `gh` identity isn'
 on this repo, which wouldn't stop plans from posting, but would break feedback detection instead:
 `$lastPlan` stays null, so genuine maintainer feedback never triggers a revision. If
 `counts.author_association_unavailable` is `true`, say so prominently too — the REST
-author-association lookup failed this run, so EVERY issue is `trusted_author: false` regardless of
-who actually opened it, and no plan can auto-approve until that's fixed. If
+author-association lookup failed both its attempts this run (#246: the script retries once after a
+bounded backoff before giving up), so EVERY issue is `trusted_author: false` regardless of who
+actually opened it, and no plan can auto-approve until that's fixed. If instead
+`counts.author_association_retried` is `true` but `counts.author_association_unavailable` is
+`false`, mention the absorbed blip briefly — the retry succeeded, so provenance is fine this run and
+no action is needed. If
 `needs_initial_plan` and `needs_revision` are both empty, say so and stop (empty
 `untrusted_comments`/`untrusted_issue_authors` buckets need no separate stop condition — report
 them as empty and continue, or as part of the same "nothing to do" message).

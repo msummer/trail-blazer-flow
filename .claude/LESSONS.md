@@ -109,3 +109,9 @@ bites: 1–3 lines, written as an instruction to a future agent.
   that excludes it and state that the slow path re-derives the same verdict. On #260 `bash hooks/push-guard.sh`
   carried `push` but not `git`, so the case exited at fast path 2 while its comment claimed to exercise the
   tokenizer's basename step; LESSON 2026-08-26 stated this for `git -C` only — it is general.
+- 2026-09-09 (c): When an acceptance criterion names TWO old totals for a bare-number sweep ("98, 97"),
+  grep each number separately and walk every hit, including chains that were already stale on main
+  before this PR (a gap a previous PR left is still in scope once the criterion names its number) —
+  and record the sweep itself (the grep commands and the walked hits) in the report's Evidence, not
+  a prose-regex sweep in its place. On #246 the `98` sweep was complete but six `97` growth chains
+  and one survivor enumeration were left at 97 (suite: 100); one verification round.

@@ -20,8 +20,12 @@
 #   carries {author, association, trusted_author}, a non-maintainer-authored issue is still
 #   listed (planning is not gated on it) but also appears in the untrusted_issue_authors bucket,
 #   and (#202: association is read from GitHub's REST issues endpoint, since gh has never exposed
-#   an issue-level authorAssociation `--json` field) if that REST lookup fails the whole run fails
-#   closed (every issue untrusted, one warn line, counts.author_association_unavailable: true). #182
+#   an issue-level authorAssociation `--json` field) if that REST lookup fails, the script retries
+#   it once after a single bounded backoff (#246, mirroring #223/PR #244's implementer-side
+#   re-run) before the run fails closed (every issue untrusted, one warn line,
+#   counts.author_association_unavailable: true); a retry that succeeds instead sets
+#   counts.author_association_retried: true and populates the map from the SECOND attempt's
+#   output, with a distinct one-line warn on stderr. #182
 #   added a second, orthogonal exclusion inside the trusted set: a trusted comment containing
 #   "<!-- harness-audit -->" (a harness-authored audit/hygiene record) or "<!-- verifier-verdict
 #   -->" (the orchestrator's own archive) never counts as feedback either, so neither re-opens a
@@ -160,8 +164,32 @@
 #                               empty author map (every issue's association resolves to
 #                               "MISSING", trusted_author: false)
 #   - reject-association      : (optional, presence-only) makes the stub's `gh api .../issues?...`
-#                               REST call exit 1, exercising find-planning-work.sh's fail-closed
-#                               author_association_unavailable path
+#                               REST call exit 1 on EVERY invocation, exercising
+#                               find-planning-work.sh's fail-closed author_association_unavailable
+#                               path after (#246) BOTH the first attempt and its one retry fail
+#   - reject-association-once : (optional, presence-only, #246) a ONE-SHOT variant of the above —
+#                               makes the stub's `gh api .../issues?...` REST call exit 1 on its
+#                               FIRST invocation only; the stub `rm -f`s this marker file as soon as
+#                               it fires, so the SECOND invocation (find-planning-work.sh's bounded
+#                               retry) falls through to rest-issues.json normally. This is the
+#                               harness's first self-consuming fixture marker — every other stub
+#                               write into a fixture directory is the append-only .api-calls log
+#                               (see the CALL LOG note below); a fixture directory carrying this
+#                               marker cannot be reused for a second run of the script under test,
+#                               and this marker and the permanent reject-association above are
+#                               mutually exclusive by convention (checked in that order — see the
+#                               issues branch documentation below), never combined in one fixture
+#   - sleep-fails             : (optional, presence-only, #246) makes the stub `sleep` installed by
+#                               build_stub_sleep (see below) exit 1 instead of 0, modelling a
+#                               backoff sleep that itself fails — pins that find-planning-work.sh's
+#                               retry guards the sleep (`|| true`) so a failing sleep can never
+#                               abort the run under set -euo pipefail
+#   - .sleep-calls            : (written by the stub, never by a case, #246) the call log
+#                               build_stub_sleep's stub `sleep` appends one line to (its own
+#                               arguments, `"$*"`), BEFORE checking sleep-fails — the same
+#                               append-first-then-branch idiom the CALL LOG note below documents
+#                               for .api-calls, read by the new expect_sleep_calls/expect_sleep_arg
+#                               helpers, never by a fixture builder
 #   - events-<n>.json          : (#174) the `gh api .../issues/<n>/events` payload for ready
 #                               issue <n> — a plain JSON array of GitHub issue-event objects
 #                               ({event, label:{name}, created_at, actor:{login}}); absent means
@@ -270,8 +298,12 @@ mk_fixture() {
 # so a mutation to that script cannot touch it; the suite has since grown to 79 across #229's five
 # new find-implementation-work.sh label-pre-filter fixtures, then 85 across #213's six approval-
 # history fixtures, then 96 across #230's eleven decision-comment-binding fixtures, then 97 across
-# #230's guard-pin fixture (kickback review), none of which touch find-planning-work.sh or the
-# needs_initial_plan call this proof mutates — not re-run): the
+# #230's guard-pin fixture (kickback review), then 100 across #246's two new author-association-
+# retry-* fixtures — not re-run for #246 either, since (like MUTATION PROOF (a) below) its
+# recorded failing set would need re-measuring rather than merely re-stating, and this PR's own
+# retry mutants (M1/M2/M3) and re-measured MUTATION PROOF B/(b) below already give this diff's own
+# behaviour full coverage):
+# the
 # generic validator — not a leftover special
 # case — is what now catches an "authorAssociation" regression. With validate_json_fields in place
 # (unmutated) and bin/find-planning-work.sh's OWN needs_initial_plan call mutated in the working
@@ -400,26 +432,31 @@ mk_fixture() {
 # otherwise invisible to the suite — reverted immediately after recording this.
 # MUTATION PROOF B (#196-class, the issue's named mutant, measured 2026-09-05; re-measured
 # 2026-09-05 when #192 grew the suite to 66 — same 27 planner-side cases, new total, since #192
-# adds no planner-side fixtures): with the stub
+# adds no planner-side fixtures; re-measured again 2026-09-09 (#246) when this PR's two new
+# author-association-retry-* fixtures grew the suite to 100): with the stub
 # unchanged, deleting the leading `.[]` from bin/find-planning-work.sh's OWN revision-candidates
-# filter (`--jq '.[].number'` -> `--jq '.number'`) and re-running the suite dropped it to 39
-# pass/27 fail, failing exactly the SAME 27 planner-side cases converted to candidates.json fixtures by
-# this PR: untrusted-comment-no-revision, contributor-comment-no-revision, owner-comment-revision,
+# filter (`--jq '.[].number'` -> `--jq '.number'`) and re-running the suite dropped it to 71
+# pass/29 fail, failing exactly the SAME 27 planner-side cases the 2026-09-05 measurement named
+# PLUS this PR's two new author-association-retry-* fixtures (both of which also write a
+# candidates.json of `[]`, so they go through the identical mutated arm): untrusted-comment-no-revision,
+# contributor-comment-no-revision, owner-comment-revision,
 # member-comment-revision, collaborator-comment-revision, lowercase-association-still-trusted,
 # untrusted-marker-does-not-shadow, untrusted-marker-only, mixed-trusted-and-untrusted,
 # missing-association-warns, no-comments, fetch-failure-survives, output-shape,
 # initial-untrusted-author-reported, initial-trusted-author-clean,
 # initial-missing-author-association, initial-author-map-per-issue,
 # revision-untrusted-author-reported, revision-trusted-author-clean,
-# author-association-unavailable, plan-audit-comment-no-revision,
+# author-association-unavailable, author-association-retry-succeeds,
+# author-association-retry-sleep-failure-survives, plan-audit-comment-no-revision,
 # plan-verdict-archive-no-revision, plan-audit-does-not-mask-real-feedback,
 # plan-untrusted-audit-marker-still-reported, plan-untrusted-harness-marker-flagged,
 # plan-untrusted-verdict-marker-flagged, and plan-escalation-audit-comment-no-revision — reverted
-# immediately after recording this. plan-candidates-filter-error did NOT fail under this script
+# immediately after recording this (byte-identical, sha256 confirmed). plan-candidates-filter-error
+# did NOT fail under this script
 # mutant: its candidates.json fixture (a page array whose own element is itself an array) errors
 # under `.number` exactly as it does under the fixed `.[].number` — the same coincidence
 # impl-approval-events-filter-error documents for the events arm, not evidence the mutant is
-# inert; the mutant is caught by the 27 cases above. Before this PR, this exact mutant left the
+# inert; the mutant is caught by the 29 cases above. Before this PR, this exact mutant left the
 # whole suite green (the `*"--jq"*` arm ignored the filter argument entirely) — that contrast is
 # the whole point of #211.
 #
@@ -497,23 +534,33 @@ mk_fixture() {
 # mid-path, not as its own positional arg.
 #
 # issues branch (#202): `gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" --paginate
-# --jq 'EXPR'` -> exit 1 if DIR/reject-association exists (simulates the REST issues endpoint
-# being unreadable — find-planning-work.sh's author_association_unavailable path); else, if
-# DIR/rest-issues.json exists (a plain JSON array of GitHub issue objects, optionally including a
-# {pull_request:{...}} entry the real endpoint would also return), `jq -r "(EXPR)"
-# DIR/rest-issues.json`, PROPAGATING jq's exit status (`|| exit 1`) — the same shape the events
-# branch above now uses (#204); a filter error here is a hard failure, matching real `gh api`'s
-# own behaviour. Absent rest-issues.json prints nothing and exits 0 (empty author map — every
-# issue's association resolves to "MISSING").
+# --jq 'EXPR'` -> (#246) if DIR/reject-association-once exists, `rm -f` it and exit 1 — a ONE-SHOT
+# rejection, consumed on first use, so the invocation the calling script makes right after
+# (find-planning-work.sh's own bounded retry) falls through to the checks below instead; else, if
+# DIR/reject-association exists, exit 1 UNCONDITIONALLY (simulates the REST issues endpoint being
+# unreadable on every attempt — find-planning-work.sh's author_association_unavailable path, now
+# reached only after both the first attempt and the retry fail); else, if DIR/rest-issues.json
+# exists (a plain JSON array of GitHub issue objects, optionally including a {pull_request:{...}}
+# entry the real endpoint would also return), `jq -r "(EXPR)" DIR/rest-issues.json`, PROPAGATING
+# jq's exit status (`|| exit 1`) — the same shape the events branch above now uses (#204); a filter
+# error here is a hard failure, matching real `gh api`'s own behaviour. Absent rest-issues.json
+# prints nothing and exits 0 (empty author map — every issue's association resolves to "MISSING").
+# reject-association-once and reject-association are checked in that order and are mutually
+# exclusive by convention — this file never combines them in one fixture — and, being the harness's
+# first self-consuming fixture marker, a fixture directory carrying reject-association-once cannot
+# be reused for a second run of the script under test (every other stub write into a fixture
+# directory, including .api-calls below, is append-only and never removed).
 # MUTATION PROOF (a) (measured 2026-09-04): reverting bin/find-planning-work.sh's whole provenance
 # lookup to its pre-#202 shape (the `if ! needs_initial_plan=$(gh issue list ... --json
 # number,title,url,author,authorAssociation ...)` probe with its `view_fields` fallback) and
 # re-running `bash dev/planning-tests.sh` against the SAME (post-#202) fixtures dropped the suite
 # from 54 pass/0 fail to 49 pass/5 fail (measured 2026-09-04, when the suite held 54 cases — the
 # suite has since grown to 74 across #204/#211/#192/#217, then 79 across #229, then 85 across
-# #213, then 96 across #230, then 97 across #230's guard-pin fixture (kickback review), all
-# additions on the implementer-facing half or the --json field-list validation, none of
-# which this planner-side proof touches; this proof was not re-run), failing exactly:
+# #213, then 96 across #230, then 97 across #230's guard-pin fixture (kickback review), then 100
+# across #246's two new author-association-retry-* fixtures — this proof was not re-run: its
+# mutant reverts to a code shape (the pre-#202 `view_fields` fallback) that no longer exists
+# anywhere in the tree, including in the #246 retry this PR adds, so there is nothing live left to
+# re-measure against), failing exactly:
 # initial-untrusted-author-reported (the
 # old fallback's needs_initial_plan carries no authorAssociation field at all now that association
 # data lives only in rest-issues.json, so the old code's own jq maps it to "MISSING" instead of the
@@ -525,25 +572,34 @@ mk_fixture() {
 # after recording this. revision-untrusted-author-reported did NOT fail under this mutant: its
 # fixture's expected outcome (false) is also what the old code's own untouched
 # comment-level-only-fallback happens to produce — a coincidence of that one fixture, not evidence
-# the mutant is inert. MUTATION PROOF (b) (measured 2026-09-04): deleting only the leading `.[] | `
-# from the script's REST --jq filter (leaving everything else at its current, #202 shape) and
-# re-running the suite dropped it to 50 pass/4 fail (measured 2026-09-04, when the suite held 54
-# cases — the suite has since grown to 74 across #204/#211/#192/#217, then 79 across #229, then 85
-# across #213, then 96 across #230, then 97 across #230's guard-pin fixture (kickback review) (same
-# implementer-facing/field-list additions, same non-involvement); not
-# re-run), failing exactly:
+# the mutant is inert. MUTATION PROOF (b) (measured 2026-09-04; re-measured 2026-09-09 (#246), when
+# the retry function read_issue_authors was factored out and the suite grew to 100 across this
+# PR's two new fixtures): deleting only the leading `.[] | ` from the script's REST --jq filter —
+# now inside read_issue_authors, called identically by both the first attempt and the retry, so the
+# SAME mutated filter is applied on both attempts — (leaving everything else at its current, #246
+# shape) and re-running the suite dropped it to 94 pass/6 fail (the 2026-09-04 measurement, when
+# the suite held 54 cases, dropped it to 50 pass/4 fail; the suite has since grown to 74 across
+# #204/#211/#192/#217, then 79 across #229, then 85 across #213, then 96 across #230, then 97
+# across #230's guard-pin fixture (kickback review), then 100 across #246's two new fixtures
+# below), failing exactly:
 # initial-untrusted-author-reported, initial-trusted-author-clean, initial-author-map-per-issue,
-# and revision-trusted-author-clean — the stub's `jq -r "(EXPR)"` then tries to index the whole
-# rest-issues.json ARRAY with `.pull_request` (jq: "Cannot index array with string
-# \"pull_request\""), errors, `|| exit 1` propagates that, and the script's `if !` guard treats it
-# identically to a REST outage (empty map, every covered issue MISSING/untrusted) — reverted
-# immediately after recording this. initial-missing-author-association and
+# revision-trusted-author-clean, author-association-retry-succeeds, and
+# author-association-retry-sleep-failure-survives — the stub's `jq -r "(EXPR)"` then tries to index
+# the whole rest-issues.json ARRAY with `.pull_request` (jq: "Cannot index array with string
+# \"pull_request\""), errors, `|| exit 1` propagates that, and (#246) BOTH attempts hit the
+# identical error on any NON-EMPTY rest-issues.json — including the retry-succeeds/sleep-failure
+# fixtures' single-item array, so their retry's second attempt fails exactly like the first and the
+# run ends up fail-closed (author_association_unavailable: true) instead of the false these two
+# fixtures expect — reverted immediately after recording this (byte-identical, sha256 confirmed).
+# initial-missing-author-association and
 # author-association-unavailable did NOT fail under this mutant: the former's rest-issues.json is
-# `[]`, which ALSO errors the same way under the mutant (jq still can't index an array), so it
-# fails closed to the exact MISSING/false outcome the case already expects; the latter's
-# reject-association file short-circuits the stub before jq ever runs. Neither is evidence the
+# `[]`, which ALSO errors the same way under the mutant on BOTH attempts (jq still can't index an
+# empty array, so it fails closed exactly like a non-empty one), so it fails closed to the exact
+# MISSING/false outcome the case already expects; the latter's permanent reject-association file
+# short-circuits the stub before jq ever runs, on both attempts. Neither is evidence the
 # mutant is inert on those two fixtures — it is caught by every OTHER case whose rest-issues.json
-# is non-empty. MUTATION PROOF (a)'s premise — that the stub rejects the old fallback's
+# is non-empty and actually reaches the mutated filter (including, since #246, both new retry
+# fixtures). MUTATION PROOF (a)'s premise — that the stub rejects the old fallback's
 # "authorAssociation" field, forcing it down its own comment-level-only fallback path — held via
 # the now-deleted `*"authorAssociation"*` list) arm at the time it was measured; #217 replaced that
 # arm with the generic validate_json_fields check, which rejects the same field with the identical
@@ -561,7 +617,12 @@ mk_fixture() {
 # invokes the stub `gh` more than once within a single case (e.g. --issue mode reusing the
 # prefetched issue still calls the stub for other lookups) accumulates every call across all of
 # them, never truncated between invocations, so a case that expects N calls must count every `gh
-# api` call the run makes, not just the last one.
+# api` call the run makes, not just the last one. (#246) find-planning-work.sh's own bounded
+# author-association retry means the planner path logs exactly ONE line when the first attempt
+# succeeds, and exactly TWO — one per attempt — whenever the first attempt fails, whether the
+# second attempt then succeeds (the retry-succeeds fixture) or also fails (the permanent
+# reject-association fixture, never a third) — see expect_api_calls below and the sleep call log
+# (.sleep-calls, build_stub_sleep) it pairs with for the retry-specific fixtures.
 build_stub_gh() {
   local dir="$1" tmpl="$dir/gh.tmpl"
   {
@@ -680,6 +741,10 @@ case "$1" in
         exit 0
         ;;
       *"/issues?"*)
+        if [ -f "__DIR__/reject-association-once" ]; then
+          rm -f "__DIR__/reject-association-once"
+          exit 1
+        fi
         if [ -f "__DIR__/reject-association" ]; then
           exit 1
         fi
@@ -698,6 +763,36 @@ EOF
   sed "s#__DIR__#$dir#g" "$tmpl" > "$dir/gh"
   rm -f "$tmpl"
   chmod +x "$dir/gh"
+  build_stub_sleep "$dir"
+}
+
+# build_stub_sleep DIR (#246) — writes an executable DIR/sleep, same __DIR__ + sed template idiom
+# as build_stub_gh above, called from the end of build_stub_gh so EVERY fixture is protected from
+# a real 30s wait during find-planning-work.sh's author-association retry backoff (run_planning
+# prepends DIR to PATH, and sleep is an external command under bash, not a builtin, so this stub
+# takes effect ahead of the real /bin/sleep). It logs first, fails second: it appends its own
+# arguments ("$*", e.g. "30") to DIR/.sleep-calls BEFORE checking DIR/sleep-fails, so the call is
+# recorded even on the path that then reports failure. Deliberately faithful to `sleep`'s
+# INTERFACE only (it accepts an argument, writes no stdout, and exits 0 or 1) and NOT to its wall
+# clock — it never actually sleeps, by design (LESSONS 2026-09-01(c), 2026-09-06): the whole point
+# is to keep this suite's runtime from growing by 30s per retry fixture while still letting a case
+# pin the backoff mechanically via the call log, the same idiom .api-calls/expect_api_calls already
+# uses for `gh api`.
+build_stub_sleep() {
+  local dir="$1" tmpl="$dir/sleep.tmpl"
+  {
+    printf '#!%s\n' "$bash_bin"
+    cat <<'EOF'
+printf '%s\n' "$*" >> "__DIR__/.sleep-calls"
+if [ -f "__DIR__/sleep-fails" ]; then
+  exit 1
+fi
+exit 0
+EOF
+  } > "$tmpl"
+  sed "s#__DIR__#$dir#g" "$tmpl" > "$dir/sleep"
+  rm -f "$tmpl"
+  chmod +x "$dir/sleep"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -783,7 +878,14 @@ run_script_at() {
 # positive control — see that case's own comment). Written as a plain if/else, never a `[ -f ...
 # ] && wc -l` tail, which would leave the function's own exit status non-zero under `set -uo
 # pipefail` whenever the file is absent (the common, EXPECTED case for a label-absent fixture) and
-# silently break every case run after it. All set $__ok=0 and append to $__why on failure.
+# silently break every case run after it. expect_sleep_calls DIR N / expect_sleep_arg DIR EXPECTED
+# — (#246) the analogous pair for the stub `sleep` build_stub_sleep installs: expect_sleep_calls
+# follows expect_api_calls' identical plain-if/else discipline (0 when DIR/.sleep-calls doesn't
+# exist, its line count otherwise); expect_sleep_arg is a whole-file string-equality check against
+# that same file's contents (only ever called on a fixture with exactly one sleep call, so a whole-
+# file compare is unambiguous). Neither is grep-based, so neither takes a needle_required guard —
+# same reasoning as expect_api_calls/expect_jq/expect_rc above. All set $__ok=0 and append to
+# $__why on failure.
 # needle_required NAME NEEDLE (#262) — guards every needle-taking helper below: an empty NEEDLE
 # degenerates `grep -qF -- ""`/`grep -cF -- ""` into an unconditional match, so treat an empty
 # needle as a harness bug IN THE CASE, not a fact about the script under test. Sets $__ok=0,
@@ -842,6 +944,20 @@ expect_api_calls() {
     actual=0
   fi
   [ "$actual" = "$expected" ] || { __ok=0; __why="${__why}api calls: expected $expected, got $actual\n"; }
+}
+expect_sleep_calls() {
+  local dir="$1" expected="$2" actual
+  if [ -f "$dir/.sleep-calls" ]; then
+    actual="$(wc -l < "$dir/.sleep-calls" | tr -d ' ')"
+  else
+    actual=0
+  fi
+  [ "$actual" = "$expected" ] || { __ok=0; __why="${__why}sleep calls: expected $expected, got $actual\n"; }
+}
+expect_sleep_arg() {
+  local dir="$1" expected="$2" actual
+  actual="$(cat "$dir/.sleep-calls" 2>/dev/null || true)"
+  [ "$actual" = "$expected" ] || { __ok=0; __why="${__why}sleep arg: expected $expected, got $actual\n"; }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1126,7 +1242,7 @@ EOF
 
 # output-shape — every existing top-level key and counts field is still present with its current
 # name (protects bin/harness-status.sh, which reads .needs_initial_plan and .needs_revision),
-# plus #176's new keys.
+# plus #176's new keys, plus (#246) the new author_association_retried counts key.
 case_output_shape() {
   local dir; dir="$(mk_fixture output-shape)"
   cat > "$dir/initial.json" <<'EOF'
@@ -1152,6 +1268,7 @@ EOF
   expect_jq '.counts | has("verdict_archives_skipped")' 'true'
   expect_jq '.counts | has("untrusted_issue_authors")' 'true'
   expect_jq '.counts | has("author_association_unavailable")' 'true'
+  expect_jq '.counts | has("author_association_retried")' 'true'
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1184,7 +1301,11 @@ EOF
 
 # initial-trusted-author-clean (control) — an issue whose rest-issues.json entry is OWNER:
 # trusted_author true, empty untrusted_issue_authors bucket. This is the case that requires the
-# REST lookup to actually succeed and join correctly — see MUTATION PROOF (a)/(b) above.
+# REST lookup to actually succeed and join correctly — see MUTATION PROOF (a)/(b) above. Also
+# (#246) the 0-failures boundary case / non-vacuity POSITIVE CONTROL for expect_api_calls and
+# expect_sleep_calls on the planner's author-association call: 1 gh api call, 0 sleeps. Without
+# this control, a retry loop wired to always sleep once (or always call twice) regardless of the
+# first attempt's outcome would still pass every fixture that only asserts 2 calls/1 sleep.
 case_initial_trusted_author_clean() {
   local dir; dir="$(mk_fixture initial-trusted-author-clean)"
   cat > "$dir/initial.json" <<'EOF'
@@ -1199,6 +1320,9 @@ EOF
   expect_rc 0
   expect_jq '.needs_initial_plan[0].trusted_author' 'true'
   expect_jq '.untrusted_issue_authors' '[]'
+  expect_jq '.counts.author_association_retried' 'false'
+  expect_api_calls "$dir" 1
+  expect_sleep_calls "$dir" 0
   expect_jq '.counts.untrusted_issue_authors' '0'
 }
 
@@ -1316,12 +1440,16 @@ EOF
   expect_jq '.untrusted_issue_authors' '[]'
 }
 
-# author-association-unavailable — the stub's REST issues call (gh api .../issues?...) fails
-# (reject-association present, simulating the REST endpoint being unreachable): one warn line,
-# every issue's trusted_author forced false regardless of its actual (unreachable) association,
-# and counts.author_association_unavailable: true. needs_initial_plan itself still succeeds
-# (#202: it's now an unconditional, authorAssociation-free `gh issue list` call, independent of
-# the REST lookup) — only the association join fails closed.
+# author-association-unavailable — (#246, the 2-failures boundary) the stub's REST issues call
+# (gh api .../issues?...) fails on EVERY invocation (reject-association present, simulating the
+# REST endpoint being unreachable on both the first attempt and the bounded retry): one warn line
+# (the byte-identical existing fail-closed stem), every issue's trusted_author forced false
+# regardless of its actual (unreachable) association, and counts.author_association_unavailable:
+# true AND counts.author_association_retried: true (a retry was attempted; it just also failed).
+# Exactly 2 gh api calls (one per attempt) and never 3 — the fail-closed branch is reached only
+# after the bounded retry, not instead of it. needs_initial_plan itself still succeeds (#202: it's
+# now an unconditional, authorAssociation-free `gh issue list` call, independent of the REST
+# lookup) — only the association join fails closed.
 case_author_association_unavailable() {
   local dir; dir="$(mk_fixture author-association-unavailable)"
   cat > "$dir/initial.json" <<'EOF'
@@ -1334,7 +1462,96 @@ EOF
   expect_rc 0
   expect_err "could not read issue author association"
   expect_jq '.counts.author_association_unavailable' 'true'
+  expect_jq '.counts.author_association_retried' 'true'
   expect_jq '.needs_initial_plan[0].trusted_author' 'false'
+  expect_api_calls "$dir" 2
+  expect_sleep_calls "$dir" 1
+}
+
+# author-association-retry-succeeds — (#246, the 1-failure boundary) the stub's REST issues call
+# fails on its FIRST invocation only (reject-association-once, consumed after it fires) and
+# succeeds on the bounded retry: exactly 2 gh api calls, exactly 1 sleep call with argument "30"
+# (expect_sleep_arg — pins the ASSOCIATION_RETRY_SLEEP constant itself, not merely that a sleep
+# happened), counts.author_association_retried: true, counts.author_association_unavailable:
+# false, and — the non-vacuity requirement — a REAL association value ("OWNER") and
+# trusted_author: true, proving the map was actually built from the SECOND attempt's output, not
+# merely that the boolean flags came out right. Pins the new stderr line's presence exactly once,
+# on its own stream (planning_err, never combined with stdout — LESSON 2026-09-08(b)), and the
+# permanent fail-closed stem's ABSENCE on that same stream (a case that only asserted the flags
+# could still pass if the script emitted both warn lines, or the wrong one). Measured mutants
+# (each applied to bin/find-planning-work.sh alone, run, then restored byte-identically —
+# sha256 confirmed — before the next): M1 (delete the retry entirely, collapsing back to the
+# pre-#246 single-attempt shape) — `bash dev/planning-tests.sh` dropped from 100 pass/0 fail to 97
+# pass/3 fail, failing exactly author-association-unavailable (now only 1 gh api call/0 sleeps
+# instead of the expected 2/1, and counts.author_association_retried stays false),
+# author-association-retry-succeeds (the first attempt's rejection is fatal again — the run
+# fail-closes with counts.author_association_unavailable: true instead of retrying, so the map is
+# never built from a second attempt), and author-association-retry-sleep-failure-survives (same
+# reason: no second attempt exists to survive a failing sleep). M2 (loop three attempts instead of
+# two, adding a second guarded sleep + retry) — `bash dev/planning-tests.sh` dropped to 99 pass/1
+# fail, failing exactly author-association-unavailable (its permanent reject-association now costs
+# 3 gh api calls/2 sleeps instead of 2/1 — the mutant's extra attempt is REACHED, since every
+# attempt in this fixture fails); this suite's two new retry-succeeding fixtures did NOT fail under
+# M2, since their single reject-association-once marker is consumed by the FIRST attempt and the
+# (mutant's extra, never-reached) third attempt is irrelevant once the second succeeds — not
+# evidence the mutant is inert, just that this fixture can't distinguish "retry once" from "retry
+# up to twice" on its own; author-association-unavailable is what catches it. M3 (drop the sleep's
+# `|| true` guard) — see author-association-retry-sleep-failure-survives below for its measurement
+# (99 pass/1 fail, failing exactly that one case).
+case_author_association_retry_succeeds() {
+  local dir; dir="$(mk_fixture author-association-retry-succeeds)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":14,"title":"Retried issue","url":"https://example.invalid/14","author":{"login":"owner"}}]
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":14,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  : > "$dir/reject-association-once"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.counts.author_association_unavailable' 'false'
+  expect_jq '.counts.author_association_retried' 'true'
+  expect_jq '.needs_initial_plan[0].association' '"OWNER"'
+  expect_jq '.needs_initial_plan[0].trusted_author' 'true'
+  expect_api_calls "$dir" 2
+  expect_sleep_calls "$dir" 1
+  expect_sleep_arg "$dir" 30
+  expect_no_err "could not read issue author association"
+  expect_warn_count "retried after 30s and succeeded" 1
+}
+
+# author-association-retry-sleep-failure-survives — (#246) the stub `sleep` itself fails
+# (sleep-fails present) on the one retry backoff a first-attempt rejection (reject-association-
+# once) triggers: the second REST attempt still runs and succeeds, and the script still exits 0 —
+# pins that find-planning-work.sh guards the sleep (`sleep "$ASSOCIATION_RETRY_SLEEP" || true`) so
+# a failing sleep can never abort the run under set -euo pipefail. This is the only case that
+# exercises that guard: every other retry fixture's stub `sleep` succeeds. Measured mutant: M3
+# (delete the `|| true` guard, leaving a bare `sleep "$ASSOCIATION_RETRY_SLEEP"` that can abort the
+# script under set -euo pipefail when the stub sleep fails) — `bash dev/planning-tests.sh` dropped
+# from 100 pass/0 fail to 99 pass/1 fail, failing exactly
+# author-association-retry-sleep-failure-survives (rc becomes 1 instead of 0, since the unguarded
+# `sleep` command's own non-zero exit now propagates straight out of the script) — every other
+# case's stub sleep always succeeds, so this mutant is invisible to them — restored
+# byte-identically (diff clean) immediately after recording this.
+case_author_association_retry_sleep_failure_survives() {
+  local dir; dir="$(mk_fixture author-association-retry-sleep-failure-survives)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":15,"title":"Retried issue, slow sleep","url":"https://example.invalid/15","author":{"login":"owner"}}]
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":15,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  : > "$dir/reject-association-once"
+  : > "$dir/sleep-fails"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.counts.author_association_unavailable' 'false'
+  expect_api_calls "$dir" 2
+  expect_sleep_calls "$dir" 1
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1618,7 +1835,11 @@ EOF
 # RE-MEASURED again 2026-09-07 against the 96-case suite that now also includes #230's eleven
 # decision-comment-binding cases, then RE-MEASURED once more on kickback review against the
 # 97-case suite that now also includes #230's guard-pin fixture — none of these reach this
-# plan-after-approval branch either) dropped it to
+# plan-after-approval branch either; the suite has since grown to 98 across #255+#262's
+# empty-needle-guard, then 100 across #246's two new author-association-retry-* fixtures — the
+# former calls neither discovery script at all, and the latter two exercise find-planning-work.sh
+# via run_planning, never find-implementation-work.sh, so none of these three new cases can reach
+# this (find-implementation-work.sh-only) branch either — not re-run) dropped it to
 # 96 pass/1 fail, failing exactly: impl-plan-after-approval, the identical single-case result as
 # every earlier measurement scaled up — reverted immediately after
 # recording this (byte-identical, sha256 confirmed). A cruder mutant (forcing every issue through the branch that runs the new check
@@ -1634,7 +1855,11 @@ EOF
 # recorded 2026-09-05 predates #213 and was never re-verified after #213 landed): dropped the
 # suite to 94 pass/2 fail; RE-MEASURED again on kickback review against the 97-case suite that now
 # also includes #230's guard-pin fixture (which does not reach this branch either — its own
-# plan_created is already not later than approved_at, so this mutant changes nothing for it):
+# plan_created is already not later than approved_at, so this mutant changes nothing for it); the
+# suite has since grown to 98 across #255+#262's empty-needle-guard, then 100 across #246's two new
+# author-association-retry-* fixtures — the same reasoning as the MUTATION PROOF above (none of the
+# three new cases invoke find-implementation-work.sh at all) applies here too, so this is not
+# re-run either:
 # dropped the suite to 95 pass/2 fail, failing exactly: impl-plan-after-approval AND
 # impl-approval-history-not-covered (#213's own plan-after-the-newest-label fixture reaches this
 # identical branch, via the same PRE-EXISTING `reason` assertion, not this comment's own leaked-
@@ -2931,7 +3156,12 @@ EOF
 # to 97 cases with impl-decision-not-looked-up-when-plan-uncovered, whose covers_plan is already
 # "false" (from the #192 plan-edit check) before the #230 block above is ever entered — every
 # mutant this comment measures lives strictly inside that block, so the new fixture is unreachable
-# by any of them and the figures above are not re-measured.
+# by any of them and the figures above are not re-measured. The suite has since grown further, to
+# 98 across #255+#262's empty-needle-guard (calls neither discovery script) and to 100 across
+# #246's two new author-association-retry-* fixtures (exercise find-planning-work.sh via
+# run_planning, never find-implementation-work.sh) — neither new addition can reach this
+# (find-implementation-work.sh-only) #230 block either, so the figures above still stand not
+# re-measured.
 case_impl_decision_edited_after_approval() {
   local dir; dir="$(mk_fixture impl-decision-edited-after-approval)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3581,7 +3811,11 @@ EOF
 # five new label-pre-filter fixtures, then 85 across #213's six approval-history fixtures, then 96
 # across #230's eleven decision-comment-binding fixtures, then 97 across #230's guard-pin fixture
 # (kickback review), none of which ever passes an unsupported --json field to a
-# list) call — not re-run): dropped the suite from 74 pass/0 fail to
+# list) call; the suite has since grown to 98 across #255+#262's empty-needle-guard (calls no
+# `gh issue list`/`gh issue view` at all — a pure test of this file's own helpers) and to 100
+# across #246's two new author-association-retry-* fixtures (each makes only `gh issue list` calls
+# with already-valid --json field lists, never an unsupported one) — none of these three new cases
+# is affected either — not re-run): dropped the suite from 74 pass/0 fail to
 # 69 pass/5 fail, failing exactly: this case, stub-json-author-association-rejected,
 # plan-script-unknown-json-field-fails-loud, impl-script-unknown-json-field-fails-loud (an
 # unvalidated list) call now falls through to initial.json/ready.json instead of rejecting — the
@@ -3610,7 +3844,10 @@ EOF
 # view)); the suite has since grown to 79 across #229's five new label-pre-filter fixtures, then
 # 85 across #213's six approval-history fixtures, then 96 across #230's eleven decision-comment-
 # binding fixtures, then 97 across #230's guard-pin fixture (kickback review), whose
-# view) calls all request only accepted fields (number,title,url,comments,labels) — not re-run):
+# view) calls all request only accepted fields (number,title,url,comments,labels); the suite has
+# since grown to 98 across #255+#262's empty-needle-guard (makes no `gh issue view` call at all)
+# and to 100 across #246's two new author-association-retry-* fixtures (their candidates.json is
+# `[]`, so neither ever reaches a `gh issue view` call either) — not re-run):
 # dropped the suite from 74 pass/0 fail to 72 pass/2 fail, failing exactly: this case and
 # stub-json-author-association-rejected (both scripts' first failing call in the end-to-end cases
 # is a list) call, already caught by the list) arm's own validation, so neither end-to-end case
@@ -3638,7 +3875,10 @@ EOF
 # comes from the found-check above this token loop, not from this loop; the suite has since grown
 # to 79 across #229, then 85 across #213, then 96 across #230, then 97 across #230's guard-pin
 # fixture (kickback review), likewise unaffected — an always-accepting validator
-# changes nothing for a fixture whose field list was already valid — not re-run): dropped the suite from
+# changes nothing for a fixture whose field list was already valid; the suite has since grown to 98
+# across #255+#262's empty-needle-guard and to 100 across #246's two new author-association-retry-*
+# fixtures, likewise unaffected for the identical reason (their field lists were already valid, or
+# they never invoke `gh issue list`/`gh issue view` at all) — not re-run): dropped the suite from
 # 74 pass/0 fail to 69 pass/5 fail, failing exactly: this case, stub-json-unknown-field-rejected,
 # stub-json-unknown-field-rejected-view, plan-script-unknown-json-field-fails-loud, and
 # impl-script-unknown-json-field-fails-loud — reverted immediately after recording this.
@@ -3694,18 +3934,32 @@ EOF
 # more on kickback review when #230's guard-pin fixture grew the suite to 97 cases — same 13
 # survivors again (confirmed by name, not just count), fail count grew from 83 to 84, exactly that
 # twelfth #230 fixture joining the caught set (its own `gh issue view` call also requests
-# "comments", so it fails closed identically): dropped the
-# suite (97 cases) from 97 pass/0 fail to
-# 13 pass/84 fail — far beyond just this
+# "comments", so it fails closed identically); RE-MEASURED once more 2026-09-09 (#246, on kickback
+# review): the suite grew to 98 cases when #255+#262 landed empty-needle-guard (its case function
+# calls none of build_stub_gh/run_planning/run_implementation/run_stub_gh at all — a pure test of
+# this file's own expect_* helpers — so it is unconditionally immune to any mutation on
+# GH_ISSUE_JSON_FIELDS or either script, joining the survivors; this 97->98 step was never recorded
+# in this chain until now, a gap #262 itself left behind), then to 100 across #246's own two new
+# author-association-retry-* fixtures (each makes only `gh issue list` calls — the needs_initial_plan
+# query and the candidates query — both with --json field lists already valid under the unmutated
+# constant, and candidates.json is `[]` in both, so neither ever reaches a `gh issue view` call at
+# all; they join the survivors too): dropped the
+# suite (100 cases) from 100 pass/0 fail to
+# 16 pass/84 fail — far beyond just this
 # control case, since "comments" is also in the field list virtually every PRE-EXISTING case's
-# real script call passes to `gh issue view`; only thirteen cases survived: no-comments,
+# real script call passes to `gh issue view`; fail count is UNCHANGED at 84 from the prior
+# measurement — only the survivor set grew, by exactly the three cases named above; sixteen cases
+# survived in total: no-comments,
 # output-shape, initial-untrusted-author-reported, initial-trusted-author-clean,
 # initial-missing-author-association, initial-author-map-per-issue,
-# author-association-unavailable, plan-candidates-filter-error, stub-json-unknown-field-rejected,
-# stub-json-check-is-field-list-scoped, plan-script-unknown-json-field-fails-loud,
-# impl-script-unknown-json-field-fails-loud, and stub-json-missing-json-argument-fails-loud — none
-# of which ever calls `gh issue view` with "comments" in its field list. Honest limit: several of
-# those thirteen survive only because their
+# author-association-unavailable, author-association-retry-succeeds,
+# author-association-retry-sleep-failure-survives, plan-candidates-filter-error,
+# stub-json-unknown-field-rejected, stub-json-check-is-field-list-scoped,
+# plan-script-unknown-json-field-fails-loud, impl-script-unknown-json-field-fails-loud,
+# stub-json-missing-json-argument-fails-loud, and empty-needle-guard — none of which (other than
+# empty-needle-guard's own unconditional immunity) ever calls `gh issue view` with "comments" in
+# its field list. Honest limit: several of
+# those sixteen survive only because their
 # candidate/ready issue's view call now fails closed exactly like a fetch failure, which happens
 # to leave their asserted counts unchanged (e.g. no-comments expects counts.revision: 0 regardless
 # of whether issue #1 was ever fetched) — a coincidence of those particular fixtures' expected
@@ -3762,7 +4016,10 @@ EOF
 # 96 across #230, then 97 across #230's guard-pin fixture (kickback review),
 # likewise unaffected — none
 # of their fixtures' --search strings or --json field lists contain the "authorAssociation"
-# substring this lazy re-implementation still catches — not re-run): dropped the suite from
+# substring this lazy re-implementation still catches; the suite has since grown to 98 across
+# #255+#262's empty-needle-guard and to 100 across #246's two new author-association-retry-*
+# fixtures — none of their `--search` strings or `--json` field lists contain that substring
+# either — not re-run): dropped the suite from
 # 74 pass/0 fail to 69 pass/5 fail, failing
 # exactly: this case (its --search string contains "authorAssociation" as
 # a substring, so the lazy re-implementation wrongly rejects a call whose --json field list is
@@ -3795,7 +4052,10 @@ EOF
 # MUTATION PROOF M7 (measured 2026-09-05, `if [ "$found" -ne 1 ]; then` -> `if false; then` in
 # validate_json_fields; the suite has since grown to 79 across #229, then 85 across #213, then 96
 # across #230, then 97 across #230's guard-pin fixture (kickback review),
-# unaffected — none of these fixtures' calls omits a --json argument — not re-run): dropped the suite from 74 pass/0 fail to
+# unaffected — none of these fixtures' calls omits a --json argument; the suite has since grown to
+# 98 across #255+#262's empty-needle-guard and to 100 across #246's two new
+# author-association-retry-* fixtures, likewise unaffected — the two new fixtures' issue-list
+# calls both carry a --json argument — not re-run): dropped the suite from 74 pass/0 fail to
 # 73 pass/1 fail, failing exactly:
 # this case (the missing-argument call now falls through to the zero-iteration `for tok in $list`
 # loop and is silently served initial.json instead of rejected) — reverted immediately after
@@ -4367,7 +4627,9 @@ EOF
 # vacuously against empty captured output), calls all three with "", then checks the ACCUMULATED
 # __ok/__why saved off before this case's own __ok/__why are reset by the runner loop. Measured
 # mutant: delete `needle_required expect_no_err "$1" || return 0` from expect_no_err only —
-# `bash dev/planning-tests.sh` goes from 98 pass, 0 fail to 97 pass, 1 fail, failing exactly:
+# `bash dev/planning-tests.sh` goes from 100 pass, 0 fail to 99 pass, 1 fail (re-measured #246,
+# when the suite grew to 100 across the two new author-association-retry fixtures above — the
+# same single-case failing set, new total), failing exactly:
 # empty-needle-guard (saved_why no longer names "expect_no_err:").
 case_empty_needle_guard() {
   local saved_ok saved_why
@@ -4413,7 +4675,9 @@ cases=(
   "initial-author-map-per-issue|case_initial_author_map_per_issue|two issues, reversed rest-issues.json order plus a PR entry: each gets its own association, keyed by number"
   "revision-untrusted-author-reported|case_revision_untrusted_author_reported|NONE-associated needs_revision issue (rest-issues.json): still revised, untrusted_issue_authors entry bucket is needs_revision"
   "revision-trusted-author-clean|case_revision_trusted_author_clean|non-vacuity control: OWNER-associated needs_revision issue: trusted_author true, empty untrusted_issue_authors"
-  "author-association-unavailable|case_author_association_unavailable|REST issues endpoint unreachable: one warn line, every issue trusted_author false, counts flag set"
+  "author-association-unavailable|case_author_association_unavailable|REST issues endpoint unreachable: one warn line, every issue trusted_author false, counts flag set (#246: now after 2 calls/1 sleep, both retry-related counts true)"
+  "author-association-retry-succeeds|case_author_association_retry_succeeds|#246: the REST issues call fails once then succeeds on the bounded retry — 2 calls, 1 sleep(30), retried true, unavailable false, real OWNER association from the second attempt"
+  "author-association-retry-sleep-failure-survives|case_author_association_retry_sleep_failure_survives|#246: the backoff sleep itself fails — the retry still runs and the script still exits 0"
   "impl-untrusted-marker-not-selected|case_impl_untrusted_marker_not_selected|a forged plan comment from an untrusted author is never selected as plan"
   "impl-untrusted-post-plan-not-binding|case_impl_untrusted_post_plan_not_binding|a drive-by comment after a real plan can never reach trusted_post_plan"
   "impl-trusted-post-plan-binding|case_impl_trusted_post_plan_binding|control: MEMBER feedback after an OWNER plan lands in trusted_post_plan"

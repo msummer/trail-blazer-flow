@@ -1291,7 +1291,10 @@ de-namespacing — and nothing about the hook's behaviour changed. No consumer a
 #255/#262's fix: `bin/check-harness.sh`'s piped `grep -q`/`find | grep -q` readers (the doctor's
 own verdict-affecting checks — a marker-file lookup, an allow-list membership test) are rewritten
 as here-strings or capture-then-test, so a writer killed by SIGPIPE under `pipefail` can no longer
-invert one of the doctor's checks and report a false verdict on your repo.
+invert one of the doctor's checks and report a false verdict on your repo. No consumer action
+either for #246: `find-planning-work.sh` now retries its author-association REST lookup once,
+after a single bounded backoff, before fail-closing the whole run — a script-internal behaviour
+change with no new grant, label, script, or settings entry to migrate.
 
 ## The per-repo settings file (required)
 
@@ -1810,8 +1813,9 @@ any such comment, if there is no trusted plan yet) is reported in the `untrusted
 instead of being silently dropped or silently trusted, and never shadows real feedback posted
 before it — one posted before that plan is dropped with no bucket entry. The same script also
 enforces provenance on WHO OPENED the issue: every discovered issue carries `trusted_author`, a
-non-maintainer-authored (or association-unreadable) issue is reported in `untrusted_issue_authors`
-and can never be auto-approved, though it is still planned (#176). `find-implementation-work.sh`
+non-maintainer-authored (or association-unreadable, after one bounded retry, #246) issue is
+reported in `untrusted_issue_authors` and can never be auto-approved, though it is still planned
+(#176). `find-implementation-work.sh`
 enforces the implementer-facing half the same way: it selects each ready issue's approved plan
 comment and binding post-plan comments itself, using the identical trust gate (gate assertion
 4.26 pins that the two discovery scripts' trusted-association lists agree), so the
