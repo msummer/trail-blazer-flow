@@ -148,11 +148,22 @@ on top and is not configurable**:
   - *Ledger cross-check*, against the pre-advance check above: the issue's `verifier` ledger row
     must read `pass`; a row reading `fail`/`incomplete`/`died` against a pass line in the PR body
     is a contradiction — don't merge, escalate with both pieces of evidence.
-  - *Plan-binding provenance, checked mechanically* (#174, extended #213), same
-    `<n>`-from-the-head-branch scoping (harness PRs only; Dependabot PRs skip this bullet): run
-    `find-implementation-work.sh --issue <n>` and read `.plan_selection[0].approval.covers_plan`
-    — must be `true`, otherwise **not eligible** ("plan binding: `<approval.reason>`"), one-line
-    reason. Otherwise read `.plan_selection[0].approval.approved_at_history[]` — newest first,
+  - *Plan-binding provenance, checked mechanically* (#174, extended #213, retried once since
+    #245), same `<n>`-from-the-head-branch scoping (harness PRs only; Dependabot PRs skip this
+    bullet): run `find-implementation-work.sh --issue <n>` and read
+    `.plan_selection[0].approval.covers_plan` — must be `true`, otherwise **not eligible** ("plan
+    binding: `<approval.reason>`"), one-line reason. An **unknown** verdict — `covers_plan`
+    neither `true` nor `false`, no `plan_selection` entry at all, or the discovery script itself
+    exiting non-zero or returning unparseable JSON — is retried **once**, per the
+    issue-implementer skill's step 2a *Approval-binding gate*, unknown branch ("Retry once
+    before concluding unknown"): use that retry run in place of the first for everything this
+    pass reads from it — this sub-bullet, the *Post-approval comments* sub-bullet below, and the
+    audit evidence — never a mix. At most **one** such re-run per PR per pass, never a third
+    call; it consumes no ladder retry. A determinate `false` is not unknown and is never
+    retried. Anything but `true` after the
+    retry — including a verdict still unknown — stays **not eligible** the same way, one-line
+    reason built from the post-retry verdict. Otherwise read
+    `.plan_selection[0].approval.approved_at_history[]` — newest first,
     deduplicated, one entry per real `plan-approved` labeling event, each `{approved_at,
     approved_by, binding_line}` with entry `[0]`'s `binding_line` identical to the top-level
     `.plan_selection[0].binding_line`: the literal `<!-- harness-plan-binding: issue=<n>
@@ -203,10 +214,11 @@ on top and is not configurable**:
   a PR resolves to "no".
   - *Post-approval comments, checked mechanically* (#206), harness PRs only (Dependabot PRs
     skip this sub-bullet): reuse the `find-implementation-work.sh --issue <n>` output the
-    *Plan-binding provenance* sub-bullet above already produced — the same run, not a second
-    call. Read `.plan_selection[0].trusted_post_plan[]`: every entry whose `covered_by_approval`
-    is not `true` is a maintainer comment the approval does not cover (write the predicate as
-    "not `true`", never "`false`", so a future `null` fails closed). One or more such entries ⇒
+    *Plan-binding provenance* sub-bullet above already produced — the same run (the retry run,
+    when one ran), not a second call. Read `.plan_selection[0].trusted_post_plan[]`: every entry
+    whose `covered_by_approval` is not `true` is a maintainer comment the approval does not
+    cover (write the predicate as "not `true`", never "`false`", so a future `null` fails
+    closed). One or more such entries ⇒
     **not eligible** — one-line reason `post-approval comment not covered by the approval:
     <url>` naming each entry's `url` (author + `createdAt` when `url` is null). This is a normal
     wait, not an escalation (see the pass's closing paragraph): the human merges the PR
@@ -304,8 +316,10 @@ since production is unverified and whether to merge onto it is the human's call.
 
 Fill in the `merged` ledger column **for every PR the pass evaluated** and emit the merge
 stage's status line yourself (there is no merge agent) — `stage=merge`, `issue=<n>`,
-`retries=0` (the merge pass doesn't retry through the ladder — a denial or base mismatch is a
-policy/config fact, not a transient failure), an outcome from the issue-implementer skill's
+`retries=0` (the merge pass doesn't retry *through the ladder* — the *Plan-binding provenance*
+re-check above is not a ladder retry and leaves this value at `retries=0`; a denial or base
+mismatch is a policy/config fact, not a transient failure), an outcome from the issue-implementer
+skill's
 "Resilient dispatch" vocabulary for `merge`, and `harness=<version>` (step 0's printed value,
 always last). When guard (e) ran, the status line and ledger row also carry a trailing
 `deploy=<verified|pending|failed>` field before it, e.g.
@@ -387,8 +401,9 @@ harness-lock.sh release <run-id>
 
 - **Recurring runs:** pair with `/loop` (e.g. "loop the issue-cycle every 30m") or a scheduled
   routine; each invocation stays ONE bounded pass — recurrence is the wrapper's job, never this
-  skill's (never polls for new work or repeats a pass; the merge pass's declared deploy waits —
-  guard (e) and the pre-first-merge recheck — are the two bounded exceptions).
+  skill's (never polls for new work or repeats a pass; the merge pass's bounded waits — guard
+  (e)'s declared deploy wait, the pre-first-merge recheck, and the *Plan-binding provenance*
+  re-check (#245) — are the three bounded exceptions).
 - **Single-flight:** mechanically enforced by `harness-lock.sh`, an atomic `mkdir` under
   `<git-common-dir>/trail-blazer/lock` acquired at step 0 and released at step 5 (see step 0
   above for the full ownership/abort/release-before-every-exit rules) — never start a cycle while

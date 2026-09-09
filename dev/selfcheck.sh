@@ -692,7 +692,7 @@ fi
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 690
-issue-cycle 420
+issue-cycle 435
 issue-planner 505
 project-kickoff 215
 test-ratchet 200

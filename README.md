@@ -598,7 +598,8 @@ subagents need:
    branch, *and* against the approval covering the specific plan comment implemented — the PR
    body carrying one of a fresh `find-implementation-work.sh` run's `approval.approved_at_history[]`
    `binding_line` values verbatim, newest first, so a body written under an earlier approval of the
-   same plan still qualifies (#174, extended #213) — CI
+   same plan still qualifies (#174, extended #213; an unknown `covers_plan` verdict from that run
+   is re-checked once before it counts, #245) — CI
    green on the head commit, its head mechanically checked to contain the default branch's
    current tip (`git merge-base --is-ancestor`) immediately before each PR's own merge attempt,
    otherwise held with "PR is behind `<default>` at `<short-sha>` — update the branch and let CI
@@ -1308,7 +1309,17 @@ grant, label, script, or baseline step: `cleanup-after-merge.sh`'s multi-PR comm
 (`gh issue view --json comments`) no longer falls back to "no marker found" when it fails or
 returns something that isn't valid JSON — during a rate-limit or auth blip on that one lookup, an
 issue that previously auto-closed instead stays open with `pr-open` still attached until a later
-successful run notices it (see "After the human merges" above).
+successful run notices it (see "After the human merges" above). #245 IS a consumer-visible
+behaviour change too, though it likewise needs no grant, label, script, or baseline step
+(`Bash(sleep:*)` already ships in `templates/repo-settings.json`): the `issue-cycle` merge pass
+now retries an **unknown** plan-binding verdict once before holding the PR — the same
+bounded-retry rule #223 already gave the implementer's two checkpoints — so one transient GitHub
+API blip no longer strands an approved, verifier-clean, CI-green PR until the next scheduled run
+or a manual merge. Behaviour **widens** on exactly one axis: a PR a transient unknown would
+previously have held for the rest of the pass can now merge in the same pass; a verdict still
+unknown after the one retry still holds the PR **not eligible**, fail-closed exactly as before.
+Cost is up to 30s plus one extra read-only discovery run, paid only on the PRs whose plan-binding
+verdict comes back unknown.
 
 ## The per-repo settings file (required)
 
@@ -1701,7 +1712,13 @@ otherwise shows the implementer complete and the verifier passing) — expected,
 The `issue-cycle` merge pass revalidates the covered case once more, requiring that the PR body
 carry one of `approval.approved_at_history[]`'s `binding_line` values verbatim before an
 autonomous merge (#213 — see below for why the check now accepts more than just the freshest
-`binding_line`) — the held case never reaches a PR, so the merge pass never sees it. Honest limit:
+`binding_line`) — the held case never reaches a PR, so the merge pass never sees it. Since #245,
+an **unknown** `covers_plan` verdict at that same merge-floor read gets the identical one bounded
+re-check the implementer's two checkpoints already get above (`sleep 30`, then one more
+`find-implementation-work.sh --issue <n>`, per #223's rule) before the PR is held; a verdict still
+unknown after that one retry holds the PR **not eligible** exactly as before — the retry narrows
+how often a transient API blip strands an otherwise-mergeable PR, it does not relax what the floor
+accepts. Honest limit:
 like verdict
 provenance above, all three checkpoints (the discovery script, the PR body, the merge pass) are
 orchestrator-written and share one `gh` identity, so this raises the cost of asserting an approval
@@ -1740,8 +1757,9 @@ newly-arrived entry is quoted verbatim in the PR body and the run summary — st
 still never holding the push; the residual race between that re-check and `gh pr create` itself
 is a named, out-of-scope honest limit. Since #206, the merge pass's hard floor goes further: it
 reads that same uncovered `trusted_post_plan` set at merge time, from the identical fresh
-`find-implementation-work.sh --issue <n>` run it already makes for the plan-binding check above,
-so a comment posted even *after* the PR opened is caught too, not just the dispatch-window race
+`find-implementation-work.sh --issue <n>` run it already makes for the plan-binding check above
+(the retry run, when one ran, #245), so a comment posted even *after* the PR opened is caught
+too, not just the dispatch-window race
 above. One or more uncovered entries hold the PR in the normal "waits on the human" queue
 (`outcome=not-eligible`), with each entry's comment URL (or author + `createdAt` when the URL is
 null) as the one-line reason — a normal wait, not an escalation. Release path: the human merges
