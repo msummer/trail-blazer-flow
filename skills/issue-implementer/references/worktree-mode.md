@@ -178,7 +178,13 @@ e. **As each implementer completes, run the issue-implementer skill's steps 2d�
      cause than the three listed above — it means the agent-boundary hook correctly denied a
      command outside the issuing role's allowed set (e.g. a verifier attempting one of the
      mutating forms, which are the orchestrator's own job, never the verifier's) — and is not
-     itself a sign of a broken installation;
+     itself a sign of a broken installation; a **third** possible cause, specific to the `-C push`
+     form only, is `hooks/push-guard.sh` (#260, the default-branch push guard — see the README's
+     "Safety model"), which denies any push whose destination resolves to the repo's default
+     branch, main session included. The worktree push below targets `claude/<number>-<slug>`,
+     never the default branch, so this cause should not fire for a conforming worktree branch
+     name — if it does, the destination is not what you expect it to be, not a broken
+     installation;
    - **the checkpoint lands in the worktree, not the main checkout**, which stays on the default
      branch, untouched, for the whole swarm;
    - **the worktree path travels in every prompt** (the verifier's included) and in every

@@ -79,26 +79,41 @@ itself the checkout (prints that checkout's own short SHA). It runs in CI as the
 `dev/selfcheck.sh` itself — run it by hand whenever `bin/check-harness.sh` or
 `bin/check-decision-record.sh` changes.
 
-`dev/hook-tests.sh` is a separate negative-test harness for BOTH of this repo's plugin-shipped
-PreToolUse hooks. For `hooks/git-c-guard.sh` (#150) it feeds fixture stdin JSON straight into the
-real script and pins its verdict — allow, or no opinion (empty stdout) — for every conforming
-`git -C <worktree> <subcommand>` form and every rejection case (an injected `-c`/`--exec-path`,
-the attached `-C<path>` form, a non-worktree path, an unknown subcommand, command substitution, an
-unquoted shell metacharacter, an unterminated quote, the wrong tool, malformed stdin, and
-`permission_mode: "plan"`), plus a booby-trapped `git`/`rm` on `PATH` proving the guard never
-executes anything against the untrusted path it is validating. For `hooks/agent-boundary.sh`
-(#235, the implementer/verifier git+gh boundary) it feeds fixture stdin JSON carrying `agent_type`
-straight into that real script and pins its verdict — deny (exit 2, empty stdout, one stderr line
-naming the role and the blocked command), or no opinion (exit 0, empty stdout, empty stderr) — for
-the implementer role (denies any `git`/`gh`, in both the bare and `trail-blazer-flow:`-namespaced
-`agent_type` spellings, across composite/quoted/prefixed command forms), the verifier role (denies
-`gh` and every non-read-only `git` subcommand — an unlisted subcommand, a global option before the
-subcommand, and a bare `git` all fail closed — while its read-only git subcommands pass), and every
-role-agnostic no-opinion edge (no `agent_type` key, an unrecognised role, `permission_mode:
-"plan"`, the wrong tool, malformed stdin, and `tool_input.command` absent), plus the same
-booby-trapped `git`/`rm`/`gh` idiom proving this hook likewise executes nothing. It runs in CI as
-the fourth step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
-`hooks/git-c-guard.sh` or `hooks/agent-boundary.sh` changes.
+`dev/hook-tests.sh` is a separate negative-test harness for ALL THREE of this repo's
+plugin-shipped PreToolUse hooks. For `hooks/git-c-guard.sh` (#150) it feeds fixture stdin JSON
+straight into the real script and pins its verdict — allow, or no opinion (empty stdout) — for
+every conforming `git -C <worktree> <subcommand>` form and every rejection case (an injected
+`-c`/`--exec-path`, the attached `-C<path>` form, a non-worktree path, an unknown subcommand,
+command substitution, an unquoted shell metacharacter, an unterminated quote, the wrong tool,
+malformed stdin, and `permission_mode: "plan"`), plus a booby-trapped `git`/`rm` on `PATH` proving
+the guard never executes anything against the untrusted path it is validating. For
+`hooks/agent-boundary.sh` (#235, the implementer/verifier git+gh boundary) it feeds fixture stdin
+JSON carrying `agent_type` straight into that real script and pins its verdict — deny (exit 2,
+empty stdout, one stderr line naming the role and the blocked command), or no opinion (exit 0,
+empty stdout, empty stderr) — for the implementer role (denies any `git`/`gh`, in both the bare
+and `trail-blazer-flow:`-namespaced `agent_type` spellings, across composite/quoted/prefixed
+command forms), the verifier role (denies `gh` and every non-read-only `git` subcommand — an
+unlisted subcommand, a global option before the subcommand, and a bare `git` all fail closed —
+while its read-only git subcommands pass), and every role-agnostic no-opinion edge (no
+`agent_type` key, an unrecognised role, `permission_mode: "plan"`, the wrong tool, malformed
+stdin, and `tool_input.command` absent), plus the same booby-trapped `git`/`rm`/`gh` idiom proving
+this hook likewise executes nothing. For `hooks/push-guard.sh` (#260, the default-branch push
+guard that governs every session, main session included — not scoped to the implementer/verifier
+subagents) it feeds fixture stdin JSON straight into that real script and pins its verdict — deny
+(exit 2, empty stdout, exactly one stderr line naming the blocked destination), or no opinion
+(exit 0, empty stdout, empty stderr) — for every refspec spelling `git push origin main` and
+`git push origin HEAD:main` bypass (a non-`origin` remote, a URL remote containing a colon, a
+full `refs/heads/…:refs/heads/main` refspec, `:main`, `--delete main`, `--all`/`--mirror`, an
+option before or after the remote/refspec, one and two chained `-o value` occurrences, one and two
+chained `PREFIX_WORDS`/global-option occurrences, the `git -C <worktree> push origin main` form
+`git-c-guard.sh` itself would allow, and the second `main`/`master` fallback member), the
+default-branch symref read against a fixture repo (base, subdirectory, and worktree-pointer-file
+`cwd` variants), the two harness-issued no-opinion shapes (`git push -u origin
+"claude/<n>-<slug>"`, bare and `-C`), every role-agnostic no-opinion edge, and the same
+booby-trapped `git`/`gh`/`rm` idiom plus a byte-identical-file-listing fixture proving this hook
+reads the filesystem but never writes to or executes anything on it. It runs in CI as the fourth
+step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
+`hooks/git-c-guard.sh`, `hooks/agent-boundary.sh`, or `hooks/push-guard.sh` changes.
 
 `dev/cleanup-tests.sh` is a separate negative-test harness for `bin/cleanup-after-merge.sh`: it
 builds throwaway fixture git repos under `mktemp`, with a stub `gh` and stub `git` on `PATH`, and

@@ -223,6 +223,28 @@ p_4_39_extraction() { edit "$1/hooks/agent-boundary.sh" 's/AGENT_TYPES_IMPLEMENT
 p_4_39_unknown_agent() { edit "$1/hooks/agent-boundary.sh" 's/^AGENT_TYPES_VERIFIER="verifier trail-blazer-flow:verifier"$/AGENT_TYPES_VERIFIER="verifer trail-blazer-flow:verifier"/'; }
 p_4_39_namespace() { edit "$1/hooks/agent-boundary.sh" 's/trail-blazer-flow:implementer/trail-blazer-flo:implementer/'; }
 p_4_39_missing_spelling() { edit "$1/hooks/agent-boundary.sh" 's/^AGENT_TYPES_IMPLEMENTER="implementer trail-blazer-flow:implementer"$/AGENT_TYPES_IMPLEMENTER="implementer"/'; }
+# p_2_7_pushguard_if_added / p_2_7_pushguard_missing_script (#260) — the same two templates as
+# p_2_7_boundary_if_added/p_2_7_boundary_missing_script above, retargeted at the THIRD
+# (push-guard.sh) handler, located by the literal substring "push-guard.sh" (present nowhere else
+# in hooks/hooks.json, same as "agent-boundary.sh" is unique to the second handler).
+p_2_7_pushguard_if_added() {
+  local f="$1/hooks/hooks.json"
+  awk '{print} /"command":.*push-guard\.sh/ && !done {print "            \"if\": \"Bash(git push:*)\","; done=1}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+p_2_7_pushguard_missing_script() { edit "$1/hooks/hooks.json" 's#push-guard\.sh#nonexistent-push.sh#'; }
+# p_4_40_* (#260) — rename characters INSIDE the identifier/value, never append a suffix (LESSON
+# 2026-09-04b).
+p_4_40_extraction() { edit "$1/hooks/push-guard.sh" 's/PUSH_DEFAULT_BRANCH_FALLBACK/PUSH_DEFAULT_BRANCH_FALBACK/g'; }
+# p_4_40_template_branch rewrites BOTH the bare deny entry and its -C mirror (characters changed
+# inside the branch name, not a suffix) so assertion 2.6's bare<->-C mirror bijection stays green
+# (both sides still agree with each other, just on "trunk" instead of "main") and only 4.40's
+# JSON<->script agreement — "trunk" is not a member of push-guard.sh's own
+# PUSH_DEFAULT_BRANCH_FALLBACK — trips.
+p_4_40_template_branch() {
+  edit "$1/templates/repo-settings.json" 's/"Bash(git push origin main:\*)"/"Bash(git push origin trunk:*)"/'
+  edit "$1/templates/repo-settings.json" 's/"Bash(git -C \* push origin main\*)"/"Bash(git -C * push origin trunk*)"/'
+}
+p_4_40_prefix_words() { edit "$1/hooks/push-guard.sh" 's/stdbuf/stdbf/'; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -499,6 +521,11 @@ cases=(
   "5.12-shadow|5.12|p_5_12_shadow|delete the inner select((.body // \"\") | contains(\"<!-- harness-hold:\")) from the candidate array so sort_by/last picks the newest comment of ANY kind -- measured: the newer-keyless-comment-does-not-shadow-hold fixture returns 'none' instead of the hold key"
   "5.12-key|5.12|p_5_12_key|rename the hold writer's key-line template only (harness-hold -> harness-hold-key) so the checker's round-trip needle no longer selects it -- measured: round-trip reports 'found 0', same failure mode as 5.10-key/5.11-key"
   "5.12-needle|5.12|p_5_12_needle|widen the hold guard's own contains()/startswith() needles from '<!-- harness-hold:' to '<!-- harness-' (the guard's own line, this file's only such line) -- measured: two fixtures fail together -- audit-comment-without-key now returns the bare '<!-- harness-audit -->' line (it starts with the widened prefix) and cross-marker-staleness-key now returns the staleness note's own key line (its comment now also matches the widened contains()); extraction itself is unaffected since selection is a plain positive match on '--json comments --jq ', not on the harness-hold marker"
+  "2.7-pushguard-if-added|2.7|p_2_7_pushguard_if_added|add an \"if\" key to the THIRD (push-guard.sh) handler only, located by the literal substring \"push-guard.sh\" -- measured: \"2.7 hooks/hooks.json structure broken: push-guard.sh's if is 'Bash(git push:*)', expected '-none-';\""
+  "2.7-pushguard-missing-script|2.7|p_2_7_pushguard_missing_script|repoint the THIRD handler's command at a nonexistent file, the mirror of p_2_7_boundary_missing_script -- measured: \"2.7 hooks/hooks.json structure broken: command handler(s) resolve to a nonexistent file: .../hooks/nonexistent-push.sh; hooks/*.sh file(s) not registered by any handler: push-guard.sh;\""
+  "4.40-extraction|4.40|p_4_40_extraction|rename hooks/push-guard.sh's PUSH_DEFAULT_BRANCH_FALLBACK identifier (characters changed inside the token, not a suffix) so the gate's anchored extraction comes back empty -- measured: \"4.40 hooks/push-guard.sh's PUSH_DEFAULT_BRANCH_FALLBACK= line didn't match (structure changed) — extraction failed\""
+  "4.40-template-branch|4.40|p_4_40_template_branch|rewrite BOTH templates/repo-settings.json default-branch deny entries (bare and -C mirror) from main to trunk, so 2.6's bijection stays green -- measured: \"4.40 push-guard vocabulary disagreement: templates/repo-settings.json deny branch(es) not in PUSH_DEFAULT_BRANCH_FALLBACK ('main master'): trunk;\""
+  "4.40-prefix-words|4.40|p_4_40_prefix_words|alter one word inside hooks/push-guard.sh's PREFIX_WORDS (stdbuf -> stdbf), so it no longer agrees with hooks/agent-boundary.sh's -- measured: \"4.40 push-guard vocabulary disagreement: PREFIX_WORDS differs between hooks/push-guard.sh (...stdbf...) and hooks/agent-boundary.sh (...stdbuf...);\""
 )
 
 # ---------------------------------------------------------------------------------------------

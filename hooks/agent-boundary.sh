@@ -15,6 +15,12 @@
 # flags (this repo's CLAUDE.md portability convention); exercised under Apple's bash 3.2 by the
 # selfcheck-macos CI job, same as bin/*.sh and hooks/git-c-guard.sh.
 #
+# Tokenizer cross-reference (#260): hooks/push-guard.sh inlines a near-twin of "the scan" below
+# (same segment-break characters, same normalize(), same repeat-until-exhausted PREFIX_WORDS
+# skip) for its own, different emitter. A future fix to the shared behaviour must be applied to
+# BOTH files — dev/selfcheck.sh's assertion 4.40 clause (c) mechanically pins the two scripts'
+# PREFIX_WORDS vocabulary stays byte-identical.
+#
 # Live-probe record, #259 (maintainer-measured 2026-09-08 against Claude Code 2.1.263, plugin
 # 2.7.0 from the marketplace cache -- one Claude Code version, one platform (macOS), one install
 # shape; not re-verified across versions, platforms, or install shapes):
