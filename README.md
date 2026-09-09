@@ -338,12 +338,12 @@ audited comments, and quarantine any plan follow-up orphaned by a `claude/*` PR 
 without merging — comment + `no-plan`, never closed) and the implementer's baseline refresh
 re-verifies merged main — two green PRs can still compose badly, and that check is now
 mechanical. The script's own pre-flight lookups (the default branch, the current branch, the
-open-PR list, the `pr-open`-labelled issue list, and the follow-up-candidate issue search) are
-best-effort too — a failure on any of them is reported (`WARN`) and the run continues, degrading
-gracefully (skipping just the sync, or just the label/follow-up steps that depend on it) rather
-than aborting before producing any output. Running `cleanup-after-merge.sh` by hand right after a
-merge is still fine (it's idempotent); without `--fix` it only reports label problems instead of
-repairing them.
+open-PR list, the `pr-open`-labelled issue list, the multi-PR comment-marker lookup, and the
+follow-up-candidate issue search) are best-effort too — a failure on any of them is reported
+(`WARN`) and the run continues, degrading gracefully (skipping just the sync, or just the
+label/follow-up steps that depend on it) rather than aborting before producing any output.
+Running `cleanup-after-merge.sh` by hand right after a merge is still fine (it's idempotent);
+without `--fix` it only reports label problems instead of repairing them.
 
 A merged `claude/<n>-*` PR only closes its issue when the PR body carries a closing keyword
 (`Closes`/`Fixes`/`Resolves #<n>`) for that issue and no multi-PR signal is present. A PR that
@@ -359,7 +359,13 @@ maintainer has no way to prove they authored the issue body the way a comment ca
 `authorAssociation`) — an issue that relied on the body marker before v2.7.0 needs the
 `multi-pr` label applied instead. `--fix` still drops `pr-open` in the KEEP case, but only once
 no other `claude/<n>-*` PR is open, so the issue re-queues for its next slice; a human closes it
-by hand if the work is actually finished.
+by hand if the work is actually finished. Since v2.7.1 (#249), if every cheaper KEEP signal comes
+up empty and the fallback comment-marker lookup (`gh issue view --json comments`) itself fails or
+returns a document that isn't valid JSON, the script no longer falls back to "no marker found" —
+it reports a `WARN` naming the failure route and leaves the issue exactly as found (`pr-open`
+still attached, not closed, not commented, not relabelled) in both `--fix` and report-only modes,
+so a rate-limit or auth blip during that one lookup can no longer manufacture a false close; the
+next run re-examines it.
 
 ### The steady state, as one command ("run the cycle")
 
@@ -1294,7 +1300,15 @@ as here-strings or capture-then-test, so a writer killed by SIGPIPE under `pipef
 invert one of the doctor's checks and report a false verdict on your repo. No consumer action
 either for #246: `find-planning-work.sh` now retries its author-association REST lookup once,
 after a single bounded backoff, before fail-closing the whole run — a script-internal behaviour
-change with no new grant, label, script, or settings entry to migrate.
+change with no new grant, label, script, or settings entry to migrate. No consumer action either
+for #248: `dev/cleanup-tests.sh`'s own stub `gh` now validates `--json` field names against gh's
+live-probed field set, a change to this repo's own test harness only — nothing a consumer's
+checkout ships or runs. #249 IS a consumer-visible behaviour change, though it likewise needs no
+grant, label, script, or baseline step: `cleanup-after-merge.sh`'s multi-PR comment-marker lookup
+(`gh issue view --json comments`) no longer falls back to "no marker found" when it fails or
+returns something that isn't valid JSON — during a rate-limit or auth blip on that one lookup, an
+issue that previously auto-closed instead stays open with `pr-open` still attached until a later
+successful run notices it (see "After the human merges" above).
 
 ## The per-repo settings file (required)
 

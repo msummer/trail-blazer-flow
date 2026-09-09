@@ -117,14 +117,27 @@ step, but it is not part of `dev/selfcheck.sh` itself — run it by hand wheneve
 
 `dev/cleanup-tests.sh` is a separate negative-test harness for `bin/cleanup-after-merge.sh`: it
 builds throwaway fixture git repos under `mktemp`, with a stub `gh` and stub `git` on `PATH`, and
-runs the real script against them to pin the multi-PR `KEEP` behavior — a merged PR that is only
+runs the real script (and, for one deliberately `--json`-mutated copy, that copy — never `bin/`
+itself) against them to pin the multi-PR `KEEP` behavior — a merged PR that is only
 "Part of #n", an open sibling PR, the `multi-pr` label, or a maintainer
 (`OWNER`/`MEMBER`/`COLLABORATOR`) comment carrying a `<!-- harness-multi-pr -->` marker must leave
 the issue open and never call `gh issue close`; a marker from anyone else is ignored and produces
 exactly one `WARN` naming the comment, and the issue-body marker is no longer honoured at all
 (#231) — the ordinary close path, the `--ff-only` pull failure continuing instead of aborting, and
 the pre-flight `gh repo view` / `git branch --show-current` / `gh pr list` lookup failures each
-being reported (WARN) and survived rather than aborting the script before any output. It runs in
+being reported (WARN) and survived rather than aborting the script before any output. Since #248,
+the stub `gh` itself validates `--json` FIELD NAMES against gh's own live-probed field sets — two
+constants, `GH_ISSUE_JSON_FIELDS` (shared by `issue list`/`issue view`, byte-identical to
+`dev/planning-tests.sh`'s constant of the same name) and `GH_PR_JSON_FIELDS` (a different,
+46-field set — `pr list` accepts fields, like `headRefName`, that the issue set does not) — wired
+as the first statement of those three arms, so an unsupported field is rejected with gh's own
+`Unknown JSON field: "<name>"` line on stderr and exit 1; the stub's `repo)` arm stays
+deliberately unvalidated (a third, unprobed field set). Since #249, a failed or malformed
+`gh issue view --json comments` (the multi-PR comment-marker lookup) no longer falls back to "no
+marker found": the harness pins a `WARN` naming the failure route (a hard fetch failure or a
+non-JSON response) and leaves the issue open with `pr-open` still attached, in both `--fix` and
+report-only modes, and that the cheaper `multi-pr`-label KEEP signal still short-circuits before
+this lookup is ever attempted. It runs in
 CI as the fifth step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
 `bin/cleanup-after-merge.sh` changes.
 
