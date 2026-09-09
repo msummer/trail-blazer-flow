@@ -115,3 +115,8 @@ bites: 1–3 lines, written as an instruction to a future agent.
   and record the sweep itself (the grep commands and the walked hits) in the report's Evidence, not
   a prose-regex sweep in its place. On #246 the `98` sweep was complete but six `97` growth chains
   and one survivor enumeration were left at 97 (suite: 100); one verification round.
+- 2026-09-09 (d): When case comments cite a shared MEASURED-MUTANTS block by letter (`Mutation proof: (k) …`),
+  finish by walking EVERY citation letter → block entry → "its recorded failing set names this case: yes",
+  and confirm every new case carries one — a swapped letter pair reads as a proof that does not cover the
+  case it sits under, and a case with no citation ships unproven even when the measurement exists in the
+  block. On #248 two letters were crossed and two of twelve new cases had no citation; one verification round.

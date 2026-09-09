@@ -7,10 +7,11 @@
 #
 # Every gh/git pre-flight lookup this script makes (the default branch via `gh repo view`, the
 # current branch via `git branch --show-current`, the PR list via `gh pr list`, issues labelled
-# pr-open via `gh issue list`, and follow-up candidates via `gh issue list --search`) is
-# best-effort: a rate limit, an auth problem, or a network blip on any one of them is reported
-# (WARN) and only the section(s) that depend on it are skipped — the script never aborts before
-# printing output, and always reaches the closing reminder.
+# pr-open via `gh issue list`, the multi-PR comment-marker lookup via `gh issue view --json
+# comments`, and follow-up candidates via `gh issue list --search`) is best-effort: a rate
+# limit, an auth problem, or a network blip on any one of them is reported (WARN) and only the
+# section(s) that depend on it are skipped — the script never aborts before printing output, and
+# always reaches the closing reminder.
 #
 #   1. Best-effort fast-forward of the default branch (only if currently checked out, and only
 #      when the default-branch and current-branch lookups above both succeeded): a diverged
@@ -28,6 +29,10 @@
 #          label, or a maintainer (OWNER/MEMBER/COLLABORATOR) comment carrying
 #          <!-- harness-multi-pr -->) -> KEEP, leave the issue open. The issue-body marker is
 #          no longer honoured; an untrusted comment's marker is ignored and WARNed instead.
+#        - PR merged, every cheaper KEEP signal absent, but the multi-PR comment-marker lookup
+#          itself failed or returned a malformed document -> WARN once (naming the failure
+#          route) and leave the issue exactly as found (pr-open still attached, not closed,
+#          not commented, not relabelled), so the next run re-examines it
 #        - PR closed WITHOUT merging       -> stale pr-open; the issue should requeue
 #        - PR still open                   -> fine, awaiting review
 #   4. Follow-ups filed from a claude/* PR that was closed WITHOUT merging (skipped, with a
@@ -194,6 +199,12 @@ if $prs_ok && $issues_ok; then
           close_pat="(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]*#${n}([^0-9]|\$)"
 
           keep_reason=""
+          # #249 — reset per issue (this branch runs once per `while read -r issue` iteration):
+          # comments_ok tracks whether the multi-PR comment-marker lookup below produced a
+          # readable document at all; lookup_failure names the failure route when it didn't. Both
+          # are read only by the decision chain further down, never left stale across issues.
+          comments_ok=true
+          lookup_failure=""
           # Here-strings, not a `printf` writer piped into `grep`'s quiet mode (#255): that
           # early-exit reader exits on its first match, which can send the printf writer SIGPIPE
           # and, under this script's `set -euo pipefail`, turn a genuine match into a reported
@@ -212,40 +223,53 @@ if $prs_ok && $issues_ok; then
             keep_reason="the issue carries the multi-pr label"
           else
             # Only fetched when every cheaper signal above came up empty — the marker may
-            # still be sitting in a maintainer comment. Fetched once; a failed or malformed
-            # fetch fails closed to the empty document (no marker found), same behaviour as
-            # before this change. Trust-gated: only an OWNER/MEMBER/COLLABORATOR comment's
-            # marker counts as KEEP (TRUSTED_ASSOCIATIONS, matching both discovery scripts); an
-            # untrusted marker (including one with no authorAssociation at all — fail-closed) is
-            # ignored here but WARNed below so the maintainer sees the attempt.
-            issue_comments_doc="$(gh issue view "$n" --json comments 2>/dev/null || echo '{"comments":[]}')"
-            printf '%s' "$issue_comments_doc" | jq -e . >/dev/null 2>&1 || issue_comments_doc='{"comments":[]}'
-
-            trusted_hits=$(printf '%s' "$issue_comments_doc" | jq -r --arg m "$marker" --arg trusted "$TRUSTED_ASSOCIATIONS" '
-              ($trusted | split(" ")) as $ok
-              | [ (.comments // [])[]
-                  | select((.body // "") | contains($m))
-                  | select(((.authorAssociation // "") | ascii_upcase) as $a | ($ok | index($a)) != null) ]
-              | length' || true)
-            untrusted_marker_lines=$(printf '%s' "$issue_comments_doc" | jq -r --arg m "$marker" --arg trusted "$TRUSTED_ASSOCIATIONS" '
-              ($trusted | split(" ")) as $ok
-              | (.comments // [])[]
-              | select((.body // "") | contains($m))
-              | select(((.authorAssociation // "") | ascii_upcase) as $a | ($ok | index($a)) == null)
-              | (.authorAssociation // "MISSING") + " " + (.url // "(no url)")' || true)
-
-            if [[ "${trusted_hits:-0}" -gt 0 ]]; then
-              keep_reason="a maintainer comment carries the harness-multi-pr marker"
+            # still be sitting in a maintainer comment. Fetched once. Since #249, a failed or
+            # malformed fetch no longer falls back to the empty document (which used to read as
+            # "no marker found" and send the issue down the close path) — it sets
+            # comments_ok=false and a lookup_failure route phrase instead, and the extraction
+            # below (and the untrusted-marker WARN it can produce) is skipped entirely: an
+            # unreadable comment set is UNKNOWN, never "no marker present", so a rate limit or a
+            # malformed response can no longer manufacture a false close. The third arm of the
+            # decision chain below reads $comments_ok/$lookup_failure and WARNs once instead.
+            # Trust-gated: only an OWNER/MEMBER/COLLABORATOR comment's marker counts as KEEP
+            # (TRUSTED_ASSOCIATIONS, matching both discovery scripts); an untrusted marker
+            # (including one with no authorAssociation at all — fail-closed) is ignored here but
+            # WARNed below so the maintainer sees the attempt.
+            if ! issue_comments_doc="$(gh issue view "$n" --json comments 2>/dev/null)"; then
+              comments_ok=false
+              lookup_failure="gh issue view failed - rate limit, auth, or network?"
+            elif ! printf '%s' "$issue_comments_doc" | jq -e . >/dev/null 2>&1; then
+              comments_ok=false
+              lookup_failure="the comments response was not valid JSON"
             fi
-            if [[ -n "$untrusted_marker_lines" ]]; then
-              while IFS= read -r hitline; do
-                [[ -n "$hitline" ]] || continue
-                assoc="${hitline%% *}"
-                hit_url="${hitline#* }"
-                echo "WARN  #${n} (${title}): ignoring a harness-multi-pr marker from an untrusted comment author (${assoc}) at ${hit_url} — apply the multi-pr label instead if this really is a multi-PR split"
-              done <<EOF
+
+            if $comments_ok; then
+              trusted_hits=$(printf '%s' "$issue_comments_doc" | jq -r --arg m "$marker" --arg trusted "$TRUSTED_ASSOCIATIONS" '
+                ($trusted | split(" ")) as $ok
+                | [ (.comments // [])[]
+                    | select((.body // "") | contains($m))
+                    | select(((.authorAssociation // "") | ascii_upcase) as $a | ($ok | index($a)) != null) ]
+                | length' || true)
+              untrusted_marker_lines=$(printf '%s' "$issue_comments_doc" | jq -r --arg m "$marker" --arg trusted "$TRUSTED_ASSOCIATIONS" '
+                ($trusted | split(" ")) as $ok
+                | (.comments // [])[]
+                | select((.body // "") | contains($m))
+                | select(((.authorAssociation // "") | ascii_upcase) as $a | ($ok | index($a)) == null)
+                | (.authorAssociation // "MISSING") + " " + (.url // "(no url)")' || true)
+
+              if [[ "${trusted_hits:-0}" -gt 0 ]]; then
+                keep_reason="a maintainer comment carries the harness-multi-pr marker"
+              fi
+              if [[ -n "$untrusted_marker_lines" ]]; then
+                while IFS= read -r hitline; do
+                  [[ -n "$hitline" ]] || continue
+                  assoc="${hitline%% *}"
+                  hit_url="${hitline#* }"
+                  echo "WARN  #${n} (${title}): ignoring a harness-multi-pr marker from an untrusted comment author (${assoc}) at ${hit_url} — apply the multi-pr label instead if this really is a multi-PR split"
+                done <<EOF
 $untrusted_marker_lines
 EOF
+              fi
             fi
           fi
 
@@ -263,6 +287,13 @@ EOF
             else
               echo "        re-run with --fix to drop pr-open so it re-queues (once no sibling PR is open)"
             fi
+          elif ! $comments_ok; then
+            # #249 — fail closed on the KEEP side: an unreadable comment-marker lookup is
+            # UNKNOWN, not "no marker found", so neither the close path nor the KEEP relabel
+            # runs for this issue in EITHER mode (not gated behind $FIX) — pr-open stays exactly
+            # as found and the next run re-examines it. Deliberately a sibling of the $FIX branch
+            # below, not nested inside it.
+            echo "WARN  #${n} (${title}): PR #${prnum} merged, but the multi-PR comment-marker lookup failed (${lookup_failure}) — leaving the issue open with pr-open in place for the next run to re-examine"
           elif $FIX; then
             gh issue comment "$n" --body "${AUDIT_MARKER}
 🧹 Harness cleanup: PR #${prnum} for this issue links it with a closing keyword, but the issue didn't auto-close (e.g. it merged into a non-default branch). Closing it now." >/dev/null
