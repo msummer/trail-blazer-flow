@@ -21,11 +21,15 @@
 # harness's own convention, not mechanically required.
 #
 # Tokenizer: the POSIX-awk segment/token walker below is a near-twin of hooks/agent-boundary.sh's
-# (see that script's "the scan" section, lines ~151-206) — same segment-break characters, same
+# (see that script's "the scan" section, lines 143-236) — same segment-break characters, same
 # normalize() (quote/backslash strip + basename), same repeat-until-exhausted PREFIX_WORDS skip
 # (never once-only — a once-only skip is the M23 regression class agent-boundary.sh's own
-# dev/hook-tests.sh table documents). A future fix to either tokenizer's shared behaviour (segment
-# breaking, normalize(), the prefix-word skip) must be applied to BOTH files — see this repo's
+# dev/hook-tests.sh table documents), and, since #270, the same bash-native carriage-return strip
+# of $cmd applied immediately after the jq extraction and before this script's own `[ -n "$cmd" ]`
+# guard (see that same point in each file — a CRLF-carrying transport can otherwise deliver a
+# command whose tokens carry a trailing `\r`, which every exact-match comparison below would miss).
+# A future fix to either tokenizer's shared behaviour (segment breaking, normalize(), the
+# prefix-word skip, the CR strip) must be applied to BOTH files — see this repo's
 # CLAUDE.md and dev/selfcheck.sh's assertion 4.40 clause (c), which mechanically pins the two
 # scripts' PREFIX_WORDS vocabulary stays byte-identical. Differences from agent-boundary.sh's
 # tokenizer: after resolving a segment's command word as `git`, this script walks forward again
@@ -81,9 +85,12 @@
 # ATTACHED `--opt=value` global option such as `--git-dir=<path>` does NOT evade this way: the
 # generic single-dash-token skip consumes it whole in one step and the subcommand still resolves
 # to `push` correctly — what `--git-dir=<path>`/`-C` actually evade is WHICH repo gets resolved,
-# already covered by the bullet below); a trailing CRLF, e.g. `git push origin main\r` (neither
-# `normalize()` nor the quote/backslash strip below removes a trailing `\r`, so the destination
-# token never matches a deny-set member exactly); `nice -n 5 git push origin main` (the same class
+# already covered by the bullet below); a CR *inside* a raw-stdin fast-path literal, e.g. `git
+# pu<CR>sh origin main` (measured: rc 0) — a conforming JSON writer escapes an embedded `\r` as the
+# two characters `\`+`r`, so the raw stdin substring `push` never appears intact and fast path 1
+# (below) exits before the #270 CR strip ever runs, regardless of the strip's own correctness; the
+# resulting command cannot execute as a real `git push` either, so this is documented, not fixed
+# (see the fast-path comment below); `nice -n 5 git push origin main` (the same class
 # as the `sudo -u foo` bullet above — `nice`'s option value `5` becomes the resolved command word,
 # not `git`); a `push.default`/`remote.<name>.push` config redirect on a bare `git push` (this
 # hook never reads `.git/config`); a `git -C <other-checkout> push` into a repo whose default
@@ -122,10 +129,14 @@ input="$(cat)"
 
 # --- fast paths ------------------------------------------------------------------------------
 # Both are pure performance optimisations, each semantics-preserving with the check it stands in
-# for below except for a command word/subcommand split by quote or backslash characters — the
-# same documented, quote-blind limit hooks/agent-boundary.sh's fast paths carry. A miss on either
-# fast path always means "this call is out of scope for this hook", which is also what the slower
-# checks below it would conclude.
+# for below except for a command word/subcommand split by quote, backslash, or carriage-return
+# characters — the same documented, quote-blind limit hooks/agent-boundary.sh's fast paths carry.
+# The #270 CR strip below (after the jq extraction) fixes an unstripped `\r` for every command
+# that reaches the tokenizer, but a CR *inside* the literal these fast paths scan (a raw stdin
+# substring like `pu<CR>sh`, where a conforming JSON writer has already escaped the `\r`) still
+# exits here, before the strip ever runs — see this file's header "Documented under-blocking
+# classes" for that residual case. A miss on either fast path always means "this call is out of
+# scope for this hook", which is also what the slower checks below it would conclude.
 case "$input" in
   *push*) : ;;
   *) exit 0 ;;
@@ -146,6 +157,17 @@ pmode="$(printf '%s' "$input" | jq -r '.permission_mode? // empty' 2>/dev/null)"
 [ "$pmode" != "plan" ] || exit 0
 
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command? // empty' 2>/dev/null)"
+
+# A CRLF-carrying transport (Git Bash, a CRLF-translating layer) can deliver a command whose
+# tokens carry a trailing \r; every comparison below is an exact match, so an unstripped \r
+# made `git push origin main\r` no-opinion (#270). Stripped here, once, before the tokenizer —
+# not inside normalize(), which the refspec destination tokens never pass through (they take
+# strip_quotes() at line ~241 and the Bash membership tests, is_deny_member() at line ~316,
+# below). Pure parameter expansion: no new process, so this hook still executes nothing (see
+# this file's header).
+cr=$'\r'
+cmd="${cmd//$cr/}"
+
 [ -n "$cmd" ] || exit 0
 
 # cwd is a documented PreToolUse stdin field (Claude Code's hooks reference lists it in the

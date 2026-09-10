@@ -1350,7 +1350,19 @@ own prose is no longer mistaken for the plan itself (see "Safety model" below fo
 full behaviour, including the deliberate `contains`-vs-`startswith` asymmetry). The one
 consumer-visible behaviour change: an issue whose only marker-carrying trusted comment is such a
 record now reports `plan: null` (`reason: "no-plan"`) rather than binding to the record and
-reporting whatever approval state that record happened to produce.
+reporting whatever approval state that record happened to produce. Also in v2.7.2 (#270):
+`hooks/push-guard.sh` and `hooks/agent-boundary.sh` both now strip every carriage return from
+`tool_input.command` before tokenizing it, needing no grant, label, script, settings entry, or
+baseline step. A CRLF-carrying command is now recognised and denied where the guard was
+previously silent — a trailing `\r` on a destination, command word, or subcommand token (e.g.
+`git push origin main\r`, `git\r push`, `gh\r …`) no longer evades either hook's exact-match
+comparisons. The one loosening-direction consequence: a verifier subagent's `git status\r` is now
+no opinion where it previously denied (fail-closed on a subcommand token no `git` invocation
+could actually resolve to); the residual class the fix does not close — a CR *inside* a raw-stdin
+fast-path literal, e.g. `git pu\rsh origin main` or `g\rit push`, whose escaped `\r` keeps the
+substring the fast path scans for from ever appearing intact — is documented, not fixed, in each
+hook's own header comment (`hooks/push-guard.sh`'s "Documented under-blocking classes" bullet and
+`hooks/agent-boundary.sh`'s fast-path-2 comment), not in "Safety model" below.
 
 ## The per-repo settings file (required)
 
@@ -1588,7 +1600,7 @@ other case — the main session (no `agent_type`), the planner or another agent,
 "plan"`, malformed stdin, another tool, or `tool_input.command` absent — is "no opinion" (exit 0,
 empty stdout, empty stderr), the same convention `git-c-guard.sh` uses; a blocked call's stderr
 names the role and the command it blocked, since a subagent can't answer a permission prompt the
-way an interactive session could. Pinned by 49 fixture cases in `dev/hook-tests.sh`, including the
+way an interactive session could. Pinned by 52 fixture cases in `dev/hook-tests.sh`, including the
 same never-executes-anything guarantee (a booby-trapped `git`/`gh`/`rm` on `PATH` proves nothing
 runs) and the same fail-open properties as the guard hook: the plugin disabled, `disableAllHooks:
 true`, no `jq` on `PATH`, an unresolved `${CLAUDE_PLUGIN_ROOT}` on Windows, or a Claude Code that

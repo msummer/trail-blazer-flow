@@ -16,8 +16,10 @@
 # stderr), or (never observed here, since this hook's contract forbids it) anything else — for
 # every case listed in the approved #235 plan's "Testing approach": implementer-role deny/no
 # opinion, verifier-role deny/no opinion (both agent_type spellings represented per role),
-# role-agnostic no opinion, and the same booby-trapped `git`/`rm` idiom proving the boundary
-# never executes anything either.
+# role-agnostic no opinion, the same booby-trapped `git`/`rm` idiom proving the boundary never
+# executes anything either, and, since #270, a CRLF-carrying command word on both the
+# implementer (`git<CR> push`) and verifier (`gh<CR> …`) roles, plus a CRLF-carrying subcommand
+# (`git status<CR>`) that DENIES pre-fix and is no opinion post-fix.
 #
 # hooks/push-guard.sh (#260) has the same two observable verdicts as agent-boundary.sh — deny
 # (exit 2, empty stdout, exactly one stderr line naming the blocked destination) or no opinion
@@ -29,9 +31,12 @@
 # `git-c-guard.sh` itself would allow, and the `main`/`master` fallback pair), a default-branch
 # symref read against a fixture repo (base/subdirectory/worktree-pointer-file `cwd` variants),
 # every documented no-opinion shape (including the two exact forms this harness itself issues),
-# role-agnostic no-opinion edges, and the same booby-trapped `git`/`gh`/`rm` idiom plus a
+# role-agnostic no-opinion edges, the same booby-trapped `git`/`gh`/`rm` idiom plus a
 # byte-identical-file-listing fixture proving this hook reads the filesystem but never writes to
-# or executes anything on it.
+# or executes anything on it, and, since #270, a CRLF-carrying destination (`git push origin
+# main<CR>`, both trailing and interior), a CRLF-carrying command word (`git<CR> push origin
+# main`), and a CRLF-carrying non-default destination (`git push origin feature/x<CR>`) proving
+# the strip does not widen the deny set.
 #
 # Usage: bash dev/hook-tests.sh [name-filter] — same output contract as dev/selfcheck-tests.sh
 # and dev/doctor-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==`
@@ -284,9 +289,10 @@ case_plan_mode() {
 # ---------------------------------------------------------------------------------------------
 # hooks/agent-boundary.sh (#235) cases. Grouped by verdict/role, counts as shipped (not the
 # approved plan's original enumeration, which this comment previously — and wrongly — cited
-# verbatim; see LESSON 2026-09-06): implementer deny (15), implementer no opinion (5), verifier
-# no opinion (6), verifier deny (13), role-agnostic no opinion (8), never-executes (2) = 49
-# total. Both agent_type spellings ("implementer"/"trail-blazer-flow:implementer",
+# verbatim; see LESSON 2026-09-06): implementer deny (16), implementer no opinion (5), verifier
+# no opinion (7), verifier deny (14), role-agnostic no opinion (8), never-executes (2) = 52
+# total (#270 added one CRLF case to each of implementer-deny, verifier-no-opinion, and
+# verifier-deny). Both agent_type spellings ("implementer"/"trail-blazer-flow:implementer",
 # "verifier"/"trail-blazer-flow:verifier") are exercised across each role's case set (LESSON
 # 2026-09-08).
 
@@ -332,6 +338,14 @@ case_ib_chained_prefix() {
   run_boundary "$(mk_agent_cmd 'implementer' 'sudo bash -c "git push"')"
   expect_deny
 }
+case_ib_crlf_cmdword() {
+  # #270: CR on the command word -- the only place a CR actually evades this hook (a CR elsewhere,
+  # e.g. `git push<CR>`, still resolves cmdword to a clean "git" and already denies). Raw stdin
+  # carries "agent_type" (via mk_agent_cmd) and "git" before the escaped \r, satisfying both
+  # fast paths.
+  run_boundary "$(mk_agent_cmd 'implementer' "git${CR} push")"
+  expect_deny
+}
 
 # --- implementer, no opinion -------------------------------------------------------------------
 case_in_npm_test()  { run_boundary "$(mk_agent_cmd 'implementer' 'npm test')"; expect_no_opinion; }
@@ -357,6 +371,16 @@ case_vn_status()    { run_boundary "$(mk_agent_cmd 'verifier' 'git status --porc
 case_vn_restore()   { run_boundary "$(mk_agent_cmd 'verifier' 'git restore api/x.py')"; expect_no_opinion; }
 case_vn_c_log()     { run_boundary "$(mk_agent_cmd 'verifier' 'git -C ../demo-wt-1 log main..HEAD --format=%s')"; expect_no_opinion; }
 case_vn_show_ns()   { run_boundary "$(mk_agent_cmd 'trail-blazer-flow:verifier' 'git show HEAD')"; expect_no_opinion; }
+case_vn_crlf_status() {
+  # #270: verifier, git status<CR> -- pins the subcommand-resolution side of the strip. Before the
+  # fix this DENIES (fail-closed: "status<CR>" is not an exact VERIFIER_GIT_READONLY member,
+  # unlike case_vn_status's clean "status --porcelain"); after the fix it is no opinion. The only
+  # new case whose pre-fix failure is a deny rather than a no-opinion, which is why it is worth
+  # having: it proves the fix is not a blanket widening of denials. Raw stdin carries "agent_type"
+  # and "git" before the escaped \r.
+  run_boundary "$(mk_agent_cmd 'verifier' "git status${CR}")"
+  expect_no_opinion
+}
 
 # --- verifier, deny ------------------------------------------------------------------------------
 case_vd_commit()      { run_boundary "$(mk_agent_cmd 'verifier' 'git commit -m x')"; expect_deny; }
@@ -384,6 +408,13 @@ case_vd_chained_prefix() {
   # Verifier-side sibling of impl-deny-chained-prefix — same regression, two chained
   # PREFIX_WORDS tokens ("env" then "sudo") in front of the command word.
   run_boundary "$(mk_agent_cmd 'verifier' 'env sudo git commit -m x')"
+  expect_deny
+}
+case_vd_crlf_gh() {
+  # #270: verifier, gh<CR> ... -- the gh branch, whose role policy compares the printed command
+  # word exactly ("gh" vs. the scan's emitted cmdword). Raw stdin carries "agent_type" and "gh"
+  # before the escaped \r.
+  run_boundary "$(mk_agent_cmd 'verifier' "gh${CR} issue comment 1 -b x")"
   expect_deny
 }
 
@@ -477,6 +508,10 @@ mk_push_tool() { jq -n --arg tool "$1" --arg cmd "$2" '{tool_name: $tool, tool_i
 # "cmd empty" check instead of passing vacuously via either raw-stdin fast path (LESSON
 # 2026-08-26's analogue, mirroring mk_agent_missing_command above).
 mk_push_missing_command() { jq -n --arg note 'was going to run git push origin main' '{tool_name: "Bash", tool_input: {}, note: $note}'; }
+
+CR=$'\r'   # one literal carriage return — the #270 CRLF fixtures below (jq --arg escapes it into
+           # the JSON as \r, so no raw CR byte ever passes through command substitution). Shared
+           # by both the push-guard and agent-boundary CRLF cases below.
 
 # mk_fixture_repo DIR DEFAULT_BRANCH CURRENT — builds an ordinary (non-worktree) .git directory
 # under DIR: refs/remotes/origin/HEAD names DEFAULT_BRANCH; HEAD names CURRENT, unless CURRENT is
@@ -596,6 +631,42 @@ case_pd_n1_refspec() {
   mk_fixture_repo "$dir" main feature/x
   run_push_guard "$(mk_push_cmd_cwd 'git push main' "$dir")"
   expect_push_deny
+}
+case_pd_crlf_dest() {
+  # #270: the exact command the issue measured. Isolates the destination compare, which goes
+  # through strip_quotes() + is_deny_member (NOT normalize() — push destinations never pass
+  # through it, see the hook's own header). Raw stdin carries both required fast-path substrings
+  # ("push", "git") ahead of the escaped \r, so this reaches the tokenizer.
+  run_push_guard "$(mk_push_cmd "git push origin main${CR}")"
+  expect_push_deny
+}
+case_pd_crlf_interior() {
+  # #270 round-2 kickback: three CRs, with the verdict-bearing one (the second) NEITHER the
+  # command's first NOR its final byte — the original two-CR fixture's verdict-bearing CR was
+  # its FIRST, so a once-only ("strip the first \r found") mutant happened to strip it too and
+  # survived the whole suite undetected; this shape kills both a trailing-only strip (the first
+  # two CRs, including the verdict-bearing one, are untouched) AND a once-only strip (the
+  # verdict-bearing CR is the SECOND, not the one a once-only strip removes) — see M23/M24/M25
+  # below. Raw stdin carries both fast-path substrings ("git", "push") intact after the first
+  # escaped \r — the fast paths are whole-string substring tests, so position is irrelevant here
+  # (unlike case_pd_crlf_cmdword, where the "g","i","t" run must survive ahead of the escape).
+  run_push_guard "$(mk_push_cmd "echo a${CR} && git push origin main${CR} && echo b${CR}")"
+  expect_push_deny
+}
+case_pd_crlf_cmdword() {
+  # #270: isolates normalize() on the command word — the site the issue's filed shape ("strip in
+  # both tokenizers' normalize()") names, and which alone is insufficient to fix the issue's own
+  # measured case (see case_pd_crlf_dest). Raw stdin carries "push" (unescaped, later in the
+  # string) and the three literal characters "g","i","t" before the escaped \r, satisfying both
+  # fast paths.
+  run_push_guard "$(mk_push_cmd "git${CR} push origin main")"
+  expect_push_deny
+}
+case_pn_crlf_feature() {
+  # #270: the strip must not widen the deny set — exact match is still required against a
+  # non-default destination. Raw stdin carries both fast-path substrings.
+  run_push_guard "$(mk_push_cmd "git push origin feature/x${CR}")"
+  expect_push_no_opinion
 }
 
 # --- deny: default-branch symref resolution against fixture repos --------------------------------
@@ -808,14 +879,28 @@ cases=(
   # refreshed immediately before every mutation, with the observed `bash dev/hook-tests.sh`
   # pass/fail delta measured against this file's case set AT THE TIME of that mutation, then
   # restored and verified with a full `diff` before the next mutation. M1-M22 were measured
-  # against the round-1 47-case/82-total addition; M23 (below) was added by the round-2 kickback
+  # against the round-1 47-case/82-total addition; M23 was added by the round-2 kickback
   # that fixed hooks/agent-boundary.sh:167's chained-PREFIX_WORDS bug and was measured against
-  # the current 49-case/84-total addition — M1-M22's own numbers were NOT re-measured against
+  # the 49-case/84-total addition — M1-M22's own numbers were NOT re-measured against
   # the 84-total baseline (LESSON 2026-09-06 asks only for bookkeeping, i.e. count words, to be
   # reconciled after the last case is added; re-running 22 already-verified mutants is out of
-  # scope for this fix). M1/M2 (the two raw-stdin fast paths) are coarse — breaking either
-  # silences the WHOLE hook, so they only distinguish a deny-verdict case from everything else,
-  # never one deny case from another:
+  # scope for this fix). M24 (below) was added by #270's CRLF-strip fix and was measured
+  # (whole-file convention — bash dev/hook-tests.sh with no filter) against the CURRENT 143-case
+  # file (agent-boundary's own addition now 52 cases; push-guard's own addition now 56 cases — a
+  # DIFFERENT, larger figure, 60, is the `push`-name-filtered measurement unit the push mutation
+  # table below uses: the 56 push-section rows below plus four rows from the OTHER two sections
+  # whose names happen to contain the substring "push" (push-upstream, impl-deny-push-bare,
+  # impl-deny-push-ns, impl-deny-git-c-push) — M1-M23's own numbers were NOT
+  # re-measured against that 143-case total: the 82/84-case figures above predate #260's
+  # push-guard section entirely (it did not exist yet when M1-M22 were measured, and held 52
+  # cases, not 56, immediately before #270 added four CRLF fixtures to it). M25 (below) was also
+  # added by the #270 round-2 kickback, probing this file for the same trailing-vs-once-only gap
+  # the push table's M24/M25 close for hooks/push-guard.sh — see M25's own entry for why no
+  # fixture here closes it (a boundary interior-CR fixture is not added: not required unless
+  # judged necessary to make a table sentence true, and none currently claims that coverage).
+  # M1/M2 (the two raw-stdin fast paths) are
+  # coarse — breaking either silences the WHOLE hook, so they only distinguish a deny-verdict
+  # case from everything else, never one deny case from another:
   #   M1  fast path 1 pattern corrupted (*agent_type* -> *agentXtype*)      -> 55 pass, 27 fail
   #   M2  fast path 2 pattern corrupted (*git*|*gh* -> *gitX*|*ghX*)        -> 55 pass, 27 fail
   #       (M1 and M2 fail the identical 27-case set: every impl-deny-*/verif-deny-* case plus
@@ -848,11 +933,26 @@ cases=(
   #   M22 "-C" exact match widened to also match lowercase "-c"            -> 81 pass,  1 fail
   #   M23 hooks/agent-boundary.sh:167's saw_prefix once-only guard restored -> 82 pass,  2 fail
   #       (!saw_prefix && (norm in prefix_set)), so only the FIRST recognised PREFIX_WORDS token
-  #       in a segment is skipped instead of every one — measured against the current 49-case/
-  #       84-total addition (the two new chained-prefix fixtures are the only cases that flip)
+  #       in a segment is skipped instead of every one — measured against the then-current
+  #       49-case/84-total addition (#235 round 2); not re-run for #270 (the two new
+  #       chained-prefix fixtures were the only cases that flipped then)
+  #   M24 the two #270 CR-strip lines deleted (cr=$'\r'; cmd="${cmd//$cr/}") -> 140 pass,  3 fail
+  #       (whole-file convention, measured against the CURRENT 143-case file — the three new
+  #       #270 boundary CRLF fixtures, impl-deny-crlf-cmdword/verif-deny-crlf-gh/
+  #       verif-noop-crlf-status, are the only cases that flip)
+  #   M25 the shipped global strip narrowed to once-only                    -> 143 pass,  0 fail
+  #       (cmd="${cmd//$cr/}" -> cmd="${cmd/$cr/}"; #270 round-2 kickback probe, whole-file
+  #       convention) -- NOT flipped by any fixture in this file: each of the three #270
+  #       boundary CRLF fixtures carries exactly one CR, so removing "the first" is identical
+  #       to removing "every" for all three — a real gap in this table's own coverage (the push
+  #       table's analogous M24/M25 close the same gap for hooks/push-guard.sh because
+  #       push-deny-crlf-interior carries a second, non-edge CR that none of these three
+  #       boundary fixtures do); left open here rather than papered over, since adding a
+  #       boundary interior-CR fixture is not required unless judged necessary to make a table
+  #       sentence true, and no sentence in this table claims this coverage
   # Six fixtures (impl-noop-npm-test/pytest/selfcheck, role-noop-no-agent-type,
   # role-noop-agent-id-only, and role-noop-malformed-json) are, verified by direct measurement,
-  # NOT flipped by any of M1-M23: their raw JSON never contains the literal substring their
+  # NOT flipped by any of M1-M25: their raw JSON never contains the literal substring their
   # governing fast path requires (fast path 1's `agent_type` for the two role-agnostic fixtures,
   # fast path 2's `git`/`gh` for the three implementer no-opinion commands), or — for the
   # malformed-JSON fixture — jq's own parse failure independently yields an empty extraction no
@@ -878,9 +978,10 @@ cases=(
   "impl-deny-subshell|case_ib_subshell|implementer deny: (cd x && git push) (paren segment breaks) -- measured: M1/M2, 55 pass 27 fail"
   "impl-deny-readonly-subcommand|case_ib_readonly_subcommand|implementer deny: git status --porcelain (implementer denies even a VERIFIER_GIT_READONLY subcommand -- isolates the role-policy split) -- measured: M14, 81 pass 1 fail"
   "impl-deny-chained-prefix|case_ib_chained_prefix|implementer deny: sudo bash -c \"git push\" (TWO chained PREFIX_WORDS tokens) -- measured: M23, 82 pass 2 fail (with verif-deny-chained-prefix)"
-  "impl-noop-npm-test|case_in_npm_test|implementer no opinion: npm test -- measured: not flipped by M1-M23 (no git/gh substring anywhere in the raw stdin -- fast path 2 alone already excludes it; see the table header note above)"
-  "impl-noop-pytest|case_in_pytest|implementer no opinion: pytest -q -- measured: not flipped by M1-M23 (same as impl-noop-npm-test)"
-  "impl-noop-selfcheck|case_in_selfcheck|implementer no opinion: bash dev/selfcheck.sh -- measured: not flipped by M1-M23 (same as impl-noop-npm-test)"
+  "impl-deny-crlf-cmdword|case_ib_crlf_cmdword|implementer deny: git<CR> push (#270, CR on the command word -- the only place a CR evades this hook) -- measured: M24, 140 pass 3 fail (with verif-deny-crlf-gh and verif-noop-crlf-status)"
+  "impl-noop-npm-test|case_in_npm_test|implementer no opinion: npm test -- measured: not flipped by M1-M24 (no git/gh substring anywhere in the raw stdin -- fast path 2 alone already excludes it; see the table header note above)"
+  "impl-noop-pytest|case_in_pytest|implementer no opinion: pytest -q -- measured: not flipped by M1-M24 (same as impl-noop-npm-test)"
+  "impl-noop-selfcheck|case_in_selfcheck|implementer no opinion: bash dev/selfcheck.sh -- measured: not flipped by M1-M24 (same as impl-noop-npm-test)"
   "impl-noop-grep-arg|case_in_grep_arg|implementer no opinion: grep -rn \"git push\" . (git as argument, not command word) -- measured: M21, 81 pass 1 fail"
   "impl-noop-git-c-guard-script|case_in_git_c_guard_script|implementer no opinion: bash hooks/git-c-guard.sh (basename contains, but isn't, \"git\") -- measured: M20, 81 pass 1 fail"
   "verif-noop-diff|case_vn_diff|verifier no opinion: git diff <default>...HEAD --stat -- measured: M13c, 81 pass 1 fail"
@@ -889,6 +990,7 @@ cases=(
   "verif-noop-restore|case_vn_restore|verifier no opinion: git restore <file> -- measured: M13d, 81 pass 1 fail"
   "verif-noop-c-log|case_vn_c_log|verifier no opinion: git -C <worktree> log <default>..HEAD --format=%s -- measured: M11, 81 pass 1 fail (also M13, 80 pass 2 fail, with verif-noop-log)"
   "verif-noop-show-ns|case_vn_show_ns|verifier no opinion: git show HEAD (agent_type: trail-blazer-flow:verifier) -- measured: M13e, 81 pass 1 fail"
+  "verif-noop-crlf-status|case_vn_crlf_status|verifier no opinion: git status<CR> (#270 -- pre-fix this DENIES, fail-closed; the only new case whose pre-fix failure is a deny, proving the fix is not a blanket widening) -- measured: M24, 140 pass 3 fail (with impl-deny-crlf-cmdword and verif-deny-crlf-gh)"
   "verif-deny-commit|case_vd_commit|verifier deny: git commit -m x -- measured: M1/M2, 55 pass 27 fail"
   "verif-deny-stash|case_vd_stash|verifier deny: git stash -- measured: M1/M2, 55 pass 27 fail"
   "verif-deny-checkout|case_vd_checkout|verifier deny: git checkout -- <file> -- measured: M1/M2, 55 pass 27 fail"
@@ -902,13 +1004,14 @@ cases=(
   "verif-deny-bare-git|case_vd_bare_git|verifier deny: bare git (-none-, fail-closed) -- measured: M1/M2, 55 pass 27 fail"
   "verif-deny-composite|case_vd_composite|verifier deny: pytest && git commit -m x (second segment) -- measured: M1/M2, 55 pass 27 fail"
   "verif-deny-chained-prefix|case_vd_chained_prefix|verifier deny: env sudo git commit -m x (TWO chained PREFIX_WORDS tokens) -- measured: M23, 82 pass 2 fail (with impl-deny-chained-prefix)"
-  "role-noop-no-agent-type|case_ra_no_agent_type_key|role-agnostic no opinion: no agent_type key at all (main session), git push -- measured: not flipped by M1-M23 (no 'agent_type' substring anywhere in the raw stdin -- fast path 1 alone already excludes it, and independently the jq .agent_type extraction below would also come back empty; see the table header note above)"
+  "verif-deny-crlf-gh|case_vd_crlf_gh|verifier deny: gh<CR> issue comment 1 -b x (#270, the gh branch's exact command-word compare) -- measured: M24, 140 pass 3 fail (with impl-deny-crlf-cmdword and verif-noop-crlf-status)"
+  "role-noop-no-agent-type|case_ra_no_agent_type_key|role-agnostic no opinion: no agent_type key at all (main session), git push -- measured: not flipped by M1-M24 (no 'agent_type' substring anywhere in the raw stdin -- fast path 1 alone already excludes it, and independently the jq .agent_type extraction below would also come back empty; see the table header note above)"
   "role-noop-explore|case_ra_explore|role-agnostic no opinion: agent_type is \"Explore\" (unrecognised role) -- measured: M15 ([ -n \"\$role\" ] || exit 0 removed), 80 pass 2 fail (with role-noop-empty-agent-type)"
   "role-noop-empty-agent-type|case_ra_empty_agent_type|role-agnostic no opinion: agent_type is the empty string -- measured: M15, 80 pass 2 fail (with role-noop-explore)"
-  "role-noop-agent-id-only|case_ra_agent_id_only|role-agnostic no opinion: agent_id present, no agent_type key -- measured: not flipped by M1-M23 (same reason as role-noop-no-agent-type -- 'agent_id' does not contain the substring 'agent_type')"
+  "role-noop-agent-id-only|case_ra_agent_id_only|role-agnostic no opinion: agent_id present, no agent_type key -- measured: not flipped by M1-M24 (same reason as role-noop-no-agent-type -- 'agent_id' does not contain the substring 'agent_type')"
   "role-noop-plan-mode|case_ra_plan_mode|role-agnostic no opinion: implementer git push under permission_mode: \"plan\" -- measured: M6, 81 pass 1 fail"
   "role-noop-wrong-tool|case_ra_wrong_tool|role-agnostic no opinion: tool_name is \"Read\", not \"Bash\" -- measured: M3, 81 pass 1 fail"
-  "role-noop-malformed-json|case_ra_malformed_json|role-agnostic no opinion: unparseable stdin (carries both agent_type and git substrings) -- measured: not flipped by M1-M23, including M3 (jq's own parse failure independently yields an empty .tool_name/.agent_type extraction regardless of which downstream check runs)"
+  "role-noop-malformed-json|case_ra_malformed_json|role-agnostic no opinion: unparseable stdin (carries both agent_type and git substrings) -- measured: not flipped by M1-M24, including M3 (jq's own parse failure independently yields an empty .tool_name/.agent_type extraction regardless of which downstream check runs)"
   "role-noop-missing-command|case_ra_missing_command|role-agnostic no opinion: tool_input.command absent -- measured: M18, 81 pass 1 fail"
   "boundary-never-executes-deny|case_boundary_never_executes_deny|deny, AND the boundary never invokes git/gh/rm on the booby-trapped PATH — sentinel absent -- measured: M1/M2, 55 pass 27 fail"
   "boundary-never-executes-noop|case_boundary_never_executes_noop|no opinion, AND the boundary never invokes git/gh/rm on the booby-trapped PATH — sentinel absent -- measured: M13b, 80 pass 2 fail (with verif-noop-status)"
@@ -917,14 +1020,19 @@ cases=(
   # the mutants actually applied to hooks/push-guard.sh via a Python literal-string replace
   # asserting exactly one occurrence (never a regex, to avoid a silent no-op substitution), with
   # the observed `bash dev/hook-tests.sh push` pass/fail delta measured against this file's
-  # 56-case push-* set, then restored and verified with a full `diff` before the next mutation.
+  # 56-case push-* set AS IT STOOD AT #260, then restored and verified with a full `diff` before
+  # the next mutation. M1-M22 were NOT re-run for #270 — only M23-M25 (below) are measured against
+  # the CURRENT 60-case push-* set (the #260 56-case baseline plus the four new #270 CRLF
+  # fixtures).
   # M1/M2 (the two raw-stdin fast paths) are coarse — breaking either silences the WHOLE hook, so
   # they only distinguish a deny-verdict case from everything else, never one deny case from
   # another:
   #   M1  fast path 1 pattern corrupted (*push* -> *pushX*)                -> 23 pass, 33 fail
   #   M2  fast path 2 pattern corrupted (*git* -> *gitX*)                  -> 23 pass, 33 fail
-  #       (M1 and M2 fail the identical 33-case set: every push-deny-* case plus
-  #       push-never-executes-deny and push-never-executes-reads-only)
+  #       (M1 and M2 fail the identical 33-case set, measured against the #260 56-case baseline:
+  #       every push-deny-* case plus push-never-executes-deny and
+  #       push-never-executes-reads-only — the four new #270 push-deny-crlf-* /
+  #       push-noop-crlf-feature fixtures did not exist yet)
   #   M3  the .tool_name == "Bash" check disabled                         -> 55 pass,  1 fail
   #   M4  the .permission_mode == "plan" check disabled                   -> 55 pass,  1 fail
   #   M5  PREFIX_WORDS emptied                                            -> 54 pass,  2 fail
@@ -956,13 +1064,38 @@ cases=(
   #   M21 normalize()'s basename-after-last-/ step removed                -> 55 pass,  1 fail
   #   M22 tool_input.command's jq default changed from empty to a real   -> 55 pass,  1 fail
   #       command string
-  # Nine fixtures are, verified by direct measurement, NOT flipped by any of M1-M22: their
+  #   M23 the two #270 CR-strip lines deleted (cr=$'\r'; cmd="${cmd//$cr/}") -> 57 pass,  3 fail
+  #       (measured against the CURRENT 60-case push-* set — the three new #270 push-deny-crlf-*
+  #       fixtures are the only cases that flip; push-noop-crlf-feature is NOT flipped, see below.
+  #       Re-measured after the #270 round-2 kickback rewrote push-deny-crlf-interior's raw
+  #       command from two CRs to three — the figures and failing set are unchanged from the
+  #       original two-CR fixture)
+  #   M24 the shipped global strip narrowed to trailing-only                -> 58 pass,  2 fail
+  #       (cmd="${cmd//$cr/}" -> cmd="${cmd%$cr}"; #270 round-2 kickback, added because M23 alone
+  #       cannot distinguish "strips every \r" from "strips only a trailing \r" — measured against
+  #       the CURRENT 60-case push-* set: kills push-deny-crlf-interior and push-deny-crlf-cmdword,
+  #       neither of whose verdict-bearing CR is the command's final byte; does NOT kill
+  #       push-deny-crlf-dest, whose single CR IS the final byte)
+  #   M25 the shipped global strip narrowed to once-only                    -> 59 pass,  1 fail
+  #       (cmd="${cmd//$cr/}" -> cmd="${cmd/$cr/}"; #270 round-2 kickback finding — the original
+  #       two-CR push-deny-crlf-interior fixture's verdict-bearing CR happened to be its FIRST, so
+  #       this mutant survived the whole 60-case set undetected until the fixture was rewritten to
+  #       a three-CR command whose verdict-bearing CR is the SECOND, not the first — measured
+  #       against the CURRENT 60-case push-* set: kills only push-deny-crlf-interior; does NOT
+  #       kill push-deny-crlf-dest or push-deny-crlf-cmdword, each of whose single CR IS the first
+  #       (and only) one)
+  # Nine fixtures (measured against the #260 56-case baseline) are, verified by direct measurement,
+  # NOT flipped by any of M1-M22: their
   # destination never coincides with a deny-set member under any of these mutants (the two
   # release-blocker positive controls this harness itself issues, an ordinary feature/release/tag
   # branch, a fixture repo whose current branch is a non-default claude/<n>-<slug> branch, a
   # detached HEAD, cwd resolving to no repo at all, and the malformed-JSON control, whose failure
   # mode is jq's own parse error regardless of which downstream check runs); their comment below
-  # says so instead of citing a mutant that was never observed to fail them.
+  # says so instead of citing a mutant that was never observed to fail them. push-noop-crlf-feature
+  # (#270) is a TENTH no-opinion fixture, measured only against M23-M25 (it did not exist when
+  # M1-M22 were run): under each of those three mutants the destination stays a non-deny-set value
+  # ("feature/x<CR>" under M23, "feature/x" under M24/M25), so "no opinion" is the verdict either
+  # way.
   "push-deny-origin-main|case_pd_origin_main|deny: git push origin main (the plain form) -- measured: M1/M2, 23 pass 33 fail"
   "push-deny-head-colon-main|case_pd_head_colon_main|deny: git push origin HEAD:main (HEAD substituted via the current branch, then the dest side of the colon read directly) -- measured: M1/M2, 23 pass 33 fail (also M11, 50 pass 6 fail)"
   "push-deny-plus-head-refs-main|case_pd_plus_head_refs|deny: git push origin +HEAD:refs/heads/main (leading + stripped, refs/heads/ prefix stripped) -- measured: M1/M2, 23 pass 33 fail (also M11 and M13, each 50/54 pass)"
@@ -987,6 +1120,9 @@ cases=(
   "push-deny-global-opt-two|case_pd_global_opt_two|deny: git -c core.pager=cat -C ../demo-wt-1 push origin main (TWO chained global-option-with-value pairs, the 0/1/2+ boundary -- LESSON 2026-09-08d) -- measured: M1/M2, 23 pass 33 fail (also M6, 53 pass 3 fail)"
   "push-deny-origin-master|case_pd_origin_master|deny: git push origin master (the second PUSH_DEFAULT_BRANCH_FALLBACK member) -- measured: M1/M2, 23 pass 33 fail (also M16, 55 pass 1 fail)"
   "push-deny-n1-refspec|case_pd_n1_refspec|deny: git push main against a fixture repo whose current branch is feature/x (n==1 -- the single argument is ALSO evaluated as a refspec destination, isolated from a real, non-denying current branch) -- measured: M1/M2, 23 pass 33 fail"
+  "push-deny-crlf-dest|case_pd_crlf_dest|deny: git push origin main<CR> (#270, the exact command the issue measured -- isolates the destination compare, which goes through strip_quotes()+is_deny_member, not normalize()) -- measured: M23, 57 pass 3 fail (with push-deny-crlf-interior and push-deny-crlf-cmdword); NOT flipped by M24 or M25 (its one CR is both the first and the last, so either a trailing-only or a once-only strip removes it too)"
+  "push-deny-crlf-interior|case_pd_crlf_interior|deny: echo a<CR> && git push origin main<CR> && echo b<CR> (#270, three CRs, the verdict-bearing one (second) neither first nor last -- distinguishes a global strip from both a trailing-only AND a once-only strip) -- measured: M23, 57 pass 3 fail (with push-deny-crlf-dest and push-deny-crlf-cmdword); M24 (trailing-only), 58 pass 2 fail (with push-deny-crlf-cmdword); M25 (once-only), 59 pass 1 fail (this case alone)"
+  "push-deny-crlf-cmdword|case_pd_crlf_cmdword|deny: git<CR> push origin main (#270, isolates normalize() on the command word -- the site the issue's filed shape names, and which alone would not fix the issue's own measured command) -- measured: M23, 57 pass 3 fail (with push-deny-crlf-dest and push-deny-crlf-interior); also M24 (trailing-only), 58 pass 2 fail (with push-deny-crlf-interior) -- its one CR is not the command's final byte, so a trailing-only strip leaves it in place; NOT flipped by M25 (its one CR is also the only/first one, so a once-only strip removes it too)"
   "push-deny-trunk-base|case_pd_trunk_base|deny: git push origin trunk against a fixture repo whose refs/remotes/origin/HEAD symref names trunk (default-branch resolution, base cwd) -- measured: M1/M2, 23 pass 33 fail (also M15, 53 pass 3 fail)"
   "push-deny-trunk-subdir|case_pd_trunk_subdir|deny: same trunk fixture repo, cwd a SUBDIRECTORY of it (the upward .git walk) -- measured: M1/M2, 23 pass 33 fail (also M15, 53 pass 3 fail; also M18, 55 pass 1 fail)"
   "push-deny-trunk-worktree|case_pd_trunk_worktree|deny: same trunk default branch, cwd a WORKTREE POINTER FILE (gitdir: ... resolution, common-dir derivation) -- measured: M1/M2, 23 pass 33 fail (also M15, 53 pass 3 fail; also M17, 55 pass 1 fail)"
@@ -1015,6 +1151,7 @@ cases=(
   "push-never-executes-noop|case_push_never_executes_noop|no opinion, AND push-guard.sh never invokes git/gh/rm on the booby-trapped PATH — sentinel absent -- measured: not flipped by M1-M22 (its command's destination, feature/x, never coincides with a deny-set member under any of these mutants)"
   "push-never-executes-reads-only|case_push_reads_only|deny, AND a fixture repo's recursive file listing is byte-identical before/after — this hook reads the filesystem but never writes to it -- measured: M1/M2, 23 pass 33 fail"
   "push-noop-o-value-two-token-remote|case_pn_o_value_two_token_remote|no opinion: git push -o v main other (isolates PUSH_OPTS_WITH_VALUE's two-token skip: main lands as the never-evaluated remote, not a refspec) -- measured: M9, 55 pass 1 fail"
+  "push-noop-crlf-feature|case_pn_crlf_feature|no opinion: git push origin feature/x<CR> (#270 -- the strip does not widen the deny set; exact match still required) -- measured: not flipped by M23, 57 pass 3 fail; also not flipped by M24, 58 pass 2 fail, or M25, 59 pass 1 fail (destination stays feature/x<CR> or feature/x under every one of these mutants, still not a deny-set member, so no opinion either way)"
 )
 
 matched=0

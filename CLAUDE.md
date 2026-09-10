@@ -94,9 +94,11 @@ empty stdout, empty stderr) — for the implementer role (denies any `git`/`gh`,
 and `trail-blazer-flow:`-namespaced `agent_type` spellings, across composite/quoted/prefixed
 command forms), the verifier role (denies `gh` and every non-read-only `git` subcommand — an
 unlisted subcommand, a global option before the subcommand, and a bare `git` all fail closed —
-while its read-only git subcommands pass), and every role-agnostic no-opinion edge (no
+while its read-only git subcommands pass), every role-agnostic no-opinion edge (no
 `agent_type` key, an unrecognised role, `permission_mode: "plan"`, the wrong tool, malformed
-stdin, and `tool_input.command` absent), plus the same booby-trapped `git`/`rm`/`gh` idiom proving
+stdin, and `tool_input.command` absent), a CRLF-carrying command word on both roles (`git<CR>
+push`/`gh<CR> …`, #270) and a CRLF-carrying subcommand (`git status<CR>`, denied pre-fix,
+no-opinion post-fix), plus the same booby-trapped `git`/`rm`/`gh` idiom proving
 this hook likewise executes nothing. For `hooks/push-guard.sh` (#260, the default-branch push
 guard that governs every session, main session included — not scoped to the implementer/verifier
 subagents) it feeds fixture stdin JSON straight into that real script and pins its verdict — deny
@@ -109,9 +111,12 @@ chained `PREFIX_WORDS`/global-option occurrences, the `git -C <worktree> push or
 `git-c-guard.sh` itself would allow, and the second `main`/`master` fallback member), the
 default-branch symref read against a fixture repo (base, subdirectory, and worktree-pointer-file
 `cwd` variants), the two harness-issued no-opinion shapes (`git push -u origin
-"claude/<n>-<slug>"`, bare and `-C`), every role-agnostic no-opinion edge, and the same
-booby-trapped `git`/`gh`/`rm` idiom plus a byte-identical-file-listing fixture proving this hook
-reads the filesystem but never writes to or executes anything on it. It runs in CI as the fourth
+"claude/<n>-<slug>"`, bare and `-C`), every role-agnostic no-opinion edge, a CRLF-carrying
+destination and command word (`git push origin main<CR>`, trailing and interior, and `git<CR>
+push origin main`, #270) and a CRLF-carrying non-default destination proving the strip does not
+widen the deny set, and the same booby-trapped `git`/`gh`/`rm` idiom plus a
+byte-identical-file-listing fixture proving this hook reads the filesystem but never writes to or
+executes anything on it. It runs in CI as the fourth
 step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
 `hooks/git-c-guard.sh`, `hooks/agent-boundary.sh`, or `hooks/push-guard.sh` changes.
 
