@@ -9,7 +9,9 @@
 #                        addressed yet. A harness-authored record (a comment containing
 #                        "<!-- harness-audit -->" or "<!-- verifier-verdict -->" anywhere in its
 #                        body) never counts as feedback, even from a trusted account — it's a
-#                        record, not a decision.
+#                        record, not a decision. #275: a harness-authored record that OPENS WITH
+#                        one of those markers is also never treated as the latest plan comment
+#                        itself (see below).
 #
 # Issues labelled "no-plan" are excluded from BOTH buckets — add that label to keep an issue
 # (tracking, discussion, question, etc.) out of the planning workflow entirely.
@@ -20,12 +22,19 @@
 # a comment to be recognised as either: an untrusted comment never becomes the latest plan and
 # never counts as feedback, regardless of the marker or its position in the thread. Untrusted
 # comments posted after the latest trusted plan are reported in the untrusted_comments output
-# bucket instead of being silently dropped, so the human still sees them. A second, orthogonal
-# exclusion also applies inside the trusted set: a trusted comment containing
-# "<!-- harness-audit -->" (a harness-authored audit/hygiene record) or "<!-- verifier-verdict -->"
-# anywhere in its body (the orchestrator's own archive) is never treated as feedback either, and
-# is reported in counts.audit_comments_skipped / counts.verdict_archives_skipped instead — this
-# only ever narrows the trusted set, so it never adds anything to untrusted_comments.
+# bucket instead of being silently dropped, so the human still sees them. A second exclusion
+# also applies inside the trusted set — at TWO different anchoring strengths for two different
+# purposes, since #275. A trusted comment containing "<!-- harness-audit -->" (a harness-authored
+# audit/hygiene record) or "<!-- verifier-verdict -->" (the orchestrator's own archive) ANYWHERE
+# in its body (contains, not anchored) is never treated as feedback, and is reported in
+# counts.audit_comments_skipped / counts.verdict_archives_skipped instead. #275 additionally
+# excludes, from the latest-plan computation itself, a trusted comment that OPENS WITH
+# (startswith, anchored to the comment's first line, not contains) one of those same markers — a
+# maintainer-authored record that merely QUOTES the plan marker in its prose must never be
+# mistaken for the plan itself (see the $planC comment in the script body for why anchoring, not
+# contains, is used at this one site — over-exclusion there would throw an approved plan back
+# into revision). Both exclusions only ever narrow the trusted set, so neither ever adds anything
+# to untrusted_comments.
 #
 # #176 extends the same trust boundary to WHO OPENED the issue, not just who commented on it:
 # both needs_initial_plan and needs_revision items now carry {author, association,
@@ -179,7 +188,20 @@ for n in $candidates; do
     ($trusted | split(" ")) as $ok
     | (.comments // []) as $c
     | ($c | map(select( ((.authorAssociation // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null ))) as $trustedC
-    | ([ $trustedC[] | select(.body | contains($m)) | .createdAt ] | max) as $lastPlan
+    # #275 — plan-candidate set: $trustedC minus any comment that OPENS WITH (startswith, not
+    # contains) the harness-audit or verifier-verdict marker, so a maintainer-authored record
+    # that merely QUOTES the plan marker in its prose is never mistaken for the latest plan
+    # (observed live on #245: an audit comment quoting "<!-- planner-plan -->" was picked as the
+    # plan). startswith here, not the contains() the feedback exclusion below still uses:
+    # over-excluding HERE is the destructive direction — a real plan comment that quotes a
+    # harness marker in its own prose (the plan comment for this very issue, for instance) would
+    # become unselectable, throwing an approved plan back into needs_revision for no human reason.
+    # Every harness-record writer in this repo posts its marker as the first line of the
+    # comment (bin/cleanup-after-merge.sh, both SKILL.md files), so anchoring costs nothing
+    # against a real record. Honest limit: a record whose marker is NOT on line 1 is not
+    # excluded here (see the #275 follow-up filed for that residual gap).
+    | ($trustedC | map(select(((.body | startswith($a)) or (.body | startswith($v))) | not))) as $planC
+    | ([ $planC[] | select(.body | contains($m)) | .createdAt ] | max) as $lastPlan
     | {
         has_feedback: (
           if $lastPlan == null then false

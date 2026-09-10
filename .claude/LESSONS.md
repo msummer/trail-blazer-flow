@@ -120,3 +120,14 @@ bites: 1–3 lines, written as an instruction to a future agent.
   and confirm every new case carries one — a swapped letter pair reads as a proof that does not cover the
   case it sits under, and a case with no citation ships unproven even when the measurement exists in the
   block. On #248 two letters were crossed and two of twelve new cases had no citation; one verification round.
+- 2026-09-10: A growth-chain note's "why the N new cases do / do not join this proof's failing set" reason is a
+  factual claim about MECHANISM, distinct from its (measured) figure — verify each clause against what the fixture
+  actually does (which script it runs, which fixture files it writes, which `--json` list that script sends, which
+  stub arm answers, whether the MUTANT — not the case — touches that path) before writing it, never by copying the
+  neighbouring proof's reason onto a new subject. On #275 eight such reasons shipped with correct-looking figures
+  and false mechanisms across three verification rounds ("never reach `read_issue_authors()`" for planner fixtures
+  that always do; the implementer's `--json` shape attributed to planner fixtures; a proof's "stub-direct-call"
+  case property mistaken for its mutant's reach, hiding a genuinely stale 79/33 set), exhausting the kickback
+  budget on prose alone. When a plan extends many chains at once, re-MEASURE every proof whose mutant edits a
+  script the new fixtures run, and treat the reasons as a set to audit together — the defect recurs across sites
+  written in the same sitting.

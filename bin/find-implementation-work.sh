@@ -19,17 +19,23 @@
 # Output (JSON): ready (as before, unchanged shape: {number,title,url}) plus plan_selection — an
 # array with one entry per ready issue that could be fetched, {number, plan, trusted_post_plan,
 # untrusted_post_plan}:
-#   plan               : the newest comment that both carries "<!-- planner-plan -->" and has a
-#                         trusted authorAssociation (OWNER/MEMBER/COLLABORATOR, ascii_upcase
-#                         normalised) — {author, association, createdAt, url}, or null when no
+#   plan               : the newest comment that carries "<!-- planner-plan -->", has a trusted
+#                         authorAssociation (OWNER/MEMBER/COLLABORATOR, ascii_upcase normalised),
+#                         AND does not itself OPEN WITH a harness-record marker (#275 — see the
+#                         $planC comment in the script body: a maintainer-authored audit/hygiene
+#                         record that merely quotes the plan marker in its prose is never mistaken
+#                         for the plan) — {author, association, createdAt, url}, or null when no
 #                         such comment exists.
-#   trusted_post_plan  : trusted comments posted after that plan, excluding the plan marker
-#                         itself and any comment containing "<!-- verifier-verdict -->" (the
-#                         orchestrator's own archive) or "<!-- harness-audit -->" (a harness-
-#                         authored audit/hygiene record) anywhere in its body — neither is human
-#                         context — same field shape, PLUS covered_by_approval (#194, see below)
-#                         and covered_by_approval_reason (#230, see below) — a string naming why
-#                         an otherwise-covered comment was un-covered, or null.
+#   trusted_post_plan  : trusted comments posted after that plan — the window itself is anchored
+#                         to $lastPlan, which #275 now derives from the same $planC set `plan` is
+#                         selected from, so this window re-anchors to the real plan rather than to
+#                         a marker-quoting record — excluding the plan marker itself and any
+#                         comment containing "<!-- verifier-verdict -->" (the orchestrator's own
+#                         archive) or "<!-- harness-audit -->" (a harness-authored audit/hygiene
+#                         record) anywhere in its body — neither is human context — same field
+#                         shape, PLUS covered_by_approval (#194, see below) and
+#                         covered_by_approval_reason (#230, see below) — a string naming why an
+#                         otherwise-covered comment was un-covered, or null.
 #   untrusted_post_plan: non-trusted comments posted after the plan (or after nothing, if there
 #                         is no trusted plan yet) — same field shape plus has_plan_marker and
 #                         has_harness_marker (#194, see below), so a forged plan comment or a
@@ -278,10 +284,27 @@ for n in $ready_numbers; do
     ($trusted | split(" ")) as $ok
     | (.comments // []) as $c
     | ($c | map(select( ((.authorAssociation // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null ))) as $trustedC
-    | ([ $trustedC[] | select(.body | contains($m)) | .createdAt ] | max) as $lastPlan
+    # #275 — plan-candidate set: $trustedC minus any comment that OPENS WITH (startswith, not
+    # contains) the harness-audit or verifier-verdict marker, so a maintainer-authored record
+    # that merely QUOTES the plan marker in its prose is never mistaken for the latest plan
+    # (observed live on #245: an audit comment quoting "<!-- planner-plan -->" was selected as
+    # `plan`, and because it postdated the plan-approved label the approval was reported
+    # covers_plan: false — the real plan two comments earlier was never considered). startswith
+    # here, not the contains() exclusion trusted_post_plan below still uses: over-excluding HERE
+    # is the destructive direction — a real plan comment that quotes a harness marker in its own
+    # prose (the plan comment for this very issue, for instance) would become unselectable,
+    # reporting plan: null / reason: no-plan and prompting issue-implementer skill step 2a to
+    # strip plan-approved and post a revision-triggering comment, reproducing this same failure
+    # through a new trigger. Every harness-record writer in this repo posts its marker as the
+    # first line of the comment (bin/cleanup-after-merge.sh, both SKILL.md files), so anchoring
+    # costs nothing against a real record. Honest limit: a record whose marker is NOT on line 1
+    # is not excluded here (see the #275 follow-up filed for that residual gap; mirrors the
+    # identical comment in the $planC binding of find-planning-work.sh).
+    | ($trustedC | map(select(((.body | startswith($a)) or (.body | startswith($v))) | not))) as $planC
+    | ([ $planC[] | select(.body | contains($m)) | .createdAt ] | max) as $lastPlan
     | {
         plan: (
-          [ $trustedC[] | select(.body | contains($m)) | select(.createdAt == $lastPlan) ] | last
+          [ $planC[] | select(.body | contains($m)) | select(.createdAt == $lastPlan) ] | last
           | if . == null then null
             else { author: (.author.login // "unknown"), association: (.authorAssociation // ""),
                    createdAt: .createdAt, url: (.url // null) }

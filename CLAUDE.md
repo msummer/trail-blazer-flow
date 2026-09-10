@@ -166,7 +166,14 @@ wait, and fixtures at 0/1/2 failures plus a sleep-itself-fails case — plus, si
 record) or `<!-- verifier-verdict -->` (the orchestrator's own archive) never counts as feedback
 either, so neither re-opens a plan for revision (`counts.audit_comments_skipped` /
 `counts.verdict_archives_skipped`), while a forged marker from an untrusted author still lands in
-`untrusted_comments`, never silently dropped. Since #211 the same faithfulness applies to the
+`untrusted_comments`, never silently dropped. Since #275, a trusted comment that OPENS WITH
+(first-line anchored, `startswith` — not the `contains` the feedback exclusion above still uses)
+one of those same markers is ALSO excluded from the latest-plan computation itself, so a
+maintainer-authored record that merely quotes the plan marker verbatim in its prose is never
+mistaken for the plan (the live #245 shape); a plan comment that itself quotes a harness marker
+in its own prose is unaffected and still becomes the latest plan (the anchoring is what prevents
+the over-exclusion regression); gate assertion 4.41 pins that this one `$planC` expression is
+spelled identically on both discovery scripts. Since #211 the same faithfulness applies to the
 revision-candidates query itself: the stub applies `find-planning-work.sh`'s own `--jq
 '.[].number'` argument with the real `jq` to a JSON page-array fixture and propagates jq's exit
 status, so a candidates filter that cannot process the returned document aborts the run under the
@@ -186,7 +193,14 @@ comment containing `<!-- verifier-verdict -->` (the orchestrator's own archive) 
 `trusted_post_plan` too (`counts.verdict_archives_skipped` / `counts.audit_comments_skipped`),
 while a forged marker from an untrusted author still lands in `untrusted_post_plan`; a comment
 missing `authorAssociation` entirely is fail-closed untrusted; and an issue with no trusted plan
-comment yields `plan: null` but stays in `ready`. It also pins that script's plan-binding approval
+comment yields `plan: null` but stays in `ready`. Since #275, the identical first-line-anchored
+exclusion `find-planning-work.sh` gained also applies here, at BOTH the `$lastPlan` computation
+and the `plan:` selection expression itself (proven by a fixture where the real plan and a
+marker-quoting record share one `createdAt`, discriminating the two sites) — so a trusted record
+that opens with a harness marker and quotes the plan marker in its prose is never selected as
+`plan`, re-anchoring `trusted_post_plan`'s window to the real plan comment instead of the record;
+an issue whose only marker-carrying trusted comment is such a record now reports `plan: null`
+rather than binding to the record. It also pins that script's plan-binding approval
 provenance (#174, the same script's `plan_selection` entry gains `approval`/`binding_line`): a
 plan comment posted after the newest `plan-approved` labeling event is not covered
 (`covers_plan: false`, `reason: "plan-after-approval"`); the newest of several relabel events

@@ -245,6 +245,10 @@ p_4_40_template_branch() {
   edit "$1/templates/repo-settings.json" 's/"Bash(git -C \* push origin main\*)"/"Bash(git -C * push origin trunk*)"/'
 }
 p_4_40_prefix_words() { edit "$1/hooks/push-guard.sh" 's/stdbuf/stdbf/'; }
+# p_4_41_* (#275) — rename characters INSIDE the identifier/value, never append a suffix (LESSON
+# 2026-09-04b).
+p_4_41_drift()      { edit "$1/bin/find-implementation-work.sh" 's/startswith/beginswith/g'; }
+p_4_41_extraction() { edit "$1/bin/find-planning-work.sh" 's/\$planC/\$plnC/g'; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -526,6 +530,8 @@ cases=(
   "4.40-extraction|4.40|p_4_40_extraction|rename hooks/push-guard.sh's PUSH_DEFAULT_BRANCH_FALLBACK identifier (characters changed inside the token, not a suffix) so the gate's anchored extraction comes back empty -- measured: \"4.40 hooks/push-guard.sh's PUSH_DEFAULT_BRANCH_FALLBACK= line didn't match (structure changed) — extraction failed\""
   "4.40-template-branch|4.40|p_4_40_template_branch|rewrite BOTH templates/repo-settings.json default-branch deny entries (bare and -C mirror) from main to trunk, so 2.6's bijection stays green -- measured: \"4.40 push-guard vocabulary disagreement: templates/repo-settings.json deny branch(es) not in PUSH_DEFAULT_BRANCH_FALLBACK ('main master'): trunk;\""
   "4.40-prefix-words|4.40|p_4_40_prefix_words|alter one word inside hooks/push-guard.sh's PREFIX_WORDS (stdbuf -> stdbf), so it no longer agrees with hooks/agent-boundary.sh's -- measured: \"4.40 push-guard vocabulary disagreement: PREFIX_WORDS differs between hooks/push-guard.sh (...stdbf...) and hooks/agent-boundary.sh (...stdbuf...);\""
+  "4.41-drift|4.41|p_4_41_drift|rewrite startswith to beginswith in bin/find-implementation-work.sh's \$planC filter only, so the two scripts' plan-candidate filters disagree -- measured: \"4.41 \$planC plan-candidate-set expression disagrees: bin/find-planning-work.sh has '| (\$trustedC | map(select(((.body | startswith(\$a)) or (.body | startswith(\$v))) | not))) as \$planC', bin/find-implementation-work.sh has '| (\$trustedC | map(select(((.body | beginswith(\$a)) or (.body | beginswith(\$v))) | not))) as \$planC'\""
+  "4.41-extraction|4.41|p_4_41_extraction|rename the \$planC binding in bin/find-planning-work.sh so the gate's extraction comes back empty -- measured: \"4.41 bin/find-planning-work.sh's or bin/find-implementation-work.sh's '... as \$planC' line didn't match (structure changed) — extraction failed\""
 )
 
 # ---------------------------------------------------------------------------------------------

@@ -1341,6 +1341,17 @@ comment is unchanged: a real change of plan, not a re-approval, still returns th
 with `plan-approved` removed. The documented remedy for a comment the re-approval releases without
 implementing it is unchanged from #213: **close the PR first, then re-approve**.
 
+**v2.7.1 → v2.7.2** needs no grant, label, script, settings entry, or baseline step either (#275):
+`find-implementation-work.sh` and `find-planning-work.sh` both now exclude a harness-authored
+record (a comment that OPENS WITH `<!-- harness-audit -->` or `<!-- verifier-verdict -->`) from
+plan selection, not just from the feedback/binding sets #182 already excluded it from — a
+maintainer-authored audit or hygiene record that happens to quote the plan marker verbatim in its
+own prose is no longer mistaken for the plan itself (see "Safety model" below for the
+full behaviour, including the deliberate `contains`-vs-`startswith` asymmetry). The one
+consumer-visible behaviour change: an issue whose only marker-carrying trusted comment is such a
+record now reports `plan: null` (`reason: "no-plan"`) rather than binding to the record and
+reporting whatever approval state that record happened to produce.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -1912,11 +1923,25 @@ comments) or `<!-- verifier-verdict
 -->` (the orchestrator's own archive) anywhere in its body is excluded from
 `find-planning-work.sh`'s feedback detection and `find-implementation-work.sh`'s
 `trusted_post_plan` alike — a harness-authored record is never binding context, on either side of
-the pipeline. Both markers are matched with `contains`, not anchored to the comment's first line
-(the same behaviour the verdict marker has always had) — a maintainer who quotes a marker
-verbatim inside their own feedback has that comment silently dropped from both binding sets, with
-no revision, no `trusted_post_plan` entry, and no warning; accepted as an inherited risk rather
-than fixed here. The filter only ever narrows the trusted set: a forged marker from an untrusted
+the pipeline. Both markers are matched with `contains` for these two sets, not anchored to the
+comment's first line (the same behaviour the verdict marker has always had) — a maintainer who
+quotes a marker verbatim inside their own feedback has that comment silently dropped from both
+binding sets, with no revision, no `trusted_post_plan` entry, and no warning; accepted as an
+inherited risk rather than fixed here, for the feedback/binding sets specifically. Since #275,
+the SAME two markers are ALSO excluded from **plan selection itself** on both scripts — the
+newest trusted comment either script would otherwise treat as "the plan" — but at a different,
+first-line-anchored strength (`startswith`, not `contains`): only a record that OPENS WITH one of
+the two markers is excluded there. This asymmetry is deliberate, not an oversight: over-excluding
+at the feedback/binding sets is safe (a record is merely dropped), but over-excluding at plan
+selection is destructive (an approved plan would be thrown away, and `issue-implementer`'s step 2a
+remedy for the resulting `no-plan` verdict is to strip `plan-approved` and post a
+revision-triggering comment) — so a plan comment that merely quotes a harness marker in its own
+prose is still selected as the plan, while a maintainer-authored record that quotes the plan
+marker verbatim (the live #245 shape: an audit comment quoting `<!-- planner-plan -->` was picked
+as the plan) is not. The named limit is now split too: a maintainer who quotes a harness marker
+inside their own FEEDBACK still has that comment silently dropped, unfixed (above); a
+harness-authored RECORD whose marker is not on line 1 is still selectable as the plan (a filed
+follow-up), unlike the feedback/binding sets' `contains` reach. The filter only ever narrows the trusted set: a forged marker from an untrusted
 author still surfaces, unfiltered, in `untrusted_comments` / `untrusted_post_plan`, exactly like
 a forged plan marker does — and, since #194, is additionally FLAGGED there: both scripts add a
 `has_harness_marker: true` boolean to that entry (alongside the existing `has_plan_marker`),
