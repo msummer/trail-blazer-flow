@@ -17,7 +17,10 @@
 #
 # Tokenizer cross-reference (#260): hooks/push-guard.sh inlines a near-twin of "the scan" below
 # (same segment-break characters, same normalize(), same repeat-until-exhausted PREFIX_WORDS
-# skip) for its own, different emitter. A future fix to the shared behaviour must be applied to
+# skip) for its own, different emitter, and, since #270, the same bash-native carriage-return
+# strip of $cmd applied immediately after the jq extraction and before this script's own
+# `[ -n "$cmd" ]` guard (see that same point in each file). A future fix to the shared behaviour
+# (segment breaking, normalize(), the prefix-word skip, the CR strip) must be applied to
 # BOTH files — dev/selfcheck.sh's assertion 4.40 clause (c) mechanically pins the two scripts'
 # PREFIX_WORDS vocabulary stays byte-identical.
 #
@@ -62,10 +65,11 @@ input="$(cat)"
 
 # --- fast paths ----------------------------------------------------------------------------
 # Both are pure performance optimisations, each semantics-preserving with the check it stands in
-# for below EXCEPT for a command word split by quote or backslash characters (see fast path 2's
-# own note) — a documented limit of the same tripwire class as the scan's other quote-blind
-# behaviour, not a security boundary by itself. A miss on either fast path always means "this call
-# is out of scope for this hook", which is also what the slower checks below it would conclude.
+# for below EXCEPT for a command word split by quote, backslash, or carriage-return characters
+# (see fast path 2's own note) — a documented limit of the same tripwire class as the scan's other
+# quote-blind behaviour, not a security boundary by itself. A miss on either fast path always means
+# "this call is out of scope for this hook", which is also what the slower checks below it would
+# conclude.
 #
 # Fast path 1: a main-session Bash call (no agent_type key in the JSON at all) can never resolve
 # to a recognised role, so skip straight to "no opinion" without spawning jq. A raw substring hit
@@ -81,11 +85,16 @@ esac
 # Fast path 2: this hook only ever denies a command whose command-position word is literally
 # "git" or "gh" — if neither substring appears anywhere in the raw stdin at all, no segment of
 # tool_input.command could possibly resolve to either, so skip the jq/awk spawn. Semantics-
-# preserving except for a command word split by quote or backslash characters: normalize() (below)
-# strips those characters before comparing, so e.g. `g"i"t push` normalises to "git" while the raw
-# stdin substring "git" never appears — this fast path exits silently where the slower scan would
-# have denied. Documented, not fixed, for the same "tripwire, not a sandbox" reason as the scan's
-# other quote-blind behaviour.
+# preserving except for a command word split by quote, backslash, or carriage-return characters:
+# normalize() (below) strips quote/backslash characters before comparing, and the #270 CR strip
+# (applied to $cmd after the jq extraction, before the scan) removes an actual \r byte, so e.g.
+# `g"i"t push` normalises to "git" while the raw stdin substring "git" never appears — this fast
+# path exits silently where the slower scan would have denied. The CR case is narrower still: a
+# CR *inside* this raw-stdin literal (e.g. `g<CR>it push`, escaped by any conforming JSON writer
+# as the two characters `\`+`r`, never a literal CR byte) also exits here, before the #270 strip
+# ever runs — the resulting command cannot execute as a real `git`/`gh` invocation either, so this
+# is documented, not fixed, for the same "tripwire, not a sandbox" reason as the scan's other
+# quote-blind behaviour.
 case "$input" in
   *git*|*gh*) : ;;
   *) exit 0 ;;
@@ -119,6 +128,16 @@ pmode="$(printf '%s' "$input" | jq -r '.permission_mode? // empty' 2>/dev/null)"
 [ "$pmode" != "plan" ] || exit 0
 
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command? // empty' 2>/dev/null)"
+
+# A CRLF-carrying transport (Git Bash, a CRLF-translating layer) can deliver a command whose
+# tokens carry a trailing \r; every comparison below is an exact match, so an unstripped \r
+# made `git\r push`/`gh\r ...` resolve to a command word this hook never matches (#270). Stripped
+# here, once, before the tokenizer — the same shared behaviour hooks/push-guard.sh applies at the
+# identical point in its own tokenizer (see this file's header cross-reference). Pure parameter
+# expansion: no new process, so this hook still executes nothing (see this file's header).
+cr=$'\r'
+cmd="${cmd//$cr/}"
+
 [ -n "$cmd" ] || exit 0
 
 # --- the scan ------------------------------------------------------------------------------
@@ -136,6 +155,10 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command? // empty' 2>/dev/null)
 # skills already say so for other reasons). A quote-aware or newline-aware lexer that instead
 # risked mis-tracking an unterminated quote or a multi-line construct and letting a real `git
 # push` through would be the worse failure mode for a control whose only job is to fail closed.
+#
+# Since #270, every `\r` in $cmd has already been stripped (see the bash-native strip right after
+# the jq extraction above) before this scan ever runs — normalize() below only ever strips quote
+# and backslash characters because a carriage return can no longer reach it.
 #
 # Per line: every one of `; & | ( ) { } `` (the eight segment-break characters) starts a new
 # segment; `<`/`>` are ordinary token separators (not segment breaks) — a Bash redirection never
