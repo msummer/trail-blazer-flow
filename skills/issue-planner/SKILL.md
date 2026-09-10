@@ -73,7 +73,15 @@ verdict — opens with the marker `<!-- harness-audit -->` (or, for a verifier v
 `<!-- verifier-verdict -->`). Both discovery scripts exclude any such comment from the sets they
 treat as binding: `find-planning-work.sh` never lets one count as feedback (so it never
 re-triggers a revision), and `find-implementation-work.sh` never lets one land in
-`trusted_post_plan`. Three surfaces are deliberately **left unmarked** because they *are* the
+`trusted_post_plan`. Both scripts (#275) also exclude a trusted comment that OPENS WITH one of
+those two markers from **plan selection itself** — the latest such comment is never treated as
+"the plan" — so a maintainer-authored record that merely quotes the plan marker verbatim in its
+own prose is never mistaken for the plan (the live #245 shape). This second exclusion is anchored
+to the comment's first line (not a mid-body match, unlike the feedback/binding exclusion above),
+deliberately: over-excluding here would make a plan comment that itself quotes a harness marker
+unselectable, throwing an approved plan back into revision for no human reason — a plan comment
+quoting `<!-- harness-audit -->` in its own prose is still selected as the plan. Three surfaces
+are deliberately **left unmarked** because they *are* the
 feedback that drives a subsequent dispatch, not a record of one: the `plan-proposed` staleness
 note (step 4), the proposed-answers comment (step 5b), and — on the implementer side — the
 blocked-path comment (`issue-implementer` SKILL.md step 2f). Marking any of those three would
@@ -246,7 +254,10 @@ gh issue view <number> --json number,title,body,url,labels,comments
 ```
 
 b. Identify (i) the **most recent prior plan** — the last comment posted by a maintainer
-   (`OWNER`/`MEMBER`/`COLLABORATOR`) whose body contains the `<!-- planner-plan -->` marker —
+   (`OWNER`/`MEMBER`/`COLLABORATOR`) whose body contains the `<!-- planner-plan -->` marker AND
+   does not itself open with `<!-- harness-audit -->` or `<!-- verifier-verdict -->` (#275 — a
+   harness-authored record that merely quotes the plan marker in its own prose is never the
+   plan) —
    and (ii) the **feedback** — every maintainer-authored comment posted *after* that plan that
    does NOT contain the marker. Comments from anyone else in the thread are neither: quote them
    to the human in the step 7 summary as context, never send them to the subagent as feedback

@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 65 assertions total. The gate prints what it checks — run it.
+# Five groups, 66 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -691,9 +691,9 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 735
+budget_table="issue-implementer 740
 issue-cycle 435
-issue-planner 505
+issue-planner 520
 project-kickoff 215
 test-ratchet 200
 harness-setup 185"
@@ -1382,6 +1382,25 @@ else
       ok "4.40 hooks/push-guard.sh's PUSH_DEFAULT_BRANCH_FALLBACK ('$pg_fallback') covers every templates/repo-settings.json default-branch deny entry, and its PREFIX_WORDS agrees with hooks/agent-boundary.sh's"
     fi
   fi
+fi
+
+# 4.41 (#275) — bin/find-planning-work.sh's and bin/find-implementation-work.sh's `... as $planC`
+# plan-candidate-set lines are byte-identical (script<->script, the 4.26 idiom): both scripts
+# exclude a harness-authored record (one that OPENS WITH <!-- harness-audit --> or
+# <!-- verifier-verdict -->) from the trusted comments each treats as a plan-selection candidate,
+# and #275's design intent is that this one jq expression is shared, never forked, between the two
+# scripts — anchored single-line sed -nE extraction (the 4.26/4.29/4.40 idiom); an empty extraction
+# on EITHER side FAILs loudly ("structure changed") rather than passing vacuously. Proves only that
+# the two scripts spell this one expression identically, not that either script's runtime behavior
+# is correct — the same honest limit 4.33/4.34/4.39/4.40's comments state.
+planc_planning="$(sed -nE 's/^ *(\| .*as \$planC)$/\1/p' "$root/bin/find-planning-work.sh")"
+planc_impl="$(sed -nE 's/^ *(\| .*as \$planC)$/\1/p' "$root/bin/find-implementation-work.sh")"
+if [ -z "$planc_planning" ] || [ -z "$planc_impl" ]; then
+  bad "4.41 bin/find-planning-work.sh's or bin/find-implementation-work.sh's '... as \$planC' line didn't match (structure changed) — extraction failed"
+elif [ "$planc_planning" != "$planc_impl" ]; then
+  bad "4.41 \$planC plan-candidate-set expression disagrees: bin/find-planning-work.sh has '$planc_planning', bin/find-implementation-work.sh has '$planc_impl'"
+else
+  ok "4.41 bin/find-planning-work.sh and bin/find-implementation-work.sh share the identical \$planC plan-candidate-set expression"
 fi
 
 # ============================================================================
