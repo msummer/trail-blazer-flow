@@ -132,19 +132,28 @@ on top and is not configurable**:
     must print `true`, and the same command with `outcome=fail` in place of `outcome=pass` must
     print `false`. Keep the trailing space after `outcome=pass` in the needle so extra trailing
     `key=value` fields on the line stay tolerated.
-  - *Archived verdict, checked mechanically*, between the check above and the *Ledger
-    cross-check* below, same `<n>`-from-the-head-branch scoping (harness PRs only; Dependabot PRs
-    skip this bullet): the archive is keyed to the PR's head branch, so a multi-PR issue's
-    earlier slice matches its own verdict rather than the newest on the issue. Read the key
-    first — `gh pr view <pr> --json headRefName --jq .headRefName | tr -d '\r'` (also where `<n>`
-    comes from) — then paste that branch name literally into the placeholder below, in this
-    one-line, substitution-free command:
+  - *Archived verdict, checked mechanically* (retried once since #277), between the check above
+    and the *Ledger cross-check* below, same `<n>`-from-the-head-branch scoping (harness PRs
+    only; Dependabot PRs skip this bullet): the archive is keyed to the PR's head branch, so a
+    multi-PR issue's earlier slice matches its own verdict rather than the newest on the issue.
+    Read the key first — `gh pr view <pr> --json headRefName --jq .headRefName | tr -d '\r'`
+    (also where `<n>` comes from) — then paste that branch name literally into the placeholder
+    below, in this one-line, substitution-free command:
     `gh issue view <n> --json comments --jq '[.comments[] | select((.body | contains("<!-- verifier-verdict -->")) and (.body | contains("<!-- verifier-verdict-branch: <paste the head branch here> -->")))] | sort_by(.createdAt) | last | ((.url // "none"), ((.body // "") | split("\n") | map(select(startswith("<!-- harness-status:"))) | last // "none"))' | tr -d '\r'`
-    — prints the comment URL, then the archived closing status line. A second line reading
-    `none`, or one that does not begin `<!-- harness-status: stage=verifier issue=<n>
-    outcome=pass `, is **not eligible** ("no archived verifier verdict for head branch
-    <branch>"), one-line reason in the report. Otherwise paste that second line literally as the
-    needle of a second, equally substitution-free command:
+    — prints the comment URL, then the archived closing status line. A failed read — this
+    `gh issue view` read rejected or erroring rather than answering, or printing output that is
+    not those two expected lines — is retried **once**, per the issue-implementer skill's step
+    2a *Approval-binding gate*, unknown branch ("Retry once before concluding unknown"): use
+    that retry run's two printed lines in place of the first's for everything this sub-bullet
+    and the audit evidence read from them — the match needle below and the comment URL cited as
+    merge evidence — never a mix. At most **one** such re-run per PR per pass; it consumes no
+    ladder retry. A determinate answer is not a failure and is never retried — a second line
+    reading `none`, or one that does not begin the expected prefix, is a fact, not a failure.
+    Still failing after the retry ⇒ **not eligible** exactly as today, same one-line reason,
+    fail-closed. A second line reading `none`, or one that does not begin `<!-- harness-status:
+    stage=verifier issue=<n> outcome=pass `, is **not eligible** ("no archived verifier verdict
+    for head branch <branch>"), one-line reason in the report. Otherwise paste that second line
+    literally as the needle of a second, equally substitution-free command:
     `gh pr view <pr> --json body --jq '(.body // "") | contains("<paste the printed line here>")' | tr -d '\r'`
     — anything but `true` is **not eligible** ("the PR body's verifier line does not match the
     verdict archived for head branch <branch>"), one-line reason in the report. Cite the printed
@@ -406,8 +415,8 @@ harness-lock.sh release <run-id>
 - **Recurring runs:** pair with `/loop` (e.g. "loop the issue-cycle every 30m") or a scheduled
   routine; each invocation stays ONE bounded pass — recurrence is the wrapper's job, never this
   skill's (never polls for new work or repeats a pass; the merge pass's bounded waits — guard
-  (e)'s declared deploy wait, the pre-first-merge recheck, and the *Plan-binding provenance*
-  re-check (#245) — are the three bounded exceptions).
+  (e)'s declared deploy wait, the pre-first-merge recheck, the *Archived verdict* re-check
+  (#277), and the *Plan-binding provenance* re-check (#245) — are the four bounded exceptions).
 - **Single-flight:** mechanically enforced by `harness-lock.sh`, an atomic `mkdir` under
   `<git-common-dir>/trail-blazer/lock` acquired at step 0 and released at step 5 (see step 0
   above for the full ownership/abort/release-before-every-exit rules) — never start a cycle while
