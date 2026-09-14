@@ -1080,7 +1080,9 @@ new to migrate. **Approval now also binds to the plan comment's edit state (#192
 `find-implementation-work.sh` fetches the selected plan comment's REST `updated_at` and compares
 it against the plan-approved label's timestamp — but only for an issue whose approval would
 otherwise already cover the plan, so this costs one extra read-only API call per *covered* ready
-issue, not per ready issue. Consumer tooling reading this script's JSON may newly see two
+issue, not per ready issue. **Refined in v2.7.2 by #240**: that per-covered-issue call is now ALSO
+skipped when gh's own per-comment `includesCreatedEdit` reports the plan comment was never edited —
+see the v2.7.1 → v2.7.2 migration entry below for the current cost. Consumer tooling reading this script's JSON may newly see two
 `approval.reason` values it has never seen before, `plan-edited-after-approval` and
 `plan-edit-unreadable`, plus two new `counts` keys, `counts.plan_edited_after_approval` and
 `counts.plan_edit_unreadable` — additive only, no existing key renamed or removed. Behaviour
@@ -1178,7 +1180,10 @@ otherwise conclude a `trusted_post_plan` entry `covered_by_approval: true` (#194
 after #229's label pre-filter and #192's plan-edit check both pass), fetches that comment's own
 REST `updated_at` (one extra read-only `gh api` call per *covered* comment, never per uncovered
 one) and compares it against `approval.approved_at`, the same idiom #192 already uses for the plan
-comment itself. A covered comment edited strictly *after* approval flips that entry to
+comment itself. **Refined in v2.7.2 by #240**: that per-covered-comment call is now ALSO skipped
+when gh's own per-comment `includesCreatedEdit` reports the comment was never edited — see the
+v2.7.1 → v2.7.2 migration entry below for the current cost. A covered comment edited strictly
+*after* approval flips that entry to
 `covered_by_approval: false` and adds a new per-entry field, `covered_by_approval_reason:
 "decision-edited-after-approval"` — additive only — and collapses the ISSUE-LEVEL verdict the same
 way: `approval.covers_plan: false`, `approval.reason: "decision-edited-after-approval"`, a new
@@ -1383,7 +1388,19 @@ no grant, label, script, settings entry, or baseline step (`Bash(sleep:*)` and
 widening: a PR a transient archive-read blip would have held for the rest of the pass can now
 merge in the same pass instead; fail-closed is unchanged — a read still failing after the one
 retry holds the PR not eligible exactly as before. Cost: up to 30s plus one extra read-only
-`gh issue view` call, paid only on a PR whose archive read fails.
+`gh issue view` call, paid only on a PR whose archive read fails. Also in v2.7.2 (#240):
+`find-implementation-work.sh` now pre-filters both the #192 plan-comment edit check and the #230
+decision-comment edit check on gh's own per-comment `includesCreatedEdit` boolean — already present
+in the `comments` field the script fetches today, at no extra API cost — needing no grant, label,
+script, settings entry, or baseline step. A comment gh itself reports as never edited
+(`includesCreatedEdit: false`) skips the REST `updated_at` lookup entirely and stays covered; a
+comment gh reports as edited, or on which gh omits the flag entirely (every gh version predating
+this field), keeps today's lookup and every existing fail-closed state unchanged. The one
+consumer-visible improvement, the point of the issue: on a busy thread with many covered decision
+comments, per-run lookups drop from one-per-covered-comment to one-per-*edited*-covered-comment,
+bounding the API cost the #230/#192 workstreams added and reducing the odds an unattended
+overnight run trips GitHub's secondary rate limit. Honest limit: this is a tripwire, not a
+control — see "Safety model" below for the residual fail-open class.
 
 ## The per-repo settings file (required)
 
@@ -1745,7 +1762,9 @@ label's newest application is not earlier than the comment (equal timestamps cou
 auto-approval path — which labels immediately after posting — always covers its own plan) — AND
 (#192) against that same comment's REST `updated_at`: an in-place edit made *after* the approval
 event un-covers the plan too (`reason: "plan-edited-after-approval"`, no `binding_line`, one
-extra read-only API call made only on this otherwise-covered branch), the implementer's gate and
+extra read-only API call made only on this otherwise-covered branch AND ONLY when gh's own
+per-comment `includesCreatedEdit` on the plan comment is not exactly `false` — see the v2.7.1 →
+v2.7.2 migration entry above for #240's cost reduction), the implementer's gate and
 the merge floor holding exactly as they do for `plan-after-approval`, with no changes of their
 own; an edit made *before* approval stays covered on purpose (the approver read the edited text);
 an unreadable edit-state lookup fails closed to `covers_plan: null`, an **unknown** verdict
@@ -1801,7 +1820,13 @@ that didn't happen rather than eliminating it; the edit check itself is a **trip
 control**, for the same reason — the same `gh` identity that edits the comment can also re-approve
 it (removing and re-adding `plan-approved` moves `approved_at` past the edit and re-covers it, the
 audited path already documented below), and the comment's content is never hashed or otherwise
-verified, only its *edit timestamp*. The same binding also governs each trusted post-plan
+verified, only its *edit timestamp*. #240 adds a second, narrower honest limit on top of that one:
+the plan-comment and every covered decision-comment lookup below are skipped entirely — no
+`updated_at` read at all — when gh's own per-comment `includesCreatedEdit` reports exactly `false`.
+This can only ever WIDEN the covered set on a determinate `false`; it is a tripwire, not a control,
+in the same sense as the edit check itself — a `false` GitHub reports for a comment that WAS
+genuinely edited would skip the lookup silently, same as any other tripwire the harness trusts
+GitHub's own field for. The same binding also governs each trusted post-plan
 *comment*, not just the plan (#194): `find-implementation-work.sh` marks every `trusted_post_plan`
 entry `covered_by_approval: true` when the comment's `createdAt` is not later than
 `approval.approved_at` and `false` when it is later — a maintainer who comments after approving is
@@ -1809,7 +1834,9 @@ not silently treated as having amended the approved plan; the comment is reporte
 (`counts.post_approval_comments`, a `warn:` line) instead of becoming a binding `RESOLVED:`
 decision. Since #230, the same content-edit binding #192 applies to the plan comment ALSO applies
 to every decision comment workstream B marked covered: one extra read-only REST call per *covered*
-comment (never an already-uncovered one, and never on an already-uncovered issue) compares its own
+comment (never an already-uncovered one, never on an already-uncovered issue, and — since #240,
+see the v2.7.1 → v2.7.2 migration entry above — never a comment gh's own `includesCreatedEdit`
+already reports as never edited) compares its own
 `updated_at` against `approval.approved_at` — a covered decision comment edited in place strictly
 *after* approval flips that entry to `covered_by_approval: false`,
 `covered_by_approval_reason: "decision-edited-after-approval"`, and collapses the ISSUE-LEVEL

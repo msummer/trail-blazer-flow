@@ -71,9 +71,10 @@
 # comments the same gap #192 closed for the plan comment itself: on the branch that would
 # otherwise leave this issue's approval.covers_plan "true" (after the #229 label pre-filter and
 # the #192 plan-edit check below both pass), the script looks up every trusted_post_plan entry
-# whose covered_by_approval workstream B computed as true — and ONLY those — via one read-only
-# `gh api repos/{owner}/{repo}/issues/comments/<id> --jq '.updated_at // empty'` call per entry,
-# <id> parsed from that entry's url with the same #issuecomment-<id> two-clause idiom
+# whose covered_by_approval workstream B computed as true AND whose own gh-reported
+# includesCreatedEdit is not exactly false (#240, see below) — via one read-only
+# `gh api repos/{owner}/{repo}/issues/comments/<id> --jq '.updated_at // empty'` call per such
+# entry, <id> parsed from that entry's url with the same #issuecomment-<id> two-clause idiom
 # plan_comment_id uses below (outer presence gate, inner digits-only guard — this id is
 # interpolated into a `gh api` path). A covered comment's updated_at strictly later than
 # approval.approved_at means the maintainer's decision text was edited after the plan-approved
@@ -90,7 +91,21 @@
 # events lookup itself already succeeded. There is NO author-plus-createdAt fallback for binding:
 # an entry whose edit state cannot be established is unreadable, never silently covered. A
 # comment already uncovered by workstream B (covered_by_approval: false/null before this check
-# runs) is never looked up — it is already non-binding, so its own edit history is moot.
+# runs), or one gh itself already reports as never edited (#240), is never looked up — the first
+# is already non-binding, the second's edit history is already known, so either way an API call
+# would tell us nothing new.
+#
+# #240 pre-filters BOTH the #192 plan-comment check above and the #230 decision-comment check just
+# described on gh's own per-comment includesCreatedEdit boolean — already present in the
+# `comments` field this script fetches today, at no extra API cost: exactly false means gh itself
+# reports the comment was never edited (updated_at == createdAt), so the id-parse and the REST
+# lookup are both moot and are skipped with no warn, leaving the entry (or the plan) covered;
+# exactly true keeps today's lookup and every fail-closed state unchanged; the key being ABSENT
+# (every comment on every issue before GitHub added this field) falls through to today's lookup —
+# no new state, no new behaviour. Honest limit: this is a tripwire, not a control — it can only
+# ever WIDEN the covered set on a determinate `false`, but a `false` GitHub reports for a comment
+# that WAS genuinely edited would skip the lookup silently, same as any other tripwire the harness
+# trusts GitHub's own field for.
 #
 # #174 adds two more members to each plan_selection entry, binding plan approval to the specific
 # plan comment a human (or the auto-approval policy) actually saw, not just the issue-level
@@ -302,24 +317,31 @@ for n in $ready_numbers; do
     # identical comment in the $planC binding of find-planning-work.sh).
     | ($trustedC | map(select(((.body | startswith($a)) or (.body | startswith($v))) | not))) as $planC
     | ([ $planC[] | select(.body | contains($m)) | .createdAt ] | max) as $lastPlan
+    # #240 — bind the plan selection and the post-plan selection each exactly once, as the raw
+    # (unprojected) comment objects, so both the projected `plan`/`trusted_post_plan` members below
+    # AND the two internal edit-flag members can read the same selection without re-running the
+    # filter twice or drifting out of index alignment with each other.
+    | ([ $planC[] | select(.body | contains($m)) | select(.createdAt == $lastPlan) ] | last) as $planSel
+    | (
+        if $lastPlan == null then []
+        else [ $trustedC[]
+               | select((.body | contains($m)) | not)
+               | select((.body | contains($v)) | not)
+               | select((.body | contains($a)) | not)
+               | select(.createdAt > $lastPlan) ]
+        end
+      ) as $tppSel
     | {
         plan: (
-          [ $planC[] | select(.body | contains($m)) | select(.createdAt == $lastPlan) ] | last
+          $planSel
           | if . == null then null
             else { author: (.author.login // "unknown"), association: (.authorAssociation // ""),
                    createdAt: .createdAt, url: (.url // null) }
             end
         ),
         trusted_post_plan: (
-          if $lastPlan == null then []
-          else [ $trustedC[]
-                 | select((.body | contains($m)) | not)
-                 | select((.body | contains($v)) | not)
-                 | select((.body | contains($a)) | not)
-                 | select(.createdAt > $lastPlan)
-                 | { author: (.author.login // "unknown"), association: (.authorAssociation // ""),
-                     createdAt: .createdAt, url: (.url // null) } ]
-          end
+          $tppSel | map({ author: (.author.login // "unknown"), association: (.authorAssociation // ""),
+                           createdAt: .createdAt, url: (.url // null) })
         ),
         untrusted_post_plan: [ $c[]
           | select( ((.authorAssociation // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) == null )
@@ -340,13 +362,28 @@ for n in $ready_numbers; do
           if $lastPlan == null then 0
           else ([ $trustedC[] | select(.body | contains($a)) | select(.createdAt > $lastPlan) ] | length)
           end
-        )
+        ),
+        # #240 — internal only (never added to `entry` below, so the published JSON is byte-
+        # identical to before this change): gh own per-comment includesCreatedEdit boolean, already
+        # present in the `comments` field this script fetches today at no extra API cost. Read as a
+        # bare `.includesCreatedEdit`, NEVER `.includesCreatedEdit // null` or `// false` — the `//`
+        # operator treats a real `false` as empty and would silently convert every genuine
+        # "never edited" reading into "missing" (confirmed locally, outside this file, that
+        # false // 1 prints 1 in jq), delivering zero of the savings this exists for. A bare
+        # `.includesCreatedEdit` already yields jq null when the key or $planSel itself is absent,
+        # with no operator needed.
+        plan_includes_created_edit: ($planSel | if . == null then null else .includesCreatedEdit end),
+        trusted_post_plan_edit_flags: ($tppSel | map(.includesCreatedEdit))
       }
   ')
 
   plan=$(printf '%s' "$result" | jq -c '.plan')
   trusted_post_plan=$(printf '%s' "$result" | jq -c '.trusted_post_plan')
   untrusted_post_plan=$(printf '%s' "$result" | jq -c '.untrusted_post_plan')
+  # #240 — assigned unconditionally on every loop iteration, before it is ever read, so (unlike
+  # #213's plan_url) it needs no separate per-iteration reset for `set -u`. "false"/"true" as jq's
+  # raw (unquoted) boolean text, or "null" when there is no plan or the key is absent.
+  plan_edit_flag=$(printf '%s' "$result" | jq -r '.plan_includes_created_edit')
 
   # #174 — approval binding: bind plan-approved to the SPECIFIC plan comment that was newest
   # when the label was last applied, not just to the issue-level label. Only makes the events
@@ -445,7 +482,8 @@ for n in $ready_numbers; do
           # #192 — plan-comment content binding: everything above proves WHICH comment and WHEN,
           # but an in-place edit of an already-approved comment moves neither its url, createdAt,
           # nor the plan-approved label. One extra read-only call, made ONLY here (an approval
-          # that would otherwise cover the plan), compares the plan comment's REST updated_at
+          # that would otherwise cover the plan) AND ONLY when the #240 pre-filter below finds gh's
+          # own includesCreatedEdit is not exactly false, compares the plan comment's REST updated_at
           # against the CURRENT (newest) approved_at computed above: an edit strictly after
           # approval un-covers the plan (a human must re-approve — removing and re-adding
           # plan-approved moves approved_at past the edit and re-covers it, the same audited path
@@ -455,7 +493,17 @@ for n in $ready_numbers; do
           # or an unreadable/unprocessable lookup fails closed, matching #204's precedent for the
           # events lookup — approved_at/approved_by stay populated in that state, since the events
           # lookup itself already succeeded.
-          if [ -z "$plan_comment_id" ]; then
+          # #240 — pre-filter checked FIRST, before the id-parse guard: gh's own includesCreatedEdit
+          # on the plan comment already told us it was never edited (updated_at == createdAt), so
+          # the id and the lookup below are moot either way — skip both, conclude covered, and emit
+          # no warn. A never-edited comment with an unparseable url therefore concludes covered
+          # here rather than falling into plan-edit-unreadable below. Honest limit: this is a
+          # tripwire, not a control — a `false` GitHub reports for a comment that WAS edited would
+          # skip this check silently too (see the script header's #240 note).
+          if [ "$plan_edit_flag" = "false" ]; then
+            covers_plan="true"
+            reason="covered"
+          elif [ -z "$plan_comment_id" ]; then
             covers_plan="null"
             reason="plan-edit-unreadable"
             echo "warn: issue #$n: plan comment url ($plan_url) carries no #issuecomment-<id> — plan edit state unreadable" >&2
@@ -504,7 +552,9 @@ for n in $ready_numbers; do
   # nothing weaker — the branch that would otherwise conclude covered, after the #229 label
   # pre-filter and the #192 plan-edit check above both passed — so an already-uncovered or
   # withdrawn approval spends zero extra calls. One extra read-only call per COVERED
-  # trusted_post_plan entry only (never every entry, never an uncovered one). No
+  # trusted_post_plan entry ONLY WHEN that entry's own gh-reported includesCreatedEdit is not
+  # exactly false (the #240 pre-filter inside the loop below) — never every entry, never an
+  # uncovered one, and never a covered entry gh itself already told us was never edited. No
   # author-plus-createdAt fallback: an entry whose edit state cannot be established is unreadable,
   # never silently covered. The loop runs in the CURRENT shell (no `printf | while` subshell,
   # which would lose $i's increments) — bash 3.2 has no `declare -A`/`mapfile`/`seq`.
@@ -519,6 +569,11 @@ for n in $ready_numbers; do
       if [ "$entry_covered" = "true" ]; then
         d_url=$(printf '%s' "$trusted_post_plan" | jq -r --argjson i "$i" '.[$i].url // empty')
         d_author=$(printf '%s' "$trusted_post_plan" | jq -r --argjson i "$i" '.[$i].author')
+        # #240 — gh's own per-comment includesCreatedEdit, read from $result (not $trusted_post_plan,
+        # which carries only the projected/decorated fields), index-aligned with this entry since
+        # trusted_post_plan_edit_flags was built via `map(...)` over the same $tppSel this entry's
+        # index ranges over.
+        d_edit_flag=$(printf '%s' "$result" | jq -r --argjson i "$i" '.trusted_post_plan_edit_flags[$i]')
         # Same two-clause idiom as plan_comment_id above: outer #issuecomment- presence gate,
         # inner digits-only guard — this id is interpolated into a `gh api` path.
         d_id=""
@@ -531,7 +586,12 @@ for n in $ready_numbers; do
             ;;
         esac
         d_verdict=""
-        if [ -z "$d_id" ]; then
+        # #240 — pre-filter checked FIRST: gh's own flag already told us this comment was never
+        # edited, so the id and the lookup below are moot — no gh api call, no warn. Same "tripwire,
+        # not a control" honest limit as the plan-comment pre-filter above.
+        if [ "$d_edit_flag" = "false" ]; then
+          : # never edited ⇒ stays covered
+        elif [ -z "$d_id" ]; then
           d_verdict="unreadable"
           echo "warn: issue #$n: trusted decision comment by $d_author (${d_url:-no url}) carries no #issuecomment-<id> — decision edit state unreadable" >&2
         elif ! d_updated=$(gh api "repos/{owner}/{repo}/issues/comments/$d_id" --jq '.updated_at // empty' 2>/dev/null); then
