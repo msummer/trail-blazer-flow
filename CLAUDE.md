@@ -181,8 +181,25 @@ the over-exclusion regression); gate assertion 4.41 pins that this one `$planC` 
 spelled identically on both discovery scripts. Since #211 the same faithfulness applies to the
 revision-candidates query itself: the stub applies `find-planning-work.sh`'s own `--jq
 '.[].number'` argument with the real `jq` to a JSON page-array fixture and propagates jq's exit
-status, so a candidates filter that cannot process the returned document aborts the run under the
-script's `set -euo pipefail` instead of silently yielding an empty candidate list. Since #217 the
+status, so a candidates filter that cannot process the returned document fails the call the same
+way a rejected `gh issue list` invocation does (see #272/#273 immediately below) — retried once,
+then (#273) reported as an empty candidate list rather than a silently different one, never a
+`set -euo pipefail` abort. Since #272/#273, `find-planning-work.sh`'s other three `gh` calls get
+the identical one-retry-then-fail-closed shape #246 already gave the REST author-association
+lookup: the `needs_initial_plan` query and the revision-candidates query each retry once after the
+same guarded 30s backoff, then — instead of the bare command-substitution assignments that used to
+let one transient failure abort the whole run before any stdout was produced — fail closed to an
+empty bucket with a dedicated `counts` flag (`initial_query_unavailable` /
+`candidates_query_unavailable`) and a warn line on stderr, while the run continues and still exits
+0 with whatever half succeeded; the per-candidate `gh issue view` inside the revision loop gets the
+same one-retry treatment before its pre-existing warn-and-skip fallback runs, narrowing
+`counts.fetch_failures` to post-retry failures only and adding `counts.fetch_retries` for the
+retried-regardless-of-outcome count. `dev/planning-tests.sh` pins all three sites with a
+`reject-initial`/`reject-initial-once`, `reject-candidates`/`reject-candidates-once`, and
+`reject-view-<n>-once` fixture-marker family (the same one-shot-then-permanent contract #246
+established), a `.issue-calls` stub call log and `expect_issue_calls` helper (mirroring
+`.api-calls`/`expect_api_calls`) that discriminates a retried call from one that merely slept
+without re-attempting, and six new 0/1/2-failure-boundary fixtures. Since #217 the
 stub's `gh issue list`/`gh issue view` calls also validate their `--json` field list generically —
 against gh's own documented field set for those two subcommands (identical in the probed gh
 version) — rejecting an unsupported field with `Unknown JSON field: "<name>"` and exit 1, replacing

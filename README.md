@@ -1362,7 +1362,20 @@ could actually resolve to); the residual class the fix does not close — a CR *
 fast-path literal, e.g. `git pu\rsh origin main` or `g\rit push`, whose escaped `\r` keeps the
 substring the fast path scans for from ever appearing intact — is documented, not fixed, in each
 hook's own header comment (`hooks/push-guard.sh`'s "Documented under-blocking classes" bullet and
-`hooks/agent-boundary.sh`'s fast-path-2 comment), not in "Safety model" below.
+`hooks/agent-boundary.sh`'s fast-path-2 comment), not in "Safety model" below. Also in v2.7.2
+(#272/#273): `find-planning-work.sh`'s other three `gh` calls (the `needs_initial_plan` query, the
+revision-candidates query, and the per-candidate `gh issue view` fetch) get the same bounded retry
+#246 already gave the REST author-association lookup — one guarded 30-second backoff, one
+re-attempt — before falling back to their existing behaviour. Two consumer-visible behaviour
+changes, both needing no grant, label, script, settings entry, or baseline step: a momentary API
+blip during a per-candidate fetch no longer drops that issue from the revision scan for the whole
+run (it's simply retried once first); and a momentary blip on either `gh issue list` query no
+longer aborts the run with no output at all — the query fails closed to an empty bucket
+(`counts.initial_query_unavailable` / `counts.candidates_query_unavailable`) with a warn line on
+stderr, and the run still prints a complete document with whatever half succeeded. A query that
+fails BOTH attempts is not "nothing to do" — it's a degraded run — so `skills/issue-planner/
+SKILL.md` step 1 and `skills/issue-cycle/SKILL.md`'s ledger-seed paragraph both now name these
+flags explicitly.
 
 ## The per-repo settings file (required)
 
