@@ -131,3 +131,9 @@ bites: 1–3 lines, written as an instruction to a future agent.
   budget on prose alone. When a plan extends many chains at once, re-MEASURE every proof whose mutant edits a
   script the new fixtures run, and treat the reasons as a set to audit together — the defect recurs across sites
   written in the same sitting.
+- 2026-09-14: A `dev/hook-tests.sh` case-description string that names a real shell variable (e.g. "not
+  `$gitdir`") inside the double-quoted `cases=()` array literal is itself variable-expanded by THIS
+  file's own `set -uo pipefail` — an unset variable in the HARNESS's scope (not the hook under test's)
+  crashes the whole run with "unbound variable" before any case executes. Escape it as `\$gitdir` in
+  prose. On #268 this crashed `bash dev/hook-tests.sh push` outright (caught immediately, no verification
+  round lost, but only because the run was watched rather than piped to a summary line).
