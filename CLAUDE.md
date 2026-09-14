@@ -246,7 +246,9 @@ call, a document the script's own filter cannot process, and an unparseable or m
 or an empty `updated_at` field — all fail closed identically (`covers_plan: null`, `reason:
 "plan-edit-unreadable"`, `counts.plan_edit_unreadable`, with `approval.approved_at`/`approved_by`
 still populated since the EVENTS lookup itself succeeded); and `--issue <n>` mode carries the new
-reason too, not just batch mode. Since
+reason too, not just batch mode (since #240, see below, this REST lookup is skipped entirely when
+gh's own `includesCreatedEdit` on the plan comment is exactly `false`; the check above still runs
+identically whenever that flag is `true` or absent). Since
 #194 it additionally pins, on BOTH scripts: workstream A, a `has_harness_marker` boolean added to
 each untrusted bucket entry (`untrusted_comments[].comments[]` / `untrusted_post_plan[]`) that
 only ANNOTATES a forged `<!-- harness-audit -->`/`<!-- verifier-verdict -->` marker from an
@@ -299,13 +301,30 @@ from the inner digits-only guard, same split #192's own pair pins for the plan c
 rejected lookup vs. a filter-error document vs. a missing `updated_at` (three routes converging on
 one fail-closed state); edited-plus-unreadable on one issue (pins precedence); and
 `expect_api_calls` proofs for zero/one/two covered comments (pins the placement discipline
-mechanically — an uncovered comment, or an issue already uncovered for another reason, is never
-looked up); plus `--issue <n>` mode carrying both new reasons. `dev/selfcheck.sh`'s assertion 4.34
+mechanically — an uncovered comment, an issue already uncovered for another reason, or (since
+#240, see below) a covered comment gh itself already reports as never edited, is never looked up);
+plus `--issue <n>` mode carrying both new reasons. `dev/selfcheck.sh`'s assertion 4.34
 pins only that `bin/find-implementation-work.sh` and `skills/issue-implementer/SKILL.md` spell
 both new reason strings identically, the same fixed-string-agreement contract as 4.33 —
 `skills/issue-cycle/SKILL.md` is excluded for the identical, already-documented reason (its
 *Plan-binding provenance* bullet prints `approval.reason` verbatim and names no individual
-reason).
+reason). Since #240, `bin/find-implementation-work.sh` pre-filters BOTH the #192 plan-comment check
+and the #230 decision-comment check just described on gh's own per-comment `includesCreatedEdit`
+boolean — already present in the `comments` field both calls already fetch, at no extra API cost:
+exactly `false` means gh itself reports the comment was never edited, so the REST lookup is skipped
+entirely, with no warn, leaving the plan or the entry covered; exactly `true` keeps today's lookup
+and every fail-closed state unchanged; the key being absent (every fixture that predates this PR)
+falls through to today's lookup unchanged — no new reason string, no new `counts` key, and no new
+`--json` field, so gate assertions 4.34 and 4.41 are both unaffected. Honest limit: this is a
+tripwire, not a control — a `false` GitHub reports for a comment that *was* genuinely edited would
+skip the lookup silently too. `dev/planning-tests.sh` pins the skip with six new fixtures
+(`impl-plan-edit-skipped-when-never-edited`, `impl-plan-edit-checked-when-flag-true`,
+`impl-decision-edit-skipped-when-never-edited`, `impl-decision-edit-checked-when-flag-true`,
+`impl-decision-edit-flags-are-per-entry`, and `impl-single-issue-edit-flags-skipped`), each proving
+the skip mechanically via `expect_api_calls` rather than inferring it from the JSON, plus eight
+measured mutants pinning both pre-filters, the index-alignment between `trusted_post_plan[]` and
+its internal edit-flag array, and the jq `//`-operator trap that would otherwise treat a real
+`false` as "missing".
 It runs in CI as the sixth step, but it
 is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh` or
 `bin/find-implementation-work.sh` changes.
