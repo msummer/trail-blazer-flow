@@ -604,7 +604,8 @@ subagents need:
    top (standard-flow PRs only, the PR body carrying the verifier's own `outcome=pass` status
    line — not prose — checked mechanically and cross-checked against the dispatch ledger *and*
    against the verifier's verdict archived verbatim as an issue comment for that PR's head
-   branch, *and* against the approval covering the specific plan comment implemented — the PR
+   branch (a transient failure of that read is re-checked once before the PR is held, #277),
+   *and* against the approval covering the specific plan comment implemented — the PR
    body carrying one of a fresh `find-implementation-work.sh` run's `approval.approved_at_history[]`
    `binding_line` values verbatim, newest first, so a body written under an earlier approval of the
    same plan still qualifies (#174, extended #213; an unknown `covers_plan` verdict from that run
@@ -1375,7 +1376,14 @@ longer aborts the run with no output at all — the query fails closed to an emp
 stderr, and the run still prints a complete document with whatever half succeeded. A query that
 fails BOTH attempts is not "nothing to do" — it's a degraded run — so `skills/issue-planner/
 SKILL.md` step 1 and `skills/issue-cycle/SKILL.md`'s ledger-seed paragraph both now name these
-flags explicitly.
+flags explicitly. Also in v2.7.2 (#277): `skills/issue-cycle/SKILL.md`'s merge-floor *Archived
+verdict* read (`gh issue view <n> --json comments`) gets the same bounded one-shot retry, needing
+no grant, label, script, settings entry, or baseline step (`Bash(sleep:*)` and
+`Bash(gh issue view:*)` already ship in `templates/repo-settings.json`). The one consumer-visible
+widening: a PR a transient archive-read blip would have held for the rest of the pass can now
+merge in the same pass instead; fail-closed is unchanged — a read still failing after the one
+retry holds the PR not eligible exactly as before. Cost: up to 30s plus one extra read-only
+`gh issue view` call, paid only on a PR whose archive read fails.
 
 ## The per-repo settings file (required)
 
@@ -1707,7 +1715,12 @@ That keyed comment's own closing status line is what the PR body's line is check
 literally before the merge pass proceeds. A prose "verifier verdict: pass" without the PR-body
 line, or a PR body with no archived comment keyed to its head branch, does not qualify —
 including a PR opened before this keying existed, whose archive carries no key line and which
-therefore waits for a human merge rather than being retrofitted. Honest limit: the check proves
+therefore waits for a human merge rather than being retrofitted. Since #277, a rejected or
+unparseable read of that archive comment — never a determinate "no archive for this branch" —
+gets the identical one bounded re-check (`sleep 30`, then one more `gh issue view`, per #223's
+rule) before the PR is held; a read still failing after that one retry holds the PR **not
+eligible** exactly as before — the retry narrows how often a transient API blip strands an
+otherwise-mergeable PR, it does not relax what the floor accepts. Honest limit: the check proves
 a matching line is present in the PR body, agrees with the ledger, and agrees with a comment
 independently timestamped on the issue —
 not that a human witnessed the dispatch. All three artifacts are still orchestrator-written, so a
