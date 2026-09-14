@@ -52,7 +52,12 @@
 # counts.author_association_unavailable: true, and leave the map empty, so EVERY issue's
 # trusted_author is false for this run (fail-closed) rather than dying or silently trusting; a
 # retry that succeeds sets counts.author_association_retried: true but never
-# author_association_unavailable, and the map is built from the SECOND attempt's output.
+# author_association_unavailable, and the map is built from the SECOND attempt's output. #272/#273
+# extend the identical one-retry-then-fail-closed shape to the script's other three `gh` calls — the
+# needs_initial_plan query, the revision-candidates query, and the per-candidate issue fetch inside
+# the loop below — each with its own pair of counts flags/counter (see "counts gains" below); all
+# four sites share the single ASSOCIATION_RETRY_SLEEP backoff constant (see its own comment ahead
+# of the retry block).
 #
 # Output (JSON): needs_initial_plan, needs_revision (each item now additionally carries author,
 # association, trusted_author) plus untrusted_comments — an array of {number, title, url,
@@ -75,6 +80,28 @@
 # (count of the array above), author_association_unavailable (boolean, see above), and (#246)
 # author_association_retried (boolean, true iff the first REST attempt failed, regardless of
 # whether the retry succeeded — so retried && !unavailable is exactly "a blip was absorbed").
+# #272/#273 add five more: initial_query_retried / initial_query_unavailable (the needs_initial_plan
+# query below), candidates_query_retried / candidates_query_unavailable (the revision-candidates
+# query below), and fetch_retries (how many per-candidate issue fetches inside the loop needed a
+# retry, regardless of whether that retry succeeded) — the same *_retried / *_unavailable boolean
+# pair #246 established, applied to the two `gh issue list` calls: *_retried is true iff that
+# query's FIRST attempt failed; *_unavailable is true only if BOTH attempts failed, in which case
+# that query's bucket (needs_initial_plan or needs_revision respectively) is reported empty for
+# this run instead of aborting the script — every fail-closed and retry path still exits 0 with one
+# complete JSON document. fetch_failures now counts only POST-RETRY per-candidate fetch failures (a
+# candidate skipped after BOTH attempts) — a candidate whose first fetch failed but whose retry
+# succeeded is a fetch_retries occurrence, not a fetch_failures one.
+#
+# Wall clock: the retry budget is deliberately UNCAPPED — one retry per site (the REST
+# author-association lookup, the needs_initial_plan query, the revision-candidates query) plus one
+# retry per candidate in the per-candidate fetch loop, no run-level ceiling on top of that. Worst
+# case this run sleeps ASSOCIATION_RETRY_SLEEP seconds × (1 author-association retry + 1
+# initial-query retry + 1 candidates-query retry + up to LIMIT candidate-fetch retries) — at the
+# current LIMIT=100 and a 30s backoff, ~50 minutes if every single call in the run fails once and
+# then succeeds on its retry. In practice a broad outage fails the candidates query on BOTH
+# attempts first (it runs before the per-candidate loop), which fails closed and skips the loop
+# entirely, so the run only ever pays for the handful of retries that precede the loop, never for
+# N candidates.
 #
 # Skipped automatically:
 #   - plan-proposed with no newer trusted non-plan comment -> awaiting your review, nothing to do
@@ -115,7 +142,10 @@ read_issue_authors() {
 # #246: one bounded retry of read_issue_authors before fail-closing the whole run — the common
 # transient-API-blip case would otherwise cost an entire unattended cycle's auto-approval floor
 # (skills/issue-planner/SKILL.md step 6b), mirroring the shape #223 (PR #244) gave the implementer
-# side's own re-run. ASSOCIATION_RETRY_SLEEP is the single backoff constant; the sleep is guarded
+# side's own re-run. ASSOCIATION_RETRY_SLEEP is the single backoff constant — named for its first
+# use here (#246), it is now shared by all four retry sites in this script (#272/#273): this REST
+# lookup, the needs_initial_plan query, the revision-candidates query, and the per-candidate issue
+# fetch inside the loop below. The sleep is guarded
 # (`|| true`) so a failing `sleep` itself can never abort the run under this script's own
 # set -euo pipefail (M3's fixture in dev/planning-tests.sh pins the guard). The map is built once, from whichever
 # attempt succeeded (never from a failed attempt's empty capture) — guarded on
@@ -141,10 +171,28 @@ if [ "$author_association_unavailable" = false ]; then
   ')
 fi
 
-needs_initial_plan=$(gh issue list \
+initial_query_retried=false
+initial_query_unavailable=false
+candidates_query_retried=false
+candidates_query_unavailable=false
+fetch_retries=0
+if ! needs_initial_plan=$(gh issue list \
   --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan" \
   --json number,title,url,author \
-  --limit "$LIMIT")
+  --limit "$LIMIT"); then
+  initial_query_retried=true
+  sleep "$ASSOCIATION_RETRY_SLEEP" || true
+  if needs_initial_plan=$(gh issue list \
+    --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan" \
+    --json number,title,url,author \
+    --limit "$LIMIT"); then
+    echo "warn: needs_initial_plan query failed once — retried after 30s and succeeded (transient API blip absorbed)" >&2
+  else
+    echo "warn: could not list issues needing an initial plan (gh issue list) — reporting an empty needs_initial_plan bucket this run (fail-closed)" >&2
+    initial_query_unavailable=true
+    needs_initial_plan='[]'
+  fi
+fi
 
 # Annotate needs_initial_plan items with author/association/trusted_author from the REST map.
 # An issue absent from the map (author_association_unavailable, or simply not returned by the
@@ -161,10 +209,23 @@ needs_initial_plan=$(printf '%s' "$needs_initial_plan" | jq --arg trusted "$TRUS
 ')
 
 # Candidates for revision: awaiting review, not yet approved, not opted out.
-candidates=$(gh issue list \
+if ! candidates=$(gh issue list \
   --search "is:open is:issue label:plan-proposed -label:plan-approved -label:no-plan" \
   --json number \
-  --limit "$LIMIT" --jq '.[].number' | tr -d '\r')
+  --limit "$LIMIT" --jq '.[].number' | tr -d '\r'); then
+  candidates_query_retried=true
+  sleep "$ASSOCIATION_RETRY_SLEEP" || true
+  if candidates=$(gh issue list \
+    --search "is:open is:issue label:plan-proposed -label:plan-approved -label:no-plan" \
+    --json number \
+    --limit "$LIMIT" --jq '.[].number' | tr -d '\r'); then
+    echo "warn: revision-candidates query failed once — retried after 30s and succeeded (transient API blip absorbed)" >&2
+  else
+    echo "warn: could not list revision candidates (gh issue list) — reporting an empty needs_revision bucket this run (fail-closed)" >&2
+    candidates_query_unavailable=true
+    candidates=""
+  fi
+fi
 
 needs_revision="[]"
 untrusted_comments="[]"
@@ -177,12 +238,19 @@ audit_comments_skipped=0
 verdict_archives_skipped=0
 for n in $candidates; do
   # Tolerate per-issue failures: one transient gh/API error must not kill the whole
-  # discovery run (matters for unattended/scheduled runs). The issue is simply
-  # reconsidered next time.
+  # discovery run (matters for unattended/scheduled runs). #272: a first failure is retried once
+  # after the same guarded ASSOCIATION_RETRY_SLEEP backoff used above; only if BOTH attempts fail
+  # is the issue skipped — simply reconsidered next time.
   if ! issue=$(gh issue view "$n" --json number,title,url,author,comments 2>/dev/null); then
-    echo "warn: could not fetch issue #$n — skipping it this run" >&2
-    fetch_failures=$((fetch_failures+1))
-    continue
+    fetch_retries=$((fetch_retries+1))
+    sleep "$ASSOCIATION_RETRY_SLEEP" || true
+    if issue=$(gh issue view "$n" --json number,title,url,author,comments 2>/dev/null); then
+      echo "warn: issue #$n: fetch failed once — retried after 30s and succeeded (transient API blip absorbed)" >&2
+    else
+      echo "warn: could not fetch issue #$n — skipping it this run" >&2
+      fetch_failures=$((fetch_failures+1))
+      continue
+    fi
   fi
   result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg a "$AUDIT_MARKER" --arg v "$VERDICT_MARKER" --arg trusted "$TRUSTED_ASSOCIATIONS" '
     ($trusted | split(" ")) as $ok
@@ -325,6 +393,11 @@ jq -n \
   --argjson uiac "$untrusted_issue_author_count" \
   --argjson aau "$author_association_unavailable" \
   --argjson aar "$author_association_retried" \
+  --argjson iqr "$initial_query_retried" \
+  --argjson iqu "$initial_query_unavailable" \
+  --argjson cqr "$candidates_query_retried" \
+  --argjson cqu "$candidates_query_unavailable" \
+  --argjson fr "$fetch_retries" \
   '{needs_initial_plan: $initial, needs_revision: $revision, untrusted_comments: $untrusted,
     untrusted_issue_authors: $uia,
     counts: {initial: ($initial | length), revision: ($revision | length),
@@ -338,4 +411,9 @@ jq -n \
              verdict_archives_skipped: $vas,
              untrusted_issue_authors: $uiac,
              author_association_unavailable: $aau,
-             author_association_retried: $aar}}'
+             author_association_retried: $aar,
+             initial_query_retried: $iqr,
+             initial_query_unavailable: $iqu,
+             candidates_query_retried: $cqr,
+             candidates_query_unavailable: $cqu,
+             fetch_retries: $fr}}'
