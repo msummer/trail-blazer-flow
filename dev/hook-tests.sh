@@ -36,7 +36,25 @@
 # or executes anything on it, and, since #270, a CRLF-carrying destination (`git push origin
 # main<CR>`, both trailing and interior), a CRLF-carrying command word (`git<CR> push origin
 # main`), and a CRLF-carrying non-default destination (`git push origin feature/x<CR>`) proving
-# the strip does not widen the deny set.
+# the strip does not widen the deny set. Since #268, the same common dir's `config` file is also
+# pinned for a push segment carrying no explicit refspec: a bare push and a named-remote push
+# each denied via a configured `remote.<name>.push` refspec (a 0/1/2+ boundary on two `push =`
+# lines under one remote, and a `key=value` assignment with no surrounding spaces), `push.default
+# = upstream`/`tracking` resolved through the current branch's recorded `merge` ref — including,
+# since the #268 round-2 kickback, alongside a NON-denying `remote.<name>.push` record on the
+# SAME remote, pinning the RESOLVED union of routes (not git's own precedence), and, since the
+# #268 round-3 kickback, a bare push denied via a denying `remote.<name>.push` record under a
+# DIFFERENT (non-`origin`) remote plus a benign `origin` section, pinning the RESOLVED union
+# across EVERY configured remote at n==0 (not just git's own default-remote pick) — `push.default
+# = matching` and a wildcard (`*`) destination each denied unconditionally, n==1 exact
+# remote-name scoping in both directions, the harness's own explicit-refspec shape confirmed as
+# a release-blocker no-opinion control even
+# against a denying config, current-branch scoping on `branch.<n>.merge`, comment/whitespace
+# handling, a CRLF-carrying config line (both a line-ending CR and, since the #268 round-2
+# kickback, an interior CR inside a refspec value), a config setting neither key at all, a
+# worktree's config resolved from the MAIN checkout rather than the pointer's own gitdir, a final
+# config line with no trailing newline, case-insensitive section/key names, and the same
+# booby-trapped/byte-identical-listing guarantee applied to the config route specifically.
 #
 # Usage: bash dev/hook-tests.sh [name-filter] — same output contract as dev/selfcheck-tests.sh
 # and dev/doctor-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==`
@@ -541,6 +559,22 @@ mk_fixture_worktree() {
   printf 'ref: refs/heads/%s\n' "$wt_branch" > "$main/.git/worktrees/wt1/HEAD"
 }
 
+# mk_fixture_config DIR BODY (#268) — writes BODY (already newline-terminated by the caller's own
+# heredoc/printf, or not, per case) to DIR/.git/config. DIR is the directory that HOLDS .git — for
+# a worktree fixture that is the MAIN dir (mk_fixture_worktree's first argument), never the
+# pointer dir, mirroring where hooks/push-guard.sh itself reads (the common dir, not the resolved
+# gitdir). AMBIENT-$PWD RULE: every push fixture below that builds a config has n <= 1 non-option
+# tokens (a bare `git push` or `git push <remote>`), because config is consulted ONLY in that
+# branch — so every one of them MUST pass an explicit cwd via mk_push_cmd_cwd, or push-guard.sh
+# resolves the developer's own checkout and reads THAT machine's real .git/config (today, before
+# this builder existed, no such flake was possible: every no-cwd push fixture in this file has
+# n >= 2 — see this file's push mutation table header).
+mk_fixture_config() {
+  local dir="$1" body="$2"
+  mkdir -p "$dir/.git"
+  printf '%s' "$body" > "$dir/.git/config"
+}
+
 # run_push_guard JSON [PATHVAL] — runs the real push-guard script against JSON on stdin, with
 # PATH set to PATHVAL (defaults to this process's own PATH), leaving $push_out (stdout)/
 # $push_err (stderr, read back from a file under $tmpbase)/$push_rc set as globals. Same "call as
@@ -774,6 +808,253 @@ case_pn_o_value_two_token_remote() {
   expect_push_no_opinion
 }
 
+# --- deny/no-opinion: #268 config-derived push routes (remote.<name>.push / push.default) -----
+# Unless stated, the fixture repo has default branch main, current branch feature/x, and the
+# command is a bare "git push" against an explicit cwd (see mk_fixture_config's ambient-$PWD
+# comment above for why every one of these MUST pass cwd).
+case_pd_config_remote_push_bare() {
+  local dir="$tmpbase/repo-cfg-remote-push-bare"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_config_remote_push_named_remote() {
+  local dir="$tmpbase/repo-cfg-remote-push-named"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push origin' "$dir")"
+  expect_push_deny
+}
+case_pd_config_remote_push_second_line() {
+  # Two "push =" lines under one remote; only the SECOND is offending -- the 0/1/2+ boundary
+  # (LESSON 2026-09-08d) for a config record set, and reuse of refspec_dest()'s own
+  # refs/heads/ strip on the destination side.
+  local dir="$tmpbase/repo-cfg-remote-push-2nd"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n\tpush = HEAD:refs/heads/feature/y\n\tpush = HEAD:refs/heads/main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_config_no_space_assign() {
+  # key=value with NO surrounding spaces (the acceptance criterion's own "key=value without
+  # spaces" clause, #268 kickback finding 1) -- the *=*) split guard must recognise this form,
+  # not only the "key = value" spacing every other fixture in this table happens to use.
+  local dir="$tmpbase/repo-cfg-no-space-assign"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\npush=HEAD:main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_config_push_default_upstream() {
+  local dir="$tmpbase/repo-cfg-push-default-upstream"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[push]\n\tdefault = upstream\n[branch "feature/x"]\n\tremote = origin\n\tmerge = refs/heads/main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_config_push_default_tracking() {
+  # "tracking" is git's documented synonym for "upstream".
+  local dir="$tmpbase/repo-cfg-push-default-tracking"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[push]\n\tdefault = tracking\n[branch "feature/x"]\n\tremote = origin\n\tmerge = refs/heads/main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_config_push_default_matching() {
+  # push.default = matching pushes every branch that exists on both ends -- including the
+  # default branch in essentially every real repo -- so this denies unconditionally, the same
+  # reasoning as --all/--mirror (Q2's default). No branch section is needed: this route never
+  # consults branch.<n>.merge.
+  local dir="$tmpbase/repo-cfg-push-default-matching"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[push]\n\tdefault = matching\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_config_union_benign_refspec_plus_upstream() {
+  # RESOLVED Q1 union semantics (#268 kickback finding 2): a remote.origin.push refspec that
+  # resolves to a NON-denying destination must not suppress the push.default route -- this hook
+  # deliberately does NOT model git's own precedence (push.default consulted only when the
+  # applicable remote has no push refspec); both routes are evaluated unconditionally, so a
+  # config carrying a benign remote.<name>.push record AND a denying push.default still denies.
+  local dir="$tmpbase/repo-cfg-union-benign-plus-upstream"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n\tpush = HEAD:refs/heads/feature/x\n[push]\n\tdefault = upstream\n[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_config_union_other_remote_bare() {
+  # #268 kickback 2 finding (RESOLVED Q1's CROSS-REMOTE union, distinct from
+  # push-deny-config-union-benign-refspec-plus-upstream above, which pins the union across
+  # ROUTES on the SAME remote): a bare push considers EVERY configured remote's push refspecs,
+  # not just the remote git's own precedence would pick (origin, absent
+  # remote.pushDefault/branch.<n>.pushRemote/branch.<n>.remote). Config here carries only a
+  # NON-origin remote's denying push refspec, plus a benign origin section with no push key at
+  # all -- this is the fixture that makes the scope gate's "n==0 -> every remote" reading
+  # observable and distinguishes it from "n==0 -> only git's own default remote".
+  local dir="$tmpbase/repo-cfg-union-other-remote"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "backup"]\n\tpush = HEAD:main\n[remote "origin"]\n\turl = https://example.invalid/r.git\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_config_wildcard_refspec() {
+  # A configured destination containing "*" pushes every matching branch; deny unconditionally
+  # (Q3's default), the same reasoning as push.default=matching above.
+  local dir="$tmpbase/repo-cfg-wildcard"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n\tpush = refs/heads/*:refs/heads/*\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_config_crlf_line() {
+  # #270's class, in the NEW config reader: every config line carries a CRLF ending.
+  local dir="$tmpbase/repo-cfg-crlf"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\r\n\tpush = HEAD:main\r\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_config_crlf_interior() {
+  # #268 kickback finding 3: an INTERIOR CR (not a line-ending one) inside the refspec value
+  # itself -- "HEAD:ma<CR>in" -- denies via the cfg_cr strip specifically; push-deny-config-crlf-line
+  # (above)'s CR is line-ending, already masked by cfg_trim()'s own [[:space:]] handling regardless
+  # of cfg_cr, so it cannot distinguish "the CR strip runs" from "it doesn't" -- this fixture is
+  # the one M35 (below) actually flips, making that mutant non-inert.
+  local dir="$tmpbase/repo-cfg-crlf-interior"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n\tpush = HEAD:ma\rin\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_config_worktree_commondir() {
+  # Config lives in the MAIN checkout's .git/config (mk_fixture_worktree's first argument), never
+  # the worktree pointer dir's own gitdir -- the same common-dir rule the origin-HEAD symref read
+  # already uses.
+  local main="$tmpbase/repo-cfg-wt-main" wt="$tmpbase/repo-cfg-wt-pointer"
+  mk_fixture_worktree "$main" "$wt" main "claude/17-a"
+  mk_fixture_config "$main" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$wt")"
+  expect_push_deny
+}
+case_pd_config_no_trailing_newline() {
+  # The final (only) config line has no trailing newline -- the read ... || [ -n "$line" ]
+  # rescue this file's while-loop needs, mirroring the idiom used elsewhere in this hook.
+  local dir="$tmpbase/repo-cfg-no-trailing-nl"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n\tpush = HEAD:main'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_config_mixed_case() {
+  # Section keyword and key name are both mixed-case; git treats both case-insensitively (a
+  # quoted subsection name, "origin" here, stays case-sensitive and is unaffected).
+  local dir="$tmpbase/repo-cfg-mixed-case"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[Remote "origin"]\n\tPush = HEAD:main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_config_never_executes() {
+  # Combines the never-executes-anything guarantee (booby-trapped git/gh/rm) AND the
+  # byte-identical-file-listing property, both on the CONFIG deny route specifically (the
+  # existing push-never-executes-* / push-never-executes-reads-only cases exercise only the
+  # plain refspec-parsing routes, never the config reader added by this issue).
+  local dir="$tmpbase/repo-cfg-never-executes"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  local trapdir="$tmpbase/trapbin-cfg-deny" sentinel="$tmpbase/sentinel-cfg-deny"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  local before after
+  before="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")" "$trapdir:$PATH"
+  after="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  expect_push_deny
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH while evaluating a config route\n"; }
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}fixture repo's file listing changed — push-guard.sh wrote to or altered a file it should only read (config route)\n"; }
+}
+case_pn_config_neither_key() {
+  # The decision's required control: a config file that sets NEITHER remote.<name>.push nor
+  # push.default at all must stay no opinion.
+  local dir="$tmpbase/repo-cfg-neither-key"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[core]\n\tbare = false\n[remote "origin"]\n\turl = https://example.invalid/o/r.git\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_pn_config_remote_push_other_dest() {
+  # A configured refspec that resolves to a destination other than the default branch.
+  local dir="$tmpbase/repo-cfg-other-dest"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n\tpush = HEAD:refs/heads/feature/x\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_pn_config_other_remote_named() {
+  # n==1 exact remote scoping: "origin"'s push route must not apply to a "git push backup".
+  local dir="$tmpbase/repo-cfg-other-remote"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push backup' "$dir")"
+  expect_push_no_opinion
+}
+case_pn_config_explicit_refspec() {
+  # The harness's own shape (n >= 2): config routes are NEVER consulted for a segment carrying
+  # an explicit refspec -- a deny here would be a release blocker.
+  local dir="$tmpbase/repo-cfg-explicit-refspec"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push -u origin "claude/17-a"' "$dir")"
+  expect_push_no_opinion
+}
+case_pn_config_branch_other() {
+  # push.default=upstream, but the [branch] section names a DIFFERENT branch than the current
+  # one -- current-branch scoping on the merge lookup.
+  local dir="$tmpbase/repo-cfg-branch-other"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[push]\n\tdefault = upstream\n[branch "other"]\n\tmerge = refs/heads/main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_pn_config_commented_out() {
+  # Comment/whitespace handling: a "#"-commented push line, a ";"-commented push.default line,
+  # odd leading whitespace on the one REAL (harmless) key, none of which may be mistaken for an
+  # active directive.
+  local dir="$tmpbase/repo-cfg-commented-out"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n  # push = HEAD:main\n     push = feature/x\n[push]\n  ; default = matching\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_pn_config_push_default_current() {
+  # git's own default mode since 2.x: "current" is never resolved by this hook's push.default
+  # route at all (only "upstream"/"tracking"/"matching" are) -- the sharp form of the clause,
+  # since a branch section for the current branch IS present and WOULD deny if this mode were
+  # mistaken for "upstream".
+  local dir="$tmpbase/repo-cfg-default-current"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[push]\n\tdefault = current\n[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_pn_config_push_default_simple() {
+  local dir="$tmpbase/repo-cfg-default-simple"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[push]\n\tdefault = simple\n[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+
 # --- role-agnostic no-opinion edges ----------------------------------------------------------------
 case_pr_plan_mode()      { run_push_guard "$(mk_push_cmd_mode 'git push origin main' 'plan')"; expect_push_no_opinion; }
 case_pr_wrong_tool()     { run_push_guard "$(mk_push_tool 'Read' 'git push origin main')"; expect_push_no_opinion; }
@@ -885,12 +1166,12 @@ cases=(
   # the 84-total baseline (LESSON 2026-09-06 asks only for bookkeeping, i.e. count words, to be
   # reconciled after the last case is added; re-running 22 already-verified mutants is out of
   # scope for this fix). M24 (below) was added by #270's CRLF-strip fix and was measured
-  # (whole-file convention — bash dev/hook-tests.sh with no filter) against the CURRENT 143-case
-  # file (agent-boundary's own addition now 52 cases; push-guard's own addition now 56 cases — a
-  # DIFFERENT, larger figure, 60, is the `push`-name-filtered measurement unit the push mutation
-  # table below uses: the 56 push-section rows below plus four rows from the OTHER two sections
-  # whose names happen to contain the substring "push" (push-upstream, impl-deny-push-bare,
-  # impl-deny-push-ns, impl-deny-git-c-push) — M1-M23's own numbers were NOT
+  # (whole-file convention — bash dev/hook-tests.sh with no filter) against the then-current
+  # 143-case file (agent-boundary's own addition 52 cases; push-guard's own addition then 56
+  # cases — a DIFFERENT, larger figure, 60, was the `push`-name-filtered measurement unit the push
+  # mutation table below used at that point: the 56 push-section rows plus four rows from the
+  # OTHER two sections whose names happen to contain the substring "push" (push-upstream,
+  # impl-deny-push-bare, impl-deny-push-ns, impl-deny-git-c-push) — M1-M23's own numbers were NOT
   # re-measured against that 143-case total: the 82/84-case figures above predate #260's
   # push-guard section entirely (it did not exist yet when M1-M22 were measured, and held 52
   # cases, not 56, immediately before #270 added four CRLF fixtures to it). M25 (below) was also
@@ -898,6 +1179,13 @@ cases=(
   # the push table's M24/M25 close for hooks/push-guard.sh — see M25's own entry for why no
   # fixture here closes it (a boundary interior-CR fixture is not added: not required unless
   # judged necessary to make a table sentence true, and none currently claims that coverage).
+  # M1-M25 (this section) were NOT re-run for #268 — that issue added twenty push-* fixtures
+  # (below), growing the whole-file total from 143 to 163 and the push-filtered unit from 60 to
+  # 80; the #268 round-2 kickback then added three more push-* fixtures, growing the whole-file
+  # total to 166 and the push-filtered unit to 83; the #268 round-3 kickback then added one more
+  # push-* fixture, growing the whole-file total to the CURRENT 167 and the push-filtered unit to
+  # 84 — none of the three rounds touched agent-boundary.sh vocabulary or behaviour, so none of
+  # this section's own historical "143-case"/"140 pass"/"143 pass" figures were re-measured.
   # M1/M2 (the two raw-stdin fast paths) are
   # coarse — breaking either silences the WHOLE hook, so they only distinguish a deny-verdict
   # case from everything else, never one deny case from another:
@@ -937,9 +1225,11 @@ cases=(
   #       49-case/84-total addition (#235 round 2); not re-run for #270 (the two new
   #       chained-prefix fixtures were the only cases that flipped then)
   #   M24 the two #270 CR-strip lines deleted (cr=$'\r'; cmd="${cmd//$cr/}") -> 140 pass,  3 fail
-  #       (whole-file convention, measured against the CURRENT 143-case file — the three new
+  #       (whole-file convention, measured against the then-current 143-case file — the three new
   #       #270 boundary CRLF fixtures, impl-deny-crlf-cmdword/verif-deny-crlf-gh/
-  #       verif-noop-crlf-status, are the only cases that flip)
+  #       verif-noop-crlf-status, are the only cases that flip; NOT re-measured against the
+  #       CURRENT 167-case file after #268 (round 1), its round-2 kickback, or its round-3
+  #       kickback — see this section's header note above)
   #   M25 the shipped global strip narrowed to once-only                    -> 143 pass,  0 fail
   #       (cmd="${cmd//$cr/}" -> cmd="${cmd/$cr/}"; #270 round-2 kickback probe, whole-file
   #       convention) -- NOT flipped by any fixture in this file: each of the three #270
@@ -1021,9 +1311,16 @@ cases=(
   # asserting exactly one occurrence (never a regex, to avoid a silent no-op substitution), with
   # the observed `bash dev/hook-tests.sh push` pass/fail delta measured against this file's
   # 56-case push-* set AS IT STOOD AT #260, then restored and verified with a full `diff` before
-  # the next mutation. M1-M22 were NOT re-run for #270 — only M23-M25 (below) are measured against
-  # the CURRENT 60-case push-* set (the #260 56-case baseline plus the four new #270 CRLF
-  # fixtures).
+  # the next mutation. M1-M22 were NOT re-run for #270 — only M23-M25 were measured against the
+  # 60-case push-* set (the #260 56-case baseline plus the four new #270 CRLF fixtures). M1-M25
+  # were NOT re-run for #268 — only M26-M42 were measured against the then-current 80-case
+  # push-* set (the #270 60-case baseline plus the twenty new #268 config-route fixtures). M26-M42
+  # were NOT re-run for the #268 round-2 kickback — only M43/M44 (below), plus a re-measurement of
+  # M35, were measured against the then-current 83-case push-* set (the 80-case baseline plus three
+  # more fixtures: a no-space key=value assignment, a benign-refspec-plus-upstream union probe, and
+  # an interior-CR refspec value). M26-M44 were NOT re-run for the #268 round-3 kickback — only
+  # M45 (below) is measured against the CURRENT 84-case push-* set (the 83-case baseline plus one
+  # more fixture: a cross-remote union bare-push probe).
   # M1/M2 (the two raw-stdin fast paths) are coarse — breaking either silences the WHOLE hook, so
   # they only distinguish a deny-verdict case from everything else, never one deny case from
   # another:
@@ -1065,7 +1362,7 @@ cases=(
   #   M22 tool_input.command's jq default changed from empty to a real   -> 55 pass,  1 fail
   #       command string
   #   M23 the two #270 CR-strip lines deleted (cr=$'\r'; cmd="${cmd//$cr/}") -> 57 pass,  3 fail
-  #       (measured against the CURRENT 60-case push-* set — the three new #270 push-deny-crlf-*
+  #       (measured against the then-current 60-case push-* set — the three new #270 push-deny-crlf-*
   #       fixtures are the only cases that flip; push-noop-crlf-feature is NOT flipped, see below.
   #       Re-measured after the #270 round-2 kickback rewrote push-deny-crlf-interior's raw
   #       command from two CRs to three — the figures and failing set are unchanged from the
@@ -1073,7 +1370,7 @@ cases=(
   #   M24 the shipped global strip narrowed to trailing-only                -> 58 pass,  2 fail
   #       (cmd="${cmd//$cr/}" -> cmd="${cmd%$cr}"; #270 round-2 kickback, added because M23 alone
   #       cannot distinguish "strips every \r" from "strips only a trailing \r" — measured against
-  #       the CURRENT 60-case push-* set: kills push-deny-crlf-interior and push-deny-crlf-cmdword,
+  #       the then-current 60-case push-* set: kills push-deny-crlf-interior and push-deny-crlf-cmdword,
   #       neither of whose verdict-bearing CR is the command's final byte; does NOT kill
   #       push-deny-crlf-dest, whose single CR IS the final byte)
   #   M25 the shipped global strip narrowed to once-only                    -> 59 pass,  1 fail
@@ -1081,9 +1378,139 @@ cases=(
   #       two-CR push-deny-crlf-interior fixture's verdict-bearing CR happened to be its FIRST, so
   #       this mutant survived the whole 60-case set undetected until the fixture was rewritten to
   #       a three-CR command whose verdict-bearing CR is the SECOND, not the first — measured
-  #       against the CURRENT 60-case push-* set: kills only push-deny-crlf-interior; does NOT
+  #       against the then-current 60-case push-* set: kills only push-deny-crlf-interior; does NOT
   #       kill push-deny-crlf-dest or push-deny-crlf-cmdword, each of whose single CR IS the first
   #       (and only) one)
+  # #268's config-route mutants (M26-M42), measured against the then-current 80-case push-* set
+  # (NOT re-run for the #268 round-2 kickback below — see this section's header note above); each
+  # applied via a Python literal-string replace asserting exactly one occurrence, restored and
+  # verified with a full `diff` + sha256 before the next mutation:
+  #   M26 the config read guard disabled (if [ -f "$cfgf" ]; then -> if false           -> 68 pass,
+  #       && [ -f "$cfgf" ]; then)                                                       12 fail
+  #       (fails all twelve push-deny-config-* cases: remote-push-bare, remote-push-named-remote,
+  #       remote-push-second-line, push-default-upstream, push-default-tracking,
+  #       push-default-matching, wildcard-refspec, crlf-line, worktree-commondir,
+  #       no-trailing-newline, mixed-case, and never-executes -- config is never read at all, so
+  #       none of the twelve config-derived deny routes fire)
+  #   M27 the n==1 exact-remote-scoping guard disabled (if [ -n "$scope" ] &&             -> 79 pass,
+  #       [ "$sub" != "$scope" ]; then -> if false && ...)                                 1 fail
+  #       (kills only push-noop-config-other-remote-named -- "origin"'s own push route wrongly
+  #       applies to a "git push backup")
+  #   M28 the [branch "<current>"] scoping guard disabled (if [ "$cfg_subsection" =       -> 79 pass,
+  #       "$current_branch" ]; then -> if true || ...)                                     1 fail
+  #       (kills only push-noop-config-branch-other -- a DIFFERENT branch's merge value wrongly
+  #       applies to the current branch)
+  #   M29 the push.default mode-check pattern widened to match every value               -> 77 pass,
+  #       ([Uu][Pp][Ss][Tt][Rr][Ee][Aa][Mm]|[Tt][Rr][Aa][Cc][Kk][Ii][Nn][Gg]) -> *))         3 fail
+  #       (kills push-noop-config-push-default-current and push-noop-config-push-default-simple,
+  #       whose branch sections WOULD deny if their mode were mistaken for upstream; also kills
+  #       push-deny-config-push-default-matching as a side effect -- the "matching" case arm
+  #       becomes unreachable once "*)" matches everything first, so that fixture's config, which
+  #       has no branch section, resolves to no destination at all instead of denying)
+  #   M30 "tracking" dropped from the upstream/tracking pattern (...[Mm]|[Tt]...[Gg])      -> 79 pass,
+  #       -> [Uu][Pp][Ss][Tt][Rr][Ee][Aa][Mm]))                                              1 fail
+  #       (kills only push-deny-config-push-default-tracking)
+  #   M31 the push.default=matching deny arm's body replaced with a no-op (:              -> 79 pass,
+  #       instead of __deny_dest=.../__deny_kind=.../__deny_via=...)                        1 fail
+  #       (kills only push-deny-config-push-default-matching)
+  #   M32 the wildcard-destination ("*") deny check removed from config_deny()'s          -> 79 pass,
+  #       per-record loop (the case "$dest" in *'*'*) ... esac block deleted)               1 fail
+  #       (kills only push-deny-config-wildcard-refspec -- its resolved destination, a literal
+  #       "*", falls through to an ordinary is_deny_member compare and does not match)
+  #   M33 only the FIRST remote.<name>.push record is ever kept ([ -n                     -> 79 pass,
+  #       "$cfg_push_lines" ] || cfg_push_lines=... guard added before the append)          1 fail
+  #       (kills only push-deny-config-remote-push-second-line -- the fixture's first, harmless
+  #       push= line wins and the second, offending one is never seen)
+  #   M34 the comment-stripping assignment disabled (if [ "${#cfg_h}" -le               -> 80 pass,
+  #       "${#cfg_s}" ]; then cfgline="$cfg_h"; else cfgline="$cfg_s"; fi -> :)             0 fail
+  #       -- NOT flipped: every "#"/";"-commented directive in this table's fixtures keeps its
+  #       comment marker as a literal, non-whitespace prefix character on the key (e.g. "# push"
+  #       or "; default"), which the exact case patterns below ([Pp][Uu][Ss][Hh],
+  #       [Dd][Ee][Ff][Aa][Uu][Ll][Tt]) can never match regardless of whether the comment is
+  #       stripped -- confirms push-noop-config-commented-out's comment lines are harmless for a
+  #       DIFFERENT, more fundamental reason than the strip itself (exact-key matching), a
+  #       genuine measured finding, not an assumption (see M40 below for the mutant that DOES
+  #       exercise that fixture)
+  #   M35 the config-line CR strip disabled (cfgline="${cfgline//$cfg_cr/}" -> :) -- FIRST
+  #       measured (then-current 80-case push-* set, #268 round 1): -> 80 pass, 0 fail (not
+  #       flipped). RE-MEASURED for the #268 round-2 kickback (finding 3), after
+  #       push-deny-config-crlf-interior (below) was added, against the then-current 83-case
+  #       push-* set: -> 82 pass, 1 fail. NOT re-run for the #268 round-3 kickback.
+  #       -- push-deny-config-crlf-line is STILL not flipped: cfg_trim()'s [[:space:]]
+  #       bracket-class strip (applied to every line regardless) already removes a trailing CR as
+  #       an incidental side effect, since a carriage return is itself classified as [:space:],
+  #       and that fixture's line-ending CR is at the very end of the line, already covered by
+  #       cfg_trim's existing whitespace strip -- a genuine measured finding (defense in depth,
+  #       not a coverage gap), not an assumption. push-deny-config-crlf-interior IS flipped: its
+  #       CR sits in the MIDDLE of the refspec value ("HEAD:ma<CR>in"), a position cfg_trim's
+  #       leading/trailing-only strip never reaches, so removing cfg_cr's own strip leaves the CR
+  #       in the parsed destination, which then fails the exact is_deny_member compare -- this is
+  #       the fixture that makes M35 non-inert.
+  #   M36 the config path changed from "$common/config" to "$gitdir/config"               -> 79 pass,
+  #                                                                                          1 fail
+  #       (kills only push-deny-config-worktree-commondir -- the worktree pointer's own gitdir
+  #       has no config file at all, so [ -f ] fails and config is silently never read; every
+  #       non-worktree fixture has $gitdir == $common already, so this mutant is inert for them)
+  #   M37 the last-line-without-a-trailing-newline read rescue removed (while             -> 79 pass,
+  #       IFS= read -r cfgline || [ -n "$cfgline" ] -> while IFS= read -r cfgline)          1 fail
+  #       (kills only push-deny-config-no-trailing-newline -- its one and only config line, which
+  #       has no trailing newline, is silently dropped by `read`'s own EOF behaviour)
+  #   M38 the [remote "<name>"] section-header pattern narrowed to lowercase-only         -> 79 pass,
+  #       ([Rr][Ee][Mm][Oo][Tt][Ee] -> remote)                                              1 fail
+  #       (kills only push-deny-config-mixed-case -- "[Remote ...]" no longer matches the section
+  #       pattern at all and falls through to the catch-all "other" section, so its "Push = ..."
+  #       key is never captured)
+  #   M39 the n<=1 gate removed (config_deny is also called after the n>=2 refspec        -> 79 pass,
+  #       loop, using nonopt[0] as scope)                                                   1 fail
+  #       (kills only push-noop-config-explicit-refspec -- the harness's own
+  #       `git push -u origin "claude/17-a"` shape wrongly denies via the fixture's
+  #       remote.origin.push=HEAD:main config; a release-blocker regression if this ever shipped)
+  #   M40 a matched remote.<name>.push record denies unconditionally, regardless          -> 78 pass,
+  #       of its resolved destination (the is_deny_member "$dest" compare after the         2 fail
+  #       wildcard check is removed)
+  #       (kills push-noop-config-remote-push-other-dest, whose configured refspec resolves to a
+  #       non-default destination, and push-noop-config-commented-out, whose one REAL harmless
+  #       key -- "push = feature/x" -- is a genuine, correctly-parsed remote.origin.push record
+  #       that must NOT deny on its own; this is the mutant that actually exercises
+  #       push-noop-config-commented-out's parsing, not M34 above)
+  #   M41 the n==1 config route removed ([ -n "$__deny_dest" ] || config_deny             -> 79 pass,
+  #       "$scope_remote" -> ... || [ "$n" -eq 1 ] || config_deny "$scope_remote")          1 fail
+  #       (kills only push-deny-config-remote-push-named-remote -- the n==1 positive control for
+  #       exact-remote scoping)
+  #   M42 the push.default case statement disabled entirely (case "$cfg_push_default"     -> 77 pass,
+  #       in -> case "" in)                                                                 3 fail
+  #       (kills push-deny-config-push-default-upstream, push-deny-config-push-default-tracking,
+  #       and push-deny-config-push-default-matching -- the only three deny fixtures whose config
+  #       carries no remote.<name>.push record at all, so denying depends entirely on this case
+  #       statement)
+  # #268 round-2 kickback mutants (M43-M44), measured against the then-current 83-case push-* set
+  # (the 80-case baseline plus push-deny-config-no-space-assign, push-deny-config-union-benign-
+  # refspec-plus-upstream, and push-deny-config-crlf-interior):
+  #   M43 the *=*) split guard narrowed to require spaces around the "="              -> 82 pass,
+  #       (*=*) -> *" = "*))                                                             1 fail
+  #       (kills only push-deny-config-no-space-assign -- a "key=value" record with no
+  #       surrounding spaces no longer matches the split guard at all and falls through to the
+  #       "continue" arm, so the key/value pair is silently never parsed)
+  #   M44 the push.default case gated on git's OWN precedence instead of the RESOLVED           -> 82 pass,
+  #       union (case "$cfg_push_default" in -> if [ -z "$cfg_push_lines" ]; then case            1 fail
+  #       "$cfg_push_default" in ... esac; fi)
+  #       (kills only push-deny-config-union-benign-refspec-plus-upstream -- its
+  #       remote.origin.push record resolves to a NON-denying destination (feature/x), so
+  #       $cfg_push_lines is non-empty and this mutant's precedence gate skips the push.default
+  #       resolution entirely, even though push.default=upstream alone denies; every other
+  #       push-default-* deny fixture has NO remote.<name>.push record at all, so $cfg_push_lines
+  #       is empty for them and this mutant is inert)
+  # #268 round-3 kickback mutant (M45), measured against the CURRENT 84-case push-* set (the
+  # 83-case baseline plus one more fixture, push-deny-config-union-other-remote-bare):
+  #   M45 the n==1/n==0 scope gate narrowed from "every configured remote at n==0"       -> 83 pass,
+  #       to "git's own default remote" (if [ -n "$scope" ] && [ "$sub" != "$scope" ];      1 fail
+  #       then -> if [ "$sub" != "${scope:-origin}" ]; then)
+  #       (kills only push-deny-config-union-other-remote-bare -- its config carries a denying
+  #       remote.<name>.push record ONLY under a non-origin remote name ("backup"), plus a benign
+  #       origin section with no push key at all; the shipped scope gate considers every remote's
+  #       records at n==0 and denies, while this mutant narrows the n==0 scope to only the
+  #       "origin" record, whose absence leaves nothing to deny on -- every other config deny
+  #       fixture names "origin" as its offending remote, so this mutant is inert for them)
   # Nine fixtures (measured against the #260 56-case baseline) are, verified by direct measurement,
   # NOT flipped by any of M1-M22: their
   # destination never coincides with a deny-set member under any of these mutants (the two
@@ -1095,7 +1522,13 @@ cases=(
   # (#270) is a TENTH no-opinion fixture, measured only against M23-M25 (it did not exist when
   # M1-M22 were run): under each of those three mutants the destination stays a non-deny-set value
   # ("feature/x<CR>" under M23, "feature/x" under M24/M25), so "no opinion" is the verdict either
-  # way.
+  # way. push-noop-config-neither-key (#268) is an ELEVENTH no-opinion fixture never flipped by
+  # any mutant in this table, measured against M26-M45 (the #268 round-2 kickback's M43/M44 and
+  # the round-3 kickback's M45 included -- none of the three appeared in its governing mutant's
+  # one-case failing set, measured directly): its config sets neither remote.<name>.push nor
+  # push.default at all, so every one of those twenty mutants changes behaviour only inside code
+  # this fixture's own config never reaches; its row states this instead of citing a mutant that
+  # was never observed to fail it.
   "push-deny-origin-main|case_pd_origin_main|deny: git push origin main (the plain form) -- measured: M1/M2, 23 pass 33 fail"
   "push-deny-head-colon-main|case_pd_head_colon_main|deny: git push origin HEAD:main (HEAD substituted via the current branch, then the dest side of the colon read directly) -- measured: M1/M2, 23 pass 33 fail (also M11, 50 pass 6 fail)"
   "push-deny-plus-head-refs-main|case_pd_plus_head_refs|deny: git push origin +HEAD:refs/heads/main (leading + stripped, refs/heads/ prefix stripped) -- measured: M1/M2, 23 pass 33 fail (also M11 and M13, each 50/54 pass)"
@@ -1152,6 +1585,30 @@ cases=(
   "push-never-executes-reads-only|case_push_reads_only|deny, AND a fixture repo's recursive file listing is byte-identical before/after — this hook reads the filesystem but never writes to it -- measured: M1/M2, 23 pass 33 fail"
   "push-noop-o-value-two-token-remote|case_pn_o_value_two_token_remote|no opinion: git push -o v main other (isolates PUSH_OPTS_WITH_VALUE's two-token skip: main lands as the never-evaluated remote, not a refspec) -- measured: M9, 55 pass 1 fail"
   "push-noop-crlf-feature|case_pn_crlf_feature|no opinion: git push origin feature/x<CR> (#270 -- the strip does not widen the deny set; exact match still required) -- measured: not flipped by M23, 57 pass 3 fail; also not flipped by M24, 58 pass 2 fail, or M25, 59 pass 1 fail (destination stays feature/x<CR> or feature/x under every one of these mutants, still not a deny-set member, so no opinion either way)"
+  "push-deny-config-remote-push-bare|case_pd_config_remote_push_bare|deny: git push against a repo whose config carries [remote \"origin\"] push = HEAD:main (#268, the issue's own shape) -- measured: M26, 68 pass 12 fail"
+  "push-deny-config-remote-push-named-remote|case_pd_config_remote_push_named_remote|deny: git push origin against the same config (n==1, the positive side of the exact-remote-scoping clause) -- measured: M26, 68 pass 12 fail (also M41, 79 pass 1 fail)"
+  "push-deny-config-remote-push-second-line|case_pd_config_remote_push_second_line|deny: two push = lines under [remote \"origin\"], only the SECOND offending (0/1/2+ boundary) -- measured: M26, 68 pass 12 fail (also M33, 79 pass 1 fail)"
+  "push-deny-config-no-space-assign|case_pd_config_no_space_assign|deny: push=HEAD:main with NO surrounding spaces (#268 kickback finding 1 -- the *=*) split guard must accept this form) -- measured: M43, 82 pass 1 fail"
+  "push-deny-config-push-default-upstream|case_pd_config_push_default_upstream|deny: [push] default = upstream + [branch \"feature/x\"] merge = refs/heads/main -- measured: M26, 68 pass 12 fail (also M42, 77 pass 3 fail)"
+  "push-deny-config-push-default-tracking|case_pd_config_push_default_tracking|deny: [push] default = tracking (git's documented synonym for upstream) -- measured: M26, 68 pass 12 fail (also M30, 79 pass 1 fail; also M42, 77 pass 3 fail)"
+  "push-deny-config-push-default-matching|case_pd_config_push_default_matching|deny: [push] default = matching (Q2, unconditional, same reasoning as --all/--mirror) -- measured: M26, 68 pass 12 fail (also M29, 77 pass 3 fail, as a side effect; also M31, 79 pass 1 fail; also M42, 77 pass 3 fail)"
+  "push-deny-config-union-benign-refspec-plus-upstream|case_pd_config_union_benign_refspec_plus_upstream|deny: [remote \"origin\"] push = HEAD:refs/heads/feature/x (a NON-denying refspec) alongside [push] default = upstream + [branch \"feature/x\"] merge = refs/heads/main (#268 kickback finding 2 -- the RESOLVED Q1 union, not git's own precedence) -- measured: M44, 82 pass 1 fail"
+  "push-deny-config-union-other-remote-bare|case_pd_config_union_other_remote_bare|deny: bare git push against a config carrying ONLY [remote \"backup\"] push = HEAD:main plus a benign origin section with no push key (#268 kickback 2 finding -- RESOLVED Q1's CROSS-REMOTE union at n==0: every configured remote's push refspecs, not just git's own default-remote pick) -- measured: M45, 83 pass 1 fail"
+  "push-deny-config-wildcard-refspec|case_pd_config_wildcard_refspec|deny: [remote \"origin\"] push = refs/heads/*:refs/heads/* (Q3, unconditional wildcard destination) -- measured: M26, 68 pass 12 fail (also M32, 79 pass 1 fail)"
+  "push-deny-config-crlf-line|case_pd_config_crlf_line|deny: the config FILE carries CRLF line endings (#270's class, in the new config reader) -- measured: M26, 68 pass 12 fail; NOT flipped by M35 (re-measured, #268 kickback finding 3), 82 pass 1 fail -- only push-deny-config-crlf-interior fails (its line-ending CR is already stripped by cfg_trim's own [[:space:]] handling -- a genuine measured finding, not a coverage gap)"
+  "push-deny-config-crlf-interior|case_pd_config_crlf_interior|deny: an INTERIOR CR inside the refspec value itself, HEAD:ma<CR>in (#268 kickback finding 3 -- distinct from push-deny-config-crlf-line's line-ending CR, and the fixture that makes M35 non-inert) -- measured: M35, 82 pass 1 fail"
+  "push-deny-config-worktree-commondir|case_pd_config_worktree_commondir|deny: config lives in the MAIN checkout's .git/config, cwd is the worktree POINTER dir (the common-dir derivation, not \$gitdir) -- measured: M26, 68 pass 12 fail (also M36, 79 pass 1 fail)"
+  "push-deny-config-no-trailing-newline|case_pd_config_no_trailing_newline|deny: the config file's last (only) line has no trailing newline (the read rescue) -- measured: M26, 68 pass 12 fail (also M37, 79 pass 1 fail)"
+  "push-deny-config-mixed-case|case_pd_config_mixed_case|deny: [Remote \"origin\"] / Push = HEAD:main (Q4, case-insensitive section keyword and key name) -- measured: M26, 68 pass 12 fail (also M38, 79 pass 1 fail)"
+  "push-deny-config-never-executes|case_pd_config_never_executes|deny via the CONFIG route, AND push-guard.sh never invokes git/gh/rm on the booby-trapped PATH, AND the fixture repo's file listing is byte-identical before/after -- measured: M26, 68 pass 12 fail"
+  "push-noop-config-neither-key|case_pn_config_neither_key|no opinion: config sets NEITHER remote.<name>.push nor push.default at all (the decision's required control) -- measured: not flipped by M26-M45 (this fixture's config never reaches any of the twenty mutated clauses)"
+  "push-noop-config-remote-push-other-dest|case_pn_config_remote_push_other_dest|no opinion: [remote \"origin\"] push = HEAD:refs/heads/feature/x (a configured refspec whose destination is not the default branch) -- measured: M40, 78 pass 2 fail (with push-noop-config-commented-out)"
+  "push-noop-config-other-remote-named|case_pn_config_other_remote_named|no opinion: [remote \"origin\"] push = HEAD:main, command git push backup (n==1 exact remote scoping -- a DIFFERENT remote's own push route must not apply) -- measured: M27, 79 pass 1 fail"
+  "push-noop-config-explicit-refspec|case_pn_config_explicit_refspec|no opinion: git push -u origin \"claude/17-a\" against a repo whose config carries push = HEAD:main (n>=2 -- config routes are NEVER consulted here; a deny would be a release blocker) -- measured: M39, 79 pass 1 fail"
+  "push-noop-config-branch-other|case_pn_config_branch_other|no opinion: push.default=upstream but [branch \"other\"] merge=refs/heads/main -- current branch (feature/x) has no section of its own -- measured: M28, 79 pass 1 fail"
+  "push-noop-config-commented-out|case_pn_config_commented_out|no opinion: a #-commented push line, a ;-commented push.default line, and odd leading whitespace on the one real harmless key -- measured: M40, 78 pass 2 fail (with push-noop-config-remote-push-other-dest); NOT flipped by M34, 80 pass 0 fail (the comment strip's absence is masked by exact-key matching -- see M34's own table entry)"
+  "push-noop-config-push-default-current|case_pn_config_push_default_current|no opinion: [push] default = current + a branch section that WOULD deny if this mode were mistaken for upstream (the sharp form of the mode-check clause) -- measured: M29, 77 pass 3 fail (with push-noop-config-push-default-simple)"
+  "push-noop-config-push-default-simple|case_pn_config_push_default_simple|no opinion: [push] default = simple, git's own default mode, same branch-section trap as push-default-current -- measured: M29, 77 pass 3 fail (with push-noop-config-push-default-current)"
 )
 
 matched=0

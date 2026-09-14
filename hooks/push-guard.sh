@@ -48,12 +48,18 @@
 # pointer, `gitdir: <path>`; a FIFO or a directory-shaped path is excluded by the `[ -f ]` guard
 # every read here uses). The default branch is read from the common dir's
 # `refs/remotes/origin/HEAD` symref; the current branch from the resolved gitdir's own `HEAD`
-# symref. Any failure at any step leaves both empty — never an error, never a non-zero exit from
-# this hook on that account alone. The deny set is `PUSH_DEFAULT_BRANCH_FALLBACK` (below) UNION
-# the resolved default branch, if any — the fallback members are ALWAYS in force (even when a
-# repo's real default branch resolves to something else), which is what lets this hook work with
-# no `cwd`, no readable `.git`, or a `-C <other-checkout>` push it deliberately never resolves
-# (see "Under-blocking classes" below).
+# symref; since #268, the same common dir's `config` file is also text-parsed (never executed as
+# `git config`, never a second process) for `remote.<name>.push` and `push.default` /
+# `branch.<current>.merge` — for a worktree this is the MAIN checkout's config, the identical
+# common-dir rule the origin-HEAD symref read already uses, never the worktree pointer's own
+# gitdir. The config file is read whole with no size cap — a pathological file simply degrades to
+# Claude Code's 10s hook timeout (silence, the same fail-open every other resolution failure
+# already has). Any failure at any step leaves both branch values, and the config-derived
+# variables, empty — never an error, never a non-zero exit from this hook on that account alone.
+# The deny set is `PUSH_DEFAULT_BRANCH_FALLBACK` (below) UNION the resolved default branch, if
+# any — the fallback members are ALWAYS in force (even when a repo's real default branch resolves
+# to something else), which is what lets this hook work with no `cwd`, no readable `.git`, or a
+# `-C <other-checkout>` push it deliberately never resolves (see "Under-blocking classes" below).
 #
 # Never invokes `git`, `gh`, or anything else derived from the untrusted command string; never
 # `eval`s; never writes a file — this hook only ever READS filesystem paths it derived from
@@ -73,7 +79,19 @@
 # only a remote name — see evaluate_segment()'s "n == 1" handling below); `--all`/`--mirror` deny
 # unconditionally, since both push every local branch, including the default one; a repo whose
 # default branch is not `main`/`master` but which legitimately has an unrelated branch named
-# `main` (the fallback deny set is unconditional).
+# `main` (the fallback deny set is unconditional); since #268, a bare `git push` (n == 0) unions
+# EVERY configured remote's `remote.<name>.push` refspecs, not only the remote git would actually
+# pick — this hook does not model git's own remote-selection precedence
+# (`branch.<n>.pushRemote` -> `remote.pushDefault` -> `branch.<n>.remote` -> `origin`), so a
+# route configured on some OTHER remote than the one git would use for this exact push is denied
+# too; `push.default = matching` denies unconditionally, the same reasoning as `--all`/`--mirror`
+# (`matching` pushes every branch that exists on both ends, which includes the default branch in
+# essentially every real repo); a configured `remote.<name>.push` destination containing `*`
+# (a wildcard refspec such as `refs/heads/*:refs/heads/*`) denies unconditionally for the same
+# reason; and a configured destination whose real value continues past an unquoted `#`/`;` (the
+# config-line comment-strip's own marker below) is truncated at that marker and evaluated as the
+# shorter, un-suffixed name — measured: `[remote "origin"] push = HEAD:refs/heads/main#hotfix`
+# denies as `main` (rc 2) even though the actual destination branch is `main#hotfix`.
 #
 # Documented under-blocking classes (evasions, named rather than hidden): `$(which git) push`
 # (the literal `git` token is never in command position); `sudo -u foo git push` (the argument to
@@ -92,12 +110,25 @@
 # resulting command cannot execute as a real `git push` either, so this is documented, not fixed
 # (see the fast-path comment below); `nice -n 5 git push origin main` (the same class
 # as the `sudo -u foo` bullet above — `nice`'s option value `5` becomes the resolved command word,
-# not `git`); a `push.default`/`remote.<name>.push` config redirect on a bare `git push` (this
-# hook never reads `.git/config`); a `git -C <other-checkout> push` into a repo whose default
-# branch differs from the session's own `cwd` (this hook deliberately never reads a `-C <path>`
-# token from the untrusted command string, so a second checkout is judged only against the
-# fallback set, not its own real default branch). This is a tripwire, not a sandbox — branch
-# protection on the default branch remains the real backstop, exactly as hooks/git-c-guard.sh and
+# not `git`); a `git -C <other-checkout> push` into a repo whose default branch differs from the
+# session's own `cwd` (this hook deliberately never reads a `-C <path>` token from the untrusted
+# command string, so a second checkout is judged only against the fallback set, not its own real
+# default branch). Since #268 closed the repo-local `push.default`/`remote.<name>.push` class
+# named here in every prior version of this file, the residual config surface left open is: a
+# GLOBAL or system git config (`$GIT_CONFIG_GLOBAL`, `~/.gitconfig`,
+# `$XDG_CONFIG_HOME/git/config`, `/etc/gitconfig`) setting either key (filed as a follow-up
+# alongside this change — this hook reads only the repo-local common-dir `config`);
+# `include`/`includeIf` directives and `config.worktree` (`extensions.worktreeConfig`) inside that
+# repo-local config, neither followed; the legacy dotted `[remote.origin]` section spelling (only
+# the quoted `[remote "origin"]` form is parsed); backslash-continued or backslash-escaped config
+# values; a key on the same line as its own section header, e.g. `[remote "origin"] push =
+# HEAD:main` (the parser reads only the section declaration on such a line, never any text after
+# the closing `]`); and a remote/branch SUBSECTION NAME itself containing an unquoted `#`/`;`
+# (e.g. `[remote "back#up"]`) loses its whole section — the header line is truncated before its
+# own closing `"]`, so it matches none of the three named section patterns, falls through to the
+# generic "other" section, and every key inside it (including a denying `push =` line) is silently
+# never captured — measured: rc 0. This is a tripwire, not a sandbox — branch protection on the
+# default branch remains the real backstop, exactly as hooks/git-c-guard.sh and
 # hooks/agent-boundary.sh already document for their own scopes.
 #
 # Contract: read the PreToolUse hook JSON on stdin; print nothing and exit 0 ("no opinion") unless
@@ -256,6 +287,28 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
 ')"
 
 # --- repo resolution (reads only, never executes) ---------------------------------------------
+# cfg_trim VALUE — strips leading/trailing [:space:] (bash 3.2-safe bracket-class case patterns;
+# no ${var,,}, no declare -A, no tr/sed). Used only by the #268 config parser below; defined here
+# (rather than alongside is_deny_member()/refspec_dest() further down) because it must exist
+# before the config-parsing loop inside the "if [ -n "$gitdir" ]" block below runs — earlier in
+# this file's execution order than those two.
+cfg_trim() {
+  local s="$1"
+  while :; do
+    case "$s" in
+      [[:space:]]*) s="${s#?}" ;;
+      *) break ;;
+    esac
+  done
+  while :; do
+    case "$s" in
+      *[[:space:]]) s="${s%?}" ;;
+      *) break ;;
+    esac
+  done
+  printf '%s' "$s"
+}
+
 resolve_cwd="${cwd:-$PWD}"
 [ -n "$resolve_cwd" ] || resolve_cwd="."
 
@@ -289,6 +342,12 @@ done
 
 default_branch=""
 current_branch=""
+# #268: config-derived push routes, always initialized (even when $gitdir never resolves) so
+# config_deny() below can reference them unconditionally under this script's `set -uo pipefail`.
+cfg_push_lines=""
+cfg_push_default=""
+cfg_branch_merge=""
+cfg_tab="$(printf '\t')"
 if [ -n "$gitdir" ]; then
   common="${gitdir%/worktrees/*}"
   ohf="$common/refs/remotes/origin/HEAD"
@@ -306,6 +365,93 @@ if [ -n "$gitdir" ]; then
     case "$hline" in
       "ref: refs/heads/"*) current_branch="${hline#ref: refs/heads/}" ;;
     esac
+  fi
+
+  # #268: text-parse the common dir's config for the two push-affecting keys git itself would
+  # otherwise consult on THIS push (remote.<name>.push, push.default/branch.<n>.merge) — same
+  # [ -f ]-guarded builtin-redirect idiom as the two reads above; never `git config`, never a
+  # second process. See this file's header "Repo resolution" paragraph for the reasoning and the
+  # resulting over-blocking class, and "Documented under-blocking classes" for what this parser
+  # deliberately leaves unread.
+  cfgf="$common/config"
+  if [ -f "$cfgf" ]; then
+    # A SEPARATE carriage-return literal from $cr (declared above for the #270 command-string
+    # strip): the push mutation table's M23 mutant deletes both of $cr's declaration and its
+    # use, and a config parser referencing $cr here would blow up under `set -u` instead of
+    # producing that mutant's documented, measured result.
+    cfg_cr=$'\r'
+    cfg_section=""
+    cfg_subsection=""
+    while IFS= read -r cfgline || [ -n "$cfgline" ]; do
+      cfgline="${cfgline//$cfg_cr/}"
+      # Strip a trailing comment: whichever of '#'/';' appears first, with no quote-tracking --
+      # git ref names MAY legitimately contain '#' or ';' (e.g. refs/heads/feat#123 and
+      # refs/heads/feat;123 are both accepted by git itself), so this is a known, documented
+      # parsing gap, not a safe assumption. See this file's header "Documented over-blocking
+      # classes" (a destination value truncated at the marker) and "Documented under-blocking
+      # classes" (a remote/branch subsection name truncated at the marker, losing its whole
+      # section) for the two behaviour classes this creates.
+      cfg_h="${cfgline%%#*}"
+      cfg_s="${cfgline%%;*}"
+      if [ "${#cfg_h}" -le "${#cfg_s}" ]; then cfgline="$cfg_h"; else cfgline="$cfg_s"; fi
+      cfgline="$(cfg_trim "$cfgline")"
+      [ -n "$cfgline" ] || continue
+      case "$cfgline" in
+        \[[Rr][Ee][Mm][Oo][Tt][Ee]\ \"*\"\]*)
+          cfg_section="remote"
+          cfg_subsection="${cfgline#*\"}"
+          cfg_subsection="${cfg_subsection%%\"*}"
+          continue
+          ;;
+        \[[Bb][Rr][Aa][Nn][Cc][Hh]\ \"*\"\]*)
+          cfg_section="branch"
+          cfg_subsection="${cfgline#*\"}"
+          cfg_subsection="${cfg_subsection%%\"*}"
+          continue
+          ;;
+        \[[Pp][Uu][Ss][Hh]\]*)
+          cfg_section="push"
+          cfg_subsection=""
+          continue
+          ;;
+        \[*)
+          cfg_section="other"
+          cfg_subsection=""
+          continue
+          ;;
+      esac
+      case "$cfgline" in
+        *=*)
+          cfg_key="$(cfg_trim "${cfgline%%=*}")"
+          cfg_val="$(cfg_trim "${cfgline#*=}")"
+          ;;
+        *) continue ;;
+      esac
+      case "$cfg_val" in
+        \"*\") cfg_val="${cfg_val#\"}"; cfg_val="${cfg_val%\"}" ;;
+      esac
+      case "$cfg_section" in
+        remote)
+          case "$cfg_key" in
+            [Pp][Uu][Ss][Hh])
+              cfg_push_lines="${cfg_push_lines}${cfg_subsection}${cfg_tab}${cfg_val}"$'\n'
+              ;;
+          esac
+          ;;
+        push)
+          case "$cfg_key" in
+            [Dd][Ee][Ff][Aa][Uu][Ll][Tt]) cfg_push_default="$cfg_val" ;;
+          esac
+          ;;
+        branch)
+          if [ "$cfg_subsection" = "$current_branch" ]; then
+            case "$cfg_key" in
+              [Mm][Ee][Rr][Gg][Ee]) cfg_branch_merge="$cfg_val" ;;
+            esac
+          fi
+          ;;
+      esac
+    done < "$cfgf"
   fi
 fi
 
@@ -342,6 +488,60 @@ refspec_dest() {
   printf '%s' "$dest"
 }
 
+# config_deny SCOPE_REMOTE — evaluates the #268 config-derived push routes (remote.<name>.push,
+# push.default) captured by the repo-resolution parse above; on a deny, sets $__deny_dest/
+# $__deny_kind ("config" or "configall")/$__deny_via the same way evaluate_segment's other checks
+# do (plain, non-"local" assignments, so they escape this function exactly like $__deny_dest/
+# $__deny_kind already do). SCOPE_REMOTE is the single non-option token at n==1, or empty at
+# n==0 (a bare push): at n==0 every remote.<name>.push record is considered regardless of remote
+# — deliberately over-broad, the RESOLVED union/fail-toward-deny default (see this file's
+# header) — while at n==1 only records whose recorded remote name equals SCOPE_REMOTE exactly are
+# considered. A configured destination containing "*" (after the same refspec_dest() resolution
+# every other route uses) denies unconditionally, the same reasoning as PUSH_ALL_REFS_OPTS above.
+# The push.default route is evaluated UNCONDITIONALLY alongside the remote.<name>.push route (the
+# union decision again — this hook does not model git's own precedence, where push.default is
+# consulted only when the applicable remote has no push refspec): "upstream"/"tracking" resolves
+# via the current branch's recorded "merge" ref; "matching" denies unconditionally (same
+# reasoning as the wildcard case); "current"/"simple"/"nothing"/absent/unrecognised add no route
+# here at all (today's current-branch check, above, is the only thing that can still deny).
+config_deny() {
+  local scope="$1" rec sub refspec dest
+  if [ -n "$cfg_push_lines" ]; then
+    while IFS= read -r rec; do
+      [ -n "$rec" ] || continue
+      sub="${rec%%"$cfg_tab"*}"
+      refspec="${rec#*"$cfg_tab"}"
+      if [ -n "$scope" ] && [ "$sub" != "$scope" ]; then
+        continue
+      fi
+      dest="$(refspec_dest "$refspec")"
+      case "$dest" in
+        *'*'*)
+          __deny_dest="$refspec"; __deny_kind="configall"; __deny_via="remote.$sub.push"
+          return
+          ;;
+      esac
+      if [ -n "$dest" ] && is_deny_member "$dest"; then
+        __deny_dest="$dest"; __deny_kind="config"; __deny_via="remote.$sub.push"
+        return
+      fi
+    done <<CFGEOF
+$cfg_push_lines
+CFGEOF
+  fi
+  case "$cfg_push_default" in
+    [Uu][Pp][Ss][Tt][Rr][Ee][Aa][Mm]|[Tt][Rr][Aa][Cc][Kk][Ii][Nn][Gg])
+      dest="$(refspec_dest "$cfg_branch_merge")"
+      if [ -n "$dest" ] && is_deny_member "$dest"; then
+        __deny_dest="$dest"; __deny_kind="config"; __deny_via="push.default=$cfg_push_default"
+      fi
+      ;;
+    [Mm][Aa][Tt][Cc][Hh][Ii][Nn][Gg])
+      __deny_dest="$cfg_push_default"; __deny_kind="configall"; __deny_via="push.default=$cfg_push_default"
+      ;;
+  esac
+}
+
 # evaluate_segment REST — REST is one push segment's remaining tokens (space-joined, already
 # quote/backslash-stripped by the tokenizer above). Sets $__deny_dest (non-empty on deny) and
 # $__deny_kind ("allrefs" or "dest"). Builds its own token array from the REST string rather than
@@ -352,6 +552,7 @@ refspec_dest() {
 evaluate_segment() {
   __deny_dest=""
   __deny_kind=""
+  __deny_via=""
   local rest="$1"
   local toks
   toks=()
@@ -385,7 +586,9 @@ evaluate_segment() {
   local n="${#nonopt[@]}"
 
   if [ "$n" -le 1 ]; then
+    local scope_remote=""
     if [ "$n" -eq 1 ]; then
+      scope_remote="${nonopt[0]}"
       local d1
       d1="$(refspec_dest "${nonopt[0]}")"
       if [ -n "$d1" ] && is_deny_member "$d1"; then
@@ -396,6 +599,10 @@ evaluate_segment() {
     if [ -n "$current_branch" ] && is_deny_member "$current_branch"; then
       __deny_dest="$current_branch"; __deny_kind="dest"
     fi
+    # #268: config-derived routes (remote.<name>.push / push.default) are consulted ONLY here —
+    # never for a segment carrying an explicit refspec (n >= 2, below) — and only when nothing
+    # above has already denied, per the RESOLVED guard shape.
+    [ -n "$__deny_dest" ] || config_deny "$scope_remote"
     return
   fi
 
@@ -417,6 +624,7 @@ evaluate_segment() {
 TAB="$(printf '\t')"
 deny_dest=""
 deny_kind=""
+deny_via=""
 while IFS= read -r line; do
   case "$line" in
     "PUSH$TAB"*) : ;;
@@ -427,6 +635,7 @@ while IFS= read -r line; do
   if [ -n "$__deny_dest" ]; then
     deny_dest="$__deny_dest"
     deny_kind="$__deny_kind"
+    deny_via="$__deny_via"
     break
   fi
 done <<EOF
@@ -438,6 +647,14 @@ if [ -n "$deny_dest" ]; then
     allrefs)
       printf '%s denies "%s" (pushes every ref, including the default branch: %s) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
         "$PUSH_DENY_STEM" "$deny_dest" "$default_display" >&2
+      ;;
+    config)
+      printf '%s denies pushing to "%s" (resolves to the default branch: %s, via %s in .git/config) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" "$deny_dest" "$default_display" "$deny_via" >&2
+      ;;
+    configall)
+      printf '%s denies "%s" (pushes every matching branch, including the default branch: %s, via %s in .git/config) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" "$deny_dest" "$default_display" "$deny_via" >&2
       ;;
     *)
       printf '%s denies pushing to "%s" (resolves to the default branch: %s) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \

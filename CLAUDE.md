@@ -116,7 +116,27 @@ destination and command word (`git push origin main<CR>`, trailing and interior,
 push origin main`, #270) and a CRLF-carrying non-default destination proving the strip does not
 widen the deny set, and the same booby-trapped `git`/`gh`/`rm` idiom plus a
 byte-identical-file-listing fixture proving this hook reads the filesystem but never writes to or
-executes anything on it. It runs in CI as the fourth
+executes anything on it. Since #268, the same common dir's `config` file is also pinned: a bare
+push and a named-remote push both denied via a configured `remote.<name>.push` refspec (the
+issue's own `remote.origin.push = HEAD:main` shape, plus a 0/1/2+ boundary on two `push =` lines
+under one remote, and a `key=value` assignment with no surrounding spaces), `push.default =
+upstream`/`tracking` resolved through the current branch's recorded `merge` ref — including,
+since a round-2 kickback, alongside a NON-denying `remote.<name>.push` record on the SAME remote,
+pinning the RESOLVED union of routes (git's own precedence, consulting `push.default` only when
+the applicable remote has no push refspec, is deliberately not modelled), and, since a round-3
+kickback, a bare push denied via a denying `remote.<name>.push` record under a DIFFERENT
+(non-`origin`) remote plus a benign `origin` section, pinning the RESOLVED union across EVERY
+configured remote at n==0 (not just git's own default-remote pick) — `push.default = matching`
+and a wildcard (`*`) configured destination each denied unconditionally as new documented
+over-blocking classes, exact n==1 remote-name scoping in both directions (a different remote's
+own route must not apply; the named remote's own route must), the harness's own explicit-refspec
+push shape confirmed as a release-blocker no-opinion control even against a denying config,
+current-branch scoping on `branch.<n>.merge`, `#`/`;` comment lines and irregular whitespace, a
+CRLF-carrying config line (both a line-ending CR and, since the round-2 kickback, an interior
+CR inside a refspec value), a config setting neither key at all, a worktree's config resolved from
+the MAIN checkout rather than the pointer's own gitdir, a final config line with no trailing
+newline, case-insensitive section/key names, and the same booby-trapped/byte-identical-listing
+guarantee applied to the config route specifically. It runs in CI as the fourth
 step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
 `hooks/git-c-guard.sh`, `hooks/agent-boundary.sh`, or `hooks/push-guard.sh` changes.
 

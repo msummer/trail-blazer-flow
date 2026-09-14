@@ -1400,7 +1400,18 @@ consumer-visible improvement, the point of the issue: on a busy thread with many
 comments, per-run lookups drop from one-per-covered-comment to one-per-*edited*-covered-comment,
 bounding the API cost the #230/#192 workstreams added and reducing the odds an unattended
 overnight run trips GitHub's secondary rate limit. Honest limit: this is a tripwire, not a
-control — see "Safety model" below for the residual fail-open class.
+control — see "Safety model" below for the residual fail-open class. Also in v2.7.2 (#268):
+`hooks/push-guard.sh` now text-parses the common dir's `config` file (never executed as `git
+config`) for `remote.<name>.push` and `push.default`/`branch.<n>.merge` whenever a push segment
+carries no explicit refspec, needing no grant, label, script, settings entry, or baseline step.
+The consumer-visible widening: a repo whose `.git/config` carries `remote.origin.push =
+HEAD:main`, or `push.default = upstream`/`tracking` with the current branch's upstream on the
+default branch, now has a bare `git push` denied where this hook was previously silent — see
+"Safety model" for the full behaviour, including the deliberate over-blocking union (a bare push
+checks every configured remote's route, not only the one git would pick) and the two new
+over-blocking classes (`push.default = matching`, a wildcard configured destination). The
+residual gap: a GLOBAL or system git config (`~/.gitconfig`, `/etc/gitconfig`, etc.) setting
+either key is not yet read (filed as a follow-up alongside this change).
 
 ## The per-repo settings file (required)
 
@@ -1684,9 +1695,26 @@ see the hook's own header for the full evasion/over-blocking inventory). It enfo
 "deny the default branch" half of this issue's Decision, not an allow-list of
 `claude/<n>-<slug>` destinations — that would also deny a `release/vX.Y.Z` branch, an annotated
 tag push, or any ordinary `git push origin feature/x` a human runs in any plugin-enabled session,
-for no matching safety gain. Pinned by fixture in `dev/hook-tests.sh`, including the same
-never-executes-anything guarantee and a byte-identical-file-listing fixture proving this hook only
-reads the filesystem, never writes to it. Composition with the deny-outranks-allow mechanism
+for no matching safety gain. Since #268, a push carrying no explicit refspec (a bare `git push` or
+`git push <remote>`) also consults the same common dir's `config` file — text-parsed, never
+executed as `git config` — for `remote.<name>.push` and `push.default`/`branch.<n>.merge`: a
+repo's own `remote.origin.push = HEAD:main` or `push.default = upstream` with the current
+branch's upstream on the default branch now denies where this hook was previously silent, closing
+the gap #260's own settings-template entries and this hook's earlier refspec parser both left
+open. This closes only the repo-local half of that class — a GLOBAL or system git config setting
+either key is filed as a follow-up alongside this change, not yet read. The union is deliberately
+over-broad rather than modelling git's own remote-selection precedence: a bare push checks EVERY
+configured remote's push
+route (not only the one git would actually pick) union the `push.default` route, and
+`push.default = matching` or a wildcard (`*`) configured destination both deny unconditionally,
+the same reasoning as `--all`/`--mirror` — three of the four new documented over-blocking classes
+named in the hook's own header (the fourth, an unquoted `#`/`;` truncating a configured
+destination mid-value, is described there instead). A segment carrying an explicit refspec
+(including the harness's own `git push
+-u origin "claude/<n>-<slug>"`) never consults config at all. Pinned by fixture in
+`dev/hook-tests.sh`, including the same never-executes-anything guarantee and a
+byte-identical-file-listing fixture proving this hook only reads the filesystem, never writes to
+it — extended to the config-read route specifically. Composition with the deny-outranks-allow mechanism
 `hooks/agent-boundary.sh`'s live-probe record establishes below was **not** separately
 re-measured for this third hook — it uses the identical mechanism, but only two hooks were ever
 replayed together live.
