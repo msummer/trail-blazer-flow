@@ -607,12 +607,12 @@ subagents need:
    top (standard-flow PRs only, the PR body carrying the verifier's own `outcome=pass` status
    line — not prose — checked mechanically and cross-checked against the dispatch ledger *and*
    against the verifier's verdict archived verbatim as an issue comment for that PR's head
-   branch (a transient failure of that read is re-checked once before the PR is held, #277),
-   *and* against the approval covering the specific plan comment implemented — the PR
+   branch, *and* against the approval covering the specific plan comment implemented — the PR
    body carrying one of a fresh `find-implementation-work.sh` run's `approval.approved_at_history[]`
    `binding_line` values verbatim, newest first, so a body written under an earlier approval of the
-   same plan still qualifies (#174, extended #213; an unknown `covers_plan` verdict from that run
-   is re-checked once before it counts, #245) — CI
+   same plan still qualifies (#174, extended #213) — every one of these provenance reads, plus the
+   head-branch key read and the archive's own match needle, gets one bounded retry on transient
+   failure before the PR is held, never on a determinate answer (#245, #277, #287) — CI
    green on the head commit, its head mechanically checked to contain the default branch's
    current tip (`git merge-base --is-ancestor`) immediately before each PR's own merge attempt,
    otherwise held with "PR is behind `<default>` at `<short-sha>` — update the branch and let CI
@@ -1455,7 +1455,21 @@ strings), computed by a GENERIC rule (every key in either script's own `counts` 
 ends in `_unavailable` and whose value is exactly `true`, so it already covers
 `initial_query_unavailable`, `candidates_query_unavailable`, `author_association_unavailable`, and
 #284's own `ready_query_unavailable` with no per-key enumeration to drift), plus `counts.degraded`
-mirroring the same boolean — see "Returning to a laptop" above.
+mirroring the same boolean — see "Returning to a laptop" above. Also in v2.7.3 (#287):
+`skills/issue-cycle/SKILL.md`'s merge-floor transient-failure retry, previously stated per-read
+for only two of its six provenance reads (the *Archived verdict* archive read, #277; the
+*Plan-binding provenance* discovery run, #245), now covers all six, stated once at floor level —
+the *Verdict provenance* needle pair, the head-branch key read, the archive read's own match
+needle, and the discovery run's binding-line walk needle join the two reads already covered,
+needing no grant, label, script, settings entry, or baseline step (`Bash(sleep:*)`,
+`Bash(gh pr view:*)`, `Bash(gh issue view:*)`, and `find-implementation-work.sh` already ship in
+`templates/repo-settings.json`). The consumer-visible widening: a PR a transient blip on any of
+the four newly covered reads would have held for the rest of the pass can now merge in the same
+pass instead; fail-closed is unchanged — a read still failing after the one retry holds the PR
+**not eligible**, same one-line reason, exactly as before, and a determinate answer (a `false`
+needle, a `false` `covers_plan`, a `none` archive line, or a wrong-prefix archived status line) is
+never retried. Cost: up to 30s plus one extra read-only call per failing read, paid only on a PR
+whose read fails — worst case six such waits in a single pass.
 
 ## The per-repo settings file (required)
 
@@ -1817,12 +1831,13 @@ That keyed comment's own closing status line is what the PR body's line is check
 literally before the merge pass proceeds. A prose "verifier verdict: pass" without the PR-body
 line, or a PR body with no archived comment keyed to its head branch, does not qualify —
 including a PR opened before this keying existed, whose archive carries no key line and which
-therefore waits for a human merge rather than being retrofitted. Since #277, a rejected or
-unparseable read of that archive comment — never a determinate "no archive for this branch" —
-gets the identical one bounded re-check (`sleep 30`, then one more `gh issue view`, per #223's
-rule) before the PR is held; a read still failing after that one retry holds the PR **not
-eligible** exactly as before — the retry narrows how often a transient API blip strands an
-otherwise-mergeable PR, it does not relax what the floor accepts. Honest limit: the check proves
+therefore waits for a human merge rather than being retrofitted. Since #287 (consolidating #277's
+narrower original), a rejected or unparseable read of that archive comment — never a determinate
+"no archive for this branch" — gets the same one bounded re-check every floor provenance read now
+gets (`sleep 30`, then one more `gh issue view`, per #223's rule) before the PR is held; a read
+still failing after that one retry holds the PR **not eligible** exactly as before — the retry
+narrows how often a transient API blip strands an otherwise-mergeable PR, it does not relax what
+the floor accepts. Honest limit: the check proves
 a matching line is present in the PR body, agrees with the ledger, and agrees with a comment
 independently timestamped on the issue —
 not that a human witnessed the dispatch. All three artifacts are still orchestrator-written, so a
@@ -1891,13 +1906,14 @@ otherwise shows the implementer complete and the verifier passing) — expected,
 The `issue-cycle` merge pass revalidates the covered case once more, requiring that the PR body
 carry one of `approval.approved_at_history[]`'s `binding_line` values verbatim before an
 autonomous merge (#213 — see below for why the check now accepts more than just the freshest
-`binding_line`) — the held case never reaches a PR, so the merge pass never sees it. Since #245,
-an **unknown** `covers_plan` verdict at that same merge-floor read gets the identical one bounded
-re-check the implementer's two checkpoints already get above (`sleep 30`, then one more
-`find-implementation-work.sh --issue <n>`, per #223's rule) before the PR is held; a verdict still
-unknown after that one retry holds the PR **not eligible** exactly as before — the retry narrows
-how often a transient API blip strands an otherwise-mergeable PR, it does not relax what the floor
-accepts. Honest limit:
+`binding_line`) — the held case never reaches a PR, so the merge pass never sees it. Since #287
+(consolidating #245's narrower original), an **unknown** `covers_plan` verdict at that same
+merge-floor read gets the same one bounded re-check every floor provenance read now gets — the
+implementer's two checkpoints already get an identical one above (`sleep 30`, then one more
+`find-implementation-work.sh --issue <n>`, per #223's rule) — before the PR is held; a verdict
+still unknown after that one retry holds the PR **not eligible** exactly as before — the retry
+narrows how often a transient API blip strands an otherwise-mergeable PR, it does not relax what
+the floor accepts. Honest limit:
 like verdict
 provenance above, all three checkpoints (the discovery script, the PR body, the merge pass) are
 orchestrator-written and share one `gh` identity, so this raises the cost of asserting an approval
