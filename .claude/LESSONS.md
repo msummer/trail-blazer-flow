@@ -155,3 +155,26 @@ bites: 1–3 lines, written as an instruction to a future agent.
   measured shape and an explicit "no rule is claimed beyond these rows". Measure every row you cite (the
   orchestrator's own prediction for the `-c"` shape was wrong until measured) and cite code by function or
   loop name, never by line number — the edit that adds the citation shifts the lines it points at.
+- 2026-09-15: When a new fixture set adds a runner that drives a SHARED stub through a NEW caller
+  (dev/planning-tests.sh's `run_status`, calling `bin/harness-status.sh`, which in turn shells out to
+  BOTH discovery scripts on the same stub `gh`), every PRE-EXISTING mutation proof whose mutant is an
+  in-place edit to one of those discovery scripts (not a `run_script_at` mutant COPY, which a new
+  caller can never reach) must be re-checked for reachability, not just proofs whose mutant lives in
+  code the new fixtures' own assertions read. On #284/#285, three pre-existing proofs (an
+  `authorAssociation`-field injection into `needs_initial_plan`, a `.[].number` deletion in the
+  revision-candidates filter, and the `#272/#273` retry-collapse/counts-key-deletion mutants) turned
+  out reachable through TWO distinct mechanisms neither obvious from reading the mutant alone: (1) a
+  mutation that makes an ALREADY-HEALTHY query in the new fixture fail can abort the whole script
+  under `set -euo pipefail`, propagating through the new caller's OWN `set -e`; (2) a mutation that
+  merely deletes a PUBLISHED `_unavailable`-suffixed counts key changes nothing for the pre-existing
+  suite's own assertions but silently narrows a NEW consumer's generic key-scanning rule (here,
+  `harness-status.sh`'s `degraded_reasons`). Reasoning by inspection undercounted both classes on the
+  first pass; only an actual re-run surfaced the true failing sets (128/6, 127/7, 129/5, 126/8, and
+  more). Budget time to re-measure every in-place mutant on a script the new runner exercises, not
+  just eyeball which ones "obviously" don't apply.
+- 2026-09-15 (b): Apply a mutant to a `bin/*.sh` script IN PLACE (Edit tool, `sed -i ''`, and `git restore`
+  to revert) — never by writing a temp file and `mv`-ing it over the script. `mv` drops the execute bit,
+  and `dev/planning-tests.sh`'s runners put `$root/bin` on PATH ahead of an ambient PATH that also carries
+  the INSTALLED plugin's `bin/`, so a non-executable repo copy silently falls through to the released
+  script and the suite measures the wrong binary with a plausible figure (on #284 the verifier got 131/3
+  for a true 133/1). Check `[ -x bin/<script> ]` after every mutation before trusting a figure.

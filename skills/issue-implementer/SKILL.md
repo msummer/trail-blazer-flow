@@ -245,7 +245,9 @@ plan_selection: [...], counts: {...} }`. `plan_selection` has already done the t
 plan/comment selection (#176) and the plan-binding approval check (#174): one entry per ready
 issue it could fetch, `{number, plan, trusted_post_plan, untrusted_post_plan, approval,
 binding_line}`. This batch run only tells you which issues are ready (**report them to the user**,
-number + title — if empty, say so and stop); step 2a re-runs the script itself, fresh, per issue,
+number + title — if empty, say so and stop, naming `counts.ready_query_unavailable: true` if set:
+that means the ready query failed closed this run (#284) — a degraded run, not an empty queue);
+step 2a re-runs the script itself, fresh, per issue,
 immediately before dispatch, since the approval binding must reflect the freshest label/plan
 state, not this snapshot.
 

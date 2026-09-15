@@ -186,9 +186,10 @@ CI as the fifth step, but it is not part of `dev/selfcheck.sh` itself — run it
 `bin/cleanup-after-merge.sh` changes.
 
 `dev/planning-tests.sh` is a separate negative-test harness for BOTH of this repo's discovery
-scripts, `bin/find-planning-work.sh` (#164) and, since #176, `bin/find-implementation-work.sh`:
+scripts, `bin/find-planning-work.sh` (#164) and, since #176, `bin/find-implementation-work.sh`,
+and, since #285, their consumer `bin/harness-status.sh` end-to-end:
 it builds throwaway fixture directories under `mktemp`, with a stub `gh` on `PATH`, and runs the
-real script under test against them. For `bin/find-planning-work.sh` it pins the
+real script(s) under test against them. For `bin/find-planning-work.sh` it pins the
 trusted-association gate — only a comment whose `authorAssociation` is `OWNER`, `MEMBER`, or
 `COLLABORATOR` ever puts its issue into `needs_revision` or is honoured as the latest plan
 comment; a `CONTRIBUTOR`/`NONE` comment, or one with no `authorAssociation` field at all
@@ -363,10 +364,25 @@ skip the lookup silently too. `dev/planning-tests.sh` pins the skip with six new
 the skip mechanically via `expect_api_calls` rather than inferring it from the JSON, plus eight
 measured mutants pinning both pre-filters, the index-alignment between `trusted_post_plan[]` and
 its internal edit-flag array, and the jq `//`-operator trap that would otherwise treat a real
-`false` as "missing".
+`false` as "missing". Since #284, `bin/find-implementation-work.sh` gets the identical
+bounded-retry-then-fail-closed shape #272/#273 gave the planner script, applied to its own two
+`gh` call sites — the batch `ready` query and the per-issue `gh issue view` inside the ready
+loop — with the same `*_retried`/`*_unavailable` counts pair for the query and a `fetch_retries`
+counter for the fetch (narrowing `fetch_failures` to post-retry failures only); `--issue <n>`
+mode's own prefetch is deliberately NOT retried (both its callers already re-run the whole script
+once on an unknown verdict), pinned by a dedicated fixture proving byte-identical behaviour to
+before #284. Since #285, `bin/harness-status.sh` — the consumer both discovery scripts already
+have — gains a top-level `degraded` boolean and `degraded_reasons` array (`"planning.<key>"` /
+`"implementation.<key>"` strings), computed by a GENERIC rule (every key in either script's own
+`counts` object whose name ends in `_unavailable` and whose value is exactly `true`, so it already
+covers `initial_query_unavailable`, `candidates_query_unavailable`,
+`author_association_unavailable`, and #284's own `ready_query_unavailable` with no per-key
+enumeration to drift), plus `counts.degraded` mirroring the same boolean — pinned end-to-end via a
+new `run_status` runner that invokes the real `bin/harness-status.sh`, which in turn resolves both
+discovery scripts by bare name on the same stub `gh` PATH.
 It runs in CI as the sixth step, but it
-is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh` or
-`bin/find-implementation-work.sh` changes.
+is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh`,
+`bin/find-implementation-work.sh`, or `bin/harness-status.sh` changes.
 
 `dev/lock-tests.sh` is a separate negative-test harness for `bin/harness-lock.sh` (#232), the
 single-flight lock that guards against two harness cycles running concurrently in one checkout.

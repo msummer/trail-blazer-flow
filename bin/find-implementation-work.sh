@@ -173,10 +173,54 @@
 # and `plan_selection` each holding at most one entry; the resulting VERDICT does now depend on
 # the issue's current label set (#229 — see approval.reason: approval-label-absent above). An
 # unknown flag, a non-numeric <n>, or extra arguments print a usage message on stderr and exit 2.
-# No arguments: unchanged behaviour and output shape (bin/harness-status.sh:24 depends on this).
+# No arguments: unchanged behaviour and output shape (bin/harness-status.sh's own
+# `implementation=$(find-implementation-work.sh)` call depends on this). #284 — this single-issue
+# prefetch is deliberately NOT retried, unlike the two sites below: both of its callers
+# (skills/issue-implementer/SKILL.md step 2a/2e and skills/issue-cycle/SKILL.md's merge floor)
+# already re-run this whole script once on an unknown verdict, which explicitly covers "no
+# plan_selection entry at all" — a script-level retry here would stack a second 30s backoff on top
+# of that existing re-run for one transient blip. Pinned by the
+# impl-single-issue-fetch-not-retried fixture: byte-identical behaviour to before #284 (one
+# attempt, warn, `counts.fetch_failures: 1`) plus a direct assertion on each of
+# `counts.fetch_retries` (0), `counts.ready_query_retried` (false), and
+# `counts.ready_query_unavailable` (false) staying at their reset values, and zero sleeps.
+#
+# #284 adds a bounded-retry-then-fail-closed shape — the SAME shape #272/#273 gave
+# bin/find-planning-work.sh, one guarded 30-second backoff (RETRY_SLEEP, below) then one
+# re-attempt — to the two batch-mode `gh` call sites this script makes: the `ready` query itself,
+# and the per-issue `gh issue view` inside the `for n in $ready_numbers` loop.
+#   - The `ready` query: a first-attempt failure retries once; if the retry succeeds,
+#     counts.ready_query_retried is true and `ready` is built from the SECOND attempt's output
+#     (one warn: "ready query failed once — retried after 30s and succeeded"); if BOTH attempts
+#     fail, counts.ready_query_retried AND counts.ready_query_unavailable are both true, `ready`
+#     is reported as an empty array (so the loop below makes zero iterations), and the script
+#     still exits 0 with one complete JSON document — never an abort with no stdout (one warn:
+#     "could not list ready issues (gh issue list) — reporting an empty ready bucket this run
+#     (fail-closed)"). Exactly one sleep fires per run for this site, bounded, never two against a
+#     permanently failing query.
+#   - The per-issue fetch: a first-attempt failure retries once after the identical backoff;
+#     fetch_retries counts every first-attempt failure regardless of the retry's own outcome (a
+#     retried-then-successful fetch increments fetch_retries and NOT fetch_failures); only a
+#     failure on BOTH attempts keeps today's warn-and-skip ("could not fetch issue #$n — skipping
+#     it this run") and increments fetch_failures — narrowed, since #284, to post-retry failures
+#     only.
+# Both sleeps are guarded (`sleep "$RETRY_SLEEP" || true`) so a failing `sleep` itself can never
+# abort the run under this script's own set -euo pipefail. Fail-closed direction: every new path
+# fails toward "less work reported" (an empty `ready` bucket, or one skipped issue), never toward
+# dispatching something unapproved.
+#
+# Wall clock (#284, mirroring bin/find-planning-work.sh's identical note): the retry budget is
+# UNCAPPED per site, exactly like the planner's. Worst case this run sleeps RETRY_SLEEP seconds ×
+# (1 ready-query retry + up to LIMIT per-issue fetch retries) — at the current LIMIT=100 and a 30s
+# backoff, ~50 minutes if every single ready issue's fetch fails once and then succeeds on its
+# retry. In practice a broad outage fails the ready query on BOTH attempts first (it runs before
+# the per-issue loop), which fails closed and skips the loop entirely, so the run only ever pays
+# for the one ready-query retry, never for N issues.
 #
 # counts gains: fetch_failures (a gh issue view failure for one ready issue is survived — that
-# issue gets no plan_selection entry, every other ready issue still gets one), no_trusted_plan,
+# issue gets no plan_selection entry, every other ready issue still gets one — narrowed, since
+# #284, to POST-RETRY failures only: a retried-then-successful fetch is a fetch_retries occurrence,
+# not a fetch_failures one), no_trusted_plan,
 # trusted_post_plan, untrusted_post_plan (totals across all issues), untrusted_plan_markers,
 # untrusted_harness_markers (#194 workstream A, see above), verdict_archives_skipped (trusted,
 # post-plan, verdict-marker-carrying comments excluded from trusted_post_plan),
@@ -189,15 +233,25 @@
 # never double-counted here), plan_edited_after_approval / plan_edit_unreadable (#192, one per
 # corresponding `reason` — see the plan_selection[].approval doc above),
 # decision_edited_after_approval / decision_edit_unreadable (#230, one per AFFECTED
-# trusted_post_plan COMMENT, not per issue — see the plan_selection[].approval doc above), and
+# trusted_post_plan COMMENT, not per issue — see the plan_selection[].approval doc above),
 # approval_label_absent (#229, one per issue where the plan-approved label is not currently on the
-# issue — see approval.reason above). ready and counts.ready/counts.truncated keep their current
-# names and computation.
+# issue — see approval.reason above), and (#284) ready_query_retried / ready_query_unavailable
+# (true iff the ready query's first attempt failed / iff BOTH attempts failed, see above) and
+# fetch_retries (how many per-issue fetches inside the loop needed a retry, regardless of whether
+# that retry succeeded). ready and counts.ready/counts.truncated keep their current names and
+# computation — ready_query_unavailable: true still yields counts.truncated: false (a complete,
+# merely empty, document was still printed).
 #
 # Requires: gh (authenticated), jq. Run from anywhere inside the repo.
 set -euo pipefail
 
 LIMIT=100
+# RETRY_SLEEP (#284): the implementer-side twin of bin/find-planning-work.sh's
+# ASSOCIATION_RETRY_SLEEP — same value (30s), a different name because this script has no
+# author-association lookup to name it after. Shared by both retry sites below (the ready query
+# and the per-issue fetch inside the loop). Guarded (`|| true`) at every use so a failing sleep
+# itself can never abort the run under set -euo pipefail.
+RETRY_SLEEP=30
 PLAN_MARKER="<!-- planner-plan -->"
 VERDICT_MARKER="<!-- verifier-verdict -->"
 AUDIT_MARKER="<!-- harness-audit -->"
@@ -237,8 +291,12 @@ if [ "$#" -gt 0 ]; then
 fi
 
 fetch_failures=0
+ready_query_retried=false
+ready_query_unavailable=false
+fetch_retries=0
 prefetched_issue=""
 if [ -n "$single_issue" ]; then
+  # #284 — deliberately NOT retried; see the script header's own paragraph on this narrowing.
   if ! prefetched_issue=$(gh issue view "$single_issue" --json number,title,url,comments,labels 2>/dev/null); then
     echo "warn: could not fetch issue #$single_issue — skipping it this run" >&2
     fetch_failures=1
@@ -250,10 +308,25 @@ if [ -n "$single_issue" ]; then
     ready_numbers="$single_issue"
   fi
 else
-  ready=$(gh issue list \
+  # #284 — bounded retry: one guarded backoff, one re-attempt, then fail closed to an empty
+  # `ready` bucket rather than letting one blip abort the whole run under set -euo pipefail.
+  if ! ready=$(gh issue list \
     --search "is:open is:issue label:plan-approved -label:pr-open -label:impl-blocked" \
     --json number,title,url \
-    --limit "$LIMIT")
+    --limit "$LIMIT"); then
+    ready_query_retried=true
+    sleep "$RETRY_SLEEP" || true
+    if ready=$(gh issue list \
+      --search "is:open is:issue label:plan-approved -label:pr-open -label:impl-blocked" \
+      --json number,title,url \
+      --limit "$LIMIT"); then
+      echo "warn: ready query failed once — retried after 30s and succeeded (transient API blip absorbed)" >&2
+    else
+      echo "warn: could not list ready issues (gh issue list) — reporting an empty ready bucket this run (fail-closed)" >&2
+      ready_query_unavailable=true
+      ready='[]'
+    fi
+  fi
   ready_numbers=$(printf '%s' "$ready" | jq -r '.[].number')
 fi
 
@@ -277,15 +350,22 @@ decision_edit_unreadable=0
 approval_label_absent=0
 for n in $ready_numbers; do
   # Tolerate per-issue failures: one transient gh/API error must not kill the whole
-  # discovery run (matters for unattended/scheduled runs). The issue is simply
-  # reconsidered next time. In --issue mode, `issue` was already fetched above — reuse it
-  # rather than fetching it twice.
+  # discovery run (matters for unattended/scheduled runs). #284: a first failure is retried once
+  # after the same guarded RETRY_SLEEP backoff used above; only if BOTH attempts fail is the
+  # issue skipped — simply reconsidered next time. In --issue mode, `issue` was already fetched
+  # above — reuse it rather than fetching it twice (and never enter this retry at all).
   if [ -n "$prefetched_issue" ]; then
     issue="$prefetched_issue"
   elif ! issue=$(gh issue view "$n" --json number,title,url,comments,labels 2>/dev/null); then
-    echo "warn: could not fetch issue #$n — skipping it this run" >&2
-    fetch_failures=$((fetch_failures+1))
-    continue
+    fetch_retries=$((fetch_retries+1))
+    sleep "$RETRY_SLEEP" || true
+    if issue=$(gh issue view "$n" --json number,title,url,comments,labels 2>/dev/null); then
+      echo "warn: issue #$n: fetch failed once — retried after 30s and succeeded (transient API blip absorbed)" >&2
+    else
+      echo "warn: could not fetch issue #$n — skipping it this run" >&2
+      fetch_failures=$((fetch_failures+1))
+      continue
+    fi
   fi
   # #229 — current label state, read from the SAME issue document as everything else here (no
   # extra API call): tolerant of both a `{"name": "..."}` object element (gh's real shape, live-
@@ -752,6 +832,9 @@ jq -n \
   --argjson deaa "$decision_edited_after_approval" \
   --argjson deu "$decision_edit_unreadable" \
   --argjson ala "$approval_label_absent" \
+  --argjson rqr "$ready_query_retried" \
+  --argjson rqu "$ready_query_unavailable" \
+  --argjson fr "$fetch_retries" \
   '{ready: $ready,
     plan_selection: $selection,
     counts: {ready: ($ready | length), truncated: (($ready | length) >= $limit),
@@ -772,4 +855,7 @@ jq -n \
              plan_edit_unreadable: $peu,
              decision_edited_after_approval: $deaa,
              decision_edit_unreadable: $deu,
-             approval_label_absent: $ala}}'
+             approval_label_absent: $ala,
+             ready_query_retried: $rqr,
+             ready_query_unavailable: $rqu,
+             fetch_retries: $fr}}'

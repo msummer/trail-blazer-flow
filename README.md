@@ -431,8 +431,11 @@ want changes made before either.
 **Returning to a laptop.** Run `harness-status.sh` to see what's left: `counts.human_actions` is
 the total waiting on you, broken into `waiting_on_human.plans_to_review`,
 `waiting_on_human.prs_to_review` (each PR entry carries a coarse `ci`: `passing`, `failing`,
-`pending`, or `none`), and `waiting_on_human.blocked`. Nothing in that JSON is phone-specific —
-it's the same summary a scheduled routine's own report already gives you.
+`pending`, or `none`), and `waiting_on_human.blocked`. Check the top-level `degraded` boolean too
+(and `degraded_reasons`, and its `counts.degraded` mirror) — `true` means a discovery query failed
+closed this run, so a bucket above may under-report the true queue rather than reflect an
+empty one. Nothing in that JSON is phone-specific — it's the same summary a scheduled routine's
+own report already gives you.
 
 ## Greenfield walkthrough: from idea to first feature
 
@@ -1430,6 +1433,29 @@ suffix — and `--git-dir=<path>`/`--work-tree` are still judged only against th
 predicate-matching directory holding no `.git` of its own is judged against the session too, since
 this resolution never walks upward the way git itself would from a real `-C`; both classes are
 filed as a follow-up alongside this change.
+
+**v2.7.2 → v2.7.3** needs no grant, label, script, settings entry, or baseline step (#284/#285):
+`find-implementation-work.sh` gets the identical bounded-retry-then-fail-closed shape #272/#273
+gave `find-planning-work.sh`, applied to its own two `gh` call sites — the batch `ready` query and
+the per-issue `gh issue view` inside the ready loop. The consumer-visible behaviour change: a
+momentary API blip during the ready query no longer aborts the run with no output at all (it fails
+closed to an empty `ready` bucket, `counts.ready_query_unavailable`, with a warn line on stderr,
+and the run still prints a complete document), and a momentary blip on a per-issue fetch is
+retried once before that issue is skipped for the run (`counts.fetch_retries`;
+`counts.fetch_failures` now counts only post-retry failures). `--issue <n>` mode's own prefetch is
+deliberately NOT retried — both its callers (the issue-implementer skill's dispatch/pre-push
+re-check and the issue-cycle merge floor) already re-run the whole script once on an unknown
+verdict. A query that fails both attempts is not "nothing to do" — it's a degraded run — so
+`skills/issue-implementer/SKILL.md` step 1 and `skills/issue-cycle/SKILL.md`'s ledger-seed
+paragraph both now name this flag (the ledger-seed paragraph alongside the planner's own two; the
+implementer's step 1 names only this script's own flag). Also in v2.7.3 (#285):
+`harness-status.sh` — the consumer both discovery scripts already have — gains a top-level
+`degraded` boolean and `degraded_reasons` array (`"planning.<key>"` / `"implementation.<key>"`
+strings), computed by a GENERIC rule (every key in either script's own `counts` object whose name
+ends in `_unavailable` and whose value is exactly `true`, so it already covers
+`initial_query_unavailable`, `candidates_query_unavailable`, `author_association_unavailable`, and
+#284's own `ready_query_unavailable` with no per-key enumeration to drift), plus `counts.degraded`
+mirroring the same boolean — see "Returning to a laptop" above.
 
 ## The per-repo settings file (required)
 
