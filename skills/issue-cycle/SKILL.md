@@ -81,10 +81,10 @@ comparisons, doesn't block the cycle.
 ledger row per issue found, noting its discovery bucket. Steps 1 and 2 re-run their own
 discovery as part of their normal procedure (expected, not wasted work), but this up-front seed
 is what lets the pre-advance checks and step 5's reconciliation catch an untouched stage. A true
-`counts.initial_query_unavailable` or `counts.candidates_query_unavailable` (#272/#273) on this
-seed run means the seed itself is incomplete — the corresponding bucket failed closed, not
-"nothing to do" — record it in the run report rather than reading an empty bucket as a clean
-result.
+`counts.initial_query_unavailable`, `counts.candidates_query_unavailable` (#272/#273), or
+`counts.ready_query_unavailable` (#284) on this seed run means the seed itself is incomplete —
+the corresponding bucket failed closed, not "nothing to do" — record it in the run report rather
+than reading an empty bucket as a clean result.
 
 ### 1. Planning pass
 

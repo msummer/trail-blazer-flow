@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 #
 # planning-tests.sh — fixture-based negative-test harness for BOTH of this repo's discovery
-# scripts, bin/find-planning-work.sh (#164) and, since #176, bin/find-implementation-work.sh too
-# — not this repo's own gate (that's dev/selfcheck.sh + dev/selfcheck-tests.sh) and not the
-# consumer doctor's harness (dev/doctor-tests.sh). Builds throwaway fixture directories under
-# mktemp, with a stub `gh` on PATH, and runs the REAL script under test against each, pinning
+# scripts, bin/find-planning-work.sh (#164) and, since #176, bin/find-implementation-work.sh too,
+# and, since #285, their consumer bin/harness-status.sh end-to-end (run via the new run_status
+# runner, Part 13 below) — not this repo's own gate (that's dev/selfcheck.sh +
+# dev/selfcheck-tests.sh) and not the consumer doctor's harness (dev/doctor-tests.sh). Builds
+# throwaway fixture directories under mktemp, with a stub `gh` on PATH, and runs the REAL script(s)
+# under test against each, pinning
 # (since #217: six cases run the stub `gh` directly rather than either discovery script, and two
 # run a deliberately `--json`-mutated COPY of a real script rather than the unmodified script
 # itself — see the field-list-validation paragraph below):
@@ -168,6 +170,28 @@
 #   in the published JSON. Six new fixtures below (Part 11) pin the skip mechanically via
 #   expect_api_calls in both batch and --issue <n> modes; the pre-existing fixtures (none of which
 #   carries the key) pin the fall-through, non-vacuously, by continuing to pass unchanged.
+#   #284 mirrors #272/#273's bounded-retry-then-fail-closed shape (one guarded 30s backoff, one
+#   re-attempt) onto the SAME script's other two `gh` call sites: the batch `ready` query (a bare
+#   command-substitution assignment before this PR, so one blip aborted the run with no stdout) and
+#   the per-issue `gh issue view` inside the ready loop (previously warn-and-skip on the FIRST
+#   failure). A retry that succeeds sets counts.ready_query_retried: true and builds `ready` from
+#   the SECOND attempt's output; both attempts failing additionally sets
+#   counts.ready_query_unavailable: true and reports `ready` as an empty array — the script still
+#   exits 0 with one complete JSON document, never an abort. counts.fetch_retries counts every
+#   per-issue first-attempt failure regardless of the retry's own outcome; counts.fetch_failures is
+#   narrowed to post-retry failures only. `--issue <n>` mode's own prefetch is deliberately NOT
+#   retried (both its callers already re-run the whole script once on an unknown verdict) — pinned
+#   by a dedicated fixture proving byte-identical behaviour to before #284.
+#   #285 teaches bin/harness-status.sh, the consumer both discovery scripts already have, to
+#   surface a degraded discovery run instead of silently reporting an empty queue: a top-level
+#   `degraded` boolean and `degraded_reasons` array (`"planning.<key>"` / `"implementation.<key>"`
+#   strings, planning half first), computed by a GENERIC rule — every key in either script's own
+#   `counts` object whose name ends in `_unavailable` and whose value is exactly `true` — plus
+#   `counts.degraded` mirroring the same boolean. Being generic, it already covers
+#   initial_query_unavailable, candidates_query_unavailable, author_association_unavailable, and
+#   #284's own ready_query_unavailable with no per-key enumeration to drift; a non-zero
+#   counts.fetch_failures on either script deliberately does NOT mark a run degraded (it drops one
+#   issue, not a whole bucket, and already produces its own per-issue warn line on stderr).
 #
 # Usage: bash dev/planning-tests.sh [name-filter] — same output contract as
 # dev/cleanup-tests.sh, dev/doctor-tests.sh, and dev/selfcheck-tests.sh: one PASS/FAIL line per
@@ -188,11 +212,29 @@
 #                               an empty needs_revision bucket, never a silent abort
 #                               (find-planning-work.sh)
 #   - ready.json              : the ready-issues query's response (find-implementation-work.sh)
+#   - proposed.json           : (#285) bin/harness-status.sh's OWN plan-proposed query response —
+#                               served by a dedicated stub arm (see build_stub_gh below), never
+#                               read by either discovery script; absent means `[]`
+#   - blocked.json            : (#285) bin/harness-status.sh's OWN impl-blocked query response —
+#                               same dedicated-arm, "absent means `[]`" convention
+#   - prs.json                : (#285) bin/harness-status.sh's OWN `gh pr list` response — served
+#                               by a dedicated top-level `pr)` stub arm whose --json field list is
+#                               deliberately UNVALIDATED (a third, unprobed field set — the
+#                               documented carve-out dev/cleanup-tests.sh's `repo)` arm already
+#                               uses for the identical reason); absent means `[]`
 #   - issue-<n>.json          : the `gh issue view` payload for candidate/ready issue <n>, shared
-#                               by both scripts (each fixture directory is dedicated to ONE
-#                               script under test, so there's no naming collision); a candidate or
+#                               by both discovery scripts (each fixture directory dedicated to a
+#                               discovery script keeps ready-issue and revision-candidate numbers
+#                               in whatever range that ONE script's own convention already uses; a
+#                               fixture run via run_status (#285, Part 13) drives BOTH scripts at
+#                               once, so its own issue-<n>.json numbers must stay disjoint between
+#                               find-planning-work.sh's revision candidates and
+#                               find-implementation-work.sh's ready issues — no issue-<n>.json is
+#                               ever shared between the two scripts' own candidates/ready numbers
+#                               in such a fixture); a candidate or
 #                               ready issue with no issue-<n>.json file simulates a fetch that
-#                               fails on EVERY attempt — for find-planning-work.sh (#272), that
+#                               fails on EVERY attempt — for find-planning-work.sh (#272) and, since
+#                               #284, find-implementation-work.sh too, that
 #                               means both the first attempt and its one bounded retry, exercising
 #                               the fetch-failures path only after both fail; reject-view-<n>-once
 #                               below models the single-failure (retry-succeeds) case instead
@@ -230,6 +272,15 @@
 #                               append-first-then-branch idiom the CALL LOG note below documents
 #                               for .api-calls, read by the new expect_sleep_calls/expect_sleep_arg
 #                               helpers, never by a fixture builder
+#   - reject-ready            : (optional, presence-only, #284) makes the stub's `gh issue list`
+#                               pr-open arm (the ready query) exit 1 on EVERY invocation, exercising
+#                               find-implementation-work.sh's fail-closed ready_query_unavailable
+#                               path after BOTH the first attempt and its one retry fail
+#   - reject-ready-once       : (optional, presence-only, #284) a ONE-SHOT variant of the above —
+#                               same self-consuming (`rm -f` on first use) contract as
+#                               reject-initial-once below, so the SECOND invocation (the script's
+#                               bounded retry) falls through to ready.json normally; mutually
+#                               exclusive with reject-ready by convention, checked in that order
 #   - reject-initial          : (optional, presence-only, #273) makes the stub's `gh issue list`
 #                               fallback arm (the needs_initial_plan query) exit 1 on EVERY
 #                               invocation, exercising find-planning-work.sh's fail-closed
@@ -302,17 +353,50 @@
 # accept on either subcommand — e.g. "authorAssociation", which gh has never accepted on an issue
 # query — makes the stub print gh's own `Unknown JSON field: "<name>"` line and exit 1, generically,
 # not via a hard-coded special case for that one field. Once a call's field list passes that
-# check, the stub tells find-planning-work.sh's `gh issue list` calls apart, in order: a call
-# containing "pr-open" (find-implementation-work.sh's ready query — neither planning search
-# contains this token) is served from ready.json; a call containing "--jq" (the revision
-# candidates query) is answered by applying the script's own --jq argument to candidates.json with
-# the real jq (#211); anything else (#202: find-planning-work.sh's now-unconditional
-# needs_initial_plan query, which requests only number,title,url,author) falls through to
-# initial.json.
-# Discriminating by `-label:`/`label:` search-string prefix would be wrong — `-label:plan-proposed`
-# contains `label:plan-proposed` as a substring. Issue author provenance (#202) is served
-# separately, over `gh api repos/{owner}/{repo}/issues?...` — see rest-issues.json above and the
-# api) branch in build_stub_gh below.
+# check, the stub tells every `gh issue list` call apart, in order: a call
+# containing "pr-open" (find-implementation-work.sh's ready query — no other search contains this
+# token) is served from ready.json (#284: after checking reject-ready-once/reject-ready first); a
+# call containing "--jq" (the revision candidates query) is answered by applying the script's own
+# --jq argument to candidates.json with the real jq (#211); a call containing "is:issue
+# label:plan-proposed" (bin/harness-status.sh's OWN plan-proposed query, #285) is served from
+# proposed.json (absent means `[]`); a call containing "is:issue label:impl-blocked"
+# (bin/harness-status.sh's OWN impl-blocked query, #285) is served from blocked.json (absent means
+# `[]`); anything else (#202: find-planning-work.sh's now-unconditional needs_initial_plan query,
+# which requests only number,title,url,author) falls through to initial.json (#273: after checking
+# reject-initial-once/reject-initial first). A separate top-level `pr)` arm (#285) serves
+# bin/harness-status.sh's own `gh pr list` call from prs.json (absent means `[]`), with a
+# deliberately UNVALIDATED --json field list — the same documented carve-out
+# dev/cleanup-tests.sh's `repo)` arm already uses.
+# The two #285 arms above are NOT both safe for the same reason — verify each mechanism
+# separately, never assume one covers the other (this is the one place this train got it wrong the
+# first time round). "is:issue label:plan-proposed" is NOT exclusive to bin/harness-status.sh's own
+# query by content: find-planning-work.sh's revision-candidates query carries the byte-identical
+# search string "is:open is:issue label:plan-proposed -label:plan-approved -label:no-plan", so a
+# direct `case` test of this pattern against that string ALSO matches. The candidates call is
+# nonetheless routed correctly (to candidates.json, never proposed.json) purely because the
+# `*"--jq"*` arm sits ABOVE the plan-proposed arm in this `case` and the candidates query always
+# carries `--jq '.[].number'` as one of its arguments, so it is claimed by that earlier arm and
+# never reaches this one. This is a load-bearing ORDERING invariant of the `case`, not content
+# exclusivity: moving the plan-proposed arm ahead of the `--jq` arm, or the candidates query ever
+# losing its `--jq` argument, would silently serve proposed.json to find-planning-work.sh instead
+# of candidates.json, and every candidates-driven fixture would keep passing on the wrong document
+# rather than failing loud. "is:issue label:impl-blocked" needs no such ordering: verified directly
+# against every real search string in all three scripts, it is exclusive by CONTENT alone — the
+# only other query naming "impl-blocked" is find-implementation-work.sh's own ready query, which
+# carries the dash-prefixed "-label:impl-blocked" (never "is:issue " immediately followed by
+# "label:impl-blocked", so this `case` pattern never matches it, independent of arm order); that
+# ready query is in any case also caught earlier by the `pr-open` arm (its search also carries
+# "-label:pr-open"), but that earlier catch is incidental for this needle, not load-bearing.
+# Discriminating by `-label:`/`label:` search-string prefix alone would ALSO be wrong for a
+# different reason — a plain `label:plan-proposed` test would match `-label:plan-proposed` as a
+# substring — which is why both #285 arms anchor on the preceding "is:issue " token (no dash)
+# instead: find-planning-work.sh's own needs_initial_plan query carries "is:issue
+# -label:plan-proposed" (the dash makes it a different string, so the anchor alone rules THIS query
+# out). The anchor alone does NOT rule out the candidates query above, though — that is what makes
+# the arm ordering the load-bearing guarantee for the plan-proposed needle, not the anchor by
+# itself. Issue author provenance (#202) is served separately, over `gh api
+# repos/{owner}/{repo}/issues?...` — see rest-issues.json above and the api) branch in
+# build_stub_gh below.
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -348,8 +432,9 @@ mk_fixture() {
 }
 
 # build_stub_gh DIR — writes an executable DIR/gh (absolute paths to DIR's own initial.json,
-# candidates.json, ready.json, issue-<n>.json, events-<n>.json, and rest-issues.json fixtures
-# baked in via the __DIR__ + sed idiom dev/cleanup-tests.sh's build_stub_gh uses). Deterministic
+# candidates.json, ready.json, proposed.json, blocked.json, prs.json, issue-<n>.json,
+# events-<n>.json, and rest-issues.json fixtures baked in via the __DIR__ + sed idiom
+# dev/cleanup-tests.sh's build_stub_gh uses). Deterministic
 # and offline. BOTH `gh issue list ...` and `gh issue view <n> --json ...` first run their --json
 # field list through validate_json_fields (#217, defined just below, against the
 # GH_ISSUE_JSON_FIELDS constant) — an unsupported field, e.g. "authorAssociation" (#202: gh has
@@ -357,21 +442,32 @@ mk_fixture() {
 # `Unknown JSON field: "<name>"` line on stderr, generically, not via a hard-coded special case
 # for that one field. Only once a call's field list passes that check does dispatch order for
 # `gh issue list ...` matter — see the header note above:
-#   *"pr-open"*            -> cat DIR/ready.json (find-implementation-work.sh's ready query)
+#   *"pr-open"*            -> (#284) checks reject-ready-once/reject-ready first, then cats
+#                             DIR/ready.json (find-implementation-work.sh's ready query)
 #   *"--jq"*               -> (#211) checks reject-candidates-once/reject-candidates (#273) first,
 #                             then applies the script's OWN --jq argument (extracted from this
 #                             invocation's own ${10}, guarded by $9 == "--jq") to DIR/candidates.json
 #                             with the real jq, propagating jq's exit status (revision candidates)
+#   *"is:issue label:plan-proposed"*
+#                          -> (#285) cats DIR/proposed.json, or prints `[]` if absent
+#                             (bin/harness-status.sh's OWN plan-proposed query)
+#   *"is:issue label:impl-blocked"*
+#                          -> (#285) cats DIR/blocked.json, or prints `[]` if absent
+#                             (bin/harness-status.sh's OWN impl-blocked query)
 #   anything else          -> (#273) checks reject-initial-once/reject-initial first, then cats
 #                             DIR/initial.json (find-planning-work.sh's now-unconditional
 #                             needs_initial_plan query, and any other plain needs_initial_plan-
 #                             shaped call)
-# `gh issue view <n> --json ...`, once past the field-list check, (#272) checks
+# `gh issue view <n> --json ...`, once past the field-list check, (#272/#284) checks
 # reject-view-<n>-once first, then cats DIR/issue-<n>.json, or exits 1 if that file is absent
-# (simulates a fetch that fails on every attempt for that candidate/ready issue). Anything else
+# (simulates a fetch that fails on every attempt for that candidate/ready issue, on either
+# discovery script). Anything else
 # under `issue)` -> exit 1. The very first statement inside `issue)`, before any of this dispatch,
 # logs the raw invocation to DIR/.issue-calls (see the CALL LOG, second copy note below
-# build_stub_gh's own definition).
+# build_stub_gh's own definition). A separate top-level `pr)` arm (#285) cats DIR/prs.json, or
+# prints `[]` if absent, for bin/harness-status.sh's OWN `gh pr list` call — its --json field list
+# is deliberately UNVALIDATED (a third, unprobed field set, the same documented carve-out
+# dev/cleanup-tests.sh's `repo)` arm already uses).
 # SUBSUMPTION PROOF (#217, measured 2026-09-05; re-measured 2026-09-05 when the suite grew to 74
 # cases with the addition of stub-json-missing-json-argument-fails-loud, unaffected on both
 # measurements — its call runs against the stub directly, never through bin/find-planning-work.sh,
@@ -404,7 +500,7 @@ mk_fixture() {
 # every one of those 27 planner-side cases passed again, and the only failures left are the same
 # five M3-only failures (stub-json-unknown-field-rejected, stub-json-unknown-field-rejected-view,
 # stub-json-author-association-rejected, plan-script-unknown-json-field-fails-closed,
-# impl-script-unknown-json-field-fails-loud): green. Both the script and stub files were restored
+# impl-script-unknown-json-field-fails-closed): green. Both the script and stub files were restored
 # byte-identically immediately after each measurement.
 #
 # RE-MEASURED 2026-09-10 (#275): with validate_json_fields unmutated and the SAME
@@ -490,6 +586,27 @@ mk_fixture() {
 # fixtures run run_implementation/run_implementation_args exclusively, writing no initial.json /
 # candidates.json / rest-issues.json and never invoking find-planning-work.sh at all — the figures
 # above still stand.
+#
+# RE-MEASURED AGAIN 2026-09-15 (#284/#285), UNLIKE #240: the suite grew to 134 across ten new
+# fixtures, five of which (Part 13) run the new run_status runner — and bin/harness-status.sh
+# invokes bin/find-planning-work.sh by bare name on the SAME stub PATH, so this mutant IS reached
+# by that half of the new suite, unlike every prior "not re-run" entry above. With the SAME
+# needs_initial_plan mutation applied (backup refreshed immediately beforehand; restore verified
+# byte-identical, sha256 confirmed): `bash dev/planning-tests.sh` dropped from 134 pass/0 fail to
+# 115 pass/19 fail — the identical 15 planner-side names the #272/#273 measurement above already
+# recorded, PLUS four new Part 13 fixtures: status-clean-not-degraded (its own initial.json is
+# healthy and non-empty — the mutation turns that healthy query into a permanently-rejected one,
+# flipping degraded from the expected false to true and counts.unplanned from 1 to 0),
+# status-degraded-implementer-ready-query, status-degraded-author-association, and
+# status-degraded-both-scripts (each expects EXACTLY one "planning."/"implementation." reason; the
+# mutated needs_initial_plan query now ALSO fails closed for these three, adding an unexpected
+# extra "planning.initial_query_unavailable" entry that breaks their exact-array assertions).
+# status-degraded-planner-initial-query does NOT join: its own permanent reject-initial marker
+# already fails this exact call every time regardless of this mutation, coincidentally producing
+# the identical observable outcome (validate_json_fields intercepts before the marker check ever
+# runs, exactly like the pre-existing plan-initial-query-unavailable coincidence documented above,
+# now doubled to a second fixture) — not evidence the mutant is inert on it. Reverted immediately
+# after recording this (byte-identical, sha256 confirmed).
 #
 # `gh api ...` has THREE branches (#192 adds the third), split on whether the URL ($2) contains
 # "/issues/<n>/events" (#174, find-implementation-work.sh's plan-binding lookup),
@@ -637,6 +754,15 @@ mk_fixture() {
 # run_implementation/run_implementation_args exclusively — not re-run: this mutant lives in the
 # stub's own `list) ... --jq` arm, reached only via a `gh issue list ... --jq` call
 # find-planning-work.sh makes and find-implementation-work.sh never does.
+#
+# The suite has grown again, to 134 across #284/#285's ten new fixtures, five of which (Part 13)
+# DO call find-planning-work.sh (via run_status), unlike #240's six — but not re-run: this mutant
+# only has an observable effect when the script's own `.[].number` filter would otherwise ERROR
+# against candidates.json (forcing the stub's error propagation to swallow that failure); every
+# Part 13 fixture's own candidates.json is well-formed (either `[]` or `[{"number":1}]`), so the
+# real filter succeeds regardless of this mutation, and status-degraded-both-scripts' own
+# candidates.json is never even reached by the stub's `--jq` line at all (its permanent
+# reject-candidates marker short-circuits first).
 # MUTATION PROOF B (#196-class, the issue's named mutant, measured 2026-09-05; re-measured
 # 2026-09-05 when #192 grew the suite to 66 — same 27 planner-side cases, new total, since #192
 # adds no planner-side fixtures; re-measured again 2026-09-09 (#246) when this PR's two new
@@ -722,6 +848,25 @@ mk_fixture() {
 # only via run_planning, which none of #240's six new (run_implementation/run_implementation_args-
 # only) fixtures ever calls.
 #
+# RE-MEASURED AGAIN 2026-09-15 (#284/#285), UNLIKE #240: the suite grew to 134 across ten new
+# fixtures, and this mutant IS reached by the five new Part 13 fixtures, for the identical reason
+# the SUBSUMPTION PROOF's own #284/#285 re-measurement above gives — bin/harness-status.sh invokes
+# bin/find-planning-work.sh by bare name, so its revision-candidates call runs through the SAME
+# stub PATH a Part 13 fixture's own run_status uses. With the SAME `.[].number` -> `.number`
+# deletion applied (backup refreshed immediately beforehand; restore verified byte-identical,
+# sha256 confirmed): dropped from 134 pass/0 fail to 98 pass/36 fail — the identical 32 planner-side
+# names the #272/#273 measurement above already recorded, PLUS four new Part 13 fixtures:
+# status-clean-not-degraded (its own candidates.json is `[]`, healthy — `jq '.number'` on an empty
+# array errors identically to a non-empty one, measured directly: `printf '[]\n' | jq '.number'`
+# exits 5 — so this healthy query now fails closed too, flipping degraded from false to true),
+# status-degraded-planner-initial-query, status-degraded-implementer-ready-query, and
+# status-degraded-author-association (each expects EXACTLY one reason; the newly-failing
+# candidates query adds an unexpected extra "planning.candidates_query_unavailable" entry to all
+# three). status-degraded-both-scripts does NOT join: its own permanent reject-candidates marker
+# already fails this exact call every time, producing the identical observable outcome regardless
+# of this mutation — not evidence the mutant is inert on it. Reverted immediately after recording
+# this (byte-identical, sha256 confirmed).
+#
 # events branch: `gh api "repos/{owner}/{repo}/issues/<n>/events?per_page=100" --paginate --jq
 # 'EXPR'` -> exit 1 if DIR/reject-events-<n> exists (simulates the events endpoint being
 # unreadable); else, if DIR/events-<n>.json exists (a plain JSON array of GitHub issue-event
@@ -789,6 +934,15 @@ mk_fixture() {
 # re-measured at the 124-case baseline: unchanged, still 123 pass/1 fail, failing exactly
 # impl-approval-events-filter-error — none of #240's six fixtures carries a malformed events-<n>.json,
 # so this stub mutation remains invisible to all of them (byte-identical, sha256 confirmed).
+#
+# The suite has grown again, to 134 across #284/#285's ten new fixtures — not re-run for either
+# MUTATION PROOF A or B above: reaching this branch (the events lookup) at all requires a ready
+# issue with `has_approval_label` true AND a non-null `plan` (a real trusted plan-marker comment);
+# none of the ten new fixtures' ready/candidate issues satisfies both — most carry `comments: []`
+# outright, and impl-ready-query-retry-succeeds/impl-retry-sleep-failure-survives, whose issue DOES
+# carry `labels: [{"name":"plan-approved"}]`, still carries `comments: []`, so `plan` resolves to
+# null and the `elif [ "$plan" != "null" ]` gate above the events call is never entered — the
+# figures above still stand.
 # #275's fifth events-carrying fixture,
 # impl-audit-record-does-not-swallow-feedback (I5), does NOT join: it deliberately asserts only
 # plan.url/trusted_post_plan/audit_comments_skipped, never an approval outcome, per its own
@@ -853,11 +1007,13 @@ mk_fixture() {
 # suite has since grown to 74 across #204/#211/#192/#217, then 79 across #229, then 85 across
 # #213, then 96 across #230, then 97 across #230's guard-pin fixture (kickback review), then 100
 # across #246's two new author-association-retry-* fixtures, then 112 across #275's twelve new
-# fixtures, then 118 across #272/#273's six new fixtures, then 124 across #240's six new fixtures
+# fixtures, then 118 across #272/#273's six new fixtures, then 124 across #240's six new fixtures,
+# then 134 across #284/#285's ten new fixtures
 # — this proof was not re-run: its
 # mutant reverts to a code shape (the pre-#202 `view_fields` fallback) that no longer exists
 # anywhere in the tree, including in the #246 retry, the #275 $planC binding, the #272/#273
-# query/fetch retries, or #240's own includesCreatedEdit pre-filters (none of which touches
+# query/fetch retries, #240's own includesCreatedEdit pre-filters, or #284's ready-query/fetch
+# retries (none of which touches
 # find-planning-work.sh's needs_initial_plan call at all), so
 # there is nothing live left to
 # re-measure against), failing exactly:
@@ -920,6 +1076,16 @@ mk_fixture() {
 # provenance lookup, not the --json field-list validation #217 adds). The suite has since grown to
 # 124 across #240's six new fixtures — not re-run: none of them writes a rest-issues.json or calls
 # find-planning-work.sh at all, for the identical reason #272/#273's six did not.
+#
+# The suite has grown again, to 134 across #284/#285's ten new fixtures — not re-run: none of
+# them writes a rest-issues.json either. Part 13's five run_status fixtures reach
+# read_issue_authors() unconditionally, but none of them executes the mutated filter: for four of
+# the five, with no rest-issues.json present the stub's `/issues?` arm exits 0 with no output
+# regardless of this mutation (the map ends up `{}`, per the identical reasoning already recorded
+# for #275's/#272/#273's own fixtures above); the fifth, status-degraded-author-association, carries
+# a permanent reject-association marker, which short-circuits the stub to exit 1 before jq ever
+# runs (the map fails closed to author_association_unavailable: true — the very flag that fixture
+# asserts), the same route the author-association-unavailable case above takes.
 #
 # CALL LOG (#229): as the very first statement inside the `api)` arm — before any of the three
 # branches above run — the stub appends the raw URL argument ($2) to DIR/.api-calls, one line per
@@ -1010,6 +1176,17 @@ case "$1" in
         validate_json_fields "$@"
         case "$*" in
           *"pr-open"*)
+            # #284: a ONE-SHOT rejection (consumed on first use) then a permanent one, checked in
+            # that order — the SAME mutual-exclusion-by-convention contract
+            # reject-candidates-once/reject-candidates already use below, applied to the ready
+            # query instead.
+            if [ -f "__DIR__/reject-ready-once" ]; then
+              rm -f "__DIR__/reject-ready-once"
+              exit 1
+            fi
+            if [ -f "__DIR__/reject-ready" ]; then
+              exit 1
+            fi
             cat "__DIR__/ready.json"
             exit 0 ;;
           *"--jq"*)
@@ -1030,6 +1207,36 @@ case "$1" in
             fi
             if [ -f "__DIR__/candidates.json" ]; then
               jq -r "(${10})" "__DIR__/candidates.json" || exit 1
+            fi
+            exit 0 ;;
+          *"is:issue label:plan-proposed"*)
+            # #285: bin/harness-status.sh's OWN plan-proposed query. This pattern is NOT exclusive
+            # to that query by content: find-planning-work.sh's revision-candidates query carries
+            # the byte-identical search string "is:open is:issue label:plan-proposed
+            # -label:plan-approved -label:no-plan" and matches this same `case` pattern too
+            # (verified directly). That call reaches candidates.json instead, purely because the
+            # `*"--jq"*` arm ABOVE this one is tried first and the candidates query always carries
+            # `--jq '.[].number'` — a load-bearing ORDERING invariant, not content exclusivity (see
+            # the header note above this function for the full mechanism and what breaks if either
+            # half changes). The "is:issue " (no dash) anchor DOES rule out
+            # find-planning-work.sh's own needs_initial_plan query, whose search carries "is:issue
+            # -label:plan-proposed" instead (the "-label:" substring trap the header above
+            # documents) — that call falls through to the initial.json arm below, unaffected.
+            if [ -f "__DIR__/proposed.json" ]; then
+              cat "__DIR__/proposed.json"
+            else
+              printf '[]\n'
+            fi
+            exit 0 ;;
+          *"is:issue label:impl-blocked"*)
+            # #285: bin/harness-status.sh's OWN impl-blocked query. Anchored the identical way —
+            # find-implementation-work.sh's own ready query carries "-label:impl-blocked" (with the
+            # dash) and is caught by the pr-open arm above first regardless (its search also
+            # carries "-label:pr-open").
+            if [ -f "__DIR__/blocked.json" ]; then
+              cat "__DIR__/blocked.json"
+            else
+              printf '[]\n'
             fi
             exit 0 ;;
           *)
@@ -1103,6 +1310,21 @@ case "$1" in
         fi
         exit 0
         ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  pr)
+    # #285: bin/harness-status.sh's OWN `gh pr list` call — the only consumer of this arm. Its
+    # --json field list is deliberately UNVALIDATED (a third, unprobed field set — the identical
+    # documented carve-out dev/cleanup-tests.sh's `repo)` arm already uses for the same reason).
+    case "$2" in
+      list)
+        if [ -f "__DIR__/prs.json" ]; then
+          cat "__DIR__/prs.json"
+        else
+          printf '[]\n'
+        fi
+        exit 0 ;;
       *) exit 1 ;;
     esac
     ;;
@@ -1208,6 +1430,19 @@ run_script_at() {
   local dir="$1" script="$2"
   shift 2
   PATH="$dir:$PATH" "$bash_bin" "$script" "$@" >"$dir/.stdout" 2>"$dir/.stderr"
+  planning_rc=$?
+  planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
+  planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
+}
+
+# run_status DIR (#285) — same contract as run_planning, but runs the REAL bin/harness-status.sh,
+# which in turn resolves BOTH bin/find-planning-work.sh and bin/find-implementation-work.sh by
+# their bare names — so $root/bin (not just $dir) must be on PATH for this one runner, with $dir
+# prepended FIRST so DIR's own stub `gh`/`sleep` still win over any real `gh`/`sleep` a PATH
+# lookup might otherwise find.
+run_status() {
+  local dir="$1"
+  PATH="$dir:$root/bin:$PATH" "$bash_bin" "$root/bin/harness-status.sh" >"$dir/.stdout" 2>"$dir/.stderr"
   planning_rc=$?
   planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
   planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
@@ -1904,7 +2139,13 @@ EOF
 # six #272/#273 fixtures sets reject-association or reject-association-once either): dropped from
 # 118 pass/0 fail to 115 pass/3 fail, failing exactly the SAME three cases; not re-run at the
 # 124-case (#240) baseline either, for the identical reason — none of #240's six fixtures sets
-# reject-association or reject-association-once, or calls find-planning-work.sh at all. M2 (loop
+# reject-association or reject-association-once, or calls find-planning-work.sh at all; not re-run
+# at the 134-case (#284/#285) baseline either — none of the ten new fixtures sets
+# reject-association-once (the only marker this mutant's failing set actually depends on: it
+# collapses the RETRY, which only ever fires after a first-attempt failure that a permanent
+# rejection would have failed closed on anyway), and status-degraded-author-association's own
+# permanent reject-association fixture asserts no api/sleep call count, so the collapsed retry's
+# only observable difference (fewer calls) is invisible to it. M2 (loop
 # three attempts instead of
 # two, adding a second guarded sleep + retry) — `bash dev/planning-tests.sh` dropped to 99 pass/1
 # fail, failing exactly author-association-unavailable (its permanent reject-association now costs
@@ -1917,13 +2158,21 @@ EOF
 # 2026-09-10 (#275) at the 112-case baseline, for the identical reason as M1 above: dropped to 111
 # pass/1 fail, failing exactly the same one case; re-measured again 2026-09-10 (#272/#273) at the
 # 118-case baseline: dropped to 117 pass/1 fail, failing exactly the same one case; not re-run at
-# the 124-case (#240) baseline, for the identical reason as M1 above. M3 (drop the
+# the 124-case (#240) baseline, for the identical reason as M1 above; not re-run at the 134-case
+# (#284/#285) baseline either — none of the ten new fixtures sets reject-association or
+# reject-association-once (status-degraded-author-association's own reject-association is
+# PERMANENT, and asserts only .degraded/.degraded_reasons, never an api/sleep call count, so a
+# mutant that changes only the RETRY MECHANISM around an already-permanent failure — same eventual
+# verdict, fewer calls — is invisible to it, the identical M1-class coincidence documented for
+# plan-initial-query-unavailable and status-degraded-planner-initial-query above). M3 (drop the
 # sleep's
 # `|| true` guard) — see author-association-retry-sleep-failure-survives below for its measurement
 # (99 pass/1 fail, failing exactly that one case; re-measured 2026-09-10 (#275) at the 112-case
 # baseline: 111 pass/1 fail, failing exactly the same one case; re-measured again 2026-09-10
 # (#272/#273) at the 118-case baseline: 117 pass/1 fail, failing exactly the same one case; not
-# re-run at the 124-case (#240) baseline, for the identical reason as M1 above).
+# re-run at the 124-case (#240) baseline, for the identical reason as M1 above; not re-run at the
+# 134-case (#284/#285) baseline either — none of the ten new fixtures combines reject-association
+# with sleep-fails).
 case_author_association_retry_succeeds() {
   local dir; dir="$(mk_fixture author-association-retry-succeeds)"
   cat > "$dir/initial.json" <<'EOF'
@@ -1969,7 +2218,9 @@ EOF
 # case — plan-retry-sleep-failure-survives, whose own sleep-fails fixture DOES exist in the suite
 # now, still does not join, for the reason above. Not re-run at the 124-case (#240) baseline: none
 # of #240's six new fixtures sets reject-association(-once), sleep-fails, or calls
-# find-planning-work.sh at all.
+# find-planning-work.sh at all. Not re-run at the 134-case (#284/#285) baseline either: none of the
+# ten new fixtures combines reject-association with sleep-fails — status-degraded-author-
+# association's own sleep always succeeds (no sleep-fails marker), so it never reaches this guard.
 case_author_association_retry_sleep_failure_survives() {
   local dir; dir="$(mk_fixture author-association-retry-sleep-failure-survives)"
   cat > "$dir/initial.json" <<'EOF'
@@ -2161,7 +2412,9 @@ EOF
 # reverted immediately after recording this. RE-MEASURED 2026-09-14 (#240) at the clause's new
 # $tppSel location and the now-124-case suite baseline: the SAME deletion dropped the suite to 123
 # pass/1 fail, failing exactly this case alone — reverted immediately after recording this
-# (byte-identical, sha256 confirmed).
+# (byte-identical, sha256 confirmed). Not re-run at the 134-case (#284/#285) baseline: none of the
+# ten new fixtures' ready/candidate issues carries more than one trusted comment (most carry none
+# at all), so the $tppSel ordering filter this mutant deletes is never reached by any of them.
 case_impl_newest_plan_selected() {
   local dir; dir="$(mk_fixture impl-newest-plan-selected)"
   cat > "$dir/ready.json" <<'EOF'
@@ -2186,13 +2439,23 @@ EOF
 }
 
 # impl-fetch-failure-survives (regression control) — the stub gh fails `issue view` for ready
-# issue #1 (no issue-1.json file); ready issue #2 still gets a plan_selection entry.
+# issue #1 on EVERY invocation (no issue-1.json file at all, so #284's one bounded retry also
+# fails — the 2-failures boundary); ready issue #2 still gets a plan_selection entry.
+# fetch_retries counts issue #1's failed first attempt (regardless of the retry's own outcome);
+# fetch_failures counts it AGAIN only because the retry also failed — the two are equal here on
+# purpose, unlike impl-fetch-retry-succeeds, where fetch_retries is 1 and fetch_failures stays 0.
+# Exactly one sleep fires (one retry attempt for one failing issue, never a second retry loop), and
+# expect_issue_calls proves issue #1 was attempted TWICE and issue #2 only ONCE — a fixture with
+# only fetch_retries/fetch_failures assertions could not tell "retried once, still failed" apart
+# from "never retried at all". Retrofitted for #284, mirroring the planner's identically-shaped
+# fetch-failure-survives. Measured mutants: (b) and (f) — see the MEASURED MUTANTS
+# (#284/#285) block below the case table.
 case_impl_fetch_failure_survives() {
   local dir; dir="$(mk_fixture impl-fetch-failure-survives)"
   cat > "$dir/ready.json" <<'EOF'
 [{"number":1,"title":"Issue one","url":"https://example.invalid/1"},{"number":2,"title":"Issue two","url":"https://example.invalid/2"}]
 EOF
-  # deliberately no issue-1.json — simulates `gh issue view 1` failing
+  # deliberately no issue-1.json — simulates `gh issue view 1` failing on every attempt
   cat > "$dir/issue-2.json" <<'EOF'
 {"number":2,"title":"Issue two","url":"https://example.invalid/2","comments":[
   {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/2#issuecomment-7016"}
@@ -2202,9 +2465,13 @@ EOF
   run_implementation "$dir"
   expect_rc 0
   expect_jq '.counts.fetch_failures' '1'
+  expect_jq '.counts.fetch_retries' '1'
   expect_jq '.plan_selection | length' '1'
   expect_jq '.plan_selection[0].number' '2'
   expect_err "could not fetch issue #1"
+  expect_sleep_calls "$dir" 1
+  expect_issue_calls "$dir" 'view 1' 2
+  expect_issue_calls "$dir" 'view 2' 1
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -2293,7 +2560,10 @@ EOF
 # $plan_updated, which is unset at this point in the branch — under this script's
 # `set -euo pipefail`, referencing it there aborts the whole run instead of merely adding a line):
 # dropped the suite to 123 pass/1 fail, failing exactly impl-plan-after-approval alone — reverted
-# immediately after recording this (byte-identical, sha256 confirmed). A cruder mutant (forcing every issue through the branch that runs the new check
+# immediately after recording this (byte-identical, sha256 confirmed). Not re-run at the 134-case
+# (#284/#285) baseline: none of the ten new fixtures' ready/candidate issues has a plan comment at
+# all (most carry `comments: []`), so none reaches the plan-after-approval branch this mutant's
+# leaked warn text lives inside. A cruder mutant (forcing every issue through the branch that runs the new check
 # at all, via `if false; then` on the plan_created/approved_at compare) also drops this case, but
 # via the PRE-EXISTING `reason` assertion — with the url now parseable, the route to that same
 # outcome changed: `plan_comment_id` resolves to "7017" (no longer empty), so the mutant sends
@@ -2326,7 +2596,9 @@ EOF
 # reaches the plan-after-approval branch either (all six have a plan comment createdAt before the
 # plan-approved label), so this re-measurement is unrelated to #240's own code change and is
 # recorded here only because this re-measurement pass touched the line — reverted immediately
-# after recording this (byte-identical, sha256 confirmed).
+# after recording this (byte-identical, sha256 confirmed). Not re-run at the 134-case (#284/#285)
+# baseline either, for the identical reason: none of the ten new fixtures reaches this branch at
+# all (no plan comment).
 case_impl_plan_after_approval() {
   local dir; dir="$(mk_fixture impl-plan-after-approval)"
   cat > "$dir/ready.json" <<'EOF'
@@ -2641,7 +2913,10 @@ EOF
 # check is ever reached). impl-plan-edit-skipped-when-never-edited (P-A) and
 # impl-single-issue-edit-flags-skipped (S-A) do NOT join: both have plan_edit_flag exactly "false",
 # so #240's plan-site pre-filter concludes covered before this mutated comparison is ever reached —
-# reverted immediately after recording this (byte-identical, sha256 confirmed).
+# reverted immediately after recording this (byte-identical, sha256 confirmed). Not re-run at the
+# 134-case (#284/#285) baseline: none of the ten new fixtures' ready/candidate issues has a plan
+# comment with a #issuecomment-<id> url at all (most carry `comments: []` outright), so none
+# reaches this plan-edit comparison.
 case_impl_plan_edited_after_approval() {
   local dir; dir="$(mk_fixture impl-plan-edited-after-approval)"
   cat > "$dir/ready.json" <<'EOF'
@@ -2724,7 +2999,9 @@ EOF
 # cases — none of #240's six new fixtures creates a plan-comment tie (P-A/S-A skip the lookup via
 # the #240 pre-filter; P-B's and D-A/D-B/D-C's plan comments are all either genuinely edited after
 # approval or created strictly before it, never exactly tied) — reverted immediately after
-# recording this (byte-identical, sha256 confirmed).
+# recording this (byte-identical, sha256 confirmed). Not re-run at the 134-case (#284/#285)
+# baseline either, for the identical reason: no plan-comment tie exists in any of the ten new
+# fixtures (most have no plan comment at all).
 case_impl_plan_edit_tie_covered() {
   local dir; dir="$(mk_fixture impl-plan-edit-tie-covered)"
   cat > "$dir/ready.json" <<'EOF'
@@ -2770,7 +3047,9 @@ EOF
 # arm): the SAME guard removal dropped it to 122 pass/2 fail, failing exactly
 # impl-plan-edit-lookup-unreadable AND impl-decision-edit-lookup-unreadable — none of #240's six
 # new fixtures uses a reject-comment-<id> marker, so this stub mutation remains invisible to all of
-# them — reverted immediately after recording this (byte-identical, sha256 confirmed).
+# them — reverted immediately after recording this (byte-identical, sha256 confirmed). Not re-run
+# at the 134-case (#284/#285) baseline either: none of the ten new fixtures uses a
+# reject-comment-<id> marker or reaches the `/issues/comments/` stub arm at all.
 case_impl_plan_edit_lookup_unreadable() {
   local dir; dir="$(mk_fixture impl-plan-edit-lookup-unreadable)"
   cat > "$dir/ready.json" <<'EOF'
@@ -2825,7 +3104,8 @@ EOF
 # identical honest-limit reason (the script's own `[ -z "$plan_updated" ]` / `[ -z "$d_updated" ]`
 # guards already catch an array document regardless of the stub's exit code); none of #240's six
 # new fixtures uses an array-shaped comment-<id>.json either — reverted immediately after
-# recording this (byte-identical, sha256 confirmed).
+# recording this (byte-identical, sha256 confirmed). Not re-run at the 134-case (#284/#285)
+# baseline either: none of the ten new fixtures reaches the `/issues/comments/` stub arm at all.
 case_impl_plan_edit_filter_error() {
   local dir; dir="$(mk_fixture impl-plan-edit-filter-error)"
   cat > "$dir/ready.json" <<'EOF'
@@ -2868,6 +3148,8 @@ EOF
 # dropped it to 123 pass/1 fail, failing exactly the same one case — none of #240's six new
 # fixtures omits `updated_at` from a comment-<id>.json it actually looks up, and P-A/S-A skip the
 # lookup entirely — reverted immediately after recording this (byte-identical, sha256 confirmed).
+# Not re-run at the 134-case (#284/#285) baseline either: none of the ten new fixtures looks up a
+# comment-<id>.json at all.
 case_impl_plan_edit_missing_updated_at() {
   local dir; dir="$(mk_fixture impl-plan-edit-missing-updated-at)"
   cat > "$dir/ready.json" <<'EOF'
@@ -2918,7 +3200,8 @@ EOF
 # suite baseline: the SAME `[ -z "$plan_comment_id" ]` neutering dropped it to 122 pass/2 fail,
 # failing exactly the same two cases — none of #240's six new fixtures carries an unparseable or
 # non-digits plan-comment url (all six are `#issuecomment-<digits>`) — reverted immediately after
-# recording this (byte-identical, sha256 confirmed).
+# recording this (byte-identical, sha256 confirmed). Not re-run at the 134-case (#284/#285)
+# baseline either: none of the ten new fixtures has a plan comment url at all.
 case_impl_plan_comment_id_unparseable() {
   local dir; dir="$(mk_fixture impl-plan-comment-id-unparseable)"
   cat > "$dir/ready.json" <<'EOF'
@@ -2971,7 +3254,8 @@ EOF
 # RE-MEASURED 2026-09-14 (#240) at the now-124-case suite baseline: the SAME digits-guard
 # relaxation dropped it to 123 pass/1 fail, failing exactly the same one case — none of #240's six
 # new fixtures reaches this guard with a non-empty, non-digits id — reverted immediately after
-# recording this (byte-identical, sha256 confirmed).
+# recording this (byte-identical, sha256 confirmed). Not re-run at the 134-case (#284/#285)
+# baseline either: none of the ten new fixtures has a plan comment url at all.
 case_impl_plan_comment_id_non_digits() {
   local dir; dir="$(mk_fixture impl-plan-comment-id-non-digits)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3047,7 +3331,11 @@ EOF
 # fixture is required for either the plan or the post-plan comment. This gives trusted_post_plan a
 # non-empty entry to pin covered_by_approval_reason's presence (null in this state, same as every
 # entry the #230 check never touches) and the two new counts keys
-# (decision_edited_after_approval, decision_edit_unreadable) are always present regardless.
+# (decision_edited_after_approval, decision_edit_unreadable) are always present regardless. #284
+# adds the three new has(...) assertions for ready_query_retried, ready_query_unavailable, and
+# fetch_retries — present on every run of this script regardless of value, batch mode included.
+# Measured mutants: (d), (e), and (f) — see the MEASURED MUTANTS (#284/#285) block below the case
+# table (one has(...) assertion catches each of the three keys' own deletion mutant independently).
 case_impl_output_shape() {
   local dir; dir="$(mk_fixture impl-output-shape)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3088,6 +3376,9 @@ EOF
   expect_jq '.counts | has("decision_edited_after_approval")' 'true'
   expect_jq '.counts | has("decision_edit_unreadable")' 'true'
   expect_jq '.counts | has("approval_label_absent")' 'true'
+  expect_jq '.counts | has("ready_query_retried")' 'true'
+  expect_jq '.counts | has("ready_query_unavailable")' 'true'
+  expect_jq '.counts | has("fetch_retries")' 'true'
   expect_api_calls "$dir" 1
 }
 
@@ -3105,7 +3396,8 @@ EOF
 # location: deleting the clause from $tppSel and re-running the 124-case suite dropped it to 122
 # pass/2 fail, failing exactly this case AND its own control sibling,
 # impl-audit-does-not-mask-real-feedback (below) — reverted immediately after recording this
-# (byte-identical, sha256 confirmed).
+# (byte-identical, sha256 confirmed). Not re-run at the 134-case (#284/#285) baseline either: none
+# of the ten new fixtures' ready/candidate issues carries a harness-audit-opening comment.
 case_impl_audit_comment_not_binding() {
   local dir; dir="$(mk_fixture impl-audit-comment-not-binding)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3169,7 +3461,8 @@ EOF
 # same three cases — none of #240's six new fixtures carries a NONE-authored (or any untrusted)
 # comment at all, so this mutation (which touches only the untrusted_post_plan array) remains
 # invisible to all of them — reverted immediately after recording this (byte-identical, sha256
-# confirmed).
+# confirmed). Not re-run at the 134-case (#284/#285) baseline either: none of the ten new fixtures
+# carries an untrusted (or any) post-plan comment either.
 case_impl_untrusted_audit_marker_still_reported() {
   local dir; dir="$(mk_fixture impl-untrusted-audit-marker-still-reported)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3282,6 +3575,13 @@ EOF
 # six new fixtures — not re-run: this mutant lives entirely inside bin/find-planning-work.sh's own
 # `untrusted:` array, reached only via run_planning, which none of #240's six new fixtures ever
 # calls.
+#
+# The suite has grown again, to 134 across #284/#285's ten new fixtures, five of which (Part 13)
+# DO call find-planning-work.sh via run_status — but not re-run: this mutant only has an
+# observable effect on a CANDIDATE with an untrusted, harness-audit-marker-carrying comment, and
+# every Part 13 fixture's own candidates.json is either `[]` or (status-degraded-both-scripts)
+# never reached at all (its permanent reject-candidates rejects the query before any candidate is
+# ever fetched).
 case_plan_untrusted_audit_marker_still_reported() {
   local dir; dir="$(mk_fixture plan-untrusted-audit-marker-still-reported)"
   cat > "$dir/initial.json" <<'EOF'
@@ -3458,7 +3758,8 @@ EOF
 # whether that entry's OWN #240 flag would otherwise skip the per-comment lookup entirely (the seed
 # is computed before either #240 pre-filter ever runs). P-A and P-B do not join: neither carries a
 # trusted_post_plan entry at all. Restoring the operator returned the suite to green (byte-identical,
-# sha256 confirmed). Plan comment
+# sha256 confirmed). Not re-run at the 134-case (#284/#285) baseline either: none of the ten new
+# fixtures' ready/candidate issues carries a trusted_post_plan entry at all. Plan comment
 # retrofitted for #192 (see impl-approval-covers-plan's
 # comment); the post-plan comment itself has a normalised (#220) `#issuecomment-7033` url. #230:
 # since this comment is UNCOVERED (its createdAt postdates the label), it is never looked up for
@@ -3563,7 +3864,8 @@ EOF
 # the SAME `>= $at` widening dropped it to 123 pass/1 fail, failing exactly the same one case — none
 # of #240's six new fixtures creates a decision-comment-createdAt-ties-approved_at construction
 # (D-A/D-B/D-C's decision comments are all strictly before approval, never tied) — reverted
-# immediately after recording this (byte-identical, sha256 confirmed).
+# immediately after recording this (byte-identical, sha256 confirmed). Not re-run at the 134-case
+# (#284/#285) baseline either: none of the ten new fixtures carries a decision comment at all.
 case_impl_post_approval_tie_covered() {
   local dir; dir="$(mk_fixture impl-post-approval-tie-covered)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3670,7 +3972,8 @@ EOF
 # `covered_by_approval`/`covered_by_approval_reason` reads as jq's implicit `null` for a missing
 # key, which none of their own assertions expects; P-A and P-B do not join (neither has a
 # trusted_post_plan entry) — reverted immediately after recording this (byte-identical, sha256
-# confirmed).
+# confirmed). Not re-run at the 134-case (#284/#285) baseline either: none of the ten new fixtures
+# carries a trusted_post_plan entry either.
 case_impl_single_issue_post_approval_comment() {
   local dir; dir="$(mk_fixture impl-single-issue-post-approval-comment)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3774,6 +4077,8 @@ EOF
 #     (S-A) do NOT join — their own covered decision comment is never entered into
 #     $decision_verdicts in the first place (#240's pre-filter skips it before the verdict chain
 #     ever runs), so this merge block was already a no-op for them.
+# Not re-run at the 134-case (#284/#285) baseline for any of the three mutants above: none of the
+# ten new fixtures' ready/candidate issues carries a decision comment at all.
 case_impl_decision_edited_after_approval() {
   local dir; dir="$(mk_fixture impl-decision-edited-after-approval)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3872,7 +4177,8 @@ EOF
 # (#240) at the now-124-case suite baseline: the SAME widening dropped it to 122 pass/2 fail,
 # failing exactly the same two cases — none of #240's six new fixtures creates a
 # decision-comment-edit tie — reverted immediately after recording this (byte-identical, sha256
-# confirmed).
+# confirmed). Not re-run at the 134-case (#284/#285) baseline either: none of the ten new fixtures
+# carries a decision comment at all.
 case_impl_decision_edit_tie_covered() {
   local dir; dir="$(mk_fixture impl-decision-edit-tie-covered)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3927,7 +4233,8 @@ EOF
 # none of #240's six new fixtures has a covered decision comment reaching this guard with a
 # missing or unparseable url (D-A's/D-C's flag-false entries never reach it at all, being skipped
 # by #240's own pre-filter first) — reverted immediately after recording this (byte-identical,
-# sha256 confirmed).
+# sha256 confirmed). Not re-run at the 134-case (#284/#285) baseline either: none of the ten new
+# fixtures carries a decision comment at all.
 case_impl_decision_comment_url_missing() {
   local dir; dir="$(mk_fixture impl-decision-comment-url-missing)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3981,7 +4288,8 @@ EOF
 # cases; the narrower digits-only relaxation dropped it to 123 pass/1 fail, failing exactly THIS
 # case alone — none of #240's six new fixtures reaches either guard with a non-empty, non-digits
 # decision-comment id — reverted immediately after recording this (byte-identical, sha256
-# confirmed).
+# confirmed). Not re-run at the 134-case (#284/#285) baseline either: none of the ten new fixtures
+# carries a decision comment at all.
 case_impl_decision_comment_id_non_digits() {
   local dir; dir="$(mk_fixture impl-decision-comment-id-non-digits)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4034,7 +4342,10 @@ EOF
 # same unreachability applies here. RE-MEASURED 2026-09-14 (#240) at the now-124-case suite
 # baseline: see impl-plan-edit-lookup-unreadable's own comment above, which records this exact
 # shared-stub-arm re-measurement (122 pass/2 fail, failing exactly THIS case and
-# impl-plan-edit-lookup-unreadable) — not repeated here to avoid pinning the same figure twice.
+# impl-plan-edit-lookup-unreadable) — not repeated here to avoid pinning the same figure twice. Not
+# re-run at the 134-case (#284/#285) baseline either, for the identical reason recorded there: none
+# of the ten new fixtures uses a reject-comment-<id> marker or reaches the `/issues/comments/` stub
+# arm at all.
 case_impl_decision_edit_lookup_unreadable() {
   local dir; dir="$(mk_fixture impl-decision-edit-lookup-unreadable)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4095,7 +4406,9 @@ EOF
 # either, since its decision comment is never looked up at all). RE-MEASURED 2026-09-14 (#240) at
 # the now-124-case suite baseline: see impl-plan-edit-filter-error's own comment above, which
 # records this exact shared-stub-arm re-measurement (124 pass/0 fail, still no case fails) — not
-# repeated here to avoid pinning the same figure twice.
+# repeated here to avoid pinning the same figure twice. Not re-run at the 134-case (#284/#285)
+# baseline either, for the identical reason recorded there: none of the ten new fixtures reaches
+# the `/issues/comments/` stub arm at all.
 case_impl_decision_edit_filter_error() {
   local dir; dir="$(mk_fixture impl-decision-edit-filter-error)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4142,7 +4455,8 @@ EOF
 # RE-MEASURED 2026-09-14 (#240) at the now-124-case suite baseline: the SAME `// empty` drop
 # dropped it to 123 pass/1 fail, failing exactly the same one case — none of #240's six new
 # fixtures omits `updated_at` from a comment-<id>.json it actually looks up — reverted immediately
-# after recording this (byte-identical, sha256 confirmed).
+# after recording this (byte-identical, sha256 confirmed). Not re-run at the 134-case (#284/#285)
+# baseline either: none of the ten new fixtures looks up a comment-<id>.json at all.
 case_impl_decision_edit_missing_updated_at() {
   local dir; dir="$(mk_fixture impl-decision-edit-missing-updated-at)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4209,7 +4523,8 @@ EOF
 # #240's six new fixtures has an uncovered trusted_post_plan entry either (D-A/D-B/D-C's decision
 # comments are all workstream-B-covered; only their OWN #240 flag, checked separately, decides
 # whether the per-comment lookup runs) — both reverted immediately after recording this
-# (byte-identical, sha256 confirmed).
+# (byte-identical, sha256 confirmed). Not re-run at the 134-case (#284/#285) baseline for either
+# mutant: none of the ten new fixtures carries a decision comment at all.
 case_impl_decision_edited_beats_unreadable() {
   local dir; dir="$(mk_fixture impl-decision-edited-beats-unreadable)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4351,7 +4666,9 @@ EOF
 # six new fixtures already has covers_plan "true" before reaching this guard (P-A/S-A via their own
 # skip; D-A/D-B/D-C via a genuinely covered plan comment), so the guard was already passing for all
 # of them and this mutant remains invisible — reverted immediately after recording this
-# (byte-identical, sha256 confirmed).
+# (byte-identical, sha256 confirmed). Not re-run at the 134-case (#284/#285) baseline either: none
+# of the ten new fixtures carries any trusted_post_plan entry, so forcing this guard open still
+# iterates the #230 loop zero times for every one of them.
 case_impl_decision_not_looked_up_when_plan_uncovered() {
   local dir; dir="$(mk_fixture impl-decision-not-looked-up-when-plan-uncovered)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4484,12 +4801,17 @@ EOF
 # — none of these twenty-one new cases
 # is affected either — not re-run): dropped the suite from 74 pass/0 fail to
 # 69 pass/5 fail, failing exactly: this case, stub-json-author-association-rejected,
-# plan-script-unknown-json-field-fails-closed, impl-script-unknown-json-field-fails-loud (an
+# plan-script-unknown-json-field-fails-closed, impl-script-unknown-json-field-fails-closed (an
 # unvalidated list) call now falls through to initial.json/ready.json instead of rejecting — the
 # implementer script's own first call is a list) call, so it fails too), and
 # stub-json-missing-json-argument-fails-loud (its own no-`--json`-at-all call is ALSO a list) call,
 # so with validate_json_fields deleted from that arm it too falls through and is silently served
-# initial.json) — reverted immediately after recording this.
+# initial.json) — reverted immediately after recording this. The suite has since grown to 134
+# across #284/#285's ten new fixtures (five of which, Part 13, call `gh issue list` via
+# run_status, alongside five Part 12 fixtures via run_implementation/run_implementation_args) —
+# none of these ten is affected either — not re-run: every one of them sends only already-valid
+# --json field lists (the same `number,title,url` / `number,title,url,comments,labels` shapes this
+# note already covers), never an unsupported field.
 case_stub_json_unknown_field_rejected() {
   local dir; dir="$(mk_fixture stub-json-unknown-field-rejected)"
   cat > "$dir/initial.json" <<'EOF'
@@ -4527,7 +4849,10 @@ EOF
 # dropped the suite from 74 pass/0 fail to 72 pass/2 fail, failing exactly: this case and
 # stub-json-author-association-rejected (both scripts' first failing call in the end-to-end cases
 # is a list) call, already caught by the list) arm's own validation, so neither end-to-end case
-# is sensitive to the view) arm alone) — reverted immediately after recording this.
+# is sensitive to the view) arm alone) — reverted immediately after recording this. The suite has
+# since grown to 134 across #284/#285's ten new fixtures — none of these is affected either — not
+# re-run: every `gh issue view` call any of them makes requests the SAME already-accepted
+# `number,title,url,comments,labels` shape, never an unsupported field.
 case_stub_json_unknown_field_rejected_view() {
   local dir; dir="$(mk_fixture stub-json-unknown-field-rejected-view)"
   cat > "$dir/issue-1.json" <<'EOF'
@@ -4559,7 +4884,9 @@ EOF
 # they never invoke `gh issue list`/`gh issue view` at all) — not re-run): dropped the suite from
 # 74 pass/0 fail to 69 pass/5 fail, failing exactly: this case, stub-json-unknown-field-rejected,
 # stub-json-unknown-field-rejected-view, plan-script-unknown-json-field-fails-closed, and
-# impl-script-unknown-json-field-fails-loud — reverted immediately after recording this.
+# impl-script-unknown-json-field-fails-closed — reverted immediately after recording this. The
+# suite has since grown to 134 across #284/#285's ten new fixtures, likewise unaffected for the
+# identical reason (their field lists were already valid) — not re-run.
 case_stub_json_author_association_rejected() {
   local dir; dir="$(mk_fixture stub-json-author-association-rejected)"
   cat > "$dir/initial.json" <<'EOF'
@@ -4633,7 +4960,7 @@ EOF
 # author-association-unavailable, author-association-retry-succeeds,
 # author-association-retry-sleep-failure-survives, plan-candidates-filter-error,
 # stub-json-unknown-field-rejected, stub-json-check-is-field-list-scoped,
-# plan-script-unknown-json-field-fails-closed, impl-script-unknown-json-field-fails-loud,
+# plan-script-unknown-json-field-fails-closed, impl-script-unknown-json-field-fails-closed,
 # stub-json-missing-json-argument-fails-loud, and empty-needle-guard — none of which (other than
 # empty-needle-guard's own unconditional immunity) ever calls `gh issue view` with "comments" in
 # its field list. Honest limit: several of
@@ -4677,6 +5004,33 @@ EOF
 # --json number,title,url,comments,labels` call (batch mode for P-A/P-B/D-A/D-B/D-C, the identical
 # --issue prefetch for S-A) that now fails validate_json_fields before it can ever reach either
 # #240 pre-filter — reverted immediately after recording this (byte-identical, sha256 confirmed).
+#
+# RE-MEASURED 2026-09-15 (#284/#285), UNLIKE #240: the suite grew to 134 across ten new fixtures,
+# and — unlike every prior "unaffected" verdict in this chain — THREE of them join the caught set
+# this time: with the SAME "comments" field removed from GH_ISSUE_JSON_FIELDS, re-running the
+# suite dropped it from 134 pass/0 fail to 26 pass/108 fail — the SAME nineteen pre-#284 survivors
+# named above (one of them, impl-script-unknown-json-field-fails-closed, renamed by THIS PR from
+# impl-script-unknown-json-field-fails-loud — same case, same survival, new name), PLUS seven of
+# #284/#285's own ten new fixtures
+# (impl-ready-query-unavailable, impl-single-issue-fetch-not-retried, and all five Part 13
+# status-* fixtures) survive too — twenty-six survivors in total. The other three
+# (impl-ready-query-retry-succeeds, impl-fetch-retry-succeeds, impl-retry-sleep-failure-survives)
+# join the caught set, since each makes a real `gh issue view ...
+# --json number,title,url,comments,labels` call for a genuinely healthy ready issue that this
+# mutation now rejects before either attempt can succeed. The retrofitted impl-fetch-failure-
+# survives was ALREADY inside the 105-name caught set at the 124-case baseline (its own issue-2.json
+# fetch makes the identical real call) — #284's new fetch_retries/sleep assertions added to that
+# case do not change its own sensitivity to this mutant. impl-ready-query-unavailable survives
+# because its ready query is rejected by its own permanent reject-ready marker before any per-issue
+# view call is ever attempted; impl-single-issue-fetch-not-retried survives coincidentally — its
+# `--issue 14` prefetch has no issue-14.json fixture either way, so validate_json_fields rejecting
+# the mutated field list produces the identical "could not fetch issue #14" outcome the case
+# already expected. All five Part 13 fixtures survive for the reason the header's own #285 doc
+# comment states: bin/harness-status.sh's degraded/degraded_reasons rule reads only each script's
+# `counts` object for `*_unavailable`-suffixed flags — never `plan_selection`, `fetch_failures`, or
+# `ready`'s own content beyond its length — so a per-issue fetch failure this mutation causes
+# (status-clean-not-degraded's own healthy issue #200) changes no field any Part 13 assertion
+# reads. Reverted immediately after recording this (byte-identical, sha256 confirmed).
 case_stub_json_script_field_lists_accepted() {
   local dir; dir="$(mk_fixture stub-json-script-field-lists-accepted)"
   cat > "$dir/initial.json" <<'EOF'
@@ -4748,12 +5102,15 @@ EOF
 # a substring, so the lazy re-implementation wrongly rejects a call whose --json field list is
 # valid), stub-json-unknown-field-rejected and stub-json-unknown-field-rejected-view (a "bogusField"
 # token is no longer checked against anything and is silently accepted), and
-# plan-script-unknown-json-field-fails-closed / impl-script-unknown-json-field-fails-loud (their
+# plan-script-unknown-json-field-fails-closed / impl-script-unknown-json-field-fails-closed (their
 # injected "bogusField" is likewise accepted, so the mutated scripts no longer fail loud).
 # stub-json-author-association-rejected did NOT fail under this mutant — its own fixture is exactly
 # the "authorAssociation" substring this lazy style still happens to catch, a coincidence of that
 # one case, not evidence the mutant is inert; it is caught by the five cases above. Reverted
-# immediately after recording this.
+# immediately after recording this. The suite has since grown to 134 across #284/#285's ten new
+# fixtures, likewise unaffected — none of them uses `--search` at all except the ready-query
+# fixtures, whose fixed `--search` constant does not contain "authorAssociation", and none of their
+# `--json` field lists contains that substring either.
 case_stub_json_check_is_field_list_scoped() {
   local dir; dir="$(mk_fixture stub-json-check-is-field-list-scoped)"
   cat > "$dir/initial.json" <<'EOF'
@@ -4789,7 +5146,9 @@ EOF
 # 73 pass/1 fail, failing exactly:
 # this case (the missing-argument call now falls through to the zero-iteration `for tok in $list`
 # loop and is silently served initial.json instead of rejected) — reverted immediately after
-# recording this.
+# recording this. The suite has since grown to 134 across #284/#285's ten new fixtures, likewise
+# unaffected — every `gh issue list`/`gh issue view` call any of them makes (both attempts, at
+# every retried site) carries a --json argument too.
 case_stub_json_missing_json_argument_fails_loud() {
   local dir; dir="$(mk_fixture stub-json-missing-json-argument-fails-loud)"
   cat > "$dir/initial.json" <<'EOF'
@@ -4847,14 +5206,23 @@ case_plan_script_unknown_json_field_fails_closed() {
   expect_err 'Unknown JSON field: "bogusField"'
 }
 
-# impl-script-unknown-json-field-fails-loud — the same mutation and wiring proof against
-# bin/find-implementation-work.sh's BATCH mode (no --issue): the first call the script makes in
-# that mode is the ready query (bin/find-implementation-work.sh:253-256), also an unguarded
-# command-substitution assignment, so it fails exactly the same way. `--issue <n>` mode's view
-# call (:242) is `2>/dev/null`-guarded and would only warn, not fail loud — batch mode is the
-# shape that actually falls closed.
-case_impl_script_unknown_json_field_fails_loud() {
-  local dir; dir="$(mk_fixture impl-script-unknown-json-field-fails-loud)"
+# impl-script-unknown-json-field-fails-closed — renamed from -fails-loud for #284 (the exact
+# retrofit #273 made to this case's planner twin, plan-script-unknown-json-field-fails-closed): the
+# same mutation and wiring proof against bin/find-implementation-work.sh's BATCH mode (no --issue).
+# The FIRST call the script makes in that mode is the ready query, which the mutation makes the
+# stub reject; (#284) the script's own bounded retry re-attempts with the IDENTICAL mutated field
+# list, so the retry is rejected too, and the ready query fails closed — one sleep,
+# ready_query_unavailable: true — instead of aborting the whole script under `set -euo pipefail`
+# before any stdout is produced (the pre-#284 behaviour this case used to pin). With `ready`
+# resolved to an empty array, the per-issue loop never runs (no view-call mutation is exercised by
+# this case). The script still exits 0 with a full document, and gh's own rejection line reaches
+# stderr on the ready query's one list-arm attempt (retried once, so the line is emitted twice,
+# but expect_err is presence-only). ready.json is `[]` (the run would otherwise succeed, and
+# produce real content, absent the mutation) so only the validator's rejection can explain the
+# fail-closed flag. Measured mutants: (a) and (e) — see the MEASURED MUTANTS (#284/#285)
+# block below the case table.
+case_impl_script_unknown_json_field_fails_closed() {
+  local dir; dir="$(mk_fixture impl-script-unknown-json-field-fails-closed)"
   sed 's/--json /--json bogusField,/' "$root/bin/find-implementation-work.sh" > "$dir/mutant.sh"
   if cmp -s "$root/bin/find-implementation-work.sh" "$dir/mutant.sh"; then
     __ok=0
@@ -4864,8 +5232,10 @@ case_impl_script_unknown_json_field_fails_loud() {
   printf '[]\n' > "$dir/ready.json"
   build_stub_gh "$dir"
   run_script_at "$dir" "$dir/mutant.sh"
-  expect_rc 1
-  expect_empty_out
+  expect_rc 0
+  expect_jq '.ready' '[]'
+  expect_jq '.counts.ready_query_unavailable' 'true'
+  expect_sleep_calls "$dir" 1
   expect_err 'Unknown JSON field: "bogusField"'
 }
 
@@ -6015,6 +6385,66 @@ EOF
 # own needs_initial_plan/revision-candidates/per-candidate-fetch retry logic or its final `jq -n`
 # output object, reached only via run_planning, and all six of #240's new fixtures run
 # run_implementation/run_implementation_args exclusively, never find-planning-work.sh.
+#
+# RE-MEASURED 2026-09-15 (#284/#285), UNLIKE #240: the suite grew to 134 across ten new fixtures,
+# five of which (Part 13) DO call find-planning-work.sh via the new run_status runner — so, unlike
+# every prior "not reached" verdict above, five of these eleven mutants ARE now reachable. Each was
+# re-applied to bin/find-planning-work.sh alone, the suite re-run, and the script byte-identically
+# restored (sha256 confirmed) before the next:
+#   (a) re-measured: 134 cases dropped to 129 pass/5 fail, failing exactly the SAME four planner-
+#       side names (plan-initial-query-retry-succeeds, plan-initial-query-unavailable,
+#       plan-retry-sleep-failure-survives, plan-script-unknown-json-field-fails-closed) PLUS
+#       status-degraded-planner-initial-query: its own permanent reject-initial marker means the
+#       collapsed retry's ONE attempt fails outright, aborting find-planning-work.sh under
+#       set -euo pipefail (no `if !` guard survives), which propagates through
+#       bin/harness-status.sh's own set -euo pipefail into a non-zero exit instead of the
+#       fail-closed document this fixture expects.
+#   (b) re-measured: 134 cases dropped to 128 pass/6 fail, failing exactly the SAME five planner-
+#       side names (plan-candidates-filter-error, plan-script-unknown-json-field-fails-closed,
+#       plan-candidates-query-retry-succeeds, plan-candidates-query-unavailable,
+#       plan-retry-sleep-failure-survives) PLUS status-degraded-both-scripts, for the identical
+#       abort mechanism as (a) — its own permanent reject-candidates marker means the collapsed
+#       retry's one attempt aborts the script outright.
+#   (c) re-measured: 134 cases dropped to 131 pass/3 fail, failing exactly the SAME three names as
+#       before (fetch-failure-survives, plan-fetch-retry-succeeds, plan-retry-sleep-failure-
+#       survives) — NOT reachable: no Part 13 fixture's own candidates.json ever has a real
+#       candidate reach the per-candidate loop (status-degraded-both-scripts' own permanent
+#       reject-candidates rejects the query before the loop is ever entered).
+#   (d1)/(d2)/(d3) not re-run: reachable only in combination with a failing stub `sleep`
+#       (sleep-fails), which none of the five new Part 13 fixtures ever sets.
+#   (e) re-measured: 134 cases dropped to 129 pass/5 fail, failing exactly the SAME five names as
+#       before (owner-comment-revision, output-shape, plan-initial-query-retry-succeeds,
+#       plan-initial-query-unavailable, plan-retry-sleep-failure-survives) — NOT reachable:
+#       `initial_query_retried` does not end in `_unavailable`, so bin/harness-status.sh's generic
+#       degraded_reasons rule never reads it, and no Part 13 fixture asserts it directly.
+#   (f) re-measured: 134 cases dropped to 128 pass/6 fail, failing exactly the SAME five names as
+#       before (output-shape, plan-script-unknown-json-field-fails-closed, plan-initial-query-
+#       retry-succeeds, plan-initial-query-unavailable, plan-retry-sleep-failure-survives) PLUS
+#       status-degraded-planner-initial-query, for the identical missing-key mechanism the
+#       SUBSUMPTION PROOF's own #284/#285 re-measurement documents above: with
+#       initial_query_unavailable absent from find-planning-work.sh's published counts entirely,
+#       bin/harness-status.sh's own generic select finds nothing to name for the planning half.
+#   (g) re-measured: 134 cases dropped to 126 pass/8 fail — one more than (h) below, for the
+#       identical (g)-not-(h) reason already recorded above (owner-comment-revision) — PLUS
+#       status-degraded-both-scripts, same missing-key mechanism as (h).
+#   (h) re-measured: 134 cases dropped to 127 pass/7 fail, failing exactly the SAME six planner-
+#       side names as before (output-shape, plan-candidates-filter-error, plan-script-unknown-
+#       json-field-fails-closed, plan-candidates-query-retry-succeeds, plan-candidates-query-
+#       unavailable, plan-retry-sleep-failure-survives) PLUS status-degraded-both-scripts, the
+#       identical missing-key mechanism as (f): with candidates_query_unavailable absent, the
+#       generic select finds nothing to name for status-degraded-both-scripts' own
+#       "planning.candidates_query_unavailable" half.
+#   (i) not re-run: `fetch_retries` does not end in `_unavailable` and no Part 13 fixture's own
+#       candidates.json ever reaches the per-candidate loop in the first place (see (c) above) —
+#       doubly unreachable.
+#   (j) not re-run: this mutant only adds an extra, unconditional retry to an ALREADY-CORRECT
+#       verdict (a healthy query stays healthy on its forced second attempt; a permanently-broken
+#       one — status-degraded-planner-initial-query's own reject-initial — fails on the forced
+#       attempt exactly as it already did on the first), so it changes NO published field any Part
+#       13 fixture reads; it only adds cost (an extra call/sleep) neither run_status nor any of its
+#       five fixtures' assertions can observe.
+#   (k) not re-run: identical reasoning to (c)/(i) — no Part 13 fixture's candidates.json ever
+#       reaches the per-candidate loop this mutant edits.
 
 # ---------------------------------------------------------------------------------------------
 # Part 11 cases (#240), against bin/find-implementation-work.sh — bounding the per-covered-comment
@@ -6342,6 +6772,421 @@ EOF
 #       flag-"false" comment loses its skip, since `false // null` evaluates to `null` (jq treats a
 #       real `false` as empty for `//`), which the pre-filter's own `= "false"` string compare no
 #       longer matches; P-B and D-B do not join (their own flags are "true", untouched by the trap).
+# The suite has since grown to 134 across #284/#285's ten new fixtures below — none of (a)-(h)
+# above was re-run: every one of these mutants lives inside the plan-comment/decision-comment
+# includesCreatedEdit pre-filters, reached only when a ready issue actually carries a plan or
+# decision comment; none of the ten new fixtures' ready/candidate issues carries either.
+
+# ---------------------------------------------------------------------------------------------
+# Part 12 cases (#284), against bin/find-implementation-work.sh — bounded retries on the batch
+# `ready` query and the per-issue `gh issue view` fetch, mirroring #272/#273's identical shape on
+# the planner side. Each fixture keeps the OTHER site on its healthy, no-retry path so its own
+# sleep/retry counts are unambiguous — except impl-retry-sleep-failure-survives, which deliberately
+# fails both sites at once (see its own comment below).
+
+# impl-ready-query-retry-succeeds — (#284, the 1-failure boundary) the stub's pr-open arm fails on
+# its FIRST invocation only (reject-ready-once, consumed after it fires) and succeeds on the
+# bounded retry: exactly 2 matching .issue-calls lines (the 'pr-open' needle — the per-issue view
+# call below carries no "pr-open" substring, so it cannot inflate this count), exactly 1 sleep call
+# with argument "30", counts.ready_query_retried: true, counts.ready_query_unavailable: false, and
+# — the non-vacuity requirement — a REAL issue number from ready.json, proving the bucket was
+# actually built from the SECOND attempt's output, not merely that the boolean flags came out
+# right. issue-50.json is present and healthy so the per-issue fetch this ready issue triggers
+# never itself retries or sleeps, keeping this fixture's own sleep/retry counts unambiguous.
+# Measured mutants: (a), (d), and (e) — see the MEASURED MUTANTS (#284/#285) block below the case
+# table.
+case_impl_ready_query_retry_succeeds() {
+  local dir; dir="$(mk_fixture impl-ready-query-retry-succeeds)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":50,"title":"Retried ready query","url":"https://example.invalid/50"}]
+EOF
+  cat > "$dir/issue-50.json" <<'EOF'
+{"number":50,"title":"Retried ready query","url":"https://example.invalid/50","comments":[],"labels":[{"name":"plan-approved"}]}
+EOF
+  : > "$dir/reject-ready-once"
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.ready[0].number' '50'
+  expect_jq '.counts.ready_query_retried' 'true'
+  expect_jq '.counts.ready_query_unavailable' 'false'
+  expect_sleep_calls "$dir" 1
+  expect_sleep_arg "$dir" 30
+  expect_issue_calls "$dir" 'pr-open' 2
+  expect_warn_count "ready query failed once" 1
+  expect_no_err "could not list ready issues"
+}
+
+# impl-ready-query-unavailable — (#284, the 2-failures boundary) the stub's pr-open arm fails on
+# EVERY invocation (permanent reject-ready): one warn line (the byte-identical existing fail-closed
+# stem), `ready` reported empty, `plan_selection` reported empty (zero loop iterations — the
+# non-vacuity pin that the per-issue loop never ran at all, not merely that it ran and found
+# nothing), both ready_query_unavailable and ready_query_retried true, exactly 1 sleep — never 2 —
+# the bounded-retry pin (an unbounded retry loop would sleep more than once against a permanently
+# failing query), and counts.truncated: false (a complete, merely empty, document was still
+# printed — the fail-closed-not-abort guarantee). Measured mutants: (a), (d), and (e) — see the
+# MEASURED MUTANTS (#284/#285) block below the case table.
+case_impl_ready_query_unavailable() {
+  local dir; dir="$(mk_fixture impl-ready-query-unavailable)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":51,"title":"Never served","url":"https://example.invalid/51"}]
+EOF
+  : > "$dir/reject-ready"
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.ready' '[]'
+  expect_jq '.plan_selection' '[]'
+  expect_jq '.counts.ready_query_unavailable' 'true'
+  expect_jq '.counts.ready_query_retried' 'true'
+  expect_jq '.counts.truncated' 'false'
+  expect_sleep_calls "$dir" 1
+  expect_warn_count "warn: issue #" 0
+  expect_err "could not list ready issues"
+}
+
+# impl-fetch-retry-succeeds — (#284, the 1-failure boundary) the stub's `gh issue view` call for
+# ready issue #1 fails on its FIRST invocation only (reject-view-1-once, consumed after it fires)
+# and succeeds on the bounded retry: exactly 2 matching .issue-calls lines (the 'view 1' needle),
+# exactly 1 sleep call with argument "30", fetch_retries: 1, fetch_failures: 0 (a retried-then-
+# successful fetch is never counted as a failure), and — non-vacuously — a real plan_selection
+# entry (built from the SECOND attempt's issue-1.json output). expect_no_err confirms the existing
+# warn-and-skip stem never fires, since the retry succeeded before that fallback would run.
+# Measured mutants: (b), (f), and (g) — see the MEASURED MUTANTS (#284/#285) block below the case
+# table.
+case_impl_fetch_retry_succeeds() {
+  local dir; dir="$(mk_fixture impl-fetch-retry-succeeds)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[],"labels":[]}
+EOF
+  : > "$dir/reject-view-1-once"
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].number' '1'
+  expect_jq '.counts.fetch_retries' '1'
+  expect_jq '.counts.fetch_failures' '0'
+  expect_sleep_calls "$dir" 1
+  expect_sleep_arg "$dir" 30
+  expect_issue_calls "$dir" 'view 1' 2
+  expect_warn_count "issue #1: fetch failed once" 1
+  expect_no_err "could not fetch issue #1"
+}
+
+# impl-single-issue-fetch-not-retried — (#284) the deliberate asymmetry (LESSON 2026-09-08: a
+# criterion naming two modes needs a case per mode): `--issue 14` (unused; 7/9/11/12/13/42/43/55
+# are taken) with no issue-14.json fixture at all — byte-identical behaviour to before #284: one
+# attempt, the existing warn-and-skip stem, fetch_failures: 1, fetch_retries/ready_query_retried/
+# ready_query_unavailable all stay at their reset values, and zero sleeps, since `--issue <n>`
+# mode's prefetch never enters the retried branch (it reuses `prefetched_issue`, never the loop's
+# own `elif ! issue=$(...)` arm) and never touches the ready query at all. Pinned by this fixture:
+# `counts.fetch_retries` (0), `counts.ready_query_retried` (false), and
+# `counts.ready_query_unavailable` (false) are all asserted directly below, closing the
+# acceptance-criterion-6 gap that left `--issue` mode's `ready_query_*` pair unpinned. Measured
+# mutants: (d), (e), (f), and (h) — see the MEASURED MUTANTS (#284/#285) block below the case
+# table.
+case_impl_single_issue_fetch_not_retried() {
+  local dir; dir="$(mk_fixture impl-single-issue-fetch-not-retried)"
+  build_stub_gh "$dir"
+  run_implementation_args "$dir" --issue 14
+  expect_rc 0
+  expect_jq '.ready' '[]'
+  expect_jq '.counts.fetch_failures' '1'
+  expect_jq '.counts.fetch_retries' '0'
+  expect_jq '.counts.ready_query_retried' 'false'
+  expect_jq '.counts.ready_query_unavailable' 'false'
+  expect_sleep_calls "$dir" 0
+  expect_issue_calls "$dir" 'view 14' 1
+  expect_err "could not fetch issue #14"
+}
+
+# impl-retry-sleep-failure-survives — (#284) BOTH new retry sites fail once each
+# (reject-ready-once and reject-view-1-once, both consumed on their first use) AND the backoff
+# sleep itself fails every time (sleep-fails): both retries still run and the script still exits 0
+# with real content built from each site's second attempt (a real ready issue, a real
+# plan_selection entry) — pinning both `|| true` guards at once. Honest limit (this fixture's own
+# comment, per the plan): it cannot localise WHICH guard broke — a mutant deleting either ONE of
+# the two `|| true` guards fails this case, but does not by itself say which; the two single-site
+# cases above (impl-ready-query-retry-succeeds, impl-fetch-retry-succeeds), whose own stub `sleep`
+# always succeeds, are unaffected by a failing sleep and so cannot substitute for this one.
+# Measured mutants: (a), (b), (c1), (c2), (d), (e), (f), and (g) — see the MEASURED MUTANTS
+# (#284/#285) block below (this fixture is the broadest single case in the new set, reachable by
+# every one of them since it exercises both retry sites and every new flag at once).
+case_impl_retry_sleep_failure_survives() {
+  local dir; dir="$(mk_fixture impl-retry-sleep-failure-survives)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Retried under a failing sleep","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Retried under a failing sleep","url":"https://example.invalid/1","comments":[],"labels":[]}
+EOF
+  : > "$dir/reject-ready-once"
+  : > "$dir/reject-view-1-once"
+  : > "$dir/sleep-fails"
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_sleep_calls "$dir" 2
+  expect_jq '.counts.ready_query_retried' 'true'
+  expect_jq '.counts.ready_query_unavailable' 'false'
+  expect_jq '.ready[0].number' '1'
+  expect_jq '.counts.fetch_retries' '1'
+  expect_jq '.counts.fetch_failures' '0'
+  expect_jq '.plan_selection[0].number' '1'
+}
+
+# ---------------------------------------------------------------------------------------------
+# Part 13 cases (#285), against bin/harness-status.sh end-to-end (via the new run_status runner) —
+# the generic degraded/degraded_reasons marker computed from EITHER discovery script's own `counts`
+# object. Each fixture's issue documents are minimal (comments: [], labels: []) and ready-issue
+# numbers are kept disjoint from revision-candidate numbers, per the convention documented in the
+# fixture-file-list note above (a status fixture drives BOTH discovery scripts at once, so
+# issue-<n>.json is never shared between find-planning-work.sh's own candidates and
+# find-implementation-work.sh's own ready issues in these fixtures).
+
+# status-clean-not-degraded — positive control / non-vacuity: every query healthy, a populated
+# initial.json, ready.json, proposed.json, blocked.json, prs.json, and one revision candidate;
+# asserts degraded: false, degraded_reasons: [], counts.degraded: false, and that the pre-existing
+# counts (unplanned, in_revision, ready_to_implement, plans_to_review, prs_to_review, blocked,
+# human_actions) are all non-zero and correct — this is what stops the degraded assertions below
+# from passing vacuously and what pins that nothing existing regressed. Measured mutant: (l) — see
+# the MEASURED MUTANTS (#284/#285) block below the case table; this is the non-vacuity control
+# mutant (l) must fail ALONE (none of (a)-(k) touches this fixture, since every query it feeds is
+# healthy).
+case_status_clean_not_degraded() {
+  local dir; dir="$(mk_fixture status-clean-not-degraded)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":100,"title":"Needs an initial plan","url":"https://example.invalid/100","author":{"login":"owner"}}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":200,"title":"Ready to implement","url":"https://example.invalid/200"}]
+EOF
+  cat > "$dir/issue-200.json" <<'EOF'
+{"number":200,"title":"Ready to implement","url":"https://example.invalid/200","comments":[],"labels":[]}
+EOF
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":300,"title":"Awaiting review","url":"https://example.invalid/300"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":400,"title":"Blocked","url":"https://example.invalid/400"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":500,"title":"Open PR","url":"https://example.invalid/500","headRefName":"claude/500-fix","statusCheckRollup":[]}]
+EOF
+  build_stub_gh "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.degraded' 'false'
+  expect_jq '.degraded_reasons' '[]'
+  expect_jq '.counts.degraded' 'false'
+  expect_jq '.counts.unplanned' '1'
+  expect_jq '.counts.in_revision' '0'
+  expect_jq '.counts.ready_to_implement' '1'
+  expect_jq '.counts.plans_to_review' '1'
+  expect_jq '.counts.prs_to_review' '1'
+  expect_jq '.counts.blocked' '1'
+  expect_jq '.counts.human_actions' '3'
+}
+
+# status-degraded-planner-initial-query — (#285) reject-initial (find-planning-work.sh's
+# needs_initial_plan query fails closed): degraded: true, degraded_reasons ==
+# ["planning.initial_query_unavailable"] (the exact array — pinning the "planning." prefix),
+# counts.unplanned: 0, counts.degraded: true. Measured mutant: (k) — see the MEASURED MUTANTS
+# (#284/#285) block below the case table ((i) only touches the implementation half and (j)'s
+# two-key enumeration still names initial_query_unavailable, so neither reaches this fixture).
+case_status_degraded_planner_initial_query() {
+  local dir; dir="$(mk_fixture status-degraded-planner-initial-query)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":101,"title":"Never served","url":"https://example.invalid/101","author":{"login":"owner"}}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  printf '[]\n' > "$dir/ready.json"
+  : > "$dir/reject-initial"
+  build_stub_gh "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.degraded' 'true'
+  expect_jq '.degraded_reasons' '["planning.initial_query_unavailable"]'
+  expect_jq '.counts.unplanned' '0'
+  expect_jq '.counts.degraded' 'true'
+}
+
+# status-degraded-implementer-ready-query — (#285) reject-ready (find-implementation-work.sh's
+# ready query fails closed): degraded_reasons == ["implementation.ready_query_unavailable"] (the
+# exact array — pinning the "implementation." prefix), counts.ready_to_implement: 0. Measured
+# mutants: (a), (e), (i), (j), and (k) — see the MEASURED MUTANTS (#284/#285) block below the case
+# table — the broadest status fixture in the new set, reached via TWO different mechanisms: (a)
+# reaches it because this fixture's permanent reject-ready, with the retry collapsed to a bare
+# assignment, aborts find-implementation-work.sh itself (no `if !` guard survives to suppress
+# set -e), which propagates through harness-status.sh's OWN set -euo pipefail into a non-zero exit;
+# (e)/(i)/(j)/(k) each reach it by changing the PUBLISHED JSON instead (a missing key, a dropped
+# half of the `+`, a narrower select, or a hard-coded boolean respectively) rather than aborting
+# anything, since it is the one fixture whose SOLE degraded reason is the implementation half.
+case_status_degraded_implementer_ready_query() {
+  local dir; dir="$(mk_fixture status-degraded-implementer-ready-query)"
+  printf '[]\n' > "$dir/initial.json"
+  printf '[]\n' > "$dir/candidates.json"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":201,"title":"Never served","url":"https://example.invalid/201"}]
+EOF
+  : > "$dir/reject-ready"
+  build_stub_gh "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.degraded' 'true'
+  expect_jq '.degraded_reasons' '["implementation.ready_query_unavailable"]'
+  expect_jq '.counts.ready_to_implement' '0'
+}
+
+# status-degraded-author-association — (#285) reject-association (find-planning-work.sh's REST
+# author-association lookup fails closed, #246): degraded_reasons ==
+# ["planning.author_association_unavailable"]. This is the pin that the rule is GENERIC: a flag
+# neither #284 nor #273 added still surfaces, so an enumerate-the-keys mutant fails here. Measured
+# mutants: (j) and (k) — see the MEASURED MUTANTS (#284/#285) block below the case table.
+case_status_degraded_author_association() {
+  local dir; dir="$(mk_fixture status-degraded-author-association)"
+  printf '[]\n' > "$dir/initial.json"
+  printf '[]\n' > "$dir/candidates.json"
+  printf '[]\n' > "$dir/ready.json"
+  : > "$dir/reject-association"
+  build_stub_gh "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.degraded' 'true'
+  expect_jq '.degraded_reasons' '["planning.author_association_unavailable"]'
+}
+
+# status-degraded-both-scripts — (#285) reject-candidates (find-planning-work.sh's
+# revision-candidates query) + reject-ready (find-implementation-work.sh's ready query) together:
+# degraded_reasons == ["planning.candidates_query_unavailable","implementation.
+# ready_query_unavailable"] — the exact array, pinning both halves of the `+` concatenation AND
+# their order (planning half first). Measured mutants: (a), (e), (i), and (j) — see the MEASURED
+# MUTANTS (#284/#285) block below the case table — (a) reaches it the same way it reaches
+# status-degraded-implementer-ready-query (this fixture's own reject-ready is also permanent, so
+# the collapsed retry aborts find-implementation-work.sh, propagating through harness-status.sh's
+# own set -euo pipefail); (e)/(i)/(j) each narrow the published implementation-half entry instead,
+# which this fixture's exact-array assertion catches on its own half of the `+` even though the
+# planning half is untouched. Mutant (k) does NOT reach it: hard-coding `degraded: false` never
+# touches `degraded_reasons` itself, and this fixture asserts only the reasons array, not the
+# boolean.
+case_status_degraded_both_scripts() {
+  local dir; dir="$(mk_fixture status-degraded-both-scripts)"
+  printf '[]\n' > "$dir/initial.json"
+  cat > "$dir/candidates.json" <<'EOF'
+[{"number":1}]
+EOF
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":202,"title":"Never served","url":"https://example.invalid/202"}]
+EOF
+  : > "$dir/reject-candidates"
+  : > "$dir/reject-ready"
+  build_stub_gh "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.degraded_reasons' '["planning.candidates_query_unavailable","implementation.ready_query_unavailable"]'
+}
+
+# MEASURED MUTANTS (#284/#285) — applied one at a time to the working tree (134 cases at
+# measurement time), the suite re-run, and the mutated file byte-identically restored (sha256
+# confirmed) before the next. Mutants (a)-(h) edit bin/find-implementation-work.sh; (i)-(l) edit
+# bin/harness-status.sh. Each Part 12/13 case's own comment above cites the letter(s) below whose
+# recorded failing set names it:
+#   (a) collapse the ready-query retry back to the bare assignment (bin/find-implementation-work.sh,
+#       `if ! ready=$(...); then ... fi` collapsed to a bare `ready=$(...)`): 134 cases dropped to
+#       128 pass/6 fail, failing exactly: impl-script-unknown-json-field-fails-closed,
+#       impl-ready-query-retry-succeeds, impl-ready-query-unavailable,
+#       impl-retry-sleep-failure-survives, status-degraded-implementer-ready-query, and
+#       status-degraded-both-scripts — the last two via a DIFFERENT mechanism than the first four:
+#       their own fixtures set a PERMANENT reject-ready, so the mutated bare assignment's only
+#       attempt fails and aborts find-implementation-work.sh outright (no `if !` guard survives to
+#       suppress set -e), which propagates through bin/harness-status.sh's own set -euo pipefail
+#       into a non-zero exit instead of the fail-closed document these fixtures expect.
+#   (b) collapse the per-issue fetch retry (bin/find-implementation-work.sh, the loop's
+#       `if ! issue=$(...); then ... fi` collapsed to the pre-#284 single-attempt warn-and-skip):
+#       134 cases dropped to 131 pass/3 fail, failing exactly: impl-fetch-failure-survives,
+#       impl-fetch-retry-succeeds, and impl-retry-sleep-failure-survives.
+#   (c1) delete the `|| true` guard from the ready-query site's `sleep "$RETRY_SLEEP"` only (the
+#       per-issue fetch site's guard intact): 134 cases dropped to 133 pass/1 fail, failing exactly
+#       impl-retry-sleep-failure-survives — the ONLY case whose stub `sleep` ever fails
+#       (sleep-fails), so every other case's guarded-or-not sleep always succeeds and this mutant
+#       is invisible to it.
+#   (c2) the identical deletion at the per-issue fetch site's guard instead (the ready-query site's
+#       guard intact): 134 cases dropped to 133 pass/1 fail, failing exactly the same one case,
+#       impl-retry-sleep-failure-survives, for the identical reason.
+#   (d) delete `ready_query_retried: $rqr,` from the final jq -n object: 134 cases dropped to 129
+#       pass/5 fail, failing exactly: impl-output-shape, impl-ready-query-retry-succeeds,
+#       impl-ready-query-unavailable, impl-single-issue-fetch-not-retried, and
+#       impl-retry-sleep-failure-survives — impl-single-issue-fetch-not-retried joins because it
+#       directly asserts `counts.ready_query_retried: false` too (added alongside its pre-existing
+#       `counts.fetch_retries: 0` assertion, closing the gap that previously left this key
+#       unpinned in `--issue` mode).
+#   (e) delete `ready_query_unavailable: $rqu,` instead: 134 cases dropped to 126 pass/8 fail,
+#       failing exactly: impl-output-shape, impl-script-unknown-json-field-fails-closed,
+#       impl-ready-query-retry-succeeds, impl-ready-query-unavailable,
+#       impl-single-issue-fetch-not-retried, impl-retry-sleep-failure-survives,
+#       status-degraded-implementer-ready-query, and status-degraded-both-scripts —
+#       impl-single-issue-fetch-not-retried joins for the identical reason as in (d) above (its
+#       direct `counts.ready_query_unavailable: false` assertion); the two status cases join
+#       because deleting the key removes it from find-implementation-work.sh's PUBLISHED counts
+#       object entirely, so bin/harness-status.sh's own generic select finds nothing to name for
+#       the implementation half (the script still exits 0 — this is a missing-key effect, not an
+#       abort, unlike (a)).
+#   (f) delete `fetch_retries: $fr}}'` from the final jq -n object: 134 cases dropped to 129
+#       pass/5 fail, failing exactly: impl-fetch-failure-survives, impl-output-shape,
+#       impl-fetch-retry-succeeds, impl-single-issue-fetch-not-retried, and
+#       impl-retry-sleep-failure-survives — impl-single-issue-fetch-not-retried joins because it
+#       asserts `counts.fetch_retries: 0` too, not just the two ready-query flags.
+#   (g) move the per-issue loop's `fetch_failures=$((fetch_failures+1))` so it increments on the
+#       FIRST failure (alongside fetch_retries) instead of only inside the post-retry `else` branch
+#       — a retried-then-successful fetch would then be wrongly counted as a failure too: 134 cases
+#       dropped to 132 pass/2 fail, failing exactly: impl-fetch-retry-succeeds (expects
+#       fetch_failures: 0 after its retry succeeds, gets 1) and impl-retry-sleep-failure-survives
+#       (same reason, plus its own two-site assertion). impl-fetch-failure-survives does NOT join:
+#       its fetch fails on BOTH attempts regardless of where the increment sits, so fetch_failures
+#       is 1 either way.
+#   (h) ADD a retry to the `--issue <n>` prefetch (proves impl-single-issue-fetch-not-retried
+#       actually discriminates the documented narrowing): 134 cases dropped to 133 pass/1 fail,
+#       failing exactly impl-single-issue-fetch-not-retried (its own expect_sleep_calls "$dir" 0
+#       assertion breaks — the mutated prefetch now sleeps once before giving up on the same
+#       missing issue-14.json). Re-measured unchanged after this fixture gained its two new
+#       `ready_query_retried`/`ready_query_unavailable` assertions: this mutant's retry lives
+#       entirely inside the `--issue` prefetch block and never touches either ready-query flag, so
+#       the failing set and total are identical to before that edit.
+#   (i) delete the `implementation` half of degraded_reasons (bin/harness-status.sh, the `+ [
+#       ($i.counts // {}) | ... ]` term removed entirely): 134 cases dropped to 132 pass/2 fail,
+#       failing exactly: status-degraded-implementer-ready-query and status-degraded-both-scripts —
+#       the two fixtures whose expected array names an "implementation." entry; neither
+#       status-clean-not-degraded (empty either way) nor status-degraded-planner-initial-query/
+#       status-degraded-author-association (planning-only reasons, untouched by deleting the
+#       implementation half) joins.
+#   (j) replace the generic `endswith("_unavailable")` select with a two-key enumeration
+#       (initial_query_unavailable/candidates_query_unavailable only, applied to BOTH halves of
+#       bin/harness-status.sh's degraded_reasons): 134 cases dropped to 131 pass/3 fail, failing
+#       exactly: status-degraded-implementer-ready-query, status-degraded-author-association, and
+#       status-degraded-both-scripts — every fixture whose own reason is a flag OTHER than the two
+#       enumerated keys (ready_query_unavailable or author_association_unavailable);
+#       status-degraded-planner-initial-query does NOT join, since initial_query_unavailable IS one
+#       of the two enumerated keys.
+#   (k) hard-code `degraded: false` (bin/harness-status.sh, `(($dr | length) > 0) as $deg` replaced
+#       with `(false) as $deg` — degraded_reasons itself is untouched): 134 cases dropped to 131
+#       pass/3 fail, failing exactly: status-degraded-planner-initial-query,
+#       status-degraded-implementer-ready-query, and status-degraded-author-association — every
+#       fixture that asserts `.degraded == 'true'` directly. status-degraded-both-scripts does NOT
+#       join: it asserts only `.degraded_reasons`, never `.degraded`, and this mutant leaves
+#       degraded_reasons's own value alone. status-clean-not-degraded does NOT join either: its own
+#       expected `.degraded` is already `false`, so the mutant changes nothing observable for it —
+#       this is exactly why (l) below, not (k), is this fixture's own non-vacuity control.
+#   (l) hard-code `degraded: true` (the identical replacement with `(true) as $deg`; must fail
+#       status-clean-not-degraded alone — the non-vacuity control): 134 cases dropped to 133
+#       pass/1 fail, failing exactly status-clean-not-degraded — the only fixture whose every query
+#       is healthy, so every other fixture already expects `degraded: true` regardless and is blind
+#       to this mutant.
+# Restored byte-identically after each measurement (sha256 confirmed against a backup refreshed
+# immediately before every mutation, LESSON 2026-09-07); final restored-tree run: 134 pass, 0 fail.
 
 # empty-needle-guard (#262-1) — exercises every guarded helper in this file (expect_err,
 # expect_no_err, expect_warn_count) with an empty needle, and asserts the guard fired for each:
@@ -6365,7 +7210,11 @@ EOF
 # when the suite grew to 124 cases across this train's six new fixtures (none of which calls
 # expect_no_err with an empty needle either — all six pass real needles, e.g. "plan edit state
 # unreadable" and "decision comment"): goes from 124 pass, 0 fail to 123 pass, 1 fail — the same
-# single-case failing set, new total.
+# single-case failing set, new total. RE-MEASURED 2026-09-15 (#284/#285), when the suite grew to
+# 134 cases across this train's ten new fixtures (none of which calls expect_no_err with an empty
+# needle either — every one passes a real needle, e.g. "could not list ready issues" and "could not
+# fetch issue #1"): goes from 134 pass, 0 fail to 133 pass, 1 fail — the same single-case failing
+# set, new total.
 case_empty_needle_guard() {
   local saved_ok saved_why
   planning_err="fixture stderr for the empty-needle guard (#262)"
@@ -6421,7 +7270,7 @@ cases=(
   "impl-verdict-archive-not-binding|case_impl_verdict_archive_not_binding|the orchestrator's own verifier-verdict archive is excluded from trusted_post_plan"
   "impl-missing-association-fail-closed|case_impl_missing_association_fail_closed|a post-plan comment with no authorAssociation field: fail-closed untrusted, counted, warned"
   "impl-newest-plan-selected|case_impl_newest_plan_selected|two trusted plan comments: the NEWER one is selected as plan, and only feedback posted after it lands in trusted_post_plan"
-  "impl-fetch-failure-survives|case_impl_fetch_failure_survives|one ready issue's gh issue view fails: fetch_failures counted, other ready issues still evaluated"
+  "impl-fetch-failure-survives|case_impl_fetch_failure_survives|#284: one ready issue's gh issue view fails on both attempts (retried once): fetch_retries and fetch_failures both counted, other ready issues still evaluated"
   "impl-approval-covers-plan|case_impl_approval_covers_plan|control: plan posted before the plan-approved label: covered, binding_line matches the exact literal"
   "impl-plan-after-approval|case_impl_plan_after_approval|plan posted after the plan-approved label: not covered — the issue's named failure"
   "impl-relabel-newest-wins|case_impl_relabel_newest_wins|two plan-approved labeling events: the NEWEST one, not the first, decides coverage"
@@ -6440,7 +7289,7 @@ cases=(
   "impl-plan-comment-id-unparseable|case_impl_plan_comment_id_unparseable|the plan comment's url carries no #issuecomment-<id> suffix: fails closed without ever calling the comments endpoint"
   "impl-plan-comment-id-non-digits|case_impl_plan_comment_id_non_digits|the plan comment's url has an #issuecomment- suffix that is NOT purely digits: pins the digits-only validation itself, distinct from the outer suffix-presence check"
   "impl-single-issue-plan-edited-after-approval|case_impl_single_issue_plan_edited_after_approval|--issue <n> mode carries the new plan-edited-after-approval reason too, not just batch mode"
-  "impl-output-shape|case_impl_output_shape|.ready, .counts.ready, and .counts.truncated are still present under their current names, plus #182's audit count, #174's approval/binding_line shape, and #213's approved_at_history key"
+  "impl-output-shape|case_impl_output_shape|.ready, .counts.ready, and .counts.truncated are still present under their current names, plus #182's audit count, #174's approval/binding_line shape, #213's approved_at_history key, and #284's ready_query_retried/ready_query_unavailable/fetch_retries counts keys"
   "impl-audit-comment-not-binding|case_impl_audit_comment_not_binding|an OWNER harness-audit comment after the plan is excluded from trusted_post_plan and counted"
   "impl-audit-does-not-mask-real-feedback|case_impl_audit_does_not_mask_real_feedback|control: genuine MEMBER feedback after an audit comment still reaches trusted_post_plan"
   "impl-untrusted-audit-marker-still-reported|case_impl_untrusted_audit_marker_still_reported|a forged harness-audit marker from a NONE author is still reported in untrusted_post_plan, never counted"
@@ -6477,7 +7326,7 @@ cases=(
   "stub-json-script-field-lists-accepted|case_stub_json_script_field_lists_accepted|non-vacuity control: all five --json field lists the two bin/ scripts actually request are accepted and serve their fixtures"
   "stub-json-check-is-field-list-scoped|case_stub_json_check_is_field_list_scoped|the check reads the --json field list, not any substring of argv: a --search string containing 'authorAssociation' is served normally"
   "plan-script-unknown-json-field-fails-closed|case_plan_script_unknown_json_field_fails_closed|end-to-end: a --json-mutated copy of bin/find-planning-work.sh asking for an unsupported field fails both list-query attempts, then fails closed — exit 0, both query-unavailable flags true, two sleeps"
-  "impl-script-unknown-json-field-fails-loud|case_impl_script_unknown_json_field_fails_loud|end-to-end: a --json-mutated copy of bin/find-implementation-work.sh (batch mode) asking for an unsupported field aborts the same way"
+  "impl-script-unknown-json-field-fails-closed|case_impl_script_unknown_json_field_fails_closed|#284: end-to-end, a --json-mutated copy of bin/find-implementation-work.sh (batch mode) asking for an unsupported field fails the ready query closed (retried, then an empty ready bucket), not an abort"
   "stub-json-missing-json-argument-fails-loud|case_stub_json_missing_json_argument_fails_loud|a gh issue list call with no --json argument at all fails loud with a distinct diagnostic instead of being silently accepted"
   "impl-approval-label-absent|case_impl_approval_label_absent|plan-approved is not on the issue's CURRENT labels, even though a historical labeling event and the plan comment's content would otherwise cover it: not covered, zero further gh api calls made"
   "impl-approval-label-empty|case_impl_approval_label_empty|labels is a genuinely empty array: same verdict as label-absent, distinguishing name-matching from a mere non-empty check"
@@ -6514,6 +7363,16 @@ cases=(
   "impl-decision-edit-checked-when-flag-true|case_impl_decision_edit_checked_when_flag_true|#240 D-B: covered decision comment includesCreatedEdit:true keeps today's lookup and decision-edited-after-approval"
   "impl-decision-edit-flags-are-per-entry|case_impl_decision_edit_flags_are_per_entry|#240 D-C: two covered decision comments, flags false then true — only the true one is looked up, per-entry verdicts"
   "impl-single-issue-edit-flags-skipped|case_impl_single_issue_edit_flags_skipped|#240 S-A: --issue <n> mode carries both pre-filters — plan and decision comment both includesCreatedEdit:false, one gh api call total"
+  "impl-ready-query-retry-succeeds|case_impl_ready_query_retry_succeeds|#284: the ready query fails once then succeeds on the bounded retry — 2 issue-calls, 1 sleep(30), retried true, unavailable false, real content from the second attempt"
+  "impl-ready-query-unavailable|case_impl_ready_query_unavailable|#284: the ready query fails on both attempts — one warn line, empty ready and plan_selection, both flags true, exactly 1 sleep, truncated false"
+  "impl-fetch-retry-succeeds|case_impl_fetch_retry_succeeds|#284: a per-issue gh issue view fails once then succeeds on the bounded retry — 2 issue-calls, 1 sleep(30), fetch_retries 1, fetch_failures 0, a real plan_selection entry from the second attempt"
+  "impl-single-issue-fetch-not-retried|case_impl_single_issue_fetch_not_retried|#284: --issue <n> mode's prefetch is deliberately NOT retried — byte-identical to before #284, zero sleeps"
+  "impl-retry-sleep-failure-survives|case_impl_retry_sleep_failure_survives|#284: both new retry sites fail once each under a backoff sleep that itself always fails — every retry still runs and the script still exits 0 with real content"
+  "status-clean-not-degraded|case_status_clean_not_degraded|#285: every discovery query healthy — degraded false, empty degraded_reasons, and every pre-existing harness-status.sh count still correct"
+  "status-degraded-planner-initial-query|case_status_degraded_planner_initial_query|#285: find-planning-work.sh's needs_initial_plan query fails closed — degraded_reasons is exactly [\"planning.initial_query_unavailable\"]"
+  "status-degraded-implementer-ready-query|case_status_degraded_implementer_ready_query|#285: find-implementation-work.sh's ready query fails closed — degraded_reasons is exactly [\"implementation.ready_query_unavailable\"]"
+  "status-degraded-author-association|case_status_degraded_author_association|#285: the generic rule picks up a flag neither #284 nor #273 added — author_association_unavailable — with no enumeration to drift"
+  "status-degraded-both-scripts|case_status_degraded_both_scripts|#285: both discovery scripts fail closed at once — degraded_reasons carries both halves, planning first, in order"
   "empty-needle-guard|case_empty_needle_guard|#262: expect_err/expect_no_err/expect_warn_count all refuse an empty needle"
 )
 
@@ -6583,6 +7442,13 @@ cases=(
 # impl-untrusted-audit-marker-still-reported and plan-untrusted-audit-marker-still-reported — see
 # those two cases' own comments for the updated (STALE-FIGURE-CORRECTED) failing sets, which now
 # name I8/P4 alongside the pre-existing cases that mutation already caught.
+# The suite has since grown to 134 across #284/#285's ten new fixtures — none of (a)-(f) above was
+# re-run: every one targets a ready/candidate issue's own audit/verdict-record-carrying comment
+# content (implementer half) or the identical candidate-side content (planner half, reached only
+# via a real per-candidate fetch); none of the ten new fixtures' ready/candidate issues carries any
+# such comment, and none of Part 13's five fixtures ever reaches a real per-candidate fetch either
+# (see the SUBSUMPTION PROOF / MUTATION PROOF B re-measurements above for the candidates query
+# itself, a different code path from this $planC content filter).
 
 matched=0
 for row in "${cases[@]}"; do
