@@ -692,7 +692,7 @@ fi
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 745
-issue-cycle 450
+issue-cycle 445
 issue-planner 525
 project-kickoff 215
 test-ratchet 200
@@ -1588,7 +1588,7 @@ fi
 # number of matching lines, an empty program, or a malformed one, rather than silently passing on
 # nothing. $cyc and $q are the 5.5-5.7 block's; reused as-is.
 
-# --- 5.8: verdict-provenance needle (SKILL.md:104) ---
+# --- 5.8: verdict-provenance needle (the *Verdict provenance* sub-bullet) ---
 vp_n="$(grep -F -- '--json body --jq' "$cyc" | grep -c -F -- '<!-- harness-status:')"
 vp_line="$(grep -F -- '--json body --jq' "$cyc" | grep -F -- '<!-- harness-status:' | head -1)"
 vp_prog="$(printf '%s\n' "$vp_line" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
@@ -1659,7 +1659,7 @@ if [ "$vp_ok" = "1" ]; then
   fi
 fi
 
-# --- 5.9: archived-verdict match needle (SKILL.md:121) ---
+# --- 5.9: archived-verdict match needle (the *Archived verdict* sub-bullet's match needle) ---
 mn_n="$(grep -F -- '--json body --jq' "$cyc" | grep -c -F -- 'paste the printed line here')"
 mn_line_src="$(grep -F -- '--json body --jq' "$cyc" | grep -F -- 'paste the printed line here' | head -1)"
 mn_prog="$(printf '%s\n' "$mn_line_src" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
