@@ -41,36 +41,77 @@
 # unlike a command word's path, so collapsing it to a basename would silently destroy the very
 # `refs/heads/` prefix the refspec_dest() function below needs to read.
 #
-# Repo resolution (reads only, NEVER executes anything, NEVER derives a path from the untrusted
-# command string): starts from the PreToolUse stdin `cwd` field (documented in Claude Code's hooks
-# reference; degrades to `$PWD` when absent) and walks upward, at most 64 parent directories,
-# looking for `<dir>/.git` — a directory (an ordinary checkout) or a regular file (a worktree
-# pointer, `gitdir: <path>`; a FIFO or a directory-shaped path is excluded by the `[ -f ]` guard
-# every read here uses). The default branch is read from the common dir's
-# `refs/remotes/origin/HEAD` symref; the current branch from the resolved gitdir's own `HEAD`
-# symref; since #268, the same common dir's `config` file is also text-parsed (never executed as
-# `git config`, never a second process) for `remote.<name>.push` and `push.default` /
-# `branch.<current>.merge` — for a worktree this is the MAIN checkout's config, the identical
-# common-dir rule the origin-HEAD symref read already uses, never the worktree pointer's own
-# gitdir. The config file is read whole with no size cap — a pathological file simply degrades to
-# Claude Code's 10s hook timeout (silence, the same fail-open every other resolution failure
-# already has). Any failure at any step leaves both branch values, and the config-derived
-# variables, empty — never an error, never a non-zero exit from this hook on that account alone.
-# The deny set is `PUSH_DEFAULT_BRANCH_FALLBACK` (below) UNION the resolved default branch, if
-# any — the fallback members are ALWAYS in force (even when a repo's real default branch resolves
-# to something else), which is what lets this hook work with no `cwd`, no readable `.git`, or a
-# `-C <other-checkout>` push it deliberately never resolves (see "Under-blocking classes" below).
+# Repo resolution (reads only, NEVER executes anything): the SESSION checkout is resolved by
+# starting from the PreToolUse stdin `cwd` field (documented in Claude Code's hooks reference;
+# degrades to `$PWD` when absent) and walking upward, at most 64 parent directories, looking for
+# `<dir>/.git` — a directory (an ordinary checkout) or a regular file (a worktree pointer, `gitdir:
+# <path>`; a FIFO or a directory-shaped path is excluded by the `[ -f ]` guard every read here
+# uses). The default branch is read from the common dir's `refs/remotes/origin/HEAD` symref; the
+# current branch from the resolved gitdir's own `HEAD` symref; since #268, the same common dir's
+# `config` file is also text-parsed (never executed as `git config`, never a second process) for
+# `remote.<name>.push` and `push.default`/`branch.<current>.merge` — for a worktree this is the
+# MAIN checkout's config, the identical common-dir rule the origin-HEAD symref read already uses,
+# never the worktree pointer's own gitdir. The config file is read whole with no size cap — a
+# pathological file simply degrades to Claude Code's 10s hook timeout (silence, the same fail-open
+# every other resolution failure already has). Any failure at any step leaves both branch values,
+# and the config-derived variables, empty — never an error, never a non-zero exit from this hook on
+# that account alone.
+#
+# Since #269, a push segment carrying exactly one DETACHED `-C <path>` token (not the attached
+# `-C<path>` form, and not a segment with a second `-C`) whose value satisfies the PATH_ERE
+# predicate below — byte-identical to, and mechanically pinned against (dev/selfcheck.sh's
+# assertion 4.42), hooks/git-c-guard.sh's own predicate of the same name — is ALSO resolved: the
+# named directory itself (never walking upward the way git itself would from a real `-C`; a
+# documented residual class below), at most one level deep. When that resolves a gitdir, the
+# segment's CURRENT BRANCH and its three config-derived values (`remote.<name>.push`,
+# `push.default`, `branch.<current>.merge`) come SOLELY from that resolved checkout — never a mix
+# with the session's own — while the DEFAULT-BRANCH deny member becomes the union of
+# `PUSH_DEFAULT_BRANCH_FALLBACK`, the SESSION checkout's own default branch, and the RESOLVED
+# checkout's own default branch (a deliberate fail-toward-deny: a second checkout that happens to
+# lack its own `refs/remotes/origin/HEAD`, which only `git clone` sets, must not silently lose
+# today's guard by replacing the session's default outright). A `-C` value that fails the
+# predicate, or that resolves to no gitdir of its own, leaves the segment judged exactly as every
+# segment was before #269 — solely against the session checkout (see "Under-blocking classes"
+# below for the residual `-C` shapes this never covers). The containment argument for reading a
+# path taken from the untrusted command string at all: a resolved target's facts are applied ONLY
+# to the segment that names it — ordinarily, only to a push actually executed inside that
+# directory (measured exceptions exist for a quoted `-C` value containing a space — see the
+# measured rows in the under-blocking inventory below for the exact shapes and rc's; in the
+# rows where a captured fragment resolves to a gitdir, the facts applied are still those of a
+# DIFFERENT directory this hook itself derived and read under the same predicate, never an
+# attacker-arbitrary one) — so even a fully attacker-controlled `<name>-wt-<n>`
+# directory can only mis-judge a push executed inside ITSELF or, in those measured shapes,
+# inside the fragment resolved from its own quoted value, never the session repo's own push
+# segments (every segment starts from a fresh `apply_session_repo()` call, below, before its own
+# `-C` value, if any, is considered). Two
+# verdicts NARROW as a result and are disclosed, not hidden: a bare `git -C <worktree> push` where
+# the session checkout sits on its own default branch (worktree-parallel mode's real shape — see
+# `references/worktree-mode.md`) no longer denies merely because the SESSION happens to be on the
+# default branch, since the segment is judged against the worktree's own (non-default) current
+# branch instead; and a resolved segment no longer inherits the session's `.git/config` routes.
+# The deny set for an UNRESOLVED segment is `PUSH_DEFAULT_BRANCH_FALLBACK` (below) UNION the
+# session's resolved default branch, if any — the fallback members are ALWAYS in force (even when
+# a repo's real default branch resolves to something else), which is what lets this hook work with
+# no `cwd`, no readable `.git`, or a `-C` value this hook does not resolve.
 #
 # Never invokes `git`, `gh`, or anything else derived from the untrusted command string; never
-# `eval`s; never writes a file — this hook only ever READS filesystem paths it derived from
-# Claude Code's own `cwd`/`$PWD`, never from a `-C <path>` token inside the model-supplied command
-# (reading THAT would let the model choose what this hook reads). bash + POSIX awk only — no jq is
-# actually needed by this hook (unlike its two siblings) since it parses `tool_input.command` with
-# awk, not a JSON library, but the raw-stdin fast paths below still gate on `jq`'s presence for the
-# few scalar field reads (`tool_name`, `permission_mode`, `tool_input.command`, `cwd`) this hook
-# does need — no python, no perl, no GNU-only flags (this repo's CLAUDE.md portability
-# convention); exercised under Apple's bash 3.2 by the selfcheck-macos CI job, same as bin/*.sh,
-# hooks/git-c-guard.sh, and hooks/agent-boundary.sh.
+# `eval`s; never writes a file. Since #269, this hook reads exactly one class of filesystem path
+# taken from the untrusted command string — a push segment's own `-C <path>` value, and ONLY when
+# it satisfies PATH_ERE below — for `<path>/.git` (directory or `gitdir:` pointer file), that
+# gitdir's `HEAD`, and that gitdir's common dir's `refs/remotes/origin/HEAD` and `config`, every
+# read the same `[ -f ]`/`[ -d ]`-guarded builtin redirection every other read in this file uses;
+# every OTHER filesystem path this hook reads still comes solely from Claude Code's own
+# `cwd`/`$PWD`, never from the command string. The untrusted `-C` value itself is fed only to
+# `grep` (a here-string, never a piped writer — assertion 1.7) as data, and to shell builtin `[ -f
+# ]`/`[ -d ]` tests; resolving it caps its own upward walk at exactly one level (see
+# `resolve_repo()`'s `MAX_DEPTH` parameter below), so that value never reaches `dirname`'s argv —
+# or any other process's argv — is never `eval`ed, and is never opened for writing. bash + POSIX
+# awk only — no jq is actually needed by this hook (unlike its two siblings) since it parses
+# `tool_input.command` with awk, not a JSON library, but the raw-stdin fast paths below still gate
+# on `jq`'s presence for the few scalar field reads (`tool_name`, `permission_mode`,
+# `tool_input.command`, `cwd`) this hook does need — no python, no perl, no GNU-only flags (this
+# repo's CLAUDE.md portability convention); exercised under Apple's bash 3.2 by the
+# selfcheck-macos CI job, same as bin/*.sh, hooks/git-c-guard.sh, and hooks/agent-boundary.sh.
 #
 # Documented over-blocking classes (deliberate, not a bug): a heredoc body line beginning `git
 # push origin main` (the same quote-blind, line-at-a-time class hooks/agent-boundary.sh documents
@@ -102,18 +143,98 @@
 # it is never reached — this hook opines "no opinion" on the whole segment, not a deny; an
 # ATTACHED `--opt=value` global option such as `--git-dir=<path>` does NOT evade this way: the
 # generic single-dash-token skip consumes it whole in one step and the subcommand still resolves
-# to `push` correctly — what `--git-dir=<path>`/`-C` actually evade is WHICH repo gets resolved,
-# already covered by the bullet below); a CR *inside* a raw-stdin fast-path literal, e.g. `git
+# to `push` correctly — what `--git-dir=<path>` always evades, and what an UNRESOLVED `-C` value
+# also evades (see below), is WHICH repo gets resolved); a CR *inside* a raw-stdin fast-path
+# literal, e.g. `git
 # pu<CR>sh origin main` (measured: rc 0) — a conforming JSON writer escapes an embedded `\r` as the
 # two characters `\`+`r`, so the raw stdin substring `push` never appears intact and fast path 1
 # (below) exits before the #270 CR strip ever runs, regardless of the strip's own correctness; the
 # resulting command cannot execute as a real `git push` either, so this is documented, not fixed
 # (see the fast-path comment below); `nice -n 5 git push origin main` (the same class
 # as the `sudo -u foo` bullet above — `nice`'s option value `5` becomes the resolved command word,
-# not `git`); a `git -C <other-checkout> push` into a repo whose default branch differs from the
-# session's own `cwd` (this hook deliberately never reads a `-C <path>` token from the untrusted
-# command string, so a second checkout is judged only against the fallback set, not its own real
-# default branch). Since #268 closed the repo-local `push.default`/`remote.<name>.push` class
+# not `git`). Since #269 narrowed this next class to its residuals (see the "Repo resolution"
+# paragraph above for what a `-C` value IS now resolved against), a `git -C <path> push` into a
+# repo whose default branch differs from the session's is STILL judged only against the session's
+# own facts in every one of these shapes — each measured directly, exact command -> rc, session on
+# `main` throughout: a `-C` value failing PATH_ERE, including the issue's own literal example,
+# `git -C ../other-checkout push origin develop` -> rc 0 (filed as a follow-up alongside this
+# change — the issue's own headline shape is outside the bound the maintainer's decision drew); the
+# attached form, `git -C../other-checkout-wt-1 push origin develop` -> rc 0 (same follow-up); two or
+# more `-C` tokens, `git -C ../a-wt-1 -C ../b-wt-1 push origin develop` -> rc 0; `--git-dir=<path>`/
+# `--work-tree=<path>`, neither ever resolved (same follow-up); a PATH_ERE-matching directory
+# holding no `.git` of its own — git itself walks upward from a real `-C`, this hook does not
+# (filed as a second, separate follow-up) — measured: `git -C ../plain-wt-1 push origin main`,
+# `../plain-wt-1` an ordinary, `.git`-less directory -> rc 2 (denies via the SESSION's own facts,
+# unaffected by the unresolvable target); and a `-C` value containing a space: this hook's plain
+# whitespace tokenizer (unlike git-c-guard.sh's quote-aware lexer) splits the quoted value at
+# the interior space and captures only its first fragment as the `-C` path. Whether the rest of
+# the segment is then still recognised as a push is decided by ONE piece of code — the
+# subcommand search in `emit_segment()` (the awk `while (j <= ntok)` loop that assigns
+# `subcmd`) — applied to the RAW whitespace fragments that follow, with any quote characters
+# still glued to them: an empty fragment is skipped; a fragment that exactly equals a
+# GIT_GLOBAL_OPTS_WITH_VALUE name (so `-c` does, but `-c"` with the closing quote glued on does
+# not) is consumed together with the fragment after it; any other fragment beginning with `-`
+# is skipped; the first fragment left standing is the subcommand candidate, and the segment is
+# recognised iff `normalize()` of it — quote characters and backslashes removed, then the last
+# `/`-separated component — is exactly `push`. Nothing about the captured `-C` fragment itself
+# enters that decision; whether that fragment is then RESOLVED is decided separately, by
+# PATH_ERE and the exactly-one-`-C` rule. The rows below are every shape measured against this
+# script (session default `main` on `claude/17-a`; `../a-wt-1` and `../b-wt-1`, sibling repos
+# whose own defaults are `trunk` and `release`; `../plain-dir`, an ordinary, `.git`-less
+# directory with no `-wt-<n>` suffix); each row's outcome follows from that one rule, and no
+# rule beyond it is claimed for shapes not listed here:
+#
+# (a) `git -C "../a-wt-1 -x" push origin trunk` -> rc 2 — `-x"` begins with `-` and is skipped,
+# the real `push` is the candidate, the segment is recognised; the captured fragment
+# (`../a-wt-1`) satisfies PATH_ERE and is resolved, so the deny names `../a-wt-1`'s own default
+# — a directory OTHER than the one git would actually `-C` into (the literal, on-disk
+# `../a-wt-1 -x`): a mis-resolution, not a containment breach (see the containment paragraph
+# above). Controls: the same command with a non-matching first fragment (`../plain-dir -x`)
+# -> rc 0, and the session alone pushing to `trunk` with no `-C` -> rc 0, isolating that the
+# deny comes from the fragment's own resolution.
+# (b) `git -C "../a-wt-1 foo" push origin main` -> rc 0 — `foo"` normalises to `foo`, not
+# `push`: the segment is dropped as unrecognised, nothing is resolved, and a push whose
+# destination is literally the session's own default branch gets no opinion (control: the
+# session alone pushing to `main` -> rc 2).
+# (c) `git -C "../plain-dir -x" push origin main` -> rc 2 — recognised exactly as (a); the
+# captured fragment fails PATH_ERE so nothing is resolved, and the segment is judged against
+# the session's own facts (`main`).
+# (d) `git -C "../repo with space-wt-1" push origin develop` -> rc 0 — `with` normalises to
+# `with`: hidden, the same way as (b).
+# (e) `git -C "../a-wt-1 push" push origin trunk` -> rc 2 — `push"` normalises to `push`, so
+# the REMAINDER is taken as the subcommand and the segment is recognised; the real `push`
+# keyword one token later then lands in the segment's remote slot, which `evaluate_segment()`
+# never evaluates as a destination, and `trunk` is still evaluated as a refspec; resolved via
+# `../a-wt-1` as in (a). Control: `git -C "../a-wt-1 push" push origin main` -> rc 2.
+# (f) `git -C "../a-wt-1 -c foo" push origin main` -> rc 2 — `-c` exactly matches a
+# GIT_GLOBAL_OPTS_WITH_VALUE name, so it is consumed together with `foo"` and the real `push`
+# is the candidate; recognised and resolved via `../a-wt-1`.
+# (g) `git -C "../a-wt-1 -C ../b-wt-1" push origin main` -> rc 2 — the interior `-C` is
+# consumed together with `../b-wt-1"` and counts as a second `-C`, so the segment is
+# recognised but, by the exactly-one-`-C` rule, NOT resolved: judged against the session's
+# own `main`.
+# (h) `git -C "../a-wt-1 x/push" push origin main` -> rc 2 — `x/push"` normalises to its last
+# `/`-component, `push`: recognised and resolved via `../a-wt-1`.
+# (i) `git -C "../a-wt-1 -c" push origin main` -> rc 2 — `-c"` carries the glued closing quote,
+# so it does NOT match the GIT_GLOBAL_OPTS_WITH_VALUE name and is merely skipped as a
+# dash-prefixed fragment; the real `push` is the candidate; recognised and resolved.
+# (j) four more: `git -C "../a-wt-1 push -x" push origin trunk` -> rc 2 (as (e)); `git -C
+# "../a-wt-1 pull" push origin main` -> rc 0 (as (b)); `git -C "../a-wt-1 push origin main"`
+# with nothing after the closing quote -> rc 2 (as (e)); `git -C "../a-wt-1 --foo=bar baz"
+# push origin main` -> rc 0 (`--foo=bar` skipped, `baz"` is the candidate — as (b)).
+#
+# Rows (b), (d) and the two rc-0 shapes in (j) are measured instances of a residual class that
+# PRE-DATES #269 (the plain whitespace split that produces it is older than this issue and
+# independent of whether `-C` resolution exists at all): a quoted `-C` value containing a
+# space can hide the whole segment from this hook, including a push whose destination is
+# literally the session's own default branch. Rows (a), (e), (f), (h), (i) and the two rc-2
+# shapes in (j) share the one resolve-a-different-directory outcome that is new to this
+# change, and it is a mis-resolution, not a containment breach: the facts applied still belong
+# to a directory this hook itself derived and read under the same predicate, never an
+# attacker-arbitrary one, but they are not necessarily the facts of the directory the push
+# actually executes in (see the containment paragraph above for the qualification this
+# residual class requires). Since #268 closed the repo-local
+# `push.default`/`remote.<name>.push` class
 # named here in every prior version of this file, the residual config surface left open is: a
 # GLOBAL or system git config (`$GIT_CONFIG_GLOBAL`, `~/.gitconfig`,
 # `$XDG_CONFIG_HOME/git/config`, `/etc/gitconfig`) setting either key (filed as a follow-up
@@ -152,9 +273,23 @@ set -f  # noglob: untrusted refspec tokens are word-split unquoted below (e.g. i
 PUSH_DEFAULT_BRANCH_FALLBACK="main master"
 PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash"
 GIT_GLOBAL_OPTS_WITH_VALUE="-c -C --git-dir --work-tree --namespace --config-env --exec-path"
+# #269: byte-identical to hooks/git-c-guard.sh's own PATH_ERE (that script's twin declaration,
+# a few lines above its own GIT_C_SUBCOMMANDS) — dev/selfcheck.sh's assertion 4.42 extracts both
+# mechanically and FAILs the gate if they ever drift apart. Used below (is_c_target_path()) to
+# decide whether a push segment's `git -C <path>` value is trusted enough to resolve against —
+# see this file's header "Repo resolution" paragraph for the containment argument.
+PATH_ERE='^([A-Za-z]:/|/|\.\./)([A-Za-z0-9._ +-]+/)*[A-Za-z0-9._+-]+-wt-[0-9]+/?$'
 PUSH_OPTS_WITH_VALUE="-o --push-option --repo --receive-pack --exec"
 PUSH_ALL_REFS_OPTS="--all --mirror"
 PUSH_DENY_STEM="trail-blazer-flow push guard:"
+
+# is_c_target_path PATH (#269) — true iff PATH satisfies the shared PATH_ERE predicate above.
+# Here-string, not a `printf` writer piped into `grep`'s quiet mode (#255): that early-exit
+# reader exits on its first match, which can send the printf writer SIGPIPE and, under this
+# file's `set -uo pipefail`, turn a genuine match into a reported pipeline failure — a
+# here-string has no writer process, so no SIGPIPE is possible (hooks/git-c-guard.sh's own
+# validate_segment() use of PATH_ERE is the precedent this copies).
+is_c_target_path() { grep -qE "$PATH_ERE" <<<"$1"; }
 
 input="$(cat)"
 
@@ -236,7 +371,7 @@ function strip_quotes(tok,    t) {
   gsub(/\\/, "", t)
   return t
 }
-function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep) {
+function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
@@ -255,10 +390,16 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
   if (cmdword != "git") return
   j = idx
   subcmd = ""
+  cpath = ""
+  ccount = 0
   while (j <= ntok) {
     tok = toks[j]
     if (tok == "") { j++; continue }
-    if (tok in gopt_set) { j += 2; continue }
+    if (tok in gopt_set) {
+      if (tok == "-C") { ccount++; cpath = strip_quotes(toks[j + 1]) }
+      j += 2
+      continue
+    }
     if (substr(tok, 1, 1) == "-") { j++; continue }
     subcmd = normalize(tok)
     j++
@@ -275,7 +416,7 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
     }
     j++
   }
-  print "PUSH\t" rest
+  print "PUSH\t" (ccount == 1 ? cpath : "") "\t" rest
 }
 {
   line = $0
@@ -312,152 +453,238 @@ cfg_trim() {
 resolve_cwd="${cwd:-$PWD}"
 [ -n "$resolve_cwd" ] || resolve_cwd="."
 
-dir="$resolve_cwd"
-gitdir=""
-depth=0
-while [ "$depth" -lt 64 ]; do
-  if [ -d "$dir/.git" ]; then
-    gitdir="$dir/.git"
-    break
-  fi
-  if [ -f "$dir/.git" ]; then
-    gline=""
-    IFS= read -r gline < "$dir/.git" 2>/dev/null || gline=""
-    case "$gline" in
-      "gitdir: "*)
-        gp="${gline#gitdir: }"
-        case "$gp" in
-          /*) gitdir="$gp" ;;
-          *) gitdir="$dir/$gp" ;;
-        esac
-        ;;
-    esac
-    break
-  fi
-  parent="$(dirname "$dir" 2>/dev/null || printf '%s' "$dir")"
-  [ "$parent" != "$dir" ] || break
-  dir="$parent"
-  depth=$((depth + 1))
-done
-
-default_branch=""
-current_branch=""
-# #268: config-derived push routes, always initialized (even when $gitdir never resolves) so
-# config_deny() below can reference them unconditionally under this script's `set -uo pipefail`.
-cfg_push_lines=""
-cfg_push_default=""
-cfg_branch_merge=""
+# #268: cfg_tab is the tab byte cfg_push_lines records use as a field separator inside
+# resolve_repo() below; #269 hoists it to file scope (computed once, not per call) since
+# resolve_repo() is now called once for the session checkout and, per resolved "-C" segment,
+# once more.
 cfg_tab="$(printf '\t')"
-if [ -n "$gitdir" ]; then
-  common="${gitdir%/worktrees/*}"
-  ohf="$common/refs/remotes/origin/HEAD"
-  if [ -f "$ohf" ]; then
-    oline=""
-    IFS= read -r oline < "$ohf" 2>/dev/null || oline=""
-    case "$oline" in
-      "ref: refs/remotes/origin/"*) default_branch="${oline#ref: refs/remotes/origin/}" ;;
-    esac
-  fi
-  hf="$gitdir/HEAD"
-  if [ -f "$hf" ]; then
-    hline=""
-    IFS= read -r hline < "$hf" 2>/dev/null || hline=""
-    case "$hline" in
-      "ref: refs/heads/"*) current_branch="${hline#ref: refs/heads/}" ;;
-    esac
-  fi
 
-  # #268: text-parse the common dir's config for the two push-affecting keys git itself would
-  # otherwise consult on THIS push (remote.<name>.push, push.default/branch.<n>.merge) — same
-  # [ -f ]-guarded builtin-redirect idiom as the two reads above; never `git config`, never a
-  # second process. See this file's header "Repo resolution" paragraph for the reasoning and the
-  # resulting over-blocking class, and "Documented under-blocking classes" for what this parser
-  # deliberately leaves unread.
-  cfgf="$common/config"
-  if [ -f "$cfgf" ]; then
-    # A SEPARATE carriage-return literal from $cr (declared above for the #270 command-string
-    # strip): the push mutation table's M23 mutant deletes both of $cr's declaration and its
-    # use, and a config parser referencing $cr here would blow up under `set -u` instead of
-    # producing that mutant's documented, measured result.
-    cfg_cr=$'\r'
-    cfg_section=""
-    cfg_subsection=""
-    while IFS= read -r cfgline || [ -n "$cfgline" ]; do
-      cfgline="${cfgline//$cfg_cr/}"
-      # Strip a trailing comment: whichever of '#'/';' appears first, with no quote-tracking --
-      # git ref names MAY legitimately contain '#' or ';' (e.g. refs/heads/feat#123 and
-      # refs/heads/feat;123 are both accepted by git itself), so this is a known, documented
-      # parsing gap, not a safe assumption. See this file's header "Documented over-blocking
-      # classes" (a destination value truncated at the marker) and "Documented under-blocking
-      # classes" (a remote/branch subsection name truncated at the marker, losing its whole
-      # section) for the two behaviour classes this creates.
-      cfg_h="${cfgline%%#*}"
-      cfg_s="${cfgline%%;*}"
-      if [ "${#cfg_h}" -le "${#cfg_s}" ]; then cfgline="$cfg_h"; else cfgline="$cfg_s"; fi
-      cfgline="$(cfg_trim "$cfgline")"
-      [ -n "$cfgline" ] || continue
-      case "$cfgline" in
-        \[[Rr][Ee][Mm][Oo][Tt][Ee]\ \"*\"\]*)
-          cfg_section="remote"
-          cfg_subsection="${cfgline#*\"}"
-          cfg_subsection="${cfg_subsection%%\"*}"
-          continue
-          ;;
-        \[[Bb][Rr][Aa][Nn][Cc][Hh]\ \"*\"\]*)
-          cfg_section="branch"
-          cfg_subsection="${cfgline#*\"}"
-          cfg_subsection="${cfg_subsection%%\"*}"
-          continue
-          ;;
-        \[[Pp][Uu][Ss][Hh]\]*)
-          cfg_section="push"
-          cfg_subsection=""
-          continue
-          ;;
-        \[*)
-          cfg_section="other"
-          cfg_subsection=""
-          continue
-          ;;
-      esac
-      case "$cfgline" in
-        *=*)
-          cfg_key="$(cfg_trim "${cfgline%%=*}")"
-          cfg_val="$(cfg_trim "${cfgline#*=}")"
-          ;;
-        *) continue ;;
-      esac
-      case "$cfg_val" in
-        \"*\") cfg_val="${cfg_val#\"}"; cfg_val="${cfg_val%\"}" ;;
-      esac
-      case "$cfg_section" in
-        remote)
-          case "$cfg_key" in
-            [Pp][Uu][Ss][Hh])
-              cfg_push_lines="${cfg_push_lines}${cfg_subsection}${cfg_tab}${cfg_val}"$'\n'
-              ;;
+# resolve_repo START_DIR MAX_DEPTH (#269) — walks upward from START_DIR, at most MAX_DEPTH parent
+# directories, looking for START_DIR/.git; resets gitdir/default_branch/current_branch/cfg_* on
+# every call so a second call (the "-C" route, below) never leaks a prior call's state. Sets the
+# plain (non-local) globals gitdir, default_branch, current_branch, cfg_push_lines,
+# cfg_push_default, cfg_branch_merge for the caller to read afterward — the same "set a plain
+# global, caller reads it after the call returns" idiom evaluate_segment() below already uses for
+# __deny_dest/__deny_kind/__deny_via. Called once for the session checkout (MAX_DEPTH 64, just
+# below) and, per push segment whose "-C" value passes is_c_target_path(), once more with
+# MAX_DEPTH 1 (see apply_c_target() further down) — examining the named directory itself only,
+# never walking upward the way git itself would from a real "-C" (a documented residual class,
+# see this file's header). The MAX_DEPTH guard below makes the untrusted "-C" path passed on that
+# second call unreachable by dirname's argv, and therefore by any process's argv at all.
+resolve_repo() {
+  dir="$1"
+  gitdir=""
+  depth=0
+  while [ "$depth" -lt "$2" ]; do
+    if [ -d "$dir/.git" ]; then
+      gitdir="$dir/.git"
+      break
+    fi
+    if [ -f "$dir/.git" ]; then
+      gline=""
+      IFS= read -r gline < "$dir/.git" 2>/dev/null || gline=""
+      case "$gline" in
+        "gitdir: "*)
+          gp="${gline#gitdir: }"
+          case "$gp" in
+            /*) gitdir="$gp" ;;
+            *) gitdir="$dir/$gp" ;;
           esac
           ;;
-        push)
-          case "$cfg_key" in
-            [Dd][Ee][Ff][Aa][Uu][Ll][Tt]) cfg_push_default="$cfg_val" ;;
-          esac
-          ;;
-        branch)
-          if [ "$cfg_subsection" = "$current_branch" ]; then
+      esac
+      break
+    fi
+    [ "$((depth + 1))" -lt "$2" ] || break
+    parent="$(dirname "$dir" 2>/dev/null || printf '%s' "$dir")"
+    [ "$parent" != "$dir" ] || break
+    dir="$parent"
+    depth=$((depth + 1))
+  done
+
+  default_branch=""
+  current_branch=""
+  # #268: config-derived push routes, always initialized (even when $gitdir never resolves) so
+  # config_deny() below can reference them unconditionally under this script's `set -uo pipefail`.
+  cfg_push_lines=""
+  cfg_push_default=""
+  cfg_branch_merge=""
+  if [ -n "$gitdir" ]; then
+    common="${gitdir%/worktrees/*}"
+    ohf="$common/refs/remotes/origin/HEAD"
+    if [ -f "$ohf" ]; then
+      oline=""
+      IFS= read -r oline < "$ohf" 2>/dev/null || oline=""
+      case "$oline" in
+        "ref: refs/remotes/origin/"*) default_branch="${oline#ref: refs/remotes/origin/}" ;;
+      esac
+    fi
+    hf="$gitdir/HEAD"
+    if [ -f "$hf" ]; then
+      hline=""
+      IFS= read -r hline < "$hf" 2>/dev/null || hline=""
+      case "$hline" in
+        "ref: refs/heads/"*) current_branch="${hline#ref: refs/heads/}" ;;
+      esac
+    fi
+
+    # #268: text-parse the common dir's config for the two push-affecting keys git itself would
+    # otherwise consult on THIS push (remote.<name>.push, push.default/branch.<n>.merge) — same
+    # [ -f ]-guarded builtin-redirect idiom as the two reads above; never `git config`, never a
+    # second process. See this file's header "Repo resolution" paragraph for the reasoning and the
+    # resulting over-blocking class, and "Documented under-blocking classes" for what this parser
+    # deliberately leaves unread.
+    cfgf="$common/config"
+    if [ -f "$cfgf" ]; then
+      # A SEPARATE carriage-return literal from $cr (declared above for the #270 command-string
+      # strip): the push mutation table's M23 mutant deletes both of $cr's declaration and its
+      # use, and a config parser referencing $cr here would blow up under `set -u` instead of
+      # producing that mutant's documented, measured result.
+      cfg_cr=$'\r'
+      cfg_section=""
+      cfg_subsection=""
+      while IFS= read -r cfgline || [ -n "$cfgline" ]; do
+        cfgline="${cfgline//$cfg_cr/}"
+        # Strip a trailing comment: whichever of '#'/';' appears first, with no quote-tracking --
+        # git ref names MAY legitimately contain '#' or ';' (e.g. refs/heads/feat#123 and
+        # refs/heads/feat;123 are both accepted by git itself), so this is a known, documented
+        # parsing gap, not a safe assumption. See this file's header "Documented over-blocking
+        # classes" (a destination value truncated at the marker) and "Documented under-blocking
+        # classes" (a remote/branch subsection name truncated at the marker, losing its whole
+        # section) for the two behaviour classes this creates.
+        cfg_h="${cfgline%%#*}"
+        cfg_s="${cfgline%%;*}"
+        if [ "${#cfg_h}" -le "${#cfg_s}" ]; then cfgline="$cfg_h"; else cfgline="$cfg_s"; fi
+        cfgline="$(cfg_trim "$cfgline")"
+        [ -n "$cfgline" ] || continue
+        case "$cfgline" in
+          \[[Rr][Ee][Mm][Oo][Tt][Ee]\ \"*\"\]*)
+            cfg_section="remote"
+            cfg_subsection="${cfgline#*\"}"
+            cfg_subsection="${cfg_subsection%%\"*}"
+            continue
+            ;;
+          \[[Bb][Rr][Aa][Nn][Cc][Hh]\ \"*\"\]*)
+            cfg_section="branch"
+            cfg_subsection="${cfgline#*\"}"
+            cfg_subsection="${cfg_subsection%%\"*}"
+            continue
+            ;;
+          \[[Pp][Uu][Ss][Hh]\]*)
+            cfg_section="push"
+            cfg_subsection=""
+            continue
+            ;;
+          \[*)
+            cfg_section="other"
+            cfg_subsection=""
+            continue
+            ;;
+        esac
+        case "$cfgline" in
+          *=*)
+            cfg_key="$(cfg_trim "${cfgline%%=*}")"
+            cfg_val="$(cfg_trim "${cfgline#*=}")"
+            ;;
+          *) continue ;;
+        esac
+        case "$cfg_val" in
+          \"*\") cfg_val="${cfg_val#\"}"; cfg_val="${cfg_val%\"}" ;;
+        esac
+        case "$cfg_section" in
+          remote)
             case "$cfg_key" in
-              [Mm][Ee][Rr][Gg][Ee]) cfg_branch_merge="$cfg_val" ;;
+              [Pp][Uu][Ss][Hh])
+                cfg_push_lines="${cfg_push_lines}${cfg_subsection}${cfg_tab}${cfg_val}"$'\n'
+                ;;
             esac
-          fi
-          ;;
-      esac
-    done < "$cfgf"
+            ;;
+          push)
+            case "$cfg_key" in
+              [Dd][Ee][Ff][Aa][Uu][Ll][Tt]) cfg_push_default="$cfg_val" ;;
+            esac
+            ;;
+          branch)
+            if [ "$cfg_subsection" = "$current_branch" ]; then
+              case "$cfg_key" in
+                [Mm][Ee][Rr][Gg][Ee]) cfg_branch_merge="$cfg_val" ;;
+              esac
+            fi
+            ;;
+        esac
+      done < "$cfgf"
+    fi
   fi
-fi
+}
 
-deny_set="$PUSH_DEFAULT_BRANCH_FALLBACK"
-[ -n "$default_branch" ] && deny_set="$deny_set $default_branch"
-default_display="${default_branch:-fallback}"
+resolve_repo "$resolve_cwd" 64
+session_default_branch="$default_branch"
+session_current_branch="$current_branch"
+session_cfg_push_lines="$cfg_push_lines"
+session_cfg_push_default="$cfg_push_default"
+session_cfg_branch_merge="$cfg_branch_merge"
+
+# apply_session_repo (#269) — (re)applies the session checkout's own resolved facts (captured
+# above, right after the one and only session-scoped resolve_repo call) to
+# default_branch/current_branch/cfg_*, and rebuilds deny_set/default_display exactly as the
+# pre-#269 file-scope statements did. Called once per push segment (see the driver loop below),
+# before that segment's own "-C" value (if any) is considered — so a segment with no "-C", or one
+# whose "-C" value does not resolve, is judged exactly as every segment was before this issue.
+apply_session_repo() {
+  default_branch="$session_default_branch"
+  current_branch="$session_current_branch"
+  cfg_push_lines="$session_cfg_push_lines"
+  cfg_push_default="$session_cfg_push_default"
+  cfg_branch_merge="$session_cfg_branch_merge"
+  deny_set="$PUSH_DEFAULT_BRANCH_FALLBACK"
+  [ -n "$default_branch" ] && deny_set="$deny_set $default_branch"
+  default_display="${default_branch:-fallback}"
+}
+
+# apply_c_target CPATH (#269) — CPATH is the tokenizer's emitted "-C" value for the segment about
+# to be evaluated (empty unless the segment carried exactly one detached "-C <path>" token — see
+# the tokenizer above), or the empty string. No-op when CPATH is empty or fails
+# is_c_target_path() — the segment keeps exactly the session checkout's facts, just applied by
+# apply_session_repo() above. Otherwise resolves CPATH at depth 1 only (the named directory
+# itself — git itself walks upward from "-C"; this hook does not, a documented residual class)
+# and, only if a gitdir actually resolved there, applies current_branch and the three cfg_*
+# variables from the resolved checkout's own values (captured into resolved_* locals right after
+# the resolve_repo call, then assigned explicitly below — each assignment its own statement, on
+# purpose, so a future regression in just one of the four can be isolated) and rebuilds deny_set
+# as the union of the always-in-force fallback, the SESSION checkout's own default branch, and the
+# RESOLVED checkout's own default branch — never a pure replacement of the session's default: a
+# second checkout that happens to lack its own refs/remotes/origin/HEAD (only `git clone` sets
+# one) must not silently lose today's guard, which a replacement would do. default_display
+# prefers the resolved checkout's own default branch. If no gitdir resolved at CPATH, this
+# segment's facts are left exactly as apply_session_repo() above already set them (degrades to
+# today's behaviour) — see the containment argument in this file's header for why an
+# attacker-controlled CPATH can only ever mis-judge a push executed inside CPATH itself.
+apply_c_target() {
+  local cpath="$1" start
+  local resolved_current resolved_cfg_push_lines resolved_cfg_push_default resolved_cfg_branch_merge
+  local resolved_default
+  [ -n "$cpath" ] || return 0
+  is_c_target_path "$cpath" || return 0
+  case "$cpath" in
+    /*|[A-Za-z]:/*) start="$cpath" ;;
+    *) start="$resolve_cwd/$cpath" ;;
+  esac
+  resolve_repo "$start" 1
+  [ -n "$gitdir" ] || { apply_session_repo; return 0; }
+  resolved_current="$current_branch"
+  resolved_cfg_push_lines="$cfg_push_lines"
+  resolved_cfg_push_default="$cfg_push_default"
+  resolved_cfg_branch_merge="$cfg_branch_merge"
+  resolved_default="$default_branch"
+  current_branch="$resolved_current"
+  cfg_push_lines="$resolved_cfg_push_lines"
+  cfg_push_default="$resolved_cfg_push_default"
+  cfg_branch_merge="$resolved_cfg_branch_merge"
+  deny_set="$PUSH_DEFAULT_BRANCH_FALLBACK"
+  [ -n "$session_default_branch" ] && deny_set="$deny_set $session_default_branch"
+  [ -n "$resolved_default" ] && deny_set="$deny_set $resolved_default"
+  default_display="${resolved_default:-$session_default_branch}"
+  [ -n "$default_display" ] || default_display="fallback"
+}
 
 # --- verdict helpers -------------------------------------------------------------------------
 is_deny_member() {
@@ -630,7 +857,11 @@ while IFS= read -r line; do
     "PUSH$TAB"*) : ;;
     *) continue ;;
   esac
-  seg_rest="${line#PUSH$TAB}"
+  seg_body="${line#PUSH$TAB}"
+  seg_cpath="${seg_body%%"$TAB"*}"
+  seg_rest="${seg_body#*"$TAB"}"
+  apply_session_repo
+  apply_c_target "$seg_cpath"
   evaluate_segment "$seg_rest"
   if [ -n "$__deny_dest" ]; then
     deny_dest="$__deny_dest"

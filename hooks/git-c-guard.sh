@@ -53,7 +53,12 @@ pmode="$(printf '%s' "$input" | jq -r '.permission_mode? // empty' 2>/dev/null)"
 GIT_C_SUBCOMMANDS="status add commit push restore diff rev-parse merge-base reset log"
 
 # Relative sibling (`../<name>-wt-<n>`), POSIX absolute, Git-Bash (`/c/Users/...`), and Windows
-# drive-letter (`C:/Users/...`) forms — see worktree-mode.md:83 and README's Windows section.
+# drive-letter (`C:/Users/...`) forms — see worktree-mode.md:88 and README's Windows section. Since
+# #269 this declaration is a mechanically-extracted shared artifact: dev/selfcheck.sh's assertion
+# 4.42 pins hooks/push-guard.sh's own PATH_ERE='...' line byte-identical to this one (that hook
+# reuses this exact predicate to decide whether a push segment's own `-C <path>` value is
+# trustworthy enough to resolve against — see its own header's "Repo resolution" paragraph); a
+# future edit to this line must be applied to both files.
 PATH_ERE='^([A-Za-z]:/|/|\.\./)([A-Za-z0-9._ +-]+/)*[A-Za-z0-9._+-]+-wt-[0-9]+/?$'
 
 # --- the lexer -------------------------------------------------------------------------------

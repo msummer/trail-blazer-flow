@@ -249,6 +249,15 @@ p_4_40_prefix_words() { edit "$1/hooks/push-guard.sh" 's/stdbuf/stdbf/'; }
 # 2026-09-04b).
 p_4_41_drift()      { edit "$1/bin/find-implementation-work.sh" 's/startswith/beginswith/g'; }
 p_4_41_extraction() { edit "$1/bin/find-planning-work.sh" 's/\$planC/\$plnC/g'; }
+# p_4_42_* (#269) — rename characters INSIDE the identifier/value, never append a suffix (LESSON
+# 2026-09-04b). p_4_42_extraction renames PATH_ERE to PATH_RE at BOTH its declaration and its one
+# use site in hooks/git-c-guard.sh, so that script keeps working (validate_segment's grep still
+# references a real variable) while the gate's anchored extraction of the literal "PATH_ERE="
+# prefix comes back empty. p_4_42_drift alters one character inside hooks/push-guard.sh's OWN
+# PATH_ERE value (the digit class, not the identifier) — verified below to occur exactly once in
+# that file (the header prose spells this shape "-wt-<n>", never the bracket form).
+p_4_42_extraction() { edit "$1/hooks/git-c-guard.sh" 's/PATH_ERE/PATH_RE/g'; }
+p_4_42_drift()      { edit "$1/hooks/push-guard.sh" 's/-wt-\[0-9\]/-wt-[0-8]/'; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -532,6 +541,8 @@ cases=(
   "4.40-prefix-words|4.40|p_4_40_prefix_words|alter one word inside hooks/push-guard.sh's PREFIX_WORDS (stdbuf -> stdbf), so it no longer agrees with hooks/agent-boundary.sh's -- measured: \"4.40 push-guard vocabulary disagreement: PREFIX_WORDS differs between hooks/push-guard.sh (...stdbf...) and hooks/agent-boundary.sh (...stdbuf...);\""
   "4.41-drift|4.41|p_4_41_drift|rewrite startswith to beginswith in bin/find-implementation-work.sh's \$planC filter only, so the two scripts' plan-candidate filters disagree -- measured: \"4.41 \$planC plan-candidate-set expression disagrees: bin/find-planning-work.sh has '| (\$trustedC | map(select(((.body | startswith(\$a)) or (.body | startswith(\$v))) | not))) as \$planC', bin/find-implementation-work.sh has '| (\$trustedC | map(select(((.body | beginswith(\$a)) or (.body | beginswith(\$v))) | not))) as \$planC'\""
   "4.41-extraction|4.41|p_4_41_extraction|rename the \$planC binding in bin/find-planning-work.sh so the gate's extraction comes back empty -- measured: \"4.41 bin/find-planning-work.sh's or bin/find-implementation-work.sh's '... as \$planC' line didn't match (structure changed) — extraction failed\""
+  "4.42-extraction|4.42|p_4_42_extraction|rename hooks/git-c-guard.sh's PATH_ERE identifier to PATH_RE (both declaration and use, characters changed inside the token) so the gate's anchored extraction comes back empty -- measured: \"4.42 hooks/git-c-guard.sh's or hooks/push-guard.sh's PATH_ERE='...' line didn't match (structure changed) — extraction failed\""
+  "4.42-drift|4.42|p_4_42_drift|alter one character inside hooks/push-guard.sh's own PATH_ERE value (the digit class [0-9] -> [0-8]), so it no longer agrees with hooks/git-c-guard.sh's -- measured: \"4.42 PATH_ERE predicate disagrees: hooks/git-c-guard.sh has '^([A-Za-z]:/|/|\\.\\./)([A-Za-z0-9._ +-]+/)*[A-Za-z0-9._+-]+-wt-[0-9]+/?\$', hooks/push-guard.sh has '^([A-Za-z]:/|/|\\.\\./)([A-Za-z0-9._ +-]+/)*[A-Za-z0-9._+-]+-wt-[0-8]+/?\$'\""
 )
 
 # ---------------------------------------------------------------------------------------------

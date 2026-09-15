@@ -136,7 +136,26 @@ CRLF-carrying config line (both a line-ending CR and, since the round-2 kickback
 CR inside a refspec value), a config setting neither key at all, a worktree's config resolved from
 the MAIN checkout rather than the pointer's own gitdir, a final config line with no trailing
 newline, case-insensitive section/key names, and the same booby-trapped/byte-identical-listing
-guarantee applied to the config route specifically. It runs in CI as the fourth
+guarantee applied to the config route specifically. Since #269, a push segment's own `git -C
+<path>` value is ALSO resolved, but only when it satisfies the same `PATH_ERE` predicate
+`hooks/git-c-guard.sh` enforces — a byte-identical declaration in both hooks, mechanically pinned
+by `dev/selfcheck.sh`'s assertion 4.42: the current-branch check, the `HEAD` refspec substitution,
+and the default-branch deny-set member each denying via a resolved sibling worktree or a wholly
+separate checkout, the resolved checkout's own config denying where the session has none, two
+documented narrowings (a resolved segment no longer inherits the session's `.git/config` routes,
+and a bare push in a sibling worktree no longer denies merely because the session sits on its own
+default branch), the predicate's boundaries (no `-wt-<n>` suffix, the attached `-C<path>` form,
+0/1/2+ occurrences of `-C`), an unresolvable-but-shape-matching target degrading to the session's
+own facts rather than clearing them, the session's own default branch staying in the deny-set
+union for a resolved segment, and the same booby-trapped/byte-identical-listing guarantee applied
+to BOTH the session repo and the resolved `-C` target. Since a round-2 kickback, that
+booby-trapped-PATH guarantee additionally names `dirname`: an unresolvable-but-shape-matching `-C`
+target's failed resolution never reaches `dirname`'s argv either, pinned specifically by a fixture
+whose target does not resolve at depth 0 (the original never-executes fixture's own target does,
+so it cannot discriminate this guard), and a two-push-segment command pins the per-segment reset
+itself — the SECOND, `-C`-less segment stays judged by the SESSION's own facts (denying via the
+session's own `remote.<name>.push` config), never by whatever the first segment's resolved `-C`
+target left behind. It runs in CI as the fourth
 step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
 `hooks/git-c-guard.sh`, `hooks/agent-boundary.sh`, or `hooks/push-guard.sh` changes.
 
