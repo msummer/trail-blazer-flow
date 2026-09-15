@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 66 assertions total. The gate prints what it checks — run it.
+# Five groups, 67 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -1401,6 +1401,27 @@ elif [ "$planc_planning" != "$planc_impl" ]; then
   bad "4.41 \$planC plan-candidate-set expression disagrees: bin/find-planning-work.sh has '$planc_planning', bin/find-implementation-work.sh has '$planc_impl'"
 else
   ok "4.41 bin/find-planning-work.sh and bin/find-implementation-work.sh share the identical \$planC plan-candidate-set expression"
+fi
+
+# 4.42 (#269) — hooks/git-c-guard.sh's and hooks/push-guard.sh's PATH_ERE='...' declaration lines
+# are byte-identical (script<->script, the 4.26/4.40(c)/4.41 idiom): #269 shares this one
+# predicate between the two hooks — hooks/git-c-guard.sh already enforced it for its own
+# `git -C <worktree> <subcommand>` allow forms, and hooks/push-guard.sh now reuses it verbatim to
+# decide whether a push segment's own `-C <path>` value is trustworthy enough to resolve against
+# (see that hook's own header). Anchored single-line sed -nE extraction (a double-quoted sed
+# program, since the value itself is single-quoted); an empty extraction on EITHER side FAILs
+# loudly ("structure changed") rather than passing vacuously, the same as every other extraction
+# assertion in this group. Proves only that the two scripts spell this one predicate identically,
+# not that either hook's runtime behavior is correct — the same honest limit 4.33/4.34/4.39/
+# 4.40/4.41's comments state.
+pathere_guard="$(sed -nE "s/^PATH_ERE='(.*)'\$/\1/p" "$root/hooks/git-c-guard.sh")"
+pathere_push="$(sed -nE "s/^PATH_ERE='(.*)'\$/\1/p" "$root/hooks/push-guard.sh")"
+if [ -z "$pathere_guard" ] || [ -z "$pathere_push" ]; then
+  bad "4.42 hooks/git-c-guard.sh's or hooks/push-guard.sh's PATH_ERE='...' line didn't match (structure changed) — extraction failed"
+elif [ "$pathere_guard" != "$pathere_push" ]; then
+  bad "4.42 PATH_ERE predicate disagrees: hooks/git-c-guard.sh has '$pathere_guard', hooks/push-guard.sh has '$pathere_push'"
+else
+  ok "4.42 hooks/git-c-guard.sh and hooks/push-guard.sh share the identical PATH_ERE predicate"
 fi
 
 # ============================================================================

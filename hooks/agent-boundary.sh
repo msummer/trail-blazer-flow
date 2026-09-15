@@ -106,7 +106,7 @@ tool_name="$(printf '%s' "$input" | jq -r '.tool_name? // empty' 2>/dev/null)"
 [ "$tool_name" = "Bash" ] || exit 0
 
 # Role resolution: exact string match against space-delimited membership (the sub_allowed idiom
-# at hooks/git-c-guard.sh:149-154) — no match, empty, or absent agent_type all resolve to no role,
+# at hooks/git-c-guard.sh:154-159) — no match, empty, or absent agent_type all resolve to no role,
 # i.e. "no opinion".
 agent_type="$(printf '%s' "$input" | jq -r '.agent_type? // empty' 2>/dev/null)"
 role=""

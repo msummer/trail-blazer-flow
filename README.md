@@ -1411,7 +1411,25 @@ default branch, now has a bare `git push` denied where this hook was previously 
 checks every configured remote's route, not only the one git would pick) and the two new
 over-blocking classes (`push.default = matching`, a wildcard configured destination). The
 residual gap: a GLOBAL or system git config (`~/.gitconfig`, `/etc/gitconfig`, etc.) setting
-either key is not yet read (filed as a follow-up alongside this change).
+either key is not yet read (filed as a follow-up alongside this change). Also in v2.7.2 (#269):
+`hooks/push-guard.sh` now resolves a push segment's own `git -C <path>` value too, but only when
+it satisfies the same `PATH_ERE` predicate `hooks/git-c-guard.sh` already enforces for its own
+worktree-parallel allow forms — the gate mechanically pins the two declarations byte-identical.
+The consumer-visible widening: a `git -C <name>-wt-<n> push` into a sibling worktree or an
+entirely separate checkout is now judged against THAT checkout's own default branch (and, for the
+current branch and any `.git/config` route, THAT checkout's own facts) rather than only the
+session's — the deny-set's default-branch member becomes the union of the session's own default
+and the resolved checkout's own default, never a pure replacement, so a target lacking its own
+`refs/remotes/origin/HEAD` cannot silently lose today's guard. Two narrowings ship alongside it: a
+bare `git -C <worktree> push` no longer denies merely because the SESSION happens to sit on its
+own default branch (worktree-parallel mode's real shape, where the session stays on the default
+branch while worktrees carry `claude/<n>-<slug>`); and a resolved segment no longer inherits the
+session's own `.git/config` routes. Residual, disclosed rather than hidden: a `-C` path that
+doesn't match the predicate — including a plain `git -C ../other-checkout push` with no `-wt-<n>`
+suffix — and `--git-dir=<path>`/`--work-tree` are still judged only against the session, and a
+predicate-matching directory holding no `.git` of its own is judged against the session too, since
+this resolution never walks upward the way git itself would from a real `-C`; both classes are
+filed as a follow-up alongside this change.
 
 ## The per-repo settings file (required)
 
@@ -1527,7 +1545,10 @@ option lands inside the first `*`), and there is no "exactly one token" rule syn
 gap; Claude Code 2.1.246 added a startup warning naming exactly this shape. The plugin ships
 `hooks/git-c-guard.sh` (a `PreToolUse` hook, registered in `hooks/hooks.json`) to do the job
 instead: it sees the whole command string and can require exactly one `-C` token, one path token
-matching the `<repo-dirname>-wt-<number>` worktree shape, and then one of the ten covered
+matching the `<repo-dirname>-wt-<number>` worktree shape (the predicate's real reach is any path
+whose final component is `<name>-wt-<digits>`, not only a sibling of the CURRENT session repo —
+since #269 also reuses it, verbatim, to decide whether `hooks/push-guard.sh` resolves a push
+segment's own `-C` target; see that hook's "Safety model" entry below), and then one of the ten covered
 subcommands (`status`, `add`, `commit`, `push`, `restore`, `diff`, `rev-parse`, `merge-base`,
 `reset --soft`, `log`), with nothing else in between — an injected `-c`/`--exec-path`, a second
 `-C`, an unrecognized path or subcommand, a non-conforming composite part, or any command
@@ -1689,9 +1710,19 @@ absent) through at most 64 parent directories, following a worktree pointer file
 (`gitdir: <path>`) when `.git` is a file rather than a directory — the same shape
 `hooks/git-c-guard.sh`'s worktree-parallel forms use. An unconditional fallback deny set,
 `main`/`master`, is always in force in addition to whatever default branch actually resolves, so
-the hook still denies a plain `git push origin main` even with no `cwd`, an unreadable `.git`, or
-a `-C <other-checkout>` push (deliberately never resolved against the untrusted `-C` path itself —
-see the hook's own header for the full evasion/over-blocking inventory). It enforces only the
+the hook still denies a plain `git push origin main` even with no `cwd` or an unreadable `.git`.
+Since #269, a push segment's own `git -C <path>` value is ALSO resolved, but only when it satisfies
+the same `PATH_ERE` predicate `hooks/git-c-guard.sh` already enforces for its own worktree-parallel
+allow forms (a byte-identical declaration in both hooks, mechanically pinned by the gate): the
+current branch and any `.git/config` route for that segment then come solely from the RESOLVED
+checkout, while the default-branch deny member becomes the union of the fallback, the session's own
+default, and the resolved checkout's own default — never a pure replacement, so a target lacking its
+own `refs/remotes/origin/HEAD` cannot silently lose the guard. A `-C` value that does not match the
+predicate (including a plain `git -C ../other-checkout push` with no `-wt-<n>` suffix), the attached
+`-C<path>` form, two or more `-C` tokens, `--git-dir=<path>`/`--work-tree`, or a predicate-matching
+directory holding no `.git` of its own (this resolution never walks upward the way git itself would
+from a real `-C`) all stay judged only against the session — see the hook's own header for the full,
+measured evasion/over-blocking inventory. It enforces only the
 "deny the default branch" half of this issue's Decision, not an allow-list of
 `claude/<n>-<slug>` destinations — that would also deny a `release/vX.Y.Z` branch, an annotated
 tag push, or any ordinary `git push origin feature/x` a human runs in any plugin-enabled session,

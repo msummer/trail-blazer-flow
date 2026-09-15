@@ -137,3 +137,21 @@ bites: 1–3 lines, written as an instruction to a future agent.
   crashes the whole run with "unbound variable" before any case executes. Escape it as `\$gitdir` in
   prose. On #268 this crashed `bash dev/hook-tests.sh push` outright (caught immediately, no verification
   round lost, but only because the run was watched rather than piped to a summary line).
+- 2026-09-14 (b): the shared `PATH_ERE` predicate (`hooks/git-c-guard.sh`/`hooks/push-guard.sh`)
+  anchors on the path's FINAL component ending `-wt-[0-9]+` — a fixture directory name with any
+  suffix AFTER that digit run (e.g. `target-wt-1-a5`, meant to read as "target A5, a worktree")
+  silently fails the predicate and degrades to no-resolution, instead of raising an error. On #269
+  three fixtures (and two of the ten new mutants' own discriminators) were originally named this
+  way and passed anyway, for the WRONG reason — vacuously, via the pre-#269 session-only code path
+  — until a mutant's failing set exposed each one; the fix was renaming to `target-a5-wt-1`
+  (digits-then-suffix moved before `-wt-<n>`). When adding a `-wt-<n>`-shaped fixture path, put any
+  disambiguating suffix BEFORE `-wt-<n>`, never after, and confirm the predicate actually matches
+  with a direct `grep -qE "$PATH_ERE" <<<"$path"` probe before trusting the fixture's verdict.
+- 2026-09-15: A header sentence that generalises how the push guard's whitespace tokenizer treats a QUOTED
+  `-C` value ("a bare remainder hides the segment", "a remainder other than `push` hides it") failed four
+  verification rounds on #269, each time to a freshly measured shape. The only statement that survived is the
+  tokenizer's own rule applied to the RAW fragments with quote characters still glued on (`-c` pairs with the
+  next fragment, `-c"` is merely dash-skipped; `x/push"` normalises to `push`), plus an enumerated row per
+  measured shape and an explicit "no rule is claimed beyond these rows". Measure every row you cite (the
+  orchestrator's own prediction for the `-c"` shape was wrong until measured) and cite code by function or
+  loop name, never by line number — the edit that adds the citation shifts the lines it points at.
