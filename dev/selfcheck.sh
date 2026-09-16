@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 67 assertions total. The gate prints what it checks — run it.
+# Five groups, 68 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -692,7 +692,7 @@ fi
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 745
-issue-cycle 445
+issue-cycle 450
 issue-planner 530
 project-kickoff 215
 test-ratchet 200
@@ -2069,6 +2069,112 @@ if [ -z "$fail_513" ]; then
   ok "5.13 reconcile-ledger.sh's four-pass sed ladder: harness-only, deploy+harness, and both legacy forms all parse cleanly; an unrecognised trailing token still dies"
 else
   bad "5.13 reconcile-ledger.sh harness-field sed ladder:$fail_513"
+fi
+
+# 5.14 (#298) — executes bin/reconcile-ledger.sh (reusing $rl and $empty_status_fixture from
+# above) against literal offline status-JSON fixtures pinning the new degraded/degraded_reasons
+# read: a document carrying neither key still reconciles exactly as before — the regression
+# ledger this control uses (a seed record for an issue the live queue no longer holds) produces no
+# per-issue discrepancy of its own either, so a spurious "degraded" line would be the ONLY thing
+# that could make this fail (c0); every degraded_reasons entry that does NOT start with "status."
+# produces its own "degraded issue=- bucket=- stage=-" line, in document order (c1, c2); every
+# "status."-prefixed entry is filtered out and never refuses on its own, whether it's the only
+# entry (c3) or mixed with a refusing one (c4); a degraded:true document with no reasons at all
+# backstops to one "unspecified" line rather than silence (c5); a degraded line never cuts the
+# per-issue comparison short — it prints before, not instead of, a genuine stage-skipped
+# discrepancy (c6); a non-array degraded_reasons dies loudly with exit 2 rather than being
+# silently accepted or crashing some other way (c7); an empty-string reason still refuses as
+# exactly one non-empty line, rendered with a visible placeholder rather than being silently
+# dropped as a blank line (c8); a reason carrying an embedded newline renders on one
+# newline-escaped line rather than splitting into two (c9); a reason that is a single NUL byte
+# still refuses as one non-empty line, rendered as its own JSON escape rather than a blank line a
+# raw byte would silently collapse to in a bash command substitution (c10); and a NUL-only reason
+# mixed with a genuine "planning." reason still produces exactly two lines in document order,
+# neither swallowing the other (c11) — c8 through c11 all pin that a refusing entry is NEVER
+# silently dropped or fragmented, for every character class that can appear in one. Refusal
+# sub-checks (c1, c2, c4, c5, c6, c8, c9, c10, c11) capture stdout ONLY (2>/dev/null) so a degraded
+# line printed to stderr instead of stdout would be caught; c0, c3, and c7 capture the merged
+# stream (c0 and c3 are silence/rc checks — a spurious warn on either stream would fail them; c7
+# greps a stderr substring out of the combined text). This file itself never contains a raw NUL or
+# other control byte: c10/c11's fixture and expected-output literals are built from `nulesc`, a
+# bash variable holding the six-character JSON escape text for NUL (\u0000), never the byte
+# itself — jq decodes that escape into a real NUL only inside its own process when parsing the
+# fixture, and escline re-encodes it back to the identical escape text on output (see
+# bin/reconcile-ledger.sh's own comment above escline).
+fail_514=""
+
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') \
+                  <(printf '%s' "$empty_status_fixture") 2>&1)"; rc=$?
+[ -z "$out" ] && [ "$rc" -eq 0 ] || fail_514="$fail_514 c0 (no degraded/degraded_reasons keys, a seeded-but-not-live-queued issue reconciles clean without the marker): expected silence/rc=0, got rc=$rc output='$out';"
+
+d_514_1='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{},"degraded":true,"degraded_reasons":["implementation.ready_query_unavailable"]}'
+expected='degraded issue=- bucket=- stage=-: harness-status.sh marked its live read degraded (implementation.ready_query_unavailable) — a query failed closed, so this reconciliation cannot confirm every queued issue is accounted for'
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') <(printf '%s' "$d_514_1") 2>/dev/null)"; rc=$?
+[ "$out" = "$expected" ] && [ "$rc" -eq 1 ] || fail_514="$fail_514 c1 (one non-status. reason): expected the exact degraded line and rc=1, got rc=$rc output='$out';"
+
+d_514_2='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{},"degraded":true,"degraded_reasons":["planning.initial_query_unavailable","implementation.ready_query_unavailable"]}'
+expected="$(printf '%s\n%s' \
+  'degraded issue=- bucket=- stage=-: harness-status.sh marked its live read degraded (planning.initial_query_unavailable) — a query failed closed, so this reconciliation cannot confirm every queued issue is accounted for' \
+  'degraded issue=- bucket=- stage=-: harness-status.sh marked its live read degraded (implementation.ready_query_unavailable) — a query failed closed, so this reconciliation cannot confirm every queued issue is accounted for')"
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') <(printf '%s' "$d_514_2") 2>/dev/null)"; rc=$?
+[ "$out" = "$expected" ] && [ "$rc" -eq 1 ] || fail_514="$fail_514 c2 (two non-status. reasons, document order): expected two lines in order and rc=1, got rc=$rc output='$out';"
+
+d_514_3='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{},"degraded":true,"degraded_reasons":["status.prs_query_unavailable"]}'
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') <(printf '%s' "$d_514_3") 2>&1)"; rc=$?
+[ -z "$out" ] && [ "$rc" -eq 0 ] || fail_514="$fail_514 c3 (status.-only reasons never refuse alone): expected silence/rc=0, got rc=$rc output='$out';"
+
+d_514_4='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{},"degraded":true,"degraded_reasons":["status.proposed_query_unavailable","planning.initial_query_unavailable"]}'
+expected='degraded issue=- bucket=- stage=-: harness-status.sh marked its live read degraded (planning.initial_query_unavailable) — a query failed closed, so this reconciliation cannot confirm every queued issue is accounted for'
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') <(printf '%s' "$d_514_4") 2>/dev/null)"; rc=$?
+[ "$out" = "$expected" ] && [ "$rc" -eq 1 ] || fail_514="$fail_514 c4 (mixed status.+planning., per-element filtering): expected exactly one line naming the planning reason and rc=1, got rc=$rc output='$out';"
+
+d_514_5='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{},"degraded":true,"degraded_reasons":[]}'
+expected='degraded issue=- bucket=- stage=-: harness-status.sh marked its live read degraded (unspecified) — a query failed closed, so this reconciliation cannot confirm every queued issue is accounted for'
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') <(printf '%s' "$d_514_5") 2>/dev/null)"; rc=$?
+[ "$out" = "$expected" ] && [ "$rc" -eq 1 ] || fail_514="$fail_514 c5 (degraded true, reasons empty -> unspecified backstop): expected the unspecified line and rc=1, got rc=$rc output='$out';"
+
+d_514_6='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[{"number":17,"title":"t","url":"u"}]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{},"degraded":true,"degraded_reasons":["planning.initial_query_unavailable"]}'
+expected="$(printf '%s\n%s' \
+  'degraded issue=- bucket=- stage=-: harness-status.sh marked its live read degraded (planning.initial_query_unavailable) — a query failed closed, so this reconciliation cannot confirm every queued issue is accounted for' \
+  'stage-skipped issue=17 bucket=ready_to_implement stage=implementer: still queued for this stage and the ledger records no outcome for it')"
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') <(printf '%s' "$d_514_6") 2>/dev/null)"; rc=$?
+[ "$out" = "$expected" ] && [ "$rc" -eq 1 ] || fail_514="$fail_514 c6 (degraded line first, per-issue comparison still runs): expected the degraded line then the exact 5.2 stage-skipped line and rc=1, got rc=$rc output='$out';"
+
+d_514_7='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{},"degraded_reasons":"planning.x"}'
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') <(printf '%s' "$d_514_7") 2>&1)"; rc=$?
+if [ "$rc" -ne 2 ] || ! grep -qF -- "malformed degraded_reasons" <<<"$out"; then
+  fail_514="$fail_514 c7 (non-array degraded_reasons dies loudly): expected rc=2 and 'malformed degraded_reasons' on stderr, got rc=$rc output='$out';"
+fi
+
+d_514_8='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{},"degraded":true,"degraded_reasons":[""]}'
+expected='degraded issue=- bucket=- stage=-: harness-status.sh marked its live read degraded ((empty reason)) — a query failed closed, so this reconciliation cannot confirm every queued issue is accounted for'
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') <(printf '%s' "$d_514_8") 2>/dev/null)"; rc=$?
+[ "$out" = "$expected" ] && [ "$rc" -eq 1 ] || fail_514="$fail_514 c8 (an empty-string reason still refuses as exactly one non-empty line, never a silently-dropped blank line): expected the placeholder line and rc=1, got rc=$rc output='$out';"
+
+d_514_9='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{},"degraded":true,"degraded_reasons":["planning.a\nb"]}'
+expected='degraded issue=- bucket=- stage=-: harness-status.sh marked its live read degraded (planning.a\nb) — a query failed closed, so this reconciliation cannot confirm every queued issue is accounted for'
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') <(printf '%s' "$d_514_9") 2>/dev/null)"; rc=$?
+[ "$out" = "$expected" ] && [ "$rc" -eq 1 ] || fail_514="$fail_514 c9 (an embedded-newline reason renders on one newline-escaped line, never silently split into two): expected the one escaped line and rc=1, got rc=$rc output='$out';"
+
+# nulesc holds the literal six-character JSON escape for NUL, used by c10/c11 below to build a
+# NUL-only degraded_reasons entry without this file ever containing a raw NUL byte.
+nulesc='\u0000'
+d_514_10='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{},"degraded":true,"degraded_reasons":["'"$nulesc"'"]}'
+expected="degraded issue=- bucket=- stage=-: harness-status.sh marked its live read degraded ($nulesc) — a query failed closed, so this reconciliation cannot confirm every queued issue is accounted for"
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') <(printf '%s' "$d_514_10") 2>/dev/null)"; rc=$?
+[ "$out" = "$expected" ] && [ "$rc" -eq 1 ] || fail_514="$fail_514 c10 (a NUL-only reason still refuses as exactly one non-empty line, rendered as its JSON escape rather than a silently-dropped blank line): expected the escaped line and rc=1, got rc=$rc output='$out';"
+
+d_514_11='{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[]},"waiting_on_human":{"plans_to_review":[],"prs_to_review":[],"blocked":[]},"counts":{},"degraded":true,"degraded_reasons":["planning.x","'"$nulesc"'"]}'
+expected="$(printf '%s\n%s' \
+  'degraded issue=- bucket=- stage=-: harness-status.sh marked its live read degraded (planning.x) — a query failed closed, so this reconciliation cannot confirm every queued issue is accounted for' \
+  "degraded issue=- bucket=- stage=-: harness-status.sh marked its live read degraded ($nulesc) — a query failed closed, so this reconciliation cannot confirm every queued issue is accounted for")"
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') <(printf '%s' "$d_514_11") 2>/dev/null)"; rc=$?
+[ "$out" = "$expected" ] && [ "$rc" -eq 1 ] || fail_514="$fail_514 c11 (a mixed planning. and NUL-only reason list: exactly two lines in document order, the NUL entry rendered as its escape rather than dropped or merged): expected two lines and rc=1, got rc=$rc output='$out';"
+
+if [ -z "$fail_514" ]; then
+  ok "5.14 reconcile-ledger.sh reads degraded/degraded_reasons: a keyless document is unaffected, every non-status. reason refuses in document order, every status.-prefixed reason is filtered out and never refuses alone, an empty-reasons degraded:true document backstops to 'unspecified', a degraded line never cuts the per-issue comparison short, a non-array degraded_reasons dies with exit 2, and an empty-string, embedded-newline, or NUL-only reason (alone or mixed with a genuine reason) still refuses as exactly one non-empty escaped line per entry"
+else
+  bad "5.14 reconcile-ledger.sh degraded/degraded_reasons read:$fail_514"
 fi
 
 # ============================================================================

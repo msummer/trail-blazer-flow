@@ -206,7 +206,13 @@ CI as the fifth step, but it is not part of `dev/selfcheck.sh` itself — run it
 
 `dev/planning-tests.sh` is a separate negative-test harness for BOTH of this repo's discovery
 scripts, `bin/find-planning-work.sh` (#164) and, since #176, `bin/find-implementation-work.sh`,
-and, since #285, their consumer `bin/harness-status.sh` end-to-end:
+and, since #285, their consumer `bin/harness-status.sh` — end-to-end via Part 13's fixtures (both
+discovery scripts run for real), and, since #297, via Part 14's fixtures against
+`bin/harness-status.sh`'s own three `gh` call sites alone, behind a `build_stub_discovery`-built
+canned stand-in for both discovery scripts (so, among the fixtures that invoke `run_status`, an
+in-place mutant to either discovery script is reachable only through Part 13's own `run_status`
+fixtures, never Part 14's — this file's many OTHER Parts, which call the discovery scripts
+directly rather than through `run_status`, reach those same mutants too):
 it builds throwaway fixture directories under `mktemp`, with a stub `gh` on `PATH`, and runs the
 real script(s) under test against them. For `bin/find-planning-work.sh` it pins the
 trusted-association gate — only a comment whose `authorAssociation` is `OWNER`, `MEMBER`, or
@@ -400,7 +406,17 @@ covers `initial_query_unavailable`, `candidates_query_unavailable`,
 `author_association_unavailable`, and #284's own `ready_query_unavailable` with no per-key
 enumeration to drift), plus `counts.degraded` mirroring the same boolean — pinned end-to-end via a
 new `run_status` runner that invokes the real `bin/harness-status.sh`, which in turn resolves both
-discovery scripts by bare name on the same stub `gh` PATH.
+discovery scripts by bare name on the same stub `gh` PATH. Since #297, `bin/harness-status.sh`
+gives its OWN three `gh` call sites — the plan-proposed query, the impl-blocked query, and the
+open-PR query — the identical bounded-retry-then-fail-closed shape, publishing six new
+`counts` booleans and extending `degraded_reasons` with a third, `"status.<key>"` half (the same
+generic rule applied to this script's own new flags) after the planning and implementation
+halves; pinned by nine new Part 14 fixtures that drive `run_status` too, but behind a
+`build_stub_discovery`-built canned stand-in for both discovery scripts, new reject-marker
+families (`reject-proposed(-once)`, `reject-blocked(-once)`, `reject-prs(-once)`) mirroring
+`reject-ready(-once)`, and a new `.pr-calls` log (mirroring `.issue-calls`) read by a new
+`expect_pr_calls` helper, since the open-PR query is a separate top-level `gh pr ...` call the
+existing `.issue-calls` log never captures.
 It runs in CI as the sixth step, but it
 is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh`,
 `bin/find-implementation-work.sh`, or `bin/harness-status.sh` changes.
