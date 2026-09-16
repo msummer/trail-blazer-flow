@@ -9,9 +9,10 @@
 #                        addressed yet. A harness-authored record (a comment containing
 #                        "<!-- harness-audit -->" or "<!-- verifier-verdict -->" anywhere in its
 #                        body) never counts as feedback, even from a trusted account — it's a
-#                        record, not a decision. #275: a harness-authored record that OPENS WITH
-#                        one of those markers is also never treated as the latest plan comment
-#                        itself (see below).
+#                        record, not a decision. #281 (superseding #275): plan candidates are
+#                        restricted to trusted comments that OPEN WITH the plan marker itself, so
+#                        a harness-authored record — which opens with its own marker, never the
+#                        plan marker — is never a plan candidate either (see below).
 #
 # Issues labelled "no-plan" are excluded from BOTH buckets — add that label to keep an issue
 # (tracking, discussion, question, etc.) out of the planning workflow entirely.
@@ -22,19 +23,19 @@
 # a comment to be recognised as either: an untrusted comment never becomes the latest plan and
 # never counts as feedback, regardless of the marker or its position in the thread. Untrusted
 # comments posted after the latest trusted plan are reported in the untrusted_comments output
-# bucket instead of being silently dropped, so the human still sees them. A second exclusion
-# also applies inside the trusted set — at TWO different anchoring strengths for two different
-# purposes, since #275. A trusted comment containing "<!-- harness-audit -->" (a harness-authored
-# audit/hygiene record) or "<!-- verifier-verdict -->" (the orchestrator's own archive) ANYWHERE
-# in its body (contains, not anchored) is never treated as feedback, and is reported in
-# counts.audit_comments_skipped / counts.verdict_archives_skipped instead. #275 additionally
-# excludes, from the latest-plan computation itself, a trusted comment that OPENS WITH
-# (startswith, anchored to the comment's first line, not contains) one of those same markers — a
-# maintainer-authored record that merely QUOTES the plan marker in its prose must never be
-# mistaken for the plan itself (see the $planC comment in the script body for why anchoring, not
-# contains, is used at this one site — over-exclusion there would throw an approved plan back
-# into revision). Both exclusions only ever narrow the trusted set, so neither ever adds anything
-# to untrusted_comments.
+# bucket instead of being silently dropped, so the human still sees them. A second restriction
+# narrows the trusted set for a different purpose: a trusted comment containing
+# "<!-- harness-audit -->" (a harness-authored audit/hygiene record) or "<!-- verifier-verdict -->"
+# (the orchestrator's own archive) ANYWHERE in its body (contains, not anchored) is never treated
+# as feedback, and is reported in counts.audit_comments_skipped / counts.verdict_archives_skipped
+# instead. Separately, #281 (superseding #275) restricts which trusted comments are even eligible
+# to become the latest plan: only a comment that OPENS WITH (startswith, anchored to the comment's
+# first line, not contains) the plan marker itself is a plan candidate at all — a
+# maintainer-authored record that merely QUOTES the plan marker in its prose, wherever its own
+# harness marker sits (or absent entirely), is never mistaken for the plan (see the $planC comment
+# in the script body for the anchoring rationale — over-exclusion there would throw an approved
+# plan back into revision). Both restrictions only ever narrow the trusted set, so neither ever
+# adds anything to untrusted_comments.
 #
 # #176 extends the same trust boundary to WHO OPENED the issue, not just who commented on it:
 # both needs_initial_plan and needs_revision items now carry {author, association,
@@ -256,20 +257,33 @@ for n in $candidates; do
     ($trusted | split(" ")) as $ok
     | (.comments // []) as $c
     | ($c | map(select( ((.authorAssociation // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null ))) as $trustedC
-    # #275 — plan-candidate set: $trustedC minus any comment that OPENS WITH (startswith, not
-    # contains) the harness-audit or verifier-verdict marker, so a maintainer-authored record
-    # that merely QUOTES the plan marker in its prose is never mistaken for the latest plan
-    # (observed live on #245: an audit comment quoting "<!-- planner-plan -->" was picked as the
-    # plan). startswith here, not the contains() the feedback exclusion below still uses:
-    # over-excluding HERE is the destructive direction — a real plan comment that quotes a
-    # harness marker in its own prose (the plan comment for this very issue, for instance) would
-    # become unselectable, throwing an approved plan back into needs_revision for no human reason.
-    # Every harness-record writer in this repo posts its marker as the first line of the
-    # comment (bin/cleanup-after-merge.sh, both SKILL.md files), so anchoring costs nothing
-    # against a real record. Honest limit: a record whose marker is NOT on line 1 is not
-    # excluded here (see the #275 follow-up filed for that residual gap).
-    | ($trustedC | map(select(((.body | startswith($a)) or (.body | startswith($v))) | not))) as $planC
-    | ([ $planC[] | select(.body | contains($m)) | .createdAt ] | max) as $lastPlan
+    # #281 (superseding #275) — plan-candidate set: a trusted comment is a plan candidate only if
+    # its body OPENS WITH (startswith, anchored to the first line of the comment) the plan marker
+    # itself, positively — not "$trustedC minus a harness-marker exclusion" any more. Because
+    # startswith($m) implies both contains($m) and the negation of startswith($a)/startswith($v)
+    # (no marker string is a prefix of another), this positive anchor subsumes the #275 record
+    # exclusion (a harness-authored record opens with its OWN marker, never the plan marker) and
+    # additionally closes the gap #275 left open: a record whose harness marker is preceded by
+    # prose, that also quotes the plan marker mid-body, is excluded here too, because it does not
+    # open with the plan marker either (observed live on #245, and the #281 follow-up that
+    # generalised it: an audit-style comment quoting "<!-- planner-plan -->" mid-body was picked
+    # as the plan).
+    #
+    # startswith, not the contains() the feedback exclusion below still uses: over-excluding HERE
+    # is the destructive direction — a real plan comment that quotes a harness marker in its own
+    # prose (the plan comment for this very issue, for instance) would become unselectable,
+    # throwing an approved plan back into needs_revision for no human reason. The planner skill
+    # posts the plan marker as the first line of the comment (see step 2c, the "must be exactly"
+    # block), so anchoring costs nothing against a harness-posted plan.
+    #
+    # Honest limit: a hand-posted plan comment with anything before the marker is not selectable
+    # here (repost it with the marker as the first line — editing the comment in place would trip
+    # the #192 plan-edited-after-approval check instead). A trusted comment that quotes the plan
+    # marker mid-body is now excluded from plan candidacy here AND was already excluded from the
+    # feedback set below by its own contains($m) test, so it is silently dropped from both with no
+    # warn (see the filed follow-up for a diagnostic on that class).
+    | ($trustedC | map(select(.body | startswith($m)))) as $planC
+    | ([ $planC[] | .createdAt ] | max) as $lastPlan
     | {
         has_feedback: (
           if $lastPlan == null then false

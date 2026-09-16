@@ -693,7 +693,7 @@ fi
 # read on demand, not on every run.
 budget_table="issue-implementer 745
 issue-cycle 445
-issue-planner 525
+issue-planner 530
 project-kickoff 215
 test-ratchet 200
 harness-setup 185"
@@ -1384,15 +1384,16 @@ else
   fi
 fi
 
-# 4.41 (#275) — bin/find-planning-work.sh's and bin/find-implementation-work.sh's `... as $planC`
-# plan-candidate-set lines are byte-identical (script<->script, the 4.26 idiom): both scripts
-# exclude a harness-authored record (one that OPENS WITH <!-- harness-audit --> or
-# <!-- verifier-verdict -->) from the trusted comments each treats as a plan-selection candidate,
-# and #275's design intent is that this one jq expression is shared, never forked, between the two
-# scripts — anchored single-line sed -nE extraction (the 4.26/4.29/4.40 idiom); an empty extraction
-# on EITHER side FAILs loudly ("structure changed") rather than passing vacuously. Proves only that
-# the two scripts spell this one expression identically, not that either script's runtime behavior
-# is correct — the same honest limit 4.33/4.34/4.39/4.40's comments state.
+# 4.41 (#281, superseding #275) — bin/find-planning-work.sh's and bin/find-implementation-work.sh's
+# `... as $planC` plan-candidate-set lines are byte-identical (script<->script, the 4.26 idiom):
+# both scripts restrict plan candidates to the trusted comments that OPEN WITH the plan marker
+# itself (<!-- planner-plan -->, startswith, anchored to the first line of the comment) — a
+# positive anchor that subsumes #275's harness-record exclusion and is #281's design intent to keep
+# as one jq expression shared, never forked, between the two scripts — anchored single-line
+# sed -nE extraction (the 4.26/4.29/4.40 idiom); an empty extraction on EITHER side FAILs loudly
+# ("structure changed") rather than passing vacuously. Proves only that the two scripts spell this
+# one expression identically, not that either script's runtime behavior is correct — the same
+# honest limit 4.33/4.34/4.39/4.40's comments state.
 planc_planning="$(sed -nE 's/^ *(\| .*as \$planC)$/\1/p' "$root/bin/find-planning-work.sh")"
 planc_impl="$(sed -nE 's/^ *(\| .*as \$planC)$/\1/p' "$root/bin/find-implementation-work.sh")"
 if [ -z "$planc_planning" ] || [ -z "$planc_impl" ]; then

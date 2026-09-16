@@ -138,7 +138,8 @@ The `issue-planner` skill:
 3. Dispatches the read-only `planner` subagent per issue (parallel dispatches OK — each is
    scoped to one issue). Prompts include relevant `LESSONS.md` entries and any orchestrator
    context the issue lacks (recently merged PRs, corrected measurements).
-4. Posts each plan as an issue comment tagged `<!-- planner-plan -->`, labels `plan-proposed`.
+4. Posts each plan as an issue comment tagged `<!-- planner-plan -->` as the comment's first
+   line, labels `plan-proposed`.
 5. **Handles stale and overlapping plans**: a pending `plan-proposed` plan whose affected files
    changed under it (PRs merged since posting) gets a staleness comment (deliberately unmarked —
    it's this run's revision feedback) and an immediate same-run revision; a stale `plan-approved`
@@ -413,11 +414,12 @@ request — so a cycle running unattended (via `/loop` or a scheduled routine) c
 entirely from wherever you read GitHub notifications, including the GitHub mobile app, without a
 laptop in reach.
 
-**What a cycle leaves behind.** A plan is a comment on the issue carrying a `<!-- planner-plan
--->` marker, with the `plan-proposed` label added to the issue. Implementation work becomes a
-pull request, opened once the verifier passes, with the verification results in its body. You
-only see either one if you're watching the repo or subscribed to the issue/PR — GitHub's own
-notification settings govern that, not this harness.
+**What a cycle leaves behind.** A plan is a comment on the issue that OPENS WITH a
+`<!-- planner-plan -->` marker — the marker must be the comment's first line for the harness to
+recognise it (#281) — with the `plan-proposed` label added to the issue. Implementation work
+becomes a pull request, opened once the verifier passes, with the verification results in its
+body. You only see either one if you're watching the repo or subscribed to the issue/PR —
+GitHub's own notification settings govern that, not this harness.
 
 **Reviewing a plan.** Read the issue comment. To accept it, add the `plan-approved` label. To
 request changes, comment on the issue with what to change — no label needed; the next cycle
@@ -1469,7 +1471,14 @@ pass instead; fail-closed is unchanged — a read still failing after the one re
 **not eligible**, same one-line reason, exactly as before, and a determinate answer (a `false`
 needle, a `false` `covers_plan`, a `none` archive line, or a wrong-prefix archived status line) is
 never retried. Cost: up to 30s plus one extra read-only call per failing read, paid only on a PR
-whose read fails — worst case six such waits in a single pass.
+whose read fails — worst case six such waits in a single pass. Also in v2.7.3 (#281): plan
+selection on both discovery scripts is now a positive, first-line anchor on the plan marker
+itself, superseding #275's harness-marker exclusion — see "Safety model" below for the full shape.
+The consumer-visible behaviour change: a hand-posted plan comment with anything before the
+`<!-- planner-plan -->` marker is no longer selectable as the plan (repost it with the marker as
+the comment's first line); a trusted comment that quotes the plan marker mid-body without opening
+with it is now silently excluded from both plan selection and the feedback/binding sets, with no
+warning (a filed follow-up). No published JSON key, `counts` key, or `reason` string changes.
 
 ## The per-repo settings file (required)
 
@@ -2093,21 +2102,30 @@ the pipeline. Both markers are matched with `contains` for these two sets, not a
 comment's first line (the same behaviour the verdict marker has always had) — a maintainer who
 quotes a marker verbatim inside their own feedback has that comment silently dropped from both
 binding sets, with no revision, no `trusted_post_plan` entry, and no warning; accepted as an
-inherited risk rather than fixed here, for the feedback/binding sets specifically. Since #275,
-the SAME two markers are ALSO excluded from **plan selection itself** on both scripts — the
-newest trusted comment either script would otherwise treat as "the plan" — but at a different,
-first-line-anchored strength (`startswith`, not `contains`): only a record that OPENS WITH one of
-the two markers is excluded there. This asymmetry is deliberate, not an oversight: over-excluding
-at the feedback/binding sets is safe (a record is merely dropped), but over-excluding at plan
-selection is destructive (an approved plan would be thrown away, and `issue-implementer`'s step 2a
-remedy for the resulting `no-plan` verdict is to strip `plan-approved` and post a
-revision-triggering comment) — so a plan comment that merely quotes a harness marker in its own
-prose is still selected as the plan, while a maintainer-authored record that quotes the plan
-marker verbatim (the live #245 shape: an audit comment quoting `<!-- planner-plan -->` was picked
-as the plan) is not. The named limit is now split too: a maintainer who quotes a harness marker
-inside their own FEEDBACK still has that comment silently dropped, unfixed (above); a
-harness-authored RECORD whose marker is not on line 1 is still selectable as the plan (a filed
-follow-up), unlike the feedback/binding sets' `contains` reach. The filter only ever narrows the trusted set: a forged marker from an untrusted
+inherited risk rather than fixed here, for the feedback/binding sets specifically. Since #281
+(superseding #275), plan selection on both scripts is a POSITIVE, first-line anchor rather than a
+harness-marker exclusion: the newest trusted comment either script would treat as "the plan" must
+itself OPEN WITH (`startswith`, anchored to the comment's first line) the plan marker
+(`<!-- planner-plan -->`) — not merely `contains` it, the strength the feedback/binding sets above
+still use. Because opening with the plan marker implies both containing it and not opening with
+either harness marker, this positive anchor subsumes #275's original exclusion (a harness-authored
+record opens with its OWN marker, never the plan marker) and additionally closes the gap #275 left
+open: a record whose harness marker is preceded by prose, that also quotes the plan marker
+mid-body, is excluded from plan selection too, because it does not open with the plan marker
+either. This asymmetry (anchored at plan selection, `contains` at feedback/binding) is deliberate,
+not an oversight: over-excluding at the feedback/binding sets is safe (a record is merely
+dropped), but over-excluding at plan selection is destructive (an approved plan would be thrown
+away, and `issue-implementer`'s step 2a remedy for the resulting `no-plan` verdict is to strip
+`plan-approved` and post a revision-triggering comment) — so a plan comment that merely quotes a
+harness marker in its own prose is still selected as the plan, while a maintainer-authored record
+that quotes the plan marker verbatim, wherever its own harness marker sits (or absent entirely) —
+the live #245 shape, generalised — is not. The named limit is now split differently: a maintainer
+who quotes a harness marker inside their own FEEDBACK still has that comment silently dropped,
+unfixed (above); a trusted comment that quotes the plan marker mid-body is now silently excluded
+from BOTH plan selection and the feedback/binding sets, with no warning (a filed follow-up); and a
+hand-posted plan comment with anything before the marker is not selectable — repost it with the
+marker as the comment's first line (editing the comment in place would trip the
+plan-edited-after-approval check instead). The filter only ever narrows the trusted set: a forged marker from an untrusted
 author still surfaces, unfiltered, in `untrusted_comments` / `untrusted_post_plan`, exactly like
 a forged plan marker does — and, since #194, is additionally FLAGGED there: both scripts add a
 `has_harness_marker: true` boolean to that entry (alongside the existing `has_plan_marker`),
