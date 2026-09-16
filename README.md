@@ -68,6 +68,8 @@ or share).
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 │   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
 │   └── lock-tests.sh             # fixture-based negative-test harness for bin/harness-lock.sh (not run by the gate)
+├── docs/
+│   └── adr/                      # architecture decision records: direction the README doesn't specify yet
 ├── .github/
 │   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the three hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
 │   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
@@ -2252,6 +2254,11 @@ copy of itself over the working tree being edited.
 
 ## Known future improvements
 
+- **Decided direction:** the larger planned changes are recorded as ADRs in
+  [`docs/adr/`](docs/adr/README.md) — [0001 Autonomy mode](docs/adr/0001-autonomy-mode.md), a
+  single opt-in profile for unattended runs, and
+  [0002 Codex compatibility](docs/adr/0002-codex-compatibility.md), running the harness under
+  OpenAI Codex. Neither is implemented yet; each ADR lists its tracking issues.
 - **Parallel-mode ergonomics:** worktree-parallel is gated on manually comparing Affected areas;
   a small script that diffs the file lists of two plans could make eligibility mechanical. (The
   final batching call should stay with the orchestrator — wave sequencing sometimes depends on
