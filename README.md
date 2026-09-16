@@ -386,7 +386,8 @@ pass → implementation pass → merge pass (**opt-in**: only with a CLAUDE.md "
 policy" *and* the `gh pr merge` deny lifted; guarded per PR, one at a time, re-verified between,
 audited in the report) → a closing reconciliation, comparing the run's **dispatch ledger**
 against `harness-status.sh`'s live queues via `reconcile-ledger.sh` (an issue with no recorded
-outcome is escalated, never dropped), then a **per-issue summary table** and a two-halves report
+outcome is escalated, never dropped; a degraded live read is escalated too, never reported
+clean), then a **per-issue summary table** and a two-halves report
 — *what the cycle did* and *what waits on the human* (plans to review, PRs to merge, blocked
 issues). It adds no authority beyond what CLAUDE.md delegates — it just removes the
 hand-cranking between stages. Pair it with `/loop` or a scheduled routine for unattended
@@ -436,10 +437,18 @@ want changes made before either.
 the total waiting on you, broken into `waiting_on_human.plans_to_review`,
 `waiting_on_human.prs_to_review` (each PR entry carries a coarse `ci`: `passing`, `failing`,
 `pending`, or `none`), and `waiting_on_human.blocked`. Check the top-level `degraded` boolean too
-(and `degraded_reasons`, and its `counts.degraded` mirror) — `true` means a discovery query failed
+(and `degraded_reasons`, and its `counts.degraded` mirror) — `true` means a discovery query OR one
+of `harness-status.sh`'s own three queries (plan-proposed, impl-blocked, open PRs) failed
 closed this run, so a bucket above may under-report the true queue rather than reflect an
-empty one. Nothing in that JSON is phone-specific — it's the same summary a scheduled routine's
-own report already gives you.
+empty one. Each `degraded_reasons` entry prefixed `status.` names which `waiting_on_human` bucket
+above it affects (the plan-proposed query → `plans_to_review`, impl-blocked → `blocked`, open
+PRs → `prs_to_review`); a `planning.`/`implementation.` entry usually affects `harness_will_handle`
+instead — except `planning.candidates_query_unavailable`, which ALSO inflates `plans_to_review`
+above: it fails the revision-candidates query closed, so `find-planning-work.sh`'s own
+`needs_revision` bucket comes back empty, and this script subtracts that (now-empty) bucket from
+the plan-proposed query — so a plan-proposed issue with real unaddressed maintainer feedback stays
+counted as awaiting your review instead of the planner's. Nothing in that JSON is phone-specific —
+it's the same summary a scheduled routine's own report already gives you.
 
 ## Greenfield walkthrough: from idea to first feature
 
@@ -1505,6 +1514,29 @@ not model git's own last-wins precedence within a single file either — a confi
 `push.default` line no longer overrides an earlier one in that same file. The residual gap: a
 SYSTEM git config (`/etc/gitconfig`) and `include`/`includeIf` directives inside any of the four
 files this hook now reads remain unread, each filed as its own follow-up.
+
+**v2.7.3 → v2.7.4** needs no grant, label, script, settings entry, or baseline step (#297/#298).
+Two behaviour changes: `harness-status.sh` gives its OWN three queries — plan-proposed,
+impl-blocked, and the open-PR list — the identical bounded-retry-then-fail-closed shape
+#272/#273/#284 already gave the two discovery scripts, publishing six new `counts` booleans
+(`proposed_query_retried`/`_unavailable`, `blocked_query_retried`/`_unavailable`,
+`prs_query_retried`/`_unavailable`) and extending `degraded_reasons` with a third, `"status.<key>"`
+half after the planning and implementation halves. Worst case this adds
+to `harness-status.sh`'s own run: 3 × 30s = 90s (all three sites fail twice); in a broad outage
+where every list query anywhere fails twice, the total across one `harness-status.sh` invocation
+rises to about 210s. Second: `reconcile-ledger.sh` now reads `degraded`/`degraded_reasons` from
+the status JSON it compares against and refuses to report a clean reconciliation on a degraded
+document — one new `degraded issue=- bucket=- stage=-: ...` line per `degraded_reasons` entry
+that does NOT start with `"status."` (a `"status."` entry describes a `waiting_on_human` bucket
+this reconciliation never compares, and never refuses on its own), printed before any per-issue
+line, forcing exit 1; a `degraded: true` document whose `degraded_reasons` is empty or absent gets
+one `unspecified` line instead of silence (a document whose reasons are all `"status."`-prefixed
+still stays silent, exit 0 — the backstop fires only on an empty/absent array, never on a
+filtered-to-nothing one). The consumer-visible fix: before this change, a discovery query that failed
+both attempts (already silently fail-closed since v2.7.2's #272/#273) could make the closing
+reconciliation report "every queued issue accounted for" even though the affected bucket had
+silently dropped an issue — `skills/issue-cycle/SKILL.md`'s closing-reconciliation per-class list
+and its two-halves report both now name this `degraded` class.
 
 ## The per-repo settings file (required)
 

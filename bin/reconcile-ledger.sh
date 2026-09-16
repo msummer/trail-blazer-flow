@@ -44,19 +44,40 @@
 #                dev/selfcheck.sh's 4.13 parses that exact line)
 #
 # STATUS JSON: harness-status.sh output. Omit the argument and this script runs
-# harness-status.sh itself (needs gh authenticated); pass a path to work offline.
+# harness-status.sh itself (needs gh authenticated); pass a path to work offline. (#298) Also
+# read: the top-level `degraded` boolean and `degraded_reasons` array — see the `degraded` OUTPUT
+# code below.
 #
-# OUTPUT: one line per discrepancy on stdout, ascending issue order:
+# OUTPUT: one line per discrepancy on stdout. A `degraded` line, if any, comes FIRST (see below) —
+# then per-issue discrepancy lines in ascending issue order:
 #
 #   <code> issue=<n> bucket=<b> stage=<s>: <explanation>
 #
+#   degraded         (#298) a discovery query (planning.* or implementation.*) failed closed this
+#                    run — or degraded:true carries no reasons at all (the "unspecified" backstop
+#                    below) — so a harness_will_handle bucket this reconciliation compares against
+#                    may under-report the true queue rather than reflect it. harness-status.sh's
+#                    OWN query failures (status.<key>) never produce this line by themselves: they
+#                    describe the waiting_on_human buckets this reconciliation never compares.
+#                    issue=- bucket=- stage=-. One line per degraded_reasons entry that does NOT
+#                    start with "status." (a "status." entry never refuses on its own); a
+#                    degraded:true document whose degraded_reasons is empty or absent yields one
+#                    "unspecified" line instead (this backstop does NOT fire on a status-only-
+#                    reasons document — that one stays silent, exit 0). Every refusing entry
+#                    renders as exactly one non-empty stdout line: every control character (an
+#                    embedded newline, a bare NUL byte, a carriage return, ...) is escaped, and an
+#                    entry that escapes to the empty string becomes a visible placeholder, so no
+#                    entry is ever silently dropped or split across lines. These lines print
+#                    before every per-issue line, and force exit 1 — the per-issue comparison
+#                    below still runs.
 #   stage-skipped    still queued for <stage>; the ledger records no outcome for it
 #   unledgered       in a harness queue but absent from the ledger entirely
 #   outcome-missing  a record exists for the stage with no outcome ('-')
 #   unknown-outcome  the recorded outcome is not in that stage's vocabulary
 #   contradiction    the ledger says the queue's stages advanced, yet the issue is still queued
 #
-# EXIT: 0 = clean (no output); 1 = discrepancies printed; 2 = usage/input error (stderr).
+# EXIT: 0 = clean (no output); 1 = discrepancies printed; 2 = usage/input error (stderr) — a status
+# JSON whose degraded_reasons is present but not an array is one such usage/input error.
 #
 # Requires: jq (and gh only when the status-json argument is omitted).
 #
@@ -70,7 +91,11 @@ usage() {
 usage: reconcile-ledger.sh <ledger-file|-> [status-json-file]
 
 Compares an issue-cycle dispatch ledger against the live harness queues and prints one line
-per discrepancy (stage-skipped | unledgered | outcome-missing | unknown-outcome | contradiction).
+per discrepancy (degraded | stage-skipped | unledgered | outcome-missing | unknown-outcome |
+contradiction). A degraded status JSON refuses a clean reconciliation: one "degraded" line per
+non-"status." degraded_reasons entry, printed before any per-issue line; a degraded:true document
+whose degraded_reasons is empty or absent gets one "unspecified" line instead (the "unspecified"
+backstop) rather than silence.
 
   <ledger-file>       records, one per line: "<issue> <stage> <outcome> [retries] [deploy=<slug>]".
                       Use '-' to read the ledger from stdin.
@@ -181,6 +206,38 @@ jq -e . >/dev/null 2>&1 <<<"$status_json" || die "status input is not valid JSON
 jq -e '.harness_will_handle' >/dev/null 2>&1 <<<"$status_json" \
   || die "status JSON has no .harness_will_handle — expected harness-status.sh output"
 
+# --- degraded (#298) -----------------------------------------------------------------------
+# A degraded live read means a query failed closed this run, so a harness_will_handle bucket
+# below may under-report the true queue rather than reflect it — this reconciliation cannot
+# then conclude "every queued issue accounted for" just because nothing else disagrees.
+# Refuse (one line, forcing exit 1) on every degraded_reasons entry that does NOT start with
+# "status." — including an unrecognised future prefix (fail toward the human) and
+# "planning.author_association_unavailable" (which hides no harness_will_handle bucket at all;
+# an accepted over-refusal — see the header's OUTPUT note). A "status." entry never refuses on
+# its own: it describes a waiting_on_human bucket this reconciliation never compares. A
+# degraded:true document whose degraded_reasons is empty or absent still gets one "unspecified"
+# line rather than silence.
+# --- degraded-lines-start ---
+# escline (below) guarantees every refusing entry renders as exactly one non-empty stdout line no
+# matter what characters it contains: tojson JSON-escapes EVERY control character it finds (an
+# embedded newline, a bare NUL byte, a carriage return, and so on), so the raw reason is what
+# startswith("status.") filters on, but the ESCAPED reason is what reaches emit() below — an entry
+# that escapes to the empty string becomes a visible placeholder instead of a silently dropped
+# blank line, and no entry's own characters can ever split it across lines or vanish. jq's own
+# stderr is discarded on this call (2>/dev/null) so a malformed document's error() only surfaces
+# once, through die's own message below.
+degraded_lines="$(jq -r '
+  def escline: (tojson | .[1:-1]) as $e
+    | if $e == "" then "(empty reason)" else $e end;
+  ((.degraded_reasons // []) | if type == "array" then . else error("x") end) as $r
+  | [ $r[] | tostring | select(startswith("status.") | not) ] as $refuse
+  | if ($refuse|length) > 0 then ($refuse[] | escline)
+    elif (.degraded == true) and (($r|length) == 0) then "unspecified"
+    else empty end
+' <<<"$status_json" 2>/dev/null)" \
+  || die "status JSON has a malformed degraded_reasons (expected an array)"
+# --- degraded-lines-end ---
+
 live="$(jq -r '.harness_will_handle as $h
   | ( (($h.unplanned // [])          | map("unplanned "          + (.number|tostring)))
     + (($h.in_revision // [])        | map("in_revision "        + (.number|tostring)))
@@ -225,6 +282,21 @@ issues="$( { printf '%s\n' "$records" | awk '{print $1}'
 
 found=0
 emit() { printf '%s\n' "$1"; found=1; }
+
+# (#298) degraded lines print FIRST, before any per-issue line — see the header's OUTPUT note.
+# This wording holds for every reason, including "planning.author_association_unavailable" and
+# the "unspecified" backstop: it never names what the query was, only that a live read failed
+# closed and this reconciliation cannot vouch for the queue it's comparing against. The refusal
+# never cuts the per-issue comparison below short — nothing here exits; found=1 (set by emit())
+# only turns the FINAL exit code non-zero.
+# --- degraded-emit-start ---
+while IFS= read -r reason; do
+  [ -n "$reason" ] || continue
+  emit "degraded issue=- bucket=- stage=-: harness-status.sh marked its live read degraded ($reason) — a query failed closed, so this reconciliation cannot confirm every queued issue is accounted for"
+done <<DEGRADED
+$degraded_lines
+DEGRADED
+# --- degraded-emit-end ---
 
 for n in $issues; do
   # (a) record-level checks, fixed stage order

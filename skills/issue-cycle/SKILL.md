@@ -382,9 +382,13 @@ run id from step 0 is never pasted into this heredoc — it is not a ledger reco
 `reconcile-ledger.sh` dies on any line that doesn't start with an issue number.
 No output, exit 0 → every queued issue accounted for. Otherwise one line per discrepancy, exit 1
 (expected, not a tool failure); `reconcile-ledger.sh`'s own output defines each code. Per class:
-`stage-skipped` / `outcome-missing` / `unknown-outcome` → escalate. `contradiction` → report
-with evidence, treat as unfinished. `unledgered` → usually a mid-run filing (say so, let the next
-cycle take it; name a ratchet-pass filing as such, not a discrepancy) — unless it was in the
+`stage-skipped` / `outcome-missing` / `unknown-outcome` → escalate. `degraded` → escalate: name
+each reason the printed line gives — a live query failed closed this run, so this reconciliation
+may under-report; never report every issue accounted for when reconcile-ledger.sh itself printed a
+`degraded` line (a status-only-reasons `degraded: true` document prints none and can legitimately
+exit 0). `contradiction` →
+report with evidence, treat as unfinished. `unledgered` → usually a mid-run filing (say so, let the
+next cycle take it; name a ratchet-pass filing as such, not a discrepancy) — unless it was in the
 pre-flight discovery output, in which case the seed step missed it: escalate that. No script on
 PATH → fall back to comparing the ledger against the JSON by hand, same criteria.
 
@@ -396,9 +400,10 @@ did** — plans posted/revised/auto-approved, PRs opened/merged (links + evidenc
 CI outcomes, lessons, hygiene fixes; **(2) what waits on the human** — plans to review
 (BLOCKING/ADVISORY counts), PRs to review/merge (CI state, the one-line reason each didn't
 qualify for the merge pass, `verified, merge blocked` PRs with their exact command), blocked
-issues (blocker, one line each) — copy-paste actionable. Nothing done and nothing waiting → say
-"all quiet" in one line and stop (still an empty ledger, not a skipped reconciliation — only
-applies when there was truly nothing to seed).
+issues (blocker, one line each) — copy-paste actionable (a `degraded: true` status JSON means
+naming each `degraded_reasons` entry here too, since that bucket may under-report). Nothing done
+and nothing waiting → say "all quiet" in one line and stop (still an empty ledger, not a skipped
+reconciliation — only applies when there was truly nothing to seed).
 
 **Release the lock — the literal last action of this step, after the report above,** pasting
 step 0's own run id literally:

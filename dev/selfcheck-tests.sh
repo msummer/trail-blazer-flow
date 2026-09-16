@@ -375,6 +375,63 @@ p_5_13_deploy_harness_pass() {
     { print }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
+# p_5_14_reasons_unread: rename the executable identifier degraded_reasons -> degraded_raesons
+# throughout bin/reconcile-ledger.sh (characters swapped inside the token, not a suffix — LESSON
+# 2026-09-04b), so the script's own jq read now targets a key no fixture ever sets: `$r` always
+# defaults to `[]` via `// []`, so `$refuse` is always empty too, regardless of the STATUS JSON's
+# real degraded_reasons content. The elif backstop (`.degraded == true` — a SEPARATE field this
+# rename never touches — `and` `$r`'s now-permanent zero length) then fires on every fixture whose
+# top-level `degraded` is `true`, collapsing it to a bare "unspecified" line no matter what its
+# real reasons were; the malformed-degraded_reasons die at c7 is reached the identical way — its
+# read target is absent too, so `// []` supplies a harmless empty array before the type check ever
+# sees the real (malformed) value, and the intended `die` never fires -- measured: every sub-check
+# whose fixture carries a real (non-empty) degraded_reasons array fails this way, collapsing to the
+# same "unspecified" line regardless of its own content: c1, c2, c3, c4, c6, c8, c9, c10, and c11.
+# c7 fails too, but for the die-suppression reason above, not the collapse (its fixture has no
+# top-level `degraded: true` at all, so neither branch fires and it goes silent/rc=0 instead of
+# dying). c0 has no top-level `degraded: true` either, so the backstop never fires and it stays
+# correctly silent. c5's own fixture already IS degraded:true with empty reasons, so it keeps
+# expecting "unspecified" and passes on the same value for the wrong reason.
+p_5_14_reasons_unread() {
+  edit "$1/bin/reconcile-ledger.sh" 's/degraded_reasons/degraded_raesons/g'
+}
+# p_5_14_status_filter: rewrite the "status." exclusion literal to "stat_us." (characters changed
+# inside the token) so a genuine "status.<key>" reason no longer matches the exclusion and is
+# treated as a refusing reason instead -- measured: c3 (status.-only reasons no longer stay
+# silent) and c4 (both reasons refuse instead of only the planning one) fail.
+p_5_14_status_filter() {
+  edit "$1/bin/reconcile-ledger.sh" 's/startswith("status\.")/startswith("stat_us.")/'
+}
+# p_5_14_backstop: rewrite the degraded:true equality test from `== true` to `== "yes"` so a
+# real JSON `true` no longer satisfies it -- the "unspecified" backstop can never fire -- measured:
+# c5 (a degraded:true document with empty degraded_reasons goes back to silent/rc=0) fails alone.
+p_5_14_backstop() {
+  edit "$1/bin/reconcile-ledger.sh" 's/\.degraded == true/.degraded == "yes"/'
+}
+# p_5_14_short_circuit: locate the degraded-emit block's own end-delimiter comment via awk's
+# index() (never a line-number offset, which the diff above already shifted once) and insert an
+# early `exit 1` immediately after it, guarded on `$found` -- so a run that printed at least one
+# degraded line exits before the per-issue loop below ever executes -- measured: c6 (the degraded
+# line prints, then the per-issue stage-skipped comparison never runs) fails alone.
+p_5_14_short_circuit() {
+  local f="$1/bin/reconcile-ledger.sh"
+  awk '
+    { print }
+    index($0, "degraded-emit-end") > 0 { print "[ \"$found\" -eq 1 ] && exit 1" }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+# p_5_14_escline: delete the escline mapping the degraded-lines jq program applies to each
+# refusing entry (`($refuse[] | escline)` -> bare `$refuse[]`), reverting to the pre-fix behavior
+# where a refusing entry reaches emit() RAW instead of rendered: an empty-string reason once again
+# becomes a silently-dropped blank line, a reason carrying an embedded newline once again splits
+# raw across two lines instead of rendering on one escaped line, and a reason that is a single NUL
+# byte is silently dropped by bash's own command substitution (which cannot hold a NUL) the same
+# way the empty string is -- measured: c8, c9, c10, and c11 fail (every other sub-check's own
+# fixtures carry only plain ASCII reasons with no control characters, so escline is a no-op on
+# them and they pass unaffected).
+p_5_14_escline() {
+  edit "$1/bin/reconcile-ledger.sh" 's/(\$refuse\[\] | escline)/$refuse[]/'
+}
 p_4_20_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(gh pr edit:\*\)"'; }
 p_4_20_orphan_grant() {
   local f="$1/templates/repo-settings.json"
@@ -512,8 +569,8 @@ cases=(
   "4.39-missing-spelling|4.39|p_4_39_missing_spelling|drop the namespaced spelling from AGENT_TYPES_IMPLEMENTER, leaving only the bare form"
   "5.13-harness-pass|5.13|p_5_13_harness_pass|disable only the harness-only sed pass in bin/reconcile-ledger.sh (retries=([^ ]+) (harness= anchor) so a harness-only status line falls through to the malformed-line die -- measured: 'harness-only planner line: expected silence/rc=0, got rc=2 output=...malformed harness-status line...'"
   "5.13-deploy-harness-pass|5.13|p_5_13_deploy_harness_pass|disable only the deploy+harness sed pass in bin/reconcile-ledger.sh ((deploy=[^ ]+) (harness= anchor) so a deploy+harness status line falls through to the malformed-line die -- measured: 'deploy+harness merge line: expected silence/rc=0, got rc=2 output=...malformed harness-status line...'"
-  "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary"
-  "5.2|5.2|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped'"
+  "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary -- measured: 5.1's own accounted-for ledger now reports an unknown-outcome discrepancy instead of staying silent; 5.14's c0 uses a DIFFERENT ledger+status fixture pair (a seed-only ledger with no implementer row, against the empty-queue fixture) that this mutation never reaches, so 5.14 stays green"
+  "5.2|5.2 5.14|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped' -- also trips 5.14's c6 sub-check (#298), which reuses this same emit to prove a degraded line never cuts the per-issue comparison short: c6's own expected literal still reads 'stage-skipped', so the renamed emit no longer matches it -- measured"
   "5.3|5.3 5.13|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again -- measured (post-#233): this same pass also serves 5.13's 'legacy merge line with deploy= only' sub-check, so it fails alongside 5.3 now"
   "5.4|5.4|p_5_4|reword the deploy-specific unknown-outcome explanation 5.4 compares literally"
   "5.5|5.5|p_5_5|drop the sort_by(.createdAt) clause from the archived-verdict --jq program so array order, not recency, picks the winner"
@@ -543,6 +600,11 @@ cases=(
   "4.41-extraction|4.41|p_4_41_extraction|rename the \$planC binding in bin/find-planning-work.sh so the gate's extraction comes back empty -- measured: \"4.41 bin/find-planning-work.sh's or bin/find-implementation-work.sh's '... as \$planC' line didn't match (structure changed) — extraction failed\""
   "4.42-extraction|4.42|p_4_42_extraction|rename hooks/git-c-guard.sh's PATH_ERE identifier to PATH_RE (both declaration and use, characters changed inside the token) so the gate's anchored extraction comes back empty -- measured: \"4.42 hooks/git-c-guard.sh's or hooks/push-guard.sh's PATH_ERE='...' line didn't match (structure changed) — extraction failed\""
   "4.42-drift|4.42|p_4_42_drift|alter one character inside hooks/push-guard.sh's own PATH_ERE value (the digit class [0-9] -> [0-8]), so it no longer agrees with hooks/git-c-guard.sh's -- measured: \"4.42 PATH_ERE predicate disagrees: hooks/git-c-guard.sh has '^([A-Za-z]:/|/|\\.\\./)([A-Za-z0-9._ +-]+/)*[A-Za-z0-9._+-]+-wt-[0-9]+/?\$', hooks/push-guard.sh has '^([A-Za-z]:/|/|\\.\\./)([A-Za-z0-9._ +-]+/)*[A-Za-z0-9._+-]+-wt-[0-8]+/?\$'\""
+  "5.14-reasons-unread|5.14|p_5_14_reasons_unread|rename degraded_reasons -> degraded_raesons throughout bin/reconcile-ledger.sh (characters swapped, not a suffix) so the script's own read targets a key no fixture sets -- measured: c1, c2, c3, c4, c6, c8, c9, c10, and c11 all collapse to the same 'unspecified' line, and c7 goes silent/rc=0 instead of dying (see the perturbation function's own comment above for the full mechanism)"
+  "5.14-status-filter|5.14|p_5_14_status_filter|rewrite the \"status.\" exclusion literal to \"stat_us.\" inside bin/reconcile-ledger.sh's own jq program (characters changed inside the token) so a genuine status.<key> reason no longer matches the exclusion -- measured: c3 (status.-only reasons no longer stay silent) and c4 (both reasons refuse instead of only the planning one) fail"
+  "5.14-backstop|5.14|p_5_14_backstop|rewrite the degraded:true equality test from == true to == \"yes\" inside bin/reconcile-ledger.sh so a real JSON true no longer satisfies it -- measured: c5 (a degraded:true document with empty degraded_reasons goes back to silent/rc=0) fails alone"
+  "5.14-short-circuit|5.14|p_5_14_short_circuit|locate the degraded-emit block's own end-delimiter comment via awk's index() and insert an early '[ \"\$found\" -eq 1 ] && exit 1' immediately after it in bin/reconcile-ledger.sh, so a run that printed a degraded line exits before the per-issue loop ever runs -- measured: c6 (the degraded line prints, then the per-issue stage-skipped comparison never runs) fails alone"
+  "5.14-escline|5.14|p_5_14_escline|delete the escline mapping bin/reconcile-ledger.sh's degraded-lines jq program applies to each refusing entry ('(\$refuse[] | escline)' -> bare '\$refuse[]'), so a refusing entry reaches emit() raw instead of rendered -- measured: c8 (an empty-string reason once again prints as a silently-dropped blank line), c9 (a reason carrying an embedded newline once again splits raw across two lines), c10 (a NUL-only reason is once again silently dropped by bash's command substitution), and c11 (the same NUL-only entry silently dropped out of a two-reason mixed list) all fail"
 )
 
 # ---------------------------------------------------------------------------------------------

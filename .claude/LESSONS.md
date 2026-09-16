@@ -201,3 +201,9 @@ bites: 1–3 lines, written as an instruction to a future agent.
   both read from an environment-wide or otherwise-shared source (not something scoped to a single
   checkout), build B so it does NOT independently satisfy the read precondition, and confirm by
   applying the discriminating mutant before trusting the fixture's citation.
+- 2026-09-16 (b): A homemade `awk` sweep for a stale bare number (e.g. `grep -n '141'` per LESSON
+  2026-09-06) must build its comparison buffer from `$0` alone. Annotating each line with its own
+  `NR` (`buf = buf "\n" NR ": " $0`) can hide a genuinely stale block: one still naming the OLD
+  total but never the new one reads as already-fixed whenever some line's own number happens to
+  contain the NEW total as a substring (e.g. line 7150's `NR=7150` makes the buffer look like it
+  mentions "150"). Grep the raw file text directly, never a debug-annotated copy.
