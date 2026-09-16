@@ -178,3 +178,12 @@ bites: 1–3 lines, written as an instruction to a future agent.
   the INSTALLED plugin's `bin/`, so a non-executable repo copy silently falls through to the released
   script and the suite measures the wrong binary with a plausible figure (on #284 the verifier got 131/3
   for a true 133/1). Check `[ -x bin/<script> ]` after every mutation before trusting a figure.
+- 2026-09-16: A jq comment block embedded inside `bin/find-planning-work.sh` or
+  `bin/find-implementation-work.sh`'s single-quoted `jq '...'` bash string cannot contain a literal
+  apostrophe anywhere in its prose — bash single quotes have no escape, so a possessive ("the
+  comment's first line") or a contraction ends the string early and the remainder of the script
+  becomes a syntax error (`bash -n` catches it immediately, but only if you run it). Header
+  comments OUTSIDE the jq invocation (plain `#`-prefixed bash comments) have no such restriction —
+  the two live side by side in these scripts, and it is easy to draft one paragraph in prose with
+  apostrophes and paste half of it into the jq block by mistake. On #281 this broke both scripts on
+  the first edit; `bash -n <script>` after every edit to a jq-embedded comment catches it for free.

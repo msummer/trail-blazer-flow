@@ -262,12 +262,14 @@ entry's comments back to that fetched thread by `url` (falling back to author + 
 `url` is null): `plan` is the approved plan comment. `trusted_post_plan` already excludes
 harness-authored records (any comment containing `<!-- verifier-verdict -->` or
 `<!-- harness-audit -->` anywhere in its body) — the orchestrator's own archives and audit trail
-never arrive here, so they never become `RESOLVED:` decisions. `plan` itself is subject to a
-narrower, first-line-anchored version of the same exclusion (#275): a trusted comment that OPENS
-WITH one of those two markers is never selected as `plan`, even when it quotes the plan marker
-verbatim in its own prose — so a maintainer-authored audit or hygiene record can never be mistaken
-for the plan (a plan comment that itself merely quotes a harness marker is unaffected and is still
-selected). Of what remains, split by
+never arrive here, so they never become `RESOLVED:` decisions. `plan` itself is selected by a
+positive, first-line-anchored rule (#281, superseding #275): only a trusted comment that OPENS
+WITH the plan marker `<!-- planner-plan -->` is ever selected as `plan` — so neither a
+maintainer-authored audit or hygiene record nor one whose harness marker is preceded by prose but
+which quotes the plan marker mid-body can ever be mistaken for the plan (a plan comment that itself
+merely quotes a harness marker is unaffected and is still selected; a hand-posted plan comment with
+anything before the marker is not selectable — it must be reposted with the marker as the first
+line). Of what remains, split by
 `covered_by_approval` (#194): a `true` entry is binding context — restate it as a `RESOLVED:`
 decision below; a `false` entry (posted after the plan-approved label, OR — since #230 — a
 comment `covered_by_approval` had marked `true` whose own REST edit timestamp postdates approval,
