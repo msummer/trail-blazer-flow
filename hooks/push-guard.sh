@@ -51,11 +51,22 @@
 # `config` file is also text-parsed (never executed as `git config`, never a second process) for
 # `remote.<name>.push` and `push.default`/`branch.<current>.merge` — for a worktree this is the
 # MAIN checkout's config, the identical common-dir rule the origin-HEAD symref read already uses,
-# never the worktree pointer's own gitdir. The config file is read whole with no size cap — a
-# pathological file simply degrades to Claude Code's 10s hook timeout (silence, the same fail-open
-# every other resolution failure already has). Any failure at any step leaves both branch values,
-# and the config-derived variables, empty — never an error, never a non-zero exit from this hook on
-# that account alone.
+# never the worktree pointer's own gitdir. Since #290, THREE global candidates are text-parsed the
+# same way and UNIONED with that repo-local config: `$GIT_CONFIG_GLOBAL` (when set and non-empty),
+# `$XDG_CONFIG_HOME/git/config` (or, when `$XDG_CONFIG_HOME` is unset or empty, `$HOME/.config/git/config`),
+# and `$HOME/.gitconfig` — every path taken from the ENVIRONMENT, never from the untrusted command
+# string, and read only when the checkout being resolved (session or a resolved `-C` target) has
+# actually resolved a gitdir (see `resolve_repo()`'s config-candidate loop for the exact order:
+# every global candidate first, this checkout's own repo-local config last, so a last-wins scalar
+# resolves to the repo's own value on any conflict). This closes only the REPO-LOCAL half of the
+# global/system config class named in every version of this file before #290 — see "Documented
+# under-blocking classes" below for what still stays unread (`/etc/gitconfig`,
+# `GIT_CONFIG_SYSTEM`/`GIT_CONFIG_NOSYSTEM`, `include`/`includeIf`, and the env-injected
+# `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>` forms). The config file(s) are read whole with no size
+# cap — a pathological file simply degrades to Claude Code's 10s hook timeout (silence, the same
+# fail-open every other resolution failure already has). Any failure at any step leaves both
+# branch values, and the config-derived variables, empty — never an error, never a non-zero exit
+# from this hook on that account alone.
 #
 # Since #269, a push segment carrying exactly one DETACHED `-C <path>` token (not the attached
 # `-C<path>` form, and not a segment with a second `-C`) whose value satisfies the PATH_ERE
@@ -88,7 +99,12 @@
 # the session checkout sits on its own default branch (worktree-parallel mode's real shape — see
 # `references/worktree-mode.md`) no longer denies merely because the SESSION happens to be on the
 # default branch, since the segment is judged against the worktree's own (non-default) current
-# branch instead; and a resolved segment no longer inherits the session's `.git/config` routes.
+# branch instead; and a resolved segment no longer inherits the session's REPO-LOCAL `.git/config`
+# routes — since #290, this qualification is REPO-LOCAL only: the GLOBAL config candidates
+# (`$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config` or its default, `$HOME/.gitconfig`) are read
+# from the environment identically for every checkout resolved (session or a resolved `-C`
+# target), so a resolved segment still sees the SAME global routes the session would, independently
+# re-derived from its own `resolve_repo()` call rather than literally inherited.
 # The deny set for an UNRESOLVED segment is `PUSH_DEFAULT_BRANCH_FALLBACK` (below) UNION the
 # session's resolved default branch, if any — the fallback members are ALWAYS in force (even when
 # a repo's real default branch resolves to something else), which is what lets this hook work with
@@ -100,8 +116,16 @@
 # it satisfies PATH_ERE below — for `<path>/.git` (directory or `gitdir:` pointer file), that
 # gitdir's `HEAD`, and that gitdir's common dir's `refs/remotes/origin/HEAD` and `config`, every
 # read the same `[ -f ]`/`[ -d ]`-guarded builtin redirection every other read in this file uses;
-# every OTHER filesystem path this hook reads still comes solely from Claude Code's own
-# `cwd`/`$PWD`, never from the command string. The untrusted `-C` value itself is fed only to
+# every OTHER filesystem path this hook derives from a resolved checkout (the two symref reads and
+# the repo-local `config` read) still comes solely from Claude Code's own `cwd`/`$PWD` or, for a
+# resolved `-C` segment, that same `-C <path>` value — never from any other part of the command
+# string. Since #290, this hook ALSO reads a THIRD class of path: the three global config
+# candidates (`$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config` or its default, `$HOME/.gitconfig`)
+# — every one of these comes from the ENVIRONMENT, never from `cwd`/`$PWD` and never from the
+# untrusted command string; an attacker who does not already control the session's environment
+# cannot influence which global files this hook reads, and this class must not be conflated with
+# the `-C`-derived containment argument above, which is specifically about paths taken from the
+# command string. The untrusted `-C` value itself is fed only to
 # `grep` (a here-string, never a piped writer — assertion 1.7) as data, and to shell builtin `[ -f
 # ]`/`[ -d ]` tests; resolving it caps its own upward walk at exactly one level (see
 # `resolve_repo()`'s `MAX_DEPTH` parameter below), so that value never reaches `dirname`'s argv —
@@ -132,7 +156,40 @@
 # reason; and a configured destination whose real value continues past an unquoted `#`/`;` (the
 # config-line comment-strip's own marker below) is truncated at that marker and evaluated as the
 # shorter, un-suffixed name — measured: `[remote "origin"] push = HEAD:refs/heads/main#hotfix`
-# denies as `main` (rc 2) even though the actual destination branch is `main#hotfix`.
+# denies as `main` (rc 2) even though the actual destination branch is `main#hotfix`. Since #290,
+# THREE new over-blocking classes (alongside every one already named above):
+# `$GIT_CONFIG_GLOBAL` is UNIONED with (never a replacement for) `$XDG_CONFIG_HOME/git/config`/
+# `$HOME/.config/git/config` and `$HOME/.gitconfig` — real git reads only `$GIT_CONFIG_GLOBAL`,
+# when it is set, in place of `$HOME/.gitconfig` — measured: `$GIT_CONFIG_GLOBAL` set to a BENIGN
+# file plus a denying `$HOME/.gitconfig` still denies (rc 2), even though real git would never
+# consult `$HOME/.gitconfig` once `$GIT_CONFIG_GLOBAL` is set; a `push.default` value from BOTH the
+# repo-local config AND a global one is evaluated unconditionally (the same union stance #268 took
+# across remotes, now also across files) — this hook does not model git's own precedence, where
+# `push.default` is a single scalar with the repo's own value always winning — measured: repo
+# `push.default = current` (git's own value, which alone never denies) plus global
+# `push.default = upstream` (with a repo `[branch]` section supplying the needed `merge` ref) still
+# denies (rc 2); and TWO `push.default = ...` lines inside the SAME file are likewise both
+# evaluated — `cfg_push_defaults` accumulates one record per parsed line, never collapsing to a
+# file's own last value, so this hook does not model git's own last-wins precedence WITHIN one
+# file either, not just across files — measured: a global config carrying `default = upstream`
+# then, on the very next line, `default = current` (git itself resolves that file's own
+# `push.default` to `current`, its LAST value, and would not deny) plus a repo
+# `[branch "feature/x"] merge = refs/heads/main` still denies (rc 2, `via push.default=upstream in
+# your global git config` — the FIRST record in accumulation order, not git's own last-wins
+# resolution). None of these three is widened again by also reaching a RESOLVED `-C` segment: the
+# same global candidates are read identically for every checkout resolved (session or target, from
+# the environment, never the untrusted command string — see `resolve_repo()`'s config-candidate
+# loop) — measured: a session `cwd` resolving to NO repo at all, `-C <target>` resolving to an
+# ordinary repo with no config of its own, and a denying `remote.<name>.push` record in
+# `$HOME/.gitconfig` alone, still denies (rc 2) via the `-C` TARGET's own resolution. This is a
+# widening of WHICH checkouts see the three classes above, not a fourth class of its own — each
+# route it exposes on a resolved `-C` target is already counted above.
+#
+# `$GIT_CONFIG_GLOBAL` set to exactly `/dev/null` — git's own documented "disable the global
+# config" idiom — is excluded from this hook's own read naturally, not by any special-cased check:
+# measured directly, `[ -f /dev/null ]` is false (a character device is not a regular file), so the
+# existing `[ -f ]` guard on every config candidate already skips it, the same way it skips any
+# other non-regular-file path.
 #
 # Documented under-blocking classes (evasions, named rather than hidden): `$(which git) push`
 # (the literal `git` token is never in command position); `sudo -u foo git push` (the argument to
@@ -234,13 +291,15 @@
 # attacker-arbitrary one, but they are not necessarily the facts of the directory the push
 # actually executes in (see the containment paragraph above for the qualification this
 # residual class requires). Since #268 closed the repo-local
-# `push.default`/`remote.<name>.push` class
-# named here in every prior version of this file, the residual config surface left open is: a
-# GLOBAL or system git config (`$GIT_CONFIG_GLOBAL`, `~/.gitconfig`,
-# `$XDG_CONFIG_HOME/git/config`, `/etc/gitconfig`) setting either key (filed as a follow-up
-# alongside this change — this hook reads only the repo-local common-dir `config`);
-# `include`/`includeIf` directives and `config.worktree` (`extensions.worktreeConfig`) inside that
-# repo-local config, neither followed; the legacy dotted `[remote.origin]` section spelling (only
+# `push.default`/`remote.<name>.push` class named here in every prior version of this file, and
+# #290 closed the GLOBAL half of that same class (`$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config`
+# or its default, `$HOME/.gitconfig`), the residual config surface left open is: a SYSTEM git
+# config (`/etc/gitconfig`, or a path named by `$GIT_CONFIG_SYSTEM`, unless `$GIT_CONFIG_NOSYSTEM`
+# is set) setting either key (filed as a follow-up alongside this change); the env-injected
+# `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` config form (never consulted);
+# `include`/`includeIf` directives and `config.worktree` (`extensions.worktreeConfig`) inside ANY
+# of the four files this hook DOES read (repo-local or global), neither followed (filed as a
+# second, separate follow-up); the legacy dotted `[remote.origin]` section spelling (only
 # the quoted `[remote "origin"]` form is parsed); backslash-continued or backslash-escaped config
 # values; a key on the same line as its own section header, e.g. `[remote "origin"] push =
 # HEAD:main` (the parser reads only the section declaration on such a line, never any text after
@@ -463,14 +522,18 @@ cfg_tab="$(printf '\t')"
 # directories, looking for START_DIR/.git; resets gitdir/default_branch/current_branch/cfg_* on
 # every call so a second call (the "-C" route, below) never leaks a prior call's state. Sets the
 # plain (non-local) globals gitdir, default_branch, current_branch, cfg_push_lines,
-# cfg_push_default, cfg_branch_merge for the caller to read afterward — the same "set a plain
+# cfg_push_defaults, cfg_branch_merge for the caller to read afterward — the same "set a plain
 # global, caller reads it after the call returns" idiom evaluate_segment() below already uses for
 # __deny_dest/__deny_kind/__deny_via. Called once for the session checkout (MAX_DEPTH 64, just
 # below) and, per push segment whose "-C" value passes is_c_target_path(), once more with
 # MAX_DEPTH 1 (see apply_c_target() further down) — examining the named directory itself only,
 # never walking upward the way git itself would from a real "-C" (a documented residual class,
 # see this file's header). The MAX_DEPTH guard below makes the untrusted "-C" path passed on that
-# second call unreachable by dirname's argv, and therefore by any process's argv at all.
+# second call unreachable by dirname's argv, and therefore by any process's argv at all. Since
+# #290, EVERY call (session and "-C") also unions in the GLOBAL config candidates below — the
+# environment is read identically regardless of MAX_DEPTH, so a resolved "-C" segment sees the
+# same global routes the session does (see "Cross-feature" in dev/hook-tests.sh's push mutation
+# table for the fixture pinning this).
 resolve_repo() {
   dir="$1"
   gitdir=""
@@ -503,10 +566,12 @@ resolve_repo() {
 
   default_branch=""
   current_branch=""
-  # #268: config-derived push routes, always initialized (even when $gitdir never resolves) so
-  # config_deny() below can reference them unconditionally under this script's `set -uo pipefail`.
+  # #268/#290: config-derived push routes, always initialized (even when $gitdir never resolves)
+  # so config_deny() below can reference them unconditionally under this script's `set -uo
+  # pipefail`. cfg_push_defaults (#290, was cfg_push_default) is a newline-separated LIST now,
+  # not a scalar — see the config-candidate loop below for why.
   cfg_push_lines=""
-  cfg_push_default=""
+  cfg_push_defaults=""
   cfg_branch_merge=""
   if [ -n "$gitdir" ]; then
     common="${gitdir%/worktrees/*}"
@@ -527,19 +592,50 @@ resolve_repo() {
       esac
     fi
 
-    # #268: text-parse the common dir's config for the two push-affecting keys git itself would
-    # otherwise consult on THIS push (remote.<name>.push, push.default/branch.<n>.merge) — same
-    # [ -f ]-guarded builtin-redirect idiom as the two reads above; never `git config`, never a
-    # second process. See this file's header "Repo resolution" paragraph for the reasoning and the
-    # resulting over-blocking class, and "Documented under-blocking classes" for what this parser
-    # deliberately leaves unread.
-    cfgf="$common/config"
-    if [ -f "$cfgf" ]; then
-      # A SEPARATE carriage-return literal from $cr (declared above for the #270 command-string
-      # strip): the push mutation table's M23 mutant deletes both of $cr's declaration and its
-      # use, and a config parser referencing $cr here would blow up under `set -u` instead of
-      # producing that mutant's documented, measured result.
-      cfg_cr=$'\r'
+    # #290: config CANDIDATES, global routes first, this checkout's own repo-local config LAST —
+    # never derived from the untrusted command string, only from the environment
+    # ($GIT_CONFIG_GLOBAL, $XDG_CONFIG_HOME, $HOME) and $common above (every reference
+    # ${VAR:-}-guarded under `set -uo pipefail`). Repo-local read last so a last-wins scalar
+    # (cfg_branch_merge) resolves to the repo's own value on any conflict with a global file,
+    # matching git's own unconditional deference to the repo config for that key; cfg_push_lines
+    # and cfg_push_defaults both ACCUMULATE across every candidate regardless of order — a route
+    # from any file can deny (the union stance #268 already took across remotes, now also across
+    # files) — so this order only decides which route's label is named first when more than one
+    # denies. $GIT_CONFIG_GLOBAL is UNIONED with (never a replacement for) the other two global
+    # paths: real git reads only $GIT_CONFIG_GLOBAL, when it is set, in place of $HOME/.gitconfig;
+    # this hook deliberately reads both, a documented over-block (see "Documented over-blocking
+    # classes" above). See this file's header "Repo resolution" paragraph for the full reasoning
+    # and "Documented under-blocking classes" for what stays unread ($GIT_CONFIG_SYSTEM/
+    # /etc/gitconfig, include/includeIf, and the env-injected GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n>
+    # forms — filed as follow-ups, not read here).
+    xdg_cfg=""
+    if [ -n "${XDG_CONFIG_HOME:-}" ]; then
+      xdg_cfg="$XDG_CONFIG_HOME/git/config"
+    elif [ -n "${HOME:-}" ]; then
+      xdg_cfg="$HOME/.config/git/config"
+    fi
+    home_cfg=""
+    [ -n "${HOME:-}" ] && home_cfg="$HOME/.gitconfig"
+
+    # A SEPARATE carriage-return literal from $cr (declared above for the #270 command-string
+    # strip): the push mutation table's M23 mutant deletes both of $cr's declaration and its
+    # use, and a config parser referencing $cr here would blow up under `set -u` instead of
+    # producing that mutant's documented, measured result. Declared once here (not per candidate
+    # file below), since it is a fixed literal independent of which candidate is being parsed.
+    cfg_cr=$'\r'
+    while IFS= read -r cfgf; do
+      [ -n "$cfgf" ] || continue
+      [ -f "$cfgf" ] || continue
+      # #290: exactly two source literals for the deny message below — this checkout's own
+      # repo-local config is always named "$common/config" (never the resolved gitdir's own path,
+      # for a worktree — the same common-dir rule the origin-HEAD symref read above already uses);
+      # every OTHER candidate in the list below is a global path, named with one shared neutral
+      # label regardless of which of the three it is (the deny message never needs to distinguish
+      # among them).
+      case "$cfgf" in
+        "$common/config") cfg_src=".git/config" ;;
+        *) cfg_src="your global git config" ;;
+      esac
       cfg_section=""
       cfg_subsection=""
       while IFS= read -r cfgline || [ -n "$cfgline" ]; do
@@ -594,13 +690,24 @@ resolve_repo() {
           remote)
             case "$cfg_key" in
               [Pp][Uu][Ss][Hh])
-                cfg_push_lines="${cfg_push_lines}${cfg_subsection}${cfg_tab}${cfg_val}"$'\n'
+                # #290 kickback finding F4: the source label goes FIRST (mirroring
+                # cfg_push_defaults' own "${cfg_src}${cfg_tab}${cfg_val}" shape below), with the
+                # configured value as the record's unbounded TAIL, never a bounded middle field —
+                # a `push =` value containing a literal TAB byte is unusual but not impossible
+                # (this config parser never rejects one), and a bounded middle field would let
+                # such a value truncate at the embedded TAB and leak its own remainder into
+                # config_deny()'s source-label field. cfg_subsection (the remote name) is read
+                # from a quoted section header, never a value that could itself carry a raw TAB
+                # in any fixture this file constructs.
+                cfg_push_lines="${cfg_push_lines}${cfg_src}${cfg_tab}${cfg_subsection}${cfg_tab}${cfg_val}"$'\n'
                 ;;
             esac
             ;;
           push)
             case "$cfg_key" in
-              [Dd][Ee][Ff][Aa][Uu][Ll][Tt]) cfg_push_default="$cfg_val" ;;
+              [Dd][Ee][Ff][Aa][Uu][Ll][Tt])
+                cfg_push_defaults="${cfg_push_defaults}${cfg_src}${cfg_tab}${cfg_val}"$'\n'
+                ;;
             esac
             ;;
           branch)
@@ -612,7 +719,12 @@ resolve_repo() {
             ;;
         esac
       done < "$cfgf"
-    fi
+    done <<CFGLIST
+${GIT_CONFIG_GLOBAL:-}
+$xdg_cfg
+$home_cfg
+$common/config
+CFGLIST
   fi
 }
 
@@ -620,7 +732,7 @@ resolve_repo "$resolve_cwd" 64
 session_default_branch="$default_branch"
 session_current_branch="$current_branch"
 session_cfg_push_lines="$cfg_push_lines"
-session_cfg_push_default="$cfg_push_default"
+session_cfg_push_defaults="$cfg_push_defaults"
 session_cfg_branch_merge="$cfg_branch_merge"
 
 # apply_session_repo (#269) — (re)applies the session checkout's own resolved facts (captured
@@ -633,7 +745,7 @@ apply_session_repo() {
   default_branch="$session_default_branch"
   current_branch="$session_current_branch"
   cfg_push_lines="$session_cfg_push_lines"
-  cfg_push_default="$session_cfg_push_default"
+  cfg_push_defaults="$session_cfg_push_defaults"
   cfg_branch_merge="$session_cfg_branch_merge"
   deny_set="$PUSH_DEFAULT_BRANCH_FALLBACK"
   [ -n "$default_branch" ] && deny_set="$deny_set $default_branch"
@@ -660,7 +772,7 @@ apply_session_repo() {
 # attacker-controlled CPATH can only ever mis-judge a push executed inside CPATH itself.
 apply_c_target() {
   local cpath="$1" start
-  local resolved_current resolved_cfg_push_lines resolved_cfg_push_default resolved_cfg_branch_merge
+  local resolved_current resolved_cfg_push_lines resolved_cfg_push_defaults resolved_cfg_branch_merge
   local resolved_default
   [ -n "$cpath" ] || return 0
   is_c_target_path "$cpath" || return 0
@@ -672,12 +784,12 @@ apply_c_target() {
   [ -n "$gitdir" ] || { apply_session_repo; return 0; }
   resolved_current="$current_branch"
   resolved_cfg_push_lines="$cfg_push_lines"
-  resolved_cfg_push_default="$cfg_push_default"
+  resolved_cfg_push_defaults="$cfg_push_defaults"
   resolved_cfg_branch_merge="$cfg_branch_merge"
   resolved_default="$default_branch"
   current_branch="$resolved_current"
   cfg_push_lines="$resolved_cfg_push_lines"
-  cfg_push_default="$resolved_cfg_push_default"
+  cfg_push_defaults="$resolved_cfg_push_defaults"
   cfg_branch_merge="$resolved_cfg_branch_merge"
   deny_set="$PUSH_DEFAULT_BRANCH_FALLBACK"
   [ -n "$session_default_branch" ] && deny_set="$deny_set $session_default_branch"
@@ -715,9 +827,11 @@ refspec_dest() {
   printf '%s' "$dest"
 }
 
-# config_deny SCOPE_REMOTE — evaluates the #268 config-derived push routes (remote.<name>.push,
-# push.default) captured by the repo-resolution parse above; on a deny, sets $__deny_dest/
-# $__deny_kind ("config" or "configall")/$__deny_via the same way evaluate_segment's other checks
+# config_deny SCOPE_REMOTE — evaluates the #268/#290 config-derived push routes
+# (remote.<name>.push, push.default) captured by the repo-resolution parse above, from every
+# candidate file that was actually read (repo-local and global); on a deny, sets $__deny_dest/
+# $__deny_kind ("config" or "configall")/$__deny_via/$__deny_src (#290 — the two-literal source
+# label, ".git/config" or "your global git config") the same way evaluate_segment's other checks
 # do (plain, non-"local" assignments, so they escape this function exactly like $__deny_dest/
 # $__deny_kind already do). SCOPE_REMOTE is the single non-option token at n==1, or empty at
 # n==0 (a bare push): at n==0 every remote.<name>.push record is considered regardless of remote
@@ -730,43 +844,65 @@ refspec_dest() {
 # consulted only when the applicable remote has no push refspec): "upstream"/"tracking" resolves
 # via the current branch's recorded "merge" ref; "matching" denies unconditionally (same
 # reasoning as the wildcard case); "current"/"simple"/"nothing"/absent/unrecognised add no route
-# here at all (today's current-branch check, above, is the only thing that can still deny).
+# here at all (today's current-branch check, above, is the only thing that can still deny). #290:
+# cfg_push_defaults is now a LIST (one record per parsed "[push] default = ..." line, across every
+# candidate file, each prefixed with its own source label) — EVERY value is evaluated, not just
+# the last one seen, so a benign value in one file never masks a denying value in another; the
+# first record whose value denies wins (its own source label is what $__deny_src names).
 config_deny() {
-  local scope="$1" rec sub refspec dest
+  local scope="$1" rec sub refspec src rest dest
+  local pdrec pdsrc pdval
   if [ -n "$cfg_push_lines" ]; then
     while IFS= read -r rec; do
       [ -n "$rec" ] || continue
-      sub="${rec%%"$cfg_tab"*}"
-      refspec="${rec#*"$cfg_tab"}"
+      # #290 kickback finding F4: src is the BOUNDED first field (never a value that could
+      # itself carry a raw TAB — see the record-building comment above); refspec is the
+      # UNBOUNDED tail, so a configured value containing a literal TAB stays intact here instead
+      # of truncating and leaking its own remainder into $src.
+      src="${rec%%"$cfg_tab"*}"
+      rest="${rec#*"$cfg_tab"}"
+      sub="${rest%%"$cfg_tab"*}"
+      refspec="${rest#*"$cfg_tab"}"
       if [ -n "$scope" ] && [ "$sub" != "$scope" ]; then
         continue
       fi
       dest="$(refspec_dest "$refspec")"
       case "$dest" in
         *'*'*)
-          __deny_dest="$refspec"; __deny_kind="configall"; __deny_via="remote.$sub.push"
+          __deny_dest="$refspec"; __deny_kind="configall"; __deny_via="remote.$sub.push"; __deny_src="$src"
           return
           ;;
       esac
       if [ -n "$dest" ] && is_deny_member "$dest"; then
-        __deny_dest="$dest"; __deny_kind="config"; __deny_via="remote.$sub.push"
+        __deny_dest="$dest"; __deny_kind="config"; __deny_via="remote.$sub.push"; __deny_src="$src"
         return
       fi
     done <<CFGEOF
 $cfg_push_lines
 CFGEOF
   fi
-  case "$cfg_push_default" in
-    [Uu][Pp][Ss][Tt][Rr][Ee][Aa][Mm]|[Tt][Rr][Aa][Cc][Kk][Ii][Nn][Gg])
-      dest="$(refspec_dest "$cfg_branch_merge")"
-      if [ -n "$dest" ] && is_deny_member "$dest"; then
-        __deny_dest="$dest"; __deny_kind="config"; __deny_via="push.default=$cfg_push_default"
-      fi
-      ;;
-    [Mm][Aa][Tt][Cc][Hh][Ii][Nn][Gg])
-      __deny_dest="$cfg_push_default"; __deny_kind="configall"; __deny_via="push.default=$cfg_push_default"
-      ;;
-  esac
+  if [ -n "$cfg_push_defaults" ]; then
+    while IFS= read -r pdrec; do
+      [ -n "$pdrec" ] || continue
+      pdsrc="${pdrec%%"$cfg_tab"*}"
+      pdval="${pdrec#*"$cfg_tab"}"
+      case "$pdval" in
+        [Uu][Pp][Ss][Tt][Rr][Ee][Aa][Mm]|[Tt][Rr][Aa][Cc][Kk][Ii][Nn][Gg])
+          dest="$(refspec_dest "$cfg_branch_merge")"
+          if [ -n "$dest" ] && is_deny_member "$dest"; then
+            __deny_dest="$dest"; __deny_kind="config"; __deny_via="push.default=$pdval"; __deny_src="$pdsrc"
+            return
+          fi
+          ;;
+        [Mm][Aa][Tt][Cc][Hh][Ii][Nn][Gg])
+          __deny_dest="$pdval"; __deny_kind="configall"; __deny_via="push.default=$pdval"; __deny_src="$pdsrc"
+          return
+          ;;
+      esac
+    done <<CFGEOF
+$cfg_push_defaults
+CFGEOF
+  fi
 }
 
 # evaluate_segment REST — REST is one push segment's remaining tokens (space-joined, already
@@ -780,6 +916,7 @@ evaluate_segment() {
   __deny_dest=""
   __deny_kind=""
   __deny_via=""
+  __deny_src=""
   local rest="$1"
   local toks
   toks=()
@@ -852,6 +989,7 @@ TAB="$(printf '\t')"
 deny_dest=""
 deny_kind=""
 deny_via=""
+deny_src=""
 while IFS= read -r line; do
   case "$line" in
     "PUSH$TAB"*) : ;;
@@ -867,6 +1005,7 @@ while IFS= read -r line; do
     deny_dest="$__deny_dest"
     deny_kind="$__deny_kind"
     deny_via="$__deny_via"
+    deny_src="$__deny_src"
     break
   fi
 done <<EOF
@@ -880,12 +1019,12 @@ if [ -n "$deny_dest" ]; then
         "$PUSH_DENY_STEM" "$deny_dest" "$default_display" >&2
       ;;
     config)
-      printf '%s denies pushing to "%s" (resolves to the default branch: %s, via %s in .git/config) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
-        "$PUSH_DENY_STEM" "$deny_dest" "$default_display" "$deny_via" >&2
+      printf '%s denies pushing to "%s" (resolves to the default branch: %s, via %s in %s) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" "$deny_dest" "$default_display" "$deny_via" "$deny_src" >&2
       ;;
     configall)
-      printf '%s denies "%s" (pushes every matching branch, including the default branch: %s, via %s in .git/config) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
-        "$PUSH_DENY_STEM" "$deny_dest" "$default_display" "$deny_via" >&2
+      printf '%s denies "%s" (pushes every matching branch, including the default branch: %s, via %s in %s) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" "$deny_dest" "$default_display" "$deny_via" "$deny_src" >&2
       ;;
     *)
       printf '%s denies pushing to "%s" (resolves to the default branch: %s) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \

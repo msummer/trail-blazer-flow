@@ -187,3 +187,17 @@ bites: 1–3 lines, written as an instruction to a future agent.
   the two live side by side in these scripts, and it is easy to draft one paragraph in prose with
   apostrophes and paste half of it into the jq block by mistake. On #281 this broke both scripts on
   the first edit; `bash -n <script>` after every edit to a jq-embedded comment catches it for free.
+- 2026-09-16: A fixture meant to isolate "a RESOLVED secondary checkout also reads route X" from
+  "the SESSION already reads the identical route X" is silently confounded whenever BOTH checkouts
+  independently satisfy the same read precondition — on #290, `push-deny-c-target-global-route`'s
+  first draft gave the session an ordinary fixture repo, so the session's OWN `resolve_repo()` call
+  ALSO read the same environment-sourced global config file the "-C" target was meant to isolate;
+  `apply_c_target()`'s own body-replaced-with-":" mutant (M46) then failed to flip it, because the
+  session's already-denying facts, never overwritten, denied on their own. The fix: make the
+  SESSION resolve to NO repo at all (so its own read of the shared route never happens), leaving
+  the "-C" target as the only path to the deny — discovered only by manually applying M46 to the
+  first draft and watching it survive; reasoning about the fixture's prose was not enough. When a
+  fixture's own claim is "route X applies to resolution path A, not just path B", and A and B are
+  both read from an environment-wide or otherwise-shared source (not something scoped to a single
+  checkout), build B so it does NOT independently satisfy the read precondition, and confirm by
+  applying the discriminating mutant before trusting the fixture's citation.

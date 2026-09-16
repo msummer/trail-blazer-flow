@@ -1416,20 +1416,24 @@ default branch, now has a bare `git push` denied where this hook was previously 
 checks every configured remote's route, not only the one git would pick) and the two new
 over-blocking classes (`push.default = matching`, a wildcard configured destination). The
 residual gap: a GLOBAL or system git config (`~/.gitconfig`, `/etc/gitconfig`, etc.) setting
-either key is not yet read (filed as a follow-up alongside this change). Also in v2.7.2 (#269):
+either key is not yet read (filed as a follow-up alongside this change). **Closed in v2.7.3 by
+#290** for the GLOBAL half (`$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config` or its default, and
+`$HOME/.gitconfig`); the SYSTEM half (`/etc/gitconfig`) remains a follow-up. Also in v2.7.2 (#269):
 `hooks/push-guard.sh` now resolves a push segment's own `git -C <path>` value too, but only when
 it satisfies the same `PATH_ERE` predicate `hooks/git-c-guard.sh` already enforces for its own
 worktree-parallel allow forms — the gate mechanically pins the two declarations byte-identical.
 The consumer-visible widening: a `git -C <name>-wt-<n> push` into a sibling worktree or an
 entirely separate checkout is now judged against THAT checkout's own default branch (and, for the
-current branch and any `.git/config` route, THAT checkout's own facts) rather than only the
-session's — the deny-set's default-branch member becomes the union of the session's own default
+current branch and any REPO-LOCAL `.git/config` route, THAT checkout's own facts) rather than only
+the session's — the deny-set's default-branch member becomes the union of the session's own default
 and the resolved checkout's own default, never a pure replacement, so a target lacking its own
 `refs/remotes/origin/HEAD` cannot silently lose today's guard. Two narrowings ship alongside it: a
 bare `git -C <worktree> push` no longer denies merely because the SESSION happens to sit on its
 own default branch (worktree-parallel mode's real shape, where the session stays on the default
 branch while worktrees carry `claude/<n>-<slug>`); and a resolved segment no longer inherits the
-session's own `.git/config` routes. Residual, disclosed rather than hidden: a `-C` path that
+session's own REPO-LOCAL `.git/config` routes (since v2.7.3/#290, this qualification is repo-local
+only — the GLOBAL config candidates apply identically to every checkout resolved, session or
+target). Residual, disclosed rather than hidden: a `-C` path that
 doesn't match the predicate — including a plain `git -C ../other-checkout push` with no `-wt-<n>`
 suffix — and `--git-dir=<path>`/`--work-tree` are still judged only against the session, and a
 predicate-matching directory holding no `.git` of its own is judged against the session too, since
@@ -1479,6 +1483,26 @@ The consumer-visible behaviour change: a hand-posted plan comment with anything 
 the comment's first line); a trusted comment that quotes the plan marker mid-body without opening
 with it is now silently excluded from both plan selection and the feedback/binding sets, with no
 warning (a filed follow-up). No published JSON key, `counts` key, or `reason` string changes.
+Also in v2.7.3 (#290): `hooks/push-guard.sh`'s #268 config read is extended to three GLOBAL
+candidates — `$GIT_CONFIG_GLOBAL` (when set and non-empty), `$XDG_CONFIG_HOME/git/config` (or,
+when `$XDG_CONFIG_HOME` is unset or empty, `$HOME/.config/git/config`), and `$HOME/.gitconfig` —
+unioned with the repo-local `.git/config` routes #268 already read, needing no grant, label,
+script, settings entry, or baseline step. The consumer-visible widening: a developer whose
+`~/.gitconfig` (or `$GIT_CONFIG_GLOBAL`/`$XDG_CONFIG_HOME` target) sets
+`push.default = upstream`/`tracking` with the current branch's upstream on the default branch,
+`push.default = matching`, or a denying `remote.<name>.push` refspec now gets a bare `git push`
+denied where this hook was previously silent, including for a resolved `-C` segment (the global
+candidates are read
+identically for every checkout resolved, session or target). The deny message now names its own
+source — `.git/config` or "your global git config" — instead of always claiming the repo-local
+file. Three new over-blocking classes, alongside #268's own: `$GIT_CONFIG_GLOBAL` is unioned with
+(never a replacement for) the other two global paths; a repo-local AND a global `push.default`
+value are both evaluated, so a benign value in one file can never mask a denying value in the
+other; and two `push.default` lines inside ONE file are likewise both evaluated, so this hook does
+not model git's own last-wins precedence within a single file either — a config's LAST
+`push.default` line no longer overrides an earlier one in that same file. The residual gap: a
+SYSTEM git config (`/etc/gitconfig`) and `include`/`includeIf` directives inside any of the four
+files this hook now reads remain unread, each filed as its own follow-up.
 
 ## The per-repo settings file (required)
 
@@ -1763,8 +1787,10 @@ the hook still denies a plain `git push origin main` even with no `cwd` or an un
 Since #269, a push segment's own `git -C <path>` value is ALSO resolved, but only when it satisfies
 the same `PATH_ERE` predicate `hooks/git-c-guard.sh` already enforces for its own worktree-parallel
 allow forms (a byte-identical declaration in both hooks, mechanically pinned by the gate): the
-current branch and any `.git/config` route for that segment then come solely from the RESOLVED
-checkout, while the default-branch deny member becomes the union of the fallback, the session's own
+current branch and any REPO-LOCAL `.git/config` route for that segment then come solely from the
+RESOLVED checkout (since #290, the GLOBAL config candidates below are read identically for every
+checkout resolved, so a resolved segment still sees the same global routes the session would),
+while the default-branch deny member becomes the union of the fallback, the session's own
 default, and the resolved checkout's own default — never a pure replacement, so a target lacking its
 own `refs/remotes/origin/HEAD` cannot silently lose the guard. A `-C` value that does not match the
 predicate (including a plain `git -C ../other-checkout push` with no `-wt-<n>` suffix), the attached
@@ -1781,8 +1807,17 @@ executed as `git config` — for `remote.<name>.push` and `push.default`/`branch
 repo's own `remote.origin.push = HEAD:main` or `push.default = upstream` with the current
 branch's upstream on the default branch now denies where this hook was previously silent, closing
 the gap #260's own settings-template entries and this hook's earlier refspec parser both left
-open. This closes only the repo-local half of that class — a GLOBAL or system git config setting
-either key is filed as a follow-up alongside this change, not yet read. The union is deliberately
+open. This closed only the repo-local half of that class — a GLOBAL or system git config setting
+either key was, at the time, filed as a follow-up. **Closed in v2.7.3 by #290**: the same two keys
+are now also read from `$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config` (or its
+`$HOME/.config/git/config` default), and `$HOME/.gitconfig`, unioned with the repo-local routes
+above — `$GIT_CONFIG_GLOBAL` is itself unioned with (not a replacement for) the other two global
+paths, and a repo-local AND a global `push.default` value are both evaluated unconditionally, each
+a deliberate, documented over-block (real git reads only one file for `$GIT_CONFIG_GLOBAL` and
+gives a single scalar precedence to `push.default`). A SYSTEM git config (`/etc/gitconfig`) and
+`include`/`includeIf` directives inside any of the four files this hook now reads remain unread,
+each filed as its own follow-up (see the hook's own header for the full, measured inventory). The
+union is deliberately
 over-broad rather than modelling git's own remote-selection precedence: a bare push checks EVERY
 configured remote's push
 route (not only the one git would actually pick) union the `push.default` route, and

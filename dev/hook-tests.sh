@@ -61,8 +61,8 @@
 # substitution, and the default-branch deny-set member each denying via a RESOLVED sibling
 # worktree or a wholly separate checkout (the issue's own headline shape), the resolved checkout's
 # own config denying where the session has none, the two documented narrowings (a resolved segment
-# no longer inherits the session's `.git/config` routes, and a bare push in a sibling worktree no
-# longer denies merely because the SESSION sits on its own default branch), the predicate's
+# no longer inherits the session's REPO-LOCAL `.git/config` routes, and a bare push in a sibling
+# worktree no longer denies merely because the SESSION sits on its own default branch), the predicate's
 # boundaries (no `-wt-<n>` suffix, the attached `-C<path>` form, 0/1/2+ occurrences of `-C`), an
 # unresolvable-but-shape-matching target degrading to the session's own facts rather than clearing
 # them, the session's own default branch staying in the deny-set union for a resolved segment, and
@@ -73,7 +73,29 @@
 # does, and so cannot discriminate the depth-1 ascent guard `dirname` exposure would otherwise
 # leave unpinned), and a two-push-segment command pins the per-segment reset itself — the SECOND,
 # `-C`-less segment stays judged by the SESSION's own facts, never by whatever the first segment's
-# resolved `-C` target left behind.
+# resolved `-C` target left behind. Since #290, the same common-dir config read is extended to
+# three GLOBAL candidates — `$GIT_CONFIG_GLOBAL` (when set and non-empty),
+# `$XDG_CONFIG_HOME/git/config` (or its `$HOME/.config/git/config` default, when
+# `$XDG_CONFIG_HOME` is unset or empty), and `$HOME/.gitconfig` — unioned with the repo-local
+# routes above and read identically for every
+# checkout resolved (session or a resolved `-C` target, since this class comes from the
+# environment, never the untrusted command string): one deny fixture per global candidate path,
+# the "none present"/loop-boundary fixture, a benign value in one file never masking a denying
+# value in another and the reverse (a denying global value still denying over a benign repo-local
+# one), `$GIT_CONFIG_GLOBAL` unioned with (not replacing) the other two global paths, the deny
+# message's own two-literal source label (repo-local vs. global), the harness's own
+# explicit-refspec push shape reconfirmed as a release-blocker no-opinion control against a denying
+# GLOBAL config (bare and `-C`), a resolved `-C` segment still seeing the global routes, and the
+# same booby-trapped/byte-identical-listing guarantee extended to the fixture `HOME` tree. Because
+# the hook now reads `$HOME`/`$XDG_CONFIG_HOME`/`$GIT_CONFIG_GLOBAL`, `run_push_guard` below
+# isolates all three for EVERY push fixture (a neutral, empty fixture `HOME` under `$tmpbase` by
+# default) so no fixture can read the developer's or CI runner's real global git config. Since the
+# #290 ROUND-2 KICKBACK, two more classes are pinned: TWO `[push] default = ...` lines inside ONE
+# file (global or repo-local) are BOTH accumulated and evaluated rather than the file's own last
+# value winning, a documented over-block; and the `cfg_push_lines` record threads its source label
+# FIRST, as a bounded field, with the configured value as the record's UNBOUNDED tail, so a
+# `remote.<name>.push` value containing a literal TAB byte cannot truncate and leak its own
+# remainder into that source label.
 #
 # Usage: bash dev/hook-tests.sh [name-filter] — same output contract as dev/selfcheck-tests.sh
 # and dev/doctor-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==`
@@ -98,6 +120,12 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+# #290: a neutral, empty HOME for every push-guard fixture (see run_push_guard below) — created
+# once, up front, so hooks/push-guard.sh's new $HOME/$XDG_CONFIG_HOME/$GIT_CONFIG_GLOBAL reads
+# never see the developer's or CI runner's real global git config.
+neutral_home="$tmpbase/neutral-home"
+mkdir -p "$neutral_home"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "  FAIL  jq not installed — required to build fixture stdin JSON and to parse the guard's output"
@@ -592,26 +620,66 @@ mk_fixture_worktree() {
 # is joined to resolve_cwd (the session's own cwd, or $PWD with none passed), so a "-C ../<name>
 # -wt-<n>" fixture with no explicit cwd resolves against the developer's own checkout's sibling
 # directory, not a fixture the test built — every "-C"-carrying config fixture below passes an
-# explicit cwd for this reason too.
+# explicit cwd for this reason too. AMBIENT-$HOME ANALOGUE (#290): hooks/push-guard.sh now also
+# reads $HOME/$XDG_CONFIG_HOME/$GIT_CONFIG_GLOBAL — run_push_guard below isolates all three for
+# EVERY push fixture (a neutral, empty $HOME under $tmpbase by default), so no fixture in this
+# file can ever read the developer's or CI runner's real global git config; a fixture that wants a
+# GLOBAL route present sets $push_home_override/$push_xdg_home/$push_git_config_global immediately
+# before calling run_push_guard instead (see mk_fixture_global_config below).
 mk_fixture_config() {
   local dir="$1" body="$2"
   mkdir -p "$dir/.git"
   printf '%s' "$body" > "$dir/.git/config"
 }
 
+# mk_fixture_global_config PATH BODY (#290) — writes BODY to PATH, creating parent directories as
+# needed, for a GLOBAL config candidate ($GIT_CONFIG_GLOBAL's own target, $HOME/.gitconfig, or
+# $XDG_CONFIG_HOME/git/config) — the analogue of mk_fixture_config above for the global routes
+# #290 added. Never writes anywhere but under PATH, which every caller places under $tmpbase.
+mk_fixture_global_config() {
+  local path="$1" body="$2"
+  mkdir -p "$(dirname "$path")"
+  printf '%s' "$body" > "$path"
+}
+
 # run_push_guard JSON [PATHVAL] — runs the real push-guard script against JSON on stdin, with
 # PATH set to PATHVAL (defaults to this process's own PATH), leaving $push_out (stdout)/
 # $push_err (stderr, read back from a file under $tmpbase)/$push_rc set as globals. Same "call as
 # a plain statement, read the globals after" idiom as run_boundary above.
+#
+# #290: hooks/push-guard.sh now reads $HOME/$XDG_CONFIG_HOME/$GIT_CONFIG_GLOBAL, so this runner
+# ISOLATES all three for EVERY call: a neutral, empty fixture HOME under $tmpbase by default
+# (never the developer's or CI runner's real one), with XDG_CONFIG_HOME and GIT_CONFIG_GLOBAL
+# unset unless a fixture sets $push_home_override/$push_xdg_home/$push_git_config_global
+# immediately before calling run_push_guard (all three cleared again right after the call, so a
+# later fixture that asks for none of them never inherits a prior fixture's values). The
+# environment mutation happens inside the "$(...)" command substitution's own implicit subshell —
+# a portable, bash-3.2/Git-Bash-safe idiom (this file's own convention prefers it to `env -u`,
+# which is not obviously safe across Git-Bash) — so it can never leak into this harness's own
+# environment or any later call. run_hook and run_boundary above are deliberately UNCHANGED:
+# neither hooks/git-c-guard.sh nor hooks/agent-boundary.sh reads any of these three variables.
 push_out=""
 push_err=""
 push_rc=0
+push_home_override=""
+push_xdg_home=""
+push_git_config_global=""
 run_push_guard() {
   local json="$1" pathval="${2:-$PATH}" errfile="$tmpbase/push-guard-stderr"
-  push_out="$(printf '%s' "$json" | PATH="$pathval" "$bash_bin" "$push_guard" 2>"$errfile")"
+  local home_val="${push_home_override:-$neutral_home}"
+  push_out="$(
+    unset XDG_CONFIG_HOME GIT_CONFIG_GLOBAL
+    export HOME="$home_val"
+    [ -z "$push_xdg_home" ] || export XDG_CONFIG_HOME="$push_xdg_home"
+    [ -z "$push_git_config_global" ] || export GIT_CONFIG_GLOBAL="$push_git_config_global"
+    printf '%s' "$json" | PATH="$pathval" "$bash_bin" "$push_guard" 2>"$errfile"
+  )"
   push_rc=$?
   push_err="$(cat "$errfile" 2>/dev/null)"
   rm -f "$errfile"
+  push_home_override=""
+  push_xdg_home=""
+  push_git_config_global=""
 }
 
 # expect_push_deny/expect_push_no_opinion — assert against $push_out/$push_err/$push_rc.
@@ -1248,6 +1316,33 @@ case_pd_config_never_executes() {
   [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH while evaluating a config route\n"; }
   [ "$before" = "$after" ] || { __ok=0; __why="${__why}fixture repo's file listing changed — push-guard.sh wrote to or altered a file it should only read (config route)\n"; }
 }
+case_pd_config_tab_in_value() {
+  # #290 kickback finding F4: cfg_push_lines records are "src<TAB>sub<TAB>refspec" (source FIRST,
+  # a bounded field; the configured value is the record's UNBOUNDED tail) so a "push =" value
+  # containing a literal TAB byte cannot truncate at that TAB and leak its own remainder into
+  # config_deny()'s source-label field. A wildcard destination denies regardless of what follows
+  # the embedded TAB, so this fixture stays a DENY either way (pre-F4-fix or post) -- what this
+  # case pins is whether $src stays exactly one of the two literal labels (measured pre-fix, with
+  # the OLD "sub<TAB>val<TAB>src" record order: still denies, rc 2, but stderr names
+  # "junklabel<TAB>.git/config" -- neither declared literal -- instead of ".git/config").
+  local dir="$tmpbase/repo-cfg-tab-in-value"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n\tpush = refs/heads/*:refs/heads/*\tjunklabel\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+  # "junklabel" is the DENIED destination's own text too (the full, untruncated wildcard refspec
+  # -- correct: git itself would treat the whole value as one refspec), so these assertions pin
+  # the SOURCE-LABEL field specifically ("in <source>)", the printf format's own trailing clause),
+  # never a plain substring test against the whole message.
+  case "$push_err" in
+    *"in .git/config)"*) ;;
+    *) __ok=0; __why="${__why}stderr's source-label field is not exactly '.git/config': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"in junklabel"*) __ok=0; __why="${__why}stderr's source-label field is corrupted by the TAB-carrying value's own remainder: '$push_err'\n" ;;
+    *) ;;
+  esac
+}
 case_pn_config_neither_key() {
   # The decision's required control: a config file that sets NEITHER remote.<name>.push nor
   # push.default at all must stay no opinion.
@@ -1316,6 +1411,265 @@ case_pn_config_push_default_simple() {
   local dir="$tmpbase/repo-cfg-default-simple"
   mk_fixture_repo "$dir" main feature/x
   mk_fixture_config "$dir" $'[push]\n\tdefault = simple\n[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+
+# --- #290: GLOBAL git config candidates ($GIT_CONFIG_GLOBAL, $XDG_CONFIG_HOME/git/config or its
+# $HOME/.config/git/config default, $HOME/.gitconfig), unioned with the repo-local config #268
+# already reads -- every fixture below passes an explicit cwd (mk_fixture_config's AMBIENT-$PWD
+# rule) and sets $push_home_override (and, where noted, $push_xdg_home/$push_git_config_global)
+# immediately before its own run_push_guard call, so its own global route is visible ONLY to that
+# call -- run_push_guard clears all three right after every call, so no fixture below can leak its
+# global config into a sibling fixture.
+case_pd_global_gitconfig_upstream() {
+  # Per-path coverage 1/4: $HOME/.gitconfig. Repo carries only a [branch] merge record (no
+  # push.default of its own); the GLOBAL push.default=upstream is what denies. Also asserts
+  # inline that stderr names the GLOBAL source label, not ".git/config".
+  local dir="$tmpbase/repo-global-gitconfig-upstream" home="$tmpbase/home-global-gitconfig-upstream"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  mk_fixture_global_config "$home/.gitconfig" $'[push]\n\tdefault = upstream\n'
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"your global git config"*) ;;
+    *) __ok=0; __why="${__why}stderr does not name the global source label 'your global git config': '$push_err'\n" ;;
+  esac
+}
+case_pd_global_xdg_upstream() {
+  # Per-path coverage 2/4: explicit $XDG_CONFIG_HOME/git/config, with a neutral (no-.gitconfig)
+  # HOME override so the OTHER two global paths are absent for this fixture.
+  local dir="$tmpbase/repo-global-xdg-upstream" home="$tmpbase/home-global-xdg-upstream"
+  local xdg="$tmpbase/xdg-global-xdg-upstream"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  mk_fixture_global_config "$xdg/git/config" $'[push]\n\tdefault = upstream\n'
+  push_home_override="$home"
+  push_xdg_home="$xdg"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_global_xdg_home_default_upstream() {
+  # Per-path coverage 3/4: $XDG_CONFIG_HOME UNSET -- pins the default-path branch,
+  # $HOME/.config/git/config, distinct from case_pd_global_xdg_upstream's explicit-XDG branch.
+  local dir="$tmpbase/repo-global-xdg-home-default-upstream"
+  local home="$tmpbase/home-global-xdg-home-default-upstream"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  mk_fixture_global_config "$home/.config/git/config" $'[push]\n\tdefault = upstream\n'
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_global_env_var_upstream() {
+  # Per-path coverage 4/4: $GIT_CONFIG_GLOBAL pointing at a fixture file OUTSIDE HOME entirely --
+  # the neutral HOME (no override) has no .gitconfig, so only the env-var route can deny here.
+  local dir="$tmpbase/repo-global-env-var-upstream"
+  local gcg="$tmpbase/gcg-global-env-var-upstream/customconfig"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  mk_fixture_global_config "$gcg" $'[push]\n\tdefault = upstream\n'
+  push_git_config_global="$gcg"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_global_remote_push_refspec() {
+  # Route coverage: remote.<name>.push via a GLOBAL file; the repo has NO config file at all.
+  local dir="$tmpbase/repo-global-remote-push-refspec"
+  local home="$tmpbase/home-global-remote-push-refspec"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$home/.gitconfig" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_global_default_matching() {
+  # Route coverage: push.default=matching via a GLOBAL file, unconditional -- no [branch] section
+  # anywhere (this route never consults branch.<n>.merge).
+  local dir="$tmpbase/repo-global-default-matching"
+  local home="$tmpbase/home-global-default-matching"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$home/.gitconfig" $'[push]\n\tdefault = matching\n'
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_global_benign_does_not_mask_repo_route() {
+  # Union/precedence: a benign GLOBAL push.default (current) must not mask a denying REPO
+  # push.default (upstream) -- the mutation-discriminating case for "evaluate every value, not
+  # just the first". Also asserts inline that stderr names the REPO source label, ".git/config".
+  local dir="$tmpbase/repo-global-benign-mask" home="$tmpbase/home-global-benign-mask"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[push]\n\tdefault = upstream\n[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  mk_fixture_global_config "$home/.gitconfig" $'[push]\n\tdefault = current\n'
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *".git/config"*) ;;
+    *) __ok=0; __why="${__why}stderr does not name the repo-local source label '.git/config': '$push_err'\n" ;;
+  esac
+}
+case_pd_global_overrides_benign_repo_route() {
+  # Union/precedence, the other direction: a denying GLOBAL push.default (upstream) must still
+  # deny even though the REPO's own push.default (current) is benign -- the documented over-block
+  # (git itself would honour the repo's "current" and never consult the global value at all).
+  local dir="$tmpbase/repo-global-overrides-benign" home="$tmpbase/home-global-overrides-benign"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[push]\n\tdefault = current\n[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  mk_fixture_global_config "$home/.gitconfig" $'[push]\n\tdefault = upstream\n'
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_global_env_var_union_not_replace() {
+  # Union-not-replace over-block: $GIT_CONFIG_GLOBAL is set to a BENIGN file, and $HOME/.gitconfig
+  # (which real git would never consult once $GIT_CONFIG_GLOBAL is set) still supplies the deny --
+  # also the "denier read LAST" half of the 2+ boundary, with the XDG candidate absent in between.
+  local dir="$tmpbase/repo-global-union-not-replace" home="$tmpbase/home-global-union-not-replace"
+  local gcg="$tmpbase/gcg-global-union-not-replace/customconfig"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$gcg" $'[core]\n\teditor = vi\n'
+  mk_fixture_global_config "$home/.gitconfig" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  push_home_override="$home"
+  push_git_config_global="$gcg"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_global_two_files_first_denies() {
+  # The "denier read FIRST" half of the 2+ boundary: $GIT_CONFIG_GLOBAL (read first) denies,
+  # $HOME/.gitconfig (read after it) is benign.
+  local dir="$tmpbase/repo-global-two-files-first-denies"
+  local home="$tmpbase/home-global-two-files-first-denies"
+  local gcg="$tmpbase/gcg-global-two-files-first-denies/customconfig"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$gcg" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  mk_fixture_global_config "$home/.gitconfig" $'[core]\n\teditor = vi\n'
+  push_home_override="$home"
+  push_git_config_global="$gcg"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_pd_global_two_defaults_one_file() {
+  # #290 kickback finding F1: TWO "[push] default = ..." lines inside ONE file (global here) are
+  # BOTH accumulated by cfg_push_defaults' list and evaluated in file-order -- so the FIRST value
+  # denies even though git itself (last-wins WITHIN one file -- this hook's own pre-#290 scalar
+  # behaviour) resolves that file's own push.default to the SECOND, benign value and would not
+  # deny. Repo carries only a [branch] merge record (no push.default of its own). Also asserts
+  # inline that the deny is attributed to the FIRST ("upstream") record's own via/source, not the
+  # second.
+  local dir="$tmpbase/repo-global-two-defaults-one-file"
+  local home="$tmpbase/home-global-two-defaults-one-file"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  mk_fixture_global_config "$home/.gitconfig" $'[push]\n\tdefault = upstream\n\tdefault = current\n'
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"push.default=upstream in your global git config"*) ;;
+    *) __ok=0; __why="${__why}stderr does not name push.default=upstream via the global source label: '$push_err'\n" ;;
+  esac
+}
+case_pd_c_target_global_route() {
+  # Cross-feature: a resolved "-C" segment sees the GLOBAL routes (read from the environment, the
+  # same for every segment, never derived from the "-C" value itself) INDEPENDENTLY of the
+  # session's own facts. The SESSION's own cwd resolves to NO repo at all (mkdir only, no
+  # mk_fixture_repo call) -- RESOLVED decision: global routes are consulted only when a repo
+  # actually resolves, so the SESSION's own resolve_repo() call never attempts the global-config
+  # read at all here. This isolates that the deny comes SOLELY from the "-C" TARGET's own
+  # resolution reading the same global files -- a session that itself also resolved a real repo
+  # would independently pick up the identical global route and mask this discriminator (measured:
+  # an earlier draft of this fixture, with the session resolving an ordinary repo, was NOT flipped
+  # by apply_c_target()'s own body-replaced-with-":" mutant, M46, because the session's own
+  # apply_session_repo() facts already carried the same deny).
+  local main="$tmpbase/repo-c-g1" target="$tmpbase/target-g1-wt-1"
+  local home="$tmpbase/home-c-g1"
+  mkdir -p "$main"
+  mk_fixture_repo "$target" trunk "feature/y"
+  mk_fixture_global_config "$home/.gitconfig" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git -C ../target-g1-wt-1 push' "$main")"
+  expect_push_deny
+}
+case_pd_global_never_executes() {
+  # Safety: the never-executes/reads-only guarantee on the GLOBAL route specifically -- booby-traps
+  # git/gh/rm/dirname and asserts byte-identical listings of BOTH the fixture repo AND the fixture
+  # HOME tree (never just the repo, which the pre-existing never-executes cases already cover).
+  local dir="$tmpbase/repo-global-never-executes" home="$tmpbase/home-global-never-executes"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  mk_fixture_global_config "$home/.gitconfig" $'[push]\n\tdefault = upstream\n'
+  local trapdir="$tmpbase/trapbin-global-deny" sentinel="$tmpbase/sentinel-global-deny"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  local before_repo after_repo before_home after_home
+  before_repo="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  before_home="$(find "$home" -type f -exec ls -la {} \; | sort)"
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")" "$trapdir:$PATH"
+  after_repo="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  after_home="$(find "$home" -type f -exec ls -la {} \; | sort)"
+  expect_push_deny
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH while evaluating a global config route\n"; }
+  [ "$before_repo" = "$after_repo" ] || { __ok=0; __why="${__why}fixture repo's file listing changed — push-guard.sh wrote to or altered a file it should only read (global config route)\n"; }
+  [ "$before_home" = "$after_home" ] || { __ok=0; __why="${__why}fixture HOME's file listing changed — push-guard.sh wrote to or altered a file it should only read (global config route)\n"; }
+}
+case_pn_global_upstream_no_tracking() {
+  # Negative control / honest scope: global push.default=upstream, current branch claude/17-a, NO
+  # [branch] section ANYWHERE -- refspec_dest() of an empty merge value resolves to no destination.
+  local dir="$tmpbase/repo-global-upstream-no-tracking"
+  local home="$tmpbase/home-global-upstream-no-tracking"
+  mk_fixture_repo "$dir" main "claude/17-a"
+  mk_fixture_global_config "$home/.gitconfig" $'[push]\n\tdefault = upstream\n'
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_pn_global_explicit_refspec() {
+  # Release-blocker control: the harness's OWN bare-C-less push -u origin "claude/<n>-<slug>"
+  # shape against a GLOBAL config carrying BOTH a denying remote.origin.push AND
+  # push.default=matching -- config is NEVER consulted for an explicit-refspec segment (n>=2),
+  # global or repo-local.
+  local dir="$tmpbase/repo-global-explicit-refspec"
+  local home="$tmpbase/home-global-explicit-refspec"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$home/.gitconfig" $'[remote "origin"]\n\tpush = HEAD:main\n[push]\n\tdefault = matching\n'
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push -u origin "claude/17-a"' "$dir")"
+  expect_push_no_opinion
+}
+case_pn_global_explicit_refspec_c() {
+  # Release-blocker control, the "-C" variant: the harness's OWN "-C <wt>"-prefixed explicit-
+  # refspec push shape, against the SAME denying GLOBAL config as case_pn_global_explicit_refspec.
+  local main="$tmpbase/repo-global-explicit-refspec-c" target="$tmpbase/target-g2-wt-1"
+  local home="$tmpbase/home-global-explicit-refspec-c"
+  mk_fixture_repo "$main" main feature/x
+  mk_fixture_repo "$target" trunk feature/y
+  mk_fixture_global_config "$home/.gitconfig" $'[remote "origin"]\n\tpush = HEAD:main\n[push]\n\tdefault = matching\n'
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git -C ../target-g2-wt-1 push -u origin "claude/17-a"' "$main")"
+  expect_push_no_opinion
+}
+case_pn_global_none_present() {
+  # The "none present" boundary AND the isolation positive control: a dedicated, empty fixture
+  # HOME with no .gitconfig and no .config/git/config, XDG_CONFIG_HOME and GIT_CONFIG_GLOBAL both
+  # unset, repo config absent -- must stay no opinion (proves this file's own isolation actually
+  # works: without it, the developer's or CI runner's real global config could flip this).
+  local dir="$tmpbase/repo-global-none-present" home="$tmpbase/home-global-none-present"
+  mkdir -p "$home"
+  mk_fixture_repo "$dir" main "claude/17-a"
+  push_home_override="$home"
   run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
   expect_push_no_opinion
 }
@@ -1451,9 +1805,12 @@ cases=(
   # push-* fixture, growing the whole-file total to 167 and the push-filtered unit to 84; #269
   # (below) then added twelve more push-* fixtures, growing the whole-file total to 179 and the
   # push-filtered unit to 96; the #269 round-2 kickback then added two more push-* fixtures,
-  # growing the whole-file total to the CURRENT 181 and the push-filtered unit to 98 — none of the
-  # five rounds touched agent-boundary.sh vocabulary or behaviour, so none of this section's own
-  # historical "143-case"/"140 pass"/"143 pass" figures were re-measured.
+  # growing the whole-file total to 181 and the push-filtered unit to 98; #290 then added sixteen
+  # more push-* fixtures, growing the whole-file total to 197 and the push-filtered unit to 114;
+  # the #290 ROUND-2 KICKBACK then added two more push-* fixtures, growing the whole-file total to
+  # the CURRENT 199 and the push-filtered unit to 116 — none of the seven rounds touched
+  # agent-boundary.sh vocabulary or behaviour, so none of this section's own historical
+  # "143-case"/"140 pass"/"143 pass" figures were re-measured.
   # M1/M2 (the two raw-stdin fast paths) are
   # coarse — breaking either silences the WHOLE hook, so they only distinguish a deny-verdict
   # case from everything else, never one deny case from another:
@@ -1497,8 +1854,9 @@ cases=(
   #       #270 boundary CRLF fixtures, impl-deny-crlf-cmdword/verif-deny-crlf-gh/
   #       verif-noop-crlf-status, are the only cases that flip; NOT re-measured against the
   #       167-case file that stood after #268 (round 1), its round-2 kickback, or its round-3
-  #       kickback (grown to the CURRENT 181 by #269 below and its own round-2 kickback, neither
-  #       of which touched agent-boundary.sh either) — see this section's header note above)
+  #       kickback (grown to 181 by #269 below and its own round-2 kickback, then to 197 by #290,
+  #       then to the CURRENT 199 by #290's own round-2 kickback, none of which touched
+  #       agent-boundary.sh either) — see this section's header note above)
   #   M25 the shipped global strip narrowed to once-only                    -> 143 pass,  0 fail
   #       (cmd="${cmd//$cr/}" -> cmd="${cmd/$cr/}"; #270 round-2 kickback probe, whole-file
   #       convention) -- NOT flipped by any fixture in this file: each of the three #270
@@ -1603,12 +1961,13 @@ cases=(
   # that moved. The #269 ROUND-2 KICKBACK (a verifier finding that the per-segment reset had no
   # multi-segment fixture, plus a Note that the depth-1 ascent guard had no fixture at all) adds
   # TWO more fixtures — push-deny-c-unresolvable-never-executes (C2) and
-  # push-deny-c-per-segment-session-reset (D1) — growing the push-* set to the CURRENT 98 cases,
-  # and TWO more mutants, M56 and M57 (below M55). Re-running M46-M55 plus the thirteen
-  # RE-POINTED mutants above against this CURRENT 98-case set changes only the PASS count (+2
-  # throughout, from the two new passing fixtures) for every one of them EXCEPT four, which each
-  # gain exactly one more failing case purely because C2/D1 happen to share a code path an
-  # UNCHANGED existing mutant already covered (no code moved this round — this is a
+  # push-deny-c-per-segment-session-reset (D1) — growing the push-* set to 98 cases (114 after
+  # #290 below, then 116 after #290's own round-2 kickback), and TWO more mutants, M56 and M57
+  # (below M55). Re-running M46-M55 plus the
+  # thirteen RE-POINTED mutants above against that then-current 98-case set changes only the PASS
+  # count (+2 throughout, from the two new passing fixtures) for every one of them EXCEPT four,
+  # which each gain exactly one more failing case purely because C2/D1 happen to share a code path
+  # an UNCHANGED existing mutant already covered (no code moved this round — this is a
   # new-fixture-matches-an-old-mutant event, not a re-pointing event): M14 and M15 (current_branch
   # / default_branch forced empty) and M52 (unresolvable "-C" target clears instead of degrading)
   # each gain C2, since C2 shares B4's exact verdict mechanism (a bare push judged by the
@@ -1617,8 +1976,80 @@ cases=(
   # push-deny-config-remote-push-bare's exact mechanism (a bare push denied via the SESSION's own
   # remote.origin.push config). Every other M1-M55 entry's failing SET is unchanged by this
   # kickback (verified directly, not assumed — each of M17, M18, M28, M33, M34, M35, M36, M37,
-  # M38, M43, M46, M47, M48, M49, M50, M51, M53, M54, M55 was re-run against the CURRENT 98-case
-  # set and produces the identical failing-case list, +2 pass).
+  # M38, M43, M46, M47, M48, M49, M50, M51, M53, M54, M55 was re-run against that then-current
+  # 98-case set and produces the identical failing-case list, +2 pass).
+  # #290 adds SIXTEEN more push-* fixtures (the global-config candidates: $GIT_CONFIG_GLOBAL,
+  # $XDG_CONFIG_HOME/git/config or its $HOME/.config/git/config default, and $HOME/.gitconfig,
+  # unioned with the repo-local routes #268 already reads), growing the push-* set to 114 cases
+  # (116 after #290's own round-2 kickback below), and TWELVE more mutants, M58-M69 (below M57).
+  # Per the mandate accompanying this issue, EVERY existing mutant whose recipe names code inside
+  # resolve_repo()'s config block or config_deny() is RE-MEASURED (not reasoned about) against
+  # this 114-case set (the CURRENT 116-case set is covered below, in the round-2 kickback
+  # paragraph), not merely
+  # the fourteen #269 already re-pointed: M14, M15, M17, M18 (current/default-branch resolution and
+  # the common-dir/upward-walk derivations, all upstream of the config candidate list), M26-M45
+  # (the whole #268 config-parsing and config_deny() surface, including M27/M29-M32/M39-M42/M44/M45,
+  # which #269 never touched since none of their recipes named code that moved into
+  # resolve_repo() at that time), and M54 (the resolved-config-not-applied mutant, whose recipe
+  # names cfg_push_lines/cfg_push_defaults/cfg_branch_merge by name and so needed re-pointing for
+  # #290's cfg_push_default -> cfg_push_defaults rename regardless of #269). Round-1 of this issue
+  # incorrectly claimed M46, M47, M48, M49, M50, M51, M52, M53, M55, M56, and M57 were ALL NOT
+  # re-measured for #290, reasoning (not measuring) that none of their recipes touches the
+  # config-candidate list or the push.default list #290 added. A verifier kickback (finding F3)
+  # measured every one of these directly against the #290 114-case push-* set and found the claim false
+  # for M46 and M47 specifically: each newly discriminates push-deny-c-target-global-route (#290's
+  # own fixture, whose SESSION deliberately resolves NO repo at all — see the dated
+  # .claude/LESSONS.md entry — so the "-C" TARGET's own resolution, which both M46
+  # (apply_c_target()'s body) and M47 (the tokenizer's "-C" field) each disable by a different
+  # route, becomes the ONLY path to this fixture's deny). M48, M49, M50, M51, M52, M53, M55, M56,
+  # and M57 ARE genuinely unaffected — each individually re-measured (not reasoned about) and
+  # confirmed to keep its EXACT pre-#290 failing set; their own "CURRENT 98-case" figures below are
+  # relabeled "the 98-case set" (no longer current, but still an accurate historical measurement)
+  # rather than re-run again. Of the TWENTY-SEVEN RE-MEASURED EXISTING mutants (M14, M15, M17, M18,
+  # M26-M45, M46, M47, M54 — M46/M47 newly added to this set by the kickback correction above),
+  # every one's PASS count grows by exactly +16 (from the sixteen new #290 passing fixtures) EXCEPT
+  # NINE, which each gain additional failing cases from #290's own fixtures — M14 (+7: every #290
+  # fixture whose deny resolves push.default=upstream/tracking through a real [branch] section),
+  # M26 (+12: every #290 DENY fixture, since disabling the whole per-file read loop removes every
+  # route regardless of source), M29 (+2), M31 (+1), M39 (+2: both #290 release-blocker "-C"
+  # controls, alongside the pre-existing push-noop-config-explicit-refspec), M42 (+9), M46 (+7,
+  # corrected as above), M47 (+7, corrected as above), and M54 (+1: the one #290 "-C" fixture whose
+  # SESSION deliberately resolves no repo at all, unlike every #269 "-C" fixture's session) — each
+  # entry below states its own gained set; the other eighteen (M15, M17, M18, M27, M28, M30, M32,
+  # M33, M34, M35, M36, M37, M38, M40, M41, M43, M44, M45) keep their EXACT pre-#290 failing sets
+  # (verified directly, not assumed), +16 pass each. The TWELVE NEW mutants, M58-M69 (below M57),
+  # are each measured fresh against this 114-case set — see their own entries (and the round-2
+  # kickback paragraph immediately below) for what each discriminates against the CURRENT 116-case
+  # set.
+  # The #290 ROUND-2 KICKBACK (verifier findings F1-F4) adds TWO more push-* fixtures:
+  # push-deny-global-two-defaults-one-file (F1 — TWO "[push] default = ..." lines inside ONE file,
+  # both accumulated and evaluated rather than the file's own last value winning) and
+  # push-deny-config-tab-in-value (F4 — a literal TAB byte inside a configured
+  # "remote.<name>.push" value, pinning that it stays in the record's own UNBOUNDED tail rather
+  # than corrupting the source label), growing the push-* set to the CURRENT 116 cases, and ONE
+  # more mutant, M70 (below M69, reverts F4's field-order fix). M33's own recipe is RESTATED (not
+  # re-pointed to different code) for F4's field-order change — the mutation's INTENT (only the
+  # FIRST remote.<name>.push record survives) and its figure are unaffected. EVERY mutant in this
+  # table, M14 through M70, is RE-MEASURED (not reasoned about) against this CURRENT 116-case set.
+  # ELEVEN gain a new failing case beyond their already-recorded 114-case figure: M14 (+1:
+  # push-deny-global-two-defaults-one-file, the same push.default=upstream-through-a-real-
+  # [branch]-section mechanism M14's own 114-case gain already documents), M26 (+2: BOTH new
+  # fixtures, since disabling the whole per-file read loop removes every route regardless of
+  # source), M32 (+1: push-deny-config-tab-in-value — the wildcard-destination check M32 disables
+  # is exactly what lets this fixture's embedded-TAB value still deny), M42 (+1:
+  # push-deny-global-two-defaults-one-file, the same push.default-disabled-entirely mechanism
+  # M42's own 114-case gain already documents), M58 (+1: push-deny-global-two-defaults-one-file —
+  # its ONLY route is global), M60 (+1: push-deny-global-two-defaults-one-file — its denying record
+  # lives in $HOME/.gitconfig specifically), M63 (+2: BOTH new fixtures, corrected below per
+  # finding F2b), M64 (+1: push-deny-global-two-defaults-one-file — read as the first EXISTING
+  # candidate, so the break-after-first-existing-candidate mutant loses $common/config's own
+  # branch.merge before this fixture's "upstream" record can resolve a destination), M65 (+1:
+  # push-deny-global-two-defaults-one-file, per finding F1's own fixture design), M67 (+1:
+  # push-deny-global-two-defaults-one-file — its inline source-label assertion, not its rc, is what
+  # this mutant flips), and M68 (+1: push-deny-config-tab-in-value — likewise its inline
+  # source-label assertion). Every other mutant (M15, M17, M18, M27, M28, M29, M30, M31, M33, M34,
+  # M35, M36, M37, M38, M39, M40, M41, M43, M44, M45, M46, M47, M48, M49, M50, M51, M52, M53, M54,
+  # M55, M56, M57, M59, M61, M62, M66, M69) keeps its EXACT pre-kickback failing set, +2 pass each.
   # M1/M2 (the two raw-stdin fast paths) are coarse — breaking either silences the WHOLE hook, so
   # they only distinguish a deny-verdict case from everything else, never one deny case from
   # another:
@@ -1651,12 +2082,26 @@ cases=(
   #       push-deny-config-push-default-tracking, push-deny-config-union-benign-refspec-plus-
   #       upstream — the last three because branch.<current>.merge is captured only under
   #       cfg_subsection==current_branch, and current_branch is now empty on every call, not just
-  #       the session's. RE-MEASURED again for the #269 round-2 kickback against the CURRENT
+  #       the session's. RE-MEASURED again for the #269 round-2 kickback against the then-current
   #       98-case push-* set: -> 89 pass, 9 fail — the same eight cases plus
   #       push-deny-c-unresolvable-never-executes (C2), which shares push-deny-c-unresolvable-
   #       degrades' (B4's) exact mechanism: a bare push judged by the SESSION's own current_branch
   #       after a failed "-C" resolution restores it — no code moved for this addition, C2 simply
-  #       exercises the identical existing dependency)
+  #       exercises the identical existing dependency. RE-MEASURED again for #290 against the
+  #       114-case push-* set: -> 98 pass, 16 fail — the same nine cases plus SEVEN of the
+  #       sixteen new #290 fixtures: push-deny-global-gitconfig-upstream, push-deny-global-xdg-
+  #       upstream, push-deny-global-xdg-home-default-upstream, push-deny-global-env-var-upstream,
+  #       push-deny-global-benign-does-not-mask-repo-route, push-deny-global-overrides-benign-repo-
+  #       route, and push-deny-global-never-executes — every #290 fixture whose deny resolves
+  #       push.default=upstream through a REAL [branch] section (the identical
+  #       cfg_subsection==current_branch dependency); the other nine #290 fixtures either use a
+  #       remote.<name>.push route, push.default=matching (never consults current_branch), or are
+  #       no-opinion controls. RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT
+  #       116-case push-* set: -> 99 pass, 17 fail — the same sixteen cases plus
+  #       push-deny-global-two-defaults-one-file (F1), the identical mechanism: its denying record
+  #       also resolves push.default=upstream through a real [branch] section; push-deny-config-
+  #       tab-in-value (F4) is unaffected, since its route is remote.<name>.push, never
+  #       push.default)
   #   M15 default_branch resolution forced empty                         -> 53 pass,  3 fail
   #       (kills push-deny-trunk-base, push-deny-trunk-subdir, push-deny-trunk-worktree. #269
   #       RE-POINTED (same shared resolve_repo() function) and RE-MEASURED against the then-current
@@ -1667,10 +2112,17 @@ cases=(
   #       depends on SOME default branch resolving, session's or the resolved target's; the two
   #       fixtures that deny via CONFIG rather than a default-branch match
   #       (push-deny-c-other-repo-config-route, push-noop-c-other-repo-ignores-session-config) are
-  #       unaffected. RE-MEASURED again for the #269 round-2 kickback against the CURRENT 98-case
-  #       push-* set: -> 88 pass, 10 fail — the same nine cases plus
+  #       unaffected. RE-MEASURED again for the #269 round-2 kickback against the then-current
+  #       98-case push-* set: -> 88 pass, 10 fail — the same nine cases plus
   #       push-deny-c-unresolvable-never-executes (C2), for the identical reason M14 above gained
-  #       it: C2 mirrors B4's dependency on the session's own default_branch too)
+  #       it: C2 mirrors B4's dependency on the session's own default_branch too. RE-MEASURED again
+  #       for #290 against the 114-case push-* set: -> 104 pass, 10 fail — UNCHANGED failing
+  #       set, +16 pass; none of the sixteen new #290 fixtures denies via a NON-fallback default
+  #       branch value — every #290 deny route resolves either through PUSH_DEFAULT_BRANCH_FALLBACK's
+  #       unconditional "main"/"master" members or through a remote.<name>.push/matching route that
+  #       never reads default_branch at all. RE-MEASURED again for the #290 ROUND-2 KICKBACK against
+  #       the CURRENT 116-case push-* set: -> 106 pass, 10 fail — UNCHANGED failing set, +2 pass;
+  #       neither new kickback fixture denies via a non-fallback default branch value either)
   #   M16 PUSH_DEFAULT_BRANCH_FALLBACK emptied                            -> 55 pass,  1 fail
   #   M17 the worktree common-dir derivation broken (never strips        -> 55 pass,  1 fail
   #       /worktrees/* from gitdir)
@@ -1678,17 +2130,25 @@ cases=(
   #       RE-MEASURED against the then-current 96-case push-* set: -> 94 pass, 2 fail — the
   #       historical case plus push-deny-config-worktree-commondir, #268's own worktree-config
   #       fixture, which depends on the identical common-dir derivation. RE-MEASURED again for the
-  #       #269 round-2 kickback against the CURRENT 98-case push-* set: -> 96 pass, 2 fail —
+  #       #269 round-2 kickback against the then-current 98-case push-* set: -> 96 pass, 2 fail —
   #       unchanged failing set, +2 pass from the two new #269-round-2 fixtures, neither a
-  #       worktree)
+  #       worktree. RE-MEASURED again for #290 against the 114-case push-* set: -> 112
+  #       pass, 2 fail — UNCHANGED failing set, +16 pass; none of the sixteen new #290 fixtures is
+  #       a worktree either. RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT
+  #       116-case push-* set: -> 114 pass, 2 fail — UNCHANGED failing set, +2 pass; neither new
+  #       kickback fixture is a worktree either)
   #   M18 the upward .git walk disabled (dir="$parent" -> dir="$dir",     -> 55 pass,  1 fail
   #       so it never leaves the starting directory)
   #       (kills only push-deny-trunk-subdir. #269 RE-POINTED (shared resolve_repo()) and
   #       RE-MEASURED against the then-current 96-case push-* set: -> 95 pass, 1 fail — unchanged
   #       failing set; no #268/#269 fixture depends on a multi-level upward walk. RE-MEASURED
-  #       again for the #269 round-2 kickback against the CURRENT 98-case push-* set: -> 97 pass,
-  #       1 fail — unchanged failing set, +2 pass; neither new fixture depends on a multi-level
-  #       upward walk either)
+  #       again for the #269 round-2 kickback against the then-current 98-case push-* set: -> 97
+  #       pass, 1 fail — unchanged failing set, +2 pass; neither new fixture depends on a
+  #       multi-level upward walk either. RE-MEASURED again for #290 against the 114-case
+  #       push-* set: -> 113 pass, 1 fail — UNCHANGED failing set, +16 pass; no #290 fixture
+  #       depends on a multi-level upward walk either. RE-MEASURED again for the #290 ROUND-2
+  #       KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail — UNCHANGED failing
+  #       set, +2 pass; neither new kickback fixture depends on a multi-level upward walk either)
   #   M19 is_deny_member widened from an exact word match to a per-      -> 55 pass,  1 fail
   #       member PREFIX match (main* matches "main-ish")
   #   M20 the "refs/* (a tag, a note) -> skip" clause changed to a       -> 56 pass,  0 fail
@@ -1738,16 +2198,32 @@ cases=(
   #       refspec-plus-upstream, union-other-remote-bare, crlf-interior) plus the new #269
   #       push-deny-c-other-repo-config-route (A4), whose deny is likewise decided entirely by a
   #       resolved checkout's config. RE-MEASURED again for the #269 round-2 kickback against the
-  #       CURRENT 98-case push-* set: -> 80 pass, 18 fail — the same seventeen cases plus
+  #       then-current 98-case push-* set: -> 80 pass, 18 fail — the same seventeen cases plus
   #       push-deny-c-per-segment-session-reset (D1), whose SECOND segment shares
   #       push-deny-config-remote-push-bare's exact mechanism: a bare push denied via the
   #       SESSION's own remote.origin.push config, disabled here for the SESSION-scope
   #       resolve_repo() call too, not just the "-C" one -- this is the same shared-function
-  #       dependency, not new code)
+  #       dependency, not new code. #290 RE-POINTED: this line now lives inside the per-candidate-
+  #       file loop (`[ -f "$cfgf" ] || continue` -> `continue` unconditionally), so EVERY
+  #       candidate file -- global or repo-local -- is skipped, not just the repo-local one;
+  #       RE-MEASURED against the 114-case push-* set: -> 84 pass, 30 fail — the same
+  #       eighteen cases plus TWELVE of the sixteen new #290 fixtures (every #290 DENY fixture; the
+  #       four #290 no-opinion fixtures are unaffected, since disabling every config read can only
+  #       ever remove a route, never add one). RE-MEASURED again for the #290 ROUND-2 KICKBACK
+  #       against the CURRENT 116-case push-* set: -> 84 pass, 32 fail — the same thirty cases plus
+  #       BOTH new #290 kickback fixtures, push-deny-global-two-defaults-one-file (F1) and
+  #       push-deny-config-tab-in-value (F4) -- each a DENY fixture whose only route is a config
+  #       read this mutant disables entirely, the identical mechanism as the other twelve)
   #   M27 the n==1 exact-remote-scoping guard disabled (if [ -n "$scope" ] &&             -> 79 pass,
   #       [ "$sub" != "$scope" ]; then -> if false && ...)                                 1 fail
   #       (kills only push-noop-config-other-remote-named -- "origin"'s own push route wrongly
-  #       applies to a "git push backup")
+  #       applies to a "git push backup". NOT RE-POINTED by #269 (no code moved); #290
+  #       RE-MEASURED for the first time since this #268 round-1 80-case baseline, against the
+  #       114-case push-* set: -> 113 pass, 1 fail — UNCHANGED failing set, +34 pass; none
+  #       of the #269/#290 fixtures added since names a non-origin remote in this shape.
+  #       RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set:
+  #       -> 115 pass, 1 fail — UNCHANGED failing set, +2 pass; neither new kickback fixture names
+  #       a non-origin remote in this shape either)
   #   M28 the [branch "<current>"] scoping guard disabled (if [ "$cfg_subsection" =       -> 79 pass,
   #       "$current_branch" ]; then -> if true || ...)                                     1 fail
   #       (kills only push-noop-config-branch-other -- a DIFFERENT branch's merge value wrongly
@@ -1755,34 +2231,89 @@ cases=(
   #       against the then-current 96-case push-* set: -> 95 pass, 1 fail — unchanged failing set;
   #       no #269 fixture depends on this guard, since none of the twelve new fixtures configures a
   #       [branch] section at all. RE-MEASURED again for the #269 round-2 kickback against the
-  #       CURRENT 98-case push-* set: -> 97 pass, 1 fail — unchanged failing set, +2 pass; neither
-  #       new fixture configures a [branch] section either)
+  #       then-current 98-case push-* set: -> 97 pass, 1 fail — unchanged failing set, +2 pass;
+  #       neither new fixture configures a [branch] section either. RE-MEASURED again for #290
+  #       against the 114-case push-* set: -> 113 pass, 1 fail — UNCHANGED failing set,
+  #       +16 pass; none of the sixteen new #290 fixtures configures a [branch] section either.
+  #       RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set:
+  #       -> 115 pass, 1 fail — UNCHANGED failing set, +2 pass; push-deny-global-two-defaults-
+  #       one-file's own [branch "feature/x"] section already equals its current branch, so this
+  #       guard's absence changes nothing for it, and push-deny-config-tab-in-value configures no
+  #       [branch] section at all)
   #   M29 the push.default mode-check pattern widened to match every value               -> 77 pass,
   #       ([Uu][Pp][Ss][Tt][Rr][Ee][Aa][Mm]|[Tt][Rr][Aa][Cc][Kk][Ii][Nn][Gg]) -> *))         3 fail
   #       (kills push-noop-config-push-default-current and push-noop-config-push-default-simple,
   #       whose branch sections WOULD deny if their mode were mistaken for upstream; also kills
   #       push-deny-config-push-default-matching as a side effect -- the "matching" case arm
   #       becomes unreachable once "*)" matches everything first, so that fixture's config, which
-  #       has no branch section, resolves to no destination at all instead of denying)
+  #       has no branch section, resolves to no destination at all instead of denying. NOT
+  #       RE-POINTED by #269; #290 RE-MEASURED for the first time since this #268 round-1 80-case
+  #       baseline, against the 114-case push-* set: -> 109 pass, 5 fail — the same three
+  #       cases plus TWO of the sixteen new #290 fixtures, as a side effect: push-deny-global-
+  #       default-matching (its "matching" case arm becomes unreachable too) and
+  #       push-deny-global-benign-does-not-mask-repo-route -- NOT because its deny is masked
+  #       (measured, correcting a verifier-round-1 finding, F2a: this fixture STILL denies, rc 2,
+  #       under this mutant); its benign GLOBAL "current" record is evaluated FIRST in
+  #       cfg_push_defaults' accumulation order and NOW ALSO matches the widened "*)" arm, so this
+  #       mutant denies via that GLOBAL record's own push.default=current -- resolving "main" from
+  #       cfg_branch_merge exactly as the "upstream" arm normally would -- and only the fixture's
+  #       OWN inline source-label assertion fails, since the deny is attributed to "your global git
+  #       config" (correct for THIS mutant's own record) rather than the REPO's ".git/config" label
+  #       the fixture's assertion expects. RE-MEASURED again for the #290 ROUND-2 KICKBACK against
+  #       the CURRENT 116-case push-* set: -> 111 pass, 5 fail — UNCHANGED failing set, +2 pass;
+  #       neither new kickback fixture's FIRST-accumulated push.default record is a value this
+  #       mutant's widened arm newly reaches ahead of a genuine deny (push-deny-global-two-
+  #       defaults-one-file's own first record, "upstream", already matched this arm before the
+  #       mutation, so widening it changes nothing for that fixture; push-deny-config-tab-in-value
+  #       uses remote.<name>.push, never push.default, at all))
   #   M30 "tracking" dropped from the upstream/tracking pattern (...[Mm]|[Tt]...[Gg])      -> 79 pass,
   #       -> [Uu][Pp][Ss][Tt][Rr][Ee][Aa][Mm]))                                              1 fail
-  #       (kills only push-deny-config-push-default-tracking)
+  #       (kills only push-deny-config-push-default-tracking. NOT RE-POINTED by #269; #290
+  #       RE-MEASURED for the first time since this #268 round-1 80-case baseline, against the
+  #       114-case push-* set: -> 113 pass, 1 fail — UNCHANGED failing set, +34 pass; none
+  #       of the sixteen new #290 fixtures uses push.default=tracking. RE-MEASURED again for the
+  #       #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail —
+  #       UNCHANGED failing set, +2 pass; neither new kickback fixture uses push.default=tracking
+  #       either)
   #   M31 the push.default=matching deny arm's body replaced with a no-op (:              -> 79 pass,
   #       instead of __deny_dest=.../__deny_kind=.../__deny_via=...)                        1 fail
-  #       (kills only push-deny-config-push-default-matching)
+  #       (kills only push-deny-config-push-default-matching. NOT RE-POINTED by #269; #290
+  #       RE-MEASURED for the first time since this #268 round-1 80-case baseline, against the
+  #       114-case push-* set: -> 112 pass, 2 fail — the same case plus ONE of the sixteen
+  #       new #290 fixtures, push-deny-global-default-matching, whose deny depends entirely on this
+  #       same arm's body. RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT
+  #       116-case push-* set: -> 114 pass, 2 fail — UNCHANGED failing set, +2 pass; neither new
+  #       kickback fixture's deny depends on this arm)
   #   M32 the wildcard-destination ("*") deny check removed from config_deny()'s          -> 79 pass,
   #       per-record loop (the case "$dest" in *'*'*) ... esac block deleted)               1 fail
   #       (kills only push-deny-config-wildcard-refspec -- its resolved destination, a literal
-  #       "*", falls through to an ordinary is_deny_member compare and does not match)
-  #   M33 only the FIRST remote.<name>.push record is ever kept ([ -n                     -> 79 pass,
-  #       "$cfg_push_lines" ] || cfg_push_lines=... guard added before the append)          1 fail
+  #       "*", falls through to an ordinary is_deny_member compare and does not match. NOT
+  #       RE-POINTED by #269; #290 RE-MEASURED for the first time since this #268 round-1 80-case
+  #       baseline, against the 114-case push-* set: -> 113 pass, 1 fail — UNCHANGED
+  #       failing set, +34 pass; no #290 fixture's config carries a wildcard destination.
+  #       RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set:
+  #       -> 114 pass, 2 fail — the same case plus push-deny-config-tab-in-value (F4): that
+  #       fixture's own wildcard destination ("refs/heads/*:refs/heads/*<TAB>junklabel") relies on
+  #       this exact check to deny; removing it falls through to the same is_deny_member compare,
+  #       which does not match either)
+  #   M33 only the FIRST remote.<name>.push record is ever kept (F4's field-reorder            -> 79 pass,
+  #       kickback restates this recipe: [ -n "$cfg_push_lines" ] || cfg_push_lines=...           1 fail
+  #       guard added before the append, now writing "${cfg_src}${cfg_tab}${cfg_subsection}
+  #       ${cfg_tab}${cfg_val}" -- the field ORDER changed by finding F4, the mutation's INTENT
+  #       and figure did not)
   #       (kills only push-deny-config-remote-push-second-line -- the fixture's first, harmless
   #       push= line wins and the second, offending one is never seen. #269 RE-POINTED (shared
   #       resolve_repo()) and RE-MEASURED against the then-current 96-case push-* set: -> 95 pass,
   #       1 fail — unchanged failing set; no #269 fixture's config carries two push= lines under
-  #       one remote. RE-MEASURED again for the #269 round-2 kickback against the CURRENT 98-case
-  #       push-* set: -> 97 pass, 1 fail — unchanged failing set, +2 pass; neither new fixture's
-  #       config carries two push= lines under one remote either)
+  #       one remote. RE-MEASURED again for the #269 round-2 kickback against the then-current
+  #       98-case push-* set: -> 97 pass, 1 fail — unchanged failing set, +2 pass; neither new
+  #       fixture's config carries two push= lines under one remote either. RE-MEASURED again for
+  #       #290 against the 114-case push-* set: -> 113 pass, 1 fail — UNCHANGED failing
+  #       set, +16 pass; no #290 fixture's config carries two push= lines under one remote either.
+  #       RE-MEASURED again for the #290 ROUND-2 KICKBACK, with the recipe restated for F4's field
+  #       reorder as noted above, against the CURRENT 116-case push-* set: -> 115 pass, 1 fail —
+  #       UNCHANGED failing set, +2 pass; neither new kickback fixture's config carries two push=
+  #       lines under one remote either)
   #   M34 the comment-stripping assignment disabled (if [ "${#cfg_h}" -le               -> 80 pass,
   #       "${#cfg_s}" ]; then cfgline="$cfg_h"; else cfgline="$cfg_s"; fi -> :)             0 fail
   #       -- NOT flipped: every "#"/";"-commented directive in this table's fixtures keeps its
@@ -1795,9 +2326,14 @@ cases=(
   #       exercise that fixture). #269 RE-POINTED (shared resolve_repo()) and RE-MEASURED against
   #       the then-current 96-case push-* set: -> 96 pass, 0 fail — still NOT flipped, same reason
   #       (no #269 fixture's config carries a "#"/";"-commented directive either). RE-MEASURED
-  #       again for the #269 round-2 kickback against the CURRENT 98-case push-* set: -> 98 pass,
-  #       0 fail — still NOT flipped, same reason (neither new fixture's config carries a
-  #       "#"/";"-commented directive either)
+  #       again for the #269 round-2 kickback against the then-current 98-case push-* set: -> 98
+  #       pass, 0 fail — still NOT flipped, same reason (neither new fixture's config carries a
+  #       "#"/";"-commented directive either). RE-MEASURED again for #290 against the
+  #       114-case push-* set: -> 114 pass, 0 fail — still NOT flipped, same reason (no #290
+  #       fixture's config carries a "#"/";"-commented directive either). RE-MEASURED again for the
+  #       #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 116 pass, 0 fail —
+  #       still NOT flipped, same reason (neither new kickback fixture's config carries a
+  #       "#"/";"-commented directive either))
   #   M35 the config-line CR strip disabled (cfgline="${cfgline//$cfg_cr/}" -> :) -- FIRST
   #       measured (then-current 80-case push-* set, #268 round 1): -> 80 pass, 0 fail (not
   #       flipped). RE-MEASURED for the #268 round-2 kickback (finding 3), after
@@ -1815,9 +2351,13 @@ cases=(
   #       the fixture that makes M35 non-inert. #269 RE-POINTED (shared resolve_repo()) and
   #       RE-MEASURED against the then-current 96-case push-* set: -> 95 pass, 1 fail — unchanged
   #       failing set (push-deny-config-crlf-interior only); no #269 fixture's config carries a CR.
-  #       RE-MEASURED again for the #269 round-2 kickback against the CURRENT 98-case push-* set:
-  #       -> 97 pass, 1 fail — unchanged failing set, +2 pass; neither new fixture's config
-  #       carries a CR either.
+  #       RE-MEASURED again for the #269 round-2 kickback against the then-current 98-case push-*
+  #       set: -> 97 pass, 1 fail — unchanged failing set, +2 pass; neither new fixture's config
+  #       carries a CR either. RE-MEASURED again for #290 against the 114-case push-* set:
+  #       -> 113 pass, 1 fail — UNCHANGED failing set, +16 pass; no #290 fixture's config carries a
+  #       CR either. RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT 116-case
+  #       push-* set: -> 115 pass, 1 fail — UNCHANGED failing set, +2 pass; neither new kickback
+  #       fixture's config carries a CR either.
   #   M36 the config path changed from "$common/config" to "$gitdir/config"               -> 79 pass,
   #                                                                                          1 fail
   #       (kills only push-deny-config-worktree-commondir -- the worktree pointer's own gitdir
@@ -1826,9 +2366,15 @@ cases=(
   #       #269 RE-POINTED (shared resolve_repo()) and RE-MEASURED against the then-current 96-case
   #       push-* set: -> 95 pass, 1 fail — unchanged failing set; every #269 "-C" target fixture is
   #       an ordinary checkout, not a worktree, so $gitdir == $common for all of them too.
-  #       RE-MEASURED again for the #269 round-2 kickback against the CURRENT 98-case push-* set:
-  #       -> 97 pass, 1 fail — unchanged failing set, +2 pass; C2/D1's checkouts are likewise
-  #       ordinary, not worktrees)
+  #       RE-MEASURED again for the #269 round-2 kickback against the then-current 98-case push-*
+  #       set: -> 97 pass, 1 fail — unchanged failing set, +2 pass; C2/D1's checkouts are likewise
+  #       ordinary, not worktrees. #290 RE-POINTED: this line now lives in the config-CANDIDATE
+  #       heredoc's own repo-local line ($common/config -> $gitdir/config), the same effect one
+  #       level up; RE-MEASURED against the 114-case push-* set: -> 113 pass, 1 fail —
+  #       UNCHANGED failing set, +16 pass; every #290 fixture's own checkout (session or "-C"
+  #       target) is likewise an ordinary checkout, not a worktree. RE-MEASURED again for the #290
+  #       ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail — UNCHANGED
+  #       failing set, +2 pass; neither new kickback fixture's own checkout is a worktree either)
   #   M37 the last-line-without-a-trailing-newline read rescue removed (while             -> 79 pass,
   #       IFS= read -r cfgline || [ -n "$cfgline" ] -> while IFS= read -r cfgline)          1 fail
   #       (kills only push-deny-config-no-trailing-newline -- its one and only config line, which
@@ -1836,9 +2382,13 @@ cases=(
   #       RE-POINTED (shared resolve_repo()) and RE-MEASURED against the then-current 96-case
   #       push-* set: -> 95 pass, 1 fail — unchanged failing set; every #269 fixture's config,
   #       where one is written at all, ends in a trailing newline. RE-MEASURED again for the #269
-  #       round-2 kickback against the CURRENT 98-case push-* set: -> 97 pass, 1 fail — unchanged
-  #       failing set, +2 pass; D1's config (the only new fixture with one) also ends in a
-  #       trailing newline)
+  #       round-2 kickback against the then-current 98-case push-* set: -> 97 pass, 1 fail —
+  #       unchanged failing set, +2 pass; D1's config (the only new fixture with one) also ends in
+  #       a trailing newline. RE-MEASURED again for #290 against the 114-case push-* set:
+  #       -> 113 pass, 1 fail — UNCHANGED failing set, +16 pass; every #290 fixture's config, where
+  #       one is written at all, also ends in a trailing newline. RE-MEASURED again for the #290
+  #       ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail — UNCHANGED
+  #       failing set, +2 pass; both new kickback fixtures' configs also end in a trailing newline)
   #   M38 the [remote "<name>"] section-header pattern narrowed to lowercase-only         -> 79 pass,
   #       ([Rr][Ee][Mm][Oo][Tt][Ee] -> remote)                                              1 fail
   #       (kills only push-deny-config-mixed-case -- "[Remote ...]" no longer matches the section
@@ -1846,14 +2396,25 @@ cases=(
   #       key is never captured. #269 RE-POINTED (shared resolve_repo()) and RE-MEASURED against
   #       the then-current 96-case push-* set: -> 95 pass, 1 fail — unchanged failing set; no #269
   #       fixture's config uses mixed-case section/key names. RE-MEASURED again for the #269
-  #       round-2 kickback against the CURRENT 98-case push-* set: -> 97 pass, 1 fail — unchanged
-  #       failing set, +2 pass; neither new fixture's config uses mixed-case section/key names
-  #       either)
+  #       round-2 kickback against the then-current 98-case push-* set: -> 97 pass, 1 fail —
+  #       unchanged failing set, +2 pass; neither new fixture's config uses mixed-case section/key
+  #       names either. RE-MEASURED again for #290 against the 114-case push-* set: -> 113
+  #       pass, 1 fail — UNCHANGED failing set, +16 pass; no #290 fixture's config uses mixed-case
+  #       section/key names either. RE-MEASURED again for the #290 ROUND-2 KICKBACK against the
+  #       CURRENT 116-case push-* set: -> 115 pass, 1 fail — UNCHANGED failing set, +2 pass; neither
+  #       new kickback fixture's config uses mixed-case section/key names either)
   #   M39 the n<=1 gate removed (config_deny is also called after the n>=2 refspec        -> 79 pass,
   #       loop, using nonopt[0] as scope)                                                   1 fail
   #       (kills only push-noop-config-explicit-refspec -- the harness's own
   #       `git push -u origin "claude/17-a"` shape wrongly denies via the fixture's
-  #       remote.origin.push=HEAD:main config; a release-blocker regression if this ever shipped)
+  #       remote.origin.push=HEAD:main config; a release-blocker regression if this ever shipped.
+  #       NOT RE-POINTED by #269; #290 RE-MEASURED for the first time since this #268 round-1
+  #       80-case baseline, against the 114-case push-* set: -> 111 pass, 3 fail — the same
+  #       case plus BOTH #290 release-blocker "-C" controls, push-noop-global-explicit-refspec and
+  #       push-noop-global-explicit-refspec-c — the release-blocker class this gate exists for.
+  #       RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set:
+  #       -> 113 pass, 3 fail — UNCHANGED failing set, +2 pass; neither new kickback fixture
+  #       carries an explicit refspec)
   #   M40 a matched remote.<name>.push record denies unconditionally, regardless          -> 78 pass,
   #       of its resolved destination (the is_deny_member "$dest" compare after the         2 fail
   #       wildcard check is removed)
@@ -1861,17 +2422,49 @@ cases=(
   #       non-default destination, and push-noop-config-commented-out, whose one REAL harmless
   #       key -- "push = feature/x" -- is a genuine, correctly-parsed remote.origin.push record
   #       that must NOT deny on its own; this is the mutant that actually exercises
-  #       push-noop-config-commented-out's parsing, not M34 above)
+  #       push-noop-config-commented-out's parsing, not M34 above. NOT RE-POINTED by #269; #290
+  #       RE-MEASURED for the first time since this #268 round-1 80-case baseline, against the
+  #       114-case push-* set: -> 112 pass, 2 fail — UNCHANGED failing set, +34 pass; no
+  #       #290 fixture's benign remote.<name>.push record resolves to a non-default destination.
+  #       RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set:
+  #       -> 114 pass, 2 fail — UNCHANGED failing set, +2 pass; neither new kickback fixture's
+  #       route resolves to a non-default destination either)
   #   M41 the n==1 config route removed ([ -n "$__deny_dest" ] || config_deny             -> 79 pass,
   #       "$scope_remote" -> ... || [ "$n" -eq 1 ] || config_deny "$scope_remote")          1 fail
   #       (kills only push-deny-config-remote-push-named-remote -- the n==1 positive control for
-  #       exact-remote scoping)
-  #   M42 the push.default case statement disabled entirely (case "$cfg_push_default"     -> 77 pass,
-  #       in -> case "" in)                                                                 3 fail
-  #       (kills push-deny-config-push-default-upstream, push-deny-config-push-default-tracking,
-  #       and push-deny-config-push-default-matching -- the only three deny fixtures whose config
-  #       carries no remote.<name>.push record at all, so denying depends entirely on this case
-  #       statement)
+  #       exact-remote scoping. NOT RE-POINTED by #269; #290 RE-MEASURED for the first time since
+  #       this #268 round-1 80-case baseline, against the 114-case push-* set: -> 113 pass,
+  #       1 fail — UNCHANGED failing set, +34 pass; no #290 fixture exercises the n==1 config route.
+  #       RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set:
+  #       -> 115 pass, 1 fail — UNCHANGED failing set, +2 pass; neither new kickback fixture
+  #       exercises the n==1 config route either)
+  #   M42 the push.default LIST evaluation disabled entirely (if [ -n                    -> 102 pass,
+  #       "$cfg_push_defaults" ]; then -> if [ -n "" ]; then)                              12 fail
+  #       (HISTORICAL RECIPE, #268 round 1: "case "$cfg_push_default" in -> case "" in", against a
+  #       scalar `case` statement that no longer exists after #290 turned cfg_push_default into the
+  #       cfg_push_defaults LIST evaluated by a `while` loop -- restated above against the CURRENT
+  #       code shape, same intent (disable the whole push.default route unconditionally); historical
+  #       figure at the #268 round-1 80-case baseline: 77 pass, 3 fail, killing
+  #       push-deny-config-push-default-upstream, push-deny-config-push-default-tracking, and
+  #       push-deny-config-push-default-matching -- the only three deny fixtures whose config
+  #       carries no remote.<name>.push record at all, so denying depends entirely on this route.
+  #       NOT RE-POINTED by #269; #290 RE-MEASURED (with the restated recipe) against the CURRENT
+  #       114-case push-* set: -> 102 pass, 12 fail — the same three historical cases plus NINE
+  #       more: EIGHT of the sixteen new #290 fixtures whose deny depends on the push.default route
+  #       with no remote.<name>.push record of its own (push-deny-global-gitconfig-upstream,
+  #       push-deny-global-xdg-upstream, push-deny-global-xdg-home-default-upstream,
+  #       push-deny-global-env-var-upstream, push-deny-global-default-matching,
+  #       push-deny-global-benign-does-not-mask-repo-route,
+  #       push-deny-global-overrides-benign-repo-route, push-deny-global-never-executes), plus ONE
+  #       PRE-#290 fixture that also newly flips, push-deny-config-union-benign-refspec-plus-
+  #       upstream: its remote.origin.push record resolves to a benign, non-denying destination, so
+  #       its deny ALSO depends entirely on this route, same as the three historical cases -- an
+  #       existing dependency this restated recipe now surfaces explicitly that the #268 round-1
+  #       recipe's own citation never named. RE-MEASURED again for the #290 ROUND-2 KICKBACK
+  #       against the CURRENT 116-case push-* set: -> 103 pass, 13 fail — the same twelve cases plus
+  #       push-deny-global-two-defaults-one-file (F1): its deny depends entirely on the push.default
+  #       route too (a global file, no remote.<name>.push record at all); push-deny-config-tab-in-
+  #       value (F4) is unaffected, since its route is remote.<name>.push, never push.default)
   # #268 round-2 kickback mutants (M43-M44), measured against the then-current 83-case push-* set
   # (the 80-case baseline plus push-deny-config-no-space-assign, push-deny-config-union-benign-
   # refspec-plus-upstream, and push-deny-config-crlf-interior):
@@ -1882,21 +2475,39 @@ cases=(
   #       "continue" arm, so the key/value pair is silently never parsed. #269 RE-POINTED (shared
   #       resolve_repo()) and RE-MEASURED against the then-current 96-case push-* set: -> 95 pass,
   #       1 fail — unchanged failing set; no #269 fixture's config omits the spaces around "=".
-  #       RE-MEASURED again for the #269 round-2 kickback against the CURRENT 98-case push-* set:
-  #       -> 97 pass, 1 fail — unchanged failing set, +2 pass; D1's config also keeps the spaces
-  #       around "=")
-  #   M44 the push.default case gated on git's OWN precedence instead of the RESOLVED           -> 82 pass,
-  #       union (case "$cfg_push_default" in -> if [ -z "$cfg_push_lines" ]; then case            1 fail
-  #       "$cfg_push_default" in ... esac; fi)
-  #       (kills only push-deny-config-union-benign-refspec-plus-upstream -- its
-  #       remote.origin.push record resolves to a NON-denying destination (feature/x), so
-  #       $cfg_push_lines is non-empty and this mutant's precedence gate skips the push.default
-  #       resolution entirely, even though push.default=upstream alone denies; every other
-  #       push-default-* deny fixture has NO remote.<name>.push record at all, so $cfg_push_lines
-  #       is empty for them and this mutant is inert)
+  #       RE-MEASURED again for the #269 round-2 kickback against the then-current 98-case push-*
+  #       set: -> 97 pass, 1 fail — unchanged failing set, +2 pass; D1's config also keeps the
+  #       spaces around "=". RE-MEASURED again for #290 against the 114-case push-* set:
+  #       -> 113 pass, 1 fail — UNCHANGED failing set, +16 pass; no #290 fixture's config omits the
+  #       spaces around "=" either. RE-MEASURED again for the #290 ROUND-2 KICKBACK against the
+  #       CURRENT 116-case push-* set: -> 115 pass, 1 fail — UNCHANGED failing set, +2 pass; neither
+  #       new kickback fixture's config omits the spaces around "=" either)
+  #   M44 the push.default route gated on git's OWN precedence instead of the RESOLVED    -> 113 pass,
+  #       union (if [ -n "$cfg_push_defaults" ]; then -> if [ -z "$cfg_push_lines" ] &&      1 fail
+  #       [ -n "$cfg_push_defaults" ]; then)
+  #       (HISTORICAL RECIPE, #268 round-2 kickback: "case "$cfg_push_default" in -> if [ -z
+  #       "$cfg_push_lines" ]; then case "$cfg_push_default" in ... esac; fi", against a scalar
+  #       `case` statement that no longer exists after #290's cfg_push_defaults LIST rename --
+  #       restated above against the CURRENT code shape, same intent (gate the whole push.default
+  #       route on git's own precedence -- consulted only when the remote has no push refspec --
+  #       instead of the RESOLVED union both routes are meant to get); historical figure at the
+  #       then-current 83-case baseline: 82 pass, 1 fail, killing only
+  #       push-deny-config-union-benign-refspec-plus-upstream -- its remote.origin.push record
+  #       resolves to a NON-denying destination (feature/x), so $cfg_push_lines is non-empty and
+  #       this mutant's precedence gate skips the push.default resolution entirely, even though
+  #       push.default=upstream alone denies; every other push-default-* deny fixture has NO
+  #       remote.<name>.push record at all, so $cfg_push_lines is empty for them and this mutant is
+  #       inert. NOT RE-POINTED by #269; #290 RE-MEASURED (with the restated recipe) against the
+  #       114-case push-* set: -> 113 pass, 1 fail — UNCHANGED failing set, +31 pass; none
+  #       of the sixteen new #290 fixtures pairs a non-denying remote.<name>.push record with a
+  #       denying push.default record on the SAME checkout. RE-MEASURED again for the #290 ROUND-2
+  #       KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail — UNCHANGED failing
+  #       set, +2 pass; neither new kickback fixture pairs a non-denying remote.<name>.push record
+  #       with a denying push.default record on the same checkout either)
   # #268 round-3 kickback mutant (M45), measured against the then-current 84-case push-* set (the
-  # 83-case baseline plus one more fixture, push-deny-config-union-other-remote-bare; grown to the
-  # CURRENT 98 by #269 below and its own round-2 kickback):
+  # 83-case baseline plus one more fixture, push-deny-config-union-other-remote-bare; grown to 98
+  # by #269 below and its own round-2 kickback, then to 114 by #290, then to the CURRENT 116 by
+  # #290's own round-2 kickback):
   #   M45 the n==1/n==0 scope gate narrowed from "every configured remote at n==0"       -> 83 pass,
   #       to "git's own default remote" (if [ -n "$scope" ] && [ "$sub" != "$scope" ];      1 fail
   #       then -> if [ "$sub" != "${scope:-origin}" ]; then)
@@ -1905,12 +2516,27 @@ cases=(
   #       origin section with no push key at all; the shipped scope gate considers every remote's
   #       records at n==0 and denies, while this mutant narrows the n==0 scope to only the
   #       "origin" record, whose absence leaves nothing to deny on -- every other config deny
-  #       fixture names "origin" as its offending remote, so this mutant is inert for them)
+  #       fixture names "origin" as its offending remote, so this mutant is inert for them. NOT
+  #       RE-POINTED by #269; #290 RE-MEASURED for the first time since this #268 round-3
+  #       84-case baseline, against the 114-case push-* set: -> 113 pass, 1 fail —
+  #       UNCHANGED failing set, +30 pass; no #290 fixture's config carries a denying
+  #       remote.<name>.push record under a non-origin remote name. RE-MEASURED again for the #290
+  #       ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail — UNCHANGED
+  #       failing set, +2 pass; neither new kickback fixture's config carries a denying
+  #       remote.<name>.push record under a non-origin remote name either)
   # #269's "-C <path>" resolution mutants (M46-M55), FIRST measured against the then-current
   # 96-case push-* set (the 84-case #268-round-3 baseline plus the twelve new #269 fixtures
-  # directly below); each RE-MEASURED again for the #269 round-2 kickback against the CURRENT
+  # directly below); each RE-MEASURED again for the #269 round-2 kickback against the then-current
   # 98-case push-* set (the 96-case baseline plus C2 and D1, added by that kickback — see M56/M57
-  # below):
+  # below). Round-1 of this issue incorrectly claimed M46-M53, M55, M56, and M57 were ALL NOT
+  # re-measured for #290, reasoning that none of their recipes touches the config-candidate list or
+  # the push.default list #290 added. A verifier kickback (finding F3) measured every one of these
+  # directly and found this false for M46 and M47 specifically — see their own entries below for
+  # the corrected figures and mechanism. M48, M49, M50, M51, M52, M53, M55, M56, and M57 ARE
+  # genuinely unaffected — each individually re-measured (not reasoned about) and confirmed to keep
+  # its EXACT pre-#290 failing set — so their own "CURRENT 98-case" wording below is downgraded to
+  # "the 98-case set" — an accurate historical label, not a current one, now that #290 and its own
+  # round-2 kickback have grown the push-* set to the CURRENT 116:
   #   M46 apply_c_target()'s entire body replaced with ":" (the "-C" route never applies         -> 89 pass,
   #       anything, regardless of predicate or resolution)                                        7 fail
   #       (kills push-deny-c-sibling-wt-bare-on-default, push-deny-c-other-repo-explicit-develop,
@@ -1922,28 +2548,52 @@ cases=(
   #       facts alone (B6) are unaffected. RE-MEASURED for the round-2 kickback: -> 91 pass,
   #       7 fail — unchanged failing set, +2 pass; neither C2 nor D1 depends on the "-C" target
   #       actually resolving to something -- C2 never resolves at all (B4's shape) and D1's own
-  #       deny comes from its SECOND, "-C"-less segment)
+  #       deny comes from its SECOND, "-C"-less segment. CORRECTED (verifier finding F3): round-1 of
+  #       #290 wrongly claimed this recipe was unaffected by the config-candidate list without
+  #       measuring it; RE-MEASURED against the #290 114-case push-* set: -> 106 pass, 8 fail — the
+  #       same seven cases plus push-deny-c-target-global-route: that fixture's SESSION deliberately
+  #       resolves NO repo at all (see the dated .claude/LESSONS.md entry), so the "-C" TARGET's own
+  #       resolution -- which this mutant disables entirely -- is the ONLY path to its deny.
+  #       RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set:
+  #       -> 108 pass, 8 fail — UNCHANGED failing set, +2 pass; neither new kickback fixture uses
+  #       "-C" at all)
   #   M47 the tokenizer's emitted "-C" field forced empty unconditionally (print "PUSH\t"         -> 89 pass,
   #       (ccount == 1 ? cpath : "") "\t" rest -> print "PUSH\t" "" "\t" rest)                     7 fail
   #       (kills the IDENTICAL seven-case set as M46 -- a different code site, the awk tokenizer
   #       rather than the bash resolution function, with the same observable effect: apply_c_target()
   #       never receives a real value to resolve. RE-MEASURED for the round-2 kickback: -> 91 pass,
-  #       7 fail — unchanged failing set, +2 pass, same reason as M46 above)
+  #       7 fail — unchanged failing set, +2 pass, same reason as M46 above. CORRECTED (verifier
+  #       finding F3, identically to M46 above): RE-MEASURED against the #290 114-case push-* set:
+  #       -> 106 pass, 8 fail — the same seven cases plus push-deny-c-target-global-route, for the
+  #       identical reason M46 gains it (a different code site, the awk tokenizer's "-C" field,
+  #       with the same observable effect). RE-MEASURED again for the #290 ROUND-2 KICKBACK against
+  #       the CURRENT 116-case push-* set: -> 108 pass, 8 fail — UNCHANGED failing set, +2 pass;
+  #       neither new kickback fixture uses "-C" at all)
   #   M48 the is_c_target_path() predicate call removed from apply_c_target() (every non-empty    -> 95 pass,
   #       "-C" value is resolved, regardless of shape)                                            1 fail
   #       (kills only push-noop-c-nonsibling-path -- its "../other-checkout" value has no
   #       "-wt-<n>" suffix at all and would otherwise never be resolved; every other fixture's
   #       "-C" value either already satisfies the predicate or is never emitted as a candidate.
-  #       RE-MEASURED for the round-2 kickback: -> 97 pass, 1 fail — unchanged failing set, +2 pass)
+  #       RE-MEASURED for the round-2 kickback: -> 97 pass, 1 fail — unchanged failing set, +2 pass.
+  #       RE-MEASURED (per finding F3's directive to measure, not reason) against the #290 114-case
+  #       push-* set: -> 113 pass, 1 fail — UNCHANGED failing set, +16 pass. RE-MEASURED again for
+  #       the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail —
+  #       UNCHANGED failing set, +2 pass; neither new kickback fixture's "-C" value shape changes)
   #   M49 the tokenizer's "-C" match widened to also capture the ATTACHED "-C<path>" form (a      -> 95 pass,
   #       new branch inserted before the gopt_set check: substr(tok,1,2)=="-C" && tok!="-C")       1 fail
   #       (kills only push-noop-c-attached-form. RE-MEASURED for the round-2 kickback: -> 97 pass,
-  #       1 fail — unchanged failing set, +2 pass)
+  #       1 fail — unchanged failing set, +2 pass. RE-MEASURED against the #290 114-case push-* set:
+  #       -> 113 pass, 1 fail — UNCHANGED failing set, +16 pass. RE-MEASURED again for the #290
+  #       ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail — UNCHANGED
+  #       failing set, +2 pass; neither new kickback fixture uses an attached "-C<path>" form)
   #   M50 the tokenizer's exactly-one-"-C" guard widened to "one or more" (ccount == 1 ->         -> 95 pass,
   #       ccount >= 1 in the emitted-field ternary -- the LAST "-C" token's value wins, since       1 fail
   #       cpath is overwritten on each "-C" occurrence)
   #       (kills only push-noop-c-double-c. RE-MEASURED for the round-2 kickback: -> 97 pass,
-  #       1 fail — unchanged failing set, +2 pass)
+  #       1 fail — unchanged failing set, +2 pass. RE-MEASURED against the #290 114-case push-* set:
+  #       -> 113 pass, 1 fail — UNCHANGED failing set, +16 pass. RE-MEASURED again for the #290
+  #       ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail — UNCHANGED
+  #       failing set, +2 pass; neither new kickback fixture carries two "-C" tokens)
   #   M51 the resolved current branch not applied (current_branch="$resolved_current" ->          -> 93 pass,
   #       current_branch="$session_current_branch")                                                3 fail
   #       (kills push-deny-c-sibling-wt-bare-on-default (the n<=1 current-branch check reads the
@@ -1955,7 +2605,11 @@ cases=(
   #       comes from an EXPLICIT refspec destination, never current_branch. RE-MEASURED for the
   #       round-2 kickback: -> 95 pass, 3 fail — unchanged failing set, +2 pass; C2 never reaches
   #       this mutated line at all (its "-C" target never resolves a gitdir, so apply_c_target()
-  #       returns before reaching it) and D1's own deny doesn't depend on current_branch either)
+  #       returns before reaching it) and D1's own deny doesn't depend on current_branch either.
+  #       RE-MEASURED against the #290 114-case push-* set: -> 111 pass, 3 fail — UNCHANGED failing
+  #       set, +16 pass. RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT
+  #       116-case push-* set: -> 113 pass, 3 fail — UNCHANGED failing set, +2 pass; neither new
+  #       kickback fixture uses "-C" at all)
   #   M52 an unresolvable "-C" target clears the session's facts instead of degrading             -> 95 pass,
   #       ([ -n "$gitdir" ] || { apply_session_repo; return 0; } -> [ -n "$gitdir" ] || return 0)   1 fail
   #       (kills only push-deny-c-unresolvable-degrades -- resolve_repo()'s own internal reset
@@ -1968,7 +2622,11 @@ cases=(
   #       2 fail — GAINS push-deny-c-unresolvable-never-executes (C2), the #269 round-2 kickback's
   #       own B4-shaped fixture: C2 shares this exact mechanism, a bare push whose only deny route
   #       is the SESSION's own current_branch after a failed "-C" resolution, so this pre-existing
-  #       mutant discriminates it identically to B4, with no code having moved for this addition)
+  #       mutant discriminates it identically to B4, with no code having moved for this addition.
+  #       RE-MEASURED against the #290 114-case push-* set: -> 112 pass, 2 fail — UNCHANGED failing
+  #       set, +16 pass. RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT
+  #       116-case push-* set: -> 114 pass, 2 fail — UNCHANGED failing set, +2 pass; neither new
+  #       kickback fixture uses "-C" at all)
   #   M53 the deny-set union narrowed to fallback ∪ resolved only (the session's own default       -> 95 pass,
   #       branch line dropped from the union)                                                      1 fail
   #       (kills only push-deny-c-session-default-union -- the fixture whose deny is explained
@@ -1977,15 +2635,28 @@ cases=(
   #       not what explains the deny at all (A2/A4/C1, decided by the RESOLVED default or config).
   #       RE-MEASURED for the round-2 kickback: -> 97 pass, 1 fail — unchanged failing set, +2
   #       pass; C2 never reaches this mutated line (its "-C" target never resolves) and D1's deny
-  #       comes from its config-driven second segment, not this union)
-  #   M54 the resolved config not applied (the three cfg_push_lines/cfg_push_default/             -> 94 pass,
+  #       comes from its config-driven second segment, not this union. RE-MEASURED against the #290
+  #       114-case push-* set: -> 113 pass, 1 fail — UNCHANGED failing set, +16 pass. RE-MEASURED
+  #       again for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass,
+  #       1 fail — UNCHANGED failing set, +2 pass; neither new kickback fixture uses "-C" at all)
+  #   M54 the resolved config not applied (the three cfg_push_lines/cfg_push_defaults/            -> 94 pass,
   #       cfg_branch_merge assignments re-pointed at the session_* copies instead of the            2 fail
-  #       resolved_* locals)
+  #       resolved_* locals -- #290 RE-POINTED: the middle assignment's variable name itself
+  #       renamed, cfg_push_default -> cfg_push_defaults, same mutation intent)
   #       (kills push-deny-c-other-repo-config-route and push-noop-c-other-repo-ignores-session-
   #       config -- the only two fixtures whose verdict is decided by which checkout's config
   #       applies. RE-MEASURED for the round-2 kickback: -> 96 pass, 2 fail — unchanged failing
   #       set, +2 pass; neither C2 (no config at all) nor D1's second segment (cpath empty, an
-  #       early return well before this mutated line) reaches this code)
+  #       early return well before this mutated line) reaches this code. RE-MEASURED again for
+  #       #290 (with the renamed variable) against the 114-case push-* set: -> 111 pass,
+  #       3 fail — the same two historical cases plus ONE of the sixteen new #290 fixtures,
+  #       push-deny-c-target-global-route, whose SESSION deliberately resolves to NO repo at all
+  #       (so session_cfg_push_lines is empty), unlike every #269 "-C" deny fixture's session,
+  #       which always resolves some repo of its own -- this is the one #290 fixture whose verdict
+  #       genuinely depends on which checkout's config is applied at this assignment site, not
+  #       merely on whether a repo resolved at all. RE-MEASURED again for the #290 ROUND-2 KICKBACK
+  #       against the CURRENT 116-case push-* set: -> 113 pass, 3 fail — UNCHANGED failing set, +2
+  #       pass; neither new kickback fixture uses "-C" at all)
   #   M55 the resolved default branch omitted from the deny-set union (the                        -> 94 pass,
   #       "[ -n "$resolved_default" ] && deny_set=..." line deleted)                                2 fail
   #       (kills push-deny-c-other-repo-explicit-develop and push-deny-c-never-executes -- the two
@@ -1993,10 +2664,17 @@ cases=(
   #       entering the union; A1/A3/B4's resolved default already equals the session's own, so
   #       dropping it changes nothing for them. RE-MEASURED for the round-2 kickback: -> 96 pass,
   #       2 fail — unchanged failing set, +2 pass; C2 never resolves a default at all and D1's
-  #       first segment never denies regardless of this union, see M46 above)
-  # #269 round-2 kickback mutants (M56-M57), measured against the CURRENT 98-case push-* set (the
-  # 96-case #269 baseline plus push-deny-c-unresolvable-never-executes (C2) and
-  # push-deny-c-per-segment-session-reset (D1), the two fixtures this kickback adds):
+  #       first segment never denies regardless of this union, see M46 above. RE-MEASURED against
+  #       the #290 114-case push-* set: -> 112 pass, 2 fail — UNCHANGED failing set, +16 pass.
+  #       RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set:
+  #       -> 114 pass, 2 fail — UNCHANGED failing set, +2 pass; neither new kickback fixture uses
+  #       "-C" at all)
+  # #269 round-2 kickback mutants (M56-M57), measured against the 98-case push-* set (the 96-case
+  # #269 baseline plus push-deny-c-unresolvable-never-executes (C2) and
+  # push-deny-c-per-segment-session-reset (D1), the two fixtures this kickback adds; per finding
+  # F3, individually RE-MEASURED (not reasoned about) against both the #290 114-case push-* set and
+  # the CURRENT 116-case push-* set, and confirmed genuinely unaffected by every fixture #290 and
+  # its own round-2 kickback added):
   #   M56 apply_session_repo() hoisted from inside the driver loop (called once, per segment) to   -> 97 pass,
   #       immediately before the loop (called once, before ANY segment) -- verifier finding: the      1 fail
   #       per-segment reset (acceptance criterion 4, "no leakage between iterations") had no
@@ -2008,7 +2686,10 @@ cases=(
   #       pointed at the FIRST segment's resolved (config-less) target, so the second segment's
   #       real deny -- via the session's own remote.origin.push=HEAD:main -- is silently lost (rc
   #       2 -> rc 0). No other fixture in this suite has more than one push segment, so D1 is the
-  #       only case that can discriminate this mutant)
+  #       only case that can discriminate this mutant. RE-MEASURED against the #290 114-case push-*
+  #       set: -> 113 pass, 1 fail — UNCHANGED failing set, +16 pass. RE-MEASURED again for the #290
+  #       ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail — UNCHANGED
+  #       failing set, +2 pass; neither new kickback fixture has more than one push segment)
   #   M57 resolve_repo()'s depth-1 ascent guard deleted (the                                       -> 97 pass,
   #       "[ "$((depth + 1))" -lt "$2" ] || break" line removed) -- Note from the #269 round-1        1 fail
   #       verifier: this guard is what keeps the untrusted "-C" path from ever reaching dirname's
@@ -2023,7 +2704,213 @@ cases=(
   #       intact and with it deleted. Nor does this mutant change C2's own VERDICT (rc 2 either
   #       way, since the degrade-to-session-facts path is unaffected) -- it pins the SAFETY
   #       property (never reaches an argv), not the verdict, the same division of labor B4/C1
-  #       already have for the "-C" route generally)
+  #       already have for the "-C" route generally. RE-MEASURED against the #290 114-case push-*
+  #       set: -> 113 pass, 1 fail — UNCHANGED failing set, +16 pass. RE-MEASURED again for the #290
+  #       ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail — UNCHANGED
+  #       failing set, +2 pass; neither new kickback fixture's "-C" target is unresolvable)
+  # #290's global-config-candidate mutants (M58-M69), each FIRST measured against the #290
+  # 114-case push-* set (the 98-case #269-round-2 baseline plus the sixteen new #290 fixtures
+  # directly below); each RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT
+  # 116-case push-* set (the 114-case baseline plus push-deny-global-two-defaults-one-file (F1) and
+  # push-deny-config-tab-in-value (F4), the two fixtures that kickback adds):
+  #   M58 the whole global contribution removed (the config-candidate heredoc's                    -> 103 pass,
+  #       $GIT_CONFIG_GLOBAL/$xdg_cfg/$home_cfg lines all deleted, leaving only                      11 fail
+  #       $common/config)
+  #       (kills ELEVEN of the sixteen new #290 fixtures -- every one whose deny depends on SOME
+  #       global candidate resolving: push-deny-global-gitconfig-upstream, push-deny-global-xdg-
+  #       upstream, push-deny-global-xdg-home-default-upstream, push-deny-global-env-var-upstream,
+  #       push-deny-global-remote-push-refspec, push-deny-global-default-matching, push-deny-
+  #       global-overrides-benign-repo-route, push-deny-global-env-var-union-not-replace, push-
+  #       deny-global-two-files-first-denies, push-deny-c-target-global-route, and push-deny-
+  #       global-never-executes; does NOT kill push-deny-global-benign-does-not-mask-repo-route
+  #       (its deny comes from the REPO route alone) or any of the four no-opinion #290 controls.
+  #       RE-MEASURED for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set:
+  #       -> 104 pass, 12 fail — the same eleven cases plus push-deny-global-two-defaults-one-file
+  #       (F1): its ONLY route is global too; push-deny-config-tab-in-value (F4) is unaffected,
+  #       since its route is repo-local)
+  #   M59 the $GIT_CONFIG_GLOBAL candidate branch removed (the heredoc's                            -> 112 pass,
+  #       "${GIT_CONFIG_GLOBAL:-}" line deleted)                                                      2 fail
+  #       (kills push-deny-global-env-var-upstream, whose ONLY denying route is
+  #       $GIT_CONFIG_GLOBAL itself (HOME has no .gitconfig), and push-deny-global-two-files-
+  #       first-denies, whose $GIT_CONFIG_GLOBAL-pointed file is the denier read FIRST.
+  #       RE-MEASURED for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set:
+  #       -> 114 pass, 2 fail — UNCHANGED failing set, +2 pass; neither new kickback fixture uses
+  #       $GIT_CONFIG_GLOBAL)
+  #   M60 the $HOME/.gitconfig candidate branch removed (the heredoc's "$home_cfg"                  -> 107 pass,
+  #       line deleted)                                                                               7 fail
+  #       (kills every #290 fixture whose ONLY or FIRST-READ denying route lives at
+  #       $HOME/.gitconfig specifically: push-deny-global-gitconfig-upstream, push-deny-global-
+  #       remote-push-refspec, push-deny-global-default-matching, push-deny-global-overrides-
+  #       benign-repo-route, push-deny-global-env-var-union-not-replace (the "denier read LAST"
+  #       fixture -- its denying route lives at $HOME/.gitconfig), push-deny-c-target-global-route,
+  #       and push-deny-global-never-executes; does NOT kill push-deny-global-two-files-first-
+  #       denies, whose denier is $GIT_CONFIG_GLOBAL, read first and unaffected by this mutant.
+  #       RE-MEASURED for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set:
+  #       -> 108 pass, 8 fail — the same seven cases plus push-deny-global-two-defaults-one-file
+  #       (F1): its denying record lives at $HOME/.gitconfig specifically too)
+  #   M61 the XDG git config candidate branch removed entirely (the heredoc's                       -> 112 pass,
+  #       "$xdg_cfg" line deleted)                                                                    2 fail
+  #       (kills push-deny-global-xdg-upstream and push-deny-global-xdg-home-default-upstream --
+  #       the two fixtures whose ONLY denying route is the XDG candidate, explicit and default-path
+  #       respectively. RE-MEASURED for the #290 ROUND-2 KICKBACK against the CURRENT 116-case
+  #       push-* set: -> 114 pass, 2 fail — UNCHANGED failing set, +2 pass; neither new kickback
+  #       fixture uses the XDG candidate)
+  #   M62 the XDG-unset default path removed (the "elif [ -n \"${HOME:-}\" ]; then                  -> 113 pass,
+  #       xdg_cfg=\"$HOME/.config/git/config\"; fi" branch deleted)                                   1 fail
+  #       (kills only push-deny-global-xdg-home-default-upstream -- the fixture that leaves
+  #       $XDG_CONFIG_HOME unset specifically to pin this default-path branch; does NOT kill
+  #       push-deny-global-xdg-upstream, which sets $XDG_CONFIG_HOME explicitly and so never
+  #       reaches this branch at all. RE-MEASURED for the #290 ROUND-2 KICKBACK against the CURRENT
+  #       116-case push-* set: -> 115 pass, 1 fail — UNCHANGED failing set, +2 pass; neither new
+  #       kickback fixture uses the XDG candidate either)
+  #   M63 the per-file loop stopping at the FIRST missing candidate (the "[ -f              -> 85 pass,
+  #       \"$cfgf\" ] || continue" line changed to "|| break")                               29 fail
+  #       (CORRECTED, verifier finding F2b: round-1 of #290 claimed this mutant kills "every
+  #       push-deny-config-* fixture (repo-local routes) plus every push-deny-global-* deny fixture
+  #       except push-deny-global-benign-does-not-mask-repo-route" -- measured (not reasoned about)
+  #       against the #290 114-case push-* set, the ACTUAL twenty-nine-case failing set is: every
+  #       push-deny-config-* fixture (repo-local routes: remote-push-bare, remote-push-named-remote,
+  #       remote-push-second-line, push-default-upstream, push-default-tracking, push-default-
+  #       matching, wildcard-refspec, crlf-line, crlf-interior, worktree-commondir, no-space-assign,
+  #       no-trailing-newline, mixed-case, never-executes, union-benign-refspec-plus-upstream,
+  #       union-other-remote-bare -- SIXTEEN total), every push-deny-global-* deny fixture except
+  #       push-deny-global-two-files-first-denies (TEN: gitconfig-upstream, xdg-upstream, xdg-
+  #       home-default-upstream, env-var-upstream, remote-push-refspec, default-matching, benign-
+  #       does-not-mask-repo-route, overrides-benign-repo-route, env-var-union-not-replace, and
+  #       never-executes), and THREE push-deny-c-*
+  #       fixtures the round-1 claim omitted entirely: push-deny-c-other-repo-config-route,
+  #       push-deny-c-per-segment-session-reset, and push-deny-c-target-global-route (each denies
+  #       via a config route this mutant's break can also strand, whether on the SESSION's own
+  #       resolve_repo() call or a resolved "-C" target's). The actual EXCEPTION is
+  #       push-deny-global-two-files-first-denies, not push-deny-global-benign-does-not-mask-repo-
+  #       route: with the default fixture HOME (no override) empty, the FIRST non-blank candidate
+  #       most fixtures reach is $HOME/.config/git/config (the XDG default path), which does not
+  #       exist there, so the loop breaks before ever reaching $HOME/.gitconfig or $common/config
+  #       -- a single missing candidate silently disables every LATER candidate in the list,
+  #       including the repo-local one; this is exactly the coarse, near-M26-sized failure this
+  #       mutant is meant to demonstrate. push-deny-global-two-files-first-denies is spared only
+  #       because its $GIT_CONFIG_GLOBAL candidate -- the FIRST non-blank one in the list -- is
+  #       itself the denier and already exists, so it is read in full BEFORE the break (at the
+  #       next, missing candidate) ever fires; push-deny-global-benign-does-not-mask-repo-route is
+  #       NOT spared, since its own denying record lives in the REPO-local $common/config, the
+  #       LAST candidate, never reached once the break fires at the second candidate. RE-MEASURED
+  #       for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 85 pass, 31
+  #       fail — the same twenty-nine cases plus BOTH new kickback fixtures, push-deny-global-two-
+  #       defaults-one-file (F1, a global deny fixture reached only past the break point) and
+  #       push-deny-config-tab-in-value (F4, a repo-local deny fixture reached only past the break
+  #       point too))
+  #   M64 the per-file loop stopping AFTER the first EXISTING candidate (an                          -> 106 pass,
+  #       unconditional "break" added immediately after "done < \"$cfgf\"")                            8 fail
+  #       (kills EIGHT of the sixteen new #290 fixtures, in two mechanically distinct groups sharing
+  #       one root cause -- once ANY candidate exists and is read, this mutant stops before reading
+  #       every LATER candidate, silently dropping whatever route a later file would have supplied:
+  #       (1) FIVE fixtures whose denying push.default=upstream route lives in the SAME single
+  #       global file this mutant reads first, but whose DESTINATION resolution also needs
+  #       branch.<current>.merge, which lives only in the REPO-local $common/config, always the
+  #       LAST candidate and so never reached: push-deny-global-gitconfig-upstream, push-deny-
+  #       global-xdg-upstream, push-deny-global-xdg-home-default-upstream, push-deny-global-env-
+  #       var-upstream, and push-deny-global-overrides-benign-repo-route (the GLOBAL upstream
+  #       record denies, but its branch.merge lives in the repo config, never reached); (2) THREE
+  #       fixtures whose FIRST EXISTING candidate is a BENIGN file, with the actual denying route
+  #       in a LATER candidate this mutant never reaches: push-deny-global-benign-does-not-mask-
+  #       repo-route (the GLOBAL file read first is benign "current"; the REPO's own denying
+  #       "upstream" in $common/config, read last, is never reached), push-deny-global-env-var-
+  #       union-not-replace ($GIT_CONFIG_GLOBAL, read first, is benign; $HOME/.gitconfig's denying
+  #       remote route is never reached), and push-deny-global-never-executes (same class as group
+  #       1 -- listed separately only because its own case also pins the never-executes property).
+  #       Does NOT kill push-deny-global-remote-push-refspec or push-deny-global-default-matching
+  #       (each fixture's ONE route is fully self-contained in the single file this mutant DOES
+  #       read -- neither remote.<name>.push nor push.default=matching ever consults
+  #       branch.<current>.merge), push-deny-global-two-files-first-denies (its denying
+  #       $GIT_CONFIG_GLOBAL file IS the first existing candidate, already fully read before the
+  #       break fires), or push-deny-c-target-global-route (the "-C" TARGET's own resolve_repo()
+  #       call finds its one denying $HOME/.gitconfig record as the first existing candidate,
+  #       already fully read; its target has no local config of its own to lose). RE-MEASURED for
+  #       the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 107 pass, 9 fail —
+  #       the same eight cases plus push-deny-global-two-defaults-one-file (F1): its denying record
+  #       is read as the first EXISTING candidate ($HOME/.gitconfig), so this mutant's break fires
+  #       immediately after it, before ever reaching $common/config for cfg_branch_merge -- group
+  #       (1)'s exact mechanism; push-deny-config-tab-in-value (F4) is unaffected, since it is
+  #       repo-local and never reaches a global candidate at all)
+  #   M65 cfg_push_defaults collapsed to a last-wins SCALAR (the accumulating                        -> 113 pass,
+  #       "cfg_push_defaults=\"${cfg_push_defaults}...\"" assignment narrowed to a plain              1 fail
+  #       overwrite, "cfg_push_defaults=\"${cfg_src}...\"", dropping the leading
+  #       "${cfg_push_defaults}" so only the LAST "[push] default = ..." line parsed survives)
+  #       (kills only push-deny-global-overrides-benign-repo-route -- its LAST-parsed push.default
+  #       record (the REPO's own, benign "current", read after the GLOBAL's denying "upstream" in
+  #       file-list order) silently overwrites the denying one under this mutant; does NOT kill
+  #       push-deny-global-benign-does-not-mask-repo-route, whose LAST-parsed record (the REPO's
+  #       own denying "upstream") already IS the one that must survive, so a last-wins collapse is
+  #       inert for it. RE-MEASURED for the #290 ROUND-2 KICKBACK against the CURRENT 116-case
+  #       push-* set: -> 114 pass, 2 fail — the same case plus push-deny-global-two-defaults-
+  #       one-file (F1, finding F1's own discriminating mutant): its FIRST-accumulated record (the
+  #       GLOBAL file's own "upstream", read before that SAME file's later "current" line) is what
+  #       must survive to deny; under a last-wins collapse, only the LAST line parsed overall
+  #       survives, which (no OTHER push.default record exists in this fixture) is that same file's
+  #       own "current" -- silently losing the deny. push-deny-config-tab-in-value (F4) is
+  #       unaffected, since it uses remote.<name>.push, never push.default, at all)
+  #   M66 config_deny()'s push-default loop evaluating only the FIRST value (an                      -> 113 pass,
+  #       unconditional "break" added at the end of the while loop's body, right                       1 fail
+  #       before "done <<CFGEOF")
+  #       (kills only push-deny-global-benign-does-not-mask-repo-route -- its FIRST-accumulated
+  #       record (the GLOBAL's benign "current") is evaluated and the loop stops there, never
+  #       reaching the REPO's own denying "upstream" record that follows it; does NOT kill push-
+  #       deny-global-overrides-benign-repo-route, whose FIRST-accumulated record (the GLOBAL's
+  #       denying "upstream") already denies on its own, so stopping after it changes nothing.
+  #       RE-MEASURED for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set:
+  #       -> 115 pass, 1 fail — UNCHANGED failing set, +2 pass; push-deny-global-two-defaults-
+  #       one-file's own FIRST-accumulated record ("upstream") already denies on its own, so
+  #       stopping after it (as this mutant does) changes nothing for that fixture either -- the
+  #       same reason push-deny-global-overrides-benign-repo-route is unaffected)
+  #   M67 __deny_src forced to ".git/config" unconditionally (the case "$cfgf"                       -> 113 pass,
+  #       in ... esac source-label arms both assign ".git/config")                                    1 fail
+  #       (kills only push-deny-global-gitconfig-upstream -- the fixture whose inline assertion
+  #       checks the deny message names the GLOBAL label, "your global git config"; every other
+  #       fixture either asserts no source label at all or (push-deny-global-benign-does-not-mask-
+  #       repo-route) asserts ".git/config", which this mutant does not disturb. RE-MEASURED for
+  #       the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 114 pass, 2 fail —
+  #       the same case plus push-deny-global-two-defaults-one-file (F1): its own inline assertion
+  #       likewise checks the GLOBAL label, "your global git config", which this mutant never
+  #       produces)
+  #   M68 __deny_src forced to "your global git config" unconditionally (the case                    -> 113 pass,
+  #       "$cfgf" in ... esac source-label arms both assign "your global git config")                 1 fail
+  #       (kills only push-deny-global-benign-does-not-mask-repo-route -- the fixture whose inline
+  #       assertion checks the deny message names the REPO label, ".git/config"; does NOT kill
+  #       push-deny-global-gitconfig-upstream, whose own inline assertion checks the GLOBAL label,
+  #       which this mutant still produces. RE-MEASURED for the #290 ROUND-2 KICKBACK against the
+  #       CURRENT 116-case push-* set: -> 114 pass, 2 fail — the same case plus push-deny-config-
+  #       tab-in-value (F4): its own inline assertion checks the REPO-LOCAL label, ".git/config",
+  #       which this mutant never produces; push-deny-global-two-defaults-one-file (F1) is
+  #       unaffected, since its own inline assertion checks the GLOBAL label, which this mutant
+  #       still produces)
+  #   M69 the global candidates dropped for a resolved "-C" segment specifically                     -> 113 pass,
+  #       (immediately after computing $home_cfg, "if [ \"$2\" = \"1\" ]; then                        1 fail
+  #       GIT_CONFIG_GLOBAL=\"\"; xdg_cfg=\"\"; home_cfg=\"\"; fi" -- MAX_DEPTH is exactly
+  #       "1" only on the per-"-C"-segment resolve_repo() call, never the session's own
+  #       MAX_DEPTH-64 call)
+  #       (kills only push-deny-c-target-global-route -- the one #290 fixture whose SESSION
+  #       deliberately resolves to NO repo at all (so it independently reads no global config of
+  #       its own), isolating that the deny comes SOLELY from the "-C" TARGET's own resolution
+  #       reading the same global files; every other #290 fixture's session DOES resolve an
+  #       ordinary repo, so it would independently pick up the identical global route regardless of
+  #       this mutant, which is exactly why this fixture's session was deliberately built with no
+  #       repo at all -- see this fixture's own case_pd_c_target_global_route() comment. RE-MEASURED
+  #       for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1
+  #       fail — UNCHANGED failing set, +2 pass; neither new kickback fixture uses "-C" at all)
+  # M70 (below, the #290 ROUND-2 KICKBACK's own new mutant, finding F4) reverts BOTH sites of the
+  # F4 field-order fix together -- the cfg_push_lines record write (back to
+  # "${cfg_subsection}${cfg_tab}${cfg_val}${cfg_tab}${cfg_src}") and config_deny()'s split (back to
+  # reading sub/refspec/src in that order, with refspec bounded and src the unbounded tail) -- since
+  # reverting only one site while the other still reads/writes the NEW order would misinterpret
+  # every field, not just corrupt the source label the way the original defect did:
+  #   M70 F4's field-order fix reverted (cfg_push_lines record back to                               -> 115 pass,
+  #       "sub<TAB>val<TAB>src", both the write in the "remote" case arm and the read              1 fail
+  #       in config_deny(), together)
+  #       (kills only push-deny-config-tab-in-value (F4) -- with src back on the record's UNBOUNDED
+  #       tail, the value's own embedded TAB byte again truncates the BOUNDED refspec field at that
+  #       TAB and leaks its own remainder ("junklabel") into the source-label field, exactly the
+  #       pre-fix defect finding F4 named; no other fixture's config value contains a literal TAB
+  #       byte, so this mutant is inert for every one of them)
   # Nine fixtures (measured against the #260 56-case baseline) are, verified by direct measurement,
   # NOT flipped by any of M1-M22: their
   # destination never coincides with a deny-set member under any of these mutants (the two
@@ -2110,7 +2997,7 @@ cases=(
   "push-deny-c-unresolvable-degrades|case_pd_c_unresolvable_degrades|deny: git -C ../missing-wt-9 push (bare), path matches the shape but nothing exists there, session HEAD ON its own default (develop) -- degrades to the session's own facts, never clears them (B4, unchanged verdict) -- measured: M52, 95 pass 1 fail"
   "push-noop-c-sibling-wt-session-on-default|case_pn_c_sibling_wt_session_on_default|no opinion: git -C ../repo-c-b5-wt-1 push, session ITSELF on its own default (main), sibling worktree on claude/17-a (B5, documented narrowing, worktree-parallel mode's real shape -- measured pre-#269: deny) -- measured: M46, 89 pass 7 fail (also M47, 89 pass 7 fail; also M51, 93 pass 3 fail)"
   "push-deny-c-session-default-union|case_pd_c_session_default_union|deny: git -C ../target-b6-wt-1 push origin develop, session default develop, target's OWN default is trunk (B6 -- measured pre-#269: ALREADY denies via the session's own deny set alone; this fixture's value is as the M53 discriminator, not a Today-vs-After widening) -- measured: M53, 95 pass 1 fail"
-  "push-deny-c-never-executes|case_pd_c_never_executes|deny via the -C resolution route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND BOTH the session repo's and the resolved -C target's file listings are byte-identical before/after (C1, A2's shape; \"dirname\" added to the trap in the #269 round-2 kickback, harmless here since this fixture's -C target resolves at depth 0 -- see M57 below and C2) -- measured: M46, 89 pass 7 fail (also M47, 89 pass 7 fail; also M55, 94 pass 2 fail); NOT flipped by M57 (measured: 97 pass 1 fail against the CURRENT 98-case set -- this fixture's -C target resolves at depth 0 and never reaches the ascent guard M57 removes; see C2 below, which does)"
+  "push-deny-c-never-executes|case_pd_c_never_executes|deny via the -C resolution route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND BOTH the session repo's and the resolved -C target's file listings are byte-identical before/after (C1, A2's shape; \"dirname\" added to the trap in the #269 round-2 kickback, harmless here since this fixture's -C target resolves at depth 0 -- see M57 below and C2) -- measured: M46, 89 pass 7 fail (also M47, 89 pass 7 fail; also M55, 94 pass 2 fail); NOT flipped by M57 (measured: 97 pass 1 fail against the 98-case set, not re-measured for #290 -- this fixture's -C target resolves at depth 0 and never reaches the ascent guard M57 removes; see C2 below, which does)"
   "push-deny-c-unresolvable-never-executes|case_pd_c_unresolvable_never_executes|deny (degrades to the session's own facts, B4's shape) via the -C resolution route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH (C2, #269 round-2 kickback -- pins the depth-1 ascent guard resolve_repo() would otherwise call dirname past, unlike C1 whose target resolves at depth 0 and never reaches that code) -- measured: M57, 97 pass 1 fail (also M14, 89 pass 9 fail; M15, 88 pass 10 fail; M52, 96 pass 2 fail -- all four discriminate this fixture, mirroring B4's exact dependency on the session's own current_branch/default_branch after a failed -C resolution)"
   "push-deny-c-per-segment-session-reset|case_pd_c_per_segment_session_reset|deny: TWO push segments -- git -C ../other-d1-wt-1 push origin claude/99-z (resolves, no opinion on its own) && git push (bare, no -C) -- the SECOND segment must be judged by the SESSION's own config (push=HEAD:main), not by whatever the first segment's -C target left behind (D1, #269 round-2 kickback -- acceptance criterion 4's per-segment reset had no multi-segment fixture) -- measured: M56, 97 pass 1 fail (also M26, 80 pass 18 fail -- the SAME session-config mechanism push-deny-config-remote-push-bare uses, see M26's own table entry)"
   "push-deny-config-remote-push-bare|case_pd_config_remote_push_bare|deny: git push against a repo whose config carries [remote \"origin\"] push = HEAD:main (#268, the issue's own shape) -- measured: M26, 68 pass 12 fail"
@@ -2129,6 +3016,7 @@ cases=(
   "push-deny-config-no-trailing-newline|case_pd_config_no_trailing_newline|deny: the config file's last (only) line has no trailing newline (the read rescue) -- measured: M26, 68 pass 12 fail (also M37, 79 pass 1 fail)"
   "push-deny-config-mixed-case|case_pd_config_mixed_case|deny: [Remote \"origin\"] / Push = HEAD:main (Q4, case-insensitive section keyword and key name) -- measured: M26, 68 pass 12 fail (also M38, 79 pass 1 fail)"
   "push-deny-config-never-executes|case_pd_config_never_executes|deny via the CONFIG route, AND push-guard.sh never invokes git/gh/rm on the booby-trapped PATH, AND the fixture repo's file listing is byte-identical before/after -- measured: M26, 68 pass 12 fail"
+  "push-deny-config-tab-in-value|case_pd_config_tab_in_value|deny: [remote \"origin\"] push = refs/heads/*:refs/heads/*<TAB>junklabel (#290 kickback finding F4 -- a literal TAB byte inside a configured value must not corrupt the two-literal source label) -- measured: M70, 115 pass 1 fail (also M32, 114 pass 2 fail; also M63, 85 pass 31 fail; also M68, 114 pass 2 fail, the inline source-label assertion)"
   "push-noop-config-neither-key|case_pn_config_neither_key|no opinion: config sets NEITHER remote.<name>.push nor push.default at all (the decision's required control) -- measured: not flipped by M26-M45 (this fixture's config never reaches any of the twenty mutated clauses)"
   "push-noop-config-remote-push-other-dest|case_pn_config_remote_push_other_dest|no opinion: [remote \"origin\"] push = HEAD:refs/heads/feature/x (a configured refspec whose destination is not the default branch) -- measured: M40, 78 pass 2 fail (with push-noop-config-commented-out)"
   "push-noop-config-other-remote-named|case_pn_config_other_remote_named|no opinion: [remote \"origin\"] push = HEAD:main, command git push backup (n==1 exact remote scoping -- a DIFFERENT remote's own push route must not apply) -- measured: M27, 79 pass 1 fail"
@@ -2137,6 +3025,23 @@ cases=(
   "push-noop-config-commented-out|case_pn_config_commented_out|no opinion: a #-commented push line, a ;-commented push.default line, and odd leading whitespace on the one real harmless key -- measured: M40, 78 pass 2 fail (with push-noop-config-remote-push-other-dest); NOT flipped by M34, 80 pass 0 fail (the comment strip's absence is masked by exact-key matching -- see M34's own table entry)"
   "push-noop-config-push-default-current|case_pn_config_push_default_current|no opinion: [push] default = current + a branch section that WOULD deny if this mode were mistaken for upstream (the sharp form of the mode-check clause) -- measured: M29, 77 pass 3 fail (with push-noop-config-push-default-simple)"
   "push-noop-config-push-default-simple|case_pn_config_push_default_simple|no opinion: [push] default = simple, git's own default mode, same branch-section trap as push-default-current -- measured: M29, 77 pass 3 fail (with push-noop-config-push-default-current)"
+  "push-deny-global-gitconfig-upstream|case_pd_global_gitconfig_upstream|deny: GLOBAL \$HOME/.gitconfig carries [push] default = upstream, repo config carries only a [branch] merge record (per-path 1/4); also asserts inline the deny message names the GLOBAL source label -- measured: M58, 103 pass 11 fail (also M67, 113 pass 1 fail, the inline source-label assertion)"
+  "push-deny-global-xdg-upstream|case_pd_global_xdg_upstream|deny: explicit \$XDG_CONFIG_HOME/git/config carries [push] default = upstream, neutral HOME (per-path 2/4) -- measured: M58, 103 pass 11 fail (also M61, 112 pass 2 fail)"
+  "push-deny-global-xdg-home-default-upstream|case_pd_global_xdg_home_default_upstream|deny: \$XDG_CONFIG_HOME UNSET, [push] default = upstream at the DEFAULT \$HOME/.config/git/config path (per-path 3/4) -- measured: M62, 113 pass 1 fail (also M58, 103 pass 11 fail; also M61, 112 pass 2 fail)"
+  "push-deny-global-env-var-upstream|case_pd_global_env_var_upstream|deny: \$GIT_CONFIG_GLOBAL points at a fixture file OUTSIDE HOME, [push] default = upstream (per-path 4/4) -- measured: M59, 112 pass 2 fail (also M58, 103 pass 11 fail)"
+  "push-deny-global-remote-push-refspec|case_pd_global_remote_push_refspec|deny: GLOBAL [remote \"origin\"] push = HEAD:main, repo has NO config file at all -- measured: M58, 103 pass 11 fail (also M60, 107 pass 7 fail; also M26, 84 pass 30 fail)"
+  "push-deny-global-default-matching|case_pd_global_default_matching|deny: GLOBAL [push] default = matching, unconditional, no [branch] section anywhere -- measured: M58, 103 pass 11 fail (also M60, 107 pass 7 fail; also M29, 109 pass 5 fail; also M31, 112 pass 2 fail)"
+  "push-deny-global-benign-does-not-mask-repo-route|case_pd_global_benign_does_not_mask_repo_route|deny: a benign GLOBAL push.default=current must not mask a denying REPO push.default=upstream (the \"evaluate every value\" discriminator); also asserts inline the deny message names the REPO source label -- measured: M66, 115 pass 1 fail (also M68, 114 pass 2 fail, the inline source-label assertion; also M29, 111 pass 5 fail -- this fixture still denies under M29, via the GLOBAL record, and fails only its own inline source-label assertion, see M29's own table entry)"
+  "push-deny-global-two-defaults-one-file|case_pd_global_two_defaults_one_file|deny: [push] default = upstream THEN, on the next line, default = current, both inside the SAME global file (#290 kickback finding F1 -- git's own last-wins-within-a-file resolves this to \"current\" and would not deny; this hook evaluates every line and denies via the FIRST, \"upstream\"); also asserts inline the deny message names push.default=upstream via the global source label -- measured: M65, 114 pass 2 fail (also M14, 99 pass 17 fail; also M26, 84 pass 32 fail; also M42, 103 pass 13 fail; also M58, 104 pass 12 fail; also M60, 108 pass 8 fail; also M63, 85 pass 31 fail; also M64, 107 pass 9 fail; also M67, 114 pass 2 fail, the inline source-label assertion)"
+  "push-deny-global-overrides-benign-repo-route|case_pd_global_overrides_benign_repo_route|deny: a denying GLOBAL push.default=upstream still denies over a benign REPO push.default=current (documented over-block -- real git would honour the repo's \"current\" alone) -- measured: M65, 113 pass 1 fail (also M58, 103 pass 11 fail; also M60, 107 pass 7 fail)"
+  "push-deny-global-env-var-union-not-replace|case_pd_global_env_var_union_not_replace|deny: \$GIT_CONFIG_GLOBAL set to a BENIGN file, \$HOME/.gitconfig (real git would never consult it once \$GIT_CONFIG_GLOBAL is set) still denies -- union-not-replace over-block, denier read LAST -- measured: M60, 107 pass 7 fail (also M58, 103 pass 11 fail)"
+  "push-deny-global-two-files-first-denies|case_pd_global_two_files_first_denies|deny: \$GIT_CONFIG_GLOBAL (read first) denies, \$HOME/.gitconfig (read after it) is benign -- denier read FIRST, the 2+ boundary's other half -- measured: M59, 112 pass 2 fail (also M58, 103 pass 11 fail)"
+  "push-deny-c-target-global-route|case_pd_c_target_global_route|deny: a resolved \"-C\" segment still sees the GLOBAL routes (session resolves NO repo at all; the \"-C\" target has its own default and no config of its own) -- measured: M69, 113 pass 1 fail (also M58, 103 pass 11 fail; also M60, 107 pass 7 fail; also M54, 111 pass 3 fail -- the only #290 fixture that mutant discriminates)"
+  "push-deny-global-never-executes|case_pd_global_never_executes|deny via a GLOBAL route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND BOTH the fixture repo's and the fixture HOME's file listings are byte-identical before/after -- measured: M58, 103 pass 11 fail (also M26, 84 pass 30 fail)"
+  "push-noop-global-upstream-no-tracking|case_pn_global_upstream_no_tracking|no opinion: GLOBAL [push] default = upstream, current branch claude/17-a, NO [branch] section anywhere (honest-scope control) -- measured: not flipped by M14-M69 (this fixture's [branch] section is absent everywhere, so refspec_dest() of an empty branch.merge always yields no destination regardless of how push.default is parsed or which file supplies it)"
+  "push-noop-global-explicit-refspec|case_pn_global_explicit_refspec|no opinion: git push -u origin \"claude/17-a\" (release-blocker control, bare) against a GLOBAL config carrying BOTH a denying remote.origin.push AND push.default=matching -- config is never consulted for an explicit refspec -- measured: M39, 111 pass 3 fail (with push-noop-config-explicit-refspec and push-noop-global-explicit-refspec-c)"
+  "push-noop-global-explicit-refspec-c|case_pn_global_explicit_refspec_c|no opinion: git -C <wt> push -u origin \"claude/17-a\" (release-blocker control, the \"-C\" variant) against the SAME denying GLOBAL config -- measured: M39, 111 pass 3 fail (with push-noop-config-explicit-refspec and push-noop-global-explicit-refspec)"
+  "push-noop-global-none-present|case_pn_global_none_present|no opinion: a dedicated, empty fixture HOME with no .gitconfig/.config/git/config, XDG_CONFIG_HOME and GIT_CONFIG_GLOBAL both unset, repo config absent (the \"none present\" boundary AND this file's own isolation positive control) -- measured: not flipped by M14-M69 (this fixture's dedicated HOME has no candidate file at all, so no mutant in this table -- none of which invents a route from a file that does not exist -- can produce a deny here)"
 )
 
 matched=0

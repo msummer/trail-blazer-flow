@@ -184,10 +184,13 @@ e. **As each implementer completes, run the issue-implementer skill's steps 2d�
      branch, main session included. Since #269, this guard resolves the `-C <worktree>` target
      itself (the same `<repo-dirname>-wt-<number>` path the guard hook above validates) and
      judges THAT push against the **worktree's own** checkout — its own current branch and
-     `.git/config` routes, with the default-branch deny set unioned from both the worktree's
-     checkout and the main checkout's own default (a sibling worktree shares the main
-     checkout's default branch and config already, so only the current branch differs in
-     practice). The worktree push below targets `claude/<number>-<slug>`,
+     REPO-LOCAL `.git/config` routes (since #290, a GLOBAL git config — `$GIT_CONFIG_GLOBAL`,
+     `$XDG_CONFIG_HOME/git/config` or its default, `$HOME/.gitconfig` — is read identically for
+     both the main checkout and the worktree, so a global `push.default`/`remote.<name>.push`
+     route applies to either regardless of this per-checkout split), with the default-branch deny
+     set unioned from both the worktree's checkout and the main checkout's own default (a sibling
+     worktree shares the main checkout's default branch and config already, so only the current
+     branch differs in practice). The worktree push below targets `claude/<number>-<slug>`,
      never the default branch, so this cause should not fire for a conforming worktree branch
      name — if it does, the destination is not what you expect it to be, not a broken
      installation;
