@@ -624,8 +624,12 @@ subagents need:
    body carrying one of a fresh `find-implementation-work.sh` run's `approval.approved_at_history[]`
    `binding_line` values verbatim, newest first, so a body written under an earlier approval of the
    same plan still qualifies (#174, extended #213) — every one of these provenance reads, plus the
-   head-branch key read and the archive's own match needle, gets one bounded retry on transient
-   failure before the PR is held, never on a determinate answer (#245, #277, #287) — CI
+   head-branch key read and the archive's own match needle, and, since #300, the `gh pr checks`
+   read, the up-to-date rail's `gh pr view` read, the merge pass's base-branch read and its
+   one-time default-branch lookup, and its merge-landed read, each get one bounded retry on
+   transient failure before the PR is held, never on a determinate answer — pending or failing
+   checks, a base mismatch, and any non-`MERGED` state all count as an answer, never retried
+   (#245, #277, #287, #300) — CI
    green on the head commit, its head mechanically checked to contain the default branch's
    current tip (`git merge-base --is-ancestor`) immediately before each PR's own merge attempt,
    otherwise held with "PR is behind `<default>` at `<short-sha>` — update the branch and let CI
@@ -1536,7 +1540,18 @@ filtered-to-nothing one). The consumer-visible fix: before this change, a discov
 both attempts (already silently fail-closed since v2.7.2's #272/#273) could make the closing
 reconciliation report "every queued issue accounted for" even though the affected bucket had
 silently dropped an issue — `skills/issue-cycle/SKILL.md`'s closing-reconciliation per-class list
-and its two-halves report both now name this `degraded` class.
+and its two-halves report both now name this `degraded` class. Also in v2.7.4 (#300): the merge
+floor's one-shot transient-failure retry (#245, #277, #287) now also covers the `gh pr checks`
+read, the up-to-date rail's `gh pr view` read, the base-branch read and its one-time
+default-branch lookup, and the merge-landed read — needing no grant, label, script, settings
+entry, or baseline step (`Bash(sleep:*)`, `Bash(gh pr checks:*)`, `Bash(gh pr view:*)`, and
+`Bash(gh repo view:*)` already ship in `templates/repo-settings.json`). The consumer-visible
+change: a PR an API blip held for the rest of a pass can now merge in the same pass instead, and
+a blip on the merge-landed read no longer reports a PR that actually merged as `merge attempted,
+unconfirmed`. Answers are never retried — per-check results in any state (pending, exit 8, and
+failing included) or a no-checks report from `gh pr checks`, a base mismatch, and any state other
+than `MERGED` all count as an answer. Cost: up to 30s plus one extra read-only call per failing
+read.
 
 ## The per-repo settings file (required)
 

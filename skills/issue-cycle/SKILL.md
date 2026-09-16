@@ -120,18 +120,19 @@ When active, evaluate each open harness PR (and Dependabot PRs, if the policy co
 against the repo's policy. The policy defines *which* PRs qualify; this **hard floor applies
 on top and is not configurable**:
 
-- **Transient-failure retry, once per read** (#245, #277, #287): six of this floor's reads are
-  retried once on transient failure — the *Verdict provenance* needle pair, the head-branch key
-  read, the *Archived verdict* archive read, its match needle, the *Plan-binding provenance*
-  discovery run, and its binding-line walk needle. A transient failure is the command rejected or
-  erroring rather than answering, or printing something other than the shape its own sub-bullet
-  expects — and, for the discovery run, an **unknown** `covers_plan` verdict. Retried **once**,
-  per the issue-implementer skill's step 2a *Approval-binding gate*, unknown branch
-  ("Retry once before concluding unknown"): at most one re-run per read, per PR, per pass, never
-  a third call; it consumes no ladder retry and leaves the merge status line at `retries=0`.
-  Everything this pass and the audit evidence read from a retried command comes from that retry
-  run, never a mix. A determinate answer is never a failure and is never retried. Still failing
-  after the retry ⇒ **not eligible**, same one-line reason, fail-closed.
+- **Transient-failure retry, once per read** (#245, #277, #287, #300): these reads are retried once
+  on transient failure — the *Verdict provenance* needle pair, the head-branch key read, the
+  *Archived verdict* archive read and match needle, the *Plan-binding provenance* discovery run and
+  binding-line walk needle, `gh pr checks`, the up-to-date rail's `gh pr view`, guard (a)'s
+  `baseRefName` and `defaultBranchRef` reads, and guard (d)'s `state` read (a re-read only, never a
+  second merge). A transient failure is the command rejected or erroring rather than answering, or
+  printing anything but the shape its own sub-bullet expects — and, for the discovery run, an
+  **unknown** `covers_plan` verdict; `gh pr checks` answers whenever it prints per-check results in
+  any state — pending (exit 8) and failing included — or reports no checks. A determinate answer
+  (those, a base mismatch, a non-`MERGED` state) is never retried. Retried per the issue-implementer
+  skill's step 2a ("Retry once before concluding unknown"): at most one re-run per read, per PR, per
+  pass; no ladder retry (`retries=0`). All reads and audit evidence come from the retry run, never a
+  mix. Still failing ⇒ **not eligible**, one-line reason (guard (d): `merge attempted, unconfirmed`).
 - **Only PRs from the standard flow** — harness branches whose plan was approved (by the human
   or the auto-approval policy, mechanically checked against the specific plan comment approved —
   see *Plan-binding provenance* below) and whose PR body carries **the verifier's own closing
@@ -326,7 +327,7 @@ since production is unverified and whether to merge onto it is the human's call.
 
 Fill in the `merged` ledger column **for every PR the pass evaluated** and emit the merge
 stage's status line yourself (there is no merge agent) — `stage=merge`, `issue=<n>`,
-`retries=0` (the merge pass doesn't retry *through the ladder* — the hard floor's own
+`retries=0` (the merge pass doesn't retry *through the ladder* — the one-shot
 transient-failure re-reads above are not a ladder retry and leave this value at `retries=0`; a
 denial or base mismatch is a policy/config fact, not a transient failure), an outcome from the
 issue-implementer skill's "Resilient dispatch" vocabulary for `merge`, and `harness=<version>`
@@ -416,7 +417,7 @@ harness-lock.sh release <run-id>
 - **Recurring runs:** pair with `/loop` (e.g. "loop the issue-cycle every 30m") or a scheduled
   routine; each invocation stays ONE bounded pass — recurrence is the wrapper's job, never this
   skill's (never polls for new work or repeats a pass; the merge pass's bounded waits — guard
-  (e)'s declared deploy wait, the pre-first-merge recheck, and the hard floor's own one-shot
+  (e)'s declared deploy wait, the pre-first-merge recheck, and the one-shot
   re-read of a transiently failed read — are the three bounded exceptions).
 - **Single-flight:** mechanically enforced by `harness-lock.sh`, an atomic `mkdir` under
   `<git-common-dir>/trail-blazer/lock` acquired at step 0 and released at step 5 (see step 0
