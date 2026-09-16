@@ -142,8 +142,8 @@ guarantee applied to the config route specifically. Since #269, a push segment's
 by `dev/selfcheck.sh`'s assertion 4.42: the current-branch check, the `HEAD` refspec substitution,
 and the default-branch deny-set member each denying via a resolved sibling worktree or a wholly
 separate checkout, the resolved checkout's own config denying where the session has none, two
-documented narrowings (a resolved segment no longer inherits the session's `.git/config` routes,
-and a bare push in a sibling worktree no longer denies merely because the session sits on its own
+documented narrowings (a resolved segment no longer inherits the session's REPO-LOCAL `.git/config`
+routes, and a bare push in a sibling worktree no longer denies merely because the session sits on its own
 default branch), the predicate's boundaries (no `-wt-<n>` suffix, the attached `-C<path>` form,
 0/1/2+ occurrences of `-C`), an unresolvable-but-shape-matching target degrading to the session's
 own facts rather than clearing them, the session's own default branch staying in the deny-set
@@ -155,7 +155,26 @@ whose target does not resolve at depth 0 (the original never-executes fixture's 
 so it cannot discriminate this guard), and a two-push-segment command pins the per-segment reset
 itself — the SECOND, `-C`-less segment stays judged by the SESSION's own facts (denying via the
 session's own `remote.<name>.push` config), never by whatever the first segment's resolved `-C`
-target left behind. It runs in CI as the fourth
+target left behind. Since #290, the same common-dir config read is extended to three GLOBAL
+candidates — `$GIT_CONFIG_GLOBAL` (when set and non-empty), `$XDG_CONFIG_HOME/git/config` (or
+its `$HOME/.config/git/config` default, when `$XDG_CONFIG_HOME` is unset or empty), and
+`$HOME/.gitconfig` — unioned with the repo-local routes above and read identically for every
+checkout resolved (session or a resolved `-C` target, since this class comes from the
+environment, never the untrusted command string): one deny fixture per global candidate path,
+the "none present"/loop-boundary fixture, a benign value in one file never masking a denying
+value in another and the reverse (a denying global value still denying over a benign
+repo-local one), two `push.default` lines inside ONE file also both evaluated rather than the
+file's own last value winning, `$GIT_CONFIG_GLOBAL` unioned with (not replacing) the other two
+global paths, the deny message's own two-literal source label (repo-local vs. global) — kept
+intact even across a literal TAB byte embedded in a configured `remote.<name>.push` value,
+since the record's source field is its own bounded first slot and the value its unbounded
+tail, never the reverse — the harness's own explicit-refspec push shape reconfirmed as a
+release-blocker no-opinion control against a denying GLOBAL config (bare and `-C`), a resolved
+`-C` segment still seeing the global routes, and the same booby-trapped/byte-identical-listing
+guarantee extended to the fixture `HOME` tree; `dev/hook-tests.sh`'s own `run_push_guard`
+runner isolates `HOME`/`XDG_CONFIG_HOME`/`GIT_CONFIG_GLOBAL` for every push fixture (a neutral,
+empty fixture `HOME` by default) so no fixture can read the developer's or CI runner's real
+global git config. It runs in CI as the fourth
 step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
 `hooks/git-c-guard.sh`, `hooks/agent-boundary.sh`, or `hooks/push-guard.sh` changes.
 
