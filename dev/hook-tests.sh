@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# hook-tests.sh — fixture-based negative-test harness for the three plugin-shipped PreToolUse
+# hook-tests.sh — fixture-based negative-test harness for the four plugin-shipped PreToolUse
 # hooks, in the style of dev/doctor-tests.sh: feeds fixture stdin JSON straight into the real
 # script and pins its verdict.
 #
@@ -97,14 +97,29 @@
 # `remote.<name>.push` value containing a literal TAB byte cannot truncate and leak its own
 # remainder into that source label.
 #
+# hooks/claude-dir-guard.sh (#327) has three verdicts — deny via the ".claude" segment class,
+# deny via the unclassifiable/fail-closed class (each exit 2, empty stdout, exactly one stderr
+# line, the two classes' wording DISTINCT from each other), or no opinion (exit 0, empty stdout,
+# empty stderr) — for every case listed in the approved #327 plan's "Testing approach": the four
+# agent_type spellings distributed across both roles and both guarded tools (Edit/Write), a nested
+# segment, a user-level path outside any repo checkout, a case-variant spelling, the Windows
+# drive-letter and backslash-spelled forms, ".claude" as the final segment, a CR-carrying
+# spelling, the relative-".claude"-vs-relative-plain pair that discriminates the two deny classes,
+# a ".."-carrying path with and without a ".claude" segment, every documented no-opinion shape
+# including the two release-blocker controls (the orchestrator's own main-session lesson append,
+# and the verifier's transient mutation-probe Edit), and the same booby-trapped
+# git/gh/rm/dirname/tr/awk/grep/sed PATH idiom plus a byte-identical fixture-tree listing proving
+# this hook — which performs NO filesystem access at all, unlike either of its two Bash-matching
+# siblings above — never executes or writes anything.
+#
 # Usage: bash dev/hook-tests.sh [name-filter] — same output contract as dev/selfcheck-tests.sh
 # and dev/doctor-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==`
 # footer, exit 0 iff nothing failed; a filter with no match exits 1.
 #
 # Every write happens under one `mktemp -d` root, removed via an EXIT trap; this repo's own
-# hooks/git-c-guard.sh, hooks/agent-boundary.sh, and hooks/push-guard.sh are read-only here —
-# each script is run directly, never copied or edited (push-guard.sh's own fixture-repo builder
-# below writes ONLY under that same mktemp root, never inside this checkout).
+# hooks/git-c-guard.sh, hooks/agent-boundary.sh, hooks/push-guard.sh, and hooks/claude-dir-guard.sh
+# are read-only here — each script is run directly, never copied or edited (push-guard.sh's own
+# fixture-repo builder below writes ONLY under that same mktemp root, never inside this checkout).
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -112,6 +127,7 @@ filter="${1:-}"
 guard="$root/hooks/git-c-guard.sh"
 boundary="$root/hooks/agent-boundary.sh"
 push_guard="$root/hooks/push-guard.sh"
+claude_dir_guard="$root/hooks/claude-dir-guard.sh"
 
 tmpbase="$(mktemp -d)"
 cleanup() {
@@ -577,6 +593,10 @@ mk_push_missing_command() { jq -n --arg note 'was going to run git push origin m
 CR=$'\r'   # one literal carriage return — the #270 CRLF fixtures below (jq --arg escapes it into
            # the JSON as \r, so no raw CR byte ever passes through command substitution). Shared
            # by both the push-guard and agent-boundary CRLF cases below.
+
+LF=$'\n'   # one literal line feed — the #327 round-1 kickback's embedded-LF claude-dir-guard.sh
+           # fixtures below (jq --arg escapes it into the JSON as \n, so no raw LF byte ever passes
+           # through command substitution).
 
 # mk_fixture_repo DIR DEFAULT_BRANCH CURRENT — builds an ordinary (non-worktree) .git directory
 # under DIR: refs/remotes/origin/HEAD names DEFAULT_BRANCH; HEAD names CURRENT, unless CURRENT is
@@ -1736,6 +1756,235 @@ case_push_reads_only() {
 }
 
 # ---------------------------------------------------------------------------------------------
+# hooks/claude-dir-guard.sh (#327) fixture builders, runner, and assertions. This hook has three
+# verdicts — deny via the ".claude" segment class (exit 2, empty stdout, one stderr line naming
+# the role, the tool, and the blocked path), deny via the unclassifiable/fail-closed class (exit
+# 2, empty stdout, one stderr line with DISTINCT wording naming the path), or no opinion (exit 0,
+# empty stdout, empty stderr) — for every case listed in the approved #327 plan's "Testing
+# approach": the ".claude" segment class across both tools (Edit/Write), both roles
+# (implementer/verifier), and all four agent_type spellings distributed across those combinations;
+# a nested segment; a user-level path entirely outside any repo checkout (pins deliberate
+# location-independence — this hook reads no cwd/repo-root at all); a case-variant spelling; the
+# Windows drive-letter and backslash-spelled forms; ".claude" as the path's final segment; a
+# CR-carrying spelling; a relative path that IS ".claude/..." (still denies via the ".claude"
+# message, discriminated from a relative PLAIN path via the unclassifiable message by
+# cdg-deny-rel-claude/cdg-deny-rel-plain below); a ".."-carrying path with ".claude" present
+# (still the ".claude" message, since that class is checked first) and one without (the
+# unclassifiable message); every documented no-opinion shape, including the two release-blocker
+# controls (a main-session Write to .claude/LESSONS.md, the orchestrator's own lesson-append path,
+# and a verifier-role Edit of a tracked source file, the mutation probe's own shape); and the same
+# booby-trapped git/gh/rm/dirname/tr/awk/grep/sed PATH idiom plus a byte-identical fixture-tree
+# listing proving this hook — which performs NO filesystem access at all, stricter than either
+# hooks/agent-boundary.sh or hooks/push-guard.sh — never executes or writes anything.
+
+mk_cdg_agent_path() { jq -n --arg agent "$1" --arg tool "$2" --arg fp "$3" '{tool_name: $tool, agent_type: $agent, tool_input: {file_path: $fp}}'; }
+mk_cdg_agent_path_mode() { jq -n --arg agent "$1" --arg tool "$2" --arg fp "$3" --arg mode "$4" '{tool_name: $tool, agent_type: $agent, tool_input: {file_path: $fp}, permission_mode: $mode}'; }
+# mk_cdg_missing_file_path AGENT TOOL — tool_input.file_path absent, but the raw JSON still
+# contains the literal 'agent_type' substring (via the agent_type field itself) so this case
+# actually reaches the "file_path empty" check instead of passing vacuously via the fast path
+# (LESSON 2026-08-26's analogue, mirroring mk_agent_missing_command/mk_push_missing_command above).
+mk_cdg_missing_file_path() { jq -n --arg agent "$1" --arg tool "$2" '{tool_name: $tool, agent_type: $agent, tool_input: {}}'; }
+# mk_cdg_main_session TOOL FILE_PATH — no agent_type key at all (the main-session shape, M1).
+mk_cdg_main_session() { jq -n --arg tool "$1" --arg fp "$2" '{tool_name: $tool, tool_input: {file_path: $fp}}'; }
+
+# run_claude_guard JSON [PATHVAL] — runs the real claude-dir-guard.sh script against JSON on
+# stdin, with PATH set to PATHVAL (defaults to this process's own PATH), leaving $cdg_out
+# (stdout)/$cdg_err (stderr, read back from a file under $tmpbase)/$cdg_rc set as globals. Same
+# separate-stdout/stderr-capture idiom as run_boundary/run_push_guard above (LESSON 2026-09-08b) —
+# a merged capture cannot pin "exactly one line on stderr, nothing on stdout".
+cdg_out=""
+cdg_err=""
+cdg_rc=0
+run_claude_guard() {
+  local json="$1" pathval="${2:-$PATH}" errfile="$tmpbase/cdg-stderr"
+  cdg_out="$(printf '%s' "$json" | PATH="$pathval" "$bash_bin" "$claude_dir_guard" 2>"$errfile")"
+  cdg_rc=$?
+  cdg_err="$(cat "$errfile" 2>/dev/null)"
+  rm -f "$errfile"
+}
+
+# expect_cdg_deny_claude/expect_cdg_deny_unclassifiable/expect_cdg_no_opinion — assert against
+# $cdg_out/$cdg_err/$cdg_rc. Each deny helper hand-types its own literal stem/phrase inline rather
+# than taking a needle parameter, keeping this file's documented property (CLAUDE.md: "its only
+# substring test hand-types the literal inline, never through a needle-taking helper").
+expect_cdg_deny_claude() {
+  [ "$cdg_rc" -eq 2 ] || { __ok=0; __why="${__why}rc: expected 2, got $cdg_rc\n"; }
+  [ -z "$cdg_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$cdg_out'\n"; }
+  local err_lines
+  err_lines="$(printf '%s\n' "$cdg_err" | grep -c '[^[:space:]]')"
+  [ "$err_lines" -eq 1 ] || { __ok=0; __why="${__why}expected exactly 1 non-blank stderr line, got $err_lines: '$cdg_err'\n"; }
+  case "$cdg_err" in
+    *"trail-blazer-flow claude-dir guard:"*"a path under a .claude segment"*) ;;
+    *) __ok=0; __why="${__why}stderr does not carry the .claude-segment deny stem/phrase: '$cdg_err'\n" ;;
+  esac
+}
+expect_cdg_deny_unclassifiable() {
+  [ "$cdg_rc" -eq 2 ] || { __ok=0; __why="${__why}rc: expected 2, got $cdg_rc\n"; }
+  [ -z "$cdg_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$cdg_out'\n"; }
+  local err_lines
+  err_lines="$(printf '%s\n' "$cdg_err" | grep -c '[^[:space:]]')"
+  [ "$err_lines" -eq 1 ] || { __ok=0; __why="${__why}expected exactly 1 non-blank stderr line, got $err_lines: '$cdg_err'\n"; }
+  case "$cdg_err" in
+    *"trail-blazer-flow claude-dir guard:"*"could not be classified as absolute or normalised"*) ;;
+    *) __ok=0; __why="${__why}stderr does not carry the unclassifiable deny stem/phrase: '$cdg_err'\n" ;;
+  esac
+}
+expect_cdg_no_opinion() {
+  [ "$cdg_rc" -eq 0 ] || { __ok=0; __why="${__why}rc: expected 0, got $cdg_rc\n"; }
+  [ -z "$cdg_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$cdg_out'\n"; }
+  [ -z "$cdg_err" ] || { __ok=0; __why="${__why}expected empty stderr, got: '$cdg_err'\n"; }
+}
+
+# --- deny: ".claude" segment ---------------------------------------------------------------
+# The four agent_type spellings distributed across both tools and both roles (LESSON 2026-09-08:
+# both spellings exercised per role).
+case_cdg_deny_impl_write_bare() { run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Write' '/repo/.claude/settings.json')"; expect_cdg_deny_claude; }
+case_cdg_deny_impl_edit_ns()    { run_claude_guard "$(mk_cdg_agent_path 'trail-blazer-flow:implementer' 'Edit' '/repo/.claude/foo.md')"; expect_cdg_deny_claude; }
+case_cdg_deny_verif_write_ns()  { run_claude_guard "$(mk_cdg_agent_path 'trail-blazer-flow:verifier' 'Write' '/repo/.claude/bar.json')"; expect_cdg_deny_claude; }
+case_cdg_deny_verif_edit_bare() { run_claude_guard "$(mk_cdg_agent_path 'verifier' 'Edit' '/repo/.claude/baz.md')"; expect_cdg_deny_claude; }
+case_cdg_deny_nested() { run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Write' '/Users/x/proj/.claude/settings.json')"; expect_cdg_deny_claude; }
+case_cdg_deny_user_level() {
+  # Deliberate location-independence: this path is OUTSIDE any repo checkout entirely (not even
+  # shaped like one), and the hook still denies it — the classifier judges the string alone, with
+  # no cwd/repo-root notion at all.
+  run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/Users/x/.claude/settings.json')"
+  expect_cdg_deny_claude
+}
+case_cdg_deny_case_variant() { run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/repo/.Claude/x')"; expect_cdg_deny_claude; }
+case_cdg_deny_drive_letter() { run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' 'C:/Users/x/.claude/foo')"; expect_cdg_deny_claude; }
+case_cdg_deny_backslash()    { run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' 'C:\Users\x\.claude\foo')"; expect_cdg_deny_claude; }
+case_cdg_deny_final_segment() { run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/repo/foo/.claude')"; expect_cdg_deny_claude; }
+case_cdg_deny_crlf() {
+  # A CR embedded inside the ".claude" spelling itself ($CR, declared above alongside the
+  # push-guard/agent-boundary CRLF fixtures) — the strip can only WIDEN toward deny (see the
+  # hook's own header), so this must still deny via the SAME ".claude" message.
+  run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' "/repo/.clau${CR}de/foo")"
+  expect_cdg_deny_claude
+}
+case_cdg_deny_rel_claude() {
+  # A relative path whose very FIRST segment is ".claude" — no leading "/" for a naive
+  # "*/.claude/*" pattern to anchor against; still denies via the ".claude" message (see the
+  # hook's own header note on why the classifier checks "/$p/", not "$p/" alone).
+  run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '.claude/LESSONS.md')"
+  expect_cdg_deny_claude
+}
+case_cdg_deny_dotdot_claude() {
+  # A ".."-carrying ABSOLUTE path that also carries a real ".claude" segment: the MORE SPECIFIC
+  # ".claude" message wins (checked first), never the unclassifiable one.
+  run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/Users/x/../.claude/y')"
+  expect_cdg_deny_claude
+}
+case_cdg_deny_lf_claude() {
+  # #327 round-1 kickback (K1): an embedded LF elsewhere in an otherwise-denying ".claude" path
+  # must still print exactly ONE stderr line, not two — pre-fix, this printed 2 (measured). The
+  # classifier still matches the raw $p (with the LF intact); only the PRINTED copy folds it.
+  run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Write' "/repo/.claude/a${LF}b.md")"
+  expect_cdg_deny_claude
+}
+
+# --- deny: unclassifiable (fail-closed) -----------------------------------------------------
+case_cdg_deny_rel_plain() {
+  # Discriminates the two deny classes against case_cdg_deny_rel_claude above: the identical
+  # "relative, no leading slash" shape, but with NO ".claude" segment anywhere -> the OTHER,
+  # distinctly-worded deny message.
+  run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' 'src/main.rs')"
+  expect_cdg_deny_unclassifiable
+}
+case_cdg_deny_dotdot_no_claude() {
+  # A ".."-carrying ABSOLUTE path with no ".claude" segment anywhere: denies fail-closed, per the
+  # triage record, even though it never mentions ".claude" at all.
+  run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/Users/x/../etc/passwd')"
+  expect_cdg_deny_unclassifiable
+}
+case_cdg_deny_lf_unclassifiable() {
+  # #327 round-1 kickback (K1), the unclassifiable class's own copy of case_cdg_deny_lf_claude
+  # above: an embedded LF in a relative, no-".claude" path (K1's own example) must still print
+  # exactly ONE stderr line via the DISTINCT unclassifiable message.
+  run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' "src/a${LF}b.rs")"
+  expect_cdg_deny_unclassifiable
+}
+
+# --- no opinion --------------------------------------------------------------------------------
+case_cdg_noop_ordinary_abs() { run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/repo/src/main.rs')"; expect_cdg_no_opinion; }
+case_cdg_noop_claude_backup() { run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/repo/.claude-backup/x')"; expect_cdg_no_opinion; }
+case_cdg_noop_my_claude() { run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/repo/my.claude/x')"; expect_cdg_no_opinion; }
+case_cdg_noop_main_session_lessons() {
+  # Release-blocker control: the orchestrator's own main-session lesson append (no agent_type key
+  # at all — reaches only this hook's fast path, never spawns jq) must keep working.
+  run_claude_guard "$(mk_cdg_main_session 'Write' '/repo/.claude/LESSONS.md')"
+  expect_cdg_no_opinion
+}
+case_cdg_noop_unrecognised_agent() { run_claude_guard "$(mk_cdg_agent_path 'Explore' 'Edit' '/repo/.claude/x')"; expect_cdg_no_opinion; }
+case_cdg_noop_empty_agent() { run_claude_guard "$(mk_cdg_agent_path '' 'Edit' '/repo/.claude/x')"; expect_cdg_no_opinion; }
+case_cdg_noop_plan_mode() { run_claude_guard "$(mk_cdg_agent_path_mode 'implementer' 'Edit' '/repo/.claude/x' 'plan')"; expect_cdg_no_opinion; }
+case_cdg_noop_wrong_tool() { run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Read' '/repo/.claude/x')"; expect_cdg_no_opinion; }
+case_cdg_noop_malformed_json() {
+  # Deliberately contains both literal substrings 'agent_type' and '.claude' so this exercises
+  # jq's own parse failure rather than passing vacuously via the raw-stdin fast path.
+  run_claude_guard 'not json at all, but mentions agent_type and .claude anyway'
+  expect_cdg_no_opinion
+}
+case_cdg_noop_missing_file_path() { run_claude_guard "$(mk_cdg_missing_file_path 'implementer' 'Edit')"; expect_cdg_no_opinion; }
+case_cdg_noop_verifier_mutation_probe() {
+  # Release-blocker control: the verifier's transient mutation-probe Edit of a tracked source file
+  # (agents/verifier.md's only durable-looking write, restored before the dispatch returns) must
+  # keep working.
+  run_claude_guard "$(mk_cdg_agent_path 'verifier' 'Edit' '/repo/bin/find-planning-work.sh')"
+  expect_cdg_no_opinion
+}
+
+# --- never-executes / writes-nothing ----------------------------------------------------------
+# Same booby-trapped-PATH idiom as the two siblings above, widened to the full trap set the #327
+# plan's acceptance criteria name (git, gh, rm, dirname, tr, awk, grep, sed) — this hook's own
+# header claims it uses NONE of these, so every one is a valid trap.
+case_cdg_never_executes_deny() {
+  local trapdir="$tmpbase/trapbin-cdg-deny" sentinel="$tmpbase/sentinel-cdg-deny"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname tr awk grep sed; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/repo/.claude/x')" "$trapdir:$PATH"
+  expect_cdg_deny_claude
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+case_cdg_never_executes_noop() {
+  local trapdir="$tmpbase/trapbin-cdg-noop" sentinel="$tmpbase/sentinel-cdg-noop"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname tr awk grep sed; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/repo/src/main.rs')" "$trapdir:$PATH"
+  expect_cdg_no_opinion
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+case_cdg_writes_nothing() {
+  # This hook performs NO filesystem access at all (stricter than either agent-boundary.sh or
+  # push-guard.sh) — pin that a fixture tree containing .claude/LESSONS.md is byte-identical
+  # before and after a deny run.
+  local dir="$tmpbase/cdg-fixture-tree"
+  mkdir -p "$dir/.claude"
+  printf '# lessons\n' > "$dir/.claude/LESSONS.md"
+  local before after
+  before="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' "$dir/.claude/LESSONS.md")"
+  after="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  expect_cdg_deny_claude
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}fixture tree's file listing changed — claude-dir-guard.sh wrote to or altered a file it should only judge by its path string\n"; }
+}
+
+# ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
   "status-rel|case_status_rel|allow: relative sibling path, status"
@@ -1808,9 +2057,14 @@ cases=(
   # growing the whole-file total to 181 and the push-filtered unit to 98; #290 then added sixteen
   # more push-* fixtures, growing the whole-file total to 197 and the push-filtered unit to 114;
   # the #290 ROUND-2 KICKBACK then added two more push-* fixtures, growing the whole-file total to
-  # the CURRENT 199 and the push-filtered unit to 116 — none of the seven rounds touched
+  # 199 and the push-filtered unit to 116 — none of the seven rounds touched
   # agent-boundary.sh vocabulary or behaviour, so none of this section's own historical
-  # "143-case"/"140 pass"/"143 pass" figures were re-measured.
+  # "143-case"/"140 pass"/"143 pass" figures were re-measured. #327 then added 29 cdg-* fixtures
+  # (none containing the substring "push"), growing the whole-file total to 228; the #327 round-1
+  # kickback then added two more cdg-* fixtures (also push-free), growing the whole-file total to
+  # the CURRENT 230 while leaving the push-filtered unit at 116 — see this file's header for the
+  # fourth hook's own paragraph, and the cdg-* section's own mutation-proof table further below for
+  # its 14 mutants.
   # M1/M2 (the two raw-stdin fast paths) are
   # coarse — breaking either silences the WHOLE hook, so they only distinguish a deny-verdict
   # case from everything else, never one deny case from another:
@@ -1855,8 +2109,9 @@ cases=(
   #       verif-noop-crlf-status, are the only cases that flip; NOT re-measured against the
   #       167-case file that stood after #268 (round 1), its round-2 kickback, or its round-3
   #       kickback (grown to 181 by #269 below and its own round-2 kickback, then to 197 by #290,
-  #       then to the CURRENT 199 by #290's own round-2 kickback, none of which touched
-  #       agent-boundary.sh either) — see this section's header note above)
+  #       then to 199 by #290's own round-2 kickback, then to the CURRENT 230 by #327's cdg-*
+  #       section and its round-1 kickback, none of which touched agent-boundary.sh either) — see
+  #       this section's header note above)
   #   M25 the shipped global strip narrowed to once-only                    -> 143 pass,  0 fail
   #       (cmd="${cmd//$cr/}" -> cmd="${cmd/$cr/}"; #270 round-2 kickback probe, whole-file
   #       convention) -- NOT flipped by any fixture in this file: each of the three #270
@@ -1880,6 +2135,13 @@ cases=(
   # for a command word split by quote/backslash characters, which none of these six fixtures'
   # commands are) is holding for them, not a coverage gap. Their comment below says so instead of
   # citing a mutant that was never observed to fail them.
+  # #327: the cdg-* section further below runs ONLY hooks/claude-dir-guard.sh, via its own
+  # run_claude_guard — no mutant M1-M25 in THIS table edits that file, so this table's recorded
+  # failing sets are unchanged by that addition, and its whole-file PASS figures above all predate
+  # it. Made non-vacuous, not just reasoned by inspection (LESSON 2026-09-15): M1 (fast path 1
+  # pattern corrupted) re-run against the CURRENT 230-case file (re-measured after the #327
+  # round-1 kickback's two new cdg-* fixtures) still fails exactly its own 31-case set (199 pass,
+  # 31 fail) with NO cdg-* case among them.
   "impl-deny-push-bare|case_ib_push_bare|implementer deny: git push (agent_type: implementer) -- measured: M1/M2, 55 pass 27 fail"
   "impl-deny-push-ns|case_ib_push_ns|implementer deny: git push (agent_type: trail-blazer-flow:implementer) -- measured: M1/M2, 55 pass 27 fail"
   "impl-deny-gh-pr-bare|case_ib_gh_pr_bare|implementer deny: gh pr create (agent_type: implementer) -- measured: M1/M2, 55 pass 27 fail"
@@ -2929,6 +3191,14 @@ cases=(
   # push.default at all, so every one of those twenty mutants changes behaviour only inside code
   # this fixture's own config never reaches; its row states this instead of citing a mutant that
   # was never observed to fail it.
+  # #327: the cdg-* section further below runs ONLY hooks/claude-dir-guard.sh, via its own
+  # run_claude_guard -- no mutant M1-M70 in THIS table edits that file, so this table's recorded
+  # failing sets are unchanged by that addition, and its whole-file PASS figures above all predate
+  # it. Made non-vacuous, not just reasoned by inspection (LESSON 2026-09-15): M16
+  # (PUSH_DEFAULT_BRANCH_FALLBACK emptied) re-run against the CURRENT 230-case file (re-measured
+  # after the #327 round-1 kickback's two new cdg-* fixtures) still fails exactly
+  # push-deny-origin-master/push-deny-c-per-segment-session-reset/push-deny-c-target-global-route
+  # (227 pass, 3 fail) with NO cdg-* case among them.
   "push-deny-origin-main|case_pd_origin_main|deny: git push origin main (the plain form) -- measured: M1/M2, 23 pass 33 fail"
   "push-deny-head-colon-main|case_pd_head_colon_main|deny: git push origin HEAD:main (HEAD substituted via the current branch, then the dest side of the colon read directly) -- measured: M1/M2, 23 pass 33 fail (also M11, 50 pass 6 fail)"
   "push-deny-plus-head-refs-main|case_pd_plus_head_refs|deny: git push origin +HEAD:refs/heads/main (leading + stripped, refs/heads/ prefix stripped) -- measured: M1/M2, 23 pass 33 fail (also M11 and M13, each 50/54 pass)"
@@ -3042,6 +3312,132 @@ cases=(
   "push-noop-global-explicit-refspec|case_pn_global_explicit_refspec|no opinion: git push -u origin \"claude/17-a\" (release-blocker control, bare) against a GLOBAL config carrying BOTH a denying remote.origin.push AND push.default=matching -- config is never consulted for an explicit refspec -- measured: M39, 111 pass 3 fail (with push-noop-config-explicit-refspec and push-noop-global-explicit-refspec-c)"
   "push-noop-global-explicit-refspec-c|case_pn_global_explicit_refspec_c|no opinion: git -C <wt> push -u origin \"claude/17-a\" (release-blocker control, the \"-C\" variant) against the SAME denying GLOBAL config -- measured: M39, 111 pass 3 fail (with push-noop-config-explicit-refspec and push-noop-global-explicit-refspec)"
   "push-noop-global-none-present|case_pn_global_none_present|no opinion: a dedicated, empty fixture HOME with no .gitconfig/.config/git/config, XDG_CONFIG_HOME and GIT_CONFIG_GLOBAL both unset, repo config absent (the \"none present\" boundary AND this file's own isolation positive control) -- measured: not flipped by M14-M69 (this fixture's dedicated HOME has no candidate file at all, so no mutant in this table -- none of which invents a route from a file that does not exist -- can produce a deny here)"
+  # --- hooks/claude-dir-guard.sh (#327) cases -----------------------------------------------------
+  # Mutation-proof table (LESSON 2026-09-01/2026-09-07(b), one mutant per classifier clause,
+  # applied in place with an immediately-refreshed backup and a full `diff` verify after every
+  # restore -- LESSON 2026-09-07), measured against THIS section's own 31-case set (29 plus the
+  # #327 round-1 kickback's two embedded-LF fixtures, K1) embedded in the CURRENT 230-case whole
+  # file (a fresh mktemp copy of hooks/claude-dir-guard.sh, never `mv`-ed over -- LESSON 2026-09-15b's
+  # exec-bit concern does not apply here, since run_claude_guard always invokes the script through
+  # an explicit `bash <path>`, never by PATH lookup); M1-M13 were RE-MEASURED against the CURRENT
+  # 230-case file for the round-1 kickback (LESSON 2026-09-15 -- reasoning by inspection undercounted
+  # M10's own kill set, below):
+  #   M1  role resolution forced to "implementer" regardless of match                -> 228 pass,
+  #       (role="" -> role="implementer", unconditionally)                              2 fail
+  #       (kills cdg-noop-unrecognised-agent and cdg-noop-empty-agent -- a genuinely unrecognised
+  #       or empty agent_type no longer exits "no opinion" early; every already-matching
+  #       implementer/verifier case is unaffected, since role only ever changes the DENY MESSAGE
+  #       text, never the policy itself)
+  #   M2  fast path deleted (*agent_type*) widened to *) so it always matches         -> 230 pass,
+  #       0 fail -- NOT FLIPPED (a measured finding, not an oversight): every payload that reaches
+  #       jq via the fast path already re-derives the identical "no opinion" from an empty/absent
+  #       .agent_type extraction, exactly the redundancy hooks/agent-boundary.sh's own M1/M2-class
+  #       fast paths do NOT have (there, breaking a fast path is coarse and flips every deny case,
+  #       since jq is never reached to re-derive the verdict another way)
+  #   M3  the GUARDED_TOOLS membership check disabled (always matches)               -> 229 pass,
+  #                                                                                      1 fail
+  #       (kills cdg-noop-wrong-tool only)
+  #   M4  the permission_mode == "plan" check disabled                               -> 229 pass,
+  #                                                                                      1 fail
+  #       (kills cdg-noop-plan-mode only)
+  #   M5  the CR strip disabled (p="${file_path//$cr/}" -> p="$file_path")           -> 229 pass,
+  #                                                                                      1 fail
+  #       (kills cdg-deny-crlf only)
+  #   M6  the backslash-to-slash separator normalisation disabled (p="${p//\\//}"    -> 229 pass,
+  #       -> p="$p")                                                                    1 fail
+  #       (kills cdg-deny-backslash only)
+  #   M7  the case-insensitive bracket classes narrowed to a bare lowercase literal  -> 229 pass,
+  #       (*/.[Cc][Ll][Aa][Uu][Dd][Ee]/* -> */.claude/*)                                1 fail
+  #       (kills cdg-deny-case-variant only)
+  #   M8  the classifier's leading+trailing slash boundary wrap removed              -> 228 pass,
+  #       (case "/$p/" in -> case "$p" in)                                              2 fail
+  #       (kills cdg-deny-final-segment and cdg-deny-rel-claude -- the two shapes whose own
+  #       natural string has no PRE-EXISTING "/" immediately before ".claude": a final segment
+  #       with nothing after it, and a relative path whose FIRST segment is ".claude". Every other
+  #       deny-claude fixture's path already contains a naturally-occurring "/.claude/" substring
+  #       without either boundary character added, so this mutant is inert for them -- INCLUDING
+  #       cdg-deny-lf-claude, whose ".claude" segment is likewise naturally bounded by real "/"
+  #       characters on both sides; re-measured directly, not merely reasoned by analogy.)
+  #   M9  the segment match widened to a bare substring test                         -> 228 pass,
+  #       (*/.[Cc][Ll][Aa][Uu][Dd][Ee]/* -> *[Cc][Ll][Aa][Uu][Dd][Ee]*)                  2 fail
+  #       (kills cdg-noop-claude-backup and cdg-noop-my-claude -- the two near-miss fixtures whose
+  #       segment CONTAINS, but does not EQUAL, ".claude")
+  #  M10  the absoluteness check's deny arm disabled (the trailing "*)" case          -> 228 pass,
+  #       becomes a no-op)                                                              2 fail
+  #       (kills cdg-deny-rel-plain AND cdg-deny-lf-unclassifiable -- the two fixtures whose deny
+  #       verdict depends solely on this clause, not the ".claude" segment class checked earlier;
+  #       re-measured for the round-1 kickback -- cdg-deny-lf-unclassifiable is the SAME
+  #       no-".claude"/relative shape as cdg-deny-rel-plain, so this mutant flips both, a kill-set
+  #       widening LESSON 2026-09-15 warns reasoning-by-inspection alone would have missed)
+  #  M11  the ".." segment check's deny arm disabled (the trailing "*)" case          -> 229 pass,
+  #       becomes a no-op)                                                              1 fail
+  #       (kills cdg-deny-dotdot-no-claude only -- cdg-deny-dotdot-claude denies earlier, via the
+  #       ".claude" segment class, and never reaches this clause at all; cdg-deny-lf-unclassifiable
+  #       carries no ".." segment, so it is unaffected by this mutant, unlike M10 above)
+  #  M12  every "exit 2" in the classifier changed to "exit 0"                        -> 211 pass,
+  #                                                                                     19 fail
+  #       (coarse -- like hooks/agent-boundary.sh's own M1/M2, this silences EVERY deny verdict at
+  #       once, so it only distinguishes an intended-deny case from everything else, never one
+  #       deny case from another: kills every cdg-deny-* case (now including cdg-deny-lf-claude and
+  #       cdg-deny-lf-unclassifiable) plus cdg-never-executes-deny and cdg-writes-nothing, i.e.
+  #       every fixture whose correct verdict is "deny")
+  #  M13  the AGENT_TYPES_VERIFIER="..." line deleted entirely                        -> 226 pass,
+  #                                                                                      4 fail
+  #       (kills cdg-deny-verif-write-ns, cdg-deny-verif-edit-bare, cdg-noop-verifier-mutation-probe
+  #       -- the verifier-role fixtures, which no longer resolve a role at all -- AND
+  #       cdg-noop-unrecognised-agent: with the variable gone entirely, referencing
+  #       $AGENT_TYPES_VERIFIER for ANY non-empty, IMPLEMENTER-non-matching agent_type -- not just
+  #       a genuine "verifier" spelling -- trips this script's own `set -uo pipefail` "unbound
+  #       variable" abort; cdg-noop-empty-agent is unaffected, since an EMPTY agent_type never
+  #       enters the `[ -n "$agent_type" ]` block that references the deleted variable at all)
+  #  M14  the print-only LF-fold reverted (p_disp="${p//$lf/\\n}" -> p_disp="$p") (#327 round-1
+  #       kickback K1, new this round)                                                -> 228 pass,
+  #                                                                                       2 fail
+  #       (kills cdg-deny-lf-claude and cdg-deny-lf-unclassifiable -- both fixtures' deny verdict is
+  #       unaffected (the classifier still matches $p, unchanged by this mutant), but the printed
+  #       message reverts to embedding the raw LF byte, so expect_cdg_deny_claude/
+  #       expect_cdg_deny_unclassifiable's "exactly 1 non-blank stderr line" assertion now sees 2)
+  # Five fixtures are, verified by direct measurement, NOT flipped by any of M1-M14:
+  # cdg-noop-ordinary-abs and cdg-never-executes-noop (the identical "ordinary absolute path, no
+  # .claude/".." segment" shape, with and without the booby-trapped PATH) survive every mutant in
+  # this table, since none of M1-M14 makes an ordinary path deny; cdg-noop-main-session-lessons
+  # carries no `agent_type` substring at all, so it never reaches past the fast path regardless of
+  # which downstream check M1-M14 breaks; cdg-noop-malformed-json's failure mode is jq's own parse
+  # error, independent of which check runs afterward; and cdg-noop-missing-file-path exits before
+  # the classifier itself ever runs, on every mutant in this table (none of M1-M14 touches the
+  # `[ -n "$file_path" ] || exit 0` gate). Their row states this instead of citing a mutant that
+  # was never observed to fail them.
+  "cdg-deny-impl-write-bare|case_cdg_deny_impl_write_bare|.claude deny: implementer (bare), Write, /repo/.claude/settings.json -- measured: M12, 211 pass 19 fail"
+  "cdg-deny-impl-edit-ns|case_cdg_deny_impl_edit_ns|.claude deny: trail-blazer-flow:implementer (namespaced), Edit, /repo/.claude/foo.md -- measured: M12, 211 pass 19 fail"
+  "cdg-deny-verif-write-ns|case_cdg_deny_verif_write_ns|.claude deny: trail-blazer-flow:verifier (namespaced), Write, /repo/.claude/bar.json -- measured: M13, 226 pass 4 fail (also M12, 211 pass 19 fail)"
+  "cdg-deny-verif-edit-bare|case_cdg_deny_verif_edit_bare|.claude deny: verifier (bare), Edit, /repo/.claude/baz.md -- measured: M13, 226 pass 4 fail (also M12, 211 pass 19 fail)"
+  "cdg-deny-nested|case_cdg_deny_nested|.claude deny: a nested segment, /Users/x/proj/.claude/settings.json -- measured: M12, 211 pass 19 fail"
+  "cdg-deny-user-level|case_cdg_deny_user_level|.claude deny: a path entirely outside any repo checkout, /Users/x/.claude/settings.json (pins deliberate location-independence -- this hook reads no cwd/repo-root at all) -- measured: M12, 211 pass 19 fail"
+  "cdg-deny-case-variant|case_cdg_deny_case_variant|.claude deny: case-varied spelling, /repo/.Claude/x -- measured: M7, 229 pass 1 fail (also M12, 211 pass 19 fail)"
+  "cdg-deny-drive-letter|case_cdg_deny_drive_letter|.claude deny: Windows drive-letter absolute form, C:/Users/x/.claude/foo -- measured: M12, 211 pass 19 fail"
+  "cdg-deny-backslash|case_cdg_deny_backslash|.claude deny: backslash-spelled form, C:\Users\x\.claude\foo (separator normalisation) -- measured: M6, 229 pass 1 fail (also M12, 211 pass 19 fail)"
+  "cdg-deny-final-segment|case_cdg_deny_final_segment|.claude deny: .claude as the path's FINAL segment, /repo/foo/.claude -- measured: M8, 228 pass 2 fail (with cdg-deny-rel-claude; also M12, 211 pass 19 fail)"
+  "cdg-deny-crlf|case_cdg_deny_crlf|.claude deny: a CR embedded inside the spelling itself, /repo/.clau<CR>de/foo (the strip can only widen toward deny) -- measured: M5, 229 pass 1 fail (also M12, 211 pass 19 fail)"
+  "cdg-deny-rel-claude|case_cdg_deny_rel_claude|.claude deny: a RELATIVE path whose first segment is .claude, .claude/LESSONS.md (discriminated from cdg-deny-rel-plain below) -- measured: M8, 228 pass 2 fail (with cdg-deny-final-segment; also M12, 211 pass 19 fail)"
+  "cdg-deny-dotdot-claude|case_cdg_deny_dotdot_claude|.claude deny: a \"..\"-carrying ABSOLUTE path that also carries a real .claude segment, /Users/x/../.claude/y (the more specific message wins) -- measured: M12, 211 pass 19 fail"
+  "cdg-deny-lf-claude|case_cdg_deny_lf_claude|.claude deny: an embedded LF elsewhere in the path, /repo/.claude/a<LF>b.md (#327 round-1 kickback K1 -- pre-fix this printed 2 stderr lines) -- measured: M14, 228 pass 2 fail (with cdg-deny-lf-unclassifiable; also M12, 211 pass 19 fail)"
+  "cdg-deny-rel-plain|case_cdg_deny_rel_plain|unclassifiable deny: the SAME relative, no-leading-slash shape as cdg-deny-rel-claude, but no .claude segment anywhere, src/main.rs (discriminates the two deny classes) -- measured: M10, 228 pass 2 fail (with cdg-deny-lf-unclassifiable; also M12, 211 pass 19 fail)"
+  "cdg-deny-dotdot-no-claude|case_cdg_deny_dotdot_no_claude|unclassifiable deny: a \"..\"-carrying ABSOLUTE path with no .claude segment anywhere, /Users/x/../etc/passwd -- measured: M11, 229 pass 1 fail (also M12, 211 pass 19 fail)"
+  "cdg-deny-lf-unclassifiable|case_cdg_deny_lf_unclassifiable|unclassifiable deny: an embedded LF in a relative, no-.claude path, src/a<LF>b.rs (#327 round-1 kickback K1's own second example -- pre-fix this printed 2 stderr lines) -- measured: M10, 228 pass 2 fail (with cdg-deny-rel-plain -- the SAME no-.claude/relative shape, a kill-set widening found only by re-measuring, not by inspection); also M14, 228 pass 2 fail (with cdg-deny-lf-claude; also M12, 211 pass 19 fail)"
+  "cdg-noop-ordinary-abs|case_cdg_noop_ordinary_abs|no opinion: an ordinary absolute path with no .claude segment, /repo/src/main.rs -- measured: not flipped by M1-M14 (an ordinary absolute path never denies under any of these mutants)"
+  "cdg-noop-claude-backup|case_cdg_noop_claude_backup|no opinion: near-miss segment spelling, /repo/.claude-backup/x (pins exact-segment matching) -- measured: M9, 228 pass 2 fail (with cdg-noop-my-claude)"
+  "cdg-noop-my-claude|case_cdg_noop_my_claude|no opinion: near-miss segment spelling, /repo/my.claude/x (pins exact-segment matching) -- measured: M9, 228 pass 2 fail (with cdg-noop-claude-backup)"
+  "cdg-noop-main-session-lessons|case_cdg_noop_main_session_lessons|no opinion: main session (no agent_type key), Write, /repo/.claude/LESSONS.md (release-blocker control -- the orchestrator's own lesson append) -- measured: not flipped by M1-M14 (no agent_type key anywhere in the raw stdin -- the fast path alone already excludes it)"
+  "cdg-noop-unrecognised-agent|case_cdg_noop_unrecognised_agent|no opinion: agent_type is \"Explore\" (unrecognised role) -- measured: M1, 228 pass 2 fail (with cdg-noop-empty-agent; also M13, 226 pass 4 fail)"
+  "cdg-noop-empty-agent|case_cdg_noop_empty_agent|no opinion: agent_type is the empty string -- measured: M1, 228 pass 2 fail (with cdg-noop-unrecognised-agent)"
+  "cdg-noop-plan-mode|case_cdg_noop_plan_mode|no opinion: implementer Edit of /repo/.claude/x under permission_mode: \"plan\" -- measured: M4, 229 pass 1 fail"
+  "cdg-noop-wrong-tool|case_cdg_noop_wrong_tool|no opinion: tool_name is \"Read\", not Edit/Write -- measured: M3, 229 pass 1 fail"
+  "cdg-noop-malformed-json|case_cdg_noop_malformed_json|no opinion: unparseable stdin (carries both agent_type and .claude substrings) -- measured: not flipped by M1-M14 (jq's own parse failure independently yields an empty extraction regardless of which downstream check runs)"
+  "cdg-noop-missing-file-path|case_cdg_noop_missing_file_path|no opinion: tool_input.file_path absent -- measured: not flipped by M1-M14 (an empty file_path exits before the classifier itself ever runs, on every mutant in this table)"
+  "cdg-noop-verifier-mutation-probe|case_cdg_noop_verifier_mutation_probe|no opinion: verifier Edit of a tracked source file, /repo/bin/find-planning-work.sh (release-blocker control -- the mutation probe) -- measured: M13, 226 pass 4 fail"
+  "cdg-never-executes-deny|case_cdg_never_executes_deny|deny, AND claude-dir-guard.sh never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent -- measured: M12, 211 pass 19 fail"
+  "cdg-never-executes-noop|case_cdg_never_executes_noop|no opinion, AND claude-dir-guard.sh never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent -- measured: not flipped by M1-M14 (the identical \"ordinary absolute path\" shape as cdg-noop-ordinary-abs, plus a booby-trapped PATH none of these mutants ever reads)"
+  "cdg-writes-nothing|case_cdg_writes_nothing|deny, AND a fixture tree containing .claude/LESSONS.md has a byte-identical recursive file listing before/after — this hook performs no filesystem access at all -- measured: M12, 211 pass 19 fail"
 )
 
 matched=0

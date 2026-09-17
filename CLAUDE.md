@@ -87,7 +87,7 @@ itself the checkout (prints that checkout's own short SHA). It runs in CI as the
 `dev/selfcheck.sh` itself — run it by hand whenever `bin/check-harness.sh` or
 `bin/check-decision-record.sh` changes.
 
-`dev/hook-tests.sh` is a separate negative-test harness for ALL THREE of this repo's
+`dev/hook-tests.sh` is a separate negative-test harness for all four of this repo's
 plugin-shipped PreToolUse hooks. For `hooks/git-c-guard.sh` (#150) it feeds fixture stdin JSON
 straight into the real script and pins its verdict — allow, or no opinion (empty stdout) — for
 every conforming `git -C <worktree> <subcommand>` form and every rejection case (an injected
@@ -182,9 +182,29 @@ release-blocker no-opinion control against a denying GLOBAL config (bare and `-C
 guarantee extended to the fixture `HOME` tree; `dev/hook-tests.sh`'s own `run_push_guard`
 runner isolates `HOME`/`XDG_CONFIG_HOME`/`GIT_CONFIG_GLOBAL` for every push fixture (a neutral,
 empty fixture `HOME` by default) so no fixture can read the developer's or CI runner's real
-global git config. It runs in CI as the fourth
+global git config.
+
+For `hooks/claude-dir-guard.sh` (#327, the fourth `PreToolUse` hook, matching `Edit|Write` rather
+than `Bash`) it feeds fixture stdin JSON straight into that real script and pins its verdict —
+deny via the `.claude`-segment class, deny via the unclassifiable/fail-closed class (each exit 2,
+empty stdout, exactly one stderr line, the two classes' wording distinct), or no opinion (exit 0,
+empty stdout, empty stderr) — for the implementer/verifier role scope (reusing
+`hooks/agent-boundary.sh`'s identical `agent_type` vocabulary, pinned script<->script by
+`dev/selfcheck.sh`'s assertion 4.45) across both guarded tools and all four `agent_type` spellings,
+a nested segment, a path entirely outside any repo checkout (deliberate location-independence — this
+hook performs no filesystem access at all), a case-variant spelling, the Windows drive-letter and
+backslash-spelled forms, `.claude` as the path's final segment, a CR-carrying spelling, the
+relative-`.claude`-vs-relative-plain pair that discriminates the two deny classes, a `..`-carrying
+path with and without a `.claude` segment, every no-opinion shape including two release-blocker
+controls (the orchestrator's own main-session lesson append, and the verifier's transient
+mutation-probe `Edit`), and the same booby-trapped `git`/`gh`/`rm`/`dirname`/`tr`/`awk`/`grep`/`sed`
+`PATH` idiom plus a byte-identical fixture-tree listing proving this hook never executes or writes
+anything, backed by its own 14-mutant measured mutation-proof table.
+
+It runs in CI as the fourth
 step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
-`hooks/git-c-guard.sh`, `hooks/agent-boundary.sh`, or `hooks/push-guard.sh` changes.
+`hooks/git-c-guard.sh`, `hooks/agent-boundary.sh`, `hooks/push-guard.sh`, or
+`hooks/claude-dir-guard.sh` changes.
 
 `dev/cleanup-tests.sh` is a separate negative-test harness for `bin/cleanup-after-merge.sh`: it
 builds throwaway fixture git repos under `mktemp`, with a stub `gh` and stub `git` on `PATH`, and

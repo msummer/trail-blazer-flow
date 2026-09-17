@@ -56,22 +56,23 @@ or share).
 │   ├── harness-version.sh         # prints the installed plugin's "<version> <sha>", one line
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
-│   ├── hooks.json                 # registers the three PreToolUse hooks below
+│   ├── hooks.json                 # registers the four PreToolUse hooks below
 │   ├── git-c-guard.sh             # approves only the exact git -C <worktree> <subcommand> forms worktree-parallel mode issues
 │   ├── agent-boundary.sh          # mechanically denies git/gh Bash commands for the implementer/verifier subagents (#235)
-│   └── push-guard.sh              # mechanically denies any git push whose destination is the default branch, every session (#260)
+│   ├── push-guard.sh              # mechanically denies any git push whose destination is the default branch, every session (#260)
+│   └── claude-dir-guard.sh        # mechanically denies an implementer/verifier Edit or Write to any .claude/ path (#327)
 ├── dev/
 │   ├── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
 │   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
 │   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh (not run by the gate)
-│   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh, hooks/agent-boundary.sh, AND hooks/push-guard.sh (not run by the gate)
+│   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh, hooks/agent-boundary.sh, hooks/push-guard.sh, AND hooks/claude-dir-guard.sh (not run by the gate)
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 │   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
 │   └── lock-tests.sh             # fixture-based negative-test harness for bin/harness-lock.sh (not run by the gate)
 ├── docs/
 │   └── adr/                      # architecture decision records: direction the README doesn't specify yet
 ├── .github/
-│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the three hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
+│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the four hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
 │   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
@@ -858,7 +859,12 @@ a dirty tree, and ride along with the next harness commit — but a change that 
 implementer or verifier subagent dispatch is in flight is the subagent's, not the harness's, and
 blocks the issue instead (the LESSONS.md dispatch guard, #323) —
 unless the file already existed untracked before that dispatch started, in which case the guard
-has no baseline to take and says so instead of blocking.
+has no baseline to take and says so instead of blocking. Since #327, this untracked-baseline gap
+no longer applies to an `Edit` or `Write` of `.claude/LESSONS.md` specifically: the
+`hooks/claude-dir-guard.sh` `PreToolUse` hook denies that call outright for both roles, tracked or
+not, with no orchestrator compare required. The dispatch guard above is still the only control on
+a Bash-issued write (`cat >>`, `tee`, `sed -i`) into `.claude/LESSONS.md`, and still carries the
+untracked-baseline gap for that route (filed as a follow-up).
 
 Under a Merge autonomy policy (#307, ADR 0001 decision 9), a harness PR that carries a lesson
 this way is not automatically held by the *Never the governance surface* rule just because it
@@ -1642,6 +1648,10 @@ distilled lesson (step 2e) is unchanged — it still runs after an issue's last 
 only when that same compare prints nothing.
 Honest limit: this is orchestrator prose, not a hook — it catches the change after the dispatch
 returns rather than preventing the write; no `Edit`/`Write` PreToolUse hook exists yet.
+**Closed in v2.7.6 by #327**: `hooks/claude-dir-guard.sh` denies the `Edit`/`Write` itself, for
+both roles, whether or not `.claude/LESSONS.md` is tracked — see that section below. The
+Bash-issued-write route (`cat >>`, `tee`, `sed -i`) is unaffected and still depends solely on the
+dispatch guard described here, untracked-baseline gap included.
 Also in v2.7.5 (#324, #319): needs no grant, label, script, settings entry, or baseline step
 (`Bash(git diff:*)`, `Bash(git fetch:*)`, and `Bash(sleep:*)` already ship in
 `templates/repo-settings.json`). Two consumer-visible changes, both of which **narrow** what
@@ -1727,6 +1737,12 @@ restores one case at a time. Declared case order, not completion order, still de
 PASS/FAIL line sequence and the summary totals; a case whose child dies before reporting a
 verdict is still counted as a FAIL naming the case, never silently dropped. The single-case/filter
 form (`bash dev/selfcheck-tests.sh <case>`) is unchanged.
+
+Also in v2.7.6 (#327): needs no grant, label, script, settings entry, or baseline step. A fourth
+plugin-shipped `PreToolUse` hook, `hooks/claude-dir-guard.sh`, now denies an implementer or
+verifier subagent's `Edit` or `Write` to any `.claude/` path — see "Safety model" below (the
+"**Four PreToolUse hooks**" paragraph and its new fourth-hook paragraph) for the deny classes,
+the no-filesystem-access property, and its own `cdg-*` fixture family in `dev/hook-tests.sh`.
 
 ## The per-repo settings file (required)
 
@@ -1948,8 +1964,10 @@ row above — Claude Code 2.1.246's startup scan is allow-only. The one item thi
 unconfirmed is the Windows/Git-Bash spot-check of row (a) — see "Prerequisites" and the Windows
 section below.
 
-**Three PreToolUse hooks.** `hooks/git-c-guard.sh` above is one of three plugin-shipped
-`PreToolUse` Bash hooks registered in `hooks/hooks.json`; the second, `hooks/agent-boundary.sh`
+**Four PreToolUse hooks.** `hooks/git-c-guard.sh` above is one of four plugin-shipped
+`PreToolUse` hooks registered in `hooks/hooks.json` — three matching `Bash`, and a fourth,
+`hooks/claude-dir-guard.sh` (#327, described in its own paragraph after the third hook below),
+matching `Edit|Write`; the second `Bash`-matching hook, `hooks/agent-boundary.sh`
 (#235, review F3), is what the "no git, no gh" caveat earlier in this section now names. It reads each Bash
 call's `agent_type` from the hook's own stdin JSON — the field a `PreToolUse` handler's `if` gate
 cannot see, which is why this handler carries no `if` at all, unlike the guard hook's — and
@@ -2057,6 +2075,51 @@ it — extended to the config-read route specifically. Composition with the deny
 `hooks/agent-boundary.sh`'s live-probe record establishes below was **not** separately
 re-measured for this third hook — it uses the identical mechanism, but only two hooks were ever
 replayed together live.
+
+**The fourth hook, `hooks/claude-dir-guard.sh` (#327), denies an implementer or verifier
+subagent's `Edit` or `Write` to any path carrying a `.claude` path segment.** It closes #323's
+LESSONS.md dispatch guard's own documented blind spot: that guard is orchestrator prose that
+detects a subagent's `.claude/LESSONS.md` change only after the dispatch returns, and has no
+baseline at all to compare against while the file exists untracked. This hook instead denies the
+`Edit`/`Write` itself, mechanically, before it can land — tracked or not. Unlike its three
+siblings, it matches `Edit|Write`, not `Bash` (the exact matcher measured live, below), and reuses
+`hooks/agent-boundary.sh`'s identical `agent_type` role vocabulary (both spellings, per role) — a
+role the `if` field cannot see, so this handler also carries no `if` key. Its classifier is a pure
+string decision with **no filesystem access at all**, strictly less than `hooks/push-guard.sh`
+above: it denies (exit 2, one stderr line naming the role, the tool, and the blocked path, empty
+stdout) when `tool_input.file_path` carries any path segment equal to `.claude` case-insensitively
+— nested, a relative path's own first segment, or the path's final segment, and whether spelled
+with a forward slash, a Windows drive-letter prefix, or a backslash (normalised to a forward slash
+first) — and denies, fail-closed, when the path cannot be classified as absolute (`/…` or
+`[A-Za-z]:/…`) and free of a `..` segment; a case that matches both classes resolves to the more
+specific `.claude` message. Every other case — the main session (no `agent_type`), another agent,
+`permission_mode: "plan"`, a tool other than `Edit`/`Write`, malformed stdin, an absent or empty
+`file_path`, or an ordinary absolute path outside any `.claude` segment — is "no opinion" (exit 0,
+empty stdout, empty stderr), including two release-blocker controls: the orchestrator's own
+main-session `.claude/LESSONS.md` append still works, and so does the verifier's own transient
+mutation-probe `Edit` of a tracked source file. Pinned by 31 fixture cases in `dev/hook-tests.sh`
+(prefix `cdg-`): the same booby-trapped-`PATH` idiom (widened here to
+`git`/`gh`/`rm`/`dirname`/`tr`/`awk`/`grep`/`sed`, since this hook uses none of them) proves it
+executes none of them, and a byte-identical fixture-tree listing proves it writes nothing to the
+filesystem — this hook also never *reads* the filesystem at all, true by construction (it opens no
+path), not something either fixture demonstrates — backed by its own 14-mutant measured
+mutation-proof table. Mass-deny risk, disclosed rather than hidden: today's live-probe record
+(below) found every captured `file_path` absolute, so no captured payload fell into the
+fail-closed unclassifiable class — but if a future Claude Code ever sends a relative `file_path`,
+every implementer/verifier `Edit`/`Write` would deny, with the unclassifiable message's own
+distinct wording naming the path so the cause is visible in the first blocked call. The same
+fail-open properties as its three siblings apply here too: the plugin disabled,
+`disableAllHooks: true`, no `jq` on `PATH`, an unresolved `${CLAUDE_PLUGIN_ROOT}`, or a Claude Code
+that stops sending `agent_type` all leave this hook silent, with no prompt and no visible sign —
+`templates/repo-settings.json` declares no `Edit(`/`Write(` entry at all, so this hook is the only
+mechanical control on this surface. A live probe run 2026-09-17 against Claude Code **2.1.274**
+(macOS, a temporary logging `PreToolUse` hook matching `Edit|Write`) measured the matcher this
+hook is registered with (`Edit|Write`, exactly) and a verifier subagent's `Edit` payload, not just
+an implementer's: it carried `agent_type: "trail-blazer-flow:verifier"` (the same namespaced
+spelling `hooks/agent-boundary.sh` already measures for `Bash`), so this hook's verifier-role
+coverage is measured, not inferred, on `Edit` — the verifier role has no `Write` tool
+(`agents/verifier.md`), so there is no verifier `Write` payload to measure — the same way
+`hooks/agent-boundary.sh`'s own record already measures verifier coverage on `Bash`.
 
 **Live-probe record (#259).** The two limits #235 shipped unresolved were closed by a probe the
 maintainer ran on 2026-09-08 against Claude Code **2.1.263** (plugin 2.7.0 from the marketplace
@@ -2548,17 +2611,17 @@ Windows specifics worth knowing:
   Bash runs the scripts via their shebang, so the check reports that and moves on. The
   harness's `gh`-output parsing also strips stray `\r` defensively, in case a CRLF-translating
   layer sits between `gh` and Bash.
-- **All three hooks' `${CLAUDE_PLUGIN_ROOT}` path.** `hooks/hooks.json` invokes each hook the same
+- **All four hooks' `${CLAUDE_PLUGIN_ROOT}` path.** `hooks/hooks.json` invokes each hook the same
   way — e.g. `bash "${CLAUDE_PLUGIN_ROOT}/hooks/git-c-guard.sh"`; if Claude Code ever exports that
   variable in backslash form on Windows, the quoted path could fail to resolve under Git Bash and
   a hook simply never runs for that session. For `git-c-guard.sh` this is fail-safe (worktree-mode
   `git -C` commands then prompt, same as if the plugin were disabled). For `hooks/agent-boundary.sh`
-  (#235) and `hooks/push-guard.sh` (#260) it is **not**: their non-firing is silent, not a prompt —
-  it just removes the mechanical implementer/verifier "no git, no gh" boundary, or the
-  default-branch push guard, with nothing visible marking the loss, since each was the only thing
-  narrowing its own surface. A Windows spot-check of all three hooks actually firing is worth doing
-  before relying on unattended worktree-parallel mode there (the probe table under "Safety model"
-  covers macOS only).
+  (#235), `hooks/push-guard.sh` (#260), and `hooks/claude-dir-guard.sh` (#327) it is **not**: their
+  non-firing is silent, not a prompt — it just removes the mechanical implementer/verifier "no git,
+  no gh" boundary, the default-branch push guard, or the `.claude`-path write boundary, with
+  nothing visible marking the loss, since each was the only thing narrowing its own surface. A
+  Windows spot-check of all four hooks actually firing is worth doing before relying on unattended
+  worktree-parallel mode there (the probe table under "Safety model" covers macOS only).
 
 ### Windows: first-run smoke test
 
