@@ -93,6 +93,13 @@
 # candidate skipped after BOTH attempts) — a candidate whose first fetch failed but whose retry
 # succeeded is a fetch_retries occurrence, not a fetch_failures one.
 #
+# #302 adds one more: plan_marker_quoters (how many trusted, post-latest-plan comments carried the
+# plan marker somewhere in their body without opening with it — never a plan candidate, and, via
+# the pre-existing contains($m) test, never counted as feedback either) plus one warn: line per
+# such comment, naming its author, createdAt, and url (or the literal "no url"), so a comment that
+# is dropped from both plan selection and feedback for this reason is no longer silent. Harness
+# records are excluded from this count exactly as they are excluded from has_feedback above.
+#
 # Wall clock: the retry budget is deliberately UNCAPPED — one retry per site (the REST
 # author-association lookup, the needs_initial_plan query, the revision-candidates query) plus one
 # retry per candidate in the per-candidate fetch loop, no run-level ceiling on top of that. Worst
@@ -237,6 +244,7 @@ untrusted_harness_markers=0
 missing_association=0
 audit_comments_skipped=0
 verdict_archives_skipped=0
+plan_marker_quoters=0
 for n in $candidates; do
   # Tolerate per-issue failures: one transient gh/API error must not kill the whole
   # discovery run (matters for unattended/scheduled runs). #272: a first failure is retried once
@@ -280,8 +288,8 @@ for n in $candidates; do
     # here (repost it with the marker as the first line — editing the comment in place would trip
     # the #192 plan-edited-after-approval check instead). A trusted comment that quotes the plan
     # marker mid-body is now excluded from plan candidacy here AND was already excluded from the
-    # feedback set below by its own contains($m) test, so it is silently dropped from both with no
-    # warn (see the filed follow-up for a diagnostic on that class).
+    # feedback set below by its own contains($m) test — #302 (see plan_marker_quoters below) warns
+    # about exactly this class by name, instead of dropping it with no diagnostic.
     | ($trustedC | map(select(.body | startswith($m)))) as $planC
     | ([ $planC[] | .createdAt ] | max) as $lastPlan
     | {
@@ -312,7 +320,21 @@ for n in $candidates; do
           if $lastPlan == null then 0
           else ([ $trustedC[] | select(.body | contains($v)) | select(.createdAt > $lastPlan) ] | length)
           end
-        )
+        ),
+        # #302 — comments dropped from BOTH plan selection and feedback for the plan-marker reason
+        # alone: the window mirrors the untrusted bucket above (posted after the latest trusted
+        # plan, or at any time when there is none); within that window, a trusted comment whose
+        # body contains the plan marker anywhere already means it does not open with it (a comment
+        # that DOES open with the marker is itself a plan candidate, so its createdAt cannot be
+        # later than $lastPlan) — so this member needs no startswith and never references $planC;
+        # harness records are excluded exactly as the feedback set above excludes them, so an
+        # audit or verdict record that also quotes the plan marker is not warned about here.
+        plan_marker_quoters: [ $trustedC[]
+          | select(.createdAt > ($lastPlan // ""))
+          | select(.body | contains($m))
+          | select((.body | contains($a)) | not)
+          | select((.body | contains($v)) | not)
+          | { author: (.author.login // "unknown"), createdAt: .createdAt, url: (.url // null) } ]
       }
   ')
 
@@ -359,6 +381,20 @@ for n in $candidates; do
       echo "warn: issue #$n: harness record marker from an untrusted author ($pair) — not a harness-authored record" >&2
       untrusted_harness_markers=$((untrusted_harness_markers+1))
     done <<<"$harness_marker_pairs"
+  fi
+
+  # warn (#302): a trusted comment posted after the latest plan (or, when there is none, at any
+  # time) carries the plan marker somewhere in its body but does not open with it — never a plan
+  # candidate, and (via the pre-existing contains($m) feedback test) never counted as feedback
+  # either. One line per such comment; harness records are excluded (diagnosed separately by the
+  # audit/verdict counters above, never by this one).
+  quoter_lines=$(printf '%s' "$result" | jq -r '.plan_marker_quoters[] | "\(.author) (\(.createdAt), \(.url // "no url"))"')
+  if [ -n "$quoter_lines" ]; then
+    while IFS= read -r desc; do
+      [ -n "$desc" ] || continue
+      echo "warn: issue #$n: trusted comment by $desc carries the plan marker but does not open with it — not the plan, and not counted as feedback" >&2
+      plan_marker_quoters=$((plan_marker_quoters+1))
+    done <<<"$quoter_lines"
   fi
 
   # warn (b): fail-closed — a comment with no authorAssociation field at all is treated as
@@ -412,6 +448,7 @@ jq -n \
   --argjson cqr "$candidates_query_retried" \
   --argjson cqu "$candidates_query_unavailable" \
   --argjson fr "$fetch_retries" \
+  --argjson pmq "$plan_marker_quoters" \
   '{needs_initial_plan: $initial, needs_revision: $revision, untrusted_comments: $untrusted,
     untrusted_issue_authors: $uia,
     counts: {initial: ($initial | length), revision: ($revision | length),
@@ -430,4 +467,5 @@ jq -n \
              initial_query_unavailable: $iqu,
              candidates_query_retried: $cqr,
              candidates_query_unavailable: $cqu,
+             plan_marker_quoters: $pmq,
              fetch_retries: $fr}}'

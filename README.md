@@ -1498,6 +1498,13 @@ The consumer-visible behaviour change: a hand-posted plan comment with anything 
 the comment's first line); a trusted comment that quotes the plan marker mid-body without opening
 with it is now silently excluded from both plan selection and the feedback/binding sets, with no
 warning (a filed follow-up). No published JSON key, `counts` key, or `reason` string changes.
+**Closed in v2.7.4 by #302**: both scripts now print one `warn:` line (naming its author,
+createdAt, and url) for every such trusted, in-window comment that carries neither harness-record
+marker of its own, and publish an additive `counts.plan_marker_quoters` key counting them — a
+comment that also carries `<!-- harness-audit -->` or `<!-- verifier-verdict -->` (a harness
+record, or a maintainer's prose-then-harness-marker copy of one) is excluded from the warn, the
+same way it was already excluded from the feedback/binding sets, and stays silently dropped — see
+"Also in v2.7.4 (#302)" below.
 Also in v2.7.3 (#290): `hooks/push-guard.sh`'s #268 config read is extended to three GLOBAL
 candidates — `$GIT_CONFIG_GLOBAL` (when set and non-empty), `$XDG_CONFIG_HOME/git/config` (or,
 when `$XDG_CONFIG_HOME` is unset or empty, `$HOME/.config/git/config`), and `$HOME/.gitconfig` —
@@ -1551,7 +1558,22 @@ a blip on the merge-landed read no longer reports a PR that actually merged as `
 unconfirmed`. Answers are never retried — per-check results in any state (pending, exit 8, and
 failing included) or a no-checks report from `gh pr checks`, a base mismatch, and any state other
 than `MERGED` all count as an answer. Cost: up to 30s plus one extra read-only call per failing
-read.
+read. Also in v2.7.4 (#302): both discovery scripts now diagnose one class #281 dropped with no
+report of its own — a TRUSTED comment posted after the latest plan (or, when there is none, at any
+time) whose body contains the plan marker somewhere other than its first line, and whose body
+carries neither harness-record marker (`<!-- harness-audit -->` or `<!-- verifier-verdict -->`) —
+printing one `warn:` line per such comment (author, createdAt, and url, or the literal "no url")
+and publishing an additive `counts.plan_marker_quoters` key on both scripts, needing no grant,
+label, script, settings entry, or baseline step. A trusted comment in that same window that DOES
+carry a harness-record marker (a genuine harness-authored record, or a maintainer's
+prose-then-harness-marker copy of one) is still excluded from both the warn and the count, exactly
+as it already was from plan selection and the feedback/binding sets — that narrower class stays
+silently dropped, a known limit, tracked as a separate follow-up (see "Safety model" below). The
+consumer-visible change: a maintainer who quotes the plan marker in feedback without opening the
+comment with it, or hand-posts a plan with prose before the marker, now sees why the planner or
+implementer skipped their comment instead of silence, unless that same comment also carries a
+harness-record marker. The comment is still never acted on either way — see "Safety model" below
+for the unchanged, security-relevant part of this behaviour.
 
 ## The per-repo settings file (required)
 
@@ -2205,9 +2227,20 @@ harness marker in its own prose is still selected as the plan, while a maintaine
 that quotes the plan marker verbatim, wherever its own harness marker sits (or absent entirely) —
 the live #245 shape, generalised — is not. The named limit is now split differently: a maintainer
 who quotes a harness marker inside their own FEEDBACK still has that comment silently dropped,
-unfixed (above); a trusted comment that quotes the plan marker mid-body is now silently excluded
-from BOTH plan selection and the feedback/binding sets, with no warning (a filed follow-up); and a
-hand-posted plan comment with anything before the marker is not selectable — repost it with the
+unfixed (above); a trusted comment that quotes the plan marker mid-body is still excluded from
+BOTH plan selection and the feedback/binding sets, and since v2.7.4 (#302) both scripts now name
+it in a `warn:` line (author, createdAt, url) and count it in `counts.plan_marker_quoters` — but
+only when that same comment was posted after the latest plan (or at any time when there is none)
+AND carries neither harness-record marker of its own; a trusted comment
+that quotes the plan marker mid-body AND also carries `<!-- harness-audit -->` or
+`<!-- verifier-verdict -->` (a genuine harness record, or a maintainer's own prose-then-
+harness-marker copy of one) is a harness-marker quoter too, so it stays
+silently dropped by #302's warn exactly as it already was by plan selection and the
+feedback/binding sets — warning on that narrower, harness-marker-quoting class is a known limit,
+tracked as a separate follow-up, not part of #302. For the class #302 DOES warn on, the drop is no longer
+silent — this also diagnoses a hand-posted plan with text before its own marker,
+since the window covers "any time" when there is no selectable plan yet; and a hand-posted plan
+comment with anything before the marker is not selectable — repost it with the
 marker as the comment's first line (editing the comment in place would trip the
 plan-edited-after-approval check instead). The filter only ever narrows the trusted set: a forged marker from an untrusted
 author still surfaces, unfiltered, in `untrusted_comments` / `untrusted_post_plan`, exactly like

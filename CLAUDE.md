@@ -244,7 +244,14 @@ prose but which quotes the plan marker mid-body (the residual gap #275 left open
 for the plan (the live #245 shape, generalised); a plan comment that itself quotes a harness marker
 in its own prose is unaffected and still becomes the latest plan (the anchoring is what prevents
 the over-exclusion regression); gate assertion 4.41 pins that this one `$planC` expression is
-spelled identically on both discovery scripts. Since #211 the same faithfulness applies to the
+spelled identically on both discovery scripts. Since #302, a trusted comment posted after the
+latest plan (or, when there is none, at any time) whose body contains the plan marker somewhere
+other than its first line — dropped from both plan selection and feedback/binding context by the
+rules above, previously with no diagnostic — is now named on stderr (`warn:` naming its author,
+createdAt, and url) and counted in a new, additive `counts.plan_marker_quoters` key on both
+scripts, spelled byte-identically (no `startswith`, no reference to `$planC`) and excluding
+harness records exactly as the feedback/binding sets already exclude them. Since #211 the same
+faithfulness applies to the
 revision-candidates query itself: the stub applies `find-planning-work.sh`'s own `--jq
 '.[].number'` argument with the real `jq` to a JSON page-array fixture and propagates jq's exit
 status, so a candidates filter that cannot process the returned document fails the call the same
