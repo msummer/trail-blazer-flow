@@ -241,7 +241,13 @@
 # fetch_retries (how many per-issue fetches inside the loop needed a retry, regardless of whether
 # that retry succeeded). ready and counts.ready/counts.truncated keep their current names and
 # computation — ready_query_unavailable: true still yields counts.truncated: false (a complete,
-# merely empty, document was still printed).
+# merely empty, document was still printed). #302 adds one more: plan_marker_quoters (how many
+# trusted, post-latest-plan comments carried the plan marker somewhere in their body without
+# opening with it — never a plan candidate, and, via the pre-existing contains($m) test, never
+# counted as trusted_post_plan either) plus one warn: line per such comment, naming its author,
+# createdAt, and url (or the literal "no url"), so a comment dropped from both plan and
+# trusted_post_plan for this reason is no longer silent. Harness records are excluded from this
+# count exactly as they are excluded from trusted_post_plan above.
 #
 # Requires: gh (authenticated), jq. Run from anywhere inside the repo.
 set -euo pipefail
@@ -339,6 +345,7 @@ untrusted_plan_markers=0
 untrusted_harness_markers=0
 verdict_archives_skipped=0
 audit_comments_skipped=0
+plan_marker_quoters=0
 missing_association=0
 plan_after_approval=0
 no_approval_event=0
@@ -407,9 +414,9 @@ for n in $ready_numbers; do
     # here (repost it with the marker as the first line — editing the comment in place would trip
     # the #192 plan-edited-after-approval check instead). A trusted comment that quotes the plan
     # marker mid-body is now excluded from plan candidacy here AND was already excluded from
-    # trusted_post_plan below by its own contains($m) test, so it is silently dropped from both
-    # with no warn (see the filed follow-up; mirrors the identical comment in the $planC binding of
-    # find-planning-work.sh).
+    # trusted_post_plan below by its own contains($m) test — #302 (see plan_marker_quoters below)
+    # warns about exactly this class by name, instead of dropping it with no diagnostic (mirrors
+    # the identical comment in the $planC binding of find-planning-work.sh).
     | ($trustedC | map(select(.body | startswith($m)))) as $planC
     | ([ $planC[] | .createdAt ] | max) as $lastPlan
     # #240 — bind the plan selection and the post-plan selection each exactly once, as the raw
@@ -458,6 +465,21 @@ for n in $ready_numbers; do
           else ([ $trustedC[] | select(.body | contains($a)) | select(.createdAt > $lastPlan) ] | length)
           end
         ),
+        # #302 — comments dropped from BOTH plan candidacy and trusted_post_plan for the
+        # plan-marker reason alone: the window mirrors untrusted_post_plan above (posted after the
+        # latest trusted plan, or at any time when there is none); within that window, a trusted
+        # comment whose body contains the plan marker anywhere already means it does not open with
+        # it (a comment that DOES open with the marker is itself a plan candidate, so its createdAt
+        # cannot be later than $lastPlan) — so this member needs no startswith and never references
+        # $planC; harness records are excluded exactly as trusted_post_plan excludes them above.
+        # Internal only — never copied into `entry` below, published only via
+        # counts.plan_marker_quoters.
+        plan_marker_quoters: [ $trustedC[]
+          | select(.createdAt > ($lastPlan // ""))
+          | select(.body | contains($m))
+          | select((.body | contains($a)) | not)
+          | select((.body | contains($v)) | not)
+          | { author: (.author.login // "unknown"), createdAt: .createdAt, url: (.url // null) } ],
         # #240 — internal only (never added to `entry` below, so the published JSON is byte-
         # identical to before this change): gh own per-comment includesCreatedEdit boolean, already
         # present in the `comments` field this script fetches today at no extra API cost. Read as a
@@ -810,6 +832,20 @@ for n in $ready_numbers; do
     done <<<"$harness_marker_pairs"
   fi
 
+  # warn (#302): a trusted comment posted after the latest plan (or, when there is none, at any
+  # time) carries the plan marker somewhere in its body but does not open with it — never a plan
+  # candidate, and (via the pre-existing contains($m) trusted_post_plan test) never binding either.
+  # One line per such comment; harness records are excluded (diagnosed separately by the
+  # audit/verdict counters above, never by this one).
+  quoter_lines=$(printf '%s' "$result" | jq -r '.plan_marker_quoters[] | "\(.author) (\(.createdAt), \(.url // "no url"))"')
+  if [ -n "$quoter_lines" ]; then
+    while IFS= read -r desc; do
+      [ -n "$desc" ] || continue
+      echo "warn: issue #$n: trusted comment by $desc carries the plan marker but does not open with it — not the plan, and not in trusted_post_plan (not binding context)" >&2
+      plan_marker_quoters=$((plan_marker_quoters+1))
+    done <<<"$quoter_lines"
+  fi
+
   # warn (b): fail-closed — a comment with no authorAssociation field at all is treated as
   # untrusted rather than trusted or crashing the script.
   issue_missing=$(printf '%s' "$result" | jq '.missing_association')
@@ -850,6 +886,7 @@ jq -n \
   --argjson rqr "$ready_query_retried" \
   --argjson rqu "$ready_query_unavailable" \
   --argjson fr "$fetch_retries" \
+  --argjson pmq "$plan_marker_quoters" \
   '{ready: $ready,
     plan_selection: $selection,
     counts: {ready: ($ready | length), truncated: (($ready | length) >= $limit),
@@ -873,4 +910,5 @@ jq -n \
              approval_label_absent: $ala,
              ready_query_retried: $rqr,
              ready_query_unavailable: $rqu,
+             plan_marker_quoters: $pmq,
              fetch_retries: $fr}}'

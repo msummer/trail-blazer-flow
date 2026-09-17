@@ -209,6 +209,16 @@
 #   sites, via a new `build_stub_discovery` builder that shadows BOTH discovery scripts with canned,
 #   non-gh-calling stand-ins — unlike Part 13's fixtures above, which drive the real discovery
 #   scripts end-to-end through run_status too.
+#   #302 adds a diagnostic for the one class #281's positive anchor drops with no report of its
+#   own: a trusted comment posted after the latest plan (or, when there is none, at any time) whose
+#   body contains the plan marker somewhere other than its first line — never a plan candidate
+#   (#281 already excludes it) and never feedback/binding context either (the pre-existing
+#   contains($m) exclusion already excludes it there too) — was previously dropped from both sets
+#   with no diagnostic. Both scripts now print one `warn:` line per such comment (naming its
+#   author, createdAt, and url, or the literal "no url") and publish `counts.plan_marker_quoters`,
+#   spelled byte-identically between the two scripts (no `startswith`, no reference to `$planC`),
+#   harness records excluded exactly as the feedback/binding sets already exclude them. Two new
+#   combined fixtures (Part 5) tell apart every clause of the rule.
 #
 # Usage: bash dev/planning-tests.sh [name-filter] — same output contract as
 # dev/cleanup-tests.sh, dev/doctor-tests.sh, and dev/selfcheck-tests.sh: one PASS/FAIL line per
@@ -658,8 +668,11 @@ mk_fixture() {
 # refreshed immediately beforehand; restore verified byte-identical, sha256 confirmed):
 # `bash dev/planning-tests.sh` dropped from 141 pass/0 fail to 122 pass/19 fail — the IDENTICAL 19
 # names the #284/#285 re-measurement above already recorded, with NO new members: none of #281's
-# three planner-side fixtures joins, because each asserts only on counts.revision/needs_revision/
-# untrusted_comments/counts.audit_comments_skipped, none of which this mutant's fail-closed
+# three planner-side fixtures joins, because each asserts on counts.revision/needs_revision/
+# untrusted_comments/counts.audit_comments_skipped (as of this 2026-09-15 measurement, the ONLY
+# fields they assert; since #302, two of the three also assert .counts.plan_marker_quoters and a
+# warn count — see the #302 continuation below, which re-confirms this mutant still doesn't touch
+# them either), none of which this mutant's fail-closed
 # needs_initial_plan bucket touches —
 # the SAME #273 continue-past-the-failure behaviour the #272/#273 measurement above already
 # explains — and #281's four implementer-side fixtures never invoke find-planning-work.sh at all.
@@ -668,6 +681,21 @@ mk_fixture() {
 # The suite has since grown to 150 across #297's nine new Part 14 fixtures — not re-run:
 # build_stub_discovery shadows find-planning-work.sh entirely for every one of them, so none ever
 # invokes the real needs_initial_plan query this mutant targets.
+#
+# RE-MEASURED AGAIN 2026-09-17 (#302): the suite grew to 152 across two new combined fixtures, one
+# of which (plan-marker-quoter-warn-scope) DOES call find-planning-work.sh via run_planning with
+# `initial.json` = `[]` — a real needs_initial_plan call this mutant's injected `authorAssociation`
+# field still rejects on both attempts. With the SAME needs_initial_plan mutation applied (backup
+# refreshed immediately beforehand; restore verified byte-identical, sha256 confirmed):
+# `bash dev/planning-tests.sh` dropped from 152 pass/0 fail to 133 pass/19 fail — the IDENTICAL 19
+# names above, with NO new members: plan-marker-quoter-warn-scope's own assertions
+# (.counts.plan_marker_quoters, its warn count, and the expect_err needle) are all computed inside
+# the per-CANDIDATE loop, fed by the SEPARATE, unmutated revision-candidates query
+# (`candidates.json` is `[{"number":1}]`, healthy) — entirely disjoint from the mutated
+# needs_initial_plan bucket this proof targets, so the mutation changes nothing this fixture
+# checks. impl-plan-marker-quoter-warn-scope never invokes find-planning-work.sh at all (it calls
+# run_implementation). Reverted immediately after recording this (byte-identical, sha256
+# confirmed).
 #
 # `gh api ...` has THREE branches (#192 adds the third), split on whether the URL ($2) contains
 # "/issues/<n>/events" (#174, find-implementation-work.sh's plan-binding lookup),
@@ -775,7 +803,12 @@ mk_fixture() {
 # takes 2 (a plan comment plus the mid-body quoter), impl-mid-body-quoter-only-no-plan takes 1 (the
 # quoter only, no plan selected), and impl-single-issue-mid-body-quoter-not-selected (issue 44, via
 # --issue mode) takes 2 like its batch-mode sibling) — its three planner-side fixtures carry no
-# comment urls at all, matching every existing planner fixture.
+# comment urls at all, matching every existing planner fixture. #302's implementer-side combined
+# fixture, impl-plan-marker-quoter-warn-scope, takes the next seven — 7108-7114, one per comment
+# (T0-T6, all seven on the same ready issue 1) — since every one of its seven comments carries a
+# distinct url, unlike the "one id per resource actually looked up" fixtures above; its
+# planner-side twin, plan-marker-quoter-warn-scope, carries no comment urls at all, matching every
+# other planner fixture in this file.
 #
 # LIVE-SHAPE PROBE (2026-09-10, maintainer triage comment on #240, gh 2.100.0 or later; expanded
 # 2026-09-14 by the orchestrator's own read-only probe): `gh issue view --json comments` already
@@ -835,7 +868,12 @@ mk_fixture() {
 # (`[{"number":1}]`), so the real (unmutated) `.[].number` filter succeeds regardless of this stub
 # mutation. The suite has since grown to 150 across #297's nine new Part 14 fixtures — not
 # re-run: build_stub_discovery shadows find-planning-work.sh entirely for every one of them, so
-# none ever reaches this stub's `--jq` line at all, well-formed candidates.json or not.
+# none ever reaches this stub's `--jq` line at all, well-formed candidates.json or not. The suite
+# has since grown to 152 across #302's two new combined fixtures — not re-run: both write the
+# SAME well-formed shapes this note already covers (plan-marker-quoter-warn-scope's own
+# candidates.json is `[{"number":1}]`; impl-plan-marker-quoter-warn-scope never calls
+# find-planning-work.sh at all), so this stub-internal mutation — observable only when the real
+# `.[].number` filter would otherwise error — has no effect on either.
 # MUTATION PROOF B (#196-class, the issue's named mutant, measured 2026-09-05; re-measured
 # 2026-09-05 when #192 grew the suite to 66 — same 27 planner-side cases, new total, since #192
 # adds no planner-side fixtures; re-measured again 2026-09-09 (#246) when this PR's two new
@@ -906,7 +944,10 @@ mk_fixture() {
 # initial-author-map-per-issue) assert only needs_initial_plan fields, which the fail-closed empty
 # needs_revision bucket never touches; no-comments additionally asserts `.counts.revision == 0`,
 # `.counts.untrusted_comments == 0`, and `.untrusted_comments == []`, all still satisfied by the
-# fail-closed empty bucket; and output-shape's 22 `has(...)` key-presence checks (plus its own
+# fail-closed empty bucket; and output-shape's 22 `has(...)` key-presence checks (23 since #302's
+# own added plan_marker_quoters check — see the MEASURED MUTANTS (#302) block's own mutant (j)
+# entry below, which states the current count directly: "#23 of its now-23 `has(...)` checks")
+# (plus its own
 # `expect_rc 0`) survive for the separate reason that the fail-closed path still prints a complete
 # document with every key present), and plan-quoting-harness-marker-still-
 # the-plan (P3, whose own candidates.json is likewise well-formed but non-empty, `[{"number":1}]`
@@ -955,6 +996,20 @@ mk_fixture() {
 # mutant produces, the same "pure abort collateral damage" immunity the no-comments fixture's own
 # comment above documents — not evidence the mutant is inert on this class, since its own content
 # never triggers revision regardless of whether the candidates query succeeds. Reverted immediately
+# after recording this (byte-identical, sha256 confirmed).
+#
+# RE-MEASURED AGAIN 2026-09-17 (#302): the suite grew to 152 across two new combined fixtures.
+# With the SAME `.[].number` -> `.number` deletion applied (backup refreshed immediately
+# beforehand; restore verified byte-identical, sha256 confirmed): dropped from 152 pass/0 fail to
+# 112 pass/40 fail — the identical 38 names above, PLUS plan-marker-quoter-warn-scope (its own
+# candidates.json is the identical well-formed-but-non-empty `[{"number":1}]` shape, so its
+# per-candidate loop never runs, .counts.plan_marker_quoters stays at its reset value 0 rather than
+# the expected 1, and no warn line prints), PLUS plan-mid-body-quoter-only-no-latest-plan — which
+# FLIPS from the coincidental-survivor class documented just above to a genuine new member: #302
+# added `.counts.plan_marker_quoters` == 1 / a warn-count assertion to this SAME fixture, and
+# neither is satisfied by the fail-closed empty bucket (which never runs the per-candidate loop at
+# all), so the coincidence that let it survive on `counts.revision`/`needs_revision`/
+# `untrusted_comments` alone no longer extends to these two new assertions. Reverted immediately
 # after recording this (byte-identical, sha256 confirmed).
 #
 # events branch: `gh api "repos/{owner}/{repo}/issues/<n>/events?per_page=100" --paginate --jq
@@ -1205,6 +1260,12 @@ mk_fixture() {
 # The suite has grown again, to 150 across #297's nine new Part 14 fixtures — not re-run:
 # build_stub_discovery shadows find-planning-work.sh entirely for every one of them, so none ever
 # invokes read_issue_authors() or writes a rest-issues.json at all.
+#
+# The suite has grown again, to 152 across #302's two new combined fixtures — not re-run:
+# plan-marker-quoter-warn-scope writes no rest-issues.json either, and reaches read_issue_authors()
+# unconditionally (the identical #281 reasoning above), so the stub's `/issues?` arm exits 0 with
+# no output regardless of this mutation; impl-plan-marker-quoter-warn-scope never calls
+# find-planning-work.sh at all.
 #
 # CALL LOG (#229): as the very first statement inside the `api)` arm — before any of the three
 # branches above run — the stub appends the raw URL argument ($2) to DIR/.api-calls, one line per
@@ -2090,9 +2151,13 @@ EOF
 # output-shape — every existing top-level key and counts field is still present with its current
 # name (protects bin/harness-status.sh, which reads .needs_initial_plan and .needs_revision),
 # plus #176's new keys, plus (#246) the new author_association_retried counts key, plus
-# (#272/#273) the five new query-retry/fetch-retry counts keys. Measured mutants: (e), (f), (g),
-# (h), and (i) — see the MEASURED MUTANTS (#272/#273) block below the case table (one has(...)
-# assertion catches each of the five keys' own deletion mutant independently).
+# (#272/#273) the five new query-retry/fetch-retry counts keys, plus (#302) plan_marker_quoters —
+# the 23rd `has(...)` check. Measured mutants: (e), (f), (g), (h), and (i) — see the MEASURED
+# MUTANTS (#272/#273) block below the case table (one has(...) assertion catches each of the five
+# keys' own deletion mutant independently) — plus (#302) mutant (j), which deletes
+# plan_marker_quoters's own counts line the identical way; its initial.json/candidates.json are
+# both empty, so the per-candidate loop never runs and none of the (a)-(i) plan_marker_quoters
+# mutants ever reaches this fixture — see the MEASURED MUTANTS (#302) block below the case table.
 case_output_shape() {
   local dir; dir="$(mk_fixture output-shape)"
   cat > "$dir/initial.json" <<'EOF'
@@ -2124,6 +2189,7 @@ EOF
   expect_jq '.counts | has("candidates_query_retried")' 'true'
   expect_jq '.counts | has("candidates_query_unavailable")' 'true'
   expect_jq '.counts | has("fetch_retries")' 'true'
+  expect_jq '.counts | has("plan_marker_quoters")' 'true'
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -2361,7 +2427,9 @@ EOF
 # reject-association or reject-association-once. Not re-run at the 150-case (#297) baseline
 # either: build_stub_discovery shadows find-planning-work.sh entirely for every one of #297's
 # nine new fixtures, so none of them ever calls the real REST author-association lookup this
-# mutant targets. M2 (loop
+# mutant targets. Not re-run at the 152-case (#302) baseline either — plan-marker-quoter-warn-scope
+# sets neither reject-association nor reject-association-once, and impl-plan-marker-quoter-warn-
+# scope never calls find-planning-work.sh at all. M2 (loop
 # three attempts instead of
 # two, adding a second guarded sleep + retry) — `bash dev/planning-tests.sh` dropped to 99 pass/1
 # fail, failing exactly author-association-unavailable (its permanent reject-association now costs
@@ -2382,7 +2450,8 @@ EOF
 # verdict, fewer calls — is invisible to it, the identical M1-class coincidence documented for
 # plan-initial-query-unavailable and status-degraded-planner-initial-query above). Not re-run at
 # the 141-case (#281) baseline either, for the identical reason. Not re-run at the 150-case
-# (#297) baseline either, for the identical reason as M1 above. M3 (drop the
+# (#297) baseline either, for the identical reason as M1 above. Not re-run at the 152-case (#302)
+# baseline either, for the identical reason as M1's own #302 continuation above. M3 (drop the
 # sleep's
 # `|| true` guard) — see author-association-retry-sleep-failure-survives below for its measurement
 # (99 pass/1 fail, failing exactly that one case; re-measured 2026-09-10 (#275) at the 112-case
@@ -2392,7 +2461,8 @@ EOF
 # 134-case (#284/#285) baseline either — none of the ten new fixtures combines reject-association
 # with sleep-fails). Not re-run at the 141-case (#281) baseline either, for the identical reason —
 # none of #281's seven new fixtures combines reject-association with sleep-fails. Not re-run at
-# the 150-case (#297) baseline either, for the identical reason as M1 above.
+# the 150-case (#297) baseline either, for the identical reason as M1 above. Not re-run at the
+# 152-case (#302) baseline either, for the identical reason as M1's own #302 continuation above.
 case_author_association_retry_succeeds() {
   local dir; dir="$(mk_fixture author-association-retry-succeeds)"
   cat > "$dir/initial.json" <<'EOF'
@@ -2444,7 +2514,9 @@ EOF
 # Not re-run at the 141-case (#281) baseline either: none of #281's seven new fixtures sets
 # reject-association(-once) or sleep-fails either. Not re-run at the 150-case (#297) baseline
 # either: build_stub_discovery shadows find-planning-work.sh entirely for every one of #297's nine
-# new fixtures, so none of them ever reaches this guard.
+# new fixtures, so none of them ever reaches this guard. Not re-run at the 152-case (#302) baseline
+# either: neither of #302's two new fixtures sets reject-association(-once) or sleep-fails, and
+# impl-plan-marker-quoter-warn-scope never calls find-planning-work.sh at all.
 case_author_association_retry_sleep_failure_survives() {
   local dir; dir="$(mk_fixture author-association-retry-sleep-failure-survives)"
   cat > "$dir/initial.json" <<'EOF'
@@ -2645,6 +2717,11 @@ EOF
 # deleting only the ordering clause changes nothing observable for any of them. Not re-run at the
 # 150-case (#297) baseline either: build_stub_discovery shadows find-implementation-work.sh
 # entirely for every one of #297's nine new fixtures, so none of them ever reaches $tppSel at all.
+# Not re-run at the 152-case (#302) baseline either: #302's own new plan_marker_quoters member has
+# its own, separate `select(.createdAt > ($lastPlan // ""))` clause and reads none of $tppSel's
+# output, so this mutant (which only deletes $tppSel's ordering clause) cannot touch it either way
+# — none of #302's touched or new fixtures' plan_marker_quoters/warn-count assertions depend on
+# $tppSel/trusted_post_plan at all.
 case_impl_newest_plan_selected() {
   local dir; dir="$(mk_fixture impl-newest-plan-selected)"
   cat > "$dir/ready.json" <<'EOF'
@@ -2838,7 +2915,13 @@ EOF
 # reason as the MUTATION PROOF above: #281's plan comments all predate their plan-approved label.
 # Not re-run at the 150-case (#297) baseline either: build_stub_discovery shadows
 # find-implementation-work.sh entirely for every one of #297's nine new fixtures, so none of them
-# ever reaches this branch, or any other branch of the real script, at all.
+# ever reaches this branch, or any other branch of the real script, at all. Not re-run at the
+# 152-case (#302) baseline either: impl-plan-marker-quoter-warn-scope and impl-output-shape have
+# no events-1.json, so they resolve no-approval-event before the plan-after-approval comparison;
+# impl-mid-body-quoter-only-no-plan has no plan comment; only
+# impl-mid-body-plan-marker-quote-not-selected and impl-single-issue-mid-body-quoter-not-selected
+# have plans that predate their label event. plan_marker_quoters is computed from its own separate
+# clause, reading none of this branch's output.
 case_impl_plan_after_approval() {
   local dir; dir="$(mk_fixture impl-plan-after-approval)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3172,7 +3255,14 @@ EOF
 # is never reached. Reverted immediately after recording this (byte-identical, sha256 confirmed).
 # Not re-run at the 150-case (#297) baseline either: build_stub_discovery shadows
 # find-implementation-work.sh entirely for every one of #297's nine new fixtures, so none of them
-# ever reaches this comparison, or any other branch of the real script, at all.
+# ever reaches this comparison, or any other branch of the real script, at all. Not re-run at the
+# 152-case (#302) baseline either: impl-mid-body-plan-marker-quote-not-selected and
+# impl-single-issue-mid-body-quoter-not-selected are already named in the #281 failing set two
+# paragraphs above, unaffected by #302's own new plan_marker_quoters assertions on them (that
+# member is computed from its own separate clause, before this comparison ever runs, and reads
+# none of covers_plan/reason); impl-plan-marker-quoter-warn-scope never reaches this comparison
+# either — it has no events-1.json, so reason resolves to no-approval-event before the `else`
+# branch containing this comparison is ever entered.
 case_impl_plan_edited_after_approval() {
   local dir; dir="$(mk_fixture impl-plan-edited-after-approval)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3262,7 +3352,12 @@ EOF
 # comment updated_at STRICTLY BEFORE its approved_at (T0 < T1, never tied), so the widened `>=`
 # test is not satisfied and this mutant remains inert on them. Not re-run at the 150-case (#297)
 # baseline either: build_stub_discovery shadows find-implementation-work.sh entirely for every one
-# of #297's nine new fixtures, so none of them ever reaches this comparison at all.
+# of #297's nine new fixtures, so none of them ever reaches this comparison at all. Not re-run at
+# the 152-case (#302) baseline either: impl-mid-body-plan-marker-quote-not-selected and
+# impl-single-issue-mid-body-quoter-not-selected each have a plan comment updated_at strictly
+# before approved_at too (never tied), so this mutant remains inert on them, for the identical
+# #281 reasoning above; impl-plan-marker-quoter-warn-scope never reaches this comparison at all —
+# its no-approval-event reason resolves before the `else` branch containing it ever runs.
 case_impl_plan_edit_tie_covered() {
   local dir; dir="$(mk_fixture impl-plan-edit-tie-covered)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3317,6 +3412,16 @@ EOF
 # Not re-run at the 150-case (#297) baseline either: none of #297's nine new fixtures makes any
 # `gh api ...` call at all — the proposed/blocked routes are `gh issue list` calls and the open-PR
 # route is a `gh pr list` call, none of which ever reaches the `api)` arm this guard lives inside.
+# Not re-run at the 152-case (#302) baseline either: of #302's five touched/new implementer
+# fixtures (impl-mid-body-plan-marker-quote-not-selected, impl-mid-body-quoter-only-no-plan,
+# impl-single-issue-mid-body-quoter-not-selected, impl-output-shape, and the new
+# impl-plan-marker-quoter-warn-scope), two — the first and third named, each carrying a real
+# plan comment with its own comment-<id>.json — DO reach the `/issues/comments/` stub arm, the
+# identical #281 reasoning above, but neither sets a reject-comment-<id> marker, so this guard
+# stays inert on them either way; the other three never reach it at all (impl-mid-body-quoter-
+# only-no-plan has no plan comment; impl-output-shape and impl-plan-marker-quoter-warn-scope both
+# resolve no-approval-event, which never gets past the events lookup). plan-marker-quoter-warn-
+# scope (the planner-side twin) never calls find-implementation-work.sh at all.
 case_impl_plan_edit_lookup_unreadable() {
   local dir; dir="$(mk_fixture impl-plan-edit-lookup-unreadable)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3379,7 +3484,15 @@ EOF
 # `/issues/comments/` stub arm, since none of them writes an array-shaped comment-<id>.json and the
 # script's own `[ -z "$plan_updated" ]` guard would catch one regardless. Not re-run at the
 # 150-case (#297) baseline either: none of #297's nine new fixtures makes any `gh api ...` call at
-# all, so none reaches the `/issues/comments/` stub arm this mutation targets.
+# all, so none reaches the `/issues/comments/` stub arm this mutation targets. Not re-run at the
+# 152-case (#302) baseline either: of #302's five touched/new implementer fixtures (named in
+# impl-plan-edit-lookup-unreadable's own #302 reachability note above), the two that DO reach this arm
+# (impl-mid-body-plan-marker-quote-not-selected, impl-single-issue-mid-body-quoter-not-selected)
+# each write a normal, OBJECT-shaped comment-<id>.json, never an array, so the script's own
+# `[ -z "$plan_updated" ]` guard would still catch a hypothetical array response from either —
+# the identical honest-limit reason above; the other three (impl-mid-body-quoter-only-no-plan,
+# impl-output-shape, impl-plan-marker-quoter-warn-scope) never reach the arm at all, so this
+# mutant stays doubly unreached on them.
 case_impl_plan_edit_filter_error() {
   local dir; dir="$(mk_fixture impl-plan-edit-filter-error)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3429,6 +3542,11 @@ EOF
 # identical value for all three and this mutant remains inert on them. Not re-run at the 150-case
 # (#297) baseline either: build_stub_discovery shadows find-implementation-work.sh entirely for
 # every one of #297's nine new fixtures, so none of them ever looks up a comment-<id>.json at all.
+# Not re-run at the 152-case (#302) baseline either: impl-mid-body-plan-marker-quote-not-selected
+# and impl-single-issue-mid-body-quoter-not-selected each look up a comment-<id>.json with a real,
+# non-omitted `updated_at`, so this mutant stays inert on them too (the identical #281 reasoning
+# above); impl-plan-marker-quoter-warn-scope never even reaches the #192 lookup at all — its
+# no-approval-event reason resolves before the `else` branch containing it ever runs.
 case_impl_plan_edit_missing_updated_at() {
   local dir; dir="$(mk_fixture impl-plan-edit-missing-updated-at)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3486,7 +3604,10 @@ EOF
 # normally and this guard (which only matters for an empty-parse url) is never reached by them.
 # Not re-run at the 150-case (#297) baseline either: build_stub_discovery shadows
 # find-implementation-work.sh entirely for every one of #297's nine new fixtures, so none of them
-# ever has a plan comment at all.
+# ever has a plan comment at all. Not re-run at the 152-case (#302) baseline either: #302's touched
+# implementer fixtures' plan comments are well-formed `#issuecomment-<digits>` urls too (the
+# identical #281 reasoning above), and plan-marker-quoter-warn-scope never calls
+# find-implementation-work.sh at all.
 case_impl_plan_comment_id_unparseable() {
   local dir; dir="$(mk_fixture impl-plan-comment-id-unparseable)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3545,7 +3666,10 @@ EOF
 # well-formed `#issuecomment-<digits>` shapes, so this inner digits-only guard is never reached
 # with a non-empty, non-digits id by any of them. Not re-run at the 150-case (#297) baseline
 # either: build_stub_discovery shadows find-implementation-work.sh entirely for every one of
-# #297's nine new fixtures, so none of them ever has a plan comment at all.
+# #297's nine new fixtures, so none of them ever has a plan comment at all. Not re-run at the
+# 152-case (#302) baseline either, for the identical reason: #302's touched implementer plan-
+# comment urls are all well-formed `#issuecomment-<digits>` shapes too, so this inner digits-only
+# guard is never reached with a non-empty, non-digits id by any of them.
 case_impl_plan_comment_id_non_digits() {
   local dir; dir="$(mk_fixture impl-plan-comment-id-non-digits)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3626,6 +3750,20 @@ EOF
 # fetch_retries — present on every run of this script regardless of value, batch mode included.
 # Measured mutants: (d), (e), and (f) — see the MEASURED MUTANTS (#284/#285) block below the case
 # table (one has(...) assertion catches each of the three keys' own deletion mutant independently).
+# #302 adds a fourth has(...) assertion, for plan_marker_quoters, caught only by the MEASURED
+# MUTANTS (#302) block's own mutant (j) (which deletes the counts key outright): this fixture's
+# own two comments (the plan and a plain "context comment") do NOT touch the plan_marker_quoters
+# rule the same way for every letter. Only (b) and (d) shift the (unasserted) value: the plan
+# itself would satisfy the clause once mutant (b) deletes the createdAt window, and the "context
+# comment" feedback would satisfy it once mutant (d) deletes the contains($m) select. (a), (c),
+# (e), (f), and (g) leave the value at 0: neither comment is untrusted (a is inert), neither is
+# affected by the no-plan-window wrap (c is inert, $lastPlan is not null), and neither comment
+# carries a harness marker for (e)/(f)/(g) to admit. (h) and (i) have no quoter for the
+# counter/warn-echo deletion to act on either, since the unmutated clause already selects zero
+# comments here. Either way, this fixture asserts no .counts.plan_marker_quoters value and no
+# warn-count needle, so it stays blind to whichever comments get counted or whether the
+# counter/warn machinery fires at all — see the MEASURED MUTANTS (#302) block below the case
+# table.
 case_impl_output_shape() {
   local dir; dir="$(mk_fixture impl-output-shape)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3669,6 +3807,7 @@ EOF
   expect_jq '.counts | has("ready_query_retried")' 'true'
   expect_jq '.counts | has("ready_query_unavailable")' 'true'
   expect_jq '.counts | has("fetch_retries")' 'true'
+  expect_jq '.counts | has("plan_marker_quoters")' 'true'
   expect_api_calls "$dir" 1
 }
 
@@ -3694,7 +3833,11 @@ EOF
 # contains($a) deleted — this mutant is inert on it — and #281's other implementer fixtures carry
 # no harness-audit-marked comment at all. Not re-run at the 150-case (#297) baseline either:
 # build_stub_discovery shadows find-implementation-work.sh entirely for every one of #297's nine
-# new fixtures, so none of them ever reaches $tppSel at all.
+# new fixtures, so none of them ever reaches $tppSel at all. Not re-run at the 152-case (#302)
+# baseline either: impl-plan-marker-quoter-warn-scope's own T3 (harness-audit-opening, also
+# quoting the plan marker mid-body) is the identical shape #281's own inert comment above — it
+# stays excluded from $tppSel via the untouched contains($m) clause regardless of this mutant; the
+# three implementer hosts (five hosts in total) carry no harness-audit-marked comment either.
 case_impl_audit_comment_not_binding() {
   local dir; dir="$(mk_fixture impl-audit-comment-not-binding)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3764,7 +3907,11 @@ EOF
 # OWNER-authored (trusted); none carries an untrusted post-plan comment. Not re-run at the
 # 150-case (#297) baseline either: build_stub_discovery shadows find-implementation-work.sh
 # entirely for every one of #297's nine new fixtures, so none of them ever populates
-# untrusted_post_plan at all.
+# untrusted_post_plan at all. Not re-run at the 152-case (#302) baseline either:
+# impl-plan-marker-quoter-warn-scope's own untrusted (NONE) T2 populates untrusted_post_plan, but
+# it is a mid-body PLAN-marker quoter with no harness marker at all, so it does not carry the
+# `.body | contains($a)`-carrying shape this mutation targets; plan-marker-quoter-warn-scope never
+# calls find-implementation-work.sh at all.
 case_impl_untrusted_audit_marker_still_reported() {
   local dir; dir="$(mk_fixture impl-untrusted-audit-marker-still-reported)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3893,6 +4040,11 @@ EOF
 # The suite has grown again, to 150 across #297's nine new Part 14 fixtures — not re-run:
 # build_stub_discovery shadows find-planning-work.sh entirely for every one of them, so none ever
 # reaches this mutant's `untrusted:` array at all.
+#
+# The suite has grown again, to 152 across #302's two new combined fixtures — not re-run either:
+# plan-marker-quoter-warn-scope's own untrusted (NONE) T2 is a mid-body PLAN-marker quoter, not a
+# harness-audit-marker-carrying comment, so it does not carry the shape this mutant targets;
+# impl-plan-marker-quoter-warn-scope never calls find-planning-work.sh at all.
 case_plan_untrusted_audit_marker_still_reported() {
   local dir; dir="$(mk_fixture plan-untrusted-audit-marker-still-reported)"
   cat > "$dir/initial.json" <<'EOF'
@@ -4077,7 +4229,16 @@ EOF
 # no implementer fixture carries a trusted_post_plan entry; #281's three planner fixtures never run
 # bin/find-implementation-work.sh at all. Not re-run at the 150-case (#297) baseline either:
 # build_stub_discovery shadows find-implementation-work.sh entirely for every one of #297's nine
-# new fixtures, so none of them ever computes the workstream-B seed at all. Plan comment
+# new fixtures, so none of them ever computes the workstream-B seed at all. Not re-run at the
+# 152-case (#302) baseline either: impl-plan-marker-quoter-warn-scope DOES carry a genuinely
+# non-empty trusted_post_plan (its own T1, plain feedback with no marker at all) while reaching
+# find-implementation-work.sh — joining the many fixtures already named above (I5 included) that
+# already carry one, so it is not the first to do so. It stays unaffected by this mutant for the
+# same reason I5 does, reached via a different route: its no-approval-event reason means
+# $approved_at (and so `$at` in the seed computation) stays the empty string, so the seed's
+# `if $at == "" then null` branch is taken unconditionally for T1, never the `else` branch
+# (`(.createdAt > $at) | not)`) this mutant edits — an empty $at rather than I5's unasserted
+# field, the same invisible-to-this-mutant outcome by a different route. Plan comment
 # retrofitted for #192 (see impl-approval-covers-plan's
 # comment); the post-plan comment itself has a normalised (#220) `#issuecomment-7033` url. #230:
 # since this comment is UNCOVERED (its createdAt postdates the label), it is never looked up for
@@ -4188,7 +4349,11 @@ EOF
 # new fixtures carries a trusted_post_plan entry (a decision comment) at all. Not re-run at the
 # 150-case (#297) baseline either: build_stub_discovery shadows find-implementation-work.sh
 # entirely for every one of #297's nine new fixtures, so none of them ever computes a
-# trusted_post_plan entry at all.
+# trusted_post_plan entry at all. Not re-run at the 152-case (#302) baseline either:
+# impl-plan-marker-quoter-warn-scope's own T1 does populate trusted_post_plan, but its
+# no-approval-event reason leaves `$at` the empty string, so the seed's `if $at == "" then null`
+# branch is taken unconditionally, never the `else` branch this mutant edits — the identical
+# reason given on impl-post-approval-comment-not-binding's own #302 continuation above.
 case_impl_post_approval_tie_covered() {
   local dir; dir="$(mk_fixture impl-post-approval-tie-covered)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4300,7 +4465,13 @@ EOF
 # the identical reason: none of #281's seven new fixtures carries one either. Not re-run at the
 # 150-case (#297) baseline either: build_stub_discovery shadows find-implementation-work.sh
 # entirely for every one of #297's nine new fixtures, so none of them exercises the `--issue <n>`
-# code path (or any other code path of the real script) at all.
+# code path (or any other code path of the real script) at all. Not re-run at the 152-case (#302)
+# baseline either: impl-plan-marker-quoter-warn-scope's own T1 populates trusted_post_plan, but its
+# no-approval-event reason leaves `$at` the empty string, so its `covered_by_approval` already
+# reads null via the unmutated `if $at == "" then null` branch — coincidentally identical to what
+# this mutant's missing-field default (jq's implicit null) would also produce, and this fixture
+# asserts neither field regardless; plan-marker-quoter-warn-scope never calls
+# find-implementation-work.sh at all.
 case_impl_single_issue_post_approval_comment() {
   local dir; dir="$(mk_fixture impl-single-issue-post-approval-comment)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4347,7 +4518,7 @@ EOF
 # edited-before-approval, impl-decision-edited-beats-unreadable, and impl-single-issue-decision-
 # edited-after-approval — reverted immediately after recording this (byte-identical, sha256
 # confirmed). SECOND MUTATION PROOF (same measurement pass): deleting the narrowed
-# `and (.covered_by_approval_reason == null)` clause from the #194 warn loop's `select(...)`
+# `and .covered_by_approval_reason == null` clause from the #194 warn loop's `select(...)`
 # (bin/find-implementation-work.sh's `uncovered_pairs=` line) dropped the suite to 95 pass/1 fail,
 # failing exactly THIS case (its own `counts.post_approval_comments 0` and `expect_warn_count
 # "was posted after the plan-approved label" 0` assertions catch the double-count) — reverted
@@ -4392,7 +4563,7 @@ EOF
 #     impl-single-issue-edit-flags-skipped (S-A) do NOT join — their own decision comment's
 #     includesCreatedEdit is exactly false, so #240's pre-filter concludes covered before this
 #     mutated comparison is ever reached.
-#   - the `and (.covered_by_approval_reason == null)` clause deletion left it at 123 pass/1 fail,
+#   - the `and .covered_by_approval_reason == null` clause deletion left it at 123 pass/1 fail,
 #     failing exactly THIS case — none of #240's six new fixtures has an entry that is BOTH
 #     uncovered-for-editing AND asserted against the "posted after the plan-approved label" warn
 #     stem, so this narrower predicate remains invisible to all of them.
@@ -4409,7 +4580,18 @@ EOF
 # 141-case (#281) baseline either, for the identical reason: none of #281's seven new fixtures
 # carries one either. Not re-run at the 150-case (#297) baseline for any of the three mutants
 # either: build_stub_discovery shadows find-implementation-work.sh entirely for every one of
-# #297's nine new fixtures, so none of them ever reaches the #230 block at all.
+# #297's nine new fixtures, so none of them ever reaches the #230 block at all. Not re-run at the
+# 152-case (#302) baseline for the FIRST and THIRD mutants (the operator flip; the whole merge-
+# block deletion): impl-plan-marker-quoter-warn-scope resolves covers_plan="false" (reason
+# no-approval-event), and both edit code strictly inside the `if [ "$covers_plan" = "true" ]`
+# block (678-757) — so neither ever runs for this fixture. The SECOND mutant is different: its
+# target, the `uncovered_pairs=` line (803), belongs to the separate #194 warn loop, which is NOT
+# guarded by covers_plan and DOES run for every issue, this one included — so it IS reached, not
+# skipped. It still leaves this fixture unchanged, for an unrelated reason: T1 (the feedback
+# comment) is seeded covered_by_approval: null, not false, because approved_at ("$at") is empty
+# when no plan-approved labeling event was found (line 662) — so `.covered_by_approval == false`
+# never matches T1, whether or not the deleted `and .covered_by_approval_reason == null` clause
+# is present. plan-marker-quoter-warn-scope never calls find-implementation-work.sh at all.
 case_impl_decision_edited_after_approval() {
   local dir; dir="$(mk_fixture impl-decision-edited-after-approval)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4513,6 +4695,10 @@ EOF
 # identical reason: none of #281's seven new fixtures carries one either. Not re-run at the
 # 150-case (#297) baseline either: build_stub_discovery shadows find-implementation-work.sh
 # entirely for every one of #297's nine new fixtures, so none of them ever reaches the #230 block.
+# Not re-run at the 152-case (#302) baseline either, for the identical reason given on
+# impl-decision-edited-after-approval's own #302 continuation above: impl-plan-marker-quoter-warn-
+# scope resolves covers_plan="false", so the whole #230 block (guarded by `if [ "$covers_plan" =
+# "true" ]`) never runs for it.
 case_impl_decision_edit_tie_covered() {
   local dir; dir="$(mk_fixture impl-decision-edit-tie-covered)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4571,7 +4757,10 @@ EOF
 # fixtures carries a decision comment at all. Not re-run at the 141-case (#281) baseline either,
 # for the identical reason: none of #281's seven new fixtures carries one either. Not re-run at
 # the 150-case (#297) baseline either: build_stub_discovery shadows find-implementation-work.sh
-# entirely for every one of #297's nine new fixtures, so none of them ever reaches this guard.
+# entirely for every one of #297's nine new fixtures, so none of them ever reaches this guard. Not
+# re-run at the 152-case (#302) baseline either, for the identical reason given on
+# impl-decision-edited-after-approval's own #302 continuation above: impl-plan-marker-quoter-warn-
+# scope resolves covers_plan="false", so the whole #230 block never runs for it.
 case_impl_decision_comment_url_missing() {
   local dir; dir="$(mk_fixture impl-decision-comment-url-missing)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4630,6 +4819,9 @@ EOF
 # identical reason: none of #281's seven new fixtures carries one either. Not re-run at the
 # 150-case (#297) baseline either: build_stub_discovery shadows find-implementation-work.sh
 # entirely for every one of #297's nine new fixtures, so none of them ever reaches either guard.
+# Not re-run at the 152-case (#302) baseline either, for the identical reason given on
+# impl-decision-edited-after-approval's own #302 continuation above: impl-plan-marker-quoter-warn-
+# scope resolves covers_plan="false", so the whole #230 block never runs for it.
 case_impl_decision_comment_id_non_digits() {
   local dir; dir="$(mk_fixture impl-decision-comment-id-non-digits)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4689,7 +4881,11 @@ EOF
 # carries a decision comment (trusted_post_plan entry) at all, so none reaches this arm via the
 # decision-comment route either. Not re-run at the 150-case (#297) baseline either: none of
 # #297's nine new fixtures makes any `gh api ...` call at all, so none reaches the
-# `/issues/comments/` stub arm this mutation targets.
+# `/issues/comments/` stub arm this mutation targets. Not re-run at the 152-case (#302) baseline
+# either, for the identical reason given on impl-decision-edited-after-approval's own #302
+# continuation above: impl-plan-marker-quoter-warn-scope resolves covers_plan="false", so the
+# whole #230 block never runs for it, and plan-marker-quoter-warn-scope never calls
+# find-implementation-work.sh at all.
 case_impl_decision_edit_lookup_unreadable() {
   local dir; dir="$(mk_fixture impl-decision-edit-lookup-unreadable)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4755,7 +4951,10 @@ EOF
 # the `/issues/comments/` stub arm at all. Not re-run at the 141-case (#281) baseline either: none
 # of #281's seven new fixtures carries a decision comment at all, so none reaches this arm via the
 # decision-comment route. Not re-run at the 150-case (#297) baseline either: none of #297's nine
-# new fixtures makes any `gh api ...` call at all, so none reaches this stub arm either.
+# new fixtures makes any `gh api ...` call at all, so none reaches this stub arm either. Not
+# re-run at the 152-case (#302) baseline either, for the identical reason given on
+# impl-decision-edited-after-approval's own #302 continuation above: impl-plan-marker-quoter-warn-
+# scope resolves covers_plan="false", so the whole #230 block never runs for it.
 case_impl_decision_edit_filter_error() {
   local dir; dir="$(mk_fixture impl-decision-edit-filter-error)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4807,7 +5006,10 @@ EOF
 # the 141-case (#281) baseline either: none of #281's seven new fixtures carries a decision comment
 # at all, so none reaches this decision-comment filter call site. Not re-run at the 150-case
 # (#297) baseline either: build_stub_discovery shadows find-implementation-work.sh entirely for
-# every one of #297's nine new fixtures, so none of them ever reaches this filter call site.
+# every one of #297's nine new fixtures, so none of them ever reaches this filter call site. Not
+# re-run at the 152-case (#302) baseline either, for the identical reason given on
+# impl-decision-edited-after-approval's own #302 continuation above: impl-plan-marker-quoter-warn-
+# scope resolves covers_plan="false", so the whole #230 block never runs for it.
 case_impl_decision_edit_missing_updated_at() {
   local dir; dir="$(mk_fixture impl-decision-edit-missing-updated-at)"
   cat > "$dir/ready.json" <<'EOF'
@@ -4879,7 +5081,11 @@ EOF
 # 141-case (#281) baseline either, for the identical reason: none of #281's seven new fixtures
 # carries one either. Not re-run at the 150-case (#297) baseline for either mutant either:
 # build_stub_discovery shadows find-implementation-work.sh entirely for every one of #297's nine
-# new fixtures, so none of them ever reaches this final verdict `if`/`elif` at all.
+# new fixtures, so none of them ever reaches this final verdict `if`/`elif` at all. Not re-run at
+# the 152-case (#302) baseline for either mutant either, for the identical reason given on
+# impl-decision-edited-after-approval's own #302 continuation above: impl-plan-marker-quoter-warn-
+# scope resolves covers_plan="false", so the OUTER `if [ "$covers_plan" = "true" ]` guard blocks
+# entry into this whole section regardless of the inner `entry_covered` mutation.
 case_impl_decision_edited_beats_unreadable() {
   local dir; dir="$(mk_fixture impl-decision-edited-beats-unreadable)"
   cat > "$dir/ready.json" <<'EOF'
@@ -5031,7 +5237,17 @@ EOF
 # fixtures never run bin/find-implementation-work.sh, so the loop does not exist for them. Not
 # re-run at the 150-case (#297) baseline either: build_stub_discovery shadows
 # find-implementation-work.sh entirely for every one of #297's nine new fixtures, so the #230 loop
-# does not exist for any of them either.
+# does not exist for any of them either. Not re-run at the 152-case (#302) baseline either:
+# impl-plan-marker-quoter-warn-scope's own T1 DOES populate trusted_post_plan, so under this
+# specific mutant (which removes the OUTER `covers_plan = "true"` guard, unlike every other #230
+# mutant this file re-measures against #302, which all live INSIDE that guard) the loop would run
+# for it — but T1's own `covered_by_approval` was already seeded `null`, not `true`, by workstream
+# B's `if $at == "" then null` branch (the identical no-approval-event reason given on
+# impl-decision-edited-after-approval's own #302 continuation above), so the inner `[
+# "$entry_covered" = "true" ]` check still fails to enter the per-comment lookup even with the
+# outer guard bypassed — this mutant remains invisible to it, for a different reason than every
+# sibling #230 mutant above. plan-marker-quoter-warn-scope never calls find-implementation-work.sh
+# at all.
 case_impl_decision_not_looked_up_when_plan_uncovered() {
   local dir; dir="$(mk_fixture impl-decision-not-looked-up-when-plan-uncovered)"
   cat > "$dir/ready.json" <<'EOF'
@@ -5189,6 +5405,11 @@ EOF
 # total — none of Part 14's nine new fixtures joined, confirming the "already-valid field list"
 # reasoning holds for every one of the nine, not just an assumption. Reverted immediately after
 # recording this (byte-identical, sha256 confirmed).
+#
+# The suite has since grown to 152 across #302's two new combined fixtures — not re-run, for the
+# identical reason: neither script's own `gh issue list`/`gh issue view` field lists changed for
+# #302, so both new fixtures send only the SAME already-valid field lists this note already
+# covers.
 case_stub_json_unknown_field_rejected() {
   local dir; dir="$(mk_fixture stub-json-unknown-field-rejected)"
   cat > "$dir/initial.json" <<'EOF'
@@ -5235,7 +5456,12 @@ EOF
 # shape too. The suite has since grown to 150 across #297's nine new Part 14 fixtures — none of
 # these is affected either — not re-run: build_stub_discovery shadows both real discovery scripts
 # for every one of them, so none ever makes a `gh issue view` call at all (harness-status.sh's own
-# three sites are all `gh issue list`/`gh pr list` calls, never `gh issue view`).
+# three sites are all `gh issue list`/`gh pr list` calls, never `gh issue view`). The suite has
+# since grown to 152 across #302's two new combined fixtures — not re-run, for the identical
+# reason as #281's fixtures above: neither script's `gh issue view` field list changed for #302,
+# so both new fixtures' real `gh issue view` calls (plan-marker-quoter-warn-scope's per-candidate
+# fetch; impl-plan-marker-quoter-warn-scope's own ready-issue fetch) request only the SAME
+# already-accepted shapes.
 case_stub_json_unknown_field_rejected_view() {
   local dir; dir="$(mk_fixture stub-json-unknown-field-rejected-view)"
   cat > "$dir/issue-1.json" <<'EOF'
@@ -5282,6 +5508,11 @@ EOF
 # SAME five cases named above,
 # scaled to the new total — none of Part 14's nine new fixtures joined. Reverted immediately after
 # recording this (byte-identical, sha256 confirmed).
+#
+# The suite has since grown to 152 across #302's two new combined fixtures — not re-run, for the
+# identical reason: neither script's `--json` field lists changed for #302, so both new fixtures'
+# `gh issue list`/`gh issue view` calls carry only already-valid field lists, never
+# "authorAssociation".
 case_stub_json_author_association_rejected() {
   local dir; dir="$(mk_fixture stub-json-author-association-rejected)"
   cat > "$dir/initial.json" <<'EOF'
@@ -5455,6 +5686,27 @@ EOF
 # measurement — only the survivor set grew, by exactly the nine cases named above; thirty-six cases
 # survive in total now. Reverted immediately after recording this (byte-identical, sha256
 # confirmed).
+#
+# RE-MEASURED AGAIN 2026-09-17 (#302): the suite grew to 152 across two new combined fixtures.
+# With the SAME "comments" field removed from GH_ISSUE_JSON_FIELDS, re-running the suite dropped
+# it from 152 pass/0 fail to 35 pass/117 fail — thirty-five of the thirty-six pre-#302 survivors
+# above carry over unchanged by name; the thirty-sixth, plan-mid-body-quoter-only-no-latest-plan,
+# FLIPS to the caught set: #302 added `.counts.plan_marker_quoters` == 1 / a warn-count assertion
+# to that same fixture, and its per-candidate `gh issue view ...,comments` call — still made,
+# since its own candidates.json is non-empty — now fails closed before either new assertion's
+# underlying computation ever runs. The RESULT is the same fixture flipping under both PROOF B
+# and this mutant, but the MECHANISM differs: PROOF B corrupts the revision-candidates query
+# itself, so the per-candidate loop never iterates to issue #1 at all; here the candidates query
+# still succeeds and the loop reaches issue #1, but that fetch is attempted TWICE (the initial
+# attempt, then one retry after the guarded 30s backoff) and fails both times, hits
+# the per-candidate `continue` (line 261), and skips the issue — a different code path to the
+# same observable non-computation. Neither of #302's own two new fixtures survives either:
+# plan-marker-quoter-warn-scope's non-empty candidates.json and
+# impl-plan-marker-quoter-warn-scope's real `gh issue view ...,comments,labels` fetch are both
+# rejected the identical way, so every assertion either one makes (count, warn count, and the
+# expect_err needle) fails and both join the caught set. Net: thirty-five survivors in total (36
+# minus the one departure, plus zero new). Reverted immediately after recording this
+# (byte-identical, sha256 confirmed).
 case_stub_json_script_field_lists_accepted() {
   local dir; dir="$(mk_fixture stub-json-script-field-lists-accepted)"
   cat > "$dir/initial.json" <<'EOF'
@@ -5553,6 +5805,12 @@ EOF
 # "is:open is:issue label:impl-blocked", and the open-PR route, which supplies no `--search` at
 # all) do not contain "authorAssociation" either, and none of their `--json` field lists does.
 # Reverted immediately after recording this (byte-identical, sha256 confirmed).
+#
+# The suite has since grown to 152 across #302's two new combined fixtures — not re-run, for the
+# identical reason: plan-marker-quoter-warn-scope's `--search` strings are the SAME two fixed
+# script constants above, and impl-plan-marker-quoter-warn-scope's ready query is the SAME fixed
+# implementer constant, none of which contains "authorAssociation"; neither new fixture's `--json`
+# field list does either.
 case_stub_json_check_is_field_list_scoped() {
   local dir; dir="$(mk_fixture stub-json-check-is-field-list-scoped)"
   cat > "$dir/initial.json" <<'EOF'
@@ -5604,6 +5862,11 @@ EOF
 # list too (the separate `pr)` arm never reaches this check at all, so its own field list is
 # irrelevant to this mutant either way). Reverted immediately after
 # recording this (byte-identical, sha256 confirmed).
+#
+# The suite has since grown to 152 across #302's two new combined fixtures — not re-run, for the
+# identical reason: every `gh issue list`/`gh issue view` call either new fixture makes (the
+# planner's needs_initial_plan and revision-candidates queries and its per-candidate fetch; the
+# implementer's ready query and per-issue fetch) carries a `--json` argument too.
 case_stub_json_missing_json_argument_fails_loud() {
   local dir; dir="$(mk_fixture stub-json-missing-json-argument-fails-loud)"
   cat > "$dir/initial.json" <<'EOF'
@@ -6200,7 +6463,13 @@ EOF
 # feedback/binding sets stays contains($m), unaffected; only the plan-CANDIDATE test is anchored,
 # and it is now positive rather than an exclusion. See the MEASURED MUTANTS (#275/#281) block below
 # the case table for mutants M-1/M-2/M-3/M-4/M-5, each cited by the case comment(s) its recorded
-# failing set names.
+# failing set names. Since #302, this Part also hosts the diagnostic for the one gap the positive
+# anchor above still leaves unreported: a trusted, in-window comment that merely quotes the plan
+# marker mid-body, without opening with it, is dropped from both plan selection and the
+# feedback/binding sets with no warning of its own. Seven fixtures below (five host fixtures
+# retrofitted with new assertions, plus two new combined fixtures, plan-marker-quoter-warn-scope and
+# impl-plan-marker-quoter-warn-scope) pin the `warn:`/`counts.plan_marker_quoters` diagnostic —
+# see the separate MEASURED MUTANTS (#302) block below the case table for its own mutants (a)-(j).
 
 # impl-audit-record-not-selected-as-plan — the live #245 shape: a real OWNER plan at T0, the
 # plan-approved label applied at T1 > T0, and an OWNER record at T2 > T1 that OPENS WITH
@@ -6604,7 +6873,12 @@ EOF
 # record exclusion (which only ever tested startswith($a)/startswith($v)) never touched this shape;
 # it was already excluded from trusted_post_plan by the pre-existing contains($m) feedback
 # exclusion, but before #281 it WAS still a plan candidate under the old exclusion-based test.
-# Mutant M-1 — see the MEASURED MUTANTS (#275/#281) block.
+# Mutant M-1 — see the MEASURED MUTANTS (#275/#281) block. #302 adds
+# .counts.plan_marker_quoters/warn-count assertions to this same fixture: mutant (b) admits its
+# own T0 plan as a second quoter (count 1 -> 2); mutants (h)/(i)/(j) instead break the
+# count/warn-count/counts-key assertions directly (deleting the counter increment, the warn
+# echo, or the counts line) without adding any second quoter — see the MEASURED MUTANTS (#302)
+# block below the case table.
 case_impl_mid_body_plan_marker_quote_not_selected() {
   local dir; dir="$(mk_fixture impl-mid-body-plan-marker-quote-not-selected)"
   cat > "$dir/ready.json" <<'EOF'
@@ -6631,13 +6905,18 @@ EOF
   expect_jq '.plan_selection[0].trusted_post_plan' '[]'
   expect_jq '.counts.audit_comments_skipped' '0'
   expect_warn_count "postdates the plan-approved label" 0
+  expect_jq '.counts.plan_marker_quoters' '1'
+  expect_warn_count "carries the plan marker but does not open with it" 1
 }
 
 # impl-mid-body-quoter-only-no-plan — the only trusted comment on the issue is a mid-body quoter
 # (no harness marker, no plan comment at all); plan-approved is on the issue's labels. plan stays
 # null (the quoter is never a candidate) and zero gh api calls are made — mirrors
 # impl-audit-record-only-no-plan exactly, for the marker-not-on-line-1-adjacent shape #281 closes.
-# Mutant M-1 — see the MEASURED MUTANTS (#275/#281) block.
+# Mutant M-1 — see the MEASURED MUTANTS (#275/#281) block. #302 adds
+# .counts.plan_marker_quoters/warn-count assertions pinning the no-plan window: caught by mutant
+# (c) (the no-plan window itself) and, since the counter/warn machinery is what those assertions
+# actually pin, also by (h)/(i)/(j) — see the MEASURED MUTANTS (#302) block below the case table.
 case_impl_mid_body_quoter_only_no_plan() {
   local dir; dir="$(mk_fixture impl-mid-body-quoter-only-no-plan)"
   cat > "$dir/ready.json" <<'EOF'
@@ -6658,12 +6937,19 @@ EOF
   expect_jq '.ready | length' '1'
   expect_err "no maintainer-authored plan comment"
   expect_api_calls "$dir" 0
+  expect_jq '.counts.plan_marker_quoters' '1'
+  expect_warn_count "carries the plan marker but does not open with it" 1
 }
 
 # impl-single-issue-mid-body-quoter-not-selected — impl-mid-body-plan-marker-quote-not-selected's
 # shape under `--issue <n>`, on issue 44 (unused elsewhere in this file), absent from ready.json
 # (LESSON 2026-09-08's two-modes rule: an acceptance criterion naming both modes needs a fixture on
-# each side). Mutant M-1 — see the MEASURED MUTANTS (#275/#281) block.
+# each side). Mutant M-1 — see the MEASURED MUTANTS (#275/#281) block. #302 adds
+# .counts.plan_marker_quoters/warn-count assertions to this same fixture, carrying LESSON
+# 2026-09-08's two-modes rule into the new rule too: mutant (b) admits its own T0 plan as a
+# second quoter (count 1 -> 2); mutants (h)/(i)/(j) instead break the count/warn-count/counts-
+# key assertions directly, without adding any second quoter — see the MEASURED MUTANTS (#302)
+# block below the case table.
 case_impl_single_issue_mid_body_quoter_not_selected() {
   local dir; dir="$(mk_fixture impl-single-issue-mid-body-quoter-not-selected)"
   cat > "$dir/ready.json" <<'EOF'
@@ -6690,6 +6976,8 @@ EOF
   expect_jq '.plan_selection[0].trusted_post_plan' '[]'
   expect_jq '.counts.audit_comments_skipped' '0'
   expect_warn_count "postdates the plan-approved label" 0
+  expect_jq '.counts.plan_marker_quoters' '1'
+  expect_warn_count "carries the plan marker but does not open with it" 1
 }
 
 # plan-prose-before-audit-marker-record-not-the-plan — OWNER plan v1 at T0, OWNER feedback at T1,
@@ -6721,7 +7009,12 @@ EOF
 # plan-mid-body-plan-marker-quote-not-the-plan — same skeleton as
 # plan-prose-before-audit-marker-record-not-the-plan, but the T2 comment carries NO harness marker
 # at all, merely quoting <!-- planner-plan --> mid-body — the class ONLY #281's positive anchor
-# closes on the planner side. Mutant M-2 — see the MEASURED MUTANTS (#275/#281) block.
+# closes on the planner side. Mutant M-2 — see the MEASURED MUTANTS (#275/#281) block. #302 adds
+# .counts.plan_marker_quoters/warn-count assertions to this same fixture: mutant (b) admits its
+# own T0 plan as a second quoter, and mutant (d) admits its own T1 feedback as a second quoter
+# (count 1 -> 2 either way); mutants (h)/(i)/(j) instead break the count/warn-count/counts-key
+# assertions directly, without adding any second quoter — see the MEASURED MUTANTS (#302) block
+# below the case table.
 case_plan_mid_body_plan_marker_quote_not_the_plan() {
   local dir; dir="$(mk_fixture plan-mid-body-plan-marker-quote-not-the-plan)"
   cat > "$dir/initial.json" <<'EOF'
@@ -6741,13 +7034,24 @@ EOF
   expect_jq '.counts.revision' '1'
   expect_jq '.needs_revision[0].number' '1'
   expect_jq '.counts.audit_comments_skipped' '0'
+  expect_jq '.counts.plan_marker_quoters' '1'
+  expect_warn_count "carries the plan marker but does not open with it" 1
 }
 
 # plan-mid-body-quoter-only-no-latest-plan — the ONLY marker-carrying trusted comment is a mid-body
 # quoter at T1 (no harness marker, no real plan comment at all), with genuine trusted feedback at
 # T2 AFTER it: pre-#281 the quoter was $lastPlan and the T2 feedback triggered a phantom revision;
 # #281's positive anchor means the quoter is never a plan candidate, so there is no latest plan and
-# no revision. Mutant M-2 — see the MEASURED MUTANTS (#275/#281) block.
+# no revision. Mutant M-2 — see the MEASURED MUTANTS (#275/#281) block. #302 adds
+# .counts.plan_marker_quoters/warn-count assertions pinning the no-plan window: mutant (c) (the
+# no-plan window wrap) drops this fixture's own T1 quoter, sending the count from 1 to 0; mutant
+# (d) instead admits its own T2 genuine feedback as a second quoter (count 1 -> 2); mutants
+# (h)/(i)/(j) break the count/warn-count/counts-key assertions directly, without adding any
+# second quoter — see the MEASURED MUTANTS (#302) block below the case table. This fixture also
+# newly joins PROOF B (the candidates-arm `.[].number` ->
+# `.number` deletion) and MUTATION PROOF M4 (the "comments" field deletion) above, both of which
+# used to survive on it coincidentally before these assertions existed — see those two proofs' own
+# re-measurement notes.
 case_plan_mid_body_quoter_only_no_latest_plan() {
   local dir; dir="$(mk_fixture plan-mid-body-quoter-only-no-latest-plan)"
   cat > "$dir/initial.json" <<'EOF'
@@ -6766,6 +7070,104 @@ EOF
   expect_jq '.counts.revision' '0'
   expect_jq '.needs_revision' '[]'
   expect_jq '.untrusted_comments' '[]'
+  expect_jq '.counts.plan_marker_quoters' '1'
+  expect_warn_count "carries the plan marker but does not open with it" 1
+}
+
+# plan-marker-quoter-warn-scope (#302) — one fixture that tells apart every clause of the new
+# plan_marker_quoters rule: a real OWNER plan at T0 (2026-01-01); plain OWNER feedback at T1
+# (2026-01-02, no marker at all — pins the contains($m) select); an untrusted (NONE) mid-body
+# quoter at T2 (2026-01-03 — pins the trust gate, since $trustedC excludes it before the rule ever
+# runs); an OWNER record opening with <!-- harness-audit --> that quotes the plan marker at T3
+# (2026-01-04 — pins the contains($a) exclusion); an OWNER record opening with
+# <!-- verifier-verdict --> that quotes it at T4 (2026-01-05 — pins the contains($v) exclusion); an
+# OWNER record with prose BEFORE its harness-audit marker, also quoting the plan marker, at T5
+# (2026-01-06 — pins contains($a) over startswith($a): T5's own harness-audit marker is not on line
+# 1, so only a body-wide contains, not a startswith, excludes it); and one automation-shaped OWNER
+# quoter at T6 (2026-01-07) with no harness marker at all, modelling a maintainer triage tool that
+# quotes the plan marker while proposing answers to the plan's own open questions — the one
+# positive. Every one of T0/T1/T2/T3/T4/T5 fails a different select in the plan_marker_quoters
+# clause (or the trust gate feeding it), so only T6 is ever counted or named, pinning
+# .counts.plan_marker_quoters at exactly 1 and the warn count at exactly 1 too. Measured mutants:
+# (a) (T2 newly admitted), (b) (T0 newly admitted, since the window is gone entirely), (d) (T1
+# newly admitted), (e) (T3 AND T5 both newly admitted — both contain $a, so deleting the
+# contains($a) exclusion admits both at once, count 1 -> 3), (f) (T4 newly admitted), (g) (T5
+# newly admitted alone — the contains-vs-startswith discrimination), (h) (the counter stays 0
+# despite a correct warn line),
+# (i) (the warn line stops printing despite a correct counter), and (j) (the counts key
+# disappears) — NOT (c): this fixture always has a real plan (T0), so $lastPlan is never null and
+# the no-plan-window wrap changes nothing for it — see the MEASURED MUTANTS (#302) block below the
+# case table. This fixture also newly joins mutant M-2 (see the MEASURED MUTANTS (#275/#281)
+# block's own #302 re-measurement note above — its own T6 is admitted into $planC too, once
+# $planC is unanchored, pulling $lastPlan to T6 itself), MUTATION PROOF B (the candidates-arm
+# `.[].number` -> `.number` deletion — its own non-empty candidates.json fails closed, so the
+# per-candidate loop never runs), and MUTATION PROOF M4 (the "comments" field deletion — its own
+# real `gh issue view` fetch fails validate_json_fields the identical way).
+case_plan_marker_quoter_warn_scope() {
+  local dir; dir="$(mk_fixture plan-marker-quoter-warn-scope)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"please also handle the edge case","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"a note that references <!-- planner-plan --> in passing, nothing more","createdAt":"2026-01-03T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE"},
+  {"body":"<!-- harness-audit -->\nauto-approved under the CLAUDE.md policy, quoting <!-- planner-plan --> for the audit trail","createdAt":"2026-01-04T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"<!-- verifier-verdict -->\noutcome=pass, quoting <!-- planner-plan --> for the archive","createdAt":"2026-01-05T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"some context before the marker\n<!-- harness-audit -->\nquoting <!-- planner-plan --> for the record","createdAt":"2026-01-06T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"Proposed answers to the open questions:\n\n> <!-- planner-plan -->\n> ## Implementation plan\n\n1. Keep the existing retry constant.","createdAt":"2026-01-07T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"}
+]}
+EOF
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.counts.plan_marker_quoters' '1'
+  expect_warn_count "carries the plan marker but does not open with it" 1
+  expect_err "trusted comment by owner (2026-01-07T00:00:00Z, no url) carries the plan marker"
+}
+
+# impl-plan-marker-quoter-warn-scope (#302) — implementer-side twin of plan-marker-quoter-warn-
+# scope: the identical seven-comment timeline on ready issue 1, labelled plan-approved, with NO
+# events-1.json at all — the same quiet configuration impl-output-shape already uses (reason
+# no-approval-event, no #192/#230 lookups, no comment-<id>.json needed), so the events lookup is
+# still MADE (one gh api call) but returns nothing and never touches the plan_marker_quoters
+# computation, which runs entirely inside the per-issue jq call before that lookup. Every comment
+# carries its own https://example.invalid/1#issuecomment-<id> url (7108-7114, the next free ids —
+# see the id-allocation note above), so the automation-shaped T6 quoter's warn line names a real
+# url rather than "no url", discriminating this fixture's own needle from its planner-side twin's.
+# Measured mutants: (a), (b), (d), (e), (f), (g), (h), (i), and (j) — same per-letter mechanism as
+# plan-marker-quoter-warn-scope's own comment above, on the identical seven-comment timeline — NOT
+# (c), for the identical reason (a real plan comment T0 means $lastPlan is never null) — see the
+# MEASURED MUTANTS (#302) block below the case table. This fixture also newly joins mutant M-1
+# (see the MEASURED MUTANTS (#275/#281) block's own #302 re-measurement note above — its own T6
+# is admitted into $planC too, once $planC is unanchored, pulling $lastPlan to T6 itself) and
+# MUTATION PROOF M4 (the "comments" field deletion — its own real `gh issue view` fetch fails
+# validate_json_fields, so the whole per-issue computation never runs and every assertion this
+# fixture makes fails).
+case_impl_plan_marker_quoter_warn_scope() {
+  local dir; dir="$(mk_fixture impl-plan-marker-quoter-warn-scope)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7108"},
+  {"body":"please also handle the edge case","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7109"},
+  {"body":"a note that references <!-- planner-plan --> in passing, nothing more","createdAt":"2026-01-03T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE","url":"https://example.invalid/1#issuecomment-7110"},
+  {"body":"<!-- harness-audit -->\nauto-approved under the CLAUDE.md policy, quoting <!-- planner-plan --> for the audit trail","createdAt":"2026-01-04T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7111"},
+  {"body":"<!-- verifier-verdict -->\noutcome=pass, quoting <!-- planner-plan --> for the archive","createdAt":"2026-01-05T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7112"},
+  {"body":"some context before the marker\n<!-- harness-audit -->\nquoting <!-- planner-plan --> for the record","createdAt":"2026-01-06T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7113"},
+  {"body":"Proposed answers to the open questions:\n\n> <!-- planner-plan -->\n> ## Implementation plan\n\n1. Keep the existing retry constant.","createdAt":"2026-01-07T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7114"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.counts.plan_marker_quoters' '1'
+  expect_warn_count "carries the plan marker but does not open with it" 1
+  expect_err "trusted comment by owner (2026-01-07T00:00:00Z, https://example.invalid/1#issuecomment-7114) carries the plan marker"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -7135,6 +7537,21 @@ EOF
 # calls build_stub_discovery, which shadows find-planning-work.sh with a canned, non-gh-calling
 # stand-in — so despite also running through run_status, none of #297's nine new fixtures ever
 # invokes the real find-planning-work.sh these eleven mutants live inside.
+#
+# The suite has since grown to 152 across #302's two new combined fixtures — none of (a)-(k) above
+# was re-run: UNLIKE #297's build_stub_discovery-shadowed fixtures, plan-marker-quoter-warn-scope
+# DOES call find-planning-work.sh directly via run_planning, and its `initial.json`/
+# `candidates.json`/`issue-1.json` all succeed on their first attempt (no reject-initial(-once),
+# reject-candidates(-once), reject-view-1-once, or sleep-fails marker) — so it reaches the four gh
+# calls these mutants target, the same reachability #281's own three planner fixtures already
+# established. But its own assertions (`.counts.plan_marker_quoters`, a specific-substring warn
+# count, and a specific-substring `expect_err` needle) name neither
+# initial_query_retried/unavailable, candidates_query_retried/unavailable, nor fetch_retries, and
+# no mutant here can fabricate the SPECIFIC "carries the plan marker but does not open with it"
+# text — every mutant's own succeed-warn/extra-sleep/call-count effect above is worded differently
+# or observed through a different assertion entirely — so this
+# fixture is blind to every one of (a)-(k), for the identical reason #281's own three fixtures
+# already were. impl-plan-marker-quoter-warn-scope never calls find-planning-work.sh at all.
 
 # ---------------------------------------------------------------------------------------------
 # Part 11 cases (#240), against bin/find-implementation-work.sh — bounding the per-covered-comment
@@ -7478,6 +7895,13 @@ EOF
 # above was re-run: build_stub_discovery shadows find-implementation-work.sh entirely for every
 # one of them, so none ever carries a plan or decision comment, or reaches either pre-filter, at
 # all.
+#
+# The suite has since grown to 152 across #302's two new combined fixtures — none of (a)-(h) above
+# was re-run: impl-plan-marker-quoter-warn-scope DOES carry a plan comment (T0), but its own
+# no-approval-event reason means execution never reaches the `else` branch these two
+# includesCreatedEdit pre-filters live inside at all — a STRONGER unreachability than #281's own
+# three fixtures above (which reach the plan-site pre-filter but pass through it harmlessly);
+# plan-marker-quoter-warn-scope never calls find-implementation-work.sh at all.
 
 # ---------------------------------------------------------------------------------------------
 # Part 12 cases (#284), against bin/find-implementation-work.sh — bounded retries on the batch
@@ -7896,8 +8320,10 @@ EOF
 # from the unmutated script, and none of #281's fixtures sets one — every ready.json, issue-N.json
 # (batch and --issue 44), and stub sleep call in #281's fixtures succeeds on its first attempt;
 # (d)-(f) each delete a `ready_query_retried`/`ready_query_unavailable`/`fetch_retries` key none of
-# #281's fixtures asserts (they check only .plan_selection[0].plan/.approval/.trusted_post_plan and
-# .counts.no_trusted_plan/.counts.audit_comments_skipped); (i)-(l) all edit bin/harness-status.sh,
+# #281's fixtures asserts (they check .plan_selection[0].plan/.approval/.trusted_post_plan and
+# .counts.no_trusted_plan/.counts.audit_comments_skipped — plus, since #302, three of the four also
+# assert .counts.plan_marker_quoters and a warn count, neither of which these mutants touch either —
+# see the #302 continuation below); (i)-(l) all edit bin/harness-status.sh,
 # reached only via run_status, which none of #281's fixtures calls.
 #
 # RE-MEASURED 2026-09-16 (#297), when the suite grew to 150 across this train's own nine new
@@ -7942,6 +8368,17 @@ EOF
 #       fixtures and status-degraded-reasons-all-halves still do NOT join (they already expect
 #       `.degraded == 'true'` regardless of this mutant). Restored byte-identically after each
 #       measurement (sha256 confirmed); final restored-tree run: 150 pass, 0 fail.
+#
+# The suite has since grown to 152 across #302's two new combined fixtures — none of (a)-(l)
+# above was re-run: (a)-(h) still require a rejection marker or a direct assertion on
+# ready_query_retried/ready_query_unavailable/fetch_retries' own VALUE, and #302's two new
+# fixtures do neither — plan-marker-quoter-warn-scope never calls find-implementation-work.sh at
+# all (it calls run_planning), and impl-plan-marker-quoter-warn-scope's own ready query and single
+# per-issue fetch both succeed on the first attempt, with no assertion on those three keys beyond
+# the pre-existing, unaffected `has(...)` checks impl-output-shape's own #302 addition mirrors;
+# (i)-(l) are reached only via run_status, which neither new fixture calls (they call
+# run_planning/run_implementation directly, the identical reason #281's own seven fixtures gave
+# above).
 
 # ---------------------------------------------------------------------------------------------
 # Part 14 cases (#297), against bin/harness-status.sh's OWN three gh call sites — plan-proposed,
@@ -8443,6 +8880,11 @@ EOF
 #       proposed site's FAIL-closed branch instead, which this mutant leaves untouched).
 # Restored byte-identically after each measurement (sha256 confirmed); final restored-tree run:
 # 150 pass, 0 fail.
+#
+# The suite has since grown to 152 across #302's two new combined fixtures — none of (a)-(l) above
+# was re-run: every one of these mutants lives inside bin/harness-status.sh's own three gh call
+# sites or its degraded-computation jq, reached only via run_status, which neither new #302
+# fixture calls (they call run_planning/run_implementation directly).
 
 # empty-needle-guard (#262-1) — exercises every guarded helper in this file (expect_err,
 # expect_no_err, expect_warn_count) with an empty needle, and asserts the guard fired for each:
@@ -8478,7 +8920,12 @@ EOF
 # Part 14 fixtures (none of which calls expect_no_err/expect_err/expect_warn_count with an empty
 # needle either — every one passes a real needle, e.g. "plan-proposed query failed once" and
 # "could not list open PRs"): goes from 150 pass, 0 fail to 149 pass, 1 fail — the same
-# single-case failing set, new total.
+# single-case failing set, new total. RE-MEASURED AGAIN 2026-09-17 (#302), when the suite grew to
+# 152 cases across two new combined fixtures (neither of which calls expect_no_err/expect_err/
+# expect_warn_count with an empty needle either — both pass real needles, e.g. "carries the plan
+# marker but does not open with it" and the automation-shaped quoter's own author/createdAt/url
+# text): goes from 152 pass, 0 fail to 151 pass, 1 fail — the same single-case failing set, new
+# total.
 case_empty_needle_guard() {
   local saved_ok saved_why
   planning_err="fixture stderr for the empty-needle guard (#262)"
@@ -8622,6 +9069,8 @@ cases=(
   "plan-prose-before-audit-marker-record-not-the-plan|case_plan_prose_before_audit_marker_record_not_the_plan|#281 planner-side twin: a record with prose before its harness-audit marker is never the latest plan, so genuine feedback still triggers a revision"
   "plan-mid-body-plan-marker-quote-not-the-plan|case_plan_mid_body_plan_marker_quote_not_the_plan|#281 planner-side twin: a comment with no harness marker that merely quotes the plan marker mid-body is never the latest plan"
   "plan-mid-body-quoter-only-no-latest-plan|case_plan_mid_body_quoter_only_no_latest_plan|#281: the only marker-carrying trusted comment is a mid-body quoter — no latest plan, so genuine feedback after it does not trigger a phantom revision"
+  "plan-marker-quoter-warn-scope|case_plan_marker_quoter_warn_scope|#302: a plan, plain feedback, an untrusted quoter, an audit record, a verdict archive, a prose-before-marker record, and one automation-shaped trusted quoter — only the last is counted and named"
+  "impl-plan-marker-quoter-warn-scope|case_impl_plan_marker_quoter_warn_scope|#302 implementer-side twin: the same seven-comment scope on a ready, plan-approved issue with no events-1.json — only the automation-shaped trusted quoter is counted and named"
   "plan-initial-query-retry-succeeds|case_plan_initial_query_retry_succeeds|#273: the needs_initial_plan query fails once then succeeds on the bounded retry — 2 issue-calls, 1 sleep(30), retried true, unavailable false, real content from the second attempt"
   "plan-initial-query-unavailable|case_plan_initial_query_unavailable|#273: the needs_initial_plan query fails on both attempts — one warn line, empty bucket, both flags true, exactly 1 sleep, needs_revision still populated from the healthy candidates query"
   "plan-candidates-query-retry-succeeds|case_plan_candidates_query_retry_succeeds|#273: the revision-candidates query fails once then succeeds on the bounded retry — 2 issue-calls, 1 sleep(30), retried true, unavailable false, a real revision from the second attempt"
@@ -8744,6 +9193,144 @@ cases=(
 # M-5 was re-run: build_stub_discovery shadows both find-planning-work.sh and
 # find-implementation-work.sh entirely for every one of them, so none ever reaches either script's
 # $planC binding at all.
+#
+# RE-MEASURED AGAIN 2026-09-17 (#302), when the suite grew to 152 across two new combined
+# fixtures (plan-marker-quoter-warn-scope, impl-plan-marker-quoter-warn-scope) that DO call the
+# real scripts via run_planning/run_implementation, unlike #297's nine: M-1 (the SAME
+# `startswith($m)` -> `contains($m)` edit on find-implementation-work.sh's $planC) dropped 152
+# cases to 141 pass/11 fail — the IDENTICAL ten names above, PLUS impl-plan-marker-quoter-warn-
+# scope: its own T6 (the automation-shaped quoter, the only comment this fixture's own
+# plan_marker_quoters clause counts) newly satisfies the unanchored contains($m) test too, so
+# $planC now admits it and $lastPlan moves forward to T6's own createdAt (2026-01-07) — which
+# makes T6 no longer STRICTLY LATER than $lastPlan, so #302's own `createdAt > $lastPlan` window
+# drops it out of plan_marker_quoters entirely (0, not 1), and the fixture's warn-count and
+# expect_err needle assertions fail alongside it. M-2 (the identical edit on
+# find-planning-work.sh's $planC) dropped 152 cases to 146 pass/6 fail — the IDENTICAL five names
+# above, PLUS plan-marker-quoter-warn-scope, joining by the same mechanism (its own T6 pulls
+# $lastPlan forward to 2026-01-07, dropping T6 itself out of the window). M-3 (revert
+# find-implementation-work.sh's $planSel binding to an unanchored $trustedC read) still drops 152
+# cases to 151 pass/1 fail, failing only impl-audit-record-plan-tie-not-selected (I3) — unchanged:
+# this mutant edits $planSel, which #302's own plan_marker_quoters member never reads (it reads
+# only $trustedC/$lastPlan), and neither new fixture's timeline has a plan/lastPlan createdAt tie
+# for $planSel to mis-resolve. M-4 (the over-exclusion probe on find-implementation-work.sh's
+# $planC) still drops 152 cases to 151 pass/1 fail, failing only
+# impl-plan-quoting-harness-marker-still-selected (I4) — unchanged: impl-plan-marker-quoter-warn-
+# scope's own T0 plan does not quote the harness-audit marker, so the added clause never excludes
+# it. M-5 (the identical probe on find-planning-work.sh's $planC) still drops 152 cases to 151
+# pass/1 fail, failing only plan-quoting-harness-marker-still-the-plan (P3) — unchanged, for the
+# identical reason on plan-marker-quoter-warn-scope's own T0. Each mutation reverted immediately
+# after recording it (byte-identical, sha256 confirmed).
+
+# MEASURED MUTANTS (#302) — the new plan_marker_quoters member (Implementation step 6), applied
+# one letter at a time to EACH script (twenty measurements total), the suite re-run against the
+# 152-case baseline, and the mutated file byte-identically restored (sha256 confirmed, `[ -x
+# bin/<script> ]` re-checked) before the next. Every letter is spelled identically against both
+# scripts' own copy of the clause (byte-identical apart from the trailing comma find-
+# implementation-work.sh's internal `result` object needs and find-planning-work.sh's doesn't).
+# Each touched or new case's own comment cites the letter(s) below whose recorded failing set
+# names it:
+#   (a) `$trustedC[]` -> `$c[]` (the raw, untrusted-inclusive comments array) on the
+#       plan_marker_quoters line only: planner — 152 cases dropped to 151 pass/1 fail, failing
+#       exactly plan-marker-quoter-warn-scope, whose own T2 (a NONE-author mid-body quoter,
+#       createdAt after the plan) is now admitted despite failing the trust gate, raising
+#       .counts.plan_marker_quoters from 1 to 2; implementer — 152 cases dropped to 151 pass/1
+#       fail, failing exactly impl-plan-marker-quoter-warn-scope, for the identical reason on its
+#       own T2. Neither of the five #281 host fixtures joins: none of them carries an untrusted
+#       comment that also satisfies the marker/harness-record clauses.
+#   (b) delete the `select(.createdAt > ($lastPlan // ""))` window select entirely (the whole
+#       clause, not just its `// ""` fallback): planner — 152 cases dropped to 150 pass/2 fail,
+#       failing exactly plan-mid-body-plan-marker-quote-not-the-plan (whose own T0 plan comment
+#       now ALSO qualifies — it trivially contains($m) via its own marker, contains neither $a nor
+#       $v — raising the count from 1 to 2) and plan-marker-quoter-warn-scope (its own T0 plan
+#       joins the same way); implementer — 152 cases dropped to 146 pass/6 fail, failing exactly
+#       impl-mid-body-plan-marker-quote-not-selected, impl-single-issue-mid-body-quoter-not-
+#       selected, and impl-plan-marker-quoter-warn-scope (their own T0 plan comments join for the
+#       identical reason), PLUS three fixtures with no plan_marker_quoters assertion of their own —
+#       impl-plan-edited-after-approval, impl-approval-label-absent, and impl-approval-label-
+#       absent-single-issue — each of whose SOLE trusted comment is its own plan (also newly
+#       admitted, for the same reason), producing a spurious SECOND "warn: issue #N:"-prefixed
+#       stderr line that breaks their own PRE-EXISTING `expect_warn_count` assertion: "warn:
+#       issue #1:" 1 for the first two (both issue 1); impl-approval-label-absent-single-issue
+#       runs `--issue 42`, so its own pre-existing needle is "warn: issue #42:" 1 instead — a
+#       collateral catch either way, not a plan_marker_quoters assertion of their own.
+#       impl-mid-body-quoter-only-no-plan and plan-mid-body-quoter-only-no-latest-plan do NOT join:
+#       neither has a real plan comment at all, so removing the window changes nothing for them
+#       (their own quoter already satisfied the unmutated window unconditionally, since $lastPlan
+#       is null).
+#   (c) wrap the window as `if $lastPlan == null then [] else [ … | select(.createdAt >
+#       $lastPlan) … ] end` (the no-plan case now returns empty instead of "any time"): planner —
+#       152 cases dropped to 151 pass/1 fail, failing exactly plan-mid-body-quoter-only-no-latest-
+#       plan, whose own quoter (the ONLY marker-carrying trusted comment, with no real plan at
+#       all) now has nothing to compare against and is dropped from the empty-$lastPlan branch;
+#       implementer — 152 cases dropped to 151 pass/1 fail, failing exactly
+#       impl-mid-body-quoter-only-no-plan, for the identical reason. Neither
+#       plan-marker-quoter-warn-scope nor impl-plan-marker-quoter-warn-scope joins: both carry a
+#       real plan comment (T0), so $lastPlan is never null for either.
+#   (d) delete the `select(.body | contains($m))` select: planner — 152 cases dropped to 149
+#       pass/3 fail, failing exactly plan-mid-body-plan-marker-quote-not-the-plan (its own T1
+#       plain-feedback comment, which carries no marker at all, now also qualifies, raising the
+#       count from 1 to 2), plan-mid-body-quoter-only-no-latest-plan (its own T2 genuine-feedback
+#       comment joins the same way), and plan-marker-quoter-warn-scope (its own T1 feedback
+#       joins); implementer — 152 cases dropped to 150 pass/2 fail, failing exactly
+#       impl-no-plan-no-binding (a fixture with no plan_marker_quoters assertion of its own: its
+#       sole comment, "just a regular comment, no marker", now spuriously qualifies, producing a
+#       second "warn: issue #1:" line that breaks its pre-existing `expect_warn_count "warn: issue
+#       #1:" 1` assertion) and impl-plan-marker-quoter-warn-scope (its own T1 feedback joins).
+#       impl-mid-body-plan-marker-quote-not-selected, impl-mid-body-quoter-only-no-plan, and
+#       impl-single-issue-mid-body-quoter-not-selected do NOT join: each has no OTHER trusted,
+#       post-window comment besides its own quoter (which already contains the marker), so
+#       deleting this select admits nothing new for them.
+#   (e) delete the `select((.body | contains($a)) | not)` exclusion: planner and implementer each
+#       — 152 cases dropped to 151 pass/1 fail, failing exactly plan-marker-quoter-warn-scope /
+#       impl-plan-marker-quoter-warn-scope respectively, whose own T3 (a trusted record opening
+#       with <!-- harness-audit --> that also quotes the plan marker) AND T5 (prose, then
+#       <!-- harness-audit -->, then a mid-body quote of the plan marker — T5 also contains $a)
+#       BOTH now qualify at once, raising the count from 1 to 3 (measured: `expected 1, got 3`).
+#       None of the five #281 host fixtures carries a harness-audit-marked comment at all, so none
+#       joins.
+#   (f) delete the `select((.body | contains($v)) | not)` exclusion: planner and implementer each
+#       — 152 cases dropped to 151 pass/1 fail, failing exactly plan-marker-quoter-warn-scope /
+#       impl-plan-marker-quoter-warn-scope respectively, whose own T4 (a trusted record opening
+#       with <!-- verifier-verdict --> that also quotes the plan marker) now qualifies too, for the
+#       identical reason as (e). None of the five #281 host fixtures joins either.
+#   (g) `contains($a)` -> `startswith($a)` (the ONE occurrence inside the plan_marker_quoters
+#       clause, not the other contains($a) sites elsewhere in either script): planner and
+#       implementer each — 152 cases dropped to 151 pass/1 fail, failing exactly
+#       plan-marker-quoter-warn-scope / impl-plan-marker-quoter-warn-scope respectively, whose own
+#       T5 (prose, THEN <!-- harness-audit -->, then a mid-body quote of the plan marker) no longer
+#       satisfies `startswith($a)` — the marker is not on line 1 — so it newly qualifies, raising
+#       the count from 1 to 2. T3 (which genuinely opens with <!-- harness-audit -->) still
+#       satisfies startswith($a) either way, so it stays excluded under this mutant; no #281 host
+#       fixture carries a comment shaped like T5 with no harness marker sitting after prose, so
+#       none of them joins.
+#   (h) delete the `plan_marker_quoters=$((plan_marker_quoters+1))` counter increment (the warn
+#       `echo` and the jq computation are both left intact): planner — 152 cases dropped to 149
+#       pass/3 fail, failing exactly the three #281/#302 fixtures that assert
+#       `.counts.plan_marker_quoters` == 1 on the planner side (plan-mid-body-plan-marker-quote-
+#       not-the-plan, plan-mid-body-quoter-only-no-latest-plan, plan-marker-quoter-warn-scope) —
+#       the counter now stays 0 for every one of them, even though the warn line(s) still print
+#       correctly; implementer — 152 cases dropped to 148 pass/4 fail, failing exactly the four
+#       fixtures that assert the implementer-side count (impl-mid-body-plan-marker-quote-not-
+#       selected, impl-mid-body-quoter-only-no-plan, impl-single-issue-mid-body-quoter-not-
+#       selected, impl-plan-marker-quoter-warn-scope), for the identical reason.
+#   (i) delete the `echo "warn: issue #$n: trusted comment by $desc carries the plan marker …"
+#       >&2` line (the counter increment is left intact): planner — 152 cases dropped to 149
+#       pass/3 fail, failing exactly the SAME three planner fixtures as (h) — each asserts
+#       `expect_warn_count "carries the plan marker but does not open with it" 1`, which now finds
+#       zero matching lines even though `.counts.plan_marker_quoters` itself is still correct;
+#       implementer — 152 cases dropped to 148 pass/4 fail, failing exactly the SAME four
+#       implementer fixtures as (h), for the identical reason.
+#   (j) delete `plan_marker_quoters: $pmq,` from the final `jq -n` counts object (the
+#       `--argjson pmq` line is left intact, merely unused): planner — 152 cases dropped to 148
+#       pass/4 fail, failing exactly output-shape (its own `.counts | has("plan_marker_quoters")`
+#       assertion, #23 of its now-23 `has(...)` checks) plus the same three planner fixtures (h)/
+#       (i) name, each of whose `.counts.plan_marker_quoters` jq lookup now resolves through
+#       `null | has(...)`/a missing-key `null` instead of the real integer; implementer — 152 cases
+#       dropped to 147 pass/5 fail, failing exactly impl-output-shape (its own `has(...)`
+#       assertion) plus the same four implementer fixtures (h)/(i) name, for the identical reason.
+# Every mutant (a)-(j) fails at least one fixture on at least one script; restored byte-
+# identically after each measurement (sha256 confirmed); final restored-tree run: 152 pass, 0
+# fail.
 
 matched=0
 for row in "${cases[@]}"; do

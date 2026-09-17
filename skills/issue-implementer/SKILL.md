@@ -709,6 +709,10 @@ merely postdates approval (`covered_by_approval_reason: null`) from one uncovere
 itself EDITED after approval or its own edit state could not be read
 (`covered_by_approval_reason: "decision-edited-after-approval"` or `"decision-edit-unreadable"`) —
 name which, since the latter is the more actionable fact for the human re-reading the thread.
+Report plan-marker quoters (#302) the same way: any comment a `warn:` line named as carrying the
+plan marker without opening with it (`counts.plan_marker_quoters`), quoted verbatim from step 2a's
+run — it was neither the plan nor binding context, so never fold it into `RESOLVED:` or the
+dispatch prompt.
 
 **Release the lock — the literal last action of this step, after the report above** — but only
 when you acquired it yourself at step 0 (standalone run; `issue-cycle` releases its own at its
