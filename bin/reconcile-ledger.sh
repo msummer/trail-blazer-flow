@@ -134,8 +134,16 @@ command -v jq >/dev/null 2>&1 || die "jq is required but not on the PATH"
 if [ "$ledger_src" = "-" ]; then
   raw="$(cat)"
 else
-  [ -r "$ledger_src" ] || die "cannot read ledger file: $ledger_src"
-  raw="$(cat "$ledger_src")"
+  # No access() pre-test on this path (dropped #336): this argument accepts any path a caller
+  # passes, including a process-substitution <(...) — this repo's own gate does exactly that
+  # (sheet A3) — and on macOS an access()-style readability test on a /dev/fd/N path races (~1 in
+  # 2000) when several processes touch /dev/fd at once — measured, sheet A4-A6 — while the content
+  # read itself never failed in 42,000 reads under that same load (A5). Attempt the read directly
+  # and die on failure instead;
+  # incidentally, a *directory* argument now dies here too (exit 2, "cannot read ledger file");
+  # previously it exited 0 with an empty ledger, with only cat's own "Is a directory" message on
+  # stderr.
+  raw="$(cat "$ledger_src" 2>/dev/null)" || die "cannot read ledger file: $ledger_src"
 fi
 
 # CR-safe; rewrite agent status lines into plain records; drop comments and blanks. Four
@@ -194,8 +202,9 @@ EOF
 
 # --- live state --------------------------------------------------------------
 if [ -n "$status_src" ]; then
-  [ -r "$status_src" ] || die "cannot read status JSON file: $status_src"
-  status_json="$(cat "$status_src")"
+  # See the ledger-read comment above (#336, sheet A4-A6): no access() pre-test on a path that
+  # can be a /dev/fd/N process substitution. Attempt the read directly and die on failure instead.
+  status_json="$(cat "$status_src" 2>/dev/null)" || die "cannot read status JSON file: $status_src"
 else
   command -v harness-status.sh >/dev/null 2>&1 \
     || die "harness-status.sh not on the PATH — pass its JSON as the second argument"

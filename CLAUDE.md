@@ -40,7 +40,15 @@ also runs in CI, as the second step in each job; run it by hand
 (`bash dev/selfcheck-tests.sh`) whenever `dev/selfcheck.sh` changes, and add a case for any
 assertion that parses structure out of a file, compares two extracted sets, or exercises script
 behavior; fixed-string and numeric-threshold assertions may ship without one, listed in the
-harness's exempt comment with a one-line reason each.
+harness's exempt comment with a one-line reason each. Since #336, cases run concurrently by
+default, in bounded waves: the job count is detected from the host's core count (clamped to at
+most 16, falling back to 2 when no probe answers), overridable by `SELFCHECK_TESTS_JOBS=<n>` or
+`-j <n>`, with `--serial` (`-j 1`) restoring one case at a time. Each case's result crosses back
+to the parent through a result file written under the same one `mktemp -d` root, collected in the
+cases' DECLARED order regardless of completion order — the PASS/FAIL line sequence, the totals,
+and the exit status never depend on scheduling — and a case whose child dies before writing that
+file is reported as a FAIL naming the case rather than silently dropped from the totals. The
+single-case/filter form (`bash dev/selfcheck-tests.sh <case>`) is unchanged.
 
 `dev/doctor-tests.sh` is a separate negative-test harness for the *consumer* doctor
 (`bin/check-harness.sh`) and its scoped-autonomy companion script (`bin/check-decision-record.sh`)
