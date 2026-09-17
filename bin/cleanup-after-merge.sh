@@ -37,7 +37,11 @@
 #        - PR still open                   -> fine, awaiting review
 #   4. Follow-ups filed from a claude/* PR that was closed WITHOUT merging (skipped, with a
 #      WARN, if the PR list or the follow-up candidate search could not be fetched): reported;
-#      with --fix, commented and labelled no-plan so the planner skips the orphaned work.
+#      with --fix, commented and labelled no-plan so the planner skips the orphaned work. Since
+#      #308, a follow-up the issue-implementer skill files is already born no-plan, so the
+#      candidate query's own -label:no-plan exclusion (see below) excludes it before this step
+#      ever runs — this quarantine path is now reachable only for a follow-up filed by an older
+#      harness version that instead carried no-auto-approve.
 #
 # Without --fix: read-mostly and conservative — never switches branches, never
 # force-deletes work that isn't merged, never edits labels (it only reports).
@@ -58,7 +62,9 @@
 #   - PR closed without merging    -> comment, remove pr-open (requeues the issue; the
 #     old claude/* branch is left alone — the implementer's branch-exists logic decides
 #     whether it can be reset or needs a human)
-# ...and quarantines orphaned plan follow-ups (also audited with a marked issue comment):
+# ...and quarantines orphaned plan follow-ups filed by an older harness version (also audited
+# with a marked issue comment) — since #308 a follow-up this version files is born no-plan, so
+# it is already excluded from the candidate query below and never reaches this path:
 #   - follow-up filed from a claude/* PR closed without merging -> comment, add no-plan
 #     (never closes the issue; a human removes no-plan to requeue it)
 #
@@ -355,7 +361,7 @@ else
           title=$(echo "$hit" | jq -r .title)
           if $FIX; then
             gh issue comment "$n" --body "${AUDIT_MARKER}
-🧹 Harness cleanup: this issue was filed automatically as a follow-up from PR #${p}, which was closed without merging, so the work it defers may never have landed. It has been labelled \`no-plan\` so the planner skips it — remove \`no-plan\` to requeue it (and \`no-auto-approve\` when you have confirmed you want it), or just close it." >/dev/null
+🧹 Harness cleanup: this issue was filed automatically as a follow-up from PR #${p}, which was closed without merging, so the work it defers may never have landed. It has been labelled \`no-plan\` so the planner skips it — remove \`no-plan\` to requeue it, or just close it." >/dev/null
             gh issue edit "$n" --add-label no-plan >/dev/null
             echo "FIXED #${n} (${title}): follow-up from PR #${p}, closed without merge — commented, labelled no-plan"
           else

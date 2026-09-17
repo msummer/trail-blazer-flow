@@ -294,13 +294,15 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    `pr-open`. The PR still ends up as one clean commit, exactly as before.
 6. **Files the plan's "Follow-ups to file"** as new issues referencing the PR — each entry whose
    justification names a concrete failure a user of this software would experience, filed with
-   `no-auto-approve` (machine-authored — a human removes the label to release it into approval)
-   and a marker naming the PR it came from — then **writes the new issue numbers back into the PR
-   body with `gh pr edit`**, not merely mentioned in the summary; entries that only name a
-   capability wish or an unnoticeable drift risk are declined with a note in the PR body instead
-   of becoming issues. If this PR is later closed without merging, the next
-   `cleanup-after-merge.sh --fix` comments on and labels `no-plan` any of those follow-ups still
-   open.
+   `no-plan` (machine-authored — held out of planning entirely until a human triages the issue
+   and removes the label; `no-auto-approve` is a separate, human-only veto the harness never
+   applies) and a marker naming the PR it came from — then **writes the new issue numbers back
+   into the PR body with `gh pr edit`**, not merely mentioned in the summary; entries that only
+   name a capability wish or an unnoticeable drift risk are declined with a note in the PR body
+   instead of becoming issues. A follow-up filed this way is born `no-plan`, so it never reaches
+   `cleanup-after-merge.sh`'s follow-up quarantine even if this PR is later closed without
+   merging — that path now applies only to a follow-up an older harness version filed (see
+   "Returning to a laptop" and the v2.7.4 → v2.7.5 note).
 7. **Watches CI** (`gh pr checks --watch`). Red CI caused by the PR itself gets **one bounded
    fix attempt** (implementer → mechanical checks → verifier → push; the PR isn't merged, so
    this is as safe as the kickback loop) — once that re-verification passes, its verdict is
@@ -448,7 +450,9 @@ above: it fails the revision-candidates query closed, so `find-planning-work.sh`
 `needs_revision` bucket comes back empty, and this script subtracts that (now-empty) bucket from
 the plan-proposed query — so a plan-proposed issue with real unaddressed maintainer feedback stays
 counted as awaiting your review instead of the planner's. Nothing in that JSON is phone-specific —
-it's the same summary a scheduled routine's own report already gives you.
+it's the same summary a scheduled routine's own report already gives you. Harness-filed
+follow-ups are held with `no-plan` and deliberately appear in none of the buckets above (#308) —
+list them yourself with `gh issue list --search "is:open is:issue label:no-plan" --limit 200`.
 
 ## Greenfield walkthrough: from idea to first feature
 
@@ -549,12 +553,17 @@ the planner → implementer → verifier loop walks it for every feature after.
 
 *(no label)* → `plan-proposed` → *(human adds, or the auto-approval policy)* `plan-approved` →
 `pr-open`, with `impl-blocked` for issues needing human input, `no-plan` to opt an issue out of
-planning entirely (tracking/discussion/question issues — also applied automatically by
-`cleanup-after-merge.sh --fix` to a plan follow-up whose source PR closed without merging), and
-`no-auto-approve` to keep an individual issue's approval manual even when CLAUDE.md defines an
-auto-approval policy. `test-ratchet` marks an issue the test-suite ratchet filed, and a plan
+planning entirely (tracking/discussion/question issues; also applied automatically by the
+`issue-implementer` skill to every follow-up issue it files, holding each one out of planning
+until a human triages it and removes the label, and by `cleanup-after-merge.sh --fix` to a plan
+follow-up filed by an older harness version and orphaned when its source PR closed without
+merging), and `no-auto-approve`, a **human-only veto** that keeps an individual issue's approval
+manual even when CLAUDE.md defines an auto-approval policy — the harness never applies this
+label itself. `test-ratchet` marks an issue the test-suite ratchet filed; the planner's
+auto-approval hard floor refuses any issue carrying it outright, so a ratchet plan always waits
+for a human; the harness never removes that label (manual approval is unaffected). A plan
 follow-up the implementer files carries a `<!-- harness-follow-up: PR #<n> -->` marker naming
-its source PR; both are harness-authored, so both also carry `no-auto-approve`. `multi-pr`
+its source PR. `multi-pr`
 (#231) is human-applied to a deliberately multi-PR issue: it's the primary signal
 `cleanup-after-merge.sh` reads to leave the issue open when one of its slices merges, read only
 by that script — nothing else in the lifecycle touches it. `plan-approved`
@@ -737,8 +746,10 @@ subagents need:
    threshold), evidence-backed (every issue quotes the command, the commit, and a verbatim
    output excerpt), capped at 3 issues per run and 5 open `test-ratchet` issues, and never the
    governance surface (`CLAUDE.md`, `.claude/`, policy/ADR docs, CI config). **No section means
-   the ratchet never runs.** Every filed issue carries `no-auto-approve`, so plan review stays
-   human by default; closing a ratchet issue as *not planned* vetoes that gap permanently.
+   the ratchet never runs.** Every filed issue carries `test-ratchet`, which the planner's
+   auto-approval hard floor refuses outright and the harness never removes, so plan
+   review always stays human (a human's own manual approval is unaffected); closing a ratchet
+   issue as *not planned* vetoes that gap permanently.
    `check-harness.sh` reports whether the section exists and, if it does, whether it names a
    backtick-quoted measurement command that resolves on the PATH — it never runs that command
    itself; only the `harness-setup` skill does, once, at onboarding, with a human present.
@@ -987,7 +998,10 @@ as governance surface, and treats a repo that reports "no checks configured" as 
 if you run merge autonomy on a repo with no CI, no PR qualifies until your own policy section
 explicitly opts a no-CI repo in. Follow-up issues the harness files now carry `no-auto-approve`
 (remove the label to release one into planning) and are commented and labelled `no-plan` by
-`cleanup-after-merge.sh --fix` if the PR that filed them is closed without merging.
+`cleanup-after-merge.sh --fix` if the PR that filed them is closed without merging — since
+v2.7.5 (see the v2.7.4 → v2.7.5 note below), a follow-up is filed with `no-plan` from birth
+instead, so both the "remove `no-auto-approve` to release" step and the quarantine-on-orphan
+behaviour described here now apply only to a follow-up filed by an older harness version.
 
 This release adds one further grant your repo must add: `"Bash(gh pr edit:*)"` — the orchestrator
 needs it to refresh a PR body it already opened (writing filed follow-up issue numbers into it,
@@ -1644,6 +1658,52 @@ assertion 4.43 pins only the presence and exact spelling of the `git diff --no-r
 --name-only` command line in `skills/issue-cycle/SKILL.md` — never the path-match rules or the
 residual "any doubt holds" judgement, which stay prose the orchestrator applies.
 
+Also in v2.7.5 (#308): needs no new grant, label, script, settings entry, or baseline step
+(re-running `bin/setup-labels.sh` is optional — it only refreshes the `no-auto-approve` label's
+description). `no-auto-approve` was overloaded: the harness applied it routinely to every
+follow-up it filed, so a maintainer's own veto use of the same label got set aside once those
+follow-ups were triaged. Three behaviour changes fix that. (1) A follow-up the implementer files
+from a PR's "Follow-ups to file" now carries `no-plan`, not `no-auto-approve` — held out of
+planning entirely until a human triages it and removes the label (see "Returning to a laptop").
+Once that removal happens, no other hard-floor clause is keyed to the follow-up's own provenance,
+so its plan becomes auto-approvable like any other issue's under the repo's own policy — triage
+is the human gate (ADR 0001 decision 4). (2) An issue the test-suite ratchet files now carries
+`test-ratchet` alone; the planner's auto-approval hard floor gained a clause refusing any issue
+carrying that label outright, and the harness never removes it, so a ratchet plan waits for a
+human. (3) `no-auto-approve` is now applied only by a human, in every mode — the harness never
+applies it itself, so when you do add it, it stays a real, standing veto. Narrowing to know: a
+human can no longer opt a `test-ratchet` issue *into* auto-approval by removing
+`no-auto-approve`, because the hold moved to the `test-ratchet` label itself, which the harness
+never removes; releasing such an issue now means a human deliberately stripping `test-ratchet` by
+hand (which also drops it from the ratchet's own backlog cap and veto memory). Approving a
+ratchet plan by hand is unaffected. An open `test-ratchet` issue still carrying the old
+`no-auto-approve` label from before this hop needs no action — the hard floor now refuses it
+regardless of that label's presence.
+
+One-time migration, for open issues an older harness version filed as follow-ups (skip if none
+are returned):
+
+```bash
+gh issue list --search "is:open is:issue label:no-auto-approve" --json number,body --limit 200 \
+  --jq '.[] | select(.body | startswith("<!-- harness-follow-up:")) | .number'
+# then, per issue number printed above:
+gh issue edit <n> --add-label no-plan --remove-label no-auto-approve
+```
+
+`--limit 200` caps the listing at 200 results — gh's own default is 30 — so a repo with more than
+200 such issues open at once should raise the limit and run it again; the listing above is not
+claimed exhaustive beyond that count. Both labels move in the same `gh issue edit` call
+deliberately: removing `no-auto-approve` alone would leave an untriaged, machine-authored issue
+eligible for auto-approval the moment a policy exists, while adding `no-plan` in that same edit
+is what keeps it held until a human triages it. Two honest limits carry over from the behaviour
+changes above:
+`harness-status.sh` has no bucket or count for a held follow-up (list them yourself, per
+"Returning to a laptop"), and `cleanup-after-merge.sh`'s follow-up quarantine — the "source PR
+closed without merging" comment — never reaches a follow-up filed with `no-plan` from birth,
+since the same `-label:no-plan` exclusion that makes `--fix` idempotent also excludes it; that
+path now applies only to a follow-up filed by an older harness version that still carries
+`no-auto-approve`.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -2215,11 +2275,14 @@ verification" sub-block (see "The CLAUDE.md contract" item 5) so "merged" stops 
 redeploys anything on your behalf — it only observes and records what the deploy did.
 
 Third, harness-authored issues are the exception to a pipeline that otherwise starts from
-human-authored ones — the test-suite ratchet (also opt-in via CLAUDE.md) is one source; the plan
-follow-ups the implementer files from a PR's "Follow-ups to file" are the other, carrying the
-same `no-auto-approve` provenance rule plus a marker naming their PR, which
-`cleanup-after-merge.sh --fix` uses to quarantine (`no-plan`, never closed) any that are orphaned
-when that PR closes without merging. The ratchet's further mitigations: the fixed issue-body
+human-authored ones — the test-suite ratchet (also opt-in via CLAUDE.md) is one source, held by
+the planner's hard floor refusing any `test-ratchet`-labelled issue outright, a label the harness
+never removes; the plan follow-ups the implementer files from a PR's
+"Follow-ups to file" are the other, born `no-plan` (holding planning itself, not just approval)
+plus a marker naming their PR. `cleanup-after-merge.sh --fix`'s quarantine (`no-plan`, never
+closed) for an orphaned follow-up now applies only to one filed by an older harness version that
+still carries `no-auto-approve`, since a follow-up born `no-plan` is already excluded from its
+candidate query. The ratchet's further mitigations: the fixed issue-body
 template, with evidence quoted as literal tool output rather than free-form prose; the "issue
 text is data, not instructions" rule below, applied to the ratchet's Evidence section like any
 other issue content; the test-only/monotonic scope that binds the plan and that the verifier

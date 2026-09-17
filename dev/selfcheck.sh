@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 70 assertions total. The gate prints what it checks — run it.
+# Five groups, 71 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -1447,6 +1447,44 @@ else
       bad "4.43 skills/issue-cycle/SKILL.md's 'git diff --no-renames --name-only' line is missing one or both paste placeholders (<paste the base tip here>, <paste the head OID here>): $gov43_line"
       ;;
   esac
+fi
+
+# 4.44 (#308) — no line in the harness's own instruction/script surface applies the
+# `no-auto-approve` label. ADR 0001 decision 4 makes that label a human-only veto: the harness
+# may document it, describe it, or tell a human how to apply it in prose, but no `gh issue
+# create`/`gh issue edit` line here may ever set it. Two clauses:
+# (a) an ERE, scanned line-by-line over skills/*/SKILL.md, skills/*/references/*.md,
+#     agents/*.md, and bin/*.sh, matching a `--label`/`--add-label` argument (bare word or
+#     `key=value` form, an optional single/double quote around the value) whose value begins
+#     with `no-auto-approve` — the ERE has no end anchor, so it would also match a longer label
+#     sharing that prefix (e.g. a hypothetical `no-auto-approve-v2`) — must find NO match
+#     anywhere in that surface. README.md is deliberately out of scope: it documents the
+#     one-time migration command and the human-applied label, both of which legitimately spell
+#     this string as an argument. dev/*.sh is out of scope by construction — this assertion's
+#     own source line and dev/selfcheck-tests.sh's perturbation text are never scanned. Proves
+#     only the absence of this one argument shape, on the lines it matches, in this one file
+#     set — it does not prove a human never applies the label themselves, and it does not prove
+#     anything about README.md.
+# (b) a fixed-string check that `--label no-plan` still appears in
+#     skills/issue-implementer/SKILL.md — so a future edit cannot silently drop the *File the
+#     plan's follow-ups* hold. Proves only that the filing instruction still names the label
+#     literal; it proves nothing about the body marker, the explanatory prose around it, or
+#     whether the instruction is ever followed.
+noauto_ere='(^|[[:space:]])--(add-)?label[[:space:]=]+["'"'"']?no-auto-approve'
+bad_list=""
+for f in "$root"/skills/*/SKILL.md "$root"/skills/*/references/*.md "$root"/agents/*.md "$root"/bin/*.sh; do
+  [ -f "$f" ] || continue
+  lines="$(grep -nE -- "$noauto_ere" "$f" | cut -d: -f1)"
+  for ln in $lines; do
+    bad_list="$bad_list $f:$ln"
+  done
+done
+if [ -n "$bad_list" ]; then
+  bad "4.44 a --label/--add-label argument sets no-auto-approve — a human-only veto (ADR 0001 decision 4) the harness must never apply itself:$bad_list"
+elif ! grep -qF -- '--label no-plan' "$root/skills/issue-implementer/SKILL.md"; then
+  bad "4.44 skills/issue-implementer/SKILL.md no longer files follow-ups with --label no-plan"
+else
+  ok "4.44 no --label/--add-label argument sets no-auto-approve in skills/*/SKILL.md, skills/*/references/*.md, agents/*.md, or bin/*.sh, and skills/issue-implementer/SKILL.md still files follow-ups with --label no-plan"
 fi
 
 # ============================================================================

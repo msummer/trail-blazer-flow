@@ -5,8 +5,9 @@ description: >
   policy". Use when the user asks to "run the test ratchet", "propose coverage work", "find
   the untested code", or when the issue-cycle's ratchet pass invokes it. Runs the measurement
   command the policy names, picks the largest gaps that tests alone can close, and files up to
-  a capped number of evidence-backed, test-only issues labelled `test-ratchet` and
-  `no-auto-approve`. Files issues only — it never plans, approves, implements, or merges.
+  a capped number of evidence-backed, test-only issues labelled `test-ratchet` — the planner's
+  auto-approval hard floor refuses that label outright, so these plans always wait for a human.
+  Files issues only — it never plans, approves, implements, or merges.
 ---
 
 # Test Ratchet
@@ -67,8 +68,9 @@ per run; target 80% per file.
    repo's policy/ADR documents, or CI configuration — the autonomy boundary only moves with a
    human in the loop.
 6. **Never approves its own work.** This skill never adds `plan-approved`, never plans, never
-   implements, never merges. Every issue it files carries `no-auto-approve`, so its plan waits
-   for a human unless that human removes the label.
+   implements, never merges. Every issue it files carries `test-ratchet`, which the planner's
+   auto-approval hard floor refuses outright, so its plan always waits for a human; the harness
+   never removes the label, and manual approval is unaffected.
 7. **Clean, green default branch only.** Measure on the default branch with a clean tree and a
    green baseline. A dirty tree, a feature branch, or a red baseline ⇒ measure nothing, file
    nothing, say why.
@@ -129,7 +131,7 @@ One `gh issue create` per gap, body written to a temp file to avoid shell-quotin
 
 ```bash
 gh issue create --title "Tests: cover <module or file>" \
-  --body-file <tempfile> --label test-ratchet --label no-auto-approve
+  --body-file <tempfile> --label test-ratchet
 ```
 
 The title always starts `Tests: cover ` so the backlog is greppable. The body is exactly the
@@ -186,8 +188,8 @@ Add tests for <...>. Suggested cases:
 
 ## Rules
 
-- **Files issues; nothing else.** No labels beyond `test-ratchet` and `no-auto-approve` on the
-  issues it creates, no comments on other issues, no branches, no commits, no PRs.
+- **Files issues; nothing else.** No label beyond `test-ratchet` on the issues it creates, no
+  comments on other issues, no branches, no commits, no PRs.
 - **No ledger record, no status line.** The ratchet is not a per-issue pipeline stage: it
   dispatches no agent and touches no issue already in the pipeline. Emitting a status line for it
   would put an unknown `stage` into the cycle's ledger, which `reconcile-ledger.sh` rejects

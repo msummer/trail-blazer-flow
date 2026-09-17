@@ -637,15 +637,16 @@ gh issue edit <number> --add-label pr-open
      `<!-- harness-multi-pr -->` in a maintainer comment — as the same opt-out.
 
      **File the plan's follow-ups.** File each entry whose justification names a concrete failure
-     a user of this software would experience — `gh issue create --label no-auto-approve`, with
+     a user of this software would experience — `gh issue create --label no-plan`, with
      the body opening `<!-- harness-follow-up: PR #<pr-number> -->`, then that justification
      quoted and a reference to this PR; then refresh the PR body: rewrite the body you composed
      above with the new issue numbers added, and apply it with `gh pr edit --body-file
      <tempfile>` — arg-less, from the issue's branch, resolves the PR from the branch, or pass
      the URL `gh pr create` printed if you're not on it — and note the numbers in your summary
-     too. Nobody human wrote these, so the label keeps their plans out of auto-approval until a
-     human removes it, and the marker is what `cleanup-after-merge.sh` matches to quarantine them
-     if this PR is later closed unmerged. An entry whose justification names a capability wish or
+     too. Nobody human wrote these, so the label holds them out of planning entirely until a
+     human triages the issue and removes it; the marker names the PR they came from.
+     `no-auto-approve` is a separate, human-only veto — the harness never applies it to a
+     follow-up or anything else. An entry whose justification names a capability wish or
      a drift risk nobody would notice rather than a concrete failure is yours to decline — don't
      file it; record the decline in the PR body (title plus one line of why) so the judgement
      reaches the reviewer instead of becoming an issue nobody triages.
