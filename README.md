@@ -626,17 +626,24 @@ subagents need:
    same plan still qualifies (#174, extended #213) — every one of these provenance reads, plus the
    head-branch key read and the archive's own match needle, and, since #300, the `gh pr checks`
    read, the up-to-date rail's `gh pr view` read, the merge pass's base-branch read and its
-   one-time default-branch lookup, and its merge-landed read, each get one bounded retry on
+   one-time default-branch lookup, and its merge-landed read, and, since #319, the up-to-date
+   rail's `git fetch origin` (answers by exiting 0, output unread, so any non-zero exit is the
+   transient failure), each get one bounded retry on
    transient failure before the PR is held, never on a determinate answer — pending or failing
    checks, a base mismatch, and any non-`MERGED` state all count as an answer, never retried
-   (#245, #277, #287, #300) — CI
+   (#245, #277, #287, #300, #319) — CI
    green on the head commit, its head mechanically checked to contain the default branch's
    current tip (`git merge-base --is-ancestor`) immediately before each PR's own merge attempt,
    otherwise held with "PR is behind `<default>` at `<short-sha>` — update the branch and let CI
    re-run" (#234, review F4 — because merges are sequential, every PR queued behind the first one
    in a pass holds this way by construction, expected rather than an error, until the pre-named
-   auto-update follow-up ships) — never the governance surface — CLAUDE.md, `.claude/`,
-   policy/ADR docs, CI config (harness PRs get one narrow, audited exception: a PR whose only
+   auto-update follow-up ships) — never the governance surface, read mechanically per PR (#324)
+   from `git diff --no-renames --name-only` over the up-to-date rail's own base-tip/head-OID
+   pair — case-insensitively, any path segment named `.claude`, `.github` (all of it, not only
+   workflow files), `adr`, or `adrs`, at any depth, or a final segment named `CLAUDE.md`,
+   `action.yml`, or `action.yaml`, plus an explicit "any doubt holds" residual for a policy/CI
+   file under another name — CLAUDE.md, `.claude/`, policy/ADR docs, CI config (harness PRs get
+   one narrow, audited exception: a PR whose only
    governance-surface change is an end-of-file append to `.claude/LESSONS.md`, at most 40 lines,
    with no deletions, no changed lines, and no `<!--`, and whose added lines the orchestrator
    judges as recording only a project gotcha — any doubt holds — is not held on that account
@@ -845,7 +852,8 @@ has no baseline to take and says so instead of blocking.
 Under a Merge autonomy policy (#307, ADR 0001 decision 9), a harness PR that carries a lesson
 this way is not automatically held by the *Never the governance surface* rule just because it
 touches `.claude/`: `skills/issue-cycle/SKILL.md`'s *Lesson-append carve-out* releases it only
-when `.claude/LESSONS.md` is the PR's sole governance-surface path, the diff is a pure
+when the *Governance path list* read (#324) establishes `.claude/LESSONS.md` as the PR's sole
+governance-surface path, the diff is a pure
 end-of-file append (no deleted or changed lines) of at most 40 added lines with no `<!--` in
 them, and the added lines, read as data, judge as only a project gotcha — any doubt holds the
 PR. Editing, reordering, or deleting an existing entry still holds it, as does any other
@@ -1620,6 +1628,21 @@ distilled lesson (step 2e) is unchanged — it still runs after an issue's last 
 only when that same compare prints nothing.
 Honest limit: this is orchestrator prose, not a hook — it catches the change after the dispatch
 returns rather than preventing the write; no `Edit`/`Write` PreToolUse hook exists yet.
+Also in v2.7.5 (#324, #319): needs no grant, label, script, settings entry, or baseline step
+(`Bash(git diff:*)`, `Bash(git fetch:*)`, and `Bash(sleep:*)` already ship in
+`templates/repo-settings.json`). Two consumer-visible changes, both of which **narrow** what
+merges unattended. First (#324): the merge floor's *Never the governance surface* rule now reads
+what "touching" means mechanically — `git diff --no-renames --name-only` over the up-to-date
+rail's own base-tip/head-OID pair, so a rename (which reports under both its old and new path)
+and a `gh`-reported file list (page-limited and rename-blind) can no longer let a governance-file
+move slip past prose judgement; a PR that touches any `.github/` path, a nested `.claude/` or
+`CLAUDE.md`, or renames a governance file elsewhere now holds where it might previously have
+been judged clear. Second (#319): a `git fetch origin` still failing after its one retry now
+holds the PR ("could not fetch origin — not comparing against a stale `<default>` tip") instead
+of risking a comparison against a stale `origin/<default-branch>` tip. Honest limit: gate
+assertion 4.43 pins only the presence and exact spelling of the `git diff --no-renames
+--name-only` command line in `skills/issue-cycle/SKILL.md` — never the path-match rules or the
+residual "any doubt holds" judgement, which stay prose the orchestrator applies.
 
 ## The per-repo settings file (required)
 
@@ -2179,8 +2202,10 @@ human, per issue, and the harness never applies it, so an uncitable answer still
 use is audited (issue comment; cycle report). With only auto-approval enabled, a bad
 auto-approval costs a wasted PR, not a bad merge. With merge
 autonomy also enabled, the backstop is the merge pass's hard floor (standard-flow PRs only,
-green CI on a head that mechanically contains the default branch's current tip (#234), protected
-governance surface — audited exception: a harness PR whose only governance-surface change is a
+green CI on a head that mechanically contains the default branch's current tip (#234) — a
+`git fetch origin` still failing after one retry holds rather than comparing a stale tip (#319)
+— protected governance surface, read mechanically from the PR's own diff (#324) — audited
+exception: a harness PR whose only governance-surface change is a
 bounded, add-only `.claude/LESSONS.md` append (#307) — sequential re-verification) — and on a repo with branch protection + required
 checks, that floor is a technical rail, not just policy. Enable
 merge autonomy only where a bad merge is cheap to revert (e.g. a default branch that doesn't

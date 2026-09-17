@@ -120,16 +120,18 @@ When active, evaluate each open harness PR (and Dependabot PRs, if the policy co
 against the repo's policy. The policy defines *which* PRs qualify; this **hard floor applies
 on top and is not configurable**:
 
-- **Transient-failure retry, once per read** (#245, #277, #287, #300): these reads are retried once
-  on transient failure — the *Verdict provenance* needle pair, the head-branch key read, the
-  *Archived verdict* archive read and match needle, the *Plan-binding provenance* discovery run and
-  binding-line walk needle, `gh pr checks`, the up-to-date rail's `gh pr view`, guard (a)'s
-  `baseRefName` and `defaultBranchRef` reads, and guard (d)'s `state` read (a re-read only, never a
-  second merge). A transient failure is the command rejected or erroring rather than answering, or
-  printing anything but the shape its own sub-bullet expects — and, for the discovery run, an
-  **unknown** `covers_plan` verdict; `gh pr checks` answers whenever it prints per-check results in
-  any state — pending (exit 8) and failing included — or reports no checks. A determinate answer
-  (those, a base mismatch, a non-`MERGED` state) is never retried. Retried per the issue-implementer
+- **Transient-failure retry, once per read** (#245, #277, #287, #300, #319): these reads are
+  retried once on transient failure — the *Verdict provenance* needle pair, the head-branch key
+  read, the *Archived verdict* archive read and match needle, the *Plan-binding provenance*
+  discovery run and binding-line walk needle, `gh pr checks`, the up-to-date rail's `git fetch
+  origin` and its `gh pr view`, guard (a)'s `baseRefName` and `defaultBranchRef` reads, and guard
+  (d)'s `state` read (a re-read only, never a second merge). A transient failure is the command
+  rejected or erroring rather than answering, or printing anything but the shape its own
+  sub-bullet expects — and, for the discovery run, an **unknown** `covers_plan` verdict; `gh pr
+  checks` answers whenever it prints per-check results in any state — pending (exit 8) and
+  failing included — or reports no checks; `git fetch origin` answers by exiting 0 — its output
+  is not read — so any non-zero exit is the transient failure. A determinate answer (those, a
+  base mismatch, a non-`MERGED` state) is never retried. Retried per the issue-implementer
   skill's step 2a ("Retry once before concluding unknown"): at most one re-run per read, per PR, per
   pass; no ladder retry (`retries=0`). All reads and audit evidence come from the retry run, never a
   mix. Still failing ⇒ **not eligible**, one-line reason (guard (d): `merge attempted, unconfirmed`).
@@ -193,15 +195,21 @@ on top and is not configurable**:
 - **CI green on the head commit**, verified fresh (`gh pr checks`), not remembered; **"no checks
   configured" is not green** unless the policy section explicitly opts a no-CI repo in.
 - **Head contains the default branch's tip**, checked mechanically, per PR, immediately before
-  guard (a) for that PR (re-evaluated after every merge — the tip moves) — except that, on a PR
-  the *Lesson-append carve-out* below applies to, that carve-out's own read-only diff check runs
-  between this rail and guard (a), not before this rail. This rail itself, unlike that carve-out,
-  applies to every PR this pass evaluates, harness and Dependabot PRs alike, with no "harness PRs
-  only" scoping of its own. Three separate Bash calls, no substitution: `git fetch origin`; then
-  `git rev-parse origin/<default-branch>` — copy the printed 40-char SHA literally; then `gh pr
-  view <pr> --json headRefOid,mergeStateStatus --jq '.headRefOid, .mergeStateStatus' | tr -d
+  guard (a) for that PR (re-evaluated after every merge — the tip moves) — except that, in the
+  window between this rail and guard (a), the *Governance path list* read below (#324) runs
+  first, for every PR (not just carve-out candidates), then, on a PR the *Lesson-append
+  carve-out* below applies to, that carve-out's own read-only diff check — neither one before
+  this rail. This rail itself, unlike that carve-out, applies to every PR this pass evaluates,
+  harness and Dependabot PRs alike, with no "harness PRs only" scoping of its own. Four separate
+  Bash calls, no substitution: `git fetch origin`; then `git rev-parse origin/<default-branch>`
+  — copy the printed 40-char SHA literally; then `gh pr view <pr>
+  --json headRefOid,mergeStateStatus --jq '.headRefOid, .mergeStateStatus' | tr -d
   '\r'` — prints the head OID, then the merge state; then `git merge-base --is-ancestor <paste
   the base tip here> <paste the head OID here>`.
+  - *`git fetch origin`:* retried once (#319, see *Transient-failure retry* above); still
+    failing after that retry ⇒ **not eligible**, one-line reason `could not fetch origin — not
+    comparing against a stale <default> tip` — neither the rest of this rail, the governance
+    path list read below, nor guard (a) runs for this PR.
   - *Verdict:* exit 0 ⇒ the head contains the tip, continue. **Any non-zero exit ⇒ not
     eligible**, one-line reason `PR is behind <default> at <short-sha> — update the branch and
     let CI re-run` (`<short-sha>` = the first 12 characters of the base tip SHA). If git errored
@@ -222,10 +230,35 @@ on top and is not configurable**:
 - **Never the governance surface**: any PR touching `CLAUDE.md`, `.claude/`, the repo's
   policy/ADR documents, or CI configuration waits for the human regardless of what the policy
   says — the autonomy boundary only moves with a human in the loop — except the *Lesson-append
-  carve-out* below, its only exception.
+  carve-out* below, its only exception. "Touching" is established mechanically, by the
+  *Governance path list* read immediately below, evaluated before the carve-out decides.
+  - *Governance path list, read mechanically* (#324): every PR this pass evaluates, harness and
+    Dependabot alike, no "harness PRs only" scoping of its own; runs after the up-to-date rail
+    above (reusing its base tip SHA and head OID) and before the carve-out below; not
+    retried — a local-object read is determinate. One Bash call, on one line, no substitution:
+    `git diff --no-renames --name-only <paste the base tip here> <paste the head OID here>`.
+    Measured (git 2.54.0): this prints the PR's own net change between the two commits the rail
+    already proved contained one another, read from local objects with no server-side page limit to
+    truncate it, and `--no-renames` prints a rename as its old path plus its new one — unaffected
+    by a repo's own `diff.renames` config — so a moved governance file is still caught under the
+    path it moved from. Path rules, case-insensitive (matching check 1's `ascii_downcase`): any
+    path segment equal to `.claude`, `.github`, `adr` or `adrs`; or a final segment equal to
+    `claude.md`, `action.yml` or `action.yaml` — beyond that list, the rule's own words above
+    still apply to the printed paths, a policy/ADR document or CI/build config under a name
+    those rules don't match (`docs/policies/…`, `.gitlab-ci.yml`, `Jenkinsfile`), and **any doubt
+    holds**. Verdict: any governance path other than `.claude/LESSONS.md` ⇒ **not eligible**,
+    one-line reason naming each, and the carve-out below is not evaluated; exactly
+    `.claude/LESSONS.md` and nothing else ⇒ the carve-out below decides; none ⇒ this rule does
+    not hold the PR. Git erroring rather than answering (an unknown flag on an old git, or the
+    head object not being present locally), or printing an empty list while the rail's two SHAs
+    differ, is **not eligible** too, quoting git's message — never a file list read from
+    anywhere else instead. Record the printed governance paths (or `none`) as evidence in the
+    cycle report for this PR's row, merged or held alike, mirroring the rail's own evidence
+    sentence.
   - *Lesson-append carve-out* (#307, ADR 0001 decision 9). Harness PRs only — Dependabot and
-    human PRs are never released by it. A PR whose only governance-surface path is
-    `.claude/LESSONS.md` is not held by this rule when all three checks below pass. Any failed
+    human PRs are never released by it. A PR whose only governance-surface path — established by
+    the *Governance path list* read above — is `.claude/LESSONS.md` is not held by this rule
+    when all three checks below pass. Any failed
     check, or any failed or non-conforming read, makes the PR **not eligible**, one-line reason
     naming the check (the verdict token for check 1); none of these reads is retried — a failed
     read just keeps today's hold, and the next pass re-evaluates.
