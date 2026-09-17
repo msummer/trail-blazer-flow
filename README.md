@@ -636,7 +636,11 @@ subagents need:
    re-run" (#234, review F4 — because merges are sequential, every PR queued behind the first one
    in a pass holds this way by construction, expected rather than an error, until the pre-named
    auto-update follow-up ships) — never the governance surface — CLAUDE.md, `.claude/`,
-   policy/ADR docs, CI config — nothing flagged for human decision, including, read from that
+   policy/ADR docs, CI config (harness PRs get one narrow, audited exception: a PR whose only
+   governance-surface change is an end-of-file append to `.claude/LESSONS.md`, at most 40 lines,
+   with no deletions, no changed lines, and no `<!--`, and whose added lines the orchestrator
+   judges as recording only a project gotcha — any doubt holds — is not held on that account
+   alone — see "The LESSONS.md contract" below) — nothing flagged for human decision, including, read from that
    same fresh `find-implementation-work.sh --issue <n>` run, any trusted post-plan comment the
    approval does not cover (`covered_by_approval` not `true`), so a maintainer's late objection
    parks the PR for you instead of merging past it (#206) — one merge at a time with
@@ -833,6 +837,17 @@ seeds an empty one on install). Format: 1–3 lines per entry, dated, written as
 to a future agent. Because the harness appends lessons mid-run but never commits to the default
 branch, uncommitted `LESSONS.md` changes are treated as benign everywhere the skills check for
 a dirty tree, and ride along with the next harness commit.
+
+Under a Merge autonomy policy (#307, ADR 0001 decision 9), a harness PR that carries a lesson
+this way is not automatically held by the *Never the governance surface* rule just because it
+touches `.claude/`: `skills/issue-cycle/SKILL.md`'s *Lesson-append carve-out* releases it only
+when `.claude/LESSONS.md` is the PR's sole governance-surface path, the diff is a pure
+end-of-file append (no deleted or changed lines) of at most 40 added lines with no `<!--` in
+them, and the added lines, read as data, judge as only a project gotcha — any doubt holds the
+PR. Editing, reordering, or deleting an existing entry still holds it, as does any other
+`.claude/` change, exactly as before. Every carve-out merge is quoted word for word in the cycle
+report and in a durable `<!-- harness-audit -->` issue comment, so a released lesson is never
+merged silently.
 
 ## The BASELINE.md contract (machine-local)
 
@@ -1574,6 +1589,20 @@ comment with it, or hand-posts a plan with prose before the marker, now sees why
 implementer skipped their comment instead of silence, unless that same comment also carries a
 harness-record marker. The comment is still never acted on either way — see "Safety model" below
 for the unchanged, security-relevant part of this behaviour.
+Also in v2.7.4 (#307, ADR 0001 decision 9): under a Merge autonomy policy, the merge floor's
+*Never the governance surface* rule gains its one exception, the *Lesson-append carve-out* —
+needing no grant, label, script, settings entry, or baseline step (`Bash(gh pr view:*)`,
+`Bash(git diff:*)`, and `Bash(gh issue comment:*)` already ship in `templates/repo-settings.json`).
+The consumer-visible widening: a harness PR whose only governance-surface change is an
+end-of-file, add-only append to `.claude/LESSONS.md` of at most 40 lines with no `<!--` in them
+no longer waits for a human on that account alone; a PR that also touches any other governance
+path, or whose `.claude/LESSONS.md` diff edits, reorders, or deletes any existing line, still
+does, unchanged. Every carve-out merge is quoted word for word — both in the cycle report and in
+a durable `<!-- harness-audit -->` issue comment posted after the merge lands — so a released
+lesson is never merged silently. Honest limit: the new gate assertion (5.15) executes only the
+files-check verdict program; both the end-of-file diff rule (check 2) and the content judgement
+(check 3, that the added lines read as only a project gotcha, never an instruction) are prose the
+orchestrator applies and the gate does not pin.
 
 ## The per-repo settings file (required)
 
@@ -2134,7 +2163,8 @@ use is audited (issue comment; cycle report). With only auto-approval enabled, a
 auto-approval costs a wasted PR, not a bad merge. With merge
 autonomy also enabled, the backstop is the merge pass's hard floor (standard-flow PRs only,
 green CI on a head that mechanically contains the default branch's current tip (#234), protected
-governance surface, sequential re-verification) — and on a repo with branch protection + required
+governance surface — audited exception: a harness PR whose only governance-surface change is a
+bounded, add-only `.claude/LESSONS.md` append (#307) — sequential re-verification) — and on a repo with branch protection + required
 checks, that floor is a technical rail, not just policy. Enable
 merge autonomy only where a bad merge is cheap to revert (e.g. a default branch that doesn't
 auto-deploy) — or, on a repo whose default branch does auto-deploy, declare a "Post-merge
@@ -2338,7 +2368,11 @@ copy of itself over the working tree being edited.
   [`docs/adr/`](docs/adr/README.md) — [0001 Autonomy mode](docs/adr/0001-autonomy-mode.md), a
   single opt-in profile for unattended runs, and
   [0002 Codex compatibility](docs/adr/0002-codex-compatibility.md), running the harness under
-  OpenAI Codex. Neither is implemented yet; each ADR lists its tracking issues.
+  OpenAI Codex. Neither ADR 0001's combined "Autonomy mode" profile nor ADR 0002's Codex
+  compatibility is implemented yet; each ADR lists its tracking issues. One piece of ADR 0001 has
+  shipped standalone, since it applies "in every mode" and needed no Autonomy mode section of its
+  own: decision 9, the lesson-append carve-out, landed with #307 (see "The LESSONS.md contract"
+  above).
 - **Parallel-mode ergonomics:** worktree-parallel is gated on manually comparing Affected areas;
   a small script that diffs the file lists of two plans could make eligibility mechanical. (The
   final batching call should stay with the orchestrator — wave sequencing sometimes depends on
