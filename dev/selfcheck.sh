@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 68 assertions total. The gate prints what it checks — run it.
+# Five groups, 69 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -692,7 +692,7 @@ fi
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 750
-issue-cycle 450
+issue-cycle 505
 issue-planner 540
 project-kickoff 215
 test-ratchet 200
@@ -2175,6 +2175,114 @@ if [ -z "$fail_514" ]; then
   ok "5.14 reconcile-ledger.sh reads degraded/degraded_reasons: a keyless document is unaffected, every non-status. reason refuses in document order, every status.-prefixed reason is filtered out and never refuses alone, an empty-reasons degraded:true document backstops to 'unspecified', a degraded line never cuts the per-issue comparison short, a non-array degraded_reasons dies with exit 2, and an empty-string, embedded-newline, or NUL-only reason (alone or mixed with a genuine reason) still refuses as exactly one non-empty escaped line per entry"
 else
   bad "5.14 reconcile-ledger.sh degraded/degraded_reasons read:$fail_514"
+fi
+
+# 5.15 — extract the lesson-append carve-out's files-check --jq program out of
+# skills/issue-cycle/SKILL.md (#307, the *Lesson-append carve-out* sub-bullet's check 1) — the
+# actual instruction text, not a copy of it — and execute it with jq against literal offline
+# fixtures. Read-only, offline: no files written, no gh call. Fails loudly if its own extraction
+# finds a wrong number of matching lines, an empty program, or a malformed one, rather than
+# silently passing on nothing. $cyc and $q are the 5.5-5.7 block's; reused as-is.
+lac_n="$(grep -c -- '--json changedFiles,files --jq ' "$cyc")"
+lac_line="$(grep -F -- '--json changedFiles,files --jq ' "$cyc" | head -1)"
+lac_prog="$(printf '%s\n' "$lac_line" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
+
+lac_ok=1
+if [ "$lac_n" != "1" ]; then
+  bad "5.15 lesson-append carve-out files-check --jq extraction: expected exactly one matching line in skills/issue-cycle/SKILL.md, found $lac_n"
+  lac_ok=0
+elif [ -z "$lac_prog" ]; then
+  bad "5.15 lesson-append carve-out files-check --jq extraction: extracted program is empty"
+  lac_ok=0
+else
+  case "$lac_prog" in
+    '[.files[]'*) : ;;
+    *)
+      bad "5.15 lesson-append carve-out files-check --jq extraction: extracted program does not start with [.files[] -- got: $lac_prog"
+      lac_ok=0
+      ;;
+  esac
+fi
+
+if [ "$lac_ok" = "1" ]; then
+  fx0='{"changedFiles":2,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":9,"deletions":0},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1}]}'
+  fx1='{"changedFiles":1,"files":[{"path":".claude/LESSONS.md","changeType":"ADDED","additions":8,"deletions":0}]}'
+  fx2='{"changedFiles":3,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":9,"deletions":0},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1}]}'
+  fx3='{"changedFiles":3,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":9,"deletions":0},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1},{"path":"docs/y.md","changeType":"RENAMED","additions":0,"deletions":0}]}'
+  fx4='{"changedFiles":3,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":9,"deletions":0},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1},{"path":".claude/settings.json","changeType":"MODIFIED","additions":1,"deletions":0}]}'
+  fx5='{"changedFiles":3,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":9,"deletions":0},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1},{"path":".Claude/settings.json","changeType":"ADDED","additions":2,"deletions":0}]}'
+  fx6='{"changedFiles":1,"files":[{"path":".claude/lessons.md","changeType":"MODIFIED","additions":9,"deletions":0}]}'
+  fx7='{"changedFiles":1,"files":[{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1}]}'
+  fx8='{"changedFiles":2,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":9,"deletions":1},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1}]}'
+  fx9='{"changedFiles":2,"files":[{"path":".claude/LESSONS.md","changeType":"CHANGED","additions":9,"deletions":0},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1}]}'
+  fx10='{"changedFiles":2,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":0,"deletions":0},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1}]}'
+  fx11='{"changedFiles":2,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":40,"deletions":0},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1}]}'
+  fx12='{"changedFiles":2,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":41,"deletions":0},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1}]}'
+  # F13-F16 each make two ADJACENT precedence clauses true at once, so the verdict token pins
+  # which clause wins first -- swapping either clause's order in the program flips the output
+  # (measured; #307 kickback finding 2).
+  fx13='{"changedFiles":4,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":9,"deletions":0},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1},{"path":"docs/y.md","changeType":"RENAMED","additions":0,"deletions":0}]}'
+  fx14='{"changedFiles":4,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":9,"deletions":0},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1},{"path":"docs/y.md","changeType":"RENAMED","additions":0,"deletions":0},{"path":".claude/settings.json","changeType":"MODIFIED","additions":1,"deletions":0}]}'
+  fx15='{"changedFiles":3,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":9,"deletions":1},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1},{"path":".claude/settings.json","changeType":"MODIFIED","additions":1,"deletions":0}]}'
+  fx16='{"changedFiles":2,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":41,"deletions":1},{"path":"bin/x.sh","changeType":"MODIFIED","additions":3,"deletions":1}]}'
+
+  fail_515=""
+  out="$(printf '%s' "$fx0" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "lessons-append" ] || fail_515="$fail_515 F0 (baseline: a single LESSONS.md edit alongside an unrelated modified file): got '$out';"
+
+  out="$(printf '%s' "$fx1" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "lessons-append" ] || fail_515="$fail_515 F1 (changeType ADDED, pins the allowed-type list's other member): got '$out';"
+
+  out="$(printf '%s' "$fx2" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "incomplete" ] || fail_515="$fail_515 F2 (files list truncated: changedFiles 3 != files|length 2): got '$out';"
+
+  out="$(printf '%s' "$fx3" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "renamed" ] || fail_515="$fail_515 F3 (a RENAMED file present elsewhere in the list): got '$out';"
+
+  out="$(printf '%s' "$fx4" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "not-lessons-only" ] || fail_515="$fail_515 F4 (a second .claude/ path present): got '$out';"
+
+  out="$(printf '%s' "$fx5" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "not-lessons-only" ] || fail_515="$fail_515 F5 (a case-varied .Claude/ path, pins ascii_downcase): got '$out';"
+
+  out="$(printf '%s' "$fx6" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "not-lessons-only" ] || fail_515="$fail_515 F6 (lowercase lessons.md, not the exact path .claude/LESSONS.md): got '$out';"
+
+  out="$(printf '%s' "$fx7" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "not-lessons-only" ] || fail_515="$fail_515 F7 (zero .claude/ paths in the file list): got '$out';"
+
+  out="$(printf '%s' "$fx8" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "not-add-only" ] || fail_515="$fail_515 F8 (LESSONS.md itself has a deletion): got '$out';"
+
+  out="$(printf '%s' "$fx9" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "not-add-only" ] || fail_515="$fail_515 F9 (changeType CHANGED, not ADDED or MODIFIED): got '$out';"
+
+  out="$(printf '%s' "$fx10" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "not-add-only" ] || fail_515="$fail_515 F10 (zero additions on LESSONS.md): got '$out';"
+
+  out="$(printf '%s' "$fx11" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "lessons-append" ] || fail_515="$fail_515 F11 (additions==40, the upper boundary, still allowed): got '$out';"
+
+  out="$(printf '%s' "$fx12" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "too-large" ] || fail_515="$fail_515 F12 (additions==41, one over the boundary): got '$out';"
+
+  out="$(printf '%s' "$fx13" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "incomplete" ] || fail_515="$fail_515 F13 (incomplete list AND a RENAMED file both true -- pins incomplete before renamed): got '$out';"
+
+  out="$(printf '%s' "$fx14" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "renamed" ] || fail_515="$fail_515 F14 (a RENAMED file AND a second .claude/ path both true -- pins renamed before not-lessons-only): got '$out';"
+
+  out="$(printf '%s' "$fx15" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "not-lessons-only" ] || fail_515="$fail_515 F15 (a second .claude/ path AND LESSONS.md's own deletion both true -- pins not-lessons-only before not-add-only): got '$out';"
+
+  out="$(printf '%s' "$fx16" | jq -r "$lac_prog" 2>&1)"
+  [ "$out" = "not-add-only" ] || fail_515="$fail_515 F16 (LESSONS.md's own deletion AND additions==41 both true -- pins not-add-only before too-large): got '$out';"
+
+  if [ -z "$fail_515" ]; then
+    ok "5.15 lesson-append carve-out files-check --jq program (#307): baseline/ADDED-type/incomplete-list/renamed-file/second-.claude-path/case-varied-path/wrong-filename/no-.claude-path/has-deletions/wrong-changeType/zero-additions/40-additions-boundary/41-additions-boundary fixtures all match, and F13-F16 each pin one adjacent pair's precedence order (incomplete-before-renamed/renamed-before-not-lessons-only/not-lessons-only-before-not-add-only/not-add-only-before-too-large)"
+  else
+    bad "5.15 lesson-append carve-out files-check --jq program:$fail_515"
+  fi
 fi
 
 # ============================================================================
