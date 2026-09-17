@@ -237,11 +237,12 @@ on top and is not configurable**:
     above (reusing its base tip SHA and head OID) and before the carve-out below; not
     retried — a local-object read is determinate. One Bash call, on one line, no substitution:
     `git diff --no-renames --name-only <paste the base tip here> <paste the head OID here>`.
-    Measured (git 2.54.0): this prints the PR's own net change between the two commits the rail
-    already proved contained one another, read from local objects with no server-side page limit to
-    truncate it, and `--no-renames` prints a rename as its old path plus its new one — unaffected
-    by a repo's own `diff.renames` config — so a moved governance file is still caught under the
-    path it moved from. Path rules, case-insensitive (matching check 1's `ascii_downcase`): any
+    Measured (git 2.54.0): `--no-renames` prints a rename as its old path plus its new one —
+    unaffected by a repo's own `diff.renames` config — so a moved governance file is still caught
+    under the path it moved from; and, because
+    the rail already proved the head contains the base tip, this two-commit diff is the PR's own
+    net change against that tip, read from local objects with no server-side page limit to truncate
+    it. Path rules, case-insensitive (matching check 1's `ascii_downcase`): any
     path segment equal to `.claude`, `.github`, `adr` or `adrs`; or a final segment equal to
     `claude.md`, `action.yml` or `action.yaml` — beyond that list, the rule's own words above
     still apply to the printed paths, a policy/ADR document or CI/build config under a name
