@@ -836,7 +836,11 @@ the project, not this toolset**: each project keeps its own `LESSONS.md` (the do
 seeds an empty one on install). Format: 1–3 lines per entry, dated, written as an instruction
 to a future agent. Because the harness appends lessons mid-run but never commits to the default
 branch, uncommitted `LESSONS.md` changes are treated as benign everywhere the skills check for
-a dirty tree, and ride along with the next harness commit.
+a dirty tree, and ride along with the next harness commit — but a change that appears while an
+implementer or verifier subagent dispatch is in flight is the subagent's, not the harness's, and
+blocks the issue instead (the LESSONS.md dispatch guard, #323) —
+unless the file already existed untracked before that dispatch started, in which case the guard
+has no baseline to take and says so instead of blocking.
 
 Under a Merge autonomy policy (#307, ADR 0001 decision 9), a harness PR that carries a lesson
 this way is not automatically held by the *Never the governance surface* rule just because it
@@ -1603,6 +1607,19 @@ lesson is never merged silently. Honest limit: the new gate assertion (5.15) exe
 files-check verdict program; both the end-of-file diff rule (check 2) and the content judgement
 (check 3, that the added lines read as only a project gotcha, never an instruction) are prose the
 orchestrator applies and the gate does not pin.
+
+**v2.7.4 → v2.7.5** needs no grant, label, script, settings entry, or baseline step (#323). An
+implementer or verifier subagent's `.claude/LESSONS.md` change now blocks the issue instead of
+riding into the `feat:` commit: `skills/issue-implementer/SKILL.md`'s new *LESSONS.md dispatch
+guard* snapshots the file immediately before each dispatch and compares it on that dispatch's
+return, death, or `incomplete` exit; any output there takes the existing blocked path (step 2f),
+never a silent commit — unless the file already existed untracked before the dispatch, in which
+case the guard has no baseline to take and leaves it unstaged for a human to commit instead. The
+orchestrator's own
+distilled lesson (step 2e) is unchanged — it still runs after an issue's last dispatch and appends
+only when that same compare prints nothing.
+Honest limit: this is orchestrator prose, not a hook — it catches the change after the dispatch
+returns rather than preventing the write; no `Edit`/`Write` PreToolUse hook exists yet.
 
 ## The per-repo settings file (required)
 
