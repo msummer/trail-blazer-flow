@@ -2,9 +2,18 @@
 #
 # selfcheck-tests.sh — negative-test harness for dev/selfcheck.sh (the gate).
 #
-# Usage: bash dev/selfcheck-tests.sh [name-filter]
-#   With no argument, runs every case. With an argument, runs only the cases whose name
-#   contains that substring (a non-zero exit if the filter matches nothing).
+# Usage: bash dev/selfcheck-tests.sh [-j <n>|--serial] [name-filter]
+#   -j <n>       run <n> cases concurrently (a positive integer; an invalid value prints usage
+#                on stderr and exits 2).
+#   --serial     equivalent to -j 1 — one case at a time, in declared order.
+#   name-filter  run only the cases whose name contains this substring (a non-zero exit if the
+#                filter matches nothing). Unchanged from before this concurrency change.
+#   With no -j/--serial, the job count comes from SELFCHECK_TESTS_JOBS if set (env var), else
+#   from detect_jobs (the host's core count via sysctl/nproc/getconf, clamped to at most 16,
+#   falling back to 2 if none answers — see detect_jobs's own comment below). A command-line
+#   -j/--serial always wins over SELFCHECK_TESTS_JOBS. The resolved count is printed as this
+#   run's first stdout line, `== selfcheck-tests: <N> jobs ==`, so every recorded run states its
+#   own concurrency.
 #
 # Contract, one row per case: apply ONE documented perturbation to a throwaway copy of this
 # repo, run the PRISTINE gate (dev/selfcheck.sh, from this checkout — never the copy's own,
@@ -12,17 +21,44 @@
 # set exactly equals the case's declared expected set, that at least one of those ids' "  FAIL
 # <id> " lines is present verbatim, and that the exit code is 1 (0 for the declared control
 # cases, whose expected set is empty and which exist to prove a perturbation is NOT falsely
-# flagged). Same output contract as the gate: one PASS/FAIL line per case, a
+# flagged). Same output contract as the gate: one PASS/FAIL line per case, in DECLARED case
+# order regardless of which case's child finishes first (see the wave scheduler below), a
 # `== summary: N pass, M fail ==` footer, exit 0 iff nothing failed. A failing case ALSO prints
 # (bounded, #255) any captured gate line that is neither a PASS/FAIL line nor one of the gate's
 # own banners nor blank — surfacing a shell-level diagnostic (e.g. a SIGPIPE broken-pipe message)
 # that the FAIL-line dump alone would otherwise discard.
 #
+# Concurrency (#336): cases run in bounded waves of up to $jobs children, each a background
+# `dispatch_case ... &` that runs run_case in its own subshell, writes run_case's captured
+# stdout/stderr to $resdir/<idx>.out / <idx>.err, and writes "pass" or "fail" to
+# $resdir/<idx>.verdict as its LAST action. flush_wave (plain `wait`, no `wait -n`; must run as a
+# statement in the parent shell — see run_gate's own comment below for the same reason) then reads
+# each wave's result files back IN THE WAVE'S DECLARED ORDER, never completion order, so output
+# order and the totals never depend on scheduling. A child that dies before writing its verdict —
+# the .verdict file is simply absent, no file test needed to tell — is reported as a FAIL naming
+# the case and stating it produced no verdict, and is counted as a failure, never silently omitted
+# (proven by the harness-dead-case self-test below). Every dispatch_case child's FIRST statement
+# is `trap - EXIT`: measured (sheet B1), a backgrounded `( ... ) &` subshell that exits on its own
+# does NOT invoke the parent's EXIT trap under bash 3.2 — only the parent's own exit runs it — so
+# this line is not required for that measured behaviour, but it is kept anyway as insurance: it
+# costs nothing, and it closes off any future or platform-specific drift in trap-inheritance
+# semantics that would otherwise let a child race cleanup()'s `rm -rf "$tmpbase"` against a
+# sibling still writing under it. With `jobs=1` the wave size is 1, so `--serial` runs the
+# identical dispatch/flush code path, one case at a time. No per-case timeout exists (BSD has no
+# portable `timeout`): a hung gate run still blocks the whole suite, exactly as it did serially
+# before this change. The two self-tests below, driven by an env-var-injected
+# SELFCHECK_TESTS_FAULT (harness-internal, never a case-table perturbation), prove exactly two
+# properties mechanically — a `die:<case>` fault (a dead case is counted as a FAIL) and a
+# `slow:<case>` fault (declared order survives an out-of-order finish) — and prove nothing beyond
+# those two: not every real death mode, not scheduling behaviour under an externally loaded
+# runner, and not cross-run reproducibility of wall-clock timings.
+#
 # This is one of several dev/*.sh scripts that write files — dev/doctor-tests.sh,
 # dev/hook-tests.sh, dev/cleanup-tests.sh, dev/planning-tests.sh, and dev/lock-tests.sh also do
 # (the consumer doctor bin/check-harness.sh also seeds .claude/LESSONS.md when absent). Every one
 # of them writes only under its own single `mktemp -d` root, removed via a trap on EXIT; nothing
-# outside that root is ever touched. By
+# outside that root is ever touched — the per-case result files above are no exception: $resdir is
+# a subdirectory of that same one root. By
 # convention (CLAUDE.md), no perturbation helper here uses `sed -i` either — plain `sed` writing
 # to a sibling temp file, same idiom as the rest of this repo.
 #
@@ -39,15 +75,104 @@
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
+
+# detect_jobs — the default worker count when neither -j/--serial nor SELFCHECK_TESTS_JOBS is
+# given. Tries, in order, `sysctl -n hw.ncpu`, `nproc`, `getconf _NPROCESSORS_ONLN`, each
+# command -v-guarded first and its own output digits-validated (empty, non-digit, or "0" output is
+# treated as "this probe didn't answer", never trusted) — the chain is safe by construction: a
+# probe that is absent or prints a non-number is simply skipped, so correctness never depends on
+# which probe exists on which platform. The first digits-only, >=1 answer wins; if none of the
+# three answers, falls back to 2. The winning value is then clamped to at most 16. Prints the
+# resolved count, nothing else, on stdout.
+detect_jobs() {
+  local n=""
+  if [ -z "$n" ] && command -v sysctl >/dev/null 2>&1; then
+    n="$(sysctl -n hw.ncpu 2>/dev/null)"
+    case "$n" in ''|*[!0-9]*|0) n="" ;; esac
+  fi
+  if [ -z "$n" ] && command -v nproc >/dev/null 2>&1; then
+    n="$(nproc 2>/dev/null)"
+    case "$n" in ''|*[!0-9]*|0) n="" ;; esac
+  fi
+  if [ -z "$n" ] && command -v getconf >/dev/null 2>&1; then
+    n="$(getconf _NPROCESSORS_ONLN 2>/dev/null)"
+    case "$n" in ''|*[!0-9]*|0) n="" ;; esac
+  fi
+  [ -n "$n" ] || n=2
+  [ "$n" -le 16 ] || n=16
+  printf '%s' "$n"
+}
+
+usage_die() {
+  echo "usage: dev/selfcheck-tests.sh [-j <n>|--serial] [name-filter] -- $1" >&2
+  exit 2
+}
+
+# Option parsing: -j <n> / --serial / -h|--help, consumed before the positional filter. A case
+# name never starts with '-' (see the case table below), so a leading-dash filter needs no
+# support — any other dash-prefixed token is an unknown option, not a filter. Precedence: a
+# command-line -j/--serial flag > SELFCHECK_TESTS_JOBS > detect_jobs.
+jobs_flag=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      cat <<'EOF'
+usage: dev/selfcheck-tests.sh [-j <n>|--serial] [name-filter]
+
+  -j <n>       run <n> cases concurrently (a positive integer)
+  --serial     equivalent to -j 1 -- one case at a time, in declared order
+  name-filter  run only the cases whose name contains this substring
+
+With no name-filter, runs every case. SELFCHECK_TESTS_JOBS overrides the detected default when
+neither -j nor --serial is given.
+EOF
+      exit 0
+      ;;
+    -j)
+      shift
+      jobs_flag="${1:-}"
+      case "$jobs_flag" in
+        ''|*[!0-9]*|0) usage_die "-j requires a positive integer, got '${1:-}'" ;;
+      esac
+      shift
+      ;;
+    --serial)
+      jobs_flag=1
+      shift
+      ;;
+    -*)
+      usage_die "unknown option: $1"
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 filter="${1:-}"
 
+if [ -n "$jobs_flag" ]; then
+  jobs="$jobs_flag"
+elif [ -n "${SELFCHECK_TESTS_JOBS:-}" ]; then
+  jobs="$SELFCHECK_TESTS_JOBS"
+  case "$jobs" in
+    ''|*[!0-9]*|0) usage_die "SELFCHECK_TESTS_JOBS must be a positive integer, got '$jobs'" ;;
+  esac
+else
+  jobs="$(detect_jobs)"
+fi
+
 tmpbase="$(mktemp -d)"
+resdir="$tmpbase/results"
+mkdir -p "$resdir"
 cleanup() {
+  wait
   if [ -n "$tmpbase" ] && [ -d "$tmpbase" ]; then
     rm -rf "$tmpbase"
   fi
 }
 trap cleanup EXIT
+
+echo "== selfcheck-tests: $jobs jobs =="
 
 pass=0; fail=0
 case_ok()  { echo "  PASS  $1 — $2"; pass=$((pass+1)); }
@@ -91,6 +216,11 @@ append() {
 # stdout+stderr) and $gate_rc (exit code) set as globals. Deliberately NOT invoked via command
 # substitution ("$(run_gate ...)") — that would fork a subshell, and the $? capture inside would
 # never make it back to the caller. Call it as a plain statement and read the globals after.
+# Since #336, run_case (which calls this) itself runs inside dispatch_case's own backgrounded
+# child — a separate process per case, so these two globals are each child's own private copy,
+# never shared across concurrent cases — and the verdict crosses back out to the PARENT shell only
+# through the per-case result files flush_wave reads (see the concurrency comment in the file
+# header), never through these variables, which do not survive past the child that set them.
 gate_out=""
 gate_rc=0
 run_gate() {
@@ -306,6 +436,13 @@ p_5_3() {
   sed -E 's/\(deploy=\[\^ \]\+\) -->/(deployX=[^ ]+) -->/' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 p_5_4()               { edit "$1/bin/reconcile-ledger.sh" 's/is not in the deploy vocabulary/is not part of the deploy vocabulary/'; }
+# p_5_16_ledger_guard (#336) — removes the ' || die "cannot read ledger file: $ledger_src"'
+# clause from the ledger read (characters removed from inside the guard, never a suffix appended
+# — LESSON 2026-09-04b), leaving a still-valid script whose unreadable-ledger path no longer dies
+# (the read is silently attempted and its failure discarded instead).
+p_5_16_ledger_guard() {
+  edit "$1/bin/reconcile-ledger.sh" 's/ || die "cannot read ledger file: \$ledger_src"//'
+}
 p_4_14_oversize() {
   local i=0
   { while [ "$i" -lt 300 ]; do echo "filler line $i"; i=$((i+1)); done; } | append "$1/skills/harness-setup/SKILL.md"
@@ -629,9 +766,15 @@ cases=(
   "5.14-backstop|5.14|p_5_14_backstop|rewrite the degraded:true equality test from == true to == \"yes\" inside bin/reconcile-ledger.sh so a real JSON true no longer satisfies it -- measured: c5 (a degraded:true document with empty degraded_reasons goes back to silent/rc=0) fails alone"
   "5.14-short-circuit|5.14|p_5_14_short_circuit|locate the degraded-emit block's own end-delimiter comment via awk's index() and insert an early '[ \"\$found\" -eq 1 ] && exit 1' immediately after it in bin/reconcile-ledger.sh, so a run that printed a degraded line exits before the per-issue loop ever runs -- measured: c6 (the degraded line prints, then the per-issue stage-skipped comparison never runs) fails alone"
   "5.14-escline|5.14|p_5_14_escline|delete the escline mapping bin/reconcile-ledger.sh's degraded-lines jq program applies to each refusing entry ('(\$refuse[] | escline)' -> bare '\$refuse[]'), so a refusing entry reaches emit() raw instead of rendered -- measured: c8 (an empty-string reason once again prints as a silently-dropped blank line), c9 (a reason carrying an embedded newline once again splits raw across two lines), c10 (a NUL-only reason is once again silently dropped by bash's command substitution), and c11 (the same NUL-only entry silently dropped out of a two-reason mixed list) all fail"
+  "5.16-ledger-guard|5.16|p_5_16_ledger_guard|remove the ' || die \"cannot read ledger file: \$ledger_src\"' clause from bin/reconcile-ledger.sh's ledger read (characters removed from inside the guard, not a suffix appended) so an unreadable ledger path no longer dies -- measured failing set: {5.16} (71 pass, 1 fail)"
 )
 
 # ---------------------------------------------------------------------------------------------
+# run_case NAME EXPECTED PERTURB DESC — returns 0 on pass, 1 on fail: the verdict is a function
+# result, not a counter side effect. case_ok/case_bad still print their own PASS/FAIL line and
+# still increment the $pass/$fail globals, but since #336 those increments happen inside
+# dispatch_case's own backgrounded child and are therefore inert there — the parent's $pass/$fail
+# are instead advanced by flush_wave, which reads each case's verdict file back (see below).
 run_case() {
   local name="$1" expected="$2" perturb="$3" desc="$4"
   local dir out observed exp_norm obs_norm literal_ok eid diag
@@ -655,7 +798,7 @@ run_case() {
     for eid in $exp_norm; do
       # Here-string, not a `printf` writer piped into `grep`'s quiet mode (#255): that early-exit
       # reader exits on its first match, which can send the printf writer SIGPIPE and, under this
-      # file's `set -uo pipefail` (line 36), turn a genuine MATCH into a reported pipeline failure
+      # file's `set -uo pipefail` (line 75), turn a genuine MATCH into a reported pipeline failure
       # (CI run 34268473009 caught this exact line: "printf: write error: Broken pipe" immediately
       # before a spurious FAIL). `<<<"$out"` is fed to grep directly — no writer process, so no
       # SIGPIPE is possible — and appends exactly one trailing newline, the same as the piped
@@ -682,6 +825,84 @@ run_case() {
       printf '%s\n' "$diag" | sed -n '1,40p' | sed 's/^/    | /'
     fi
   fi
+  [ "$ok" -eq 1 ]
+}
+
+# dispatch_case IDX NAME EXPECTED PERTURB DESC — runs one case as a background child (always
+# invoked as `dispatch_case ... &`, even at jobs=1 — see the wave scheduler below). FIRST
+# statement: `trap - EXIT`, unconditionally (see the file header's concurrency comment for why
+# this insurance line stays even though sheet B1 measured it isn't required for correctness).
+# Then a harness-internal fault hook, read from SELFCHECK_TESTS_FAULT (self-tests only; no
+# case-table perturbation ever sets this): "die:<name>" exits before any work at all, so this
+# case writes neither an .out/.err file nor a .verdict; "slow:<name>" sleeps 2 seconds before
+# running the case, inverting completion order without changing the case's own outcome.
+# run_case's stdout and stderr are captured to SEPARATE files (never `2>&1` — a merged stream
+# could never prove a stream-specific claim like "usage on stderr" — LESSON 2026-09-08b), and the
+# verdict ("pass"/"fail") is written to $IDX.verdict as the LAST action, so a child that dies
+# mid-run leaves that file absent rather than half-written.
+dispatch_case() {
+  trap - EXIT
+  local idx="$1" name="$2" expected="$3" perturb="$4" desc="$5"
+  local fault="${SELFCHECK_TESTS_FAULT:-}"
+  case "$fault" in
+    "die:$name") exit 9 ;;
+    "slow:$name") sleep 2 ;;
+  esac
+  run_case "$name" "$expected" "$perturb" "$desc" > "$resdir/$idx.out" 2> "$resdir/$idx.err"
+  local rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf 'pass' > "$resdir/$idx.verdict"
+  else
+    printf 'fail' > "$resdir/$idx.verdict"
+  fi
+}
+
+# Wave scheduler state: plain indexed arrays (no declare -A), reset each wave. case_no is the
+# running case index (also each case's result-file stem); wave_n is the current wave's size.
+case_no=0
+wave_n=0
+wave_idx=()
+wave_name=()
+wave_desc=()
+
+# flush_wave — waits for every child dispatched in the current wave (plain `wait`, no `wait -n`),
+# then collects results IN THE WAVE'S DECLARED ORDER, never completion order, so output order and
+# the totals never depend on scheduling. Must run as a plain statement in the PARENT shell — never
+# inside a pipeline or $( ) — same reason run_gate's own comment documents: a subshell's variable
+# writes (here, $pass/$fail) never reach back out. No file test on a result path — a missing file
+# yields the empty string from `cat`, and that empty string alone is what routes a dead case to
+# the no-verdict branch below.
+flush_wave() {
+  wait
+  local k idx v out err
+  k=0
+  while [ "$k" -lt "$wave_n" ]; do
+    idx="${wave_idx[$k]}"
+    v="$(cat "$resdir/$idx.verdict" 2>/dev/null)"
+    out="$(cat "$resdir/$idx.out" 2>/dev/null)"
+    err="$(cat "$resdir/$idx.err" 2>/dev/null)"
+    case "$v" in
+      pass)
+        pass=$((pass+1))
+        [ -n "$out" ] && printf '%s\n' "$out"
+        [ -n "$err" ] && printf '%s\n' "$err" 1>&2
+        ;;
+      fail)
+        fail=$((fail+1))
+        [ -n "$out" ] && printf '%s\n' "$out"
+        [ -n "$err" ] && printf '%s\n' "$err" 1>&2
+        ;;
+      *)
+        fail=$((fail+1))
+        echo "  FAIL  ${wave_name[$k]} — ${wave_desc[$k]}"
+        echo "    this case produced no verdict — it died before reporting and is counted as a failure"
+        [ -n "$out" ] && printf '%s\n' "$out" | sed -n '1,40p'
+        [ -n "$err" ] && printf '%s\n' "$err" | sed -n '1,40p' 1>&2
+        ;;
+    esac
+    k=$((k+1))
+  done
+  wave_n=0
 }
 
 run_headercount_case() {
@@ -694,6 +915,63 @@ run_headercount_case() {
   else
     case_bad "header-count" "dev/selfcheck.sh's header 'N assertions total' matches a clean run's PASS+FAIL line count"
     echo "    header says $header_n, clean run printed $n_lines PASS/FAIL lines"
+  fi
+}
+
+# harness-dead-case (#336) — proves a child that dies without writing a verdict is reported as a
+# FAIL naming the case and the missing-verdict wording, never silently omitted from the totals.
+# Runs a real, nested invocation of THIS SAME script (SELFCHECK_TESTS_JOBS=2, a die: fault on
+# exactly one matched case — "1.1-hooks" matches exactly one case row and not header-count) and
+# pins its stdout+rc. The die fault exits before any gate ever runs, so this nested run costs
+# essentially nothing. See the file header's "what these self-tests do NOT prove" note: this
+# covers one injected death mode only, never every real death mode. Mutation proof (measured): a
+# missing/unknown verdict counted as `pass` instead of `fail` in flush_wave's no-verdict branch
+# makes harness-dead-case fail alone against the full 139-case suite (138 pass, 1 fail) —
+# harness-accounting does NOT also fire, since this mutation misclassifies a verdict rather than
+# dropping one from the pass+fail total.
+run_deadcase_selftest() {
+  local out rc bad
+  out="$(SELFCHECK_TESTS_JOBS=2 SELFCHECK_TESTS_FAULT="die:1.1-hooks" bash "$root/dev/selfcheck-tests.sh" 1.1-hooks 2>&1)"
+  rc=$?
+  bad=""
+  [ "$rc" -eq 1 ] || bad="$bad rc: expected 1, got $rc;"
+  grep -qE '^  FAIL  1\.1-hooks ' <<<"$out" || bad="$bad missing the '  FAIL  1.1-hooks ' line;"
+  grep -qF -- "produced no verdict" <<<"$out" || bad="$bad missing the no-verdict wording;"
+  grep -qF -- "== summary: 0 pass, 1 fail ==" <<<"$out" || bad="$bad missing footer '== summary: 0 pass, 1 fail ==';"
+  if [ -z "$bad" ]; then
+    case_ok "harness-dead-case" "a child that dies without writing a verdict (SELFCHECK_TESTS_FAULT=die:<case>) is reported as a FAIL naming the case, never silently omitted from the totals"
+  else
+    case_bad "harness-dead-case" "a child that dies without writing a verdict (SELFCHECK_TESTS_FAULT=die:<case>) is reported as a FAIL naming the case, never silently omitted from the totals"
+    echo "    $bad"
+    printf '%s\n' "$out" | sed -n '1,40p' | sed 's/^/    | /'
+  fi
+}
+
+# harness-order (#336) — proves declared order, not completion order, decides the PASS/FAIL line
+# sequence and the totals. Runs a nested invocation (SELFCHECK_TESTS_JOBS=2, a slow: fault on the
+# FIRST of exactly three cases the "1.7" filter matches, in declared order 1.7 / 1.7-dev /
+# 1.7-comment) and extracts the case-name sequence from the "  PASS  "/"  FAIL  " lines, requiring
+# it to equal the declared order even though the delayed case finishes last inside its own
+# two-case first wave. Covers one injected inversion only — see the file header's "what these
+# self-tests do NOT prove" note. Mutation proof (measured): reversing flush_wave's own wave_idx
+# lookup (`${wave_idx[$k]}` -> `${wave_idx[$((wave_n-1-k))]}`, an order-destroying collector) makes
+# harness-order fail alone against the full 139-case suite (138 pass, 1 fail).
+run_order_selftest() {
+  local out rc seq expected_seq bad
+  out="$(SELFCHECK_TESTS_JOBS=2 SELFCHECK_TESTS_FAULT="slow:1.7" bash "$root/dev/selfcheck-tests.sh" 1.7 2>&1)"
+  rc=$?
+  seq="$(printf '%s\n' "$out" | sed -n -E 's/^  (PASS|FAIL)  ([^ ]*) .*/\2/p' | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  expected_seq="1.7 1.7-dev 1.7-comment"
+  bad=""
+  [ "$rc" -eq 0 ] || bad="$bad rc: expected 0, got $rc;"
+  [ "$seq" = "$expected_seq" ] || bad="$bad case-name sequence: expected '$expected_seq', got '$seq';"
+  grep -qF -- "== summary: 3 pass, 0 fail ==" <<<"$out" || bad="$bad missing footer '== summary: 3 pass, 0 fail ==';"
+  if [ -z "$bad" ]; then
+    case_ok "harness-order" "declared order, not completion order, decides the PASS/FAIL line sequence and the totals (SELFCHECK_TESTS_FAULT=slow:<case> delays the first-declared case past its wave-mate)"
+  else
+    case_bad "harness-order" "declared order, not completion order, decides the PASS/FAIL line sequence and the totals (SELFCHECK_TESTS_FAULT=slow:<case> delays the first-declared case past its wave-mate)"
+    echo "    $bad"
+    printf '%s\n' "$out" | sed -n '1,40p' | sed 's/^/    | /'
   fi
 }
 
@@ -712,11 +990,26 @@ for row in "${cases[@]}"; do
   rest="${rest#*|}"
   perturb="${rest%%|*}"
   desc="${rest#*|}"
-  run_case "$name" "$expected" "$perturb" "$desc"
+  case_no=$((case_no+1))
+  wave_idx[$wave_n]="$case_no"
+  wave_name[$wave_n]="$name"
+  wave_desc[$wave_n]="$desc"
+  dispatch_case "$case_no" "$name" "$expected" "$perturb" "$desc" &
+  wave_n=$((wave_n+1))
+  if [ "$wave_n" -ge "$jobs" ]; then
+    flush_wave
+  fi
 done
+flush_wave
 
 case "header-count" in
   *"$filter"*) matched=$((matched+1)); run_headercount_case ;;
+esac
+case "harness-dead-case" in
+  *"$filter"*) matched=$((matched+1)); run_deadcase_selftest ;;
+esac
+case "harness-order" in
+  *"$filter"*) matched=$((matched+1)); run_order_selftest ;;
 esac
 
 if [ "$matched" -eq 0 ]; then
@@ -724,9 +1017,15 @@ if [ "$matched" -eq 0 ]; then
   exit 1
 fi
 
+accounting_bad=0
+if [ "$((pass+fail))" -ne "$matched" ]; then
+  echo "  FAIL  harness-accounting — pass ($pass) + fail ($fail) = $((pass+fail)), expected $matched matched work items; a case vanished from the totals"
+  accounting_bad=1
+fi
+
 echo
 echo "== summary: $pass pass, $fail fail =="
-if [ "$fail" -gt 0 ]; then
+if [ "$fail" -gt 0 ] || [ "$accounting_bad" -eq 1 ]; then
   exit 1
 fi
 exit 0

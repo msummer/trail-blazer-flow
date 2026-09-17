@@ -1704,6 +1704,30 @@ since the same `-label:no-plan` exclusion that makes `--fix` idempotent also exc
 path now applies only to a follow-up filed by an older harness version that still carries
 `no-auto-approve`.
 
+**v2.7.5 → v2.7.6** needs no grant, label, script, settings entry, or baseline step (#336). No
+consumer action is required: of the three files this change touches — `bin/reconcile-ledger.sh`,
+the gate (`dev/selfcheck.sh`), and the gate's own negative-test harness
+(`dev/selfcheck-tests.sh`) — the only one a consumer repo runs is `bin/reconcile-ledger.sh`, and
+it changes only on an error path: an unreadable path still dies with the same message and the
+same exit 2 as before, plus the directory case described later in this paragraph. Two changes,
+in order. First,
+`reconcile-ledger.sh`'s ledger and status-JSON reads drop their `access()`-style readability
+pre-test on the caller-supplied path (both arguments accept any path, including a
+process-substitution `<(...)` — this repo's own gate passes exactly that) in favour of attempting
+the read directly and dying on failure with
+the identical message and exit code as before — the pre-test raced on macOS (roughly 1 in 2000)
+when several processes touched `/dev/fd` at once, which is exactly what running this repo's own
+gate concurrently now does; the read itself never failed under that same load. Incidentally, a
+*directory* argument now dies too (exit 2, `cannot read ledger file`); previously it exited 0
+with an empty ledger, with only `cat`'s own "Is a directory" message on stderr. Second,
+`dev/selfcheck-tests.sh` runs its case rows concurrently by default, in bounded waves: the job
+count is detected from the host's core count (clamped to at most 16, falling back to 2 when no
+probe answers), overridable with `SELFCHECK_TESTS_JOBS=<n>` or `-j <n>`, and `--serial` (`-j 1`)
+restores one case at a time. Declared case order, not completion order, still decides the
+PASS/FAIL line sequence and the summary totals; a case whose child dies before reporting a
+verdict is still counted as a FAIL naming the case, never silently dropped. The single-case/filter
+form (`bash dev/selfcheck-tests.sh <case>`) is unchanged.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -2461,6 +2485,8 @@ Markdown instruction files, Bash scripts, and JSON manifests. The gate and its s
 harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tests.sh`, `dev/hook-tests.sh`,
 `dev/cleanup-tests.sh`, `dev/planning-tests.sh`, `dev/lock-tests.sh`) all run in CI on every pull
 request — see this repo's `CLAUDE.md` "Verification" section for the exact commands and jobs.
+`dev/selfcheck-tests.sh` runs its case rows concurrently by default (#336); `SELFCHECK_TESTS_JOBS=<n>`
+or `-j <n>` overrides the detected job count, and `--serial` restores one case at a time.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor. Onboarding it here would mean checking in a `.claude/settings.json` that

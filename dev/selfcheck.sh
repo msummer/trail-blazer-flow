@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 71 assertions total. The gate prints what it checks — run it.
+# Five groups, 72 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -2345,6 +2345,30 @@ if [ "$lac_ok" = "1" ]; then
   else
     bad "5.15 lesson-append carve-out files-check --jq program:$fail_515"
   fi
+fi
+
+# 5.16 (#336) — reconcile-ledger.sh's ledger/status-JSON reads no longer pre-test access() on a
+# path that can be a process-substitution /dev/fd/N (removed because that pre-test raced on macOS
+# under concurrency, sheet A4-A6): this pins that the read is still ATTEMPTED and still DIES with
+# the same message and exit code when it fails, so the removed pre-test's error path can't
+# silently regress. Both sub-checks are offline (reusing $rl and $empty_status_fixture from
+# 5.3/5.4 above) and write nothing.
+fail_516=""
+
+out="$(bash "$rl" "$root/.selfcheck-no-such-ledger" <(printf '%s' "$empty_status_fixture") 2>&1)"; rc=$?
+if [ "$rc" -ne 2 ] || ! grep -qF -- "cannot read ledger file: " <<<"$out"; then
+  fail_516="$fail_516 unreadable ledger path: expected rc=2 and 'cannot read ledger file: ' in the output, got rc=$rc output='$out';"
+fi
+
+out="$(bash "$rl" <(printf '%s\n' '17 seed ready_to_implement 0') "$root/.selfcheck-no-such-status" 2>&1)"; rc=$?
+if [ "$rc" -ne 2 ] || ! grep -qF -- "cannot read status JSON file: " <<<"$out"; then
+  fail_516="$fail_516 unreadable status-JSON path: expected rc=2 and 'cannot read status JSON file: ' in the output, got rc=$rc output='$out';"
+fi
+
+if [ -z "$fail_516" ]; then
+  ok "5.16 reconcile-ledger.sh: an unreadable ledger path and an unreadable status-JSON path each die with rc=2 and the expected message (#336)"
+else
+  bad "5.16 reconcile-ledger.sh unreadable-path guard:$fail_516"
 fi
 
 # ============================================================================
