@@ -194,6 +194,12 @@ e. **As each implementer completes, run the issue-implementer skill's steps 2d�
      never the default branch, so this cause should not fire for a conforming worktree branch
      name — if it does, the destination is not what you expect it to be, not a broken
      installation;
+   - **the LESSONS.md dispatch guard (#323) also takes `-C <worktree>`** — snapshot `git -C
+     <worktree> add -u -- .claude/LESSONS.md` immediately before each dispatch into the worktree,
+     compare `git -C <worktree> diff --name-only -- .claude/LESSONS.md` (absent baseline: `git -C
+     <worktree> status --porcelain --ignored -- .claude/LESSONS.md`) on its return, death, or
+     `incomplete` exit, judged against that worktree's own copy exactly as in sequential mode's
+     "Resilient dispatch" guard block;
    - **the checkpoint lands in the worktree, not the main checkout**, which stays on the default
      branch, untouched, for the whole swarm;
    - **the worktree path travels in every prompt** (the verifier's included) and in every

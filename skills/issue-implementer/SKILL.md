@@ -45,7 +45,8 @@ once under "Hard rules" below.
   `fail` and after red CI, too: you never edit a source, test, or doc file yourself to resolve a
   finding or a CI failure — you re-dispatch the implementer (step 2e), and once the kickback
   budget is spent, the issue takes the blocked path (step 2f). Your own edits are harness
-  bookkeeping only — `.claude/LESSONS.md`, the PR body, and issue comments.
+  bookkeeping only — `.claude/LESSONS.md` (only when made outside a dispatch window — see the
+  LESSONS.md dispatch guard below), the PR body, and issue comments.
 - **A dirty working tree is only recoverable when it's clearly the harness's own** — step 0 has
   the full rule; never risk clobbering uncommitted human work.
 - **No Bash command may wrap another command's output inline** (backticks or dollar-paren
@@ -127,12 +128,42 @@ commit, never a leftover checkpoint/death/exhausted one — step 2f guarantees t
 commit rather than silently skipping, even over an already-checkpointed tree. Preserve this on
 any future change to step 2f's commit, or a blocked branch would misclassify as resume.
 
+### LESSONS.md dispatch guard (#323)
+
+- **Snapshot**, immediately before launching an implementer or verifier dispatch: `git add -u --
+  .claude/LESSONS.md` — this dispatch's baseline (yours, in whatever state). No **tracked** file
+  yet → skip; the baseline is "absent". Honest limit: a `LESSONS.md` that already exists but is
+  untracked has no baseline this guard can take — outside the documented contract (the file rides
+  with harness commits) — so that case is not covered: if the absent-baseline compare below
+  already prints BEFORE this dispatch launches, there is no baseline to judge this dispatch
+  against — don't read the return print as a hit; say so in the summary instead.
+- **Compare**, the first thing you do on that dispatch's return, death, or `incomplete` exit —
+  always before any `git add`, `git commit`, or `git reset`: `git diff --name-only --
+  .claude/LESSONS.md` (baseline "absent": `git status --porcelain --ignored --
+  .claude/LESSONS.md` instead). It must print nothing.
+- **Covers** step 2c's dispatch (every return, its resume relaunches, and hard-death returns),
+  step 2e's kickback and CI-fix re-dispatches, and every step 2e verifier dispatch.
+- **Verdict:** any output means the file changed while the subagent was in flight,
+  except the untracked-baseline case above (the guard can't judge it) — not your bookkeeping, never
+  an accounted path. Take step 2f's blocked path (no new label); name the path and the blocked
+  branch in the blocker comment and summary, never quoting the added lines.
+- **Your own lesson** (step 2e's distill) is unaffected: it runs this compare once immediately
+  before appending, appends only when it prints nothing, and otherwise doesn't append and reports
+  it instead.
+- **Worktree-parallel mode:** every command here takes `-C <worktree>`, against that worktree's
+  copy.
+
+Orchestrator prose, not a mechanical rail — no hook matches Edit/Write. The `add -u`/`--ignored`
+forms were chosen because they keep working when `.claude/` itself is an ignored directory
+(`.gitignore` or `.git/info/exclude`).
+
 ### Death / incomplete-exit checkpoint and resume brief
 
 Whenever a dispatch dies with no usable report, or returns `status: incomplete`, the orchestrator
-WIP-commits the tree **before doing anything else** — `git add -A && git commit -m "wip: <stage>
-died (#<n>)"` or `... "wip: context exhausted (#<n>)"` respectively (skip if nothing changed) —
-then builds a **resume brief** and relaunches, bounded by a cap.
+WIP-commits the tree **before doing anything else** (the guard's compare above is the one read
+that comes first) — `git add -A && git commit -m "wip: <stage> died (#<n>)"` or `...
+"wip: context exhausted (#<n>)"` respectively (skip if nothing changed) — then builds a **resume
+brief** and relaunches, bounded by a cap.
 
 A resume brief has exactly five elements: issue number, branch, last WIP commit SHA, what was
 completed, and what remains. **Clean exit** — copy the agent's own `## Resume brief` section
@@ -404,13 +435,14 @@ c. **Dispatch the `implementer` subagent** (Task tool). It starts from a fresh c
    as mislabelled and ask the human. If the dispatch itself fails, retry per the "Resilient
    dispatch" ladder rather than treating it as a blocker.
 
-   **Checkpoint on `status: complete`:** before anything else, `git add -A && git commit -m "wip:
-   checkpoint implementer (#<n>)"` (skip if nothing changed) — makes the verifier's diff (step 2e)
-   non-empty and correct.
+   **Checkpoint on `status: complete`:** run the LESSONS.md dispatch guard's compare first, then
+   `git add -A && git commit -m "wip: checkpoint implementer (#<n>)"` (skip if nothing changed) —
+   makes the verifier's diff (step 2e) non-empty and correct.
 
-   **On `status: incomplete` or a hard death:** checkpoint immediately, build the resume brief
-   per "Resilient dispatch", and relaunch — bounded by the resume cap, consuming neither a
-   kickback nor a ladder retry. Record the relaunch count for the summary table.
+   **On `status: incomplete` or a hard death:** checkpoint immediately (after the guard's
+   compare), build the resume brief per "Resilient dispatch", and relaunch — bounded by the resume
+   cap, consuming neither a kickback nor a ladder retry. Record the relaunch count for the summary
+   table.
 
 d. **On `status: complete`:** independently re-run the project's verification commands (from
    CLAUDE.md) as the authoritative gate — the subagent may be mistaken. If they fail, treat it as
@@ -444,9 +476,10 @@ e. **Dispatch the `verifier` subagent** (Task tool, `agents/verifier.md`) — th
    - **Verdict `fail`:** kick back. Re-dispatch the **implementer** (per the ladder if the
      dispatch fails) with: the full approved plan, its own previous report, and the verifier's
      findings verbatim, plus *"Fix ONLY these verification findings. Do not expand scope. Return
-     your report."* On return, checkpoint: `git add -A && git commit -m "wip: checkpoint kickback
-     (#<n>)"` (skip if nothing changed). Re-run the mechanical checks and re-dispatch the
-     **verifier** (include its prior findings so it confirms each is resolved). **Maximum 2
+     your report."* On return, run the guard's compare, then checkpoint: `git add -A && git
+     commit -m "wip: checkpoint kickback (#<n>)"` (skip if nothing changed). Re-run the mechanical
+     checks and re-dispatch the **verifier** (include its prior findings so it confirms each is
+     resolved). **Maximum 2
      kickbacks** (3 implementer attempts total). Still failing → blocked path (step f), with the
      latest findings as the blocker explanation. Record verification rounds and ladder retries
      used for the summary table.
@@ -467,9 +500,12 @@ git add -A
 git status --porcelain   # review this list
 ```
      Every staged path must be accounted for by the report's "Files changed" list (or an obvious
-     consequence, e.g. a lockfile — `.claude/LESSONS.md` always counts). Unstage and investigate
-     anything unexpected (`git restore --staged <path>`); if it can't be explained, treat the
-     issue as blocked rather than commit files the report can't account for.
+     consequence, e.g. a lockfile — `.claude/LESSONS.md` counts only when the guard above had a
+     tracked baseline to compare; with no baseline (the untracked case above), it never counts:
+     unstage it (`git restore --staged .claude/LESSONS.md`) if `git add -A` staged it — under an
+     ignored `.claude/` it never is — and leave it for the human to commit). Unstage and
+     investigate anything unexpected (`git restore --staged <path>`); if it can't be explained,
+     treat the issue as blocked rather than commit files the report can't account for.
 
      **Re-validate the plan binding (#174) before committing.** Run `find-implementation-work.sh
      --issue <number>` once more (if its verdict is unknown, the **unknown** branch below applies
@@ -621,12 +657,13 @@ gh issue edit <number> --add-label pr-open
      yet). Classify the failure first (`gh run view <run-id> --log-failed`):
      - **Caused by this PR** → re-dispatch the **implementer** (per the ladder if the dispatch
        fails) with the plan, its report, the failing log excerpt, and *"Fix ONLY this CI failure.
-       Do not expand scope. Return your report."* On return, checkpoint: `git add -A && git
-       commit -m "wip: checkpoint ci-fix (#<n>)"` (skip if nothing changed). Re-run the
-       mechanical checks, re-dispatch the **verifier** (scope: the fix); once it confirms,
-       archive its fresh verdict the same way as any other pass (above), then refresh the PR
-       body — rewrite it with the fresh verdict's closing status line and `Mutation probe:` line
-       replacing the superseded ones — and apply it with `gh pr edit --body-file <tempfile>`, so
+       Do not expand scope. Return your report."* On return, run the guard's compare, then
+       checkpoint: `git add -A && git commit -m "wip: checkpoint ci-fix (#<n>)"` (skip if nothing
+       changed). Re-run the mechanical checks, re-dispatch the **verifier** (scope: the fix); once
+       it confirms, archive its fresh verdict the same way as any other pass (above), then
+       refresh the PR body — rewrite it with the fresh verdict's closing status line and
+       `Mutation probe:` line replacing the superseded ones — and apply it with `gh pr edit
+       --body-file <tempfile>`, so
        the body describes the tree the head commit actually carries. A permission-denied `gh pr
        edit` is never routed around: report it loudly in the run summary with the exact command,
        and flag the PR as needing a manual body update before it can qualify for autonomous
