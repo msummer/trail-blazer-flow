@@ -441,7 +441,7 @@ branch unchanged from baseline (a standalone invocation always measures).
 **No ledger row, no status line** — touches no issue already in the pipeline, dispatches no
 agent. Note the issue numbers it filed: step 5 lists each as `unledgered`. Report what it filed
 in "what this cycle did" — issue links, the measurement figure, and that each carries
-`no-auto-approve`.
+`test-ratchet`, which the planner's hard floor refuses to auto-approve.
 
 ### 5. Close the loop
 

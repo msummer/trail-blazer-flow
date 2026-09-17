@@ -23,9 +23,9 @@ the orchestrator: you handle all GitHub I/O, and you delegate the actual plan-wr
 | Needs initial plan | *(no plan-* label)* | New issue, never planned | — |
 | Awaiting review | `plan-proposed` | Plan posted; waiting on human | this skill |
 | Approved | `plan-approved` | Ready for the implementer | human, or this skill via the auto-approval policy (step 6) |
-| Opted out | `no-plan` | Planner ignores this issue entirely (tracking/discussion/question) | human, or cleanup-after-merge.sh --fix (orphaned follow-ups) |
-| Manual approval only | `no-auto-approve` | This issue's plans are never auto-approved, even under a CLAUDE.md policy | human; the implementer on every follow-up it files; the test-ratchet skill |
-| Harness-authored | `test-ratchet` | Filed by the `test-ratchet` skill; the body is machine-authored evidence | the `test-ratchet` skill |
+| Opted out | `no-plan` | Planner ignores this issue entirely (tracking/discussion/question) | human; the implementer on every follow-up it files; cleanup-after-merge.sh --fix (orphaned follow-ups from an older harness version) |
+| Manual approval only | `no-auto-approve` | This issue's plans are never auto-approved, even under a CLAUDE.md policy | human only — the harness never applies this label |
+| Harness-authored | `test-ratchet` | Filed by the `test-ratchet` skill; the body is machine-authored evidence; step 6b's hard floor refuses auto-approval outright | the `test-ratchet` skill |
 
 **Requesting changes is comment-driven, not label-driven.** To ask for a revision, a maintainer
 (`OWNER`/`MEMBER`/`COLLABORATOR` — see "Trust and provenance" below) simply comments on the
@@ -231,8 +231,9 @@ b. Dispatch the **`planner` subagent** (via the Task tool) with a prompt contain
    test-only (no production-code changes), must not delete, skip, weaken, or loosen any existing
    test, assertion, or coverage threshold, and must not touch `CLAUDE.md`, `.claude/`, or CI
    configuration. If the gap cannot be closed within that scope, say so under Open questions
-   rather than widening it."* These issues are filed with `no-auto-approve`, so step 6's hard
-   floor already keeps their plans manual; removing that label is the human's call, per issue.
+   rather than widening it."* These issues carry the `test-ratchet` label, and step 6b's hard
+   floor refuses to auto-approve any issue carrying it — the harness never removes that label,
+   so their plans always wait for a human; approving one is always the human's own action.
 
 c. Post the returned plan as an issue comment. Write the plan body to a temp file first to
    avoid shell-quoting problems, then:
@@ -389,6 +390,9 @@ the following. The policy can loosen nothing in the hard floor; it can only add 
 
 **Hard floor (non-negotiable, regardless of what the policy says):**
 - the issue does NOT carry the `no-auto-approve` label;
+- the issue does NOT carry the `test-ratchet` label — machine-authored, so it is never
+  auto-approved, in any mode; the harness never removes this label, so only a human removing
+  it by hand takes the issue out of this clause (manual approval is unaffected);
 - the plan has **zero unanswered BLOCKING questions** — and zero BLOCKING questions resolved by
   `RESOLVED (orchestrator-proposed):` decisions (you may not approve your own answers). One
   narrow exception: on an issue carrying the grant label declared under "Autonomy decision

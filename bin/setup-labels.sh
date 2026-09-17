@@ -10,13 +10,19 @@
 #   pr-open         -> a PR has been opened for the issue; awaiting your review/merge
 #   impl-blocked    -> implementation hit a blocker; needs your input (remove to retry)
 #   no-plan         -> opt-out: the planner ignores this issue entirely (tracking/discussion);
-#                      also applied automatically by cleanup-after-merge.sh --fix to a plan
-#                      follow-up orphaned when its source PR was closed without merging
-#   no-auto-approve -> opt-out: this issue's plans are never auto-approved, even if CLAUDE.md
-#                      defines an auto-approval policy; approval must be manual
+#                      the issue-implementer skill also applies it to every follow-up issue it
+#                      files, holding each one out of planning until a human triages it and
+#                      removes the label; and cleanup-after-merge.sh --fix applies it to a plan
+#                      follow-up (filed by an older harness version) orphaned when its source PR
+#                      was closed without merging
+#   no-auto-approve -> human-only veto: this issue's plans are never auto-approved, even if
+#                      CLAUDE.md defines an auto-approval policy; approval must be manual. The
+#                      harness never applies this label to any issue it files — only a human does.
 #   test-ratchet    -> provenance: filed by the test-ratchet skill under the repo's CLAUDE.md
-#                      "Test-suite ratchet policy". Harness-authored, so it also gets
-#                      no-auto-approve; close it as "not planned" to veto that gap for good.
+#                      "Test-suite ratchet policy". The planner's hard floor refuses to
+#                      auto-approve any issue carrying this label, so it always waits for a
+#                      human's manual approval; close it as "not planned" to veto that gap for
+#                      good.
 #   multi-pr        -> human-applied: the primary signal cleanup-after-merge.sh reads to leave
 #                      a multi-PR issue open when one of its slices merges (the issue-body
 #                      marker is no longer honoured; a maintainer comment marker still is).
@@ -48,7 +54,7 @@ create_or_update "plan-approved"   "1D76DB" "Plan approved; ready for the implem
 create_or_update "pr-open"         "5319E7" "PR opened for this issue; awaiting human review/merge"
 create_or_update "impl-blocked"    "B60205" "Implementation hit a blocker; needs human input (remove to retry)"
 create_or_update "no-plan"         "EEEEEE" "Excluded from the planning workflow; the planner ignores this issue"
-create_or_update "no-auto-approve" "FBCA04" "Never auto-approve this issue's plans; approval must be manual"
+create_or_update "no-auto-approve" "FBCA04" "Human-only veto: never auto-approve this issue's plans (the harness never applies it)"
 create_or_update "test-ratchet"    "006B75" "Filed by the test-suite ratchet; harness-authored coverage work"
 create_or_update "multi-pr"        "C5DEF5" "Multi-PR issue: cleanup leaves it open when a slice's PR merges"
 

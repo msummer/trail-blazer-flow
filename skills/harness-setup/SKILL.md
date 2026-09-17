@@ -87,14 +87,16 @@ it without guessing?"**:
    policy" exists, the `test-ratchet` skill (standalone, and as the `issue-cycle` ratchet pass)
    may file coverage-increasing issues on the repo's behalf; a non-configurable hard floor
    applies on top — test-only work, monotonic, capped per run and per open backlog, evidence
-   required, `no-auto-approve` on every issue (see the plugin README). No section means the
+   required, and the planner's own hard floor refuses to auto-approve any issue carrying
+   `test-ratchet` (see the plugin README). No section means the
    ratchet never runs. If the section exists, **run the measurement command it names once** and
    report the figure: a policy whose command doesn't run files nothing, and that is worth
    catching here rather than in an unattended cycle. If they want it, offer to draft a
    conservative starting policy (e.g. *"Measure with `<cmd>`; propose coverage work under
    `src/` only; at most 1 issue per run"*) for their review, and explain the flow — filed issues
-   arrive labelled `test-ratchet` + `no-auto-approve`, so every one still gets a human's plan
-   review, and closing one as *not planned* vetoes that gap permanently.
+   arrive labelled `test-ratchet`, which the planner's hard floor refuses to auto-approve, so
+   every one still gets a human's plan review, and closing one as *not planned* vetoes that gap
+   permanently.
 8. **Scoped autonomy (optional)** — if sections titled exactly "Autonomy reserve" and/or
    "Autonomy decision record" exist, they make a human-applied grant label checkable: the
    planner adds a "Reserve touch list" to plans and runs `check-decision-record.sh` on
