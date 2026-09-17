@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 69 assertions total. The gate prints what it checks — run it.
+# Five groups, 70 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -692,7 +692,7 @@ fi
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 785
-issue-cycle 505
+issue-cycle 540
 issue-planner 540
 project-kickoff 215
 test-ratchet 200
@@ -1423,6 +1423,30 @@ elif [ "$pathere_guard" != "$pathere_push" ]; then
   bad "4.42 PATH_ERE predicate disagrees: hooks/git-c-guard.sh has '$pathere_guard', hooks/push-guard.sh has '$pathere_push'"
 else
   ok "4.42 hooks/git-c-guard.sh and hooks/push-guard.sh share the identical PATH_ERE predicate"
+fi
+
+# 4.43 (#324) — skills/issue-cycle/SKILL.md's *Governance path list* sub-bullet names exactly one
+# Bash call, on one line, for the merge floor's governance-surface read: a fixed-string count plus
+# a same-line placeholder check. This proves only that the command's literal text and its two
+# paste placeholders are present and spelled correctly — never that the path-match rules stated in
+# the surrounding prose are correct, that the pasted base-tip/head-OID values are right, or that
+# the orchestrator actually runs the command; none of those is machine-parsable under CLAUDE.md's
+# machine-parsed-artifacts rule. $cyc is assigned later in this file (see the 5.5-5.7 block), so
+# this assertion uses its own path.
+gov43_path="$root/skills/issue-cycle/SKILL.md"
+gov43_n="$(grep -c -F -- 'git diff --no-renames --name-only ' "$gov43_path")"
+if [ "$gov43_n" != "1" ]; then
+  bad "4.43 skills/issue-cycle/SKILL.md: expected exactly one 'git diff --no-renames --name-only' line, found $gov43_n"
+else
+  gov43_line="$(grep -F -- 'git diff --no-renames --name-only ' "$gov43_path")"
+  case "$gov43_line" in
+    *'<paste the base tip here>'*'<paste the head OID here>'*)
+      ok "4.43 skills/issue-cycle/SKILL.md names exactly one 'git diff --no-renames --name-only' governance-path-list Bash call, with both paste placeholders on that same line"
+      ;;
+    *)
+      bad "4.43 skills/issue-cycle/SKILL.md's 'git diff --no-renames --name-only' line is missing one or both paste placeholders (<paste the base tip here>, <paste the head OID here>): $gov43_line"
+      ;;
+  esac
 fi
 
 # ============================================================================
