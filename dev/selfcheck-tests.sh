@@ -396,6 +396,19 @@ p_4_43_norenames() { edit "$1/skills/issue-cycle/SKILL.md" 's/ --no-renames//'; 
 # (the append helper p_1_1/p_1_7 already use, proving an append there trips nothing else besides
 # what it's meant to), so assertion 4.44 clause (a)'s ERE scan finds a match in bin/*.sh.
 p_4_44() { printf 'gh issue create --title x --label no-auto-approve\n' | append "$1/bin/harness-status.sh"; }
+# p_2_7_cdg_matcher (#327) — flip the FOURTH (claude-dir-guard.sh) handler's matcher from
+# "Edit|Write" to "Bash", located by the literal '"matcher": "Edit|Write"' string (present exactly
+# once in hooks/hooks.json — the description prose spells "Edit|Write" too, but never inside a
+# quoted "matcher": key), tripping reworked 2.7's basename-keyed matcher table's clause (a) without
+# touching any other handler's matcher/if/command text.
+p_2_7_cdg_matcher() { edit "$1/hooks/hooks.json" 's/"matcher": "Edit|Write"/"matcher": "Bash"/'; }
+# p_4_45_* (#327) — rename characters INSIDE the identifier/value, never append a suffix (LESSON
+# 2026-09-04b). p_4_45_drift alters hooks/claude-dir-guard.sh's own AGENT_TYPES_VERIFIER value
+# (characters changed inside the namespaced token, not a suffix) so it no longer agrees with
+# hooks/agent-boundary.sh's; p_4_45_extraction renames hooks/claude-dir-guard.sh's
+# AGENT_TYPES_IMPLEMENTER identifier throughout so the gate's anchored extraction comes back empty.
+p_4_45_drift() { edit "$1/hooks/claude-dir-guard.sh" 's/AGENT_TYPES_VERIFIER="verifier trail-blazer-flow:verifier"/AGENT_TYPES_VERIFIER="verifier trail-blazer-flow:verifer"/'; }
+p_4_45_extraction() { edit "$1/hooks/claude-dir-guard.sh" 's/AGENT_TYPES_IMPLEMENTER/AGENT_TYPES_IMPLEMENTOR/g'; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -656,7 +669,7 @@ cases=(
   "2.7-if-missing|2.7|p_2_7_if_missing|rename the git-c-guard.sh handler's \"if\" key so the gate's extraction defaults it to \"-none-\" -- re-measured against reworked 2.7 (no longer a length mismatch, since a missing if now defaults cleanly to \"-none-\"; it fails via the basename-keyed table's mismatch instead): measured: \"2.7 hooks/hooks.json structure broken: git-c-guard.sh's if is '-none-', expected 'Bash(git -C *)';\""
   "2.7-boundary-if-added|2.7|p_2_7_boundary_if_added|add an \"if\" key to hooks.json's agent-boundary.sh handler, which reworked 2.7 expects to carry none (\"-none-\")"
   "2.7-boundary-missing-script|2.7|p_2_7_boundary_missing_script|repoint hooks.json's agent-boundary.sh handler at a nonexistent script"
-  "2.7-matcher|2.7|p_2_7_matcher|change the second PreToolUse entry's matcher from Bash to Write"
+  "2.7-matcher|2.7|p_2_7_matcher|change the second PreToolUse entry's matcher from Bash to Write -- re-measured against reworked 2.7's basename-keyed matcher table: measured: \"2.7 hooks/hooks.json structure broken: agent-boundary.sh's matcher is 'Write', expected 'Bash';\" (72 pass, 1 fail)"
   "2.7-orphan-hook-script|2.7|p_2_7_orphan_hook_script|add a syntactically valid hooks/*.sh file that hooks.json never registers (1.1/1.2/1.4/1.6 stay green)"
   "2.6|2.6|p_2_6|drop the Bash(git -C * clean*) deny entry"
   "3.4|3.4|p_3_4|agents/planner.md's harness-status line: retries=<k> becomes retries=<kk>"
@@ -715,10 +728,10 @@ cases=(
   "4.37-extraction|4.37|p_4_37_extraction|rename bin/harness-version.sh's HARNESS_VERSION_STEM identifier throughout so the gate's anchored extraction comes back empty -- measured: '4.37 bin/harness-version.sh's HARNESS_VERSION_STEM= or HARNESS_STATUS_FIELD= line didn't match (structure changed) — extraction failed'"
   "4.38-stem|4.38|p_4_38_stem|rewrite 'protection' to 'protecton' inside every occurrence of the strict WARN stem in dev/doctor-tests.sh only (characters changed inside the token, not a suffix) -- measured: '4.38 branch-protection WARN stem literal(s) missing from: dev/doctor-tests.sh(strict);'"
   "4.38-extraction|4.38|p_4_38_extraction|rename bin/check-harness.sh's PROTECTION_STRICT_WARN_STEM identifier throughout so the gate's anchored extraction comes back empty -- measured: '4.38 bin/check-harness.sh's PROTECTION_STRICT_WARN_STEM= or PROTECTION_CHECKS_WARN_STEM= line didn't match (structure changed) — extraction failed'"
-  "4.39-extraction|4.39|p_4_39_extraction|rename hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER identifier throughout so the gate's anchored extraction comes back empty"
-  "4.39-unknown-agent|4.39|p_4_39_unknown_agent|typo AGENT_TYPES_VERIFIER's bare spelling to 'verifer', naming an agents/*.md file that doesn't exist"
-  "4.39-namespace|4.39|p_4_39_namespace|typo the namespaced spelling's plugin-name prefix to 'trail-blazer-flo', no longer matching plugin.json's .name"
-  "4.39-missing-spelling|4.39|p_4_39_missing_spelling|drop the namespaced spelling from AGENT_TYPES_IMPLEMENTER, leaving only the bare form"
+  "4.39-extraction|4.39 4.45|p_4_39_extraction|rename hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER identifier throughout so the gate's anchored extraction comes back empty -- since #327, 4.45's OWN extraction from this same file also comes back empty (4.45 reads hooks/agent-boundary.sh's AGENT_TYPES_* lines directly, never through 4.39's variables), so both fail together -- measured: 71 pass, 2 fail"
+  "4.39-unknown-agent|4.39 4.45|p_4_39_unknown_agent|typo AGENT_TYPES_VERIFIER's bare spelling to 'verifer', naming an agents/*.md file that doesn't exist -- since #327, this also makes hooks/agent-boundary.sh's AGENT_TYPES_VERIFIER disagree with hooks/claude-dir-guard.sh's untouched copy, so 4.45 fails alongside 4.39 -- measured: 71 pass, 2 fail"
+  "4.39-namespace|4.39 4.45|p_4_39_namespace|typo the namespaced spelling's plugin-name prefix to 'trail-blazer-flo', no longer matching plugin.json's .name -- since #327, this also makes hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER disagree with hooks/claude-dir-guard.sh's untouched copy, so 4.45 fails alongside 4.39 -- measured: 71 pass, 2 fail"
+  "4.39-missing-spelling|4.39 4.45|p_4_39_missing_spelling|drop the namespaced spelling from AGENT_TYPES_IMPLEMENTER, leaving only the bare form -- since #327, this also makes hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER disagree with hooks/claude-dir-guard.sh's untouched copy, so 4.45 fails alongside 4.39 -- measured: 71 pass, 2 fail"
   "5.13-harness-pass|5.13|p_5_13_harness_pass|disable only the harness-only sed pass in bin/reconcile-ledger.sh (retries=([^ ]+) (harness= anchor) so a harness-only status line falls through to the malformed-line die -- measured: 'harness-only planner line: expected silence/rc=0, got rc=2 output=...malformed harness-status line...'"
   "5.13-deploy-harness-pass|5.13|p_5_13_deploy_harness_pass|disable only the deploy+harness sed pass in bin/reconcile-ledger.sh ((deploy=[^ ]+) (harness= anchor) so a deploy+harness status line falls through to the malformed-line die -- measured: 'deploy+harness merge line: expected silence/rc=0, got rc=2 output=...malformed harness-status line...'"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary -- measured: 5.1's own accounted-for ledger now reports an unknown-outcome discrepancy instead of staying silent; 5.14's c0 uses a DIFFERENT ledger+status fixture pair (a seed-only ledger with no implementer row, against the empty-queue fixture) that this mutation never reaches, so 5.14 stays green"
@@ -767,6 +780,9 @@ cases=(
   "5.14-short-circuit|5.14|p_5_14_short_circuit|locate the degraded-emit block's own end-delimiter comment via awk's index() and insert an early '[ \"\$found\" -eq 1 ] && exit 1' immediately after it in bin/reconcile-ledger.sh, so a run that printed a degraded line exits before the per-issue loop ever runs -- measured: c6 (the degraded line prints, then the per-issue stage-skipped comparison never runs) fails alone"
   "5.14-escline|5.14|p_5_14_escline|delete the escline mapping bin/reconcile-ledger.sh's degraded-lines jq program applies to each refusing entry ('(\$refuse[] | escline)' -> bare '\$refuse[]'), so a refusing entry reaches emit() raw instead of rendered -- measured: c8 (an empty-string reason once again prints as a silently-dropped blank line), c9 (a reason carrying an embedded newline once again splits raw across two lines), c10 (a NUL-only reason is once again silently dropped by bash's command substitution), and c11 (the same NUL-only entry silently dropped out of a two-reason mixed list) all fail"
   "5.16-ledger-guard|5.16|p_5_16_ledger_guard|remove the ' || die \"cannot read ledger file: \$ledger_src\"' clause from bin/reconcile-ledger.sh's ledger read (characters removed from inside the guard, not a suffix appended) so an unreadable ledger path no longer dies -- measured failing set: {5.16} (71 pass, 1 fail)"
+  "2.7-cdg-matcher|2.7|p_2_7_cdg_matcher|change the FOURTH (claude-dir-guard.sh) handler's matcher from Edit|Write to Bash -- measured: \"2.7 hooks/hooks.json structure broken: claude-dir-guard.sh's matcher is 'Bash', expected 'Edit|Write';\" (72 pass, 1 fail)"
+  "4.45-drift|4.45|p_4_45_drift|alter one character inside hooks/claude-dir-guard.sh's own AGENT_TYPES_VERIFIER value (characters changed inside the token, not a suffix) so it no longer agrees with hooks/agent-boundary.sh's -- measured: \"4.45 AGENT_TYPES_* vocabulary disagrees: hooks/agent-boundary.sh has AGENT_TYPES_IMPLEMENTER='implementer trail-blazer-flow:implementer' AGENT_TYPES_VERIFIER='verifier trail-blazer-flow:verifier', hooks/claude-dir-guard.sh has AGENT_TYPES_IMPLEMENTER='implementer trail-blazer-flow:implementer' AGENT_TYPES_VERIFIER='verifier trail-blazer-flow:verifer'\" (72 pass, 1 fail)"
+  "4.45-extraction|4.45|p_4_45_extraction|rename hooks/claude-dir-guard.sh's AGENT_TYPES_IMPLEMENTER identifier throughout so the gate's anchored extraction comes back empty -- measured: \"4.45 hooks/agent-boundary.sh's or hooks/claude-dir-guard.sh's AGENT_TYPES_IMPLEMENTER= or AGENT_TYPES_VERIFIER= line didn't match (structure changed) — extraction failed\" (72 pass, 1 fail)"
 )
 
 # ---------------------------------------------------------------------------------------------

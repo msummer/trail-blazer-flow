@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 72 assertions total. The gate prints what it checks — run it.
+# Five groups, 73 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -283,54 +283,62 @@ else
   bad "$msg"
 fi
 
-# 2.7 (reworked #235) — hooks/hooks.json structure ↔ filesystem, both directions. Parses (2.1
-# already checked); .hooks.PreToolUse is a non-empty array. Four clauses, folded into one
-# assertion so the count stays unchanged:
-#   (a) EVERY .hooks.PreToolUse[] element's .matcher == "Bash" (widened from the old first-element-
-#       only check, now that a second entry exists — hooks/agent-boundary.sh, #235);
+# 2.7 (reworked #235; matcher table added #327) — hooks/hooks.json structure ↔ filesystem, both
+# directions. Parses (2.1 already checked); .hooks.PreToolUse is a non-empty array. Four clauses,
+# folded into one assertion so the count stays unchanged:
+#   (a) each type=="command" handler's own .matcher (read from the .hooks.PreToolUse[] element
+#       that contains it) equals what a basename-keyed expected-matcher table says that script
+#       should carry — git-c-guard.sh/agent-boundary.sh/push-guard.sh -> "Bash",
+#       claude-dir-guard.sh (#327) -> "Edit|Write" (the exact matcher its own live-probe record
+#       measured, M5) — with an unregistered basename FAILing loudly ("add its expected matcher to
+#       this table") rather than silently passing or defaulting to "Bash";
 #   (b) every type=="command" handler's .command, with ${CLAUDE_PLUGIN_ROOT} textually replaced by
 #       $root and the surrounding 'bash "' / '"' stripped, names a file that exists;
 #   (c) each handler's "if" (jq's `.["if"]`, since `if` is a jq keyword; an absent/empty value
 #       normalises to the sentinel "-none-") equals what a basename-keyed expectation table says
-#       that script should carry — git-c-guard.sh -> "Bash(git -C *)" (#155), agent-boundary.sh and
-#       push-guard.sh (#260) -> "-none-" (the `if` field is permission-rule syntax over tool input
-#       only and cannot see agent_type or a `-C`/`env`/`bash -c`-wrapped push — see each hook's own
-#       header) — with an unregistered basename FAILing loudly ("add its expected if to this
-#       table") rather than silently passing;
+#       that script should carry — git-c-guard.sh -> "Bash(git -C *)" (#155); agent-boundary.sh,
+#       push-guard.sh (#260), and claude-dir-guard.sh (#327) -> "-none-" (the `if` field is
+#       permission-rule syntax over tool input only and cannot see agent_type, a `-C`/`env`/
+#       `bash -c`-wrapped push, or a `.claude` path segment — see each hook's own header) — with an
+#       unregistered basename FAILing loudly ("add its expected if to this table") rather than
+#       silently passing;
 #   (d) every hooks/*.sh file on disk is named by some handler's .command (the reverse direction:
 #       an orphan hook script — shipped but never registered — is exactly this issue's failure
 #       mode, since an unregistered hook never fires).
-# Extracts handler_cmds and handler_ifs into indexed arrays (bash 3.2 indexed arrays are fine —
-# only declare -A is banned) and FAILs loudly if either comes back empty or their lengths differ,
-# the same guard 2.5/4.13 use for an empty/short extraction rather than a vacuous pass.
+# Extracts, in ONE jq pass, "matcher<TAB>command<TAB>if" per handler (matcher paired with its own
+# enclosing element, via `. as $e | ($e.matcher // "-none-") as $m | $e.hooks[]?`), read back with
+# `@tsv`/`IFS=$'\t' read -r` into three same-length indexed arrays (bash 3.2 indexed arrays are
+# fine — only declare -A is banned); FAILs loudly if the row extraction comes back empty or any
+# row's command field is empty (an unsplittable/short row), the same guard 2.5/4.13 use for an
+# empty/short extraction rather than a vacuous pass.
 pretooluse_n="$(jq -r '.hooks.PreToolUse? // [] | length' "$hooks_json" 2>/dev/null)"
-bad_matcher_n="$(jq -r '[.hooks.PreToolUse[]?.matcher? // empty | select(. != "Bash")] | length' "$hooks_json" 2>/dev/null)"
-handler_cmds="$(jq -r '.hooks.PreToolUse[]?.hooks[]? | select(.type == "command") | .command // empty' "$hooks_json" 2>/dev/null)"
-handler_ifs_raw="$(jq -r '.hooks.PreToolUse[]?.hooks[]? | select(.type == "command") | .["if"] // "-none-"' "$hooks_json" 2>/dev/null)"
-if [ -z "$pretooluse_n" ] || [ "$pretooluse_n" -eq 0 ] || [ -z "$handler_cmds" ] || [ -z "$handler_ifs_raw" ]; then
+handler_rows="$(jq -r '.hooks.PreToolUse[]? | . as $e | ($e.matcher // "-none-") as $m | $e.hooks[]? | select(.type == "command") | [$m, (.command // ""), (.["if"] // "-none-")] | @tsv' "$hooks_json" 2>/dev/null)"
+if [ -z "$pretooluse_n" ] || [ "$pretooluse_n" -eq 0 ] || [ -z "$handler_rows" ]; then
   bad "2.7 hooks/hooks.json structure: .hooks.PreToolUse extraction failed or came back empty (structure changed)"
-elif [ -n "$bad_matcher_n" ] && [ "$bad_matcher_n" -ne 0 ]; then
-  bad "2.7 hooks/hooks.json structure: $bad_matcher_n .hooks.PreToolUse[] element(s) have a .matcher other than 'Bash'"
 else
+  matcher_arr=()
   cmd_arr=()
-  while IFS= read -r hc; do cmd_arr+=("$hc"); done <<EOF
-$handler_cmds
-EOF
   if_arr=()
-  while IFS= read -r hi; do
+  row_err=0
+  while IFS=$'\t' read -r hm hc hi; do
+    [ -n "$hc" ] || row_err=1
+    matcher_arr+=("$hm")
+    cmd_arr+=("$hc")
     [ -n "$hi" ] || hi="-none-"
     if_arr+=("$hi")
   done <<EOF
-$handler_ifs_raw
+$handler_rows
 EOF
-  if [ "${#cmd_arr[@]}" -eq 0 ] || [ "${#cmd_arr[@]}" -ne "${#if_arr[@]}" ]; then
-    bad "2.7 hooks/hooks.json structure: handler_cmds (${#cmd_arr[@]}) and handler_ifs (${#if_arr[@]}) came back different lengths (structure changed) — extraction failed"
+  if [ "$row_err" -eq 1 ] || [ "${#cmd_arr[@]}" -eq 0 ] || [ "${#cmd_arr[@]}" -ne "${#if_arr[@]}" ] || [ "${#cmd_arr[@]}" -ne "${#matcher_arr[@]}" ]; then
+    bad "2.7 hooks/hooks.json structure: handler_matchers (${#matcher_arr[@]}), handler_cmds (${#cmd_arr[@]}), and handler_ifs (${#if_arr[@]}) came back empty or different lengths (structure changed) — extraction failed"
   else
     missing_script=""
     bad_if=""
+    bad_matcher=""
     registered_basenames=""
     idx=0
     while [ "$idx" -lt "${#cmd_arr[@]}" ]; do
+      hm="${matcher_arr[$idx]}"
       hc="${cmd_arr[$idx]}"
       hi="${if_arr[$idx]}"
       resolved="${hc//\$\{CLAUDE_PLUGIN_ROOT\}/$root}"
@@ -343,10 +351,22 @@ EOF
           git-c-guard.sh) expect_if='Bash(git -C *)' ;;
           agent-boundary.sh) expect_if='-none-' ;;
           push-guard.sh) expect_if='-none-' ;;
+          claude-dir-guard.sh) expect_if='-none-' ;;
           *) bad_if="$bad_if $base has no expected-if table entry (add its expected if to this table);" ;;
         esac
         if [ -n "$expect_if" ] && [ "$hi" != "$expect_if" ]; then
           bad_if="$bad_if $base's if is '$hi', expected '$expect_if';"
+        fi
+        expect_matcher=""
+        case "$base" in
+          git-c-guard.sh) expect_matcher='Bash' ;;
+          agent-boundary.sh) expect_matcher='Bash' ;;
+          push-guard.sh) expect_matcher='Bash' ;;
+          claude-dir-guard.sh) expect_matcher='Edit|Write' ;;
+          *) bad_matcher="$bad_matcher $base has no expected-matcher table entry (add its expected matcher to this table);" ;;
+        esac
+        if [ -n "$expect_matcher" ] && [ "$hm" != "$expect_matcher" ]; then
+          bad_matcher="$bad_matcher $base's matcher is '$hm', expected '$expect_matcher';"
         fi
       else
         missing_script="$missing_script $path"
@@ -362,11 +382,12 @@ EOF
         *) orphan_scripts="$orphan_scripts $fb" ;;
       esac
     done
-    if [ -z "$missing_script" ] && [ -z "$bad_if" ] && [ -z "$orphan_scripts" ]; then
-      ok "2.7 hooks/hooks.json structure: every PreToolUse entry's matcher is 'Bash', every command handler resolves to an existing file and carries its expected \"if\", and every hooks/*.sh file is registered"
+    if [ -z "$missing_script" ] && [ -z "$bad_if" ] && [ -z "$bad_matcher" ] && [ -z "$orphan_scripts" ]; then
+      ok "2.7 hooks/hooks.json structure: every command handler carries its expected matcher and \"if\", resolves to an existing file, and every hooks/*.sh file is registered"
     else
       msg="2.7 hooks/hooks.json structure broken:"
       [ -n "$missing_script" ] && msg="$msg command handler(s) resolve to a nonexistent file:$missing_script;"
+      [ -n "$bad_matcher" ] && msg="$msg$bad_matcher"
       [ -n "$bad_if" ] && msg="$msg$bad_if"
       [ -n "$orphan_scripts" ] && msg="$msg hooks/*.sh file(s) not registered by any handler:$orphan_scripts;"
       bad "$msg"
@@ -1485,6 +1506,30 @@ elif ! grep -qF -- '--label no-plan' "$root/skills/issue-implementer/SKILL.md"; 
   bad "4.44 skills/issue-implementer/SKILL.md no longer files follow-ups with --label no-plan"
 else
   ok "4.44 no --label/--add-label argument sets no-auto-approve in skills/*/SKILL.md, skills/*/references/*.md, agents/*.md, or bin/*.sh, and skills/issue-implementer/SKILL.md still files follow-ups with --label no-plan"
+fi
+
+# 4.45 (#327) — hooks/agent-boundary.sh's and hooks/claude-dir-guard.sh's AGENT_TYPES_IMPLEMENTER=
+# and AGENT_TYPES_VERIFIER= declaration lines are byte-identical (script<->script, the 4.42
+# idiom): claude-dir-guard.sh reuses agent-boundary.sh's exact role vocabulary rather than forking
+# it. Anchored single-line sed -nE extraction on BOTH files (the 4.26/4.39-4.42 idiom) — this
+# assertion extracts hooks/agent-boundary.sh's two lines itself, into its OWN variables, rather
+# than reusing 4.39's $ab_impl/$ab_verif (#327 round-1 kickback K2: the two blocks' extractions
+# are independent, so a change to one assertion's variables cannot silently affect the other's
+# verdict); an empty extraction on EITHER side, for EITHER key, FAILs loudly ("structure changed")
+# rather than passing vacuously. Proves only that the two scripts spell this vocabulary
+# identically, not that either hook's runtime behavior is correct — the same honest limit
+# 4.33/4.34/4.39-4.42's comments state.
+ab445_impl="$(sed -nE 's/^AGENT_TYPES_IMPLEMENTER="([^"]*)"$/\1/p' "$ab")"
+ab445_verif="$(sed -nE 's/^AGENT_TYPES_VERIFIER="([^"]*)"$/\1/p' "$ab")"
+cdg="$root/hooks/claude-dir-guard.sh"
+cdg_impl="$(sed -nE 's/^AGENT_TYPES_IMPLEMENTER="([^"]*)"$/\1/p' "$cdg")"
+cdg_verif="$(sed -nE 's/^AGENT_TYPES_VERIFIER="([^"]*)"$/\1/p' "$cdg")"
+if [ -z "$ab445_impl" ] || [ -z "$ab445_verif" ] || [ -z "$cdg_impl" ] || [ -z "$cdg_verif" ]; then
+  bad "4.45 hooks/agent-boundary.sh's or hooks/claude-dir-guard.sh's AGENT_TYPES_IMPLEMENTER= or AGENT_TYPES_VERIFIER= line didn't match (structure changed) — extraction failed"
+elif [ "$ab445_impl" != "$cdg_impl" ] || [ "$ab445_verif" != "$cdg_verif" ]; then
+  bad "4.45 AGENT_TYPES_* vocabulary disagrees: hooks/agent-boundary.sh has AGENT_TYPES_IMPLEMENTER='$ab445_impl' AGENT_TYPES_VERIFIER='$ab445_verif', hooks/claude-dir-guard.sh has AGENT_TYPES_IMPLEMENTER='$cdg_impl' AGENT_TYPES_VERIFIER='$cdg_verif'"
+else
+  ok "4.45 hooks/agent-boundary.sh and hooks/claude-dir-guard.sh share the identical AGENT_TYPES_IMPLEMENTER ('$ab445_impl') and AGENT_TYPES_VERIFIER ('$ab445_verif') vocabulary"
 fi
 
 # ============================================================================
