@@ -278,8 +278,15 @@ other than its first line — dropped from both plan selection and feedback/bind
 rules above, previously with no diagnostic — is now named on stderr (`warn:` naming its author,
 createdAt, and url) and counted in a new, additive `counts.plan_marker_quoters` key on both
 scripts, spelled byte-identically (no `startswith`, no reference to `$planC`) and excluding
-harness records exactly as the feedback/binding sets already exclude them. Since #211 the same
-faithfulness applies to the
+harness records exactly as the feedback/binding sets already exclude them. Since #321, both
+scripts additionally warn on the twin class #302 left unwarned: a trusted, in-window comment whose
+body contains any marker in a new shared declaration, `HARNESS_RECORD_MARKERS` (one marker per
+line, built from the existing `$AUDIT_MARKER`/`$VERDICT_MARKER` constants), but does not open with
+one — a maintainer quoting a harness-authored record, not a record itself — named on stderr and
+counted in a new, additive `counts.harness_marker_quoters` key, disjoint from
+`counts.plan_marker_quoters` (a comment quoting both markers is counted in exactly one); gate
+assertion 4.46 pins that the two scripts' `HARNESS_RECORD_MARKERS` declarations are spelled
+identically. Since #211 the same faithfulness applies to the
 revision-candidates query itself: the stub applies `find-planning-work.sh`'s own `--jq
 '.[].number'` argument with the real `jq` to a JSON page-array fixture and propagates jq's exit
 status, so a candidates filter that cannot process the returned document fails the call the same

@@ -249,6 +249,19 @@
 # trusted_post_plan for this reason is no longer silent. Harness records are excluded from this
 # count exactly as they are excluded from trusted_post_plan above.
 #
+# #321 adds one more: harness_marker_quoters (how many trusted, post-latest-plan comments carried
+# any marker in the harness-record marker set — HARNESS_RECORD_MARKERS below — somewhere in their
+# body without opening with one) plus one warn: line per such comment ("... carries a harness
+# record marker but does not open with it — not a harness record, and not in trusted_post_plan
+# (not binding context)"), naming its author, createdAt, and url (or the literal "no url"). The
+# window is the same as plan_marker_quoters above (posted after the latest trusted plan, or at any
+# time when there is none). Harness records are excluded positively, by a startswith test against
+# the same set: every record this harness posts opens with its own marker as the first line of the
+# body, so this count never fires on a genuine harness-authored comment. Honest limit: a harness
+# record with anything (even whitespace) before its marker would be counted here, and a maintainer
+# comment that begins with a verbatim marker copy at byte 0 is still dropped from trusted_post_plan
+# silently — no count, no warn — tracked as a separate follow-up.
+#
 # Requires: gh (authenticated), jq. Run from anywhere inside the repo.
 set -euo pipefail
 
@@ -262,6 +275,13 @@ RETRY_SLEEP=30
 PLAN_MARKER="<!-- planner-plan -->"
 VERDICT_MARKER="<!-- verifier-verdict -->"
 AUDIT_MARKER="<!-- harness-audit -->"
+
+# HARNESS_RECORD_MARKERS (#321) — the harness-record marker SET, one marker per line. A later
+# marker (an escalation record, say) is a ONE-LINE addition here and nowhere else in the
+# harness_marker_quoters member below. The per-marker counters above/below keep their own
+# $a/$v tests on purpose: each names its marker in its own counts key.
+HARNESS_RECORD_MARKERS="$AUDIT_MARKER
+$VERDICT_MARKER"
 
 # GitHub's authorAssociation enum: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR,
 # FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, NONE. Only the first three carry repo
@@ -346,6 +366,7 @@ untrusted_harness_markers=0
 verdict_archives_skipped=0
 audit_comments_skipped=0
 plan_marker_quoters=0
+harness_marker_quoters=0
 missing_association=0
 plan_after_approval=0
 no_approval_event=0
@@ -383,8 +404,9 @@ for n in $ready_numbers; do
     [ (.labels // [])[] | if type == "object" then (.name // "") else tostring end ]
     | index("plan-approved") != null')
 
-  result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg v "$VERDICT_MARKER" --arg a "$AUDIT_MARKER" --arg trusted "$TRUSTED_ASSOCIATIONS" '
+  result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg v "$VERDICT_MARKER" --arg a "$AUDIT_MARKER" --arg hrm "$HARNESS_RECORD_MARKERS" --arg trusted "$TRUSTED_ASSOCIATIONS" '
     ($trusted | split(" ")) as $ok
+    | ($hrm | split("\n") | map(select(length > 0))) as $hm
     | (.comments // []) as $c
     | ($c | map(select( ((.authorAssociation // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null ))) as $trustedC
     # #281 (superseding #275) — plan-candidate set: a trusted comment is a plan candidate only if
@@ -479,6 +501,19 @@ for n in $ready_numbers; do
           | select(.body | contains($m))
           | select((.body | contains($a)) | not)
           | select((.body | contains($v)) | not)
+          | { author: (.author.login // "unknown"), createdAt: .createdAt, url: (.url // null) } ],
+        # (#321) — comments dropped from trusted_post_plan for the harness-record reason alone:
+        # the same window as the member above; within it, a trusted comment whose body contains
+        # ANY marker in $hm anywhere but opens with NONE of them is a maintainer quoting a harness
+        # record, not a harness record (every record this harness posts opens with its own marker
+        # as the first line of the body). Harness records themselves are excluded by the second
+        # select, positively, so this member never fires on a real run of the harness. Internal
+        # only — never copied into `entry` below, published only via counts.harness_marker_quoters.
+        harness_marker_quoters: [ $trustedC[]
+          | . as $cm
+          | select(.createdAt > ($lastPlan // ""))
+          | select(any($hm[]; . as $k | $cm.body | contains($k)))
+          | select((any($hm[]; . as $k | $cm.body | startswith($k))) | not)
           | { author: (.author.login // "unknown"), createdAt: .createdAt, url: (.url // null) } ],
         # #240 — internal only (never added to `entry` below, so the published JSON is byte-
         # identical to before this change): gh own per-comment includesCreatedEdit boolean, already
@@ -846,6 +881,19 @@ for n in $ready_numbers; do
     done <<<"$quoter_lines"
   fi
 
+  # warn (#321): a trusted comment posted after the latest plan (or, when there is none, at any
+  # time) carries a harness-record marker somewhere in its body but does not open with it — a
+  # maintainer's quote, not a harness record, and (via the pre-existing contains($a)/contains($v)
+  # trusted_post_plan tests) never binding either. One line per such comment.
+  record_quoter_lines=$(printf '%s' "$result" | jq -r '.harness_marker_quoters[] | "\(.author) (\(.createdAt), \(.url // "no url"))"')
+  if [ -n "$record_quoter_lines" ]; then
+    while IFS= read -r desc; do
+      [ -n "$desc" ] || continue
+      echo "warn: issue #$n: trusted comment by $desc carries a harness record marker but does not open with it — not a harness record, and not in trusted_post_plan (not binding context)" >&2
+      harness_marker_quoters=$((harness_marker_quoters+1))
+    done <<<"$record_quoter_lines"
+  fi
+
   # warn (b): fail-closed — a comment with no authorAssociation field at all is treated as
   # untrusted rather than trusted or crashing the script.
   issue_missing=$(printf '%s' "$result" | jq '.missing_association')
@@ -887,6 +935,7 @@ jq -n \
   --argjson rqu "$ready_query_unavailable" \
   --argjson fr "$fetch_retries" \
   --argjson pmq "$plan_marker_quoters" \
+  --argjson hmq "$harness_marker_quoters" \
   '{ready: $ready,
     plan_selection: $selection,
     counts: {ready: ($ready | length), truncated: (($ready | length) >= $limit),
@@ -911,4 +960,5 @@ jq -n \
              ready_query_retried: $rqr,
              ready_query_unavailable: $rqu,
              plan_marker_quoters: $pmq,
+             harness_marker_quoters: $hmq,
              fetch_retries: $fr}}'

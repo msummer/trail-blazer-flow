@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 73 assertions total. The gate prints what it checks — run it.
+# Five groups, 74 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -712,9 +712,9 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 785
+budget_table="issue-implementer 790
 issue-cycle 540
-issue-planner 540
+issue-planner 550
 project-kickoff 215
 test-ratchet 200
 harness-setup 185"
@@ -1530,6 +1530,27 @@ elif [ "$ab445_impl" != "$cdg_impl" ] || [ "$ab445_verif" != "$cdg_verif" ]; the
   bad "4.45 AGENT_TYPES_* vocabulary disagrees: hooks/agent-boundary.sh has AGENT_TYPES_IMPLEMENTER='$ab445_impl' AGENT_TYPES_VERIFIER='$ab445_verif', hooks/claude-dir-guard.sh has AGENT_TYPES_IMPLEMENTER='$cdg_impl' AGENT_TYPES_VERIFIER='$cdg_verif'"
 else
   ok "4.45 hooks/agent-boundary.sh and hooks/claude-dir-guard.sh share the identical AGENT_TYPES_IMPLEMENTER ('$ab445_impl') and AGENT_TYPES_VERIFIER ('$ab445_verif') vocabulary"
+fi
+
+# 4.46 (#321) — bin/find-planning-work.sh's and bin/find-implementation-work.sh's
+# HARNESS_RECORD_MARKERS="..." declaration blocks are byte-identical (script<->script, the
+# 4.41/4.45 idiom): both scripts build the harness_marker_quoters member's marker SET from this
+# one declaration, so a later marker added to one script but not the other is exactly the silent
+# drift this assertion catches. The declaration spans two lines (a multi-line shell string, one
+# marker per line) rather than 4.41/4.45's single line, so extraction is a `sed -n` RANGE from the
+# opening `HARNESS_RECORD_MARKERS="` line through the line ending in a bare `"`, with embedded
+# newlines flattened to `|` so a shell string comparison sees the whole block; an empty extraction
+# on EITHER side FAILs loudly ("structure changed") rather than passing vacuously. Proves only
+# that the two scripts spell this declaration identically, not that either script's runtime
+# behaviour is correct — the same honest limit 4.33/4.34/4.39-4.42/4.45's comments state.
+hrm_planning="$(sed -n '/^HARNESS_RECORD_MARKERS="/,/"$/p' "$root/bin/find-planning-work.sh" | tr '\n' '|')"
+hrm_impl="$(sed -n '/^HARNESS_RECORD_MARKERS="/,/"$/p' "$root/bin/find-implementation-work.sh" | tr '\n' '|')"
+if [ -z "$hrm_planning" ] || [ -z "$hrm_impl" ]; then
+  bad "4.46 bin/find-planning-work.sh's or bin/find-implementation-work.sh's HARNESS_RECORD_MARKERS=\"...\" block didn't match (structure changed) — extraction failed"
+elif [ "$hrm_planning" != "$hrm_impl" ]; then
+  bad "4.46 HARNESS_RECORD_MARKERS declaration disagrees: bin/find-planning-work.sh has '$hrm_planning', bin/find-implementation-work.sh has '$hrm_impl'"
+else
+  ok "4.46 bin/find-planning-work.sh and bin/find-implementation-work.sh share the identical HARNESS_RECORD_MARKERS declaration"
 fi
 
 # ============================================================================

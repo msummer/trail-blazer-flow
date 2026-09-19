@@ -219,6 +219,17 @@
 #   spelled byte-identically between the two scripts (no `startswith`, no reference to `$planC`),
 #   harness records excluded exactly as the feedback/binding sets already exclude them. Two new
 #   combined fixtures (Part 5) tell apart every clause of the rule.
+#   #321 adds the twin diagnostic for the class #302 deliberately left unwarned: a trusted comment
+#   posted after the latest plan (or, when there is none, at any time) whose body contains a
+#   harness-record marker (the harness-audit marker or the verifier-verdict marker — the set is now
+#   one shared declaration, HARNESS_RECORD_MARKERS, on both scripts) somewhere other than its first
+#   line — a maintainer quoting a harness record (to dispute it, for instance), not a harness
+#   record itself, since every record this harness posts opens with its own marker. Both scripts now
+#   print one `warn:` line per such comment (naming its author, createdAt, and url, or the literal
+#   "no url") and publish `counts.harness_marker_quoters`, spelled byte-identically between the two
+#   scripts, disjoint from `counts.plan_marker_quoters` (a comment quoting both markers is counted
+#   in exactly one). Five new fixtures (Part 5) tell apart every clause of the rule, including the
+#   no-plan window and (implementer only) `--issue <n>` mode.
 #
 # Usage: bash dev/planning-tests.sh [name-filter] — same output contract as
 # dev/cleanup-tests.sh, dev/doctor-tests.sh, and dev/selfcheck-tests.sh: one PASS/FAIL line per
@@ -808,7 +819,17 @@ mk_fixture() {
 # (T0-T6, all seven on the same ready issue 1) — since every one of its seven comments carries a
 # distinct url, unlike the "one id per resource actually looked up" fixtures above; its
 # planner-side twin, plan-marker-quoter-warn-scope, carries no comment urls at all, matching every
-# other planner fixture in this file.
+# other planner fixture in this file. #321's implementer-side combined fixture,
+# impl-harness-marker-quoter-warn-scope, takes the next eight — 7115-7122, one per comment (T0-T7,
+# all eight on the same ready issue 1), for the identical one-url-per-comment reason as #302's
+# combined fixture above; its planner-side twin, harness-marker-quoter-warn-scope, carries no
+# comment urls at all. impl-harness-marker-quoter-only-no-plan takes 1 (7123, the quoter only, no
+# plan selected — the identical shape as impl-mid-body-quoter-only-no-plan's own allocation
+# above); impl-single-issue-harness-marker-quoter (issue 45, via --issue mode) takes 2 (7124-7125,
+# a plan comment plus the quoter — the identical shape as impl-single-issue-mid-body-quoter-not-
+# selected's own allocation above). #321's two planner-side batch-mode fixtures
+# (harness-marker-quoter-warn-scope, plan-harness-marker-quoter-only-no-plan) carry no comment
+# urls at all, matching every other planner fixture in this file.
 #
 # LIVE-SHAPE PROBE (2026-09-10, maintainer triage comment on #240, gh 2.100.0 or later; expanded
 # 2026-09-14 by the orchestrator's own read-only probe): `gh issue view --json comments` already
@@ -1011,6 +1032,19 @@ mk_fixture() {
 # all), so the coincidence that let it survive on `counts.revision`/`needs_revision`/
 # `untrusted_comments` alone no longer extends to these two new assertions. Reverted immediately
 # after recording this (byte-identical, sha256 confirmed).
+#
+# RE-MEASURED AGAIN (#321): the suite grew to 157 across five new fixtures. With the SAME
+# `.[].number` -> `.number` deletion applied (backup refreshed immediately beforehand; restore
+# verified byte-identical, sha256 confirmed): dropped from 157 pass/0 fail to 115 pass/42 fail —
+# the identical 40 names above, PLUS harness-marker-quoter-warn-scope and
+# plan-harness-marker-quoter-only-no-plan (both planner-side, both writing the identical
+# well-formed-but-non-empty `[{"number":1}]` candidates.json shape, so both fail the per-candidate
+# loop the same way: `.counts.harness_marker_quoters` stays at its reset value 0 rather than the
+# expected 3 / 1, and none of either fixture's warn lines print). Neither of the three
+# implementer-side new fixtures joins (impl-harness-marker-quoter-warn-scope,
+# impl-harness-marker-quoter-only-no-plan, impl-single-issue-harness-marker-quoter): this mutant
+# targets bin/find-planning-work.sh alone, and none of the three ever calls it. Reverted
+# immediately after recording this (byte-identical, sha256 confirmed).
 #
 # events branch: `gh api "repos/{owner}/{repo}/issues/<n>/events?per_page=100" --paginate --jq
 # 'EXPR'` -> exit 1 if DIR/reject-events-<n> exists (simulates the events endpoint being
@@ -2152,12 +2186,14 @@ EOF
 # name (protects bin/harness-status.sh, which reads .needs_initial_plan and .needs_revision),
 # plus #176's new keys, plus (#246) the new author_association_retried counts key, plus
 # (#272/#273) the five new query-retry/fetch-retry counts keys, plus (#302) plan_marker_quoters —
-# the 23rd `has(...)` check. Measured mutants: (e), (f), (g), (h), and (i) — see the MEASURED
-# MUTANTS (#272/#273) block below the case table (one has(...) assertion catches each of the five
-# keys' own deletion mutant independently) — plus (#302) mutant (j), which deletes
-# plan_marker_quoters's own counts line the identical way; its initial.json/candidates.json are
-# both empty, so the per-candidate loop never runs and none of the (a)-(i) plan_marker_quoters
-# mutants ever reaches this fixture — see the MEASURED MUTANTS (#302) block below the case table.
+# the 23rd `has(...)` check, plus (#321) harness_marker_quoters — the 24th. Measured mutants: (e),
+# (f), (g), (h), and (i) — see the MEASURED MUTANTS (#272/#273) block below the case table (one
+# has(...) assertion catches each of the five keys' own deletion mutant independently) — plus
+# (#302) mutant (j), which deletes plan_marker_quoters's own counts line the identical way, and
+# (#321) mutant (j), which deletes harness_marker_quoters's own counts line the identical way; its
+# initial.json/candidates.json are both empty, so the per-candidate loop never runs and none of
+# the (a)-(i) plan_marker_quoters or harness_marker_quoters mutants ever reaches this fixture —
+# see the MEASURED MUTANTS (#302) and (#321) blocks below the case table.
 case_output_shape() {
   local dir; dir="$(mk_fixture output-shape)"
   cat > "$dir/initial.json" <<'EOF'
@@ -2190,6 +2226,7 @@ EOF
   expect_jq '.counts | has("candidates_query_unavailable")' 'true'
   expect_jq '.counts | has("fetch_retries")' 'true'
   expect_jq '.counts | has("plan_marker_quoters")' 'true'
+  expect_jq '.counts | has("harness_marker_quoters")' 'true'
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -3763,6 +3800,10 @@ EOF
 # comments here. Either way, this fixture asserts no .counts.plan_marker_quoters value and no
 # warn-count needle, so it stays blind to whichever comments get counted or whether the
 # counter/warn machinery fires at all — see the MEASURED MUTANTS (#302) block below the case
+# table. #321 adds a fifth has(...) assertion, for harness_marker_quoters, caught only by the
+# MEASURED MUTANTS (#321) block's own mutant (j) (which deletes the counts key outright): neither
+# of this fixture's two comments carries any harness-record marker, so none of mutants (a)-(i)
+# reaches a non-zero value here either — see the MEASURED MUTANTS (#321) block below the case
 # table.
 case_impl_output_shape() {
   local dir; dir="$(mk_fixture impl-output-shape)"
@@ -3808,6 +3849,7 @@ EOF
   expect_jq '.counts | has("ready_query_unavailable")' 'true'
   expect_jq '.counts | has("fetch_retries")' 'true'
   expect_jq '.counts | has("plan_marker_quoters")' 'true'
+  expect_jq '.counts | has("harness_marker_quoters")' 'true'
   expect_api_calls "$dir" 1
 }
 
@@ -5707,6 +5749,17 @@ EOF
 # expect_err needle) fails and both join the caught set. Net: thirty-five survivors in total (36
 # minus the one departure, plus zero new). Reverted immediately after recording this
 # (byte-identical, sha256 confirmed).
+#
+# RE-MEASURED AGAIN (#321): the suite grew to 157 across five new fixtures — harness-marker-
+# quoter-warn-scope, plan-harness-marker-quoter-only-no-plan (both non-empty candidates.json),
+# impl-harness-marker-quoter-warn-scope, impl-harness-marker-quoter-only-no-plan, and
+# impl-single-issue-harness-marker-quoter (all three real `gh issue view ...,comments,...`
+# fetches) — none of which survives, for the identical mechanism as #302's own two fixtures just
+# above. With the SAME "comments" deletion from GH_ISSUE_JSON_FIELDS applied (backup refreshed
+# immediately beforehand; restore verified byte-identical, sha256 confirmed): dropped from 157
+# pass/0 fail to 35 pass/122 fail — the identical thirty-five survivors, none newly departing
+# (survivor count unchanged), all five new fixtures joining the caught set. Reverted immediately
+# after recording this (byte-identical, sha256 confirmed).
 case_stub_json_script_field_lists_accepted() {
   local dir; dir="$(mk_fixture stub-json-script-field-lists-accepted)"
   cat > "$dir/initial.json" <<'EOF'
@@ -6568,7 +6621,12 @@ EOF
 # this case is unaffected by M-1/M-2/M-3 — but mutant M-4 (which additionally excludes any
 # candidate whose body contains the harness-audit marker anywhere) kills this case alone, proving
 # the over-exclusion control is a live mechanical guard, not a comment-only claim; see the MEASURED
-# MUTANTS (#275/#281) block.
+# MUTANTS (#275/#281) block. (#321) The plan comment is also this issue's ONLY comment, so its own
+# createdAt equals $lastPlan — outside the harness_marker_quoters window (createdAt > $lastPlan) —
+# so `counts.harness_marker_quoters` stays 0 here regardless of the harness marker it quotes.
+# Measured mutant (b) (delete the window select entirely): 0 -> 1, the sole comment (the plan
+# itself) is admitted once the window no longer excludes createdAt == $lastPlan — see the MEASURED
+# MUTANTS (#321) block below the case table.
 case_impl_plan_quoting_harness_marker_still_selected() {
   local dir; dir="$(mk_fixture impl-plan-quoting-harness-marker-still-selected)"
   cat > "$dir/ready.json" <<'EOF'
@@ -6592,6 +6650,7 @@ EOF
   expect_jq '.plan_selection[0].approval.covers_plan' 'true'
   expect_jq '.plan_selection[0].approval.reason' '"covered"'
   expect_jq '.counts.no_trusted_plan' '0'
+  expect_jq '.counts.harness_marker_quoters' '0'
 }
 
 # impl-audit-record-does-not-swallow-feedback — plan at T0, plan-approved labeled at T1 > T0, a
@@ -6781,7 +6840,12 @@ EOF
 # positive anchor tests the PLAN marker, not the harness markers, so this case is unaffected by
 # M-2 — but mutant M-5 (the same over-exclusion probe as M-4, applied here) kills this case alone,
 # proving the over-exclusion control is a live mechanical guard, not a comment-only claim; see the
-# MEASURED MUTANTS (#275/#281) block.
+# MEASURED MUTANTS (#275/#281) block. (#321) v2 is also the newest comment on this issue, so its
+# own createdAt equals $lastPlan — outside the harness_marker_quoters window (createdAt >
+# $lastPlan) — and T0/T1 carry no harness marker at all, so `counts.harness_marker_quoters` stays
+# 0 here. Measured mutant (b) (delete the window select entirely): 0 -> 1, v2 (T2) is admitted
+# once the window no longer excludes createdAt == $lastPlan, the identical mechanism as its
+# implementer-side twin — see the MEASURED MUTANTS (#321) block below the case table.
 case_plan_quoting_harness_marker_still_the_plan() {
   local dir; dir="$(mk_fixture plan-quoting-harness-marker-still-the-plan)"
   cat > "$dir/initial.json" <<'EOF'
@@ -6800,6 +6864,7 @@ EOF
   expect_rc 0
   expect_jq '.counts.revision' '0'
   expect_jq '.needs_revision' '[]'
+  expect_jq '.counts.harness_marker_quoters' '0'
 }
 
 # plan-untrusted-audit-record-quoting-plan-still-reported — planner-side twin of
@@ -6810,6 +6875,12 @@ EOF
 # inside $trustedC only, so this untrusted forgery never reaches it. Confirmed by re-measurement
 # (not a new mutant of its own) to join plan-untrusted-audit-marker-still-reported's existing
 # self-censoring-forgery mutation proof — see that case's own comment for the updated failing set.
+# (#321) The harness_marker_quoters member reads $trustedC only (the trust gate is applied before
+# it, exactly as it is before plan_marker_quoters); this NONE-author record never enters $trustedC
+# regardless of what it quotes or opens with, so `counts.harness_marker_quoters` stays 0 here — a
+# control pinning the trust gate the T2 fixture below also exercises. Measured mutant (j) (delete
+# the counts key): 0 -> null, the same universal has()-deletion effect every fixture asserting
+# this key shares — see the MEASURED MUTANTS (#321) block below the case table.
 case_plan_untrusted_audit_record_quoting_plan_still_reported() {
   local dir; dir="$(mk_fixture plan-untrusted-audit-record-quoting-plan-still-reported)"
   cat > "$dir/initial.json" <<'EOF'
@@ -6832,13 +6903,21 @@ EOF
   expect_jq '.counts.untrusted_harness_markers' '1'
   expect_jq '.counts.audit_comments_skipped' '0'
   expect_jq '.counts.revision' '0'
+  expect_jq '.counts.harness_marker_quoters' '0'
 }
 
 # impl-prose-before-audit-marker-record-not-selected — #281's own live shape: a real OWNER plan at
 # T0, the plan-approved label applied at T1 > T0, and an OWNER record at T2 > T1 whose body is
 # PROSE, then <!-- harness-audit -->, then a mid-body quote of <!-- planner-plan -->: excluded
 # because it does not itself open with the plan marker (a record whose marker is not on line 1 —
-# the residual gap #275 left open). Mutant M-1 — see the MEASURED MUTANTS (#275/#281) block.
+# the residual gap #275 left open). Mutant M-1 — see the MEASURED MUTANTS (#275/#281) block. #321
+# adds .counts.harness_marker_quoters/warn-count assertions to this same fixture: the T2 comment
+# is trusted, in-window, contains the harness-audit marker mid-body, and does not open with it —
+# the maintainer-disputing-an-audit-comment shape the issue itself named — so it is this member's
+# ONE counted comment; mutant (g) (contains -> startswith in the positive test) collapses the
+# count to 0 (the positive and negative tests become mutually exclusive), and mutants (h)/(i)/(j)
+# break the count/warn-count/counts-key assertions directly (deleting the counter increment, the
+# warn echo, or the counts line) — see the MEASURED MUTANTS (#321) block below the case table.
 case_impl_prose_before_audit_marker_record_not_selected() {
   local dir; dir="$(mk_fixture impl-prose-before-audit-marker-record-not-selected)"
   cat > "$dir/ready.json" <<'EOF'
@@ -6865,6 +6944,8 @@ EOF
   expect_jq '.plan_selection[0].trusted_post_plan' '[]'
   expect_jq '.counts.audit_comments_skipped' '1'
   expect_warn_count "postdates the plan-approved label" 0
+  expect_jq '.counts.harness_marker_quoters' '1'
+  expect_warn_count "carries a harness record marker but does not open with it" 1
 }
 
 # impl-mid-body-plan-marker-quote-not-selected — the class ONLY #281's positive anchor closes: a
@@ -6983,7 +7064,15 @@ EOF
 # plan-prose-before-audit-marker-record-not-the-plan — OWNER plan v1 at T0, OWNER feedback at T1,
 # and an OWNER record at T2 whose body is PROSE, then <!-- harness-audit -->, then a mid-body quote
 # of <!-- planner-plan -->: never the latest plan (does not open with the plan marker), so the T1
-# feedback still triggers a revision. Mutant M-2 — see the MEASURED MUTANTS (#275/#281) block.
+# feedback still triggers a revision. Mutant M-2 — see the MEASURED MUTANTS (#275/#281) block. #321
+# adds a .counts.harness_marker_quoters/warn-count assertion to this same fixture: the T2 comment
+# is trusted, in-window, contains the harness-audit marker mid-body, and does not open with it, so
+# it is this member's ONE counted comment; mutant (d) (delete the contains-any select) admits its
+# own T1 feedback as a second quoter (count 1 -> 2, T1 carries no marker at all but no longer needs
+# one); mutant (g) (contains -> startswith in the positive test) collapses the count to 0 instead
+# (the positive and negative tests become mutually exclusive); mutants (h)/(i)/(j) break the
+# count/warn-count/counts-key assertions directly — see the MEASURED MUTANTS (#321) block below
+# the case table.
 case_plan_prose_before_audit_marker_record_not_the_plan() {
   local dir; dir="$(mk_fixture plan-prose-before-audit-marker-record-not-the-plan)"
   cat > "$dir/initial.json" <<'EOF'
@@ -7004,6 +7093,8 @@ EOF
   expect_jq '.needs_revision[0].number' '1'
   expect_jq '.counts.audit_comments_skipped' '1'
   expect_jq '.untrusted_comments' '[]'
+  expect_jq '.counts.harness_marker_quoters' '1'
+  expect_warn_count "carries a harness record marker but does not open with it" 1
 }
 
 # plan-mid-body-plan-marker-quote-not-the-plan — same skeleton as
@@ -7103,6 +7194,28 @@ EOF
 # `.[].number` -> `.number` deletion — its own non-empty candidates.json fails closed, so the
 # per-candidate loop never runs), and MUTATION PROOF M4 (the "comments" field deletion — its own
 # real `gh issue view` fetch fails validate_json_fields the identical way).
+#
+# (#321) The same timeline ALSO exercises harness_marker_quoters, but only T5 (2026-01-06, prose
+# then <!-- harness-audit -->, quoting the plan marker mid-body) satisfies it — trusted, in-window,
+# contains a harness marker, and does NOT open with one — the maintainer-disputing-an-audit-comment
+# shape the issue itself names. `.counts.harness_marker_quoters` is exactly 1 here too, disjoint
+# from `.counts.plan_marker_quoters` (also 1, but named on T6, a different comment) — the
+# disjointness acceptance criterion, pinned on one run. T3/T4 each OPEN WITH their own harness
+# marker (excluded by the startswith-any negation); T2 carries NO harness marker at all (unlike
+# harness-marker-quoter-warn-scope's own T2, so it fails the contains-any select regardless of the
+# trust gate); T0/T1/T6 carry no harness marker either. MEASURED (against this fixture's own
+# timeline, not assumed from its sibling): (d) (deleting the contains-any select admits T1 AND T6,
+# neither of which needs a marker any more once that select is gone, count 1 -> 3), (e) (deleting
+# the startswith-any negation admits T3 AND T4, count 1 -> 3), (g) (`contains($k)` ->
+# `startswith($k)` in the positive test collapses the count to 0: T5's own marker is not at byte 0,
+# so it now fails the mutated positive test too, and nothing else in this timeline opens with a
+# marker to take its place), (h) (the counter stays 0 despite a correct warn line), (i) (the warn
+# line stops printing despite a correct counter), and (j) (the counts key resolves to `null`) — NOT
+# (a): T2 carries no harness marker at all, so admitting it via `$c[]` adds no comment the
+# contains-any select would accept; NOT (b): T0 carries no harness marker either, so removing the
+# window admits nothing; NOT (c): this fixture always has a real plan (T0), so $lastPlan is never
+# null; NOT (f): T5's own marker is $AUDIT_MARKER, unaffected by deleting $VERDICT_MARKER from the
+# set — see the MEASURED MUTANTS (#321) block below the case table.
 case_plan_marker_quoter_warn_scope() {
   local dir; dir="$(mk_fixture plan-marker-quoter-warn-scope)"
   cat > "$dir/initial.json" <<'EOF'
@@ -7126,6 +7239,8 @@ EOF
   expect_jq '.counts.plan_marker_quoters' '1'
   expect_warn_count "carries the plan marker but does not open with it" 1
   expect_err "trusted comment by owner (2026-01-07T00:00:00Z, no url) carries the plan marker"
+  expect_jq '.counts.harness_marker_quoters' '1'
+  expect_warn_count "carries a harness record marker but does not open with it" 1
 }
 
 # impl-plan-marker-quoter-warn-scope (#302) — implementer-side twin of plan-marker-quoter-warn-
@@ -7146,6 +7261,14 @@ EOF
 # MUTATION PROOF M4 (the "comments" field deletion — its own real `gh issue view` fetch fails
 # validate_json_fields, so the whole per-issue computation never runs and every assertion this
 # fixture makes fails).
+#
+# (#321) The identical seven-comment timeline also exercises harness_marker_quoters, with the same
+# T5-only mechanism as plan-marker-quoter-warn-scope's own #321 paragraph above:
+# `.counts.harness_marker_quoters` is exactly 1 (T5, the prose-then-<!-- harness-audit --> quoter),
+# disjoint from `.counts.plan_marker_quoters` (also 1, named on T6). MEASURED: (d), (e), (g), (h),
+# (i), and (j) — the identical per-letter mechanism as plan-marker-quoter-warn-scope's own #321
+# paragraph, on the identical seven-comment timeline — NOT (a), (b), (c), or (f), for the identical
+# reasons — see the MEASURED MUTANTS (#321) block below the case table.
 case_impl_plan_marker_quoter_warn_scope() {
   local dir; dir="$(mk_fixture impl-plan-marker-quoter-warn-scope)"
   cat > "$dir/ready.json" <<'EOF'
@@ -7168,6 +7291,209 @@ EOF
   expect_jq '.counts.plan_marker_quoters' '1'
   expect_warn_count "carries the plan marker but does not open with it" 1
   expect_err "trusted comment by owner (2026-01-07T00:00:00Z, https://example.invalid/1#issuecomment-7114) carries the plan marker"
+  expect_jq '.counts.harness_marker_quoters' '1'
+  expect_warn_count "carries a harness record marker but does not open with it" 1
+}
+
+# harness-marker-quoter-warn-scope (#321) — the twin of plan-marker-quoter-warn-scope, one fixture
+# that tells apart every clause of the new harness_marker_quoters rule: a real OWNER plan at T0
+# (2026-01-01); plain OWNER feedback at T1 (2026-01-02, no marker at all — pins the contains-any
+# select); an untrusted (NONE) prose-then-<!-- harness-audit --> quoter at T2 (2026-01-03 — pins
+# the trust gate, since $trustedC excludes it before the rule ever runs); an OWNER record OPENING
+# WITH <!-- harness-audit --> at T3 (2026-01-04 — pins the startswith-any exclusion, audit member);
+# an OWNER record OPENING WITH <!-- verifier-verdict --> at T4 (2026-01-05 — pins the same
+# exclusion, verdict member); an OWNER record with prose BEFORE its harness-audit marker at T5
+# (2026-01-06 — the first positive: a maintainer disputing an audit comment, the issue's own named
+# shape); an OWNER record with prose BEFORE its verifier-verdict marker at T6 (2026-01-07 — the
+# second positive, pinning that the SET has both members, not just the audit one); and an OWNER
+# comment at T7 (2026-01-08) that quotes BOTH the plan marker and, mid-body, <!-- harness-audit -->
+# (the third positive, pinning disjointness with #302: T7 is excluded from plan_marker_quoters by
+# its own contains($a) exclusion, and counted here instead). Only T5/T6/T7 are ever counted or
+# named, pinning .counts.harness_marker_quoters at exactly 3 and the warn count at exactly 3;
+# .counts.plan_marker_quoters stays 0 (T7 is the only comment quoting the plan marker, and it is
+# excluded from that member by its own contains($a) select). .counts.audit_comments_skipped is 3
+# (T3, T5, T7 each contain $a somewhere) and .counts.verdict_archives_skipped is 2 (T4, T6) —
+# narrower counts that already counted this class before #321 gave it its own name and warn line.
+# Measured mutants: (a) (T2 newly admitted, 3 -> 4), (d) (T1 newly admitted, 3 -> 4), (e) (T3 AND
+# T4 both newly admitted, 3 -> 5), (f) (T6 dropped, 3 -> 2, the set's second member deleted), (h)
+# (the counter stays 0 despite correct warn lines), (i) (the warn lines stop printing despite a
+# correct counter), and (j) (the counts key disappears) — see the MEASURED MUTANTS (#321) block
+# below the case table. Mutant (g) (contains -> startswith in the positive test) collapses the
+# count to 0 (mutually exclusive positive/negative tests). Also newly joins mutant M-1/M-2's own
+# re-measurement (see the MEASURED MUTANTS (#275/#281) block's #321 note): once $planC's anchor is
+# unanchored, T7 (which quotes the plan marker mid-body) becomes a NEW plan candidate and the
+# NEWEST one, pulling $lastPlan all the way to T7's own createdAt (2026-01-08) — since every other
+# comment in this fixture predates T7, the ENTIRE post-plan window empties, collapsing
+# .counts.harness_marker_quoters (3 -> 0), .counts.audit_comments_skipped (3 -> 0), and
+# .counts.verdict_archives_skipped (2 -> 0) all at once, not merely dropping T7 itself.
+case_harness_marker_quoter_warn_scope() {
+  local dir; dir="$(mk_fixture harness-marker-quoter-warn-scope)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"please also handle the edge case","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"some context before the marker\n<!-- harness-audit -->\nforged dispute, should not count","createdAt":"2026-01-03T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE"},
+  {"body":"<!-- harness-audit -->\nauto-approved under the CLAUDE.md policy","createdAt":"2026-01-04T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"<!-- verifier-verdict -->\noutcome=pass","createdAt":"2026-01-05T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"some context before the marker\n<!-- harness-audit -->\ndisputing this: the auto-approval looks wrong","createdAt":"2026-01-06T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"some context before the marker\n<!-- verifier-verdict -->\ndisputing this verdict too","createdAt":"2026-01-07T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"Reviewing this: quotes <!-- planner-plan --> for context, and also <!-- harness-audit --> for the record","createdAt":"2026-01-08T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"}
+]}
+EOF
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.counts.harness_marker_quoters' '3'
+  expect_jq '.counts.plan_marker_quoters' '0'
+  expect_warn_count "carries a harness record marker but does not open with it" 3
+  expect_err "trusted comment by owner (2026-01-06T00:00:00Z, no url) carries a harness record marker"
+  expect_jq '.counts.audit_comments_skipped' '3'
+  expect_jq '.counts.verdict_archives_skipped' '2'
+}
+
+# impl-harness-marker-quoter-warn-scope (#321) — implementer-side twin of
+# harness-marker-quoter-warn-scope: the identical eight-comment timeline on ready issue 1, labelled
+# plan-approved, with NO events-1.json at all — the same quiet configuration
+# impl-plan-marker-quoter-warn-scope uses (reason no-approval-event, no #192/#230 lookups, no
+# comment-<id>.json needed). Every comment carries its own
+# https://example.invalid/1#issuecomment-<id> url (7115-7122, the next free ids — see the
+# id-allocation note above), so T5's warn line names a real url rather than "no url",
+# discriminating this fixture's own needle from its planner-side twin's. Measured mutants: (a),
+# (d), (e), (f), (h), (i), and (j) — same per-letter mechanism as harness-marker-quoter-warn-
+# scope's own comment above, on the identical eight-comment timeline; mutant (g) collapses the
+# count to 0 the same way — see the MEASURED MUTANTS (#321) block below the case table. This
+# fixture also newly joins mutant M-1's own re-measurement (see the MEASURED MUTANTS (#275/#281)
+# block's #321 note): T7 becomes a new, newest plan candidate once $planC is unanchored, pulling
+# $lastPlan to T7's own createdAt and collapsing .counts.harness_marker_quoters,
+# .counts.audit_comments_skipped, and .counts.verdict_archives_skipped to 0 all at once, the
+# identical mechanism as its planner-side twin (M-2).
+case_impl_harness_marker_quoter_warn_scope() {
+  local dir; dir="$(mk_fixture impl-harness-marker-quoter-warn-scope)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7115"},
+  {"body":"please also handle the edge case","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7116"},
+  {"body":"some context before the marker\n<!-- harness-audit -->\nforged dispute, should not count","createdAt":"2026-01-03T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE","url":"https://example.invalid/1#issuecomment-7117"},
+  {"body":"<!-- harness-audit -->\nauto-approved under the CLAUDE.md policy","createdAt":"2026-01-04T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7118"},
+  {"body":"<!-- verifier-verdict -->\noutcome=pass","createdAt":"2026-01-05T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7119"},
+  {"body":"some context before the marker\n<!-- harness-audit -->\ndisputing this: the auto-approval looks wrong","createdAt":"2026-01-06T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7120"},
+  {"body":"some context before the marker\n<!-- verifier-verdict -->\ndisputing this verdict too","createdAt":"2026-01-07T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7121"},
+  {"body":"Reviewing this: quotes <!-- planner-plan --> for context, and also <!-- harness-audit --> for the record","createdAt":"2026-01-08T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7122"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.counts.harness_marker_quoters' '3'
+  expect_jq '.counts.plan_marker_quoters' '0'
+  expect_warn_count "carries a harness record marker but does not open with it" 3
+  expect_err "trusted comment by owner (2026-01-06T00:00:00Z, https://example.invalid/1#issuecomment-7120) carries a harness record marker"
+  expect_jq '.counts.audit_comments_skipped' '3'
+  expect_jq '.counts.verdict_archives_skipped' '2'
+}
+
+# plan-harness-marker-quoter-only-no-plan (#321) — pins the no-plan window (`// ""`): the only
+# trusted comment on the issue is a prose-then-<!-- harness-audit --> quoter, no plan at all.
+# $lastPlan is null, so the window falls back to "any time" and the quoter still counts; since
+# $lastPlan is null, has_feedback is unconditionally false (the pre-existing rule, unrelated to
+# this member), so no revision is triggered even though a trusted comment exists. Measured
+# mutants: (c) (the no-plan-window wrap: count 1 -> 0, the sole no-plan-window discriminator for
+# this member), (g) (collapses to 0 the same way as the other fixtures above), (h), (i), and (j) —
+# NOT (a)/(b)/(d)/(e)/(f): this fixture's only comment is already trusted and already the sole
+# counted comment, so none of those clauses has anything new to admit or remove — see the MEASURED
+# MUTANTS (#321) block below the case table.
+case_plan_harness_marker_quoter_only_no_plan() {
+  local dir; dir="$(mk_fixture plan-harness-marker-quoter-only-no-plan)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"some context before the marker\n<!-- harness-audit -->\ndisputing this early","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"}
+]}
+EOF
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.counts.harness_marker_quoters' '1'
+  expect_warn_count "carries a harness record marker but does not open with it" 1
+  expect_jq '.counts.revision' '0'
+  expect_jq '.needs_revision' '[]'
+}
+
+# impl-harness-marker-quoter-only-no-plan (#321) — implementer-side twin of
+# plan-harness-marker-quoter-only-no-plan: batch mode, the only trusted comment on a ready,
+# plan-approved issue is the same prose-then-<!-- harness-audit --> quoter, no plan at all — plan
+# stays null (the quoter is never a candidate) and zero gh api calls are made (no plan comment id
+# to look up). Takes comment id 7123 — see the id-allocation note above. Measured mutants: (c),
+# (g), (h), (i), and (j) — the identical set and mechanism as plan-harness-marker-quoter-only-no-
+# plan's own comment above — see the MEASURED MUTANTS (#321) block below the case table.
+case_impl_harness_marker_quoter_only_no_plan() {
+  local dir; dir="$(mk_fixture impl-harness-marker-quoter-only-no-plan)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"some context before the marker\n<!-- harness-audit -->\ndisputing this early","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7123"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].plan' 'null'
+  expect_jq '.plan_selection[0].approval.reason' '"no-plan"'
+  expect_jq '.counts.no_trusted_plan' '1'
+  expect_jq '.ready | length' '1'
+  expect_api_calls "$dir" 0
+  expect_jq '.counts.harness_marker_quoters' '1'
+  expect_warn_count "carries a harness record marker but does not open with it" 1
+}
+
+# impl-single-issue-harness-marker-quoter (#321) — `--issue 45` (an issue number unused elsewhere
+# in this file, absent from ready.json — LESSON 2026-09-08's two-modes rule): a real OWNER plan at
+# T0 (2026-01-01, covered by an approval labeled at T1 2026-01-02), plus a trusted OWNER
+# prose-then-<!-- harness-audit --> quoter at T2 (2026-01-03), pinning that `--issue <n>` mode
+# carries the same harness_marker_quoters computation as batch mode. Takes comment ids 7124-7125 —
+# see the id-allocation note above. Measured mutants: (g), (h), (i), and (j) — NOT (c): this
+# fixture always has a real plan (T0), so $lastPlan is never null; NOT (a)/(b)/(d)/(e)/(f): T2 is
+# already the sole counted comment and already trusted, so none of those clauses has anything new
+# to admit or remove — see the MEASURED MUTANTS (#321) block below the case table.
+case_impl_single_issue_harness_marker_quoter() {
+  local dir; dir="$(mk_fixture impl-single-issue-harness-marker-quoter)"
+  cat > "$dir/ready.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/issue-45.json" <<'EOF'
+{"number":45,"title":"Not in the ready query","url":"https://example.invalid/45","comments":[
+  {"body":"<!-- planner-plan -->\nreal plan","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/45#issuecomment-7124"},
+  {"body":"some context before the marker\n<!-- harness-audit -->\ndisputing this: please re-check","createdAt":"2026-01-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/45#issuecomment-7125"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  cat > "$dir/events-45.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  cat > "$dir/comment-7124.json" <<'EOF'
+{"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}
+EOF
+  build_stub_gh "$dir"
+  run_implementation_args "$dir" --issue 45
+  expect_rc 0
+  expect_jq '.plan_selection[0].plan.url' '"https://example.invalid/45#issuecomment-7124"'
+  expect_jq '.plan_selection[0].approval.covers_plan' 'true'
+  expect_jq '.plan_selection[0].approval.reason' '"covered"'
+  expect_jq '.plan_selection[0].trusted_post_plan' '[]'
+  expect_jq '.counts.audit_comments_skipped' '1'
+  expect_jq '.counts.harness_marker_quoters' '1'
+  expect_warn_count "carries a harness record marker but does not open with it" 1
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -9071,6 +9397,11 @@ cases=(
   "plan-mid-body-quoter-only-no-latest-plan|case_plan_mid_body_quoter_only_no_latest_plan|#281: the only marker-carrying trusted comment is a mid-body quoter — no latest plan, so genuine feedback after it does not trigger a phantom revision"
   "plan-marker-quoter-warn-scope|case_plan_marker_quoter_warn_scope|#302: a plan, plain feedback, an untrusted quoter, an audit record, a verdict archive, a prose-before-marker record, and one automation-shaped trusted quoter — only the last is counted and named"
   "impl-plan-marker-quoter-warn-scope|case_impl_plan_marker_quoter_warn_scope|#302 implementer-side twin: the same seven-comment scope on a ready, plan-approved issue with no events-1.json — only the automation-shaped trusted quoter is counted and named"
+  "harness-marker-quoter-warn-scope|case_harness_marker_quoter_warn_scope|#321: a plan, plain feedback, an untrusted quoter, an audit record, a verdict archive, and two maintainer-disputing-a-record quoters (audit and verdict), plus a third quoter carrying both markers — only the three prose-then-marker comments are counted and named, disjoint from plan_marker_quoters"
+  "impl-harness-marker-quoter-warn-scope|case_impl_harness_marker_quoter_warn_scope|#321 implementer-side twin: the same eight-comment scope on a ready, plan-approved issue with no events-1.json — only the three prose-then-marker comments are counted and named"
+  "plan-harness-marker-quoter-only-no-plan|case_plan_harness_marker_quoter_only_no_plan|#321: the only trusted comment is a prose-then-harness-audit quoter, no plan at all — pins the no-plan (\`// \"\"\`) window"
+  "impl-harness-marker-quoter-only-no-plan|case_impl_harness_marker_quoter_only_no_plan|#321 implementer-side twin: batch mode, the only trusted comment is the same quoter, plan stays null, zero gh api calls"
+  "impl-single-issue-harness-marker-quoter|case_impl_single_issue_harness_marker_quoter|#321: \`--issue 45\` carries the identical harness_marker_quoters computation as batch mode (LESSON 2026-09-08's two-modes rule)"
   "plan-initial-query-retry-succeeds|case_plan_initial_query_retry_succeeds|#273: the needs_initial_plan query fails once then succeeds on the bounded retry — 2 issue-calls, 1 sleep(30), retried true, unavailable false, real content from the second attempt"
   "plan-initial-query-unavailable|case_plan_initial_query_unavailable|#273: the needs_initial_plan query fails on both attempts — one warn line, empty bucket, both flags true, exactly 1 sleep, needs_revision still populated from the healthy candidates query"
   "plan-candidates-query-retry-succeeds|case_plan_candidates_query_retry_succeeds|#273: the revision-candidates query fails once then succeeds on the bounded retry — 2 issue-calls, 1 sleep(30), retried true, unavailable false, a real revision from the second attempt"
@@ -9220,6 +9551,26 @@ cases=(
 # pass/1 fail, failing only plan-quoting-harness-marker-still-the-plan (P3) — unchanged, for the
 # identical reason on plan-marker-quoter-warn-scope's own T0. Each mutation reverted immediately
 # after recording it (byte-identical, sha256 confirmed).
+#
+# RE-MEASURED AGAIN (#321), when the suite grew to 157 across five new fixtures, two of which
+# (harness-marker-quoter-warn-scope, impl-harness-marker-quoter-warn-scope) call the real scripts
+# via run_planning/run_implementation: M-1 dropped 157 cases to 145 pass/12 fail — the IDENTICAL
+# eleven names above, PLUS impl-harness-marker-quoter-warn-scope: its own T7 (the comment quoting
+# BOTH the plan marker and, mid-body, the harness-audit marker) newly satisfies the unanchored
+# contains($m) test too, so $planC admits it and, being the NEWEST comment in this fixture's own
+# eight-comment timeline, pulls $lastPlan all the way forward to T7's own createdAt
+# (2026-01-08) — since every other comment in the fixture predates T7, the entire post-plan window
+# empties at once, collapsing .counts.harness_marker_quoters (3 -> 0), .counts.
+# audit_comments_skipped (3 -> 0), and .counts.verdict_archives_skipped (2 -> 0) together, not
+# merely dropping T7 itself. M-2 (the identical edit on find-planning-work.sh's $planC) dropped 157
+# cases to 150 pass/7 fail — the IDENTICAL six names above, PLUS harness-marker-quoter-warn-scope,
+# joining by the identical mechanism on its own T7. M-3 still drops 157 cases to 156 pass/1 fail,
+# failing only impl-audit-record-plan-tie-not-selected (I3) — unchanged: neither new fixture's
+# timeline has a plan/lastPlan createdAt tie. M-4 still drops 157 cases to 156 pass/1 fail, failing
+# only impl-plan-quoting-harness-marker-still-selected (I4) — unchanged: neither new fixture's own
+# T0 plan quotes the harness-audit marker. M-5 still drops 157 cases to 156 pass/1 fail, failing
+# only plan-quoting-harness-marker-still-the-plan (P3) — unchanged, for the identical reason. Each
+# mutation reverted immediately after recording it (byte-identical, sha256 confirmed).
 
 # MEASURED MUTANTS (#302) — the new plan_marker_quoters member (Implementation step 6), applied
 # one letter at a time to EACH script (twenty measurements total), the suite re-run against the
@@ -9331,6 +9682,187 @@ cases=(
 # Every mutant (a)-(j) fails at least one fixture on at least one script; restored byte-
 # identically after each measurement (sha256 confirmed); final restored-tree run: 152 pass, 0
 # fail.
+#
+# RE-MEASURED AGAIN (#321), when the suite grew to 157 across five new fixtures, two of which
+# (harness-marker-quoter-warn-scope, impl-harness-marker-quoter-warn-scope) assert
+# `.counts.plan_marker_quoters` themselves (both expect 0, since neither fixture's own T7 — the
+# comment quoting both markers — ever satisfies this clause under the UNMUTATED script): applied
+# one letter at a time to EACH script exactly as before, the suite re-run against the 157-case
+# baseline, and the mutated file byte-identically restored (sha256 confirmed, `[ -x bin/<script>
+# ]` re-checked) before the next. Every letter still fails the IDENTICAL pre-#321 names above; the
+# only change is which letters ALSO newly admit harness-marker-quoter-warn-scope /
+# impl-harness-marker-quoter-warn-scope into this clause's failing set, since both fixtures assert
+# `.counts.plan_marker_quoters == 0` and several letters make that assertion false:
+#   (a) — no new joiner (planner 156 pass/1 fail; implementer 156 pass/1 fail): neither new
+#       fixture's untrusted T2 comment contains the plan marker, so admitting untrusted comments
+#       changes nothing for either.
+#   (b) — NEW joiner on both scripts (planner 154 pass/3 fail; implementer 150 pass/7 fail):
+#       deleting the window entirely admits each new fixture's own T0 plan comment (it trivially
+#       contains($m), contains neither $a nor $v), raising plan_marker_quoters from 0 to 1.
+#   (c) — no new joiner (planner 156 pass/1 fail; implementer 156 pass/1 fail): both new fixtures
+#       always have a real plan (T0), so $lastPlan is never null.
+#   (d) — NEW joiner on both scripts (planner 153 pass/4 fail; implementer 154 pass/3 fail):
+#       deleting the contains($m) requirement admits each new fixture's own T1 plain-feedback
+#       comment (no marker at all, so it already passes the two negations), raising the count from
+#       0 to 1.
+#   (e) — NEW joiner on both scripts (planner 155 pass/2 fail; implementer 155 pass/2 fail):
+#       deleting the contains($a) exclusion admits each new fixture's own T7 (which contains $a
+#       mid-body), raising the count from 0 to 1.
+#   (f) — no new joiner (planner 156 pass/1 fail; implementer 156 pass/1 fail): deleting the
+#       contains($v) exclusion does not admit T7 (still excluded via the intact contains($a)
+#       exclusion, since T7 contains both markers).
+#   (g) — NEW joiner on both scripts (planner 155 pass/2 fail; implementer 155 pass/2 fail):
+#       contains($a) -> startswith($a) no longer excludes T7 (which contains $a mid-body but does
+#       not START WITH it), admitting it and raising the count from 0 to 1.
+#   (h)/(i) — no new joiner on either (planner 154 pass/3 fail for both; implementer 153 pass/4
+#       fail for both): the new fixtures' own plan_marker_quoters value is already 0 under the
+#       unmutated script, so a stuck-at-0 counter or a suppressed warn line changes nothing they
+#       assert.
+#   (j) — NEW joiner on both scripts (planner 152 pass/5 fail; implementer 151 pass/6 fail):
+#       deleting the counts key resolves `.counts.plan_marker_quoters` through `null`, not `0`,
+#       breaking both new fixtures' own equality assertion the same way it breaks every
+#       pre-existing one. Every measurement reverted immediately after recording it (byte-
+#       identical, sha256 confirmed); final restored-tree run: 157 pass, 0 fail.
+
+# MEASURED MUTANTS (#321) — the new harness_marker_quoters member (Implementation steps 2-6),
+# applied one letter at a time to EACH script (twenty measurements total), the suite re-run
+# against the 157-case baseline, and the mutated file byte-identically restored (sha256 confirmed,
+# `[ -x bin/<script> ]` re-checked) before the next. Every letter is spelled identically against
+# both scripts' own copy of the clause (byte-identical apart from the trailing comma
+# find-implementation-work.sh's internal `result` object needs and find-planning-work.sh's
+# doesn't). Each touched or new case's own comment cites the letter(s) below whose recorded
+# failing set names it:
+#   (a) `$trustedC[]` -> `$c[]` (the raw, untrusted-inclusive comments array) on the
+#       harness_marker_quoters line only: planner — 157 cases dropped to 156 pass/1 fail, failing
+#       exactly harness-marker-quoter-warn-scope, whose own T2 (a NONE-author prose-then-
+#       harness-audit quoter, createdAt after the plan) is now admitted despite failing the trust
+#       gate, raising `.counts.harness_marker_quoters` from 3 to 4; implementer — 157 cases dropped
+#       to 156 pass/1 fail, failing exactly impl-harness-marker-quoter-warn-scope, for the
+#       identical reason on its own T2. plan-marker-quoter-warn-scope / impl-plan-marker-quoter-
+#       warn-scope do NOT join: their own T2 (a mid-body plan-marker quote from an untrusted
+#       author) carries no harness marker at all, so admitting it via `$c[]` still fails the
+#       contains-any select.
+#   (b) delete the `select(.createdAt > ($lastPlan // ""))` window select entirely (the whole
+#       clause, not just its `// ""` fallback): planner — 157 cases dropped to 156 pass/1 fail,
+#       failing exactly plan-quoting-harness-marker-still-the-plan (its own v2/T2 plan comment,
+#       which quotes <!-- harness-audit --> in its own prose and previously sat AT $lastPlan
+#       rather than after it, now qualifies once the window no longer excludes createdAt ==
+#       $lastPlan, raising the count from 0 to 1); implementer — 157 cases dropped to 156 pass/1
+#       fail, failing exactly impl-plan-quoting-harness-marker-still-selected, for the identical
+#       reason on its own single plan comment. None of the other three combined/twin fixtures
+#       (harness-marker-quoter-warn-scope / impl-harness-marker-quoter-warn-scope,
+#       plan-marker-quoter-warn-scope / impl-plan-marker-quoter-warn-scope) joins: none of their
+#       own T0 plan comments quotes any harness marker, so removing the window admits nothing new
+#       for any of them.
+#   (c) wrap the window as `if $lastPlan == null then [] else … end` (the no-plan case now returns
+#       empty instead of "any time"): planner — 157 cases dropped to 156 pass/1 fail, failing
+#       exactly plan-harness-marker-quoter-only-no-plan, whose own quoter (the ONLY trusted comment,
+#       with no real plan at all) now has nothing to compare against and is dropped from the
+#       empty-$lastPlan branch; implementer — 157 cases dropped to 156 pass/1 fail, failing exactly
+#       impl-harness-marker-quoter-only-no-plan, for the identical reason. None of
+#       harness-marker-quoter-warn-scope, impl-harness-marker-quoter-warn-scope,
+#       impl-single-issue-harness-marker-quoter, plan-marker-quoter-warn-scope, or
+#       impl-plan-marker-quoter-warn-scope joins: all five carry a real plan comment (T0), so
+#       $lastPlan is never null for any of them.
+#   (d) delete the `select(any($hm[]; . as $k | $cm.body | contains($k)))` select: planner — 157
+#       cases dropped to 154 pass/3 fail, failing exactly plan-prose-before-audit-marker-record-
+#       not-the-plan (its own T1 plain-feedback comment, which carries no marker at all, now also
+#       qualifies once the "must contain a marker" requirement is gone, raising the count from 1 to
+#       2), harness-marker-quoter-warn-scope (its own T1 feedback joins the same way, raising the
+#       count from 3 to 4), and plan-marker-quoter-warn-scope (its own T1 feedback AND T6
+#       automation-shaped quoter both newly qualify — neither needs a marker any more once the
+#       select is gone, and neither opens with one either, so both also pass the still-intact
+#       startswith-any negation — raising `.counts.harness_marker_quoters` from 1 to 3, measured:
+#       `expected 1, got 3`); implementer — 157 cases dropped to 154 pass/3 fail, failing exactly
+#       impl-no-plan-no-binding (a fixture with no harness_marker_quoters assertion of its own: its
+#       sole trusted comment, "just a regular comment, no marker", now spuriously qualifies,
+#       producing a second "warn: issue #1:"-prefixed stderr line that breaks its own PRE-EXISTING
+#       `expect_warn_count "warn: issue #1:" 1` assertion), impl-harness-marker-quoter-warn-scope
+#       (its own T1 feedback joins), and impl-plan-marker-quoter-warn-scope (its own T1/T6 join the
+#       identical way, 1 -> 3, measured: `expected 1, got 3`). impl-prose-before-audit-marker-
+#       record-not-selected does NOT join: unlike its planner-side twin, this fixture's only other
+#       comment besides its own quoter is the plan itself (T0), whose createdAt can never be later
+#       than $lastPlan, so it never reaches the window regardless of this mutant.
+#   (e) delete the `select((any($hm[]; . as $k | $cm.body | startswith($k))) | not)` exclusion:
+#       planner — 157 cases dropped to 155 pass/2 fail, failing exactly harness-marker-quoter-
+#       warn-scope (its own T3 opening with <!-- harness-audit --> AND T4 opening with
+#       <!-- verifier-verdict --> BOTH now qualify at once, raising the count from 3 to 5, measured:
+#       `expected 3, got 5` — the false-positive-on-a-genuine-record case this exclusion exists to
+#       prevent) and plan-marker-quoter-warn-scope (its own T3 AND T4, which also open with their
+#       own harness marker, join T5 the identical way, raising `.counts.harness_marker_quoters`
+#       from 1 to 3, measured: `expected 1, got 3`); implementer — 157 cases dropped to 155 pass/2
+#       fail, failing exactly impl-harness-marker-quoter-warn-scope and impl-plan-marker-quoter-
+#       warn-scope, for the identical reasons on each script's own T3/T4 (both measured 1 -> 3 /
+#       3 -> 5 respectively).
+#   (f) delete the `$VERDICT_MARKER` line from `HARNESS_RECORD_MARKERS` (collapsing the two-member
+#       set to `$AUDIT_MARKER` alone): planner and implementer each — 157 cases dropped to 156
+#       pass/1 fail, failing exactly harness-marker-quoter-warn-scope / impl-harness-marker-
+#       quoter-warn-scope respectively, whose own T6 (prose, then <!-- verifier-verdict -->) no
+#       longer matches any marker in the now-single-member set, dropping the count from 3 to 2 —
+#       pins the set's second member and the one-line-addition design (Implementation step 2).
+#       plan-marker-quoter-warn-scope / impl-plan-marker-quoter-warn-scope do NOT join: their own
+#       counted comment, T5, quotes only $AUDIT_MARKER, which the mutant leaves in the set, so its
+#       classification is unaffected by removing $VERDICT_MARKER.
+#   (g) `contains($k)` -> `startswith($k)` in the positive (contains-any) test — leaving the
+#       negation half of the clause spelled with `startswith($k)` too, so the positive and negative
+#       tests become mutually exclusive (a comment cannot both start with a marker and not start
+#       with one): planner — 157 cases dropped to 153 pass/4 fail, failing exactly
+#       plan-prose-before-audit-marker-record-not-the-plan, harness-marker-quoter-warn-scope,
+#       plan-harness-marker-quoter-only-no-plan, and plan-marker-quoter-warn-scope, each of whose
+#       count collapses to 0 (every one of its counted comments never opens with a marker, so none
+#       can satisfy the mutated positive test either; plan-marker-quoter-warn-scope's own T5,
+#       measured: `expected 1, got 0`); implementer — 157 cases dropped to 152 pass/5 fail, failing
+#       exactly impl-prose-before-audit-marker-record-not-selected, impl-harness-marker-quoter-
+#       warn-scope, impl-harness-marker-quoter-only-no-plan, impl-single-issue-harness-marker-
+#       quoter, and impl-plan-marker-quoter-warn-scope, for the identical reason (measured: every
+#       one collapses to 0, not merely losing one comment; impl-plan-marker-quoter-warn-scope's own
+#       T5, measured: `expected 1, got 0`) — this is a materially different failure mode from
+#       #302's own mutant (g), which changes only ONE marker's exclusion and admits exactly one new
+#       comment; this member's shared, set-wide spelling means the identical edit degenerates the
+#       whole clause instead.
+#   (h) delete the `harness_marker_quoters=$((harness_marker_quoters+1))` counter increment (the
+#       warn `echo` and the jq computation are both left intact): planner — 157 cases dropped to
+#       153 pass/4 fail, failing exactly the four planner fixtures that assert
+#       `.counts.harness_marker_quoters` at a non-zero value (plan-prose-before-audit-marker-
+#       record-not-the-plan, harness-marker-quoter-warn-scope, plan-harness-marker-quoter-only-no-
+#       plan, plan-marker-quoter-warn-scope) — the counter now stays 0 for every one of them
+#       (plan-marker-quoter-warn-scope measured: `expected 1, got 0`), even though the warn line(s)
+#       still print correctly; implementer — 157 cases dropped to 152 pass/5 fail, failing exactly
+#       the five fixtures that assert the implementer-side count (impl-prose-before-audit-marker-
+#       record-not-selected, impl-harness-marker-quoter-warn-scope, impl-harness-marker-quoter-
+#       only-no-plan, impl-single-issue-harness-marker-quoter, impl-plan-marker-quoter-warn-scope),
+#       for the identical reason.
+#   (i) delete the `echo "warn: issue #$n: trusted comment by $desc carries a harness record
+#       marker …" >&2` line (the counter increment is left intact): planner — 157 cases dropped to
+#       153 pass/4 fail, failing exactly the SAME four planner fixtures as (h) — each asserts
+#       `expect_warn_count "carries a harness record marker but does not open with it" <n>`, which
+#       now finds zero matching lines even though `.counts.harness_marker_quoters` itself is still
+#       correct (plan-marker-quoter-warn-scope measured: warn count `expected 1, got 0`, jq count
+#       still 1); implementer — 157 cases dropped to 152 pass/5 fail, failing exactly the SAME five
+#       implementer fixtures as (h), for the identical reason.
+#   (j) delete `harness_marker_quoters: $hmq,` from the final `jq -n` counts object (the
+#       `--argjson hmq` line is left intact, merely unused): planner — 157 cases dropped to 150
+#       pass/7 fail, failing exactly output-shape (its own `.counts | has("harness_marker_
+#       quoters")` assertion, #24 of its now-24 `has(...)` checks) plus the four planner fixtures
+#       (g)/(h)/(i) name plus the two control fixtures asserting `.counts.harness_marker_quoters ==
+#       0` (plan-quoting-harness-marker-still-the-plan, plan-untrusted-audit-record-quoting-plan-
+#       still-reported), each of whose `.counts.harness_marker_quoters` jq lookup now resolves
+#       through a missing-key `null` instead of the real integer (plan-marker-quoter-warn-scope
+#       measured: `expected 1, got null`); implementer — 157 cases dropped to 150 pass/7 fail,
+#       failing exactly impl-output-shape (its own `has(...)` assertion) plus the five implementer
+#       fixtures (g)/(h)/(i) name plus impl-plan-quoting-harness-marker-still-selected (its own
+#       control asserting `== 0`), for the identical reason (impl-plan-marker-quoter-warn-scope
+#       measured: `expected 1, got null`).
+# Every mutant (a)-(j) fails at least one fixture on at least one script; restored byte-
+# identically after each measurement (sha256 confirmed, `[ -x bin/<script> ]` re-checked);
+# plan-marker-quoter-warn-scope / impl-plan-marker-quoter-warn-scope join (d), (e), (g), (h), (i),
+# and (j) on their own script — never (a), (b), (c), or (f) — a NARROWER letter set than their
+# #321-only siblings harness-marker-quoter-warn-scope / impl-harness-marker-quoter-warn-scope
+# (which also join (a) and (f)): the two timelines share the same T0/T3/T4/T5 shape, but diverge at
+# T2 (plan-marker-quoter-warn-scope's own T2 carries no harness marker at all, unlike its sibling's)
+# and T6 (plan-marker-quoter-warn-scope's own T6 carries no harness marker either, where its
+# sibling's quotes <!-- verifier-verdict -->) — see (a) and (f) above for the mechanism each
+# divergence blocks; final restored-tree run: 157 pass, 0 fail.
 
 matched=0
 for row in "${cases[@]}"; do
