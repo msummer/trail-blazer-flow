@@ -3,8 +3,8 @@
 # planning-tests.sh — fixture-based negative-test harness for BOTH of this repo's discovery
 # scripts, bin/find-planning-work.sh (#164) and, since #176, bin/find-implementation-work.sh too,
 # and, since #285, their consumer bin/harness-status.sh — end-to-end via Part 13 (run via the new
-# run_status runner, both discovery scripts run for real) and, since #297, against
-# harness-status.sh's own three gh call sites alone via Part 14 (run_status too, but behind a
+# run_status runner, both discovery scripts run for real) and, since #297 (extended #333), against
+# harness-status.sh's own four gh call sites alone via Part 14 (run_status too, but behind a
 # canned stand-in for both discovery scripts — see build_stub_discovery below) — not this repo's
 # own gate (that's dev/selfcheck.sh +
 # dev/selfcheck-tests.sh) and not the consumer doctor's harness (dev/doctor-tests.sh). Builds
@@ -205,10 +205,26 @@
 #   `_unavailable`, `blocked_query_retried`/`_unavailable`, `prs_query_retried`/`_unavailable`) and
 #   extending `degraded_reasons` with a third, status half — the SAME generic rule applied to this
 #   script's own new flags, producing `"status.<key>"` entries after the planning and
-#   implementation halves. The Part 14 fixtures below (#297) exercise ONLY this script's own three
-#   sites, via a new `build_stub_discovery` builder that shadows BOTH discovery scripts with canned,
-#   non-gh-calling stand-ins — unlike Part 13's fixtures above, which drive the real discovery
-#   scripts end-to-end through run_status too.
+#   implementation halves. The Part 14 fixtures below (#297, extended #333) exercise ONLY this
+#   script's own gh call sites, via a new `build_stub_discovery` builder that shadows BOTH
+#   discovery scripts with canned, non-gh-calling stand-ins — unlike Part 13's fixtures above,
+#   which drive the real discovery scripts end-to-end through run_status too.
+#   #333 adds a FOURTH such site, `waiting_on_human.followups_to_triage`: open, `no-plan` issues
+#   whose body opens with the harness-filed follow-up marker (#308), fed by a fourth `gh issue
+#   list` call with the identical bounded-retry-then-fail-closed shape, publishing
+#   `followups_query_retried`/`_unavailable` and a `"status.followups_query_unavailable"`
+#   degraded_reasons entry appended AFTER the three #297 status entries. Per the maintainer's
+#   binding decision, `counts.human_actions` does NOT include this bucket — it is reported beside
+#   the total, never inside it, because the query cannot tell a follow-up nobody has triaged from
+#   one a maintainer read and deliberately parked (both keep `no-plan` and the marker forever;
+#   measured on this repo 2026-09-17: the filter matched 10 issues, every one already triaged and
+#   parked). `human_actions` becomes a generic sum over every `waiting_on_human` array member
+#   EXCEPT a small, named exclusion list (today exactly `["followups_to_triage"]`) bound right next
+#   to the sum, so a FUTURE `waiting_on_human` member (#309's escalations) joins the total
+#   automatically with no edit to the sum expression, unless it too is named in that exclusion
+#   list. Four new Part 14 fixtures (below) pin the new site; two existing Part 14 fixtures
+#   (status-own-queries-healthy, status-own-retry-sleep-failure-survives) are extended to cover its
+#   healthy path and its guarded sleep.
 #   #302 adds a diagnostic for the one class #281's positive anchor drops with no report of its
 #   own: a trusted comment posted after the latest plan (or, when there is none, at any time) whose
 #   body contains the plan marker somewhere other than its first line — never a plan candidate
@@ -277,6 +293,13 @@
 #                               top-level `pr)` arm appends its own raw invocation ("$*") to, as its
 #                               first statement — mirroring .issue-calls/.api-calls — read by the
 #                               new expect_pr_calls helper
+#   - followups.json           : (#333) bin/harness-status.sh's OWN held-follow-up query response —
+#                               same dedicated-arm, "absent means `[]`" convention as proposed.json/
+#                               blocked.json above; like the impl-blocked arm (see build_stub_gh's
+#                               own comment on this arm) and unlike the plan-proposed arm, this one
+#                               is exclusive by CONTENT alone, so it needs no arm-ordering note
+#   - reject-followups / reject-followups-once : (optional, presence-only, #333) the identical pair
+#                               for the held-follow-up arm instead — see reject-proposed(-once) above
 #   - issue-<n>.json          : the `gh issue view` payload for candidate/ready issue <n>, shared
 #                               by both discovery scripts (each fixture directory dedicated to a
 #                               discovery script keeps ready-issue and revision-candidate numbers
@@ -417,7 +440,10 @@
 # proposed.json (#297: after checking reject-proposed-once/reject-proposed first; absent means
 # `[]`); a call containing "is:issue label:impl-blocked"
 # (bin/harness-status.sh's OWN impl-blocked query, #285) is served from blocked.json (#297: after
-# checking reject-blocked-once/reject-blocked first; absent means `[]`); anything else (#202:
+# checking reject-blocked-once/reject-blocked first; absent means `[]`); a call containing
+# "is:issue label:no-plan" (bin/harness-status.sh's OWN held-follow-up query, #333) is served from
+# followups.json (#333: after checking reject-followups-once/reject-followups first; absent means
+# `[]`); anything else (#202:
 # find-planning-work.sh's now-unconditional needs_initial_plan query,
 # which requests only number,title,url,author) falls through to initial.json (#273: after checking
 # reject-initial-once/reject-initial first). A separate top-level `pr)` arm (#285) logs its own raw
@@ -446,6 +472,13 @@
 # "label:impl-blocked", so this `case` pattern never matches it, independent of arm order); that
 # ready query is in any case also caught earlier by the `pr-open` arm (its search also carries
 # "-label:pr-open"), but that earlier catch is incidental for this needle, not load-bearing.
+# "is:issue label:no-plan" (#333) needs no ordering trick either: verified directly against every
+# real `--search` string in bin/ (find-planning-work.sh's needs_initial_plan query, served by the
+# fallback `*)` arm via initial.json; its revision-candidates query, served by the earlier
+# `*"--jq"*` arm via candidates.json; and cleanup-after-merge.sh's own query, never served by this
+# stub anyway), every one that mentions "no-plan" spells it "-label:no-plan" (the dash), never
+# "is:issue " immediately followed by "label:no-plan"; it is exclusive by CONTENT alone, the same
+# class as the impl-blocked arm just above, not the plan-proposed arm's ordering trick.
 # Discriminating by `-label:`/`label:` search-string prefix alone would ALSO be wrong for a
 # different reason — a plain `label:plan-proposed` test would match `-label:plan-proposed` as a
 # substring — which is why both #285 arms anchor on the preceding "is:issue " token (no dash)
@@ -515,6 +548,12 @@ mk_fixture() {
 #                          -> (#285) checks reject-blocked-once/reject-blocked (#297) first,
 #                             then cats DIR/blocked.json, or prints `[]` if absent
 #                             (bin/harness-status.sh's OWN impl-blocked query)
+#   *"is:issue label:no-plan"*
+#                          -> (#333) checks reject-followups-once/reject-followups first,
+#                             then cats DIR/followups.json, or prints `[]` if absent
+#                             (bin/harness-status.sh's OWN held-follow-up query; exclusive by
+#                             CONTENT alone, needing no arm-ordering trick — see the header note
+#                             above)
 #   anything else          -> (#273) checks reject-initial-once/reject-initial first, then cats
 #                             DIR/initial.json (find-planning-work.sh's now-unconditional
 #                             needs_initial_plan query, and any other plain needs_initial_plan-
@@ -525,8 +564,9 @@ mk_fixture() {
 # discovery script). Anything else
 # under `issue)` -> exit 1. The very first statement inside `issue)`, before any of this dispatch,
 # logs the raw invocation to DIR/.issue-calls (see the CALL LOG, second copy note below
-# build_stub_gh's own definition) — this includes the plan-proposed and impl-blocked arms above,
-# since they too live inside `issue)`/`list)`. A separate top-level `pr)` arm (#285) logs its own
+# build_stub_gh's own definition) — this includes the plan-proposed, impl-blocked, and (#333)
+# held-follow-up arms above, since they too live inside `issue)`/`list)`. A separate top-level
+# `pr)` arm (#285) logs its own
 # raw invocation to DIR/.pr-calls as its first statement (#297, mirroring .issue-calls), then
 # checks reject-prs-once/reject-prs (#297) first, then cats DIR/prs.json, or
 # prints `[]` if absent, for bin/harness-status.sh's OWN `gh pr list` call — its --json field list
@@ -1319,12 +1359,13 @@ mk_fixture() {
 # (.sleep-calls, build_stub_sleep) it pairs with for the retry-specific fixtures.
 # CALL LOG, second copy (#272/#273): the identical idiom, one layer up — as the very first
 # statement inside the `issue)` arm (before EITHER the `list)` or `view)` inner arm runs), the stub
-# appends the raw invocation ("$*", not just $2 — the (now five, #297) call shapes this log holds
+# appends the raw invocation ("$*", not just $2 — the (now six, #333) call shapes this log holds
 # are told apart by grepping their own arguments, not a URL) to DIR/.issue-calls, one line per
-# `gh issue ...` invocation — this includes bin/harness-status.sh's OWN plan-proposed and
-# impl-blocked queries (#297), since both are `gh issue list` calls that route through this SAME
-# `issue)` arm; its OWN third site, the open-PR query, is a separate top-level `gh pr ...` call and
-# logs to DIR/.pr-calls instead (see expect_pr_calls's own comment below). This is the log
+# `gh issue ...` invocation — this includes bin/harness-status.sh's OWN plan-proposed,
+# impl-blocked (#297), and held-follow-up (#333) queries, since all three are `gh issue list` calls
+# that route through this SAME `issue)` arm; its OWN open-PR query is a separate top-level
+# `gh pr ...` call and logs to DIR/.pr-calls instead (see expect_pr_calls's own comment
+# below). This is the log
 # expect_issue_calls (below) reads: find-planning-work.sh's own
 # three new bounded retries (the needs_initial_plan query, the revision-candidates query, and the
 # per-candidate issue fetch) each log exactly ONE line per attempt, so a site that retried once
@@ -1473,6 +1514,30 @@ case "$1" in
               printf '[]\n'
             fi
             exit 0 ;;
+          *"is:issue label:no-plan"*)
+            # #333: bin/harness-status.sh's OWN held-follow-up query. Unlike the plan-proposed arm
+            # above, this one is exclusive by CONTENT alone, not by arm ordering: every other `gh
+            # issue list --search` string in bin/ that mentions "no-plan" spells it "-label:no-plan"
+            # (find-planning-work.sh's needs_initial_plan query, served by the fallback `*)` arm
+            # below via initial.json; its revision-candidates query, served by the `*"--jq"*` arm
+            # above via candidates.json; and cleanup-after-merge.sh's own query, never served by
+            # this stub anyway), so the no-dash "is:issue " anchor alone rules every one of them
+            # out; no earlier arm ever claims this search string first. (#333) same
+            # one-shot-then-permanent reject contract as reject-proposed-once/reject-proposed
+            # above, for this query instead.
+            if [ -f "__DIR__/reject-followups-once" ]; then
+              rm -f "__DIR__/reject-followups-once"
+              exit 1
+            fi
+            if [ -f "__DIR__/reject-followups" ]; then
+              exit 1
+            fi
+            if [ -f "__DIR__/followups.json" ]; then
+              cat "__DIR__/followups.json"
+            else
+              printf '[]\n'
+            fi
+            exit 0 ;;
           *)
             # #273: same one-shot-then-permanent contract as reject-candidates-once/
             # reject-candidates above, for the needs_initial_plan query instead.
@@ -1615,11 +1680,12 @@ EOF
 # DIR/find-planning-work.sh and DIR/find-implementation-work.sh, canned stand-ins used only by
 # the Part 14 fixtures below: run_status (#285) puts $dir ahead of $root/bin on PATH (see
 # run_status's own comment above), so these shadow the real discovery scripts for a case
-# exercising ONLY harness-status.sh's OWN three gh call sites (proposed, blocked, prs) — the real
-# discovery scripts, and every in-place mutant that edits them, are unreachable through a fixture
-# built this way (an ADVISORY decision this train resolved; see the MEASURED MUTANTS (#297) block
-# below, which the Part 13 fixtures above deliberately do NOT use this builder, driving both real
-# scripts end-to-end instead). PLANNING_COUNTS/IMPL_COUNTS default to '{}' (a healthy, non-degraded
+# exercising ONLY harness-status.sh's OWN gh call sites (proposed, blocked, prs, and (#333)
+# followups) — the real discovery scripts, and every in-place mutant that edits them, are
+# unreachable through a fixture built this way (an ADVISORY decision this train resolved; see the
+# MEASURED MUTANTS (#297) block below, which the Part 13 fixtures above deliberately do NOT use
+# this builder, driving both real scripts end-to-end instead). PLANNING_COUNTS/IMPL_COUNTS default
+# to '{}' (a healthy, non-degraded
 # discovery run's own `counts` object); pass a literal JSON object (e.g.
 # '{"candidates_query_unavailable":true}') to simulate a degraded discovery script instead — each
 # argument is spliced verbatim into the stand-in's own printed `counts` field, so it must already
@@ -1851,7 +1917,12 @@ expect_sleep_arg() {
 # of find-implementation-work.sh's own ready query, whose search carries "-label:impl-blocked"
 # preceded by "-label:pr-open " rather than "is:issue " immediately followed by
 # "label:impl-blocked" — the same anchor argument the header's own case-order note makes for the
-# stub's dispatch itself).
+# stub's dispatch itself). (#333) A third needle discriminates harness-status.sh's OWN held-
+# follow-up query, its fourth site: 'is:issue label:no-plan --json number,title,url,body' names an
+# attempt (verified exclusive of find-planning-work.sh's needs_initial_plan and revision-candidates
+# queries, both of which spell it "-label:no-plan" with the dash, and of cleanup-after-merge.sh's
+# own query, never served by this stub anyway — see build_stub_gh's own case-order note for the
+# full argument).
 expect_issue_calls() {
   local dir="$1" needle="$2" expected="$3" actual content
   needle_required expect_issue_calls "$needle" || return 0
@@ -8705,31 +8776,69 @@ EOF
 # (i)-(l) are reached only via run_status, which neither new fixture calls (they call
 # run_planning/run_implementation directly, the identical reason #281's own seven fixtures gave
 # above).
+#
+# RE-MEASURED 2026-09-19 (#333), when the suite grew to 161 across four new status-followups-*
+# fixtures (below the #297 MEASURED MUTANTS block that follows): (a)-(h) STILL unreached, for the
+# identical reason as #297/#302 above — the four new fixtures also call build_stub_discovery, so
+# none of them ever calls the real find-implementation-work.sh either. (i) and (j) ARE reached
+# (every new fixture also runs through run_status), but their failing sets are UNCHANGED —
+# 161 cases dropped to 158 pass/3 fail for (i), 157 pass/4 fail for (j), failing exactly the SAME
+# three/four cases as the #297 re-measurement above, scaled to the new total: none of the four new
+# fixtures asserts an "implementation."-prefixed degraded_reasons entry or the two-key-enumeration
+# author_association_unavailable/ready_query_unavailable flags these two mutants touch. (k) and (l)
+# both GAIN new members:
+#   (k) (hard-code `degraded: false`) — 161 cases dropped to 152 pass/9 fail, failing exactly the
+#       original seven (status-degraded-planner-initial-query,
+#       status-degraded-implementer-ready-query, status-degraded-author-association,
+#       status-proposed-query-unavailable, status-blocked-query-unavailable,
+#       status-prs-query-unavailable, status-degraded-reasons-all-halves) PLUS
+#       status-followups-query-unavailable and status-followups-degraded-order — both new fixtures
+#       assert `.degraded == 'true'` directly, the identical class every other member of this
+#       failing set already belongs to. status-followups-bucket-populated and
+#       status-followups-query-retry-succeeds do NOT join: both already expect `.degraded ==
+#       'false'`, unaffected by hard-coding it false.
+#   (l) (hard-code `degraded: true`) — 161 cases dropped to 153 pass/8 fail, failing exactly the
+#       original six (status-clean-not-degraded, status-own-queries-healthy,
+#       status-proposed-query-retry-succeeds, status-blocked-query-retry-succeeds,
+#       status-prs-query-retry-succeeds, status-own-retry-sleep-failure-survives) PLUS
+#       status-followups-bucket-populated and status-followups-query-retry-succeeds — both new
+#       fixtures expect `.degraded == 'false'` directly, the identical class every other member of
+#       this failing set already belongs to. status-followups-query-unavailable and
+#       status-followups-degraded-order do NOT join: both already expect `.degraded == 'true'`
+#       regardless of this mutant. Restored byte-identically after each measurement (sha256
+#       confirmed); final restored-tree run: 161 pass, 0 fail.
 
 # ---------------------------------------------------------------------------------------------
 # Part 14 cases (#297), against bin/harness-status.sh's OWN three gh call sites — plan-proposed,
 # impl-blocked, and open-PR — end to end (via run_status), giving each the identical
 # bounded-retry-then-fail-closed shape #272/#273/#284 already gave the two discovery scripts'
-# own query sites. Every fixture here calls build_stub_discovery (NOT the real discovery
+# own query sites. #333 extends this to a FOURTH such site, held follow-ups, with the identical
+# shape — see the four status-followups-* fixtures after the #297 MEASURED MUTANTS block below.
+# Every fixture here calls build_stub_discovery (NOT the real discovery
 # scripts): run_status puts $dir ahead of $root/bin on PATH, so these canned stand-ins shadow
-# find-planning-work.sh/find-implementation-work.sh, and only harness-status.sh's own three sites
+# find-planning-work.sh/find-implementation-work.sh, and only harness-status.sh's own sites
 # are ever reached — the ADVISORY decision this train resolved (see build_stub_discovery's own
 # comment above). Every fixture writes proposed.json ([#601]), blocked.json ([#602]), and
 # prs.json ([#603, headRefName "claude/603-x", statusCheckRollup []]) as its own healthy baseline
 # content, so a site that is NOT the fixture's own subject of study still returns real content
-# when its query succeeds. The two needles that discriminate harness-status.sh's own two `gh
-# issue list` sites inside the shared `.issue-calls` log are documented on expect_issue_calls
-# itself, above; `.pr-calls`/expect_pr_calls is the analogous call log/helper for the separate
+# when its query succeeds; the four new #333 fixtures below additionally write followups.json as
+# their own subject or baseline. The three needles that discriminate harness-status.sh's own
+# three `gh issue list` sites inside the shared `.issue-calls` log are documented on
+# expect_issue_calls itself, above; `.pr-calls`/expect_pr_calls is the analogous call log/helper
+# for the separate
 # top-level `pr)` arm the open-PR site alone reaches.
 
-# status-own-queries-healthy (AC2) — every one of the three own sites succeeds on its first
-# attempt: each called exactly once, no sleeps, all six new counts flags false, degraded false,
+# status-own-queries-healthy (AC2) — every one of the four own sites succeeds on its first
+# attempt: each called exactly once, no sleeps, all eight new counts flags false, degraded false,
 # empty degraded_reasons — and (non-vacuity) the canned planning stand-in's own unplanned issue
 # (#650) surfaces in the output, while zero .issue-calls lines carry
 # "number,title,url,author" — the real find-planning-work.sh's own needs_initial_plan field
 # list, which build_stub_discovery's stand-in never sends since it never calls gh at all — proving
-# the canned stand-in ran instead of the real planner. Measured mutants: (h1), (h2), (h3), (i),
-# (k) — see the MEASURED MUTANTS (#297) block below the case table.
+# the canned stand-in ran instead of the real planner. This fixture writes no followups.json at
+# all, deliberately, so it also pins the absent-followups.json ⇒ `[]` convention (#333) the other
+# three sites' own absent-file convention already documents. Measured mutants: (h1), (h2), (h3),
+# (i), (k) — see the MEASURED MUTANTS (#297) block below the case table; (N4)/(N5) — see the
+# MEASURED MUTANTS (#333) block after the new #333 fixtures below.
 case_status_own_queries_healthy() {
   local dir; dir="$(mk_fixture status-own-queries-healthy)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -8754,18 +8863,22 @@ EOF
   expect_jq '.counts.blocked_query_unavailable' 'false'
   expect_jq '.counts.prs_query_retried' 'false'
   expect_jq '.counts.prs_query_unavailable' 'false'
+  expect_jq '.counts.followups_query_retried' 'false'
+  expect_jq '.counts.followups_query_unavailable' 'false'
+  expect_jq '.counts.followups_to_triage' '0'
   expect_sleep_calls "$dir" 0
   expect_issue_calls "$dir" 'is:issue label:plan-proposed -label:plan-approved -label:no-plan --json number,title,url' 1
   expect_issue_calls "$dir" 'is:issue label:impl-blocked' 1
+  expect_issue_calls "$dir" 'is:issue label:no-plan --json number,title,url,body' 1
   expect_issue_calls "$dir" 'number,title,url,author' 0
   expect_pr_calls "$dir" 1
 }
 
 # status-proposed-query-retry-succeeds (AC1) — the plan-proposed site's first attempt fails, the
 # retry succeeds: retried true, unavailable false, EXACTLY one succeed-warn (expect_warn_count,
-# not mere presence), one sleep(30), two logged attempts; the other two sites are unaffected (one
-# call each, real content, no warn). Measured mutants: (a), (e), (h1), (i), (l) — see the MEASURED
-# MUTANTS (#297) block below the case table.
+# not mere presence), one sleep(30), two logged attempts; the impl-blocked and open-PR sites are
+# unaffected (one call each, real content, no warn). Measured mutants: (a), (e), (h1), (i), (l) —
+# see the MEASURED MUTANTS (#297) block below the case table.
 case_status_proposed_query_retry_succeeds() {
   local dir; dir="$(mk_fixture status-proposed-query-retry-succeeds)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -8803,8 +8916,8 @@ EOF
 # status-proposed-query-unavailable (AC1) — the plan-proposed site fails on BOTH attempts: fails
 # closed to an empty plans_to_review bucket, both flags true, one fail-closed warn (never the
 # succeed-warn), exactly one sleep, degraded_reasons is exactly ["status.proposed_query_unavailable"];
-# the other two sites are unaffected. Measured mutants: (a), (e), (f), (g), (h1), (i) — see the
-# MEASURED MUTANTS (#297) block below the case table.
+# the impl-blocked and open-PR sites are unaffected. Measured mutants: (a), (e), (f), (g), (h1),
+# (i) — see the MEASURED MUTANTS (#297) block below the case table.
 case_status_proposed_query_unavailable() {
   local dir; dir="$(mk_fixture status-proposed-query-unavailable)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -8987,17 +9100,21 @@ EOF
   expect_pr_calls "$dir" 2
 }
 
-# status-own-retry-sleep-failure-survives (AC3) — all three sites fail once each, AND the backoff
+# status-own-retry-sleep-failure-survives (AC3) — all four sites fail once each, AND the backoff
 # sleep itself always fails (sleep-fails): every retry still runs (guarded `|| true`), exit 0,
-# exactly 3 sleeps, real content in all three buckets (the one-shot reject markers consume
+# exactly 4 sleeps, real content in all four buckets (the one-shot reject markers consume
 # themselves regardless of whether the intervening sleep succeeded), and EXACTLY one succeed-warn
 # per site (expect_warn_count, not mere presence). Measured mutants: (a), (b), (c), (d1), (d2),
-# (d3), (e), (h1), (h2), (h3), (l) — see the MEASURED MUTANTS (#297) block below the case table —
-# the broadest Part 14 fixture, reached by every retry-SHAPE mutant across all three sites (its own
-# sleep-calls/warn/flag assertions span all three at once) EXCEPT (k): that mutant's forced
+# (d3), (e), (h1), (h2), (h3), (l) — see the MEASURED MUTANTS (#297) block below the case table,
+# plus (N1), (N2), (N3), (N4), (N5) — see the MEASURED MUTANTS (#333) block after the new #333
+# fixtures below —
+# the broadest Part 14 fixture, reached by every retry-SHAPE mutant across all four sites (its own
+# sleep-calls/warn/flag assertions span all four at once) EXCEPT (k): that mutant's forced
 # always-retry on the proposed site is observationally identical to a genuine retry whenever the
 # site already fails on its first attempt, which this fixture's own reject-proposed-once marker
-# guarantees — see (k)'s own entry below for the full reasoning.
+# guarantees — see (k)'s own entry below for the full reasoning. This is also the only fixture
+# whose stub `sleep` ever fails, so it is the only home for the guarded-`|| true` mutant on the
+# new followups site (N3), exactly as it already is for (d1)-(d3) on the three #297 sites.
 case_status_own_retry_sleep_failure_survives() {
   local dir; dir="$(mk_fixture status-own-retry-sleep-failure-survives)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -9009,9 +9126,13 @@ EOF
   cat > "$dir/prs.json" <<'EOF'
 [{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
 EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":608,"title":"Held follow-up","url":"https://example.invalid/608","body":"<!-- harness-follow-up: PR #200 -->"}]
+EOF
   : > "$dir/reject-proposed-once"
   : > "$dir/reject-blocked-once"
   : > "$dir/reject-prs-once"
+  : > "$dir/reject-followups-once"
   : > "$dir/sleep-fails"
   build_stub_gh "$dir"
   build_stub_discovery "$dir"
@@ -9025,22 +9146,28 @@ EOF
   expect_jq '.counts.blocked_query_unavailable' 'false'
   expect_jq '.counts.prs_query_retried' 'true'
   expect_jq '.counts.prs_query_unavailable' 'false'
+  expect_jq '.counts.followups_query_retried' 'true'
+  expect_jq '.counts.followups_query_unavailable' 'false'
   expect_jq '.counts.plans_to_review' '1'
   expect_jq '.counts.blocked' '1'
   expect_jq '.counts.prs_to_review' '1'
-  expect_sleep_calls "$dir" 3
+  expect_jq '.counts.followups_to_triage' '1'
+  expect_sleep_calls "$dir" 4
   expect_warn_count "plan-proposed query failed once — retried after 30s and succeeded" 1
   expect_warn_count "impl-blocked query failed once — retried after 30s and succeeded" 1
   expect_warn_count "open-PR query failed once — retried after 30s and succeeded" 1
+  expect_warn_count "held-follow-up query failed once — retried after 30s and succeeded" 1
   expect_issue_calls "$dir" 'is:issue label:plan-proposed -label:plan-approved -label:no-plan --json number,title,url' 2
   expect_issue_calls "$dir" 'is:issue label:impl-blocked' 2
+  expect_issue_calls "$dir" 'is:issue label:no-plan --json number,title,url,body' 2
   expect_pr_calls "$dir" 2
 }
 
 # status-degraded-reasons-all-halves (AC4) — planning and implementation both degraded (a
 # canned, non-gh-calling stand-in each — see build_stub_discovery) AND two of harness-status.sh's
-# own three sites fail closed (blocked stays healthy): degraded_reasons is the exact 4-entry
-# array, planning half, then implementation half, then the status half (in $sf's own key order —
+# own four sites fail closed (blocked and the held-follow-up site both stay healthy):
+# degraded_reasons is the exact 4-entry array, planning half, then implementation half, then the
+# status half (in $sf's own key order —
 # proposed before blocked before prs; blocked's own flag is false so it never joins), 2 sleeps
 # (blocked needs none). Measured mutants: (a), (c), (e), (f), (h1), (h2), (h3), (j) — see the
 # MEASURED MUTANTS (#297) block below the case table — the only Part 14 fixture whose own array
@@ -9211,6 +9338,396 @@ EOF
 # was re-run: every one of these mutants lives inside bin/harness-status.sh's own three gh call
 # sites or its degraded-computation jq, reached only via run_status, which neither new #302
 # fixture calls (they call run_planning/run_implementation directly).
+#
+# RE-MEASURED 2026-09-19 (#333), when the suite grew to 161 across the four new status-followups-*
+# fixtures below (each also calls run_status, reaching every one of these mutants):
+#   (a) 161 cases dropped to 156 pass/5 fail, failing exactly the original four
+#       (status-proposed-query-retry-succeeds, status-proposed-query-unavailable,
+#       status-own-retry-sleep-failure-survives, status-degraded-reasons-all-halves) PLUS
+#       status-followups-degraded-order — its own PERMANENT reject-proposed fails the mutated bare
+#       assignment's only attempt, aborting harness-status.sh outright under `set -euo pipefail`
+#       before it prints any JSON, the identical mechanism the original four already trigger.
+#   (b) 161 cases dropped to 158 pass/3 fail, failing exactly the original three
+#       (status-blocked-query-retry-succeeds, status-blocked-query-unavailable,
+#       status-own-retry-sleep-failure-survives) — UNCHANGED: none of the four new fixtures sets a
+#       reject-blocked(-once) marker, since status-followups-degraded-order's own blocked.json is
+#       healthy.
+#   (c) 161 cases dropped to 156 pass/5 fail, failing exactly the original four
+#       (status-prs-query-retry-succeeds, status-prs-query-unavailable,
+#       status-own-retry-sleep-failure-survives, status-degraded-reasons-all-halves) PLUS
+#       status-followups-degraded-order — the identical abort mechanism as (a), via its own
+#       PERMANENT reject-prs instead.
+#   (d1)/(d2)/(d3) each still drop 161 cases to 160 pass/1 fail, failing exactly
+#       status-own-retry-sleep-failure-survives — UNCHANGED: it remains the only fixture whose stub
+#       `sleep` ever fails.
+#   (e) 161 cases dropped to 156 pass/5 fail, failing exactly the original four PLUS
+#       status-followups-degraded-order — the identical call-count mechanism as the original four:
+#       its own `expect_issue_calls ... 'is:issue label:plan-proposed...' 2` assertion no longer
+#       holds once the proposed site sleeps but never actually retries.
+#   (f) 161 cases dropped to 155 pass/6 fail, failing exactly the original four
+#       (status-proposed-query-unavailable, status-blocked-query-unavailable,
+#       status-prs-query-unavailable, status-degraded-reasons-all-halves) PLUS
+#       status-followups-query-unavailable and status-followups-degraded-order — both new fixtures'
+#       own expected degraded_reasons names a "status.followups_query_unavailable" entry, which
+#       disappears once the ENTIRE status half is dropped from `$all`.
+#   (g) 161 cases dropped to 156 pass/5 fail, failing exactly the original three
+#       (status-proposed-query-unavailable, status-blocked-query-unavailable,
+#       status-prs-query-unavailable) PLUS status-followups-query-unavailable and
+#       status-followups-degraded-order — both new fixtures' own degraded_reasons is EXCLUSIVELY a
+#       status-half entry (or entries), so `$dr` alone is empty for each, flipping `.degraded` to
+#       false against their own `expect_jq '.degraded' 'true'` assertion.
+#   (h1) 161 cases dropped to 155 pass/6 fail, failing exactly the original five PLUS
+#       status-followups-degraded-order — its own expected degraded_reasons names
+#       "status.proposed_query_unavailable", which the generic select can no longer find once that
+#       key is deleted from `$sf`.
+#   (h2) 161 cases dropped to 155 pass/6 fail, failing exactly the original five PLUS
+#       status-followups-degraded-order — via its own DIRECT `counts.blocked_query_unavailable ==
+#       'false'` assertion (now a missing key, `null`), not via degraded_reasons (its own
+#       blocked.json is healthy, so blocked never contributes a "status." entry there).
+#   (h3) 161 cases dropped to 155 pass/6 fail, failing exactly the original five PLUS
+#       status-followups-degraded-order — the identical mechanism as (h1), via its own expected
+#       "status.prs_query_unavailable" entry instead.
+#   (i) 161 cases dropped to 157 pass/4 fail, failing exactly the original four
+#       (status-own-queries-healthy, status-proposed-query-retry-succeeds,
+#       status-proposed-query-unavailable, status-own-retry-sleep-failure-survives) — UNCHANGED:
+#       none of the four new fixtures asserts `counts.proposed_query_retried` directly, and
+#       `_retried` never participates in the array-building select.
+#   (j) 161 cases dropped to 160 pass/1 fail, failing exactly status-degraded-reasons-all-halves —
+#       UNCHANGED: it remains the only fixture whose expected array spans more than one non-empty
+#       source, so it is the only one sensitive to the concatenation order; none of the four new
+#       fixtures' own expected arrays mixes a planning/implementation entry with a status entry.
+#   (k) 161 cases dropped to 153 pass/8 fail, failing exactly the original five
+#       (status-own-queries-healthy, status-blocked-query-retry-succeeds,
+#       status-blocked-query-unavailable, status-prs-query-retry-succeeds,
+#       status-prs-query-unavailable) PLUS status-followups-bucket-populated,
+#       status-followups-query-retry-succeeds, and status-followups-query-unavailable — the first
+#       two join for the SAME reason the original five do: each expects the plan-proposed needle
+#       called exactly once (proposed is not their subject) or zero sleeps, and the forced retry
+#       doubles the call count / adds an unexpected sleep regardless of outcome.
+#       status-followups-query-unavailable joins for the identical reason (it too expects the
+#       plan-proposed needle called exactly once, with proposed healthy for it).
+#       status-followups-degraded-order does NOT join: its own PERMANENT reject-proposed already
+#       fails the guarded first call too, so the forced branch is observationally identical to the
+#       genuine one — the same "already-retrying" blind spot the original five's own siblings
+#       (status-proposed-query-retry-succeeds/-unavailable/status-own-retry-sleep-failure-survives)
+#       already document.
+#   (l) [#297's own duplicate-succeed-warn mutant] 161 cases dropped to 159 pass/2 fail, failing
+#       exactly the original two (status-proposed-query-retry-succeeds,
+#       status-own-retry-sleep-failure-survives) — UNCHANGED: none of the four new fixtures asserts
+#       `expect_warn_count "plan-proposed query failed once ..." 1`.
+# Restored byte-identically after each measurement (sha256 confirmed); final restored-tree run:
+# 161 pass, 0 fail.
+
+# ---------------------------------------------------------------------------------------------
+# Part 14 (continued, #333) — bin/harness-status.sh's FOURTH own gh call site, held follow-ups:
+# open, no-plan issues whose body opens with the harness-filed follow-up marker (#308), fed by
+# list_followups() with the identical bounded-retry-then-fail-closed shape #297 already gave the
+# other three sites. Every fixture here writes the same proposed.json ([#601]), blocked.json
+# ([#602]), and prs.json ([#603, headRefName "claude/603-x", statusCheckRollup []]) healthy
+# baseline the #297 fixtures above use, plus its own followups.json — every fixture in this block
+# writes one; the absent-followups.json convention is instead exercised by
+# status-own-queries-healthy in the #297 block above. The new needle that discriminates this
+# fourth site inside the shared `.issue-calls` log — 'is:issue label:no-plan --json
+# number,title,url,body' — is documented on
+# expect_issue_calls itself, above.
+#
+# Discovery-script reachability from this block (measured 2026-09-19, orchestrator kickback 1 of
+# #333): every fixture below calls build_stub_discovery, never the real find-planning-work.sh or
+# find-implementation-work.sh, so an in-place mutant of either discovery script cannot be caught
+# by any of the four fixtures in this block. Measured directly rather than reasoned by inspection:
+# with bin/find-planning-work.sh's entire body replaced in place by a bare `exit 1`
+# (backed up outside the checkout, sha256-confirmed before and after, `[ -x
+# bin/find-planning-work.sh ]` re-confirmed), `bash dev/planning-tests.sh` goes from 161 pass/0
+# fail to 109 pass/52 fail; with bin/find-implementation-work.sh mutated the identical way
+# instead, it goes to 67 pass/94 fail. In NEITHER run does status-followups-bucket-populated,
+# status-followups-query-retry-succeeds, status-followups-query-unavailable,
+# status-followups-degraded-order, status-own-queries-healthy, or
+# status-own-retry-sleep-failure-survives appear in the failing set. Checked name-by-name against
+# both saved failing sets (52 names for the planner mutation, 94 for the implementer one): every
+# other failure is either a fixture from the file's opening part or Parts 1-12 that calls
+# run_planning/run_implementation (or its --issue variant, run_implementation_args) directly, one
+# of the five Part 13 #284/#285 fixtures that run the real discovery scripts through run_status
+# without build_stub_discovery (status-clean-not-degraded, status-degraded-planner-initial-query,
+# status-degraded-implementer-ready-query, status-degraded-author-association,
+# status-degraded-both-scripts), or — one case in EACH saved list, neither of them a
+# run_planning/run_implementation caller — plan-script-unknown-json-field-fails-closed /
+# impl-script-unknown-json-field-fails-closed, which derive their own mutant copy of the SAME real
+# script with sed and run it through run_script_at instead. Both discovery-script files were
+# restored byte-identically (sha256-confirmed) before the next measurement. Conclusion: no
+# in-place mutant of either discovery script is reachable from #333's four new fixtures or its two
+# extended ones, so the pre-existing "152-case (#302) baseline" growth-chain notes for mutants
+# that live in find-planning-work.sh/find-implementation-work.sh are deliberately NOT given a
+# #333 continuation (per-file scope, not an oversight) — the same "reachable only through Part
+# 13's own run_status fixtures, never Part 14's" property CLAUDE.md's own dev/planning-tests.sh
+# paragraph already states generically for this file.
+
+# status-followups-bucket-populated (AC-#333-populated) — followups.json carries four issues:
+# #604's body opens with the marker followed by more prose (still a match — startswith, not an
+# exact-line test); #605's body IS only the marker line (the boundary case); #606 is a human's own
+# no-plan opt-out whose body carries no marker at all; #607's body carries prose BEFORE the marker
+# (the anchor this fixture exists to pin — a #302/#321-shaped "quotes the marker but doesn't open
+# with it" issue must NOT join). Bucket length 2 (#604, #605 only); the [0] entry is asserted
+# against the exact compact {number,title,url} projection for #604 — no body key present, proving
+# the projection drops it; counts.followups_to_triage 2; counts.human_actions STAYS 3 — this is the
+# fixture that pins the exclusion (a non-empty followups_to_triage bucket does not move
+# human_actions); the other three bucket counts stay 1 each; both new flags false; degraded false;
+# zero sleeps. Measured mutants: #284/#285's (l) and #297's (k) — see each block's own RE-MEASURED
+# 2026-09-19 (#333) continuation above — plus (N4), (N5), (N6), (N7), (N8), (N9) — see the
+# MEASURED MUTANTS (#333) block below.
+case_status_followups_bucket_populated() {
+  local dir; dir="$(mk_fixture status-followups-bucket-populated)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[
+  {"number":604,"title":"Follow-up A","url":"https://example.invalid/604","body":"<!-- harness-follow-up: PR #123 -->\nSome extra detail about the follow-up.\nMore context here."},
+  {"number":605,"title":"Follow-up B","url":"https://example.invalid/605","body":"<!-- harness-follow-up: PR #124 -->"},
+  {"number":606,"title":"Manual opt-out","url":"https://example.invalid/606","body":"Human note: keeping this open by hand, no-plan opt-out with no marker at all."},
+  {"number":607,"title":"Prose before marker","url":"https://example.invalid/607","body":"See discussion below for context.\n<!-- harness-follow-up: PR #125 -->"}
+]
+EOF
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.waiting_on_human.followups_to_triage | length' '2'
+  expect_jq '.waiting_on_human.followups_to_triage[0]' '{"number":604,"title":"Follow-up A","url":"https://example.invalid/604"}'
+  expect_jq '.counts.followups_to_triage' '2'
+  expect_jq '.counts.human_actions' '3'
+  expect_jq '.counts.plans_to_review' '1'
+  expect_jq '.counts.prs_to_review' '1'
+  expect_jq '.counts.blocked' '1'
+  expect_jq '.counts.followups_query_retried' 'false'
+  expect_jq '.counts.followups_query_unavailable' 'false'
+  expect_jq '.degraded' 'false'
+  expect_jq '.degraded_reasons' '[]'
+  expect_sleep_calls "$dir" 0
+  expect_issue_calls "$dir" 'is:issue label:no-plan --json number,title,url,body' 1
+}
+
+# status-followups-query-retry-succeeds (AC-#333-AC1) — the held-follow-up site's twin of
+# status-proposed-query-retry-succeeds: first attempt fails, the retry succeeds, retried true /
+# unavailable false, a populated bucket (one qualifying issue), one succeed-warn (expect_warn_count,
+# not mere presence), one sleep(30), two logged attempts; the other three sites are unaffected (one
+# call each, real content, no warn). Measured mutants: #284/#285's (l) and #297's (k) — see each
+# block's own RE-MEASURED 2026-09-19 (#333) continuation above — plus (N1), (N2), (N4), (N5) — see
+# the MEASURED MUTANTS (#333) block below.
+case_status_followups_query_retry_succeeds() {
+  local dir; dir="$(mk_fixture status-followups-query-retry-succeeds)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":604,"title":"Follow-up A","url":"https://example.invalid/604","body":"<!-- harness-follow-up: PR #123 -->"}]
+EOF
+  : > "$dir/reject-followups-once"
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.degraded' 'false'
+  expect_jq '.degraded_reasons' '[]'
+  expect_jq '.counts.followups_query_retried' 'true'
+  expect_jq '.counts.followups_query_unavailable' 'false'
+  expect_jq '.counts.followups_to_triage' '1'
+  expect_jq '.counts.plans_to_review' '1'
+  expect_jq '.counts.blocked' '1'
+  expect_jq '.counts.prs_to_review' '1'
+  expect_sleep_calls "$dir" 1
+  expect_sleep_arg "$dir" '30'
+  expect_warn_count "held-follow-up query failed once — retried after 30s and succeeded" 1
+  expect_warn_count "could not list held follow-ups" 0
+  expect_warn_count "could not list plan-proposed issues" 0
+  expect_warn_count "could not list impl-blocked issues" 0
+  expect_warn_count "could not list open PRs" 0
+  expect_issue_calls "$dir" 'is:issue label:plan-proposed -label:plan-approved -label:no-plan --json number,title,url' 1
+  expect_issue_calls "$dir" 'is:issue label:impl-blocked' 1
+  expect_issue_calls "$dir" 'is:issue label:no-plan --json number,title,url,body' 2
+  expect_pr_calls "$dir" 1
+}
+
+# status-followups-query-unavailable (AC-#333-AC1) — the held-follow-up site's twin of
+# status-proposed-query-unavailable: fails on BOTH attempts, fails closed to an empty
+# followups_to_triage bucket, both flags true, counts.human_actions STAYS 3 (the exclusion holds
+# even on the fail-closed path too), one fail-closed warn (never the succeed-warn), exactly one
+# sleep, degraded_reasons is exactly ["status.followups_query_unavailable"]; the other three sites
+# are unaffected. Measured mutants: (f), (g), (k) — see the RE-MEASURED 2026-09-19 (#333)
+# continuation of the MEASURED MUTANTS (#297) block above — plus (N1), (N2), (N4), (N5) — see the
+# MEASURED MUTANTS (#333) block below.
+case_status_followups_query_unavailable() {
+  local dir; dir="$(mk_fixture status-followups-query-unavailable)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":604,"title":"Never served","url":"https://example.invalid/604","body":"<!-- harness-follow-up: PR #123 -->"}]
+EOF
+  : > "$dir/reject-followups"
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.degraded' 'true'
+  expect_jq '.degraded_reasons' '["status.followups_query_unavailable"]'
+  expect_jq '.counts.followups_query_retried' 'true'
+  expect_jq '.counts.followups_query_unavailable' 'true'
+  expect_jq '.counts.followups_to_triage' '0'
+  expect_jq '.counts.human_actions' '3'
+  expect_jq '.counts.plans_to_review' '1'
+  expect_jq '.counts.blocked' '1'
+  expect_jq '.counts.prs_to_review' '1'
+  expect_sleep_calls "$dir" 1
+  expect_sleep_arg "$dir" '30'
+  expect_warn_count "could not list held follow-ups (gh issue list) — reporting an empty followups_to_triage bucket this run (fail-closed)" 1
+  expect_warn_count "held-follow-up query failed once — retried after 30s and succeeded" 0
+  expect_warn_count "could not list plan-proposed issues" 0
+  expect_warn_count "could not list impl-blocked issues" 0
+  expect_warn_count "could not list open PRs" 0
+  expect_issue_calls "$dir" 'is:issue label:plan-proposed -label:plan-approved -label:no-plan --json number,title,url' 1
+  expect_issue_calls "$dir" 'is:issue label:impl-blocked' 1
+  expect_issue_calls "$dir" 'is:issue label:no-plan --json number,title,url,body' 2
+  expect_pr_calls "$dir" 1
+}
+
+# status-followups-degraded-order (AC-#333-AC4) — reject-proposed + reject-prs + reject-followups
+# together, blocked healthy: degraded_reasons is exactly the 3-entry array
+# ["status.proposed_query_unavailable","status.prs_query_unavailable",
+# "status.followups_query_unavailable"] — pinning that the new pair lands at the END of $sf's own
+# key order (proposed, blocked, prs, followups; blocked's own flag is false so it never joins);
+# counts.human_actions is 1 (only the healthy blocked bucket contributes — plans_to_review and
+# prs_to_review are both fail-closed empty, and followups_to_triage is excluded regardless of its
+# own value); 3 sleeps (blocked needs none). Measured mutants: (a), (c), (e), (f), (h1), (h2), (h3)
+# — see the RE-MEASURED 2026-09-19 (#333) continuation of the MEASURED MUTANTS (#297) block above
+# — plus (N1), (N2), (N4) — see the MEASURED MUTANTS (#333) block below.
+case_status_followups_degraded_order() {
+  local dir; dir="$(mk_fixture status-followups-degraded-order)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Never served","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Never served","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":604,"title":"Never served","url":"https://example.invalid/604","body":"<!-- harness-follow-up: PR #123 -->"}]
+EOF
+  : > "$dir/reject-proposed"
+  : > "$dir/reject-prs"
+  : > "$dir/reject-followups"
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.degraded' 'true'
+  expect_jq '.degraded_reasons' '["status.proposed_query_unavailable","status.prs_query_unavailable","status.followups_query_unavailable"]'
+  expect_jq '.counts.blocked' '1'
+  expect_jq '.counts.blocked_query_retried' 'false'
+  expect_jq '.counts.blocked_query_unavailable' 'false'
+  expect_jq '.counts.human_actions' '1'
+  expect_sleep_calls "$dir" 3
+  expect_issue_calls "$dir" 'is:issue label:plan-proposed -label:plan-approved -label:no-plan --json number,title,url' 2
+  expect_issue_calls "$dir" 'is:issue label:impl-blocked' 1
+  expect_issue_calls "$dir" 'is:issue label:no-plan --json number,title,url,body' 2
+  expect_pr_calls "$dir" 2
+}
+
+# MEASURED MUTANTS (#333) — applied one at a time to bin/harness-status.sh (Edit tool) against the
+# working tree (161 cases at measurement time), `[ -x bin/harness-status.sh ]` confirmed executable
+# after each mutation (LESSON 2026-09-15b), the suite re-run, and the file byte-identically
+# restored (sha256 confirmed against a backup refreshed immediately before every mutation, LESSON
+# 2026-09-07) before the next:
+#   (N1) collapse the followups site's retry entirely (`if ! followups_raw=$(list_followups); then
+#       ... fi` collapsed to the bare `followups_raw=$(list_followups)`): 161 cases dropped to 157
+#       pass/4 fail, failing exactly: status-own-retry-sleep-failure-survives,
+#       status-followups-query-retry-succeeds, status-followups-query-unavailable, and
+#       status-followups-degraded-order — every fixture that sets any reject-followups(-once)
+#       marker: under `set -euo pipefail`, the mutated bare assignment's failing command
+#       substitution aborts harness-status.sh outright before it prints any JSON at all (the same
+#       class of failure #284/#285's own mutant (a) documents for the ready-query site).
+#       status-followups-bucket-populated does NOT join: its own followups.json is served on the
+#       first (and only) attempt, so the mutated bare assignment never fails for it.
+#   (N2) the followups site sleeps but never actually retries (the inner `if
+#       followups_raw=$(list_followups); then ... else ... fi` collapsed to the unconditional
+#       `else` body): 161 cases dropped to 157 pass/4 fail, failing exactly the SAME four cases as
+#       (N1) — status-followups-query-unavailable joins for a DIFFERENT reason than (N1): its own
+#       permanent reject-followups still leaves the mutated code exiting 0 with the correct
+#       fail-closed document, but its own `expect_issue_calls ... 2` assertion breaks (only one
+#       real attempt is ever made, never a second); the other three join for the identical
+#       call-count/verdict reasons (N1) documents.
+#   (N3) delete the `|| true` guard from the followups site's `sleep "$RETRY_SLEEP"` only: 161
+#       cases dropped to 160 pass/1 fail, failing exactly status-own-retry-sleep-failure-survives —
+#       the ONLY fixture whose stub `sleep` ever fails (sleep-fails), so every other case's
+#       guarded-or-not sleep always succeeds and this mutant is invisible to it.
+#   (N4) delete `followups_query_unavailable: $fqu,` from the `$sf` object literal: 161 cases
+#       dropped to 155 pass/6 fail, failing exactly: status-own-queries-healthy,
+#       status-own-retry-sleep-failure-survives, status-followups-bucket-populated,
+#       status-followups-query-retry-succeeds, status-followups-query-unavailable, and
+#       status-followups-degraded-order — every fixture that asserts
+#       `counts.followups_query_unavailable` directly (now a missing key, `null`, never `true` or
+#       `false`) OR whose expected degraded_reasons names "status.followups_query_unavailable" (the
+#       generic select finds nothing to name once the key is gone).
+#   (N5) delete `followups_query_retried: $fqr,` from the `$sf` object literal: 161 cases dropped
+#       to 156 pass/5 fail, failing exactly: status-own-queries-healthy,
+#       status-own-retry-sleep-failure-survives, status-followups-bucket-populated,
+#       status-followups-query-retry-succeeds, and status-followups-query-unavailable — every
+#       fixture that asserts `counts.followups_query_retried` directly (now a missing key);
+#       status-followups-degraded-order does NOT join, since it never asserts that one flag (only
+#       the degraded_reasons array and blocked's two flags), and `_retried` never participates in
+#       the array-building select (which keys on `endswith("_unavailable")`).
+#   (N6) `startswith` -> `contains` in the body filter (`select((.body // "") | contains("<!--
+#       harness-follow-up: PR #"))`): 161 cases dropped to 160 pass/1 fail, failing exactly
+#       status-followups-bucket-populated — the only fixture whose followups.json contains an issue
+#       (#607, prose before the marker) that `contains` newly matches but `startswith` does not;
+#       every other fixture's followups.json entries either already open with the marker or are
+#       served from a permanently/one-shot-rejected call and never reach this filter with real
+#       content.
+#   (N7) delete the body `select(...)` clause entirely (every followups.json issue joins the
+#       bucket regardless of its body): 161 cases dropped to 160 pass/1 fail, failing exactly
+#       status-followups-bucket-populated — the only fixture whose followups.json carries more than
+#       one issue, and whose bucket-length/entry-shape assertions catch every non-qualifying issue
+#       (#606, #607) joining; the other three #333 fixtures' followups.json files carry exactly one
+#       issue that already satisfies the filter, so deleting it changes nothing observable there.
+#   (N8) delete `"followups_to_triage"` from the exclusion list (`[] as $excluded` instead of
+#       `["followups_to_triage"] as $excluded`), so the bucket joins human_actions: 161 cases
+#       dropped to 160 pass/1 fail, failing exactly status-followups-bucket-populated —
+#       `jq .counts.human_actions: expected 3, got 5` (measured directly), the exact 3 -> 5 flip
+#       the exclusion is meant to prevent; every other fixture either has an empty followups bucket
+#       (adding zero to the sum either way) or does not assert human_actions at all.
+#   (N9) drop the `{number, title, url}` projection (`followups=$followups_raw` after the filter,
+#       keeping every original field including body): 161 cases dropped to 160 pass/1 fail, failing
+#       exactly status-followups-bucket-populated — the only fixture that asserts the bucket's [0]
+#       entry against the exact compact `{number,title,url}` object (no `body` key); the other
+#       three #333 fixtures never inspect an individual bucket entry's shape.
+# Restored byte-identically after each measurement (sha256 confirmed); final restored-tree run:
+# 161 pass, 0 fail.
+#
+# Measured-green shape probe (not a mutant that bites — recorded honestly per the plan): replacing
+# the generic minus-named-exclusion sum with the plain three-term enumeration
+# `(($woh.plans_to_review|length) + ($woh.prs_to_review|length) + ($woh.blocked|length))` leaves
+# the suite at 161 pass, 0 fail — no fixture pins the generic shape over the plain enumeration; the
+# generic form is a forward-compatibility choice for #309's future escalations member, deliberately
+# not something any fixture here can discriminate from the equivalent hard-coded three-term sum.
 
 # empty-needle-guard (#262-1) — exercises every guarded helper in this file (expect_err,
 # expect_no_err, expect_warn_count) with an empty needle, and asserts the guard fired for each:
@@ -9251,7 +9768,11 @@ EOF
 # expect_warn_count with an empty needle either — both pass real needles, e.g. "carries the plan
 # marker but does not open with it" and the automation-shaped quoter's own author/createdAt/url
 # text): goes from 152 pass, 0 fail to 151 pass, 1 fail — the same single-case failing set, new
-# total.
+# total. RE-MEASURED 2026-09-19 (#333), when the suite grew to 161 cases across four new
+# status-followups-* fixtures (none of which calls expect_no_err/expect_err/expect_warn_count with
+# an empty needle either — every one passes a real needle, e.g. "held-follow-up query failed once"
+# and "could not list held follow-ups"): goes from 161 pass, 0 fail to 160 pass, 1 fail — the same
+# single-case failing set, new total.
 case_empty_needle_guard() {
   local saved_ok saved_why
   planning_err="fixture stderr for the empty-needle guard (#262)"
@@ -9424,15 +9945,19 @@ cases=(
   "status-degraded-implementer-ready-query|case_status_degraded_implementer_ready_query|#285: find-implementation-work.sh's ready query fails closed — degraded_reasons is exactly [\"implementation.ready_query_unavailable\"]"
   "status-degraded-author-association|case_status_degraded_author_association|#285: the generic rule picks up a flag neither #284 nor #273 added — author_association_unavailable — with no enumeration to drift"
   "status-degraded-both-scripts|case_status_degraded_both_scripts|#285: both discovery scripts fail closed at once — degraded_reasons carries both halves, planning first, in order"
-  "status-own-queries-healthy|case_status_own_queries_healthy|#297: all three of harness-status.sh's own sites succeed on first attempt — each called once, no sleeps, all six new counts flags false, and the canned discovery stand-ins ran instead of the real scripts"
-  "status-proposed-query-retry-succeeds|case_status_proposed_query_retry_succeeds|#297: the plan-proposed site fails once then succeeds on the bounded retry — retried true, unavailable false, one succeed-warn, one sleep(30), the other two sites unaffected"
+  "status-own-queries-healthy|case_status_own_queries_healthy|#297 (extended #333): all four of harness-status.sh's own sites succeed on first attempt — each called once, no sleeps, all eight new counts flags false, and the canned discovery stand-ins ran instead of the real scripts"
+  "status-proposed-query-retry-succeeds|case_status_proposed_query_retry_succeeds|#297: the plan-proposed site fails once then succeeds on the bounded retry — retried true, unavailable false, one succeed-warn, one sleep(30), the impl-blocked and open-PR sites unaffected"
   "status-proposed-query-unavailable|case_status_proposed_query_unavailable|#297: the plan-proposed site fails on both attempts — fails closed to an empty plans_to_review bucket, degraded_reasons is exactly [\"status.proposed_query_unavailable\"]"
   "status-blocked-query-retry-succeeds|case_status_blocked_query_retry_succeeds|#297: the impl-blocked site's twin of status-proposed-query-retry-succeeds"
   "status-blocked-query-unavailable|case_status_blocked_query_unavailable|#297: the impl-blocked site's twin of status-proposed-query-unavailable"
   "status-prs-query-retry-succeeds|case_status_prs_query_retry_succeeds|#297: the open-PR site's twin, retried attempts logged in .pr-calls (its own separate top-level pr) arm) rather than .issue-calls"
   "status-prs-query-unavailable|case_status_prs_query_unavailable|#297: the open-PR site's twin of status-proposed-query-unavailable, again logged in .pr-calls"
-  "status-own-retry-sleep-failure-survives|case_status_own_retry_sleep_failure_survives|#297: all three of harness-status.sh's own sites fail once AND the backoff sleep itself always fails — every retry still runs, exit 0, exactly 3 sleeps, real content in all three buckets"
+  "status-own-retry-sleep-failure-survives|case_status_own_retry_sleep_failure_survives|#297 (extended #333): all four of harness-status.sh's own sites fail once AND the backoff sleep itself always fails — every retry still runs, exit 0, exactly 4 sleeps, real content in all four buckets"
   "status-degraded-reasons-all-halves|case_status_degraded_reasons_all_halves|#297: degraded_reasons carries all three halves in order — planning, implementation, then status (proposed and prs; blocked stays healthy and never joins)"
+  "status-followups-bucket-populated|case_status_followups_bucket_populated|#333: the held-follow-up bucket filters on open+no-plan+body-opens-with-marker, projects to {number,title,url}, and human_actions stays 3 — unchanged by a non-empty followups bucket"
+  "status-followups-query-retry-succeeds|case_status_followups_query_retry_succeeds|#333: the held-follow-up site's twin of status-proposed-query-retry-succeeds"
+  "status-followups-query-unavailable|case_status_followups_query_unavailable|#333: the held-follow-up site's twin of status-proposed-query-unavailable — human_actions still excludes the (empty) bucket"
+  "status-followups-degraded-order|case_status_followups_degraded_order|#333: proposed+prs+followups all fail closed at once — degraded_reasons puts followups_query_unavailable LAST, in \$sf's own key order"
   "empty-needle-guard|case_empty_needle_guard|#262: expect_err/expect_no_err/expect_warn_count all refuse an empty needle"
 )
 

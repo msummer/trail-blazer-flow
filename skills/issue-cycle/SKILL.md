@@ -489,10 +489,14 @@ did** — plans posted/revised/auto-approved, PRs opened/merged (links + evidenc
 CI outcomes, lessons, hygiene fixes; **(2) what waits on the human** — plans to review
 (BLOCKING/ADVISORY counts), PRs to review/merge (CI state, the one-line reason each didn't
 qualify for the merge pass, `verified, merge blocked` PRs with their exact command), blocked
-issues (blocker, one line each) — copy-paste actionable (a `degraded: true` status JSON means
-naming each `degraded_reasons` entry here too, since that bucket may under-report). Nothing done
-and nothing waiting → say "all quiet" in one line and stop (still an empty ledger, not a skipped
-reconciliation — only applies when there was truly nothing to seed).
+issues (blocker, one line each), and (#333) held follow-ups to triage
+(`followups_to_triage`, reported beside `human_actions`, never inside it) — copy-paste
+actionable (a `degraded: true` status JSON means naming each `degraded_reasons` entry here too,
+since that bucket may under-report). Nothing done and nothing waiting (`counts.human_actions` is
+0 — a non-empty `followups_to_triage` alone does not prevent this; still name its count in that
+one line) → say "all quiet" in one line and stop (still an empty ledger, not a skipped
+reconciliation — only applies when there was
+truly nothing to seed).
 
 **Release the lock — the literal last action of this step, after the report above,** pasting
 step 0's own run id literally:
