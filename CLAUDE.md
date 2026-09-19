@@ -235,8 +235,8 @@ CI as the fifth step, but it is not part of `dev/selfcheck.sh` itself — run it
 `dev/planning-tests.sh` is a separate negative-test harness for BOTH of this repo's discovery
 scripts, `bin/find-planning-work.sh` (#164) and, since #176, `bin/find-implementation-work.sh`,
 and, since #285, their consumer `bin/harness-status.sh` — end-to-end via Part 13's fixtures (both
-discovery scripts run for real), and, since #297, via Part 14's fixtures against
-`bin/harness-status.sh`'s own three `gh` call sites alone, behind a `build_stub_discovery`-built
+discovery scripts run for real), and, since #297 (extended #333), via Part 14's fixtures against
+`bin/harness-status.sh`'s own four `gh` call sites alone, behind a `build_stub_discovery`-built
 canned stand-in for both discovery scripts (so, among the fixtures that invoke `run_status`, an
 in-place mutant to either discovery script is reachable only through Part 13's own `run_status`
 fixtures, never Part 14's — this file's many OTHER Parts, which call the discovery scripts
@@ -458,7 +458,22 @@ halves; pinned by nine new Part 14 fixtures that drive `run_status` too, but beh
 families (`reject-proposed(-once)`, `reject-blocked(-once)`, `reject-prs(-once)`) mirroring
 `reject-ready(-once)`, and a new `.pr-calls` log (mirroring `.issue-calls`) read by a new
 `expect_pr_calls` helper, since the open-PR query is a separate top-level `gh pr ...` call the
-existing `.issue-calls` log never captures.
+existing `.issue-calls` log never captures. Since #333, `bin/harness-status.sh` gains a FOURTH such
+site, `waiting_on_human.followups_to_triage`: open, `no-plan` issues whose body opens with the
+harness-filed follow-up marker (#308), fed by a fourth `gh issue list` call with the identical
+bounded-retry-then-fail-closed shape, publishing `followups_query_retried`/`_unavailable` and a
+`"status.followups_query_unavailable"` `degraded_reasons` entry appended after the three #297
+entries. Per the maintainer's decision, `counts.human_actions` does NOT include this bucket — the
+query cannot tell a follow-up nobody has triaged from one a maintainer read and deliberately
+parked (both keep `no-plan` and the marker), so `human_actions` becomes a generic sum over every
+`waiting_on_human` array member EXCEPT a small, named exclusion list (today exactly
+`["followups_to_triage"]`) bound next to the sum, so a future member (#309's escalations) joins the
+total automatically unless it too is named there; pinned by four new Part 14 fixtures (a populated
+bucket whose `human_actions` stays unchanged, a retry-succeeds case, a both-attempts-fail case, and
+a status-half-ordering case) plus two extended Part 14 fixtures (the healthy and
+guarded-sleep-failure cases), a new stub `gh issue list` arm (content-exclusive, needing no
+arm-ordering trick unlike the plan-proposed arm), and a `reject-followups(-once)` marker family
+mirroring `reject-proposed(-once)`.
 It runs in CI as the sixth step, but it
 is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh`,
 `bin/find-implementation-work.sh`, or `bin/harness-status.sh` changes.

@@ -473,6 +473,7 @@ p_4_14_oversize() {
 }
 p_4_15()              { printf 'x=$(echo hi)\n' | append "$1/skills/harness-setup/SKILL.md"; }
 p_4_16()              { edit "$1/bin/cleanup-after-merge.sh" 's/harness-follow-up/harness-followup/g'; }
+p_4_16_status()        { edit "$1/bin/harness-status.sh" 's/harness-follow-up/harness-followup/g'; }
 p_4_17()              { edit "$1/bin/cleanup-after-merge.sh" 's/harness-multi-pr/harness-multipr/g'; }
 p_4_18()              { edit "$1/skills/issue-cycle/SKILL.md" 's/stage=verifier/stage=verified/g'; }
 p_4_19()              { edit "$1/skills/issue-cycle/SKILL.md" 's/verifier-verdict/verifier-verdictx/g'; }
@@ -700,6 +701,7 @@ cases=(
   "4.14|4.14|p_4_14_oversize|append 300 filler lines to skills/harness-setup/SKILL.md"
   "4.15|4.15|p_4_15|append a real dollar-paren command to skills/harness-setup/SKILL.md"
   "4.16|4.16|p_4_16|rename the follow-up marker in cleanup-after-merge.sh so the skill and the script disagree"
+  "4.16-status|4.16|p_4_16_status|rename the follow-up marker in bin/harness-status.sh so the writer and the status reader disagree"
   "4.17|4.17|p_4_17|rename the multi-pr marker in cleanup-after-merge.sh so the script and the docs disagree"
   "4.18|4.18 5.8|p_4_18|rename the verifier status-line needle in issue-cycle/SKILL.md so the writer and the checker disagree (also renames stage=verifier inside the extracted verdict-provenance --jq program, so 5.8's unrenamed fixtures no longer match)"
   "4.19|4.19 5.5 5.6 5.7|p_4_19|rename the verifier-verdict marker throughout skills/issue-cycle/SKILL.md so the writer and the checker disagree (also renames both needles inside the extracted archived-verdict --jq program, so 5.5/5.6/5.7 no longer match the unrenamed fixtures and fail alongside it)"

@@ -392,10 +392,12 @@ against `harness-status.sh`'s live queues via `reconcile-ledger.sh` (an issue wi
 outcome is escalated, never dropped; a degraded live read is escalated too, never reported
 clean), then a **per-issue summary table** and a two-halves report
 — *what the cycle did* and *what waits on the human* (plans to review, PRs to merge, blocked
-issues). It adds no authority beyond what CLAUDE.md delegates — it just removes the
+issues, and (#333) held follow-ups to triage, reported beside the total rather than inside it).
+It adds no authority beyond what CLAUDE.md delegates — it just removes the
 hand-cranking between stages. Pair it with `/loop` or a scheduled routine for unattended
-operation; each invocation stays one bounded pass, and an empty cycle reports "all quiet" in one
-line. See the `issue-cycle` skill for the full procedure.
+operation; each invocation stays one bounded pass, and an empty cycle — nothing done, and
+`counts.human_actions` at 0 (a non-empty `followups_to_triage` alone does not prevent this) —
+reports "all quiet" in one line. See the `issue-cycle` skill for the full procedure.
 
 ### The test-suite ratchet (opt-in)
 
@@ -436,24 +438,34 @@ verifier's own status line, its mutation-probe line, the implementer's condensed
 and its CI checks. Merge it, or close it, the same as any other PR; comment on it first if you
 want changes made before either.
 
-**Returning to a laptop.** Run `harness-status.sh` to see what's left: `counts.human_actions` is
-the total waiting on you, broken into `waiting_on_human.plans_to_review`,
-`waiting_on_human.prs_to_review` (each PR entry carries a coarse `ci`: `passing`, `failing`,
-`pending`, or `none`), and `waiting_on_human.blocked`. Check the top-level `degraded` boolean too
+**Returning to a laptop.** Run `harness-status.sh` to see what's left: `waiting_on_human` has four
+buckets — `plans_to_review`, `prs_to_review` (each PR entry carries a coarse `ci`: `passing`,
+`failing`, `pending`, or `none`), `blocked`, and (#333) `followups_to_triage` — but
+`counts.human_actions` totals only the FIRST THREE: a harness-filed follow-up (#308) is born with
+`no-plan`, and this query — open + `no-plan` + body opens with the harness marker — cannot tell one
+nobody has triaged yet from one you already read and deliberately decided to keep held (both keep
+`no-plan` and the marker forever), so folding it into the total would mean the total could never
+return to zero in a repo with any parked follow-up. Read `followups_to_triage` yourself, alongside
+the total, not instead of it. Check the top-level `degraded` boolean too
 (and `degraded_reasons`, and its `counts.degraded` mirror) — `true` means a discovery query OR one
-of `harness-status.sh`'s own three queries (plan-proposed, impl-blocked, open PRs) failed
-closed this run, so a bucket above may under-report the true queue rather than reflect an
+of `harness-status.sh`'s own four queries (plan-proposed, impl-blocked, open PRs, held follow-ups)
+failed closed this run, so a bucket above may under-report the true queue rather than reflect an
 empty one. Each `degraded_reasons` entry prefixed `status.` names which `waiting_on_human` bucket
 above it affects (the plan-proposed query → `plans_to_review`, impl-blocked → `blocked`, open
-PRs → `prs_to_review`); a `planning.`/`implementation.` entry usually affects `harness_will_handle`
+PRs → `prs_to_review`, held follow-ups → `followups_to_triage`); a `planning.`/`implementation.`
+entry usually affects `harness_will_handle`
 instead — except `planning.candidates_query_unavailable`, which ALSO inflates `plans_to_review`
 above: it fails the revision-candidates query closed, so `find-planning-work.sh`'s own
 `needs_revision` bucket comes back empty, and this script subtracts that (now-empty) bucket from
 the plan-proposed query — so a plan-proposed issue with real unaddressed maintainer feedback stays
 counted as awaiting your review instead of the planner's. Nothing in that JSON is phone-specific —
-it's the same summary a scheduled routine's own report already gives you. Harness-filed
-follow-ups are held with `no-plan` and deliberately appear in none of the buckets above (#308) —
-list them yourself with `gh issue list --search "is:open is:issue label:no-plan" --limit 200`.
+it's the same summary a scheduled routine's own report already gives you. Honest limits on
+`followups_to_triage`: a deliberately parked follow-up keeps counting forever, a hand-written
+`no-plan` issue whose body happens to open with the same marker text would count too even though
+the harness never filed it, and GitHub's issue search can trail a label edit (measured once on
+this repo, 2026-09-17: a `gh issue list --search` run made right after a label edit missed an
+issue that a later run returned), so a follow-up filed moments earlier may be missing from this
+run's bucket — whether a just-triaged one can likewise linger was not measured.
 
 ## Greenfield walkthrough: from idea to first feature
 
@@ -1713,8 +1725,9 @@ deliberately: removing `no-auto-approve` alone would leave an untriaged, machine
 eligible for auto-approval the moment a policy exists, while adding `no-plan` in that same edit
 is what keeps it held until a human triages it. Two honest limits carry over from the behaviour
 changes above:
-`harness-status.sh` has no bucket or count for a held follow-up (list them yourself, per
-"Returning to a laptop"), and `cleanup-after-merge.sh`'s follow-up quarantine — the "source PR
+`harness-status.sh` had no bucket or count for a held follow-up (superseded by #333, below — it
+now has one, `waiting_on_human.followups_to_triage`, reported beside `counts.human_actions` rather
+than inside it), and `cleanup-after-merge.sh`'s follow-up quarantine — the "source PR
 closed without merging" comment — never reaches a follow-up filed with `no-plan` from birth,
 since the same `-label:no-plan` exclusion that makes `--fix` idempotent also excludes it; that
 path now applies only to a follow-up filed by an older harness version that still carries
@@ -1762,6 +1775,23 @@ both markers is counted in exactly one). New gate assertion 4.46 pins that the t
 `HARNESS_RECORD_MARKERS` declarations stay byte-identical. See "Safety model" below for the full
 shape and its residual honest limit (a comment that itself opens with a verbatim marker copy at
 byte 0 is still indistinguishable from a genuine harness record, and stays silently dropped).
+
+Also in v2.7.6 (#333): needs no grant, label, script, settings entry, or baseline step.
+`harness-status.sh` gains a fourth `waiting_on_human` bucket, `followups_to_triage` — open,
+`no-plan` issues whose body opens with the harness-filed follow-up marker (#308) — fed by a fourth
+`gh issue list` call with the identical bounded-retry-then-fail-closed shape the other three sites
+already have, publishing `counts.followups_query_retried`/`counts.followups_query_unavailable` and
+a `"status.followups_query_unavailable"` `degraded_reasons` entry appended after the three existing
+status-half entries. `counts.human_actions` deliberately does NOT include this bucket: the query
+cannot tell a follow-up nobody has triaged yet from one a maintainer already read and decided to
+keep held (both keep `no-plan` and the marker forever), so folding it into the total would mean the
+total could never return to zero in a repo with any parked follow-up (measured on this repo
+2026-09-17: the filter matched 10 issues, every one already triaged and parked) — see "Returning to
+a laptop" above for the reader-facing shape and honest limits (parked follow-ups keep counting, a
+label edit can leave a just-filed entry missing from one run — measured once on this repo,
+2026-09-17: a `gh issue list --search` run made right after a label edit missed an issue that a
+later run returned; whether a just-triaged entry can likewise linger was not measured — and
+`--limit 100` caps the listing).
 
 ## The per-repo settings file (required)
 

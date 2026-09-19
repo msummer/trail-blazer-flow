@@ -713,7 +713,7 @@ fi
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 790
-issue-cycle 540
+issue-cycle 545
 issue-planner 550
 project-kickoff 215
 test-ratchet 200
@@ -760,15 +760,18 @@ else
   bad "4.15 dollar-paren substitution found — run the inner command separately and paste its literal result instead:$bad_list"
 fi
 
-# 4.16 — the literal harness-follow-up marker prefix appears in both files (fixed-string).
+# 4.16 — the literal harness-follow-up marker prefix appears in all three files (fixed-string).
 # Mirrors 4.1/4.5. Pins only the prefix — the PR number varies per issue, so the full marker
-# is never a fixed string.
+# is never a fixed string. (#333) bin/harness-status.sh reads the same prefix (its own
+# followups_to_triage filter), so a rename there that the other two writers/readers don't share
+# would silently stop that bucket from ever matching a real follow-up issue.
 marker='<!-- harness-follow-up: PR #'
 missing=""
 grep -qF -- "$marker" "$root/skills/issue-implementer/SKILL.md" || missing="$missing skills/issue-implementer/SKILL.md"
 grep -qF -- "$marker" "$root/bin/cleanup-after-merge.sh" || missing="$missing bin/cleanup-after-merge.sh"
+grep -qF -- "$marker" "$root/bin/harness-status.sh" || missing="$missing bin/harness-status.sh"
 if [ -z "$missing" ]; then
-  ok "4.16 '$marker' present in skills/issue-implementer/SKILL.md and bin/cleanup-after-merge.sh"
+  ok "4.16 '$marker' present in skills/issue-implementer/SKILL.md, bin/cleanup-after-merge.sh, and bin/harness-status.sh"
 else
   bad "4.16 '$marker' missing from:$missing"
 fi
