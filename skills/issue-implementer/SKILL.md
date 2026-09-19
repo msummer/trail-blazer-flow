@@ -750,7 +750,11 @@ name which, since the latter is the more actionable fact for the human re-readin
 Report plan-marker quoters (#302) the same way: any comment a `warn:` line named as carrying the
 plan marker without opening with it (`counts.plan_marker_quoters`), quoted verbatim from step 2a's
 run — it was neither the plan nor binding context, so never fold it into `RESOLVED:` or the
-dispatch prompt.
+dispatch prompt. Report harness-marker quoters (#321) the same way too: any comment a `warn:` line
+named as carrying a harness-record marker without opening with it
+(`counts.harness_marker_quoters`) — a maintainer quoting a harness-authored record, typically to
+dispute it, not a record itself — quoted verbatim from step 2a's run; it was never binding either.
+The remedy for either class: repost the feedback without the quoted marker line.
 
 **Release the lock — the literal last action of this step, after the report above** — but only
 when you acquired it yourself at step 0 (standalone run; `issue-cycle` releases its own at its

@@ -409,6 +409,17 @@ p_2_7_cdg_matcher() { edit "$1/hooks/hooks.json" 's/"matcher": "Edit|Write"/"mat
 # AGENT_TYPES_IMPLEMENTER identifier throughout so the gate's anchored extraction comes back empty.
 p_4_45_drift() { edit "$1/hooks/claude-dir-guard.sh" 's/AGENT_TYPES_VERIFIER="verifier trail-blazer-flow:verifier"/AGENT_TYPES_VERIFIER="verifier trail-blazer-flow:verifer"/'; }
 p_4_45_extraction() { edit "$1/hooks/claude-dir-guard.sh" 's/AGENT_TYPES_IMPLEMENTER/AGENT_TYPES_IMPLEMENTOR/g'; }
+# p_4_46_* (#321) — rename characters INSIDE the identifier/value, never append a suffix (LESSON
+# 2026-09-04b). p_4_46_extraction renames HARNESS_RECORD_MARKERS to HARNESS_RECORD_MARKS
+# throughout bin/find-planning-work.sh (both the declaration and its one --arg use site), so that
+# script keeps working (the jq --arg still references a real variable) while the gate's anchored
+# extraction of the literal "HARNESS_RECORD_MARKERS=" prefix comes back empty. p_4_46_drift alters
+# one character inside bin/find-implementation-work.sh's OWN HARNESS_RECORD_MARKERS block (the
+# $VERDICT_MARKER reference on the block's second line, anchored to the WHOLE line so the
+# standalone VERDICT_MARKER="..." declaration and the --arg v "$VERDICT_MARKER" use site elsewhere
+# in the file are untouched) so the two scripts' blocks disagree while bash -n stays clean.
+p_4_46_extraction() { edit "$1/bin/find-planning-work.sh" 's/HARNESS_RECORD_MARKERS/HARNESS_RECORD_MARKS/g'; }
+p_4_46_drift()      { edit "$1/bin/find-implementation-work.sh" 's/^\$VERDICT_MARKER"$/\$VERDICT_MARKR"/'; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -783,6 +794,8 @@ cases=(
   "2.7-cdg-matcher|2.7|p_2_7_cdg_matcher|change the FOURTH (claude-dir-guard.sh) handler's matcher from Edit|Write to Bash -- measured: \"2.7 hooks/hooks.json structure broken: claude-dir-guard.sh's matcher is 'Bash', expected 'Edit|Write';\" (72 pass, 1 fail)"
   "4.45-drift|4.45|p_4_45_drift|alter one character inside hooks/claude-dir-guard.sh's own AGENT_TYPES_VERIFIER value (characters changed inside the token, not a suffix) so it no longer agrees with hooks/agent-boundary.sh's -- measured: \"4.45 AGENT_TYPES_* vocabulary disagrees: hooks/agent-boundary.sh has AGENT_TYPES_IMPLEMENTER='implementer trail-blazer-flow:implementer' AGENT_TYPES_VERIFIER='verifier trail-blazer-flow:verifier', hooks/claude-dir-guard.sh has AGENT_TYPES_IMPLEMENTER='implementer trail-blazer-flow:implementer' AGENT_TYPES_VERIFIER='verifier trail-blazer-flow:verifer'\" (72 pass, 1 fail)"
   "4.45-extraction|4.45|p_4_45_extraction|rename hooks/claude-dir-guard.sh's AGENT_TYPES_IMPLEMENTER identifier throughout so the gate's anchored extraction comes back empty -- measured: \"4.45 hooks/agent-boundary.sh's or hooks/claude-dir-guard.sh's AGENT_TYPES_IMPLEMENTER= or AGENT_TYPES_VERIFIER= line didn't match (structure changed) — extraction failed\" (72 pass, 1 fail)"
+  "4.46-extraction|4.46|p_4_46_extraction|rename HARNESS_RECORD_MARKERS to HARNESS_RECORD_MARKS throughout bin/find-planning-work.sh (both the declaration and its --arg use site, characters removed inside the token, not a suffix) so the gate's anchored extraction comes back empty -- measured: \"4.46 bin/find-planning-work.sh's or bin/find-implementation-work.sh's HARNESS_RECORD_MARKERS=\"...\" block didn't match (structure changed) — extraction failed\" (73 pass, 1 fail)"
+  "4.46-drift|4.46|p_4_46_drift|alter one character inside bin/find-implementation-work.sh's own HARNESS_RECORD_MARKERS block (its \$VERDICT_MARKER reference, anchored to the whole line so the standalone VERDICT_MARKER declaration and its other use site are untouched), so it no longer agrees with bin/find-planning-work.sh's -- measured: \"4.46 HARNESS_RECORD_MARKERS declaration disagrees: bin/find-planning-work.sh has 'HARNESS_RECORD_MARKERS=\"\$AUDIT_MARKER|\$VERDICT_MARKER\"|', bin/find-implementation-work.sh has 'HARNESS_RECORD_MARKERS=\"\$AUDIT_MARKER|\$VERDICT_MARKR\"|'\" (73 pass, 1 fail)"
 )
 
 # ---------------------------------------------------------------------------------------------

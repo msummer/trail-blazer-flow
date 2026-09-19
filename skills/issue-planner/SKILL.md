@@ -475,6 +475,13 @@ counts as feedback; a hand-posted plan with text before the marker must instead 
 the marker as the comment's first line, so it counts as the plan. Reposting a feedback comment
 with the marker first would make it the new plan instead of feedback — not the intended fix.
 
+**Report harness-marker quoters (#321).** List every issue named by a `warn:` line reporting a
+trusted comment that carries a harness-record marker but does not open with it
+(`counts.harness_marker_quoters`) — issue, author, and `createdAt`. This is a maintainer quoting a
+harness-authored record (an audit comment, a verifier verdict), typically to dispute it — not a
+harness record itself. Nothing in it was acted on. The remedy: repost the feedback WITHOUT the
+quoted marker line, so it counts as feedback.
+
 **Report untrusted issue authors.** List every issue in `find-planning-work.sh`'s
 `untrusted_issue_authors` bucket (issue, author, association, and which bucket —
 `needs_initial_plan` or `needs_revision` — it came from) so the human knows which plans this run

@@ -100,6 +100,19 @@
 # is dropped from both plan selection and feedback for this reason is no longer silent. Harness
 # records are excluded from this count exactly as they are excluded from has_feedback above.
 #
+# #321 adds one more: harness_marker_quoters (how many trusted, post-latest-plan comments carried
+# any marker in the harness-record marker set — HARNESS_RECORD_MARKERS below — somewhere in their
+# body without opening with one) plus one warn: line per such comment ("... carries a harness
+# record marker but does not open with it — not a harness record, and not counted as feedback"),
+# naming its author, createdAt, and url (or the literal "no url"). The window is the same as
+# plan_marker_quoters above (posted after the latest trusted plan, or at any time when there is
+# none). Harness records are excluded positively, by a startswith test against the same set: every
+# record this harness posts opens with its own marker as the first line of the body, so this count
+# never fires on a genuine harness-authored comment. Honest limit: a harness record with anything
+# (even whitespace) before its marker would be counted here, and a maintainer comment that begins
+# with a verbatim marker copy at byte 0 is still dropped from feedback silently — no count, no
+# warn — tracked as a separate follow-up.
+#
 # Wall clock: the retry budget is deliberately UNCAPPED — one retry per site (the REST
 # author-association lookup, the needs_initial_plan query, the revision-candidates query) plus one
 # retry per candidate in the per-candidate fetch loop, no run-level ceiling on top of that. Worst
@@ -125,6 +138,13 @@ LIMIT=100
 PLAN_MARKER="<!-- planner-plan -->"
 AUDIT_MARKER="<!-- harness-audit -->"
 VERDICT_MARKER="<!-- verifier-verdict -->"
+
+# HARNESS_RECORD_MARKERS (#321) — the harness-record marker SET, one marker per line. A later
+# marker (an escalation record, say) is a ONE-LINE addition here and nowhere else in the
+# harness_marker_quoters member below. The per-marker counters above/below keep their own
+# $a/$v tests on purpose: each names its marker in its own counts key.
+HARNESS_RECORD_MARKERS="$AUDIT_MARKER
+$VERDICT_MARKER"
 
 # GitHub's authorAssociation enum: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR,
 # FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, NONE. Only the first three carry repo
@@ -245,6 +265,7 @@ missing_association=0
 audit_comments_skipped=0
 verdict_archives_skipped=0
 plan_marker_quoters=0
+harness_marker_quoters=0
 for n in $candidates; do
   # Tolerate per-issue failures: one transient gh/API error must not kill the whole
   # discovery run (matters for unattended/scheduled runs). #272: a first failure is retried once
@@ -261,8 +282,9 @@ for n in $candidates; do
       continue
     fi
   fi
-  result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg a "$AUDIT_MARKER" --arg v "$VERDICT_MARKER" --arg trusted "$TRUSTED_ASSOCIATIONS" '
+  result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg a "$AUDIT_MARKER" --arg v "$VERDICT_MARKER" --arg hrm "$HARNESS_RECORD_MARKERS" --arg trusted "$TRUSTED_ASSOCIATIONS" '
     ($trusted | split(" ")) as $ok
+    | ($hrm | split("\n") | map(select(length > 0))) as $hm
     | (.comments // []) as $c
     | ($c | map(select( ((.authorAssociation // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null ))) as $trustedC
     # #281 (superseding #275) — plan-candidate set: a trusted comment is a plan candidate only if
@@ -328,12 +350,26 @@ for n in $candidates; do
         # that DOES open with the marker is itself a plan candidate, so its createdAt cannot be
         # later than $lastPlan) — so this member needs no startswith and never references $planC;
         # harness records are excluded exactly as the feedback set above excludes them, so an
-        # audit or verdict record that also quotes the plan marker is not warned about here.
+        # audit or verdict record that also quotes the plan marker is not warned about by this
+        # member — the harness_marker_quoters member below names the ones that do not open with a
+        # harness marker.
         plan_marker_quoters: [ $trustedC[]
           | select(.createdAt > ($lastPlan // ""))
           | select(.body | contains($m))
           | select((.body | contains($a)) | not)
           | select((.body | contains($v)) | not)
+          | { author: (.author.login // "unknown"), createdAt: .createdAt, url: (.url // null) } ],
+        # (#321) — comments dropped from the feedback set for the harness-record reason
+        # alone: the same window as the member above; within it, a trusted comment whose body
+        # contains ANY marker in $hm anywhere but opens with NONE of them is a maintainer quoting a
+        # harness record, not a harness record (every record this harness posts opens with its own
+        # marker as the first line of the body). Harness records themselves are excluded by the
+        # second select, positively, so this member never fires on a real run of the harness.
+        harness_marker_quoters: [ $trustedC[]
+          | . as $cm
+          | select(.createdAt > ($lastPlan // ""))
+          | select(any($hm[]; . as $k | $cm.body | contains($k)))
+          | select((any($hm[]; . as $k | $cm.body | startswith($k))) | not)
           | { author: (.author.login // "unknown"), createdAt: .createdAt, url: (.url // null) } ]
       }
   ')
@@ -397,6 +433,19 @@ for n in $candidates; do
     done <<<"$quoter_lines"
   fi
 
+  # warn (#321): a trusted comment posted after the latest plan (or, when there is none, at any
+  # time) carries a harness-record marker somewhere in its body but does not open with it — a
+  # maintainer's quote, not a harness record, and (via the pre-existing contains($a)/contains($v)
+  # feedback tests) never counted as feedback either. One line per such comment.
+  record_quoter_lines=$(printf '%s' "$result" | jq -r '.harness_marker_quoters[] | "\(.author) (\(.createdAt), \(.url // "no url"))"')
+  if [ -n "$record_quoter_lines" ]; then
+    while IFS= read -r desc; do
+      [ -n "$desc" ] || continue
+      echo "warn: issue #$n: trusted comment by $desc carries a harness record marker but does not open with it — not a harness record, and not counted as feedback" >&2
+      harness_marker_quoters=$((harness_marker_quoters+1))
+    done <<<"$record_quoter_lines"
+  fi
+
   # warn (b): fail-closed — a comment with no authorAssociation field at all is treated as
   # untrusted rather than trusted or crashing the script.
   issue_missing=$(printf '%s' "$result" | jq '.missing_association')
@@ -449,6 +498,7 @@ jq -n \
   --argjson cqu "$candidates_query_unavailable" \
   --argjson fr "$fetch_retries" \
   --argjson pmq "$plan_marker_quoters" \
+  --argjson hmq "$harness_marker_quoters" \
   '{needs_initial_plan: $initial, needs_revision: $revision, untrusted_comments: $untrusted,
     untrusted_issue_authors: $uia,
     counts: {initial: ($initial | length), revision: ($revision | length),
@@ -468,4 +518,5 @@ jq -n \
              candidates_query_retried: $cqr,
              candidates_query_unavailable: $cqu,
              plan_marker_quoters: $pmq,
+             harness_marker_quoters: $hmq,
              fetch_retries: $fr}}'
