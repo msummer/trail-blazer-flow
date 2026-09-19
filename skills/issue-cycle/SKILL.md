@@ -489,8 +489,11 @@ did** — plans posted/revised/auto-approved, PRs opened/merged (links + evidenc
 CI outcomes, lessons, hygiene fixes; **(2) what waits on the human** — plans to review
 (BLOCKING/ADVISORY counts), PRs to review/merge (CI state, the one-line reason each didn't
 qualify for the merge pass, `verified, merge blocked` PRs with their exact command), blocked
-issues (blocker, one line each), and (#333) held follow-ups to triage
-(`followups_to_triage`, reported beside `human_actions`, never inside it) — copy-paste
+issues (blocker, one line each), (#333) held follow-ups to triage
+(`followups_to_triage`, reported beside `human_actions`, never inside it), and (#309) durable
+escalations awaiting an answer (`waiting_on_human.escalations` — number, title, url each; stage,
+reason and the comment url are known only for an escalation THIS run posted, from the
+implementer's own step 3 report) — copy-paste
 actionable (a `degraded: true` status JSON means naming each `degraded_reasons` entry here too,
 since that bucket may under-report). Nothing done and nothing waiting (`counts.human_actions` is
 0 — a non-empty `followups_to_triage` alone does not prevent this; still name its count in that

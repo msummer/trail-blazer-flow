@@ -103,7 +103,9 @@ git worktree add "../<repo-dirname>-wt-<number>" "<branch>"
        Never reset it onto the default branch. Capture the WIP SHA (`git -C <worktree> rev-parse
        HEAD`), build the resume brief per "Resilient dispatch", and carry the issue's
        prior-attempt comments into the dispatch alongside it — same as step 2b.
-     - **Any non-wip commit** → skip and warn, exactly as step 2b.
+     - **Any non-wip commit** → same two branches as step 2b: an open PR skips and warns (no
+       escalation); otherwise it's a Durable escalation (stage `2b`, reason
+       `branch-has-committed-work`), exactly as step 2b's own procedure.
    - **`git worktree add` refuses because the branch is already checked out in another
      worktree** → the issue-implementer skill's step 0 sweep missed one whose directory still
      exists. Re-read `git worktree list --porcelain`, apply that sweep's rule to that path, and

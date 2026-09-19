@@ -3,8 +3,9 @@ name: issue-implementer
 description: >
   Implements approved GitHub issues end to end, producing a pull request for each. Use when the
   user asks to "implement the approved issues", "run the implementer", "build the approved
-  plans", or similar. Finds issues labelled plan-approved (excluding pr-open / impl-blocked),
-  processes them ONE AT A TIME (never in parallel — they share a working tree), and for each:
+  plans", or similar. Finds issues labelled plan-approved (excluding pr-open / impl-blocked /
+  needs-human), processes them ONE AT A TIME (never in parallel — they share a working tree), and
+  for each:
   branches off the default branch, dispatches a single `implementer` subagent to write and verify
   the code, then commits, pushes, and opens a PR for review. Never merges.
 ---
@@ -31,6 +32,8 @@ once under "Hard rules" below.
 - `pr-open` — set by this skill once a PR is open (removes the issue from the queue).
 - `impl-blocked` — set by this skill if implementation hits a blocker (removes it from the queue;
   the human removes this label to retry).
+- `needs-human` — set by a Durable escalation (see "Resilient dispatch" below); removes the issue
+  from every discovery query until the human answers and removes it.
 
 ## Hard rules
 
@@ -183,6 +186,57 @@ continue it, do not restart."
 **Cap:** at most 2 resume relaunches per issue per run (3 implementer contexts total),
 independent of the 2-kickback limit. Exceeding it routes to the blocked path (step 2f) — the
 work is preserved either way.
+
+### Durable escalation (#309)
+
+Several sites below ask the human a question and then **move on rather than blocking the run**
+(ADR 0001 decision 3): post a comment stating the question and its evidence, label the issue, and
+continue with the next issue — never routed around, and never waited on. An attended session may
+also ask in the conversation, but the run itself never waits for an answer. Defined once here;
+every citing site names its stage and reason.
+
+**Procedure, at the cited site:**
+1. Write a temp file whose first line is exactly `<!-- harness-escalation -->` and second line is
+   exactly the key template `<!-- harness-escalation-key: issue=<n> stage=<stage> reason=<slug>
+   comments=<ids> -->` — `<ids>` spelled exactly as step 2a's hold key already spells it: every
+   `#issuecomment-<id>` id the body names, **ascending, comma-separated, no spaces, no `#`**, the
+   literal `none` when it names none, and the literal `no-id` for a named comment whose url
+   carries no parseable `#issuecomment-<id>`. The body then states the question, quotes its
+   evidence verbatim, and states what releases it: removing `needs-human`.
+2. Post it and label the issue:
+```bash
+gh issue comment <number> --body-file <tempfile>
+gh issue edit <number> --add-label needs-human
+```
+3. **Continue with the next issue (step 2g)** — never wait on an answer.
+
+**Vocabulary (closed).** `<stage>` is one of `2a`, `2b`, `2c`, `2e` (the citing step); `<reason>`
+is one of `plan-contradicted` (2a), `branch-has-committed-work` (2b),
+`blocking-question-unanswered` (2c), `ci-red-after-fix` (2e), `ci-red-unrelated` (2e), or
+`permission-denied` (2e) — no site here ever posts a slug outside this list.
+
+**Label rules.** No other label changes: `plan-approved` is not removed, `impl-blocked` is not
+added. This is a different path from step 2f's blocked path, whose comment stays deliberately
+**unmarked** and carries **no** `needs-human` label — step 2b's classification rule depends on
+that comment staying unmarked so a retry can carry its findings forward.
+
+**Dedupe.** The `needs-human` label IS the dedupe: every discovery query excludes it (`ready`,
+`needs_initial_plan`, `needs_revision`), so an escalated issue is out of the workflow until a
+human removes the label. At most one escalation comment per issue per run. A human who removes
+the label without resolving the underlying cause gets an identical key again next run —
+deliberate: this mechanism has no comment-level de-dup guard (unlike the hold key's own, at step
+2a below); the label is the only one, and nothing checks whether the question was answered.
+
+**Permission-denied.** A tool call denied because nobody can answer a permission prompt (e.g. an
+unattended `claude -p --permission-prompts none` session) is escalated the same way, never routed
+around — cited at step 2e's `gh pr edit` denial, reason `permission-denied`. Two other
+permission-denied shapes keep their pre-existing behaviour, deliberately NOT this mechanism: the
+retry ladder's `sleep`-denied fallback (one immediate retry, then report "backoff unavailable"
+into the run report — see "Retry ladder" above) and step 2e's collapse skip (no `git
+merge-base`/`reset --soft` grants — skip the collapse, add the `feat:` commit on top of the WIP
+trail instead). Honest limit: escalating itself needs `gh issue comment`/`gh issue edit` — if
+either of those is what's denied instead, there is no durable record to post; the stop is
+summary-only that run.
 
 ## Procedure
 
@@ -386,8 +440,9 @@ someone forged a harness-authored record — call either out too).
 
 Record the skip, its reason, and which branch ran for step 3. Never fall back to reading the
 thread by hand to approve one anyway. If any `trusted_post_plan` comment contradicts the plan
-outright — covered or uncovered by the approval alike — treat the issue as mislabelled and ask
-the human instead of dispatching.
+outright — covered or uncovered by the approval alike — escalate per "Durable escalation" above
+(stage `2a`, reason `plan-contradicted`), quoting the contradicting comment as the evidence,
+instead of dispatching.
 
 b. **Branch off a fresh default branch:**
 ```bash
@@ -410,8 +465,10 @@ Build a slug from the title (lowercase; non-alphanumerics → hyphens; trim; ~40
   re-cut the branch. If checkout fails because the branch is checked out in another worktree,
   sweep it per step 0's stale-worktree sweep, then retry. Say so in the summary.
 - **Any non-wip commit** → real prior work. If an OPEN PR exists, skip and warn (the `pr-open`
-  label was probably removed by mistake). Otherwise stop and warn — reusing or discarding
-  committed work is the human's call.
+  label was probably removed by mistake) and move to the next issue. Otherwise escalate per
+  "Durable escalation" above (stage `2b`, reason `branch-has-committed-work`), quoting the
+  branch's non-wip commit list as the evidence — reusing or discarding committed work is the
+  human's call — then move to the next issue (step 2g).
 
 c. **Dispatch the `implementer` subagent** (Task tool). It starts from a fresh context and sees
    only what you send, so the prompt must carry **every decision and verified fact** — it should
@@ -431,9 +488,10 @@ c. **Dispatch the `implementer` subagent** (Task tool). It starts from a fresh c
      and constraints. Return your report."*
    - the dispatch attempt number ("Dispatch attempt: `<k>`", starting at 1) and "Harness version:
      `<version>`" (step 0's printed value).
-   If a BLOCKING question has no answer anywhere in the thread, do NOT dispatch — treat the issue
-   as mislabelled and ask the human. If the dispatch itself fails, retry per the "Resilient
-   dispatch" ladder rather than treating it as a blocker.
+   If a BLOCKING question has no answer anywhere in the thread, do NOT dispatch — escalate per
+   "Durable escalation" above (stage `2c`, reason `blocking-question-unanswered`), quoting the
+   unanswered question as the evidence, then move to the next issue (step 2g). If the dispatch
+   itself fails, retry per the "Resilient dispatch" ladder rather than treating it as a blocker.
 
    **Checkpoint on `status: complete`:** run the LESSONS.md dispatch guard's compare first, then
    `git add -A && git commit -m "wip: checkpoint implementer (#<n>)"` (skip if nothing changed) —
@@ -666,16 +724,20 @@ gh issue edit <number> --add-label pr-open
        `Mutation probe:` line replacing the superseded ones — and apply it with `gh pr edit
        --body-file <tempfile>`, so
        the body describes the tree the head commit actually carries. A permission-denied `gh pr
-       edit` is never routed around: report it loudly in the run summary with the exact command,
-       and flag the PR as needing a manual body update before it can qualify for autonomous
-       merge. Amend the ci-fix checkpoint if one was created (`git commit --amend -m "fix: <what>
-       (CI, #<number>)"`), otherwise commit empty instead (`git commit --allow-empty -m "fix:
-       <what> (CI, #<number>)"`) — never amend the already-pushed `feat:` commit (force-push is
-       denied, so the push would be rejected). Push — CI re-runs; watch again. **Maximum ONE
-       CI-fix attempt per issue** (not counted toward the kickback limit). Still red → note it
-       and let the human decide.
+       edit` does not stop this flow: report it loudly, flag the PR as needing a manual body
+       update before autonomous merge, and continue below. Amend the ci-fix checkpoint if one was
+       created (`git commit --amend -m "fix: <what> (CI, #<number>)"`), otherwise commit empty
+       instead (`git commit --allow-empty -m "fix: <what> (CI, #<number>)"`) — never amend the
+       already-pushed `feat:` commit (force-push is denied, so the push would be rejected). Push —
+       CI re-runs; watch again. **Maximum ONE CI-fix attempt per issue** (not counted toward the
+       kickback limit). Escalate exactly once, when the watch concludes: still red → escalate per
+       "Durable escalation" above (stage `2e`, reason `ci-red-after-fix`), quoting the failing log
+       excerpt (plus the denied `gh pr edit` command, if any); green but `gh pr edit` was denied
+       above → escalate instead (reason `permission-denied`), quoting the exact denied command.
+       Either way, move to the next issue (step 2g) — the PR stays open, `pr-open` unchanged.
      - **Not caused by this PR** (infra flake, unrelated breakage, quota) → don't burn the
-       attempt; note it and let the human decide.
+       attempt; escalate per "Durable escalation" above (stage `2e`, reason `ci-red-unrelated`),
+       quoting the failure classification as the evidence, then move to the next issue (step 2g).
 
      **Distill the lesson:** a gotcha the subagent couldn't have known, once traced, gets
      appended to `.claude/LESSONS.md` (1–3 lines, dated, as an instruction) and included in every
@@ -755,6 +817,10 @@ named as carrying a harness-record marker without opening with it
 (`counts.harness_marker_quoters`) — a maintainer quoting a harness-authored record, typically to
 dispute it, not a record itself — quoted verbatim from step 2a's run; it was never binding either.
 The remedy for either class: repost the feedback without the quoted marker line.
+
+**Report every durable escalation (#309).** For every issue any site above escalated this run,
+report: issue number, stage, reason, the comment URL, and that the issue is now excluded from
+discovery (`ready`/`needs_initial_plan`/`needs_revision`) until a human removes `needs-human`.
 
 **Release the lock — the literal last action of this step, after the report above** — but only
 when you acquired it yourself at step 0 (standalone run; `issue-cycle` releases its own at its

@@ -15,8 +15,13 @@
 #                         follow-up marker (#308) — read them, then either remove no-plan to
 #                         release one into planning or leave it held; deliberately NOT included in
 #                         counts.human_actions (see the exclusion note below)
-#   degraded            : boolean (#284/#285, #297, #333) — true iff degraded_reasons is
-#                         non-empty; a discovery query OR one of this script's OWN four queries
+#     escalations        : (#309) open needs-human issues — a durable escalation from a skill's
+#                         "ask the human, then move on" stop (see skills/issue-implementer/
+#                         SKILL.md's "Durable escalation" subsection); read the comment opening
+#                         with <!-- harness-escalation -->, then remove needs-human to release the
+#                         issue back into discovery
+#   degraded            : boolean (#284/#285, #297, #333, #309) — true iff degraded_reasons is
+#                         non-empty; a discovery query OR one of this script's OWN five queries
 #                         below failed closed this run, so a bucket above may under-report the
 #                         true queue rather than reflect it
 #   degraded_reasons    : array of "planning.<key>" / "implementation.<key>" / "status.<key>"
@@ -29,21 +34,22 @@
 #                         script grows a new `*_unavailable` flag — already covers
 #                         initial_query_unavailable, candidates_query_unavailable,
 #                         author_association_unavailable, and (#284) ready_query_unavailable. The
-#                         status half (#297, #333) is the SAME generic rule applied to this
+#                         status half (#297, #333, #309) is the SAME generic rule applied to this
 #                         script's OWN `counts` (see the final jq -n below), covering, in this
 #                         script's own $sf key order, proposed_query_unavailable,
-#                         blocked_query_unavailable, prs_query_unavailable, and (#333)
-#                         followups_query_unavailable. counts.fetch_failures on either discovery
-#                         script deliberately does not participate: it drops one issue, not a
-#                         whole bucket, and already produces its own per-issue warn line on
-#                         stderr.
+#                         blocked_query_unavailable, prs_query_unavailable, (#333)
+#                         followups_query_unavailable, and (#309) escalations_query_unavailable.
+#                         counts.fetch_failures on either discovery script deliberately does not
+#                         participate: it drops one issue, not a whole bucket, and already
+#                         produces its own per-issue warn line on stderr.
 #   counts               : per-bucket counts + human_actions (see the exclusion note below for
 #                         exactly what this sums) + degraded (mirrors the top-level boolean, so a
-#                         reader who only looks at counts still sees it) + (#297, #333) this
-#                         script's own eight proposed_query_retried/proposed_query_unavailable/
+#                         reader who only looks at counts still sees it) + (#297, #333, #309) this
+#                         script's own ten proposed_query_retried/proposed_query_unavailable/
 #                         blocked_query_retried/blocked_query_unavailable/
 #                         prs_query_retried/prs_query_unavailable/followups_query_retried/
-#                         followups_query_unavailable booleans
+#                         followups_query_unavailable/escalations_query_retried/
+#                         escalations_query_unavailable booleans
 #
 # human_actions and the followups_to_triage exclusion (#333): human_actions is a GENERIC sum over
 # every waiting_on_human array EXCEPT the ones named in a small exclusion list bound right next to
@@ -56,8 +62,9 @@
 # maintainer already read and decided to keep held (both keep no-plan and the marker forever), so
 # folding it into the total would mean the total could never return to zero in a repo with any
 # parked follow-up (measured on this repo 2026-09-17: the filter matched 10 issues, every one
-# already triaged and parked). human_actions is therefore, today, the sum of plans_to_review,
-# prs_to_review, and blocked only.
+# already triaged and parked). escalations (#309) is NOT named in the exclusion list, so it joins
+# the sum automatically, by the same generic rule: human_actions is therefore, today, the sum of
+# plans_to_review, prs_to_review, blocked, and escalations.
 #
 # Honest limits on followups_to_triage (#333): the bucket is exactly "open + no-plan + body opens
 # with the harness marker", so a deliberately parked follow-up keeps counting forever, and a
@@ -66,16 +73,28 @@
 # once on this repo, 2026-09-17: a `gh issue list --search` run made right after a label edit
 # missed an issue that a later run returned), so a follow-up filed moments earlier in the same run
 # may be missing from this run's bucket — whether a just-triaged one can likewise linger was not
-# measured; --limit "$LIMIT" (100) caps this listing exactly as it caps the other three.
+# measured; --limit "$LIMIT" (100) caps this listing the same way it caps plans_to_review's,
+# prs_to_review's, blocked's, and escalations' own queries.
 #
-# Wall clock (#297, #333): this script's own four queries below (plan-proposed, impl-blocked,
-# open PRs, held follow-ups) each get one guarded 30s backoff and one retry, the same
-# RETRY_SLEEP-driven shape find-implementation-work.sh already uses — worst case, when all four
-# fail twice, 4 × 30s = 120s added to this script's own run. In a broad outage where every list
-# query anywhere fails twice, the total across one harness-status.sh invocation is about 240s: the
-# planning script's up to 3 retries (needs_initial_plan, revision-candidates, the
+# Honest limits on escalations (#309): list_proposed and list_blocked do not exclude needs-human,
+# so an issue carrying needs-human alongside plan-proposed or impl-blocked appears in both buckets
+# and counts twice in human_actions — removing either label clears its own entry; and an escalation
+# filed from a red-CI site (ci-red-after-fix, ci-red-unrelated) sits on an issue whose open PR is
+# already in prs_to_review — list_prs carries no --search string of its own for anything to be
+# excluded from — so that one problem counts twice in human_actions too (once as the PR, once as
+# the escalated issue). GitHub's issue search can trail a label edit
+# (measured on this repo, 2026-09-17 and again 2026-09-19: a list query made right after a label
+# edit missed an issue that a later run returned), so an issue escalated moments earlier may be
+# missing from the same run's escalations bucket.
+#
+# Wall clock (#297, #333, #309): this script's own five queries below (plan-proposed,
+# impl-blocked, open PRs, held follow-ups, escalations) each get one guarded 30s backoff and one
+# retry, the same RETRY_SLEEP-driven shape find-implementation-work.sh already uses — worst case,
+# when all five fail twice, 5 × 30s = 150s added to this script's own run. In a broad outage where
+# every list query anywhere fails twice, the total across one harness-status.sh invocation is
+# about 270s: the planning script's up to 3 retries (needs_initial_plan, revision-candidates, the
 # author-association REST lookup) + the implementation script's up to 1 retry on its own ready
-# query (its per-issue fetch retry is per-issue, not counted here) + this script's own up to 4
+# query (its per-issue fetch retry is per-issue, not counted here) + this script's own up to 5
 # retries above. The per-issue fetch worst cases on either discovery script are unchanged by this
 # addition.
 #
@@ -86,9 +105,13 @@ set -euo pipefail
 
 LIMIT=100
 # RETRY_SLEEP (#297): mirrors find-implementation-work.sh's own RETRY_SLEEP — same value (30s),
-# guarding this script's own four gh call sites below (proposed, blocked, prs, and (#333)
-# followups).
+# guarding this script's own five gh call sites below (proposed, blocked, prs, (#333) followups,
+# and (#309) escalations).
 RETRY_SLEEP=30
+# ESCALATION_LABEL (#309) — declared byte-identically in bin/find-planning-work.sh and
+# bin/find-implementation-work.sh (gate assertion 4.48); this script's own list_escalations()
+# query reads it below.
+ESCALATION_LABEL="needs-human"
 
 planning=$(find-planning-work.sh)
 implementation=$(find-implementation-work.sh)
@@ -107,9 +130,9 @@ unplanned=$(jq .needs_initial_plan <<<"$planning")
 in_revision=$(jq .needs_revision <<<"$planning")
 ready=$(jq .ready <<<"$implementation")
 
-# list_proposed / list_blocked / list_prs / list_followups (#297, #333) — each call's last
-# command is the gh call itself, with no pipe inside, so a retry can re-run just the call without
-# repeating the whole invocation+transform.
+# list_proposed / list_blocked / list_prs / list_followups / list_escalations (#297, #333, #309) —
+# each call's last command is the gh call itself, with no pipe inside, so a retry can re-run just
+# the call without repeating the whole invocation+transform.
 list_proposed() {
   gh issue list \
     --search "is:open is:issue label:plan-proposed -label:plan-approved -label:no-plan" \
@@ -132,6 +155,14 @@ list_followups() {
   gh issue list \
     --search "is:open is:issue label:no-plan" \
     --json number,title,url,body --limit "$LIMIT"
+}
+# (#309) open + needs-human — a durable escalation from a skill's "ask the human, then move on"
+# stop (see skills/issue-implementer/SKILL.md's "Durable escalation" subsection). No --jq argument,
+# for the identical reason list_followups() above states.
+list_escalations() {
+  gh issue list \
+    --search "is:open is:issue label:$ESCALATION_LABEL" \
+    --json number,title,url --limit "$LIMIT"
 }
 
 # plan-proposed issues NOT in the revision bucket = awaiting the human's review. (#297) One
@@ -209,6 +240,22 @@ if ! followups_raw=$(list_followups); then
 fi
 followups=$(jq '[ .[] | select((.body // "") | startswith("<!-- harness-follow-up: PR #")) | {number, title, url} ]' <<<"$followups_raw")
 
+# (#309) same bounded-retry-then-fail-closed shape as proposed/blocked/prs/followups above, for
+# this script's own escalations query. list_escalations() already returns the {number,title,url}
+# shape verbatim, so there is no separate jq transform to split from the retried call.
+escalations_query_retried=false; escalations_query_unavailable=false
+if ! escalations=$(list_escalations); then
+  escalations_query_retried=true
+  sleep "$RETRY_SLEEP" || true
+  if escalations=$(list_escalations); then
+    echo "warn: escalations query failed once — retried after 30s and succeeded (transient API blip absorbed)" >&2
+  else
+    echo "warn: could not list escalated issues (gh issue list) — reporting an empty escalations bucket this run (fail-closed)" >&2
+    escalations_query_unavailable=true
+    escalations='[]'
+  fi
+fi
+
 # human_actions and its exclusion list (#333) — see the header's own "human_actions and the
 # followups_to_triage exclusion" paragraph for the full rationale; the exclusion binding sits
 # right next to the sum it governs, on purpose, so the two are read together.
@@ -220,6 +267,7 @@ jq -n \
   --argjson prs "$prs_to_review" \
   --argjson blocked "$blocked" \
   --argjson followups "$followups" \
+  --argjson escalations "$escalations" \
   --argjson dr "$degraded_reasons" \
   --argjson pqr "$proposed_query_retried" \
   --argjson pqu "$proposed_query_unavailable" \
@@ -229,13 +277,16 @@ jq -n \
   --argjson prqu "$prs_query_unavailable" \
   --argjson fqr "$followups_query_retried" \
   --argjson fqu "$followups_query_unavailable" \
+  --argjson eqr "$escalations_query_retried" \
+  --argjson equ "$escalations_query_unavailable" \
   '{proposed_query_retried: $pqr, proposed_query_unavailable: $pqu,
     blocked_query_retried: $bqr, blocked_query_unavailable: $bqu,
     prs_query_retried: $prqr, prs_query_unavailable: $prqu,
-    followups_query_retried: $fqr, followups_query_unavailable: $fqu} as $sf
+    followups_query_retried: $fqr, followups_query_unavailable: $fqu,
+    escalations_query_retried: $eqr, escalations_query_unavailable: $equ} as $sf
    | ($dr + [ $sf | to_entries[] | select((.key|endswith("_unavailable")) and .value == true) | "status." + .key ]) as $all
    | (($all | length) > 0) as $deg
-   | {plans_to_review: $plans, prs_to_review: $prs, blocked: $blocked, followups_to_triage: $followups} as $woh
+   | {plans_to_review: $plans, prs_to_review: $prs, blocked: $blocked, followups_to_triage: $followups, escalations: $escalations} as $woh
    | ["followups_to_triage"] as $excluded
    | {
      harness_will_handle: {unplanned: $unplanned, in_revision: $in_revision, ready_to_implement: $ready},
@@ -250,6 +301,7 @@ jq -n \
        prs_to_review: ($woh.prs_to_review | length),
        blocked: ($woh.blocked | length),
        followups_to_triage: ($woh.followups_to_triage | length),
+       escalations: ($woh.escalations | length),
        human_actions: ([ $woh | to_entries[]
                          | select((.value | type) == "array")
                          | .key as $k | select(($excluded | index($k)) | not)

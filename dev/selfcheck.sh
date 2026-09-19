@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 74 assertions total. The gate prints what it checks — run it.
+# Five groups, 75 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -712,9 +712,9 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 790
+budget_table="issue-implementer 855
 issue-cycle 545
-issue-planner 550
+issue-planner 555
 project-kickoff 215
 test-ratchet 200
 harness-setup 185"
@@ -1554,6 +1554,55 @@ elif [ "$hrm_planning" != "$hrm_impl" ]; then
   bad "4.46 HARNESS_RECORD_MARKERS declaration disagrees: bin/find-planning-work.sh has '$hrm_planning', bin/find-implementation-work.sh has '$hrm_impl'"
 else
   ok "4.46 bin/find-planning-work.sh and bin/find-implementation-work.sh share the identical HARNESS_RECORD_MARKERS declaration"
+fi
+
+# 4.48 (#309) — ESCALATION_LABEL="needs-human" declaration/usage bijection, four clauses:
+# (a) the three ESCALATION_LABEL="..." declarations (bin/find-planning-work.sh,
+# bin/find-implementation-work.sh, bin/harness-status.sh) are non-empty and byte-identical —
+# anchored single-line sed -nE extraction (the 4.35/4.45 idiom); an empty extraction on ANY of the
+# three FAILs loudly ("structure changed") rather than passing vacuously; (b) that value is one of
+# the labels bin/setup-labels.sh actually creates — the same create_or_update "…" extraction 4.6/
+# 4.35 already use; (c) every `--search "` line in the two DISCOVERY scripts (not
+# bin/harness-status.sh — its own three pre-existing `--search`-bearing functions, list_proposed,
+# list_blocked, and list_followups, are deliberately untouched, see that script's header) carries
+# the literal `-label:$ESCALATION_LABEL` token — the `--search "` lines are
+# extracted into a variable first, then grep -cF counts the token WITHIN that extracted set only
+# (fed via a here-string, per assertion 1.7), never against the whole file, so a token appearing
+# elsewhere in the file (e.g. in a comment) can never mask a --search line that itself lacks it; the
+# two totals are summed across both scripts; (d) the literal label value appears (fixed-string) in
+# skills/issue-implementer/SKILL.md, the one instruction surface that names it individually.
+# Proves only that the label vocabulary agrees end to end, not that any script's runtime behaviour
+# is correct — the same honest limit 4.33/4.34/4.35/4.45/4.46's comments state.
+el_planning="$(sed -nE 's/^ESCALATION_LABEL="([^"]+)"$/\1/p' "$root/bin/find-planning-work.sh")"
+el_impl="$(sed -nE 's/^ESCALATION_LABEL="([^"]+)"$/\1/p' "$root/bin/find-implementation-work.sh")"
+el_status="$(sed -nE 's/^ESCALATION_LABEL="([^"]+)"$/\1/p' "$root/bin/harness-status.sh")"
+if [ -z "$el_planning" ] || [ -z "$el_impl" ] || [ -z "$el_status" ]; then
+  bad "4.48 ESCALATION_LABEL=\"...\" line missing or unmatched (structure changed) in bin/find-planning-work.sh, bin/find-implementation-work.sh, or bin/harness-status.sh — extraction failed"
+elif [ "$el_planning" != "$el_impl" ] || [ "$el_planning" != "$el_status" ]; then
+  bad "4.48 ESCALATION_LABEL disagrees: bin/find-planning-work.sh='$el_planning' bin/find-implementation-work.sh='$el_impl' bin/harness-status.sh='$el_status'"
+else
+  setup_labels_created_448="$(sed -nE 's/^create_or_update "([^"]+)".*/\1/p' "$root/bin/setup-labels.sh")"
+  search_total_448=0; search_with_label_448=0
+  for f_448 in bin/find-planning-work.sh bin/find-implementation-work.sh; do
+    search_lines_448="$(grep -- '--search "' "$root/$f_448" || true)"
+    n_total_448="$(grep -c -- '--search "' "$root/$f_448" || true)"
+    n_with_448="$(grep -cF -- "-label:\$ESCALATION_LABEL" <<<"$search_lines_448" || true)"
+    search_total_448=$((search_total_448 + n_total_448))
+    search_with_label_448=$((search_with_label_448 + n_with_448))
+  done
+  if [ -z "$setup_labels_created_448" ]; then
+    bad "4.48 bin/setup-labels.sh's create_or_update lines didn't match (structure changed) — extraction failed"
+  elif ! grep -qx -- "$el_planning" <<<"$setup_labels_created_448"; then
+    bad "4.48 ESCALATION_LABEL ('$el_planning') is not among the labels bin/setup-labels.sh creates"
+  elif [ "$search_total_448" -eq 0 ]; then
+    bad "4.48 no --search \" lines found in bin/find-planning-work.sh or bin/find-implementation-work.sh (structure changed) — extraction failed"
+  elif [ "$search_total_448" -ne "$search_with_label_448" ]; then
+    bad "4.48 $((search_total_448 - search_with_label_448)) of $search_total_448 discovery --search lines lack the -label:\$ESCALATION_LABEL token"
+  elif ! grep -qF -- "$el_planning" "$root/skills/issue-implementer/SKILL.md"; then
+    bad "4.48 ESCALATION_LABEL value ('$el_planning') not found in skills/issue-implementer/SKILL.md"
+  else
+    ok "4.48 ESCALATION_LABEL ('$el_planning') declared identically in all three scripts, created by setup-labels.sh, excluded by every discovery --search line, and named in skills/issue-implementer/SKILL.md"
+  fi
 fi
 
 # ============================================================================

@@ -26,6 +26,11 @@
 #   multi-pr        -> human-applied: the primary signal cleanup-after-merge.sh reads to leave
 #                      a multi-PR issue open when one of its slices merges (the issue-body
 #                      marker is no longer honoured; a maintainer comment marker still is).
+#   needs-human     -> a durable escalation (#309): a skill asked a question and moved on rather
+#                      than blocking. The label is the dedupe — all three discovery queries
+#                      exclude it, so the issue stays out of planning and implementation until a
+#                      human answers and removes it. See skills/issue-implementer/SKILL.md's
+#                      "Durable escalation" subsection.
 #
 # Requesting plan changes does NOT use a label — just comment on the issue and the planner
 # revises on its next run. Approval and the implementation states ARE labels (unambiguous signals).
@@ -57,6 +62,7 @@ create_or_update "no-plan"         "EEEEEE" "Excluded from the planning workflow
 create_or_update "no-auto-approve" "FBCA04" "Human-only veto: never auto-approve this issue's plans (the harness never applies it)"
 create_or_update "test-ratchet"    "006B75" "Filed by the test-suite ratchet; harness-authored coverage work"
 create_or_update "multi-pr"        "C5DEF5" "Multi-PR issue: cleanup leaves it open when a slice's PR merges"
+create_or_update "needs-human"     "D93F0B" "Harness asked a question and moved on; answer, then remove this label to release the issue"
 
 echo "Labels are set up."
 echo "Note: the old 'plan-changes-requested' label is no longer used. Delete it if you like:"
