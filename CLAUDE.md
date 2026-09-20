@@ -235,8 +235,8 @@ CI as the fifth step, but it is not part of `dev/selfcheck.sh` itself — run it
 `dev/planning-tests.sh` is a separate negative-test harness for BOTH of this repo's discovery
 scripts, `bin/find-planning-work.sh` (#164) and, since #176, `bin/find-implementation-work.sh`,
 and, since #285, their consumer `bin/harness-status.sh` — end-to-end via Part 13's fixtures (both
-discovery scripts run for real), and, since #297 (extended #333), via Part 14's fixtures against
-`bin/harness-status.sh`'s own four `gh` call sites alone, behind a `build_stub_discovery`-built
+discovery scripts run for real), and, since #297 (extended #333, #309), via Part 14's fixtures
+against `bin/harness-status.sh`'s own five `gh` call sites alone, behind a `build_stub_discovery`-built
 canned stand-in for both discovery scripts (so, among the fixtures that invoke `run_status`, an
 in-place mutant to either discovery script is reachable only through Part 13's own `run_status`
 fixtures, never Part 14's — this file's many OTHER Parts, which call the discovery scripts
@@ -281,12 +281,22 @@ scripts, spelled byte-identically (no `startswith`, no reference to `$planC`) an
 harness records exactly as the feedback/binding sets already exclude them. Since #321, both
 scripts additionally warn on the twin class #302 left unwarned: a trusted, in-window comment whose
 body contains any marker in a new shared declaration, `HARNESS_RECORD_MARKERS` (one marker per
-line, built from the existing `$AUDIT_MARKER`/`$VERDICT_MARKER` constants), but does not open with
+line, built from the `$AUDIT_MARKER`/`$VERDICT_MARKER` constants, joined since #309 by a third,
+`$ESCALATION_MARKER`), but does not open with
 one — a maintainer quoting a harness-authored record, not a record itself — named on stderr and
 counted in a new, additive `counts.harness_marker_quoters` key, disjoint from
 `counts.plan_marker_quoters` (a comment quoting both markers is counted in exactly one); gate
 assertion 4.46 pins that the two scripts' `HARNESS_RECORD_MARKERS` declarations are spelled
-identically. Since #211 the same faithfulness applies to the
+identically. Since #309, a durable-escalation record (opening with `<!-- harness-escalation -->`,
+distinct from the planner's own colon-suffixed `<!-- harness-escalation: bucket=... stage=... -->`
+key) or a comment quoting it is excluded from feedback/`trusted_post_plan` the identical way, via a
+new, additive `counts.escalation_records_skipped` key (the same contains/`createdAt > $lastPlan`
+shape `counts.audit_comments_skipped`/`counts.verdict_archives_skipped` already use); the label
+that dedupes the resulting `needs-human` escalation across discovery passes is named
+`ESCALATION_LABEL`, and gate assertion 4.48 pins that it is declared identically (one line each)
+across all three of `bin/find-planning-work.sh`, `bin/find-implementation-work.sh`, and
+`bin/harness-status.sh`, is one of the labels `bin/setup-labels.sh` creates, is excluded by every
+discovery `--search` line, and is named in `skills/issue-implementer/SKILL.md`. Since #211 the same faithfulness applies to the
 revision-candidates query itself: the stub applies `find-planning-work.sh`'s own `--jq
 '.[].number'` argument with the real `jq` to a JSON page-array fixture and propagates jq's exit
 status, so a candidates filter that cannot process the returned document fails the call the same
@@ -467,13 +477,24 @@ entries. Per the maintainer's decision, `counts.human_actions` does NOT include 
 query cannot tell a follow-up nobody has triaged from one a maintainer read and deliberately
 parked (both keep `no-plan` and the marker), so `human_actions` becomes a generic sum over every
 `waiting_on_human` array member EXCEPT a small, named exclusion list (today exactly
-`["followups_to_triage"]`) bound next to the sum, so a future member (#309's escalations) joins the
+`["followups_to_triage"]`) bound next to the sum, so a future member joins the
 total automatically unless it too is named there; pinned by four new Part 14 fixtures (a populated
 bucket whose `human_actions` stays unchanged, a retry-succeeds case, a both-attempts-fail case, and
 a status-half-ordering case) plus two extended Part 14 fixtures (the healthy and
 guarded-sleep-failure cases), a new stub `gh issue list` arm (content-exclusive, needing no
 arm-ordering trick unlike the plan-proposed arm), and a `reject-followups(-once)` marker family
-mirroring `reject-proposed(-once)`.
+mirroring `reject-proposed(-once)`. Since #309, `bin/harness-status.sh` gains a FIFTH such site,
+`waiting_on_human.escalations`: open, `needs-human` issues, served verbatim with no filter, fed by
+a fifth `gh issue list` call with the identical bounded-retry-then-fail-closed shape, publishing
+`escalations_query_retried`/`_unavailable` and a `"status.escalations_query_unavailable"`
+`degraded_reasons` entry appended after the four existing status-half entries. Unlike
+`followups_to_triage`, this member is deliberately NOT named in the exclusion list, so it joins
+`counts.human_actions` automatically by the same generic rule, with no edit to the sum itself;
+pinned by three new Part 14 fixtures (a populated bucket whose `human_actions` DOES change, a
+retry-succeeds case, and a both-attempts-fail case) plus two extended Part 14 fixtures (the healthy
+and guarded-sleep-failure cases), a new stub `gh issue list` arm (content-exclusive, the identical
+class as the no-plan arm), and a `reject-escalations(-once)` marker family mirroring
+`reject-followups(-once)`.
 It runs in CI as the sixth step, but it
 is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh`,
 `bin/find-implementation-work.sh`, or `bin/harness-status.sh` changes.

@@ -231,7 +231,9 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    but nothing destructive happens: no label is removed, no revision-triggering comment is posted;
    a `<!-- harness-audit -->`-marked comment, keyed and de-duplicated across runs (#222 — see
    "Approval provenance"), records the hold and the issue stays queued for the
-   next run. Missing a BLOCKING answer → don't dispatch; ask the human.
+   next run. Missing a BLOCKING answer → don't dispatch; escalate durably (#309, see
+   `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection) and move on to the
+   next issue.
    Before reporting, the subagent runs a mandatory evidence pass — sweeping the repo for every
    claim its diff falsifies, mutation-checking each new or rewritten test, pasting every number
    from command output — and records it in its report's Evidence block.
@@ -309,9 +311,10 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    this is as safe as the kickback loop) — once that re-verification passes, its verdict is
    archived too, and the PR body's verifier status line and `Mutation probe:` line are refreshed
    with `gh pr edit` so the body always describes the tree the head commit actually carries (a
-   denied `gh pr edit` is reported loudly, never routed around); still red — or not the PR's
-   fault — is noted on the issue for the human. If the failure was a project gotcha, **append it
-   to `LESSONS.md`**.
+   denied `gh pr edit` escalates durably too, #309, never routed around); still red — or not the
+   PR's fault — escalates durably instead of blocking the run (#309, see
+   `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection). If the failure was a
+   project gotcha, **append it to `LESSONS.md`**.
 8. Never merges (merging is the human's, or the cycle's merge pass under an opt-in policy —
    see "The CLAUDE.md contract"). Blockers → local `wip:` branch + `impl-blocked` label +
    explanatory comment.
@@ -438,21 +441,25 @@ verifier's own status line, its mutation-probe line, the implementer's condensed
 and its CI checks. Merge it, or close it, the same as any other PR; comment on it first if you
 want changes made before either.
 
-**Returning to a laptop.** Run `harness-status.sh` to see what's left: `waiting_on_human` has four
+**Returning to a laptop.** Run `harness-status.sh` to see what's left: `waiting_on_human` has five
 buckets — `plans_to_review`, `prs_to_review` (each PR entry carries a coarse `ci`: `passing`,
-`failing`, `pending`, or `none`), `blocked`, and (#333) `followups_to_triage` — but
-`counts.human_actions` totals only the FIRST THREE: a harness-filed follow-up (#308) is born with
-`no-plan`, and this query — open + `no-plan` + body opens with the harness marker — cannot tell one
-nobody has triaged yet from one you already read and deliberately decided to keep held (both keep
-`no-plan` and the marker forever), so folding it into the total would mean the total could never
-return to zero in a repo with any parked follow-up. Read `followups_to_triage` yourself, alongside
+`failing`, `pending`, or `none`), `blocked`, (#333) `followups_to_triage`, and (#309)
+`escalations` (open `needs-human` issues — a skill asked a question and moved on rather than
+blocking; see `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection) — but
+`counts.human_actions` EXCLUDES only
+`followups_to_triage`: a harness-filed follow-up (#308) is born with `no-plan`, and this query —
+open + `no-plan` + body opens with the harness marker — cannot tell one nobody has triaged yet
+from one you already read and deliberately decided to keep held (both keep `no-plan` and the
+marker forever), so folding it into the total would mean the total could never return to zero in a
+repo with any parked follow-up. Read `followups_to_triage` yourself, alongside
 the total, not instead of it. Check the top-level `degraded` boolean too
 (and `degraded_reasons`, and its `counts.degraded` mirror) — `true` means a discovery query OR one
-of `harness-status.sh`'s own four queries (plan-proposed, impl-blocked, open PRs, held follow-ups)
-failed closed this run, so a bucket above may under-report the true queue rather than reflect an
-empty one. Each `degraded_reasons` entry prefixed `status.` names which `waiting_on_human` bucket
-above it affects (the plan-proposed query → `plans_to_review`, impl-blocked → `blocked`, open
-PRs → `prs_to_review`, held follow-ups → `followups_to_triage`); a `planning.`/`implementation.`
+of `harness-status.sh`'s own five queries (plan-proposed, impl-blocked, open PRs, held follow-ups,
+escalations) failed closed this run, so a bucket above may under-report the true queue rather than
+reflect an empty one. Each `degraded_reasons` entry prefixed `status.` names which `waiting_on_human`
+bucket above it affects (the plan-proposed query → `plans_to_review`, impl-blocked → `blocked`, open
+PRs → `prs_to_review`, held follow-ups → `followups_to_triage`, escalations → `escalations`); a
+`planning.`/`implementation.`
 entry usually affects `harness_will_handle`
 instead — except `planning.candidates_query_unavailable`, which ALSO inflates `plans_to_review`
 above: it fails the revision-candidates query closed, so `find-planning-work.sh`'s own
@@ -465,7 +472,16 @@ it's the same summary a scheduled routine's own report already gives you. Honest
 the harness never filed it, and GitHub's issue search can trail a label edit (measured once on
 this repo, 2026-09-17: a `gh issue list --search` run made right after a label edit missed an
 issue that a later run returned), so a follow-up filed moments earlier may be missing from this
-run's bucket — whether a just-triaged one can likewise linger was not measured.
+run's bucket — whether a just-triaged one can likewise linger was not measured. Honest limits on
+`escalations` (#309): this bucket's query is not excluded from `plans_to_review`/`blocked`, so an
+issue carrying `needs-human` alongside `plan-proposed` or `impl-blocked` counts twice in
+`counts.human_actions` until you remove one of the two labels; an escalation from a red-CI site
+(`ci-red-after-fix`, `ci-red-unrelated`) sits on an issue whose open PR is already in
+`prs_to_review`, so that one problem counts twice too (once as the PR, once as the escalated
+issue); and GitHub's issue search can trail a label edit (measured on this repo, 2026-09-17 and
+again 2026-09-19: a list query made right after a label edit missed an issue that a later run
+returned), so an issue escalated moments earlier may be missing from the same run's `escalations`
+bucket.
 
 ## Greenfield walkthrough: from idea to first feature
 
@@ -579,7 +595,11 @@ follow-up the implementer files carries a `<!-- harness-follow-up: PR #<n> -->` 
 its source PR. `multi-pr`
 (#231) is human-applied to a deliberately multi-PR issue: it's the primary signal
 `cleanup-after-merge.sh` reads to leave the issue open when one of its slices merges, read only
-by that script — nothing else in the lifecycle touches it. `plan-approved`
+by that script — nothing else in the lifecycle touches it. `needs-human` (#309) is a durable
+escalation: a skill posted a comment stating a question and its evidence, applied the label, and
+moved on to the next issue rather than blocking the run (see `skills/issue-implementer/SKILL.md`'s
+"Durable escalation" subsection); it excludes the issue from every discovery query until a human
+answers and removes the label. `plan-approved`
 can also come back off: the `issue-implementer` skill removes it (with an audit comment) when the
 approval no longer covers the freshest plan comment — a same-run revision landed after the label
 was applied (#174), the plan comment was itself edited in place after approval (#192), or, since
@@ -1793,6 +1813,48 @@ label edit can leave a just-filed entry missing from one run — measured once o
 later run returned; whether a just-triaged entry can likewise linger was not measured — and
 `--limit 100` caps the listing).
 
+Also in v2.7.6 (#309): **needs a label step** — re-run `bin/setup-labels.sh` on any repo already
+running an earlier harness version, so the new `needs-human` label exists before the next cycle;
+this hop is not a no-op the way the four v2.7.6 notes above are (#336, #327, #321, #333) (measured
+on this repo, 2026-09-19, before the label existed: a search naming a label the repo does not have
+is harmless — the ready and needs_initial_plan queries returned identical results with and without
+` -label:needs-human`, and the positive query returned `[]`, all rc 0. So a consumer who skips this
+step keeps a working discovery and an empty `escalations` bucket; what actually fails is the
+escalation's own `gh issue edit --add-label`). These sites in `skills/issue-implementer/SKILL.md`
+(a contradicting trusted comment, a branch with committed work and no open PR, an unanswered
+BLOCKING question, red CI after the one bounded fix attempt or unrelated to the PR, and a denied
+`gh pr edit`) now escalate durably instead: posts an issue comment whose first line is exactly
+`<!-- harness-escalation -->` and second line the key template
+`<!-- harness-escalation-key: issue=<n> stage=<stage> reason=<slug> comments=<ids> -->`, labels the
+issue `needs-human`, and continues with the next issue — see the "Durable escalation" subsection
+under `skills/issue-implementer/SKILL.md`'s "Resilient dispatch" for the full procedure, the closed
+`<stage>`/`<reason>` vocabulary, and the label rules. Step 2b's open-PR sub-branch is deliberately
+left as skip-and-warn, not escalated (it writes nothing to GitHub); the run-level dirty-tree and
+red-baseline stops halt the whole run before any issue is processed, so there is no issue yet to
+escalate on — and the step 2f blocked path is untouched: its comment stays deliberately unmarked
+and carries no `needs-human` label. The
+`needs-human` label IS the dedupe: all three discovery queries (`find-planning-work.sh` ×2,
+`find-implementation-work.sh` ×1) exclude it, so an escalated issue is out of the workflow until a
+human answers and removes the label.
+`harness-status.sh` gains a fifth `waiting_on_human` bucket, `escalations` — open `needs-human`
+issues, served verbatim with no filter — fed by a fifth `gh issue list` call with the identical
+bounded-retry-then-fail-closed shape the other four sites already have, publishing
+`counts.escalations_query_retried`/`counts.escalations_query_unavailable` and a
+`"status.escalations_query_unavailable"` `degraded_reasons` entry appended after the four existing
+status-half entries. Unlike `followups_to_triage`, `counts.human_actions` DOES include this
+bucket — see "Returning to a laptop" above for the reader-facing shape and its own honest limit
+(an issue carrying `needs-human` alongside `plan-proposed` or `impl-blocked` counts twice until you
+remove one of the two labels). Both discovery scripts' `HARNESS_RECORD_MARKERS` set (see "Also in
+v2.7.6 (#321)" above) gains a third marker, `<!-- harness-escalation -->` — distinct from, and
+never cross-matched with, the planner's own pre-existing `<!-- harness-escalation: bucket=...
+stage=... -->` key — so a durable-escalation record and a comment quoting it are both excluded from
+feedback/`trusted_post_plan` (counted in a new, additive `counts.escalation_records_skipped` key,
+the identical shape `counts.audit_comments_skipped`/`counts.verdict_archives_skipped` already use)
+and covered by #321's own quoter warning. New gate assertion 4.48 pins that the `ESCALATION_LABEL`
+constant is declared identically in all three scripts, is one of the labels `bin/setup-labels.sh`
+creates, is excluded by every discovery `--search` line, and is named in
+`skills/issue-implementer/SKILL.md`.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -2471,16 +2533,24 @@ also carries a `<!-- harness-hold: issue=<n> stage=<stage> reason=<reason> comme
 key, so a repeat run skips re-posting it once the issue's newest maintainer-authored hold comment
 already records that same key (#222) — the
 implementer's interrupted-run and worktree-sweep notes, `cleanup-after-merge.sh`'s hygiene
-comments) or `<!-- verifier-verdict
--->` (the orchestrator's own archive) anywhere in its body is excluded from
-`find-planning-work.sh`'s feedback detection and `find-implementation-work.sh`'s
+comments), `<!-- verifier-verdict
+-->` (the orchestrator's own archive), or, since #309, `<!-- harness-escalation -->` — the
+implementer's own durable-escalation comment (see `skills/issue-implementer/SKILL.md`'s "Durable
+escalation" subsection), whose second line
+carries a `<!-- harness-escalation-key: issue=<n> stage=<stage> reason=<slug> comments=<ids> -->`
+key — a DIFFERENT string from the planner's own `<!-- harness-escalation: bucket=<bucket>
+stage=<stage> -->` key two sentences above (neither `contains` nor `startswith` cross-matches the
+other in either direction) — anywhere in its body is excluded from
+`find-planning-work.sh`'s feedback detection (counted in `counts.escalation_records_skipped`) and
+`find-implementation-work.sh`'s
 `trusted_post_plan` alike — a harness-authored record is never binding context, on either side of
-the pipeline. Both markers are matched with `contains` for these two sets, not anchored to the
+the pipeline. All three markers are matched with `contains` for these two sets, not anchored to the
 comment's first line (the same behaviour the verdict marker has always had) — a maintainer who
 quotes a marker verbatim inside their own feedback, without opening the comment with it, still has
 that comment dropped from both binding sets (no revision, no `trusted_post_plan` entry), but since
-v2.7.6 (#321) it is no longer silent: both scripts name it in a `warn:` line and count it in
-`counts.harness_marker_quoters` (see "Also in v2.7.6 (#321)" below). Only a comment that itself
+v2.7.6 (#321, extended #309) it is no longer silent: both scripts name it in a `warn:` line and
+count it in `counts.harness_marker_quoters` (see "Also in v2.7.6 (#321)" and "Also in v2.7.6
+(#309)" below). Only a comment that itself
 OPENS WITH a verbatim marker copy at byte 0 is still silently dropped, indistinguishable from a
 genuine harness-authored record — accepted as an inherited risk rather than fixed here, for the
 feedback/binding sets specifically. Since #281

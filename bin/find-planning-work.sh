@@ -113,6 +113,17 @@
 # with a verbatim marker copy at byte 0 is still dropped from feedback silently — no count, no
 # warn — tracked as a separate follow-up.
 #
+# #309 adds a third marker to HARNESS_RECORD_MARKERS, ESCALATION_MARKER ("<!-- harness-escalation
+# -->" — distinct from, and never cross-matched with, the pre-existing
+# "<!-- harness-escalation: bucket=... stage=... -->" key the planner skill's own step-7
+# stalled-stage record uses — see skills/issue-planner/SKILL.md), and one more counter to go with
+# it: escalation_records_skipped (how many trusted, post-latest-plan comments contained the
+# escalation marker — a durable-escalation record itself, or a trusted comment quoting that marker
+# mid-body — excluded from has_feedback via the same contains($e)/createdAt > $lastPlan shape
+# audit_comments_skipped/verdict_archives_skipped already use). A quoter comment is therefore
+# counted by BOTH escalation_records_skipped and harness_marker_quoters, the same double-counting
+# the pre-existing per-marker counters already have with harness_marker_quoters.
+#
 # Wall clock: the retry budget is deliberately UNCAPPED — one retry per site (the REST
 # author-association lookup, the needs_initial_plan query, the revision-candidates query) plus one
 # retry per candidate in the per-candidate fetch loop, no run-level ceiling on top of that. Worst
@@ -127,6 +138,9 @@
 # Skipped automatically:
 #   - plan-proposed with no newer trusted non-plan comment -> awaiting your review, nothing to do
 #   - plan-approved                                -> handed off to the implementer
+#   - needs-human (#309)                           -> a durable escalation is waiting on a human;
+#                                                      excluded from both buckets until they remove
+#                                                      the label (see ESCALATION_LABEL below)
 #
 # To request a revision: a maintainer (OWNER/MEMBER/COLLABORATOR) comments on the issue. To
 # approve: add the plan-approved label.
@@ -135,16 +149,24 @@
 set -euo pipefail
 
 LIMIT=100
+# ESCALATION_LABEL (#309) — the durable-escalation label a skill applies (see
+# skills/issue-implementer/SKILL.md's "Durable escalation" subsection) and the dedupe mechanism:
+# every discovery query below excludes it, so an escalated issue is never rediscovered until a
+# human removes it. Declared byte-identically in bin/find-implementation-work.sh and
+# bin/harness-status.sh (gate assertion 4.48).
+ESCALATION_LABEL="needs-human"
 PLAN_MARKER="<!-- planner-plan -->"
 AUDIT_MARKER="<!-- harness-audit -->"
 VERDICT_MARKER="<!-- verifier-verdict -->"
+ESCALATION_MARKER="<!-- harness-escalation -->"
 
-# HARNESS_RECORD_MARKERS (#321) — the harness-record marker SET, one marker per line. A later
-# marker (an escalation record, say) is a ONE-LINE addition here and nowhere else in the
-# harness_marker_quoters member below. The per-marker counters above/below keep their own
-# $a/$v tests on purpose: each names its marker in its own counts key.
+# HARNESS_RECORD_MARKERS (#321, extended by #309) — the harness-record marker SET, one marker per
+# line. A later marker is a ONE-LINE addition here and nowhere else in the harness_marker_quoters
+# member below. The per-marker counters above/below keep their own $a/$v/$e tests on purpose: each
+# names its marker in its own counts key.
 HARNESS_RECORD_MARKERS="$AUDIT_MARKER
-$VERDICT_MARKER"
+$VERDICT_MARKER
+$ESCALATION_MARKER"
 
 # GitHub's authorAssociation enum: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR,
 # FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, NONE. Only the first three carry repo
@@ -205,13 +227,13 @@ candidates_query_retried=false
 candidates_query_unavailable=false
 fetch_retries=0
 if ! needs_initial_plan=$(gh issue list \
-  --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan" \
+  --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan -label:$ESCALATION_LABEL" \
   --json number,title,url,author \
   --limit "$LIMIT"); then
   initial_query_retried=true
   sleep "$ASSOCIATION_RETRY_SLEEP" || true
   if needs_initial_plan=$(gh issue list \
-    --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan" \
+    --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan -label:$ESCALATION_LABEL" \
     --json number,title,url,author \
     --limit "$LIMIT"); then
     echo "warn: needs_initial_plan query failed once — retried after 30s and succeeded (transient API blip absorbed)" >&2
@@ -238,13 +260,13 @@ needs_initial_plan=$(printf '%s' "$needs_initial_plan" | jq --arg trusted "$TRUS
 
 # Candidates for revision: awaiting review, not yet approved, not opted out.
 if ! candidates=$(gh issue list \
-  --search "is:open is:issue label:plan-proposed -label:plan-approved -label:no-plan" \
+  --search "is:open is:issue label:plan-proposed -label:plan-approved -label:no-plan -label:$ESCALATION_LABEL" \
   --json number \
   --limit "$LIMIT" --jq '.[].number' | tr -d '\r'); then
   candidates_query_retried=true
   sleep "$ASSOCIATION_RETRY_SLEEP" || true
   if candidates=$(gh issue list \
-    --search "is:open is:issue label:plan-proposed -label:plan-approved -label:no-plan" \
+    --search "is:open is:issue label:plan-proposed -label:plan-approved -label:no-plan -label:$ESCALATION_LABEL" \
     --json number \
     --limit "$LIMIT" --jq '.[].number' | tr -d '\r'); then
     echo "warn: revision-candidates query failed once — retried after 30s and succeeded (transient API blip absorbed)" >&2
@@ -264,6 +286,7 @@ untrusted_harness_markers=0
 missing_association=0
 audit_comments_skipped=0
 verdict_archives_skipped=0
+escalation_records_skipped=0
 plan_marker_quoters=0
 harness_marker_quoters=0
 for n in $candidates; do
@@ -282,7 +305,7 @@ for n in $candidates; do
       continue
     fi
   fi
-  result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg a "$AUDIT_MARKER" --arg v "$VERDICT_MARKER" --arg hrm "$HARNESS_RECORD_MARKERS" --arg trusted "$TRUSTED_ASSOCIATIONS" '
+  result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg a "$AUDIT_MARKER" --arg v "$VERDICT_MARKER" --arg e "$ESCALATION_MARKER" --arg hrm "$HARNESS_RECORD_MARKERS" --arg trusted "$TRUSTED_ASSOCIATIONS" '
     ($trusted | split(" ")) as $ok
     | ($hrm | split("\n") | map(select(length > 0))) as $hm
     | (.comments // []) as $c
@@ -321,6 +344,7 @@ for n in $candidates; do
                   | select((.body | contains($m)) | not)
                   | select((.body | contains($a)) | not)
                   | select((.body | contains($v)) | not)
+                  | select((.body | contains($e)) | not)
                   | select(.createdAt > $lastPlan) ] | length) > 0
           end
         ),
@@ -331,7 +355,7 @@ for n in $candidates; do
               association: (.authorAssociation // "MISSING"),
               createdAt: .createdAt,
               has_plan_marker: (.body | contains($m)),
-              has_harness_marker: ((.body | contains($a)) or (.body | contains($v))) } ],
+              has_harness_marker: ((.body | contains($a)) or (.body | contains($v)) or (.body | contains($e))) } ],
         missing_association: ([ $c[] | select(has("authorAssociation") | not) ] | length),
         audit_comments_skipped: (
           if $lastPlan == null then 0
@@ -341,6 +365,15 @@ for n in $candidates; do
         verdict_archives_skipped: (
           if $lastPlan == null then 0
           else ([ $trustedC[] | select(.body | contains($v)) | select(.createdAt > $lastPlan) ] | length)
+          end
+        ),
+        # (#309) — comments dropped from the feedback set for the escalation-record reason alone,
+        # the same contains($e)/createdAt > $lastPlan shape as audit_comments_skipped/
+        # verdict_archives_skipped above: a durable-escalation record itself, or a trusted comment
+        # quoting that marker mid-body, is not feedback.
+        escalation_records_skipped: (
+          if $lastPlan == null then 0
+          else ([ $trustedC[] | select(.body | contains($e)) | select(.createdAt > $lastPlan) ] | length)
           end
         ),
         # #302 — comments dropped from BOTH plan selection and feedback for the plan-marker reason
@@ -358,6 +391,7 @@ for n in $candidates; do
           | select(.body | contains($m))
           | select((.body | contains($a)) | not)
           | select((.body | contains($v)) | not)
+          | select((.body | contains($e)) | not)
           | { author: (.author.login // "unknown"), createdAt: .createdAt, url: (.url // null) } ],
         # (#321) — comments dropped from the feedback set for the harness-record reason
         # alone: the same window as the member above; within it, a trusted comment whose body
@@ -459,6 +493,9 @@ for n in $candidates; do
 
   issue_verdict_skipped=$(printf '%s' "$result" | jq '.verdict_archives_skipped')
   verdict_archives_skipped=$((verdict_archives_skipped+issue_verdict_skipped))
+
+  issue_escalation_skipped=$(printf '%s' "$result" | jq '.escalation_records_skipped')
+  escalation_records_skipped=$((escalation_records_skipped+issue_escalation_skipped))
 done
 
 # untrusted_issue_authors: every needs_initial_plan/needs_revision item with trusted_author:
@@ -489,6 +526,7 @@ jq -n \
   --argjson ma "$missing_association" \
   --argjson acs "$audit_comments_skipped" \
   --argjson vas "$verdict_archives_skipped" \
+  --argjson ers "$escalation_records_skipped" \
   --argjson uiac "$untrusted_issue_author_count" \
   --argjson aau "$author_association_unavailable" \
   --argjson aar "$author_association_retried" \
@@ -510,6 +548,7 @@ jq -n \
              missing_association: $ma,
              audit_comments_skipped: $acs,
              verdict_archives_skipped: $vas,
+             escalation_records_skipped: $ers,
              untrusted_issue_authors: $uiac,
              author_association_unavailable: $aau,
              author_association_retried: $aar,

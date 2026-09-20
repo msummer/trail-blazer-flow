@@ -3,9 +3,9 @@
 # planning-tests.sh — fixture-based negative-test harness for BOTH of this repo's discovery
 # scripts, bin/find-planning-work.sh (#164) and, since #176, bin/find-implementation-work.sh too,
 # and, since #285, their consumer bin/harness-status.sh — end-to-end via Part 13 (run via the new
-# run_status runner, both discovery scripts run for real) and, since #297 (extended #333), against
-# harness-status.sh's own four gh call sites alone via Part 14 (run_status too, but behind a
-# canned stand-in for both discovery scripts — see build_stub_discovery below) — not this repo's
+# run_status runner, both discovery scripts run for real) and, since #297 (extended #333, #309),
+# against harness-status.sh's own five gh call sites alone via Part 14 (run_status too, but behind
+# a canned stand-in for both discovery scripts — see build_stub_discovery below) — not this repo's
 # own gate (that's dev/selfcheck.sh +
 # dev/selfcheck-tests.sh) and not the consumer doctor's harness (dev/doctor-tests.sh). Builds
 # throwaway fixture directories under mktemp, with a stub `gh` on PATH, and runs the REAL script(s)
@@ -205,8 +205,8 @@
 #   `_unavailable`, `blocked_query_retried`/`_unavailable`, `prs_query_retried`/`_unavailable`) and
 #   extending `degraded_reasons` with a third, status half — the SAME generic rule applied to this
 #   script's own new flags, producing `"status.<key>"` entries after the planning and
-#   implementation halves. The Part 14 fixtures below (#297, extended #333) exercise ONLY this
-#   script's own gh call sites, via a new `build_stub_discovery` builder that shadows BOTH
+#   implementation halves. The Part 14 fixtures below (#297, extended #333, extended #309) exercise
+#   ONLY this script's own gh call sites, via a new `build_stub_discovery` builder that shadows BOTH
 #   discovery scripts with canned, non-gh-calling stand-ins — unlike Part 13's fixtures above,
 #   which drive the real discovery scripts end-to-end through run_status too.
 #   #333 adds a FOURTH such site, `waiting_on_human.followups_to_triage`: open, `no-plan` issues
@@ -220,11 +220,25 @@
 #   measured on this repo 2026-09-17: the filter matched 10 issues, every one already triaged and
 #   parked). `human_actions` becomes a generic sum over every `waiting_on_human` array member
 #   EXCEPT a small, named exclusion list (today exactly `["followups_to_triage"]`) bound right next
-#   to the sum, so a FUTURE `waiting_on_human` member (#309's escalations) joins the total
-#   automatically with no edit to the sum expression, unless it too is named in that exclusion
-#   list. Four new Part 14 fixtures (below) pin the new site; two existing Part 14 fixtures
+#   to the sum, so `waiting_on_human`'s escalations member (#309) joins the total automatically,
+#   with no edit to the sum expression, since it is not named in that exclusion list — the same
+#   mechanism any future member gets unless it too is named there. Four new Part 14 fixtures
+#   (below) pin the new site; two existing Part 14 fixtures
 #   (status-own-queries-healthy, status-own-retry-sleep-failure-survives) are extended to cover its
 #   healthy path and its guarded sleep.
+#   #309 adds a FIFTH such site, `waiting_on_human.escalations`: open `needs-human` issues, served
+#   verbatim with no filter, fed by a fifth `gh issue list` call with the identical
+#   bounded-retry-then-fail-closed shape, publishing `counts.escalations`,
+#   `counts.escalations_query_retried`/`_unavailable` and a
+#   `"status.escalations_query_unavailable"` degraded_reasons entry appended AFTER the four
+#   existing status-half entries (the three #297 entries plus #333's own). Unlike
+#   `followups_to_triage`, this member is NOT named in the `human_actions` exclusion list, so it
+#   joins the total automatically by the same generic rule, with no edit to the sum itself. Three
+#   new Part 14 fixtures pin the new site — status-escalations-bucket-populated,
+#   status-escalations-query-retry-succeeds, and status-escalations-query-unavailable — and the
+#   same two existing Part 14 fixtures (status-own-queries-healthy,
+#   status-own-retry-sleep-failure-survives) are extended again, this time to cover the escalations
+#   site's healthy path and its guarded sleep.
 #   #302 adds a diagnostic for the one class #281's positive anchor drops with no report of its
 #   own: a trusted comment posted after the latest plan (or, when there is none, at any time) whose
 #   body contains the plan marker somewhere other than its first line — never a plan candidate
@@ -300,6 +314,14 @@
 #                               is exclusive by CONTENT alone, so it needs no arm-ordering note
 #   - reject-followups / reject-followups-once : (optional, presence-only, #333) the identical pair
 #                               for the held-follow-up arm instead — see reject-proposed(-once) above
+#   - escalations.json         : (#309) bin/harness-status.sh's OWN escalations query response —
+#                               same dedicated-arm, "absent means `[]`" convention as proposed.json/
+#                               blocked.json/followups.json above; like the impl-blocked and
+#                               held-follow-up arms, this one is exclusive by CONTENT alone, so it
+#                               needs no arm-ordering note
+#   - reject-escalations / reject-escalations-once : (optional, presence-only, #309) the identical
+#                               pair for the escalations arm instead — see reject-proposed(-once)
+#                               above
 #   - issue-<n>.json          : the `gh issue view` payload for candidate/ready issue <n>, shared
 #                               by both discovery scripts (each fixture directory dedicated to a
 #                               discovery script keeps ready-issue and revision-candidate numbers
@@ -443,7 +465,9 @@
 # checking reject-blocked-once/reject-blocked first; absent means `[]`); a call containing
 # "is:issue label:no-plan" (bin/harness-status.sh's OWN held-follow-up query, #333) is served from
 # followups.json (#333: after checking reject-followups-once/reject-followups first; absent means
-# `[]`); anything else (#202:
+# `[]`); a call containing "is:issue label:needs-human" (bin/harness-status.sh's OWN escalations
+# query, #309) is served from escalations.json (#309: after checking
+# reject-escalations-once/reject-escalations first; absent means `[]`); anything else (#202:
 # find-planning-work.sh's now-unconditional needs_initial_plan query,
 # which requests only number,title,url,author) falls through to initial.json (#273: after checking
 # reject-initial-once/reject-initial first). A separate top-level `pr)` arm (#285) logs its own raw
@@ -456,7 +480,9 @@
 # separately, never assume one covers the other (this is the one place this train got it wrong the
 # first time round). "is:issue label:plan-proposed" is NOT exclusive to bin/harness-status.sh's own
 # query by content: find-planning-work.sh's revision-candidates query carries the byte-identical
-# search string "is:open is:issue label:plan-proposed -label:plan-approved -label:no-plan", so a
+# search string "is:open is:issue label:plan-proposed -label:plan-approved -label:no-plan
+# -label:$ESCALATION_LABEL" (#309 appended the trailing token; the substring this `case` pattern
+# tests against is unaffected), so a
 # direct `case` test of this pattern against that string ALSO matches. The candidates call is
 # nonetheless routed correctly (to candidates.json, never proposed.json) purely because the
 # `*"--jq"*` arm sits ABOVE the plan-proposed arm in this `case` and the candidates query always
@@ -479,6 +505,13 @@
 # stub anyway), every one that mentions "no-plan" spells it "-label:no-plan" (the dash), never
 # "is:issue " immediately followed by "label:no-plan"; it is exclusive by CONTENT alone, the same
 # class as the impl-blocked arm just above, not the plan-proposed arm's ordering trick.
+# "is:issue label:needs-human" (#309) needs no ordering trick either, the identical class as the
+# no-plan arm just above: verified directly against every real `--search` string in bin/, the three
+# discovery searches this train's #309 plan touches (find-planning-work.sh's needs_initial_plan and
+# revision-candidates queries, find-implementation-work.sh's ready query) all spell the exclusion
+# "-label:$ESCALATION_LABEL" (the dash), appended at the END of the string, never bare "is:issue "
+# immediately followed by "label:needs-human"; no earlier arm in this `case` ever claims this
+# search string first, so it is exclusive by CONTENT alone.
 # Discriminating by `-label:`/`label:` search-string prefix alone would ALSO be wrong for a
 # different reason — a plain `label:plan-proposed` test would match `-label:plan-proposed` as a
 # substring — which is why both #285 arms anchor on the preceding "is:issue " token (no dash)
@@ -554,6 +587,12 @@ mk_fixture() {
 #                             (bin/harness-status.sh's OWN held-follow-up query; exclusive by
 #                             CONTENT alone, needing no arm-ordering trick — see the header note
 #                             above)
+#   *"is:issue label:needs-human"*
+#                          -> (#309) checks reject-escalations-once/reject-escalations first,
+#                             then cats DIR/escalations.json, or prints `[]` if absent
+#                             (bin/harness-status.sh's OWN escalations query; exclusive by CONTENT
+#                             alone, the identical class as the no-plan arm just above — see the
+#                             header note above)
 #   anything else          -> (#273) checks reject-initial-once/reject-initial first, then cats
 #                             DIR/initial.json (find-planning-work.sh's now-unconditional
 #                             needs_initial_plan query, and any other plain needs_initial_plan-
@@ -1086,6 +1125,24 @@ mk_fixture() {
 # targets bin/find-planning-work.sh alone, and none of the three ever calls it. Reverted
 # immediately after recording this (byte-identical, sha256 confirmed).
 #
+# RE-MEASURED 2026-09-19 (#309): the suite grew to 166 across two new combined fixtures
+# (plan-escalation-record-not-feedback, impl-escalation-record-not-binding) and seven unrelated
+# status-* fixtures that never call run_planning at all. With the SAME `.[].number` -> `.number`
+# deletion applied (backup refreshed immediately beforehand; restore verified byte-identical,
+# sha256 confirmed): dropped from 166 pass/0 fail to 123 pass/43 fail — the identical 42 names
+# above, PLUS plan-escalation-record-not-feedback: its own candidates.json is the identical
+# well-formed-but-non-empty `[{"number":1}]` shape, so it fails the per-candidate loop the same
+# way — `.counts.escalation_records_skipped`/`.counts.harness_marker_quoters` both stay at their
+# reset value 0 rather than the expected 2/1, and its one warn line (pinned by two assertions,
+# expect_warn_count and expect_err) does not print.
+# impl-escalation-record-not-binding does NOT join: this mutant targets bin/find-planning-work.sh
+# alone, and that fixture never calls it. This is one of the two broad proofs (alongside MUTATION
+# PROOF M4 below) the plan's own approval audit predicted the two new fixtures would join;
+# measurement confirms it for the planner-side fixture only, never the implementer-side one — the
+# identical planner-only reach every prior "RE-MEASURED AGAIN" note in this chain already
+# documents for every other planner-only fixture. Reverted immediately after recording this
+# (byte-identical, sha256 confirmed).
+#
 # events branch: `gh api "repos/{owner}/{repo}/issues/<n>/events?per_page=100" --paginate --jq
 # 'EXPR'` -> exit 1 if DIR/reject-events-<n> exists (simulates the events endpoint being
 # unreadable); else, if DIR/events-<n>.json exists (a plain JSON array of GitHub issue-event
@@ -1359,11 +1416,12 @@ mk_fixture() {
 # (.sleep-calls, build_stub_sleep) it pairs with for the retry-specific fixtures.
 # CALL LOG, second copy (#272/#273): the identical idiom, one layer up — as the very first
 # statement inside the `issue)` arm (before EITHER the `list)` or `view)` inner arm runs), the stub
-# appends the raw invocation ("$*", not just $2 — the (now six, #333) call shapes this log holds
+# appends the raw invocation ("$*", not just $2 — the (now seven, #309) call shapes this log holds
 # are told apart by grepping their own arguments, not a URL) to DIR/.issue-calls, one line per
 # `gh issue ...` invocation — this includes bin/harness-status.sh's OWN plan-proposed,
-# impl-blocked (#297), and held-follow-up (#333) queries, since all three are `gh issue list` calls
-# that route through this SAME `issue)` arm; its OWN open-PR query is a separate top-level
+# impl-blocked (#297), held-follow-up (#333), and escalations (#309) queries, since all four are
+# `gh issue list` calls that route through this SAME `issue)` arm; its OWN open-PR query is a
+# separate top-level
 # `gh pr ...` call and logs to DIR/.pr-calls instead (see expect_pr_calls's own comment
 # below). This is the log
 # expect_issue_calls (below) reads: find-planning-work.sh's own
@@ -1534,6 +1592,27 @@ case "$1" in
             fi
             if [ -f "__DIR__/followups.json" ]; then
               cat "__DIR__/followups.json"
+            else
+              printf '[]\n'
+            fi
+            exit 0 ;;
+          *"is:issue label:needs-human"*)
+            # #309: bin/harness-status.sh's OWN escalations query. Exclusive by CONTENT alone, the
+            # identical class as the no-plan arm immediately above: every other `gh issue list
+            # --search` string in bin/ that mentions the escalation label spells it
+            # "-label:needs-human" (with the dash — the three discovery-script searches this train's
+            # #309 plan appends it to), never bare "is:issue label:needs-human"; no earlier arm ever
+            # claims this search string first. Same one-shot-then-permanent reject contract as
+            # reject-followups-once/reject-followups above, for this query instead.
+            if [ -f "__DIR__/reject-escalations-once" ]; then
+              rm -f "__DIR__/reject-escalations-once"
+              exit 1
+            fi
+            if [ -f "__DIR__/reject-escalations" ]; then
+              exit 1
+            fi
+            if [ -f "__DIR__/escalations.json" ]; then
+              cat "__DIR__/escalations.json"
             else
               printf '[]\n'
             fi
@@ -1922,7 +2001,11 @@ expect_sleep_arg() {
 # attempt (verified exclusive of find-planning-work.sh's needs_initial_plan and revision-candidates
 # queries, both of which spell it "-label:no-plan" with the dash, and of cleanup-after-merge.sh's
 # own query, never served by this stub anyway — see build_stub_gh's own case-order note for the
-# full argument).
+# full argument). (#309) A fourth needle discriminates harness-status.sh's OWN escalations query,
+# its fifth site: 'is:issue label:needs-human' names an attempt (verified exclusive of every real
+# `-label:needs-human`-spelled search string the three discovery-script queries carry, none of
+# which is bare "is:issue label:needs-human" with no dash — see build_stub_gh's own case-order
+# note for the full argument).
 expect_issue_calls() {
   local dir="$1" needle="$2" expected="$3" actual content
   needle_required expect_issue_calls "$needle" || return 0
@@ -2257,14 +2340,17 @@ EOF
 # name (protects bin/harness-status.sh, which reads .needs_initial_plan and .needs_revision),
 # plus #176's new keys, plus (#246) the new author_association_retried counts key, plus
 # (#272/#273) the five new query-retry/fetch-retry counts keys, plus (#302) plan_marker_quoters —
-# the 23rd `has(...)` check, plus (#321) harness_marker_quoters — the 24th. Measured mutants: (e),
+# the 23rd `has(...)` check, plus (#321) harness_marker_quoters — the 24th, plus (#309)
+# escalation_records_skipped — the 25th. Measured mutants: (e),
 # (f), (g), (h), and (i) — see the MEASURED MUTANTS (#272/#273) block below the case table (one
 # has(...) assertion catches each of the five keys' own deletion mutant independently) — plus
 # (#302) mutant (j), which deletes plan_marker_quoters's own counts line the identical way, and
 # (#321) mutant (j), which deletes harness_marker_quoters's own counts line the identical way; its
 # initial.json/candidates.json are both empty, so the per-candidate loop never runs and none of
 # the (a)-(i) plan_marker_quoters or harness_marker_quoters mutants ever reaches this fixture —
-# see the MEASURED MUTANTS (#302) and (#321) blocks below the case table.
+# see the MEASURED MUTANTS (#302) and (#321) blocks below the case table. escalation_records_skipped
+# has no lettered block of its own (#309 adds no new (a)-(j)-shaped clause set — see the MEASURED
+# MUTANTS (#309) block's own scope note), so only its counts-key-deletion mutant is pinned here.
 case_output_shape() {
   local dir; dir="$(mk_fixture output-shape)"
   cat > "$dir/initial.json" <<'EOF'
@@ -2298,6 +2384,7 @@ EOF
   expect_jq '.counts | has("fetch_retries")' 'true'
   expect_jq '.counts | has("plan_marker_quoters")' 'true'
   expect_jq '.counts | has("harness_marker_quoters")' 'true'
+  expect_jq '.counts | has("escalation_records_skipped")' 'true'
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -3875,7 +3962,10 @@ EOF
 # MEASURED MUTANTS (#321) block's own mutant (j) (which deletes the counts key outright): neither
 # of this fixture's two comments carries any harness-record marker, so none of mutants (a)-(i)
 # reaches a non-zero value here either — see the MEASURED MUTANTS (#321) block below the case
-# table.
+# table. #309 adds a sixth has(...) assertion, for escalation_records_skipped — this member has no
+# lettered mutant block of its own (see the MEASURED MUTANTS (#309) block's own scope note), so
+# only its counts-key-deletion mutant is pinned here, the identical class as plan_marker_quoters'/
+# harness_marker_quoters' own mutant (j).
 case_impl_output_shape() {
   local dir; dir="$(mk_fixture impl-output-shape)"
   cat > "$dir/ready.json" <<'EOF'
@@ -3921,6 +4011,7 @@ EOF
   expect_jq '.counts | has("fetch_retries")' 'true'
   expect_jq '.counts | has("plan_marker_quoters")' 'true'
   expect_jq '.counts | has("harness_marker_quoters")' 'true'
+  expect_jq '.counts | has("escalation_records_skipped")' 'true'
   expect_api_calls "$dir" 1
 }
 
@@ -5831,6 +5922,23 @@ EOF
 # pass/0 fail to 35 pass/122 fail — the identical thirty-five survivors, none newly departing
 # (survivor count unchanged), all five new fixtures joining the caught set. Reverted immediately
 # after recording this (byte-identical, sha256 confirmed).
+#
+# RE-MEASURED 2026-09-19 (#309): the suite grew to 166 across two new combined fixtures
+# (plan-escalation-record-not-feedback, impl-escalation-record-not-binding — both make a real
+# `gh issue view ...,comments,...` fetch) and seven unrelated status-* fixtures (#333's four plus
+# #309's own three new status-escalations-* fixtures, none of them re-measured against this proof
+# since the #321 continuation above) that call build_stub_discovery, never reaching either
+# discovery script's own `gh issue view` call at all — the same "reachable only through Part 13's
+# own run_status fixtures, never Part 14's" property CLAUDE.md's own dev/planning-tests.sh
+# paragraph already states generically for this file. With the SAME
+# "comments" deletion from GH_ISSUE_JSON_FIELDS applied (backup refreshed immediately beforehand;
+# restore verified byte-identical, sha256 confirmed): dropped from 166 pass/0 fail to 42 pass/124
+# fail — the identical thirty-five survivors, none newly departing (survivor count unchanged),
+# both new combined fixtures joining the caught set, the seven status-* fixtures joining neither
+# set (unreachable). This is the second of the two broad proofs the plan's own approval audit
+# predicted the two new fixtures would join; measurement confirms it for BOTH of them, unlike the
+# candidates-arm MUTATION PROOF B above, which only reaches the planner-side one. Reverted
+# immediately after recording this (byte-identical, sha256 confirmed).
 case_stub_json_script_field_lists_accepted() {
   local dir; dir="$(mk_fixture stub-json-script-field-lists-accepted)"
   cat > "$dir/initial.json" <<'EOF'
@@ -7567,6 +7675,88 @@ EOF
   expect_warn_count "carries a harness record marker but does not open with it" 1
 }
 
+# plan-escalation-record-not-feedback (#309) — a real OWNER plan at T0 (2026-01-01); a trusted
+# OWNER durable-escalation record at T1 (2026-01-02) that OPENS WITH <!-- harness-escalation -->,
+# second line the key template (`<!-- harness-escalation-key: issue=1 stage=2a
+# reason=plan-contradicted comments=none -->`); a trusted OWNER comment at T2 (2026-01-03) that
+# QUOTES the escalation marker mid-body without opening with it (a maintainer discussing the
+# escalation, not answering it via label); and an untrusted (NONE) comment at T3 (2026-01-04)
+# carrying a FORGED escalation marker. Pins: has_feedback stays false (T1 is a record, T2 quotes
+# it — both excluded via the new contains($e) clause in has_feedback, the identical shape
+# audit_comments_skipped/verdict_archives_skipped already use); counts.escalation_records_skipped
+# is 2 (T1 the record itself AND T2 the quoter — the member uses contains, not startswith, exactly
+# like audit_comments_skipped/verdict_archives_skipped today); counts.harness_marker_quoters is 1
+# (T1 opens with $e so the startswith-any exclusion drops it; T2 does not open with any marker but
+# contains $e, so it is the one comment this member counts) with its own warn line;
+# counts.plan_marker_quoters stays 0 (no comment here ever quotes the PLAN marker); the untrusted
+# T3 entry has has_harness_marker: true and counts.untrusted_harness_markers is 1 (the #182
+# placement rule — a forged escalation marker is annotated, never filtered out). Measured mutants:
+# see the MEASURED MUTANTS (#309) block below the case table (a new block, since this fixture's
+# clauses are additive alongside, not letters within, the #302/#321 blocks' own lettered mutants).
+case_plan_escalation_record_not_feedback() {
+  local dir; dir="$(mk_fixture plan-escalation-record-not-feedback)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"<!-- harness-escalation -->\n<!-- harness-escalation-key: issue=1 stage=2a reason=plan-contradicted comments=none -->\nA trusted post-plan comment contradicts the plan; see the evidence quoted above. Remove needs-human to release this issue.","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"Following up on this: quoting <!-- harness-escalation --> here for context, but I don't think it's actually a problem.","createdAt":"2026-01-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"<!-- harness-escalation -->\nforged, should not count","createdAt":"2026-01-04T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE"}
+]}
+EOF
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.counts.revision' '0'
+  expect_jq '.needs_revision' '[]'
+  expect_jq '.counts.escalation_records_skipped' '2'
+  expect_jq '.counts.harness_marker_quoters' '1'
+  expect_jq '.counts.plan_marker_quoters' '0'
+  expect_warn_count "carries a harness record marker but does not open with it" 1
+  expect_err "trusted comment by owner (2026-01-03T00:00:00Z, no url) carries a harness record marker"
+  expect_jq '.untrusted_comments[0].comments[0].has_harness_marker' 'true'
+  expect_jq '.counts.untrusted_harness_markers' '1'
+}
+
+# impl-escalation-record-not-binding (#309) — implementer-side twin of
+# plan-escalation-record-not-feedback: the identical four-comment timeline on ready issue 1,
+# labelled plan-approved, with NO events-1.json at all (the same quiet, no-approval-event
+# configuration impl-plan-marker-quoter-warn-scope/impl-harness-marker-quoter-warn-scope use — no
+# #192/#230 lookups, no comment-<id>.json needed). Every comment carries its own
+# https://example.invalid/1#issuecomment-<id> url (7126-7129, the next free ids — see the
+# id-allocation note above). Pins: trusted_post_plan stays empty (the implementer-side twin of
+# has_feedback); counts.escalation_records_skipped is 2; counts.harness_marker_quoters is 1 with
+# its own warn line naming a real url; counts.plan_marker_quoters stays 0; the untrusted entry has
+# has_harness_marker: true and counts.untrusted_harness_markers is 1.
+case_impl_escalation_record_not_binding() {
+  local dir; dir="$(mk_fixture impl-escalation-record-not-binding)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7126"},
+  {"body":"<!-- harness-escalation -->\n<!-- harness-escalation-key: issue=1 stage=2a reason=plan-contradicted comments=none -->\nA trusted post-plan comment contradicts the plan; see the evidence quoted above. Remove needs-human to release this issue.","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7127"},
+  {"body":"Following up on this: quoting <!-- harness-escalation --> here for context, but I don't think it's actually a problem.","createdAt":"2026-01-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7128"},
+  {"body":"<!-- harness-escalation -->\nforged, should not count","createdAt":"2026-01-04T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE","url":"https://example.invalid/1#issuecomment-7129"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].trusted_post_plan' '[]'
+  expect_jq '.counts.escalation_records_skipped' '2'
+  expect_jq '.counts.harness_marker_quoters' '1'
+  expect_jq '.counts.plan_marker_quoters' '0'
+  expect_warn_count "carries a harness record marker but does not open with it" 1
+  expect_err "trusted comment by owner (2026-01-03T00:00:00Z, https://example.invalid/1#issuecomment-7128) carries a harness record marker"
+  expect_jq '.plan_selection[0].untrusted_post_plan[0].has_harness_marker' 'true'
+  expect_jq '.counts.untrusted_harness_markers' '1'
+}
+
 # ---------------------------------------------------------------------------------------------
 # Part 10 cases (#272/#273), against bin/find-planning-work.sh — bounded retries on the
 # needs_initial_plan query, the revision-candidates query, and the per-candidate issue fetch. Each
@@ -8807,6 +8997,33 @@ EOF
 #       status-followups-degraded-order do NOT join: both already expect `.degraded == 'true'`
 #       regardless of this mutant. Restored byte-identically after each measurement (sha256
 #       confirmed); final restored-tree run: 161 pass, 0 fail.
+#
+# RE-MEASURED 2026-09-19 (#309), when the suite grew to 166 across three new status-escalations-*
+# fixtures (below the #333 MEASURED MUTANTS block further below) and two unrelated marker fixtures
+# that never call run_status at all (so cannot join any of these four): (i) and (j) are UNCHANGED —
+# 166 cases dropped to 163 pass/3 fail for (i), 162 pass/4 fail for (j), failing exactly the SAME
+# three/four cases as the #333 re-measurement above: none of the three new fixtures asserts an
+# "implementation."-prefixed degraded_reasons entry or the two-key-enumeration
+# author_association_unavailable/ready_query_unavailable flags these two mutants touch — their own
+# reason, when they have one, is always "status.escalations_query_unavailable", untouched by either
+# mutant. (k) and (l) both GAIN one new member each:
+#   (k) (hard-code `degraded: false`) — 166 cases dropped to 156 pass/10 fail, failing exactly the
+#       original nine (status-degraded-planner-initial-query, status-degraded-implementer-ready-
+#       query, status-degraded-author-association, status-proposed-query-unavailable,
+#       status-blocked-query-unavailable, status-prs-query-unavailable,
+#       status-degraded-reasons-all-halves, status-followups-query-unavailable,
+#       status-followups-degraded-order) PLUS status-escalations-query-unavailable — the only new
+#       fixture that asserts `.degraded == 'true'` directly.
+#   (l) (hard-code `degraded: true`) — 166 cases dropped to 156 pass/10 fail, failing exactly the
+#       original eight (status-clean-not-degraded, status-own-queries-healthy,
+#       status-proposed-query-retry-succeeds, status-blocked-query-retry-succeeds,
+#       status-prs-query-retry-succeeds, status-own-retry-sleep-failure-survives,
+#       status-followups-bucket-populated, status-followups-query-retry-succeeds) PLUS
+#       status-escalations-bucket-populated and status-escalations-query-retry-succeeds — both new
+#       fixtures expect `.degraded == 'false'` directly, the identical class every other member of
+#       this failing set already belongs to. status-escalations-query-unavailable does NOT join: it
+#       already expects `.degraded == 'true'` regardless of this mutant. Restored byte-identically
+#       after each measurement (sha256 confirmed); final restored-tree run: 166 pass, 0 fail.
 
 # ---------------------------------------------------------------------------------------------
 # Part 14 cases (#297), against bin/harness-status.sh's OWN three gh call sites — plan-proposed,
@@ -8814,6 +9031,8 @@ EOF
 # bounded-retry-then-fail-closed shape #272/#273/#284 already gave the two discovery scripts'
 # own query sites. #333 extends this to a FOURTH such site, held follow-ups, with the identical
 # shape — see the four status-followups-* fixtures after the #297 MEASURED MUTANTS block below.
+# #309 extends this again to a FIFTH such site, escalations, with the identical shape — see the
+# three status-escalations-* fixtures after the #333 MEASURED MUTANTS block further below.
 # Every fixture here calls build_stub_discovery (NOT the real discovery
 # scripts): run_status puts $dir ahead of $root/bin on PATH, so these canned stand-ins shadow
 # find-planning-work.sh/find-implementation-work.sh, and only harness-status.sh's own sites
@@ -8821,24 +9040,26 @@ EOF
 # comment above). Every fixture writes proposed.json ([#601]), blocked.json ([#602]), and
 # prs.json ([#603, headRefName "claude/603-x", statusCheckRollup []]) as its own healthy baseline
 # content, so a site that is NOT the fixture's own subject of study still returns real content
-# when its query succeeds; the four new #333 fixtures below additionally write followups.json as
-# their own subject or baseline. The three needles that discriminate harness-status.sh's own
-# three `gh issue list` sites inside the shared `.issue-calls` log are documented on
+# when its query succeeds; the four new #333 fixtures below additionally write followups.json, and
+# the three new #309 fixtures further below additionally write escalations.json, as their own
+# subject or baseline. The four needles that discriminate harness-status.sh's own
+# four `gh issue list` sites inside the shared `.issue-calls` log are documented on
 # expect_issue_calls itself, above; `.pr-calls`/expect_pr_calls is the analogous call log/helper
 # for the separate
 # top-level `pr)` arm the open-PR site alone reaches.
 
-# status-own-queries-healthy (AC2) — every one of the four own sites succeeds on its first
-# attempt: each called exactly once, no sleeps, all eight new counts flags false, degraded false,
+# status-own-queries-healthy (AC2) — every one of the five own sites succeeds on its first
+# attempt: each called exactly once, no sleeps, all ten new counts flags false, degraded false,
 # empty degraded_reasons — and (non-vacuity) the canned planning stand-in's own unplanned issue
 # (#650) surfaces in the output, while zero .issue-calls lines carry
 # "number,title,url,author" — the real find-planning-work.sh's own needs_initial_plan field
 # list, which build_stub_discovery's stand-in never sends since it never calls gh at all — proving
-# the canned stand-in ran instead of the real planner. This fixture writes no followups.json at
-# all, deliberately, so it also pins the absent-followups.json ⇒ `[]` convention (#333) the other
-# three sites' own absent-file convention already documents. Measured mutants: (h1), (h2), (h3),
-# (i), (k) — see the MEASURED MUTANTS (#297) block below the case table; (N4)/(N5) — see the
-# MEASURED MUTANTS (#333) block after the new #333 fixtures below.
+# the canned stand-in ran instead of the real planner. This fixture writes no followups.json or
+# escalations.json at all, deliberately, so it also pins the absent-file ⇒ `[]` convention (#333,
+# #309) the other three sites' own absent-file convention already documents. Measured mutants:
+# (h1), (h2), (h3), (i), (k) — see the MEASURED MUTANTS (#297) block below the case table;
+# (N4)/(N5) — see the MEASURED MUTANTS (#333) block after the new #333 fixtures below;
+# (P4)/(P5) — see the MEASURED MUTANTS (#309) block after the new #309 fixtures further below.
 case_status_own_queries_healthy() {
   local dir; dir="$(mk_fixture status-own-queries-healthy)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -8866,10 +9087,14 @@ EOF
   expect_jq '.counts.followups_query_retried' 'false'
   expect_jq '.counts.followups_query_unavailable' 'false'
   expect_jq '.counts.followups_to_triage' '0'
+  expect_jq '.counts.escalations_query_retried' 'false'
+  expect_jq '.counts.escalations_query_unavailable' 'false'
+  expect_jq '.counts.escalations' '0'
   expect_sleep_calls "$dir" 0
   expect_issue_calls "$dir" 'is:issue label:plan-proposed -label:plan-approved -label:no-plan --json number,title,url' 1
   expect_issue_calls "$dir" 'is:issue label:impl-blocked' 1
   expect_issue_calls "$dir" 'is:issue label:no-plan --json number,title,url,body' 1
+  expect_issue_calls "$dir" 'is:issue label:needs-human' 1
   expect_issue_calls "$dir" 'number,title,url,author' 0
   expect_pr_calls "$dir" 1
 }
@@ -9100,21 +9325,23 @@ EOF
   expect_pr_calls "$dir" 2
 }
 
-# status-own-retry-sleep-failure-survives (AC3) — all four sites fail once each, AND the backoff
+# status-own-retry-sleep-failure-survives (AC3) — all five sites fail once each, AND the backoff
 # sleep itself always fails (sleep-fails): every retry still runs (guarded `|| true`), exit 0,
-# exactly 4 sleeps, real content in all four buckets (the one-shot reject markers consume
+# exactly 5 sleeps, real content in all five buckets (the one-shot reject markers consume
 # themselves regardless of whether the intervening sleep succeeded), and EXACTLY one succeed-warn
 # per site (expect_warn_count, not mere presence). Measured mutants: (a), (b), (c), (d1), (d2),
 # (d3), (e), (h1), (h2), (h3), (l) — see the MEASURED MUTANTS (#297) block below the case table,
-# plus (N1), (N2), (N3), (N4), (N5) — see the MEASURED MUTANTS (#333) block after the new #333
-# fixtures below —
-# the broadest Part 14 fixture, reached by every retry-SHAPE mutant across all four sites (its own
-# sleep-calls/warn/flag assertions span all four at once) EXCEPT (k): that mutant's forced
+# (N1), (N2), (N3), (N4), (N5) — see the MEASURED MUTANTS (#333) block after the new #333
+# fixtures below — plus (P1), (P2), (P3), (P4), (P5) — see the MEASURED MUTANTS (#309) block
+# after the new #309 fixtures further below —
+# the broadest Part 14 fixture, reached by every retry-SHAPE mutant across all five sites (its own
+# sleep-calls/warn/flag assertions span all five at once) EXCEPT (k): that mutant's forced
 # always-retry on the proposed site is observationally identical to a genuine retry whenever the
 # site already fails on its first attempt, which this fixture's own reject-proposed-once marker
 # guarantees — see (k)'s own entry below for the full reasoning. This is also the only fixture
 # whose stub `sleep` ever fails, so it is the only home for the guarded-`|| true` mutant on the
-# new followups site (N3), exactly as it already is for (d1)-(d3) on the three #297 sites.
+# followups site (N3) and the escalations site (P3), exactly as it already is for (d1)-(d3) on the
+# three #297 sites.
 case_status_own_retry_sleep_failure_survives() {
   local dir; dir="$(mk_fixture status-own-retry-sleep-failure-survives)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -9129,10 +9356,14 @@ EOF
   cat > "$dir/followups.json" <<'EOF'
 [{"number":608,"title":"Held follow-up","url":"https://example.invalid/608","body":"<!-- harness-follow-up: PR #200 -->"}]
 EOF
+  cat > "$dir/escalations.json" <<'EOF'
+[{"number":609,"title":"Escalated","url":"https://example.invalid/609"}]
+EOF
   : > "$dir/reject-proposed-once"
   : > "$dir/reject-blocked-once"
   : > "$dir/reject-prs-once"
   : > "$dir/reject-followups-once"
+  : > "$dir/reject-escalations-once"
   : > "$dir/sleep-fails"
   build_stub_gh "$dir"
   build_stub_discovery "$dir"
@@ -9148,24 +9379,30 @@ EOF
   expect_jq '.counts.prs_query_unavailable' 'false'
   expect_jq '.counts.followups_query_retried' 'true'
   expect_jq '.counts.followups_query_unavailable' 'false'
+  expect_jq '.counts.escalations_query_retried' 'true'
+  expect_jq '.counts.escalations_query_unavailable' 'false'
   expect_jq '.counts.plans_to_review' '1'
   expect_jq '.counts.blocked' '1'
   expect_jq '.counts.prs_to_review' '1'
   expect_jq '.counts.followups_to_triage' '1'
-  expect_sleep_calls "$dir" 4
+  expect_jq '.counts.escalations' '1'
+  expect_sleep_calls "$dir" 5
   expect_warn_count "plan-proposed query failed once — retried after 30s and succeeded" 1
   expect_warn_count "impl-blocked query failed once — retried after 30s and succeeded" 1
   expect_warn_count "open-PR query failed once — retried after 30s and succeeded" 1
   expect_warn_count "held-follow-up query failed once — retried after 30s and succeeded" 1
+  expect_warn_count "escalations query failed once — retried after 30s and succeeded" 1
   expect_issue_calls "$dir" 'is:issue label:plan-proposed -label:plan-approved -label:no-plan --json number,title,url' 2
   expect_issue_calls "$dir" 'is:issue label:impl-blocked' 2
   expect_issue_calls "$dir" 'is:issue label:no-plan --json number,title,url,body' 2
+  expect_issue_calls "$dir" 'is:issue label:needs-human' 2
   expect_pr_calls "$dir" 2
 }
 
 # status-degraded-reasons-all-halves (AC4) — planning and implementation both degraded (a
 # canned, non-gh-calling stand-in each — see build_stub_discovery) AND two of harness-status.sh's
-# own four sites fail closed (blocked and the held-follow-up site both stay healthy):
+# own five sites fail closed (blocked, the held-follow-up site, and the escalations site all stay
+# healthy):
 # degraded_reasons is the exact 4-entry array, planning half, then implementation half, then the
 # status half (in $sf's own key order —
 # proposed before blocked before prs; blocked's own flag is false so it never joins), 2 sleeps
@@ -9417,6 +9654,40 @@ EOF
 #       `expect_warn_count "plan-proposed query failed once ..." 1`.
 # Restored byte-identically after each measurement (sha256 confirmed); final restored-tree run:
 # 161 pass, 0 fail.
+#
+# RE-MEASURED 2026-09-19 (#309), when the suite grew to 166 across three new status-escalations-*
+# fixtures below (each also calls run_status, reaching every one of these mutants) and two
+# unrelated marker fixtures that never call run_status at all (so cannot join any of these
+# sixteen): (a), (b), (c), (d1), (d2), (d3), (e), (h1), (h2), (h3), (i), and (j) are all UNCHANGED
+# — none of the three new fixtures sets a reject-proposed/-blocked/-prs(-once) marker or asserts
+# `counts.proposed_query_retried`/`counts.blocked_query_unavailable`/etc. directly, and none of
+# their own expected degraded_reasons arrays mixes a status entry with a planning/implementation
+# one. (f), (g), and (k) each GAIN new members:
+#   (f) (drop the status half from `$all`) — 166 cases dropped to 159 pass/7 fail, failing exactly
+#       the original six (status-proposed-query-unavailable, status-blocked-query-unavailable,
+#       status-prs-query-unavailable, status-degraded-reasons-all-halves,
+#       status-followups-query-unavailable, status-followups-degraded-order) PLUS
+#       status-escalations-query-unavailable — its own expected degraded_reasons names
+#       "status.escalations_query_unavailable", which disappears once the entire status half is
+#       dropped from `$all`.
+#   (g) (compute `$deg` from `$dr` only) — 166 cases dropped to 160 pass/6 fail, failing exactly
+#       the original five (status-proposed-query-unavailable, status-blocked-query-unavailable,
+#       status-prs-query-unavailable, status-followups-query-unavailable,
+#       status-followups-degraded-order) PLUS status-escalations-query-unavailable — its own
+#       degraded_reasons is EXCLUSIVELY a status-half entry, so `$dr` alone is empty, flipping
+#       `.degraded` to false against its own `expect_jq '.degraded' 'true'` assertion.
+#   (k) (force the proposed site to ALWAYS enter its retry branch) — 166 cases dropped to 155
+#       pass/11 fail, failing exactly the original eight (status-own-queries-healthy,
+#       status-blocked-query-retry-succeeds, status-blocked-query-unavailable,
+#       status-prs-query-retry-succeeds, status-prs-query-unavailable,
+#       status-followups-bucket-populated, status-followups-query-retry-succeeds,
+#       status-followups-query-unavailable) PLUS status-escalations-bucket-populated,
+#       status-escalations-query-retry-succeeds, and status-escalations-query-unavailable — all
+#       three join for the SAME reason status-followups-bucket-populated/-query-retry-succeeds/
+#       -query-unavailable already do: each expects the plan-proposed needle called exactly once
+#       (proposed is not their subject) or zero sleeps, and the forced retry doubles the call count
+#       / adds an unexpected sleep regardless of outcome. Restored byte-identically after each
+#       measurement (sha256 confirmed); final restored-tree run: 166 pass, 0 fail.
 
 # ---------------------------------------------------------------------------------------------
 # Part 14 (continued, #333) — bin/harness-status.sh's FOURTH own gh call site, held follow-ups:
@@ -9722,12 +9993,257 @@ EOF
 # Restored byte-identically after each measurement (sha256 confirmed); final restored-tree run:
 # 161 pass, 0 fail.
 #
+# RE-MEASURED 2026-09-19 (#309), when the suite grew to 166 across three new status-escalations-*
+# fixtures further below (each also calls run_status, reaching every one of N1-N9) and two
+# unrelated marker fixtures that never call run_status at all: ALL NINE mutants (N1)-(N9) are
+# UNCHANGED — none of the three new fixtures sets a reject-followups(-once) marker, writes a
+# followups.json of its own, or asserts `counts.followups_query_retried`/
+# `counts.followups_query_unavailable`/an individual followups bucket entry's shape directly (the
+# closest, status-escalations-bucket-populated, asserts only `.counts.followups_to_triage == '0'`,
+# a direct value unaffected by any of N1-N9's followups-specific retry, filter, exclusion-list, or
+# projection edits when the bucket is empty either way). 166 cases dropped to 162 pass/4 fail for
+# (N1) and (N2) (the identical original four: status-own-retry-sleep-failure-survives,
+# status-followups-query-retry-succeeds, status-followups-query-unavailable,
+# status-followups-degraded-order), to 165 pass/1 fail for (N3) (status-own-retry-sleep-failure-
+# survives alone), to 160 pass/6 fail for (N4) (the identical original six named in the #333
+# measurement above), to 161 pass/5 fail for (N5) (the identical original five), and to 165 pass/1
+# fail for (N6), (N7), (N8),
+# and (N9) (status-followups-bucket-populated alone in every one of those four) — every figure the
+# SAME failing NAMES as the #333 measurement above, arithmetic-shifted by the five new cases.
+# Restored byte-identically after each measurement (sha256 confirmed); final restored-tree run:
+# 166 pass, 0 fail.
+#
 # Measured-green shape probe (not a mutant that bites — recorded honestly per the plan): replacing
 # the generic minus-named-exclusion sum with the plain three-term enumeration
 # `(($woh.plans_to_review|length) + ($woh.prs_to_review|length) + ($woh.blocked|length))` leaves
 # the suite at 161 pass, 0 fail — no fixture pins the generic shape over the plain enumeration; the
 # generic form is a forward-compatibility choice for #309's future escalations member, deliberately
 # not something any fixture here can discriminate from the equivalent hard-coded three-term sum.
+#
+# #309 discharges that prediction: escalations landed using the SAME generic mechanism (it is
+# simply never named in the exclusion list), and status-escalations-bucket-populated now DOES
+# discriminate the generic form from the plain hard-coded enumeration above — see mutant (P6) in
+# the MEASURED MUTANTS (#309) block below, which proves it by the opposite edit (naming
+# "escalations" IN the exclusion list, rather than replacing the sum's shape).
+
+# Part 14 (continued, #309) — bin/harness-status.sh's FIFTH own gh call site, escalations: open,
+# needs-human issues fed by list_escalations() with the identical bounded-retry-then-fail-closed
+# shape #297/#333 already gave the other four sites. Unlike list_followups(), list_escalations()
+# applies NO jq filter at all — `gh issue list --json number,title,url` is served verbatim as the
+# bucket, so there is no marker/body select to pin the way status-followups-bucket-populated pins
+# `startswith` — the escalations fixtures below are correspondingly simpler. Every fixture here
+# writes the same proposed.json ([#601]), blocked.json ([#602]), and prs.json ([#603, headRefName
+# "claude/603-x", statusCheckRollup []]) healthy baseline the #297/#333 fixtures above use, plus its
+# own escalations.json — every fixture in this block writes one; the absent-escalations.json
+# convention is instead exercised by status-own-queries-healthy in the #297 block above (retrofitted
+# for #309, see its own comment). The needle that discriminates this fifth site inside the shared
+# `.issue-calls` log — 'is:issue label:needs-human' — is documented on expect_issue_calls itself,
+# above.
+#
+# Discovery-script reachability from this block (measured 2026-09-19, same method as #333's own
+# note above): every fixture below calls build_stub_discovery, never the real
+# find-planning-work.sh or find-implementation-work.sh, so an in-place mutant of either discovery
+# script cannot be caught by any of the three fixtures in this block — the identical, already-
+# documented "reachable only through Part 13's own run_status fixtures, never Part 14's" property.
+
+# status-escalations-bucket-populated (AC-#309-populated) — escalations.json carries two issues,
+# served verbatim (no filter): bucket length 2, the [0] entry matches the fixture's own
+# {number,title,url} object exactly (no filtering to prove — list_escalations() applies none);
+# counts.escalations 2; counts.human_actions is 5 — UNLIKE followups_to_triage, this bucket IS
+# included in the generic sum (see the case body's own arithmetic comment for the breakdown); both
+# new flags false; degraded false; zero sleeps.
+case_status_escalations_bucket_populated() {
+  local dir; dir="$(mk_fixture status-escalations-bucket-populated)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  cat > "$dir/escalations.json" <<'EOF'
+[
+  {"number":609,"title":"Escalated A","url":"https://example.invalid/609"},
+  {"number":610,"title":"Escalated B","url":"https://example.invalid/610"}
+]
+EOF
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.waiting_on_human.escalations | length' '2'
+  expect_jq '.waiting_on_human.escalations[0]' '{"number":609,"title":"Escalated A","url":"https://example.invalid/609"}'
+  expect_jq '.counts.escalations' '2'
+  # human_actions: plans_to_review(1) + prs_to_review(1) + blocked(1) + escalations(2) = 5 —
+  # followups_to_triage stays excluded, so its own (empty here) value never enters this sum.
+  expect_jq '.counts.human_actions' '5'
+  expect_jq '.counts.plans_to_review' '1'
+  expect_jq '.counts.prs_to_review' '1'
+  expect_jq '.counts.blocked' '1'
+  expect_jq '.counts.followups_to_triage' '0'
+  expect_jq '.counts.escalations_query_retried' 'false'
+  expect_jq '.counts.escalations_query_unavailable' 'false'
+  expect_jq '.degraded' 'false'
+  expect_jq '.degraded_reasons' '[]'
+  expect_sleep_calls "$dir" 0
+  expect_issue_calls "$dir" 'is:issue label:needs-human' 1
+}
+
+# status-escalations-query-retry-succeeds (AC-#309-AC1) — the escalations site's twin of
+# status-proposed-query-retry-succeeds: first attempt fails, the retry succeeds, retried true /
+# unavailable false, a populated bucket (one qualifying issue), one succeed-warn
+# (expect_warn_count, not mere presence), one sleep(30), two logged attempts; the other four sites
+# are unaffected (one call each, real content, no warn).
+case_status_escalations_query_retry_succeeds() {
+  local dir; dir="$(mk_fixture status-escalations-query-retry-succeeds)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  cat > "$dir/escalations.json" <<'EOF'
+[{"number":609,"title":"Escalated A","url":"https://example.invalid/609"}]
+EOF
+  : > "$dir/reject-escalations-once"
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.degraded' 'false'
+  expect_jq '.degraded_reasons' '[]'
+  expect_jq '.counts.escalations_query_retried' 'true'
+  expect_jq '.counts.escalations_query_unavailable' 'false'
+  expect_jq '.counts.escalations' '1'
+  expect_jq '.counts.plans_to_review' '1'
+  expect_jq '.counts.blocked' '1'
+  expect_jq '.counts.prs_to_review' '1'
+  expect_sleep_calls "$dir" 1
+  expect_sleep_arg "$dir" '30'
+  expect_warn_count "escalations query failed once — retried after 30s and succeeded" 1
+  expect_warn_count "could not list escalated issues" 0
+  expect_warn_count "could not list plan-proposed issues" 0
+  expect_warn_count "could not list impl-blocked issues" 0
+  expect_warn_count "could not list open PRs" 0
+  expect_issue_calls "$dir" 'is:issue label:plan-proposed -label:plan-approved -label:no-plan --json number,title,url' 1
+  expect_issue_calls "$dir" 'is:issue label:impl-blocked' 1
+  expect_issue_calls "$dir" 'is:issue label:needs-human' 2
+  expect_pr_calls "$dir" 1
+}
+
+# status-escalations-query-unavailable (AC-#309-AC1) — the escalations site's twin of
+# status-proposed-query-unavailable: fails on BOTH attempts, fails closed to an empty escalations
+# bucket, both flags true, counts.human_actions drops to what the other three (non-excluded)
+# buckets alone provide, one fail-closed warn (never the succeed-warn), exactly one sleep,
+# degraded_reasons is exactly ["status.escalations_query_unavailable"]; the other four sites are
+# unaffected.
+case_status_escalations_query_unavailable() {
+  local dir; dir="$(mk_fixture status-escalations-query-unavailable)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  cat > "$dir/escalations.json" <<'EOF'
+[{"number":609,"title":"Never served","url":"https://example.invalid/609"}]
+EOF
+  : > "$dir/reject-escalations"
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.degraded' 'true'
+  expect_jq '.degraded_reasons' '["status.escalations_query_unavailable"]'
+  expect_jq '.counts.escalations_query_retried' 'true'
+  expect_jq '.counts.escalations_query_unavailable' 'true'
+  expect_jq '.counts.escalations' '0'
+  # human_actions: plans_to_review(1) + prs_to_review(1) + blocked(1) + escalations(0, fail-closed) = 3.
+  expect_jq '.counts.human_actions' '3'
+  expect_jq '.counts.plans_to_review' '1'
+  expect_jq '.counts.blocked' '1'
+  expect_jq '.counts.prs_to_review' '1'
+  expect_sleep_calls "$dir" 1
+  expect_sleep_arg "$dir" '30'
+  expect_warn_count "could not list escalated issues (gh issue list) — reporting an empty escalations bucket this run (fail-closed)" 1
+  expect_warn_count "escalations query failed once — retried after 30s and succeeded" 0
+  expect_warn_count "could not list plan-proposed issues" 0
+  expect_warn_count "could not list impl-blocked issues" 0
+  expect_warn_count "could not list open PRs" 0
+  expect_issue_calls "$dir" 'is:issue label:plan-proposed -label:plan-approved -label:no-plan --json number,title,url' 1
+  expect_issue_calls "$dir" 'is:issue label:impl-blocked' 1
+  expect_issue_calls "$dir" 'is:issue label:needs-human' 2
+  expect_pr_calls "$dir" 1
+}
+
+# MEASURED MUTANTS (#309) — applied one at a time to bin/harness-status.sh (Edit tool) against the
+# working tree (166 cases at measurement time — RE-MEASURED 2026-09-19 at the tree's final,
+# five-new-fixture total; the first pass, before plan-escalation-record-not-feedback and
+# impl-escalation-record-not-binding existed, was stamped at 164 — those two fixtures call
+# run_planning/run_implementation, never run_status, so they cannot reach a bin/harness-status.sh
+# mutant, and every figure below is that same failing set with two more passes), `[ -x
+# bin/harness-status.sh ]` confirmed executable after each mutation (LESSON 2026-09-15b), the suite
+# re-run, and the file byte-identically restored (sha256 confirmed against a backup refreshed
+# immediately before every mutation, LESSON 2026-09-07) before the next. list_escalations() applies
+# no jq filter or projection at all (unlike list_followups()), so there is no (N6)/(N7)/(N9)-shaped
+# mutant to give this site — five mutants in total, plus a sixth pinning the human_actions
+# inclusion #333's own site was deliberately excluded from:
+#   (P1) collapse the escalations site's retry entirely (`if ! escalations=$(list_escalations);
+#       then ... fi` collapsed to the bare `escalations=$(list_escalations)`): 166 cases dropped to
+#       163 pass/3 fail, failing exactly: status-own-retry-sleep-failure-survives,
+#       status-escalations-query-retry-succeeds, and status-escalations-query-unavailable — every
+#       fixture that sets any reject-escalations(-once) marker: under `set -euo pipefail`, the
+#       mutated bare assignment's failing command substitution aborts harness-status.sh outright
+#       before it prints any JSON at all (the same class of failure #284/#285's own mutant (a) and
+#       #333's own (N1) document). status-escalations-bucket-populated does NOT join: its own
+#       escalations.json is served on the first (and only) attempt, so the mutated bare assignment
+#       never fails for it.
+#   (P2) the escalations site sleeps but never actually retries (the inner `if
+#       escalations=$(list_escalations); then ... else ... fi` collapsed to the unconditional
+#       `else` body): 166 cases dropped to 163 pass/3 fail, failing exactly the SAME three cases as
+#       (P1) — status-escalations-query-unavailable joins for a DIFFERENT reason than (P1): its own
+#       permanent reject-escalations still leaves the mutated code exiting 0 with the correct
+#       fail-closed document, but its own `expect_issue_calls ... 2` assertion breaks (only one
+#       real attempt is ever made, never a second); the other two join for the identical
+#       call-count/verdict reasons (P1) documents.
+#   (P3) delete the `|| true` guard from the escalations site's `sleep "$RETRY_SLEEP"` only: 166
+#       cases dropped to 165 pass/1 fail, failing exactly status-own-retry-sleep-failure-survives —
+#       the ONLY fixture whose stub `sleep` ever fails (sleep-fails), so every other case's
+#       guarded-or-not sleep always succeeds and this mutant is invisible to it.
+#   (P4) delete `escalations_query_unavailable: $equ,` from the `$sf` object literal (leaving a
+#       trailing comma on the preceding member): 166 cases dropped to 161 pass/5 fail, failing
+#       exactly: status-own-queries-healthy, status-own-retry-sleep-failure-survives,
+#       status-escalations-bucket-populated, status-escalations-query-retry-succeeds, and
+#       status-escalations-query-unavailable — every fixture that asserts
+#       `counts.escalations_query_unavailable` directly (now a missing key, `null`, never `true` or
+#       `false`) OR whose expected degraded_reasons names "status.escalations_query_unavailable"
+#       (the generic select finds nothing to name once the key is gone). There is no
+#       status-escalations-degraded-order fixture (deliberately not added — RESOLVED, plan step 7
+#       names exactly three new Part 14 fixtures for this site), so this failing set has no sixth
+#       member the way #333's own (N4) gained one.
+#   (P5) delete `escalations_query_retried: $eqr,` from the `$sf` object literal: 166 cases dropped
+#       to 161 pass/5 fail, failing exactly the SAME five fixtures as (P4) — measured, not assumed:
+#       unlike #333's own (N4)/(N5) pair (which diverge by one fixture, status-followups-degraded-
+#       order, present only in (N4)'s set), #309 has no degraded-order fixture to diverge on, so
+#       (P4) and (P5) converge on the identical five names.
+#   (P6) add `"escalations"` to the exclusion list (`["followups_to_triage","escalations"] as
+#       $excluded` instead of `["followups_to_triage"] as $excluded`), so the bucket is EXCLUDED
+#       from human_actions instead of joining it: 166 cases dropped to 165 pass/1 fail, failing
+#       exactly status-escalations-bucket-populated — `jq .counts.human_actions: expected 5, got 3`
+#       (measured directly), the exact 5 -> 3 flip proves escalations is NOT excluded today (the
+#       opposite direction from #333's own (N8), which proves followups_to_triage IS); every other
+#       fixture either has an empty escalations bucket (subtracting zero either way) or does not
+#       assert human_actions at all.
+# Restored byte-identically after each measurement (sha256 confirmed); final restored-tree run:
+# 166 pass, 0 fail.
 
 # empty-needle-guard (#262-1) — exercises every guarded helper in this file (expect_err,
 # expect_no_err, expect_warn_count) with an empty needle, and asserts the guard fired for each:
@@ -9772,7 +10288,15 @@ EOF
 # status-followups-* fixtures (none of which calls expect_no_err/expect_err/expect_warn_count with
 # an empty needle either — every one passes a real needle, e.g. "held-follow-up query failed once"
 # and "could not list held follow-ups"): goes from 161 pass, 0 fail to 160 pass, 1 fail — the same
-# single-case failing set, new total.
+# single-case failing set, new total. RE-MEASURED 2026-09-19 (#309), when the suite grew to 166
+# cases across five new fixtures — the three status-escalations-* fixtures
+# (status-escalations-bucket-populated, status-escalations-query-retry-succeeds,
+# status-escalations-query-unavailable) plus plan-escalation-record-not-feedback and
+# impl-escalation-record-not-binding (none of which calls
+# expect_no_err/expect_err/expect_warn_count with an empty needle either — every one passes a real
+# needle, e.g. "escalations query failed once", "could not list escalated issues", and "carries a
+# harness record marker but does not open with it"): goes from 166 pass, 0 fail to 165 pass, 1
+# fail — the same single-case failing set (empty-needle-guard), new total.
 case_empty_needle_guard() {
   local saved_ok saved_why
   planning_err="fixture stderr for the empty-needle guard (#262)"
@@ -9923,6 +10447,8 @@ cases=(
   "plan-harness-marker-quoter-only-no-plan|case_plan_harness_marker_quoter_only_no_plan|#321: the only trusted comment is a prose-then-harness-audit quoter, no plan at all — pins the no-plan (\`// \"\"\`) window"
   "impl-harness-marker-quoter-only-no-plan|case_impl_harness_marker_quoter_only_no_plan|#321 implementer-side twin: batch mode, the only trusted comment is the same quoter, plan stays null, zero gh api calls"
   "impl-single-issue-harness-marker-quoter|case_impl_single_issue_harness_marker_quoter|#321: \`--issue 45\` carries the identical harness_marker_quoters computation as batch mode (LESSON 2026-09-08's two-modes rule)"
+  "plan-escalation-record-not-feedback|case_plan_escalation_record_not_feedback|#309: an escalation record and a comment quoting it are both excluded from feedback and counted in escalation_records_skipped; the quoter alone is a harness_marker_quoters warn"
+  "impl-escalation-record-not-binding|case_impl_escalation_record_not_binding|#309: implementer-side twin — the record and its quoter are both excluded from trusted_post_plan"
   "plan-initial-query-retry-succeeds|case_plan_initial_query_retry_succeeds|#273: the needs_initial_plan query fails once then succeeds on the bounded retry — 2 issue-calls, 1 sleep(30), retried true, unavailable false, real content from the second attempt"
   "plan-initial-query-unavailable|case_plan_initial_query_unavailable|#273: the needs_initial_plan query fails on both attempts — one warn line, empty bucket, both flags true, exactly 1 sleep, needs_revision still populated from the healthy candidates query"
   "plan-candidates-query-retry-succeeds|case_plan_candidates_query_retry_succeeds|#273: the revision-candidates query fails once then succeeds on the bounded retry — 2 issue-calls, 1 sleep(30), retried true, unavailable false, a real revision from the second attempt"
@@ -9945,19 +10471,22 @@ cases=(
   "status-degraded-implementer-ready-query|case_status_degraded_implementer_ready_query|#285: find-implementation-work.sh's ready query fails closed — degraded_reasons is exactly [\"implementation.ready_query_unavailable\"]"
   "status-degraded-author-association|case_status_degraded_author_association|#285: the generic rule picks up a flag neither #284 nor #273 added — author_association_unavailable — with no enumeration to drift"
   "status-degraded-both-scripts|case_status_degraded_both_scripts|#285: both discovery scripts fail closed at once — degraded_reasons carries both halves, planning first, in order"
-  "status-own-queries-healthy|case_status_own_queries_healthy|#297 (extended #333): all four of harness-status.sh's own sites succeed on first attempt — each called once, no sleeps, all eight new counts flags false, and the canned discovery stand-ins ran instead of the real scripts"
+  "status-own-queries-healthy|case_status_own_queries_healthy|#297 (extended #333, #309): all five of harness-status.sh's own sites succeed on first attempt — each called once, no sleeps, all ten new counts flags false, and the canned discovery stand-ins ran instead of the real scripts"
   "status-proposed-query-retry-succeeds|case_status_proposed_query_retry_succeeds|#297: the plan-proposed site fails once then succeeds on the bounded retry — retried true, unavailable false, one succeed-warn, one sleep(30), the impl-blocked and open-PR sites unaffected"
   "status-proposed-query-unavailable|case_status_proposed_query_unavailable|#297: the plan-proposed site fails on both attempts — fails closed to an empty plans_to_review bucket, degraded_reasons is exactly [\"status.proposed_query_unavailable\"]"
   "status-blocked-query-retry-succeeds|case_status_blocked_query_retry_succeeds|#297: the impl-blocked site's twin of status-proposed-query-retry-succeeds"
   "status-blocked-query-unavailable|case_status_blocked_query_unavailable|#297: the impl-blocked site's twin of status-proposed-query-unavailable"
   "status-prs-query-retry-succeeds|case_status_prs_query_retry_succeeds|#297: the open-PR site's twin, retried attempts logged in .pr-calls (its own separate top-level pr) arm) rather than .issue-calls"
   "status-prs-query-unavailable|case_status_prs_query_unavailable|#297: the open-PR site's twin of status-proposed-query-unavailable, again logged in .pr-calls"
-  "status-own-retry-sleep-failure-survives|case_status_own_retry_sleep_failure_survives|#297 (extended #333): all four of harness-status.sh's own sites fail once AND the backoff sleep itself always fails — every retry still runs, exit 0, exactly 4 sleeps, real content in all four buckets"
+  "status-own-retry-sleep-failure-survives|case_status_own_retry_sleep_failure_survives|#297 (extended #333, #309): all five of harness-status.sh's own sites fail once AND the backoff sleep itself always fails — every retry still runs, exit 0, exactly 5 sleeps, real content in all five buckets"
   "status-degraded-reasons-all-halves|case_status_degraded_reasons_all_halves|#297: degraded_reasons carries all three halves in order — planning, implementation, then status (proposed and prs; blocked stays healthy and never joins)"
   "status-followups-bucket-populated|case_status_followups_bucket_populated|#333: the held-follow-up bucket filters on open+no-plan+body-opens-with-marker, projects to {number,title,url}, and human_actions stays 3 — unchanged by a non-empty followups bucket"
   "status-followups-query-retry-succeeds|case_status_followups_query_retry_succeeds|#333: the held-follow-up site's twin of status-proposed-query-retry-succeeds"
   "status-followups-query-unavailable|case_status_followups_query_unavailable|#333: the held-follow-up site's twin of status-proposed-query-unavailable — human_actions still excludes the (empty) bucket"
   "status-followups-degraded-order|case_status_followups_degraded_order|#333: proposed+prs+followups all fail closed at once — degraded_reasons puts followups_query_unavailable LAST, in \$sf's own key order"
+  "status-escalations-bucket-populated|case_status_escalations_bucket_populated|#309: the escalations bucket is served verbatim (no filter) from list_escalations(), and — unlike followups_to_triage — joins human_actions"
+  "status-escalations-query-retry-succeeds|case_status_escalations_query_retry_succeeds|#309: the escalations site's twin of status-proposed-query-retry-succeeds"
+  "status-escalations-query-unavailable|case_status_escalations_query_unavailable|#309: the escalations site's twin of status-proposed-query-unavailable — human_actions drops by the fail-closed bucket's own contribution"
   "empty-needle-guard|case_empty_needle_guard|#262: expect_err/expect_no_err/expect_warn_count all refuse an empty needle"
 )
 
@@ -10096,6 +10625,26 @@ cases=(
 # T0 plan quotes the harness-audit marker. M-5 still drops 157 cases to 156 pass/1 fail, failing
 # only plan-quoting-harness-marker-still-the-plan (P3) — unchanged, for the identical reason. Each
 # mutation reverted immediately after recording it (byte-identical, sha256 confirmed).
+#
+# RE-MEASURED 2026-09-19 (#309): M-1 (find-implementation-work.sh's $planC) and M-2
+# (find-planning-work.sh's $planC) are BOTH UNCHANGED at the 166-case baseline — 166 cases dropped
+# to 154 pass/12 fail for M-1 and 159 pass/7 fail for M-2, the IDENTICAL twelve/seven names as the
+# #321 measurement above, with neither impl-escalation-record-not-binding nor
+# plan-escalation-record-not-feedback joining: unlike harness-marker-quoter-warn-scope's own T7,
+# neither new fixture has any OTHER comment that quotes the plan marker $m anywhere — every one of
+# their non-plan comments uses only the escalation marker — so unanchoring $planC's positive test
+# admits nothing new for either, and $lastPlan never moves. M-3, M-4, and M-5 are OUT of this
+# bounded re-measurement's scope, per the approval audit (which named only M-1, M-2, MUTATION
+# PROOF B, and MUTATION PROOF M4 for re-measurement) — their own baseline-stamped records stand
+# as-is, not independently re-run at the 166-case baseline; by the identical reasoning the #321
+# measurement already gives for M-1/M-2 (no plan/lastPlan tie, no plan comment quoting a
+# harness-audit marker, in either new fixture), neither new fixture is expected to join them
+# either, but that expectation is not confirmed by measurement here. Measured directly, not
+# assumed, for the four broad proofs the approval audit DID name: the plan's own approval audit
+# predicted these two new fixtures would join every one of them; measurement shows only
+# MUTATION PROOF B and MUTATION PROOF M4 actually do (M-1/M-2 do not) — see each proof's own #309
+# continuation for the mechanism. Each mutation reverted immediately after recording it
+# (byte-identical, sha256 confirmed).
 
 # MEASURED MUTANTS (#302) — the new plan_marker_quoters member (Implementation step 6), applied
 # one letter at a time to EACH script (twenty measurements total), the suite re-run against the
@@ -10248,6 +10797,34 @@ cases=(
 #       breaking both new fixtures' own equality assertion the same way it breaks every
 #       pre-existing one. Every measurement reverted immediately after recording it (byte-
 #       identical, sha256 confirmed); final restored-tree run: 157 pass, 0 fail.
+#
+# RE-MEASURED 2026-09-19 (#309), when the suite grew to 166 across two new combined fixtures
+# (plan-escalation-record-not-feedback, impl-escalation-record-not-binding — neither of which
+# asserts `.counts.plan_marker_quoters` at anything but 0, since neither fixture's own comments
+# ever quote the PLAN marker) and seven unrelated status-* fixtures that never call
+# run_planning/run_implementation at all (build_stub_discovery shadows both scripts for every one
+# of them): applied one letter at a time to EACH script exactly as before, the suite re-run against
+# the 166-case baseline. (a), (c), (d), (e), (f), (g), (h), and (i) are all UNCHANGED — none of the
+# two new fixtures' own comments ever trivially satisfies the mutated clause the way the #321
+# pair's own T0/T7 did (the new pair's only marker-carrying comments are excluded by their own
+# contains($e) exclusion regardless of these mutants); measured directly for (g) specifically
+# (`contains($a) -> startswith($a)`, since neither T1/T2/T3 here contains $a at all, unlike the
+# #321 pair's own T7): planner 164 pass/2 fail, implementer 164 pass/2 fail, both failing the
+# identical pre-#309 pair named at (g)'s own #321-baseline measurement above
+# (plan-marker-quoter-warn-scope/harness-marker-quoter-warn-scope on the planner side,
+# impl-plan-marker-quoter-warn-scope/impl-harness-marker-quoter-warn-scope on the implementer
+# side), neither new fixture joining. (b) and (j) each GAIN one new member on BOTH scripts:
+#   (b) — NEW joiner on both scripts (planner 162 pass/4 fail; implementer 158 pass/8 fail):
+#       deleting the window entirely admits plan-escalation-record-not-feedback's/
+#       impl-escalation-record-not-binding's own T0 plan comment the identical way it admitted the
+#       #321 pair's — it trivially contains($m), and contains neither $a, $v, nor $e — raising
+#       plan_marker_quoters from 0 to 1.
+#   (j) — NEW joiner on both scripts (planner 160 pass/6 fail; implementer 159 pass/7 fail):
+#       deleting the counts key resolves `.counts.plan_marker_quoters` through `null`, not `0`,
+#       breaking both new fixtures' own equality assertion the same way it breaks every
+#       pre-existing one. Every measurement reverted immediately after recording it (byte-
+#       identical, sha256 confirmed, `[ -x bin/<script> ]` re-checked); final restored-tree run:
+#       166 pass, 0 fail.
 
 # MEASURED MUTANTS (#321) — the new harness_marker_quoters member (Implementation steps 2-6),
 # applied one letter at a time to EACH script (twenty measurements total), the suite re-run
@@ -10388,6 +10965,69 @@ cases=(
 # and T6 (plan-marker-quoter-warn-scope's own T6 carries no harness marker either, where its
 # sibling's quotes <!-- verifier-verdict -->) — see (a) and (f) above for the mechanism each
 # divergence blocks; final restored-tree run: 157 pass, 0 fail.
+#
+# RE-MEASURED 2026-09-19 (#309), when the suite grew to 166 across two new combined fixtures
+# (plan-escalation-record-not-feedback, impl-escalation-record-not-binding) and seven unrelated
+# status-* fixtures unreachable from either discovery script (see the #302 block's own #309
+# continuation above for the identical reachability argument). Both new fixtures assert
+# `.counts.harness_marker_quoters == 1` (T2, their own trusted quoter — the only comment among
+# their four that satisfies the unmutated clause) and
+# `expect_warn_count "carries a harness record marker but does not open with it" 1`, so this
+# member's own letters interact with them far more than #302's plan_marker_quoters clause did.
+# (a), (b), (c), (d), and (f) are all UNCHANGED — neither new fixture's untrusted T3 (which OPENS
+# WITH the escalation marker) is ever admitted by widening the trust gate or deleting the window
+# ((a)/(b)), neither has a plain no-marker comment for the contains-any deletion to newly admit
+# ((d)), and neither counted comment (T2) ever quotes $VERDICT_MARKER, so removing it from the set
+# changes nothing ((f)). (c) was independently re-run rather than assumed inert, on both scripts,
+# at the 166-case baseline (`if $lastPlan == null then [] else … end` wrapped around the
+# harness_marker_quoters clause): planner 165 pass/1 fail, implementer 165 pass/1 fail, both
+# failing the identical single pre-#309 fixture named at (c)'s own #321-baseline measurement above
+# (plan-harness-marker-quoter-only-no-plan / impl-harness-marker-quoter-only-no-plan) — $lastPlan
+# is never null for either new fixture (both carry a real T0 plan), so neither joins. (e), (g),
+# (h), (i), and (j) each GAIN one new member on BOTH scripts:
+#   (e) — NEW joiner on both scripts (planner 163 pass/3 fail; implementer 163 pass/3 fail):
+#       deleting the startswith-any negation admits each new fixture's own T1 (the escalation
+#       record itself, which OPENS WITH the marker and was excluded by this exclusion alone),
+#       raising harness_marker_quoters from 1 to 2.
+#   (g) — NEW joiner on both scripts (planner 161 pass/5 fail; implementer 160 pass/6 fail):
+#       contains($k) -> startswith($k) in the positive test no longer matches T2 (which quotes the
+#       marker mid-body, never at position 0), dropping harness_marker_quoters from 1 to 0.
+#   (h) — NEW joiner on both scripts (planner 161 pass/5 fail; implementer 160 pass/6 fail): the
+#       counter stays 0 despite T2's warn line still printing correctly, breaking the `== 1`
+#       assertion the identical way it breaks the #321 pair's own.
+#   (i) — NEW joiner on both scripts (planner 161 pass/5 fail; implementer 160 pass/6 fail): the
+#       warn line for T2 stops printing despite the jq count staying correct at 1, breaking the
+#       `expect_warn_count` assertion.
+#   (j) — NEW joiner on both scripts (planner 158 pass/8 fail; implementer 158 pass/8 fail):
+#       deleting the counts key resolves `.counts.harness_marker_quoters` through `null`, breaking
+#       both new fixtures' own `== 1` assertion.
+# One further mutant, specific to #309's own three-member HARNESS_RECORD_MARKERS set and absent
+# from the #321 block above (which only ever exercised the two-member set): deleting
+# `$ESCALATION_MARKER` (the set's third line, collapsing it back to `$AUDIT_MARKER`/
+# `$VERDICT_MARKER`) — planner and implementer each: 166 cases dropped to 165 pass/1 fail, failing
+# exactly plan-escalation-record-not-feedback / impl-escalation-record-not-binding respectively,
+# whose own T2 no longer matches any marker in the now-two-member set, dropping
+# harness_marker_quoters from 1 to 0 and silencing its warn line — the mirror of the #321 block's
+# own mutant (f), applied to the member this train added, pinning that
+# HARNESS_RECORD_MARKERS's third line is genuinely load-bearing rather than decorative. Every
+# measurement reverted immediately after recording it (byte-identical, sha256 confirmed,
+# `[ -x bin/<script> ]` re-checked); final restored-tree run: 166 pass, 0 fail.
+#
+# #309 RE-MEASUREMENT SCOPE (orchestrator-bounded): the re-measurement above covers exactly the
+# blocks the approval audit named — the MEASURED MUTANTS (#321) and (#302) blocks (both scripts),
+# M-1/M-2, MUTATION PROOF B (candidates arm), and MUTATION PROOF M4, plus, for
+# bin/harness-status.sh, the MEASURED MUTANTS (#284/#285) block's (i)-(l), the MEASURED MUTANTS
+# (#297) block's (a)-(l), the MEASURED MUTANTS (#333) block's N1-N9, and the empty-needle-guard
+# continuation. Every OTHER measured-mutants/mutation-proof block in this file — including, but not
+# limited to, SUBSUMPTION PROOF, MUTATION PROOF A, the events-arm "MUTATION PROOF B", M-3/M-4/M5's
+# own retained controls beyond what M-1/M-2's own continuation above states, the MEASURED MUTANTS
+# (#284/#285) block's OWN (a)-(h) letters (find-implementation-work.sh-specific, distinct from the
+# (i)-(l) letters named above), and every #229/#230/#240/#255/#262/#272/#273 block not named above —
+# keeps its own baseline-stamped record as-is and got NO #309 continuation — those
+# records were NOT re-measured at the 166-case baseline, and this train's two new real-script
+# fixtures (plan-escalation-record-not-feedback, impl-escalation-record-not-binding) MAY join the
+# failing sets of broad mutants recorded there, the identical way they newly joined MUTATION PROOF
+# B and M4 above; this is not a claim that any of them are unreachable.
 
 matched=0
 for row in "${cases[@]}"; do

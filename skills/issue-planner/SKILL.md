@@ -26,6 +26,7 @@ the orchestrator: you handle all GitHub I/O, and you delegate the actual plan-wr
 | Opted out | `no-plan` | Planner ignores this issue entirely (tracking/discussion/question) | human; the implementer on every follow-up it files; cleanup-after-merge.sh --fix (orphaned follow-ups from an older harness version) |
 | Manual approval only | `no-auto-approve` | This issue's plans are never auto-approved, even under a CLAUDE.md policy | human only — the harness never applies this label |
 | Harness-authored | `test-ratchet` | Filed by the `test-ratchet` skill; the body is machine-authored evidence; step 6b's hard floor refuses auto-approval outright | the `test-ratchet` skill |
+| Escalated | `needs-human` | A durable escalation (#309): a skill asked the human a question and moved on; excluded from both this skill's and the implementer's discovery until the human answers and removes it | `issue-implementer`, via a Durable escalation |
 
 **Requesting changes is comment-driven, not label-driven.** To ask for a revision, a maintainer
 (`OWNER`/`MEMBER`/`COLLABORATOR` — see "Trust and provenance" below) simply comments on the
@@ -69,8 +70,12 @@ non-maintainer-authored issue is still planned; it is reported in `untrusted_iss
 
 **Harness-authored records are never binding context, on either side.** Every comment this skill
 or the implementer posts under its own identity — an audit record, a hygiene notice, an archived
-verdict — opens with the marker `<!-- harness-audit -->` (or, for a verifier verdict archive,
-`<!-- verifier-verdict -->`). Both discovery scripts exclude any such comment from the sets they
+verdict, or (#309) a durable escalation — opens with the marker `<!-- harness-audit -->` (or, for
+a verifier verdict archive, `<!-- verifier-verdict -->`, or for a durable escalation, `<!--
+harness-escalation -->` — see `issue-implementer`'s own SKILL.md "Durable escalation" subsection;
+distinct from, and never cross-matched with, this skill's OWN `<!-- harness-escalation:
+bucket=<bucket> stage=<stage> -->` stalled-stage key below). Both discovery scripts exclude any
+such comment from the sets they
 treat as binding: `find-planning-work.sh` never lets one count as feedback (so it never
 re-triggers a revision), and `find-implementation-work.sh` never lets one land in
 `trusted_post_plan`. Both scripts (#281, superseding #275) also restrict **plan selection itself**

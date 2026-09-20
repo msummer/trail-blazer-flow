@@ -2,10 +2,13 @@
 #
 # find-implementation-work.sh
 # Lists the issues ready for implementation, as JSON.
-#   ready : open issues labelled plan-approved, NOT already pr-open and NOT impl-blocked
+#   ready : open issues labelled plan-approved, NOT already pr-open, NOT impl-blocked, and
+#           (#309) NOT needs-human
 #
-# An issue leaves this queue when it gets pr-open (a PR was opened) or impl-blocked (needs a
-# human). To retry a blocked issue, remove the impl-blocked label.
+# An issue leaves this queue when it gets pr-open (a PR was opened), impl-blocked (needs a
+# human), or needs-human (a durable escalation is waiting on a human — #309, see
+# skills/issue-implementer/SKILL.md's "Durable escalation" subsection). To retry a blocked issue,
+# remove the impl-blocked label; to release an escalated one, remove needs-human.
 #
 # Recovery: if a PR is closed WITHOUT merging, its issue still carries pr-open and will never
 # re-enter this queue. Remove the pr-open label (and delete the stale claude/<n>-<slug> branch)
@@ -262,6 +265,17 @@
 # comment that begins with a verbatim marker copy at byte 0 is still dropped from trusted_post_plan
 # silently — no count, no warn — tracked as a separate follow-up.
 #
+# #309 adds a third marker to HARNESS_RECORD_MARKERS, ESCALATION_MARKER ("<!-- harness-escalation
+# -->" — distinct from, and never cross-matched with, the pre-existing
+# "<!-- harness-escalation: bucket=... stage=... -->" key the planner skill's own step-7
+# stalled-stage record uses — see skills/issue-planner/SKILL.md), and one more counter to go with
+# it: escalation_records_skipped (how many trusted, post-latest-plan comments contained the
+# escalation marker — a durable-escalation record itself, or a trusted comment quoting that marker
+# mid-body — excluded from trusted_post_plan via the same contains($e)/createdAt > $lastPlan shape
+# audit_comments_skipped/verdict_archives_skipped already use). A quoter comment is therefore
+# counted by BOTH escalation_records_skipped and harness_marker_quoters, the same double-counting
+# the pre-existing per-marker counters already have with harness_marker_quoters.
+#
 # Requires: gh (authenticated), jq. Run from anywhere inside the repo.
 set -euo pipefail
 
@@ -272,16 +286,24 @@ LIMIT=100
 # and the per-issue fetch inside the loop). Guarded (`|| true`) at every use so a failing sleep
 # itself can never abort the run under set -euo pipefail.
 RETRY_SLEEP=30
+# ESCALATION_LABEL (#309) — the durable-escalation label a skill applies (see
+# skills/issue-implementer/SKILL.md's "Durable escalation" subsection) and the dedupe mechanism:
+# the ready query below excludes it, so an escalated issue is never rediscovered until a human
+# removes it. Declared byte-identically in bin/find-planning-work.sh and bin/harness-status.sh
+# (gate assertion 4.48).
+ESCALATION_LABEL="needs-human"
 PLAN_MARKER="<!-- planner-plan -->"
 VERDICT_MARKER="<!-- verifier-verdict -->"
 AUDIT_MARKER="<!-- harness-audit -->"
+ESCALATION_MARKER="<!-- harness-escalation -->"
 
-# HARNESS_RECORD_MARKERS (#321) — the harness-record marker SET, one marker per line. A later
-# marker (an escalation record, say) is a ONE-LINE addition here and nowhere else in the
-# harness_marker_quoters member below. The per-marker counters above/below keep their own
-# $a/$v tests on purpose: each names its marker in its own counts key.
+# HARNESS_RECORD_MARKERS (#321, extended by #309) — the harness-record marker SET, one marker per
+# line. A later marker is a ONE-LINE addition here and nowhere else in the harness_marker_quoters
+# member below. The per-marker counters above/below keep their own $a/$v/$e tests on purpose: each
+# names its marker in its own counts key.
 HARNESS_RECORD_MARKERS="$AUDIT_MARKER
-$VERDICT_MARKER"
+$VERDICT_MARKER
+$ESCALATION_MARKER"
 
 # GitHub's authorAssociation enum: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR,
 # FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, NONE. Only the first three carry repo
@@ -338,13 +360,13 @@ else
   # #284 — bounded retry: one guarded backoff, one re-attempt, then fail closed to an empty
   # `ready` bucket rather than letting one blip abort the whole run under set -euo pipefail.
   if ! ready=$(gh issue list \
-    --search "is:open is:issue label:plan-approved -label:pr-open -label:impl-blocked" \
+    --search "is:open is:issue label:plan-approved -label:pr-open -label:impl-blocked -label:$ESCALATION_LABEL" \
     --json number,title,url \
     --limit "$LIMIT"); then
     ready_query_retried=true
     sleep "$RETRY_SLEEP" || true
     if ready=$(gh issue list \
-      --search "is:open is:issue label:plan-approved -label:pr-open -label:impl-blocked" \
+      --search "is:open is:issue label:plan-approved -label:pr-open -label:impl-blocked -label:$ESCALATION_LABEL" \
       --json number,title,url \
       --limit "$LIMIT"); then
       echo "warn: ready query failed once — retried after 30s and succeeded (transient API blip absorbed)" >&2
@@ -365,6 +387,7 @@ untrusted_plan_markers=0
 untrusted_harness_markers=0
 verdict_archives_skipped=0
 audit_comments_skipped=0
+escalation_records_skipped=0
 plan_marker_quoters=0
 harness_marker_quoters=0
 missing_association=0
@@ -404,7 +427,7 @@ for n in $ready_numbers; do
     [ (.labels // [])[] | if type == "object" then (.name // "") else tostring end ]
     | index("plan-approved") != null')
 
-  result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg v "$VERDICT_MARKER" --arg a "$AUDIT_MARKER" --arg hrm "$HARNESS_RECORD_MARKERS" --arg trusted "$TRUSTED_ASSOCIATIONS" '
+  result=$(printf '%s' "$issue" | jq --arg m "$PLAN_MARKER" --arg v "$VERDICT_MARKER" --arg a "$AUDIT_MARKER" --arg e "$ESCALATION_MARKER" --arg hrm "$HARNESS_RECORD_MARKERS" --arg trusted "$TRUSTED_ASSOCIATIONS" '
     ($trusted | split(" ")) as $ok
     | ($hrm | split("\n") | map(select(length > 0))) as $hm
     | (.comments // []) as $c
@@ -452,6 +475,7 @@ for n in $ready_numbers; do
                | select((.body | contains($m)) | not)
                | select((.body | contains($v)) | not)
                | select((.body | contains($a)) | not)
+               | select((.body | contains($e)) | not)
                | select(.createdAt > $lastPlan) ]
         end
       ) as $tppSel
@@ -475,7 +499,7 @@ for n in $ready_numbers; do
               createdAt: .createdAt,
               url: (.url // null),
               has_plan_marker: (.body | contains($m)),
-              has_harness_marker: ((.body | contains($a)) or (.body | contains($v))) } ],
+              has_harness_marker: ((.body | contains($a)) or (.body | contains($v)) or (.body | contains($e))) } ],
         missing_association: ([ $c[] | select(has("authorAssociation") | not) ] | length),
         verdict_archives_skipped: (
           if $lastPlan == null then 0
@@ -485,6 +509,15 @@ for n in $ready_numbers; do
         audit_comments_skipped: (
           if $lastPlan == null then 0
           else ([ $trustedC[] | select(.body | contains($a)) | select(.createdAt > $lastPlan) ] | length)
+          end
+        ),
+        # (#309) — comments dropped from trusted_post_plan for the escalation-record reason alone,
+        # the same contains($e)/createdAt > $lastPlan shape as verdict_archives_skipped/
+        # audit_comments_skipped above: a durable-escalation record itself, or a trusted comment
+        # quoting that marker mid-body, is not binding context.
+        escalation_records_skipped: (
+          if $lastPlan == null then 0
+          else ([ $trustedC[] | select(.body | contains($e)) | select(.createdAt > $lastPlan) ] | length)
           end
         ),
         # #302 — comments dropped from BOTH plan candidacy and trusted_post_plan for the
@@ -501,6 +534,7 @@ for n in $ready_numbers; do
           | select(.body | contains($m))
           | select((.body | contains($a)) | not)
           | select((.body | contains($v)) | not)
+          | select((.body | contains($e)) | not)
           | { author: (.author.login // "unknown"), createdAt: .createdAt, url: (.url // null) } ],
         # (#321) — comments dropped from trusted_post_plan for the harness-record reason alone:
         # the same window as the member above; within it, a trusted comment whose body contains
@@ -907,6 +941,9 @@ for n in $ready_numbers; do
 
   issue_audit_skipped=$(printf '%s' "$result" | jq '.audit_comments_skipped')
   audit_comments_skipped=$((audit_comments_skipped+issue_audit_skipped))
+
+  issue_escalation_skipped=$(printf '%s' "$result" | jq '.escalation_records_skipped')
+  escalation_records_skipped=$((escalation_records_skipped+issue_escalation_skipped))
 done
 
 jq -n \
@@ -921,6 +958,7 @@ jq -n \
   --argjson uhm "$untrusted_harness_markers" \
   --argjson vas "$verdict_archives_skipped" \
   --argjson acs "$audit_comments_skipped" \
+  --argjson ers "$escalation_records_skipped" \
   --argjson ma "$missing_association" \
   --argjson paa "$plan_after_approval" \
   --argjson nae "$no_approval_event" \
@@ -947,6 +985,7 @@ jq -n \
              untrusted_harness_markers: $uhm,
              verdict_archives_skipped: $vas,
              audit_comments_skipped: $acs,
+             escalation_records_skipped: $ers,
              missing_association: $ma,
              plan_after_approval: $paa,
              no_approval_event: $nae,

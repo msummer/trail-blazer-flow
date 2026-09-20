@@ -350,7 +350,7 @@ EOF
 
 # build_stub_gh DIR [BRANCH] [EXTRA_LABEL] [PROTECTION_MODE] — a deterministic, offline gh: auth
 # always succeeds; repo view returns the fixture's fake nameWithOwner and BRANCH (default "main")
-# as defaultBranchRef; label list returns the eight lifecycle labels (extracted from
+# as defaultBranchRef; label list returns the nine lifecycle labels (extracted from
 # bin/setup-labels.sh via the same sed idiom dev/selfcheck.sh's 4.6 uses — no second hard-coded
 # copy) plus EXTRA_LABEL, if given (so a fixture repo can "have" a scoped-autonomy grant label);
 # issue view returns DIR/gh-issue-body.json verbatim (a case writes that file before calling

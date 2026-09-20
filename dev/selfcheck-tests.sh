@@ -419,7 +419,38 @@ p_4_45_extraction() { edit "$1/hooks/claude-dir-guard.sh" 's/AGENT_TYPES_IMPLEME
 # standalone VERDICT_MARKER="..." declaration and the --arg v "$VERDICT_MARKER" use site elsewhere
 # in the file are untouched) so the two scripts' blocks disagree while bash -n stays clean.
 p_4_46_extraction() { edit "$1/bin/find-planning-work.sh" 's/HARNESS_RECORD_MARKERS/HARNESS_RECORD_MARKS/g'; }
-p_4_46_drift()      { edit "$1/bin/find-implementation-work.sh" 's/^\$VERDICT_MARKER"$/\$VERDICT_MARKR"/'; }
+p_4_46_drift()      { edit "$1/bin/find-implementation-work.sh" 's/^\$VERDICT_MARKER$/\$VERDICT_MARKR/'; }
+# p_4_48_* (#309) — four clauses, four perturbations, characters changed INSIDE the token, never a
+# suffix (LESSON 2026-09-04b). p_4_48_disagree alters bin/harness-status.sh's OWN ESCALATION_LABEL
+# value (a two-letter swap inside the token) so it no longer agrees with the other two scripts'
+# byte-identical declarations (clause a). p_4_48_not_created renames the label INSIDE
+# bin/setup-labels.sh's create_or_update call only (its OWN value, not the ESCALATION_LABEL
+# declarations elsewhere), so the value the three scripts agree on is no longer among the labels
+# setup-labels.sh actually creates (clause b) — measured to ALSO trip 4.6's pre-existing label
+# bijection, since the same edit removes the doctor-required "needs-human" label from what
+# setup-labels.sh creates. p_4_48_missing_token deletes the ` -label:$ESCALATION_LABEL` token from
+# exactly ONE of the six discovery --search lines — a whole-line anchored match on the
+# needs_initial_plan query's FIRST (non-retry, two-space-indented) occurrence only, which
+# distinguishes it from the byte-identical four-space-indented retry duplicate immediately below
+# it — tripping clause (c)'s per-script count-agreement check without needing every line to lose
+# it. p_4_48_missing_token_masked (#309 kickback K1) applies the identical missing-token edit and
+# then appends one comment line, `# every query appends -label:$ESCALATION_LABEL`, to the end of
+# the SAME file — before the K1 fix, clause (c) counted the token against the whole file rather
+# than within the extracted `--search "` lines, so the appended comment's own occurrence of the
+# token silently stood in for the one deleted from the real search line and the mutation passed
+# vacuously (measured on the pre-fix code: 75 pass, 0 fail, PASS 4.48); this case pins that the
+# fixed extraction still fails it, identically to p_4_48_missing_token's own message.
+# p_4_48_no_skill_mention replaces every occurrence of "needs-human" in
+# skills/issue-implementer/SKILL.md with a near-miss spelling, so the literal value no longer
+# appears anywhere in the one instruction surface clause (d) checks.
+p_4_48_disagree()      { edit "$1/bin/harness-status.sh" 's/^ESCALATION_LABEL="needs-human"$/ESCALATION_LABEL="needs-huamn"/'; }
+p_4_48_not_created()   { edit "$1/bin/setup-labels.sh" 's/create_or_update "needs-human"/create_or_update "needs-huamn"/'; }
+p_4_48_missing_token() { edit "$1/bin/find-planning-work.sh" 's/^  --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan -label:\$ESCALATION_LABEL" \\$/  --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan" \\/'; }
+p_4_48_missing_token_masked() {
+  edit "$1/bin/find-planning-work.sh" 's/^  --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan -label:\$ESCALATION_LABEL" \\$/  --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan" \\/'
+  printf '%s\n' '# every query appends -label:$ESCALATION_LABEL' | append "$1/bin/find-planning-work.sh"
+}
+p_4_48_no_skill_mention() { edit "$1/skills/issue-implementer/SKILL.md" 's/needs-human/needs-huamn/g'; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -796,8 +827,13 @@ cases=(
   "2.7-cdg-matcher|2.7|p_2_7_cdg_matcher|change the FOURTH (claude-dir-guard.sh) handler's matcher from Edit|Write to Bash -- measured: \"2.7 hooks/hooks.json structure broken: claude-dir-guard.sh's matcher is 'Bash', expected 'Edit|Write';\" (72 pass, 1 fail)"
   "4.45-drift|4.45|p_4_45_drift|alter one character inside hooks/claude-dir-guard.sh's own AGENT_TYPES_VERIFIER value (characters changed inside the token, not a suffix) so it no longer agrees with hooks/agent-boundary.sh's -- measured: \"4.45 AGENT_TYPES_* vocabulary disagrees: hooks/agent-boundary.sh has AGENT_TYPES_IMPLEMENTER='implementer trail-blazer-flow:implementer' AGENT_TYPES_VERIFIER='verifier trail-blazer-flow:verifier', hooks/claude-dir-guard.sh has AGENT_TYPES_IMPLEMENTER='implementer trail-blazer-flow:implementer' AGENT_TYPES_VERIFIER='verifier trail-blazer-flow:verifer'\" (72 pass, 1 fail)"
   "4.45-extraction|4.45|p_4_45_extraction|rename hooks/claude-dir-guard.sh's AGENT_TYPES_IMPLEMENTER identifier throughout so the gate's anchored extraction comes back empty -- measured: \"4.45 hooks/agent-boundary.sh's or hooks/claude-dir-guard.sh's AGENT_TYPES_IMPLEMENTER= or AGENT_TYPES_VERIFIER= line didn't match (structure changed) — extraction failed\" (72 pass, 1 fail)"
-  "4.46-extraction|4.46|p_4_46_extraction|rename HARNESS_RECORD_MARKERS to HARNESS_RECORD_MARKS throughout bin/find-planning-work.sh (both the declaration and its --arg use site, characters removed inside the token, not a suffix) so the gate's anchored extraction comes back empty -- measured: \"4.46 bin/find-planning-work.sh's or bin/find-implementation-work.sh's HARNESS_RECORD_MARKERS=\"...\" block didn't match (structure changed) — extraction failed\" (73 pass, 1 fail)"
-  "4.46-drift|4.46|p_4_46_drift|alter one character inside bin/find-implementation-work.sh's own HARNESS_RECORD_MARKERS block (its \$VERDICT_MARKER reference, anchored to the whole line so the standalone VERDICT_MARKER declaration and its other use site are untouched), so it no longer agrees with bin/find-planning-work.sh's -- measured: \"4.46 HARNESS_RECORD_MARKERS declaration disagrees: bin/find-planning-work.sh has 'HARNESS_RECORD_MARKERS=\"\$AUDIT_MARKER|\$VERDICT_MARKER\"|', bin/find-implementation-work.sh has 'HARNESS_RECORD_MARKERS=\"\$AUDIT_MARKER|\$VERDICT_MARKR\"|'\" (73 pass, 1 fail)"
+  "4.46-extraction|4.46|p_4_46_extraction|rename HARNESS_RECORD_MARKERS to HARNESS_RECORD_MARKS throughout bin/find-planning-work.sh (both the declaration and its --arg use site, characters removed inside the token, not a suffix) so the gate's anchored extraction comes back empty -- measured: \"4.46 bin/find-planning-work.sh's or bin/find-implementation-work.sh's HARNESS_RECORD_MARKERS=\"...\" block didn't match (structure changed) — extraction failed\" (74 pass, 1 fail)"
+  "4.46-drift|4.46|p_4_46_drift|alter one character inside bin/find-implementation-work.sh's own HARNESS_RECORD_MARKERS block (its \$VERDICT_MARKER middle line, anchored to the whole line — now bare, with no trailing quote, since #309 added a third line ending in \$ESCALATION_MARKER\" — so the standalone VERDICT_MARKER declaration and its other use site are untouched), so it no longer agrees with bin/find-planning-work.sh's -- measured: \"4.46 HARNESS_RECORD_MARKERS declaration disagrees: bin/find-planning-work.sh has 'HARNESS_RECORD_MARKERS=\"\$AUDIT_MARKER|\$VERDICT_MARKER|\$ESCALATION_MARKER\"|', bin/find-implementation-work.sh has 'HARNESS_RECORD_MARKERS=\"\$AUDIT_MARKER|\$VERDICT_MARKR|\$ESCALATION_MARKER\"|'\" (74 pass, 1 fail)"
+  "4.48-disagree|4.48|p_4_48_disagree|alter one character inside bin/harness-status.sh's own ESCALATION_LABEL value (characters changed inside the token, not a suffix) so it no longer agrees with bin/find-planning-work.sh's and bin/find-implementation-work.sh's byte-identical declarations -- measured: \"4.48 ESCALATION_LABEL disagrees: bin/find-planning-work.sh='needs-human' bin/find-implementation-work.sh='needs-human' bin/harness-status.sh='needs-huamn'\" (74 pass, 1 fail)"
+  "4.48-not-created|4.6 4.48|p_4_48_not_created|rename the label inside bin/setup-labels.sh's create_or_update call only (characters changed inside the token, not a suffix), so the value the three ESCALATION_LABEL declarations agree on is no longer among the labels setup-labels.sh creates -- measured: 4.6's pre-existing label bijection ALSO fails (the same edit removes 'needs-human' from what setup-labels.sh creates while bin/check-harness.sh's doctor loop still requires it) alongside \"4.48 ESCALATION_LABEL ('needs-human') is not among the labels bin/setup-labels.sh creates\" (73 pass, 2 fail)"
+  "4.48-missing-token|4.48|p_4_48_missing_token|delete the ' -label:\$ESCALATION_LABEL' token from exactly ONE of the six discovery --search lines (bin/find-planning-work.sh's needs_initial_plan query, the first/non-retry two-space-indented occurrence only, distinguished from its byte-identical four-space-indented retry duplicate by indentation) -- measured: \"4.48 1 of 6 discovery --search lines lack the -label:\$ESCALATION_LABEL token\" (74 pass, 1 fail)"
+  "4.48-missing-token-masked|4.48|p_4_48_missing_token_masked|the identical missing-token edit as 4.48-missing-token, PLUS one appended comment line carrying the token elsewhere in bin/find-planning-work.sh (non-vacuity proof: on the pre-K1-fix extraction, which counted the token against the whole file rather than within the --search \" lines, this exact mutation measured 75 pass, 0 fail -- PASS 4.48 -- a vacuous pass, since the appended comment's own occurrence silently replaced the deleted one in the file-wide count) -- measured on the fixed extraction: \"4.48 1 of 6 discovery --search lines lack the -label:\$ESCALATION_LABEL token\" (74 pass, 1 fail)"
+  "4.48-no-skill-mention|4.48|p_4_48_no_skill_mention|replace every occurrence of 'needs-human' in skills/issue-implementer/SKILL.md with a near-miss spelling (characters changed inside the token, not a suffix) -- measured: \"4.48 ESCALATION_LABEL value ('needs-human') not found in skills/issue-implementer/SKILL.md\" (74 pass, 1 fail)"
 )
 
 # ---------------------------------------------------------------------------------------------
