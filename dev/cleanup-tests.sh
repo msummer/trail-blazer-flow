@@ -37,6 +37,15 @@
 # fixtures both routes, and a fifth fixture pins that the cheaper `multi-pr`-label KEEP signal
 # still short-circuits before this lookup is ever attempted.
 #
+# Since #334, the follow-up quarantine's idempotence key moved off the `no-plan` label (a
+# follow-up is born `no-plan` since #308, so excluding it from the candidate query would exclude
+# every follow-up outright) onto a trusted, PR-keyed `<!-- harness-orphan-notice: PR #<p> -->`
+# marker read from a per-follow-up `gh issue view --json comments` lookup, the same trust gate and
+# #249 fail-closed shape the multi-PR path above already uses. `build_stub_gh`'s `issue list` arm
+# gains a `--search` case serving `followups.json` (field-projected exactly like the `pr-open`
+# arm), and its `issue view` "ok" mode prefers a per-issue `comments-<n>.json` override when
+# present — see `build_stub_gh`'s own comment below for both.
+#
 # Usage: bash dev/cleanup-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh and dev/doctor-tests.sh: one PASS/FAIL line per case, a
 # `== summary: N pass, M fail ==` footer, exit 0 iff nothing failed; a filter with no match
@@ -130,23 +139,32 @@ mk_repo_with_origin() {
 # mode-dependent body, so a bad field list is still caught on a fixture that also wants to
 # simulate a failed `gh pr list`. VIEW_MODE (#249, default "ok", the same positional idiom as
 # REPO_MODE/PR_MODE rather than the marker-file approach #249's issue text sketches — it matches
-# the run's overall behaviour, not a per-issue one) composes the `issue view)` arm: "ok" cats
-# DIR/comments.json (the `--json comments`-shaped payload the marker lookup expects), "fail"
-# exits 1 with no output (simulating a rate-limited/unauthenticated `gh issue view`), "malformed"
-# prints a non-JSON line and exits 0 (simulating a response gh itself returned successfully but
-# that fails to parse — e.g. a truncated body). Otherwise: `issue list` cats DIR/issues.json when
-# invoked with the literal `--label pr-open` flag pair (the label-hygiene query) and prints `[]`
-# for any other `issue list` invocation (the follow-ups query, never exercised by these fixtures
-# since their prs.json carries no CLOSED entry) — since #231, the label-hygiene arm additionally
-# PROJECTS the real jq's own `with_entries(select(...))` idiom over DIR/issues.json against
-# whatever field list followed a literal `--json` token in the invocation, the same
-# document-semantics faithfulness #196 (LESSON 2026-09-01(c)) requires: a fixture whose script
-# drops `labels` from its own `--json` list gets back objects with no `labels` key at all, not a
-# stub that silently keeps serving it — which is what makes the `keep-multi-pr-label` case's
-# mutation proof possible. `issue comment|edit|close` append the full `"$*"` line to
-# DIR/gh-calls.log and exit 0 — the machine-derived payload every case's assertions read back.
-# Anything else exits 1. The `__DIR__` placeholder + sed substitution step stays for the
-# fixed part of the script (unchanged from before REPO_MODE/PR_MODE existed).
+# the run's overall behaviour, not a per-issue one) composes the `issue view)` arm: in its default
+# "ok" mode, it cats DIR/comments-$3.json (`$3` is the issue number the `gh issue view <n> --json
+# comments` call names) when that file exists, falling back to DIR/comments.json otherwise —
+# letting one fixture give two different follow-up issues distinct comment state (#334, the
+# `followup-notice-per-issue-state` case); "fail" exits 1 with no output (simulating a
+# rate-limited/unauthenticated `gh issue view`, uniformly for every issue number — no per-issue
+# override in this mode), "malformed" prints a non-JSON line and exits 0 (simulating a response gh
+# itself returned successfully but that fails to parse — e.g. a truncated body), also uniform.
+# Otherwise: `issue list` cats DIR/issues.json when invoked with the literal `--label pr-open`
+# flag pair (the label-hygiene query); since #334, it also cats DIR/followups.json, when that file
+# exists, when invoked with the literal `is:open is:issue -label:pr-open` search predicate (the
+# follow-up candidate query) — an exact-substring match, not a generic `--search` match, so a
+# mutant that reintroduces the old query's `-label:no-plan` token breaks the match and falls
+# through to the catch-all `[]` below — and prints `[]` for any other `issue list` invocation, or
+# when DIR/followups.json is absent (which is what keeps the pre-#334 fixtures byte-identical:
+# none of them creates that file, and most never reach the follow-up query at all because their
+# prs.json carries no CLOSED entry). Since #231, the label-hygiene arm additionally PROJECTS the
+# real jq's own `with_entries(select(...))` idiom over DIR/issues.json against whatever field list
+# followed a literal `--json` token in the invocation, the same document-semantics faithfulness
+# #196 (LESSON 2026-09-01(c)) requires: a fixture whose script drops `labels` from its own `--json`
+# list gets back objects with no `labels` key at all, not a stub that silently keeps serving it —
+# which is what makes the `keep-multi-pr-label` case's mutation proof possible; since #334, the
+# follow-up arm projects DIR/followups.json the identical way. `issue comment|edit|close` append
+# the full `"$*"` line to DIR/gh-calls.log and exit 0 — the machine-derived payload every case's
+# assertions read back. Anything else exits 1. The `__DIR__` placeholder + sed substitution step
+# stays for the fixed part of the script (unchanged from before REPO_MODE/PR_MODE existed).
 #
 # Since #248, the generated stub ALSO carries two live-probed field-set constants and a
 # `validate_json_fields` helper (ported from dev/planning-tests.sh's #217 treatment — see that
@@ -268,6 +286,17 @@ EOF
               cat "__DIR__/issues.json"
             fi
             ;;
+          *"is:open is:issue -label:pr-open"*)
+            if [ -f "__DIR__/followups.json" ]; then
+              if [ -n "$fields" ]; then
+                jq -c --arg f "$fields" 'map(with_entries(select(.key as $k | (($f | split(",")) | index($k)) != null)))' "__DIR__/followups.json"
+              else
+                cat "__DIR__/followups.json"
+              fi
+            else
+              printf '[]'
+            fi
+            ;;
           *) printf '[]' ;;
         esac
         exit 0 ;;
@@ -277,7 +306,10 @@ EOF
     elif [ "$view_mode" = malformed ]; then
       printf '      view) validate_json_fields "$GH_ISSUE_JSON_FIELDS" "$@"; printf "not a json document\\n"; exit 0 ;;\n'
     else
-      printf '      view) validate_json_fields "$GH_ISSUE_JSON_FIELDS" "$@"; cat "__DIR__/comments.json"; exit 0 ;;\n'
+      printf '      view)\n'
+      printf '        validate_json_fields "$GH_ISSUE_JSON_FIELDS" "$@"\n'
+      printf '        if [ -f "__DIR__/comments-$3.json" ]; then cat "__DIR__/comments-$3.json"; else cat "__DIR__/comments.json"; fi\n'
+      printf '        exit 0 ;;\n'
     fi
     cat <<'EOF'
       comment|edit|close)
@@ -501,15 +533,16 @@ EOF
 # Decision replaced it with the multi-pr label, since cleanup has no author-association lookup
 # for the issue itself), so this now takes the ordinary close path — same fixture as the old
 # keep-marker-body case, inverted expectations. Mutation proof (step 13(d), RE-MEASURED
-# 2026-09-09 against the 30-case suite #248/#249 grew this file to): restoring ONLY the deleted
-# body-marker `elif` (re-adding `issue_body=$(printf '%s' "$issue" | jq -r '.body // ""'...)`
-# plus the elif reading it) left this fixture PASSING (measured: 30 pass, 0 fail) — a surviving
-# mutant, because `--json number,title,labels` no longer requests `body` at all, so the stub's
-# own field projection (see build_stub_gh above) strips the key and `issue_body` reads empty
-# regardless of the elif's presence; a real `gh` would behave identically. The meaningful,
+# 2026-09-21, kickback K1, on a `tar --exclude=.git` scratch copy of the final tree, against the
+# 46-case registry #248/#249/#334/kickback-K1 grew this file to): restoring ONLY the deleted
+# body-marker `elif` (re-adding `issue_body=$(printf '%s' "$issue" | jq -r '.body //
+# ""'...)` plus the elif reading it) left this fixture PASSING (measured: 46 pass, 0 fail) — a
+# surviving mutant, because `--json number,title,labels` no longer requests `body` at all, so the
+# stub's own field projection (see build_stub_gh above) strips the key and `issue_body` reads
+# empty regardless of the elif's presence; a real `gh` would behave identically. The meaningful,
 # measured mutant instead restores the whole removed code path together — the elif AND `body`
 # back in the `--json` field list (`--json number,title,labels,body`) — which makes this
-# fixture, and only this fixture, FAIL (measured: 29 pass, 1 fail): the issue reports KEEP and
+# fixture, and only this fixture, FAIL (measured: 45 pass, 1 fail): the issue reports KEEP and
 # "issue close" is never called. (Both figures move in lockstep with the suite's case count, not
 # with this fixture's own behaviour — re-run, never assumed, per LESSON 2026-09-07.)
 case_close_marker_body_only() {
@@ -555,11 +588,12 @@ EOF
 # keep-multi-pr-label (#231) — the issue itself carries the multi-pr label (gh's real
 # {"name": "..."} label-element shape), Closes #7 present, no sibling, no comment marker at
 # all: no close. The primary signal — proves the label alone is sufficient, no comment fetch
-# needed. Mutation proof (step 13(a), RE-MEASURED 2026-09-09 against the 30-case suite):
+# needed. Mutation proof (step 13(a), RE-MEASURED 2026-09-21, kickback K1, on a
+# `tar --exclude=.git` scratch copy of the final tree, against the 46-case registry):
 # dropping `labels` from bin/cleanup-after-merge.sh's `gh issue list --json` field list (the
 # stub's field projection then serves an issue object with no labels key at all, so
-# has_multi_pr_label reads false) makes `bash dev/cleanup-tests.sh` go from 30 pass, 0 fail to
-# 28 pass, 2 fail, failing EXACTLY this fixture AND keep-multi-pr-label-view-failure-short-
+# has_multi_pr_label reads false) makes `bash dev/cleanup-tests.sh` go from 46 pass, 0 fail to
+# 44 pass, 2 fail, failing EXACTLY this fixture AND keep-multi-pr-label-view-failure-short-
 # circuits (#249, added by this diff — it depends on the identical has_multi_pr_label signal) —
 # a WIDER failing set than the pre-#249 measurement named, confirmed by re-running rather than
 # assumed (LESSON 2026-09-07).
@@ -584,10 +618,11 @@ EOF
 # close-untrusted-comment-marker (#231) — a comment carries <!-- harness-multi-pr --> but its
 # authorAssociation is NONE: the marker is ignored (not a KEEP signal) and the issue closes on
 # the normal path, plus exactly one WARN line naming the comment's association and url.
-# Mutation proof (step 13(b), RE-MEASURED 2026-09-09 against the 30-case suite): deleting the
+# Mutation proof (step 13(b), RE-MEASURED 2026-09-21, kickback K1, on a `tar --exclude=.git`
+# scratch copy of the final tree, against the 46-case registry): deleting the
 # trusted `select` clause from the `trusted_hits` jq filter (so ANY marker-carrying comment
 # counts as trusted, regardless of authorAssociation) makes `bash dev/cleanup-tests.sh` go from
-# 30 pass, 0 fail to 28 pass, 2 fail, failing EXACTLY this fixture AND
+# 46 pass, 0 fail to 44 pass, 2 fail, failing EXACTLY this fixture AND
 # close-missing-association-marker (below — its comment has no authorAssociation key at all,
 # which this mutation also treats as trusted): both KEEP instead of closing. Re-run rather than
 # assumed (LESSON 2026-09-07) — the failing set is two fixtures, not one.
@@ -615,9 +650,10 @@ EOF
 # --fix: the same untrusted-marker WARN still prints exactly once, naming the comment's
 # association and url, and no gh mutation call is made at all — proving the WARN is not gated
 # behind --fix (RESOLVED: the untrusted-marker WARN prints in report-only mode as well as
-# --fix). Mutation proof (RE-MEASURED 2026-09-09 against the 30-case suite): wrapping the
+# --fix). Mutation proof (RE-MEASURED 2026-09-21, kickback K1, on a `tar --exclude=.git`
+# scratch copy of the final tree, against the 46-case registry): wrapping the
 # untrusted-marker WARN `echo` in `if $FIX; then ... fi` makes `bash dev/cleanup-tests.sh` go
-# from 30 pass, 0 fail to 29 pass, 1 fail, failing EXACTLY this fixture — the "ignoring a
+# from 46 pass, 0 fail to 45 pass, 1 fail, failing EXACTLY this fixture — the "ignoring a
 # harness-multi-pr marker" WARN line disappears (count 0, not 1) when the run is report-only.
 case_warn_untrusted_marker_no_fix() {
   local dir; dir="$(mk_repo warn-untrusted-marker-no-fix)"
@@ -641,10 +677,11 @@ EOF
 # close-missing-association-marker (#231) — same as close-untrusted-comment-marker, but the
 # comment object has NO authorAssociation key at all: fail-closed the same way (same rule as
 # both discovery scripts), one WARN naming the MISSING sentinel. Mutation proof (step 13(c),
-# RE-MEASURED 2026-09-09 against the 30-case suite): deleting the whole untrusted `select`/WARN
+# RE-MEASURED 2026-09-21, kickback K1, on a `tar --exclude=.git` scratch copy of the final tree,
+# against the 46-case registry): deleting the whole untrusted `select`/WARN
 # `if`/`while` block (the `if [[ -n "$untrusted_marker_lines" ]]; then ... fi` around the
 # `echo "WARN ... ignoring a harness-multi-pr marker"` line) makes `bash dev/cleanup-tests.sh` go
-# from 30 pass, 0 fail to 27 pass, 3 fail, failing EXACTLY this fixture,
+# from 46 pass, 0 fail to 43 pass, 3 fail, failing EXACTLY this fixture,
 # close-untrusted-comment-marker, and warn-untrusted-marker-no-fix (every fixture that asserts
 # the "ignoring a harness-multi-pr marker" WARN line, not just this one — the WARN line
 # disappears, count 0, not 1, for all three). Re-run rather than assumed (LESSON 2026-09-07).
@@ -671,8 +708,9 @@ EOF
 # keep-marker-comment-lowercase-assoc (#231) — a comment's authorAssociation is "owner"
 # (lowercase, as GitHub never actually sends it, but pins the ascii_upcase normalisation no
 # other fixture distinguishes): still trusted, still KEEP. Mutation proof (step 13(e),
-# RE-MEASURED 2026-09-09 against the 30-case suite): deleting `ascii_upcase` from the
-# `trusted_hits` jq filter makes `bash dev/cleanup-tests.sh` go from 30 pass, 0 fail to 29 pass,
+# RE-MEASURED 2026-09-21, kickback K1, on a `tar --exclude=.git` scratch copy of the final tree,
+# against the 46-case registry): deleting `ascii_upcase` from the
+# `trusted_hits` jq filter makes `bash dev/cleanup-tests.sh` go from 46 pass, 0 fail to 45 pass,
 # 1 fail, failing EXACTLY this fixture — the lowercase association no longer matches the
 # uppercase TRUSTED_ASSOCIATIONS list, so the marker is treated as untrusted and the issue
 # closes instead of KEEPing.
@@ -873,12 +911,14 @@ EOF
 # non-empty values first (so a non-guarded regression couldn't pass vacuously against empty
 # captured output), calls all six with "", then checks the ACCUMULATED __ok/__why saved off
 # before this case's own __ok/__why are reset by the runner loop.
-# Measured mutants (re-measured against the 30-case suite after #248/#249's cases were added):
+# Measured mutants (re-measured 2026-09-21, kickback K1, on a `tar --exclude=.git` scratch copy
+# of the final tree, against the 46-case registry after #248/#249/#334/kickback-K1's
+# cases were added):
 #   - delete `needle_required expect_count "$needle" || return 0` from expect_count only —
-#     `bash dev/cleanup-tests.sh` goes from 30 pass, 0 fail to 29 pass, 1 fail, failing exactly:
+#     `bash dev/cleanup-tests.sh` goes from 46 pass, 0 fail to 45 pass, 1 fail, failing exactly:
 #     empty-needle-guard (saved_why no longer names "expect_count:").
-#   - delete `needle_required expect_err "$1" || return 0` from expect_err only — 30 pass, 0 fail
-#     to 29 pass, 1 fail, failing exactly: empty-needle-guard (saved_why no longer names
+#   - delete `needle_required expect_err "$1" || return 0` from expect_err only — 46 pass, 0 fail
+#     to 45 pass, 1 fail, failing exactly: empty-needle-guard (saved_why no longer names
 #     "expect_err:").
 case_empty_needle_guard() {
   local saved_ok saved_why
@@ -1011,7 +1051,7 @@ EOF
   run_stub_gh "$dir" issue list --label pr-open --state open --json number,title,labels --limit 100
   expect_rc 0
   expect '"title":"T"'
-  run_stub_gh "$dir" issue list --search "is:open is:issue -label:no-plan -label:pr-open" --json number,title,body --limit 200
+  run_stub_gh "$dir" issue list --search "is:open is:issue -label:pr-open" --json number,title,body,labels --limit 200
   expect_rc 0
   [ "$cleanup_out" = "[]" ] || { __ok=0; __why="${__why}expected [] from the follow-up candidates query, got: $cleanup_out\n"; }
   run_stub_gh "$dir" issue view 7 --json comments
@@ -1205,62 +1245,646 @@ EOF
   expect_call "remove-label pr-open"
 }
 
-# MEASURED MUTANTS (2026-09-09), applied one at a time to the working tree and reverted
-# byte-identically immediately after each measurement (backup refreshed immediately before each
-# mutation, restore verified with a full `diff`, per LESSON 2026-09-07), full suite
-# (`bash dev/cleanup-tests.sh`) re-run after each, against this file's final 30-case registry:
+# ---------------------------------------------------------------------------------------------
+# Part 5 cases (#334, extended to sixteen by kickback K1): the follow-up orphan-notice
+# quarantine. All sixteen fixtures share the
+# same base shape unless noted — one CLOSED, claude/50-x-headed PR (#12), an empty issues.json
+# (so the pr-open section never calls `issue view` itself and can't interfere with these
+# fixtures' own view-mode parameter), and a followups.json entry (issue #50) whose body carries
+# <!-- harness-follow-up: PR #12 -->. Comment urls use the real
+# https://example.invalid/<issue>#issuecomment-<id> shape (#220).
+
+# followup-notice-first-run — --fix, the follow-up already carries no-plan (the #308 shape, the
+# regression #334 fixes), comments empty (not yet noticed): one issue comment call whose body
+# carries both marker lines, no add-label call (no-plan is already present), FIXED line present.
+# Mutation proof: (m), (t), (u), (v) — see the #334 MEASURED MUTANTS block below.
+case_followup_notice_first_run() {
+  local dir; dir="$(mk_repo followup-notice-first-run)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue comment 50"
+  expect_call "<!-- harness-audit -->"
+  expect_call "<!-- harness-orphan-notice: PR #12 -->"
+  expect_no_call "add-label"
+  expect "FIXED #50 (Deferred later): follow-up from PR #12, closed without merge — commented"
+}
+
+# followup-notice-idempotent-second-run — --fix, comments seeded with a trusted (OWNER) comment
+# already carrying <!-- harness-orphan-notice: PR #12 -->: expect_calls_empty, no FIXED, no
+# STALE — the idempotence guarantee, second run. Mutation proof: (v).
+case_followup_notice_idempotent_second_run() {
+  local dir; dir="$(mk_repo followup-notice-idempotent-second-run)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"Already handled.\n<!-- harness-orphan-notice: PR #12 -->\n","authorAssociation":"OWNER","url":"https://example.invalid/50#issuecomment-9101"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_calls_empty
+  expect_absent "FIXED #50"
+  expect_absent "STALE #50"
+}
+
+# followup-notice-report-only — the first-run fixture, without --fix: one STALE line,
+# expect_calls_empty. Mutation proof: (m).
+case_followup_notice_report_only() {
+  local dir; dir="$(mk_repo followup-notice-report-only)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir"
+  expect_rc 0
+  expect "STALE #50 (Deferred later): filed as a follow-up from PR #12, which was closed without merging"
+  expect_calls_empty
+}
+
+# followup-notice-idempotent-report-only — the idempotent-second-run fixture, without --fix
+# (LESSON 2026-09-08: the criterion names both modes): no STALE line, no calls.
+# Mutation proof: (v).
+case_followup_notice_idempotent_report_only() {
+  local dir; dir="$(mk_repo followup-notice-idempotent-report-only)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"Already handled.\n<!-- harness-orphan-notice: PR #12 -->\n","authorAssociation":"OWNER","url":"https://example.invalid/50#issuecomment-9101"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir"
+  expect_rc 0
+  expect_absent "STALE #50"
+  expect_calls_empty
+}
+
+# followup-notice-adds-no-plan-when-absent — --fix, "labels":[] (the older-harness shape, before
+# #308 born every follow-up with no-plan already attached): comment call AND
+# issue edit 50 --add-label no-plan. Mutation proof: (m).
+case_followup_notice_adds_no_plan_when_absent() {
+  local dir; dir="$(mk_repo followup-notice-adds-no-plan-when-absent)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue comment 50"
+  expect_call "issue edit 50 --add-label no-plan"
+  expect "FIXED #50 (Deferred later): follow-up from PR #12, closed without merge — commented, labelled no-plan"
+}
+
+# followup-notice-untrusted-marker-ignored — --fix, the orphan-notice marker is present but its
+# comment's authorAssociation is NONE: the marker is ignored (not a suppression signal) and the
+# notice is still posted, plus exactly one WARN naming the comment's association and url.
+# Mutation proof: (m), (n), (p), (v).
+case_followup_notice_untrusted_marker_ignored() {
+  local dir; dir="$(mk_repo followup-notice-untrusted-marker-ignored)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"Not mine to say.\n<!-- harness-orphan-notice: PR #12 -->\n","authorAssociation":"NONE","url":"https://example.invalid/50#issuecomment-9102"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue comment 50"
+  expect "FIXED #50 (Deferred later): follow-up from PR #12, closed without merge — commented"
+  expect_count "ignoring an orphan-notice marker from an untrusted comment author" 1
+  expect "(NONE) at https://example.invalid/50#issuecomment-9102"
+}
+
+# followup-notice-untrusted-marker-no-fix — the untrusted-marker fixture, without --fix: the same
+# single WARN still prints, STALE is still printed, expect_calls_empty.
+# Mutation proof: (m), (n), (p), (v).
+case_followup_notice_untrusted_marker_no_fix() {
+  local dir; dir="$(mk_repo followup-notice-untrusted-marker-no-fix)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"Not mine to say.\n<!-- harness-orphan-notice: PR #12 -->\n","authorAssociation":"NONE","url":"https://example.invalid/50#issuecomment-9102"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir"
+  expect_rc 0
+  expect "STALE #50 (Deferred later): filed as a follow-up from PR #12, which was closed without merging"
+  expect_count "ignoring an orphan-notice marker from an untrusted comment author" 1
+  expect "(NONE) at https://example.invalid/50#issuecomment-9102"
+  expect_calls_empty
+}
+
+# followup-notice-missing-association-marker — --fix, the orphan-notice marker is on a comment
+# with NO authorAssociation key at all: fail-closed untrusted (same rule as the multi-PR path),
+# notice posted, one WARN naming the MISSING sentinel. Mutation proof: (m), (n), (p), (v).
+case_followup_notice_missing_association_marker() {
+  local dir; dir="$(mk_repo followup-notice-missing-association-marker)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"Not mine to say.\n<!-- harness-orphan-notice: PR #12 -->\n","url":"https://example.invalid/50#issuecomment-9103"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue comment 50"
+  expect "FIXED #50 (Deferred later): follow-up from PR #12, closed without merge — commented"
+  expect_count "ignoring an orphan-notice marker from an untrusted comment author" 1
+  expect "(MISSING) at https://example.invalid/50#issuecomment-9103"
+}
+
+# followup-notice-idempotent-lowercase-assoc (kickback K1, mirroring the multi-PR path's
+# keep-marker-comment-lowercase-assoc) — --fix, the idempotent-second-run fixture with the seeded
+# comment's authorAssociation spelled "owner" (lowercase, as GitHub never actually sends it, but
+# pins the ascii_upcase normalisation no other #334 fixture distinguishes): still trusted, notice
+# still suppressed, no untrusted-marker WARN. Mutation proof: (o), (v).
+case_followup_notice_idempotent_lowercase_assoc() {
+  local dir; dir="$(mk_repo followup-notice-idempotent-lowercase-assoc)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"Already handled.\n<!-- harness-orphan-notice: PR #12 -->\n","authorAssociation":"owner","url":"https://example.invalid/50#issuecomment-9107"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_calls_empty
+  expect_absent "FIXED #50"
+  expect_absent "STALE #50"
+  expect_absent "ignoring an orphan-notice marker from an untrusted comment author"
+}
+
+# followup-notice-view-failure-warns-and-keeps — --fix, the per-follow-up orphan-notice lookup
+# itself fails (VIEW_MODE=fail): one WARN naming the fetch route phrase, expect_calls_empty, no
+# FIXED/STALE line — the issue is left exactly as found for the next run to re-examine.
+# Mutation proof: (m), (q).
+case_followup_notice_view_failure_warns_and_keeps() {
+  local dir; dir="$(mk_repo followup-notice-view-failure-warns-and-keeps)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir" ok ok fail
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_count "the orphan-notice lookup failed" 1
+  expect "(gh issue view failed - rate limit, auth, or network?)"
+  expect_calls_empty
+  expect_absent "FIXED #50"
+  expect_absent "STALE #50"
+}
+
+# followup-notice-view-failure-warns-no-fix — the same failed-lookup fixture, without --fix: the
+# same single WARN still prints, no STALE line, expect_calls_empty.
+# Mutation proof: (m), (q), (s).
+case_followup_notice_view_failure_warns_no_fix() {
+  local dir; dir="$(mk_repo followup-notice-view-failure-warns-no-fix)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir" ok ok fail
+  run_cleanup "$dir"
+  expect_rc 0
+  expect_count "the orphan-notice lookup failed" 1
+  expect "(gh issue view failed - rate limit, auth, or network?)"
+  expect_absent "STALE #50"
+  expect_calls_empty
+}
+
+# followup-notice-view-malformed-warns-and-keeps — the per-follow-up lookup SUCCEEDS but returns
+# a non-JSON document (VIEW_MODE=malformed): same WARN discipline, distinguishing route phrase.
+# Mutation proof: (m), (q), (r).
+case_followup_notice_view_malformed_warns_and_keeps() {
+  local dir; dir="$(mk_repo followup-notice-view-malformed-warns-and-keeps)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir" ok ok malformed
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_count "the orphan-notice lookup failed" 1
+  expect "(the comments response was not valid JSON)"
+  expect_calls_empty
+  expect_absent "FIXED #50"
+  expect_absent "STALE #50"
+}
+
+# followup-notice-view-malformed-warns-no-fix — the same malformed fixture, without --fix.
+# Mutation proof: (m), (q), (r), (s).
+case_followup_notice_view_malformed_warns_no_fix() {
+  local dir; dir="$(mk_repo followup-notice-view-malformed-warns-no-fix)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir" ok ok malformed
+  run_cleanup "$dir"
+  expect_rc 0
+  expect_count "the orphan-notice lookup failed" 1
+  expect "(the comments response was not valid JSON)"
+  expect_absent "STALE #50"
+  expect_calls_empty
+}
+
+# followup-notice-marker-is-per-pr — --fix, a trusted orphan-notice marker naming PR #99 while
+# the actual closed PR is #12: the notice IS posted (the marker is PR-keyed, the analogue of
+# keep-wrong-issue-number for the multi-PR path). Mutation proof: (m) — none of the other #334
+# mutants change this fixture's outcome, since its seeded comment never matches the real marker
+# either way (see mutant (v)'s own note in the MEASURED MUTANTS block below).
+case_followup_notice_marker_is_per_pr() {
+  local dir; dir="$(mk_repo followup-notice-marker-is-per-pr)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"From a different PR entirely.\n<!-- harness-orphan-notice: PR #99 -->\n","authorAssociation":"OWNER","url":"https://example.invalid/50#issuecomment-9104"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue comment 50"
+  expect "FIXED #50 (Deferred later): follow-up from PR #12, closed without merge — commented"
+}
+
+# followup-notice-audit-marker-alone-does-not-suppress — --fix, a trusted comment carrying only
+# <!-- harness-audit --> (no orphan-notice marker at all): the notice IS posted — pins that the
+# idempotence key is the orphan marker, not the audit marker every harness comment opens with.
+# Mutation proof: (m).
+case_followup_notice_audit_marker_alone_does_not_suppress() {
+  local dir; dir="$(mk_repo followup-notice-audit-marker-alone-does-not-suppress)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"<!-- harness-audit -->\nSome unrelated harness comment, no orphan marker.\n","authorAssociation":"OWNER","url":"https://example.invalid/50#issuecomment-9105"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue comment 50"
+  expect "FIXED #50 (Deferred later): follow-up from PR #12, closed without merge — commented"
+}
+
+# followup-notice-per-issue-state — --fix, two follow-ups from the SAME closed PR: #50 not yet
+# noticed (comments-50.json empty) and #51 already noticed (comments-51.json seeded with a
+# trusted orphan-notice marker) — exactly one issue comment call, naming #50 only. Pins per-issue
+# state and the stub's new comments-<n>.json override; expect_count "issue comment" 1 against
+# $calls is not available (expect_count reads $cleanup_out, not $calls — see that helper's own
+# comment above), so this case uses expect_call + expect_no_call instead. Mutation proof: (m), (v).
+case_followup_notice_per_issue_state() {
+  local dir; dir="$(mk_repo followup-notice-per-issue-state)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Not yet noticed","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]},
+ {"number":51,"title":"Already noticed","body":"Deferring this too.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  cat > "$dir/comments-50.json" <<'EOF'
+{"comments":[]}
+EOF
+  cat > "$dir/comments-51.json" <<'EOF'
+{"comments":[{"body":"Already handled.\n<!-- harness-orphan-notice: PR #12 -->\n","authorAssociation":"OWNER","url":"https://example.invalid/51#issuecomment-9106"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue comment 50 --body"
+  expect_no_call "issue comment 51"
+  expect "FIXED #50 (Not yet noticed): follow-up from PR #12, closed without merge — commented"
+  expect_absent "FIXED #51"
+  expect_absent "STALE #51"
+}
+
+# MEASURED MUTANTS — the twelve entries (a)-(l) were first authored 2026-09-09; RE-MEASURED
+# 2026-09-21 (including kickback K1's sixteenth fixture) against this file's final 46-case
+# registry — see the #334 block below for the ten new mutants that block added. Every measurement
+# below, both these twelve entries and the #334 block's own, was taken by extracting a fresh copy
+# of the pristine tree from one `tar --exclude=.git` archive per mutation, applying exactly one
+# mutation to that scratch copy, running `bash dev/cleanup-tests.sh` there and saving its full
+# output to a file, then discarding the scratch copy before the next mutation — never by mutating
+# bin/cleanup-after-merge.sh or this file in place on the tracked working tree:
 #   (a) delete `validate_json_fields "$GH_ISSUE_JSON_FIELDS" "$@"` from the `issue) list)` arm
-#       only: 27 pass, 3 fail, failing EXACTLY stub-json-unknown-field-rejected-issue-list,
+#       only: 43 pass, 3 fail, failing EXACTLY stub-json-unknown-field-rejected-issue-list,
 #       stub-json-field-sets-are-subcommand-scoped, stub-json-missing-json-argument-fails-loud.
-#   (b) delete the same call from the `issue) view)` arm only: 27 pass, 3 fail, failing EXACTLY
+#   (b) delete the same call from the `issue) view)` arm only: 43 pass, 3 fail, failing EXACTLY
 #       stub-json-unknown-field-rejected-issue-view, stub-json-field-sets-are-subcommand-scoped,
 #       script-unknown-json-field-warns-and-keeps.
 #   (c) delete `validate_json_fields "$GH_PR_JSON_FIELDS" "$@"` from the `pr) list)` arm only:
-#       29 pass, 1 fail, failing EXACTLY stub-json-unknown-field-rejected-pr-list.
-#   (d) swap GH_PR_JSON_FIELDS -> GH_ISSUE_JSON_FIELDS on the `pr) list)` arm: 8 pass, 22 fail —
+#       45 pass, 1 fail, failing EXACTLY stub-json-unknown-field-rejected-pr-list.
+#   (d) swap GH_PR_JSON_FIELDS -> GH_ISSUE_JSON_FIELDS on the `pr) list)` arm: 11 pass, 35 fail —
 #       a wide cascade (bin/cleanup-after-merge.sh's own `pr list --json
 #       number,state,headRefName,body` call is rejected, so almost every fixture that depends on
-#       the PR list loses it), including but not limited to stub-json-field-sets-are-subcommand-
-#       scoped and stub-json-script-field-lists-accepted — re-run confirmed rather than assumed
-#       (LESSON 2026-09-07), passing set: pull-ok, current-branch-failure-continues,
-#       pr-list-failure-continues, empty-needle-guard, stub-json-unknown-field-rejected-
-#       issue-list, stub-json-unknown-field-rejected-issue-view, stub-json-unknown-field-
-#       rejected-pr-list, stub-json-missing-json-argument-fails-loud.
-#   (e) swap GH_ISSUE_JSON_FIELDS -> GH_PR_JSON_FIELDS on BOTH issue arms: 29 pass, 1 fail,
+#       the PR list loses it — the saved run shows `WARN    could not fetch the PR list (gh pr
+#       list failed — rate limit, auth, or network?) — skipping pr-open label hygiene and the
+#       follow-ups check below.` on 33 of the 35 failing cases); the remaining two,
+#       stub-json-field-sets-are-subcommand-scoped and stub-json-script-field-lists-accepted, call
+#       the stub's `pr list` arm directly and never run the script at all — the saved run shows
+#       each failing on the stub's own rejection instead: `rc: expected 0, got 1` plus
+#       `missing: "headRefName":"claude/1-x"` for the former, `rc: expected 0, got 1` plus
+#       `missing: "headRefName":"claude/7-x"` for the latter —
+#       re-run confirmed rather than assumed (LESSON 2026-09-07), passing set: pull-ok,
+#       current-branch-failure-continues, pr-list-failure-continues, empty-needle-guard,
+#       stub-json-unknown-field-rejected-issue-list, stub-json-unknown-field-rejected-issue-view,
+#       stub-json-unknown-field-rejected-pr-list, stub-json-missing-json-argument-fails-loud,
+#       followup-notice-idempotent-second-run, followup-notice-idempotent-report-only,
+#       followup-notice-idempotent-lowercase-assoc (kickback K1's addition) — the three
+#       #334 idempotent fixtures assert only ABSENCE of output/calls, which an empty candidate
+#       list — the pr-open section's own gh pr list call is rejected before the follow-ups
+#       section is ever reached — also produces, so they survive this cascade too.
+#   (e) swap GH_ISSUE_JSON_FIELDS -> GH_PR_JSON_FIELDS on BOTH issue arms: 45 pass, 1 fail,
 #       failing EXACTLY stub-json-field-sets-are-subcommand-scoped (GH_PR_JSON_FIELDS is a
 #       superset of every OTHER field any fixture's issue calls request, so only the
 #       subcommand-scoping case, which specifically expects headRefName to be REJECTED on
 #       issue list/view, notices).
 #   (f) collapse the membership `case " $allowed " in *" $tok "*) : ;; ...` to an unconditional
-#       accept (`*) : ;;` as the first arm): 25 pass, 5 fail, failing EXACTLY
+#       accept (`*) : ;;` as the first arm): 41 pass, 5 fail, failing EXACTLY
 #       stub-json-unknown-field-rejected-issue-list, stub-json-unknown-field-rejected-issue-view,
 #       stub-json-unknown-field-rejected-pr-list, stub-json-field-sets-are-subcommand-scoped,
 #       script-unknown-json-field-warns-and-keeps (stub-json-missing-json-argument-fails-loud is
 #       untouched — that contract is checked before the membership loop runs at all).
-#   (g) delete `labels` from GH_ISSUE_JSON_FIELDS: 9 pass, 21 fail — the control's mutant, a wide
+#   (g) delete `labels` from GH_ISSUE_JSON_FIELDS: 12 pass, 34 fail — the control's mutant, a wide
 #       cascade (bin/cleanup-after-merge.sh's OWN `issue list --json number,title,labels` call is
-#       now rejected, so almost every issue-list-dependent fixture fails), passing set: pull-ok,
+#       now rejected — the saved run shows `WARN    could not fetch issues labelled pr-open (gh
+#       issue list failed — rate limit, auth, or network?) — skipping pr-open label hygiene.` on
+#       33 of the 34 failing cases, a DIFFERENT WARN than mutant (d)'s); the remaining one,
+#       stub-json-script-field-lists-accepted, calls the stub directly and never runs the script —
+#       the saved run shows it failing on the stub's own rejection instead: `rc: expected 0, got
+#       1` plus `missing: "title":"T"` for its own `issue list --label pr-open` probe, then
+#       `rc: expected 0, got 1` plus `expected [] from the follow-up candidates query, got: ` for
+#       its `issue list --search` probe. stub-json-field-sets-are-subcommand-scoped PASSES under
+#       this mutant: (g) removes `labels` from GH_ISSUE_JSON_FIELDS only, leaving the `pr list`
+#       arm's GH_PR_JSON_FIELDS — the set that case probes — untouched; that case never runs the
+#       script either. So almost every issue-list-dependent fixture fails, passing set: pull-ok,
 #       current-branch-failure-continues, pr-list-failure-continues, empty-needle-guard,
 #       stub-json-unknown-field-rejected-issue-list, stub-json-unknown-field-rejected-issue-view,
 #       stub-json-unknown-field-rejected-pr-list, stub-json-field-sets-are-subcommand-scoped,
-#       stub-json-missing-json-argument-fails-loud.
-#   (h) `if [ "$found" -ne 1 ]` -> `if false`: 29 pass, 1 fail, failing EXACTLY
+#       stub-json-missing-json-argument-fails-loud, followup-notice-idempotent-second-run,
+#       followup-notice-idempotent-report-only, followup-notice-idempotent-lowercase-assoc
+#       (kickback K1's addition; the same survival reason as mutant (d) above — all three
+#       idempotent #334 fixtures assert only absence, which this cascade also produces).
+#   (h) `if [ "$found" -ne 1 ]` -> `if false`: 45 pass, 1 fail, failing EXACTLY
 #       stub-json-missing-json-argument-fails-loud.
 #   (i) restore bin/cleanup-after-merge.sh's `issue_comments_doc="$(gh issue view "$n" --json
 #       comments 2>/dev/null || echo '{"comments":[]}')"` swallow for the FETCH-FAILURE route
-#       only (keeping the malformed-document check): 27 pass, 3 fail, failing EXACTLY
+#       only (keeping the malformed-document check): 43 pass, 3 fail, failing EXACTLY
 #       script-unknown-json-field-warns-and-keeps, view-failure-warns-and-keeps,
 #       view-failure-warns-no-fix.
 #   (j) drop the malformed-document `elif` branch in bin/cleanup-after-merge.sh (folding it back
-#       so only a hard fetch failure sets comments_ok=false): 28 pass, 2 fail, failing EXACTLY
+#       so only a hard fetch failure sets comments_ok=false): 44 pass, 2 fail, failing EXACTLY
 #       view-malformed-warns-and-keeps, view-malformed-warns-no-fix.
 #   (k) wrap the new `elif ! $comments_ok; then ... fi` decision branch in `if $FIX; then ... fi`
-#       in bin/cleanup-after-merge.sh: 28 pass, 2 fail, failing EXACTLY view-failure-warns-no-fix,
+#       in bin/cleanup-after-merge.sh: 44 pass, 2 fail, failing EXACTLY view-failure-warns-no-fix,
 #       view-malformed-warns-no-fix (LESSON 2026-09-08 — the --fix-only fixtures in this set
 #       cannot see this mutant; only the report-only pair does).
 #   (l) delete the `elif [[ "$has_multi_pr_label" == "true" ]]; then keep_reason=...` arm from
-#       bin/cleanup-after-merge.sh's KEEP chain: 28 pass, 2 fail, failing EXACTLY
+#       bin/cleanup-after-merge.sh's KEEP chain: 44 pass, 2 fail, failing EXACTLY
 #       keep-multi-pr-label, keep-multi-pr-label-view-failure-short-circuits.
+#
+# MEASURED MUTANTS, #334 (2026-09-21, extended by kickback K1 — see mutant (o)), taken by the
+# identical scratch-copy workflow the (a)-(l) block's own header describes above — one fresh
+# `tar --exclude=.git` extraction per mutation, never a mutation applied in place on the tracked
+# working tree — against the same final 46-case registry, one mutant at a time, on
+# bin/cleanup-after-merge.sh's new follow-up orphan-notice code (the "== follow-ups from rejected
+# PRs ==" section) unless noted:
+#   (m) revert the candidate search predicate to its pre-#334 form (re-insert `-label:no-plan `
+#       before `-label:pr-open` in the `gh issue list --search` string): 33 pass, 13 fail, failing
+#       EXACTLY every #334 fixture EXCEPT followup-notice-idempotent-second-run,
+#       followup-notice-idempotent-report-only, and followup-notice-idempotent-lowercase-assoc
+#       (kickback K1's fixture) — build_stub_gh's `--search` arm (dev/cleanup-
+#       tests.sh) matches the exact substring `is:open is:issue -label:pr-open`, which the
+#       reverted string no longer contains contiguously, so the stub falls through to its
+#       catch-all `[]`; the saved run shows the "== follow-ups from rejected PRs ==" section
+#       printing nothing at all (no FIXED/STALE/WARN line) for every #334 fixture, and the three
+#       idempotent fixtures survive because an empty candidate list also satisfies their own
+#       "nothing posted" assertions.
+#   (n) delete the trusted `select` clause from the orphan `trusted_notice_hits` jq filter (so ANY
+#       marker-carrying comment counts as trusted, regardless of authorAssociation): 43 pass,
+#       3 fail, failing EXACTLY followup-notice-untrusted-marker-ignored,
+#       followup-notice-untrusted-marker-no-fix, followup-notice-missing-association-marker — all
+#       three now treat the untrusted marker as already-noticed and go silent instead of warning.
+#       The saved run shows, for the two `--fix` fixtures (followup-notice-untrusted-marker-ignored
+#       and followup-notice-missing-association-marker), both `missing gh call: issue comment 50`
+#       and `missing: FIXED #50 (Deferred later): follow-up from PR #12, closed without merge —
+#       commented`, alongside the untrusted-WARN diagnostic (`count: expected 1 of 'ignoring an
+#       orphan-notice marker from an untrusted comment author', got 0`); the report-only fixture,
+#       followup-notice-untrusted-marker-no-fix, shows the identical WARN-count diagnostic but
+#       `missing: STALE #50 (Deferred later): filed as a follow-up from PR #12, which was closed
+#       without merging` in place of the missing comment call/FIXED line, since it asserts neither
+#       in the first place.
+#   (o) delete `ascii_upcase` from BOTH orphan jq blocks (`trusted_notice_hits` and
+#       `untrusted_notice_lines`): 45 pass, 1 fail, failing EXACTLY
+#       followup-notice-idempotent-lowercase-assoc (kickback K1's fixture, mirroring the multi-PR
+#       path's `keep-marker-comment-lowercase-assoc` control) — the saved run shows its seeded
+#       comment's lowercase `owner` association no longer matching the uppercase
+#       TRUSTED_ASSOCIATIONS list, so the marker is treated as untrusted: the script prints `WARN
+#       #50 ... ignoring an orphan-notice marker from an untrusted comment author (owner) ...` and
+#       reposts the notice (`FIXED #50` plus a fresh `issue comment 50` call), failing the
+#       fixture's `expect_calls_empty`, `expect_absent "FIXED #50"`, and
+#       `expect_absent "ignoring an orphan-notice marker ..."` assertions all three. Before
+#       kickback K1 this mutant had no fixture whose orphan-notice comment carried a lowercase or
+#       mixed-case authorAssociation (every #334 comment fixture used `OWNER`, `NONE`, or omitted
+#       the field) and survived (45 pass, 0 fail against the 45-case registry) — the honest gap
+#       kickback K1 (#334) closes.
+#   (p) delete the whole untrusted `if [[ -n "$untrusted_notice_lines" ]]; then ... fi` WARN block:
+#       43 pass, 3 fail, failing EXACTLY followup-notice-untrusted-marker-ignored,
+#       followup-notice-untrusted-marker-no-fix, followup-notice-missing-association-marker — the
+#       identical failing set as mutant (n), reached a different way: the saved run shows the
+#       script still reaches its notice branch — `FIXED #50` prints for the two `--fix` fixtures,
+#       whose `issue comment 50` call is made (so their own `expect_call "issue comment 50"`
+#       assertion still passes), and `STALE #50` prints for the report-only fixture, which posts
+#       nothing with or without this mutant — but the "ignoring an orphan-notice marker" WARN line
+#       never prints: all three show `count: expected 1 of 'ignoring an orphan-notice marker from
+#       an untrusted comment author', got 0` plus a matching `missing: (NONE) at …`/`missing:
+#       (MISSING) at …` line; followup-notice-untrusted-marker-no-fix has no `expect_call`
+#       assertion to begin with (it asserts `expect_calls_empty`, already satisfied by report-only
+#       mode regardless of this mutant), so only its `expect_count`/`missing:` pair fails there.
+#   (q) collapse the `if ! $notice_ok; then ... continue; fi` branch entirely (fold an unreadable
+#       lookup into "proceed as normal" instead of "leave as found"): 42 pass, 4 fail, failing
+#       EXACTLY followup-notice-view-failure-warns-and-keeps, followup-notice-view-failure-warns-
+#       no-fix, followup-notice-view-malformed-warns-and-keeps, followup-notice-view-malformed-
+#       warns-no-fix — with the guard gone, execution falls through to the trusted/untrusted jq
+#       calls on `$followup_comments_doc` regardless of `$notice_ok`. The saved runs show the two
+#       failure-route cases and the two malformed-route cases differ in what jq actually does:
+#       for the failure-route pair, `$followup_comments_doc` is empty (the failed `gh issue view`
+#       produces no stdout) and both jq calls (each fed via `|| true`) print no stderr at all and
+#       exit cleanly with an empty captured value — jq given completely empty input produces no
+#       output rather than "failing to parse" it; for the malformed-route pair,
+#       `$followup_comments_doc` is the literal non-JSON text and both calls DO print `jq: parse
+#       error: Invalid numeric literal at line 1, column 4` (once each, visible in the saved
+#       merged output) before `|| true` empties the captured value the same way. Either route
+#       leaves `$trusted_notice_hits`/`$untrusted_notice_lines` empty, so the script silently
+#       posts the notice (or prints STALE) instead of warning.
+#   (r) drop the malformed-document `elif` branch (fold it back so only a hard fetch failure sets
+#       notice_ok=false): 44 pass, 2 fail, failing EXACTLY followup-notice-view-malformed-warns-
+#       and-keeps, followup-notice-view-malformed-warns-no-fix.
+#   (s) wrap the `echo "WARN ... orphan-notice lookup failed ..."` line (only the echo, not the
+#       `continue` after it) in `if $FIX; then ... fi`: 44 pass, 2 fail, failing EXACTLY
+#       followup-notice-view-failure-warns-no-fix, followup-notice-view-malformed-warns-no-fix —
+#       the report-only pair, the only fixtures that can see a WARN gated behind $FIX (LESSON
+#       2026-09-08, the same reason mutant (k) above names).
+#   (t) make `--add-label no-plan` unconditional (delete the `if [[ "$has_no_plan_label" !=
+#       "true" ]]; then ... else ... fi` wrapper, always adding the label and printing the
+#       "labelled no-plan" tail): 45 pass, 1 fail, failing EXACTLY followup-notice-first-run — the
+#       only fixture that asserts NO `--add-label` call (its follow-up is already born `no-plan`,
+#       the #308 shape).
+#   (u) delete the second marker line (`${orphan_marker}`) from the posted comment body, leaving
+#       only `${AUDIT_MARKER}` followed directly by the prose: 45 pass, 1 fail, failing EXACTLY
+#       followup-notice-first-run — the only fixture that asserts the literal
+#       `<!-- harness-orphan-notice: PR #12 -->` line appears in the posted call.
+#   (v) replace `${p}` with the literal `0` in the marker-key assignment (`orphan_marker=
+#       "${ORPHAN_NOTICE_MARKER_PREFIX}0 -->"`, ignoring the actual closed PR number): 38 pass,
+#       8 fail, failing EXACTLY followup-notice-first-run, followup-notice-idempotent-second-run,
+#       followup-notice-idempotent-report-only, followup-notice-idempotent-lowercase-assoc
+#       (kickback K1's fixture), followup-notice-untrusted-marker-ignored,
+#       followup-notice-untrusted-marker-no-fix, followup-notice-missing-association-marker, and
+#       followup-notice-per-issue-state. The saved run shows: followup-notice-first-run only
+#       `missing gh call: <!-- harness-orphan-notice: PR #12 -->` (the notice IS still posted, now
+#       naming PR #0, so every other assertion on that fixture still passes);
+#       followup-notice-idempotent-second-run and followup-notice-idempotent-lowercase-assoc both
+#       `expected no gh mutation calls, got: issue comment 50 --body <!-- harness-audit -->` /
+#       `<!-- harness-orphan-notice: PR #0 -->` / the cleanup prose, plus `unexpected: FIXED #50`
+#       — their seeded PR #12 markers no longer match the PR #0 the script now searches for, so
+#       neither suppresses and the notice is reposted; followup-notice-idempotent-report-only
+#       shows only `unexpected: STALE #50` — report-only mode makes no gh calls either way, so
+#       there is no "expected no gh mutation calls" diagnostic here, only the reappearing STALE
+#       line; followup-notice-untrusted-marker-ignored and followup-notice-untrusted-marker-no-fix
+#       both `count: expected 1 of 'ignoring an orphan-notice marker from an untrusted comment
+#       author', got 0` plus `missing: (NONE) at https://example.invalid/50#issuecomment-9102`;
+#       followup-notice-missing-association-marker the same count line plus
+#       `missing: (MISSING) at https://example.invalid/50#issuecomment-9103` — none of these three
+#       seeded PR #12 markers matches PR #0, so neither the trusted-hits nor the untrusted-lines
+#       filter ever finds it and the WARN never prints; and followup-notice-per-issue-state shows
+#       `unexpected gh call: issue comment 51` plus `unexpected: FIXED #51` — issue #51's seeded
+#       PR #12 "already noticed" marker no longer matches, so it gets a second notice posted too.
+#       A wider failing set than a same-value literal like `12` would have produced, confirmed by
+#       re-running rather than assumed, per LESSON 2026-09-07; followup-notice-marker-is-per-pr and
+#       followup-notice-audit-marker-alone-does-not-suppress are unaffected — neither fixture's
+#       seeded comment ever matched the real marker in the first place.
 
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
@@ -1295,6 +1919,22 @@ cases=(
   "view-malformed-warns-and-keeps|case_view_malformed_warns_and_keeps|#249: a malformed (non-JSON) gh issue view response WARNs once and keeps the issue open, with --fix"
   "view-malformed-warns-no-fix|case_view_malformed_warns_no_fix|#249: the same malformed-view fixture without --fix — same WARN, no 'close manually' line"
   "keep-multi-pr-label-view-failure-short-circuits|case_keep_multi_pr_label_view_failure_short_circuits|#249: the multi-pr label KEEP signal still short-circuits before a failing view lookup — no lookup WARN"
+  "followup-notice-first-run|case_followup_notice_first_run|#334: a not-yet-noticed no-plan follow-up gets the orphan notice, comment carries both marker lines, no add-label call"
+  "followup-notice-idempotent-second-run|case_followup_notice_idempotent_second_run|#334: a trusted comment already carrying the orphan-notice marker suppresses a repeat notice"
+  "followup-notice-report-only|case_followup_notice_report_only|#334: the first-run fixture without --fix — one STALE line, no gh mutation call"
+  "followup-notice-idempotent-report-only|case_followup_notice_idempotent_report_only|#334: the idempotent fixture without --fix — no STALE line, no calls"
+  "followup-notice-adds-no-plan-when-absent|case_followup_notice_adds_no_plan_when_absent|#334: an older-harness follow-up with no labels gets both the comment and --add-label no-plan"
+  "followup-notice-untrusted-marker-ignored|case_followup_notice_untrusted_marker_ignored|#334: an orphan-notice marker from a NONE-association comment does not suppress; exactly one WARN naming it"
+  "followup-notice-untrusted-marker-no-fix|case_followup_notice_untrusted_marker_no_fix|#334: the untrusted-marker fixture without --fix — same WARN, STALE still printed, no calls"
+  "followup-notice-missing-association-marker|case_followup_notice_missing_association_marker|#334: an orphan-notice marker from a comment with no authorAssociation field — fail-closed untrusted, same as NONE"
+  "followup-notice-idempotent-lowercase-assoc|case_followup_notice_idempotent_lowercase_assoc|#334 kickback K1: a trusted orphan-notice marker whose comment authorAssociation is lowercase 'owner' still suppresses the notice (ascii_upcase)"
+  "followup-notice-view-failure-warns-and-keeps|case_followup_notice_view_failure_warns_and_keeps|#334: the per-follow-up orphan-notice lookup fails — one WARN, no calls, issue left as found, with --fix"
+  "followup-notice-view-failure-warns-no-fix|case_followup_notice_view_failure_warns_no_fix|#334: the same failed-lookup fixture without --fix — same WARN, no STALE"
+  "followup-notice-view-malformed-warns-and-keeps|case_followup_notice_view_malformed_warns_and_keeps|#334: the per-follow-up lookup returns a non-JSON document — one WARN with the malformed route phrase, with --fix"
+  "followup-notice-view-malformed-warns-no-fix|case_followup_notice_view_malformed_warns_no_fix|#334: the same malformed fixture without --fix — same WARN, no STALE"
+  "followup-notice-marker-is-per-pr|case_followup_notice_marker_is_per_pr|#334: a trusted orphan-notice marker naming a different PR does not suppress — the marker is PR-keyed"
+  "followup-notice-audit-marker-alone-does-not-suppress|case_followup_notice_audit_marker_alone_does_not_suppress|#334: a trusted comment carrying only the harness-audit marker does not suppress the notice"
+  "followup-notice-per-issue-state|case_followup_notice_per_issue_state|#334: two follow-ups from one PR, one noticed and one not — exactly one comment call, naming the un-noticed issue"
 )
 
 matched=0

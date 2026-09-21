@@ -230,7 +230,22 @@ deliberately unvalidated (a third, unprobed field set). Since #249, a failed or 
 marker found": the harness pins a `WARN` naming the failure route (a hard fetch failure or a
 non-JSON response) and leaves the issue open with `pr-open` still attached, in both `--fix` and
 report-only modes, and that the cheaper `multi-pr`-label KEEP signal still short-circuits before
-this lookup is ever attempted. It runs in
+this lookup is ever attempted. Since #334, the follow-up quarantine's idempotence key moved off
+the `no-plan` label onto a trusted, PR-keyed `<!-- harness-orphan-notice: PR #<p> -->` marker read
+from a per-candidate `gh issue view --json comments` lookup, the same trust gate and #249
+fail-closed shape (WARN once, naming the failure route, leaving the issue exactly as found, in
+both `--fix` and report-only modes) the multi-PR comment-marker lookup above already uses; the
+candidate search itself drops its `-label:no-plan` exclusion (now `is:open is:issue -label:pr-open`,
+`--json number,title,body,labels`), since a follow-up is born `no-plan` (#308) and would otherwise
+never be a candidate. `build_stub_gh` gains an `is:open is:issue -label:pr-open`-matched `--search`
+case serving a new `followups.json` fixture file (field-projected identically to the `--label
+pr-open` arm, `[]` when absent so the thirty pre-#334 fixtures stay byte-identical) and an `issue
+view` "ok"-mode override, `comments-<n>.json`, letting one fixture give two different follow-up
+issues distinct comment state; sixteen new fixtures (30 → 46, the sixteenth — pinning the
+`ascii_upcase` normalisation on the new path — added by #334 kickback K1) cover both modes, both
+notice-lookup failure routes, the trust gate, the PR-number key boundary, the conditional
+`--add-label no-plan`, and per-issue idempotence state, each with a measured mutation proof,
+alongside the twelve pre-existing mutation proofs re-measured against the grown suite. It runs in
 CI as the fifth step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
 `bin/cleanup-after-merge.sh` changes.
 
