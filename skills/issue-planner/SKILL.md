@@ -23,7 +23,7 @@ the orchestrator: you handle all GitHub I/O, and you delegate the actual plan-wr
 | Needs initial plan | *(no plan-* label)* | New issue, never planned | — |
 | Awaiting review | `plan-proposed` | Plan posted; waiting on human | this skill |
 | Approved | `plan-approved` | Ready for the implementer | human, or this skill via the auto-approval policy (step 6) |
-| Opted out | `no-plan` | Planner ignores this issue entirely (tracking/discussion/question) | human; the implementer on every follow-up it files; cleanup-after-merge.sh --fix (orphaned follow-ups from an older harness version) |
+| Opted out | `no-plan` | Planner ignores this issue entirely (tracking/discussion/question) | human; the implementer on every follow-up it files; cleanup-after-merge.sh --fix (orphaned follow-ups, keyed on a trusted comment marker) |
 | Manual approval only | `no-auto-approve` | This issue's plans are never auto-approved, even under a CLAUDE.md policy | human only — the harness never applies this label |
 | Harness-authored | `test-ratchet` | Filed by the `test-ratchet` skill; the body is machine-authored evidence; step 6b's hard floor refuses auto-approval outright | the `test-ratchet` skill |
 | Escalated | `needs-human` | A durable escalation (#309): a skill asked the human a question and moved on; excluded from both this skill's and the implementer's discovery until the human answers and removes it | `issue-implementer`, via a Durable escalation |

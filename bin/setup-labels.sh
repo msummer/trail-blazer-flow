@@ -12,9 +12,10 @@
 #   no-plan         -> opt-out: the planner ignores this issue entirely (tracking/discussion);
 #                      the issue-implementer skill also applies it to every follow-up issue it
 #                      files, holding each one out of planning until a human triages it and
-#                      removes the label; and cleanup-after-merge.sh --fix applies it to a plan
-#                      follow-up (filed by an older harness version) orphaned when its source PR
-#                      was closed without merging
+#                      removes the label; and cleanup-after-merge.sh --fix applies it (when not
+#                      already present) to a plan follow-up orphaned when its source PR was closed
+#                      without merging, keyed on a trusted orphan-notice marker in the issue's own
+#                      comments rather than on this label
 #   no-auto-approve -> human-only veto: this issue's plans are never auto-approved, even if
 #                      CLAUDE.md defines an auto-approval policy; approval must be manual. The
 #                      harness never applies this label to any issue it files — only a human does.

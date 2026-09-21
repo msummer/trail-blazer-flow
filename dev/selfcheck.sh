@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 76 assertions total. The gate prints what it checks — run it.
+# Five groups, 77 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -1554,6 +1554,19 @@ elif [ "$hrm_planning" != "$hrm_impl" ]; then
   bad "4.46 HARNESS_RECORD_MARKERS declaration disagrees: bin/find-planning-work.sh has '$hrm_planning', bin/find-implementation-work.sh has '$hrm_impl'"
 else
   ok "4.46 bin/find-planning-work.sh and bin/find-implementation-work.sh share the identical HARNESS_RECORD_MARKERS declaration"
+fi
+
+# 4.47 (#334) — the literal harness-orphan-notice marker prefix appears in the script and the
+# README (fixed-string). Mirrors 4.16/4.17 — pins only the prefix (the PR number varies per
+# issue, so the full marker is never a fixed string).
+marker='<!-- harness-orphan-notice: PR #'
+missing=""
+grep -qF -- "$marker" "$root/bin/cleanup-after-merge.sh" || missing="$missing bin/cleanup-after-merge.sh"
+grep -qF -- "$marker" "$root/README.md" || missing="$missing README.md"
+if [ -z "$missing" ]; then
+  ok "4.47 '$marker' present in bin/cleanup-after-merge.sh and README.md"
+else
+  bad "4.47 '$marker' missing from:$missing"
 fi
 
 # 4.48 (#309) — ESCALATION_LABEL="needs-human" declaration/usage bijection, four clauses:

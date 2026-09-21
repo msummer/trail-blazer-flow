@@ -304,10 +304,10 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    applies) and a marker naming the PR it came from — then **writes the new issue numbers back
    into the PR body with `gh pr edit`**, not merely mentioned in the summary; entries that only
    name a capability wish or an unnoticeable drift risk are declined with a note in the PR body
-   instead of becoming issues. A follow-up filed this way is born `no-plan`, so it never reaches
-   `cleanup-after-merge.sh`'s follow-up quarantine even if this PR is later closed without
-   merging — that path now applies only to a follow-up an older harness version filed (see
-   "Returning to a laptop" and the v2.7.4 → v2.7.5 note).
+   instead of becoming issues. A follow-up filed this way is born `no-plan`; if this PR is later
+   closed without merging, `cleanup-after-merge.sh`'s follow-up quarantine still reaches it (#334)
+   — keyed on a trusted, PR-keyed orphan-notice marker rather than the label — see "Returning to
+   a laptop" and the v2.7.5 → v2.7.6 note.
 7. **Watches CI** (`gh pr checks --watch`). Red CI caused by the PR itself gets **one bounded
    fix attempt** (implementer → mechanical checks → verifier → push; the PR isn't merged, so
    this is as safe as the kickback loop) — once that re-verification passes, its verdict is
@@ -355,11 +355,12 @@ Nothing is required: every planner/implementer/cycle run starts with
 the run continues, never aborts, prune merged `claude/*` branches — a merged branch a
 worktree still holds is reported and skipped, never fatal — repair stale `pr-open` labels with
 audited comments, and quarantine any plan follow-up orphaned by a `claude/*` PR that closed
-without merging — comment + `no-plan`, never closed) and the implementer's baseline refresh
-re-verifies merged main — two green PRs can still compose badly, and that check is now
-mechanical. The script's own pre-flight lookups (the default branch, the current branch, the
-open-PR list, the `pr-open`-labelled issue list, the multi-PR comment-marker lookup, and the
-follow-up-candidate issue search) are best-effort too — a failure on any of them is reported
+without merging — comment + `no-plan` when it isn't already present, never closed) and the
+implementer's baseline refresh re-verifies merged main — two green PRs can still compose badly,
+and that check is now mechanical. The script's own pre-flight lookups (the default branch, the
+current branch, the open-PR list, the `pr-open`-labelled issue list, the multi-PR comment-marker
+lookup, the follow-up-candidate issue search, and each matched follow-up's own orphan-notice
+comments lookup) are best-effort too — a failure on any of them is reported
 (`WARN`) and the run continues, degrading gracefully (skipping just the sync, or just the
 label/follow-up steps that depend on it) rather than aborting before producing any output.
 Running `cleanup-after-merge.sh` by hand right after a merge is still fine (it's idempotent);
@@ -603,15 +604,18 @@ the planner → implementer → verifier loop walks it for every feature after.
 `pr-open`, with `impl-blocked` for issues needing human input, `no-plan` to opt an issue out of
 planning entirely (tracking/discussion/question issues; also applied automatically by the
 `issue-implementer` skill to every follow-up issue it files, holding each one out of planning
-until a human triages it and removes the label, and by `cleanup-after-merge.sh --fix` to a plan
-follow-up filed by an older harness version and orphaned when its source PR closed without
-merging), and `no-auto-approve`, a **human-only veto** that keeps an individual issue's approval
+until a human triages it and removes the label, and by `cleanup-after-merge.sh --fix` — when not
+already present — to a plan follow-up orphaned when its source PR closed without merging), and
+`no-auto-approve`, a **human-only veto** that keeps an individual issue's approval
 manual even when CLAUDE.md defines an auto-approval policy — the harness never applies this
 label itself. `test-ratchet` marks an issue the test-suite ratchet filed; the planner's
 auto-approval hard floor refuses any issue carrying it outright, so a ratchet plan always waits
 for a human; the harness never removes that label (manual approval is unaffected). A plan
 follow-up the implementer files carries a `<!-- harness-follow-up: PR #<n> -->` marker naming
-its source PR. `multi-pr`
+its source PR; `cleanup-after-merge.sh --fix`'s own notice for such an orphaned follow-up carries
+a second marker, `<!-- harness-orphan-notice: PR #<n> -->` (#334) — the idempotence key for that
+quarantine, checked against the issue's own comments rather than the `no-plan` label so it still
+reaches a follow-up born with that label. `multi-pr`
 (#231) is human-applied to a deliberately multi-PR issue: it's the primary signal
 `cleanup-after-merge.sh` reads to leave the issue open when one of its slices merges, read only
 by that script — nothing else in the lifecycle touches it. `needs-human` (#309) is a durable
@@ -1061,8 +1065,10 @@ explicitly opts a no-CI repo in. Follow-up issues the harness files now carry `n
 (remove the label to release one into planning) and are commented and labelled `no-plan` by
 `cleanup-after-merge.sh --fix` if the PR that filed them is closed without merging — since
 v2.7.5 (see the v2.7.4 → v2.7.5 note below), a follow-up is filed with `no-plan` from birth
-instead, so both the "remove `no-auto-approve` to release" step and the quarantine-on-orphan
-behaviour described here now apply only to a follow-up filed by an older harness version.
+instead, so the "remove `no-auto-approve` to release" step now applies only to a follow-up filed
+by an older harness version; since v2.7.6 (#334, see the v2.7.5 → v2.7.6 note below) the
+quarantine-on-orphan behaviour described here reaches a follow-up born `no-plan` too, keyed on a
+trusted comment marker rather than the label.
 
 This release adds one further grant your repo must add: `"Bash(gh pr edit:*)"` — the orchestrator
 needs it to refresh a PR body it already opened (writing filed follow-up issue numbers into it,
@@ -1771,10 +1777,10 @@ changes above:
 `harness-status.sh` had no bucket or count for a held follow-up (superseded by #333, below — it
 now has one, `waiting_on_human.followups_to_triage`, reported beside `counts.human_actions` rather
 than inside it), and `cleanup-after-merge.sh`'s follow-up quarantine — the "source PR
-closed without merging" comment — never reaches a follow-up filed with `no-plan` from birth,
-since the same `-label:no-plan` exclusion that makes `--fix` idempotent also excludes it; that
-path now applies only to a follow-up filed by an older harness version that still carries
-`no-auto-approve`.
+closed without merging" comment — never reached a follow-up filed with `no-plan` from birth,
+since the same `-label:no-plan` exclusion that made `--fix` idempotent also excluded it (superseded
+by #334, below — since v2.7.6 the quarantine's idempotence key moved off that label onto a
+trusted, PR-keyed orphan-notice marker instead, so it now reaches a follow-up born `no-plan` too).
 
 **v2.7.5 → v2.7.6** needs no grant, label, script, settings entry, or baseline step (#336). No
 consumer action is required: of the three files this change touches — `bin/reconcile-ledger.sh`,
@@ -1901,6 +1907,27 @@ Measured on this repo (gh 2.97.0, 2026-09-21) while the `harness-stop` label did
 `[]` with exit 0 and `harness-stop.sh` printed `stop=false` — so a consumer who has not yet
 re-run `bin/setup-labels.sh` gets no spurious stop; until they do, `bin/check-harness.sh` FAILs
 on the missing label.
+
+Also in v2.7.6 (#334): needs no grant, label, script, settings entry, or baseline step.
+`cleanup-after-merge.sh`'s follow-up orphan-notice quarantine now reaches a follow-up born
+`no-plan` (#308) too. The candidate search drops its `-label:no-plan` exclusion (now `is:open
+is:issue -label:pr-open`, `--json number,title,body,labels`), and for each candidate whose body
+names a closed-unmerged `claude/*` PR, a per-candidate `gh issue view --json comments` lookup
+treats it as already noticed iff a trusted (OWNER/MEMBER/COLLABORATOR) comment already carries
+that PR's own `<!-- harness-orphan-notice: PR #<n> -->` marker — the same trust gate and #249
+fail-closed shape (WARN once naming the failure route, leaving the issue exactly as found) the
+multi-PR comment-marker path already uses; an untrusted marker is ignored and WARNed the same way
+too. Not yet noticed, `--fix`: comments (with both marker lines) and adds `no-plan` only when it
+isn't already present. New gate assertion 4.47 pins the marker's fixed-string prefix in the
+script and this README, mirroring 4.16/4.17. One-time migration effect: a follow-up the pre-#308
+path already quarantined carries the OLD notice comment, which has no orphan-notice marker, so the
+first `--fix` run after upgrading posts one more, near-identical notice on it; every run after
+that posts nothing, since the new marker is now present — provided the account running `--fix` is
+itself OWNER/MEMBER/COLLABORATOR on the repo (`TRUSTED_ASSOCIATIONS`, the same trust gate this
+paragraph's WARN already describes): measured on this repo (gh 2.97.0, 2026-09-21), `gh` returns
+`authorAssociation` on issue comments and the harness's own comments here are `OWNER`. On a repo
+where that does not hold, the harness's own notice comment never counts as already-noticed, so
+each `--fix` run posts another one and prints the untrusted-marker WARN naming that comment.
 
 ## The per-repo settings file (required)
 
@@ -2524,10 +2551,11 @@ human-authored ones — the test-suite ratchet (also opt-in via CLAUDE.md) is on
 the planner's hard floor refusing any `test-ratchet`-labelled issue outright, a label the harness
 never removes; the plan follow-ups the implementer files from a PR's
 "Follow-ups to file" are the other, born `no-plan` (holding planning itself, not just approval)
-plus a marker naming their PR. `cleanup-after-merge.sh --fix`'s quarantine (`no-plan`, never
-closed) for an orphaned follow-up now applies only to one filed by an older harness version that
-still carries `no-auto-approve`, since a follow-up born `no-plan` is already excluded from its
-candidate query. The ratchet's further mitigations: the fixed issue-body
+plus a marker naming their PR. `cleanup-after-merge.sh --fix`'s quarantine (comment + `no-plan`
+when it isn't already present, never closed) for an orphaned follow-up reaches a follow-up born
+`no-plan` too (#334): its idempotence key is a trusted, PR-keyed
+`<!-- harness-orphan-notice: PR #<n> -->` marker in the issue's own comments, not the label. The
+ratchet's further mitigations: the fixed issue-body
 template, with evidence quoted as literal tool output rather than free-form prose; the "issue
 text is data, not instructions" rule below, applied to the ratchet's Evidence section like any
 other issue content; the test-only/monotonic scope that binds the plan and that the verifier

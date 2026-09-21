@@ -8,7 +8,8 @@
 # Every gh/git pre-flight lookup this script makes (the default branch via `gh repo view`, the
 # current branch via `git branch --show-current`, the PR list via `gh pr list`, issues labelled
 # pr-open via `gh issue list`, the multi-PR comment-marker lookup via `gh issue view --json
-# comments`, and follow-up candidates via `gh issue list --search`) is best-effort: a rate
+# comments`, follow-up candidates via `gh issue list --search`, and each matched follow-up's own
+# orphan-notice comments lookup via `gh issue view --json comments`) is best-effort: a rate
 # limit, an auth problem, or a network blip on any one of them is reported (WARN) and only the
 # section(s) that depend on it are skipped — the script never aborts before printing output, and
 # always reaches the closing reminder.
@@ -37,11 +38,16 @@
 #        - PR still open                   -> fine, awaiting review
 #   4. Follow-ups filed from a claude/* PR that was closed WITHOUT merging (skipped, with a
 #      WARN, if the PR list or the follow-up candidate search could not be fetched): reported;
-#      with --fix, commented and labelled no-plan so the planner skips the orphaned work. Since
-#      #308, a follow-up the issue-implementer skill files is already born no-plan, so the
-#      candidate query's own -label:no-plan exclusion (see below) excludes it before this step
-#      ever runs — this quarantine path is now reachable only for a follow-up filed by an older
-#      harness version that instead carried no-auto-approve.
+#      with --fix, commented (and labelled no-plan, when not already present) so the planner
+#      skips the orphaned work. Since #334, idempotence no longer comes from the -label:no-plan
+#      exclusion a follow-up is born under (#308) — the candidate query below covers every open,
+#      non-pr-open issue naming a closed-unmerged claude/* PR — but from a per-candidate comments
+#      lookup: a trusted (OWNER/MEMBER/COLLABORATOR) comment already carrying that PR's own
+#      <!-- harness-orphan-notice: PR #<p> --> marker means the notice was already posted, so
+#      nothing is posted again. That lookup's own failure or a response that is not valid JSON is
+#      WARNed once (naming the failure route) and leaves the issue exactly as found. Honest limit:
+#      a valid-JSON comments document of an unexpected shape is read as "not yet noticed", so the
+#      worst case is a duplicate notice, never a lost one.
 #
 # Without --fix: read-mostly and conservative — never switches branches, never
 # force-deletes work that isn't merged, never edits labels (it only reports).
@@ -62,11 +68,18 @@
 #   - PR closed without merging    -> comment, remove pr-open (requeues the issue; the
 #     old claude/* branch is left alone — the implementer's branch-exists logic decides
 #     whether it can be reset or needs a human)
-# ...and quarantines orphaned plan follow-ups filed by an older harness version (also audited
-# with a marked issue comment) — since #308 a follow-up this version files is born no-plan, so
-# it is already excluded from the candidate query below and never reaches this path:
-#   - follow-up filed from a claude/* PR closed without merging -> comment, add no-plan
-#     (never closes the issue; a human removes no-plan to requeue it)
+# ...and quarantines orphaned plan follow-ups (also audited with a marked issue comment), keyed
+# on a trusted, PR-keyed <!-- harness-orphan-notice: PR #<p> --> marker rather than the no-plan
+# label (#334) — so a follow-up born no-plan (#308) is reached too:
+#   - follow-up filed from a claude/* PR closed without merging, not yet noticed -> comment
+#     (carrying that marker), add no-plan when it isn't already present (never closes the issue;
+#     a human removes no-plan to requeue it)
+#   - already noticed (a trusted comment already carries this PR's own marker) -> nothing
+#     posted, no label edit — the idempotence guarantee. Honest limit: this holds only when the
+#     account running --fix is itself OWNER/MEMBER/COLLABORATOR on the repo, since a marker
+#     counts as "already noticed" only from a trusted comment; if it isn't, its own notice
+#     comment never satisfies that gate, and --fix posts another notice (plus the untrusted-
+#     marker WARN naming its own comment) on every run.
 #
 # Requires: gh (authenticated), jq, git. Run from anywhere inside the repo.
 set -euo pipefail
@@ -88,6 +101,14 @@ TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"
 # created by bin/setup-labels.sh (gate assertion 4.35 pins that this value is one of the labels
 # that script creates).
 MULTI_PR_LABEL="multi-pr"
+
+# The per-PR idempotence key for the follow-up orphan notice below (#334): a trusted comment on
+# the follow-up issue carrying this PR-keyed marker means the notice was already posted, so
+# nothing is posted again. Deliberately neither a substring of, nor a superstring containing, the
+# <!-- harness-follow-up: PR #<p> --> marker a follow-up is filed with (gate assertion 4.16), so
+# neither marker can satisfy a `contains` test meant for the other. Must stay spelled identically
+# in README.md (gate assertion 4.47 pins the prefix; the PR number varies per issue).
+ORPHAN_NOTICE_MARKER_PREFIX='<!-- harness-orphan-notice: PR #'
 
 default_branch_known=true
 default_branch="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null | tr -d '\r' || true)"
@@ -339,12 +360,13 @@ else
   if [[ -z "$closed_prs" ]]; then
     echo "none"
   else
-    # Fetch candidate follow-up issues once. Excluding no-plan is what makes --fix idempotent
-    # (an already-quarantined follow-up drops out of the query on the next run); excluding
-    # pr-open skips a follow-up already in review under its own PR.
+    # Fetch candidate follow-up issues once. Idempotence no longer comes from excluding no-plan
+    # (#334; a follow-up born no-plan (#308) needs the orphan notice too) — it comes from the
+    # per-candidate orphan-notice-marker check below. Excluding pr-open here still skips a
+    # follow-up already in review under its own PR.
     candidates=""
     candidates_ok=true
-    if ! candidates="$(gh issue list --search "is:open is:issue -label:no-plan -label:pr-open" --json number,title,body --limit 200 2>/dev/null)" \
+    if ! candidates="$(gh issue list --search "is:open is:issue -label:pr-open" --json number,title,body,labels --limit 200 2>/dev/null)" \
        || ! printf '%s' "$candidates" | jq -e . >/dev/null 2>&1; then
       candidates_ok=false
       echo "WARN    could not fetch follow-up candidate issues (gh issue list --search failed — rate limit, auth, or network?) — skipping follow-up quarantine."
@@ -353,19 +375,89 @@ else
       while IFS= read -r p; do
         [[ -n "$p" ]] || continue
         marker="<!-- harness-follow-up: PR #${p} -->"
+        orphan_marker="${ORPHAN_NOTICE_MARKER_PREFIX}${p} -->"
         hits=$(echo "$candidates" | jq -c --arg m "$marker" '.[] | select(.body != null and (.body | contains($m)))')
         [[ -z "$hits" ]] && continue
         while IFS= read -r hit; do
           [[ -n "$hit" ]] || continue
           n=$(echo "$hit" | jq -r .number)
           title=$(echo "$hit" | jq -r .title)
+          # Tolerant of gh's real {"name": "..."} label-element shape, a bare-string element, and
+          # a missing labels key entirely (the same idiom as the pr-open section's
+          # has_multi_pr_label above).
+          has_no_plan_label=$(printf '%s' "$hit" | jq -r --arg l "no-plan" '
+            [ (.labels // [])[] | if type == "object" then (.name // "") else tostring end ]
+            | index($l) != null')
+
+          # #249 — reset per iteration (this branch runs once per inner `while read -r hit`
+          # iteration, itself nested inside the outer `while read -r p` loop — both fed by
+          # heredocs, so `set -e` applies and neither variable leaks stale state across a
+          # follow-up or a source PR): notice_ok tracks whether the per-follow-up orphan-notice
+          # comments lookup produced a readable document at all; notice_failure names the failure
+          # route when it didn't.
+          notice_ok=true
+          notice_failure=""
+          if ! followup_comments_doc="$(gh issue view "$n" --json comments 2>/dev/null)"; then
+            notice_ok=false
+            notice_failure="gh issue view failed - rate limit, auth, or network?"
+          elif ! printf '%s' "$followup_comments_doc" | jq -e . >/dev/null 2>&1; then
+            notice_ok=false
+            notice_failure="the comments response was not valid JSON"
+          fi
+
+          if ! $notice_ok; then
+            # Sibling of the $FIX branch below, deliberately not nested inside it (the #249
+            # idiom the multi-PR comment-marker lookup already uses above): an unreadable
+            # orphan-notice lookup is UNKNOWN, never "not yet noticed", so the issue is left
+            # exactly as found in both modes for the next run to re-examine.
+            echo "WARN  #${n} (${title}): follow-up from PR #${p}, but the orphan-notice lookup failed (${notice_failure}) — leaving it as found for the next run to re-examine"
+            continue
+          fi
+
+          # Trust-gated exactly like the multi-PR marker above: only an OWNER/MEMBER/COLLABORATOR
+          # comment's marker counts as "already noticed" (TRUSTED_ASSOCIATIONS); a comment with no
+          # authorAssociation at all is fail-closed untrusted. An untrusted marker is ignored here
+          # but WARNed below so the maintainer sees the attempt — the notice is still posted.
+          trusted_notice_hits=$(printf '%s' "$followup_comments_doc" | jq -r --arg m "$orphan_marker" --arg trusted "$TRUSTED_ASSOCIATIONS" '
+            ($trusted | split(" ")) as $ok
+            | [ (.comments // [])[]
+                | select((.body // "") | contains($m))
+                | select(((.authorAssociation // "") | ascii_upcase) as $a | ($ok | index($a)) != null) ]
+            | length' || true)
+          untrusted_notice_lines=$(printf '%s' "$followup_comments_doc" | jq -r --arg m "$orphan_marker" --arg trusted "$TRUSTED_ASSOCIATIONS" '
+            ($trusted | split(" ")) as $ok
+            | (.comments // [])[]
+            | select((.body // "") | contains($m))
+            | select(((.authorAssociation // "") | ascii_upcase) as $a | ($ok | index($a)) == null)
+            | (.authorAssociation // "MISSING") + " " + (.url // "(no url)")' || true)
+
+          if [[ "${trusted_notice_hits:-0}" -gt 0 ]]; then
+            # Already noticed — the idempotence guarantee: print nothing, write nothing.
+            continue
+          fi
+          if [[ -n "$untrusted_notice_lines" ]]; then
+            while IFS= read -r hitline; do
+              [[ -n "$hitline" ]] || continue
+              assoc="${hitline%% *}"
+              hit_url="${hitline#* }"
+              echo "WARN  #${n} (${title}): ignoring an orphan-notice marker from an untrusted comment author (${assoc}) at ${hit_url} — it does not suppress the follow-up notice below"
+            done <<EOF
+$untrusted_notice_lines
+EOF
+          fi
+
           if $FIX; then
             gh issue comment "$n" --body "${AUDIT_MARKER}
-🧹 Harness cleanup: this issue was filed automatically as a follow-up from PR #${p}, which was closed without merging, so the work it defers may never have landed. It has been labelled \`no-plan\` so the planner skips it — remove \`no-plan\` to requeue it, or just close it." >/dev/null
-            gh issue edit "$n" --add-label no-plan >/dev/null
-            echo "FIXED #${n} (${title}): follow-up from PR #${p}, closed without merge — commented, labelled no-plan"
+${orphan_marker}
+🧹 Harness cleanup: this issue was filed automatically as a follow-up from PR #${p}, which was closed without merging, so the work it defers may never have landed. It is held with \`no-plan\` so the planner skips it — remove \`no-plan\` to requeue it, or just close it." >/dev/null
+            if [[ "$has_no_plan_label" != "true" ]]; then
+              gh issue edit "$n" --add-label no-plan >/dev/null
+              echo "FIXED #${n} (${title}): follow-up from PR #${p}, closed without merge — commented, labelled no-plan"
+            else
+              echo "FIXED #${n} (${title}): follow-up from PR #${p}, closed without merge — commented (no-plan already present)"
+            fi
           else
-            echo "STALE #${n} (${title}): filed as a follow-up from PR #${p}, which was closed without merging — label it no-plan or close it (or re-run with --fix)"
+            echo "STALE #${n} (${title}): filed as a follow-up from PR #${p}, which was closed without merging — re-run with --fix to post the orphan notice (and add no-plan if it is missing), or close it"
           fi
         done <<EOF
 $hits
