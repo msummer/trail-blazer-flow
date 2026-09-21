@@ -54,7 +54,8 @@
 # runner, and not cross-run reproducibility of wall-clock timings.
 #
 # This is one of several dev/*.sh scripts that write files — dev/doctor-tests.sh,
-# dev/hook-tests.sh, dev/cleanup-tests.sh, dev/planning-tests.sh, and dev/lock-tests.sh also do
+# dev/hook-tests.sh, dev/cleanup-tests.sh, dev/planning-tests.sh, dev/lock-tests.sh, and
+# dev/stop-tests.sh also do
 # (the consumer doctor bin/check-harness.sh also seeds .claude/LESSONS.md when absent). Every one
 # of them writes only under its own single `mktemp -d` root, removed via a trap on EXIT; nothing
 # outside that root is ever touched — the per-case result files above are no exception: $resdir is
@@ -451,6 +452,18 @@ p_4_48_missing_token_masked() {
   printf '%s\n' '# every query appends -label:$ESCALATION_LABEL' | append "$1/bin/find-planning-work.sh"
 }
 p_4_48_no_skill_mention() { edit "$1/skills/issue-implementer/SKILL.md" 's/needs-human/needs-huamn/g'; }
+# p_4_49_* (#310) — rename/alter characters INSIDE the identifier/value, never append a suffix
+# (LESSON 2026-09-04b). p_4_49_drift alters bin/harness-stop.sh's OWN STOP_LABEL value
+# (characters changed inside the token, not a suffix) so it is no longer among the labels
+# bin/setup-labels.sh creates (clause a's membership half). p_4_49_extraction renames the
+# STOP_LABEL identifier throughout bin/harness-stop.sh so the gate's anchored extraction of the
+# literal "STOP_LABEL=" prefix comes back empty (clause a's extraction half). p_4_49_applied
+# appends a line applying the stop label via --add-label to bin/harness-status.sh (the append
+# target p_4_44/p_1_1/p_1_7 already use, proving an append there trips nothing else besides what
+# it's meant to), so clause (b)'s ERE scan finds a match in bin/*.sh.
+p_4_49_drift()      { edit "$1/bin/harness-stop.sh" 's/^STOP_LABEL="harness-stop"$/STOP_LABEL="harness-stpo"/'; }
+p_4_49_extraction() { edit "$1/bin/harness-stop.sh" 's/STOP_LABEL/STOP_LBEL/g'; }
+p_4_49_applied()    { printf 'gh issue edit 1 --add-label harness-stop\n' | append "$1/bin/harness-status.sh"; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -720,7 +733,7 @@ cases=(
   "4.6|4.6|p_4_6|drop a label bin/setup-labels.sh creates from the doctor's required list"
   "4.9-missing-step|4.9|p_4_9_missing_step|drop the 'bash dev/doctor-tests.sh' run step from the workflow"
   "4.9-orphan-step|4.9|p_4_9_orphan_step|add a CI run step for a nonexistent dev/nonexistent.sh"
-  "4.9-uneven-jobs|4.9|p_4_9_one_job_only|delete the workflow's last line (the macOS job's dev/lock-tests.sh step, #232), leaving that script covered on ubuntu only"
+  "4.9-uneven-jobs|4.9|p_4_9_one_job_only|delete the workflow's last line (the macOS job's dev/stop-tests.sh step, #310), leaving that script covered on ubuntu only"
   "4.11-local|4.11|p_4_11_local|reintroduce a raw sed of \"\$settings_local\" in bin/check-harness.sh"
   "4.11-comment||p_4_11_comment|control: an indented comment mentioning grep and quoting \"\$settings\" is not flagged"
   "4.13-script|4.13|p_4_13_script|add a 'docs' stage to reconcile-ledger.sh's STAGES= list only"
@@ -834,6 +847,9 @@ cases=(
   "4.48-missing-token|4.48|p_4_48_missing_token|delete the ' -label:\$ESCALATION_LABEL' token from exactly ONE of the six discovery --search lines (bin/find-planning-work.sh's needs_initial_plan query, the first/non-retry two-space-indented occurrence only, distinguished from its byte-identical four-space-indented retry duplicate by indentation) -- measured: \"4.48 1 of 6 discovery --search lines lack the -label:\$ESCALATION_LABEL token\" (74 pass, 1 fail)"
   "4.48-missing-token-masked|4.48|p_4_48_missing_token_masked|the identical missing-token edit as 4.48-missing-token, PLUS one appended comment line carrying the token elsewhere in bin/find-planning-work.sh (non-vacuity proof: on the pre-K1-fix extraction, which counted the token against the whole file rather than within the --search \" lines, this exact mutation measured 75 pass, 0 fail -- PASS 4.48 -- a vacuous pass, since the appended comment's own occurrence silently replaced the deleted one in the file-wide count) -- measured on the fixed extraction: \"4.48 1 of 6 discovery --search lines lack the -label:\$ESCALATION_LABEL token\" (74 pass, 1 fail)"
   "4.48-no-skill-mention|4.48|p_4_48_no_skill_mention|replace every occurrence of 'needs-human' in skills/issue-implementer/SKILL.md with a near-miss spelling (characters changed inside the token, not a suffix) -- measured: \"4.48 ESCALATION_LABEL value ('needs-human') not found in skills/issue-implementer/SKILL.md\" (74 pass, 1 fail)"
+  "4.49-drift|4.49|p_4_49_drift|alter one character inside bin/harness-stop.sh's own STOP_LABEL value (characters changed inside the token, not a suffix) so it is no longer among the labels bin/setup-labels.sh creates -- measured: \"4.49 STOP_LABEL ('harness-stpo') is not among the labels bin/setup-labels.sh creates\" (75 pass, 1 fail)"
+  "4.49-extraction|4.49|p_4_49_extraction|rename STOP_LABEL to STOP_LBEL throughout bin/harness-stop.sh (both the declaration and its usage()-text use site) so the gate's anchored extraction comes back empty -- measured: \"4.49 bin/harness-stop.sh's STOP_LABEL=\\\"...\\\" line didn't match (structure changed) — extraction failed\" (75 pass, 1 fail)"
+  "4.49-applied|4.49|p_4_49_applied|append 'gh issue edit 1 --add-label harness-stop' to bin/harness-status.sh (the append target p_4_44/p_1_1/p_1_7 already prove trips nothing else) -- measured failing set: {4.49} (75 pass, 1 fail)"
 )
 
 # ---------------------------------------------------------------------------------------------

@@ -24,9 +24,10 @@ It prints a `PASS`/`FAIL` line per assertion (grouped and labelled in its own ou
 CI on every pull request (`.github/workflows/selfcheck.yml`, two jobs — `selfcheck` on
 `ubuntu-latest` and `selfcheck-macos` on `macos-latest`, which prepends `/bin` to `PATH` so the
 same commands run under Apple's bash 3.2 instead of a newer bash); a red check means one of the
-jobs' seven commands failed — reproduce locally with `bash dev/selfcheck.sh`,
+jobs' eight commands failed — reproduce locally with `bash dev/selfcheck.sh`,
 `bash dev/selfcheck-tests.sh`, `bash dev/doctor-tests.sh`, `bash dev/hook-tests.sh`,
-`bash dev/cleanup-tests.sh`, `bash dev/planning-tests.sh`, and `bash dev/lock-tests.sh` (on a
+`bash dev/cleanup-tests.sh`, `bash dev/planning-tests.sh`, `bash dev/lock-tests.sh`, and
+`bash dev/stop-tests.sh` (on a
 Mac, prefix each with `PATH=/bin:$PATH` to match the macOS job's shell, e.g.
 `PATH=/bin:$PATH bash dev/selfcheck.sh`).
 There is no test suite and no build step: this repo is Markdown instruction files, Bash scripts,
@@ -219,7 +220,8 @@ the pre-flight `gh repo view` / `git branch --show-current` / `gh pr list` looku
 being reported (WARN) and survived rather than aborting the script before any output. Since #248,
 the stub `gh` itself validates `--json` FIELD NAMES against gh's own live-probed field sets — two
 constants, `GH_ISSUE_JSON_FIELDS` (shared by `issue list`/`issue view`, byte-identical to
-`dev/planning-tests.sh`'s constant of the same name) and `GH_PR_JSON_FIELDS` (a different,
+`dev/planning-tests.sh`'s and `dev/stop-tests.sh`'s constants of the same name) and
+`GH_PR_JSON_FIELDS` (a different,
 46-field set — `pr list` accepts fields, like `headRefName`, that the issue set does not) — wired
 as the first statement of those three arms, so an unsupported field is rejected with gh's own
 `Unknown JSON field: "<name>"` line on stderr and exit 1; the stub's `repo)` arm stays
@@ -514,8 +516,47 @@ non-digits `pid`/`host` file refuses rather than reclaiming, naming `release --f
 one lock (`git rev-parse --git-common-dir`); and the recorded pid is `${CLAUDE_PID:-$PPID}` (the
 Claude Code session process, since a Bash tool call's own `$PPID` dies before the next call —
 see the script's own header for the measured rationale), including the fallback to `$PPID` when
-`CLAUDE_PID` is unset or non-digits. It runs in CI as the seventh and last step, but it is not
+`CLAUDE_PID` is unset or non-digits. It runs in CI as the seventh of eight steps, but it is not
 part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/harness-lock.sh` changes.
+
+`dev/stop-tests.sh` is a separate negative-test harness for `bin/harness-stop.sh` (#310), the
+read-only maintainer stop switch checked before each stage and before each merge (ADR 0001
+decision 8). It builds throwaway git repos under `mktemp`, each with its own small `tbin/`
+directory that becomes the SUBPROCESS's entire PATH when invoking the real `bin/harness-stop.sh`
+(never a fallback to the developer's or CI runner's own PATH) — `git`/`cat` always symlinked to
+this machine's real binaries, `jq` symlinked or omitted entirely per fixture (the jq-missing
+cases), a stub `sleep` (never a real 30s wait), and its own stub `gh` (a byte-identical
+`GH_ISSUE_JSON_FIELDS` copy of `dev/planning-tests.sh`'s and `dev/cleanup-tests.sh`'s constant of
+the same name, ADVISORY default accepted; `dev/planning-tests.sh`'s own stub is not reused — this
+script's one call shape, `gh issue list --label ... --state open --json ... --limit ...`, gets its
+own, smaller stub, plus a `badbody-once`/`badbody-always` marker pair letting a fixture serve an
+arbitrary raw response body on an otherwise-zero-exit call) — and pins: the union semantics (a
+labelled open GitHub issue, the local file `<git-common-dir>/trail-blazer/stop`, or both, all
+yield `stop=true`/exit 3; neither yields `stop=false`/exit 0; a local stop plus an unreadable
+GitHub route still yields exit 3 with a `reason=` line, since a determinate set route beats
+unknown; an unreadable GitHub route with neither route set yields `stop=unknown`/exit 4); the
+stdout grammar (`route=`/`clear=` pairs, at most one `reason=` line); the literal `--state open`
+spelling in the logged query (#310 kickback K2); that a `gh issue list` attempt counts as a read
+only when `gh` exits 0 AND the body parses as a JSON array — a non-zero exit, an empty body, a
+body that fails to parse, and a well-formed JSON object are all a FAILED attempt, retried
+identically once, never silently counted as "zero issues" (#310 kickback K1); that a SUCCESSFUL
+attempt whose own `jq 'length'` count is not a single plain number — a body of more than one
+concatenated JSON array document, which the array-shape check alone accepts since it judges only
+the last document in the stream — closes the same "zero issues" fallback one layer further down,
+with no retry (the attempt itself already succeeded) and the identical
+`reason=github-query-unavailable` (#310 kickback N1, the `github-multi-document` case); that `jq`
+absent from `PATH` makes the GitHub route unreadable with `reason=jq-not-found`, no sleep, no retry
+attempted, while the local route (needing no `jq`) still works; the one-bounded-retry GitHub
+query, proven via a stub-`sleep` call count and a stub-`gh` call log showing two attempts; a `git
+worktree add` fixture proving a worktree shares its main checkout's local stop file; `--help`/an
+unknown argument/not-a-git-repository; and (the approval addendum, since this script actually
+executes `git`/`gh` unlike the `hooks/*.sh` never-executes idiom) a `never-mutates` case using a
+*recording* `git` wrapper (logs its args, then runs the real `git`) and the stub `gh`'s own call
+log (proving every call is `rev-parse --git-common-dir` / `issue list`, never a mutating one)
+alongside booby-trapped `rm`/`mv`/`touch`/`mkdir`/`dirname` and a byte-identical fixture-tree
+`find` listing before and after, across a stop-set and a stop-absent fixture — proving the script
+never writes to the tree it reads. It runs in CI as the eighth and last step, but it is not part
+of `dev/selfcheck.sh` itself — run it by hand whenever `bin/harness-stop.sh` changes.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
 *consumer* doctor; see the README's "Working on the harness itself" for why.
@@ -555,8 +596,8 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
 - **A fixture harness's `expect`-family helper must refuse an empty needle.** `grep -qF -- ""`
   (or `-cF`) matches every line unconditionally, so an empty needle silently makes `expect ""`
   always pass and `expect_absent ""` always fail regardless of what was captured (#262).
-  `dev/doctor-tests.sh`, `dev/cleanup-tests.sh`, `dev/lock-tests.sh`, and `dev/planning-tests.sh`
-  each guard every needle-taking helper with a `needle_required` check that fails the case
+  `dev/doctor-tests.sh`, `dev/cleanup-tests.sh`, `dev/lock-tests.sh`, `dev/planning-tests.sh`, and
+  `dev/stop-tests.sh` each guard every needle-taking helper with a `needle_required` check that fails the case
   instead; `dev/hook-tests.sh` needs no guard (its only substring test hand-types the literal
   inline, never through a needle-taking helper).
 - The README is part of "done": every factual claim it makes about this repo's behavior must be

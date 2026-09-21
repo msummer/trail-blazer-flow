@@ -54,6 +54,7 @@ or share).
 │   ├── reconcile-ledger.sh        # reconciles a cycle's dispatch ledger against live state
 │   ├── harness-lock.sh            # single-flight lock: at most one active cycle per checkout
 │   ├── harness-version.sh         # prints the installed plugin's "<version> <sha>", one line
+│   ├── harness-stop.sh            # read-only maintainer stop switch: GitHub label or local file (#310)
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
 │   ├── hooks.json                 # registers the four PreToolUse hooks below
@@ -68,11 +69,12 @@ or share).
 │   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh, hooks/agent-boundary.sh, hooks/push-guard.sh, AND hooks/claude-dir-guard.sh (not run by the gate)
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 │   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
-│   └── lock-tests.sh             # fixture-based negative-test harness for bin/harness-lock.sh (not run by the gate)
+│   ├── lock-tests.sh             # fixture-based negative-test harness for bin/harness-lock.sh (not run by the gate)
+│   └── stop-tests.sh             # fixture-based negative-test harness for bin/harness-stop.sh (not run by the gate)
 ├── docs/
 │   └── adr/                      # architecture decision records: direction the README doesn't specify yet
 ├── .github/
-│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the four hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
+│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the four hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness, then the stop switch script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
 │   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
@@ -483,6 +485,23 @@ again 2026-09-19: a list query made right after a label edit missed an issue tha
 returned), so an issue escalated moments earlier may be missing from the same run's `escalations`
 bucket.
 
+**Stopping a cycle (#310).** `bin/harness-stop.sh` is a read-only stop switch, checked before each
+stage and before each merge — see "One active cycle per checkout" below for the sibling lock
+mechanism this complements. Two unioned routes; either one alone is enough to stop the next check:
+set the GitHub route from a phone with `gh issue edit <n> --add-label harness-stop` (or tap the
+label onto any issue in the mobile app) and clear it the same way, with `--remove-label
+harness-stop`; set the local route at the keyboard with `mkdir -p
+"<git-common-dir>/trail-blazer" && touch "<that dir>/stop"` (`<git-common-dir>` from `git
+rev-parse --git-common-dir`) and clear it with `rm`. A local stop plus an unreadable GitHub route
+still halts the run (a determinate set route beats an unconfirmable one); neither route set and
+GitHub unreadable after one retry halts it too (an unconfirmable veto is not an absent one).
+Honest limits: the query is capped at `--limit 20` open `harness-stop` issues; a label edit can
+trail the query that checks it by several seconds (measured on this repo, 2026-09-19 — see
+`bin/harness-stop.sh`'s own header for the figures), so the local route is the immediate one for
+an operator at the keyboard; and the switch halts the harness's own dispatch loop — it cannot
+interrupt a subagent already running, and it has no effect on a session that isn't running the
+harness skills.
+
 ## Greenfield walkthrough: from idea to first feature
 
 This is the end-to-end story of starting a project on the harness — exactly what you say to the
@@ -599,7 +618,11 @@ by that script — nothing else in the lifecycle touches it. `needs-human` (#309
 escalation: a skill posted a comment stating a question and its evidence, applied the label, and
 moved on to the next issue rather than blocking the run (see `skills/issue-implementer/SKILL.md`'s
 "Durable escalation" subsection); it excludes the issue from every discovery query until a human
-answers and removes the label. `plan-approved`
+answers and removes the label. `harness-stop` (#310) is a human-only stop switch: any open issue
+carrying it stops an `issue-cycle` run — one already in progress included — at its next checked
+boundary, and a standalone `issue-planner`/`issue-implementer` run at its own per-issue dispatch
+loop (`bin/harness-stop.sh`) — see "Stopping a cycle" above; the harness only ever reads this
+label, and never applies or removes it. `plan-approved`
 can also come back off: the `issue-implementer` skill removes it (with an audit comment) when the
 approval no longer covers the freshest plan comment — a same-run revision landed after the label
 was applied (#174), the plan comment was itself edited in place after approval (#192), or, since
@@ -1855,6 +1878,30 @@ constant is declared identically in all three scripts, is one of the labels `bin
 creates, is excluded by every discovery `--search` line, and is named in
 `skills/issue-implementer/SKILL.md`.
 
+Also in v2.7.6 (#310): **needs two consumer actions** — re-copy the permissions block from
+`templates/repo-settings.json` (or add `"Bash(harness-stop.sh:*)"` by hand) so the new script is
+grantable, and re-run `bin/setup-labels.sh` so the `harness-stop` label exists. A new, read-only
+script, `bin/harness-stop.sh`, is a maintainer-settable stop switch checked before each stage and
+before each merge — see "Stopping a cycle" above for the reader-facing shape (both routes, the
+set/clear commands, the union rule, the honest limits) and "Label lifecycle" above for the label
+itself. It takes no subcommand and no mutating flag, on purpose (ADR 0001 decision 8): every
+`bin/*.sh` script is granted to the model as `Bash(<name>.sh:*)`, so a mutating subcommand here
+would hand the model a way to lift the maintainer's own veto. New gate assertion 4.49 pins that
+its `STOP_LABEL` value is one of the labels `bin/setup-labels.sh` creates, and that no
+`--label`/`--add-label`/`--remove-label` argument naming it appears anywhere in
+`skills/*/SKILL.md`, `skills/*/references/*.md`, `agents/*.md`, or `bin/*.sh` — the same shape
+4.44 already enforces for `no-auto-approve`, widened to also catch `--remove-label` (4.44's own
+ERE has no `--remove-label` arm). `skills/issue-cycle/SKILL.md` gained a canonical "Stop switch"
+section plus checks at the step-0, pre-implementation, pre-merge-pass, per-PR and pre-ratchet
+boundaries; `skills/issue-implementer/SKILL.md` and `skills/issue-planner/SKILL.md` each gained
+one check at their own per-issue dispatch sites, citing that section rather than restating it.
+`dev/stop-tests.sh` is the new eighth CI command — see CLAUDE.md's "Verification" section.
+Measured on this repo (gh 2.97.0, 2026-09-21) while the `harness-stop` label did not yet exist:
+`gh issue list --label harness-stop --state open --json number,title,url --limit 20` returned
+`[]` with exit 0 and `harness-stop.sh` printed `stop=false` — so a consumer who has not yet
+re-run `bin/setup-labels.sh` gets no spurious stop; until they do, `bin/check-harness.sh` FAILs
+on the missing label.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -2667,9 +2714,9 @@ bash dev/selfcheck.sh
 
 It prints a `PASS`/`FAIL` line per assertion and a `== summary: N pass, M fail ==` footer — run
 it to see exactly what it checks. There is no test suite and no build step: this repo is
-Markdown instruction files, Bash scripts, and JSON manifests. The gate and its six negative-test
+Markdown instruction files, Bash scripts, and JSON manifests. The gate and its seven negative-test
 harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tests.sh`, `dev/hook-tests.sh`,
-`dev/cleanup-tests.sh`, `dev/planning-tests.sh`, `dev/lock-tests.sh`) all run in CI on every pull
+`dev/cleanup-tests.sh`, `dev/planning-tests.sh`, `dev/lock-tests.sh`, `dev/stop-tests.sh`) all run in CI on every pull
 request — see this repo's `CLAUDE.md` "Verification" section for the exact commands and jobs.
 `dev/selfcheck-tests.sh` runs its case rows concurrently by default (#336); `SELFCHECK_TESTS_JOBS=<n>`
 or `-j <n>` overrides the detected job count, and `--serial` restores one case at a time.
