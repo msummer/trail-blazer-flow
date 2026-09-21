@@ -549,3 +549,8 @@ harness-lock.sh release <run-id>
 - **If a subagent's plan is dominated by open questions** (i.e. it couldn't form a real plan),
   still post it — the open questions are exactly the feedback the human needs to provide — and
   say so in the summary.
+- **Stop switch.** Before each dispatch site — step 2 (initial plans), step 3 (revisions), and
+  step 5 (proposed-answer revisions) — run `harness-stop.sh`: on stop, finish the issue currently
+  in flight, dispatch no further issues, report the undispatched ones, and (standalone only)
+  release the lock on the way out. See the `issue-cycle` skill's *Stop switch* section for the
+  full definition (exit-code mapping, stdout grammar, the stop path).

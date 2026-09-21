@@ -64,9 +64,14 @@ runs `issue-planner`'s or `issue-implementer`'s own step 0 as part of this pass 
 below), skip THEIR acquire/release (acquire is deliberately not same-pid-idempotent: a second
 acquire from this same live session would itself refuse and abort the run). **Release before
 every exit:** this lock is released at step 5's close AND on every STOP/abort path in this skill
-or a sub-skill it runs (red baseline, exhausted retry ladder, dirty-tree stop) — the recorded pid
+or a sub-skill it runs (red baseline, exhausted retry ladder, dirty-tree stop, a stop-switch stop)
+— the recorded pid
 is the Claude Code session, which outlives the run, so a lock left unreleased here blocks this
 checkout's very next invocation until a human runs `release --force`.
+
+**Stop check.** Immediately after the lock acquire above, before the implementer pre-flight below:
+see *Stop switch* below (at step 0 specifically: report the stop record and release the lock
+without running `harness-status.sh` or the closing reconciliation — nothing was seeded yet).
 
 Run the issue-implementer skill's pre-flight (step 0) **up front**: gh auth, dirty-tree /
 crash-recovery rules (incl. the stale-worktree sweep, before the hygiene script),
@@ -96,6 +101,8 @@ in the `planned` column (incl. retry counts from each status line); **pre-advanc
 
 ### 2. Implementation pass
 
+**Stop check** before this pass — see *Stop switch* below.
+
 Invoke the **`issue-implementer`** skill for everything now `plan-approved` — including plans
 auto-approved in step 1 (the PR gate still applies) — skipping its step 0. Sequential by
 default; its worktree-parallel mode applies under its own rules and changes nothing here (one
@@ -105,6 +112,8 @@ check** applies as in step 1. If step 1 produced nothing to implement and nothin
 approved, skip this pass.
 
 ### 3. Merge pass (only under a repo merge autonomy policy)
+
+**Stop check** before this pass — see *Stop switch* below.
 
 Skip this pass entirely — **silently** — when there is no "Merge autonomy
 policy" section at all; that silence is the only silent case, everything past activation is
@@ -117,7 +126,8 @@ below), not a silent skip: the half-finished double opt-in gets escalated, not p
 quietly.
 
 When active, evaluate each open harness PR (and Dependabot PRs, if the policy covers them)
-against the repo's policy. The policy defines *which* PRs qualify; this **hard floor applies
+against the repo's policy. **Stop check, once per PR, before the *Verdict provenance* read
+below** — see *Stop switch* below. The policy defines *which* PRs qualify; this **hard floor applies
 on top and is not configurable**:
 
 - **Transient-failure retry, once per read** (#245, #277, #287, #300, #319): these reads are
@@ -430,6 +440,8 @@ needing the human's attention beyond just "PR waits").
 
 ### 4. Ratchet pass (only under a repo test-suite ratchet policy)
 
+**Stop check** before this pass — see *Stop switch* below.
+
 Skip this pass entirely — **silently** — when `CLAUDE.md` has no section titled exactly
 **"Test-suite ratchet policy"**; everything past activation is loud. Runs after the merge pass
 (measurement then reflects everything that landed). When active, invoke the **`test-ratchet`**
@@ -506,6 +518,43 @@ step 0's own run id literally:
 ```bash
 harness-lock.sh release <run-id>
 ```
+
+## Stop switch
+
+Run this check at five named points: the step-0 check (immediately after the lock acquire), the
+pre-implementation check (before step 2), the pre-merge-pass check (before step 3), the per-PR
+check (once per PR, at the top of that PR's merge-floor evaluation), and the pre-ratchet check
+(before step 4):
+```bash
+harness-stop.sh
+```
+Exit 0 (`stop=false`): proceed normally. Exit 3 or 4 (`stop=true`/`stop=unknown`): take the stop
+path below. Any exit status this script is not documented to return (a crash, a signal, 126) means
+the check itself did not complete — treat it the same as `stop=unknown` and take the stop path.
+Exit 2, or the command not found, is the one exception: report loudly in the run summary and
+continue — an install fault is not a maintainer veto (see the script's own header for its argument
+vocabulary and stdout grammar). Never re-derive the `route=`/`clear=`/`reason=` lines it prints —
+paste them verbatim into the report; this skill never spells the clear command itself (the
+script's own read-only design is why — see `bin/harness-stop.sh`'s header).
+
+**The stop path at the step-0, pre-implementation, pre-merge-pass and pre-ratchet checks:** each
+of these runs BETWEEN passes, so there is no stage currently in flight to finish — dispatch
+nothing new, run no further pass of any kind (no planning pass, no implementation pass, no merge
+pass, no ratchet-pass issue filing), and reach the existing `harness-lock.sh release <run-id>`
+call on this run's way out. At step 0 specifically: report the stop record and release the lock
+without running `harness-status.sh` or the closing reconciliation — nothing was seeded yet, so
+there is nothing to reconcile. At any later boundary: still run step 5 in full — the
+`stage-skipped` lines `reconcile-ledger.sh` reports for the issues this stop left undispatched are
+expected under a stop, and are reported here attributed to it rather than escalated.
+
+**The stop path at the per-PR check:** here the stage in flight IS the merge pass itself — the
+pass this check sits inside, once per PR — so "finish the stage in flight" cannot mean finishing
+it; read that way, it would let a stopped run merge every remaining PR, the opposite of "checked
+before each merge". Instead: the stop ends the merge pass immediately. The PR this check just
+gated, and every PR not yet evaluated, are neither evaluated nor merged; each is recorded
+`outcome=merge-blocked` (the existing vocabulary — no new outcome slug, no `reconcile-ledger.sh`
+change), the stop as its one-line reason. No further pass runs (no ratchet pass); the run goes to
+step 5.
 
 ## Unattended operation
 

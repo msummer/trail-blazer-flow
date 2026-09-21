@@ -257,7 +257,7 @@ command's own output IS the holder record (no separate `status` call needed) —
 immediately, before any mutating command below runs, and report the holder record plus the exact
 remedy, `harness-lock.sh release --force`. **Release before every exit:** when you did acquire
 here (standalone), release it on every STOP/abort path too (a dirty-tree stop, an exhausted
-retry ladder, `status: died`) — not only at step 3's normal close — because the recorded pid is
+retry ladder, `status: died`, a stop-switch stop) — not only at step 3's normal close — because the recorded pid is
 the Claude Code session, which outlives the run; a lock left unreleased blocks this checkout's
 very next invocation until a human runs `release --force`.
 
@@ -337,6 +337,11 @@ immediately before dispatch, since the approval binding must reflect the freshes
 state, not this snapshot.
 
 ### 2. For each ready issue, IN SEQUENCE
+
+**Stop check**, before each issue in this loop: run `harness-stop.sh` — on stop, finish the issue
+currently in flight, dispatch no further issues, report the undispatched ones, and (standalone
+only) release the lock on the way out. See the `issue-cycle` skill's *Stop switch* section for the
+full definition (exit-code mapping, stdout grammar, the stop path).
 
 a. **Run `find-implementation-work.sh --issue <number>`**, fresh — never step 1's batch run.
 Take `plan`, `trusted_post_plan`, `untrusted_post_plan`, `approval`, and `binding_line` **from

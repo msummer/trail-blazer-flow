@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 75 assertions total. The gate prints what it checks — run it.
+# Five groups, 76 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -712,9 +712,9 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 855
-issue-cycle 545
-issue-planner 555
+budget_table="issue-implementer 860
+issue-cycle 595
+issue-planner 560
 project-kickoff 215
 test-ratchet 200
 harness-setup 185"
@@ -1602,6 +1602,46 @@ else
     bad "4.48 ESCALATION_LABEL value ('$el_planning') not found in skills/issue-implementer/SKILL.md"
   else
     ok "4.48 ESCALATION_LABEL ('$el_planning') declared identically in all three scripts, created by setup-labels.sh, excluded by every discovery --search line, and named in skills/issue-implementer/SKILL.md"
+  fi
+fi
+
+# 4.49 (#310) — bin/harness-stop.sh's STOP_LABEL="..." vocabulary, two clauses folded into one
+# assertion so the count rises by exactly one: (a) STOP_LABEL="..." extracts non-empty from
+# bin/harness-stop.sh with the anchored sed -nE idiom (the 2.5/4.13/4.35/4.36/4.48 idiom — an
+# empty extraction FAILs loudly, "structure changed", rather than passing vacuously) and its value
+# is a member of the labels bin/setup-labels.sh creates (the same create_or_update "…" extraction
+# 4.6/4.35/4.48 already use, itself FAILing loudly if empty); (b) no --label/--add-label/
+# --remove-label argument whose value is that label appears anywhere in skills/*/SKILL.md,
+# skills/*/references/*.md, agents/*.md, or bin/*.sh — the 4.44 ERE idiom, widened to also match
+# --remove-label, scanned line by line, listing every hit; README.md is deliberately out of scope:
+# it documents this label's own human-applied set/clear commands (--add-label/--remove-label
+# harness-stop), which legitimately spell this string as an argument. Proves only that the label
+# literal agrees end to end and that this one argument shape is absent from that surface — nothing
+# about runtime behaviour, the same honest limit 4.33/4.34/4.35/4.45/4.46/4.48's comments state.
+stop_label="$(sed -nE 's/^STOP_LABEL="([^"]*)"$/\1/p' "$root/bin/harness-stop.sh")"
+if [ -z "$stop_label" ]; then
+  bad "4.49 bin/harness-stop.sh's STOP_LABEL=\"...\" line didn't match (structure changed) — extraction failed"
+else
+  setup_labels_created_449="$(sed -nE 's/^create_or_update "([^"]+)".*/\1/p' "$root/bin/setup-labels.sh")"
+  if [ -z "$setup_labels_created_449" ]; then
+    bad "4.49 bin/setup-labels.sh's create_or_update lines didn't match (structure changed) — extraction failed"
+  elif ! grep -qx -- "$stop_label" <<<"$setup_labels_created_449"; then
+    bad "4.49 STOP_LABEL ('$stop_label') is not among the labels bin/setup-labels.sh creates"
+  else
+    stop_ere='(^|[[:space:]])--(add-|remove-)?label[[:space:]=]+["'"'"']?'"$stop_label"
+    bad_list_449=""
+    for f_449 in "$root"/skills/*/SKILL.md "$root"/skills/*/references/*.md "$root"/agents/*.md "$root"/bin/*.sh; do
+      [ -f "$f_449" ] || continue
+      lines_449="$(grep -nE -- "$stop_ere" "$f_449" | cut -d: -f1)"
+      for ln_449 in $lines_449; do
+        bad_list_449="$bad_list_449 $f_449:$ln_449"
+      done
+    done
+    if [ -n "$bad_list_449" ]; then
+      bad "4.49 a --label/--add-label/--remove-label argument names the stop label ('$stop_label') — the maintainer's veto must never be liftable by the harness itself:$bad_list_449"
+    else
+      ok "4.49 bin/harness-stop.sh's STOP_LABEL ('$stop_label') is created by bin/setup-labels.sh, and no --label/--add-label/--remove-label argument naming it appears in skills/*/SKILL.md, skills/*/references/*.md, agents/*.md, or bin/*.sh"
+    fi
   fi
 fi
 
