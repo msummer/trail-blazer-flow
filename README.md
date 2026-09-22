@@ -33,9 +33,9 @@ or share).
 │   ├── plugin.json               # plugin manifest (semver version field — bump it to publish an update)
 │   └── marketplace.json          # this repo doubles as its own marketplace
 ├── agents/
-│   ├── planner.md                # read-only planning subagent (Opus 5)
+│   ├── planner.md                # read-only planning subagent (Opus 5.5)
 │   ├── implementer.md            # code-writing subagent (Sonnet 5); no git/gh, mechanically enforced (hooks/agent-boundary.sh)
-│   └── verifier.md               # plan-conformance reviewer (Opus 5); fresh context; restores anything it mutates; read-only git only, no gh, mechanically enforced
+│   └── verifier.md               # plan-conformance reviewer (Opus 5.5); fresh context; restores anything it mutates; read-only git only, no gh, mechanically enforced
 ├── skills/
 │   ├── project-kickoff/SKILL.md  # greenfield on-ramp: interview → brief + CLAUDE.md + repo + backlog
 │   ├── harness-setup/SKILL.md    # one-time repo onboarding: doctor + CLAUDE.md audit + baseline
@@ -92,9 +92,9 @@ Three capability tiers, each placed where it pays:
 | Role | Model | Why |
 |------|-------|-----|
 | **Orchestrator** (the main session) | most capable available | judgment calls: proposing answers to open questions, verifying premises with measurements, reconciling staged files vs. reports, deciding when something is a blocker |
-| **planner** subagent | Opus 5 | codebase research and design; one dispatch per issue, read-only |
+| **planner** subagent | Opus 5.5 | codebase research and design; one dispatch per issue, read-only |
 | **implementer** subagent | Sonnet 5 | execution of a fully-resolved plan; cheap enough to run often (and in parallel) |
-| **verifier** subagent | Opus 5 | adversarial plan-conformance review of the diff with fresh context — the generator/critic split; judgment-heavy, so it gets the stronger model |
+| **verifier** subagent | Opus 5.5 | adversarial plan-conformance review of the diff with fresh context — the generator/critic split; judgment-heavy, so it gets the stronger model |
 
 Two consequences are baked into the skills:
 1. **Ambiguity is resolved top-down, before execution.** Plans classify questions
@@ -1929,6 +1929,16 @@ paragraph's WARN already describes): measured on this repo (gh 2.97.0, 2026-09-2
 where that does not hold, the harness's own notice comment never counts as already-noticed, so
 each `--fix` run posts another one and prints the untrusted-marker WARN naming that comment.
 
+**v2.7.6 → v2.7.7** needs no grant, label, script, settings entry, or baseline step. The
+`planner` and `verifier` subagents' frontmatter `model:` pin moves from `claude-opus-5` to
+`claude-opus-5-5` (Claude Opus 5.5); the `implementer` stays on `claude-sonnet-5`. The pins are
+full model IDs on purpose, not the `opus`/`sonnet` aliases Claude Code also accepts: an alias
+resolves to a provider-chosen "recommended" version that changes over time and differs between
+the Anthropic API and Bedrock/Vertex/Foundry, so a consumer could not tell from this repo's
+history which model verified a given PR. Installing the update is the whole migration — the pins
+travel with the plugin (see "Distribution"); a consumer whose provider does not yet serve
+`claude-opus-5-5` should stay on v2.7.6 until it does.
+
 ## The per-repo settings file (required)
 
 Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
@@ -2718,7 +2728,7 @@ release-at-close-or-abort placement is prompt-enforced, not mechanically checked
 
 This repo **is the plugin and its own marketplace** (`.claude-plugin/plugin.json` +
 `marketplace.json`): skills + agents versioned together, installable per-project, with the
-agent model pins (`planner: claude-opus-5`, `implementer: claude-sonnet-5`, `verifier: claude-opus-5`) travelling with
+agent model pins (`planner: claude-opus-5-5`, `implementer: claude-sonnet-5`, `verifier: claude-opus-5-5`) travelling with
 the plugin. Install/update flow is in "Installing in a new repo".
 
 Project-side files that never live in this repo: `LESSONS.md`, `BASELINE.md`,

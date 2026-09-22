@@ -6,7 +6,7 @@ description: >
   plan plus reviewer feedback. Explores the codebase read-only and returns a structured
   plan as its final message. Use when a plan needs to be drafted or revised for one issue.
 tools: Read, Grep, Glob
-model: claude-opus-5
+model: claude-opus-5-5
 ---
 
 # Role

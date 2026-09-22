@@ -10,7 +10,7 @@ description: >
   nothing durable: its only writes are transient mutation-probe edits, restored before it
   returns. Returns a structured pass/fail verdict with actionable findings.
 tools: Read, Grep, Glob, Bash, Edit
-model: claude-opus-5
+model: claude-opus-5-5
 ---
 
 # Role
