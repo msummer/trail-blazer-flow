@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 77 assertions total. The gate prints what it checks — run it.
+# Five groups, 78 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -1654,6 +1654,61 @@ else
       bad "4.49 a --label/--add-label/--remove-label argument names the stop label ('$stop_label') — the maintainer's veto must never be liftable by the harness itself:$bad_list_449"
     else
       ok "4.49 bin/harness-stop.sh's STOP_LABEL ('$stop_label') is created by bin/setup-labels.sh, and no --label/--add-label/--remove-label argument naming it appears in skills/*/SKILL.md, skills/*/references/*.md, agents/*.md, or bin/*.sh"
+    fi
+  fi
+fi
+
+# 4.50 (#346) — bin/harness-status.sh's TRIAGED_HELD_LABEL="..." vocabulary, the 4.49 shape reused,
+# four clauses folded into one assertion so the count rises by exactly one: (a)
+# TRIAGED_HELD_LABEL="..." extracts non-empty from bin/harness-status.sh with the anchored
+# sed -nE idiom (an empty extraction FAILs loudly, "structure changed", rather than passing
+# vacuously) and (b) its value is a member of the labels bin/setup-labels.sh creates (the same
+# create_or_update "…" extraction 4.6/4.35/4.48/4.49 already use, itself FAILing loudly if empty);
+# (c) every `--search "` line in bin/harness-status.sh containing the literal "is:issue
+# label:no-plan" also contains the literal "-label:$TRIAGED_HELD_LABEL" (FAILing loudly when zero
+# such lines are found — "structure changed" — and when the two counts differ), the counts fed via
+# a here-string, never a pipeline into grep's quiet mode (CLAUDE.md / assertion 1.7); (d) no
+# --label/--add-label/--remove-label argument whose value is that label appears anywhere in
+# skills/*/SKILL.md, skills/*/references/*.md, agents/*.md, or bin/*.sh — the 4.44/4.49 ERE idiom,
+# scanned line by line, listing every hit. README.md is deliberately out of scope for clause (d):
+# it documents this label's own human-applied set/clear commands (--add-label/--remove-label
+# triaged-held), which legitimately spell this string as an argument. Proves only that the label
+# vocabulary agrees end to end and that this one argument shape is absent from that surface —
+# nothing about runtime behaviour, and clause (c) does not prove *which* function's query carries
+# the token beyond the "is:issue label:no-plan" pairing — the same honest limit
+# 4.33/4.34/4.35/4.45/4.46/4.48/4.49's comments state.
+th_label="$(sed -nE 's/^TRIAGED_HELD_LABEL="([^"]*)"$/\1/p' "$root/bin/harness-status.sh")"
+if [ -z "$th_label" ]; then
+  bad "4.50 bin/harness-status.sh's TRIAGED_HELD_LABEL=\"...\" line didn't match (structure changed) — extraction failed"
+else
+  setup_labels_created_450="$(sed -nE 's/^create_or_update "([^"]+)".*/\1/p' "$root/bin/setup-labels.sh")"
+  if [ -z "$setup_labels_created_450" ]; then
+    bad "4.50 bin/setup-labels.sh's create_or_update lines didn't match (structure changed) — extraction failed"
+  elif ! grep -qx -- "$th_label" <<<"$setup_labels_created_450"; then
+    bad "4.50 TRIAGED_HELD_LABEL ('$th_label') is not among the labels bin/setup-labels.sh creates"
+  else
+    search_lines_450="$(grep -- '--search "' "$root/bin/harness-status.sh" || true)"
+    anchor_lines_450="$(awk -v a="is:issue label:no-plan" 'index($0, a) { n++ } END { print n+0 }' <<<"$search_lines_450")"
+    with_token_450="$(awk -v a="is:issue label:no-plan" -v b="-label:\$TRIAGED_HELD_LABEL" 'index($0, a) && index($0, b) { n++ } END { print n+0 }' <<<"$search_lines_450")"
+    if [ "$anchor_lines_450" -eq 0 ]; then
+      bad "4.50 no --search \" line in bin/harness-status.sh contains 'is:issue label:no-plan' (structure changed) — extraction failed"
+    elif [ "$anchor_lines_450" -ne "$with_token_450" ]; then
+      bad "4.50 $((anchor_lines_450 - with_token_450)) of $anchor_lines_450 'is:issue label:no-plan' --search lines in bin/harness-status.sh lack the -label:\$TRIAGED_HELD_LABEL token"
+    else
+      th_ere='(^|[[:space:]])--(add-|remove-)?label[[:space:]=]+["'"'"']?'"$th_label"
+      bad_list_450=""
+      for f_450 in "$root"/skills/*/SKILL.md "$root"/skills/*/references/*.md "$root"/agents/*.md "$root"/bin/*.sh; do
+        [ -f "$f_450" ] || continue
+        lines_450="$(grep -nE -- "$th_ere" "$f_450" | cut -d: -f1)"
+        for ln_450 in $lines_450; do
+          bad_list_450="$bad_list_450 $f_450:$ln_450"
+        done
+      done
+      if [ -n "$bad_list_450" ]; then
+        bad "4.50 a --label/--add-label/--remove-label argument names the triaged-held label ('$th_label') — a harness-applied instance would silently shrink the maintainer's own human_actions queue:$bad_list_450"
+      else
+        ok "4.50 bin/harness-status.sh's TRIAGED_HELD_LABEL ('$th_label') is created by bin/setup-labels.sh, excluded by its held-follow-up --search line, and no --label/--add-label/--remove-label argument naming it appears in skills/*/SKILL.md, skills/*/references/*.md, agents/*.md, or bin/*.sh"
+      fi
     fi
   fi
 fi
