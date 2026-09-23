@@ -4,113 +4,8 @@
 # hooks, in the style of dev/doctor-tests.sh: feeds fixture stdin JSON straight into the real
 # script and pins its verdict.
 #
-# hooks/git-c-guard.sh (#150) has two verdicts — allow (a single
-# hookSpecificOutput.permissionDecision == "allow" JSON object on stdout) or no opinion (empty
-# stdout) — for every case listed in the approved #150 plan's "Testing approach", plus a
-# booby-trapped `git`/`rm` on PATH proving the guard never executes anything against the
-# untrusted worktree path it is validating (that is exactly the risk the startup wildcard
-# warning names — see hooks/git-c-guard.sh's header).
-#
-# hooks/agent-boundary.sh (#235) has three verdicts — deny (exit 2, empty stdout, one stderr
-# line naming the role and the blocked command), no opinion (exit 0, empty stdout, empty
-# stderr), or (never observed here, since this hook's contract forbids it) anything else — for
-# every case listed in the approved #235 plan's "Testing approach": implementer-role deny/no
-# opinion, verifier-role deny/no opinion (both agent_type spellings represented per role),
-# role-agnostic no opinion, the same booby-trapped `git`/`rm` idiom proving the boundary never
-# executes anything either, and, since #270, a CRLF-carrying command word on both the
-# implementer (`git<CR> push`) and verifier (`gh<CR> …`) roles, plus a CRLF-carrying subcommand
-# (`git status<CR>`) that DENIES pre-fix and is no opinion post-fix.
-#
-# hooks/push-guard.sh (#260) has the same two observable verdicts as agent-boundary.sh — deny
-# (exit 2, empty stdout, exactly one stderr line naming the blocked destination) or no opinion
-# (exit 0, empty stdout, empty stderr) — for every case listed in the approved #260 plan's
-# "Testing approach": one deny case per refspec-parsing clause/boundary (a non-`origin` remote, a
-# URL remote containing a colon, a full `refs/heads/…` refspec, `:main`, `--delete`,
-# `--all`/`--mirror`, an option before/after the remote or refspec, 0/1/2+ occurrences of a
-# skipped option/prefix-word/global-option class, the `git -C <worktree> push origin main` form
-# `git-c-guard.sh` itself would allow, and the `main`/`master` fallback pair), a default-branch
-# symref read against a fixture repo (base/subdirectory/worktree-pointer-file `cwd` variants),
-# every documented no-opinion shape (including the two exact forms this harness itself issues),
-# role-agnostic no-opinion edges, the same booby-trapped `git`/`gh`/`rm` idiom plus a
-# byte-identical-file-listing fixture proving this hook reads the filesystem but never writes to
-# or executes anything on it, and, since #270, a CRLF-carrying destination (`git push origin
-# main<CR>`, both trailing and interior), a CRLF-carrying command word (`git<CR> push origin
-# main`), and a CRLF-carrying non-default destination (`git push origin feature/x<CR>`) proving
-# the strip does not widen the deny set. Since #268, the same common dir's `config` file is also
-# pinned for a push segment carrying no explicit refspec: a bare push and a named-remote push
-# each denied via a configured `remote.<name>.push` refspec (a 0/1/2+ boundary on two `push =`
-# lines under one remote, and a `key=value` assignment with no surrounding spaces), `push.default
-# = upstream`/`tracking` resolved through the current branch's recorded `merge` ref — including,
-# since the #268 round-2 kickback, alongside a NON-denying `remote.<name>.push` record on the
-# SAME remote, pinning the RESOLVED union of routes (not git's own precedence), and, since the
-# #268 round-3 kickback, a bare push denied via a denying `remote.<name>.push` record under a
-# DIFFERENT (non-`origin`) remote plus a benign `origin` section, pinning the RESOLVED union
-# across EVERY configured remote at n==0 (not just git's own default-remote pick) — `push.default
-# = matching` and a wildcard (`*`) destination each denied unconditionally, n==1 exact
-# remote-name scoping in both directions, the harness's own explicit-refspec shape confirmed as
-# a release-blocker no-opinion control even
-# against a denying config, current-branch scoping on `branch.<n>.merge`, comment/whitespace
-# handling, a CRLF-carrying config line (both a line-ending CR and, since the #268 round-2
-# kickback, an interior CR inside a refspec value), a config setting neither key at all, a
-# worktree's config resolved from the MAIN checkout rather than the pointer's own gitdir, a final
-# config line with no trailing newline, case-insensitive section/key names, and the same
-# booby-trapped/byte-identical-listing guarantee applied to the config route specifically. Since
-# #269, a push segment's own `git -C <path>` value is ALSO pinned, but only when it satisfies the
-# same `PATH_ERE` predicate `hooks/git-c-guard.sh` enforces (mechanically pinned identical by
-# dev/selfcheck.sh's assertion 4.42): the current-branch check, `refspec_dest()`'s `HEAD`
-# substitution, and the default-branch deny-set member each denying via a RESOLVED sibling
-# worktree or a wholly separate checkout (the issue's own headline shape), the resolved checkout's
-# own config denying where the session has none, the two documented narrowings (a resolved segment
-# no longer inherits the session's REPO-LOCAL `.git/config` routes, and a bare push in a sibling
-# worktree no longer denies merely because the SESSION sits on its own default branch), the predicate's
-# boundaries (no `-wt-<n>` suffix, the attached `-C<path>` form, 0/1/2+ occurrences of `-C`), an
-# unresolvable-but-shape-matching target degrading to the session's own facts rather than clearing
-# them, the session's own default branch staying in the deny-set union for a resolved segment, and
-# the same booby-trapped/byte-identical-listing guarantee — applied to BOTH the session repo and
-# the resolved `-C` target — proving the new resolution route reads but never executes or writes.
-# Since the #269 round-2 kickback, that same guarantee's trap set also names `dirname`, pinned by a
-# SEPARATE fixture whose `-C` target does not resolve at depth 0 (the original fixture's own target
-# does, and so cannot discriminate the depth-1 ascent guard `dirname` exposure would otherwise
-# leave unpinned), and a two-push-segment command pins the per-segment reset itself — the SECOND,
-# `-C`-less segment stays judged by the SESSION's own facts, never by whatever the first segment's
-# resolved `-C` target left behind. Since #290, the same common-dir config read is extended to
-# three GLOBAL candidates — `$GIT_CONFIG_GLOBAL` (when set and non-empty),
-# `$XDG_CONFIG_HOME/git/config` (or its `$HOME/.config/git/config` default, when
-# `$XDG_CONFIG_HOME` is unset or empty), and `$HOME/.gitconfig` — unioned with the repo-local
-# routes above and read identically for every
-# checkout resolved (session or a resolved `-C` target, since this class comes from the
-# environment, never the untrusted command string): one deny fixture per global candidate path,
-# the "none present"/loop-boundary fixture, a benign value in one file never masking a denying
-# value in another and the reverse (a denying global value still denying over a benign repo-local
-# one), `$GIT_CONFIG_GLOBAL` unioned with (not replacing) the other two global paths, the deny
-# message's own two-literal source label (repo-local vs. global), the harness's own
-# explicit-refspec push shape reconfirmed as a release-blocker no-opinion control against a denying
-# GLOBAL config (bare and `-C`), a resolved `-C` segment still seeing the global routes, and the
-# same booby-trapped/byte-identical-listing guarantee extended to the fixture `HOME` tree. Because
-# the hook now reads `$HOME`/`$XDG_CONFIG_HOME`/`$GIT_CONFIG_GLOBAL`, `run_push_guard` below
-# isolates all three for EVERY push fixture (a neutral, empty fixture `HOME` under `$tmpbase` by
-# default) so no fixture can read the developer's or CI runner's real global git config. Since the
-# #290 ROUND-2 KICKBACK, two more classes are pinned: TWO `[push] default = ...` lines inside ONE
-# file (global or repo-local) are BOTH accumulated and evaluated rather than the file's own last
-# value winning, a documented over-block; and the `cfg_push_lines` record threads its source label
-# FIRST, as a bounded field, with the configured value as the record's UNBOUNDED tail, so a
-# `remote.<name>.push` value containing a literal TAB byte cannot truncate and leak its own
-# remainder into that source label.
-#
-# hooks/claude-dir-guard.sh (#327) has three verdicts — deny via the ".claude" segment class,
-# deny via the unclassifiable/fail-closed class (each exit 2, empty stdout, exactly one stderr
-# line, the two classes' wording DISTINCT from each other), or no opinion (exit 0, empty stdout,
-# empty stderr) — for every case listed in the approved #327 plan's "Testing approach": the four
-# agent_type spellings distributed across both roles and both guarded tools (Edit/Write), a nested
-# segment, a user-level path outside any repo checkout, a case-variant spelling, the Windows
-# drive-letter and backslash-spelled forms, ".claude" as the final segment, a CR-carrying
-# spelling, the relative-".claude"-vs-relative-plain pair that discriminates the two deny classes,
-# a ".."-carrying path with and without a ".claude" segment, every documented no-opinion shape
-# including the two release-blocker controls (the orchestrator's own main-session lesson append,
-# and the verifier's transient mutation-probe Edit), and the same booby-trapped
-# git/gh/rm/dirname/tr/awk/grep/sed PATH idiom plus a byte-identical fixture-tree listing proving
-# this hook — which performs NO filesystem access at all, unlike either of its two Bash-matching
-# siblings above — never executes or writes anything.
+# Per-PR history of what this harness pins: CHANGELOG.md (archive, #363). Each hook's own header
+# and each case's own comment state its mechanism.
 #
 # Usage: bash dev/hook-tests.sh [name-filter] — same output contract as dev/selfcheck-tests.sh
 # and dev/doctor-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==`
@@ -2062,9 +1957,9 @@ cases=(
   # "143-case"/"140 pass"/"143 pass" figures were re-measured. #327 then added 29 cdg-* fixtures
   # (none containing the substring "push"), growing the whole-file total to 228; the #327 round-1
   # kickback then added two more cdg-* fixtures (also push-free), growing the whole-file total to
-  # the CURRENT 230 while leaving the push-filtered unit at 116 — see this file's header for the
-  # fourth hook's own paragraph, and the cdg-* section's own mutation-proof table further below for
-  # its 14 mutants.
+  # the CURRENT 230 while leaving the push-filtered unit at 116 — see hooks/claude-dir-guard.sh's
+  # own header for the fourth hook's own paragraph, and the cdg-* section's own mutation-proof
+  # table further below for its 14 mutants.
   # M1/M2 (the two raw-stdin fast paths) are
   # coarse — breaking either silences the WHOLE hook, so they only distinguish a deny-verdict
   # case from everything else, never one deny case from another:

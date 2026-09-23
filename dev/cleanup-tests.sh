@@ -11,75 +11,8 @@
 # #249), or `git pull --ff-only` is reported (WARN) and survived rather than aborting the run
 # before any output, that would otherwise only be hand-verified.
 #
-# Since #231, the multi-PR KEEP signal is label-primary and the comment-marker path is
-# trust-gated: the `multi-pr` label on the issue itself is the primary KEEP signal (read from
-# the same `gh issue list --json number,title,labels` fetch the script already makes); the
-# `<!-- harness-multi-pr -->` marker is honoured only in a comment whose `authorAssociation` is
-# OWNER/MEMBER/COLLABORATOR (case-insensitively), with a comment carrying no `authorAssociation`
-# field treated as untrusted (fail-closed) — an ignored untrusted marker prints exactly one WARN
-# line naming the comment's association and url, in both `--fix` and report-only modes; and the
-# issue-BODY marker is no longer honoured at all (an issue relying on it now closes on the
-# normal path). `build_stub_gh`'s `issue list` arm projects the requested `--json` field list
-# (see its own comment below) so a fixture can distinguish "the script requested labels" from
-# "the script didn't" — proving the label case can't pass vacuously if the script stops asking
-# for `labels`.
-#
-# Since #248, the stub `gh` also validates `--json` FIELD NAMES against gh's own live-probed
-# field set, the same treatment #217 gave dev/planning-tests.sh's stub: `issue list`, `issue
-# view`, and `pr list` each reject an unsupported field with gh's own `Unknown JSON field:
-# "<name>"` line on stderr and exit 1, so a future cleanup change asking gh for a field it does
-# not support turns THIS repo's CI red instead of being silently served a fixture (see
-# `validate_json_fields`'s own comment below for the two constants and what stays unvalidated).
-# Since #249, a failed or malformed `gh issue view --json comments` (the multi-PR comment-marker
-# lookup) no longer falls back to "no marker found" — it WARNs once, naming the failure route,
-# and leaves the issue exactly as found (open, `pr-open` still attached) in both `--fix` and
-# report-only modes; `build_stub_gh`'s new `VIEW_MODE` parameter (`ok`/`fail`/`malformed`)
-# fixtures both routes, and a fifth fixture pins that the cheaper `multi-pr`-label KEEP signal
-# still short-circuits before this lookup is ever attempted.
-#
-# Since #334, the follow-up quarantine's idempotence key moved off the `no-plan` label (a
-# follow-up is born `no-plan` since #308, so excluding it from the candidate query would exclude
-# every follow-up outright) onto a trusted, PR-keyed `<!-- harness-orphan-notice: PR #<p> -->`
-# marker read from a per-follow-up `gh issue view --json comments` lookup, the same trust gate and
-# #249 fail-closed shape the multi-PR path above already uses. `build_stub_gh`'s `issue list` arm
-# gains a `--search` case serving `followups.json` (field-projected exactly like the `pr-open`
-# arm), and its `issue view` "ok" mode prefers a per-issue `comments-<n>.json` override when
-# present — see `build_stub_gh`'s own comment below for both.
-#
-# Since #355, the best-effort treatment above extends to bin/cleanup-after-merge.sh's own
-# MUTATING writes (`gh issue comment`/`gh issue edit`/`gh issue close`), not just its pre-flight
-# lookups: a failed write is reported (one `WARN` line naming the issue and which write failed)
-# and the remaining writes of that same issue's own arm are skipped, but the run always continues
-# to the next issue, still reaches the "== follow-ups from rejected PRs ==" section, and still
-# prints the closing Reminder — exit status stays 0. `build_stub_gh`'s `issue comment|edit|close`
-# arm gains a `reject-$2-once`/`reject-$2` marker-file pair (see its own comment below) that fails
-# one write on demand, mirroring `dev/planning-tests.sh`'s `reject-X(-once)` contract; thirteen new
-# fixtures pin the per-arm skip-the-rest behaviour, the close-arm and follow-up-arm write
-# reorderings that make the write which keeps an issue re-examinable the LAST one attempted, the
-# one summary WARN line printed before the Reminder when any write failed this run, and that
-# report-only mode still performs zero writes regardless of which reject markers are present.
-#
-# Since #370, a second `gh issue list --label pr-open --state closed --json number,title --limit
-# 100` query feeds a new "== closed issues still labelled pr-open ==" section, sweeping the whole
-# historical backlog of closed issues still carrying `pr-open` (not just the one #355 could leave
-# behind), 100 per run: an issue with any OPEN `claude/<n>-*` PR is kept (an `ok` line, no write);
-# otherwise, with `--fix`, the label is removed through `try_write` with no comment posted at all
-# (the label-removal event is its own audit trail) — without `--fix`, a `STALE` line only. The
-# sweep runs whenever the PR list itself was fetched, independent of the open-issue query's own
-# success. `build_stub_gh`'s `issue list` arm gains a `--label pr-open --state closed` case ahead
-# of the open one (see its own comment below), serving `closed-pr-open.json`, plus
-# `reject-closed-list` and `reject-open-list` failure markers. Since #370 kickback round 3, that
-# same closed arm also appends its own full argv to a separate `DIR/gh-list-calls.log` (the
-# pre-existing, mutation-only `gh-calls.log` is untouched), read into `$list_calls` by
-# `run_cleanup_at` and asserted via a new, needle-guarded `expect_list_call` helper — making the
-# closed query's own literal argument list, including ` --limit 100`, observable to a fixture for
-# the first time (RESOLVED and the first acceptance criterion both name this literal command
-# line). Since #370 kickback round 4, that same fixture additionally asserts the section header
-# text itself (`expect "== closed issues still labelled pr-open =="`) and, via a new
-# `expect_section_order` helper, that header's POSITION between `== pr-open label hygiene ==` and
-# `== follow-ups from rejected PRs ==` — see the `MEASURED MUTANTS, #370` block's own "Kickback
-# round 4" paragraph for the full literal -> fixture:assertion -> mutant table this round's own
-# sweep produced.
+# Per-PR history of what this harness pins: CHANGELOG.md (archive, #363). Each fixture's own
+# comment states its mechanism.
 #
 # Usage: bash dev/cleanup-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh and dev/doctor-tests.sh: one PASS/FAIL line per case, a

@@ -29,6 +29,7 @@ or share).
 ```
 .
 ├── CLAUDE.md                     # this repo's OWN harness contract — governs work on the harness itself
+├── CHANGELOG.md                  # per-PR history (not governance, not a spec)
 ├── .claude-plugin/
 │   ├── plugin.json               # plugin manifest (semver version field — bump it to publish an update)
 │   └── marketplace.json          # this repo doubles as its own marketplace
@@ -307,7 +308,7 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    instead of becoming issues. A follow-up filed this way is born `no-plan`; if this PR is later
    closed without merging, `cleanup-after-merge.sh`'s follow-up quarantine still reaches it (#334)
    — keyed on a trusted, PR-keyed orphan-notice marker rather than the label — see "Returning to
-   a laptop" and the v2.7.5 → v2.7.6 note.
+   a laptop" and `CHANGELOG.md` (the archived v2.7.6 migration notes, #334).
 7. **Watches CI** (`gh pr checks --watch`). Red CI caused by the PR itself gets **one bounded
    fix attempt** (implementer → mechanical checks → verifier → push; the PR isn't merged, so
    this is as safe as the kickback loop) — once that re-verification passes, its verdict is
@@ -1021,6 +1022,7 @@ of the interview, and files the initial backlog. The manual steps below are for 
 
 ```bash
 # 1. bump "version" in .claude-plugin/plugin.json (e.g. 1.1.0 -> 1.2.0)
+# 2. retitle CHANGELOG.md's "## Unreleased" heading to "## vX.Y.Z"
 git commit -am "Release vX.Y.Z: <summary>"
 git tag -a vX.Y.Z -m "trail-blazer-flow vX.Y.Z"   # match the version field exactly
 git push origin main
@@ -1080,714 +1082,50 @@ check-harness.sh
 It names exactly what the new version needs that your repo lacks; fix what it flags and you're
 migrated.
 
-For **v1.9.0 → v2.0.0**, exactly one thing migrates: a new permission grant,
-`"Bash(gh auth status:*)"`. Three skills run `gh auth status` as their first command, so without
-it a repo on the default permission mode stalls at the start of every run. Re-copy the
-permissions block from `templates/repo-settings.json`, or add that one entry by hand — the doctor
-names it either way. No new label, script, or baseline step.
+For full per-release history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration
+notes, v1.9.0 to v2.7.7" subsection).
 
-Two behaviour changes worth knowing, both of which *narrow* what the harness does unattended, so
-neither can surprise you into a merge you didn't want. The merge pass now treats CI configuration
-as governance surface, and treats a repo that reports "no checks configured" as **not** green —
-if you run merge autonomy on a repo with no CI, no PR qualifies until your own policy section
-explicitly opts a no-CI repo in. Follow-up issues the harness files now carry `no-auto-approve`
-(remove the label to release one into planning) and are commented and labelled `no-plan` by
-`cleanup-after-merge.sh --fix` if the PR that filed them is closed without merging — since
-v2.7.5 (see the v2.7.4 → v2.7.5 note below), a follow-up is filed with `no-plan` from birth
-instead, so the "remove `no-auto-approve` to release" step now applies only to a follow-up filed
-by an older harness version; since v2.7.6 (#334, see the v2.7.5 → v2.7.6 note below) the
-quarantine-on-orphan behaviour described here reaches a follow-up born `no-plan` too, keyed on a
-trusted comment marker rather than the label.
+**v1.9.0 → v2.2.0** — add grants `"Bash(gh auth status:*)"` and `"Bash(gh pr edit:*)"`: re-copy
+the permissions block from `templates/repo-settings.json`, or add both by hand.
 
-This release adds one further grant your repo must add: `"Bash(gh pr edit:*)"` — the orchestrator
-needs it to refresh a PR body it already opened (writing filed follow-up issue numbers into it,
-and replacing the verifier status line and mutation-probe line after a CI-fix round). Re-copy the
-permissions block from `templates/repo-settings.json`, or add that one entry by hand — the doctor
-names it either way. Under merge autonomy, this release also makes the merge floor stricter: it
-now additionally requires the PR body's verifier line to match a verifier verdict the orchestrator
-archived as an issue comment (see "Verdict provenance" under "Safety model"). Any PR opened before
-your repo picks up this version carries no such comment, so it is not eligible for autonomous
-merge — it simply waits in the "waits on the human" queue until you merge it by hand.
+**v2.2.0 → v2.3.0** needs no grant, label, script, or baseline step — sharper doctor checks and a
+branch-keyed verifier verdict under merge autonomy.
 
-**v2.2.0 → v2.3.0** adds no grant, label, script, or baseline step — the doctor reports nothing
-new to migrate. Three doctor checks got sharper: a `#` comment inside the ratchet policy's fenced
-block no longer truncates the section slice; a declared "Post-merge verification" block now gets an
-advisory WARN naming the exact `Bash(<command>:*)` entry for any declared command that has no
-matching allow entry (a string comparison — nothing declared is ever executed); and an abbreviated
-`- commit:` value of 7+ hex characters in `.claude/BASELINE.md` no longer trips the "baseline is
-behind" WARN, while a shorter value WARNs as malformed. Under merge autonomy the merge floor is
-stricter again: the archived verifier verdict is now keyed to the PR's head branch (a second
-`<!-- verifier-verdict-branch: … -->` line in the archive comment), so a PR opened before your repo
-picks up this version carries an unkeyed archive and is not eligible for autonomous merge — it
-waits for one manual merge, exactly like the v2.2.0 transition above.
+**v2.3.0 → v2.4.0** — settings step: delete the nine legacy `Bash(git -C * <sub> *)` allow entries
+(or re-copy the permissions block from `templates/repo-settings.json`). Prerequisite: Claude Code
+**2.1.85+**.
 
-**v2.3.0 → v2.4.0** removes a grant rather than adding one: the nine `Bash(git -C * <sub> *)`
-allow entries worktree-parallel mode used to depend on are gone from the template, replaced by a
-plugin-shipped `PreToolUse` guard hook (`hooks/hooks.json` + `hooks/git-c-guard.sh`) that
-auto-updates with the plugin and needs no per-repo file. Re-copy the permissions block from
-`templates/repo-settings.json` (or delete the nine entries by hand) to pick this up — the nine
-"has a wildcard before the rest of the command" warnings Claude Code 2.1.246+ prints at the start
-of every session are the visible cue that your repo is still on the old template. Because the
-plugin's marketplace entry ships `"autoUpdate": true`, the plugin itself updates before you next
-sync settings in practice, so the guard hook is already active by the time you delete the old
-entries — worktree-parallel mode's `git -C` commands stay prompt-free throughout the transition.
-`check-harness.sh` now also WARNs when it finds `disableAllHooks: true` in any of the three
-settings files (silently disabling the guard hook, and every other hook) and, separately, when
-`.claude/settings.json` still carries one of the superseded legacy `-C` allow entries. The
-post-merge allow-entry check and the path-qualified interpreter probe now also consult this same
-three-file union instead of `.claude/settings.json` alone, so a grant that lives only in
-`.claude/settings.local.json` or the user-level settings file no longer produces a spurious "no
-matching allow entry" WARN — no consumer action required. The guard also now covers
-`git -C <worktree> log` (#155) — the verifier's read-only commit-message evidence call, which
-previously hit an unanswerable prompt inside a worktree — and its handler is registered with an
-`"if": "Bash(git -C *)"` filter so the hook process is only spawned for `git -C` Bash commands,
-which needs Claude Code **2.1.85+** (see "Prerequisites").
+**v2.4.0 → v2.5.0** needs no grant, label, script, or baseline step — comment- and issue-author
+provenance, and plan-binding approval provenance, both narrow what runs unattended.
 
-**v2.4.0 → v2.5.0** adds no grant, label, script, or baseline step — the doctor reports nothing
-new to migrate. What changes is trust and provenance, and every change *narrows* what the harness
-does unattended. (1) Comment- and issue-author provenance: only `OWNER`/`MEMBER`/`COLLABORATOR`
-comments are binding feedback, only maintainer-authored issues can be auto-approved, and
-everything untrusted is surfaced to you in new report buckets instead of silently acted on. A bug
-(fixed in #202) had this lookup ask `gh` for an issue-level `authorAssociation` `--json` field it
-has never returned on any version — not a version gap that would close as `gh` caught up — so
-issue-author trust failed closed on every run and **plan auto-approval was effectively paused
-wherever a policy exists**; manual approval was unaffected throughout. The lookup now reads the
-same GitHub-computed association from the REST issues endpoint instead, which does return it
-today, so auto-approval resumes for maintainer-authored issues wherever a policy exists — re-read
-your policy before upgrading if you had come to rely on the (accidental) pause. (2) Harness-authored
-record comments (auto-approval audits, staleness notes on approved plans, interrupted-run/worktree-sweep
-notes, `cleanup-after-merge.sh`'s hygiene comments) now open with `<!-- harness-audit -->` and are
-excluded from feedback detection and from the implementer's binding context — no more phantom
-revisions after an audit comment. One-time transition note: such comments posted by *older*
-versions carry no marker, so each can trigger at most one spurious revision before its issue's
-next plan supersedes it. (3) Approval now binds to the plan artifact: the newest `plan-approved`
-labeling event must post-date the plan comment, the implementer revalidates before dispatch and
-before push (a plan revised after approval is returned to review — `plan-approved` removed, an
-audit comment posted — never silently built), PR bodies carry a machine-generated
-`<!-- harness-plan-binding: … -->` line, and under merge autonomy the floor requires it — so a PR
-opened before your repo picks up this version is not eligible for autonomous merge and waits for
-one manual merge, exactly like the v2.2.0 and v2.3.0 transitions. This costs one extra read-only
-GitHub API call per ready issue. (4) The doctor's merge-gated CI action-pinning WARN now also
-scans `action.yml`/`action.yaml` under `.github/actions/` — a repo that previously showed a clean
-PASS may newly WARN if an unpinned ref hides inside a local composite action; that is the fix, not
-a regression (that hop's scan stopped at `.github/actions/`; it has since widened to cover any
-`action.yml`/`action.yaml` anywhere in the repo — see the "Merge autonomy policy" item in the
-CLAUDE.md contract). (5) The
-decision-record checker is stricter: fence-aware section slicing, required non-empty content, and
-same-depth sibling headings no longer leak into a record's span — a record that passed by accident
-under the looser scan can start failing; the failure names the element.
+**v2.5.0 → v2.5.1** needs no grant, label, script, or baseline step — fixes a live
+approval-binding bug; upgrade promptly.
 
-**v2.5.0 → v2.5.1** adds no grant, label, script, or baseline step — the doctor reports nothing
-new to migrate — but **upgrade promptly: v2.5.0's approval binding is broken live**. (1) The bug
-(#196): `find-implementation-work.sh`'s `plan-approved` events lookup applied its `gh api --jq`
-filter to the wrong document shape (each response page arrives as a JSON array), the error was
-swallowed, and every ready issue fail-closed to `approval-unreadable` — so under the v2.5.0
-implementer skill's approval gate no approved issue could ever be dispatched, and the gate's
-prescribed remedy would strip your fresh `plan-approved` labels and post revision-triggering
-comments. v2.5.1 fixes the filter and makes the planning-tests stub faithful to real
-`gh api --jq` document semantics, so the approval fixtures now pin the live shape instead of two
-bugs canceling out. (2) Post-approval comments narrow further (#194): a trusted comment posted
-*after* the `plan-approved` label is no longer restated to the implementer as a binding
-`RESOLVED:` decision — it is marked `covered_by_approval: false`, warned about, and reported to
-you; to make such a comment binding, remove and re-add `plan-approved`, which re-binds the
-approval to the thread's current state. (3) Forged harness-record markers are flagged (#194): an
-untrusted comment carrying `<!-- harness-audit -->` or `<!-- verifier-verdict -->` is annotated
-`has_harness_marker: true` in the untrusted report buckets, with a warn line and a count — new
-warns may appear where drive-by comments dress up as harness records; nothing is filtered out.
-(4) Unattended planning runs leave a durable trace (#194): an issue that drops out of a pass with
-no recorded outcome now gets a `<!-- harness-audit -->` escalation comment on the issue itself,
-instead of only a line in the run summary that vanishes with the session. (5) The doctor's
-merge-gated CI action-pinning WARN now scans every `action.yml`/`action.yaml` anywhere in the
-repo, pruning `.git`, `node_modules`, and `.github/workflows` (#186) — a repo that previously
-showed a clean PASS may newly WARN about an unpinned ref in a local composite action outside
-`.github/actions/` (the exact exposure the widening closes) or in action files CI never runs;
-WARN-only, the doctor's exit code is unaffected.
+**v2.5.1 → v2.5.2** needs no grant, label, script, or baseline step — fixes a live
+auto-approval bug; upgrade promptly if you run a "Plan auto-approval policy".
 
-**v2.5.1 → v2.5.2** adds no grant, label, script, or baseline step — the doctor reports nothing
-new to migrate — but **upgrade promptly if you run a "Plan auto-approval policy": it has been
-silently paused since v2.5.0**. (1) **Auto-approval works again (#202).** `find-planning-work.sh`
-read issue-author provenance from a `gh issue list --json authorAssociation` field `gh` has never
-supported, so every run since v2.5.0 fail-closed — `counts.author_association_unavailable: true`,
-every issue `trusted_author: false`, and plan auto-approval paused on every machine wherever a
-policy exists. The lookup now uses GitHub's REST issues endpoint (`author_association`), which
-returns the field today: auto-approval resumes for maintainer-authored issues wherever a "Plan
-auto-approval policy" section exists — a **widening** back to the #176 design intent, so re-read
-your policy before upgrading if you preferred the pause. The fail-closed branch behaves exactly
-as before and now fires only when the REST lookup itself fails. Costs one extra read-only,
-paginated API call per planning run. (2) Post-approval comments are surfaced at the pre-push
-revalidation (#198): the implementer's step 2e compared only the binding line, so a trusted
-comment that arrived while the implementer was working went unmentioned; it now diffs the
-trusted-but-uncovered post-plan set against the one recorded at dispatch and quotes any newly
-arrived comment (author, association, `createdAt`, `url`) in the PR body's verification section
-and the run summary, or in the blocker comment when the binding-line check fails first. Such a
-comment stays non-binding — no `RESOLVED:` decision, no re-dispatch, no push hold — so an empty
-diff leaves behaviour byte-identical. (3) Planner escalation comments are de-duplicated across
-runs (#199): the `<!-- harness-audit -->` escalation the planner posts on an issue that drops out
-of a pass with no recorded outcome now carries a second line,
-`<!-- harness-escalation: bucket=<bucket> stage=<stage> -->`, and is skipped when the newest
-maintainer-authored escalation on the issue already carries the identical key — an issue stalled
-across unattended cycles no longer collects one duplicate per run. The run-summary escalation is
-never suppressed, and only `OWNER`/`MEMBER`/`COLLABORATOR` comments satisfy the guard, so a
-forged key cannot silence a real escalation. One-time transition note: escalation comments
-posted by v2.5.1 carry no key line, so such an issue receives at most one more comment before
-the guard takes effect.
+**v2.5.2 → v2.6.0** needs no grant, label, script, or baseline step — approval now also binds to
+the plan comment's own edit state.
 
-**v2.5.2 → v2.6.0** adds no grant, label, script, or baseline step — the doctor reports nothing
-new to migrate. **Approval now also binds to the plan comment's edit state (#192).**
-`find-implementation-work.sh` fetches the selected plan comment's REST `updated_at` and compares
-it against the plan-approved label's timestamp — but only for an issue whose approval would
-otherwise already cover the plan, so this costs one extra read-only API call per *covered* ready
-issue, not per ready issue. **Refined in v2.7.2 by #240**: that per-covered-issue call is now ALSO
-skipped when gh's own per-comment `includesCreatedEdit` reports the plan comment was never edited —
-see the v2.7.1 → v2.7.2 migration entry below for the current cost. Consumer tooling reading this script's JSON may newly see two
-`approval.reason` values it has never seen before, `plan-edited-after-approval` and
-`plan-edit-unreadable`, plus two new `counts` keys, `counts.plan_edited_after_approval` and
-`counts.plan_edit_unreadable` — additive only, no existing key renamed or removed. Behaviour
-**narrows**: a plan comment edited in place after its approval, which every prior version treated
-as still covered, now waits for a human to re-approve it (remove and re-add `plan-approved`)
-instead of being built silently — the same "waits for a human" posture the v2.5.0 approval-binding
-transition (and v2.5.1's fix to it) already established for a plan revised after approval, just
-for one more way a plan can outrun its approval. **Behaviour also widens for an unknown approval
-verdict (#219).** Every prior version treated `approval.covers_plan` values `false` and `null`
-identically: an unreadable GitHub API call (`reason: "approval-unreadable"` or
-`"plan-edit-unreadable"`, or a `plan_selection` entry missing entirely) triggered the same
-destructive remedy as a demonstrably-uncovered plan — `plan-approved` removed and a
-revision-triggering comment posted — so one transient outage during an unattended run could strip
-approval from every ready issue. The `issue-implementer` skill now splits its remedy by verdict:
-a demonstrably-uncovered plan (`covers_plan: false`) is byte-identical to before; an *unknown*
-verdict instead holds non-destructively — no label change, no revision-triggering comment, one
-`<!-- harness-audit -->`-marked comment recording the hold, and the issue stays queued for the
-next run's fresh check, both before dispatch (step 2a) and again before push (step 2e, where the
-already-staged tree is checkpointed as `wip: checkpoint binding-recheck` rather than lost). No
-new grant, label, script, or baseline step; `bin/find-implementation-work.sh`'s tri-state and its
-`counts` keys are unchanged — only the `issue-implementer` skill's remedy changes.
-**Under merge autonomy the hard floor is stricter (#206).** The merge pass now reads the uncovered
-`trusted_post_plan` set from the same fresh `find-implementation-work.sh --issue <n>` run it already
-makes for the plan-binding check: a maintainer (`OWNER`/`MEMBER`/`COLLABORATOR`) comment posted on
-the issue after its `plan-approved` label — even after the PR opened — holds that PR in the normal
-"waits on the human" queue (`outcome=not-eligible`, one-line reason naming the comment's URL).
-Behaviour **narrows**: no PR merges past a post-approval comment the approval does not cover.
-Release path in this version: merge the PR yourself, or withdraw the comment and let the next cycle
-re-evaluate; re-adding `plan-approved` does **not** release an open PR (it moves
-`approval.approved_at`, so the PR body's older binding line no longer matches — see "Merge
-autonomy policy"). One-time transition note: a PR already open when your repo picks up this
-version is held if its issue carries any such comment — one manual merge, exactly like the v2.2.0
-transition. Heads-up: #213 (approved, planned for the next release) is expected to let re-approval
-of the *same* plan release a held PR, so do not build a habit around the interim rule. **Planner
-staleness notes are de-duplicated across runs (#208).** The `<!-- harness-audit -->` note the
-planner posts on a `plan-approved` issue whose plan predates merged PRs that touched its Affected
-areas now carries a second line, `<!-- harness-staleness: issue=<n> prs=<prs> -->`, and is skipped
-when the issue's newest maintainer-authored staleness note already carries the identical key — an
-approved-but-stale plan no longer collects one duplicate note per unattended cycle. The run-summary
-flag is never suppressed, and only `OWNER`/`MEMBER`/`COLLABORATOR` comments satisfy the guard.
-One-time transition note: notes posted by earlier versions carry no key line, so such an issue
-receives at most one more note before the guard takes effect. Repo-internal only, no consumer
-effect: `dev/planning-tests.sh`'s stub `gh` now propagates jq errors on its events and candidates
-arms (#204, #211) and validates every `gh issue … --json` field list against gh's documented set
-(#217), its fixtures use GitHub's real comment-url shape under new gate assertion 4.31 (#220), and
-the macOS CI job's timeout is 10 minutes (#224).
+**v2.6.0 → v2.6.1** needs no grant, label, script, or baseline step — approval now also requires
+`plan-approved` to be currently on the issue; re-approving releases a held PR under merge autonomy.
 
-**v2.6.0 → v2.6.1** adds no grant, label, script, or baseline step — the doctor reports nothing
-new to migrate. **Approval now also requires `plan-approved` to be currently on the issue (#229).**
-`find-implementation-work.sh` fetches `labels` on the same `gh issue view` call it already makes
-and checks first, before the events lookup and before #192's plan-edit lookup, at zero extra API
-cost: `plan-approved` absent from the issue's current labels is a new `approval.reason` value,
-`approval-label-absent`, and a new `counts` key, `counts.approval_label_absent` — additive only, no
-existing key renamed or removed. Behaviour **narrows**: a maintainer who removes `plan-approved` to
-veto an issue mid-flight — previously undetected between the historical labeling event this script
-already read and the label's current state — now halts dispatch, the pre-push recheck, and (under
-a merge autonomy policy) the autonomous merge floor at the next check each one runs, since
-all three read `approval.reason` for this same issue. The remedy is **non-destructive**, unlike
-every other `false` reason: no label change (there's nothing to remove), no revision-triggering
-comment (there's nothing to revise) — instead the `issue-implementer` skill posts one
-`<!-- harness-audit -->`-marked comment naming the withdrawal and, at the pre-push recheck, keeps
-the already-implemented tree as a `wip: checkpoint binding-recheck` commit rather than discarding
-it, so the branch resumes automatically via the normal WIP-branch classification rule once a human
-re-adds `plan-approved`. No new grant, label, script, or baseline step.
+**v2.6.1 → v2.7.0** — re-run `bin/setup-labels.sh` (creates `multi-pr`); re-copy the permissions
+block from `templates/repo-settings.json` (adds `"Bash(harness-lock.sh:*)"` and
+`"Bash(harness-version.sh:*)"`); one-time: apply `multi-pr` by hand to any open issue that relied
+on the issue-body `<!-- harness-multi-pr -->` marker.
 
-**Re-approving the same plan now releases a held PR under merge autonomy (#213).** The interim
-rule shipped in v2.6.0 — "re-adding `plan-approved` does not release an already-open PR" — is
-reversed: `find-implementation-work.sh`'s `plan_selection[].approval` gains an additive
-`approved_at_history[]` array (newest first, deduplicated, one `{approved_at, approved_by,
-binding_line}` entry per real `plan-approved` labeling event the events API returns, each entry's
-`binding_line` built for the plan selected *now*; entry `[0]`'s `approved_at`/`approved_by` equal
-the top-level fields by construction (both resolve to the same newest event), and entry `[0]`'s
-`binding_line` is what the top-level `binding_line` is now derived from — one template, not two).
-The `issue-cycle` merge floor's *Plan-binding provenance* check
-walks that array newest first, pasting each entry's `binding_line` into the same
-substitution-free `contains(...)` needle it already used, stopping at the first match: a PR body
-written under an *earlier* approval of the same plan is now accepted, so removing and re-adding
-`plan-approved` — the README's own documented way to bind a post-approval comment (see "Merge
-autonomy policy" → *Post-approval comments*) — releases an already-open PR instead of stranding it
-forever. Behaviour **widens** on this one axis only: a maintainer who comments on an open PR's
-issue and then re-approves the same plan releases that PR **without the comment having been
-implemented**. The documented remedy, unchanged in spirit from before: **close the PR first, then
-re-approve**, so the comment binds the next dispatch instead of being silently released underneath
-it. Every other fail-closed axis is unchanged — a different plan comment's url, a timestamp
-matching no real labeling event, an empty history, or an unreadable events lookup all still hold
-the PR. At this version, `skills/issue-implementer/SKILL.md`'s pre-push re-check (step 2e) was
-deliberately left unchanged: a bare re-approval landing *during* implementation still returned the
-issue to review, same as before this release. **Superseded in v2.7.1 by #238**: step 2e now
-accepts a same-plan re-approval too — see "Approval provenance" below for the current rule and the
-release mechanism itself. No new grant, label, script, or baseline step.
+**v2.7.0 → v2.7.1** needs no grant, label, script, settings entry, or baseline step —
+`hooks/push-guard.sh` now blocks in-session default-branch pushes.
 
-**Approval binding now also checks every COVERED trusted decision comment's own edit timestamp,
-not just the plan comment's (#230).** `find-implementation-work.sh`, on the branch that would
-otherwise conclude a `trusted_post_plan` entry `covered_by_approval: true` (#194 workstream B —
-after #229's label pre-filter and #192's plan-edit check both pass), fetches that comment's own
-REST `updated_at` (one extra read-only `gh api` call per *covered* comment, never per uncovered
-one) and compares it against `approval.approved_at`, the same idiom #192 already uses for the plan
-comment itself. **Refined in v2.7.2 by #240**: that per-covered-comment call is now ALSO skipped
-when gh's own per-comment `includesCreatedEdit` reports the comment was never edited — see the
-v2.7.1 → v2.7.2 migration entry below for the current cost. A covered comment edited strictly
-*after* approval flips that entry to
-`covered_by_approval: false` and adds a new per-entry field, `covered_by_approval_reason:
-"decision-edited-after-approval"` — additive only — and collapses the ISSUE-LEVEL verdict the same
-way: `approval.covers_plan: false`, `approval.reason: "decision-edited-after-approval"`, a new
-`counts.decision_edited_after_approval` key. An entry whose own edit state cannot be established
-(no parseable comment id, a rejected lookup, or an unreadable `updated_at`) collapses the verdict
-to **unknown** instead: `covers_plan: null`, `reason: "decision-edit-unreadable"`,
-`covered_by_approval_reason: "decision-edit-unreadable"`, a new `counts.decision_edit_unreadable`
-key — edited wins precedence when an issue has both. `approval.approved_at`/`approved_by` stay
-populated in both new states (the events lookup itself succeeded), matching #192's precedent.
-Behaviour **narrows** on one existing key: `counts.post_approval_comments` now excludes an entry
-whose `false` comes from its own edit (`covered_by_approval_reason` non-null) rather than merely
-postdating the label — the same comment is no longer double-reported under two different reasons,
-but a warn-line count some tooling may have relied on can now read lower for an issue with an
-edited decision comment. Remedy, unchanged in spirit from #192: **remove and re-add
-`plan-approved`** — the human re-reads the edited decision and re-approves, moving `approved_at`
-past the edit and re-covering it, the same audited path already documented above. One-time
-transition note: on the first discovery run after upgrading, an issue with a covered decision
-comment that was quietly edited some time ago will newly report `covers_plan: false` or `null` and
-lose `plan-approved` (or hold, for the unknown verdict) — this is the intended tripwire firing
-retroactively, not a regression. No new grant, label, script, or baseline step.
+**v2.7.1 → v2.7.2** needs no grant, label, script, settings entry, or baseline step.
 
-**v2.6.1 → v2.7.0** requires three consumer actions: **re-run `bin/setup-labels.sh`** to create the
-new `multi-pr` label (until then, `check-harness.sh` reports it missing — see below); **re-copy
-the permissions block** from `templates/repo-settings.json` to pick up the two new allow entries —
-`"Bash(harness-lock.sh:*)"` the single-flight lock needs (#232, below) and
-`"Bash(harness-version.sh:*)"` the harness-version report needs (#233, below) — until then,
-`check-harness.sh` WARNs "settings.json allow-list missing 2 template entries"; and **no action**
-for the version-provenance lines themselves (#233) — every new `harness=<version>` status-line
-field and `<!-- harness-version: ... -->` marker line is purely additive, so an existing ledger
-record, archived verdict, or PR body with neither keeps parsing exactly as before. **The
-implementer's unknown-verdict
-hold comment is de-duplicated across runs
-(#222), the same treatment #199 and #208 already gave the planner's escalation and staleness
-notes.** The `<!-- harness-audit -->` comment `issue-implementer` posts at step 2a and step 2e
-when `approval.covers_plan` is unknown (a GitHub API call failed) now carries a second line,
-`<!-- harness-hold: issue=<n> stage=<stage> reason=<reason> comments=<ids> -->`, and is skipped
-when the issue's newest maintainer-authored hold comment already carries the identical key — an
-issue held across an unattended multi-hour outage no longer collects one duplicate hold per
-scheduled cycle. The run-summary flag is never suppressed — every held issue is still reported
-every run, whether or not the comment posted — and only `OWNER`/`MEMBER`/`COLLABORATOR` comments
-satisfy the guard, so a forged key cannot silence a real hold. The `approval-label-absent` hold
-(#229, the human's own withdrawal) is deliberately **not** keyed: batch discovery already excludes
-any issue without `plan-approved`, so that hold cannot repeat across scheduled runs, and keying it
-would suppress a genuine *second* withdrawal notice after a re-approval. One-time transition note:
-hold comments posted by v2.6.1 and earlier carry no key line, so such an issue receives at most one
-more hold comment before the guard takes effect. No new grant, label, script, or baseline step.
-**The implementer also retries an unknown verdict once before concluding it (#223):** at step 2a
-and again at step 2e, before treating any of the three unknown triggers as final, the skill waits
-`sleep 30` (the "Resilient dispatch" ladder's first rung) and re-runs
-`find-implementation-work.sh --issue <n>` exactly once more, using that run's result for
-everything the step reads — so a single momentary API blip no longer holds an otherwise-ready,
-already-approved issue for the whole run. A determinate second verdict is acted on exactly as a
-first-run verdict would be, including a `false` verdict's remedy; only a verdict still unknown
-after the retry holds, keyed by the post-retry `approval.reason`. This adds no grant
-(`Bash(sleep:*)` is already in `templates/repo-settings.json`), no label, no script, and no
-baseline step; the only observable cost is one extra read-only discovery run plus up to 30s of
-added wall clock, per held issue, per checkpoint.
-**Multi-PR cleanup is now label-primary and the comment-marker path is trust-gated (#231):** the
-new `multi-pr` label on the issue (see "Label lifecycle") is the primary signal
-`cleanup-after-merge.sh` reads to leave a multi-PR issue open when one of its slices merges — the
-consumer action named above. The `<!-- harness-multi-pr -->` **comment** marker is still honoured,
-but only from an `OWNER`/`MEMBER`/`COLLABORATOR` comment; a marker from anyone else is ignored and
-reported as one `WARN` line naming the comment, instead of silently trusted. The
-**issue-body** marker is no longer honoured at all — cleanup has no author-association lookup for
-the issue itself, so it cannot gate that path the way it gates a comment's. One-time transition
-note: any issue that relied on the body marker before this release needs the `multi-pr` label
-applied by hand; without it, that issue closes on the normal path the next time its slice's PR
-merges — the intended, documented behaviour change, not a bug.
-**A single-flight lock now guards against two harness cycles running concurrently in one
-checkout (#232):** the `issue-cycle`, `issue-planner`, and `issue-implementer` skills each
-acquire `bin/harness-lock.sh` (new script, the consumer action named above) at their own step 0
-— unless they're being run as part of `issue-cycle`, which acquires once for the whole composed
-run — and release it at their closing step, and on every STOP/abort path too. A refused acquire
-(the lock already held) aborts the run loudly, before any tree-mutating command, with the
-holder's record and the `harness-lock.sh release --force` remedy. See "Safety model" below for
-the mechanism (the atomic `mkdir`, the reclaim rule, the recorded-pid rationale, and the honest
-limits) and CLAUDE.md's "Verification" section for `dev/lock-tests.sh`, the new seventh CI
-command.
-**The merge pass's hard floor gains a mechanical up-to-date rail (#234, review F4):** before
-attempting each PR's merge, the cycle now confirms the default branch's current tip is contained
-in that PR's head commit (`git merge-base --is-ancestor`, re-checked per PR, immediately before
-that PR's own merge attempt — the tip moves after every merge in the pass); a PR whose head does
-not contain it is held with "PR is behind `<default>` at `<short-sha>` — update the branch and
-let CI re-run" rather than merged on CI that ran against a base the default branch has since
-moved past. **Behavior narrows, never widens:** this only ever holds a PR autonomous merge would
-previously have taken. Because the pass merges one at a time with re-verification between, every
-PR queued behind the first merge of a pass is behind by construction and holds this way too —
-expected, not an error; auto-updating the held branch and waiting for its CI is a **named,
-tracked follow-up**, not shipped here, so a queue with several ready PRs still drains at one merge
-per cycle until it lands. The doctor also gains WARN-only reporting: only when a "Merge autonomy
-policy" section is declared and the protection endpoint call succeeds, `check-harness.sh` now
-reads the protection document itself and reports `required_status_checks.strict` (WARN when not
-exactly `true`), the number of required status check contexts (WARN when zero), and whether
-required PR reviews are configured (informational) — none of the three can FAIL, and with no
-policy section the doctor's protection output is unchanged. No new grant, label, script, or
-baseline step.
-**The implementer/verifier "no git, no gh" boundary is now mechanically enforced (#235, review
-F3):** a second plugin-shipped `PreToolUse` hook, `hooks/agent-boundary.sh` (see "Safety model"
-for its full contract), denies `git`/`gh` Bash commands for those two subagent roles. Consumers
-get it automatically with the plugin update — **no grant, no label, no script, no baseline step,
-and no settings re-copy for this issue.** The boundary applies only to this plugin's own
-`implementer`/`verifier` subagents, never to the main session, the planner, or any other agent,
-and it can only **remove** permission a settings file would otherwise have granted — it never adds
-any. A Claude Code that does not supply `agent_type` in `PreToolUse` stdin simply leaves the hook
-silent, the same status quo as before this release — never a new block.
+**v2.7.2 → v2.7.3** needs no grant, label, script, settings entry, or baseline step.
 
-**v2.7.0 → v2.7.1 adds a new mechanical block** (#260), not just measurements and a SIGPIPE fix:
-a third plugin-shipped `PreToolUse` hook, `hooks/push-guard.sh`, now denies any `git push` whose
-destination resolves to your repo's default branch, inside **any** Claude Code session with the
-plugin enabled — the main session included, unlike `hooks/agent-boundary.sh`, which only governs
-the implementer/verifier subagents. If your workflow ever pushes to the default branch directly
-from inside a Claude Code session (uncommon with branch protection enabled, but possible without
-it, or via an `admin` bypass — see this repo's own release ritual above), that push is now
-blocked. Two escape hatches: run that push from a plain terminal outside Claude Code, or set
-`disableAllHooks: true` in a settings file — which also disables `git-c-guard.sh`'s and
-`agent-boundary.sh`'s controls, so use it narrowly and briefly, not as a standing setting. No
-grant, label, script, or baseline step is needed either way: the hook is plugin behaviour, not a
-permission entry, so it applies automatically with the plugin update and the doctor reports
-nothing to migrate for it. Everything else in this release adds no grant, label, script, or
-baseline step either — the doctor reports nothing new to migrate for the rest. #235's two
-documented limits are now measured (2026-09-08, Claude Code 2.1.263 —
-see "Safety model"'s live-probe record): the `agent_type` spelling a plugin subagent sends in
-`PreToolUse` stdin is the namespaced form, and this hook's `deny` does outrank
-`git-c-guard.sh`'s `allow` for the same call. Both `agent_type` spellings still ship — the
-namespaced one being the confirmed live form, the bare one retained as insurance against a future
-de-namespacing — and nothing about the hook's behaviour changed. No consumer action either for
-#255/#262's fix: `bin/check-harness.sh`'s piped `grep -q`/`find | grep -q` readers (the doctor's
-own verdict-affecting checks — a marker-file lookup, an allow-list membership test) are rewritten
-as here-strings or capture-then-test, so a writer killed by SIGPIPE under `pipefail` can no longer
-invert one of the doctor's checks and report a false verdict on your repo. No consumer action
-either for #246: `find-planning-work.sh` now retries its author-association REST lookup once,
-after a single bounded backoff, before fail-closing the whole run — a script-internal behaviour
-change with no new grant, label, script, or settings entry to migrate. No consumer action either
-for #248: `dev/cleanup-tests.sh`'s own stub `gh` now validates `--json` field names against gh's
-live-probed field set, a change to this repo's own test harness only — nothing a consumer's
-checkout ships or runs. #249 IS a consumer-visible behaviour change, though it likewise needs no
-grant, label, script, or baseline step: `cleanup-after-merge.sh`'s multi-PR comment-marker lookup
-(`gh issue view --json comments`) no longer falls back to "no marker found" when it fails or
-returns something that isn't valid JSON — during a rate-limit or auth blip on that one lookup, an
-issue that previously auto-closed instead stays open with `pr-open` still attached until a later
-successful run notices it (see "After the human merges" above). #245 IS a consumer-visible
-behaviour change too, though it likewise needs no grant, label, script, or baseline step
-(`Bash(sleep:*)` already ships in `templates/repo-settings.json`): the `issue-cycle` merge pass
-now retries an **unknown** plan-binding verdict once before holding the PR — the same
-bounded-retry rule #223 already gave the implementer's two checkpoints — so one transient GitHub
-API blip no longer strands an approved, verifier-clean, CI-green PR until the next scheduled run
-or a manual merge. Behaviour **widens** on exactly one axis: a PR a transient unknown would
-previously have held for the rest of the pass can now merge in the same pass; a verdict still
-unknown after the one retry still holds the PR **not eligible**, fail-closed exactly as before.
-Cost is up to 30s plus one extra read-only discovery run, paid only on the PRs whose plan-binding
-verdict comes back unknown. **#238 IS a consumer-visible behaviour change**, though it too needs no
-grant, label, script, or baseline step: `skills/issue-implementer/SKILL.md`'s pre-push re-check
-(step 2e) now accepts a **same-plan re-approval** landing while the implementer works — a human
-removing and re-adding `plan-approved` without changing the approved plan comment. Behaviour
-**widens**: the run no longer aborts, `plan-approved` is no longer removed, and this run's fresh
-`binding_line` (not the one captured before dispatch) is what goes into the PR body. Any comment
-the re-approval newly covers is surfaced verbatim (author, association, `createdAt`, `url`) in the
-PR body and the run summary, flagged as covered by the re-approval but **not** implemented — the
-human decides whether the PR is still what they want. A re-approval naming a *different* plan
-comment is unchanged: a real change of plan, not a re-approval, still returns the issue to review
-with `plan-approved` removed. The documented remedy for a comment the re-approval releases without
-implementing it is unchanged from #213: **close the PR first, then re-approve**.
+**v2.7.3 → v2.7.4** needs no grant, label, script, settings entry, or baseline step.
 
-**v2.7.1 → v2.7.2** needs no grant, label, script, settings entry, or baseline step either (#275):
-`find-implementation-work.sh` and `find-planning-work.sh` both now exclude a harness-authored
-record (a comment that OPENS WITH `<!-- harness-audit -->` or `<!-- verifier-verdict -->`) from
-plan selection, not just from the feedback/binding sets #182 already excluded it from — a
-maintainer-authored audit or hygiene record that happens to quote the plan marker verbatim in its
-own prose is no longer mistaken for the plan itself (see "Safety model" below for the
-full behaviour, including the deliberate `contains`-vs-`startswith` asymmetry). The one
-consumer-visible behaviour change: an issue whose only marker-carrying trusted comment is such a
-record now reports `plan: null` (`reason: "no-plan"`) rather than binding to the record and
-reporting whatever approval state that record happened to produce. Also in v2.7.2 (#270):
-`hooks/push-guard.sh` and `hooks/agent-boundary.sh` both now strip every carriage return from
-`tool_input.command` before tokenizing it, needing no grant, label, script, settings entry, or
-baseline step. A CRLF-carrying command is now recognised and denied where the guard was
-previously silent — a trailing `\r` on a destination, command word, or subcommand token (e.g.
-`git push origin main\r`, `git\r push`, `gh\r …`) no longer evades either hook's exact-match
-comparisons. The one loosening-direction consequence: a verifier subagent's `git status\r` is now
-no opinion where it previously denied (fail-closed on a subcommand token no `git` invocation
-could actually resolve to); the residual class the fix does not close — a CR *inside* a raw-stdin
-fast-path literal, e.g. `git pu\rsh origin main` or `g\rit push`, whose escaped `\r` keeps the
-substring the fast path scans for from ever appearing intact — is documented, not fixed, in each
-hook's own header comment (`hooks/push-guard.sh`'s "Documented under-blocking classes" bullet and
-`hooks/agent-boundary.sh`'s fast-path-2 comment), not in "Safety model" below. Also in v2.7.2
-(#272/#273): `find-planning-work.sh`'s other three `gh` calls (the `needs_initial_plan` query, the
-revision-candidates query, and the per-candidate `gh issue view` fetch) get the same bounded retry
-#246 already gave the REST author-association lookup — one guarded 30-second backoff, one
-re-attempt — before falling back to their existing behaviour. Two consumer-visible behaviour
-changes, both needing no grant, label, script, settings entry, or baseline step: a momentary API
-blip during a per-candidate fetch no longer drops that issue from the revision scan for the whole
-run (it's simply retried once first); and a momentary blip on either `gh issue list` query no
-longer aborts the run with no output at all — the query fails closed to an empty bucket
-(`counts.initial_query_unavailable` / `counts.candidates_query_unavailable`) with a warn line on
-stderr, and the run still prints a complete document with whatever half succeeded. A query that
-fails BOTH attempts is not "nothing to do" — it's a degraded run — so `skills/issue-planner/
-SKILL.md` step 1 and `skills/issue-cycle/SKILL.md`'s ledger-seed paragraph both now name these
-flags explicitly. Also in v2.7.2 (#277): `skills/issue-cycle/SKILL.md`'s merge-floor *Archived
-verdict* read (`gh issue view <n> --json comments`) gets the same bounded one-shot retry, needing
-no grant, label, script, settings entry, or baseline step (`Bash(sleep:*)` and
-`Bash(gh issue view:*)` already ship in `templates/repo-settings.json`). The one consumer-visible
-widening: a PR a transient archive-read blip would have held for the rest of the pass can now
-merge in the same pass instead; fail-closed is unchanged — a read still failing after the one
-retry holds the PR not eligible exactly as before. Cost: up to 30s plus one extra read-only
-`gh issue view` call, paid only on a PR whose archive read fails. Also in v2.7.2 (#240):
-`find-implementation-work.sh` now pre-filters both the #192 plan-comment edit check and the #230
-decision-comment edit check on gh's own per-comment `includesCreatedEdit` boolean — already present
-in the `comments` field the script fetches today, at no extra API cost — needing no grant, label,
-script, settings entry, or baseline step. A comment gh itself reports as never edited
-(`includesCreatedEdit: false`) skips the REST `updated_at` lookup entirely and stays covered; a
-comment gh reports as edited, or on which gh omits the flag entirely (every gh version predating
-this field), keeps today's lookup and every existing fail-closed state unchanged. The one
-consumer-visible improvement, the point of the issue: on a busy thread with many covered decision
-comments, per-run lookups drop from one-per-covered-comment to one-per-*edited*-covered-comment,
-bounding the API cost the #230/#192 workstreams added and reducing the odds an unattended
-overnight run trips GitHub's secondary rate limit. Honest limit: this is a tripwire, not a
-control — see "Safety model" below for the residual fail-open class. Also in v2.7.2 (#268):
-`hooks/push-guard.sh` now text-parses the common dir's `config` file (never executed as `git
-config`) for `remote.<name>.push` and `push.default`/`branch.<n>.merge` whenever a push segment
-carries no explicit refspec, needing no grant, label, script, settings entry, or baseline step.
-The consumer-visible widening: a repo whose `.git/config` carries `remote.origin.push =
-HEAD:main`, or `push.default = upstream`/`tracking` with the current branch's upstream on the
-default branch, now has a bare `git push` denied where this hook was previously silent — see
-"Safety model" for the full behaviour, including the deliberate over-blocking union (a bare push
-checks every configured remote's route, not only the one git would pick) and the two new
-over-blocking classes (`push.default = matching`, a wildcard configured destination). The
-residual gap: a GLOBAL or system git config (`~/.gitconfig`, `/etc/gitconfig`, etc.) setting
-either key is not yet read (filed as a follow-up alongside this change). **Closed in v2.7.3 by
-#290** for the GLOBAL half (`$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config` or its default, and
-`$HOME/.gitconfig`); the SYSTEM half (`/etc/gitconfig`) remains a follow-up. Also in v2.7.2 (#269):
-`hooks/push-guard.sh` now resolves a push segment's own `git -C <path>` value too, but only when
-it satisfies the same `PATH_ERE` predicate `hooks/git-c-guard.sh` already enforces for its own
-worktree-parallel allow forms — the gate mechanically pins the two declarations byte-identical.
-The consumer-visible widening: a `git -C <name>-wt-<n> push` into a sibling worktree or an
-entirely separate checkout is now judged against THAT checkout's own default branch (and, for the
-current branch and any REPO-LOCAL `.git/config` route, THAT checkout's own facts) rather than only
-the session's — the deny-set's default-branch member becomes the union of the session's own default
-and the resolved checkout's own default, never a pure replacement, so a target lacking its own
-`refs/remotes/origin/HEAD` cannot silently lose today's guard. Two narrowings ship alongside it: a
-bare `git -C <worktree> push` no longer denies merely because the SESSION happens to sit on its
-own default branch (worktree-parallel mode's real shape, where the session stays on the default
-branch while worktrees carry `claude/<n>-<slug>`); and a resolved segment no longer inherits the
-session's own REPO-LOCAL `.git/config` routes (since v2.7.3/#290, this qualification is repo-local
-only — the GLOBAL config candidates apply identically to every checkout resolved, session or
-target). Residual, disclosed rather than hidden: a `-C` path that
-doesn't match the predicate — including a plain `git -C ../other-checkout push` with no `-wt-<n>`
-suffix — and `--git-dir=<path>`/`--work-tree` are still judged only against the session, and a
-predicate-matching directory holding no `.git` of its own is judged against the session too, since
-this resolution never walks upward the way git itself would from a real `-C`; both classes are
-filed as a follow-up alongside this change.
-
-**v2.7.2 → v2.7.3** needs no grant, label, script, settings entry, or baseline step (#284/#285):
-`find-implementation-work.sh` gets the identical bounded-retry-then-fail-closed shape #272/#273
-gave `find-planning-work.sh`, applied to its own two `gh` call sites — the batch `ready` query and
-the per-issue `gh issue view` inside the ready loop. The consumer-visible behaviour change: a
-momentary API blip during the ready query no longer aborts the run with no output at all (it fails
-closed to an empty `ready` bucket, `counts.ready_query_unavailable`, with a warn line on stderr,
-and the run still prints a complete document), and a momentary blip on a per-issue fetch is
-retried once before that issue is skipped for the run (`counts.fetch_retries`;
-`counts.fetch_failures` now counts only post-retry failures). `--issue <n>` mode's own prefetch is
-deliberately NOT retried — both its callers (the issue-implementer skill's dispatch/pre-push
-re-check and the issue-cycle merge floor) already re-run the whole script once on an unknown
-verdict. A query that fails both attempts is not "nothing to do" — it's a degraded run — so
-`skills/issue-implementer/SKILL.md` step 1 and `skills/issue-cycle/SKILL.md`'s ledger-seed
-paragraph both now name this flag (the ledger-seed paragraph alongside the planner's own two; the
-implementer's step 1 names only this script's own flag). Also in v2.7.3 (#285):
-`harness-status.sh` — the consumer both discovery scripts already have — gains a top-level
-`degraded` boolean and `degraded_reasons` array (`"planning.<key>"` / `"implementation.<key>"`
-strings), computed by a GENERIC rule (every key in either script's own `counts` object whose name
-ends in `_unavailable` and whose value is exactly `true`, so it already covers
-`initial_query_unavailable`, `candidates_query_unavailable`, `author_association_unavailable`, and
-#284's own `ready_query_unavailable` with no per-key enumeration to drift), plus `counts.degraded`
-mirroring the same boolean — see "Returning to a laptop" above. Also in v2.7.3 (#287):
-`skills/issue-cycle/SKILL.md`'s merge-floor transient-failure retry, previously stated per-read
-for only two of its six provenance reads (the *Archived verdict* archive read, #277; the
-*Plan-binding provenance* discovery run, #245), now covers all six, stated once at floor level —
-the *Verdict provenance* needle pair, the head-branch key read, the archive read's own match
-needle, and the discovery run's binding-line walk needle join the two reads already covered,
-needing no grant, label, script, settings entry, or baseline step (`Bash(sleep:*)`,
-`Bash(gh pr view:*)`, `Bash(gh issue view:*)`, and `find-implementation-work.sh` already ship in
-`templates/repo-settings.json`). The consumer-visible widening: a PR a transient blip on any of
-the four newly covered reads would have held for the rest of the pass can now merge in the same
-pass instead; fail-closed is unchanged — a read still failing after the one retry holds the PR
-**not eligible**, same one-line reason, exactly as before, and a determinate answer (a `false`
-needle, a `false` `covers_plan`, a `none` archive line, or a wrong-prefix archived status line) is
-never retried. Cost: up to 30s plus one extra read-only call per failing read, paid only on a PR
-whose read fails — worst case six such waits in a single pass. Also in v2.7.3 (#281): plan
-selection on both discovery scripts is now a positive, first-line anchor on the plan marker
-itself, superseding #275's harness-marker exclusion — see "Safety model" below for the full shape.
-The consumer-visible behaviour change: a hand-posted plan comment with anything before the
-`<!-- planner-plan -->` marker is no longer selectable as the plan (repost it with the marker as
-the comment's first line); a trusted comment that quotes the plan marker mid-body without opening
-with it is now silently excluded from both plan selection and the feedback/binding sets, with no
-warning (a filed follow-up). No published JSON key, `counts` key, or `reason` string changes.
-**Closed in v2.7.4 by #302**: both scripts now print one `warn:` line (naming its author,
-createdAt, and url) for every such trusted, in-window comment that carries neither harness-record
-marker of its own, and publish an additive `counts.plan_marker_quoters` key counting them — a
-comment that also carries `<!-- harness-audit -->` or `<!-- verifier-verdict -->` (a harness
-record, or a maintainer's prose-then-harness-marker copy of one) is excluded from the warn, the
-same way it was already excluded from the feedback/binding sets. **Also in v2.7.6 (#321)**: of
-that excluded class, only the comment that carries a harness-record marker without opening with it
-(a maintainer's own prose-then-harness-marker copy) gets its own twin warn and an additive
-`counts.harness_marker_quoters` key; a genuine harness-authored record, which opens with its own
-marker, is counted in neither key and is not warned about, as before — see "Also in v2.7.6 (#321)"
-below for the full shape.
-Also in v2.7.3 (#290): `hooks/push-guard.sh`'s #268 config read is extended to three GLOBAL
-candidates — `$GIT_CONFIG_GLOBAL` (when set and non-empty), `$XDG_CONFIG_HOME/git/config` (or,
-when `$XDG_CONFIG_HOME` is unset or empty, `$HOME/.config/git/config`), and `$HOME/.gitconfig` —
-unioned with the repo-local `.git/config` routes #268 already read, needing no grant, label,
-script, settings entry, or baseline step. The consumer-visible widening: a developer whose
-`~/.gitconfig` (or `$GIT_CONFIG_GLOBAL`/`$XDG_CONFIG_HOME` target) sets
-`push.default = upstream`/`tracking` with the current branch's upstream on the default branch,
-`push.default = matching`, or a denying `remote.<name>.push` refspec now gets a bare `git push`
-denied where this hook was previously silent, including for a resolved `-C` segment (the global
-candidates are read
-identically for every checkout resolved, session or target). The deny message now names its own
-source — `.git/config` or "your global git config" — instead of always claiming the repo-local
-file. Three new over-blocking classes, alongside #268's own: `$GIT_CONFIG_GLOBAL` is unioned with
-(never a replacement for) the other two global paths; a repo-local AND a global `push.default`
-value are both evaluated, so a benign value in one file can never mask a denying value in the
-other; and two `push.default` lines inside ONE file are likewise both evaluated, so this hook does
-not model git's own last-wins precedence within a single file either — a config's LAST
-`push.default` line no longer overrides an earlier one in that same file. The residual gap: a
-SYSTEM git config (`/etc/gitconfig`) and `include`/`includeIf` directives inside any of the four
-files this hook now reads remain unread, each filed as its own follow-up.
-
-**v2.7.3 → v2.7.4** needs no grant, label, script, settings entry, or baseline step (#297/#298).
-Two behaviour changes: `harness-status.sh` gives its OWN three queries — plan-proposed,
-impl-blocked, and the open-PR list — the identical bounded-retry-then-fail-closed shape
-#272/#273/#284 already gave the two discovery scripts, publishing six new `counts` booleans
-(`proposed_query_retried`/`_unavailable`, `blocked_query_retried`/`_unavailable`,
-`prs_query_retried`/`_unavailable`) and extending `degraded_reasons` with a third, `"status.<key>"`
-half after the planning and implementation halves. Worst case this adds
-to `harness-status.sh`'s own run: 3 × 30s = 90s (all three sites fail twice); in a broad outage
-where every list query anywhere fails twice, the total across one `harness-status.sh` invocation
-rises to about 210s. Second: `reconcile-ledger.sh` now reads `degraded`/`degraded_reasons` from
-the status JSON it compares against and refuses to report a clean reconciliation on a degraded
-document — one new `degraded issue=- bucket=- stage=-: ...` line per `degraded_reasons` entry
-that does NOT start with `"status."` (a `"status."` entry describes a `waiting_on_human` bucket
-this reconciliation never compares, and never refuses on its own), printed before any per-issue
-line, forcing exit 1; a `degraded: true` document whose `degraded_reasons` is empty or absent gets
-one `unspecified` line instead of silence (a document whose reasons are all `"status."`-prefixed
-still stays silent, exit 0 — the backstop fires only on an empty/absent array, never on a
-filtered-to-nothing one). The consumer-visible fix: before this change, a discovery query that failed
-both attempts (already silently fail-closed since v2.7.2's #272/#273) could make the closing
-reconciliation report "every queued issue accounted for" even though the affected bucket had
-silently dropped an issue — `skills/issue-cycle/SKILL.md`'s closing-reconciliation per-class list
-and its two-halves report both now name this `degraded` class. Also in v2.7.4 (#300): the merge
-floor's one-shot transient-failure retry (#245, #277, #287) now also covers the `gh pr checks`
-read, the up-to-date rail's `gh pr view` read, the base-branch read and its one-time
-default-branch lookup, and the merge-landed read — needing no grant, label, script, settings
-entry, or baseline step (`Bash(sleep:*)`, `Bash(gh pr checks:*)`, `Bash(gh pr view:*)`, and
-`Bash(gh repo view:*)` already ship in `templates/repo-settings.json`). The consumer-visible
-change: a PR an API blip held for the rest of a pass can now merge in the same pass instead, and
-a blip on the merge-landed read no longer reports a PR that actually merged as `merge attempted,
-unconfirmed`. Answers are never retried — per-check results in any state (pending, exit 8, and
-failing included) or a no-checks report from `gh pr checks`, a base mismatch, and any state other
-than `MERGED` all count as an answer. Cost: up to 30s plus one extra read-only call per failing
-read. Also in v2.7.4 (#302): both discovery scripts now diagnose one class #281 dropped with no
-report of its own — a TRUSTED comment posted after the latest plan (or, when there is none, at any
-time) whose body contains the plan marker somewhere other than its first line, and whose body
-carries neither harness-record marker (`<!-- harness-audit -->` or `<!-- verifier-verdict -->`) —
-printing one `warn:` line per such comment (author, createdAt, and url, or the literal "no url")
-and publishing an additive `counts.plan_marker_quoters` key on both scripts, needing no grant,
-label, script, settings entry, or baseline step. A trusted comment in that same window that DOES
-carry a harness-record marker (a genuine harness-authored record, or a maintainer's
-prose-then-harness-marker copy of one) is still excluded from both the warn and the count, exactly
-as it already was from plan selection and the feedback/binding sets — since v2.7.6 (#321, see
-below), only the prose-then-harness-marker-copy half of that narrower class gets its own twin
-diagnostic; a genuine harness-authored record, which opens with its own marker, is still counted in
-neither key and still not warned about. The consumer-visible change: a maintainer who quotes the
-plan marker in feedback without opening the comment with it, or hand-posts a plan with prose before
-the marker, now sees why the planner or
-implementer skipped their comment instead of silence, unless that same comment also carries a
-harness-record marker. The comment is still never acted on either way — see "Safety model" below
-for the unchanged, security-relevant part of this behaviour.
-Also in v2.7.4 (#307, ADR 0001 decision 9): under a Merge autonomy policy, the merge floor's
-*Never the governance surface* rule gains its one exception, the *Lesson-append carve-out* —
-needing no grant, label, script, settings entry, or baseline step (`Bash(gh pr view:*)`,
-`Bash(git diff:*)`, and `Bash(gh issue comment:*)` already ship in `templates/repo-settings.json`).
-The consumer-visible widening: a harness PR whose only governance-surface change is an
-end-of-file, add-only append to `.claude/LESSONS.md` of at most 40 lines with no `<!--` in them
-no longer waits for a human on that account alone; a PR that also touches any other governance
-path, or whose `.claude/LESSONS.md` diff edits, reorders, or deletes any existing line, still
-does, unchanged. Every carve-out merge is quoted word for word — both in the cycle report and in
-a durable `<!-- harness-audit -->` issue comment posted after the merge lands — so a released
-lesson is never merged silently. Honest limit: the new gate assertion (5.15) executes only the
-files-check verdict program; both the end-of-file diff rule (check 2) and the content judgement
-(check 3, that the added lines read as only a project gotcha, never an instruction) are prose the
-orchestrator applies and the gate does not pin.
-
-**v2.7.4 → v2.7.5** needs no grant, label, script, settings entry, or baseline step (#323). An
-implementer or verifier subagent's `.claude/LESSONS.md` change now blocks the issue instead of
-riding into the `feat:` commit: `skills/issue-implementer/SKILL.md`'s new *LESSONS.md dispatch
-guard* snapshots the file immediately before each dispatch and compares it on that dispatch's
-return, death, or `incomplete` exit; any output there takes the existing blocked path (step 2f),
-never a silent commit — unless the file already existed untracked before the dispatch, in which
-case the guard has no baseline to take and leaves it unstaged for a human to commit instead. The
-orchestrator's own
-distilled lesson (step 2e) is unchanged — it still runs after an issue's last dispatch and appends
-only when that same compare prints nothing.
-Honest limit: this is orchestrator prose, not a hook — it catches the change after the dispatch
-returns rather than preventing the write; no `Edit`/`Write` PreToolUse hook exists yet.
-**Closed in v2.7.6 by #327**: `hooks/claude-dir-guard.sh` denies the `Edit`/`Write` itself, for
-both roles, whether or not `.claude/LESSONS.md` is tracked — see that section below. The
-Bash-issued-write route (`cat >>`, `tee`, `sed -i`) is unaffected and still depends solely on the
-dispatch guard described here, untracked-baseline gap included.
-Also in v2.7.5 (#324, #319): needs no grant, label, script, settings entry, or baseline step
-(`Bash(git diff:*)`, `Bash(git fetch:*)`, and `Bash(sleep:*)` already ship in
-`templates/repo-settings.json`). Two consumer-visible changes, both of which **narrow** what
-merges unattended. First (#324): the merge floor's *Never the governance surface* rule now reads
-what "touching" means mechanically — `git diff --no-renames --name-only` over the up-to-date
-rail's own base-tip/head-OID pair, so a rename (which reports under both its old and new path)
-and a `gh`-reported file list (page-limited and rename-blind) can no longer let a governance-file
-move slip past prose judgement; a PR that touches any `.github/` path, a nested `.claude/` or
-`CLAUDE.md`, or renames a governance file elsewhere now holds where it might previously have
-been judged clear. Second (#319): a `git fetch origin` still failing after its one retry now
-holds the PR ("could not fetch origin — not comparing against a stale `<default>` tip") instead
-of risking a comparison against a stale `origin/<default-branch>` tip. Honest limit: gate
-assertion 4.43 pins only the presence and exact spelling of the `git diff --no-renames
---name-only` command line in `skills/issue-cycle/SKILL.md` — never the path-match rules or the
-residual "any doubt holds" judgement, which stay prose the orchestrator applies.
-
-Also in v2.7.5 (#308): needs no new grant, label, script, settings entry, or baseline step
-(re-running `bin/setup-labels.sh` is optional — it only refreshes the `no-auto-approve` label's
-description). `no-auto-approve` was overloaded: the harness applied it routinely to every
-follow-up it filed, so a maintainer's own veto use of the same label got set aside once those
-follow-ups were triaged. Three behaviour changes fix that. (1) A follow-up the implementer files
-from a PR's "Follow-ups to file" now carries `no-plan`, not `no-auto-approve` — held out of
-planning entirely until a human triages it and removes the label (see "Returning to a laptop").
-Once that removal happens, no other hard-floor clause is keyed to the follow-up's own provenance,
-so its plan becomes auto-approvable like any other issue's under the repo's own policy — triage
-is the human gate (ADR 0001 decision 4). (2) An issue the test-suite ratchet files now carries
-`test-ratchet` alone; the planner's auto-approval hard floor gained a clause refusing any issue
-carrying that label outright, and the harness never removes it, so a ratchet plan waits for a
-human. (3) `no-auto-approve` is now applied only by a human, in every mode — the harness never
-applies it itself, so when you do add it, it stays a real, standing veto. Narrowing to know: a
-human can no longer opt a `test-ratchet` issue *into* auto-approval by removing
-`no-auto-approve`, because the hold moved to the `test-ratchet` label itself, which the harness
-never removes; releasing such an issue now means a human deliberately stripping `test-ratchet` by
-hand (which also drops it from the ratchet's own backlog cap and veto memory). Approving a
-ratchet plan by hand is unaffected. An open `test-ratchet` issue still carrying the old
-`no-auto-approve` label from before this hop needs no action — the hard floor now refuses it
-regardless of that label's presence.
-
-One-time migration, for open issues an older harness version filed as follow-ups (skip if none
-are returned):
+**v2.7.4 → v2.7.5** — one-time migration, for open issues an older harness version filed as
+follow-ups (skip if none are returned):
 
 ```bash
 gh issue list --search "is:open is:issue label:no-auto-approve" --json number,body --limit 200 \
@@ -1797,243 +1135,16 @@ gh issue edit <n> --add-label no-plan --remove-label no-auto-approve
 ```
 
 `--limit 200` caps the listing at 200 results — gh's own default is 30 — so a repo with more than
-200 such issues open at once should raise the limit and run it again; the listing above is not
-claimed exhaustive beyond that count. Both labels move in the same `gh issue edit` call
-deliberately: removing `no-auto-approve` alone would leave an untriaged, machine-authored issue
-eligible for auto-approval the moment a policy exists, while adding `no-plan` in that same edit
-is what keeps it held until a human triages it. Two honest limits carry over from the behaviour
-changes above:
-`harness-status.sh` had no bucket or count for a held follow-up (superseded by #333, below, and
-narrowed again by #346 — since v2.7.7 the bucket is untriaged-only and counted inside
-`counts.human_actions`; see the v2.7.6 → v2.7.7 notes below), and `cleanup-after-merge.sh`'s
-follow-up quarantine — the "source PR
-closed without merging" comment — never reached a follow-up filed with `no-plan` from birth,
-since the same `-label:no-plan` exclusion that made `--fix` idempotent also excluded it (superseded
-by #334, below — since v2.7.6 the quarantine's idempotence key moved off that label onto a
-trusted, PR-keyed orphan-notice marker instead, so it now reaches a follow-up born `no-plan` too).
+200 such issues open at once should raise the limit and run it again. Re-running
+`bin/setup-labels.sh` is optional (it only refreshes the `no-auto-approve` label's description).
 
-**v2.7.5 → v2.7.6** needs no grant, label, script, settings entry, or baseline step (#336). No
-consumer action is required: of the three files this change touches — `bin/reconcile-ledger.sh`,
-the gate (`dev/selfcheck.sh`), and the gate's own negative-test harness
-(`dev/selfcheck-tests.sh`) — the only one a consumer repo runs is `bin/reconcile-ledger.sh`, and
-it changes only on an error path: an unreadable path still dies with the same message and the
-same exit 2 as before, plus the directory case described later in this paragraph. Two changes,
-in order. First,
-`reconcile-ledger.sh`'s ledger and status-JSON reads drop their `access()`-style readability
-pre-test on the caller-supplied path (both arguments accept any path, including a
-process-substitution `<(...)` — this repo's own gate passes exactly that) in favour of attempting
-the read directly and dying on failure with
-the identical message and exit code as before — the pre-test raced on macOS (roughly 1 in 2000)
-when several processes touched `/dev/fd` at once, which is exactly what running this repo's own
-gate concurrently now does; the read itself never failed under that same load. Incidentally, a
-*directory* argument now dies too (exit 2, `cannot read ledger file`); previously it exited 0
-with an empty ledger, with only `cat`'s own "Is a directory" message on stderr. Second,
-`dev/selfcheck-tests.sh` runs its case rows concurrently by default, in bounded waves: the job
-count is detected from the host's core count (clamped to at most 16, falling back to 2 when no
-probe answers), overridable with `SELFCHECK_TESTS_JOBS=<n>` or `-j <n>`, and `--serial` (`-j 1`)
-restores one case at a time. Declared case order, not completion order, still decides the
-PASS/FAIL line sequence and the summary totals; a case whose child dies before reporting a
-verdict is still counted as a FAIL naming the case, never silently dropped. The single-case/filter
-form (`bash dev/selfcheck-tests.sh <case>`) is unchanged.
+**v2.7.5 → v2.7.6** — re-run `bin/setup-labels.sh` (creates `needs-human` and `harness-stop`);
+re-copy the permissions block from `templates/repo-settings.json` or add
+`"Bash(harness-stop.sh:*)"` by hand.
 
-Also in v2.7.6 (#327): needs no grant, label, script, settings entry, or baseline step. A fourth
-plugin-shipped `PreToolUse` hook, `hooks/claude-dir-guard.sh`, now denies an implementer or
-verifier subagent's `Edit` or `Write` to any `.claude/` path — see "Safety model" below (the
-"**Four PreToolUse hooks**" paragraph and its new fourth-hook paragraph) for the deny classes,
-the no-filesystem-access property, and its own `cdg-*` fixture family in `dev/hook-tests.sh`.
-
-Also in v2.7.6 (#321): needs no grant, label, script, settings entry, or baseline step. Both
-discovery scripts diagnose the one class #302 deliberately left unwarned: a trusted, in-window
-comment that carries a harness-record marker (`<!-- harness-audit -->` or `<!-- verifier-verdict
--->` — the set is now one shared declaration, `HARNESS_RECORD_MARKERS`, on both scripts) somewhere
-in its body without opening with one — a maintainer quoting a harness-authored record, typically
-to dispute it, not a record itself. Both scripts print one `warn:` line per such comment (author,
-createdAt, and url, or the literal "no url") and publish an additive
-`counts.harness_marker_quoters` key, disjoint from `counts.plan_marker_quoters` (a comment quoting
-both markers is counted in exactly one). New gate assertion 4.46 pins that the two scripts'
-`HARNESS_RECORD_MARKERS` declarations stay byte-identical. See "Safety model" below for the full
-shape and its residual honest limit (a comment that itself opens with a verbatim marker copy at
-byte 0 is still indistinguishable from a genuine harness record, and stays silently dropped).
-
-Also in v2.7.6 (#333): needs no grant, label, script, settings entry, or baseline step.
-`harness-status.sh` gains a fourth `waiting_on_human` bucket, `followups_to_triage` — open,
-`no-plan` issues whose body opens with the harness-filed follow-up marker (#308) — fed by a fourth
-`gh issue list` call with the identical bounded-retry-then-fail-closed shape the other three sites
-already have, publishing `counts.followups_query_retried`/`counts.followups_query_unavailable` and
-a `"status.followups_query_unavailable"` `degraded_reasons` entry appended after the three existing
-status-half entries. `counts.human_actions` deliberately does NOT include this bucket: the query
-cannot tell a follow-up nobody has triaged yet from one a maintainer already read and decided to
-keep held (both keep `no-plan` and the marker forever), so folding it into the total would mean the
-total could never return to zero in a repo with any parked follow-up (measured on this repo
-2026-09-17: the filter matched 10 issues, every one already triaged and parked) — see "Returning to
-a laptop" above for the reader-facing shape and honest limits (parked follow-ups keep counting, a
-label edit can leave a just-filed entry missing from one run — measured once on this repo,
-2026-09-17: a `gh issue list --search` run made right after a label edit missed an issue that a
-later run returned; whether a just-triaged entry can likewise linger was not measured — and
-`--limit 100` caps the listing). Since v2.7.7 (#346, see the v2.7.6 → v2.7.7 note below), the
-query additionally excludes a new `triaged-held` label, narrowing this bucket to untriaged-only,
-and `counts.human_actions` now DOES include it.
-
-Also in v2.7.6 (#309): **needs a label step** — re-run `bin/setup-labels.sh` on any repo already
-running an earlier harness version, so the new `needs-human` label exists before the next cycle;
-this hop is not a no-op the way the four v2.7.6 notes above are (#336, #327, #321, #333) (measured
-on this repo, 2026-09-19, before the label existed: a search naming a label the repo does not have
-is harmless — the ready and needs_initial_plan queries returned identical results with and without
-` -label:needs-human`, and the positive query returned `[]`, all rc 0. So a consumer who skips this
-step keeps a working discovery and an empty `escalations` bucket; what actually fails is the
-escalation's own `gh issue edit --add-label`). These sites in `skills/issue-implementer/SKILL.md`
-(a contradicting trusted comment, a branch with committed work and no open PR, an unanswered
-BLOCKING question, red CI after the one bounded fix attempt or unrelated to the PR, and a denied
-`gh pr edit`) now escalate durably instead: posts an issue comment whose first line is exactly
-`<!-- harness-escalation -->` and second line the key template
-`<!-- harness-escalation-key: issue=<n> stage=<stage> reason=<slug> comments=<ids> -->`, labels the
-issue `needs-human`, and continues with the next issue — see the "Durable escalation" subsection
-under `skills/issue-implementer/SKILL.md`'s "Resilient dispatch" for the full procedure, the closed
-`<stage>`/`<reason>` vocabulary, and the label rules. Step 2b's open-PR sub-branch is deliberately
-left as skip-and-warn, not escalated (it writes nothing to GitHub); the run-level dirty-tree and
-red-baseline stops halt the whole run before any issue is processed, so there is no issue yet to
-escalate on — and the step 2f blocked path is untouched: its comment stays deliberately unmarked
-and carries no `needs-human` label. The
-`needs-human` label IS the dedupe: all three discovery queries (`find-planning-work.sh` ×2,
-`find-implementation-work.sh` ×1) exclude it, so an escalated issue is out of the workflow until a
-human answers and removes the label.
-`harness-status.sh` gains a fifth `waiting_on_human` bucket, `escalations` — open `needs-human`
-issues, served verbatim with no filter — fed by a fifth `gh issue list` call with the identical
-bounded-retry-then-fail-closed shape the other four sites already have, publishing
-`counts.escalations_query_retried`/`counts.escalations_query_unavailable` and a
-`"status.escalations_query_unavailable"` `degraded_reasons` entry appended after the four existing
-status-half entries. Unlike `followups_to_triage`, `counts.human_actions` DOES include this
-bucket — see "Returning to a laptop" above for the reader-facing shape and its own honest limit
-(an issue carrying `needs-human` alongside `plan-proposed` or `impl-blocked` counts twice until you
-remove one of the two labels). Both discovery scripts' `HARNESS_RECORD_MARKERS` set (see "Also in
-v2.7.6 (#321)" above) gains a third marker, `<!-- harness-escalation -->` — distinct from, and
-never cross-matched with, the planner's own pre-existing `<!-- harness-escalation: bucket=...
-stage=... -->` key — so a durable-escalation record and a comment quoting it are both excluded from
-feedback/`trusted_post_plan` (counted in a new, additive `counts.escalation_records_skipped` key,
-the identical shape `counts.audit_comments_skipped`/`counts.verdict_archives_skipped` already use)
-and covered by #321's own quoter warning. New gate assertion 4.48 pins that the `ESCALATION_LABEL`
-constant is declared identically in all three scripts, is one of the labels `bin/setup-labels.sh`
-creates, is excluded by every discovery `--search` line, and is named in
-`skills/issue-implementer/SKILL.md`. Since v2.7.7 (#346, see the v2.7.6 → v2.7.7 note below),
-`followups_to_triage` joined `escalations` in the `counts.human_actions` sum too, by the identical
-mechanism.
-
-Also in v2.7.6 (#310): **needs two consumer actions** — re-copy the permissions block from
-`templates/repo-settings.json` (or add `"Bash(harness-stop.sh:*)"` by hand) so the new script is
-grantable, and re-run `bin/setup-labels.sh` so the `harness-stop` label exists. A new, read-only
-script, `bin/harness-stop.sh`, is a maintainer-settable stop switch checked before each stage and
-before each merge — see "Stopping a cycle" above for the reader-facing shape (both routes, the
-set/clear commands, the union rule, the honest limits) and "Label lifecycle" above for the label
-itself. It takes no subcommand and no mutating flag, on purpose (ADR 0001 decision 8): every
-`bin/*.sh` script is granted to the model as `Bash(<name>.sh:*)`, so a mutating subcommand here
-would hand the model a way to lift the maintainer's own veto. New gate assertion 4.49 pins that
-its `STOP_LABEL` value is one of the labels `bin/setup-labels.sh` creates, and that no
-`--label`/`--add-label`/`--remove-label` argument naming it appears anywhere in
-`skills/*/SKILL.md`, `skills/*/references/*.md`, `agents/*.md`, or `bin/*.sh` — the same shape
-4.44 already enforces for `no-auto-approve`, widened to also catch `--remove-label` (4.44's own
-ERE has no `--remove-label` arm). `skills/issue-cycle/SKILL.md` gained a canonical "Stop switch"
-section plus checks at the step-0, pre-implementation, pre-merge-pass, per-PR and pre-ratchet
-boundaries; `skills/issue-implementer/SKILL.md` and `skills/issue-planner/SKILL.md` each gained
-one check at their own per-issue dispatch sites, citing that section rather than restating it.
-`dev/stop-tests.sh` is the new eighth CI command — see CLAUDE.md's "Verification" section.
-Measured on this repo (gh 2.97.0, 2026-09-21) while the `harness-stop` label did not yet exist:
-`gh issue list --label harness-stop --state open --json number,title,url --limit 20` returned
-`[]` with exit 0 and `harness-stop.sh` printed `stop=false` — so a consumer who has not yet
-re-run `bin/setup-labels.sh` gets no spurious stop; until they do, `bin/check-harness.sh` FAILs
-on the missing label.
-
-Also in v2.7.6 (#334): needs no grant, label, script, settings entry, or baseline step.
-`cleanup-after-merge.sh`'s follow-up orphan-notice quarantine now reaches a follow-up born
-`no-plan` (#308) too. The candidate search drops its `-label:no-plan` exclusion (now `is:open
-is:issue -label:pr-open`, `--json number,title,body,labels`), and for each candidate whose body
-names a closed-unmerged `claude/*` PR, a per-candidate `gh issue view --json comments` lookup
-treats it as already noticed iff a trusted (OWNER/MEMBER/COLLABORATOR) comment already carries
-that PR's own `<!-- harness-orphan-notice: PR #<n> -->` marker — the same trust gate and #249
-fail-closed shape (WARN once naming the failure route, leaving the issue exactly as found) the
-multi-PR comment-marker path already uses; an untrusted marker is ignored and WARNed the same way
-too. Not yet noticed, `--fix`: comments (with both marker lines) and adds `no-plan` only when it
-isn't already present. New gate assertion 4.47 pins the marker's fixed-string prefix in the
-script and this README, mirroring 4.16/4.17. One-time migration effect: a follow-up the pre-#308
-path already quarantined carries the OLD notice comment, which has no orphan-notice marker, so the
-first `--fix` run after upgrading posts one more, near-identical notice on it; every run after
-that posts nothing, since the new marker is now present — provided the account running `--fix` is
-itself OWNER/MEMBER/COLLABORATOR on the repo (`TRUSTED_ASSOCIATIONS`, the same trust gate this
-paragraph's WARN already describes): measured on this repo (gh 2.97.0, 2026-09-21), `gh` returns
-`authorAssociation` on issue comments and the harness's own comments here are `OWNER`. On a repo
-where that does not hold, the harness's own notice comment never counts as already-noticed, so
-each `--fix` run posts another one and prints the untrusted-marker WARN naming that comment.
-
-**v2.7.6 → v2.7.7** needs no grant, label, script, settings entry, or baseline step for the model
-pin itself (#358) — but this hop as a whole is not a no-op: see "Also in v2.7.7 (#346)" below,
-which needs a label step. The `planner` and `verifier` subagents' frontmatter `model:` pin
-moves from `claude-opus-5` to `claude-opus-5-5` (Claude Opus 5.5); the `implementer` stays on
-`claude-sonnet-5`. The pins are
-full model IDs on purpose, not the `opus`/`sonnet` aliases Claude Code also accepts: an alias
-resolves to a provider-chosen "recommended" version that changes over time and differs between
-the Anthropic API and Bedrock/Vertex/Foundry, so a consumer could not tell from this repo's
-history which model verified a given PR. Installing the update is the whole migration for the
-pin — the pins travel with the plugin (see "Distribution"); a consumer whose provider does not yet
-serve `claude-opus-5-5` should stay on v2.7.6 until it does.
-
-Also in v2.7.7 (#346): **needs a label step** — re-run `bin/setup-labels.sh` on any repo already
-running an earlier harness version, so the new `triaged-held` label exists before the next cycle;
-until then `bin/check-harness.sh` FAILs on the missing label (the same shape as #310's
-`harness-stop`, above), though `harness-status.sh`'s own held-follow-up query degrades gracefully
-(see below). `harness-status.sh`'s `list_followups()` query gains a `-label:$TRIAGED_HELD_LABEL`
-exclusion, narrowing the `followups_to_triage` bucket to untriaged-only, and the `$excluded`
-binding that used to name `followups_to_triage` is emptied, so the bucket now joins
-`counts.human_actions` by the same generic rule `escalations` (#309) already used — see "Returning
-to a laptop" and "Label lifecycle" above for the reader-facing shape, the park/unpark commands, and
-the honest limits. Measured on this repo, 2026-09-22, before the label existed:
-`gh issue list --search "is:open is:issue label:no-plan" --json number,title,url,body --limit 100
-| jq length` and the same query with ` -label:triaged-held` appended both returned 19, all rc 0,
-and `gh label list` showed no `triaged-held` label — so a consumer who skips this step still gets a
-working, merely un-narrowed bucket (every harness-filed follow-up, triaged or not, counts), not a
-broken one. New gate assertion 4.50 pins the label's vocabulary end to end and that no
-`--label`/`--add-label`/`--remove-label` argument names it in `skills/*/SKILL.md`,
-`skills/*/references/*.md`, `agents/*.md`, or `bin/*.sh`, the same shape 4.48/4.49 already give
-`needs-human`/`harness-stop`. **Migration note:** this label is new — no already-parked follow-up
-carries it yet, so on upgrade every follow-up you have already triaged and decided to keep held
-counts as untriaged (and therefore in `counts.human_actions`) until you label it `triaged-held` by
-hand; there is no automatic migration of pre-existing parked state. (#362) The label's description
-as first merged was 109 characters, over GitHub's 100-character API limit, so `bin/setup-labels.sh`
-aborted at it with HTTP 422 and never created the label — fixed before the v2.7.7 release, with new
-gate assertion 1.8 pinning every description in that script at 100 characters or fewer.
-
-Also in v2.7.7 (#353): needs no grant, label, script, settings entry, or baseline step.
-`harness-status.sh` gains a SIXTH check — not a sixth `gh` call site, it still makes exactly five —
-one `bin/harness-stop.sh` invocation, fed by that script's own stdout grammar rather than a second
-query and never retried at this layer (`bin/harness-stop.sh` already performs its own one bounded
-retry). The status JSON gains a top-level `stop` object (`{state, reason, exit_code}` — `state` is
-one of `bin/harness-stop.sh`'s own three tokens, `"false"`/`"true"`/`"unknown"`, or this script's
-OWN `"unavailable"` slug for every outcome that script never prints) and a new
-`waiting_on_human.stop_routes` array (one `{route, clear}` entry per SET carrier, both fields
-pasted verbatim, never re-derived), plus `counts.stop_routes` and, in the status-half `$sf` object,
-`counts.stop_check_unavailable` (appended last, so its own `status.stop_check_unavailable`
-`degraded_reasons` entry — when present — is always the array's last entry too). `stop_routes` was
-never named in the `human_actions` exclusion list either, so a SET stop with N carriers joins the
-sum too, by the identical generic rule `escalations` and `followups_to_triage` already use — see
-"Returning to a laptop" above for the reader-facing shape and its own honest limits. New gate
-assertion 4.51 pins that the stop-grammar tokens `harness-status.sh` parses appear as fixed
-strings in `bin/harness-stop.sh`'s source.
-
-Also in v2.7.7 (#355): needs no grant, label, script, settings entry, or baseline step. A failed
-`gh issue comment`/`gh issue edit`/`gh issue close` inside `cleanup-after-merge.sh --fix` no
-longer aborts the run: each write is now best-effort, exactly like the script's own pre-flight
-lookups already were (see "After the human merges" above) — a failed write is reported (`WARN`,
-naming the issue and which write failed) and the rest of that one issue's own repair arm is
-skipped, but the run always continues to the next issue, still reaches the follow-up quarantine
-section, and still prints the closing reminder; one summary `WARN` line prints when any write
-failed this run. The close arm's write order changes from comment/remove-label/close to
-comment/close/remove-label, and the follow-up arm's changes from comment/add-label to
-add-label/comment, so in both arms the write that keeps an issue re-examinable by the next `--fix`
-run is the last one attempted — the one bounded residue this leaves is a CLOSED issue that still
-carries a stale `pr-open` label if only the final `remove-label` call fails, which this script's
-own `--label pr-open --state open` query never revisits (a closed-issue sweep added since #370
-removes it on the next `--fix` run instead — see "After the human merges" above). New gate
-assertion 1.9 (header 80 → 81 —
-assertion 1.8, the #362 hotfix, landed in between) flags a bare, unguarded `gh issue
-comment`/`gh issue edit`/`gh issue close` at command position in any `bin/*.sh`.
+**v2.7.6 → v2.7.7** — re-run `bin/setup-labels.sh` (creates `triaged-held`); one-time: label
+already-parked follow-ups `triaged-held` by hand. Precondition: your provider must serve
+`claude-opus-5-5` (#358); otherwise stay on v2.7.6.
 
 ## The per-repo settings file (required)
 
@@ -2485,8 +1596,8 @@ auto-approval path — which labels immediately after posting — always covers 
 (#192) against that same comment's REST `updated_at`: an in-place edit made *after* the approval
 event un-covers the plan too (`reason: "plan-edited-after-approval"`, no `binding_line`, one
 extra read-only API call made only on this otherwise-covered branch AND ONLY when gh's own
-per-comment `includesCreatedEdit` on the plan comment is not exactly `false` — see the v2.7.1 →
-v2.7.2 migration entry above for #240's cost reduction), the implementer's gate and
+per-comment `includesCreatedEdit` on the plan comment is not exactly `false` — see
+`CHANGELOG.md` (the archived v2.7.2 migration notes, #240) for the cost reduction), the implementer's gate and
 the merge floor holding exactly as they do for `plan-after-approval`, with no changes of their
 own; an edit made *before* approval stays covered on purpose (the approver read the edited text);
 an unreadable edit-state lookup fails closed to `covers_plan: null`, an **unknown** verdict
@@ -2558,7 +1669,7 @@ not silently treated as having amended the approved plan; the comment is reporte
 decision. Since #230, the same content-edit binding #192 applies to the plan comment ALSO applies
 to every decision comment workstream B marked covered: one extra read-only REST call per *covered*
 comment (never an already-uncovered one, never on an already-uncovered issue, and — since #240,
-see the v2.7.1 → v2.7.2 migration entry above — never a comment gh's own `includesCreatedEdit`
+see `CHANGELOG.md` (the archived v2.7.2 migration notes) — never a comment gh's own `includesCreatedEdit`
 already reports as never edited) compares its own
 `updated_at` against `approval.approved_at` — a covered decision comment edited in place strictly
 *after* approval flips that entry to `covered_by_approval: false`,
@@ -2730,8 +1841,8 @@ comment's first line (the same behaviour the verdict marker has always had) — 
 quotes a marker verbatim inside their own feedback, without opening the comment with it, still has
 that comment dropped from both binding sets (no revision, no `trusted_post_plan` entry), but since
 v2.7.6 (#321, extended #309) it is no longer silent: both scripts name it in a `warn:` line and
-count it in `counts.harness_marker_quoters` (see "Also in v2.7.6 (#321)" and "Also in v2.7.6
-(#309)" below). Only a comment that itself
+count it in `counts.harness_marker_quoters` (see `CHANGELOG.md` for the archived v2.7.6
+migration notes for #321 and #309). Only a comment that itself
 OPENS WITH a verbatim marker copy at byte 0 is still silently dropped, indistinguishable from a
 genuine harness-authored record — accepted as an inherited risk rather than fixed here, for the
 feedback/binding sets specifically. Since #281

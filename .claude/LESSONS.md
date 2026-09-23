@@ -225,3 +225,9 @@ bites: 1–3 lines, written as an instruction to a future agent.
 - 2026-09-23 (c): Orchestrator: never `git reset --hard` with an uncommitted `.claude/LESSONS.md` edit in
   the tree — it is discarded silently. Commit the lesson (it rides with harness commits) or stash it
   first; check `git status --porcelain -- .claude/LESSONS.md` after any reset.
+- 2026-09-24: `hooks/agent-boundary.sh` denies an implementer/verifier Bash call whose command TEXT contains a
+  backtick-quoted span beginning `git ` or `gh ` — e.g. a heredoc writing Markdown prose that mentions
+  `` `git worktree add` `` — because the hook fails closed on anything shaped like command substitution;
+  no real git/gh runs. By design (do not loosen the hook). For a documentation-heavy dispatch, write or
+  edit prose that quotes git/gh commands through the Edit/Write tools, never a Bash heredoc. Found by the
+  implementer on #363.
