@@ -11,10 +11,11 @@
 #     plans_to_review    : plan-proposed issues with NO new maintainer feedback — your review/approval
 #     prs_to_review      : open claude/* PRs, with a coarse CI state — your review/merge
 #     blocked            : impl-blocked issues — remove the label to retry
-#     followups_to_triage: (#333) open no-plan issues whose body opens with the harness-filed
-#                         follow-up marker (#308) — read them, then either remove no-plan to
-#                         release one into planning or leave it held; deliberately NOT included in
-#                         counts.human_actions (see the exclusion note below)
+#     followups_to_triage: (#333, #346) open no-plan issues, not triaged-held, whose body opens
+#                         with the harness-filed follow-up marker (#308) — read them, then either
+#                         remove no-plan to release one into planning, or add the triaged-held
+#                         label to park it (drops it out of this bucket, and out of the
+#                         human_actions sum — see the sum note below)
 #     escalations        : (#309) open needs-human issues — a durable escalation from a skill's
 #                         "ask the human, then move on" stop (see skills/issue-implementer/
 #                         SKILL.md's "Durable escalation" subsection); read the comment opening
@@ -42,8 +43,8 @@
 #                         counts.fetch_failures on either discovery script deliberately does not
 #                         participate: it drops one issue, not a whole bucket, and already
 #                         produces its own per-issue warn line on stderr.
-#   counts               : per-bucket counts + human_actions (see the exclusion note below for
-#                         exactly what this sums) + degraded (mirrors the top-level boolean, so a
+#   counts               : per-bucket counts + human_actions (see the sum note below for exactly
+#                         what this sums) + degraded (mirrors the top-level boolean, so a
 #                         reader who only looks at counts still sees it) + (#297, #333, #309) this
 #                         script's own ten proposed_query_retried/proposed_query_unavailable/
 #                         blocked_query_retried/blocked_query_unavailable/
@@ -51,30 +52,31 @@
 #                         followups_query_unavailable/escalations_query_retried/
 #                         escalations_query_unavailable booleans
 #
-# human_actions and the followups_to_triage exclusion (#333): human_actions is a GENERIC sum over
-# every waiting_on_human array EXCEPT the ones named in a small exclusion list bound right next to
-# the sum in the final jq -n below (today, exactly ["followups_to_triage"]) — so a future
-# waiting_on_human member that is NOT named there joins the total automatically, with no edit to
-# the human_actions expression itself: one list_* function, one retry block, one waiting_on_human
-# member, one counts key, and two flags are enough; degraded_reasons and human_actions both follow
-# for free. followups_to_triage is excluded deliberately: the query behind it — open + no-plan +
-# body opens with the harness marker — cannot tell a follow-up nobody has triaged yet from one a
-# maintainer already read and decided to keep held (both keep no-plan and the marker forever), so
-# folding it into the total would mean the total could never return to zero in a repo with any
-# parked follow-up (measured on this repo 2026-09-17: the filter matched 10 issues, every one
-# already triaged and parked). escalations (#309) is NOT named in the exclusion list, so it joins
-# the sum automatically, by the same generic rule: human_actions is therefore, today, the sum of
-# plans_to_review, prs_to_review, blocked, and escalations.
+# human_actions and its exclusion list (#333, #346): human_actions is a GENERIC sum over every
+# waiting_on_human array EXCEPT the ones named in a small exclusion list bound right next to the
+# sum in the final jq -n below (today empty, kept as the extension point a future member can still
+# use — see below) — so a future waiting_on_human member that is NOT named there joins the total
+# automatically, with no edit to the human_actions expression itself: one list_* function, one
+# retry block, one waiting_on_human member, one counts key, and two flags are enough;
+# degraded_reasons and human_actions both follow for free. followups_to_triage was excluded from
+# #333 through v2.7.6: the query behind it — open + no-plan + body opens with the harness marker —
+# could not tell a follow-up nobody had triaged yet from one a maintainer already read and decided
+# to keep held (both kept no-plan and the marker forever), so folding it into the total would have
+# meant the total could never return to zero in a repo with any parked follow-up. Since #346, the
+# query itself excludes -label:$TRIAGED_HELD_LABEL (see list_followups() below), so the bucket is
+# untriaged-only and joined the sum by removing its name from the exclusion list. escalations
+# (#309) was never named in the exclusion list, so it already joined the sum automatically, by the
+# same generic rule. human_actions is therefore, today, the sum of every waiting_on_human member:
+# plans_to_review, prs_to_review, blocked, followups_to_triage, and escalations.
 #
-# Honest limits on followups_to_triage (#333): the bucket is exactly "open + no-plan + body opens
-# with the harness marker", so a deliberately parked follow-up keeps counting forever, and a
-# hand-written no-plan issue whose body happens to open with the same marker text would count too
-# even though the harness never filed it; GitHub's issue search can trail a label edit (measured
-# once on this repo, 2026-09-17: a `gh issue list --search` run made right after a label edit
-# missed an issue that a later run returned), so a follow-up filed moments earlier in the same run
-# may be missing from this run's bucket — whether a just-triaged one can likewise linger was not
-# measured; --limit "$LIMIT" (100) caps this listing the same way it caps plans_to_review's,
-# prs_to_review's, blocked's, and escalations' own queries.
+# Honest limits on followups_to_triage (#333, #346): (a) a follow-up a maintainer read and parked
+# WITHOUT applying the triaged-held label still counts; (b) a hand-written no-plan issue whose
+# body happens to open with the same marker text would count too even though the harness never
+# filed it; (c) GitHub's issue search can trail a label edit (measured once on this repo,
+# 2026-09-17: a `gh issue list --search` run made right after a label edit missed an issue that a
+# later run returned), so a just-parked follow-up may still appear in the very next run's bucket —
+# and now also in counts.human_actions; (d) --limit "$LIMIT" (100) caps this listing the same way
+# it caps plans_to_review's, prs_to_review's, blocked's, and escalations' own queries.
 #
 # Honest limits on escalations (#309): list_proposed and list_blocked do not exclude needs-human,
 # so an issue carrying needs-human alongside plan-proposed or impl-blocked appears in both buckets
@@ -112,6 +114,11 @@ RETRY_SLEEP=30
 # bin/find-implementation-work.sh (gate assertion 4.48); this script's own list_escalations()
 # query reads it below.
 ESCALATION_LABEL="needs-human"
+# TRIAGED_HELD_LABEL (#346) — human-applied only; the harness only ever reads it (gate assertion
+# 4.50 forbids naming it in a --label/--add-label/--remove-label argument anywhere in
+# skills/*/SKILL.md, skills/*/references/*.md, agents/*.md, or bin/*.sh). This script's own
+# list_followups() query below excludes it.
+TRIAGED_HELD_LABEL="triaged-held"
 
 planning=$(find-planning-work.sh)
 implementation=$(find-implementation-work.sh)
@@ -147,13 +154,15 @@ list_prs() {
   gh pr list --state open \
     --json number,title,url,headRefName,statusCheckRollup --limit "$LIMIT"
 }
-# (#333) open + no-plan + body opens with the harness-filed follow-up marker (#308) — see the
-# header's own exclusion note for why this bucket is reported beside human_actions, never inside
-# it. No --jq argument (a --jq would be claimed by dev/planning-tests.sh's stub *"--jq"* arm and
-# silently served the wrong fixture document).
+# (#333, #346) open + no-plan + not triaged-held + body opens with the harness-filed follow-up
+# marker (#308) — the -label:$TRIAGED_HELD_LABEL exclusion (#346) narrows this bucket to
+# untriaged-only, which is why it now joins human_actions (see the header's own sum note). Honest
+# limit: the label only has an effect on an issue that also carries no-plan, because this query
+# requires both. No --jq argument (a --jq would be claimed by dev/planning-tests.sh's stub *"--jq"*
+# arm and silently served the wrong fixture document).
 list_followups() {
   gh issue list \
-    --search "is:open is:issue label:no-plan" \
+    --search "is:open is:issue label:no-plan -label:$TRIAGED_HELD_LABEL" \
     --json number,title,url,body --limit "$LIMIT"
 }
 # (#309) open + needs-human — a durable escalation from a skill's "ask the human, then move on"
@@ -256,9 +265,11 @@ if ! escalations=$(list_escalations); then
   fi
 fi
 
-# human_actions and its exclusion list (#333) — see the header's own "human_actions and the
-# followups_to_triage exclusion" paragraph for the full rationale; the exclusion binding sits
-# right next to the sum it governs, on purpose, so the two are read together.
+# human_actions and its exclusion list (#333, #346) — see the header's own "human_actions and its
+# exclusion list" paragraph for the full rationale; the exclusion binding sits right next to the
+# sum it governs, on purpose, so the two are read together. Deliberately kept, empty (#346): the
+# named-exclusion mechanism is retained as an extension point for a future waiting_on_human
+# member, even though nothing is named today.
 jq -n \
   --argjson unplanned "$unplanned" \
   --argjson in_revision "$in_revision" \
@@ -287,7 +298,7 @@ jq -n \
    | ($dr + [ $sf | to_entries[] | select((.key|endswith("_unavailable")) and .value == true) | "status." + .key ]) as $all
    | (($all | length) > 0) as $deg
    | {plans_to_review: $plans, prs_to_review: $prs, blocked: $blocked, followups_to_triage: $followups, escalations: $escalations} as $woh
-   | ["followups_to_triage"] as $excluded
+   | [] as $excluded
    | {
      harness_will_handle: {unplanned: $unplanned, in_revision: $in_revision, ready_to_implement: $ready},
      waiting_on_human:    $woh,

@@ -490,28 +490,45 @@ site, `waiting_on_human.followups_to_triage`: open, `no-plan` issues whose body 
 harness-filed follow-up marker (#308), fed by a fourth `gh issue list` call with the identical
 bounded-retry-then-fail-closed shape, publishing `followups_query_retried`/`_unavailable` and a
 `"status.followups_query_unavailable"` `degraded_reasons` entry appended after the three #297
-entries. Per the maintainer's decision, `counts.human_actions` does NOT include this bucket — the
-query cannot tell a follow-up nobody has triaged from one a maintainer read and deliberately
-parked (both keep `no-plan` and the marker), so `human_actions` becomes a generic sum over every
-`waiting_on_human` array member EXCEPT a small, named exclusion list (today exactly
+entries. Per the maintainer's decision, `counts.human_actions` did NOT include this bucket through
+v2.7.6 — the query could not tell a follow-up nobody had triaged from one a maintainer read and
+deliberately parked (both kept `no-plan` and the marker), so `human_actions` was a generic sum over
+every `waiting_on_human` array member EXCEPT a small, named exclusion list (through v2.7.6, exactly
 `["followups_to_triage"]`) bound next to the sum, so a future member joins the
-total automatically unless it too is named there; pinned by four new Part 14 fixtures (a populated
-bucket whose `human_actions` stays unchanged, a retry-succeeds case, a both-attempts-fail case, and
-a status-half-ordering case) plus two extended Part 14 fixtures (the healthy and
-guarded-sleep-failure cases), a new stub `gh issue list` arm (content-exclusive, needing no
-arm-ordering trick unlike the plan-proposed arm), and a `reject-followups(-once)` marker family
-mirroring `reject-proposed(-once)`. Since #309, `bin/harness-status.sh` gains a FIFTH such site,
-`waiting_on_human.escalations`: open, `needs-human` issues, served verbatim with no filter, fed by
-a fifth `gh issue list` call with the identical bounded-retry-then-fail-closed shape, publishing
-`escalations_query_retried`/`_unavailable` and a `"status.escalations_query_unavailable"`
-`degraded_reasons` entry appended after the four existing status-half entries. Unlike
-`followups_to_triage`, this member is deliberately NOT named in the exclusion list, so it joins
-`counts.human_actions` automatically by the same generic rule, with no edit to the sum itself;
-pinned by three new Part 14 fixtures (a populated bucket whose `human_actions` DOES change, a
-retry-succeeds case, and a both-attempts-fail case) plus two extended Part 14 fixtures (the healthy
-and guarded-sleep-failure cases), a new stub `gh issue list` arm (content-exclusive, the identical
-class as the no-plan arm), and a `reject-escalations(-once)` marker family mirroring
-`reject-followups(-once)`.
+total automatically unless it too is named there (see #346 below for how #333's own bucket later
+joined); pinned by four new Part 14 fixtures (a populated bucket whose `human_actions` stayed
+unchanged at the time, a retry-succeeds case, a both-attempts-fail case, and a status-half-ordering
+case) plus two extended Part 14 fixtures (the healthy and guarded-sleep-failure cases), a new stub
+`gh issue list` arm (content-exclusive, needing no arm-ordering trick unlike the plan-proposed
+arm), and a `reject-followups(-once)` marker family mirroring `reject-proposed(-once)`. Since #309,
+`bin/harness-status.sh` gains a FIFTH such site, `waiting_on_human.escalations`: open, `needs-human`
+issues, served verbatim with no filter, fed by a fifth `gh issue list` call with the identical
+bounded-retry-then-fail-closed shape, publishing `escalations_query_retried`/`_unavailable` and a
+`"status.escalations_query_unavailable"` `degraded_reasons` entry appended after the four existing
+status-half entries. Unlike `followups_to_triage` at the time, this member was NOT named in the
+exclusion list, so it joined `counts.human_actions` automatically by the same generic rule, with no
+edit to the sum itself; pinned by three new Part 14 fixtures (a populated bucket whose
+`human_actions` DOES change, a retry-succeeds case, and a both-attempts-fail case) plus two extended
+Part 14 fixtures (the healthy and guarded-sleep-failure cases), a new stub `gh issue list` arm
+(content-exclusive, the identical class as the no-plan arm), and a `reject-escalations(-once)`
+marker family mirroring `reject-followups(-once)`. Since #346, `bin/harness-status.sh` gains a new
+lifecycle label constant, `TRIAGED_HELD_LABEL` (`triaged-held`, human-applied only — the harness
+never adds or removes it), and `list_followups()`'s own `--search` string gains a trailing
+`-label:$TRIAGED_HELD_LABEL` exclusion, narrowing `followups_to_triage` to untriaged-only; with that
+narrowing in place the `$excluded` binding is emptied (`[] as $excluded`, kept as the extension
+point #333 designed), so `followups_to_triage` joins `counts.human_actions` too, by the identical
+generic rule #309's own escalations member already used — `human_actions` is therefore, today, the
+sum of every `waiting_on_human` member. New gate assertion 4.50 (the 4.48/4.49 shape reused) pins
+the label's vocabulary end to end and that no `--label`/`--add-label`/`--remove-label` argument
+names it in `skills/*/SKILL.md`, `skills/*/references/*.md`, `agents/*.md`, or `bin/*.sh`. No new
+fixture is required in `dev/planning-tests.sh`: the six
+`expect_issue_calls` needles pin the new query token, and the 0/1/2+ `human_actions` boundary is
+pinned by three existing Part 14 fixtures (`status-followups-bucket-populated` at 2,
+`status-followups-query-retry-succeeds` at 1, and `status-followups-query-unavailable`, whose own
+bucket stays empty either way at 0); the pre-existing mutant (N8) is restated as its own inverse (adding
+`"followups_to_triage"` back to the now-empty exclusion list) and a new mutant deletes the query's
+own label token — both measured, alongside every pre-existing mutant in the four `MEASURED MUTANTS`
+blocks whose target is `bin/harness-status.sh`, against the re-shaped code.
 It runs in CI as the sixth step, but it
 is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh`,
 `bin/find-implementation-work.sh`, or `bin/harness-status.sh` changes.

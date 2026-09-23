@@ -398,12 +398,12 @@ against `harness-status.sh`'s live queues via `reconcile-ledger.sh` (an issue wi
 outcome is escalated, never dropped; a degraded live read is escalated too, never reported
 clean), then a **per-issue summary table** and a two-halves report
 — *what the cycle did* and *what waits on the human* (plans to review, PRs to merge, blocked
-issues, and (#333) held follow-ups to triage, reported beside the total rather than inside it).
+issues, and (#333, #346) untriaged follow-ups, counted in the total).
 It adds no authority beyond what CLAUDE.md delegates — it just removes the
 hand-cranking between stages. Pair it with `/loop` or a scheduled routine for unattended
 operation; each invocation stays one bounded pass, and an empty cycle — nothing done, and
-`counts.human_actions` at 0 (a non-empty `followups_to_triage` alone does not prevent this) —
-reports "all quiet" in one line. See the `issue-cycle` skill for the full procedure.
+`counts.human_actions` at 0 — reports "all quiet" in one line. See the `issue-cycle` skill for the
+full procedure.
 
 ### The test-suite ratchet (opt-in)
 
@@ -446,16 +446,19 @@ want changes made before either.
 
 **Returning to a laptop.** Run `harness-status.sh` to see what's left: `waiting_on_human` has five
 buckets — `plans_to_review`, `prs_to_review` (each PR entry carries a coarse `ci`: `passing`,
-`failing`, `pending`, or `none`), `blocked`, (#333) `followups_to_triage`, and (#309)
+`failing`, `pending`, or `none`), `blocked`, (#333, #346) `followups_to_triage`, and (#309)
 `escalations` (open `needs-human` issues — a skill asked a question and moved on rather than
-blocking; see `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection) — but
-`counts.human_actions` EXCLUDES only
-`followups_to_triage`: a harness-filed follow-up (#308) is born with `no-plan`, and this query —
-open + `no-plan` + body opens with the harness marker — cannot tell one nobody has triaged yet
-from one you already read and deliberately decided to keep held (both keep `no-plan` and the
-marker forever), so folding it into the total would mean the total could never return to zero in a
-repo with any parked follow-up. Read `followups_to_triage` yourself, alongside
-the total, not instead of it. Check the top-level `degraded` boolean too
+blocking; see `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection) —
+`counts.human_actions` is a generic sum over all five today (no bucket is excluded; the sum's
+named-exclusion mechanism is retained, empty, as an extension point for a future member). Since
+#346, `followups_to_triage` is untriaged-only: a harness-filed follow-up (#308) is born with
+`no-plan`, and once you have read one and decided to keep it held, park it with
+`gh issue edit <n> --add-label triaged-held` — it then drops out of both `followups_to_triage` and
+`counts.human_actions`. To release a parked follow-up back into planning, remove `no-plan`; to see
+the parked backlog, GitHub's own issue list is now the only view (`harness-status.sh` reports
+nothing about it): `gh issue list --label triaged-held --state open`. To un-park one back into
+`followups_to_triage`, remove the label: `gh issue edit <n> --remove-label triaged-held`. Check the
+top-level `degraded` boolean too
 (and `degraded_reasons`, and its `counts.degraded` mirror) — `true` means a discovery query OR one
 of `harness-status.sh`'s own five queries (plan-proposed, impl-blocked, open PRs, held follow-ups,
 escalations) failed closed this run, so a bucket above may under-report the true queue rather than
@@ -470,12 +473,14 @@ above: it fails the revision-candidates query closed, so `find-planning-work.sh`
 the plan-proposed query — so a plan-proposed issue with real unaddressed maintainer feedback stays
 counted as awaiting your review instead of the planner's. Nothing in that JSON is phone-specific —
 it's the same summary a scheduled routine's own report already gives you. Honest limits on
-`followups_to_triage`: a deliberately parked follow-up keeps counting forever, a hand-written
-`no-plan` issue whose body happens to open with the same marker text would count too even though
-the harness never filed it, and GitHub's issue search can trail a label edit (measured once on
-this repo, 2026-09-17: a `gh issue list --search` run made right after a label edit missed an
-issue that a later run returned), so a follow-up filed moments earlier may be missing from this
-run's bucket — whether a just-triaged one can likewise linger was not measured. Honest limits on
+`followups_to_triage` (#333, #346): a follow-up you read and parked WITHOUT applying
+`triaged-held` still counts; a hand-written `no-plan` issue whose body happens to open with the
+same marker text would count too even though the harness never filed it; GitHub's issue search can
+trail a label edit (measured once on this repo, 2026-09-17: a `gh issue list --search` run made
+right after a label edit missed an issue that a later run returned), so a just-parked follow-up may
+still appear — and now also count — in the very next run's bucket; and `--limit 100` caps this
+listing the same way it caps `plans_to_review`'s, `prs_to_review`'s, `blocked`'s, and
+`escalations`' own queries. Honest limits on
 `escalations` (#309): this bucket's query is not excluded from `plans_to_review`/`blocked`, so an
 issue carrying `needs-human` alongside `plan-proposed` or `impl-blocked` counts twice in
 `counts.human_actions` until you remove one of the two labels; an escalation from a red-CI site
@@ -626,7 +631,10 @@ answers and removes the label. `harness-stop` (#310) is a human-only stop switch
 carrying it stops an `issue-cycle` run — one already in progress included — at its next checked
 boundary, and a standalone `issue-planner`/`issue-implementer` run at its own per-issue dispatch
 loop (`bin/harness-stop.sh`) — see "Stopping a cycle" above; the harness only ever reads this
-label, and never applies or removes it. `plan-approved`
+label, and never applies or removes it. `triaged-held` (#346) is human-applied: it marks a held
+follow-up issue you have read and deliberately decided to keep parked — see "Returning to a
+laptop" above for the `followups_to_triage` bucket this excludes from and the `gh issue edit`
+set/clear commands; the harness never applies or removes it either. `plan-approved`
 can also come back off: the `issue-implementer` skill removes it (with an audit comment) when the
 approval no longer covers the freshest plan comment — a same-run revision landed after the label
 was applied (#174), the plan comment was itself edited in place after approval (#192), or, since
@@ -1774,9 +1782,10 @@ deliberately: removing `no-auto-approve` alone would leave an untriaged, machine
 eligible for auto-approval the moment a policy exists, while adding `no-plan` in that same edit
 is what keeps it held until a human triages it. Two honest limits carry over from the behaviour
 changes above:
-`harness-status.sh` had no bucket or count for a held follow-up (superseded by #333, below — it
-now has one, `waiting_on_human.followups_to_triage`, reported beside `counts.human_actions` rather
-than inside it), and `cleanup-after-merge.sh`'s follow-up quarantine — the "source PR
+`harness-status.sh` had no bucket or count for a held follow-up (superseded by #333, below, and
+narrowed again by #346 — since v2.7.7 the bucket is untriaged-only and counted inside
+`counts.human_actions`; see the v2.7.6 → v2.7.7 notes below), and `cleanup-after-merge.sh`'s
+follow-up quarantine — the "source PR
 closed without merging" comment — never reached a follow-up filed with `no-plan` from birth,
 since the same `-label:no-plan` exclusion that made `--fix` idempotent also excluded it (superseded
 by #334, below — since v2.7.6 the quarantine's idempotence key moved off that label onto a
@@ -1840,7 +1849,9 @@ a laptop" above for the reader-facing shape and honest limits (parked follow-ups
 label edit can leave a just-filed entry missing from one run — measured once on this repo,
 2026-09-17: a `gh issue list --search` run made right after a label edit missed an issue that a
 later run returned; whether a just-triaged entry can likewise linger was not measured — and
-`--limit 100` caps the listing).
+`--limit 100` caps the listing). Since v2.7.7 (#346, see the v2.7.6 → v2.7.7 note below), the
+query additionally excludes a new `triaged-held` label, narrowing this bucket to untriaged-only,
+and `counts.human_actions` now DOES include it.
 
 Also in v2.7.6 (#309): **needs a label step** — re-run `bin/setup-labels.sh` on any repo already
 running an earlier harness version, so the new `needs-human` label exists before the next cycle;
@@ -1882,7 +1893,9 @@ the identical shape `counts.audit_comments_skipped`/`counts.verdict_archives_ski
 and covered by #321's own quoter warning. New gate assertion 4.48 pins that the `ESCALATION_LABEL`
 constant is declared identically in all three scripts, is one of the labels `bin/setup-labels.sh`
 creates, is excluded by every discovery `--search` line, and is named in
-`skills/issue-implementer/SKILL.md`.
+`skills/issue-implementer/SKILL.md`. Since v2.7.7 (#346, see the v2.7.6 → v2.7.7 note below),
+`followups_to_triage` joined `escalations` in the `counts.human_actions` sum too, by the identical
+mechanism.
 
 Also in v2.7.6 (#310): **needs two consumer actions** — re-copy the permissions block from
 `templates/repo-settings.json` (or add `"Bash(harness-stop.sh:*)"` by hand) so the new script is
@@ -1929,15 +1942,39 @@ paragraph's WARN already describes): measured on this repo (gh 2.97.0, 2026-09-2
 where that does not hold, the harness's own notice comment never counts as already-noticed, so
 each `--fix` run posts another one and prints the untrusted-marker WARN naming that comment.
 
-**v2.7.6 → v2.7.7** needs no grant, label, script, settings entry, or baseline step. The
-`planner` and `verifier` subagents' frontmatter `model:` pin moves from `claude-opus-5` to
-`claude-opus-5-5` (Claude Opus 5.5); the `implementer` stays on `claude-sonnet-5`. The pins are
+**v2.7.6 → v2.7.7** needs no grant, label, script, settings entry, or baseline step for the model
+pin itself (#358) — but this hop as a whole is not a no-op: see "Also in v2.7.7 (#346)" below,
+which needs a label step. The `planner` and `verifier` subagents' frontmatter `model:` pin
+moves from `claude-opus-5` to `claude-opus-5-5` (Claude Opus 5.5); the `implementer` stays on
+`claude-sonnet-5`. The pins are
 full model IDs on purpose, not the `opus`/`sonnet` aliases Claude Code also accepts: an alias
 resolves to a provider-chosen "recommended" version that changes over time and differs between
 the Anthropic API and Bedrock/Vertex/Foundry, so a consumer could not tell from this repo's
-history which model verified a given PR. Installing the update is the whole migration — the pins
-travel with the plugin (see "Distribution"); a consumer whose provider does not yet serve
-`claude-opus-5-5` should stay on v2.7.6 until it does.
+history which model verified a given PR. Installing the update is the whole migration for the
+pin — the pins travel with the plugin (see "Distribution"); a consumer whose provider does not yet
+serve `claude-opus-5-5` should stay on v2.7.6 until it does.
+
+Also in v2.7.7 (#346): **needs a label step** — re-run `bin/setup-labels.sh` on any repo already
+running an earlier harness version, so the new `triaged-held` label exists before the next cycle;
+until then `bin/check-harness.sh` FAILs on the missing label (the same shape as #310's
+`harness-stop`, above), though `harness-status.sh`'s own held-follow-up query degrades gracefully
+(see below). `harness-status.sh`'s `list_followups()` query gains a `-label:$TRIAGED_HELD_LABEL`
+exclusion, narrowing the `followups_to_triage` bucket to untriaged-only, and the `$excluded`
+binding that used to name `followups_to_triage` is emptied, so the bucket now joins
+`counts.human_actions` by the same generic rule `escalations` (#309) already used — see "Returning
+to a laptop" and "Label lifecycle" above for the reader-facing shape, the park/unpark commands, and
+the honest limits. Measured on this repo, 2026-09-22, before the label existed:
+`gh issue list --search "is:open is:issue label:no-plan" --json number,title,url,body --limit 100
+| jq length` and the same query with ` -label:triaged-held` appended both returned 19, all rc 0,
+and `gh label list` showed no `triaged-held` label — so a consumer who skips this step still gets a
+working, merely un-narrowed bucket (every harness-filed follow-up, triaged or not, counts), not a
+broken one. New gate assertion 4.50 pins the label's vocabulary end to end and that no
+`--label`/`--add-label`/`--remove-label` argument names it in `skills/*/SKILL.md`,
+`skills/*/references/*.md`, `agents/*.md`, or `bin/*.sh`, the same shape 4.48/4.49 already give
+`needs-human`/`harness-stop`. **Migration note:** this label is new — no already-parked follow-up
+carries it yet, so on upgrade every follow-up you have already triaged and decided to keep held
+counts as untriaged (and therefore in `counts.human_actions`) until you label it `triaged-held` by
+hand; there is no automatic migration of pre-existing parked state.
 
 ## The per-repo settings file (required)
 

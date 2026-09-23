@@ -42,6 +42,14 @@
 #                      skills/*/references/*.md, agents/*.md, or bin/*.sh (dev/stop-tests.sh's own
 #                      fixture legitimately carries that literal as an expected test-output
 #                      string, outside that scanned surface).
+#   triaged-held    -> human-applied: this held follow-up has been triaged and is deliberately
+#                      parked (the harness never applies it). bin/harness-status.sh's
+#                      list_followups() query excludes it, so a parked follow-up drops out of the
+#                      followups_to_triage bucket (and out of counts.human_actions) — see that
+#                      script's own header. Gate assertion 4.50 forbids naming it in a
+#                      --label/--add-label/--remove-label argument anywhere in skills/*/SKILL.md,
+#                      skills/*/references/*.md, agents/*.md, or bin/*.sh; README.md documents the
+#                      human's own set/clear commands.
 #
 # Requesting plan changes does NOT use a label — just comment on the issue and the planner
 # revises on its next run. Approval and the implementation states ARE labels (unambiguous signals).
@@ -75,6 +83,7 @@ create_or_update "test-ratchet"    "006B75" "Filed by the test-suite ratchet; ha
 create_or_update "multi-pr"        "C5DEF5" "Multi-PR issue: cleanup leaves it open when a slice's PR merges"
 create_or_update "needs-human"     "D93F0B" "Harness asked a question and moved on; answer, then remove this label to release the issue"
 create_or_update "harness-stop"    "000000" "Human-only stop switch: stops a run in progress, not just the next one (harness-stop.sh)"
+create_or_update "triaged-held"    "C2E0C6" "Human-applied: this held follow-up has been triaged and is deliberately parked (the harness never applies it)"
 
 echo "Labels are set up."
 echo "Note: the old 'plan-changes-requested' label is no longer used. Delete it if you like:"

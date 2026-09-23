@@ -468,6 +468,22 @@ p_4_48_no_skill_mention() { edit "$1/skills/issue-implementer/SKILL.md" 's/needs
 p_4_49_drift()      { edit "$1/bin/harness-stop.sh" 's/^STOP_LABEL="harness-stop"$/STOP_LABEL="harness-stpo"/'; }
 p_4_49_extraction() { edit "$1/bin/harness-stop.sh" 's/STOP_LABEL/STOP_LBEL/g'; }
 p_4_49_applied()    { printf 'gh issue edit 1 --add-label harness-stop\n' | append "$1/bin/harness-status.sh"; }
+# p_4_50_* (#346) — rename/alter characters INSIDE the identifier/value, never append a suffix
+# (LESSON 2026-09-04b), the 4.49 idiom reused. p_4_50_extraction renames the TRIAGED_HELD_LABEL
+# identifier throughout bin/harness-status.sh (both the declaration and its list_followups() use
+# site) so the gate's anchored extraction of the literal "TRIAGED_HELD_LABEL=" prefix comes back
+# empty (clause a). p_4_50_drift alters bin/harness-status.sh's own TRIAGED_HELD_LABEL value
+# (characters changed inside the token, not a suffix) so it is no longer among the labels
+# bin/setup-labels.sh creates (clause b). p_4_50_missing_token deletes the
+# ' -label:$TRIAGED_HELD_LABEL' token from list_followups()'s own --search line, leaving it the
+# only 'is:issue label:no-plan' line lacking the token (clause c). p_4_50_applied appends a line
+# applying the triaged-held label via --add-label to bin/harness-status.sh (the same append target
+# p_4_44/p_1_1/p_1_7/p_4_49_applied already prove trips nothing else), so clause (d)'s ERE scan
+# finds a match in bin/*.sh.
+p_4_50_extraction()     { edit "$1/bin/harness-status.sh" 's/TRIAGED_HELD_LABEL/TRIAGED_HELD_LBEL/g'; }
+p_4_50_drift()          { edit "$1/bin/harness-status.sh" 's/^TRIAGED_HELD_LABEL="triaged-held"$/TRIAGED_HELD_LABEL="triaged-hled"/'; }
+p_4_50_missing_token()  { edit "$1/bin/harness-status.sh" 's/^    --search "is:open is:issue label:no-plan -label:\$TRIAGED_HELD_LABEL" \\$/    --search "is:open is:issue label:no-plan" \\/'; }
+p_4_50_applied()        { printf 'gh issue edit 1 --add-label triaged-held\n' | append "$1/bin/harness-status.sh"; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -855,6 +871,10 @@ cases=(
   "4.49-drift|4.49|p_4_49_drift|alter one character inside bin/harness-stop.sh's own STOP_LABEL value (characters changed inside the token, not a suffix) so it is no longer among the labels bin/setup-labels.sh creates -- measured: \"4.49 STOP_LABEL ('harness-stpo') is not among the labels bin/setup-labels.sh creates\" (75 pass, 1 fail)"
   "4.49-extraction|4.49|p_4_49_extraction|rename STOP_LABEL to STOP_LBEL throughout bin/harness-stop.sh (both the declaration and its usage()-text use site) so the gate's anchored extraction comes back empty -- measured: \"4.49 bin/harness-stop.sh's STOP_LABEL=\\\"...\\\" line didn't match (structure changed) — extraction failed\" (75 pass, 1 fail)"
   "4.49-applied|4.49|p_4_49_applied|append 'gh issue edit 1 --add-label harness-stop' to bin/harness-status.sh (the append target p_4_44/p_1_1/p_1_7 already prove trips nothing else) -- measured failing set: {4.49} (75 pass, 1 fail)"
+  "4.50-extraction|4.50|p_4_50_extraction|rename TRIAGED_HELD_LABEL to TRIAGED_HELD_LBEL throughout bin/harness-status.sh (both the declaration and its list_followups() use site) so the gate's anchored extraction comes back empty -- measured: \"4.50 bin/harness-status.sh's TRIAGED_HELD_LABEL=\\\"...\\\" line didn't match (structure changed) — extraction failed\" (77 pass, 1 fail)"
+  "4.50-drift|4.50|p_4_50_drift|alter one character inside bin/harness-status.sh's own TRIAGED_HELD_LABEL value (characters changed inside the token, not a suffix) so it is no longer among the labels bin/setup-labels.sh creates -- measured: \"4.50 TRIAGED_HELD_LABEL ('triaged-hled') is not among the labels bin/setup-labels.sh creates\" (77 pass, 1 fail)"
+  "4.50-missing-token|4.50|p_4_50_missing_token|delete the ' -label:\$TRIAGED_HELD_LABEL' token from list_followups()'s own --search line in bin/harness-status.sh, the only 'is:issue label:no-plan' --search line in that script -- measured: \"4.50 1 of 1 'is:issue label:no-plan' --search lines in bin/harness-status.sh lack the -label:\$TRIAGED_HELD_LABEL token\" (77 pass, 1 fail)"
+  "4.50-applied|4.50|p_4_50_applied|append 'gh issue edit 1 --add-label triaged-held' to bin/harness-status.sh (the append target p_4_44/p_1_1/p_1_7/p_4_49_applied already prove trips nothing else) -- measured failing set: {4.50} (77 pass, 1 fail)"
 )
 
 # ---------------------------------------------------------------------------------------------
