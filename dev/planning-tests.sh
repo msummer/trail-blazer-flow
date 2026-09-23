@@ -3,8 +3,9 @@
 # planning-tests.sh — fixture-based negative-test harness for BOTH of this repo's discovery
 # scripts, bin/find-planning-work.sh (#164) and, since #176, bin/find-implementation-work.sh too,
 # and, since #285, their consumer bin/harness-status.sh — end-to-end via Part 13 (run via the new
-# run_status runner, both discovery scripts run for real) and, since #297 (extended #333, #309),
-# against harness-status.sh's own five gh call sites alone via Part 14 (run_status too, but behind
+# run_status runner, both discovery scripts run for real) and, since #297 (extended #333, #309,
+# #353), against harness-status.sh's own five gh call sites, PLUS (#353) its own stop check (not a
+# gh call site — see build_stub_stop below), via Part 14 (run_status too, but behind
 # a canned stand-in for both discovery scripts — see build_stub_discovery below) — not this repo's
 # own gate (that's dev/selfcheck.sh +
 # dev/selfcheck-tests.sh) and not the consumer doctor's harness (dev/doctor-tests.sh). Builds
@@ -205,10 +206,11 @@
 #   `_unavailable`, `blocked_query_retried`/`_unavailable`, `prs_query_retried`/`_unavailable`) and
 #   extending `degraded_reasons` with a third, status half — the SAME generic rule applied to this
 #   script's own new flags, producing `"status.<key>"` entries after the planning and
-#   implementation halves. The Part 14 fixtures below (#297, extended #333, extended #309) exercise
-#   ONLY this script's own gh call sites, via a new `build_stub_discovery` builder that shadows BOTH
-#   discovery scripts with canned, non-gh-calling stand-ins — unlike Part 13's fixtures above,
-#   which drive the real discovery scripts end-to-end through run_status too.
+#   implementation halves. The Part 14 fixtures below (#297, extended #333, extended #309, extended
+#   #353) exercise this script's own five gh call sites — PLUS (#353) its own stop check, which is
+#   not a gh call site (see build_stub_stop below) — via a new `build_stub_discovery` builder that
+#   shadows BOTH discovery scripts with canned, non-gh-calling stand-ins — unlike Part 13's fixtures
+#   above, which drive the real discovery scripts end-to-end through run_status too.
 #   #333 adds a FOURTH such site, `waiting_on_human.followups_to_triage`: open, `no-plan` issues
 #   whose body opens with the harness-filed follow-up marker (#308), fed by a fourth `gh issue
 #   list` call with the identical bounded-retry-then-fail-closed shape, publishing
@@ -266,6 +268,30 @@
 #   scripts, disjoint from `counts.plan_marker_quoters` (a comment quoting both markers is counted
 #   in exactly one). Five new fixtures (Part 5) tell apart every clause of the rule, including the
 #   no-plan window and (implementer only) `--issue <n>` mode.
+#   #353 adds a SIXTH check site to bin/harness-status.sh, but not a sixth `gh` call site: one
+#   bin/harness-stop.sh invocation, fed by that script's own stdout grammar rather than a second
+#   query, never retried at this layer (harness-stop.sh already does its own one bounded retry).
+#   The status JSON gains a top-level `stop` object ({state, reason, exit_code}) and a new
+#   `waiting_on_human.stop_routes` array (one {route, clear} entry per SET carrier, both fields
+#   pasted verbatim from harness-stop.sh's own printed lines), plus `counts.stop_routes` and, in
+#   `$sf`, `counts.stop_check_unavailable` (appended LAST, after `escalations_query_unavailable`,
+#   so its own `status.stop_check_unavailable` degraded_reasons entry — when present — is always
+#   the array's last entry too). `stop_routes` was never named in the `human_actions` exclusion
+#   list either, so a SET stop with N carriers joins the sum automatically, the identical
+#   mechanism #309's escalations member and (since #346) followups_to_triage already use. Tested
+#   behind a new canned `build_stub_stop` stand-in (mirroring `build_stub_discovery`'s own
+#   canned-not-real design for this file's Part 14), installed by DEFAULT from `run_status` so no
+#   pre-#353 `run_status` fixture needed changing to keep passing (the default stand-in is why) and
+#   no fixture ever executes the real bin/harness-stop.sh against the developer's or CI runner's own
+#   checkout — `status-own-queries-healthy` gained three `expect_jq` assertions plus
+#   `expect_stop_calls` as the default stand-in's own non-vacuity control; the other twenty
+#   pre-#353 `run_status` fixtures are byte-identical. Twelve new Part 14
+#   fixtures (below, after the #309 ones) pin the state mapping (fail-closed to "unavailable" on
+#   every outcome bin/harness-stop.sh does not document, including a determinate-looking carrier
+#   line printed alongside an untrusted exit — discarded rather than trusted), the verbatim
+#   carrier/`clear=` pairing and GitHub-before-local ordering, the
+#   `stop_check_unavailable`/`degraded_reasons` participation, and the
+#   `human_actions` arithmetic at N=0/1/3 carriers.
 #
 # Usage: bash dev/planning-tests.sh [name-filter] — same output contract as
 # dev/cleanup-tests.sh, dev/doctor-tests.sh, and dev/selfcheck-tests.sh: one PASS/FAIL line per
@@ -273,8 +299,10 @@
 # match exits 1.
 #
 # Every write happens under one `mktemp -d` root, removed via an EXIT trap. No git fixture is
-# needed — neither script calls anything but `gh` and `jq` — so each fixture is just a directory
-# holding a stub `gh` (offline, deterministic) plus the JSON payloads it serves:
+# needed — (#353) bin/harness-status.sh now also shells out to harness-stop.sh, but the canned
+# build_stub_stop stand-in that shadows it needs none either, so neither script under test ever
+# reaches a real `git` — so each fixture is just a directory holding a stub `gh` (offline,
+# deterministic) plus the JSON payloads it serves:
 #   - initial.json           : the needs_initial_plan query's response (find-planning-work.sh)
 #   - candidates.json         : (#211) the revision candidates query's response — a JSON page
 #                               array of {"number": N} objects, exactly what `gh issue list
@@ -328,6 +356,19 @@
 #   - reject-escalations / reject-escalations-once : (optional, presence-only, #309) the identical
 #                               pair for the escalations arm instead — see reject-proposed(-once)
 #                               above
+#   - stop-stdout.txt          : (#353) bin/harness-status.sh's OWN stop-check response — the exact
+#                               stdout build_stub_stop's own harness-stop.sh stand-in prints for a
+#                               fixture that calls build_stub_stop itself (see that builder's own
+#                               comment above); absent means the DEFAULT `stop=false` the stand-in
+#                               prints on its own, and PRESENT-BUT-EMPTY means empty stdout (the
+#                               shape a usage/environment-error or not-found exit needs) — a
+#                               different convention from proposed.json/blocked.json/followups.json/
+#                               escalations.json above (whose OWN absence means `[]`, never empty
+#                               stdout), documented here explicitly rather than assumed
+#   - .stop-calls               : (written by the stub, never by a case, #353) the call log
+#                               build_stub_stop's own harness-stop.sh stand-in appends its own
+#                               invocation to, as its first statement — mirroring .issue-calls/
+#                               .pr-calls/.api-calls — read by the new expect_stop_calls helper
 #   - issue-<n>.json          : the `gh issue view` payload for candidate/ready issue <n>, shared
 #                               by both discovery scripts (each fixture directory dedicated to a
 #                               discovery script keeps ready-issue and revision-candidate numbers
@@ -1770,8 +1811,10 @@ EOF
 # DIR/find-planning-work.sh and DIR/find-implementation-work.sh, canned stand-ins used only by
 # the Part 14 fixtures below: run_status (#285) puts $dir ahead of $root/bin on PATH (see
 # run_status's own comment above), so these shadow the real discovery scripts for a case
-# exercising ONLY harness-status.sh's OWN gh call sites (proposed, blocked, prs, and (#333)
-# followups) — the real discovery scripts, and every in-place mutant that edits them, are
+# exercising ONLY harness-status.sh's OWN gh call sites (proposed, blocked, prs, (#333)
+# followups, and (#309) escalations) — plus, since #353, its own non-gh stop check, shadowed
+# separately by build_stub_stop (see run_status's own comment below) — the real discovery scripts,
+# and every in-place mutant that edits them, are
 # unreachable through a fixture built this way (an ADVISORY decision this train resolved; see the
 # MEASURED MUTANTS (#297) block below, which the Part 13 fixtures above deliberately do NOT use
 # this builder, driving both real scripts end-to-end instead). PLANNING_COUNTS/IMPL_COUNTS default
@@ -1799,6 +1842,56 @@ cat <<'JSON'
 JSON
 EOF
   chmod +x "$dir/find-implementation-work.sh"
+}
+
+# build_stub_stop DIR [RC] (#353) — writes an executable DIR/harness-stop.sh, the same __DIR__ +
+# sed template idiom build_stub_gh/build_stub_sleep use above (plus a second __RC__ substitution,
+# for the same reason: the quoted heredoc must not interpolate "$*" at BUILD time). The stand-in
+# appends its own invocation to DIR/.stop-calls FIRST (mirroring .issue-calls/.pr-calls's
+# append-first-then-branch idiom), then `cat`s DIR/stop-stdout.txt if that file exists — an EMPTY
+# file therefore means empty stdout, the shape status-stop-usage-error and status-stop-not-on-path
+# below need — else prints the default `stop=false`, then exits RC (default 0). run_status (#285)
+# installs this stand-in with
+# NO arguments (rc 0, `stop=false`) by default whenever a fixture has not already written its own
+# DIR/harness-stop.sh (see run_status's own comment below) — a fixture that needs a non-default rc
+# or stdout calls this builder itself, before run_status, the same convention build_stub_discovery
+# above documents for its own default-vs-explicit split. Faithful to bin/harness-stop.sh's own
+# STDOUT GRAMMAR by construction: every fixture below that writes its own stop-stdout.txt copies
+# the exact literal tokens that script's source prints (`stop=true`/`stop=false`/`stop=unknown`,
+# `route=github issue=<n> url=<url>` + `clear=gh issue edit <n> --remove-label harness-stop`,
+# `route=local path=<abs path>` + `clear=rm <abs path>`, `reason=<slug>`) — checked against a LIVE
+# run of the real bin/harness-stop.sh, performed by the ORCHESTRATOR (2026-09-23, in a throwaway
+# `git init` repo, first with no `gh` on PATH and then with a stub `gh`; recorded in the train's
+# artifacts as stop-measure-353.md), not by this implementer dispatch — the implementer role's git
+# boundary (hooks/agent-boundary.sh) denies every `git` invocation unconditionally, including
+# `git init`, so this dispatch could not run the measurement itself, and that denial was correct
+# behaviour. Measured lines that matter here: `stop=false` (rc 0); `stop=true` +
+# `route=github issue=<n> url=<url>` + `clear=gh issue edit <n> --remove-label harness-stop`
+# (rc 3); `stop=true` + `route=local path=<abs>` + `clear=rm <abs>` (rc 3); both routes together as
+# GitHub carrier(s) printed FIRST, then the local carrier (rc 3); `stop=unknown` +
+# `reason=gh-not-found` (rc 4) and `stop=unknown` + `reason=github-query-unavailable` (rc 4); and —
+# the shape this file's own fixtures had to guess before this measurement — a DETERMINATE stop
+# carrying a reason line: `stop=true` + the local pair + `reason=gh-not-found` (rc 3), the reason
+# line printed AFTER the carrier pair (see status-stop-set-local's own reshaped fixture below).
+# Every `warn:` line the real script prints goes to its OWN stderr, never stdout, in every measured
+# case.
+build_stub_stop() {
+  local dir="$1" rc="${2:-0}" tmpl="$dir/harness-stop.sh.tmpl"
+  {
+    printf '#!%s\n' "$bash_bin"
+    cat <<'EOF'
+printf '%s\n' "$*" >> "__DIR__/.stop-calls"
+if [ -f "__DIR__/stop-stdout.txt" ]; then
+  cat "__DIR__/stop-stdout.txt"
+else
+  echo "stop=false"
+fi
+exit __RC__
+EOF
+  } > "$tmpl"
+  sed -e "s#__DIR__#$dir#g" -e "s#__RC__#$rc#g" "$tmpl" > "$dir/harness-stop.sh"
+  rm -f "$tmpl"
+  chmod +x "$dir/harness-stop.sh"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1873,9 +1966,17 @@ run_script_at() {
 # which in turn resolves BOTH bin/find-planning-work.sh and bin/find-implementation-work.sh by
 # their bare names — so $root/bin (not just $dir) must be on PATH for this one runner, with $dir
 # prepended FIRST so DIR's own stub `gh`/`sleep` still win over any real `gh`/`sleep` a PATH
-# lookup might otherwise find.
+# lookup might otherwise find. (#353) bin/harness-status.sh also resolves harness-stop.sh by bare
+# name; install build_stub_stop's own default clean stand-in (rc 0, `stop=false`) here whenever
+# the fixture has not already written DIR/harness-stop.sh itself — without this, EVERY existing
+# run_status fixture would fall through to the REAL $root/bin/harness-stop.sh, which reads `git
+# rev-parse --git-common-dir` from the developer's or CI runner's own checkout and its real local
+# stop file — the isolation class dev/hook-tests.sh's run_push_guard already applies to HOME.
 run_status() {
   local dir="$1"
+  if [ ! -f "$dir/harness-stop.sh" ]; then
+    build_stub_stop "$dir"
+  fi
   PATH="$dir:$root/bin:$PATH" "$bash_bin" "$root/bin/harness-status.sh" >"$dir/.stdout" 2>"$dir/.stderr"
   planning_rc=$?
   planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
@@ -2043,6 +2144,21 @@ expect_pr_calls() {
     actual=0
   fi
   [ "$actual" = "$expected" ] || { __ok=0; __why="${__why}pr calls: expected $expected, got $actual\n"; }
+}
+# expect_stop_calls DIR N — (#353) the count-only twin of expect_pr_calls/expect_api_calls/
+# expect_sleep_calls for DIR/.stop-calls (build_stub_stop's own call log) — plain if/else, no
+# needle, so no needle_required guard (same reasoning as expect_pr_calls/expect_api_calls). 0 when
+# the file doesn't exist at all (no harness-stop.sh invocation was ever made), otherwise its line
+# count — AC1's own proof that this site is never retried: every fixture below expects exactly 1,
+# never 2.
+expect_stop_calls() {
+  local dir="$1" expected="$2" actual
+  if [ -f "$dir/.stop-calls" ]; then
+    actual="$(wc -l < "$dir/.stop-calls" | tr -d ' ')"
+  else
+    actual=0
+  fi
+  [ "$actual" = "$expected" ] || { __ok=0; __why="${__why}stop calls: expected $expected, got $actual\n"; }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -9050,6 +9166,47 @@ EOF
 # confirmed against a backup refreshed immediately before every mutation, LESSON 2026-09-07;
 # `[ -x bin/harness-status.sh ]` confirmed executable after each, LESSON 2026-09-15b); final
 # restored-tree run: 166 pass, 0 fail.
+#
+# RE-MEASURED 2026-09-23 (#353): the eleven new status-stop-* fixtures below all call run_status
+# too, reaching every one of (i)/(j)/(k)/(l). (i) and (j) are UNCHANGED — 177 cases dropped to 174
+# pass/3 fail for (i) and 173 pass/4 fail for (j), failing exactly the SAME three/four names as the
+# #346 measurement above: none of the eleven new fixtures asserts an "implementation."-prefixed
+# degraded_reasons entry or the two-key-enumeration author_association_unavailable/
+# ready_query_unavailable flags these two mutants touch. (k) and (l) each GAIN three new members:
+#   (k) (hard-code `degraded: false`) — 177 cases dropped to 164 pass/13 fail, failing exactly the
+#       original ten (status-degraded-planner-initial-query, status-degraded-implementer-ready-
+#       query, status-degraded-author-association, status-proposed-query-unavailable,
+#       status-blocked-query-unavailable, status-prs-query-unavailable,
+#       status-degraded-reasons-all-halves, status-followups-query-unavailable,
+#       status-followups-degraded-order, status-escalations-query-unavailable) PLUS
+#       status-stop-unknown, status-stop-usage-error, and status-stop-degraded-order — the only
+#       three new fixtures that assert `.degraded == 'true'` directly.
+#   (l) (hard-code `degraded: true`) — 177 cases dropped to 164 pass/13 fail, failing exactly the
+#       original ten (status-clean-not-degraded, status-own-queries-healthy,
+#       status-proposed-query-retry-succeeds, status-blocked-query-retry-succeeds,
+#       status-prs-query-retry-succeeds, status-own-retry-sleep-failure-survives,
+#       status-followups-bucket-populated, status-followups-query-retry-succeeds,
+#       status-escalations-bucket-populated, status-escalations-query-retry-succeeds) PLUS
+#       status-stop-clear, status-stop-set-github, and status-stop-set-both-routes — the only three
+#       new fixtures that assert `.degraded == 'false'` directly (status-stop-set-local and
+#       status-stop-true-no-carrier do NOT join either mutant: neither asserts `.degraded` at all).
+# Restored byte-identically after each measurement (sha256 confirmed against a backup refreshed
+# immediately before every mutation, LESSON 2026-09-07; `[ -x bin/harness-status.sh ]` confirmed
+# executable after each, LESSON 2026-09-15b); final restored-tree run: 177 pass, 0 fail.
+#
+# RE-MEASURED AGAIN 2026-09-23 (#353, verifier kickback round 2, F2), against the 178-case tree
+# with the twelfth new status-stop-* fixture, status-stop-unavailable-with-carriers: (i) and (j)
+# stay UNCHANGED — 178 cases dropped to 175 pass/3 fail for (i) and 174 pass/4 fail for (j), the
+# SAME three/four names — the new fixture asserts neither an "implementation."-prefixed
+# degraded_reasons entry nor the author_association_unavailable/ready_query_unavailable flags. (k)
+# GAINS the new fixture as a new member — 178 cases dropped to 164 pass/14 fail, the original
+# thirteen PLUS status-stop-unavailable-with-carriers, which also asserts `.degraded == 'true'`
+# directly, the identical class the other thirteen already belong to. (l) stays UNCHANGED — 178
+# cases dropped to 165 pass/13 fail, the SAME thirteen names — the new fixture itself expects
+# `.degraded == 'true'`, so hard-coding `degraded: true` does not flip it. Restored
+# byte-identically after each measurement (sha256 confirmed against a backup refreshed immediately
+# before every mutation, LESSON 2026-09-07; `[ -x bin/harness-status.sh ]` confirmed executable
+# after each, LESSON 2026-09-15b); final restored-tree run: 178 pass, 0 fail.
 
 # ---------------------------------------------------------------------------------------------
 # Part 14 cases (#297), against bin/harness-status.sh's OWN three gh call sites — plan-proposed,
@@ -9058,7 +9215,10 @@ EOF
 # own query sites. #333 extends this to a FOURTH such site, held follow-ups, with the identical
 # shape — see the four status-followups-* fixtures after the #297 MEASURED MUTANTS block below.
 # #309 extends this again to a FIFTH such site, escalations, with the identical shape — see the
-# three status-escalations-* fixtures after the #333 MEASURED MUTANTS block further below.
+# three status-escalations-* fixtures after the #333 MEASURED MUTANTS block further below. #353
+# adds a SIXTH check, but not a sixth `gh` call site: one bin/harness-stop.sh invocation, shadowed
+# by build_stub_stop rather than build_stub_discovery — see the twelve status-stop-* fixtures after
+# the #309 MEASURED MUTANTS block further below.
 # Every fixture here calls build_stub_discovery (NOT the real discovery
 # scripts): run_status puts $dir ahead of $root/bin on PATH, so these canned stand-ins shadow
 # find-planning-work.sh/find-implementation-work.sh, and only harness-status.sh's own sites
@@ -9074,18 +9234,23 @@ EOF
 # for the separate
 # top-level `pr)` arm the open-PR site alone reaches.
 
-# status-own-queries-healthy (AC2) — every one of the five own sites succeeds on its first
-# attempt: each called exactly once, no sleeps, all ten new counts flags false, degraded false,
-# empty degraded_reasons — and (non-vacuity) the canned planning stand-in's own unplanned issue
-# (#650) surfaces in the output, while zero .issue-calls lines carry
+# status-own-queries-healthy (AC2) — every one of the five own gh call sites succeeds on its first
+# attempt: each called exactly once, no sleeps, all ten pre-#353 counts flags false, degraded
+# false, empty degraded_reasons — and (non-vacuity) the canned planning stand-in's own unplanned
+# issue (#650) surfaces in the output, while zero .issue-calls lines carry
 # "number,title,url,author" — the real find-planning-work.sh's own needs_initial_plan field
 # list, which build_stub_discovery's stand-in never sends since it never calls gh at all — proving
 # the canned stand-in ran instead of the real planner. This fixture writes no followups.json or
 # escalations.json at all, deliberately, so it also pins the absent-file ⇒ `[]` convention (#333,
-# #309) the other three sites' own absent-file convention already documents. Measured mutants:
-# (h1), (h2), (h3), (i), (k) — see the MEASURED MUTANTS (#297) block below the case table;
+# #309) the other three sites' own absent-file convention already documents. (#353) This fixture
+# also writes no stop-stdout.txt and never calls build_stub_stop itself, so run_status installs
+# its DEFAULT stand-in (rc 0, `stop=false`) — the non-vacuity control for the stop check's own
+# healthy path: stop.state "false", counts.stop_routes 0, counts.stop_check_unavailable false, one
+# .stop-calls line (proving the check runs exactly once, never retried at this layer). Measured
+# mutants: (h1), (h2), (h3), (i), (k) — see the MEASURED MUTANTS (#297) block below the case table;
 # (N4)/(N5) — see the MEASURED MUTANTS (#333) block after the new #333 fixtures below;
-# (P4)/(P5) — see the MEASURED MUTANTS (#309) block after the new #309 fixtures further below.
+# (P4)/(P5) — see the MEASURED MUTANTS (#309) block after the new #309 fixtures further below;
+# (S3) — see the MEASURED MUTANTS (#353) block after the new #353 fixtures at the very end.
 case_status_own_queries_healthy() {
   local dir; dir="$(mk_fixture status-own-queries-healthy)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -9116,6 +9281,9 @@ EOF
   expect_jq '.counts.escalations_query_retried' 'false'
   expect_jq '.counts.escalations_query_unavailable' 'false'
   expect_jq '.counts.escalations' '0'
+  expect_jq '.stop.state' '"false"'
+  expect_jq '.counts.stop_routes' '0'
+  expect_jq '.counts.stop_check_unavailable' 'false'
   expect_sleep_calls "$dir" 0
   expect_issue_calls "$dir" 'is:issue label:plan-proposed -label:plan-approved -label:no-plan --json number,title,url' 1
   expect_issue_calls "$dir" 'is:issue label:impl-blocked' 1
@@ -9123,6 +9291,7 @@ EOF
   expect_issue_calls "$dir" 'is:issue label:needs-human' 1
   expect_issue_calls "$dir" 'number,title,url,author' 0
   expect_pr_calls "$dir" 1
+  expect_stop_calls "$dir" 1
 }
 
 # status-proposed-query-retry-succeeds (AC1) — the plan-proposed site's first attempt fails, the
@@ -9734,6 +9903,102 @@ EOF
 # measurement (sha256 confirmed against a backup refreshed immediately before every mutation,
 # LESSON 2026-09-07; `[ -x bin/harness-status.sh ]` confirmed executable after each, LESSON
 # 2026-09-15b); final restored-tree run: 166 pass, 0 fail.
+#
+# RE-MEASURED 2026-09-23 (#353), against the 177-case tree with the eleven new status-stop-*
+# fixtures below (each also calls run_status, reaching every one of these sixteen mutants): (b),
+# (c), (d1), (d2), (d3), (h2), (h3), (i), (j), and (l) are all UNCHANGED — 177 cases dropped to 174
+# pass/3 fail for (b), 172 pass/5 fail for (c), 176 pass/1 fail for (d1)/(d2)/(d3) each, 171 pass/6
+# fail for (h2)/(h3) each, 173 pass/4 fail for (i), 176 pass/1 fail for (j), and 175 pass/2 fail for
+# (l) — every one failing exactly the SAME names as the #346 measurement above: none of the eleven
+# new fixtures sets a reject-blocked/-prs(-once) marker, asserts `counts.blocked_query_unavailable`/
+# `counts.prs_query_unavailable`/`counts.proposed_query_retried` directly, mixes a status-half entry
+# with another status entry in its own expected degraded_reasons array, or asserts
+# `expect_warn_count "plan-proposed query failed once ..." 1`. (a), (e), (f), (g), and (h1) each
+# GAIN status-stop-degraded-order (its own PERMANENT reject-proposed reaches every one of these
+# proposed-site mutants the identical way it already reaches the proposed-site mutants named in the
+# fixture's own comment):
+#   (a) (collapse the proposed retry entirely) — 177 cases dropped to 171 pass/6 fail, failing
+#       exactly the original five (status-proposed-query-retry-succeeds,
+#       status-proposed-query-unavailable, status-own-retry-sleep-failure-survives,
+#       status-degraded-reasons-all-halves, status-followups-degraded-order) PLUS
+#       status-stop-degraded-order — the mutated bare assignment's only attempt fails (this
+#       fixture's own reject-proposed is permanent), aborting harness-status.sh outright under
+#       `set -euo pipefail` before it prints any JSON at all, the identical mechanism the original
+#       five already trigger.
+#   (e) (the proposed site sleeps but never actually retries) — 177 cases dropped to 171 pass/6
+#       fail, failing the IDENTICAL six names as (a) — status-stop-degraded-order's own
+#       `expect_issue_calls ... 2` assertion no longer holds once only one real attempt is ever
+#       made.
+#   (f) (drop the status half from `$all`) — 177 cases dropped to 167 pass/10 fail, failing exactly
+#       the original seven (status-proposed-query-unavailable, status-blocked-query-unavailable,
+#       status-prs-query-unavailable, status-degraded-reasons-all-halves,
+#       status-followups-query-unavailable, status-followups-degraded-order,
+#       status-escalations-query-unavailable) PLUS status-stop-unknown, status-stop-usage-error, and
+#       status-stop-degraded-order — the three new fixtures whose own expected degraded_reasons or
+#       `.degraded` value depends on a "status."-prefixed entry surviving in `$all`.
+#   (g) (compute `$deg` from `$dr` only) — 177 cases dropped to 168 pass/9 fail, failing exactly the
+#       original six (status-proposed-query-unavailable, status-blocked-query-unavailable,
+#       status-prs-query-unavailable, status-followups-query-unavailable,
+#       status-followups-degraded-order, status-escalations-query-unavailable) PLUS
+#       status-stop-unknown, status-stop-usage-error, and status-stop-degraded-order — each of the
+#       three new fixtures' own `$dr` is empty (their own discovery halves are healthy), flipping
+#       `.degraded` to false against their own `expect_jq '.degraded' 'true'` assertion.
+#   (h1) (delete `proposed_query_unavailable: $pqu,` from `$sf`) — 177 cases dropped to 170 pass/7
+#       fail, failing exactly the original six (status-own-queries-healthy,
+#       status-own-retry-sleep-failure-survives, status-followups-bucket-populated,
+#       status-followups-query-retry-succeeds, status-followups-query-unavailable,
+#       status-followups-degraded-order) PLUS status-stop-degraded-order — its own expected
+#       degraded_reasons names "status.proposed_query_unavailable" as the FIRST of its two entries,
+#       which the generic select can no longer find once that key is gone.
+# (k) [#297's own force-the-proposed-site-to-always-retry mutant, distinct from the shared
+# MEASURED MUTANTS (#284/#285) block's own (k)/(l) above, which hard-code `$deg` itself] GAINS two
+# new members neither the #346 measurement above nor any prior continuation predicted from
+# inspection alone — found only by actually running it: 177 cases dropped to 164 pass/13 fail,
+# failing exactly the original eleven (status-own-queries-healthy, status-blocked-query-
+# retry-succeeds, status-blocked-query-unavailable, status-prs-query-retry-succeeds,
+# status-prs-query-unavailable, status-followups-bucket-populated,
+# status-followups-query-retry-succeeds, status-followups-query-unavailable,
+# status-escalations-bucket-populated, status-escalations-query-retry-succeeds,
+# status-escalations-query-unavailable) PLUS status-stop-clear and status-stop-true-no-carrier —
+# both fixtures' own proposed.json is healthy (proposed is not their subject), so their
+# `expect_sleep_calls "$dir" 0` and `expect_warn_count "warn:" 0` assertions both break once the
+# forced retry sleeps once and prints the succeed-warn regardless of the first attempt's real
+# outcome — the identical mechanism status-own-queries-healthy's own original membership already
+# documents, now reached by two more zero-sleep/zero-warn fixtures. status-stop-set-local and
+# status-stop-unparseable-first-line do NOT join: neither asserts `expect_sleep_calls` or
+# `expect_warn_count "warn:"` at all. Re-measured 2026-09-23 (#353, verifier kickback round 2, F2)
+# against the 178-case tree with the twelfth new status-stop-* fixture,
+# status-stop-unavailable-with-carriers: UNCHANGED, arithmetic-shifted to 165 pass/13 fail, the
+# SAME thirteen names — the new fixture asserts neither `expect_sleep_calls` nor
+# `expect_warn_count "warn:"` (its own `expect_warn_count` needle is the specific
+# "could not read the stop switch (harness-stop.sh exit 1)" string, unaffected by an EXTRA
+# proposed-site succeed-warn this mutant prints), so it does not join.
+# Restored byte-identically after each measurement (sha256 confirmed against a backup refreshed
+# immediately before every mutation, LESSON 2026-09-07; `[ -x bin/harness-status.sh ]` confirmed
+# executable after each, LESSON 2026-09-15b); final restored-tree run: 178 pass, 0 fail.
+#
+# RE-MEASURED AGAIN 2026-09-23 (#353, verifier kickback round 2, F2), against the 178-case tree with
+# the twelfth new status-stop-* fixture, status-stop-unavailable-with-carriers: (f) and (g) each
+# GAIN it as a new member — 178 cases dropped to 167 pass/11 fail for (f) (the original seven PLUS
+# status-stop-unknown, status-stop-usage-error, status-stop-degraded-order, and
+# status-stop-unavailable-with-carriers) and 168 pass/10 fail for (g) (the original six PLUS the
+# same four) — the new fixture's own `.degraded' 'true'` assertion depends EXCLUSIVELY on the
+# status half surviving in `$all` (its own `$dr` is empty — every discovery site is healthy, the
+# identical shape status-stop-unknown/-usage-error/-degraded-order already establish), the same
+# mechanism that already made those three join. (a), (b), (c), (d1), (d2), (d3), (e), (h1), (h2),
+# (h3), (i), (j), and (l) are all UNCHANGED — arithmetic-shifted from 177 to 178 cases, no new
+# names — the new fixture sets no reject-proposed/-blocked/-prs marker (its own proposed.json,
+# blocked.json, and prs.json are the identical healthy baseline every other #353 fixture uses) and
+# asserts neither a site-specific counts flag (`proposed_query_retried`/`_unavailable`,
+# `blocked_query_unavailable`, `prs_query_unavailable`) nor an exact `degraded_reasons` array, so
+# none of these site-specific mutants' failing sets can reach it; (h1) and (k) [this block's own
+# force-the-proposed-site-to-always-retry mutant, not the #284/#285 block's identically-lettered
+# hard-code-`$deg` pair] re-confirmed directly (not just by this reasoning) — (h1) still 171 pass/7
+# fail, (k) — see its own paragraph immediately above, already re-measured at 165 pass/13 fail —
+# both the SAME names as before, no new member. Restored byte-identically after each measurement
+# (sha256 confirmed against a backup
+# refreshed immediately before every mutation, LESSON 2026-09-07; `[ -x bin/harness-status.sh ]`
+# confirmed executable after each, LESSON 2026-09-15b); final restored-tree run: 178 pass, 0 fail.
 
 # ---------------------------------------------------------------------------------------------
 # Part 14 (continued, #333) — bin/harness-status.sh's FOURTH own gh call site, held follow-ups:
@@ -9786,10 +10051,11 @@ EOF
 # with it" issue must NOT join). Bucket length 2 (#604, #605 only); the [0] entry is asserted
 # against the exact compact {number,title,url} projection for #604 — no body key present, proving
 # the projection drops it; counts.followups_to_triage 2; counts.human_actions is 5 (#346) —
-# plans_to_review(1) + prs_to_review(1) + blocked(1) + followups_to_triage(2) = 5 — this is the
-# fixture that pins the INVERSE of #333's original exclusion (a populated followups_to_triage
-# bucket now moves human_actions, since the query excludes triaged-held issues at the source); the
-# other three bucket counts stay 1 each; both new flags false; degraded false; zero sleeps.
+# plans_to_review(1) + prs_to_review(1) + blocked(1) + followups_to_triage(2) + stop_routes(0) = 5
+# — this is the fixture that pins the INVERSE of #333's original exclusion (a populated
+# followups_to_triage bucket now moves human_actions, since the query excludes triaged-held issues
+# at the source); the other three bucket counts stay 1 each; both new flags false; degraded false;
+# zero sleeps.
 # Measured mutants: #284/#285's (l) and #297's (k) — see each block's own RE-MEASURED 2026-09-19
 # (#333) continuation above — plus (N4), (N5), (N6), (N7), (N9) — see the MEASURED MUTANTS (#333)
 # block below; (N8) is restated as its own inverse below (adding followups_to_triage BACK to the
@@ -9837,9 +10103,10 @@ EOF
 # unavailable false, a populated bucket (one qualifying issue), one succeed-warn (expect_warn_count,
 # not mere presence), one sleep(30), two logged attempts; the other three sites are unaffected (one
 # call each, real content, no warn). Since #346 also pins the n==1 boundary: counts.human_actions is
-# 4 — plans_to_review(1) + prs_to_review(1) + blocked(1) + followups_to_triage(1) = 4. Measured
-# mutants: #284/#285's (l) and #297's (k) — see each block's own RE-MEASURED 2026-09-19 (#333)
-# continuation above — plus (N1), (N2), (N4), (N5) — see the MEASURED MUTANTS (#333) block below.
+# 4 — plans_to_review(1) + prs_to_review(1) + blocked(1) + followups_to_triage(1) + stop_routes(0)
+# = 4. Measured mutants: #284/#285's (l) and #297's (k) — see each block's own RE-MEASURED
+# 2026-09-19 (#333) continuation above — plus (N1), (N2), (N4), (N5) — see the MEASURED MUTANTS
+# (#333) block below.
 case_status_followups_query_retry_succeeds() {
   local dir; dir="$(mk_fixture status-followups-query-retry-succeeds)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -9885,8 +10152,8 @@ EOF
 # status-proposed-query-unavailable: fails on BOTH attempts, fails closed to an empty
 # followups_to_triage bucket, both flags true, counts.human_actions STAYS 3 (#346: the bucket now
 # joins the sum, but an empty bucket contributes 0 either way — plans_to_review(1) +
-# prs_to_review(1) + blocked(1) + followups_to_triage(0) = 3), one fail-closed warn (never the
-# succeed-warn), exactly one sleep, degraded_reasons is exactly
+# prs_to_review(1) + blocked(1) + followups_to_triage(0) + stop_routes(0) = 3), one fail-closed
+# warn (never the succeed-warn), exactly one sleep, degraded_reasons is exactly
 # ["status.followups_query_unavailable"]; the other three sites are unaffected. Measured mutants:
 # (f), (g), (k) — see the RE-MEASURED 2026-09-19 (#333) continuation of the MEASURED MUTANTS (#297)
 # block above — plus (N1), (N2), (N4), (N5) — see the MEASURED MUTANTS (#333) block below.
@@ -10093,6 +10360,32 @@ EOF
 # LESSON 2026-09-07; `[ -x bin/harness-status.sh ]` confirmed executable after each, LESSON
 # 2026-09-15b); final restored-tree run: 166 pass, 0 fail.
 #
+# RE-MEASURED 2026-09-23 (#353): none of the eleven new status-stop-* fixtures below writes
+# followups.json, sets a reject-followups(-once) marker, or asserts any
+# followups_query_retried/followups_query_unavailable/followups_to_triage-specific key or needle —
+# the identical class of non-reachability this file's own "Discovery-script reachability" note
+# above already establishes by direct inspection for the discovery scripts, applied here to
+# list_followups() itself. Measured directly rather than assumed for the broadest two — (N1)
+# (collapse the followups retry entirely) still drops 177 cases to 173 pass/4 fail, and (N4)
+# (delete `followups_query_unavailable: $fqu,` from `$sf`) still drops 177 cases to 171 pass/6
+# fail, each failing exactly the SAME names as the #346 measurement above, none of the eleven new
+# fixtures joining either — the remaining seven (N2, N3, N5, N6, N7, N9) and (QT) share the
+# identical non-reachability fact (no #353 fixture ever calls list_followups() through anything but
+# its own healthy default) and are therefore UNCHANGED, arithmetic-shifted from 166 to 177 cases
+# with no new names. Restored byte-identically after each measurement (sha256 confirmed against a
+# backup refreshed immediately before every mutation, LESSON 2026-09-07; `[ -x
+# bin/harness-status.sh ]` confirmed executable after each, LESSON 2026-09-15b); final
+# restored-tree run: 177 pass, 0 fail.
+#
+# RE-MEASURED AGAIN 2026-09-23 (#353, verifier kickback round 2, F2): the twelfth new status-stop-*
+# fixture, status-stop-unavailable-with-carriers, is built the identical way every one of the
+# original eleven is — it calls build_stub_discovery, writes no followups.json, sets no
+# reject-followups(-once) marker, and asserts no followups_query_retried/
+# followups_query_unavailable/followups_to_triage-specific key or needle — so it shares the
+# identical non-reachability fact this paragraph already established for every #353 fixture against
+# every one of (N1)-(N9) and (QT): UNCHANGED, arithmetic-shifted from 177 to 178 cases, no new
+# names, for all nine plus (QT).
+#
 # Measured-green shape probe (not a mutant that bites — recorded honestly, as #333's own plan
 # first asked): replacing the generic minus-named-exclusion sum with the plain three-term
 # enumeration `(($woh.plans_to_review|length) + ($woh.prs_to_review|length) +
@@ -10119,6 +10412,25 @@ EOF
 # below already discriminates by the opposite edit). Restored byte-identically after measurement
 # (sha256 confirmed against a backup refreshed immediately before the mutation; `[ -x
 # bin/harness-status.sh ]` confirmed executable after); final restored-tree run: 166 pass, 0 fail.
+#
+# #353 discharges the identical prediction a third, independent way for stop_routes, MEASURED
+# directly the identical way #346 did for followups_to_triage: replacing the generic sum with the
+# SAME plain three-term enumeration against the current (#353) 177-case tree dropped the suite to
+# 171 pass/6 fail, failing exactly status-followups-bucket-populated,
+# status-followups-query-retry-succeeds, and status-escalations-bucket-populated (the identical
+# three names the #346 measurement above already names) PLUS status-stop-set-github,
+# status-stop-set-local, and status-stop-set-both-routes — the three new fixtures whose own
+# non-empty stop_routes the plain enumeration omits from the sum entirely. Restored byte-identically
+# after measurement (sha256 confirmed against a backup refreshed immediately before the mutation;
+# `[ -x bin/harness-status.sh ]` confirmed executable after); final restored-tree run: 177 pass, 0
+# fail. RE-MEASURED 2026-09-23 (#353, verifier kickback round 2, F2), against the 178-case tree
+# with the twelfth new status-stop-* fixture, status-stop-unavailable-with-carriers: UNCHANGED,
+# arithmetic-shifted to 172 pass/6 fail, the SAME six names — the new fixture's own `human_actions`
+# stays 3 either way (its own stop_routes is empty in both the real code and this mutant, since the
+# discard-on-unavailable step forces it empty regardless of what the enumeration counts), so it
+# does not join. Restored byte-identically after measurement (sha256 confirmed against a backup
+# refreshed immediately before the mutation; `[ -x bin/harness-status.sh ]` confirmed executable
+# after); final restored-tree run: 178 pass, 0 fail.
 
 # Part 14 (continued, #309) — bin/harness-status.sh's FIFTH own gh call site, escalations: open,
 # needs-human issues fed by list_escalations() with the identical bounded-retry-then-fail-closed
@@ -10172,8 +10484,8 @@ EOF
   expect_jq '.waiting_on_human.escalations[0]' '{"number":609,"title":"Escalated A","url":"https://example.invalid/609"}'
   expect_jq '.counts.escalations' '2'
   # human_actions: plans_to_review(1) + prs_to_review(1) + blocked(1) + followups_to_triage(0) +
-  # escalations(2) = 5 — followups_to_triage now joins the sum too (#346), but this fixture writes
-  # no followups.json, so that member is empty and contributes 0.
+  # escalations(2) + stop_routes(0) = 5 — followups_to_triage now joins the sum too (#346), but
+  # this fixture writes no followups.json, so that member is empty and contributes 0.
   expect_jq '.counts.human_actions' '5'
   expect_jq '.counts.plans_to_review' '1'
   expect_jq '.counts.prs_to_review' '1'
@@ -10263,7 +10575,7 @@ EOF
   expect_jq '.counts.escalations_query_unavailable' 'true'
   expect_jq '.counts.escalations' '0'
   # human_actions: plans_to_review(1) + prs_to_review(1) + blocked(1) + followups_to_triage(0) +
-  # escalations(0, fail-closed) = 3.
+  # escalations(0, fail-closed) + stop_routes(0) = 3.
   expect_jq '.counts.human_actions' '3'
   expect_jq '.counts.plans_to_review' '1'
   expect_jq '.counts.blocked' '1'
@@ -10356,6 +10668,594 @@ EOF
 # byte-identically after each measurement (sha256 confirmed against a backup refreshed immediately
 # before every mutation, LESSON 2026-09-07; `[ -x bin/harness-status.sh ]` confirmed executable
 # after each, LESSON 2026-09-15b); final restored-tree run: 166 pass, 0 fail.
+#
+# RE-MEASURED 2026-09-23 (#353): none of the eleven new status-stop-* fixtures below writes
+# escalations.json, sets a reject-escalations(-once) marker, or asserts any
+# escalations_query_retried/escalations_query_unavailable/escalations-specific key or needle — the
+# identical non-reachability fact this block's own #346 continuation above already establishes for
+# (P1)-(P5). Measured directly rather than assumed for the broadest and the exclusion-list mutant —
+# (P1) (collapse the escalations retry entirely) still drops 177 cases to 174 pass/3 fail, and (P6)
+# (add "escalations" to the exclusion list) still drops 177 cases to 176 pass/1 fail, each failing
+# exactly the SAME names as the #346 measurement above, none of the eleven new fixtures joining
+# either — (P2), (P3), (P4), and (P5) share the identical non-reachability fact and are therefore
+# UNCHANGED, arithmetic-shifted from 166 to 177 cases with no new names. Restored byte-identically
+# after each measurement (sha256 confirmed against a backup refreshed immediately before every
+# mutation, LESSON 2026-09-07; `[ -x bin/harness-status.sh ]` confirmed executable after each,
+# LESSON 2026-09-15b); final restored-tree run: 177 pass, 0 fail.
+#
+# RE-MEASURED AGAIN 2026-09-23 (#353, verifier kickback round 2, F2): the twelfth new status-stop-*
+# fixture, status-stop-unavailable-with-carriers, is built the identical way every one of the
+# original eleven is — it writes no escalations.json, sets no reject-escalations(-once) marker, and
+# asserts no escalations_query_retried/escalations_query_unavailable/escalations-specific key or
+# needle — so it shares the identical non-reachability fact this paragraph already established for
+# every #353 fixture against every one of (P1)-(P6): UNCHANGED, arithmetic-shifted from 177 to 178
+# cases, no new names, for all six.
+
+# ---------------------------------------------------------------------------------------------
+# Part 14 (continued, #353) — bin/harness-status.sh's SIXTH check site, but not a sixth `gh` call
+# site: one bin/harness-stop.sh invocation, fed by that script's own stdout grammar (stop=<state>,
+# per-carrier route=/clear= pairs, at most one reason=<slug>) rather than a second query, never
+# retried at this layer (harness-stop.sh already performs its own one bounded retry — see that
+# script's own header). Every fixture here writes the same proposed.json ([#601]), blocked.json
+# ([#602]), and prs.json ([#603, headRefName "claude/603-x", statusCheckRollup []]) healthy
+# baseline the #297/#333/#309 fixtures above use, plus its own stop-stdout.txt (via
+# build_stub_stop "$dir" <rc>) — every fixture in this block calls build_stub_stop itself, even
+# the clear-state control, so none of them relies on run_status's own default stand-in (already
+# exercised, deliberately, by status-own-queries-healthy above). Fixture stdout content matches
+# the ORCHESTRATOR's own LIVE measurement of the real bin/harness-stop.sh (2026-09-23, throwaway
+# `git init` repo, recorded as stop-measure-353.md) — except the three deliberate fail-closed
+# probes whose stdout the real script can never print (status-stop-rc-token-disagreement,
+# status-stop-unparseable-first-line, status-stop-unavailable-with-carriers), each of which says so
+# in its own comment — see build_stub_stop's own comment above for the measured lines quoted in
+# full and why this implementer dispatch could not run that measurement itself.
+#
+# Discovery-script reachability from this block (the identical method #333's and #309's own notes
+# above use): every fixture below calls build_stub_discovery, never the real find-planning-work.sh
+# or find-implementation-work.sh, so an in-place mutant of either discovery script cannot be caught
+# by any fixture in this block — the same "reachable only through Part 13's own run_status
+# fixtures, never Part 14's" property CLAUDE.md's own dev/planning-tests.sh paragraph already
+# states generically for this file.
+
+# status-stop-clear (AC3, control) — rc 0, `stop=false`: state "false", reason null, exit_code 0,
+# stop_routes [], counts.stop_routes 0, counts.stop_check_unavailable false, degraded false, empty
+# degraded_reasons, human_actions unchanged at 3 (the Part 14 baseline), one .stop-calls line, and
+# — since every one of the five gh sites plus the stop check is healthy — zero warn lines at all.
+# Measured mutants: (S3), (S8) — see the MEASURED MUTANTS (#353) block below the case table; also
+# (#297's own force-the-proposed-site-to-always-retry mutant, distinct from the shared MEASURED
+# MUTANTS (#284/#285) block's (k)/(l)) — see the RE-MEASURED 2026-09-23 (#353) continuation of the
+# MEASURED MUTANTS (#297) block above, which this fixture's own `expect_sleep_calls "$dir" 0` and
+# `expect_warn_count "warn:" 0` assertions newly discriminate.
+case_status_stop_clear() {
+  local dir; dir="$(mk_fixture status-stop-clear)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  printf 'stop=false\n' > "$dir/stop-stdout.txt"
+  build_stub_stop "$dir" 0
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.stop' '{"state":"false","reason":null,"exit_code":0}'
+  expect_jq '.waiting_on_human.stop_routes' '[]'
+  expect_jq '.counts.stop_routes' '0'
+  expect_jq '.counts.stop_check_unavailable' 'false'
+  expect_jq '.degraded' 'false'
+  expect_jq '.degraded_reasons' '[]'
+  expect_jq '.counts.human_actions' '3'
+  expect_warn_count "warn:" 0
+  expect_sleep_calls "$dir" 0
+  expect_stop_calls "$dir" 1
+}
+
+# status-stop-set-github (AC5) — rc 3, `stop=true` plus one GitHub carrier: state "true", the
+# stop_routes[0] entry matches the printed route=/clear= pair VERBATIM (including their own
+# "route="/"clear=" prefixes — never re-derived), counts.stop_routes 1,
+# counts.stop_check_unavailable false (a determinate stop does not degrade), human_actions rises
+# by exactly 1 to 4. Measured mutants: (S5), (S6) — see the MEASURED MUTANTS (#353) block below
+# the case table.
+case_status_stop_set_github() {
+  local dir; dir="$(mk_fixture status-stop-set-github)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  printf 'stop=true\nroute=github issue=42 url=https://example.invalid/42\nclear=gh issue edit 42 --remove-label harness-stop\n' > "$dir/stop-stdout.txt"
+  build_stub_stop "$dir" 3
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.stop.state' '"true"'
+  expect_jq '.stop.reason' 'null'
+  expect_jq '.stop.exit_code' '3'
+  expect_jq '.waiting_on_human.stop_routes' '[{"route":"route=github issue=42 url=https://example.invalid/42","clear":"clear=gh issue edit 42 --remove-label harness-stop"}]'
+  expect_jq '.counts.stop_routes' '1'
+  expect_jq '.counts.stop_check_unavailable' 'false'
+  expect_jq '.degraded' 'false'
+  expect_jq '.degraded_reasons' '[]'
+  expect_jq '.counts.human_actions' '4'
+  expect_stop_calls "$dir" 1
+}
+
+# status-stop-set-local (AC4, AC5, mutant S11) — rc 3, `stop=true` plus one LOCAL carrier AND a
+# reason=<slug> line: the orchestrator's own live measurement, case B in stop-measure-353.md (the
+# local stop file set, `gh` absent from PATH) — a determinate stop still carries a reason when the
+# GitHub route itself could not be confirmed, printed AFTER the carrier pair, and this does NOT
+# degrade the verdict (stop.state stays "true", counts.stop_check_unavailable stays false — the
+# claim the earlier, impossible status-stop-set-both-routes shape used to carry). Pins: the local
+# carrier's verbatim route=local/clear=rm pair, stop.reason "gh-not-found", counts.stop_routes 1,
+# human_actions 4. Measured mutants: (S6), (S9), (S11) — see the MEASURED MUTANTS (#353) block
+# below the case table.
+case_status_stop_set_local() {
+  local dir; dir="$(mk_fixture status-stop-set-local)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  printf 'stop=true\nroute=local path=/repo/.git/trail-blazer/stop\nclear=rm /repo/.git/trail-blazer/stop\nreason=gh-not-found\n' > "$dir/stop-stdout.txt"
+  build_stub_stop "$dir" 3
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.stop.state' '"true"'
+  expect_jq '.stop.reason' '"gh-not-found"'
+  expect_jq '.waiting_on_human.stop_routes' '[{"route":"route=local path=/repo/.git/trail-blazer/stop","clear":"clear=rm /repo/.git/trail-blazer/stop"}]'
+  expect_jq '.counts.stop_routes' '1'
+  expect_jq '.counts.stop_check_unavailable' 'false'
+  expect_jq '.counts.human_actions' '4'
+  expect_stop_calls "$dir" 1
+}
+
+# status-stop-set-both-routes (AC5) — rc 3, TWO GitHub carriers + ONE local carrier, NO reason=
+# line: the orchestrator's own live measurement, case D2 in stop-measure-353.md (a healthy `gh`
+# call answering with a real issue prints no reason= line at all, even alongside a local carrier)
+# showed this fixture's earlier "2 GitHub carriers + reason=github-query-unavailable" combination
+# was a shape the real script can never print — a reason= line is printed only when the GitHub
+# route itself is unreadable, and in that case no GitHub carrier can exist at all (measured: case G
+# prints `stop=unknown`/`reason=github-query-unavailable` with no carrier line at all). See
+# status-stop-set-local above for the measured determinate-stop-plus-reason shape instead. Pins:
+# the exact 3-element stop_routes array IN PRINTED ORDER (both GitHub carriers before the local
+# one), stop.reason null, counts.stop_check_unavailable false (still determinate), human_actions
+# rises by 3 to 6. Measured mutant: (S7) — see the MEASURED MUTANTS (#353) block below the case
+# table.
+case_status_stop_set_both_routes() {
+  local dir; dir="$(mk_fixture status-stop-set-both-routes)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  printf 'stop=true\nroute=github issue=10 url=https://example.invalid/10\nclear=gh issue edit 10 --remove-label harness-stop\nroute=github issue=11 url=https://example.invalid/11\nclear=gh issue edit 11 --remove-label harness-stop\nroute=local path=/repo/.git/trail-blazer/stop\nclear=rm /repo/.git/trail-blazer/stop\n' > "$dir/stop-stdout.txt"
+  build_stub_stop "$dir" 3
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.stop.state' '"true"'
+  expect_jq '.stop.reason' 'null'
+  expect_jq '.waiting_on_human.stop_routes' '[{"route":"route=github issue=10 url=https://example.invalid/10","clear":"clear=gh issue edit 10 --remove-label harness-stop"},{"route":"route=github issue=11 url=https://example.invalid/11","clear":"clear=gh issue edit 11 --remove-label harness-stop"},{"route":"route=local path=/repo/.git/trail-blazer/stop","clear":"clear=rm /repo/.git/trail-blazer/stop"}]'
+  expect_jq '.counts.stop_routes' '3'
+  expect_jq '.counts.stop_check_unavailable' 'false'
+  expect_jq '.degraded' 'false'
+  expect_jq '.counts.human_actions' '6'
+  expect_stop_calls "$dir" 1
+}
+
+# status-stop-unknown (AC3, AC4) — rc 4, `stop=unknown` plus a reason=<slug> line: state "unknown",
+# stop_routes [], counts.stop_check_unavailable true, degraded true, degraded_reasons EXACTLY
+# ["status.stop_check_unavailable"], human_actions unchanged at 3 (nothing to clear), exactly one
+# warn line naming exit 4, one .stop-calls line (never retried here). Measured mutant: (S2) — see
+# the MEASURED MUTANTS (#353) block below the case table.
+case_status_stop_unknown() {
+  local dir; dir="$(mk_fixture status-stop-unknown)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  printf 'stop=unknown\nreason=github-query-unavailable\n' > "$dir/stop-stdout.txt"
+  build_stub_stop "$dir" 4
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.stop.state' '"unknown"'
+  expect_jq '.stop.reason' '"github-query-unavailable"'
+  expect_jq '.waiting_on_human.stop_routes' '[]'
+  expect_jq '.counts.stop_check_unavailable' 'true'
+  expect_jq '.degraded' 'true'
+  expect_jq '.degraded_reasons' '["status.stop_check_unavailable"]'
+  expect_jq '.counts.human_actions' '3'
+  expect_warn_count "could not confirm the stop switch's GitHub route (harness-stop.sh exit 4)" 1
+  expect_stop_calls "$dir" 1
+}
+
+# status-stop-usage-error (AC3) — rc 2, empty stdout (harness-stop.sh's own usage/environment-error
+# shape): state "unavailable", one warn naming exit 2, counts.stop_check_unavailable true. Measured
+# mutant: (S1) — see the MEASURED MUTANTS (#353) block below the case table.
+case_status_stop_usage_error() {
+  local dir; dir="$(mk_fixture status-stop-usage-error)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  : > "$dir/stop-stdout.txt"
+  build_stub_stop "$dir" 2
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.stop.state' '"unavailable"'
+  expect_jq '.stop.exit_code' '2'
+  expect_jq '.counts.stop_check_unavailable' 'true'
+  expect_jq '.degraded' 'true'
+  expect_warn_count "warn: could not read the stop switch (harness-stop.sh exit 2)" 1
+  expect_stop_calls "$dir" 1
+}
+
+# status-stop-not-on-path (AC3) — rc 127, empty stdout: the same published shape as
+# status-stop-usage-error, warn naming exit 127 instead (models the missing-script class). Measured
+# mutant: (S10) — see the MEASURED MUTANTS (#353) block below the case table.
+case_status_stop_not_on_path() {
+  local dir; dir="$(mk_fixture status-stop-not-on-path)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  : > "$dir/stop-stdout.txt"
+  build_stub_stop "$dir" 127
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.stop.state' '"unavailable"'
+  expect_jq '.stop.exit_code' '127'
+  expect_jq '.counts.stop_check_unavailable' 'true'
+  expect_warn_count "warn: could not read the stop switch (harness-stop.sh exit 127)" 1
+  expect_stop_calls "$dir" 1
+}
+
+# status-stop-rc-token-disagreement (AC3) — rc 0 (the "clear" exit code) but stdout's first line is
+# `stop=true` (the "set" token): the cross-check catches the mismatch — state "unavailable", never
+# "true" or "false" — one warn naming exit 0. Measured mutant: (S4) — see the MEASURED MUTANTS
+# (#353) block below the case table.
+case_status_stop_rc_token_disagreement() {
+  local dir; dir="$(mk_fixture status-stop-rc-token-disagreement)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  printf 'stop=true\n' > "$dir/stop-stdout.txt"
+  build_stub_stop "$dir" 0
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.stop.state' '"unavailable"'
+  expect_jq '.stop.exit_code' '0'
+  expect_jq '.counts.stop_check_unavailable' 'true'
+  expect_warn_count "warn: could not read the stop switch (harness-stop.sh exit 0)" 1
+  expect_stop_calls "$dir" 1
+}
+
+# status-stop-true-no-carrier (AC5, AC6, honest limit) — rc 3, `stop=true` with NO carrier line at
+# all (harness-stop.sh's own documented non-issue-element response class): state "true",
+# stop_routes [], human_actions UNCHANGED at 3 (stop.state, not stop_routes' own length, is the
+# authority), counts.stop_check_unavailable false (still determinate). Measured mutant: (S8) — see
+# the MEASURED MUTANTS (#353) block below the case table; also #297's own force-the-proposed-site-
+# to-always-retry mutant — see the RE-MEASURED 2026-09-23 (#353) continuation of the MEASURED
+# MUTANTS (#297) block above, which this fixture's own `expect_warn_count "warn:" 0` assertion (the
+# forced retry's succeed-warn matches the fixed string "warn:") newly discriminates.
+case_status_stop_true_no_carrier() {
+  local dir; dir="$(mk_fixture status-stop-true-no-carrier)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  printf 'stop=true\n' > "$dir/stop-stdout.txt"
+  build_stub_stop "$dir" 3
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.stop.state' '"true"'
+  expect_jq '.waiting_on_human.stop_routes' '[]'
+  expect_jq '.counts.stop_routes' '0'
+  expect_jq '.counts.stop_check_unavailable' 'false'
+  expect_jq '.counts.human_actions' '3'
+  expect_warn_count "warn:" 0
+  expect_stop_calls "$dir" 1
+}
+
+# status-stop-unparseable-first-line (AC3) — rc 3, but stdout's line 1 is not a stop=<state> line
+# at all (a different jq/bash branch from status-stop-rc-token-disagreement: that fixture's rc is
+# 0, this one's is 3, so the two exercise different arms of the bash `case "$stop_rc"`): state
+# "unavailable", one warn naming exit 3. Measured mutant: (S1) — see the MEASURED MUTANTS (#353)
+# block below the case table.
+case_status_stop_unparseable_first_line() {
+  local dir; dir="$(mk_fixture status-stop-unparseable-first-line)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  printf 'garbage\nmore garbage\n' > "$dir/stop-stdout.txt"
+  build_stub_stop "$dir" 3
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.stop.state' '"unavailable"'
+  expect_jq '.stop.exit_code' '3'
+  expect_jq '.counts.stop_check_unavailable' 'true'
+  expect_warn_count "warn: could not read the stop switch (harness-stop.sh exit 3)" 1
+  expect_stop_calls "$dir" 1
+}
+
+# status-stop-degraded-order (AC4) — reject-proposed (permanent) + rc 4 `stop=unknown`: the append
+# position — degraded_reasons is exactly ["status.proposed_query_unavailable",
+# "status.stop_check_unavailable"], stop_check_unavailable LAST (after every #297/#333/#309 flag in
+# $sf's own key order); human_actions is 2 (plans_to_review fails closed to 0, blocked(1) +
+# prs(1) = 2, followups/escalations/stop_routes all empty). Measured mutant: (S2) — see the
+# MEASURED MUTANTS (#353) block below the case table.
+case_status_stop_degraded_order() {
+  local dir; dir="$(mk_fixture status-stop-degraded-order)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Never served","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  : > "$dir/reject-proposed"
+  printf 'stop=unknown\nreason=github-query-unavailable\n' > "$dir/stop-stdout.txt"
+  build_stub_stop "$dir" 4
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.degraded' 'true'
+  expect_jq '.degraded_reasons' '["status.proposed_query_unavailable","status.stop_check_unavailable"]'
+  expect_jq '.counts.human_actions' '2'
+  expect_sleep_calls "$dir" 1
+  expect_issue_calls "$dir" 'is:issue label:plan-proposed -label:plan-approved -label:no-plan --json number,title,url' 2
+  expect_stop_calls "$dir" 1
+}
+
+# status-stop-unavailable-with-carriers (F2, verifier kickback round 2) — rc 1 (an exit status
+# bin/harness-stop.sh never documents, so the state mapping's `*)` catch-all applies regardless of
+# what line 1 says) but stdout still carries a determinate `stop=true` PLUS one LOCAL carrier pair:
+# pins the discard-on-unavailable fix — this script does not trust whatever carrier-shaped lines an
+# UNTRUSTED exit happened to print (see bin/harness-status.sh's own comment right after the jq
+# parse). State "unavailable" (never "true"), waiting_on_human.stop_routes emptied to [] even
+# though the carrier line was present in stdout, counts.stop_routes 0, counts.stop_check_unavailable
+# true, degraded true (its own $dr is empty — every discovery site is healthy — so, like
+# status-stop-unknown/-usage-error/-degraded-order above, this fixture's `.degraded` depends
+# EXCLUSIVELY on the status half surviving in `$all`), human_actions UNCHANGED at 3 (an untrusted
+# exit's carrier lines are never counted — stop.state, never stop_routes' own length, is the
+# authority), one warn naming exit 1, exactly one .stop-calls line. Measured mutant: (S12) — see the
+# MEASURED MUTANTS (#353) block below the case table; also (f), (g) — see the RE-MEASURED
+# 2026-09-23 (#353) continuation of the MEASURED MUTANTS (#297) block above (re-measured a second
+# time for this fixture); also (S1), (S3), (S8) — this fixture's stub exits non-zero and asserts
+# `counts.stop_check_unavailable` and `.waiting_on_human.stop_routes` directly, joining each of
+# those three failing sets too; the plain three-term human_actions enumeration and #297's own
+# force-the-proposed-site-to-always-retry mutant do NOT join — this fixture's own human_actions
+# stays 3 either way (stop_routes is empty in both the real code and that mutant), and it asserts
+# neither `expect_sleep_calls` nor the bare `expect_warn_count "warn:"` needle.
+case_status_stop_unavailable_with_carriers() {
+  local dir; dir="$(mk_fixture status-stop-unavailable-with-carriers)"
+  cat > "$dir/proposed.json" <<'EOF'
+[{"number":601,"title":"Awaiting review","url":"https://example.invalid/601"}]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[{"number":602,"title":"Blocked","url":"https://example.invalid/602"}]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":603,"title":"Open PR","url":"https://example.invalid/603","headRefName":"claude/603-x","statusCheckRollup":[]}]
+EOF
+  printf 'stop=true\nroute=local path=/repo/.git/trail-blazer/stop\nclear=rm /repo/.git/trail-blazer/stop\n' > "$dir/stop-stdout.txt"
+  build_stub_stop "$dir" 1
+  build_stub_gh "$dir"
+  build_stub_discovery "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.stop.state' '"unavailable"'
+  expect_jq '.stop.exit_code' '1'
+  expect_jq '.waiting_on_human.stop_routes' '[]'
+  expect_jq '.counts.stop_routes' '0'
+  expect_jq '.counts.stop_check_unavailable' 'true'
+  expect_jq '.degraded' 'true'
+  expect_jq '.counts.human_actions' '3'
+  expect_warn_count "warn: could not read the stop switch (harness-stop.sh exit 1)" 1
+  expect_stop_calls "$dir" 1
+}
+
+# MEASURED MUTANTS (#353) — applied one at a time to bin/harness-status.sh (Edit tool) against the
+# working tree (178 cases at measurement time, including status-stop-unavailable-with-carriers, the
+# 12th #353 fixture added on the verifier's kickback round 2, F2), `[ -x bin/harness-status.sh ]`
+# confirmed executable after each mutation (LESSON 2026-09-15b), the suite re-run, and the file
+# byte-identically restored (sha256 confirmed against a backup refreshed immediately before every
+# mutation, LESSON 2026-09-07) before the next:
+#   (S1) delete the `|| stop_rc=$?` capture (`stop_out="$(harness-stop.sh)" || stop_rc=$?` collapsed
+#       to the bare `stop_out="$(harness-stop.sh)"`): 178 cases dropped to 168 pass/10 fail, failing
+#       exactly: status-stop-set-github, status-stop-set-local, status-stop-set-both-routes,
+#       status-stop-unknown, status-stop-usage-error, status-stop-not-on-path,
+#       status-stop-true-no-carrier, status-stop-unparseable-first-line, status-stop-degraded-order,
+#       and (re-measured for the kickback round 2 fixture, a NEW member) status-stop-unavailable-
+#       with-carriers — every fixture whose stub harness-stop.sh exits non-zero (the mutated bare
+#       assignment's failing command substitution aborts harness-status.sh outright under `set
+#       -euo pipefail` before it prints any JSON at all; the new fixture's own rc is 1, non-zero,
+#       so it joins the identical way). status-stop-clear and status-stop-rc-token-disagreement do
+#       NOT join: both fixtures' stub exits 0.
+#   (S2) map rc 4 unconditionally to the "false"/clear token (the `4)` case arm's own
+#       `if [ "$stop_line1" = ... ]` test and its else branch collapsed to the single statement
+#       `stop_state="$STOP_STATE_CLEAR"`): 178 cases dropped to 176 pass/2 fail, failing exactly
+#       status-stop-unknown and status-stop-degraded-order — the only two fixtures whose stub exits
+#       4; both now report state "false" (not degraded) instead of "unknown", flipping every one of
+#       their `stop`/`degraded`/`degraded_reasons`/`human_actions` assertions that depends on the
+#       real "unknown" verdict. Re-measured for the kickback round 2 fixture (rc 1, unaffected by
+#       construction): UNCHANGED, arithmetic-shifted from 177 to 178 cases, no new names — the new
+#       fixture's own rc (1) never reaches the `4)` arm at all.
+#   (S3) delete `stop_check_unavailable: $scu` from the `$sf` object literal (leaving a trailing
+#       comma on the preceding member removed too, so the object stays valid JSON): 178 cases
+#       dropped to 165 pass/13 fail, failing exactly status-own-queries-healthy plus all TWELVE
+#       #353 fixtures, including (re-measured for the kickback round 2 fixture, a NEW member)
+#       status-stop-unavailable-with-carriers — every fixture asserting `counts.stop_check_unavailable`
+#       directly (now a missing key, `null`, never `true` or `false`; the new fixture does) OR whose
+#       expected degraded_reasons names "status.stop_check_unavailable" (the generic select finds
+#       nothing to name once the key is gone).
+#   (S4) drop the rc<->token cross-check (the three-armed `case "$stop_rc"` replaced with a flat
+#       `if/elif/elif/else` chain that tests $stop_line1 against all three tokens regardless of
+#       $stop_rc, trusting whichever token matches): 178 cases dropped to 176 pass/2 fail, failing
+#       exactly status-stop-rc-token-disagreement and (re-measured for the kickback round 2 fixture,
+#       a NEW member found only by actually running it, not predicted when F2 was drafted)
+#       status-stop-unavailable-with-carriers — every fixture whose own rc disagrees with its own
+#       line 1's token: status-stop-rc-token-disagreement (rc 0, line 1 "stop=true") the original
+#       way, and status-stop-unavailable-with-carriers (rc 1, line 1 also "stop=true") the identical
+#       way — trusting the token alone flips its state to "true" instead of the correct
+#       rc-driven "unavailable". Every other fixture's rc and line 1 already agree, so trusting the
+#       token alone reaches the identical verdict for them.
+#   (S5) drop the `clear` field from each stop_routes entry (the `clear: (if ... else null end)`
+#       member deleted from the route-building jq object, leaving only `route: $lines[$i]`): 178
+#       cases dropped to 175 pass/3 fail, failing exactly status-stop-set-github,
+#       status-stop-set-local, and status-stop-set-both-routes — every fixture whose expected
+#       stop_routes array names a `clear` field (a missing key in an exact-object jq compare).
+#       Re-measured for the kickback round 2 fixture: UNCHANGED, arithmetic-shifted from 177 to 178
+#       cases, no new names — status-stop-unavailable-with-carriers's own carrier line IS parsed by
+#       this mutated jq (so the parse bug would matter in principle), but the separate
+#       discard-on-unavailable step (added for F2, see (S12) below) overwrites `.routes` to `[]`
+#       regardless right after, before the parse's own result is ever published — the discard masks
+#       every carrier-SHAPE mutation for an "unavailable"-state fixture.
+#   (S6) pair each `route=` line with the PREVIOUS line instead of the next (`$i + 1`/
+#       `$lines[$i + 1]` changed to `$i - 1`/`$lines[$i - 1]` in the clear-lookup, with the
+#       corresponding bounds check flipped from `< length` to `>= 0`): 178 cases dropped to 175
+#       pass/3 fail, failing exactly the SAME three fixtures as (S5) — every fixture with a real
+#       carrier now pairs it with the WRONG clear line (the line immediately BEFORE it — `stop=true`
+#       itself for the first carrier, which never starts with the clear prefix, collapsing that
+#       carrier's own `clear` to null too). Re-measured for the kickback round 2 fixture: UNCHANGED,
+#       arithmetic-shifted from 177 to 178 cases, no new names — the identical discard-masks-the-
+#       parse-bug reason (S5) gives.
+#   (S7) reverse the carrier order (the `[ ... ] as $routes` array bound to a `$routes_fwd` name
+#       instead, then `($routes_fwd | reverse) as $routes` added immediately after): 178 cases
+#       dropped to 177 pass/1 fail, failing exactly status-stop-set-both-routes — the only fixture
+#       with more than one carrier, so the only one sensitive to order; every single-carrier
+#       fixture's one-element array is unchanged by reversal. Re-measured for the kickback round 2
+#       fixture: UNCHANGED, arithmetic-shifted from 177 to 178 cases, no new names — the identical
+#       discard-masks-the-parse-bug reason (S5)/(S6) give (the new fixture's own single carrier is
+#       discarded to `[]` regardless of its position in the parsed array).
+#   (S8) move `stop_routes` out of `$woh` to the top level (the `stop_routes: $sp.routes` member
+#       deleted from the `$woh` object literal entirely, published nowhere else): 178 cases dropped
+#       to 171 pass/7 fail, failing exactly status-stop-clear, status-stop-set-github,
+#       status-stop-set-local, status-stop-set-both-routes, status-stop-unknown,
+#       status-stop-true-no-carrier, and (re-measured for the kickback round 2 fixture, a NEW
+#       member) status-stop-unavailable-with-carriers — every fixture that asserts
+#       `.waiting_on_human.stop_routes` directly (now resolving through a missing key to `null`,
+#       never `[]` or a real array) — INCLUDING four whose own expected array is already empty
+#       (`[]` != `null`), the new fixture among them.
+#       status-own-queries-healthy does NOT join: it asserts only `counts.stop_routes`, which stays
+#       correct at 0 either way (`$woh.stop_routes | length` on a missing key is `null | length`, 0
+#       in jq); status-stop-usage-error/-not-on-path/-rc-token-disagreement/-unparseable-first-line/
+#       -degraded-order do NOT join either, for the identical reason — none of them asserts
+#       `.waiting_on_human.stop_routes` directly.
+#   (S9) add `"stop_routes"` to the `$excluded` list (`[] as $excluded` -> `["stop_routes"] as
+#       $excluded` — the opposite-direction proof #309's own (P6) gives escalations, and #346's own
+#       restated (N8) gives followups_to_triage): 178 cases dropped to 175 pass/3 fail, failing
+#       exactly status-stop-set-github, status-stop-set-local, and status-stop-set-both-routes —
+#       every fixture whose stop_routes is non-empty and whose own human_actions assertion reflects
+#       that; every other #353 fixture's stop_routes is already empty, so excluding it changes the
+#       sum by 0 either way. Re-measured for the kickback round 2 fixture: UNCHANGED, arithmetic-
+#       shifted from 177 to 178 cases, no new names — the new fixture's own stop_routes is empty
+#       (the discard forces it), so excluding an already-empty member from the sum changes nothing.
+#   (S10) wrap the stop check in a retry (mirrors the five gh sites' own `if ! cmd; then sleep;
+#       cmd; fi` shape: `stop_out="$(harness-stop.sh)" || stop_rc=$?` replaced with
+#       `if ! stop_out="$(harness-stop.sh)"; then sleep "$RETRY_SLEEP" || true;
+#       stop_out="$(harness-stop.sh)" || stop_rc=$?; fi`): 178 cases dropped to 168 pass/10 fail,
+#       failing the IDENTICAL ten names as (S1), including (re-measured for the kickback round 2
+#       fixture, a NEW member) status-stop-unavailable-with-carriers — every fixture whose stub
+#       harness-stop.sh exits non-zero (permanently, in every one of these fixtures) now logs 2
+#       `.stop-calls` lines instead of the 1 every one of them asserts via `expect_stop_calls "$dir"
+#       1` (AC1's own proof); the verdict itself is unchanged (the retried call fails identically),
+#       so this is a call-count-only failure, a DIFFERENT mechanism from (S1)'s abort despite the
+#       identical failing set.
+#   (S11) set `stop_check_unavailable` true whenever a `reason=` line is present, regardless of
+#       state (the assignment guard widened from `if [ "$stop_state" = "$STOP_STATE_SET" ] ||
+#       [ "$stop_state" = "$STOP_STATE_CLEAR" ]; then` to also require, via an ANDed `case "$stop_out"
+#       in *"${STOP_REASON_PREFIX}"*) false ;; *) true ;; esac`, that stdout carries no reason= line
+#       at all): 178 cases dropped to 177 pass/1 fail, failing exactly status-stop-set-local — the
+#       only fixture whose stdout carries BOTH a determinate stop AND a reason= line (status-stop-
+#       set-both-routes no longer does, per its own reshape above — see stop-measure-353.md's case
+#       D2), so it is the only one whose own `counts.stop_check_unavailable false` / `degraded
+#       false` assertions this mutant flips. Re-measured for the kickback round 2 fixture:
+#       UNCHANGED, arithmetic-shifted from 177 to 178 cases, no new names — the new fixture's own
+#       stdout carries no reason= line at all, so this guard's widened condition is never even
+#       exercised for it.
+#   (S12, kickback round 2, F2) drop the unavailable-state carrier discard entirely (the
+#       `if [ "$stop_state" = "$STOP_STATE_UNAVAILABLE" ]; then stop_parsed=$(jq -c '.routes = []'
+#       <<<"$stop_parsed"); fi` block, added by this same kickback round to make the code match
+#       AC6 and the header's own claim, collapsed to the single statement `true`): 178 cases dropped
+#       to 177 pass/1 fail, failing exactly status-stop-unavailable-with-carriers — the only fixture
+#       whose stdout carries a real carrier line WHILE its own state is "unavailable" (every other
+#       "unavailable" fixture's stdout — status-stop-usage-error, status-stop-not-on-path,
+#       status-stop-rc-token-disagreement, status-stop-unparseable-first-line — carries no `route=`
+#       line at all, so there is nothing for the discard to have discarded); without the discard,
+#       `.waiting_on_human.stop_routes` surfaces the parsed local carrier instead of `[]`,
+#       `.counts.stop_routes` becomes 1 instead of 0, and `.counts.human_actions` becomes 4 instead
+#       of 3 — this fixture's own three assertions on exactly those fields.
+# Restored byte-identically after each measurement (sha256 confirmed against a backup refreshed
+# immediately before every mutation, LESSON 2026-09-07; `[ -x bin/harness-status.sh ]` confirmed
+# executable after each, LESSON 2026-09-15b); final restored-tree run: 178 pass, 0 fail.
 
 # empty-needle-guard (#262-1) — exercises every guarded helper in this file (expect_err,
 # expect_no_err, expect_warn_count) with an empty needle, and asserts the guard fired for each:
@@ -10408,7 +11308,17 @@ EOF
 # expect_no_err/expect_err/expect_warn_count with an empty needle either — every one passes a real
 # needle, e.g. "escalations query failed once", "could not list escalated issues", and "carries a
 # harness record marker but does not open with it"): goes from 166 pass, 0 fail to 165 pass, 1
-# fail — the same single-case failing set (empty-needle-guard), new total.
+# fail — the same single-case failing set (empty-needle-guard), new total. RE-MEASURED 2026-09-23
+# (#353), when the suite grew to 177 cases across eleven new status-stop-* fixtures (none of which
+# calls expect_no_err/expect_err/expect_warn_count with an empty needle either — every one passes a
+# real needle, e.g. "could not confirm the stop switch's GitHub route" and "could not read the stop
+# switch"): goes from 177 pass, 0 fail to 176 pass, 1 fail — the same single-case failing set
+# (empty-needle-guard), new total. RE-MEASURED AGAIN 2026-09-23 (#353, verifier kickback round 2,
+# F2), when the suite grew to 178 cases across the twelfth new status-stop-* fixture,
+# status-stop-unavailable-with-carriers (its own `expect_warn_count` call passes the real needle
+# "could not read the stop switch (harness-stop.sh exit 1)", never an empty one): goes from 178
+# pass, 0 fail to 177 pass, 1 fail — the same single-case failing set (empty-needle-guard), new
+# total.
 case_empty_needle_guard() {
   local saved_ok saved_why
   planning_err="fixture stderr for the empty-needle guard (#262)"
@@ -10583,7 +11493,7 @@ cases=(
   "status-degraded-implementer-ready-query|case_status_degraded_implementer_ready_query|#285: find-implementation-work.sh's ready query fails closed — degraded_reasons is exactly [\"implementation.ready_query_unavailable\"]"
   "status-degraded-author-association|case_status_degraded_author_association|#285: the generic rule picks up a flag neither #284 nor #273 added — author_association_unavailable — with no enumeration to drift"
   "status-degraded-both-scripts|case_status_degraded_both_scripts|#285: both discovery scripts fail closed at once — degraded_reasons carries both halves, planning first, in order"
-  "status-own-queries-healthy|case_status_own_queries_healthy|#297 (extended #333, #309): all five of harness-status.sh's own sites succeed on first attempt — each called once, no sleeps, all ten new counts flags false, and the canned discovery stand-ins ran instead of the real scripts"
+  "status-own-queries-healthy|case_status_own_queries_healthy|#297 (extended #333, #309): all five of harness-status.sh's own sites succeed on first attempt — each called once, no sleeps, all eleven new counts flags false, and the canned discovery stand-ins ran instead of the real scripts"
   "status-proposed-query-retry-succeeds|case_status_proposed_query_retry_succeeds|#297: the plan-proposed site fails once then succeeds on the bounded retry — retried true, unavailable false, one succeed-warn, one sleep(30), the impl-blocked and open-PR sites unaffected"
   "status-proposed-query-unavailable|case_status_proposed_query_unavailable|#297: the plan-proposed site fails on both attempts — fails closed to an empty plans_to_review bucket, degraded_reasons is exactly [\"status.proposed_query_unavailable\"]"
   "status-blocked-query-retry-succeeds|case_status_blocked_query_retry_succeeds|#297: the impl-blocked site's twin of status-proposed-query-retry-succeeds"
@@ -10599,6 +11509,18 @@ cases=(
   "status-escalations-bucket-populated|case_status_escalations_bucket_populated|#309: the escalations bucket is served verbatim (no filter) from list_escalations(), and — like followups_to_triage since #346 — joins human_actions"
   "status-escalations-query-retry-succeeds|case_status_escalations_query_retry_succeeds|#309: the escalations site's twin of status-proposed-query-retry-succeeds"
   "status-escalations-query-unavailable|case_status_escalations_query_unavailable|#309: the escalations site's twin of status-proposed-query-unavailable — human_actions drops by the fail-closed bucket's own contribution"
+  "status-stop-clear|case_status_stop_clear|#353: the stop check's healthy control — rc 0 stop=false, stop_routes [], not degraded, human_actions unchanged, zero warns, exactly one .stop-calls line"
+  "status-stop-set-github|case_status_stop_set_github|#353: rc 3 stop=true plus one GitHub carrier — the {route,clear} pair pasted verbatim, human_actions +1"
+  "status-stop-set-local|case_status_stop_set_local|#353: rc 3 stop=true plus one LOCAL carrier and a reason= line (measured, case B) — the verbatim route=local/clear=rm pair, a determinate stop does not degrade, human_actions +1"
+  "status-stop-set-both-routes|case_status_stop_set_both_routes|#353: rc 3 stop=true, two GitHub carriers + one local carrier, no reason= line (measured, case D2) — the exact 3-element array in printed order, human_actions +3"
+  "status-stop-unknown|case_status_stop_unknown|#353: rc 4 stop=unknown plus reason= — degraded_reasons is exactly [\"status.stop_check_unavailable\"], human_actions unchanged, one warn naming exit 4"
+  "status-stop-usage-error|case_status_stop_usage_error|#353: rc 2, empty stdout — state \"unavailable\", one warn naming exit 2"
+  "status-stop-not-on-path|case_status_stop_not_on_path|#353: rc 127, empty stdout — the same unavailable shape, warn naming exit 127 (models the missing-script class)"
+  "status-stop-rc-token-disagreement|case_status_stop_rc_token_disagreement|#353: rc 0 but stdout's first line is stop=true — the cross-check catches the mismatch, state \"unavailable\" never \"true\"/\"false\""
+  "status-stop-true-no-carrier|case_status_stop_true_no_carrier|#353: rc 3 stop=true with NO carrier line — the documented honest limit: state \"true\", stop_routes [], human_actions unchanged, not degraded"
+  "status-stop-unparseable-first-line|case_status_stop_unparseable_first_line|#353: rc 3 but line 1 is not stop=<state> at all — a different bash case arm from status-stop-rc-token-disagreement, state \"unavailable\""
+  "status-stop-degraded-order|case_status_stop_degraded_order|#353: reject-proposed (permanent) + rc 4 stop=unknown — degraded_reasons puts stop_check_unavailable LAST, after every #297/#333/#309 flag"
+  "status-stop-unavailable-with-carriers|case_status_stop_unavailable_with_carriers|#353 (verifier kickback round 2, F2): rc 1 stop=true plus a local carrier — the discard-on-unavailable fix empties stop_routes even though a carrier line was printed, human_actions unchanged, one warn naming exit 1"
   "empty-needle-guard|case_empty_needle_guard|#262: expect_err/expect_no_err/expect_warn_count all refuse an empty needle"
 )
 
@@ -11140,6 +12062,25 @@ cases=(
 # fixtures (plan-escalation-record-not-feedback, impl-escalation-record-not-binding) MAY join the
 # failing sets of broad mutants recorded there, the identical way they newly joined MUTATION PROOF
 # B and M4 above; this is not a claim that any of them are unreachable.
+#
+# #353 RE-MEASUREMENT SCOPE (orchestrator-bounded, the identical discipline the #309 scope note
+# above states): the re-measurement covers exactly the blocks the approved plan named — the
+# MEASURED MUTANTS (#284/#285) block's (i)-(l), the MEASURED MUTANTS (#297) block's (a)-(l) (both
+# its own i/j/k/l letters and the shared i/j/k/l letters the (#284/#285) block above also uses),
+# the MEASURED MUTANTS (#333) block's N1-N9 plus (QT), the MEASURED MUTANTS (#309) block's P1-P6,
+# the empty-needle-guard continuation, and the "Measured-green shape probe" plain-enumeration
+# paragraph. Every OTHER measured-mutants/mutation-proof block in this file — including, but not
+# limited to, the MEASURED MUTANTS (#321) and (#302) blocks (both scripts), M-1/M-2, MUTATION PROOF
+# B (candidates arm), MUTATION PROOF M4, SUBSUMPTION PROOF, MUTATION PROOF A, the events-arm
+# "MUTATION PROOF B", M-3/M-4/M5's own retained controls, the MEASURED MUTANTS (#284/#285) block's
+# OWN (a)-(h) letters (find-implementation-work.sh-specific, distinct from the (i)-(l) letters
+# re-measured above), and every #229/#230/#240/#255/#262/#272/#273 block — keeps its own
+# baseline-stamped record as-is and got NO #353 continuation — those records were NOT re-measured
+# at the 178-case total (after the verifier's kickback round 2, F2, added a twelfth status-stop-*
+# fixture within the identical scope named above), and the twelve new status-stop-* fixtures MAY
+# join the failing sets of broad mutants recorded there, the identical way status-stop-degraded-
+# order newly joined mutants in the blocks that WERE re-measured above; this is not a claim that
+# any of them are unreachable.
 
 matched=0
 for row in "${cases[@]}"; do

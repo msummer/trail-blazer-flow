@@ -57,7 +57,7 @@
 #                    run — or degraded:true carries no reasons at all (the "unspecified" backstop
 #                    below) — so a harness_will_handle bucket this reconciliation compares against
 #                    may under-report the true queue rather than reflect it. harness-status.sh's
-#                    OWN query failures (status.<key>) never produce this line by themselves: they
+#                    OWN query/check failures (status.<key>) never produce this line by themselves: they
 #                    describe the waiting_on_human buckets this reconciliation never compares.
 #                    issue=- bucket=- stage=-. One line per degraded_reasons entry that does NOT
 #                    start with "status." (a "status." entry never refuses on its own); a

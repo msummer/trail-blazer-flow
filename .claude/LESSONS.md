@@ -207,3 +207,10 @@ bites: 1–3 lines, written as an instruction to a future agent.
   total but never the new one reads as already-fixed whenever some line's own number happens to
   contain the NEW total as a substring (e.g. line 7150's `NR=7150` makes the buffer look like it
   mentions "150"). Grep the raw file text directly, never a debug-annotated copy.
+- 2026-09-23: GitHub caps a label DESCRIPTION at 100 characters — `gh label create/edit --description` with
+  a longer string is a 422 that, under `bin/setup-labels.sh`'s `set -euo pipefail`, aborts the whole
+  script at that label (later labels never created, "Labels are set up." never printed). No suite
+  catches it: `dev/doctor-tests.sh`'s stub `gh` serves the label list from `create_or_update` names
+  and never validates the description. Before adding or editing a `create_or_update "…" "…" "…"`
+  line, measure the description (`awk '{print length($0)}'`) and keep it ≤ 100 — #346 shipped 109
+  characters and the live post-merge `bash bin/setup-labels.sh` run failed on the first run.

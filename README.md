@@ -401,9 +401,9 @@ clean), then a **per-issue summary table** and a two-halves report
 issues, and (#333, #346) untriaged follow-ups, counted in the total).
 It adds no authority beyond what CLAUDE.md delegates — it just removes the
 hand-cranking between stages. Pair it with `/loop` or a scheduled routine for unattended
-operation; each invocation stays one bounded pass, and an empty cycle — nothing done, and
-`counts.human_actions` at 0 — reports "all quiet" in one line. See the `issue-cycle` skill for the
-full procedure.
+operation; each invocation stays one bounded pass, and an empty cycle — nothing done,
+`counts.human_actions` at 0, and the stop switch clear (`stop.state` `"false"`) — reports
+"all quiet" in one line. See the `issue-cycle` skill for the full procedure.
 
 ### The test-suite ratchet (opt-in)
 
@@ -444,12 +444,15 @@ verifier's own status line, its mutation-probe line, the implementer's condensed
 and its CI checks. Merge it, or close it, the same as any other PR; comment on it first if you
 want changes made before either.
 
-**Returning to a laptop.** Run `harness-status.sh` to see what's left: `waiting_on_human` has five
+**Returning to a laptop.** Run `harness-status.sh` to see what's left: `waiting_on_human` has six
 buckets — `plans_to_review`, `prs_to_review` (each PR entry carries a coarse `ci`: `passing`,
-`failing`, `pending`, or `none`), `blocked`, (#333, #346) `followups_to_triage`, and (#309)
+`failing`, `pending`, or `none`), `blocked`, (#333, #346) `followups_to_triage`, (#309)
 `escalations` (open `needs-human` issues — a skill asked a question and moved on rather than
-blocking; see `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection) —
-`counts.human_actions` is a generic sum over all five today (no bucket is excluded; the sum's
+blocking; see `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection), and (#353)
+`stop_routes` (one `{route, clear}` entry per SET stop-switch carrier, pasted verbatim from
+`bin/harness-stop.sh`'s own stdout — see "Stopping a cycle" below and the new top-level `stop`
+object it feeds) —
+`counts.human_actions` is a generic sum over all six today (no bucket is excluded; the sum's
 named-exclusion mechanism is retained, empty, as an extension point for a future member). Since
 #346, `followups_to_triage` is untriaged-only: a harness-filed follow-up (#308) is born with
 `no-plan`, and once you have read one and decided to keep it held, park it with
@@ -459,12 +462,13 @@ the parked backlog, GitHub's own issue list is now the only view (`harness-statu
 nothing about it): `gh issue list --label triaged-held --state open`. To un-park one back into
 `followups_to_triage`, remove the label: `gh issue edit <n> --remove-label triaged-held`. Check the
 top-level `degraded` boolean too
-(and `degraded_reasons`, and its `counts.degraded` mirror) — `true` means a discovery query OR one
+(and `degraded_reasons`, and its `counts.degraded` mirror) — `true` means a discovery query, one
 of `harness-status.sh`'s own five queries (plan-proposed, impl-blocked, open PRs, held follow-ups,
-escalations) failed closed this run, so a bucket above may under-report the true queue rather than
-reflect an empty one. Each `degraded_reasons` entry prefixed `status.` names which `waiting_on_human`
-bucket above it affects (the plan-proposed query → `plans_to_review`, impl-blocked → `blocked`, open
-PRs → `prs_to_review`, held follow-ups → `followups_to_triage`, escalations → `escalations`); a
+escalations), or its stop check, failed closed this run, so a bucket above may under-report the
+true queue rather than reflect an empty one. Each `degraded_reasons` entry prefixed `status.` names
+which `waiting_on_human` bucket above it affects (the plan-proposed query → `plans_to_review`,
+impl-blocked → `blocked`, open PRs → `prs_to_review`, held follow-ups → `followups_to_triage`,
+escalations → `escalations`, the stop check → `stop_routes`/`stop.state`); a
 `planning.`/`implementation.`
 entry usually affects `harness_will_handle`
 instead — except `planning.candidates_query_unavailable`, which ALSO inflates `plans_to_review`
@@ -489,7 +493,11 @@ issue carrying `needs-human` alongside `plan-proposed` or `impl-blocked` counts 
 issue); and GitHub's issue search can trail a label edit (measured on this repo, 2026-09-17 and
 again 2026-09-19: a list query made right after a label edit missed an issue that a later run
 returned), so an issue escalated moments earlier may be missing from the same run's `escalations`
-bucket.
+bucket. Honest limits on `stop_routes` (#353): a `stop.state` of `"true"` carrying no carrier line
+at all (`bin/harness-stop.sh`'s own documented non-issue-element response class) yields an EMPTY
+`stop_routes`, so `human_actions` does not count it — `stop.state`, not `stop_routes`' own length,
+is the authority on whether a stop is in effect; and the same freshness lag "Stopping a cycle"
+below documents applies here unchanged.
 
 **Stopping a cycle (#310).** `bin/harness-stop.sh` is a read-only stop switch, checked before each
 stage and before each merge — see "One active cycle per checkout" below for the sibling lock
@@ -506,7 +514,8 @@ trail the query that checks it by several seconds (measured on this repo, 2026-0
 `bin/harness-stop.sh`'s own header for the figures), so the local route is the immediate one for
 an operator at the keyboard; and the switch halts the harness's own dispatch loop — it cannot
 interrupt a subagent already running, and it has no effect on a session that isn't running the
-harness skills.
+harness skills. (#353) `harness-status.sh` surfaces this exact check's own verdict rather than
+running a second one — see "Returning to a laptop" above for the `stop`/`stop_routes` shape.
 
 ## Greenfield walkthrough: from idea to first feature
 
@@ -1975,6 +1984,23 @@ broken one. New gate assertion 4.50 pins the label's vocabulary end to end and t
 carries it yet, so on upgrade every follow-up you have already triaged and decided to keep held
 counts as untriaged (and therefore in `counts.human_actions`) until you label it `triaged-held` by
 hand; there is no automatic migration of pre-existing parked state.
+
+Also in v2.7.7 (#353): needs no grant, label, script, settings entry, or baseline step.
+`harness-status.sh` gains a SIXTH check — not a sixth `gh` call site, it still makes exactly five —
+one `bin/harness-stop.sh` invocation, fed by that script's own stdout grammar rather than a second
+query and never retried at this layer (`bin/harness-stop.sh` already performs its own one bounded
+retry). The status JSON gains a top-level `stop` object (`{state, reason, exit_code}` — `state` is
+one of `bin/harness-stop.sh`'s own three tokens, `"false"`/`"true"`/`"unknown"`, or this script's
+OWN `"unavailable"` slug for every outcome that script never prints) and a new
+`waiting_on_human.stop_routes` array (one `{route, clear}` entry per SET carrier, both fields
+pasted verbatim, never re-derived), plus `counts.stop_routes` and, in the status-half `$sf` object,
+`counts.stop_check_unavailable` (appended last, so its own `status.stop_check_unavailable`
+`degraded_reasons` entry — when present — is always the array's last entry too). `stop_routes` was
+never named in the `human_actions` exclusion list either, so a SET stop with N carriers joins the
+sum too, by the identical generic rule `escalations` and `followups_to_triage` already use — see
+"Returning to a laptop" above for the reader-facing shape and its own honest limits. New gate
+assertion 4.51 pins that the stop-grammar tokens `harness-status.sh` parses appear as fixed
+strings in `bin/harness-stop.sh`'s source.
 
 ## The per-repo settings file (required)
 

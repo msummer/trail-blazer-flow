@@ -21,10 +21,28 @@
 #                         SKILL.md's "Durable escalation" subsection); read the comment opening
 #                         with <!-- harness-escalation -->, then remove needs-human to release the
 #                         issue back into discovery
-#   degraded            : boolean (#284/#285, #297, #333, #309) — true iff degraded_reasons is
-#                         non-empty; a discovery query OR one of this script's OWN five queries
-#                         below failed closed this run, so a bucket above may under-report the
-#                         true queue rather than reflect it
+#     stop_routes        : (#353) one entry per SET stop-switch carrier — {route, clear}, both
+#                         fields pasted verbatim from harness-stop.sh's own stdout (never
+#                         re-derived) — fed by the top-level stop check below rather than a second
+#                         query; empty under "false"/"unknown" because harness-stop.sh itself never
+#                         prints a carrier line in either state (measured, see
+#                         stop-measure-353.md), empty under "unavailable" because this script
+#                         discards whatever an untrusted exit printed rather than trust it, or
+#                         "true" with no carrier line printed at all (see the honest limits below)
+#   stop                 : (#353) {state, reason, exit_code} — one bin/harness-stop.sh invocation's
+#                         verdict for THIS run: state is one of harness-stop.sh's own three tokens,
+#                         "false"/"true"/"unknown", or this script's OWN "unavailable" slug for
+#                         every outcome that script never prints (a usage/environment error, a
+#                         not-found exit, an rc/token disagreement, or stdout with no parseable
+#                         stop=<state> first line at all — see counts.stop_check_unavailable below);
+#                         reason is the exact reason=<slug> line harness-stop.sh printed, prefix
+#                         stripped, or null; exit_code is its raw exit status. The skills treat
+#                         "true" and "unknown" identically — both halt dispatch at the next stage
+#                         boundary — see skills/issue-cycle/SKILL.md's "Stop switch" section.
+#   degraded            : boolean (#284/#285, #297, #333, #309, #353) — true iff degraded_reasons is
+#                         non-empty; a discovery query, one of this script's OWN five gh call sites
+#                         below, or its stop check, failed closed this run, so a bucket above may
+#                         under-report the true queue rather than reflect it
 #   degraded_reasons    : array of "planning.<key>" / "implementation.<key>" / "status.<key>"
 #                         strings (planning half first, implementation half second, status half
 #                         third) — the planning/implementation halves are computed by a GENERIC
@@ -35,29 +53,30 @@
 #                         script grows a new `*_unavailable` flag — already covers
 #                         initial_query_unavailable, candidates_query_unavailable,
 #                         author_association_unavailable, and (#284) ready_query_unavailable. The
-#                         status half (#297, #333, #309) is the SAME generic rule applied to this
-#                         script's OWN `counts` (see the final jq -n below), covering, in this
+#                         status half (#297, #333, #309, #353) is the SAME generic rule applied to
+#                         this script's OWN `counts` (see the final jq -n below), covering, in this
 #                         script's own $sf key order, proposed_query_unavailable,
 #                         blocked_query_unavailable, prs_query_unavailable, (#333)
-#                         followups_query_unavailable, and (#309) escalations_query_unavailable.
+#                         followups_query_unavailable, (#309) escalations_query_unavailable, and,
+#                         appended last, (#353) stop_check_unavailable.
 #                         counts.fetch_failures on either discovery script deliberately does not
 #                         participate: it drops one issue, not a whole bucket, and already
 #                         produces its own per-issue warn line on stderr.
 #   counts               : per-bucket counts + human_actions (see the sum note below for exactly
 #                         what this sums) + degraded (mirrors the top-level boolean, so a
-#                         reader who only looks at counts still sees it) + (#297, #333, #309) this
-#                         script's own ten proposed_query_retried/proposed_query_unavailable/
+#                         reader who only looks at counts still sees it) + (#297, #333, #309, #353)
+#                         this script's own eleven proposed_query_retried/proposed_query_unavailable/
 #                         blocked_query_retried/blocked_query_unavailable/
 #                         prs_query_retried/prs_query_unavailable/followups_query_retried/
 #                         followups_query_unavailable/escalations_query_retried/
-#                         escalations_query_unavailable booleans
+#                         escalations_query_unavailable/stop_check_unavailable booleans
 #
-# human_actions and its exclusion list (#333, #346): human_actions is a GENERIC sum over every
-# waiting_on_human array EXCEPT the ones named in a small exclusion list bound right next to the
-# sum in the final jq -n below (today empty, kept as the extension point a future member can still
-# use — see below) — so a future waiting_on_human member that is NOT named there joins the total
-# automatically, with no edit to the human_actions expression itself: one list_* function, one
-# retry block, one waiting_on_human member, one counts key, and two flags are enough;
+# human_actions and its exclusion list (#333, #346, #353): human_actions is a GENERIC sum over
+# every waiting_on_human array EXCEPT the ones named in a small exclusion list bound right next to
+# the sum in the final jq -n below (today empty, kept as the extension point a future member can
+# still use — see below) — so a future waiting_on_human member that is NOT named there joins the
+# total automatically, with no edit to the human_actions expression itself: one list_* function,
+# one retry block, one waiting_on_human member, one counts key, and two flags are enough;
 # degraded_reasons and human_actions both follow for free. followups_to_triage was excluded from
 # #333 through v2.7.6: the query behind it — open + no-plan + body opens with the harness marker —
 # could not tell a follow-up nobody had triaged yet from one a maintainer already read and decided
@@ -66,8 +85,15 @@
 # query itself excludes -label:$TRIAGED_HELD_LABEL (see list_followups() below), so the bucket is
 # untriaged-only and joined the sum by removing its name from the exclusion list. escalations
 # (#309) was never named in the exclusion list, so it already joined the sum automatically, by the
-# same generic rule. human_actions is therefore, today, the sum of every waiting_on_human member:
-# plans_to_review, prs_to_review, blocked, followups_to_triage, and escalations.
+# same generic rule. stop_routes (#353) is likewise never named in the exclusion list, so a SET
+# stop with N carriers raises the total by exactly N — an unknown stop, or a determinate "true"
+# with no carrier line at all, contributes 0 because harness-stop.sh itself never prints a carrier
+# line in either case (measured, see stop-measure-353.md); an unavailable stop also contributes 0,
+# but for a different reason — this script discards whatever an untrusted exit printed and
+# publishes stop_routes as [] regardless (see the discard step further below) — so stop.state,
+# never stop_routes' own length, is the authority on whether a stop is in effect. human_actions is
+# therefore, today, the sum of every waiting_on_human member: plans_to_review, prs_to_review,
+# blocked, followups_to_triage, escalations, and stop_routes.
 #
 # Honest limits on followups_to_triage (#333, #346): (a) a follow-up a maintainer read and parked
 # WITHOUT applying the triaged-held label still counts; (b) a hand-written no-plan issue whose
@@ -89,26 +115,41 @@
 # edit missed an issue that a later run returned), so an issue escalated moments earlier may be
 # missing from the same run's escalations bucket.
 #
-# Wall clock (#297, #333, #309): this script's own five queries below (plan-proposed,
+# Honest limits on stop / stop_routes (#353): (a) a stop=true carrying NO carrier line at all —
+# harness-stop.sh's own documented non-issue-element response class, in that script's STDOUT
+# GRAMMAR section — yields state: "true" with an EMPTY stop_routes, so human_actions does not count
+# it; stop.state, never stop_routes' own length, is the authority on whether a stop is in effect.
+# (b) the freshness lag harness-stop.sh's own header documents (a label edit can trail the query
+# that reads it) applies unchanged here — a stop applied moments before this run may not yet be
+# visible. (c) this check is read ONCE per run and never retried at this layer: harness-stop.sh
+# already performs its own one bounded retry around its GitHub-route query (see that script's own
+# header), so a second retry here would only double the wait, not the confidence.
+#
+# Wall clock (#297, #333, #309): this script's own five gh call sites below (plan-proposed,
 # impl-blocked, open PRs, held follow-ups, escalations) each get one guarded 30s backoff and one
 # retry, the same RETRY_SLEEP-driven shape find-implementation-work.sh already uses — worst case,
-# when all five fail twice, 5 × 30s = 150s added to this script's own run. In a broad outage where
-# every list query anywhere fails twice, the total across one harness-status.sh invocation is
-# about 270s: the planning script's up to 3 retries (needs_initial_plan, revision-candidates, the
+# when all five fail twice, 5 × 30s = 150s added to this script's own run. (#353) The stop check
+# below is a SIXTH check but not a sixth gh call site — it shells out to harness-stop.sh, never
+# calls gh itself — and is never retried at this layer; harness-stop.sh's own single bounded retry
+# can add up to 30s more on top of the 150s above. In a broad outage where every list query
+# anywhere fails twice, the total across one harness-status.sh invocation is about 300s: the
+# planning script's up to 3 retries (needs_initial_plan, revision-candidates, the
 # author-association REST lookup) + the implementation script's up to 1 retry on its own ready
 # query (its per-issue fetch retry is per-issue, not counted here) + this script's own up to 5
-# retries above. The per-issue fetch worst cases on either discovery script are unchanged by this
-# addition.
+# retries above + (#353) harness-stop.sh's own up to 1 retry. The per-issue fetch worst cases on
+# either discovery script are unchanged by this addition.
 #
 # Read-only. Used by the issue-cycle skill's closing report, and handy standalone:
-# "what is waiting on me?" Requires: gh (authenticated), jq, and the other harness
+# "what is waiting on me?" Requires: gh (authenticated), jq, harness-stop.sh, and the other harness
 # scripts on the PATH. Run from anywhere inside the repo.
 set -euo pipefail
 
 LIMIT=100
 # RETRY_SLEEP (#297): mirrors find-implementation-work.sh's own RETRY_SLEEP — same value (30s),
 # guarding this script's own five gh call sites below (proposed, blocked, prs, (#333) followups,
-# and (#309) escalations).
+# and (#309) escalations). (#353) The stop check further below is NOT one of these five gh sites —
+# it is never retried at this layer (see the header's own Wall clock paragraph) — so it does not
+# use RETRY_SLEEP.
 RETRY_SLEEP=30
 # ESCALATION_LABEL (#309) — declared byte-identically in bin/find-planning-work.sh and
 # bin/find-implementation-work.sh (gate assertion 4.48); this script's own list_escalations()
@@ -119,6 +160,25 @@ ESCALATION_LABEL="needs-human"
 # skills/*/SKILL.md, skills/*/references/*.md, agents/*.md, or bin/*.sh). This script's own
 # list_followups() query below excludes it.
 TRIAGED_HELD_LABEL="triaged-held"
+# STOP_*_PREFIX / STOP_STATE_{SET,CLEAR,UNKNOWN} (#353) — the literal stdout-grammar tokens
+# bin/harness-stop.sh prints and this script parses (see that script's own header, STDOUT GRAMMAR);
+# load-bearing on both sides — gate assertion 4.51 cross-checks these against bin/harness-stop.sh's
+# own source as fixed strings, never renaming one without the other. Declared one per anchored
+# NAME="value" line so the sed -nE 's/^NAME="([^"]*)"$/\1/p' extraction idiom
+# (2.5/4.13/4.35/4.36/4.48/4.49/4.50/4.51) can read them.
+STOP_STATE_PREFIX="stop="
+STOP_ROUTE_PREFIX="route="
+STOP_CLEAR_PREFIX="clear="
+STOP_REASON_PREFIX="reason="
+STOP_STATE_SET="true"
+STOP_STATE_CLEAR="false"
+STOP_STATE_UNKNOWN="unknown"
+# STOP_STATE_UNAVAILABLE (#353) — this script's OWN slug, never printed by bin/harness-stop.sh
+# itself (deliberately excluded from gate assertion 4.51's clause (b) for that reason) — covers
+# every outcome that script does not document: a usage/environment error (exit 2), a not-found
+# exit (127), any other exit status, an rc/token disagreement, or stdout with no parseable
+# stop=<state> first line at all.
+STOP_STATE_UNAVAILABLE="unavailable"
 
 planning=$(find-planning-work.sh)
 implementation=$(find-implementation-work.sh)
@@ -265,6 +325,86 @@ if ! escalations=$(list_escalations); then
   fi
 fi
 
+# (#353) one bin/harness-stop.sh invocation — never a second gh query (see the STOP_* constants
+# above and the header's own "stop" paragraph): harness-stop.sh already performs its own one
+# bounded retry around its GitHub-route query, so this site adds no second retry of its own, unlike
+# the five gh call sites above.
+stop_rc=0
+stop_out="$(harness-stop.sh)" || stop_rc=$?
+# Never pipe this through `head -1` (CLAUDE.md's grep-quiet-mode class, #255, the same SIGPIPE
+# risk): parameter expansion keeps this a pure bash operation with no second process to signal.
+stop_line1="${stop_out%%$'\n'*}"
+case "$stop_rc" in
+  0)
+    if [ "$stop_line1" = "${STOP_STATE_PREFIX}${STOP_STATE_CLEAR}" ]; then
+      stop_state="$STOP_STATE_CLEAR"
+    else
+      stop_state="$STOP_STATE_UNAVAILABLE"
+    fi
+    ;;
+  3)
+    if [ "$stop_line1" = "${STOP_STATE_PREFIX}${STOP_STATE_SET}" ]; then
+      stop_state="$STOP_STATE_SET"
+    else
+      stop_state="$STOP_STATE_UNAVAILABLE"
+    fi
+    ;;
+  4)
+    if [ "$stop_line1" = "${STOP_STATE_PREFIX}${STOP_STATE_UNKNOWN}" ]; then
+      stop_state="$STOP_STATE_UNKNOWN"
+    else
+      stop_state="$STOP_STATE_UNAVAILABLE"
+    fi
+    ;;
+  *)
+    stop_state="$STOP_STATE_UNAVAILABLE"
+    ;;
+esac
+if [ "$stop_state" = "$STOP_STATE_SET" ] || [ "$stop_state" = "$STOP_STATE_CLEAR" ]; then
+  stop_check_unavailable=false
+else
+  stop_check_unavailable=true
+fi
+case "$stop_state" in
+  "$STOP_STATE_UNKNOWN")
+    echo "warn: could not confirm the stop switch's GitHub route (harness-stop.sh exit 4) — reporting stop.state \"unknown\" this run; the skills treat an unknown stop as a stop" >&2
+    ;;
+  "$STOP_STATE_UNAVAILABLE")
+    echo "warn: could not read the stop switch (harness-stop.sh exit $stop_rc) — reporting stop.state \"unavailable\" this run (fail-closed)" >&2
+    ;;
+esac
+# Parse $stop_out into JSON once: reason (the first reason=<slug> line, prefix stripped, else
+# null) and routes (one {route, clear} object per route=... line, both fields byte-identical to
+# the printed lines — never re-derived from $STOP_LABEL or a path, the same verbatim rule
+# skills/issue-cycle/SKILL.md's "Stop switch" section states for the report), preserving printed
+# order (GitHub carriers before the local carrier, harness-stop.sh's own order).
+stop_parsed=$(jq -n \
+  --arg out "$stop_out" \
+  --arg rp "$STOP_ROUTE_PREFIX" \
+  --arg cp "$STOP_CLEAR_PREFIX" \
+  --arg zp "$STOP_REASON_PREFIX" \
+  '
+  ($out | split("\n")) as $lines
+  | (([ $lines[] | select(startswith($zp)) ])[0]) as $reason_line
+  | (if $reason_line == null then null else $reason_line[($zp | length):] end) as $reason
+  | [ range(0; $lines | length)
+      | select($lines[.] | startswith($rp))
+      | . as $i
+      | { route: $lines[$i],
+          clear: (if (($i + 1) < ($lines | length)) and ($lines[$i + 1] | startswith($cp))
+                  then $lines[$i + 1] else null end) }
+    ] as $routes
+  | { reason: $reason, routes: $routes }
+  ')
+# An "unavailable" verdict comes from an untrusted exit (a usage/environment error, a not-found
+# exit, an rc/token disagreement, or unparseable stdout) — this script does not trust whatever
+# carrier-shaped lines that exit happened to print, so it discards them here regardless of what
+# $stop_parsed.routes came out as: stop.state, never stop_routes' own length, stays the sole
+# authority on whether a stop is in effect (AC6 of #353's plan; see the header's own honest limits).
+if [ "$stop_state" = "$STOP_STATE_UNAVAILABLE" ]; then
+  stop_parsed=$(jq -c '.routes = []' <<<"$stop_parsed")
+fi
+
 # human_actions and its exclusion list (#333, #346) — see the header's own "human_actions and its
 # exclusion list" paragraph for the full rationale; the exclusion binding sits right next to the
 # sum it governs, on purpose, so the two are read together. Deliberately kept, empty (#346): the
@@ -290,20 +430,27 @@ jq -n \
   --argjson fqu "$followups_query_unavailable" \
   --argjson eqr "$escalations_query_retried" \
   --argjson equ "$escalations_query_unavailable" \
+  --arg sst "$stop_state" \
+  --argjson src "$stop_rc" \
+  --argjson scu "$stop_check_unavailable" \
+  --argjson sp "$stop_parsed" \
   '{proposed_query_retried: $pqr, proposed_query_unavailable: $pqu,
     blocked_query_retried: $bqr, blocked_query_unavailable: $bqu,
     prs_query_retried: $prqr, prs_query_unavailable: $prqu,
     followups_query_retried: $fqr, followups_query_unavailable: $fqu,
-    escalations_query_retried: $eqr, escalations_query_unavailable: $equ} as $sf
+    escalations_query_retried: $eqr, escalations_query_unavailable: $equ,
+    stop_check_unavailable: $scu} as $sf
    | ($dr + [ $sf | to_entries[] | select((.key|endswith("_unavailable")) and .value == true) | "status." + .key ]) as $all
    | (($all | length) > 0) as $deg
-   | {plans_to_review: $plans, prs_to_review: $prs, blocked: $blocked, followups_to_triage: $followups, escalations: $escalations} as $woh
+   | {state: $sst, reason: $sp.reason, exit_code: $src} as $stop
+   | {plans_to_review: $plans, prs_to_review: $prs, blocked: $blocked, followups_to_triage: $followups, escalations: $escalations, stop_routes: $sp.routes} as $woh
    | [] as $excluded
    | {
      harness_will_handle: {unplanned: $unplanned, in_revision: $in_revision, ready_to_implement: $ready},
      waiting_on_human:    $woh,
      degraded: $deg,
      degraded_reasons: $all,
+     stop: $stop,
      counts: ({
        unplanned: ($unplanned | length),
        in_revision: ($in_revision | length),
@@ -313,6 +460,7 @@ jq -n \
        blocked: ($woh.blocked | length),
        followups_to_triage: ($woh.followups_to_triage | length),
        escalations: ($woh.escalations | length),
+       stop_routes: ($woh.stop_routes | length),
        human_actions: ([ $woh | to_entries[]
                          | select((.value | type) == "array")
                          | .key as $k | select(($excluded | index($k)) | not)
