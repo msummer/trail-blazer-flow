@@ -1983,7 +1983,10 @@ broken one. New gate assertion 4.50 pins the label's vocabulary end to end and t
 `needs-human`/`harness-stop`. **Migration note:** this label is new — no already-parked follow-up
 carries it yet, so on upgrade every follow-up you have already triaged and decided to keep held
 counts as untriaged (and therefore in `counts.human_actions`) until you label it `triaged-held` by
-hand; there is no automatic migration of pre-existing parked state.
+hand; there is no automatic migration of pre-existing parked state. (#362) The label's description
+as first merged was 109 characters, over GitHub's 100-character API limit, so `bin/setup-labels.sh`
+aborted at it with HTTP 422 and never created the label — fixed before the v2.7.7 release, with new
+gate assertion 1.8 pinning every description in that script at 100 characters or fewer.
 
 Also in v2.7.7 (#353): needs no grant, label, script, settings entry, or baseline step.
 `harness-status.sh` gains a SIXTH check — not a sixth `gh` call site, it still makes exactly five —
