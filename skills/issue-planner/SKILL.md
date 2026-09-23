@@ -153,8 +153,9 @@ cleanup-after-merge.sh --fix
 ```
 
 This fast-forwards the default branch (when checked out), prunes local `claude/*` branches
-whose PRs merged, and repairs stale `pr-open` labels (each fix is audited with an issue
-comment). Then make sure the planner subagents will explore current code:
+whose PRs merged, repairs stale `pr-open` labels on open issues (each fix is audited with an
+issue comment), and sweeps the whole backlog of closed issues still carrying the label
+(label-only — no comment). Then make sure the planner subagents will explore current code:
 
 - **Clean tree, not on the default branch** → check out the default branch and `git pull
   --ff-only` (mention the switch in your summary).

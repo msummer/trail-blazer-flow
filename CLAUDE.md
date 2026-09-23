@@ -261,7 +261,50 @@ one summary WARN line printed only when a write failed this run, that the per-wr
 only for a failed write (never for a successful one), and that report-only mode still
 performs zero writes regardless of which reject markers are present, each with a measured
 mutation proof, alongside all twenty-two pre-existing mutation proofs re-measured against the
-grown registry. It runs in
+grown registry. Since #370, the script gains a SECOND hygiene query, `gh issue list --label
+pr-open --state closed --json number,title --limit 100`, sweeping the whole historical backlog of
+CLOSED issues still labelled `pr-open` — not just #355's own residue, since nothing else in the
+harness ever removes the label from an issue GitHub auto-closed when its PR merged — up to 100 per
+run, converging across runs; an issue is kept while any `claude/<n>-*` PR for it is still OPEN, and
+the sweep runs whenever the PR list itself was fetched, independent of the open-issue query's own
+success. The repair is label-only — `gh issue edit --remove-label pr-open` through the existing
+`try_write` helper, no audit comment posted, since the label-removal event is its own audit trail.
+`build_stub_gh`'s `issue list` arm gains a `--label pr-open --state closed` case (checked ahead of
+the pre-existing `--label pr-open` open-state case, since bash `case` takes the first match), a
+`malformed-closed-list` marker (gh exits 0 with a non-JSON body — the identical VIEW_MODE=malformed
+shape, but call-scoped via a marker file rather than a `build_stub_gh` positional, since this query
+has no MODE parameter of its own), and `reject-closed-list`/`reject-open-list` failure markers;
+twelve new fixtures (59 → 71) cover the label-only removal, the report-only `STALE` line, keeping
+the label while a sibling PR is open (in both modes), sweeping an issue with no matching PR at all,
+a write failure that still lets a second issue repair, a failed OR non-JSON (malformed) query in
+either direction, the PR-list-unavailable skip, the `<n>` scoping against an OPEN PR for a
+DIFFERENT issue, and the empty-list control, each with a measured mutation proof, alongside the
+four pre-existing mutants this section's own new code actually reaches — (d), (g), (M11), and
+(M12) — each re-run against the grown registry, and the other thirty-six pre-existing mutation
+proofs restated as +1 pass each by the file's own growth-chain mechanism argument, with three
+((a), (l), and (M2)) spot-checked by actual re-run. Since #370 kickback round 3, the closed arm
+additionally appends its own full argv to a separate `DIR/gh-list-calls.log` (read into
+`$list_calls`, asserted via a new, needle-guarded `expect_list_call` helper — the pre-existing,
+mutation-only `gh-calls.log`/`$calls`/`expect_calls_empty` are untouched), and
+closed-sweep-removes-label gains one new assertion pinning the closed query's own literal
+` --limit 100` argument — no fixture was added (the registry stays at 71), but a seventeenth
+mutant, (C17) (deleting ` --limit 100` from the query), is added with its own measured proof
+(70 pass, 1 fail, failing EXACTLY closed-sweep-removes-label). Since #370 kickback round 4, the
+same fixture gains two more assertions — `expect "== closed issues still labelled pr-open =="`
+(a verifier finding: deleting that section header's own `echo` line survived every prior round)
+and a new `expect_section_order` helper call pinning the header's POSITION between `== pr-open
+label hygiene ==` and `== follow-ups from rejected PRs ==` — backed by two new mutants, (C18)
+(deleting the header line) and (C19) (physically moving the whole closed-issue-sweep block to run
+after the follow-ups block instead of before it). The same round also ran a full literal sweep
+against every literal RESOLVED and the acceptance criteria name for this section, mapping each to
+the fixture:assertion that observes it and the mutant that is measured to catch it; three literals
+had an assertion but no dedicated mutant before this round — the sweep's exact `gh issue edit <n>
+--remove-label pr-open` write, its "no comment, no close" fact, and its `first // empty` jq
+fallback — closed by three further new mutants, (C20) (a spurious `gh issue comment` call), (C21)
+(changing the write's own `--remove-label pr-open` argument), and (C22) (deleting the ` // empty`
+fallback, which otherwise lets jq's null-to-`"null"` string serialization masquerade an absent PR
+match as a still-open one). No fixture was added or removed this round either (the registry stays
+71-case); mutant count: seventeen -> twenty-two. It runs in
 CI as the fifth step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
 `bin/cleanup-after-merge.sh` changes.
 

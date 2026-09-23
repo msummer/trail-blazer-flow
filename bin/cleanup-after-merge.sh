@@ -7,9 +7,10 @@
 #
 # Every gh/git pre-flight lookup this script makes (the default branch via `gh repo view`, the
 # current branch via `git branch --show-current`, the PR list via `gh pr list`, issues labelled
-# pr-open via `gh issue list`, the multi-PR comment-marker lookup via `gh issue view --json
-# comments`, follow-up candidates via `gh issue list --search`, and each matched follow-up's own
-# orphan-notice comments lookup via `gh issue view --json comments`) is best-effort: a rate
+# pr-open via `gh issue list` (open, and, since #370, a second closed-issue query), the multi-PR
+# comment-marker lookup via `gh issue view --json comments`, follow-up candidates via `gh issue
+# list --search`, and each matched follow-up's own orphan-notice comments lookup via `gh issue
+# view --json comments`) is best-effort: a rate
 # limit, an auth problem, or a network blip on any one of them is reported (WARN) and only the
 # section(s) that depend on it are skipped. With --fix, every mutating write (posting a cleanup
 # or orphan-notice comment, closing an issue, adding or removing the pr-open/no-plan labels) is
@@ -42,7 +43,16 @@
 #          not commented, not relabelled), so the next run re-examines it
 #        - PR closed WITHOUT merging       -> stale pr-open; the issue should requeue
 #        - PR still open                   -> fine, awaiting review
-#   4. Follow-ups filed from a claude/* PR that was closed WITHOUT merging (skipped, with a
+#   4. Closed-issue pr-open sweep (#370; skipped, with a WARN, if the PR list or this
+#      closed-issue query itself could not be fetched — independent of whether the open-issue
+#      query above succeeded): every CLOSED issue still labelled pr-open is swept, up to 100 per
+#      run, converging across runs — not just #355's own residue, but the whole historical
+#      backlog, since nothing else in the harness ever removes pr-open from an issue GitHub
+#      auto-closed when its PR merged. An issue is kept (label left in place, no write) while any
+#      claude/<n>-* PR for it is still OPEN; otherwise the label is removed. Label-only: no
+#      comment is posted, so a reopened issue re-entering the ready set keeps whatever
+#      plan-approved state it already had.
+#   5. Follow-ups filed from a claude/* PR that was closed WITHOUT merging (skipped, with a
 #      WARN, if the PR list or the follow-up candidate search could not be fetched): reported;
 #      with --fix, labelled no-plan (when not already present) and then commented, so the
 #      planner skips the orphaned work. Since #334, idempotence no longer comes from the -label:no-plan
@@ -58,19 +68,21 @@
 # Without --fix: read-mostly and conservative — never switches branches, never
 # force-deletes work that isn't merged, never edits labels (it only reports).
 #
-# With --fix, it additionally repairs the label-hygiene cases — every comment below opens with
-# the "<!-- harness-audit -->" marker, so it's excluded from both discovery scripts' binding
+# With --fix, it additionally repairs the label-hygiene cases — every COMMENT posted below opens
+# with the "<!-- harness-audit -->" marker, so it's excluded from both discovery scripts' binding
 # comment sets (a harness-authored audit/hygiene record is never fed back to the planner or
-# implementer as human decision text). Each arm's writes run in the order listed and stop at the
-# first failure (#355), so every partial state below either leaves the issue re-examinable by the
-# next --fix run, or is the one bounded residue named on the close arm:
+# implementer as human decision text); the closed-issue sweep further down (#370) is label-only —
+# it posts no comment at all, so the label-removal event itself is the audit trail. Each arm's
+# writes run in the order listed and stop at the first failure (#355), so every partial state
+# below either leaves the issue re-examinable by the next --fix run, or is the one bounded
+# residue named on the close arm:
 #   - PR merged, issue still open, closing keyword present, no multi-PR signal -> comment,
 #     close the issue, remove pr-open (audited with a marked issue comment). If the comment
 #     fails, nothing else in this arm runs and the issue is left untouched; if closing fails
 #     after a successful comment, pr-open stays attached and the next run posts another audit
 #     comment before retrying; if only the final remove-label fails, the issue ends up CLOSED but
-#     still carrying pr-open — this script's own hygiene query is `--label pr-open --state open`,
-#     so a closed issue is never revisited and nothing here ever sweeps that stale label off.
+#     still carrying pr-open — the closed-issue sweep further down (#370) picks it up on the next
+#     --fix run and removes the label then, with no further comment posted.
 #   - PR merged but a multi-PR signal is present (KEEP: the multi-pr label, or a maintainer
 #     comment carrying <!-- harness-multi-pr -->) -> issue stays open; when no other
 #     claude/<n>-* PR is still open, the issue is commented (with the same marker) and pr-open is
@@ -396,6 +408,46 @@ EOF
     done <<EOF
 $issue_lines
 EOF
+  fi
+fi
+
+echo
+echo "== closed issues still labelled pr-open =="
+if ! $prs_ok; then
+  echo "WARN    closed-issue pr-open sweep skipped (PR list unavailable — see WARN above)"
+else
+  closed_issues=""
+  closed_issues_ok=true
+  if ! closed_issues="$(gh issue list --label pr-open --state closed --json number,title --limit 100 2>/dev/null)" \
+     || ! printf '%s' "$closed_issues" | jq -e . >/dev/null 2>&1; then
+    closed_issues_ok=false
+    echo "WARN    could not fetch closed issues labelled pr-open (gh issue list failed — rate limit, auth, or network?) — skipping the closed-issue pr-open sweep."
+  fi
+
+  if $closed_issues_ok; then
+    if [[ $(echo "$closed_issues" | jq 'length') -eq 0 ]]; then
+      echo "no closed issues labelled pr-open"
+    else
+      closed_issue_lines="$(echo "$closed_issues" | jq -c '.[]')"
+      while IFS= read -r ci; do
+        [[ -n "$ci" ]] || continue
+        n=$(echo "$ci" | jq -r .number)
+        title=$(echo "$ci" | jq -r .title)
+        open_pr=$(printf '%s' "$prs" | jq -r --arg p "claude/${n}-" \
+          '[.[] | select((.headRefName | startswith($p)) and .state == "OPEN") | .number] | first // empty')
+        if [[ -n "$open_pr" ]]; then
+          echo "ok    #${n} (${title}): closed, but PR #${open_pr} (claude/${n}-*) is still open — pr-open kept"
+        elif $FIX; then
+          if try_write "$n" "$title" "removing the pr-open label" gh issue edit "$n" --remove-label pr-open; then
+            echo "FIXED #${n} (${title}): closed issue — removed stale pr-open"
+          fi
+        else
+          echo "STALE #${n} (${title}): closed but still labelled pr-open — re-run with --fix to remove it (a reopened issue would otherwise stay out of the implementer's queue)"
+        fi
+      done <<EOF
+$closed_issue_lines
+EOF
+    fi
   fi
 fi
 

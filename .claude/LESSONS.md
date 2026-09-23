@@ -214,3 +214,14 @@ bites: 1–3 lines, written as an instruction to a future agent.
   and never validates the description. Before adding or editing a `create_or_update "…" "…" "…"`
   line, measure the description (`awk '{print length($0)}'`) and keep it ≤ 100 — #346 shipped 109
   characters and the live post-merge `bash bin/setup-labels.sh` run failed on the first run.
+- 2026-09-23 (b): When a plan's acceptance criterion or RESOLVED decision spells a literal command line
+  (`gh issue list --label pr-open --state closed --json number,title --limit 100`) or a literal output
+  line (`== closed issues still labelled pr-open ==`), EVERY token of it is a pinned claim the verifier
+  will mutate — including constants like `--limit 100` that the stub does not observe and section
+  headers no fixture asserts. Before the first verifier dispatch, enumerate every literal the criteria
+  name and map each to the fixture assertion that observes it; pin any unobserved one up front (a
+  list-call log for query arguments, an `expect` on each header). On #370 this class cost four
+  verification rounds on a script that was byte-identical since round 1.
+- 2026-09-23 (c): Orchestrator: never `git reset --hard` with an uncommitted `.claude/LESSONS.md` edit in
+  the tree — it is discarded silently. Commit the lesson (it rides with harness commits) or stash it
+  first; check `git status --porcelain -- .claude/LESSONS.md` after any reset.
