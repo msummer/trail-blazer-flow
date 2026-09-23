@@ -74,7 +74,7 @@ or share).
 ├── docs/
 │   └── adr/                      # architecture decision records: direction the README doesn't specify yet
 ├── .github/
-│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the four hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness, then the stop switch script's negative-test harness — on ubuntu-latest and, pinned to Apple's bash 3.2, on macos-latest
+│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the four hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness, then the stop switch script's negative-test harness — on ubuntu-latest per PR and, pinned to Apple's bash 3.2, on macos-latest post-merge and nightly (#365)
 │   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
@@ -2843,7 +2843,8 @@ it to see exactly what it checks. There is no test suite and no build step: this
 Markdown instruction files, Bash scripts, and JSON manifests. The gate and its seven negative-test
 harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tests.sh`, `dev/hook-tests.sh`,
 `dev/cleanup-tests.sh`, `dev/planning-tests.sh`, `dev/lock-tests.sh`, `dev/stop-tests.sh`) all run in CI on every pull
-request — see this repo's `CLAUDE.md` "Verification" section for the exact commands and jobs.
+request on ubuntu, and again under Apple's bash 3.2 on macOS after each merge to `main` and
+nightly (#365) — see this repo's `CLAUDE.md` "Verification" section for the exact commands and jobs.
 `dev/selfcheck-tests.sh` runs its case rows concurrently by default (#336); `SELFCHECK_TESTS_JOBS=<n>`
 or `-j <n>` overrides the detected job count, and `--serial` restores one case at a time.
 
