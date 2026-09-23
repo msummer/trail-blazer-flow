@@ -253,6 +253,10 @@ p_1_4_comment() {
 }
 p_1_5()               { printf 'git branch -D "$stale" >/dev/null\n' | append "$1/bin/harness-status.sh"; }
 p_1_5_guarded()        { printf 'git branch -D "$stale" || true\n' | append "$1/bin/harness-status.sh"; }
+# p_1_8 (#362) — lengthen one label description past GitHub's 100-character limit by inserting
+# characters INSIDE the quoted field (never a trailing suffix outside it), so 1.8's per-line length
+# check trips on exactly that label; the padded text is prose, so no other assertion reads it.
+p_1_8()               { edit "$1/bin/setup-labels.sh" 's/^create_or_update "multi-pr"        "C5DEF5" "Multi-PR issue: /create_or_update "multi-pr"        "C5DEF5" "Multi-PR issue (this description is deliberately padded well past the one-hundred-character limit): /'; }
 p_1_1_hooks()          { printf 'if [\n' | append "$1/hooks/git-c-guard.sh"; }
 p_1_6()                { printf 'eval "$x"\n' | append "$1/hooks/git-c-guard.sh"; }
 p_1_6_comment() {
@@ -736,6 +740,7 @@ cases=(
   "1.4-mentions||p_1_4_comment|control: a single #-comment naming all five constructs"
   "1.5|1.5|p_1_5|append a bare, unchecked 'git branch -D' to bin/harness-status.sh"
   "1.5-guarded||p_1_5_guarded|control: the same delete with a '|| true' fallback is not flagged"
+  "1.8|1.8|p_1_8|pad one create_or_update description in bin/setup-labels.sh past GitHub's 100-character limit (characters inserted inside the quoted field) -- measured: \"1.8 label description(s) in bin/setup-labels.sh exceed GitHub's 100-character limit — gh label create/edit returns HTTP 422 and setup-labels.sh aborts there: multi-pr(147)\" (79 pass, 1 fail)"
   "1.1-hooks|1.1|p_1_1_hooks|append a stray 'if [' to hooks/git-c-guard.sh (proves the glob extension)"
   "1.6|1.6|p_1_6|append a bare 'eval \"\$x\"' line to hooks/git-c-guard.sh"
   "1.6-comment||p_1_6_comment|control: a single #-comment naming eval is not flagged"

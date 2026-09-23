@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 79 assertions total. The gate prints what it checks — run it.
+# Five groups, 80 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -173,6 +173,31 @@ if [ -z "$bad_list" ]; then
   ok "1.5 no unguarded 'git branch -d/-D/--delete' in bin/*.sh"
 else
   bad "1.5 unguarded 'git branch' delete found —$bad_list"
+fi
+
+# 1.8 (#362) — every label description bin/setup-labels.sh passes to `gh label create/edit` is at
+# most 100 characters: GitHub's API rejects a longer one with HTTP 422 ("description is too long
+# (maximum is 100 characters)"), and under that script's `set -euo pipefail` the failed
+# `gh label create` — the last command in create_or_update — aborts the whole run at that label,
+# so later labels are never created and the consumer doctor then FAILs on the missing label
+# (measured live on this repo, 2026-09-23: #346's 109-character triaged-held description; the
+# other ten labels were 40–90 characters). A numeric threshold over a machine-parsed artifact —
+# the third quoted field of every `create_or_update "…" "…" "…"` line, extracted with the same sed
+# idiom 4.6/4.48/4.49/4.50 use for the first field; an empty extraction FAILs loudly (structure
+# changed) rather than passing vacuously. awk's length() counts bytes on some awks and characters
+# on others; every description here is ASCII, so the two agree. Proves only the length bound —
+# nothing about a description's wording, and nothing about a description passed by any other
+# route than these lines.
+label_desc_lines_18="$(sed -nE 's/^create_or_update "([^"]+)" +"[^"]*" +"(.*)"$/\1\t\2/p' "$root/bin/setup-labels.sh")"
+if [ -z "$label_desc_lines_18" ]; then
+  bad "1.8 bin/setup-labels.sh's create_or_update \"…\" \"…\" \"…\" lines didn't match (structure changed) — extraction failed"
+else
+  too_long_18="$(printf '%s\n' "$label_desc_lines_18" | awk -F'\t' 'length($2) > 100 { printf " %s(%d)", $1, length($2) }')"
+  if [ -z "$too_long_18" ]; then
+    ok "1.8 every label description in bin/setup-labels.sh is at most 100 characters (GitHub's API limit)"
+  else
+    bad "1.8 label description(s) in bin/setup-labels.sh exceed GitHub's 100-character limit — gh label create/edit returns HTTP 422 and setup-labels.sh aborts there:$too_long_18"
+  fi
 fi
 
 # ============================================================================

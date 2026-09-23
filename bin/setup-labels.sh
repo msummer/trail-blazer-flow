@@ -51,6 +51,12 @@
 #                      skills/*/references/*.md, agents/*.md, or bin/*.sh; README.md documents the
 #                      human's own set/clear commands.
 #
+# Every description above is at most 100 characters: GitHub's API rejects a longer one with
+# HTTP 422 ("description is too long (maximum is 100 characters)"), and under this script's
+# `set -euo pipefail` that failed `gh label create` aborts the whole run at that label, so the
+# later labels are never created and "Labels are set up." never prints (#362 — measured live on
+# this repo 2026-09-23 with a 109-character description). Gate assertion 1.8 pins the bound.
+#
 # Requesting plan changes does NOT use a label — just comment on the issue and the planner
 # revises on its next run. Approval and the implementation states ARE labels (unambiguous signals).
 #
@@ -83,7 +89,7 @@ create_or_update "test-ratchet"    "006B75" "Filed by the test-suite ratchet; ha
 create_or_update "multi-pr"        "C5DEF5" "Multi-PR issue: cleanup leaves it open when a slice's PR merges"
 create_or_update "needs-human"     "D93F0B" "Harness asked a question and moved on; answer, then remove this label to release the issue"
 create_or_update "harness-stop"    "000000" "Human-only stop switch: stops a run in progress, not just the next one (harness-stop.sh)"
-create_or_update "triaged-held"    "C2E0C6" "Human-applied: this held follow-up has been triaged and is deliberately parked (the harness never applies it)"
+create_or_update "triaged-held"    "C2E0C6" "Human-applied: triaged and deliberately parked; the harness never applies it"
 
 echo "Labels are set up."
 echo "Note: the old 'plan-changes-requested' label is no longer used. Delete it if you like:"
