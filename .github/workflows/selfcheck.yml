@@ -2,6 +2,14 @@ name: selfcheck
 
 on:
   pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Nightly (UTC). The macOS job is not a per-PR check since #365: the maintainer's local run
+    # already happens under Apple's bash 3.2, so this catches a BSD-only regression on main
+    # within a day instead of holding every merge for ~12 minutes.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -22,6 +30,9 @@ jobs:
       - run: bash dev/stop-tests.sh
 
   selfcheck-macos:
+    # Post-merge and nightly only (#365) — never a pull_request check. Keep this job LAST in the
+    # file: dev/selfcheck-tests.sh's 4.9-uneven-jobs case deletes the workflow's final line.
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 20
     steps:

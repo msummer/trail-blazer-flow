@@ -21,9 +21,13 @@ bash dev/selfcheck.sh
 
 It prints a `PASS`/`FAIL` line per assertion (grouped and labelled in its own output) and a
 `== summary: N pass, M fail ==` footer, and exits 0 iff nothing failed. The same command runs in
-CI on every pull request (`.github/workflows/selfcheck.yml`, two jobs — `selfcheck` on
-`ubuntu-latest` and `selfcheck-macos` on `macos-latest`, which prepends `/bin` to `PATH` so the
-same commands run under Apple's bash 3.2 instead of a newer bash); a red check means one of the
+CI (`.github/workflows/selfcheck.yml`, two jobs running the same eight commands — `selfcheck` on
+`ubuntu-latest`, the only required check on every pull request, and `selfcheck-macos` on
+`macos-latest`, which prepends `/bin` to `PATH` so the same commands run under Apple's bash 3.2
+instead of a newer bash, and which since #365 runs only post-merge on `main`, nightly, and on
+manual dispatch — never on a pull request, because the maintainer's own local run already happens
+under bash 3.2, so a BSD-only regression is caught on `main` within a day rather than holding
+every merge for the ~12 minutes that job takes); a red check means one of the
 jobs' eight commands failed — reproduce locally with `bash dev/selfcheck.sh`,
 `bash dev/selfcheck-tests.sh`, `bash dev/doctor-tests.sh`, `bash dev/hook-tests.sh`,
 `bash dev/cleanup-tests.sh`, `bash dev/planning-tests.sh`, `bash dev/lock-tests.sh`, and
@@ -652,7 +656,7 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   (macOS) and Git-Bash userlands — no GNU-only flags (`sed -i` without a suffix, `grep -P`,
   `readlink -f`, `mapfile`/`readarray`, `declare -A`). Enforced mechanically on `bin/*.sh`
   (assertion 1.4); `dev/*.sh` follows the same rule by convention, and is exercised under
-  BSD/bash 3.2 by the `selfcheck-macos` CI job.
+  BSD/bash 3.2 by the `selfcheck-macos` CI job (post-merge and nightly, not per PR — #365).
 - **No writer piped into `grep`'s quiet mode** (a `-q`/`-c`/`-x` flag cluster containing `q`, or
   `--quiet`) in `bin/*.sh`, `dev/*.sh`, or `hooks/*.sh`: every script in these three directories
   runs `set -uo pipefail`, under which that early-exit reader can send its upstream writer
