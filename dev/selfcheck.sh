@@ -8,7 +8,8 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 81 assertions total. The gate prints what it checks — run it.
+# The gate prints what it checks, grouped by concern — run it. The assertion total is the
+# summary footer's pass + fail; no count is hand-maintained here.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
