@@ -46,6 +46,19 @@
 # arm), and its `issue view` "ok" mode prefers a per-issue `comments-<n>.json` override when
 # present — see `build_stub_gh`'s own comment below for both.
 #
+# Since #355, the best-effort treatment above extends to bin/cleanup-after-merge.sh's own
+# MUTATING writes (`gh issue comment`/`gh issue edit`/`gh issue close`), not just its pre-flight
+# lookups: a failed write is reported (one `WARN` line naming the issue and which write failed)
+# and the remaining writes of that same issue's own arm are skipped, but the run always continues
+# to the next issue, still reaches the "== follow-ups from rejected PRs ==" section, and still
+# prints the closing Reminder — exit status stays 0. `build_stub_gh`'s `issue comment|edit|close`
+# arm gains a `reject-$2-once`/`reject-$2` marker-file pair (see its own comment below) that fails
+# one write on demand, mirroring `dev/planning-tests.sh`'s `reject-X(-once)` contract; thirteen new
+# fixtures pin the per-arm skip-the-rest behaviour, the close-arm and follow-up-arm write
+# reorderings that make the write which keeps an issue re-examinable the LAST one attempted, the
+# one summary WARN line printed before the Reminder when any write failed this run, and that
+# report-only mode still performs zero writes regardless of which reject markers are present.
+#
 # Usage: bash dev/cleanup-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh and dev/doctor-tests.sh: one PASS/FAIL line per case, a
 # `== summary: N pass, M fail ==` footer, exit 0 iff nothing failed; a filter with no match
@@ -67,7 +80,9 @@
 # that rule governs dev/selfcheck.sh, not this fixture harness. Like dev/doctor-tests.sh, this
 # file pins short, ASCII-only verdict STEMS (stop before the script's em dashes) plus
 # machine-derived payloads — the gh-calls.log this stub gh writes on every issue
-# comment/edit/close invocation. That log is the harness's own audit trail, not prose pinning.
+# comment/edit/close invocation, whether or not that call goes on to fail (since #355, a logged
+# line means the write was ATTEMPTED, not that it succeeded — see build_stub_gh's own comment).
+# That log is the harness's own audit trail, not prose pinning.
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -161,10 +176,21 @@ mk_repo_with_origin() {
 # #196 (LESSON 2026-09-01(c)) requires: a fixture whose script drops `labels` from its own `--json`
 # list gets back objects with no `labels` key at all, not a stub that silently keeps serving it —
 # which is what makes the `keep-multi-pr-label` case's mutation proof possible; since #334, the
-# follow-up arm projects DIR/followups.json the identical way. `issue comment|edit|close` append
-# the full `"$*"` line to DIR/gh-calls.log and exit 0 — the machine-derived payload every case's
-# assertions read back. Anything else exits 1. The `__DIR__` placeholder + sed substitution step
-# stays for the fixed part of the script (unchanged from before REPO_MODE/PR_MODE existed).
+# follow-up arm projects DIR/followups.json the identical way. `issue comment|edit|close` always
+# append the full `"$*"` line to DIR/gh-calls.log FIRST — so, since #355, a logged line means the
+# write was ATTEMPTED, not that it succeeded — then, since #355, check for a failure-injection
+# marker file in DIR before deciding how to exit: `reject-$2-once` (consumed with `rm -f`, one
+# stderr diagnostic, exit 1) is checked before the permanent `reject-$2` (same diagnostic, exit
+# 1, never consumed), mirroring `dev/planning-tests.sh`'s `reject-X(-once)` one-shot-then-permanent
+# contract (never both present in one fixture, by the same convention). `$2` is literally
+# `comment`/`edit`/`close`, so the three marker families are `reject-comment`, `reject-edit`, and
+# `reject-close` (+ their `-once` twins) — `reject-edit` fires for EVERY `gh issue edit`
+# invocation regardless of which flag it carries, so it covers both `--remove-label pr-open` and
+# `--add-label no-plan` alike; a fixture that needs to fail only one of the two `edit` calls in an
+# arm needs its own discriminator (none of the thirteen #355 fixtures below needs that). With no
+# marker file present, the call exits 0 exactly as before #355. Anything else exits 1. The
+# `__DIR__` placeholder + sed substitution step stays for the fixed part of the script (unchanged
+# from before REPO_MODE/PR_MODE existed).
 #
 # Since #248, the generated stub ALSO carries two live-probed field-set constants and a
 # `validate_json_fields` helper (ported from dev/planning-tests.sh's #217 treatment — see that
@@ -314,6 +340,15 @@ EOF
     cat <<'EOF'
       comment|edit|close)
         printf '%s\n' "$*" >> "__DIR__/gh-calls.log"
+        if [ -f "__DIR__/reject-$2-once" ]; then
+          rm -f "__DIR__/reject-$2-once"
+          echo "stub: simulated gh issue $2 failure (rate limit, auth, or network?)" >&2
+          exit 1
+        fi
+        if [ -f "__DIR__/reject-$2" ]; then
+          echo "stub: simulated gh issue $2 failure (rate limit, auth, or network?)" >&2
+          exit 1
+        fi
         exit 0 ;;
       *) exit 1 ;;
     esac
@@ -359,7 +394,13 @@ EOF
 # into $cleanup_out stays MERGED, unchanged from before this refactor — every line
 # bin/cleanup-after-merge.sh itself prints is `echo` to stdout, and no criterion anywhere in this
 # file names a stream for the SCRIPT under test (only the stub's own `Unknown JSON field:`
-# claims, asserted via run_stub_gh below, name a stream). Deliberately NOT invoked via command
+# claims, asserted via run_stub_gh below, name a stream). Since #355, this same merged capture is
+# also what the `write-failure-gh-stderr-not-swallowed` case reads: a failed write's own stub
+# diagnostic (`stub: simulated gh issue … failure …`, emitted on the STUB's stderr by
+# build_stub_gh's reject-$2(-once) branches) lands in $cleanup_out too, so that case's claim is
+# worded as "gh's own diagnostic is not swallowed", never "on stderr" — a stream-specific claim
+# would need run_stub_gh's split capture instead (LESSON 2026-09-08(b)), which this runner
+# deliberately doesn't provide. Deliberately NOT invoked via command
 # substitution itself (same idiom as dev/doctor-tests.sh's run_doctor) — call as a plain
 # statement and read the globals after.
 # run_cleanup DIR [ARGS...] — delegates to run_cleanup_at with the real
@@ -534,15 +575,18 @@ EOF
 # for the issue itself), so this now takes the ordinary close path — same fixture as the old
 # keep-marker-body case, inverted expectations. Mutation proof (step 13(d), RE-MEASURED
 # 2026-09-21, kickback K1, on a `tar --exclude=.git` scratch copy of the final tree, against the
-# 46-case registry #248/#249/#334/kickback-K1 grew this file to): restoring ONLY the deleted
+# 46-case registry #248/#249/#334/kickback-K1 grew this file to, and RE-MEASURED AGAIN 2026-09-23
+# against this file's now-final 59-case registry): restoring ONLY the deleted
 # body-marker `elif` (re-adding `issue_body=$(printf '%s' "$issue" | jq -r '.body //
-# ""'...)` plus the elif reading it) left this fixture PASSING (measured: 46 pass, 0 fail) — a
+# ""'...)` plus the elif reading it) left this fixture PASSING both times (46 pass, 0 fail; then
+# 59 pass, 0 fail) — a
 # surviving mutant, because `--json number,title,labels` no longer requests `body` at all, so the
 # stub's own field projection (see build_stub_gh above) strips the key and `issue_body` reads
 # empty regardless of the elif's presence; a real `gh` would behave identically. The meaningful,
 # measured mutant instead restores the whole removed code path together — the elif AND `body`
 # back in the `--json` field list (`--json number,title,labels,body`) — which makes this
-# fixture, and only this fixture, FAIL (measured: 45 pass, 1 fail): the issue reports KEEP and
+# fixture, and only this fixture, FAIL both times (45 pass, 1 fail; then RE-MEASURED 2026-09-23:
+# 58 pass, 1 fail, still failing EXACTLY this fixture): the issue reports KEEP and
 # "issue close" is never called. (Both figures move in lockstep with the suite's case count, not
 # with this fixture's own behaviour — re-run, never assumed, per LESSON 2026-09-07.)
 case_close_marker_body_only() {
@@ -588,15 +632,17 @@ EOF
 # keep-multi-pr-label (#231) — the issue itself carries the multi-pr label (gh's real
 # {"name": "..."} label-element shape), Closes #7 present, no sibling, no comment marker at
 # all: no close. The primary signal — proves the label alone is sufficient, no comment fetch
-# needed. Mutation proof (step 13(a), RE-MEASURED 2026-09-21, kickback K1, on a
-# `tar --exclude=.git` scratch copy of the final tree, against the 46-case registry):
+# needed. Mutation proof (step 13(a), RE-MEASURED 2026-09-21, kickback K1, and RE-MEASURED AGAIN
+# 2026-09-23 (#355) against this file's now-final 59-case registry, on a
+# `tar --exclude=.git` scratch copy of the final tree):
 # dropping `labels` from bin/cleanup-after-merge.sh's `gh issue list --json` field list (the
 # stub's field projection then serves an issue object with no labels key at all, so
-# has_multi_pr_label reads false) makes `bash dev/cleanup-tests.sh` go from 46 pass, 0 fail to
-# 44 pass, 2 fail, failing EXACTLY this fixture AND keep-multi-pr-label-view-failure-short-
+# has_multi_pr_label reads false) makes `bash dev/cleanup-tests.sh` go from 59 pass, 0 fail to
+# 57 pass, 2 fail, failing EXACTLY this fixture AND keep-multi-pr-label-view-failure-short-
 # circuits (#249, added by this diff — it depends on the identical has_multi_pr_label signal) —
 # a WIDER failing set than the pre-#249 measurement named, confirmed by re-running rather than
-# assumed (LESSON 2026-09-07).
+# assumed (LESSON 2026-09-07); unchanged by #355's own thirteen new fixtures, none of which
+# touches the multi-pr label signal.
 case_keep_multi_pr_label() {
   local dir; dir="$(mk_repo keep-multi-pr-label)"
   cat > "$dir/prs.json" <<'EOF'
@@ -618,14 +664,15 @@ EOF
 # close-untrusted-comment-marker (#231) — a comment carries <!-- harness-multi-pr --> but its
 # authorAssociation is NONE: the marker is ignored (not a KEEP signal) and the issue closes on
 # the normal path, plus exactly one WARN line naming the comment's association and url.
-# Mutation proof (step 13(b), RE-MEASURED 2026-09-21, kickback K1, on a `tar --exclude=.git`
-# scratch copy of the final tree, against the 46-case registry): deleting the
+# Mutation proof (step 13(b), RE-MEASURED 2026-09-21, kickback K1, and RE-MEASURED AGAIN
+# 2026-09-23 (#355) against this file's now-final 59-case registry, on a `tar --exclude=.git`
+# scratch copy of the final tree): deleting the
 # trusted `select` clause from the `trusted_hits` jq filter (so ANY marker-carrying comment
 # counts as trusted, regardless of authorAssociation) makes `bash dev/cleanup-tests.sh` go from
-# 46 pass, 0 fail to 44 pass, 2 fail, failing EXACTLY this fixture AND
+# 59 pass, 0 fail to 57 pass, 2 fail, failing EXACTLY this fixture AND
 # close-missing-association-marker (below — its comment has no authorAssociation key at all,
 # which this mutation also treats as trusted): both KEEP instead of closing. Re-run rather than
-# assumed (LESSON 2026-09-07) — the failing set is two fixtures, not one.
+# assumed (LESSON 2026-09-07) — the failing set is two fixtures, not one; unchanged by #355.
 case_close_untrusted_comment_marker() {
   local dir; dir="$(mk_repo close-untrusted-comment-marker)"
   cat > "$dir/prs.json" <<'EOF'
@@ -650,10 +697,12 @@ EOF
 # --fix: the same untrusted-marker WARN still prints exactly once, naming the comment's
 # association and url, and no gh mutation call is made at all — proving the WARN is not gated
 # behind --fix (RESOLVED: the untrusted-marker WARN prints in report-only mode as well as
-# --fix). Mutation proof (RE-MEASURED 2026-09-21, kickback K1, on a `tar --exclude=.git`
-# scratch copy of the final tree, against the 46-case registry): wrapping the
+# --fix). Mutation proof (RE-MEASURED 2026-09-21, kickback K1, and RE-MEASURED AGAIN 2026-09-23
+# (#355) against this file's now-final 59-case registry, on a `tar --exclude=.git`
+# scratch copy of the final tree): wrapping the
 # untrusted-marker WARN `echo` in `if $FIX; then ... fi` makes `bash dev/cleanup-tests.sh` go
-# from 46 pass, 0 fail to 45 pass, 1 fail, failing EXACTLY this fixture — the "ignoring a
+# from 59 pass, 0 fail to 58 pass, 1 fail, failing EXACTLY this fixture (unchanged by #355) — the
+# "ignoring a
 # harness-multi-pr marker" WARN line disappears (count 0, not 1) when the run is report-only.
 case_warn_untrusted_marker_no_fix() {
   local dir; dir="$(mk_repo warn-untrusted-marker-no-fix)"
@@ -677,14 +726,16 @@ EOF
 # close-missing-association-marker (#231) — same as close-untrusted-comment-marker, but the
 # comment object has NO authorAssociation key at all: fail-closed the same way (same rule as
 # both discovery scripts), one WARN naming the MISSING sentinel. Mutation proof (step 13(c),
-# RE-MEASURED 2026-09-21, kickback K1, on a `tar --exclude=.git` scratch copy of the final tree,
-# against the 46-case registry): deleting the whole untrusted `select`/WARN
+# RE-MEASURED 2026-09-21, kickback K1, and RE-MEASURED AGAIN 2026-09-23 (#355) against this
+# file's now-final 59-case registry, on a `tar --exclude=.git` scratch copy of the final tree):
+# deleting the whole untrusted `select`/WARN
 # `if`/`while` block (the `if [[ -n "$untrusted_marker_lines" ]]; then ... fi` around the
 # `echo "WARN ... ignoring a harness-multi-pr marker"` line) makes `bash dev/cleanup-tests.sh` go
-# from 46 pass, 0 fail to 43 pass, 3 fail, failing EXACTLY this fixture,
+# from 59 pass, 0 fail to 56 pass, 3 fail, failing EXACTLY this fixture,
 # close-untrusted-comment-marker, and warn-untrusted-marker-no-fix (every fixture that asserts
 # the "ignoring a harness-multi-pr marker" WARN line, not just this one — the WARN line
-# disappears, count 0, not 1, for all three). Re-run rather than assumed (LESSON 2026-09-07).
+# disappears, count 0, not 1, for all three). Re-run rather than assumed (LESSON 2026-09-07);
+# unchanged by #355.
 case_close_missing_association_marker() {
   local dir; dir="$(mk_repo close-missing-association-marker)"
   cat > "$dir/prs.json" <<'EOF'
@@ -708,10 +759,11 @@ EOF
 # keep-marker-comment-lowercase-assoc (#231) — a comment's authorAssociation is "owner"
 # (lowercase, as GitHub never actually sends it, but pins the ascii_upcase normalisation no
 # other fixture distinguishes): still trusted, still KEEP. Mutation proof (step 13(e),
-# RE-MEASURED 2026-09-21, kickback K1, on a `tar --exclude=.git` scratch copy of the final tree,
-# against the 46-case registry): deleting `ascii_upcase` from the
-# `trusted_hits` jq filter makes `bash dev/cleanup-tests.sh` go from 46 pass, 0 fail to 45 pass,
-# 1 fail, failing EXACTLY this fixture — the lowercase association no longer matches the
+# RE-MEASURED 2026-09-21, kickback K1, and RE-MEASURED AGAIN 2026-09-23 (#355) against this
+# file's now-final 59-case registry, on a `tar --exclude=.git` scratch copy of the final tree):
+# deleting `ascii_upcase` from the
+# `trusted_hits` jq filter makes `bash dev/cleanup-tests.sh` go from 59 pass, 0 fail to 58 pass,
+# 1 fail, failing EXACTLY this fixture (unchanged by #355) — the lowercase association no longer matches the
 # uppercase TRUSTED_ASSOCIATIONS list, so the marker is treated as untrusted and the issue
 # closes instead of KEEPing.
 case_keep_marker_comment_lowercase_assoc() {
@@ -912,14 +964,15 @@ EOF
 # captured output), calls all six with "", then checks the ACCUMULATED __ok/__why saved off
 # before this case's own __ok/__why are reset by the runner loop.
 # Measured mutants (re-measured 2026-09-21, kickback K1, on a `tar --exclude=.git` scratch copy
-# of the final tree, against the 46-case registry after #248/#249/#334/kickback-K1's
-# cases were added):
+# of the final tree, against the then-46-case registry after #248/#249/#334/kickback-K1's
+# cases were added; RE-MEASURED AGAIN 2026-09-23 (#355) against this file's now-final 59-case
+# registry):
 #   - delete `needle_required expect_count "$needle" || return 0` from expect_count only —
-#     `bash dev/cleanup-tests.sh` goes from 46 pass, 0 fail to 45 pass, 1 fail, failing exactly:
-#     empty-needle-guard (saved_why no longer names "expect_count:").
-#   - delete `needle_required expect_err "$1" || return 0` from expect_err only — 46 pass, 0 fail
-#     to 45 pass, 1 fail, failing exactly: empty-needle-guard (saved_why no longer names
-#     "expect_err:").
+#     `bash dev/cleanup-tests.sh` goes from 59 pass, 0 fail to 58 pass, 1 fail, failing exactly:
+#     empty-needle-guard (saved_why no longer names "expect_count:"), unchanged by #355.
+#   - delete `needle_required expect_err "$1" || return 0` from expect_err only — 59 pass, 0 fail
+#     to 58 pass, 1 fail, failing exactly: empty-needle-guard (saved_why no longer names
+#     "expect_err:"), unchanged by #355.
 case_empty_needle_guard() {
   local saved_ok saved_why
   cleanup_out="fixture output for the empty-needle guard (#262)"
@@ -1680,28 +1733,397 @@ EOF
   expect_absent "STALE #51"
 }
 
+# ---------------------------------------------------------------------------------------------
+# Part 6 cases (#355): a failed write (`gh issue comment`/`gh issue edit`/`gh issue close`) is
+# best-effort, exactly like every pre-flight lookup already is — reported (one WARN naming the
+# issue and which write failed), counted, and the remaining writes of that issue's own arm are
+# skipped, but the run always continues to the next issue and reaches the closing Reminder. That
+# per-write WARN line prints only for a FAILED write (never for a successful one) and prints
+# exactly once per failed write. build_stub_gh's `reject-$2-once`/`reject-$2` marker files (see
+# its own comment above) fail one write on demand; `$2` is literally `comment`/`edit`/`close`.
+
+# write-failure-close-comment — close path (Closes #7, no sibling, no marker: the same shape as
+# close-normal), `reject-comment` present, --fix: the comment write fails first, so nothing else
+# in the close arm runs — no `issue close`, no `remove-label` — and no FIXED line. The one
+# summary WARN line prints (exactly one write failed this run) and the closing Reminder still
+# prints. The `expect_count` below pins the "exactly one" half of "the per-write WARN prints
+# exactly once for a failed write" (the "only for a failed write, never a successful one" half is
+# pinned by write-summary-absent-on-clean-run's own `expect_absent` instead — measured: (M16),
+# which echoes try_write's WARN line in its own SUCCESS branch too, does not touch this fixture's
+# single, failing try_write call, so this `expect_count` does not itself gain a citation from it).
+# Mutation proof: (M1), (M7), (M11), (M15).
+case_write_failure_close_comment() {
+  local dir; dir="$(mk_repo write-failure-close-comment)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Ordinary issue","body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-comment"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "WARN  #7 (Ordinary issue): posting the cleanup comment failed"
+  expect_count "WARN  #7 (Ordinary issue): posting the cleanup comment failed" 1
+  expect_call "issue comment 7"
+  expect_no_call "issue close"
+  expect_no_call "remove-label"
+  expect_absent "FIXED #7"
+  expect "WARN    1 repair write(s) failed this run"
+  expect "Reminder:"
+}
+
+# write-failure-close-close — the same close-path shape, `reject-close`: the comment succeeds
+# (logged), `issue close` is attempted (logged, then fails), and `remove-label` never runs — both
+# the skip-the-rest contract AND the close→remove-label reorder are pinned by the SAME assertion:
+# `expect_no_call "remove-label"` holds ONLY under the comment → close → remove-label order, which
+# is why (M8) — reverting to the pre-#355 comment → remove-label → close order — kills this case
+# too (remove-label now runs, and succeeds, before the still-failing close call). Mutation proof:
+# (M3), (M7), (M8).
+case_write_failure_close_close() {
+  local dir; dir="$(mk_repo write-failure-close-close)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Ordinary issue","body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-close"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue comment 7"
+  expect_call "issue close 7"
+  expect_no_call "remove-label"
+  expect "WARN  #7 (Ordinary issue): closing the issue failed"
+  expect_absent "FIXED #7"
+}
+
+# write-failure-close-edit — the same close-path shape, `reject-edit`: comment and close both
+# succeed, `remove-label` is attempted (logged) and fails — the one bounded residue this plan
+# documents (the issue ends up CLOSED but still carrying pr-open). No FIXED line (the arm never
+# reaches its success branch). Mutation proof: (M2), (M8).
+case_write_failure_close_edit() {
+  local dir; dir="$(mk_repo write-failure-close-edit)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Ordinary issue","body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-edit"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue comment 7"
+  expect_call "issue close 7"
+  expect_call "remove-label pr-open"
+  expect "WARN  #7 (Ordinary issue): removing the pr-open label failed"
+  expect_absent "FIXED #7"
+}
+
+# write-failure-keep-comment — the KEEP relabel arm (Part of #7, no sibling: the same shape as
+# keep-part-of), `reject-comment`, --fix: the KEEP line still prints (it's unconditional, above
+# the $FIX branch), the comment write fails, and `remove-label` never runs — no "pr-open removed"
+# line. Mutation proof: (M4).
+case_write_failure_keep_comment() {
+  local dir; dir="$(mk_repo write-failure-keep-comment)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-slice1","body":"Part of #7\n\nPR 1 of 3"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Multi-PR thing","body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-comment"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "KEEP  #7 (Multi-PR thing): PR #12 merged as part of a multi-PR issue"
+  expect_no_call "remove-label"
+  expect_absent "pr-open removed"
+  expect "WARN  #7 (Multi-PR thing): posting the cleanup comment failed"
+}
+
+# write-failure-keep-edit — the same KEEP-arm shape, `reject-edit`: the comment succeeds
+# (logged), `remove-label` is attempted (logged) and fails — no "pr-open removed" line.
+# Mutation proof: (M5).
+case_write_failure_keep_edit() {
+  local dir; dir="$(mk_repo write-failure-keep-edit)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-slice1","body":"Part of #7\n\nPR 1 of 3"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Multi-PR thing","body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-edit"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue comment 7"
+  expect_call "remove-label pr-open"
+  expect_absent "pr-open removed"
+  expect "WARN  #7 (Multi-PR thing): removing the pr-open label failed"
+}
+
+# write-failure-requeue-comment — the requeue arm (a CLOSED, unmerged claude/7-* PR): comment
+# fails, so `remove-label` never runs and no FIXED line prints. Mutation proof: (M6a).
+case_write_failure_requeue_comment() {
+  local dir; dir="$(mk_repo write-failure-requeue-comment)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/7-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Stale issue","body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-comment"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue comment 7"
+  expect_no_call "remove-label"
+  expect_absent "FIXED #7"
+  expect "WARN  #7 (Stale issue): posting the cleanup comment failed"
+}
+
+# write-failure-requeue-edit — the same requeue-arm shape, `reject-edit`: comment succeeds
+# (logged), `remove-label` is attempted (logged) and fails — no FIXED line.
+# Mutation proof: (M6b).
+case_write_failure_requeue_edit() {
+  local dir; dir="$(mk_repo write-failure-requeue-edit)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/7-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Stale issue","body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-edit"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue comment 7"
+  expect_call "remove-label pr-open"
+  expect_absent "FIXED #7"
+  expect "WARN  #7 (Stale issue): removing the pr-open label failed"
+}
+
+# write-failure-followup-comment — the follow-up arm, `"labels":[]` (the older-harness shape, the
+# same as followup-notice-adds-no-plan-when-absent), `reject-comment`: `--add-label no-plan` is
+# attempted FIRST (logged, succeeds — the #355 reorder), then the comment is attempted (logged)
+# and fails — no FIXED line. Mutation proof: (M9b), (M10).
+case_write_failure_followup_comment() {
+  local dir; dir="$(mk_repo write-failure-followup-comment)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-comment"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue edit 50 --add-label no-plan"
+  expect_call "issue comment 50"
+  expect_absent "FIXED #50"
+  expect "WARN  #50 (Deferred later): posting the orphan notice failed"
+}
+
+# write-failure-followup-label — the same follow-up shape, `"labels":[]`, `reject-edit`: the
+# `--add-label no-plan` write is attempted (logged) and fails, so the comment never runs at all
+# (`expect_no_call "issue comment 50"` pins both the skip-the-rest contract AND the #355 reorder —
+# under the pre-#355 comment-then-label order this assertion would instead prove the comment ran
+# and the label failed) — no FIXED line. Mutation proof: (M9a), (M10).
+case_write_failure_followup_label() {
+  local dir; dir="$(mk_repo write-failure-followup-label)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-edit"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue edit 50 --add-label no-plan"
+  expect_no_call "issue comment 50"
+  expect_absent "FIXED #50"
+  expect "WARN  #50 (Deferred later): adding the no-plan label failed"
+}
+
+# write-failure-continues-to-next-issue — the headline claim: two pr-open issues on the close
+# path (#7, #8) plus one CLOSED claude/50-* PR with a follow-up, `reject-comment-once` (a
+# ONE-SHOT rejection, consumed by whichever `gh issue comment` call reaches the stub first — #7's,
+# since issues.json lists it first and the pr-open section runs before the follow-up section):
+# #7's comment fails and #7 gets no FIXED line, but #8 is fully repaired (FIXED #8, `issue close
+# 8` logged), the run reaches "== follow-ups from rejected PRs ==", #50 is fully repaired too
+# (FIXED #50 — the once-marker was already consumed by #7, so #50's own comment call succeeds),
+# the closing Reminder prints, the summary line counts exactly 1 failed write, and rc is 0.
+# Mutation proof: (M1), (M7), (M11), (M15).
+case_write_failure_continues_to_next_issue() {
+  local dir; dir="$(mk_repo write-failure-continues-to-next-issue)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"},
+ {"number":13,"state":"MERGED","headRefName":"claude/8-x","body":"Closes #8"},
+ {"number":14,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"First issue","body":""},{"number":8,"title":"Second issue","body":""}]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #14 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-comment-once"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "WARN  #7 (First issue): posting the cleanup comment failed"
+  expect_absent "FIXED #7"
+  expect "FIXED #8 (Second issue): PR #13 merged — commented, closed the issue, removed pr-open"
+  expect_call "issue close 8"
+  expect "== follow-ups from rejected PRs =="
+  expect "FIXED #50 (Deferred later): follow-up from PR #14, closed without merge — commented (no-plan already present)"
+  expect "Reminder:"
+  expect "WARN    1 repair write(s) failed this run"
+}
+
+# write-failure-markers-inert-no-fix — write-failure-close-comment's tree, but with ALL THREE
+# permanent reject markers present (reject-comment, reject-edit, reject-close) and run WITHOUT
+# --fix: report-only mode never writes at all, so every marker is inert — expect_calls_empty, no
+# write-failure WARN, and no summary line. Mutation proof: (M12), (M13).
+case_write_failure_markers_inert_no_fix() {
+  local dir; dir="$(mk_repo write-failure-markers-inert-no-fix)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Ordinary issue","body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-comment" "$dir/reject-edit" "$dir/reject-close"
+  run_cleanup "$dir"
+  expect_rc 0
+  expect_calls_empty
+  expect_absent "repair write(s) failed"
+  expect_absent "failed (gh exited non-zero"
+}
+
+# write-summary-absent-on-clean-run (control) — close-normal's shape, no reject markers, --fix: a
+# clean run with no failed write never prints the summary line at all, while FIXED still prints.
+# The `expect_absent "failed (gh exited non-zero"` below pins the "only for a FAILED write" half
+# of the per-write WARN claim: every try_write call in this fixture succeeds, so that WARN text —
+# which only try_write's own failure branch echoes — must never appear. Mutation proof: (M12),
+# (M16).
+case_write_summary_absent_on_clean_run() {
+  local dir; dir="$(mk_repo write-summary-absent-on-clean-run)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Ordinary issue","body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_absent "repair write(s) failed"
+  expect_absent "failed (gh exited non-zero"
+  expect "FIXED #7 (Ordinary issue): PR #12 merged — commented, closed the issue, removed pr-open"
+}
+
+# write-failure-gh-stderr-not-swallowed — write-failure-close-comment's tree again: the stub's own
+# diagnostic (printed on the STUB's stderr by its reject-$2(-once) branches — see build_stub_gh's
+# own comment above) is not swallowed by try_write's `>/dev/null` (which redirects only stdout) —
+# it lands in run_cleanup_at's MERGED `$cleanup_out` capture. Worded as "gh's own diagnostic is
+# not swallowed", never "on stderr" (LESSON 2026-09-08(b) — this runner makes no split-stream
+# capture; run_stub_gh's would, but this case deliberately goes through the real script instead).
+# (M7) does NOT cite this case: its only assertions are `expect_rc 0` and the stub's own stderr
+# diagnostic, neither of which the M7 mutation (dropping the close arm's skip-the-rest chain)
+# touches. Mutation proof: (M1), (M14).
+case_write_failure_gh_stderr_not_swallowed() {
+  local dir; dir="$(mk_repo write-failure-gh-stderr-not-swallowed)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Ordinary issue","body":""}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-comment"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "stub: simulated gh issue comment failure"
+}
+
 # MEASURED MUTANTS — the twelve entries (a)-(l) were first authored 2026-09-09; RE-MEASURED
-# 2026-09-21 (including kickback K1's sixteenth fixture) against this file's final 46-case
-# registry — see the #334 block below for the ten new mutants that block added. Every measurement
-# below, both these twelve entries and the #334 block's own, was taken by extracting a fresh copy
+# 2026-09-21 (including kickback K1's sixteenth fixture) against this file's then-final 46-case
+# registry, and RE-MEASURED AGAIN 2026-09-23 (#355) against this file's now-final 59-case
+# registry — see the #334 block below for the ten mutants that block added, and the #355 block
+# further below for its own seventeen new mutants (M1-M15, two of them split a/b). Every
+# measurement below, all three blocks' own, was taken by extracting a fresh copy
 # of the pristine tree from one `tar --exclude=.git` archive per mutation, applying exactly one
 # mutation to that scratch copy, running `bash dev/cleanup-tests.sh` there and saving its full
 # output to a file, then discarding the scratch copy before the next mutation — never by mutating
 # bin/cleanup-after-merge.sh or this file in place on the tracked working tree:
 #   (a) delete `validate_json_fields "$GH_ISSUE_JSON_FIELDS" "$@"` from the `issue) list)` arm
-#       only: 43 pass, 3 fail, failing EXACTLY stub-json-unknown-field-rejected-issue-list,
+#       only: 56 pass, 3 fail, failing EXACTLY stub-json-unknown-field-rejected-issue-list,
 #       stub-json-field-sets-are-subcommand-scoped, stub-json-missing-json-argument-fails-loud.
-#   (b) delete the same call from the `issue) view)` arm only: 43 pass, 3 fail, failing EXACTLY
+#   (b) delete the same call from the `issue) view)` arm only: 56 pass, 3 fail, failing EXACTLY
 #       stub-json-unknown-field-rejected-issue-view, stub-json-field-sets-are-subcommand-scoped,
 #       script-unknown-json-field-warns-and-keeps.
 #   (c) delete `validate_json_fields "$GH_PR_JSON_FIELDS" "$@"` from the `pr) list)` arm only:
-#       45 pass, 1 fail, failing EXACTLY stub-json-unknown-field-rejected-pr-list.
-#   (d) swap GH_PR_JSON_FIELDS -> GH_ISSUE_JSON_FIELDS on the `pr) list)` arm: 11 pass, 35 fail —
+#       58 pass, 1 fail, failing EXACTLY stub-json-unknown-field-rejected-pr-list.
+#   (d) swap GH_PR_JSON_FIELDS -> GH_ISSUE_JSON_FIELDS on the `pr) list)` arm: 12 pass, 47 fail —
 #       a wide cascade (bin/cleanup-after-merge.sh's own `pr list --json
 #       number,state,headRefName,body` call is rejected, so almost every fixture that depends on
 #       the PR list loses it — the saved run shows `WARN    could not fetch the PR list (gh pr
 #       list failed — rate limit, auth, or network?) — skipping pr-open label hygiene and the
-#       follow-ups check below.` on 33 of the 35 failing cases); the remaining two,
+#       follow-ups check below.` on 45 of the 47 failing cases); the remaining two,
 #       stub-json-field-sets-are-subcommand-scoped and stub-json-script-field-lists-accepted, call
 #       the stub's `pr list` arm directly and never run the script at all — the saved run shows
 #       each failing on the stub's own rejection instead: `rc: expected 0, got 1` plus
@@ -1715,23 +2137,33 @@ EOF
 #       followup-notice-idempotent-lowercase-assoc (kickback K1's addition) — the three
 #       #334 idempotent fixtures assert only ABSENCE of output/calls, which an empty candidate
 #       list — the pr-open section's own gh pr list call is rejected before the follow-ups
-#       section is ever reached — also produces, so they survive this cascade too.
-#   (e) swap GH_ISSUE_JSON_FIELDS -> GH_PR_JSON_FIELDS on BOTH issue arms: 45 pass, 1 fail,
+#       section is ever reached — also produces, so they survive this cascade too (eleven
+#       members). Since #355, the passing set gains a TWELFTH survivor,
+#       write-failure-markers-inert-no-fix — a report-only run whose own assertions
+#       (expect_calls_empty, no write-failure WARN, no summary line) are also all satisfied by
+#       "the PR list fetch failed before any write was ever attempted" — the same survival reason
+#       as the three #334 idempotent fixtures above.
+#       Re-measured against this file's grown 59-case registry (RE-MEASURED 2026-09-23): the
+#       failing set's twelve NEW members are the twelve remaining #355 write-failure-* fixtures
+#       (every one of them EXCEPT write-failure-markers-inert-no-fix), each failing for the
+#       identical reason as the pre-existing 35 — none of them ever reaches the pr-open section's
+#       write arms once the PR list fetch itself is rejected.
+#   (e) swap GH_ISSUE_JSON_FIELDS -> GH_PR_JSON_FIELDS on BOTH issue arms: 58 pass, 1 fail,
 #       failing EXACTLY stub-json-field-sets-are-subcommand-scoped (GH_PR_JSON_FIELDS is a
 #       superset of every OTHER field any fixture's issue calls request, so only the
 #       subcommand-scoping case, which specifically expects headRefName to be REJECTED on
 #       issue list/view, notices).
 #   (f) collapse the membership `case " $allowed " in *" $tok "*) : ;; ...` to an unconditional
-#       accept (`*) : ;;` as the first arm): 41 pass, 5 fail, failing EXACTLY
+#       accept (`*) : ;;` as the first arm): 54 pass, 5 fail, failing EXACTLY
 #       stub-json-unknown-field-rejected-issue-list, stub-json-unknown-field-rejected-issue-view,
 #       stub-json-unknown-field-rejected-pr-list, stub-json-field-sets-are-subcommand-scoped,
 #       script-unknown-json-field-warns-and-keeps (stub-json-missing-json-argument-fails-loud is
 #       untouched — that contract is checked before the membership loop runs at all).
-#   (g) delete `labels` from GH_ISSUE_JSON_FIELDS: 12 pass, 34 fail — the control's mutant, a wide
+#   (g) delete `labels` from GH_ISSUE_JSON_FIELDS: 13 pass, 46 fail — the control's mutant, a wide
 #       cascade (bin/cleanup-after-merge.sh's OWN `issue list --json number,title,labels` call is
 #       now rejected — the saved run shows `WARN    could not fetch issues labelled pr-open (gh
 #       issue list failed — rate limit, auth, or network?) — skipping pr-open label hygiene.` on
-#       33 of the 34 failing cases, a DIFFERENT WARN than mutant (d)'s); the remaining one,
+#       45 of the 46 failing cases, a DIFFERENT WARN than mutant (d)'s); the remaining one,
 #       stub-json-script-field-lists-accepted, calls the stub directly and never runs the script —
 #       the saved run shows it failing on the stub's own rejection instead: `rc: expected 0, got
 #       1` plus `missing: "title":"T"` for its own `issue list --label pr-open` probe, then
@@ -1746,33 +2178,45 @@ EOF
 #       stub-json-missing-json-argument-fails-loud, followup-notice-idempotent-second-run,
 #       followup-notice-idempotent-report-only, followup-notice-idempotent-lowercase-assoc
 #       (kickback K1's addition; the same survival reason as mutant (d) above — all three
-#       idempotent #334 fixtures assert only absence, which this cascade also produces).
-#   (h) `if [ "$found" -ne 1 ]` -> `if false`: 45 pass, 1 fail, failing EXACTLY
+#       idempotent #334 fixtures assert only absence, which this cascade also produces). Since
+#       #355, the passing set gains write-failure-markers-inert-no-fix as its thirteenth member
+#       (the identical reason as mutant (d)'s twelfth above), and the failing set gains the
+#       twelve remaining #355 write-failure-* fixtures, RE-MEASURED 2026-09-23 against this
+#       file's grown 59-case registry.
+#   (h) `if [ "$found" -ne 1 ]` -> `if false`: 58 pass, 1 fail, failing EXACTLY
 #       stub-json-missing-json-argument-fails-loud.
 #   (i) restore bin/cleanup-after-merge.sh's `issue_comments_doc="$(gh issue view "$n" --json
 #       comments 2>/dev/null || echo '{"comments":[]}')"` swallow for the FETCH-FAILURE route
-#       only (keeping the malformed-document check): 43 pass, 3 fail, failing EXACTLY
+#       only (keeping the malformed-document check): 56 pass, 3 fail, failing EXACTLY
 #       script-unknown-json-field-warns-and-keeps, view-failure-warns-and-keeps,
 #       view-failure-warns-no-fix.
 #   (j) drop the malformed-document `elif` branch in bin/cleanup-after-merge.sh (folding it back
-#       so only a hard fetch failure sets comments_ok=false): 44 pass, 2 fail, failing EXACTLY
+#       so only a hard fetch failure sets comments_ok=false): 57 pass, 2 fail, failing EXACTLY
 #       view-malformed-warns-and-keeps, view-malformed-warns-no-fix.
 #   (k) wrap the new `elif ! $comments_ok; then ... fi` decision branch in `if $FIX; then ... fi`
-#       in bin/cleanup-after-merge.sh: 44 pass, 2 fail, failing EXACTLY view-failure-warns-no-fix,
+#       in bin/cleanup-after-merge.sh: 57 pass, 2 fail, failing EXACTLY view-failure-warns-no-fix,
 #       view-malformed-warns-no-fix (LESSON 2026-09-08 — the --fix-only fixtures in this set
 #       cannot see this mutant; only the report-only pair does).
 #   (l) delete the `elif [[ "$has_multi_pr_label" == "true" ]]; then keep_reason=...` arm from
-#       bin/cleanup-after-merge.sh's KEEP chain: 44 pass, 2 fail, failing EXACTLY
+#       bin/cleanup-after-merge.sh's KEEP chain: 57 pass, 2 fail, failing EXACTLY
 #       keep-multi-pr-label, keep-multi-pr-label-view-failure-short-circuits.
 #
-# MEASURED MUTANTS, #334 (2026-09-21, extended by kickback K1 — see mutant (o)), taken by the
+# (a)-(l) RE-MEASURED 2026-09-23 (#355) against this file's grown 59-case registry, by the
+# identical scratch-copy workflow, after the thirteen new #355 fixtures landed: every entry's
+# totals above are current; only (d) and (g) (both wide cascades reached through the `gh pr
+# list`/`gh issue list --label pr-open` fetches every #355 write-failure-* fixture also depends
+# on) picked up new failing members, exactly as LESSON 2026-09-15 predicts for a cascade mutant —
+# re-run rather than assumed, per that same lesson.
+#
+# MEASURED MUTANTS, #334 (2026-09-21, extended by kickback K1 — see mutant (o); RE-MEASURED
+# 2026-09-23 against this file's grown 59-case registry — see mutant (m) and mutant (t) below for
+# the two entries whose failing set picked up a #355 fixture), taken by the
 # identical scratch-copy workflow the (a)-(l) block's own header describes above — one fresh
 # `tar --exclude=.git` extraction per mutation, never a mutation applied in place on the tracked
-# working tree — against the same final 46-case registry, one mutant at a time, on
-# bin/cleanup-after-merge.sh's new follow-up orphan-notice code (the "== follow-ups from rejected
-# PRs ==" section) unless noted:
+# working tree, on bin/cleanup-after-merge.sh's follow-up orphan-notice code (the "== follow-ups
+# from rejected PRs ==" section) unless noted:
 #   (m) revert the candidate search predicate to its pre-#334 form (re-insert `-label:no-plan `
-#       before `-label:pr-open` in the `gh issue list --search` string): 33 pass, 13 fail, failing
+#       before `-label:pr-open` in the `gh issue list --search` string): 43 pass, 16 fail, failing
 #       EXACTLY every #334 fixture EXCEPT followup-notice-idempotent-second-run,
 #       followup-notice-idempotent-report-only, and followup-notice-idempotent-lowercase-assoc
 #       (kickback K1's fixture) — build_stub_gh's `--search` arm (dev/cleanup-
@@ -1781,9 +2225,16 @@ EOF
 #       catch-all `[]`; the saved run shows the "== follow-ups from rejected PRs ==" section
 #       printing nothing at all (no FIXED/STALE/WARN line) for every #334 fixture, and the three
 #       idempotent fixtures survive because an empty candidate list also satisfies their own
-#       "nothing posted" assertions.
+#       "nothing posted" assertions. Since #355, the failing set also gains the three #355
+#       fixtures whose own follow-up arm depends on this identical candidate query —
+#       write-failure-continues-to-next-issue, write-failure-followup-comment, and
+#       write-failure-followup-label — each failing for the identical reason (an empty candidate
+#       list means the follow-up section never finds issue #50, so none of their FIXED/WARN/call
+#       assertions about it are satisfied); the other ten #355 fixtures never reach the follow-up
+#       candidate query at all (their own `prs.json` carries no CLOSED `claude/*` entry) and are
+#       unaffected, RE-MEASURED 2026-09-23.
 #   (n) delete the trusted `select` clause from the orphan `trusted_notice_hits` jq filter (so ANY
-#       marker-carrying comment counts as trusted, regardless of authorAssociation): 43 pass,
+#       marker-carrying comment counts as trusted, regardless of authorAssociation): 56 pass,
 #       3 fail, failing EXACTLY followup-notice-untrusted-marker-ignored,
 #       followup-notice-untrusted-marker-no-fix, followup-notice-missing-association-marker — all
 #       three now treat the untrusted marker as already-noticed and go silent instead of warning.
@@ -1797,7 +2248,7 @@ EOF
 #       without merging` in place of the missing comment call/FIXED line, since it asserts neither
 #       in the first place.
 #   (o) delete `ascii_upcase` from BOTH orphan jq blocks (`trusted_notice_hits` and
-#       `untrusted_notice_lines`): 45 pass, 1 fail, failing EXACTLY
+#       `untrusted_notice_lines`): 58 pass, 1 fail, failing EXACTLY
 #       followup-notice-idempotent-lowercase-assoc (kickback K1's fixture, mirroring the multi-PR
 #       path's `keep-marker-comment-lowercase-assoc` control) — the saved run shows its seeded
 #       comment's lowercase `owner` association no longer matching the uppercase
@@ -1811,7 +2262,7 @@ EOF
 #       the field) and survived (45 pass, 0 fail against the 45-case registry) — the honest gap
 #       kickback K1 (#334) closes.
 #   (p) delete the whole untrusted `if [[ -n "$untrusted_notice_lines" ]]; then ... fi` WARN block:
-#       43 pass, 3 fail, failing EXACTLY followup-notice-untrusted-marker-ignored,
+#       56 pass, 3 fail, failing EXACTLY followup-notice-untrusted-marker-ignored,
 #       followup-notice-untrusted-marker-no-fix, followup-notice-missing-association-marker — the
 #       identical failing set as mutant (n), reached a different way: the saved run shows the
 #       script still reaches its notice branch — `FIXED #50` prints for the two `--fix` fixtures,
@@ -1824,7 +2275,7 @@ EOF
 #       assertion to begin with (it asserts `expect_calls_empty`, already satisfied by report-only
 #       mode regardless of this mutant), so only its `expect_count`/`missing:` pair fails there.
 #   (q) collapse the `if ! $notice_ok; then ... continue; fi` branch entirely (fold an unreadable
-#       lookup into "proceed as normal" instead of "leave as found"): 42 pass, 4 fail, failing
+#       lookup into "proceed as normal" instead of "leave as found"): 55 pass, 4 fail, failing
 #       EXACTLY followup-notice-view-failure-warns-and-keeps, followup-notice-view-failure-warns-
 #       no-fix, followup-notice-view-malformed-warns-and-keeps, followup-notice-view-malformed-
 #       warns-no-fix — with the guard gone, execution falls through to the trusted/untrusted jq
@@ -1840,24 +2291,30 @@ EOF
 #       leaves `$trusted_notice_hits`/`$untrusted_notice_lines` empty, so the script silently
 #       posts the notice (or prints STALE) instead of warning.
 #   (r) drop the malformed-document `elif` branch (fold it back so only a hard fetch failure sets
-#       notice_ok=false): 44 pass, 2 fail, failing EXACTLY followup-notice-view-malformed-warns-
+#       notice_ok=false): 57 pass, 2 fail, failing EXACTLY followup-notice-view-malformed-warns-
 #       and-keeps, followup-notice-view-malformed-warns-no-fix.
 #   (s) wrap the `echo "WARN ... orphan-notice lookup failed ..."` line (only the echo, not the
-#       `continue` after it) in `if $FIX; then ... fi`: 44 pass, 2 fail, failing EXACTLY
+#       `continue` after it) in `if $FIX; then ... fi`: 57 pass, 2 fail, failing EXACTLY
 #       followup-notice-view-failure-warns-no-fix, followup-notice-view-malformed-warns-no-fix —
 #       the report-only pair, the only fixtures that can see a WARN gated behind $FIX (LESSON
 #       2026-09-08, the same reason mutant (k) above names).
-#   (t) make `--add-label no-plan` unconditional (delete the `if [[ "$has_no_plan_label" !=
-#       "true" ]]; then ... else ... fi` wrapper, always adding the label and printing the
-#       "labelled no-plan" tail): 45 pass, 1 fail, failing EXACTLY followup-notice-first-run — the
-#       only fixture that asserts NO `--add-label` call (its follow-up is already born `no-plan`,
-#       the #308 shape).
+#   (t) make `--add-label no-plan` unconditional (in the #355-restructured code, always take the
+#       `has_no_plan_label != "true"` branch's try_write chain, never the "comment alone" branch):
+#       57 pass, 2 fail, failing EXACTLY followup-notice-first-run and (since #355, RE-MEASURED
+#       2026-09-23) write-failure-continues-to-next-issue — the only two fixtures whose follow-up
+#       is already born `no-plan` (the #308 shape) and assert the "commented (no-plan already
+#       present)" tail text: both now see a spurious `--add-label no-plan` call and the WRONG tail
+#       text, "commented, labelled no-plan", instead. followup-notice-first-run additionally
+#       asserts NO `--add-label` call at all, so it fails on two counts; the twelve other #355
+#       fixtures and the other #334 fixtures are unaffected — none of them exercises a follow-up
+#       that is already labelled `no-plan` AND asserts the "already present" tail text.
 #   (u) delete the second marker line (`${orphan_marker}`) from the posted comment body, leaving
-#       only `${AUDIT_MARKER}` followed directly by the prose: 45 pass, 1 fail, failing EXACTLY
+#       only `${AUDIT_MARKER}` followed directly by the prose: 58 pass, 1 fail, failing EXACTLY
 #       followup-notice-first-run — the only fixture that asserts the literal
-#       `<!-- harness-orphan-notice: PR #12 -->` line appears in the posted call.
+#       `<!-- harness-orphan-notice: PR #12 -->` line appears in the posted call (RE-MEASURED
+#       2026-09-23: none of the twelve #355 write-failure-* fixtures assert on that literal line).
 #   (v) replace `${p}` with the literal `0` in the marker-key assignment (`orphan_marker=
-#       "${ORPHAN_NOTICE_MARKER_PREFIX}0 -->"`, ignoring the actual closed PR number): 38 pass,
+#       "${ORPHAN_NOTICE_MARKER_PREFIX}0 -->"`, ignoring the actual closed PR number): 51 pass,
 #       8 fail, failing EXACTLY followup-notice-first-run, followup-notice-idempotent-second-run,
 #       followup-notice-idempotent-report-only, followup-notice-idempotent-lowercase-assoc
 #       (kickback K1's fixture), followup-notice-untrusted-marker-ignored,
@@ -1885,6 +2342,94 @@ EOF
 #       re-running rather than assumed, per LESSON 2026-09-07; followup-notice-marker-is-per-pr and
 #       followup-notice-audit-marker-alone-does-not-suppress are unaffected — neither fixture's
 #       seeded comment ever matched the real marker in the first place.
+#
+# MEASURED MUTANTS, #355 (2026-09-23), taken by the identical scratch-copy workflow the (a)-(l)
+# block's own header describes above — one fresh `tar --exclude=.git` extraction per mutation,
+# never a mutation applied in place on the tracked working tree — against this file's final
+# 59-case registry, one mutant at a time, on bin/cleanup-after-merge.sh's four write arms, the
+# try_write helper, and the pr-open loop's heredoc restructure:
+#   (M1) restore the bare, unguarded `gh issue comment` in the close arm (the pre-#355 shape):
+#       56 pass, 3 fail, failing EXACTLY write-failure-close-comment,
+#       write-failure-continues-to-next-issue, write-failure-gh-stderr-not-swallowed — the bare
+#       call now trips `set -euo pipefail` the moment the stub's `reject-comment(-once)` marker
+#       makes it exit 1, aborting the whole script (rc 1, no Reminder) instead of WARNing and
+#       continuing; all three seed `reject-comment`/`reject-comment-once` on the close-arm shape.
+#   (M2) same for the close arm's `gh issue edit --remove-label pr-open` (leaving comment and
+#       close try_write-guarded): 58 pass, 1 fail, failing EXACTLY write-failure-close-edit.
+#   (M3) same for the close arm's `gh issue close` (leaving comment guarded, and re-guarding
+#       remove-label around the now-bare close's exit status): 58 pass, 1 fail, failing EXACTLY
+#       write-failure-close-close.
+#   (M4) same for the KEEP relabel arm's `gh issue comment`: 58 pass, 1 fail, failing EXACTLY
+#       write-failure-keep-comment.
+#   (M5) same for the KEEP relabel arm's `gh issue edit --remove-label pr-open`: 58 pass, 1 fail,
+#       failing EXACTLY write-failure-keep-edit.
+#   (M6a) same for the requeue arm's `gh issue comment`: 58 pass, 1 fail, failing EXACTLY
+#       write-failure-requeue-comment.
+#   (M6b) same for the requeue arm's `gh issue edit --remove-label pr-open`: 58 pass, 1 fail,
+#       failing EXACTLY write-failure-requeue-edit.
+#   (M7) replace the close arm's `&&`-chained try_write calls with three semicolon-separated
+#       statements, still inside the same `if …; then` list (no skip-the-rest — bash's `set -e`
+#       exemption for an `if` condition covers EVERY statement in that list, not just the last one
+#       tested, so none of the three aborts the script): 56 pass, 3 fail, failing EXACTLY
+#       write-failure-close-comment (caught by `expect_no_call "issue close"`,
+#       `expect_no_call "remove-label"`, AND `expect_absent "FIXED #7"` — all three trip),
+#       write-failure-close-close (caught by
+#       `expect_no_call "remove-label"` and `expect_absent "FIXED #7"`), and
+#       write-failure-continues-to-next-issue (caught only by `expect_absent "FIXED #7"`) — with
+#       the `&&` chain gone, `issue close`/`remove-label` are attempted (and logged) even after the
+#       comment write fails, and since the `if` list's own truth value is the LAST statement's exit
+#       status, the final try_write in the chain succeeding (its own reject-* marker doesn't apply
+#       to it) still prints the FIXED line. write-failure-gh-stderr-not-swallowed SURVIVES this
+#       mutant — its only assertions are `expect_rc 0` and the stub's own stderr diagnostic, and
+#       this mutant changes neither.
+#   (M8) revert the close-arm reorder (comment -> remove-label -> close, the pre-#355 order):
+#       57 pass, 2 fail, failing EXACTLY write-failure-close-close (caught by its
+#       `expect_no_call "remove-label"`: under `reject-close`, the reordered remove-label call now
+#       runs — and succeeds — BEFORE the still-failing close call, so it is logged) and
+#       write-failure-close-edit (caught by its `expect_call "issue close 7"`: under `reject-edit`,
+#       the reordered remove-label call now runs first, fails, and the `&&` chain skips the close
+#       call entirely — the fixture's own claim, a CLOSED issue that still CARRIES pr-open, is
+#       never reached under this order).
+#   (M9a) restore a bare `gh issue edit --add-label no-plan` in the follow-up arm's
+#       label-then-comment branch: 58 pass, 1 fail, failing EXACTLY write-failure-followup-label.
+#   (M9b) same for that branch's `gh issue comment` (leaving add-label try_write-guarded):
+#       58 pass, 1 fail, failing EXACTLY write-failure-followup-comment.
+#   (M10) revert the follow-up reorder (comment -> add-label, the pre-#355 order): 57 pass, 2 fail,
+#       failing EXACTLY write-failure-followup-comment, write-failure-followup-label — both assert
+#       an add-label-then-comment call order or an `expect_no_call` that only holds under it.
+#   (M11) delete the `write_failures=$((write_failures + 1))` increment from `try_write` (keeping
+#       its WARN and `return 1`): 57 pass, 2 fail, failing EXACTLY write-failure-close-comment,
+#       write-failure-continues-to-next-issue — the two fixtures that assert the summary
+#       `WARN    N repair write(s) failed this run` line; every write-failure fixture that asserts
+#       only a per-issue WARN (not the summary line) is unaffected.
+#   (M12) print the summary WARN line unconditionally (drop the `if [[ "$write_failures" -gt 0
+#       ]]` guard): 57 pass, 2 fail, failing EXACTLY write-failure-markers-inert-no-fix,
+#       write-summary-absent-on-clean-run — the two fixtures whose own claim is that the summary
+#       line is ABSENT on a run with no failed write.
+#   (M13) drop the close arm's own `$FIX` guard (`elif $FIX; then` -> `elif true; then`):
+#       57 pass, 2 fail, failing EXACTLY warn-untrusted-marker-no-fix,
+#       write-failure-markers-inert-no-fix — both are report-only (no `--fix`) runs over a
+#       close-path fixture; with the guard gone the close arm's writes are attempted even in
+#       report-only mode, tripping both fixtures' `expect_calls_empty`.
+#   (M14) add `2>/dev/null` to `try_write`'s own `"$@"` invocation (swallowing gh's own stderr
+#       diagnostic, not just its stdout): 58 pass, 1 fail, failing EXACTLY
+#       write-failure-gh-stderr-not-swallowed — the one fixture whose claim is that this
+#       diagnostic is NOT swallowed.
+#   (M15) revert the pr-open loop's heredoc restructure, putting it back as the last stage of a
+#       `... | while read -r issue; do ... done` pipeline (so `write_failures` is incremented
+#       inside a subshell and never reaches the parent shell): 57 pass, 2 fail, failing EXACTLY
+#       write-failure-close-comment, write-failure-continues-to-next-issue — the two fixtures that
+#       assert the summary line after a pr-open-loop write failure; write-failure-markers-
+#       inert-no-fix and write-summary-absent-on-clean-run are unaffected because their own claim
+#       is the summary line's ABSENCE, which an always-zero `$write_failures` also produces.
+#   (M16) echo `try_write`'s own WARN line in its SUCCESS branch too (leaving the failure branch's
+#       echo, the counter, and `return 1` untouched): 58 pass, 1 fail, failing EXACTLY
+#       write-summary-absent-on-clean-run — every try_write call in that fixture succeeds, so the
+#       now-duplicated WARN text ("failed (gh exited non-zero") appears in `$cleanup_out` even
+#       though no write actually failed, tripping its `expect_absent "failed (gh exited
+#       non-zero"`. write-failure-close-comment's own `expect_count ... 1` does NOT gain a
+#       citation from this mutant: that fixture's only try_write call fails (never reaching the
+#       success branch this mutant edits), so the count stays 1 under (M16) too.
 
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
@@ -1935,6 +2480,19 @@ cases=(
   "followup-notice-marker-is-per-pr|case_followup_notice_marker_is_per_pr|#334: a trusted orphan-notice marker naming a different PR does not suppress — the marker is PR-keyed"
   "followup-notice-audit-marker-alone-does-not-suppress|case_followup_notice_audit_marker_alone_does_not_suppress|#334: a trusted comment carrying only the harness-audit marker does not suppress the notice"
   "followup-notice-per-issue-state|case_followup_notice_per_issue_state|#334: two follow-ups from one PR, one noticed and one not — exactly one comment call, naming the un-noticed issue"
+  "write-failure-close-comment|case_write_failure_close_comment|#355: close arm, reject-comment: nothing else in the arm runs, one WARN, no FIXED, summary line, Reminder still prints"
+  "write-failure-close-close|case_write_failure_close_close|#355: close arm, reject-close: comment logged, close attempted, remove-label never runs, one WARN, no FIXED"
+  "write-failure-close-edit|case_write_failure_close_edit|#355: close arm, reject-edit: comment and close both succeed, remove-label attempted and fails, no FIXED (closed-but-labelled residue)"
+  "write-failure-keep-comment|case_write_failure_keep_comment|#355: KEEP relabel arm, reject-comment: KEEP line still prints, remove-label never runs, no 'pr-open removed' line"
+  "write-failure-keep-edit|case_write_failure_keep_edit|#355: KEEP relabel arm, reject-edit: comment succeeds, remove-label attempted and fails, no 'pr-open removed' line"
+  "write-failure-requeue-comment|case_write_failure_requeue_comment|#355: requeue arm, reject-comment: remove-label never runs, no FIXED"
+  "write-failure-requeue-edit|case_write_failure_requeue_edit|#355: requeue arm, reject-edit: comment logged, remove-label attempted and fails, no FIXED"
+  "write-failure-followup-comment|case_write_failure_followup_comment|#355: follow-up arm, reject-comment: add-label no-plan attempted first (succeeds, the reorder), comment attempted and fails, no FIXED"
+  "write-failure-followup-label|case_write_failure_followup_label|#355: follow-up arm, reject-edit: add-label attempted and fails, comment never runs (skip-the-rest and the reorder), no FIXED"
+  "write-failure-continues-to-next-issue|case_write_failure_continues_to_next_issue|#355: the headline claim — a reject-comment-once failure on issue #7 still lets #8 and the follow-up #50 fully repair, reaches the follow-ups section, prints the Reminder and a summary counting 1"
+  "write-failure-markers-inert-no-fix|case_write_failure_markers_inert_no_fix|#355: all three permanent reject markers present, no --fix: report-only performs no writes, so every marker is inert — no WARN, no summary line"
+  "write-summary-absent-on-clean-run|case_write_summary_absent_on_clean_run|#355: control — a clean --fix run with no failed write never prints the summary line, FIXED still prints"
+  "write-failure-gh-stderr-not-swallowed|case_write_failure_gh_stderr_not_swallowed|#355: the stub's own failure diagnostic is not swallowed by try_write's stdout-only redirect"
 )
 
 matched=0

@@ -245,7 +245,19 @@ issues distinct comment state; sixteen new fixtures (30 → 46, the sixteenth �
 `ascii_upcase` normalisation on the new path — added by #334 kickback K1) cover both modes, both
 notice-lookup failure routes, the trust gate, the PR-number key boundary, the conditional
 `--add-label no-plan`, and per-issue idempotence state, each with a measured mutation proof,
-alongside the twelve pre-existing mutation proofs re-measured against the grown suite. It runs in
+alongside the twelve pre-existing mutation proofs re-measured against the grown suite. Since
+#355, the harness also pins that a failed write — `gh issue comment`/`gh issue edit`/`gh issue
+close` — inside `--fix` is best-effort rather than fatal, exactly like every pre-flight lookup
+already was: `build_stub_gh`'s `comment|edit|close` arm gains a `reject-$2-once`/`reject-$2`
+marker-file pair (mirroring `dev/planning-tests.sh`'s `reject-X(-once)` one-shot-then-permanent
+contract) that fails one write on demand, with `$2` literally `comment`/`edit`/`close`; thirteen
+new fixtures (46 → 59) cover the per-arm skip-the-rest behaviour, the close-arm and
+follow-up-arm write reorderings that put the write which keeps an issue re-examinable last, the
+one summary WARN line printed only when a write failed this run, that the per-write WARN prints
+only for a failed write (never for a successful one), and that report-only mode still
+performs zero writes regardless of which reject markers are present, each with a measured
+mutation proof, alongside all twenty-two pre-existing mutation proofs re-measured against the
+grown registry. It runs in
 CI as the fifth step, but it is not part of `dev/selfcheck.sh` itself — run it by hand whenever
 `bin/cleanup-after-merge.sh` changes.
 

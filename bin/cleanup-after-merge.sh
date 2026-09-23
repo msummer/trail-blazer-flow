@@ -11,8 +11,14 @@
 # comments`, follow-up candidates via `gh issue list --search`, and each matched follow-up's own
 # orphan-notice comments lookup via `gh issue view --json comments`) is best-effort: a rate
 # limit, an auth problem, or a network blip on any one of them is reported (WARN) and only the
-# section(s) that depend on it are skipped — the script never aborts before printing output, and
-# always reaches the closing reminder.
+# section(s) that depend on it are skipped. With --fix, every mutating write (posting a cleanup
+# or orphan-notice comment, closing an issue, adding or removing the pr-open/no-plan labels) is
+# best-effort too (#355): a failed write is reported (one WARN line naming the issue and which
+# write failed) and counted, and the remaining writes of that same issue's own arm are skipped —
+# the loop always continues with the next issue. The script never aborts before printing output,
+# and always reaches the "== follow-ups from rejected PRs ==" section and the closing reminder,
+# even when one or more writes failed; a run with at least one failed write prints one extra
+# summary WARN line just before the reminder. Exit status stays 0 regardless.
 #
 #   1. Best-effort fast-forward of the default branch (only if currently checked out, and only
 #      when the default-branch and current-branch lookups above both succeeded): a diverged
@@ -38,8 +44,8 @@
 #        - PR still open                   -> fine, awaiting review
 #   4. Follow-ups filed from a claude/* PR that was closed WITHOUT merging (skipped, with a
 #      WARN, if the PR list or the follow-up candidate search could not be fetched): reported;
-#      with --fix, commented (and labelled no-plan, when not already present) so the planner
-#      skips the orphaned work. Since #334, idempotence no longer comes from the -label:no-plan
+#      with --fix, labelled no-plan (when not already present) and then commented, so the
+#      planner skips the orphaned work. Since #334, idempotence no longer comes from the -label:no-plan
 #      exclusion a follow-up is born under (#308) — the candidate query below covers every open,
 #      non-pr-open issue naming a closed-unmerged claude/* PR — but from a per-candidate comments
 #      lookup: a trusted (OWNER/MEMBER/COLLABORATOR) comment already carrying that PR's own
@@ -55,25 +61,42 @@
 # With --fix, it additionally repairs the label-hygiene cases — every comment below opens with
 # the "<!-- harness-audit -->" marker, so it's excluded from both discovery scripts' binding
 # comment sets (a harness-authored audit/hygiene record is never fed back to the planner or
-# implementer as human decision text):
+# implementer as human decision text). Each arm's writes run in the order listed and stop at the
+# first failure (#355), so every partial state below either leaves the issue re-examinable by the
+# next --fix run, or is the one bounded residue named on the close arm:
 #   - PR merged, issue still open, closing keyword present, no multi-PR signal -> comment,
-#     remove pr-open, close the issue (audited with a marked issue comment)
+#     close the issue, remove pr-open (audited with a marked issue comment). If the comment
+#     fails, nothing else in this arm runs and the issue is left untouched; if closing fails
+#     after a successful comment, pr-open stays attached and the next run posts another audit
+#     comment before retrying; if only the final remove-label fails, the issue ends up CLOSED but
+#     still carrying pr-open — this script's own hygiene query is `--label pr-open --state open`,
+#     so a closed issue is never revisited and nothing here ever sweeps that stale label off.
 #   - PR merged but a multi-PR signal is present (KEEP: the multi-pr label, or a maintainer
-#     comment carrying <!-- harness-multi-pr -->) -> issue stays open; pr-open is removed
-#     (and the issue commented, once, with the same marker) only when no other
-#     claude/<n>-* PR is still open, so the issue re-queues for its next slice — a human closes
-#     it by hand if the work is actually finished. A harness-multi-pr marker from an untrusted
-#     comment author is ignored (never a KEEP signal) and WARNed, in both --fix and report-only
-#     modes, naming the comment's url and association.
+#     comment carrying <!-- harness-multi-pr -->) -> issue stays open; when no other
+#     claude/<n>-* PR is still open, the issue is commented (with the same marker) and pr-open is
+#     removed so it re-queues for its next slice — a human closes it by hand if the work is
+#     actually finished. If the comment fails, nothing else in this arm runs and pr-open is left
+#     in place; if only the remove-label fails after a successful comment, pr-open stays attached
+#     and the next run posts another audit comment before retrying the label removal (this
+#     comment is best-effort like every other write here, not deduplicated by a marker check the
+#     way the follow-up notice below is). A harness-multi-pr marker from an untrusted comment
+#     author is ignored (never a KEEP signal) and WARNed, in both --fix and report-only modes,
+#     naming the comment's url and association.
 #   - PR closed without merging    -> comment, remove pr-open (requeues the issue; the
 #     old claude/* branch is left alone — the implementer's branch-exists logic decides
-#     whether it can be reset or needs a human)
+#     whether it can be reset or needs a human). Same partial-failure shape as the KEEP arm
+#     above: a failed comment leaves the issue untouched, a failed remove-label after a
+#     successful comment leaves pr-open attached and duplicates the audit comment on the next run.
 # ...and quarantines orphaned plan follow-ups (also audited with a marked issue comment), keyed
 # on a trusted, PR-keyed <!-- harness-orphan-notice: PR #<p> --> marker rather than the no-plan
 # label (#334) — so a follow-up born no-plan (#308) is reached too:
-#   - follow-up filed from a claude/* PR closed without merging, not yet noticed -> comment
-#     (carrying that marker), add no-plan when it isn't already present (never closes the issue;
-#     a human removes no-plan to requeue it)
+#   - follow-up filed from a claude/* PR closed without merging, not yet noticed -> add no-plan
+#     when it isn't already present, then comment (carrying that marker) (never closes the
+#     issue; a human removes no-plan to requeue it). If the label edit fails, nothing is
+#     commented and the next run retries both; if only the comment fails after a successful
+#     label edit, the issue is held with no-plan but carries no notice yet, and the next run
+#     retries just the comment (the label edit is skipped a second time, since the label is
+#     already present).
 #   - already noticed (a trusted comment already carries this PR's own marker) -> nothing
 #     posted, no label edit — the idempotence guarantee. Honest limit: this holds only when the
 #     account running --fix is itself OWNER/MEMBER/COLLABORATOR on the repo, since a marker
@@ -109,6 +132,28 @@ MULTI_PR_LABEL="multi-pr"
 # neither marker can satisfy a `contains` test meant for the other. Must stay spelled identically
 # in README.md (gate assertion 4.47 pins the prefix; the PR number varies per issue).
 ORPHAN_NOTICE_MARKER_PREFIX='<!-- harness-orphan-notice: PR #'
+
+# Count of failed writes this run, for the one summary WARN line before the closing Reminder.
+# Deliberately `x=$((x + 1))`, never `((x++))`: the latter returns non-zero when the pre-increment
+# value is 0, which would trip `set -e` at whichever call site isn't already inside an
+# if/&&/condition.
+write_failures=0
+
+# try_write N TITLE DESC CMD… : runs CMD (stdout discarded, stderr deliberately NOT redirected,
+# so gh's own diagnostic still reaches the transcript); on failure WARNs once, counts it, and
+# returns 1 so an && chain skips the rest of this issue's arm. `set -e` is suppressed inside a
+# function invoked from an if/&& condition, so every step here is tested explicitly — nothing in
+# this helper relies on `set -e` to abort.
+try_write() {
+  local n="$1" title="$2" desc="$3"
+  shift 3
+  if "$@" >/dev/null; then
+    return 0
+  fi
+  echo "WARN  #${n} (${title}): ${desc} failed (gh exited non-zero — rate limit, auth, or network?) — no further repair attempted on this issue; re-run cleanup-after-merge.sh --fix once the cause clears"
+  write_failures=$((write_failures + 1))
+  return 1
+}
 
 default_branch_known=true
 default_branch="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null | tr -d '\r' || true)"
@@ -196,7 +241,9 @@ if $prs_ok && $issues_ok; then
   if [[ $(echo "$issues" | jq 'length') -eq 0 ]]; then
     echo "no open issues labelled pr-open"
   else
-    echo "$issues" | jq -c '.[]' | while read -r issue; do
+    issue_lines="$(echo "$issues" | jq -c '.[]')"
+    while IFS= read -r issue; do
+      [[ -n "$issue" ]] || continue
       n=$(echo "$issue" | jq -r .number)
       title=$(echo "$issue" | jq -r .title)
       match=$(echo "$prs" | jq -c --arg p "claude/${n}-" \
@@ -304,10 +351,11 @@ EOF
             echo "KEEP  #${n} (${title}): PR #${prnum} merged as part of a multi-PR issue (${keep_reason}); leaving the issue open"
             if $FIX; then
               if [[ "$open_siblings" -eq 0 ]]; then
-                gh issue comment "$n" --body "${AUDIT_MARKER}
-🧹 Harness cleanup: PR #${prnum} for this issue merged, but this looks like one slice of a multi-PR issue (${keep_reason}), so it was left open. \`pr-open\` has been removed so it re-queues for its next slice — if this issue is actually finished, close it by hand." >/dev/null
-                gh issue edit "$n" --remove-label pr-open >/dev/null
-                echo "        pr-open removed — re-queued for its next slice"
+                if try_write "$n" "$title" "posting the cleanup comment" gh issue comment "$n" --body "${AUDIT_MARKER}
+🧹 Harness cleanup: PR #${prnum} for this issue merged, but this looks like one slice of a multi-PR issue (${keep_reason}), so it was left open. \`pr-open\` has been removed so it re-queues for its next slice — if this issue is actually finished, close it by hand." \
+                   && try_write "$n" "$title" "removing the pr-open label" gh issue edit "$n" --remove-label pr-open; then
+                  echo "        pr-open removed — re-queued for its next slice"
+                fi
               else
                 echo "        pr-open kept — another claude/${n}-* PR is still open"
               fi
@@ -322,28 +370,32 @@ EOF
             # below, not nested inside it.
             echo "WARN  #${n} (${title}): PR #${prnum} merged, but the multi-PR comment-marker lookup failed (${lookup_failure}) — leaving the issue open with pr-open in place for the next run to re-examine"
           elif $FIX; then
-            gh issue comment "$n" --body "${AUDIT_MARKER}
-🧹 Harness cleanup: PR #${prnum} for this issue links it with a closing keyword, but the issue didn't auto-close (e.g. it merged into a non-default branch). Closing it now." >/dev/null
-            gh issue edit "$n" --remove-label pr-open >/dev/null
-            gh issue close "$n" >/dev/null
-            echo "FIXED #${n} (${title}): PR #${prnum} merged — commented, removed pr-open, closed the issue"
+            if try_write "$n" "$title" "posting the cleanup comment" gh issue comment "$n" --body "${AUDIT_MARKER}
+🧹 Harness cleanup: PR #${prnum} for this issue links it with a closing keyword, but the issue didn't auto-close (e.g. it merged into a non-default branch). Closing it now." \
+               && try_write "$n" "$title" "closing the issue" gh issue close "$n" \
+               && try_write "$n" "$title" "removing the pr-open label" gh issue edit "$n" --remove-label pr-open; then
+              echo "FIXED #${n} (${title}): PR #${prnum} merged — commented, closed the issue, removed pr-open"
+            fi
           else
             echo "WARN  #${n} (${title}): PR #${prnum} merged, links this issue with a closing keyword, but the issue is still open — close manually (or re-run with --fix)"
           fi
           ;;
         CLOSED)
           if $FIX; then
-            gh issue comment "$n" --body "${AUDIT_MARKER}
-🧹 Harness cleanup: PR #${prnum} was closed without merging, so this issue has been requeued for implementation (\`pr-open\` removed). The old \`claude/${n}-*\` branch was left in place — the next implementer run resets it if it only contains wip commits, and asks a human otherwise." >/dev/null
-            gh issue edit "$n" --remove-label pr-open >/dev/null
-            echo "FIXED #${n} (${title}): PR #${prnum} closed without merge — commented, removed pr-open (issue requeued)"
+            if try_write "$n" "$title" "posting the cleanup comment" gh issue comment "$n" --body "${AUDIT_MARKER}
+🧹 Harness cleanup: PR #${prnum} was closed without merging, so this issue has been requeued for implementation (\`pr-open\` removed). The old \`claude/${n}-*\` branch was left in place — the next implementer run resets it if it only contains wip commits, and asks a human otherwise." \
+               && try_write "$n" "$title" "removing the pr-open label" gh issue edit "$n" --remove-label pr-open; then
+              echo "FIXED #${n} (${title}): PR #${prnum} closed without merge — commented, removed pr-open (issue requeued)"
+            fi
           else
             echo "STALE #${n} (${title}): PR #${prnum} closed WITHOUT merge — remove pr-open to requeue (or re-run with --fix)"
           fi
           ;;
         OPEN)   echo "ok    #${n} (${title}): PR #${prnum} open, awaiting review" ;;
       esac
-    done
+    done <<EOF
+$issue_lines
+EOF
   fi
 fi
 
@@ -447,14 +499,19 @@ EOF
           fi
 
           if $FIX; then
-            gh issue comment "$n" --body "${AUDIT_MARKER}
-${orphan_marker}
-🧹 Harness cleanup: this issue was filed automatically as a follow-up from PR #${p}, which was closed without merging, so the work it defers may never have landed. It is held with \`no-plan\` so the planner skips it — remove \`no-plan\` to requeue it, or just close it." >/dev/null
             if [[ "$has_no_plan_label" != "true" ]]; then
-              gh issue edit "$n" --add-label no-plan >/dev/null
-              echo "FIXED #${n} (${title}): follow-up from PR #${p}, closed without merge — commented, labelled no-plan"
+              if try_write "$n" "$title" "adding the no-plan label" gh issue edit "$n" --add-label no-plan \
+                 && try_write "$n" "$title" "posting the orphan notice" gh issue comment "$n" --body "${AUDIT_MARKER}
+${orphan_marker}
+🧹 Harness cleanup: this issue was filed automatically as a follow-up from PR #${p}, which was closed without merging, so the work it defers may never have landed. It is held with \`no-plan\` so the planner skips it — remove \`no-plan\` to requeue it, or just close it."; then
+                echo "FIXED #${n} (${title}): follow-up from PR #${p}, closed without merge — commented, labelled no-plan"
+              fi
             else
-              echo "FIXED #${n} (${title}): follow-up from PR #${p}, closed without merge — commented (no-plan already present)"
+              if try_write "$n" "$title" "posting the orphan notice" gh issue comment "$n" --body "${AUDIT_MARKER}
+${orphan_marker}
+🧹 Harness cleanup: this issue was filed automatically as a follow-up from PR #${p}, which was closed without merging, so the work it defers may never have landed. It is held with \`no-plan\` so the planner skips it — remove \`no-plan\` to requeue it, or just close it."; then
+                echo "FIXED #${n} (${title}): follow-up from PR #${p}, closed without merge — commented (no-plan already present)"
+              fi
             fi
           else
             echo "STALE #${n} (${title}): filed as a follow-up from PR #${p}, which was closed without merging — re-run with --fix to post the orphan notice (and add no-plan if it is missing), or close it"
@@ -467,6 +524,10 @@ $closed_prs
 EOF
     fi
   fi
+fi
+
+if [[ "$write_failures" -gt 0 ]]; then
+  echo "WARN    ${write_failures} repair write(s) failed this run (see the WARN lines above) — re-run cleanup-after-merge.sh --fix once the cause clears."
 fi
 
 echo

@@ -257,6 +257,8 @@ p_1_5_guarded()        { printf 'git branch -D "$stale" || true\n' | append "$1/
 # characters INSIDE the quoted field (never a trailing suffix outside it), so 1.8's per-line length
 # check trips on exactly that label; the padded text is prose, so no other assertion reads it.
 p_1_8()               { edit "$1/bin/setup-labels.sh" 's/^create_or_update "multi-pr"        "C5DEF5" "Multi-PR issue: /create_or_update "multi-pr"        "C5DEF5" "Multi-PR issue (this description is deliberately padded well past the one-hundred-character limit): /'; }
+p_1_9()                { printf 'gh issue close "$n" >/dev/null\n' | append "$1/bin/harness-status.sh"; }
+p_1_9_guarded()         { printf 'gh issue close "$n" || true\n' | append "$1/bin/harness-status.sh"; }
 p_1_1_hooks()          { printf 'if [\n' | append "$1/hooks/git-c-guard.sh"; }
 p_1_6()                { printf 'eval "$x"\n' | append "$1/hooks/git-c-guard.sh"; }
 p_1_6_comment() {
@@ -467,8 +469,10 @@ p_4_48_no_skill_mention() { edit "$1/skills/issue-implementer/SKILL.md" 's/needs
 # STOP_LABEL identifier throughout bin/harness-stop.sh so the gate's anchored extraction of the
 # literal "STOP_LABEL=" prefix comes back empty (clause a's extraction half). p_4_49_applied
 # appends a line applying the stop label via --add-label to bin/harness-status.sh (the append
-# target p_4_44/p_1_1/p_1_7 already use, proving an append there trips nothing else besides what
-# it's meant to), so clause (b)'s ERE scan finds a match in bin/*.sh.
+# target p_4_44/p_1_1/p_1_7 already use, proving an append there trips nothing ELSE besides what
+# it's meant to), so clause (b)'s ERE scan finds a match in bin/*.sh — since #355, that same bare
+# 'gh issue edit ...' line at command position ALSO trips assertion 1.9 (the unguarded-write
+# scan), so the 4.49-applied case row's expected set below is {1.9 4.49}, not {4.49} alone.
 p_4_49_drift()      { edit "$1/bin/harness-stop.sh" 's/^STOP_LABEL="harness-stop"$/STOP_LABEL="harness-stpo"/'; }
 p_4_49_extraction() { edit "$1/bin/harness-stop.sh" 's/STOP_LABEL/STOP_LBEL/g'; }
 p_4_49_applied()    { printf 'gh issue edit 1 --add-label harness-stop\n' | append "$1/bin/harness-status.sh"; }
@@ -482,8 +486,10 @@ p_4_49_applied()    { printf 'gh issue edit 1 --add-label harness-stop\n' | appe
 # ' -label:$TRIAGED_HELD_LABEL' token from list_followups()'s own --search line, leaving it the
 # only 'is:issue label:no-plan' line lacking the token (clause c). p_4_50_applied appends a line
 # applying the triaged-held label via --add-label to bin/harness-status.sh (the same append target
-# p_4_44/p_1_1/p_1_7/p_4_49_applied already prove trips nothing else), so clause (d)'s ERE scan
-# finds a match in bin/*.sh.
+# p_4_44/p_1_1/p_1_7/p_4_49_applied already prove trips nothing ELSE besides what each is meant
+# to), so clause (d)'s ERE scan finds a match in bin/*.sh — since #355, that same bare 'gh issue
+# edit ...' line at command position ALSO trips assertion 1.9, so the 4.50-applied case row's
+# expected set below is {1.9 4.50}, not {4.50} alone.
 p_4_50_extraction()     { edit "$1/bin/harness-status.sh" 's/TRIAGED_HELD_LABEL/TRIAGED_HELD_LBEL/g'; }
 p_4_50_drift()          { edit "$1/bin/harness-status.sh" 's/^TRIAGED_HELD_LABEL="triaged-held"$/TRIAGED_HELD_LABEL="triaged-hled"/'; }
 p_4_50_missing_token()  { edit "$1/bin/harness-status.sh" 's/^    --search "is:open is:issue label:no-plan -label:\$TRIAGED_HELD_LABEL" \\$/    --search "is:open is:issue label:no-plan" \\/'; }
@@ -741,6 +747,8 @@ cases=(
   "1.5|1.5|p_1_5|append a bare, unchecked 'git branch -D' to bin/harness-status.sh"
   "1.5-guarded||p_1_5_guarded|control: the same delete with a '|| true' fallback is not flagged"
   "1.8|1.8|p_1_8|pad one create_or_update description in bin/setup-labels.sh past GitHub's 100-character limit (characters inserted inside the quoted field) -- measured: \"1.8 label description(s) in bin/setup-labels.sh exceed GitHub's 100-character limit — gh label create/edit returns HTTP 422 and setup-labels.sh aborts there: multi-pr(147)\" (79 pass, 1 fail)"
+  "1.9|1.9|p_1_9|append a bare, unchecked 'gh issue close' to bin/harness-status.sh (#355)"
+  "1.9-guarded||p_1_9_guarded|control: the same write with a '|| true' fallback is not flagged"
   "1.1-hooks|1.1|p_1_1_hooks|append a stray 'if [' to hooks/git-c-guard.sh (proves the glob extension)"
   "1.6|1.6|p_1_6|append a bare 'eval \"\$x\"' line to hooks/git-c-guard.sh"
   "1.6-comment||p_1_6_comment|control: a single #-comment naming eval is not flagged"
@@ -886,11 +894,11 @@ cases=(
   "4.48-no-skill-mention|4.48|p_4_48_no_skill_mention|replace every occurrence of 'needs-human' in skills/issue-implementer/SKILL.md with a near-miss spelling (characters changed inside the token, not a suffix) -- measured: \"4.48 ESCALATION_LABEL value ('needs-human') not found in skills/issue-implementer/SKILL.md\" (74 pass, 1 fail)"
   "4.49-drift|4.49|p_4_49_drift|alter one character inside bin/harness-stop.sh's own STOP_LABEL value (characters changed inside the token, not a suffix) so it is no longer among the labels bin/setup-labels.sh creates -- measured: \"4.49 STOP_LABEL ('harness-stpo') is not among the labels bin/setup-labels.sh creates\" (75 pass, 1 fail)"
   "4.49-extraction|4.49|p_4_49_extraction|rename STOP_LABEL to STOP_LBEL throughout bin/harness-stop.sh (both the declaration and its usage()-text use site) so the gate's anchored extraction comes back empty -- measured: \"4.49 bin/harness-stop.sh's STOP_LABEL=\\\"...\\\" line didn't match (structure changed) — extraction failed\" (75 pass, 1 fail)"
-  "4.49-applied|4.49|p_4_49_applied|append 'gh issue edit 1 --add-label harness-stop' to bin/harness-status.sh (the append target p_4_44/p_1_1/p_1_7 already prove trips nothing else) -- measured failing set: {4.49} (75 pass, 1 fail)"
+  "4.49-applied|1.9 4.49|p_4_49_applied|append 'gh issue edit 1 --add-label harness-stop' to bin/harness-status.sh — since #355 (assertion 1.9), this same bare unguarded write also trips the new gh-issue-write scan -- measured failing set: {1.9 4.49} (79 pass, 2 fail)"
   "4.50-extraction|4.50|p_4_50_extraction|rename TRIAGED_HELD_LABEL to TRIAGED_HELD_LBEL throughout bin/harness-status.sh (both the declaration and its list_followups() use site) so the gate's anchored extraction comes back empty -- measured: \"4.50 bin/harness-status.sh's TRIAGED_HELD_LABEL=\\\"...\\\" line didn't match (structure changed) — extraction failed\" (77 pass, 1 fail)"
   "4.50-drift|4.50|p_4_50_drift|alter one character inside bin/harness-status.sh's own TRIAGED_HELD_LABEL value (characters changed inside the token, not a suffix) so it is no longer among the labels bin/setup-labels.sh creates -- measured: \"4.50 TRIAGED_HELD_LABEL ('triaged-hled') is not among the labels bin/setup-labels.sh creates\" (77 pass, 1 fail)"
   "4.50-missing-token|4.50|p_4_50_missing_token|delete the ' -label:\$TRIAGED_HELD_LABEL' token from list_followups()'s own --search line in bin/harness-status.sh, the only 'is:issue label:no-plan' --search line in that script -- measured: \"4.50 1 of 1 'is:issue label:no-plan' --search lines in bin/harness-status.sh lack the -label:\$TRIAGED_HELD_LABEL token\" (77 pass, 1 fail)"
-  "4.50-applied|4.50|p_4_50_applied|append 'gh issue edit 1 --add-label triaged-held' to bin/harness-status.sh (the append target p_4_44/p_1_1/p_1_7/p_4_49_applied already prove trips nothing else) -- measured failing set: {4.50} (77 pass, 1 fail)"
+  "4.50-applied|1.9 4.50|p_4_50_applied|append 'gh issue edit 1 --add-label triaged-held' to bin/harness-status.sh — since #355 (assertion 1.9), this same bare unguarded write also trips the new gh-issue-write scan -- measured failing set: {1.9 4.50} (79 pass, 2 fail)"
   "4.51-extraction|4.51|p_4_51_extraction|rename STOP_ROUTE_PREFIX to STOP_ROUTE_PREFX throughout bin/harness-status.sh (both the declaration and its jq --arg use site) so the gate's anchored extraction comes back empty -- measured: \"4.51 a STOP_*_PREFIX or STOP_STATE_{SET,CLEAR,UNKNOWN} declaration didn't match (structure changed) in bin/harness-status.sh — extraction failed\" (78 pass, 1 fail)"
   "4.51-drift|4.51|p_4_51_drift|alter one character inside bin/harness-status.sh's own STOP_STATE_UNKNOWN value (characters removed inside the token, not a suffix) so the stop=<state> concatenation no longer appears as a fixed string in bin/harness-stop.sh -- measured: \"4.51 bin/harness-stop.sh is missing one or more of bin/harness-status.sh's own stop-grammar tokens as fixed strings: 'stop=unkown'\" (78 pass, 1 fail)"
 )
