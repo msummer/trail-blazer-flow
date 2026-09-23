@@ -35,8 +35,9 @@ jobs' eight commands failed — reproduce locally with `bash dev/selfcheck.sh`,
 Mac, prefix each with `PATH=/bin:$PATH` to match the macOS job's shell, e.g.
 `PATH=/bin:$PATH bash dev/selfcheck.sh`).
 There is no test suite and no build step: this repo is Markdown instruction files, Bash scripts,
-and JSON manifests. The gate prints what it checks — run it. A change the gate can't catch needs
-a new assertion in the gate, not a waiver, subject to the machine-parsed-artifacts rule below.
+and JSON manifests. The gate prints what it checks — run it. A change existing checks can't catch
+is closed by a new fixture or case in the relevant suite, not waived; a new gate assertion is the
+exception, governed by the machine-parsed-artifacts convention below.
 
 `dev/selfcheck-tests.sh` is the gate's own negative-test harness — a separate script, not part of
 `dev/selfcheck.sh` itself, that copies this repo to a throwaway temp directory, applies one
@@ -154,6 +155,12 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   mechanically extracted artifacts (JSON↔JSON, script↔script, script↔JSON, filename↔frontmatter);
   no assertion may parse or pin English prose. Duplicated spec text is resolved by **deleting a
   copy**, never by pinning both — pinning makes the duplication load-bearing and permanent.
+  Default: no new gate assertion. A plan may add one only when its "Testing approach" names (a)
+  the specific cross-artifact drift the assertion prevents — the two artifacts that must agree —
+  and (b) why no existing gate assertion or `dev/*-tests.sh` fixture already catches it; a check a
+  fixture suite already exercises (such as a stdout token vocabulary the fixtures themselves
+  consume) does not qualify. The maintainer's plan approval is where that justification is judged;
+  this is a review-level convention, and no gate assertion checks it.
 - **Follow-ups must name a user-visible failure.** A follow-up issue filed from a PR must name a
   concrete failure a user of this plugin would experience; a verifier's "Notes for the PR
   reviewer" is not a finding and does not become a follow-up by default.

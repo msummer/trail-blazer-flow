@@ -17,6 +17,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #364: `dev/selfcheck.sh`'s header no longer hand-maintains an assertion total (the summary
+  footer's pass + fail is the total), so a new assertion never edits a shared line; the
+  tautological header-count self-test is removed; CLAUDE.md now makes "no new gate assertion" the
+  default, requiring a plan to name the drift one prevents and why no existing suite catches it.
 - #363: Moved the per-PR "Since #N, X gains…" history out of CLAUDE.md's Verification section, out
   of `dev/cleanup-tests.sh`, `dev/hook-tests.sh`, and `dev/planning-tests.sh`'s own header
   comments, and out of README's per-repo migration notes, into the Archive below. CLAUDE.md's

@@ -1039,23 +1039,10 @@ flush_wave() {
   wave_n=0
 }
 
-run_headercount_case() {
-  local header_n out n_lines
-  header_n="$(grep -m1 -oE '[0-9]+ assertions total' "$root/dev/selfcheck.sh" | grep -oE '^[0-9]+')"
-  out="$(bash "$root/dev/selfcheck.sh" "$root" 2>&1)"
-  n_lines="$(printf '%s\n' "$out" | grep -cE '^  (PASS|FAIL)  ')"
-  if [ "$header_n" = "$n_lines" ]; then
-    case_ok "header-count" "dev/selfcheck.sh's header 'N assertions total' matches a clean run's PASS+FAIL line count"
-  else
-    case_bad "header-count" "dev/selfcheck.sh's header 'N assertions total' matches a clean run's PASS+FAIL line count"
-    echo "    header says $header_n, clean run printed $n_lines PASS/FAIL lines"
-  fi
-}
-
 # harness-dead-case (#336) — proves a child that dies without writing a verdict is reported as a
 # FAIL naming the case and the missing-verdict wording, never silently omitted from the totals.
 # Runs a real, nested invocation of THIS SAME script (SELFCHECK_TESTS_JOBS=2, a die: fault on
-# exactly one matched case — "1.1-hooks" matches exactly one case row and not header-count) and
+# exactly one matched case — "1.1-hooks" matches exactly one case row and neither self-test) and
 # pins its stdout+rc. The die fault exits before any gate ever runs, so this nested run costs
 # essentially nothing. See the file header's "what these self-tests do NOT prove" note: this
 # covers one injected death mode only, never every real death mode. Mutation proof (measured): a
@@ -1136,9 +1123,6 @@ for row in "${cases[@]}"; do
 done
 flush_wave
 
-case "header-count" in
-  *"$filter"*) matched=$((matched+1)); run_headercount_case ;;
-esac
 case "harness-dead-case" in
   *"$filter"*) matched=$((matched+1)); run_deadcase_selftest ;;
 esac
