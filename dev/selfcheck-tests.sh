@@ -484,6 +484,17 @@ p_4_50_extraction()     { edit "$1/bin/harness-status.sh" 's/TRIAGED_HELD_LABEL/
 p_4_50_drift()          { edit "$1/bin/harness-status.sh" 's/^TRIAGED_HELD_LABEL="triaged-held"$/TRIAGED_HELD_LABEL="triaged-hled"/'; }
 p_4_50_missing_token()  { edit "$1/bin/harness-status.sh" 's/^    --search "is:open is:issue label:no-plan -label:\$TRIAGED_HELD_LABEL" \\$/    --search "is:open is:issue label:no-plan" \\/'; }
 p_4_50_applied()        { printf 'gh issue edit 1 --add-label triaged-held\n' | append "$1/bin/harness-status.sh"; }
+# p_4_51_* (#353) — rename/alter characters INSIDE the identifier/value, never append a suffix
+# (LESSON 2026-09-04b). Both mutate bin/harness-status.sh (the extraction source for both of
+# 4.51's clauses), never bin/harness-stop.sh (the fixed-string check target). p_4_51_extraction
+# renames the STOP_ROUTE_PREFIX identifier throughout bin/harness-status.sh (both the declaration
+# and its jq --arg use site), so the gate's anchored extraction of the literal
+# "STOP_ROUTE_PREFIX=" prefix comes back empty (clause a). p_4_51_drift alters
+# bin/harness-status.sh's own STOP_STATE_UNKNOWN value (characters removed inside the token, not a
+# suffix) so the STOP_STATE_PREFIX+STOP_STATE_UNKNOWN concatenation ("stop=unkown") no longer
+# appears as a fixed string in bin/harness-stop.sh, whose own literal is "stop=unknown" (clause b).
+p_4_51_extraction() { edit "$1/bin/harness-status.sh" 's/STOP_ROUTE_PREFIX/STOP_ROUTE_PREFX/g'; }
+p_4_51_drift()      { edit "$1/bin/harness-status.sh" 's/^STOP_STATE_UNKNOWN="unknown"$/STOP_STATE_UNKNOWN="unkown"/'; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -875,6 +886,8 @@ cases=(
   "4.50-drift|4.50|p_4_50_drift|alter one character inside bin/harness-status.sh's own TRIAGED_HELD_LABEL value (characters changed inside the token, not a suffix) so it is no longer among the labels bin/setup-labels.sh creates -- measured: \"4.50 TRIAGED_HELD_LABEL ('triaged-hled') is not among the labels bin/setup-labels.sh creates\" (77 pass, 1 fail)"
   "4.50-missing-token|4.50|p_4_50_missing_token|delete the ' -label:\$TRIAGED_HELD_LABEL' token from list_followups()'s own --search line in bin/harness-status.sh, the only 'is:issue label:no-plan' --search line in that script -- measured: \"4.50 1 of 1 'is:issue label:no-plan' --search lines in bin/harness-status.sh lack the -label:\$TRIAGED_HELD_LABEL token\" (77 pass, 1 fail)"
   "4.50-applied|4.50|p_4_50_applied|append 'gh issue edit 1 --add-label triaged-held' to bin/harness-status.sh (the append target p_4_44/p_1_1/p_1_7/p_4_49_applied already prove trips nothing else) -- measured failing set: {4.50} (77 pass, 1 fail)"
+  "4.51-extraction|4.51|p_4_51_extraction|rename STOP_ROUTE_PREFIX to STOP_ROUTE_PREFX throughout bin/harness-status.sh (both the declaration and its jq --arg use site) so the gate's anchored extraction comes back empty -- measured: \"4.51 a STOP_*_PREFIX or STOP_STATE_{SET,CLEAR,UNKNOWN} declaration didn't match (structure changed) in bin/harness-status.sh — extraction failed\" (78 pass, 1 fail)"
+  "4.51-drift|4.51|p_4_51_drift|alter one character inside bin/harness-status.sh's own STOP_STATE_UNKNOWN value (characters removed inside the token, not a suffix) so the stop=<state> concatenation no longer appears as a fixed string in bin/harness-stop.sh -- measured: \"4.51 bin/harness-stop.sh is missing one or more of bin/harness-status.sh's own stop-grammar tokens as fixed strings: 'stop=unkown'\" (78 pass, 1 fail)"
 )
 
 # ---------------------------------------------------------------------------------------------

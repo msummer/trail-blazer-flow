@@ -505,9 +505,12 @@ issues (blocker, one line each), (#333, #346) held follow-ups to triage
 (`followups_to_triage`, untriaged-only since #346 and counted in `human_actions`), and (#309)
 durable escalations awaiting an answer (`waiting_on_human.escalations` — number, title, url each;
 stage, reason and the comment url are known only for an escalation THIS run posted, from the
-implementer's own step 3 report) — copy-paste
+implementer's own step 3 report), and (#353) the stop switch's own verdict (`stop.state`; a set
+stop's carriers, from `waiting_on_human.stop_routes`, each with its own `clear=`
+command pasted verbatim — see "Stop switch" below) — copy-paste
 actionable (a `degraded: true` status JSON means naming each `degraded_reasons` entry here too,
 since that bucket may under-report). Nothing done and nothing waiting (`counts.human_actions` is
+0 AND `stop.state` is `"false"` — a set, unknown or unreadable stop is never "all quiet", even at
 0) → say "all quiet" in one line and stop (still an empty ledger, not a skipped
 reconciliation — only applies when there was
 truly nothing to seed).

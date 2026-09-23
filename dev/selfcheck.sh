@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 78 assertions total. The gate prints what it checks — run it.
+# Five groups, 79 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -713,7 +713,7 @@ fi
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 860
-issue-cycle 595
+issue-cycle 600
 issue-planner 560
 project-kickoff 215
 test-ratchet 200
@@ -1710,6 +1710,44 @@ else
         ok "4.50 bin/harness-status.sh's TRIAGED_HELD_LABEL ('$th_label') is created by bin/setup-labels.sh, excluded by its held-follow-up --search line, and no --label/--add-label/--remove-label argument naming it appears in skills/*/SKILL.md, skills/*/references/*.md, agents/*.md, or bin/*.sh"
       fi
     fi
+  fi
+fi
+
+# 4.51 (#353) — bin/harness-status.sh's STOP_*_PREFIX / STOP_STATE_{SET,CLEAR,UNKNOWN} constants
+# <-> bin/harness-stop.sh's own literal stdout-grammar tokens, the 4.48/4.49/4.50 shape reused, two
+# clauses folded into one assertion so the count rises by exactly one: (a) each of the four
+# STOP_STATE_PREFIX/STOP_ROUTE_PREFIX/STOP_CLEAR_PREFIX/STOP_REASON_PREFIX="..." declarations
+# extracts non-empty from bin/harness-status.sh with the anchored sed -nE idiom (an empty
+# extraction FAILs loudly, "structure changed", rather than passing vacuously) and appears as a
+# fixed string (grep -F) in bin/harness-stop.sh; (b) each of the three concatenations
+# STOP_STATE_PREFIX+STOP_STATE_SET / +STOP_STATE_CLEAR / +STOP_STATE_UNKNOWN
+# (bin/harness-status.sh's own STOP_STATE_SET/CLEAR/UNKNOWN="..." declarations, extracted the
+# identical way) appears as a fixed string in bin/harness-stop.sh too. STOP_STATE_UNAVAILABLE is
+# deliberately excluded from clause (b): it is this script's OWN slug for an outcome
+# bin/harness-stop.sh itself never prints (see that constant's own comment in
+# bin/harness-status.sh). Proves only that the token vocabulary agrees end to end, nothing about
+# either script's runtime parse — the same honest limit 4.33/4.34/4.35/4.45/4.46/4.48/4.49/4.50's
+# comments state.
+sp_prefix_451="$(sed -nE 's/^STOP_STATE_PREFIX="([^"]*)"$/\1/p' "$root/bin/harness-status.sh")"
+sr_prefix_451="$(sed -nE 's/^STOP_ROUTE_PREFIX="([^"]*)"$/\1/p' "$root/bin/harness-status.sh")"
+sc_prefix_451="$(sed -nE 's/^STOP_CLEAR_PREFIX="([^"]*)"$/\1/p' "$root/bin/harness-status.sh")"
+sz_prefix_451="$(sed -nE 's/^STOP_REASON_PREFIX="([^"]*)"$/\1/p' "$root/bin/harness-status.sh")"
+ss_set_451="$(sed -nE 's/^STOP_STATE_SET="([^"]*)"$/\1/p' "$root/bin/harness-status.sh")"
+ss_clear_451="$(sed -nE 's/^STOP_STATE_CLEAR="([^"]*)"$/\1/p' "$root/bin/harness-status.sh")"
+ss_unknown_451="$(sed -nE 's/^STOP_STATE_UNKNOWN="([^"]*)"$/\1/p' "$root/bin/harness-status.sh")"
+if [ -z "$sp_prefix_451" ] || [ -z "$sr_prefix_451" ] || [ -z "$sc_prefix_451" ] || [ -z "$sz_prefix_451" ] \
+   || [ -z "$ss_set_451" ] || [ -z "$ss_clear_451" ] || [ -z "$ss_unknown_451" ]; then
+  bad "4.51 a STOP_*_PREFIX or STOP_STATE_{SET,CLEAR,UNKNOWN} declaration didn't match (structure changed) in bin/harness-status.sh — extraction failed"
+else
+  missing_451=""
+  for tok_451 in "$sp_prefix_451" "$sr_prefix_451" "$sc_prefix_451" "$sz_prefix_451" \
+                 "${sp_prefix_451}${ss_set_451}" "${sp_prefix_451}${ss_clear_451}" "${sp_prefix_451}${ss_unknown_451}"; do
+    grep -qF -- "$tok_451" "$root/bin/harness-stop.sh" || missing_451="$missing_451 '$tok_451'"
+  done
+  if [ -n "$missing_451" ]; then
+    bad "4.51 bin/harness-stop.sh is missing one or more of bin/harness-status.sh's own stop-grammar tokens as fixed strings:$missing_451"
+  else
+    ok "4.51 bin/harness-status.sh's STOP_*_PREFIX constants and STOP_STATE_PREFIX+{SET,CLEAR,UNKNOWN} concatenations all appear as fixed strings in bin/harness-stop.sh"
   fi
 fi
 

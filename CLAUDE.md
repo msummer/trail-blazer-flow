@@ -252,9 +252,10 @@ CI as the fifth step, but it is not part of `dev/selfcheck.sh` itself — run it
 `dev/planning-tests.sh` is a separate negative-test harness for BOTH of this repo's discovery
 scripts, `bin/find-planning-work.sh` (#164) and, since #176, `bin/find-implementation-work.sh`,
 and, since #285, their consumer `bin/harness-status.sh` — end-to-end via Part 13's fixtures (both
-discovery scripts run for real), and, since #297 (extended #333, #309), via Part 14's fixtures
-against `bin/harness-status.sh`'s own five `gh` call sites alone, behind a `build_stub_discovery`-built
-canned stand-in for both discovery scripts (so, among the fixtures that invoke `run_status`, an
+discovery scripts run for real), and, since #297 (extended #333, #309, #353), via Part 14's
+fixtures against `bin/harness-status.sh`'s own five `gh` call sites, plus (#353) its own stop check
+(not a `gh` call site — one `bin/harness-stop.sh` invocation instead), behind a
+`build_stub_discovery`-built canned stand-in for both discovery scripts (so, among the fixtures that invoke `run_status`, an
 in-place mutant to either discovery script is reachable only through Part 13's own `run_status`
 fixtures, never Part 14's — this file's many OTHER Parts, which call the discovery scripts
 directly rather than through `run_status`, reach those same mutants too):
@@ -528,7 +529,31 @@ pinned by three existing Part 14 fixtures (`status-followups-bucket-populated` a
 bucket stays empty either way at 0); the pre-existing mutant (N8) is restated as its own inverse (adding
 `"followups_to_triage"` back to the now-empty exclusion list) and a new mutant deletes the query's
 own label token — both measured, alongside every pre-existing mutant in the four `MEASURED MUTANTS`
-blocks whose target is `bin/harness-status.sh`, against the re-shaped code.
+blocks whose target is `bin/harness-status.sh`, against the re-shaped code. Since #353,
+`bin/harness-status.sh` gains a SIXTH such check, but not a sixth `gh` call site — it still makes
+exactly five — one `bin/harness-stop.sh` invocation, fed by that script's own stdout grammar rather
+than a second query and never retried at this layer (`bin/harness-stop.sh` already performs its own
+one bounded retry). The status JSON gains a top-level `stop` object (`{state, reason, exit_code}`)
+and a new `waiting_on_human.stop_routes` array (one `{route, clear}` entry per SET carrier, both
+fields pasted verbatim, never re-derived), plus `counts.stop_routes` and, in `$sf`,
+`counts.stop_check_unavailable` (appended last, after `escalations_query_unavailable`).
+`stop_routes` was never named in the `human_actions` exclusion list either, so a SET stop with N
+carriers joins the sum automatically, the identical generic rule `escalations` and (since #346)
+`followups_to_triage` already use — `human_actions` is therefore, today, the sum of every
+`waiting_on_human` member: `plans_to_review`, `prs_to_review`, `blocked`, `followups_to_triage`,
+`escalations`, and `stop_routes`. Tested behind a new canned `build_stub_stop` stand-in (the
+identical canned-not-real design `build_stub_discovery` already uses for this file's Part 14),
+installed by DEFAULT from `run_status` so no pre-#353 `run_status` fixture needed changing to keep
+passing (the default stand-in is why) and no fixture ever executes the real
+`bin/harness-stop.sh` — `status-own-queries-healthy` gained three `expect_jq` assertions plus
+`expect_stop_calls` as the default stand-in's own non-vacuity control; the other twenty are
+byte-identical. Twelve new Part 14 fixtures pin the state mapping (fail-closed to `"unavailable"`
+on every outcome `bin/harness-stop.sh` does not document, including a determinate-looking carrier
+line printed alongside an untrusted exit — discarded rather than trusted), the verbatim
+carrier/`clear=` pairing and GitHub-before-local ordering, the
+`stop_check_unavailable`/`degraded_reasons` participation, and the `human_actions` arithmetic at
+N=0/1/3 carriers; new gate assertion 4.51 pins that the stop-grammar tokens
+`bin/harness-status.sh` parses appear as fixed strings in `bin/harness-stop.sh`'s own source.
 It runs in CI as the sixth step, but it
 is not part of `dev/selfcheck.sh` itself — run it by hand whenever `bin/find-planning-work.sh`,
 `bin/find-implementation-work.sh`, or `bin/harness-status.sh` changes.
