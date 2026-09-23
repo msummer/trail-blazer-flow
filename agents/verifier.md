@@ -82,7 +82,9 @@ summary. Read the actual changed files — do not trust the report or the diff s
    g. **Documentation changes** — for docs (new or edited), every factual claim in the text is
       an acceptance criterion: verify each against the code it describes (endpoints, names,
       parameters, error behavior, where checks are enforced). A claim you cannot ground in the
-      code is a finding, same as an unmet criterion.
+      code is a finding, same as an unmet criterion. A dated history record (e.g. a changelog
+      entry) is checked only when this diff adds it, against this diff; older entries, and text
+      the diff moves verbatim, are not current claims.
    h. **Autonomy reserve** — read the reserve globs from the orchestrator's prompt (pasted one
       per line from CLAUDE.md's `## Autonomy reserve` fenced block, or the literal
       `none declared`). If the prompt is silent on the subject instead, read CLAUDE.md's

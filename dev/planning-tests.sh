@@ -10,288 +10,13 @@
 # own gate (that's dev/selfcheck.sh +
 # dev/selfcheck-tests.sh) and not the consumer doctor's harness (dev/doctor-tests.sh). Builds
 # throwaway fixture directories under mktemp, with a stub `gh` on PATH, and runs the REAL script(s)
-# under test against each, pinning
-# (since #217: six cases run the stub `gh` directly rather than either discovery script, and two
-# run a deliberately `--json`-mutated COPY of a real script rather than the unmodified script
-# itself — see the field-list-validation paragraph below):
+# under test against each (since #217, six cases run the stub `gh` directly rather than either
+# discovery script, and two run a deliberately `--json`-mutated COPY of a real script rather than
+# the unmodified script itself — see the field-list-validation paragraph below); the behaviour
+# pinned is described in CHANGELOG.md's archive and in each script's own header comment.
 #
-#   bin/find-planning-work.sh (#164, planner-facing): only a comment whose authorAssociation is
-#   OWNER, MEMBER, or COLLABORATOR ever puts its issue into needs_revision or is honoured as the
-#   latest plan comment; everything else (CONTRIBUTOR, NONE, or a comment with no
-#   authorAssociation field at all — fail-closed) posted after the issue's latest trusted plan
-#   (or any such comment, if there is no trusted plan yet) is reported in the untrusted_comments
-#   output bucket instead of being silently dropped or silently trusted, and never shadows a
-#   real, trusted plan; one posted before that plan is dropped with no bucket entry. #176 added
-#   issue-author provenance on the SAME script: every needs_initial_plan/needs_revision item now
-#   carries {author, association, trusted_author}, a non-maintainer-authored issue is still
-#   listed (planning is not gated on it) but also appears in the untrusted_issue_authors bucket,
-#   and (#202: association is read from GitHub's REST issues endpoint, since gh has never exposed
-#   an issue-level authorAssociation `--json` field) if that REST lookup fails, the script retries
-#   it once after a single bounded backoff (#246, mirroring #223/PR #244's implementer-side
-#   re-run) before the run fails closed (every issue untrusted, one warn line,
-#   counts.author_association_unavailable: true); a retry that succeeds instead sets
-#   counts.author_association_retried: true and populates the map from the SECOND attempt's
-#   output, with a distinct one-line warn on stderr. #182
-#   added a second, orthogonal exclusion inside the trusted set: a trusted comment containing
-#   "<!-- harness-audit -->" (a harness-authored audit/hygiene record) or "<!-- verifier-verdict
-#   -->" (the orchestrator's own archive) never counts as feedback either, so neither re-opens a
-#   plan for revision — counted in counts.audit_comments_skipped / counts.verdict_archives_skipped
-#   respectively, and never applied to the untrusted bucket (a forged marker from an untrusted
-#   author still lands in untrusted_comments, never silently dropped). #281 (superseding #275)
-#   restricts the plan-candidate set feeding the LATEST-PLAN computation itself to trusted
-#   comments that OPEN WITH (first-line anchored, not the contains() the feedback exclusion above
-#   uses) the plan marker — so neither a harness-authored record (which opens with its own marker,
-#   never the plan marker) nor a record whose harness marker is preceded by prose but which quotes
-#   the plan marker mid-body (the residual gap #275 left open) is ever mistaken for the plan (the
-#   live #245 shape, generalised); a plan comment that itself quotes a harness marker in its own
-#   prose is unaffected and still becomes the latest plan. #211 makes the SAME
-#   script's revision-candidates query faithful too: the stub applies the script's own `--jq
-#   '.[].number'` argument to a JSON page-array fixture with the real jq and propagates jq's exit
-#   status, so a candidates filter that cannot process the returned document fails the call the
-#   identical way a rejected `gh issue list` call does — see #272/#273 immediately below, which
-#   retries that failure once before it can abort anything. #272/#273 extend #246's bounded-retry
-#   shape (one guarded 30s sleep, one re-attempt) to the SAME script's other three `gh` calls: the
-#   needs_initial_plan query and the revision-candidates query each retry once, then — instead of
-#   the bare command-substitution assignments that used to let one transient failure abort the
-#   whole run under `set -euo pipefail` before any stdout was produced — fail closed to an empty
-#   bucket with a dedicated counts flag and a warn line on stderr, while the run continues and
-#   still exits 0 with whatever half succeeded (#273); the per-candidate `gh issue view` inside the
-#   revision loop gets the identical one-retry treatment before its pre-existing warn-and-skip
-#   fallback runs (#272), narrowing counts.fetch_failures to post-retry failures only and adding
-#   counts.fetch_retries for the retried-regardless-of-outcome count. All four sites (this REST
-#   lookup included) share the one ASSOCIATION_RETRY_SLEEP backoff constant.
-#
-#   bin/find-implementation-work.sh (#176, implementer-facing): the same trust gate, reused
-#   rather than forked (TRUSTED_ASSOCIATIONS agrees with find-planning-work.sh's — see gate
-#   assertion 4.26), selects each ready issue's approved plan comment and its binding post-plan
-#   comments itself: a plan-marker comment from an untrusted author is never selected as `plan`;
-#   an untrusted post-plan comment never lands in trusted_post_plan; a trusted post-plan comment
-#   containing "<!-- verifier-verdict -->" (the orchestrator's own archive) or, since #182,
-#   "<!-- harness-audit -->" (a harness-authored audit/hygiene record) is excluded from
-#   trusted_post_plan too (counted in counts.verdict_archives_skipped / counts.audit_comments_
-#   skipped respectively, never applied to untrusted_post_plan); a comment with no
-#   authorAssociation field at all is fail-closed untrusted; and an issue with no trusted plan
-#   comment yields plan: null but stays in `ready`. #281 (superseding #275) restricts plan
-#   candidacy itself to trusted comments that OPEN WITH the plan marker (first-line anchored),
-#   applied identically at BOTH the underlying $lastPlan computation and the plan: selection
-#   expression (a same-createdAt tie fixture discriminates the two sites), so neither a
-#   harness-authored record nor a record whose harness marker is preceded by prose but which
-#   quotes the plan marker mid-body is ever selected as plan; trusted_post_plan's own window
-#   re-anchors to the real plan.
-#   #174 added plan-binding provenance on the SAME script: each plan_selection entry's
-#   `approval.covers_plan` is true iff the newest `plan-approved` labeling event is not earlier
-#   than the selected plan comment (a plan posted AFTER the label is not covered — the issue's
-#   named failure) — necessary but, since #192 also gates on the comment's content not having
-#   changed after approval, no longer sufficient on its own — the newest of several relabel events
-#   wins, ties count as covered, an unreadable events lookup fails closed (`covers_plan: null`),
-#   and `binding_line` is non-null iff `covers_plan` is `true`. Also pins `--issue <n>`
-#   single-issue mode's output shape and its exit-2 argument validation.
-#   #194 adds three more pins, split across both scripts and one skill-facing behaviour:
-#   workstream A — a `has_harness_marker` boolean (true when a comment's body contains
-#   "<!-- harness-audit -->" or "<!-- verifier-verdict -->") is added to BOTH scripts' untrusted
-#   buckets (`untrusted_comments[].comments[]` on the planner side, `untrusted_post_plan[]` on the
-#   implementer side) — an ANNOTATION only, never a filter (the #182 placement rule): a forged
-#   harness-record marker from a non-maintainer still surfaces, just flagged, counted in
-#   counts.untrusted_harness_markers, and warned about, on both scripts, symmetrically (gate
-#   assertion 4.29 pins that the two flag names agree). Workstream B — find-implementation-work.sh
-#   marks each `trusted_post_plan` entry `covered_by_approval`: true when the comment's createdAt
-#   is not later than that entry's own `approval.approved_at`, false when it is (reported —
-#   counts.post_approval_comments, a warn line — never binding), null when approved_at itself is
-#   unknown; `counts.trusted_post_plan` keeps counting every entry, covered and uncovered alike.
-#   Workstream C — the planner skill's step-7 stalled-stage escalation is now a
-#   "<!-- harness-audit -->"-opening issue comment rather than summary-only prose; pinned here by
-#   confirming such a comment (posted by a trusted author, after the plan) still exercises the
-#   existing audit-marker exclusion and does not re-open the plan for revision.
-#   #192 adds plan-COMMENT-content binding on the SAME script, layered inside the branch that
-#   #174's approval.covers_plan check would otherwise conclude "covered": the selected plan
-#   comment's REST `updated_at` (fetched via `gh api .../issues/comments/<id>`, `<id>` parsed from
-#   the comment url's `#issuecomment-<id>` suffix) is compared against the SAME `approved_at` the
-#   events lookup above already computed — an edit strictly AFTER approval un-covers the plan
-#   (`covers_plan: false`, `reason: "plan-edited-after-approval"`, `binding_line: null`,
-#   `counts.plan_edited_after_approval`); an edit before approval, or an edit-timestamp tie, stays
-#   covered on purpose (the approver read the edited text); an unparseable comment id, a rejected
-#   lookup, or a document the script's own filter cannot process all fail closed identically
-#   (`covers_plan: null`, `reason: "plan-edit-unreadable"`, `counts.plan_edit_unreadable`, with
-#   `approval.approved_at`/`approved_by` still populated since the EVENTS lookup itself succeeded
-#   — the contrast with `approval-unreadable`). The lookup is made ONLY on the
-#   would-otherwise-be-covered branch AND ONLY when the #240 pre-filter below finds gh's own
-#   includesCreatedEdit is not exactly false, so an issue already uncovered for another reason (no
-#   plan, no approval event, plan-after-approval, events-unreadable) — or one whose plan comment gh
-#   itself already reports as never edited — makes no extra API call and fires no extra warn line.
-#   Also pins that `--issue <n>` single-issue mode carries the new reason too.
-#   #229 adds a PRE-FILTER on the SAME script, checked before #174's events lookup and before
-#   #192's plan-edit lookup: `plan-approved` absent from the issue's CURRENT `labels` (fetched on
-#   the SAME `gh issue view` call both modes already make, tolerant of gh's real
-#   `{"name": "..."}` element shape and fail-closed on a missing `labels` key or an empty array)
-#   sets `covers_plan: false`, `reason: "approval-label-absent"`, `binding_line: null`, and
-#   `counts.approval_label_absent`, and makes NEITHER the events lookup NOR the plan-edit lookup —
-#   a maintainer who removes plan-approved to veto an issue mid-flight is caught, at zero API cost,
-#   by both single-issue callers (the implementer skill's pre-push recheck and issue-cycle's merge
-#   floor, both `--issue <n>`) and by batch mode (whose search result can be stale; the view fetch
-#   below it is always fresher). This reason wins precedence over no-plan — the human's withdrawal
-#   is the more actionable fact — but the separate "no maintainer-authored plan comment" warn and
-#   counts.no_trusted_plan still fire too, so the missing-plan fact is never hidden.
-#   #213 adds approval.approved_at_history[] on the SAME script (bin/find-implementation-work.sh):
-#   every real plan-approved `labeled` event for the issue, newest first, deduplicated, as
-#   {approved_at, approved_by, binding_line} — so a PR body written under an EARLIER approval of
-#   the same plan still has a binding line the issue-cycle merge floor recognises after a later,
-#   unrelated re-approval (see skills/issue-cycle/SKILL.md's *Plan-binding provenance* and
-#   *Post-approval comments* sub-bullets — re-adding plan-approved to bind a post-approval comment
-#   no longer permanently strands an open PR). Pinned here: a single labeled event => one entry
-#   matching approval's own top-level approved_at/approved_by/binding_line; three events posted
-#   OUT OF ORDER in the fixture => newest-first ordering (entry [0] is the newest, matching what
-#   $latest already picked); two byte-identical events => deduplicated to one entry; covers_plan
-#   not true (plan-after-approval) => every entry's binding_line is null even though the history
-#   itself is non-empty; the events lookup being unreadable (reject-events-<n>), evaluated
-#   alongside a healthy sibling issue, => approved_at_history: [] for the unreadable issue only —
-#   pinning the same per-iteration reset #229's approval-label-absent pre-filter also depends on
-#   (a stale value must never leak from one ready issue's loop iteration into the next); and
-#   --issue <n> single-issue mode carries the same field, same shape.
-#   #230 closes, for DECISION comments, the same content-binding gap #192 closed for the plan
-#   comment: on the branch that would otherwise leave approval.covers_plan "true" (after #229's
-#   label pre-filter and #192's plan-edit check both pass), the script fetches the REST updated_at
-#   of every trusted_post_plan entry #194 workstream B already marked covered_by_approval: true AND
-#   whose own gh-reported includesCreatedEdit is not exactly false (#240, see below) — and ONLY
-#   those — comparing it against the SAME approved_at. A covered comment edited strictly
-#   after approval flips that entry to covered_by_approval: false, covered_by_approval_reason:
-#   "decision-edited-after-approval", and collapses the ISSUE-LEVEL verdict to covers_plan: false,
-#   reason: "decision-edited-after-approval" too (folded into the same verdict split every reader
-#   already inherits). An entry whose edit state cannot be established (unparseable id, rejected
-#   call, a document the script's own filter cannot process, or an empty updated_at) flips to
-#   covered_by_approval: null, covered_by_approval_reason: "decision-edit-unreadable", collapsing
-#   the issue-level verdict the same way UNLESS some other covered comment on the same issue was
-#   also edited (edited wins — false is definitive). An entry the workstream-B check already
-#   marked uncovered, or one gh itself already reports as never edited (#240), is never looked up
-#   (proved mechanically by expect_api_calls, not inferred from the JSON) — the comment-<id>.json /
-#   reject-comment-<id> fixture contract above now serves EITHER the plan comment or a covered
-#   decision comment whose own includesCreatedEdit is not exactly false, since both calls hit the
-#   identical REST shape. Also pins that --issue <n> mode carries both new reasons.
-#   #240 pre-filters BOTH #192's plan-comment check and #230's decision-comment check just described
-#   on gh's own per-comment includesCreatedEdit boolean, already present in the `comments` field
-#   both scripts' fixtures already carry, at no extra API cost: exactly false means gh itself
-#   reports the comment was never edited, so the id-parse and the REST lookup are both skipped, with
-#   no warn, leaving the entry (or the plan) covered; exactly true keeps today's lookup and every
-#   fail-closed state unchanged; the key being ABSENT (every fixture that predates this PR) falls
-#   through to today's lookup — no new state, no new reason, no new counts key, no new `--json`
-#   field (the flag rides inside the `comments` field find-implementation-work.sh already fetches).
-#   Both internal jq members (plan_includes_created_edit, trusted_post_plan_edit_flags) never appear
-#   in the published JSON. Six new fixtures below (Part 11) pin the skip mechanically via
-#   expect_api_calls in both batch and --issue <n> modes; the pre-existing fixtures (none of which
-#   carries the key) pin the fall-through, non-vacuously, by continuing to pass unchanged.
-#   #284 mirrors #272/#273's bounded-retry-then-fail-closed shape (one guarded 30s backoff, one
-#   re-attempt) onto the SAME script's other two `gh` call sites: the batch `ready` query (a bare
-#   command-substitution assignment before this PR, so one blip aborted the run with no stdout) and
-#   the per-issue `gh issue view` inside the ready loop (previously warn-and-skip on the FIRST
-#   failure). A retry that succeeds sets counts.ready_query_retried: true and builds `ready` from
-#   the SECOND attempt's output; both attempts failing additionally sets
-#   counts.ready_query_unavailable: true and reports `ready` as an empty array — the script still
-#   exits 0 with one complete JSON document, never an abort. counts.fetch_retries counts every
-#   per-issue first-attempt failure regardless of the retry's own outcome; counts.fetch_failures is
-#   narrowed to post-retry failures only. `--issue <n>` mode's own prefetch is deliberately NOT
-#   retried (both its callers already re-run the whole script once on an unknown verdict) — pinned
-#   by a dedicated fixture proving byte-identical behaviour to before #284.
-#   #285 teaches bin/harness-status.sh, the consumer both discovery scripts already have, to
-#   surface a degraded discovery run instead of silently reporting an empty queue: a top-level
-#   `degraded` boolean and `degraded_reasons` array (`"planning.<key>"` / `"implementation.<key>"`
-#   strings, planning half first), computed by a GENERIC rule — every key in either script's own
-#   `counts` object whose name ends in `_unavailable` and whose value is exactly `true` — plus
-#   `counts.degraded` mirroring the same boolean. Being generic, it already covers
-#   initial_query_unavailable, candidates_query_unavailable, author_association_unavailable, and
-#   #284's own ready_query_unavailable with no per-key enumeration to drift; a non-zero
-#   counts.fetch_failures on either script deliberately does NOT mark a run degraded (it drops one
-#   issue, not a whole bucket, and already produces its own per-issue warn line on stderr).
-#   #297 gives bin/harness-status.sh's OWN three gh call sites (plan-proposed, impl-blocked, open
-#   PRs) the identical bounded-retry-then-fail-closed shape #272/#273/#284 already gave the two
-#   discovery scripts, publishing six new `counts` booleans (`proposed_query_retried`/
-#   `_unavailable`, `blocked_query_retried`/`_unavailable`, `prs_query_retried`/`_unavailable`) and
-#   extending `degraded_reasons` with a third, status half — the SAME generic rule applied to this
-#   script's own new flags, producing `"status.<key>"` entries after the planning and
-#   implementation halves. The Part 14 fixtures below (#297, extended #333, extended #309, extended
-#   #353) exercise this script's own five gh call sites — PLUS (#353) its own stop check, which is
-#   not a gh call site (see build_stub_stop below) — via a new `build_stub_discovery` builder that
-#   shadows BOTH discovery scripts with canned, non-gh-calling stand-ins — unlike Part 13's fixtures
-#   above, which drive the real discovery scripts end-to-end through run_status too.
-#   #333 adds a FOURTH such site, `waiting_on_human.followups_to_triage`: open, `no-plan` issues
-#   whose body opens with the harness-filed follow-up marker (#308), fed by a fourth `gh issue
-#   list` call with the identical bounded-retry-then-fail-closed shape, publishing
-#   `followups_query_retried`/`_unavailable` and a `"status.followups_query_unavailable"`
-#   degraded_reasons entry appended AFTER the three #297 status entries. From #333 through v2.7.6,
-#   `counts.human_actions` did NOT include this bucket — it was reported beside the total, never
-#   inside it, because the query could not tell a follow-up nobody had triaged from one a
-#   maintainer read and deliberately parked (both kept `no-plan` and the marker forever; measured
-#   on this repo 2026-09-17: the filter matched 10 issues, every one already triaged and parked).
-#   `human_actions` is a generic sum over every `waiting_on_human` array member EXCEPT a small,
-#   named exclusion list bound right next to the sum, so `waiting_on_human`'s escalations member
-#   (#309) joins the total automatically, with no edit to the sum expression, since it is not named
-#   in that exclusion list — the same mechanism any future member gets unless it too is named
-#   there. Since #346, `list_followups()`'s own query additionally excludes
-#   `-label:$TRIAGED_HELD_LABEL` (a new, human-applied-only lifecycle label the harness never adds
-#   or removes), narrowing the bucket to untriaged-only; with that narrowing in place the exclusion
-#   list is now empty (`[] as $excluded`, kept as the extension point #333 designed), so
-#   `followups_to_triage` joins `counts.human_actions` too, by the identical generic rule. Four new
-#   Part 14 fixtures (below) pin the new site; two existing Part 14 fixtures
-#   (status-own-queries-healthy, status-own-retry-sleep-failure-survives) are extended to cover its
-#   healthy path and its guarded sleep; a further #346 continuation (below the #309 fixtures
-#   further down) restates the affected fixtures' human_actions expectations and mutant (N8) for
-#   the new, empty-exclusion-list baseline.
-#   #309 adds a FIFTH such site, `waiting_on_human.escalations`: open `needs-human` issues, served
-#   verbatim with no filter, fed by a fifth `gh issue list` call with the identical
-#   bounded-retry-then-fail-closed shape, publishing `counts.escalations`,
-#   `counts.escalations_query_retried`/`_unavailable` and a
-#   `"status.escalations_query_unavailable"` degraded_reasons entry appended AFTER the four
-#   existing status-half entries (the three #297 entries plus #333's own). This member was never
-#   named in the `human_actions` exclusion list, so it joined the total automatically by the same
-#   generic rule, with no edit to the sum itself — the same rule #346 (above) now also applies to
-#   `followups_to_triage`. Three new Part 14 fixtures pin the new site —
-#   status-escalations-bucket-populated, status-escalations-query-retry-succeeds, and
-#   status-escalations-query-unavailable — and the same two existing Part 14 fixtures
-#   (status-own-queries-healthy, status-own-retry-sleep-failure-survives) are extended again, this
-#   time to cover the escalations site's healthy path and its guarded sleep.
-#   #302 adds a diagnostic for the one class #281's positive anchor drops with no report of its
-#   own: a trusted comment posted after the latest plan (or, when there is none, at any time) whose
-#   body contains the plan marker somewhere other than its first line — never a plan candidate
-#   (#281 already excludes it) and never feedback/binding context either (the pre-existing
-#   contains($m) exclusion already excludes it there too) — was previously dropped from both sets
-#   with no diagnostic. Both scripts now print one `warn:` line per such comment (naming its
-#   author, createdAt, and url, or the literal "no url") and publish `counts.plan_marker_quoters`,
-#   spelled byte-identically between the two scripts (no `startswith`, no reference to `$planC`),
-#   harness records excluded exactly as the feedback/binding sets already exclude them. Two new
-#   combined fixtures (Part 5) tell apart every clause of the rule.
-#   #321 adds the twin diagnostic for the class #302 deliberately left unwarned: a trusted comment
-#   posted after the latest plan (or, when there is none, at any time) whose body contains a
-#   harness-record marker (the harness-audit marker or the verifier-verdict marker — the set is now
-#   one shared declaration, HARNESS_RECORD_MARKERS, on both scripts) somewhere other than its first
-#   line — a maintainer quoting a harness record (to dispute it, for instance), not a harness
-#   record itself, since every record this harness posts opens with its own marker. Both scripts now
-#   print one `warn:` line per such comment (naming its author, createdAt, and url, or the literal
-#   "no url") and publish `counts.harness_marker_quoters`, spelled byte-identically between the two
-#   scripts, disjoint from `counts.plan_marker_quoters` (a comment quoting both markers is counted
-#   in exactly one). Five new fixtures (Part 5) tell apart every clause of the rule, including the
-#   no-plan window and (implementer only) `--issue <n>` mode.
-#   #353 adds a SIXTH check site to bin/harness-status.sh, but not a sixth `gh` call site: one
-#   bin/harness-stop.sh invocation, fed by that script's own stdout grammar rather than a second
-#   query, never retried at this layer (harness-stop.sh already does its own one bounded retry).
-#   The status JSON gains a top-level `stop` object ({state, reason, exit_code}) and a new
-#   `waiting_on_human.stop_routes` array (one {route, clear} entry per SET carrier, both fields
-#   pasted verbatim from harness-stop.sh's own printed lines), plus `counts.stop_routes` and, in
-#   `$sf`, `counts.stop_check_unavailable` (appended LAST, after `escalations_query_unavailable`,
-#   so its own `status.stop_check_unavailable` degraded_reasons entry — when present — is always
-#   the array's last entry too). `stop_routes` was never named in the `human_actions` exclusion
-#   list either, so a SET stop with N carriers joins the sum automatically, the identical
-#   mechanism #309's escalations member and (since #346) followups_to_triage already use. Tested
-#   behind a new canned `build_stub_stop` stand-in (mirroring `build_stub_discovery`'s own
-#   canned-not-real design for this file's Part 14), installed by DEFAULT from `run_status` so no
-#   pre-#353 `run_status` fixture needed changing to keep passing (the default stand-in is why) and
-#   no fixture ever executes the real bin/harness-stop.sh against the developer's or CI runner's own
-#   checkout — `status-own-queries-healthy` gained three `expect_jq` assertions plus
-#   `expect_stop_calls` as the default stand-in's own non-vacuity control; the other twenty
-#   pre-#353 `run_status` fixtures are byte-identical. Twelve new Part 14
-#   fixtures (below, after the #309 ones) pin the state mapping (fail-closed to "unavailable" on
-#   every outcome bin/harness-stop.sh does not document, including a determinate-looking carrier
-#   line printed alongside an untrusted exit — discarded rather than trusted), the verbatim
-#   carrier/`clear=` pairing and GitHub-before-local ordering, the
-#   `stop_check_unavailable`/`degraded_reasons` participation, and the
-#   `human_actions` arithmetic at N=0/1/3 carriers.
+# Per-PR history of what this harness pins: CHANGELOG.md (archive, #363). Each script's own
+# header and each fixture/case comment states its current mechanism.
 #
 # Usage: bash dev/planning-tests.sh [name-filter] — same output contract as
 # dev/cleanup-tests.sh, dev/doctor-tests.sh, and dev/selfcheck-tests.sh: one PASS/FAIL line per
@@ -5984,8 +5709,9 @@ EOF
 # view call is ever attempted; impl-single-issue-fetch-not-retried survives coincidentally — its
 # `--issue 14` prefetch has no issue-14.json fixture either way, so validate_json_fields rejecting
 # the mutated field list produces the identical "could not fetch issue #14" outcome the case
-# already expected. All five Part 13 fixtures survive for the reason the header's own #285 doc
-# comment states: bin/harness-status.sh's degraded/degraded_reasons rule reads only each script's
+# already expected. All five Part 13 fixtures survive for the reason this file's own #285 doc
+# comment, now archived in CHANGELOG.md, states: bin/harness-status.sh's degraded/degraded_reasons
+# rule reads only each script's
 # `counts` object for `*_unavailable`-suffixed flags — never `plan_selection`, `fetch_failures`, or
 # `ready`'s own content beyond its length — so a per-issue fetch failure this mutation causes
 # (status-clean-not-degraded's own healthy issue #200) changes no field any Part 13 assertion
@@ -11244,7 +10970,8 @@ EOF
 #   (S12, kickback round 2, F2) drop the unavailable-state carrier discard entirely (the
 #       `if [ "$stop_state" = "$STOP_STATE_UNAVAILABLE" ]; then stop_parsed=$(jq -c '.routes = []'
 #       <<<"$stop_parsed"); fi` block, added by this same kickback round to make the code match
-#       AC6 and the header's own claim, collapsed to the single statement `true`): 178 cases dropped
+#       AC6 and the header's own claim (now archived in CHANGELOG.md), collapsed to the single
+#       statement `true`): 178 cases dropped
 #       to 177 pass/1 fail, failing exactly status-stop-unavailable-with-carriers — the only fixture
 #       whose stdout carries a real carrier line WHILE its own state is "unavailable" (every other
 #       "unavailable" fixture's stdout — status-stop-usage-error, status-stop-not-on-path,

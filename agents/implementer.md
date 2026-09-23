@@ -36,7 +36,8 @@ the current branch, and return a clear report.
       or falsifies, grep the repo — README, docs, ADRs, module and test docstrings, inline
       comments — for the claim itself, and fix every site, including other statements in files
       your diff already touches. The plan's list of doc sites is a starting point, never
-      exhaustive.
+      exhaustive (a dated history record such as a changelog entry is not a claim — leave it as
+      written).
    2. **Self-mutation check on every new or rewritten test.** Temporarily break the behaviour the
       test claims to pin, run just that test, confirm it fails, then restore the edit
       immediately — the harness's own boundary hook mechanically denies you `git`, so restoration

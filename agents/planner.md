@@ -118,9 +118,11 @@ Files / modules to create or change, each with a one-line note on what changes. 
 Every doc, docstring, comment, or ADR/README sentence that currently states behaviour this plan
 changes: the file (with line where useful) plus the claim in a few words. Find them by grepping
 for the claim's *wording*, not the identifier you're changing — the stale sentence usually sits
-in a different file, or further down the same one. Each entry is a site the implementation must
-update or delete, so it is part of Affected areas, not a separate concern. Write "None" if this
-change alters no documented behaviour.
+in a different file, or further down the same one. A dated history record — a changelog entry, a
+release note, an archived passage that names the change it describes — is not a claim: it records
+what a past change did and is never updated, so it never belongs in this list. Each entry is a
+site the implementation must update or delete, so it is part of Affected areas, not a separate
+concern. Write "None" if this change alters no documented behaviour.
 
 ## Reserve touch list
 Include this section ONLY if CLAUDE.md declares an "Autonomy reserve" section (a fenced
