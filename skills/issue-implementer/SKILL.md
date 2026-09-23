@@ -308,7 +308,8 @@ in the summary.
 
 **Sync & hygiene:** run `cleanup-after-merge.sh --fix` (fast-forwards the default branch when
 checked out — check it out first if you aren't on it and the tree is clean; prunes merged
-`claude/*` branches; repairs stale `pr-open` labels with audited comments).
+`claude/*` branches; repairs stale `pr-open` labels on open issues with audited comments, and
+sweeps closed issues still carrying it, label-only — no comment).
 
 **Baseline refresh.** Read `.claude/BASELINE.md` (machine-local: a `- commit:` line with the last
 known-green default-branch SHA, plus per-command results). If missing, warn the user to run the
