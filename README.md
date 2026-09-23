@@ -355,16 +355,22 @@ Nothing is required: every planner/implementer/cycle run starts with
 the run continues, never aborts, prune merged `claude/*` branches — a merged branch a
 worktree still holds is reported and skipped, never fatal — repair stale `pr-open` labels with
 audited comments, and quarantine any plan follow-up orphaned by a `claude/*` PR that closed
-without merging — comment + `no-plan` when it isn't already present, never closed) and the
+without merging — `no-plan` (when it isn't already present) then a comment, never closed) and the
 implementer's baseline refresh re-verifies merged main — two green PRs can still compose badly,
 and that check is now mechanical. The script's own pre-flight lookups (the default branch, the
 current branch, the open-PR list, the `pr-open`-labelled issue list, the multi-PR comment-marker
 lookup, the follow-up-candidate issue search, and each matched follow-up's own orphan-notice
 comments lookup) are best-effort too — a failure on any of them is reported
 (`WARN`) and the run continues, degrading gracefully (skipping just the sync, or just the
-label/follow-up steps that depend on it) rather than aborting before producing any output.
-Running `cleanup-after-merge.sh` by hand right after a merge is still fine (it's idempotent);
-without `--fix` it only reports label problems instead of repairing them.
+label/follow-up steps that depend on it) rather than aborting before producing any output. Since
+#355, `--fix`'s own mutating writes (posting a comment, closing an issue, adding or removing a
+label) are best-effort in the same way: a failed write is reported (`WARN`, naming the issue and
+which write failed) and the rest of that one issue's own repair is skipped, but the run always
+continues on to the next issue and still reaches the closing reminder — one summary `WARN` line
+prints when any write failed this run. Running `cleanup-after-merge.sh` by hand right after a
+merge is still fine (it's idempotent for a clean run; a run whose writes partly failed can leave
+an issue that the next run re-repairs, including posting a second audit comment); without `--fix`
+it only reports label problems instead of repairing them.
 
 A merged `claude/<n>-*` PR only closes its issue when the PR body carries a closing keyword
 (`Closes`/`Fixes`/`Resolves #<n>`) for that issue and no multi-PR signal is present. A PR that
@@ -2004,6 +2010,22 @@ sum too, by the identical generic rule `escalations` and `followups_to_triage` a
 "Returning to a laptop" above for the reader-facing shape and its own honest limits. New gate
 assertion 4.51 pins that the stop-grammar tokens `harness-status.sh` parses appear as fixed
 strings in `bin/harness-stop.sh`'s source.
+
+Also in v2.7.7 (#355): needs no grant, label, script, settings entry, or baseline step. A failed
+`gh issue comment`/`gh issue edit`/`gh issue close` inside `cleanup-after-merge.sh --fix` no
+longer aborts the run: each write is now best-effort, exactly like the script's own pre-flight
+lookups already were (see "After the human merges" above) — a failed write is reported (`WARN`,
+naming the issue and which write failed) and the rest of that one issue's own repair arm is
+skipped, but the run always continues to the next issue, still reaches the follow-up quarantine
+section, and still prints the closing reminder; one summary `WARN` line prints when any write
+failed this run. The close arm's write order changes from comment/remove-label/close to
+comment/close/remove-label, and the follow-up arm's changes from comment/add-label to
+add-label/comment, so in both arms the write that keeps an issue re-examinable by the next `--fix`
+run is the last one attempted — the one bounded residue this leaves is a CLOSED issue that still
+carries a stale `pr-open` label if only the final `remove-label` call fails, which this script's
+own `--label pr-open --state open` query never revisits. New gate assertion 1.9 (header 80 → 81 —
+assertion 1.8, the #362 hotfix, landed in between) flags a bare, unguarded `gh issue
+comment`/`gh issue edit`/`gh issue close` at command position in any `bin/*.sh`.
 
 ## The per-repo settings file (required)
 

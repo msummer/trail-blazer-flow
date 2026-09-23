@@ -8,7 +8,7 @@
 #   anywhere works, and a `root` argument lets you point it at a perturbed temp copy for
 #   negative testing without touching this checkout.
 #
-# Five groups, 80 assertions total. The gate prints what it checks — run it.
+# Five groups, 81 assertions total. The gate prints what it checks — run it.
 #
 # Read-only: writes no files, mutates nothing (no chmod, no auto-fix), makes no network
 # calls. Prints one PASS/FAIL line per assertion and a `== summary: N pass, M fail ==`
@@ -198,6 +198,33 @@ else
   else
     bad "1.8 label description(s) in bin/setup-labels.sh exceed GitHub's 100-character limit — gh label create/edit returns HTTP 422 and setup-labels.sh aborts there:$too_long_18"
   fi
+fi
+
+# 1.9 — no unguarded 'gh issue comment|edit|close' at command position in bin/*.sh (#355): a bare
+# write aborts the whole script the moment gh fails (rate limit, auth, or network) under
+# 'set -euo pipefail' — see cleanup-after-merge.sh's own #355 history. Anchored on the line's
+# FIRST command word, same idiom as 1.5: bin/harness-stop.sh's `printf '  gh issue edit <n>
+# --add-label %s\n' ...` line and its jq expression containing `"\nclear=gh issue edit "` both
+# name the literal string "gh issue edit" at NON-command position (a printf format argument and a
+# jq string literal) and must NOT be flagged — a looser "line contains" pattern would falsely
+# flag both. Full-line comments are stripped first (1.4/1.5's idiom); a write is safe when it's
+# wrapped by a guard (cleanup-after-merge.sh's own try_write helper puts 'if'/'&&' at the start of
+# the line instead of 'gh') or carries a '||' fallback on the same line. The pattern's own
+# '!?' also flags a '! gh issue ...' line, even though 'set -e' ignores a '!'-negated command's
+# exit status — deliberate, conservative over-flagging rather than a blind spot. Known
+# limitation: a second write '&&'-chained later on the SAME physical line as a first,
+# already-guarded write is out of reach here — keep one write per line.
+write_pat='^[0-9]+:[[:space:]]*!?[[:space:]]*gh[[:space:]]+issue[[:space:]]+(comment|edit|close)([[:space:]]|$)'
+bad_list=""
+for s in "$root"/bin/*.sh; do
+  [ -f "$s" ] || continue
+  hits="$(grep -vnE '^[[:space:]]*#' "$s" | grep -E "$write_pat" | grep -vE '\|\|')"
+  [ -z "$hits" ] || bad_list="$bad_list $s: $(printf '%s' "$hits" | tr '\n' ' ');"
+done
+if [ -z "$bad_list" ]; then
+  ok "1.9 no unguarded 'gh issue comment|edit|close' at command position in bin/*.sh (#355)"
+else
+  bad "1.9 unguarded 'gh issue comment|edit|close' found —$bad_list"
 fi
 
 # ============================================================================
