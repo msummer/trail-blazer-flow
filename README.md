@@ -1,955 +1,378 @@
-# Trail Blazer Flow - A portable Claude Code development harness
+# Trail Blazer Flow
 
-**Trail Blazer Flow** is a software development harness, designed as a plug-in for Claude
-Code, that supports an agentic, GitHub issues driven development cycle. 
+**A Claude Code plugin that turns GitHub issues into reviewed, tested pull requests.** You write an
+issue; the harness plans it, you approve the plan, it writes the code, an independent reviewer
+checks the work, and a PR shows up for you to merge. Once you trust it, you can let it approve
+low-risk plans and merge its own PRs as well.
 
-A project-agnostic Claude Code setup for driving GitHub issues through **planning**,
-**implementation**, and **verification**, locally, on your Claude Code subscription (no API
-keys, OAuth tokens, or GitHub Actions). The generic *mechanism* lives here; everything
-project-specific lives in the target repo's `CLAUDE.md` and `.claude/LESSONS.md`.
+Everything runs locally on your Claude Code subscription. You don't need API keys, OAuth tokens, or
+GitHub Actions.
 
-> **Status: early access.** This harness is in active testing with a small group. Expect rough
-> edges and occasional breaking changes — and note that, by default, updates arrive
-> automatically (see "Updating"). Bug reports and feedback are very welcome: please
+> **Status: early access.** This harness is being tested by a small group. Expect rough edges and
+> the occasional breaking change, and note that updates arrive automatically by default (see
+> [Updating](#updating)). Bug reports and feedback are very welcome:
 > [open an issue](https://github.com/msummer/trail-blazer-flow/issues). Licensed under
 > [MIT](LICENSE).
 
-This repo is a **Claude Code plugin** (and its own marketplace — see "Installing in a new
-repo"). Keep the boundary in mind when editing: nothing project-specific belongs in the skills
-or agent files — it belongs in the target repo's `CLAUDE.md` (conventions, verification
-commands) or `.claude/LESSONS.md` (project gotchas), both of which stay with each project.
-Four things always live on the project side, never here: `LESSONS.md` (seeded by the doctor
-script), a thin `.claude/settings.json` (permission grants — plugins cannot ship permissions;
-template provided), `.claude/BASELINE.md` (the machine-local verification baseline — gitignored,
-harness-maintained), and `settings.local.json` (machine-local secrets/overrides — never commit
-or share).
+**Contents**
 
-## What's in here
+- [How it works](#how-it-works)
+- [Prerequisites](#prerequisites)
+- [Getting started](#getting-started): [a new project](#path-a--start-a-brand-new-project) or
+  [an existing repo](#path-b--add-the-harness-to-an-existing-repo)
+- [Everyday workflows](#everyday-workflows): step-by-step recipes
+- [Autonomous mode](#autonomous-mode): what it is and how to turn it on
+- [The CLAUDE.md contract](#the-claudemd-contract): configuring the harness for your repo
+- [Labels at a glance](#labels-at-a-glance)
+- [Safety model](#safety-model)
+- [Updating](#updating)
+- [Troubleshooting](#troubleshooting)
+- [Reference documentation](#reference-documentation)
+- [Working on the harness itself](#working-on-the-harness-itself)
 
-```
-.
-├── CLAUDE.md                     # this repo's OWN harness contract — governs work on the harness itself
-├── CHANGELOG.md                  # per-PR history (not governance, not a spec)
-├── .claude-plugin/
-│   ├── plugin.json               # plugin manifest (semver version field — bump it to publish an update)
-│   └── marketplace.json          # this repo doubles as its own marketplace
-├── agents/
-│   ├── planner.md                # read-only planning subagent (Opus 5.5)
-│   ├── implementer.md            # code-writing subagent (Sonnet 5); no git/gh, mechanically enforced (hooks/agent-boundary.sh)
-│   └── verifier.md               # plan-conformance reviewer (Opus 5.5); fresh context; restores anything it mutates; read-only git only, no gh, mechanically enforced
-├── skills/
-│   ├── project-kickoff/SKILL.md  # greenfield on-ramp: interview → brief + CLAUDE.md + repo + backlog
-│   ├── harness-setup/SKILL.md    # one-time repo onboarding: doctor + CLAUDE.md audit + baseline
-│   ├── issue-planner/SKILL.md    # orchestrates planning (answers → revision → policy auto-approval)
-│   ├── issue-implementer/SKILL.md # orchestrates implementation → verification → PR (+ CI fix)
-│   ├── issue-implementer/references/worktree-mode.md  # worktree-parallel procedure (read on demand)
-│   ├── issue-cycle/SKILL.md      # steady-state loop: cleanup → plan → implement → status report
-│   └── test-ratchet/SKILL.md     # optional, policy-gated: files coverage-increasing issues (never implements)
-├── bin/                          # on the Bash PATH when the plugin is enabled
-│   ├── check-harness.sh           # mechanical preflight ("doctor"); safe to re-run any time
-│   ├── check-decision-record.sh   # scoped-autonomy: checks an issue body against a declared decision record
-│   ├── find-planning-work.sh
-│   ├── setup-labels.sh            # creates the workflow labels (run once per repo)
-│   ├── find-implementation-work.sh
-│   ├── harness-status.sh          # who acts next: harness queues vs. items waiting on the human
-│   ├── reconcile-ledger.sh        # reconciles a cycle's dispatch ledger against live state
-│   ├── harness-lock.sh            # single-flight lock: at most one active cycle per checkout
-│   ├── harness-version.sh         # prints the installed plugin's "<version> <sha>", one line
-│   ├── harness-stop.sh            # read-only maintainer stop switch: GitHub label or local file (#310)
-│   ├── governance-paths.sh        # merge floor's governance-path classifier + doctor's --check validator (#331)
-│   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
-├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
-│   ├── hooks.json                 # registers the four PreToolUse hooks below
-│   ├── git-c-guard.sh             # approves only the exact git -C <worktree> <subcommand> forms worktree-parallel mode issues
-│   ├── agent-boundary.sh          # mechanically denies git/gh Bash commands, and a Bash write into .claude/, for the implementer/verifier subagents (#235, #340)
-│   ├── push-guard.sh              # mechanically denies any git push whose destination is the default branch, every session (#260)
-│   └── claude-dir-guard.sh        # mechanically denies an implementer/verifier Edit or Write to any .claude/ path (#327)
-├── dev/
-│   ├── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
-│   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
-│   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh AND bin/governance-paths.sh (not run by the gate)
-│   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh, hooks/agent-boundary.sh, hooks/push-guard.sh, AND hooks/claude-dir-guard.sh (not run by the gate)
-│   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
-│   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
-│   ├── lock-tests.sh             # fixture-based negative-test harness for bin/harness-lock.sh (not run by the gate)
-│   ├── stop-tests.sh             # fixture-based negative-test harness for bin/harness-stop.sh (not run by the gate)
-│   ├── mutant-driver.sh          # checked-in mutant driver: applies dev/mutants/*.json's recorded edits to a scratch copy and re-runs each record's suite (#359)
-│   ├── mutant-driver-tests.sh    # the driver's own negative-test harness, over synthetic targets/suites (not run by the gate)
-│   └── mutants/                  # machine-readable mutant registries the driver reads — {name,target,suite,filter,edits,expect_fail} per record
-├── docs/
-│   └── adr/                      # architecture decision records: direction the README doesn't specify yet
-├── .github/
-│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the four hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness, then the stop switch script's negative-test harness, then the mutant driver (post-merge/nightly/dispatch only), then the driver's own negative-test harness — on ubuntu-latest per PR and, pinned to Apple's bash 3.2, on macos-latest post-merge and nightly (#365)
-│   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
-└── templates/
-    └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
-```
-
-Skills are invoked with the plugin namespace (`/trail-blazer-flow:issue-planner`, …) or by natural
-language ("plan issue 14"). The `bin/` scripts are plain commands on the session's PATH — that
-is why the per-repo permission entries are portable bare names (`Bash(check-harness.sh:*)`)
-rather than machine-specific plugin-cache paths.
-
-## The model tiering (deliberate design)
-
-Three capability tiers, each placed where it pays:
-
-| Role | Model | Why |
-|------|-------|-----|
-| **Orchestrator** (the main session) | most capable available | judgment calls: proposing answers to open questions, verifying premises with measurements, reconciling staged files vs. reports, deciding when something is a blocker |
-| **planner** subagent | Opus 5.5 | codebase research and design; one dispatch per issue, read-only |
-| **implementer** subagent | Sonnet 5 | execution of a fully-resolved plan; cheap enough to run often (and in parallel) |
-| **verifier** subagent | Opus 5.5 | adversarial plan-conformance review of the diff with fresh context — the generator/critic split; judgment-heavy, so it gets the stronger model |
-
-Two consequences are baked into the skills:
-1. **Ambiguity is resolved top-down, before execution.** Plans classify questions
-   BLOCKING/ADVISORY; the orchestrator proposes answers; the implementer receives only
-   `RESOLVED:` decisions — it should never exercise design judgment.
-2. **Research flows down as "Verified facts".** The planner writes down every codebase fact it
-   confirmed (exact names, signatures, fixture contracts, ordering constraints), so every
-   downstream dispatch — the implementer, the verifier, retries, parallel runs — works from one
-   written account instead of re-deriving it: research gets paid for once, not per dispatch, and
-   the implementer's context stays on the change instead of the exploration.
+---
 
 ## How it works
 
-### Starting a new project ("start a new project" / "I want to build …")
-
-The `project-kickoff` skill is the **greenfield on-ramp** — the front door for a project that
-doesn't exist yet. The rest of the harness consumes GitHub issues and reads `CLAUDE.md`; kickoff
-produces the first of each. The main session (no subagents):
-1. **Interviews** the user — document-first if they have a PRD/notes/link (ingest it, ask only
-   about gaps), a fuller interview if they don't. Adaptive depth, batched recommendation-first
-   questions, and an explicit nudge to **dictate by voice** to keep a thorough interview from
-   feeling like an interrogation. Open points are tagged BLOCKING / ADVISORY / DEFERRED.
-2. **Synthesizes** an opinionated brief, architecture/stack (with rationale and rejected
-   alternatives), methodology, and a proposed issue backlog — presented for a **single approval**.
-3. On approval, **connects GitHub** (creates or selects the repo, installs labels, lays down the
-   thin `.claude/settings.json`), then emits the artifacts: `docs/PROJECT-BRIEF.md`, a drafted
-   `CLAUDE.md`, and the **issue backlog whose first item is a walking skeleton** (project
-   skeleton + verification setup — the thing that later makes the baseline green).
-4. **Hands off:** plan+implement the skeleton issue first → run `harness-setup` to record the
-   green baseline (which can't exist until there's code) → `issue-planner` on the rest.
-
-Kickoff never writes feature code and never establishes the baseline itself (no buildable code
-yet — that's `harness-setup`'s job after the skeleton lands). For an *existing* codebase, skip
-kickoff and go straight to `harness-setup`.
-
-### Planning ("plan the open issues" / "plan issues 13 and 15")
-
-The `issue-planner` skill:
-1. Pre-flight: `cleanup-after-merge.sh --fix` (sync + queue hygiene), then makes sure plans are
-   written against the current default branch.
-2. Finds issues needing an **initial plan** (no `plan-*` label) or a **revision**
-   (`plan-proposed` with maintainer — `OWNER`/`MEMBER`/`COLLABORATOR` — comments after the latest
-   trusted plan), via `find-planning-work.sh`. Comments from anyone else are reported, never
-   acted on — see "Safety model" below. Each issue also carries its author's association;
-   non-maintainer-authored issues are still planned but can never be auto-approved (step 6).
-3. Dispatches the read-only `planner` subagent per issue (parallel dispatches OK — each is
-   scoped to one issue). Prompts include relevant `LESSONS.md` entries and any orchestrator
-   context the issue lacks (recently merged PRs, corrected measurements).
-4. Posts each plan as an issue comment tagged `<!-- planner-plan -->` as the comment's first
-   line, labels `plan-proposed`.
-5. **Handles stale and overlapping plans**: a pending `plan-proposed` plan whose affected files
-   changed under it (PRs merged since posting) gets a staleness comment (deliberately unmarked —
-   it's this run's revision feedback) and an immediate same-run revision; a stale `plan-approved`
-   plan gets the same staleness note, but opening with `<!-- harness-audit -->` (it's a record for
-   the human, not feedback), plus a prominent flag (the human approved *that* plan — re-approval
-   is theirs). Since #208, that `plan-approved` note also carries a
-   `<!-- harness-staleness: issue=<n> prs=<prs> -->` key naming the merged PRs that caused it, and
-   is skipped (never re-posted) once a prior run already recorded that same cause — the flag to
-   the human is never skipped, only the comment. Overlapping plans (same files → merge conflicts)
-   are flagged and excluded from auto-approval.
-6. **Proposes answers and revises in the same run**: for BLOCKING open questions the
-   orchestrator can ground in code/measurements, it posts proposed answers as a comment, then
-   immediately revises the plan, tagging each folded decision `RESOLVED
-   (orchestrator-proposed):` so provenance is visible at approval time. The human reviews one
-   artifact instead of two rounds. Ungroundable questions stay open for the human.
-7. **Auto-approves under the repo's policy, if one exists** — see "Approval" below.
-
-The plan template (see `agents/planner.md`) includes: Summary, **Acceptance criteria** (the
-testable definition of done the verifier later checks against — derived even when the issue
-didn't state any), Estimated size (S/M/L), Affected areas (including a **"Claims this change
-falsifies"** sub-list: the docs, docstrings, comments, and ADR sentences the change invalidates,
-found at planning time rather than by the verifier afterwards), Data/schema impact,
-Implementation steps, Testing approach, Risks, **Verified facts**, **Open questions
-(BLOCKING/ADVISORY)**, **Follow-ups to file** (each carrying a one-sentence justification), Out
-of scope.
-
-### Approval (human by default, policy-assisted if you opt in)
-
-A maintainer (`OWNER`/`MEMBER`/`COLLABORATOR`) comments on the issue to request changes
-(comment-driven, no label needed) — a comment from anyone else is reported to the human but
-never treated as feedback. Add `plan-approved` to accept. **Approving a plan whose open questions are all ADVISORY accepts the stated
-defaults** — no extra revision round; the orchestrator passes the defaults to the implementer as
-resolved decisions. Plans with unanswered BLOCKING questions shouldn't be approved. The
-approval binds to the *specific plan comment* the label's newest application postdates (#174,
-see "Approval provenance" below) — approving, then commenting again to trigger a same-run
-revision, returns the issue to review instead of letting the implementer build the revised plan
-under the old approval.
-
-**Plan auto-approval (opt-in).** If the repo's `CLAUDE.md` contains a section titled **"Plan
-auto-approval policy"**, the planner may add `plan-approved` itself for plans that satisfy the
-policy's conditions AND a non-negotiable hard floor (see "The CLAUDE.md contract" item 4). Every
-auto-approval leaves an audit comment, opening with `<!-- harness-audit -->` — the marker (matched
-anywhere in the body) is what excludes it from both discovery scripts' binding sets (which
-conditions were met, how to veto). No policy section ⇒ no auto-approval — the default is fully
-manual, UNLESS `CLAUDE.md`'s "Autonomy mode" section declares `mode: autonomous` (item 9), in
-which case a missing policy section is read as present with no conditions beyond the hard floor —
-schema, security, and reserve-touching work are still never opted in by the mode alone. The
-**`no-auto-approve` label** opts any individual issue back out of the policy. Note that an auto-approved plan may be implemented in
-the same run — for that work, PR review is the human gate.
-
-### Implementation ("implement the approved issues" / "implement issue 14")
-
-The `issue-implementer` skill, for each `plan-approved` issue (sequential by default):
-1. Pre-flight: crash recovery (a dirty tree on a `claude/<n>-*` branch from an interrupted run
-   is wip-committed, noted on the issue, and requeued; a dirty tree anywhere else is a hard
-   stop — that's human work; stale worktrees left by a crashed swarm are swept in the same
-   pre-flight (a dirty one is wip-committed first, then removed), so a sequential run no longer
-   trips over a branch still checked out elsewhere), `cleanup-after-merge.sh --fix`, and the
-   **baseline refresh**: if
-   the default branch moved past `.claude/BASELINE.md`'s recorded commit, re-run the
-   verification suite on it — green updates the baseline, red stops the whole run (a broken
-   main makes every failure unattributable). Then a fresh `claude/<n>-<slug>` branch; a wip-only
-   leftover branch is **resumed, not restarted** unless its newest commit is a `wip: blocked —
-   …`, in which case it's reset fresh as before — see "Resilience" below. Branches with real
-   (non-wip) commits still go to the human.
-2. Runs a fresh `find-implementation-work.sh --issue <n>` immediately before dispatch and
-   dispatches the `implementer` subagent with: issue + full plan (incl. Verified facts) +
-   **resolved answers to every open question** (as `RESOLVED:` decisions built ONLY from the trusted
-   post-plan comments that `find-implementation-work.sh` marks `covered_by_approval: true` — a
-   comment posted after the `plan-approved` label is `covered_by_approval: false`, reported to the
-   human instead of folded in as a binding decision, per #194; since #230, a comment that WAS
-   covered but was itself edited in place after approval is also un-covered
-   (`covered_by_approval_reason: "decision-edited-after-approval"`), and one whose own edit state
-   cannot be established is un-covered too (`"decision-edit-unreadable"`) — taken from that fresh, per-issue
-   run, not read from the thread by hand) + `LESSONS.md` entries.
-   **Plan-binding gate (#174, split by verdict since #219; #229 adds a label pre-filter, checked
-   first, at zero extra API cost):** `plan-approved` must currently be on the issue — its absence
-   ("approval-label-absent") means the human withdrew (or never applied) it, so the issue is
-   **not dispatched**, but the remedy is non-destructive: no label change (nothing to remove), no
-   revision-triggering comment (nothing to revise); a `<!-- harness-audit -->`-marked comment
-   records the withdrawal, and the issue resumes automatically once a human re-adds the label. If
-   the label IS present, the approval must also cover the specific plan comment selected — the
-   newest `plan-approved` labeling event must not be earlier than that comment; if it demonstrably
-   doesn't (e.g. the plan was revised after approval), the issue is **not dispatched**:
-   `plan-approved` is removed and a revision-triggering comment posted, naming why. If the verdict
-   is merely **unknown** instead — a GitHub API call failed — the issue is re-checked once (a
-   `sleep 30` wait, then one more lookup, #223) before the verdict is concluded; still unknown
-   after that retry, the issue is still not dispatched,
-   but nothing destructive happens: no label is removed, no revision-triggering comment is posted;
-   a `<!-- harness-audit -->`-marked comment, keyed and de-duplicated across runs (#222 — see
-   "Approval provenance"), records the hold and the issue stays queued for the
-   next run. Missing a BLOCKING answer → don't dispatch; escalate durably (#309, see
-   `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection) and move on to the
-   next issue.
-   Before reporting, the subagent runs a mandatory evidence pass — sweeping the repo for every
-   claim its diff falsifies, mutation-checking each new or rewritten test, pasting every number
-   from command output — and records it in its report's Evidence block.
-3. On completion: **independently re-runs the verification commands** (the mechanical gate — the
-   subagent may be wrong, and this re-run stays the authoritative gate), comparing against the
-   recorded baseline (counts must not drop unexplained).
-4. **Dispatches the `verifier` subagent** (the semantic gate): fresh-context review of the diff
-   against the plan's steps, the plan's acceptance criteria, test quality — including a bounded
-   mutation probe (3 to 5 mutants in the changed code, tests re-run against each, tree restored
-   immediately after every mutant; a surviving mutant on a behavior the plan's criteria named is
-   a `major` finding) — scope, declared constraints, and, when CLAUDE.md declares an "Autonomy
-   reserve", the diff's changed paths against those same globs (an undeclared reserve touch is a
-   `blocker` finding). **Verifier fail → kickback**: the
-   implementer is re-dispatched with the findings ("fix ONLY these"), then re-checked. The
-   re-check confirms each prior finding is resolved and reviews only the fix's own delta. Its
-   mutation probe targets only production code the fix changed, and a new surviving mutant on
-   code the previous round already reviewed is a Note, not a finding, so the loop converges.
-   **The kickback budget — 2 by default, or `CLAUDE.md`'s "Autonomy mode" `kickback-budget:`
-   value (item 9) when that section declares `mode: autonomous` — is never exceeded**, then
-   `impl-blocked` with the findings; **the orchestrator itself never patches a
-   finding** — it never edits a source, test, or doc file to resolve one, only re-dispatches the
-   implementer or, once the budget is spent, takes the blocked path. All of this happens
-   *before* anything is pushed or a PR exists — the branch may already carry local WIP checkpoint
-   commits by this point (see "Resilience: checkpointing, retries, and the dispatch ledger"
-   below), but nothing leaves the machine until the verifier passes, so every PR the human sees is
-   verifier-clean.
-5. On verifier pass: **archives the verdict verbatim as an issue comment** (opening with
-   `<!-- verifier-verdict -->`, its second line keying the archive to this PR's head branch,
-   after every pass, including a later CI-fix re-verification), then
-   **collapses the run's WIP checkpoint commits** into the working tree (one
-   `git reset --soft` to the branch's merge base with the default branch — never the working
-   tree itself, which is untouched), stages everything, **reconciles the staged list against the
-   report's "Files changed"** (unexplained files = blocker, not a commit), **re-validates the
-   plan binding** (#174: a fresh `find-implementation-work.sh --issue <n>` run's `binding_line`
-   must either still match the one captured before dispatch, or come from a **same-plan
-   re-approval** (#238: `covers_plan: true` naming the *same* `plan.url`, only the `approved-at=`
-   field moved — a human removed and re-added `plan-approved` while the implementer worked) — in
-   which case that fresh line, not the earlier one, is what the PR body carries — split by verdict
-   since #219, plus #229's
-   label check: if the label is currently absent (`approval-label-absent` — the human's own
-   withdrawal), no commit, no push, no PR, and no `impl-blocked` either — instead the
-   already-staged tree is committed as a `wip: checkpoint binding-recheck` commit exactly as the
-   unknown-verdict branch below does, so the branch resumes next run once a human re-adds the
-   label, and a `<!-- harness-audit -->`-marked comment records the withdrawal; if the label IS
-   present but demonstrably doesn't cover the plan (`covers_plan: false` for any other reason, **or
-   `covers_plan: true` naming a *different* plan comment (#238)** — a change of plan, not a
-   re-approval), no
-   commit, no push, the blocked path instead, and `plan-approved` removed; if the verdict is
-   unknown instead, the same one-retry re-check as step 2 runs first (#223); still unknown after
-   it, no commit, no push, but nothing destructive — `plan-approved` stays, the
-   already-staged tree is committed as a `wip: checkpoint
-   binding-recheck` commit so the branch resumes next run, and a `<!-- harness-audit -->`-marked
-   comment, keyed and de-duplicated the same way (#222 — see "Approval provenance"), records the
-   hold) **and diffs that same fresh run's (the retry run, when one ran) trusted post-approval comments**
-   (#198) against the set captured before dispatch — a trusted comment that arrived while the
-   implementer worked is surfaced (never binding, never holds the push) in the PR body when a PR
-   exists, or in the blocker/hold comment otherwise, and the run summary; **on a same-plan
-   re-approval the diff also surfaces (#238) any comment the re-approval itself newly covered,
-   flagged as covered by the re-approval but not implemented — the human decides whether the PR is
-   still what they want** — commits once, pushes,
-   opens the PR (`Closes #n`, verification results, **the verifier's own closing status line
-   pasted verbatim** — never one the orchestrator composes on its behalf — the re-validated
-   `binding_line` pasted verbatim too, a `Mutation probe:`
-   line carrying the verdict's mutation-probe result, the implementer's Evidence block condensed
-   to its Claims-swept and Mutation-checks lines, schema notes, verifier notes), labels
-   `pr-open`. The PR still ends up as one clean commit, exactly as before.
-6. **Files the plan's "Follow-ups to file"** as new issues referencing the PR — each entry whose
-   justification names a concrete failure a user of this software would experience, filed with
-   `no-plan` (machine-authored — held out of planning entirely until a human triages the issue
-   and removes the label; `no-auto-approve` is a separate, human-only veto the harness never
-   applies) and a marker naming the PR it came from — then **writes the new issue numbers back
-   into the PR body with `gh pr edit`**, not merely mentioned in the summary; entries that only
-   name a capability wish or an unnoticeable drift risk are declined with a note in the PR body
-   instead of becoming issues. A follow-up filed this way is born `no-plan`; if this PR is later
-   closed without merging, `cleanup-after-merge.sh`'s follow-up quarantine still reaches it (#334)
-   — keyed on a trusted, PR-keyed orphan-notice marker rather than the label — see "Returning to
-   a laptop" and `CHANGELOG.md` (the archived v2.7.6 migration notes, #334).
-7. **Watches CI** (`gh pr checks --watch`). Red CI caused by the PR itself gets **one bounded
-   fix attempt** (implementer → mechanical checks → verifier → push; the PR isn't merged, so
-   this is as safe as the kickback loop) — once that re-verification passes, its verdict is
-   archived too, and the PR body's verifier status line and `Mutation probe:` line are refreshed
-   with `gh pr edit` so the body always describes the tree the head commit actually carries (a
-   denied `gh pr edit` escalates durably too, #309, never routed around); still red — or not the
-   PR's fault — escalates durably instead of blocking the run (#309, see
-   `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection). If the failure was a
-   project gotcha, **append it to `LESSONS.md`**.
-8. Never merges (merging is the human's, or the cycle's merge pass under an opt-in policy —
-   see "The CLAUDE.md contract"). Blockers → local `wip:` branch + `impl-blocked` label +
-   explanatory comment.
-
-**Worktree-parallel mode:** never used inside the cycle's serial merge train (item 9) — the train
-hands the implementer one issue at a time. When 2+ approved plans have pairwise **disjoint Affected areas**
-(production + test files), the orchestrator may create one git worktree per issue and dispatch up
-to **4 implementers concurrently**, acting as their **supervisor**: it tracks each worktree in an
-in-context table, handles each completion as it arrives instead of waiting for the batch,
-checkpoints a dead subagent's worktree *before* re-dispatching it under the same retry ladder and
-resume cap as sequential mode, and defers the blocking CI watches until no implementer is still
-running. Only the implementer dispatches fan out — the mechanical checks, the verifier, and the
-orchestrator's own git/gh work stay sequential, one worktree at a time. Leftover state from an
-earlier run is handled rather than fatal: the pre-flight's stale-worktree sweep (above) has
-already run for both modes, and an existing `claude/<n>-*` branch is attached and
-resumed instead of failing a `git worktree add -b` — reset fresh only when its newest commit is a
-`wip: blocked — …`, exactly as sequential mode decides. Ignored files (venvs, `node_modules`)
-don't exist in fresh worktrees: verification runs the main checkout's tool binaries against the
-worktree, and UI-heavy issues that need per-tree installs fall back to sequential. Any overlap or
-doubt → sequential.
-
-### Resilience: checkpointing, retries, and the dispatch ledger
-
-Recovery is an owned mechanism, not improvisation (canonical spec: the `issue-implementer`
-skill's "Resilient dispatch", cited by name from `issue-planner`/`issue-cycle`): WIP
-checkpointing with resume-not-restart, bounded exponential backoff before a stage escalates as
-**failed**, a clean exit on context exhaustion under a capped relaunch budget, a status-line-fed
-dispatch ledger reconciled by `reconcile-ledger.sh`, and merge guards — see "The steady state"
-below for the ledger and the guards. Every status line also carries a trailing `harness=<version>`
-field (#233) — the installed plugin revision that produced it, from `harness-version.sh` — which
-`reconcile-ledger.sh` accepts as an optional trailing field but doesn't otherwise interpret.
-
-### After the human merges
-
-Nothing is required: every planner/implementer/cycle run starts with
-`cleanup-after-merge.sh --fix` (best-effort sync — a diverged/missing upstream is reported and
-the run continues, never aborts, prune merged `claude/*` branches — a merged branch a
-worktree still holds is reported and skipped, never fatal — repair stale `pr-open` labels on open
-issues with audited comments, sweep the whole historical backlog of CLOSED issues still labelled
-`pr-open` (#370; up to 100 per run, converging across runs — just the label removed, no comment,
-since the label-removal event is its own audit trail), and quarantine any plan follow-up orphaned
-by a `claude/*` PR that closed
-without merging — `no-plan` (when it isn't already present) then a comment, never closed) and the
-implementer's baseline refresh re-verifies merged main — two green PRs can still compose badly,
-and that check is now mechanical. The script's own pre-flight lookups (the default branch, the
-current branch, the open-PR list, the `pr-open`-labelled issue list — open and, since #370, a
-second closed-issue query — the multi-PR comment-marker
-lookup, the follow-up-candidate issue search, and each matched follow-up's own orphan-notice
-comments lookup) are best-effort too — a failure on any of them is reported
-(`WARN`) and the run continues, degrading gracefully (skipping just the sync, or just the
-label/follow-up/closed-sweep steps that depend on it) rather than aborting before producing any
-output. Since
-#355, `--fix`'s own mutating writes (posting a comment, closing an issue, adding or removing a
-label) are best-effort in the same way: a failed write is reported (`WARN`, naming the issue and
-which write failed) and the rest of that one issue's own repair is skipped, but the run always
-continues on to the next issue and still reaches the closing reminder — one summary `WARN` line
-prints when any write failed this run. Running `cleanup-after-merge.sh` by hand right after a
-merge is still fine (it's idempotent for a clean run; a run whose writes partly failed can leave
-an issue that the next run re-repairs, including posting a second audit comment, or, for the
-closed-issue sweep, just retrying the label removal); without `--fix`
-it only reports label problems instead of repairing them.
-
-A merged `claude/<n>-*` PR only closes its issue when the PR body carries a closing keyword
-(`Closes`/`Fixes`/`Resolves #<n>`) for that issue and no multi-PR signal is present. A PR that
-delivers only part of an issue — its body says `Part of #<n>` / `PR <k> of <m>`, another
-`claude/<n>-*` PR is still open, the issue carries the `multi-pr` label, or a maintainer
-(`OWNER`/`MEMBER`/`COLLABORATOR`) comment carries a `<!-- harness-multi-pr -->` marker — leaves
-the issue open (reported as `KEEP`) instead of closing it. The `multi-pr` label (applied by
-hand, created by `setup-labels.sh`) is the primary signal — permission-controlled and visible in
-the issue's label list, unlike an HTML comment. The comment-marker path still works but is
-trust-gated (#231): a marker posted by anyone else is ignored and reported as one `WARN` line
-naming the comment, and the issue's BODY carrying the marker is no longer honoured at all (a
-maintainer has no way to prove they authored the issue body the way a comment carries its own
-`authorAssociation`) — an issue that relied on the body marker before v2.7.0 needs the
-`multi-pr` label applied instead. `--fix` still drops `pr-open` in the KEEP case, but only once
-no other `claude/<n>-*` PR is open, so the issue re-queues for its next slice; a human closes it
-by hand if the work is actually finished. Since v2.7.1 (#249), if every cheaper KEEP signal comes
-up empty and the fallback comment-marker lookup (`gh issue view --json comments`) itself fails or
-returns a document that isn't valid JSON, the script no longer falls back to "no marker found" —
-it reports a `WARN` naming the failure route and leaves the issue exactly as found (`pr-open`
-still attached, not closed, not commented, not relabelled) in both `--fix` and report-only modes,
-so a rate-limit or auth blip during that one lookup can no longer manufacture a false close; the
-next run re-examines it.
-
-### The steady state, as one command ("run the cycle")
-
-The `issue-cycle` skill composes the above into a single bounded pass: pre-flight → planning
-pass → implementation pass → merge pass (**opt-in**: with a CLAUDE.md "Merge autonomy
-policy" *and* the `gh pr merge` deny lifted, or with "Autonomy mode" declaring `mode: autonomous`
-(item 9), which implies the policy for harness PRs only — the deny still has to be lifted by
-hand either way; guarded per PR, one at a time, re-verified between,
-audited in the report — in autonomous mode, item 9's serial merge train instead interleaves the
-implementation and merge passes per issue) → a closing reconciliation, comparing the run's **dispatch ledger**
-against `harness-status.sh`'s live queues via `reconcile-ledger.sh` (an issue with no recorded
-outcome is escalated, never dropped; a degraded live read is escalated too, never reported
-clean), then a **per-issue summary table** and a two-halves report
-— *what the cycle did* and *what waits on the human* (plans to review, PRs to merge, blocked
-issues, and (#333, #346) untriaged follow-ups, counted in the total).
-It adds no authority beyond what CLAUDE.md delegates — it just removes the
-hand-cranking between stages. Pair it with `/loop` or a scheduled routine for unattended
-operation; each invocation stays one bounded pass, and an empty cycle — nothing done,
-`counts.human_actions` at 0, and the stop switch clear (`stop.state` `"false"`) — reports
-"all quiet" in one line. See the `issue-cycle` skill for the full procedure.
-
-### The test-suite ratchet (opt-in)
-
-The `test-ratchet` skill is the harness's only skill that files **machine-authored** issues —
-proposals derived from tool output, closing measurable test coverage gaps. Off unless `CLAUDE.md`
-has a section titled exactly **"Test-suite ratchet policy"**, which must state a measurement
-command (required — no command means no ratchet) and may add a scope, per-run/open-backlog caps
-(each may only lower the hard floor's numbers, never raise them), and a per-file target.
-
-A non-configurable hard floor applies on top (see "The CLAUDE.md contract" item 6); closing an
-issue as *not planned* vetoes that gap permanently.
-
-Runs as `issue-cycle`'s **step 4, after the merge pass**, so the measurement reflects everything
-that landed this run; an issue it files this run can't be planned, approved, or implemented
-until the *next* cycle. It only files issues — never plans, approves, implements, or merges what
-it files.
-
-### Working the human gates from the phone
-
-Every gate the harness waits on is an ordinary GitHub object — a label, an issue comment, a pull
-request — so a cycle running unattended (via `/loop` or a scheduled routine) can be driven
-entirely from wherever you read GitHub notifications, including the GitHub mobile app, without a
-laptop in reach.
-
-**What a cycle leaves behind.** A plan is a comment on the issue that OPENS WITH a
-`<!-- planner-plan -->` marker — the marker must be the comment's first line for the harness to
-recognise it (#281) — with the `plan-proposed` label added to the issue. Implementation work
-becomes a pull request, opened once the verifier passes, with the verification results in its
-body. You only see either one if you're watching the repo or subscribed to the issue/PR —
-GitHub's own notification settings govern that, not this harness.
-
-**Reviewing a plan.** Read the issue comment. To accept it, add the `plan-approved` label. To
-request changes, comment on the issue with what to change — no label needed; the next cycle
-reads your comment and revises. To take an issue out of planning entirely, add `no-plan`.
-
-**Reviewing a PR.** Read the PR body (summary, files changed, verification results, the
-verifier's own status line, its mutation-probe line, the implementer's condensed Evidence lines)
-and its CI checks. Merge it, or close it, the same as any other PR; comment on it first if you
-want changes made before either.
-
-**Returning to a laptop.** Run `harness-status.sh` to see what's left: `waiting_on_human` has six
-buckets — `plans_to_review`, `prs_to_review` (each PR entry carries a coarse `ci`: `passing`,
-`failing`, `pending`, or `none`), `blocked`, (#333, #346) `followups_to_triage`, (#309)
-`escalations` (open `needs-human` issues — a skill asked a question and moved on rather than
-blocking; see `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection), and (#353)
-`stop_routes` (one `{route, clear}` entry per SET stop-switch carrier, pasted verbatim from
-`bin/harness-stop.sh`'s own stdout — see "Stopping a cycle" below and the new top-level `stop`
-object it feeds) —
-`counts.human_actions` is a generic sum over all six today (no bucket is excluded; the sum's
-named-exclusion mechanism is retained, empty, as an extension point for a future member). Since
-#346, `followups_to_triage` is untriaged-only: a harness-filed follow-up (#308) is born with
-`no-plan`, and once you have read one and decided to keep it held, park it with
-`gh issue edit <n> --add-label triaged-held` — it then drops out of both `followups_to_triage` and
-`counts.human_actions`. To release a parked follow-up back into planning, remove `no-plan`; to see
-the parked backlog, GitHub's own issue list is now the only view (`harness-status.sh` reports
-nothing about it): `gh issue list --label triaged-held --state open`. To un-park one back into
-`followups_to_triage`, remove the label: `gh issue edit <n> --remove-label triaged-held`. Check the
-top-level `degraded` boolean too
-(and `degraded_reasons`, and its `counts.degraded` mirror) — `true` means a discovery query, one
-of `harness-status.sh`'s own five queries (plan-proposed, impl-blocked, open PRs, held follow-ups,
-escalations), or its stop check, failed closed this run, so a bucket above may under-report the
-true queue rather than reflect an empty one. Each `degraded_reasons` entry prefixed `status.` names
-which `waiting_on_human` bucket above it affects (the plan-proposed query → `plans_to_review`,
-impl-blocked → `blocked`, open PRs → `prs_to_review`, held follow-ups → `followups_to_triage`,
-escalations → `escalations`, the stop check → `stop_routes`/`stop.state`); a
-`planning.`/`implementation.`
-entry usually affects `harness_will_handle`
-instead — except `planning.candidates_query_unavailable`, which ALSO inflates `plans_to_review`
-above: it fails the revision-candidates query closed, so `find-planning-work.sh`'s own
-`needs_revision` bucket comes back empty, and this script subtracts that (now-empty) bucket from
-the plan-proposed query — so a plan-proposed issue with real unaddressed maintainer feedback stays
-counted as awaiting your review instead of the planner's. Nothing in that JSON is phone-specific —
-it's the same summary a scheduled routine's own report already gives you. Honest limits on
-`followups_to_triage` (#333, #346): a follow-up you read and parked WITHOUT applying
-`triaged-held` still counts; a hand-written `no-plan` issue whose body happens to open with the
-same marker text would count too even though the harness never filed it; GitHub's issue search can
-trail a label edit (measured once on this repo, 2026-09-17: a `gh issue list --search` run made
-right after a label edit missed an issue that a later run returned), so a just-parked follow-up may
-still appear — and now also count — in the very next run's bucket; and `--limit 100` caps this
-listing the same way it caps `plans_to_review`'s, `prs_to_review`'s, `blocked`'s, and
-`escalations`' own queries. Honest limits on
-`escalations` (#309): this bucket's query is not excluded from `plans_to_review`/`blocked`, so an
-issue carrying `needs-human` alongside `plan-proposed` or `impl-blocked` counts twice in
-`counts.human_actions` until you remove one of the two labels; an escalation from a red-CI site
-(`ci-red-after-fix`, `ci-red-unrelated`) or from the implementer's open-PR sub-branch
-(`branch-has-open-pr`) sits on an issue whose open PR is already in `prs_to_review`, so that one
-problem counts twice too (once as the PR, once as the escalated issue); and GitHub's issue search
-can trail a label edit (measured on this repo, 2026-09-17 and
-again 2026-09-19: a list query made right after a label edit missed an issue that a later run
-returned), so an issue escalated moments earlier may be missing from the same run's `escalations`
-bucket. Honest limits on `stop_routes` (#353): a `stop.state` of `"true"` carrying no carrier line
-at all (`bin/harness-stop.sh`'s own documented non-issue-element response class) yields an EMPTY
-`stop_routes`, so `human_actions` does not count it — `stop.state`, not `stop_routes`' own length,
-is the authority on whether a stop is in effect; and the same freshness lag "Stopping a cycle"
-below documents applies here unchanged.
-
-**Stopping a cycle (#310).** `bin/harness-stop.sh` is a read-only stop switch, checked before each
-stage and before each merge — see "One active cycle per checkout" below for the sibling lock
-mechanism this complements. Two unioned routes; either one alone is enough to stop the next check:
-set the GitHub route from a phone with `gh issue edit <n> --add-label harness-stop` (or tap the
-label onto any issue in the mobile app) and clear it the same way, with `--remove-label
-harness-stop`; set the local route at the keyboard with `mkdir -p
-"<git-common-dir>/trail-blazer" && touch "<that dir>/stop"` (`<git-common-dir>` from `git
-rev-parse --git-common-dir`) and clear it with `rm`. A local stop plus an unreadable GitHub route
-still halts the run (a determinate set route beats an unconfirmable one); neither route set and
-GitHub unreadable after one retry halts it too (an unconfirmable veto is not an absent one).
-Honest limits: the query is capped at `--limit 20` open `harness-stop` issues; a label edit can
-trail the query that checks it by several seconds (measured on this repo, 2026-09-19 — see
-`bin/harness-stop.sh`'s own header for the figures), so the local route is the immediate one for
-an operator at the keyboard; and the switch halts the harness's own dispatch loop — it cannot
-interrupt a subagent already running, and it has no effect on a session that isn't running the
-harness skills. (#353) `harness-status.sh` surfaces this exact check's own verdict rather than
-running a second one — see "Returning to a laptop" above for the `stop`/`stop_routes` shape.
-
-## Greenfield walkthrough: from idea to first feature
-
-This is the end-to-end story of starting a project on the harness — exactly what you say to the
-orchestrator (Claude Code running in the project directory) at each stage, and what it does in
-response. Lines in **quotes** are what *you* type or say (dictation works fine); everything else
-is the harness acting. Approvals and merges are yours by default (each is delegable only
-through an explicit policy section you write into CLAUDE.md — see "The CLAUDE.md contract").
-
-**Before you start:** an empty (or nearly empty) directory, `gh` authenticated, and the plugin
-installed (see "Installing in a new repo" step 1). You do **not** need a GitHub repo yet —
-kickoff creates one with you.
-
-### Why the order is what it is (read this once)
-
-The harness's quality gate is a **green verification baseline** — "the suite was green at N
-before my change". A brand-new project has no buildable code, so that baseline cannot exist yet.
-That is the whole reason kickoff's **issue #1 is a walking skeleton**: it stands up the project
-and its verification commands, and only once it's merged does a green baseline exist to record.
-So the sequence is deliberately: **kickoff → build issue #1 → `harness-setup` (baseline) → build
-everything else.** `harness-setup` runs *after* the first merge, not before. (Trade-off: this
-means one trip through the normal plan→implement→merge loop before the baseline is locked in. We
-chose this so kickoff stays code-free like every other skill — it never writes implementation,
-the pipeline does.)
-
-### Stage 1 — Kick off the project
-
-> **"Let's start a new project — I want to build &lt;your idea&gt;."** (paste a PRD, notes, or a
-> doc link if you have one; otherwise just describe it — and feel free to dictate by voice)
-
-The `project-kickoff` skill runs. It ingests anything you shared, then interviews you — adaptive
-depth, batched multiple-choice questions, going deeper only where the project is ambiguous or
-high-stakes. It then shows you a synthesized **project brief**, an opinionated
-**architecture/stack** (with rationale and the alternatives it rejected), a **methodology**, and
-the **proposed issue backlog**, all for a single approval.
-
-> **"Looks good — go ahead."** (or give feedback: *"use Postgres not SQLite, and drop the admin
-> panel from the MVP"* — it revises and re-presents)
-
-On approval it creates or selects the GitHub repo, installs the lifecycle labels, and writes the
-project-owned files (`.claude/settings.json`, `docs/PROJECT-BRIEF.md`, a drafted `CLAUDE.md`)
-plus the issue backlog — **issue #1 the walking skeleton**, the rest a focused first milestone.
-It leaves the files uncommitted for your review and runs the doctor (`check-harness.sh`); the
-only outstanding items will be baseline-related, which is expected.
-
-> **"Commit and push the setup files."** (kickoff never commits on its own)
-
-### Stage 2 — Plan and build the walking skeleton (issue #1)
-
-> **"Plan issue 1."**
-
-The `issue-planner` skill dispatches the read-only `planner` subagent, then posts an
-implementation plan as a comment on issue #1 and labels it `plan-proposed`. Review the plan on
-GitHub. To request changes, just comment on the issue and say *"revise the plan for issue 1"*; to
-accept it, approve it:
-
-```bash
-gh issue edit 1 --add-label plan-approved   # or click the label in the GitHub UI
+```
+  you write      planner        you           implementer    verifier       you
+  an issue  ──▶  drafts a  ──▶  approve  ──▶  writes code ──▶ reviews  ──▶  merge
+                 plan           the plan      and tests       the diff      the PR
+                    │                                            │
+                    └─ posted as an issue comment                └─ fail? back to the implementer
+                                                                    pass? PR opened, CI watched
 ```
 
-> **"Implement issue 1."**
+The Claude Code session you start acts as the **orchestrator**. It does all the git and GitHub
+work and hands focused jobs to three subagents:
 
-The `issue-implementer` skill runs the full loop described under "Implementation" above and opens
-a PR (`Closes #1`) with the verification results. Review the PR and **merge it** on GitHub. (No
-cleanup step needed — the next skill run's pre-flight syncs and tidies automatically; run
-`cleanup-after-merge.sh` by hand if you want the tidy-up immediately.)
+| Agent | Model | Job |
+|---|---|---|
+| **planner** | Opus 5.5 | Reads the codebase (read-only) and writes a plan for one issue: acceptance criteria, steps, risks, open questions |
+| **implementer** | Sonnet 5 | Writes the code and tests for an approved plan. It cannot run `git` or `gh` (a hook enforces this) |
+| **verifier** | Opus 5.5 | Reviews the diff against the plan with fresh context, including a small mutation test of the new tests. Nothing is pushed until it passes |
 
-Now the repo has buildable code and a passing verification suite for the first time.
+**You have two gates: approving the plan and merging the PR.** By default both are yours. Each one
+can be delegated to the harness through a policy you write into your repo's `CLAUDE.md` (see
+[Autonomous mode](#autonomous-mode)).
 
-### Stage 3 — Record the baseline with harness-setup
+**Every step leaves a trace on GitHub.** Plans are issue comments, approval is a label, finished
+work is a PR, and questions it can't answer become issue comments with a `needs-human` label. You
+can review everything from the GitHub web or mobile app.
 
-> **"Run harness-setup: audit the CLAUDE.md against the real code now that the skeleton is
-> merged, and record the green verification baseline."**
+**What lives where.** The plugin carries the generic machinery (skills, agents, scripts, hooks).
+Anything specific to your project lives in your repo:
 
-The `harness-setup` skill runs the doctor, reviews the now-real `CLAUDE.md` against the actual
-scaffold (the verification commands kickoff drafted are no longer aspirational — they exist and
-pass), runs them and **persists the green baseline to `.claude/BASELINE.md`** (gitignored,
-machine-local — see "The BASELINE.md contract"), and reports the repo **ready**. From here every
-implementation run compares against this baseline, and refreshes it as merges land.
+| File in your repo | What it is |
+|---|---|
+| `CLAUDE.md` | Your conventions, your verification commands (tests, lint, build), and any autonomy policies you opt into. The agents read it at the start of every task |
+| `.claude/settings.json` | Permission grants the subagents need, checked in. Start from [`templates/repo-settings.json`](templates/repo-settings.json) |
+| `.claude/LESSONS.md` | Gotchas the harness has learned about your project, one short entry each. Created for you |
+| `.claude/BASELINE.md` | The last known-green run of your tests on the default branch. Machine-local and gitignored; the harness maintains it |
 
-### Stage 4 — Build the rest of the backlog
+---
 
-From now on it's the steady-state loop, as many times as you like:
+## Prerequisites
 
-> **"Run the cycle."** → review the plans it posted (approve with `plan-approved`, or let a
-> CLAUDE.md auto-approval policy handle the low-risk ones) → review and merge the PRs (or let
-> a CLAUDE.md merge autonomy policy land the low-risk ones once you've opted in) →
-> **"Run the cycle"** again.
+- **Claude Code 2.1.85 or newer**, on a Pro or Max subscription. Your account needs access to the
+  models the agents pin: `claude-opus-5-5` and `claude-sonnet-5`.
+- **`gh`** (GitHub CLI), authenticated (`gh auth status`).
+- **`jq`** and **`bash`**. macOS and Linux work out of the box. On Windows, run Claude Code under
+  Git Bash or WSL (see [Windows](#windows)).
+- A GitHub repository where you can add labels and open PRs. The kickoff flow creates one for you
+  if you're starting from scratch.
 
-(The stages are still available individually — **"Plan the open issues"** /
-**"Implement the approved issues"** — and cleanup happens automatically in every run's
-pre-flight.)
+---
 
-That's the whole lifecycle: kickoff blazed the trail (repo, conventions, backlog, skeleton), and
-the planner → implementer → verifier loop walks it for every feature after.
+## Getting started
 
-## Label lifecycle
+First, **install the plugin**. You only need to do this once per machine:
 
-*(no label)* → `plan-proposed` → *(human adds, or the auto-approval policy)* `plan-approved` →
-`pr-open`, with `impl-blocked` for issues needing human input, `no-plan` to opt an issue out of
-planning entirely (tracking/discussion/question issues; also applied automatically by the
-`issue-implementer` skill to every follow-up issue it files, holding each one out of planning
-until a human triages it and removes the label, and by `cleanup-after-merge.sh --fix` — when not
-already present — to a plan follow-up orphaned when its source PR closed without merging), and
-`no-auto-approve`, a **human-only veto** that keeps an individual issue's approval
-manual even when CLAUDE.md defines an auto-approval policy — the harness never applies this
-label itself. `test-ratchet` marks an issue the test-suite ratchet filed; the planner's
-auto-approval hard floor refuses any issue carrying it outright, so a ratchet plan always waits
-for a human; the harness never removes that label (manual approval is unaffected). A plan
-follow-up the implementer files carries a `<!-- harness-follow-up: PR #<n> -->` marker naming
-its source PR; `cleanup-after-merge.sh --fix`'s own notice for such an orphaned follow-up carries
-a second marker, `<!-- harness-orphan-notice: PR #<n> -->` (#334) — the idempotence key for that
-quarantine, checked against the issue's own comments rather than the `no-plan` label so it still
-reaches a follow-up born with that label. `multi-pr`
-(#231) is human-applied to a deliberately multi-PR issue: it's the primary signal
-`cleanup-after-merge.sh` reads to leave the issue open when one of its slices merges, read only
-by that script — nothing else in the lifecycle touches it. `needs-human` (#309) is a durable
-escalation: a skill posted a comment stating a question and its evidence, applied the label, and
-moved on to the next issue rather than blocking the run (see `skills/issue-implementer/SKILL.md`'s
-"Durable escalation" subsection); it excludes the issue from every discovery query until a human
-answers and removes the label. `harness-stop` (#310) is a human-only stop switch: any open issue
-carrying it stops an `issue-cycle` run — one already in progress included — at its next checked
-boundary, and a standalone `issue-planner`/`issue-implementer` run at its own per-issue dispatch
-loop (`bin/harness-stop.sh`) — see "Stopping a cycle" above; the harness only ever reads this
-label, and never applies or removes it. `triaged-held` (#346) is human-applied: it marks a held
-follow-up issue you have read and deliberately decided to keep parked — see "Returning to a
-laptop" above for the `followups_to_triage` bucket this excludes from and the `gh issue edit`
-set/clear commands; the harness never applies or removes it either. `plan-approved`
-can also come back off: the `issue-implementer` skill removes it (with an audit comment) when the
-approval no longer covers the freshest plan comment — a same-run revision landed after the label
-was applied (#174), the plan comment was itself edited in place after approval (#192), or, since
-#230, a covered trusted decision comment was edited in place after approval — returning the issue
-to the human's review queue rather than building the
-wrong version. A human can also remove `plan-approved` directly, at any time, to veto an issue
-mid-flight (#229): the harness never removes a label the human didn't ask it to here, but it
-DOES honour the removal — dispatch, the pre-push recheck, and (under a merge autonomy policy) the
-autonomous merge floor all re-check the label's CURRENT state and halt at the next check they run,
-non-destructively (no label change, no revision-triggering comment — just a
-`<!-- harness-audit -->` comment noting the withdrawal); the issue resumes automatically once a
-human re-adds `plan-approved`. Humans gate
-twice: plan approval and PR merge — each manual unless the repo's CLAUDE.md explicitly
-delegates it (see "The CLAUDE.md contract"; merge delegation additionally requires the human
-to lift the `gh pr merge` deny).
+```
+/plugin marketplace add msummer/trail-blazer-flow
+/plugin install trail-blazer-flow@trail-blazer-flow
+```
 
-## The CLAUDE.md contract (required)
+Teammates can skip this step: once your repo's `.claude/settings.json` is checked in, anyone who
+clones the repo gets the plugin installed and enabled the first time they trust the folder.
 
-These skills assume the repo has a **`CLAUDE.md`** documenting the project-specifics the generic
-subagents need:
+Then pick your path.
 
-1. **Conventions & architecture** — stack, code style, patterns, security/data rules.
-2. **Verification commands** — the checks that define "done" (typecheck/lint/tests/build or the
-   project's equivalent), ideally under a clearly labelled "Verification" section.
-3. **Setup command** (optional) — how to install dependencies.
-4. **Plan auto-approval policy** (optional) — a section titled exactly "Plan auto-approval
-   policy" stating, in plain language, which plans the planner may approve on your behalf,
-   e.g.:
+### Path A — Start a brand-new project
 
-   ```markdown
-   ## Plan auto-approval policy
-   Auto-approve plans that are size S, with no data/schema impact and no
-   security-sensitive risks. Everything under `payments/` requires manual approval.
-   ```
+Use this path for an empty or nearly empty directory. You don't need a GitHub repo yet.
 
-   The hard floor always applies on top (no BLOCKING questions — none answered by the
-   orchestrator itself, except a granted issue's record-citing answer, see item 8 below — not
-   stale, no overlap, schema/security work only if explicitly opted in, and the issue's author is
-   a maintainer), every auto-approval is audited with an issue comment, and the `no-auto-approve`
-   label opts any issue out. **No section means no auto-approval** — this is a trust decision that
-   belongs in your file, not the plugin's (or "Autonomy mode", item 9, which reads a missing
-   section as present with no conditions beyond the hard floor above).
+**Why the order matters:** the harness measures every change against a green test baseline, and
+a project with no code can't have one yet. So the first issue is always a **walking skeleton**:
+the smallest runnable project plus its test setup. The baseline gets recorded once that skeleton
+merges.
 
-5. **Merge autonomy policy** (optional) — a section titled exactly "Merge autonomy policy"
-   stating which PRs the `issue-cycle` merge pass may merge on your behalf, e.g.:
+1. **Start Claude Code in the empty directory and describe what you want to build.**
+   > "Let's start a new project — I want to build &lt;your idea&gt;."
 
-   ```markdown
-   ## Merge autonomy policy
-   The cycle may merge harness PRs whose plan was approved, whose verifier verdict
-   is pass, and whose CI is green — plus Dependabot patch/minor updates with green
-   CI. Never: anything touching `db/`, auth, CI/CD, or dependency majors.
-   ```
+   Paste a PRD, notes, or a doc link if you have one. The `project-kickoff` skill interviews you
+   about whatever is missing. Answers can be dictated by voice.
+2. **Review the proposal.** It shows you a project brief, an architecture and stack (with the
+   alternatives it rejected), a methodology, and a first issue backlog. Give feedback until you're
+   happy, then say *"Looks good — go ahead."*
+3. **Let it set things up.** It creates or selects the GitHub repo, installs the labels, and
+   writes `.claude/settings.json`, `docs/PROJECT-BRIEF.md`, a drafted `CLAUDE.md`, and the
+   issues. Issue #1 is the walking skeleton. Kickoff never commits on its own, so review the files
+   and then say:
+   > "Commit and push the setup files."
+4. **Build the skeleton (issue #1).**
+   > "Plan issue 1."
 
-   Activation is a **double opt-in**: the section alone does nothing until you also remove
-   `Bash(gh pr merge:*)` from the deny list (and add it to the allow list, or unattended runs
-   stall on the permission prompt). Edit `.claude/settings.json` to activate for everyone, or
-   `.claude/settings.local.json` (machine-local, gitignored, never committed) to activate on
-   one machine only — settings.local.json is the first-class way to do that. A deny in
-   *either* file — or in your user-level settings file — wins over an allow anywhere else.
-   Both edits are yours, never an agent's. The merge pass's hard floor always applies on
-   top (standard-flow PRs only, the PR body carrying the verifier's own `outcome=pass` status
-   line — not prose — checked mechanically and cross-checked against the dispatch ledger *and*
-   against the verifier's verdict archived verbatim as an issue comment for that PR's head
-   branch, *and* against the approval covering the specific plan comment implemented — the PR
-   body carrying one of a fresh `find-implementation-work.sh` run's `approval.approved_at_history[]`
-   `binding_line` values verbatim, newest first, so a body written under an earlier approval of the
-   same plan still qualifies (#174, extended #213) — every one of these provenance reads, plus the
-   head-branch key read and the archive's own match needle, and, since #300, the `gh pr checks`
-   read, the up-to-date rail's `gh pr view` read, the merge pass's base-branch read and its
-   one-time default-branch lookup, and its merge-landed read, and, since #319, the up-to-date
-   rail's `git fetch origin` (answers by exiting 0, output unread, so any non-zero exit is the
-   transient failure), each get one bounded retry on
-   transient failure before the PR is held, never on a determinate answer — pending or failing
-   checks, a base mismatch, and any non-`MERGED` state all count as an answer, never retried
-   (#245, #277, #287, #300, #319) — CI
-   green on the head commit, its head mechanically checked to contain the default branch's
-   current tip (`git merge-base --is-ancestor`) immediately before each PR's own merge attempt,
-   otherwise held with "PR is behind `<default>` at `<short-sha>` — update the branch and let CI
-   re-run" (#234, review F4 — because merges are sequential, every PR queued behind the first one
-   in a pass holds this way by construction, expected rather than an error, outside the serial
-   merge train — item 9's "Autonomy mode" runs the update-branch fallback there instead) — never
-   the governance surface, read mechanically per PR by
-   `governance-paths.sh` (item 10 below) — CLAUDE.md, `.claude/`, policy/ADR docs, CI config, and
-   any path this repo's own CLAUDE.md declares (harness PRs get
-   one narrow, audited exception: a PR whose only
-   governance-surface change is an end-of-file append to `.claude/LESSONS.md`, at most 40 lines,
-   with no deletions, no changed lines, and no `<!--`, and whose added lines the orchestrator
-   judges as recording only a project gotcha — any doubt holds — is not held on that account
-   alone — see "The LESSONS.md contract" below) — nothing flagged for human decision, including, read from that
-   same fresh `find-implementation-work.sh --issue <n>` run, any trusted post-plan comment the
-   approval does not cover (`covered_by_approval` not `true`), so a maintainer's late objection
-   parks the PR for you instead of merging past it (#206) — one merge at a time with
-   re-verification between, every merge audited in the cycle report). **No section means no
-   autonomous merges** — behavior is exactly the
-   pre-1.5 default — UNLESS "Autonomy mode" (item 9) declares `mode: autonomous`, in which case a
-   missing section here is read as present for harness PRs only (never Dependabot, never an
-   opt-in for a repo with no CI). **"No checks configured" is not green.** A repo with no CI wired up gets a
-   "no checks configured" result from `gh pr checks`, and the hard floor above treats that the
-   same as red: no PR qualifies for the merge pass unless your "Merge autonomy policy" section
-   explicitly opts a no-CI repo in. Absent that opt-in, the PR simply waits, with the reason
-   recorded in the cycle report. Recommended pairing: branch protection with required status
-   checks, so the policy has a technical rail under it, not just prompt adherence — once merge
-   autonomy is effectively active (a "Merge autonomy policy" section present, or "Autonomy mode"
-   implying it), `check-harness.sh` reads the protection document
-   itself and WARNs (never FAILs) when `required_status_checks.strict` isn't exactly `true`, when
-   zero status check contexts are required, and reports informationally whether required PR
-   reviews are configured (#234).
-   `check-harness.sh` judges activation from *effective* merge-permission state — across
-   `.claude/settings.json`, `.claude/settings.local.json`, and your user-level settings file —
-   and reports off, active (with a note when no `.github/workflows` file is found, naming the
-   same no-checks-configured precondition), or (the trap it exists to catch) half-activated: a
-   "Merge autonomy policy" section present (or "Autonomy mode" implying it) while `Bash(gh pr
-   merge:*)` is still denied in one of
-   those files, which the doctor WARNs on by naming the file, because it leaves the cycle
-   reporting `verified, merge blocked` on every run. Once merge autonomy is effectively active,
-   `check-harness.sh` also WARNs on any `uses:` ref in `.github/workflows/*.yml`/`*.yaml` and in
-   any `action.yml`/`action.yaml` anywhere in the repo (so a local composite action gets its own
-   refs checked no matter where it lives, not only under `.github/actions/`) — local (`./…`,
-   `../…`) and `docker://` refs excepted in both — that isn't pinned to a full 40-hex commit
-   SHA — under merge autonomy the cycle merges on "CI green", and a mutable tag lets its owner
-   repoint what CI runs with no diff visible in this repo. An action metadata file inside a
-   pruned `.git/` or `node_modules/` tree, a symlinked action directory whose target lies outside
-   the repo, and the body of a reusable workflow owned by another repo (its ref is still checked,
-   just not its contents) are not scanned.
-
-   **Post-merge verification** (optional, nested under this same section) — a sub-heading titled
-   exactly "Post-merge verification" (any `#` depth) followed by a fenced block of read-only
-   commands, one per line, run in order from the repo root after a merge is confirmed, so a repo
-   whose default branch auto-deploys stops reporting "done" when only "merged" is true, e.g.:
-
-   ````markdown
-   ## Merge autonomy policy
-   The cycle may merge harness PRs whose plan was approved, whose verifier verdict
-   is pass, and whose CI is green.
-
-   ### Post-merge verification
-   Wait: 10 minutes
-   ```
-   railway status --service api --json
-   curl -fsS https://api.example.com/readyz
-   ```
-   ````
-
-   An optional `Wait: <N> minutes` line before the fence sets the poll budget (default 10,
-   clamped to a non-configurable 30-minute ceiling, beyond which the pass hands off rather than
-   waiting longer). The `issue-cycle` merge pass runs exactly the declared commands — never one
-   it synthesizes, adapts, or extends — and records the outcome as a trailing `deploy=` field on
-   the merge stage's ledger row and status line: `verified` (every command exited 0 within the
-   budget), `pending` (budget spent with no conclusive result, or a permission/`sleep` problem),
-   or `failed` (a command exited non-zero — which additionally stops the merge pass for the rest
-   of the run); `pending`/`failed` surface loudly in the cycle report with the command output's
-   last lines. **No sub-block means the merge pass behaves exactly as it does today** — no extra
-   step, no `deploy=` field. These commands are reads only: the harness never approves, promotes,
-   or redeploys anything — see "Safety model". `check-harness.sh` reports the declaration state as
-   part of the merge-autonomy verdict — declared (with a count of fenced command lines), heading
-   present but no fenced commands, or not declared at all — without ever executing, eval'ing, or
-   otherwise looking up any of the declared commands themselves. When declared, it additionally
-   reports whether each declared command's first token has a matching `Bash(<token>:*)` allow entry
-   in the same three-file union the merge-autonomy verdict reads (`.claude/settings.json`,
-   `.claude/settings.local.json`, and the user-level settings file) — a literal string comparison
-   only, never a lookup or an execution — WARNing (never failing) and naming the exact entry to add
-   when one is missing, so an unattended cycle doesn't discover the missing grant only after a
-   merge. Because the dispatch ledger lives in each run's context only, the next run's merge pass
-   re-runs these same commands once, immediately before its first merge, and stops before merging
-   anything if that recheck comes back anything but `verified`.
-
-6. **Test-suite ratchet policy** (optional) — a section titled exactly "Test-suite ratchet
-   policy" stating the measurement command the `test-ratchet` skill (standalone, and as the
-   `issue-cycle` ratchet pass) runs to find coverage gaps, e.g.:
-
-   ```markdown
-   ## Test-suite ratchet policy
-   Measure with `pytest --cov=app --cov-report=term-missing`. Propose coverage work for
-   `app/` only — never `app/migrations/`, generated clients, or `scripts/`. At most 1 issue
-   per run; target 80% per file.
-   ```
-
-   A non-configurable hard floor always applies on top: test-only (adds or extends tests,
-   nothing else), monotonic (never deletes, skips, or weakens an existing test, assertion, or
-   threshold), evidence-backed (every issue quotes the command, the commit, and a verbatim
-   output excerpt), capped at 3 issues per run and 5 open `test-ratchet` issues, and never the
-   governance surface (`CLAUDE.md`, `.claude/`, policy/ADR docs, CI config). **No section means
-   the ratchet never runs.** Every filed issue carries `test-ratchet`, which the planner's
-   auto-approval hard floor refuses outright and the harness never removes, so plan
-   review always stays human (a human's own manual approval is unaffected); closing a ratchet
-   issue as *not planned* vetoes that gap permanently.
-   `check-harness.sh` reports whether the section exists and, if it does, whether it names a
-   backtick-quoted measurement command that resolves on the PATH — it never runs that command
-   itself; only the `harness-setup` skill does, once, at onboarding, with a human present.
-
-7. **Autonomy reserve** (optional) — a section titled exactly "Autonomy reserve" declaring a
-   fenced block of path globs, one per line (`**` allowed), naming paths a scoped-autonomy grant
-   must never be treated as authorizing, e.g.:
-
-   ````markdown
-   ## Autonomy reserve
-   ```
-   CLAUDE.md
-   .claude/**
-   docs/adr/**
-   ```
-   ````
-
-   The planner adds a "Reserve touch list" section to every plan when this section exists: every
-   "Affected areas" entry matching a declared glob (naming the glob it matched), or "None". A
-   non-empty Reserve touch list blocks auto-approval (item 4's hard floor) unless the "Plan
-   auto-approval policy" section explicitly opts reserve-touching work in. The `verifier` subagent
-   re-checks the same globs against the diff's actually-changed paths at review time (see
-   "Implementation" step 4 above) — a changed path matching a declared glob that the plan's
-   Reserve touch list never named is a `blocker` finding, whether or not the plan was
-   auto-approved. **No section means the harness never populates a Reserve touch list, the hard
-   floor's reserve bullet is inert, and the verifier's reserve-touch check never runs either.**
-   What counts as reserved, and what a grant may override, stays this repo's decision — the
-   harness only reads the declared globs and does the matching in prose.
-
-8. **Autonomy decision record** (optional) — a section titled exactly "Autonomy decision record"
-   declaring a fenced block of `key: value` lines describing the record a human-applied grant
-   label requires an issue's body to carry, e.g.:
-
-   ````markdown
-   ## Autonomy decision record
-   ```
-   grant-label: scoped-autonomy
-   record-section: Binding decisions
-   element: Escalation triggers
-   element: Migration posture
-   element: Worked example
-   ```
-   ````
-
-   `grant-label:` (required) names the label a human applies to an issue to grant it whatever
-   autonomy this repo's own policy defines. `record-section:` (optional, default "Binding
-   decisions") names the heading the issue body's record lives under. Each `element:` line (at
-   least one required) names a required sub-heading under that section. When an issue this run
-   carries the declared label, the `issue-planner` skill runs `check-decision-record.sh <n>` — a
-   read-only script that fetches the issue body and checks it for the record-section heading
-   (presence only) and, for each declared element, a heading nested under the record-section
-   heading (strictly deeper, before the next same-or-shallower heading outside a fence — a
-   same-depth heading is NOT nested) that has at least one non-blank line of content in its span
-   — printing a PASS/FAIL line per check, with a distinct message for "heading absent" versus
-   "heading found outside the record section" versus "heading found, no content under it" — and
-   reports a `grant: will deliver` / `grant: will not deliver` verdict in its summary before
-   implementation. The body scan recognises backtick- and tilde-fenced blocks of any matching
-   length, indented up to 3 spaces, closing only on a same-character run at least as long
-   followed by nothing but whitespace. A non-zero exit on a grant-labelled issue also joins item
-   4's hard floor. **The harness never applies, removes, or creates the grant label** — that
-   stays a human action — and never judges whether the record's *content* is any good, only
-   whether each declared element's heading is nested under the record section, outside a fenced
-   block, and has something written under it. **No 'Autonomy decision record' section means the
-   check never runs and no grant is ever evaluated.** `check-harness.sh` reports
-   `scoped autonomy: off` only when neither this section nor item 7's "Autonomy reserve" is
-   declared; a repo that declares
-   "Autonomy reserve" alone gets a WARN instead (no grant label is declared, so
-   `check-decision-record.sh` never runs).
-
-   **The body-hash grant pattern (documented convention, not harness behaviour).** A repo that
-   wants its grant label to be tamper-evident against a re-label that skips a genuine re-review
-   can adopt this convention in its own `CLAUDE.md`: when granting, the human posts a comment
-   `grant: <sha256 of issue body>`. The canonical recipe, run as two plain commands (no allow rule
-   approves a command containing command substitution — see "Safety model"):
-
+   Read the plan it posts on the issue. If it looks right, approve it:
    ```bash
-   gh issue view <n> --json body --jq .body | tr -d '\r' > /tmp/body.txt
-   shasum -a 256 /tmp/body.txt        # macOS/BSD
-   sha256sum /tmp/body.txt            # Linux
+   gh issue edit 1 --add-label plan-approved   # or add the label in the GitHub UI
    ```
+   > "Implement issue 1."
 
-   Both sides must use the same recipe or the digests won't match. **The harness computes and
-   verifies nothing here** — a repo that wants a subagent to recompute the hash must say so in
-   its own `CLAUDE.md` and add `Bash(shasum:*)` / `Bash(sha256sum:*)` to its allow-list; the
-   template does not ship either grant.
+   Review the PR it opens and merge it.
+5. **Record the baseline.**
+   > "Run harness-setup."
 
-9. **Autonomy mode** (optional) — a section titled exactly "Autonomy mode" declaring a fenced
-   block of `key: value` lines that turns on several of the policies above together, as one
-   combination, instead of requiring each declared separately (ADR 0001), e.g.:
+   The `harness-setup` skill checks the installation, audits `CLAUDE.md` against the real code,
+   runs your verification commands, and records the green baseline. The repo is now ready.
+6. **Carry on with the [everyday workflows](#everyday-workflows).**
 
+### Path B — Add the harness to an existing repo
+
+1. **Add the per-repo settings file.** Copy the template into your repo as
+   `.claude/settings.json`. The command below overwrites the file, so if you already have one,
+   merge the template's entries into it by hand instead:
+   ```bash
+   mkdir -p .claude
+   curl -fsSL https://raw.githubusercontent.com/msummer/trail-blazer-flow/main/templates/repo-settings.json \
+     -o .claude/settings.json
+   ```
+   The template allows `pnpm`, `npm`, `yarn`, and `pytest`. If you build with something else, add
+   it to `permissions.allow`, for example `"Bash(make:*)"` or `"Bash(cargo:*)"`. Subagents can't
+   answer permission prompts, so a missing grant stalls them. Commit the file.
+2. **Run the setup skill.** In a Claude Code session in the repo, say:
+   > "Run harness-setup: check this repo's harness installation, audit CLAUDE.md against the
+   > contract (draft what's missing for my review), and establish the verification baseline."
+
+   The skill:
+   - runs the doctor, `check-harness.sh`, and creates any missing labels
+   - audits your `CLAUDE.md`, or drafts one if you don't have it. The part that matters most is a
+     **Verification** section naming the commands that define "done" (tests, lint, typecheck,
+     build)
+   - runs those commands on the default branch and records the green baseline in
+     `.claude/BASELINE.md`
+
+   If your default branch is red, fix that first. The harness can't tell its own breakage apart
+   from breakage that was already there.
+3. **Review and commit the `CLAUDE.md` changes.** The skill never commits on its own.
+4. **Recommended: protect the default branch.** Require a PR before merging, and require your CI
+   checks to pass. The doctor reminds you if this is missing.
+5. **Try it on one small issue:** *"Plan issue 42"* → approve → *"Implement issue 42"* → merge.
+
+You can re-run `check-harness.sh` at any time. It's read-only apart from two safe fixes (script
+executable bits, seeding an empty `LESSONS.md`), and it tells you exactly what to fix.
+
+---
+
+## Everyday workflows
+
+You drive the harness in plain English from a Claude Code session in your repo. These phrases map
+to the skills:
+
+| Say… | Skill | What happens |
+|---|---|---|
+| "Run the cycle" | `issue-cycle` | One full pass: tidy up after merges → plan → implement → (merge, if enabled) → report what's waiting on you |
+| "Plan the open issues" / "Plan issues 13 and 15" | `issue-planner` | Drafts or revises plans and posts them as issue comments |
+| "Implement the approved issues" / "Implement issue 14" | `issue-implementer` | Builds each approved issue on its own branch, verifies it, and opens a PR |
+| "Run harness-setup" | `harness-setup` | Checks the installation, audits `CLAUDE.md`, and refreshes the baseline |
+| "Start a new project" | `project-kickoff` | The greenfield on-ramp ([Path A](#path-a--start-a-brand-new-project)) |
+| "Run the test ratchet" | `test-ratchet` | Files issues that close test-coverage gaps. Opt-in, see [the CLAUDE.md contract](#the-claudemd-contract) |
+
+You can also call a skill directly, for example `/trail-blazer-flow:issue-cycle`.
+
+### The daily loop
+
+1. **"Run the cycle."** It finishes with a report in two halves: what it did, and what's waiting on
+   you.
+2. **Review the plans it posted** ([recipe below](#review-a-plan)).
+3. **Review and merge the PRs it opened** ([recipe below](#review-and-merge-a-pr)).
+4. **Repeat.** Anything you approved gets built on the next run.
+
+After a merge you don't need to do anything. The next run starts by syncing the default branch,
+deleting merged `claude/*` branches, and repairing labels. Before building anything new, it also
+re-runs your verification commands on the merged code, because two green PRs can still break each
+other.
+
+### Review a plan
+
+A plan is an issue comment whose first line is a hidden `<!-- planner-plan -->` marker, and the
+issue gets the `plan-proposed` label. Each plan includes acceptance criteria, implementation steps, a testing
+approach, risks, and **open questions** marked **BLOCKING** or **ADVISORY**.
+
+- **Approve it:** add the `plan-approved` label (`gh issue edit <n> --add-label plan-approved`).
+  Approving a plan whose open questions are all ADVISORY accepts the defaults it proposes. Don't
+  approve a plan that still has an unanswered BLOCKING question. Answer it in a comment instead.
+- **Request changes:** comment on the issue saying what to change. You don't need a label. The next
+  planning run reads your comment and posts a revised plan.
+- **Take the issue out of planning:** add `no-plan`.
+
+Only comments from repo owners, members, and collaborators count as feedback. Comments from anyone
+else are reported to you and never acted on.
+
+### Review and merge a PR
+
+The PR is only opened after the verifier has passed the work. Its body includes the verification
+results, the verifier's status line, the mutation-probe result, and `Closes #<n>`. Read it, check
+CI, then merge it or close it like any other PR. If you want changes before doing either, comment
+on it first.
+
+### See what's waiting on you
+
+```bash
+harness-status.sh
+```
+
+This prints JSON with two halves. `harness_will_handle` lists work the next run will pick up
+without you. `waiting_on_human` lists what needs you: `plans_to_review`, `prs_to_review` (each
+with its CI state), `blocked`, `followups_to_triage`, `escalations`, and `stop_routes`. If
+`degraded` is `true`, a GitHub query failed and one of those lists may be incomplete. The
+`degraded_reasons` field says which one.
+
+### Unblock an issue
+
+- **`impl-blocked`:** the implementer hit something it couldn't resolve, for example the verifier
+  still failing after the retry budget ran out. Its comment on the issue explains why. Fix the
+  cause (usually by answering a question, or by revising the plan), then **remove `impl-blocked`**
+  to put the issue back in the queue.
+- **`needs-human`:** the harness hit a question only you can answer. It posted the question and
+  its evidence as a comment and moved on to other work instead of stalling. Answer in a comment,
+  then **remove `needs-human`**. The issue is invisible to every harness queue until you do.
+
+### Triage follow-up issues
+
+When a PR's plan lists follow-up work, the harness files each follow-up as a new issue labelled
+`no-plan`, so it waits for you before any planning happens. For each one:
+
+- **Build it:** remove `no-plan` and it enters planning on the next run.
+- **Keep it parked:** add `triaged-held`. It then stops counting in `followups_to_triage`.
+- **Drop it:** close it as *not planned*.
+
+If the PR that filed a follow-up is closed without merging, the next run's cleanup quarantines that
+follow-up. It makes sure the issue carries `no-plan` and leaves a comment keyed
+`<!-- harness-orphan-notice: PR #<n> -->`. It never closes the issue.
+
+### Split an issue across several PRs
+
+Add the **`multi-pr`** label to the issue. When one slice's PR merges, cleanup then leaves the
+issue open (reported as `KEEP`) instead of closing it, and the issue re-queues for its next slice.
+A maintainer comment containing `<!-- harness-multi-pr -->` works too, but the label is the
+primary signal. Close the issue yourself when the last slice lands.
+
+### Pause, veto, or stop
+
+| You want to… | Do this |
+|---|---|
+| Keep one issue's approval manual, even under an auto-approval policy | Add `no-auto-approve` |
+| Halt one issue mid-flight | Remove `plan-approved`. The harness honours this at its next check and resumes when you re-add it |
+| **Stop a running cycle** from your phone | Add `harness-stop` to any open issue. Remove it to resume |
+| **Stop a running cycle** at the keyboard | `mkdir -p "$(git rev-parse --git-common-dir)/trail-blazer" && touch "$(git rev-parse --git-common-dir)/trail-blazer/stop"`. Delete the file to resume |
+
+The stop switch is checked before each stage and before each merge. It can't interrupt a subagent
+that is already running, but nothing new starts after it's set.
+
+### Work from your phone
+
+Every gate is an ordinary GitHub object, so the GitHub mobile app is all you need while a cycle
+runs unattended. Read a plan and add `plan-approved`, comment to request changes, merge a PR, or
+add `harness-stop` to halt everything. Back at a laptop, `harness-status.sh` shows what's left.
+
+### Run it on a schedule
+
+Each cycle is one bounded pass, so you schedule the repetition from outside:
+
+```
+/loop 30m /trail-blazer-flow:issue-cycle
+```
+
+You can also run it from a scheduled routine or cron job. Only one cycle can run per checkout at a
+time (a lock enforces this). For fully unattended runs, see
+[Autonomous mode](#autonomous-mode).
+
+---
+
+## Autonomous mode
+
+By default, a human approves every plan and merges every PR. Autonomous mode lets the harness do
+both itself, but only inside fixed safety floors that no setting can loosen. It's meant for repos
+where you want the backlog to keep moving while you're away, and where a bad merge is cheap to
+revert.
+
+### The four levels
+
+Each level is something you opt into in your repo's `CLAUDE.md`, plus, for merging, one settings
+edit that only a human can make.
+
+| Level | Who approves plans | Who merges PRs | How to turn it on |
+|---|---|---|---|
+| **Manual** (default) | You | You | Nothing to do |
+| **Auto-approve** | The harness, for plans matching your policy | You | Add a `## Plan auto-approval policy` section |
+| **Merge autonomy** | You or your policy | The cycle, for PRs matching your policy | Add a `## Merge autonomy policy` section **and** lift the `gh pr merge` deny |
+| **Autonomous mode** | The harness, within the hard floor | The cycle, for harness PRs, within the merge floor | Add a `## Autonomy mode` section with `mode: autonomous`, **and** lift the `gh pr merge` deny if you want merges |
+
+### What autonomous mode changes
+
+- **Plans get approved automatically** if they pass the hard floor, even if you haven't written a
+  "Plan auto-approval policy". If you have written one, it still applies in full. The mode can
+  only narrow your policies, never widen them.
+- **Leftover plans are reconsidered on every run.** A plan posted in an earlier run that got no new
+  feedback is re-checked against the floor and approved if it passes. If you removed or added the
+  `plan-approved` label yourself, the harness respects that and leaves the plan alone.
+- **Harness PRs get merged automatically** if they pass the merge floor, even if you haven't
+  written a "Merge autonomy policy". This only happens after you lift the merge deny (step 3
+  below). Dependabot and other non-harness PRs are never included.
+- **The cycle becomes a serial merge train.** Each issue goes all the way through
+  implement → verify → PR → CI → merge before the next branch is cut. Each issue then starts from
+  a default branch that already contains the previous merge, so PRs don't pile up and conflict. If
+  a PR is only held because it's behind, the train updates the branch once, waits for CI, and
+  re-checks the whole floor.
+- **The retry budget is configurable.** `kickback-budget:` (0–3, default 2) sets how many times a
+  failed verifier review goes back to the implementer before the issue is marked `impl-blocked`.
+
+### What it never does
+
+These floors apply in every mode, and autonomous mode can't loosen any of them.
+
+- **It never auto-approves a plan** that has a BLOCKING question no human has answered, is stale, overlaps another
+  plan's files, touches schema or security (unless your policy explicitly opts that in), comes
+  from an issue opened by someone who isn't a maintainer, or carries `no-auto-approve` or
+  `test-ratchet`.
+- **It never merges a PR** unless the verifier passed it (checked against three separate records),
+  CI is green on the head commit, the branch contains the latest default branch, the approval still
+  covers the exact plan that was built, and no maintainer comment arrived after approval.
+  **"No checks configured" doesn't count as green**, so a repo without CI doesn't auto-merge.
+  Autonomous mode never changes that; only a written "Merge autonomy policy" can explicitly opt a
+  no-CI repo in.
+- **It never merges a change to governance files:** `CLAUDE.md`, `.claude/`, `.github/`, ADRs,
+  CI config, or any path you add under "Governance paths". Those always wait for you. The one
+  exception is a small, append-only new entry in `.claude/LESSONS.md`, and every such merge is
+  quoted in the cycle report.
+- **Autonomous mode never lifts the merge deny or edits your settings files.** That switch is
+  always yours.
+- **It never pushes to the default branch** (a hook blocks this in every session) and never
+  fixes a verifier finding itself. Fixes always go back through the implementer and get
+  re-verified.
+- **It never guesses when stuck.** It labels the issue `needs-human`, explains why, and moves on.
+
+### Turn it on, step by step
+
+1. **Make sure the rails are in place.**
+   - CI runs on pull requests.
+   - Branch protection on the default branch requires those checks and has "require branches to
+     be up to date" turned on.
+   - Your default branch doesn't auto-deploy. If it does, declare
+     [Post-merge verification](#optional-post-merge-verification) so the harness confirms each
+     deploy.
+2. **Add the section to your repo's `CLAUDE.md`:**
    ````markdown
    ## Autonomy mode
    ```
@@ -957,288 +380,182 @@ subagents need:
    kickback-budget: 2
    ```
    ````
-
-   `mode: autonomous` (required) is the only recognised value — anything else, or the section's
-   absence, leaves the mode off; a section present with no `mode: autonomous` line is **inert**,
-   same as absent. `kickback-budget:` (optional) is an integer from 0 to 3, default 2 — any other
-   value falls back to the default, with a WARN from `check-harness.sh` naming the bad value; the
-   budget is never exceeded.
-
-   In autonomous mode:
-   - A missing "Plan auto-approval policy" section (item 4) is read as present with no conditions
-     beyond item 4's own hard floor — that floor alone decides, so schema, security, and
-     reserve-touching work are never opted in by the mode alone.
-   - A missing "Merge autonomy policy" section (item 5) is read as present for harness PRs
-     only — never Dependabot, and never an opt-in for a repo with no CI wired up (item 5's own
-     "no checks configured is not green" hard floor still applies).
-   - A section this repo DOES declare still applies in full, exactly as items 4/5 describe — the
-     mode can only narrow what it allows, never widen a policy this repo wrote narrower.
-   - The "Test-suite ratchet policy" (item 6), "Autonomy reserve" (item 7), and "Autonomy decision
-     record" (item 8) sections stay separate opt-ins; the mode implies none of them.
-   - Lifting the `Bash(gh pr merge:*)` deny stays a manual, human edit to `.claude/settings.json`
-     or `.claude/settings.local.json` (item 5's own double opt-in) — the mode never lifts it and
-     never edits a settings file itself.
-   - Every hard floor named in items 4 through 8 is unchanged; the mode only widens *which*
-     section is read as present, never *what* a present section is allowed to authorize.
-   - The kickback budget (see "Implementation" step 4 above) bounds how many times the verifier's
-     fail finding re-dispatches the implementer before the run takes the blocked path. The
-     orchestrator never writes the fix itself; a spent budget always takes the blocked path,
-     exactly like the fixed limit does without this section.
-   - Auto-approval (item 4) is also evaluated on every run for each `plan-proposed` plan posted in
-     an EARLIER run, not just one posted or revised this run (ADR 0001 decision 6), as long as its
-     latest plan has no newer maintainer feedback. The same hard floor and the same approval
-     binding (item 4's own plan-comment binding) apply — nothing is loosened for a carry-over
-     candidate. A plan whose `plan-approved` label was added or removed after it was posted is
-     never re-approved by the harness this way (a withdrawal is honoured); post new feedback or
-     re-add the label yourself to get it reconsidered. A carry-over candidate that fails the floor
-     gets no comment and no label — it is only reported in that run's summary.
-   - **Serial merge train** (ADR 0001 decision 7, folds in #257): whenever this mode is on AND
-     the merge pass's activation (1) holds, the `issue-cycle` skill runs its implementation and
-     merge passes as one serial train instead of implementing everything first and merging after
-     — see `skills/issue-cycle/references/serial-train.md` for the full procedure. It drains any
-     open harness PRs left over from earlier passes first, then carries each ready issue through
-     implement → verify → PR → CI → the merge floor → merge → post-merge re-verification before
-     the next branch is cut; worktree-parallel mode is never entered inside the train. A held PR
-     moves the train on to the next issue; a merge-halting event (e.g. a merge denial or an
-     unconfirmed merge) makes the rest of the run implement-only, opening PRs but attempting no
-     further merge; a train-stopping event (a red baseline after a merge, or a stop-switch stop)
-     dispatches no further issue. For a PR whose only hold is the up-to-date rail ("behind"),
-     the train tries `gh pr update-branch <pr>` once (merge-from-base, never `--rebase`, skipped
-     when the repo's merge method is rebase), waits a bounded time for CI, then re-evaluates the
-     whole merge floor from the top on the new head; a conflict or a further failure leaves the
-     PR held, named, with the old → new head recorded in the report. Activation (1) does not
-     require the `gh pr merge` deny to be lifted, so until a merge is confirmed in a run the train
-     applies at most one update-branch (and its CI wait) — with the deny still in place, guard
-     (c)'s denial then stops merging for the run.
-     Outside this mode, the
-     merge pass is unchanged: one merge per pass, no update-branch.
-
-   `check-harness.sh` prints exactly one verdict line whenever `CLAUDE.md` exists — off (no
-   section), autonomous (naming the effective kickback budget), or inert (section present, no
-   `mode: autonomous` line) — and, in autonomous mode, widens the merge-autonomy, CI-pinning, and
-   branch-protection checks (item 5's own WARN stems, unchanged) to fire from the implied
-   activation too, even with no "Merge autonomy policy" section declared. Only in autonomous mode
-   it also prints one informational line reporting each settings file's `permissions.defaultMode`
-   value (a validated bare word, or `(unset)`/`(unrecognised value)` otherwise) —
-   `.claude/settings.json`, `.claude/settings.local.json`, and the user-level settings file
-   included — never an allow/deny entry from any of them.
-
-   **Recommended headless invocation**, once this section is on:
-
+   With only this step, the harness approves plans and builds PRs, and you still do the merging.
+   That's a sensible first week. Until you do step 3, the doctor reports merge autonomy as
+   `half-activated` and cycle reports show `verified, merge blocked`. That's expected.
+3. **Let it merge (optional).** In `.claude/settings.json`, remove `"Bash(gh pr merge:*)"` from
+   `permissions.deny`. Then add it to `permissions.allow`, either in `.claude/settings.json` (turns
+   merging on for everyone) or in `.claude/settings.local.json` (this machine only, never
+   committed). A deny in any settings file, including your user-level one, beats an allow
+   anywhere else.
+4. **Check it with the doctor.** Run `check-harness.sh`. Look for:
+   - `autonomy mode: autonomous (kickback budget 2) …`
+   - `merge autonomy: active (…)`. If you see `merge autonomy: half-activated` instead, a deny is
+     still in place. The line names the file.
+   - The doctor also warns about CI actions that aren't pinned to a commit SHA, and about branch
+     protection that isn't strict.
+5. **Run it unattended.** Use `/loop` or a schedule (see
+   [Run it on a schedule](#run-it-on-a-schedule)), or run it headless:
    ```bash
    claude -p --permission-mode auto --permission-prompts none "run the cycle"
    ```
+   With `--permission-prompts none`, a permission prompt becomes a denial instead of a stall, and
+   the harness reports that denial as a `needs-human` escalation. The plugin's safety hooks still
+   run.
 
-   Under `--permission-prompts none`, a would-be permission prompt becomes a denial instead of
-   stalling unattended. The skills already escalate a denial durably (see "Durable escalation"
-   under "Implementation") and never route around it, so this changes nothing about how a denial
-   is handled. The plugin's `PreToolUse` hooks (see "Safety model") still run and still deny
-   exactly what they deny today; `--permission-mode auto` and `--permission-prompts none` change
-   the CLI's own prompting behavior, never the hooks'.
+**To turn it off**, delete the `## Autonomy mode` section, or change it to anything other than
+`mode: autonomous`. To stop merges only, put `"Bash(gh pr merge:*)"` back in `permissions.deny`.
+To stop a run in progress, use the [stop switch](#pause-veto-or-stop).
 
-10. **Governance paths** (optional) — a section titled exactly "Governance paths" declaring extra
-    path globs the merge pass's *Governance path list* read (item 5 above) treats as governance,
-    on top of the built-in rules below, e.g.:
+### Optional: post-merge verification
 
-    ````markdown
-    ## Governance paths
-    ```
-    docs/policies/
-    .gitlab-ci.yml
-    Jenkinsfile
-    renovate.json
-    ```
-    ````
+If merging to your default branch deploys something, add a **Post-merge verification** sub-block
+under your "Merge autonomy policy" section. It lists read-only commands the cycle runs after each
+merge. If one fails, merging stops for the rest of the run:
 
-    Read mechanically by `bin/governance-paths.sh` — the same script the merge pass calls for
-    item 5's read, and the one `check-harness.sh` calls (in a validation-only mode, never to
-    compute a verdict) — from the section's first fenced code block only; blank lines and
-    `#`-prefixed lines inside it are ignored, and every other line is trimmed and treated as one
-    glob. **Built-in rules** (case-insensitive, always active whether or not this section exists):
-    any path segment equal to `.claude`, `.github` (all of it, not only workflow files), `adr`, or
-    `adrs`; or a final segment equal to `CLAUDE.md`, `action.yml`, or `action.yaml`. **Declared
-    globs only ever ADD holds** — the result is the built-in test OR the declared test, never a
-    replacement or a narrowing. **Glob dialect:** matching is case-insensitive; a glob with no `/`
-    matches the path's final segment at any depth (`Jenkinsfile` also catches `ci/Jenkinsfile`); a
-    glob with a `/` matches the whole repo-relative path, anchored at the repo root; a trailing
-    `/` means "everything beneath" (`docs/policies/` becomes `docs/policies/*`); `*`, `?`, and
-    `[...]` follow plain shell `case`-pattern (fnmatch) semantics, and `*` crosses `/` (so `**` is
-    no different from `*`); a line starting `!` (negation) or `/` or `./` (a leading slash) makes
-    the WHOLE section malformed, fail-closed, rather than silently matching nothing forever. Read
-    from the **base tip's** CLAUDE.md only — never the PR head, never the working tree, so a PR
-    can't loosen the rule it's held against by editing this section in the same PR. No section, or
-    no CLAUDE.md at all at the base tip, means only the built-in rules apply — not an error. A
-    malformed section means the merge pass holds every PR (`verdict=error`) until a human fixes
-    it; `check-harness.sh` WARNs, never FAILs, naming the malformed reason (`no-fence`,
-    `unterminated-fence`, `no-globs`, `negation`, or `leading-slash`) — or, with no section at all,
-    PASSes `governance paths: none declared`, or, with a well-formed section, PASSes
-    `governance paths: <n> declared glob(s)`. The rule's own words apply beyond any explicit list
-    too — a policy/ADR document or CI/build config under a name these rules don't match, and **any
-    doubt holds**. Only the merge pass's *Governance path list* read (item 5) and the doctor's
-    validation ever read this section; nothing else in the harness does.
+````markdown
+## Merge autonomy policy
+The cycle may merge harness PRs whose plan was approved, whose verifier verdict
+is pass, and whose CI is green.
 
-The subagents read `CLAUDE.md` at the start of every task — it is the real input that makes
-the harness work well in a given repo. Too little and they're guessing; too much and the
-contract above drowns in restatement of what the file system, manifests, and linter config
-already say. The ten items above are the floor, not a template to pad: leave out directory
-tours, framework defaults, and formatter-enforced style, and keep the non-obvious — invariants,
-why-this-way decisions, traps a fresh reader would hit — instead. `check-harness.sh` turns "too
-much" into a mechanical proxy: it WARNs once `CLAUDE.md` passes 300 lines or 20,000 bytes,
-pointing at the harness-setup skill's leanness audit — not at the ten contract items themselves.
+### Post-merge verification
+Wait: 10 minutes
+```
+railway status --service api --json
+curl -fsS https://api.example.com/readyz
+```
+````
 
-## The LESSONS.md contract (project-owned)
+The harness only runs these commands and records what they report. It never approves, promotes,
+or redeploys anything. Each command's first word needs a `Bash(<command>:*)` allow entry, and the
+doctor names any that are missing.
 
-`.claude/LESSONS.md` holds project-specific traps — CI quirks, fixture contracts, naming
-conventions — that subagents repeatedly trip over. The skills inject relevant entries into every
-subagent prompt and append new entries when a failure traces to a gotcha. **The file belongs to
-the project, not this toolset**: each project keeps its own `LESSONS.md` (the doctor script
-seeds an empty one on install). Format: 1–3 lines per entry, dated, written as an instruction
-to a future agent. Because the harness appends lessons mid-run but never commits to the default
-branch, uncommitted `LESSONS.md` changes are treated as benign everywhere the skills check for
-a dirty tree, and ride along with the next harness commit — but a change that appears while an
-implementer or verifier subagent dispatch is in flight is the subagent's, not the harness's, and
-blocks the issue instead (the LESSONS.md dispatch guard, #323) —
-unless the file already existed untracked before that dispatch started, in which case the guard
-has no baseline to take and says so instead of blocking. Since #327, this untracked-baseline gap
-no longer applies to an `Edit` or `Write` of `.claude/LESSONS.md` specifically: the
-`hooks/claude-dir-guard.sh` `PreToolUse` hook denies that call outright for both roles, tracked or
-not, with no orchestrator compare required. Since #340, `hooks/agent-boundary.sh` also denies an
-implementer/verifier Bash redirection, `tee`, `cp`, `mv`, `cd`/`pushd`, or in-place `sed` that
-targets a `.claude` path segment — closing most of the Bash-issued write route into
-`.claude/LESSONS.md` for those two roles specifically. The dispatch guard above is still the only
-control on the remaining Bash writers (an interpreter such as `python3 -c "open(...)"` or `perl
--i`, `dd`, `install`, `ln`, or a variable-built path), and still carries the untracked-baseline gap
-for those.
+### Finer-grained controls
 
-Under a Merge autonomy policy (#307, ADR 0001 decision 9), a harness PR that carries a lesson
-this way is not automatically held by the *Never the governance surface* rule just because it
-touches `.claude/`: `skills/issue-cycle/SKILL.md`'s *Lesson-append carve-out* releases it only
-when the *Governance path list* read (#324) establishes `.claude/LESSONS.md` as the PR's sole
-governance-surface path, the diff is a pure
-end-of-file append (no deleted or changed lines) of at most 40 added lines with no `<!--` in
-them, and the added lines, read as data, judge as only a project gotcha — any doubt holds the
-PR. Editing, reordering, or deleting an existing entry still holds it, as does any other
-`.claude/` change, exactly as before. Every carve-out merge is quoted word for word in the cycle
-report and in a durable `<!-- harness-audit -->` issue comment, so a released lesson is never
-merged silently.
+To scope autonomy more tightly, `CLAUDE.md` can also declare an **Autonomy reserve** (paths that
+always need a human), an **Autonomy decision record** (a per-issue grant label for pre-decided
+work), and extra **Governance paths**. See
+[the CLAUDE.md contract](#the-claudemd-contract).
 
-## The BASELINE.md contract (machine-local)
+---
 
-`.claude/BASELINE.md` records the last **known-green** run of the verification commands on the
-default branch: the full commit SHA it ran on, the date, and each command's outcome ("pytest:
-631 passed"). It is what makes "the suite was green at N before my change" a checkable fact
-across sessions rather than a memory of one chat. Written by `harness-setup`, refreshed
-automatically by the implementer/cycle pre-flight whenever the default branch moves past the
-recorded commit (green → new baseline; red → the run stops, because a broken main makes every
-failure unattributable — that's also the mechanical "two green PRs can still compose badly"
-check). It is **machine-local state, not a project document**: keep it gitignored
-(`harness-setup` adds the entry; the doctor warns if it's missing or tracked), and never edit
-it by hand. `harness-setup` and the implementer/cycle refresh both always write the full SHA; the
-doctor's compare against it tolerates an abbreviated recorded value of 7 or more hex characters
-as a prefix of the current tip.
+## The CLAUDE.md contract
 
-## Installing in a new repo
+Your repo's `CLAUDE.md` is the harness's main input. Items 1–2 are what every repo needs. The rest
+are opt-in sections. The harness looks for each one by its **exact title**. The full rules for each
+item, including every hard floor, are in
+[docs/reference/claude-md-contract.md](docs/reference/claude-md-contract.md).
 
-**Starting a brand-new project?** Do step 1 below to get the plugin, then just run the
-`project-kickoff` skill ("start a new project") — it does steps 2–3 *for* you (creates/selects
-the GitHub repo, lays down `.claude/settings.json`, installs labels, drafts `CLAUDE.md`) as part
-of the interview, and files the initial backlog. The manual steps below are for onboarding an
-*existing* repo.
+| # | Section | Required? | What it does |
+|---|---|---|---|
+| 1 | Conventions & architecture | Yes | Stack, code style, patterns, security and data rules |
+| 2 | Verification | Yes | The commands that define "done" (tests, lint, typecheck, build) |
+| 3 | Setup command | Optional | How to install dependencies |
+| 4 | `Plan auto-approval policy` | Optional | Which plans the harness may approve for you, in plain language |
+| 5 | `Merge autonomy policy` | Optional | Which PRs the cycle may merge for you. Also needs the merge deny lifted. Can contain a `Post-merge verification` sub-block |
+| 6 | `Test-suite ratchet policy` | Optional | Turns on the `test-ratchet` skill: names a coverage command, and the ratchet files test-only issues that always need your approval |
+| 7 | `Autonomy reserve` | Optional | Path globs that autonomy may never touch without a human |
+| 8 | `Autonomy decision record` | Optional | A human-applied grant label, plus the record an issue body must carry to qualify |
+| 9 | `Autonomy mode` | Optional | `mode: autonomous` turns items 4 and 5 on together (see [Autonomous mode](#autonomous-mode)) |
+| 10 | `Governance paths` | Optional | Extra paths the merge floor always holds for a human |
 
-1. **Add the marketplace and install the plugin** (once per machine; the repo is public, so any
-   GitHub-authenticated machine can install it — no special access needed):
-   ```
-   /plugin marketplace add msummer/trail-blazer-flow
-   /plugin install trail-blazer-flow@trail-blazer-flow
-   ```
-   (Or skip this entirely and let step 2 do it — see the note there.)
-2. **Create the thin per-repo settings.** Copy `templates/repo-settings.json` from this repo to
-   the target repo as `.claude/settings.json` (or merge into an existing one). It carries the
-   three things a plugin cannot ship: the **permission grants** (subagents can't answer
-   permission prompts, so their commands must be pre-allowed), `extraKnownMarketplaces` (which
-   registers this marketplace — with `autoUpdate` on, see "Updating") and `enabledPlugins` (so
-   the plugin is enabled after the trust dialog). Because the checked-in settings register the
-   marketplace, **anyone who clones the repo gets the plugin installed and enabled on their first
-   trusted session — they don't need step 1 at all.** Commit it.
-3. **Run the `harness-setup` skill** — in a Claude Code session in the repo, say:
-   > Run the harness-setup skill: check this repo's harness installation, audit CLAUDE.md
-   > against the contract (draft what's missing for my review), and establish the
-   > verification baseline.
-   It runs the mechanical preflight (`check-harness.sh`), creates the labels, audits/drafts
-   `CLAUDE.md`, runs the verification commands on the default branch and persists the **green
-   baseline** to `.claude/BASELINE.md` (gitignored — see "The BASELINE.md contract"), and
-   reports readiness. Don't skip the baseline: every implementation run compares against it,
-   and a repo that is red on its own default branch can't use the harness meaningfully.
-4. Recommended: enable branch protection on the default branch (require a PR before merge) —
-   the doctor checks and reminds you.
+Example policy sections:
 
-**Updating:** the plugin uses semantic versioning (the `version` field in
-`.claude-plugin/plugin.json`). *To publish a release* (author side):
+```markdown
+## Plan auto-approval policy
+Auto-approve plans that are size S, with no data/schema impact and no
+security-sensitive risks. Everything under `payments/` requires manual approval.
 
-```bash
-# 1. bump "version" in .claude-plugin/plugin.json (e.g. 1.1.0 -> 1.2.0)
-# 2. retitle CHANGELOG.md's "## Unreleased" heading to "## vX.Y.Z"
-git commit -am "Release vX.Y.Z: <summary>"
-git tag -a vX.Y.Z -m "trail-blazer-flow vX.Y.Z"   # match the version field exactly
-git push origin main
-git push origin vX.Y.Z
+## Test-suite ratchet policy
+Measure with `pytest --cov=app --cov-report=term-missing`. Propose coverage work for
+`app/` only. At most 1 issue per run; target 80% per file.
 ```
 
-Since v2.7.1, `hooks/push-guard.sh` (#260) denies that `git push origin main` step from inside a
-Claude Code session with the plugin enabled (it resolves `main` as this repo's own default
-branch and denies unconditionally) — run the release ritual from a plain terminal outside Claude
-Code, or ship the release via a `release/vX.Y.Z` PR instead (the shape v2.7.0 itself shipped
-through). The `git push origin vX.Y.Z` tag push is unaffected — it targets a tag ref, never a
-branch, so this hook's destination check never matches it.
+**Keep it lean.** The agents read `CLAUDE.md` at the start of every task, so describe what isn't
+obvious: invariants, decisions and why you made them, and traps a newcomer would fall into. Leave
+out directory tours and anything your linter already enforces. The doctor warns once the file
+passes 300 lines or 20,000 bytes.
 
-That is the whole release process. The `version` field on the default branch is what actually
-drives updates; the matching `vX.Y.Z` **annotated tag is an immutable anchor** for
-rollback/bisect (and pinning), not the update trigger — so always tag in the same step as the
-bump to keep the two from drifting. (`main` is branch-protected: collaborators land changes via
-pull request — no required approvals while the project is solo — while the maintainer pushes
-directly via admin bypass, which is what keeps this direct-push ritual working. Force-pushes and
-branch deletion are blocked for everyone.) *To receive updates* (consumer side): the template
-registers the marketplace with `"autoUpdate": true`, so each new version is picked up
-automatically at the start of a session (Claude Code refreshes the marketplace and reports what
-it updated; run `/reload-plugins` if prompted). To update by hand instead, run
-`/plugin marketplace update trail-blazer-flow` then
-`/plugin update trail-blazer-flow@trail-blazer-flow`.
+---
 
-**Heads-up for testers — `autoUpdate` is a trust choice.** With `"autoUpdate": true` you pull
-each new push to `main` automatically at session start; convenient, but it means taking the
-author's latest commit sight-unseen. If you'd rather vet updates first, set
-`"autoUpdate": false` in your `.claude/settings.json` and run the two manual commands above once
-you've reviewed what changed. The published `vX.Y.Z` tags give you known-good points to compare
-against or roll back to.
+## Labels at a glance
 
-**Which revision produced a given plan comment, verdict, or PR (#233).** Four durable harness
-artifacts — the planner's plan comment, the verifier-verdict archive comment, the PR body, and the
-`issue-cycle` report header — record the installed plugin's `<version> <sha>` (via
-`bin/harness-version.sh`; the doctor reports it too), so a consumer who sees behaviour differ from
-last week's run can tell exactly which revision produced each of those four. Every
-`<!-- harness-status: ... -->` line also carries a trailing `harness=<version>` field (see
-"Resilience" above) — but that field is the `<version>` half only, no sha, so it narrows a run
-to a released version, not to an exact commit; check one of the four sha-carrying artifacts from
-the same run for that. To pin to a known revision instead of trusting `autoUpdate`, see
-"Heads-up for testers" above. The published `vX.Y.Z` annotated tags are the anchors to diff a
-recorded `<version>` against, or to roll back to.
+`setup-labels.sh` creates all of these (the setup skills run it for you).
+
+| Label | Applied by | Meaning |
+|---|---|---|
+| `plan-proposed` | harness | A plan is posted and waiting for your review |
+| `plan-approved` | **you** (or an auto-approval policy) | Go ahead and build it. Remove it to halt the issue |
+| `pr-open` | harness | A PR is open for this issue |
+| `impl-blocked` | harness | Implementation hit a blocker. Read the comment, then remove the label to retry |
+| `needs-human` | harness | The harness asked you a question and moved on. Answer it, then remove the label |
+| `no-plan` | you, or the harness on follow-ups | Keep this issue out of planning |
+| `no-auto-approve` | **you only** | Never auto-approve this issue's plans |
+| `test-ratchet` | harness | Filed by the test ratchet. Always needs human approval |
+| `multi-pr` | **you only** | This issue ships as several PRs, so keep it open when one merges |
+| `triaged-held` | **you only** | A follow-up you've read and decided to park |
+| `harness-stop` | **you only** | Stop switch. Any open issue carrying it stops every run |
+
+The full label lifecycle is in [docs/reference/workflow.md](docs/reference/workflow.md#label-lifecycle).
+
+---
+
+## Safety model
+
+The short version (full detail in
+[docs/reference/safety-model.md](docs/reference/safety-model.md)):
+
+- **The implementer and verifier can't touch git history or GitHub.** Plugin hooks deny their
+  `git`/`gh` commands (the verifier gets a read-only `git` subset) and their `Edit`/`Write` calls
+  under `.claude/`.
+- **Nothing reaches the default branch directly.** Work happens on `claude/<n>-<slug>` branches.
+  A hook denies any push to the default branch in every session, including yours.
+- **Nothing is pushed until the verifier passes.** Before the PR's commit, the orchestrator re-runs
+  your verification commands itself and checks the staged files against the implementer's report.
+- **The settings template denies the dangerous commands:** merging (until you lift it), force-push,
+  `reset --hard`, `git clean`, and `rm -rf`.
+- **Issue and comment text is treated as data, not instructions,** and only maintainer comments
+  count as feedback.
+- **Every automatic decision leaves an audit comment** on the issue, and approvals are tied to the
+  exact plan comment that was approved.
+- **Branch protection is your real backstop.** The deny list is pattern-based, so require PRs and
+  status checks on the default branch.
+
+---
+
+## Updating
+
+**Getting updates.** The settings template registers the plugin with `"autoUpdate": true`, so
+Claude Code picks up each new version when a session starts (run `/reload-plugins` if it asks).
+To update by hand:
+
+```
+/plugin marketplace update trail-blazer-flow
+/plugin update trail-blazer-flow@trail-blazer-flow
+```
+
+**`autoUpdate` is a trust choice.** It means taking the latest release without reviewing it
+first. If you'd rather check updates yourself, set `"autoUpdate": false` in
+`.claude/settings.json`, and use the published `vX.Y.Z` tags as known-good points to compare
+against or roll back to. Plans, verdict comments, PR bodies, and cycle reports all record the
+plugin `<version> <sha>` that produced them (`harness-version.sh` prints the installed one).
 
 ### Updating an already-onboarded repo (per-repo migration)
 
-An update replaces the plugin's skills/agents/scripts everywhere, but the **project-side
-artifacts don't update themselves**: the labels, the permissions in `.claude/settings.json`,
-and the baseline all live in your repo. The migration tool is the doctor — after any update,
-run:
+An update replaces the plugin everywhere, but the files in your repo (labels, permissions,
+baseline) don't update themselves. **After any update, run:**
 
 ```bash
 check-harness.sh
 ```
 
-It names exactly what the new version needs that your repo lacks; fix what it flags and you're
-migrated.
+It lists what the new version needs that your repo is missing. Fix what it flags and you're done.
 
-For full per-release history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration
-notes, v1.9.0 to v2.7.7" subsection).
+<details>
+<summary>Per-version migration notes (v1.9.0 → v2.8.0)</summary>
+
+For older history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration notes, v1.9.0
+to v2.7.7" subsection).
 
 **v1.9.0 → v2.2.0** — add grants `"Bash(gh auth status:*)"` and `"Bash(gh pr edit:*)"`: re-copy
 the permissions block from `templates/repo-settings.json`, or add both by hand.
@@ -1304,956 +621,149 @@ already-parked follow-ups `triaged-held` by hand. Precondition: your provider mu
 **v2.7.7 → v2.8.0** — re-copy the permissions block from `templates/repo-settings.json` or add
 `"Bash(governance-paths.sh:*)"` and `"Bash(gh pr update-branch:*)"` by hand.
 
-## The per-repo settings file (required)
+</details>
 
-Plugins cannot ship permission rules, so each target repo keeps a thin, checked-in
-`.claude/settings.json` — start from `templates/repo-settings.json`. It pre-allows the harness
-scripts (bare names — `bin/` is on the PATH), the `gh`/`git` commands the orchestrator runs,
-Edit/Write, the build/test runners, and carries the deny-list (no merge, no force-push, no
-`reset --hard`). The `gh pr merge` deny is the merge-autonomy off-switch: it ships on, and
-lifting it is a human edit reserved for repos that define a CLAUDE.md merge autonomy policy.
-`Bash(gh pr edit:*)` lets the orchestrator refresh a PR body it already opened — writing in filed
-follow-up issue numbers, and replacing the verifier status line and mutation-probe line with a
-fresh verdict's after a CI-fix round; `gh pr comment` is deliberately **not** granted — the
-verifier's verdict is archived on the *issue* instead (`Bash(gh issue comment:*)`, already
-granted), which is also where the merge pass reads it back with one `gh issue view` call.
-`Bash(gh pr update-branch:*)` is used only by the serial merge train's update-branch fallback
-(item 9) — it merges the default branch into a held PR's own branch, never `--rebase`, and never
-touches the default branch itself. The same
-file also carries the non-permission keys a clone needs to bootstrap
-the plugin — `extraKnownMarketplaces` (auto-registering + auto-updating the marketplace) and
-`enabledPlugins` — covered in "Installing in a new repo". Four grants exist solely for the
-resilience mechanism (see "Resilience: checkpointing, retries, and the dispatch ledger"):
-`Bash(sleep:*)` (the retry ladder's backoff waits), `Bash(date:*)` (duration reporting in the
-summary table — advisory only, its absence just costs `duration: unknown`),
-`Bash(git reset --soft:*)` and `Bash(git merge-base:*)` (collapsing a run's WIP checkpoints into
-one clean commit before the PR — `git reset --soft` never touches the working tree, only where
-HEAD points; see "Safety model"). Worktree-parallel mode's `git -C <worktree> <subcommand>`
-commands (see the `issue-implementer` skill's `references/worktree-mode.md`) are approved by a
-plugin-shipped `PreToolUse` hook instead of a permission grant — through v2.3.0 the template
-shipped nine `Bash(git -C * <sub> *)` allow entries for this, but a `*` before the subcommand
-also matches any option inserted at that position (`-c core.pager=…`, `--exec-path=…`) and
-approves it without a prompt, which Claude Code 2.1.246 started warning about at startup, and no
-rewrite of the rule closes the gap — there is no "exactly one token" rule syntax. `hooks/`
-ships a guard script instead (see "Safety model" for its contract and the fail-safe design).
-Separately, the seven bare `git` deny entries above each gained a
-`git -C * …` mirror, so a worktree-mode command can't slip past a guard the bare form already
-stops — see "Safety model" for why the mirror matters. Two of those seven bare denies
-(`branch -D main` and `push origin main`) name the default branch literally, so they guard
-nothing on a repo whose default branch isn't `main` (`master`, `trunk`, `develop`, ...);
-`check-harness.sh` derives the guarded operations from the template itself, checks them against
-this repo's actual default branch, and — when coverage is missing — names the exact bare and
-`-C` deny entries to add. The template allows `pnpm`, `npm`,
-`yarn`, and `pytest`; if your repo uses a
-different toolchain, add it — the doctor warns when it detects a toolchain no settings file's
-allow-list covers — e.g.:
+---
 
-```json
-"Bash(make:*)", "Bash(cargo:*)", "Bash(go:*)", "Bash(just:*)"
-```
+## Troubleshooting
 
-That bare-name check is a regex match prefix-anchored at `^Bash(` against the allow-list entries
-across all three settings files (the same three-file union named in "The CLAUDE.md contract" item
-5 above) — a grant
-in `.claude/settings.local.json` or your user-level settings file counts too, not just
-`.claude/settings.json` — and doesn't cover a *path-qualified* verification interpreter (e.g.
-`api/.venv/bin/python`, as worktree-parallel mode's per-checkout virtualenvs require) — those need
-their own literal-path allow entry (`Bash(<repo>/api/.venv/bin/python:*)`) instead of, or in
-addition to, the bare `Bash(python:*)` form. When CLAUDE.md's verification scope names such a
-path, `check-harness.sh` looks for a matching literal-path grant across all three settings files
-and WARNs with the exact entry to add if none exists — the shell resolves an absolute venv path
-just fine, but Claude Code's permission match is a literal prefix test, so a bare-name grant can't
-produce a false reassurance for a path-qualified interpreter it doesn't actually cover.
+| Symptom | Likely cause and fix |
+|---|---|
+| A subagent stalls or a step is denied | A permission grant is missing. Run `check-harness.sh`, which names the exact `Bash(...)` entry to add |
+| A run aborts because the lock is held | Another session holds the checkout's lock. `harness-lock.sh status` shows who holds it. If that session is gone, run `harness-lock.sh release --force` |
+| A run stops with a red baseline | Your default branch is failing its own verification commands. Fix `main` first, because the harness won't build on a broken base |
+| The cycle never merges anything | Run `check-harness.sh`. The usual causes are `merge autonomy: half-activated` (the deny is still in place), no CI on the repo, or a PR that touches governance files |
+| A plan you commented on wasn't revised | Only owner, member, and collaborator comments count as feedback, and only issues still labelled `plan-proposed` get revised |
+| `check-harness.sh: command not found` | The plugin isn't enabled in this session, or (on Windows) its `bin/` isn't on the Bash PATH. See below |
 
-`check-harness.sh` reads these files exclusively with `jq`, matching literal entries in the
-`permissions.allow`/`permissions.deny` arrays it parses out — never a raw-text search of a whole
-file, which could be fooled by a rule merely mentioned in an unrelated string (a comment, an
-`env` value) or by a deny-side entry that a whole-file search can't tell apart from an allow-side
-one. Every check here — the harness-script sentinel, template drift, the stale-`-C`-allow WARN,
-and default-branch guard coverage — stays scoped to `.claude/settings.json` by design: they judge
-the shared, checked-in file, not effective permission. The exceptions need *effective* state
-across all three files: the toolchain bare-name check above, the path-qualified interpreter
-probe, the merge-autonomy verdict (see "The CLAUDE.md contract" item 5), the post-merge
-allow-entry check, the `disableAllHooks` WARN, and (#311, only in "Autonomy mode" item 9's
-autonomous mode) the informational `permissions.defaultMode` report, which reads a SANITISED
-bare word from all three files, including the user-level one, and never prints an allow/deny
-entry from any of them. `settings.local.json` is machine-local (may hold
-secrets) — never commit it.
+### Windows
 
-## Safety model
+The automation layer is Bash plus `gh` and `jq`, so run Claude Code under **Git Bash or WSL**.
+There is no native cmd or PowerShell path. Install `gh` and `jq` so they're on the *Bash* PATH you
+launch Claude Code from (for example `winget install GitHub.cli jqlang.jq`, or scoop/choco). This
+repo ships a `.gitattributes` that pins `*.sh` to LF line endings, so Git for Windows can't corrupt
+the scripts.
 
-The implementer subagent can edit files and run the build tool, but does **no** git or network —
-the orchestrator does all git/GitHub. The **git/gh** half of that is mechanically enforced, not
-just prompt convention (#235, review F3): a second plugin-shipped `PreToolUse` hook,
-`hooks/agent-boundary.sh` (its full contract is further down in this section), denies any Bash
-command whose command-position word resolves to `git`/`gh` for the implementer subagent. The
-**network** half remains a prompt-level rule only — blocking it by command pattern is not
-enforceable without also breaking dependency installs during verification, so #235 left it out of
-scope. The verifier subagent writes nothing
-durable: its mutation
-probe edits an already-tracked file inside the tree under review, runs the tests, restores it
-with `git restore <file>` (working tree only — never a commit, ref, or push), and re-checks
-`git status --porcelain` against its pre-probe output before returning; if the repo doesn't grant
-the restore, it skips the probe and says so. Guarantees: branch isolation (work never lands on the
-default branch directly — mechanically enforced for any push refspec, not just the
-pattern-matched deny entries below, by the third plugin-shipped `PreToolUse` hook,
-`hooks/push-guard.sh` (#260, main session included, described further down in this section)), a
-deny-list (no merge by default, no force-push, no `reset --hard`,
-no `rm -rf`), independent re-verification + staged-file reconciliation before every commit, and
-**human review of every PR before merge unless the repo has double-opted-in to merge autonomy**
-(CLAUDE.md policy + lifted deny — see "The CLAUDE.md contract"). The deny-list is best-effort pattern matching; branch protection +
-PR review are the real backstops, and — because two of the seven bare denies name the default
-branch literally — `check-harness.sh` reports per-repo whether those two entries (and their `-C`
-mirrors) actually cover this repo's default branch. The pre-merge guarantee is "nothing pushed, no PR exists" —
-not "nothing committed": WIP checkpoint commits accumulate locally during a run (see
-"Resilience"), but never leave the machine before the verifier passes. `git reset --soft`, added
-for collapsing those checkpoints, only moves what a branch points at — it never touches the
-working tree or deletes any file, so it carries none of the risk `reset --hard` does; the
-`Bash(git reset --hard:*)` deny is unchanged and, like every deny, takes precedence over any
-allow entry. Bash rules are prefix-matched, and a `git -C <path> …` command does **not** match a
-bare-subcommand rule — allow or deny — so a `-C` command needs its own coverage on each side of
-the permission model, and the two sides use different mechanisms. On the deny side, every bare
-git deny — not only the ones worktree mode itself issues — gets a no-space trailing-wildcard `-C`
-mirror, e.g. `Bash(git -C * push --force*)` and `Bash(git -C * clean*)` (see "The per-repo
-settings file"): an unmirrored deny would be a real bypass (e.g. `git -C <worktree> push --force`
-slipping past a guard that stops the bare form). On the allow side, a permission *rule* cannot do
-this safely at all: the only syntax available is an exact match, a trailing `:*`, or a `*` that
-matches any text including spaces, so `Bash(git -C * push *)` — the form the template shipped
-through v2.3.0 — also approves `git -C <worktree> -c core.sshCommand=… push …` (the injected
-option lands inside the first `*`), and there is no "exactly one token" rule syntax to close that
-gap; Claude Code 2.1.246 added a startup warning naming exactly this shape. The plugin ships
-`hooks/git-c-guard.sh` (a `PreToolUse` hook, registered in `hooks/hooks.json`) to do the job
-instead: it sees the whole command string and can require exactly one `-C` token, one path token
-matching the `<repo-dirname>-wt-<number>` worktree shape (the predicate's real reach is any path
-whose final component is `<name>-wt-<digits>`, not only a sibling of the CURRENT session repo —
-since #269 also reuses it, verbatim, to decide whether `hooks/push-guard.sh` resolves a push
-segment's own `-C` target; see that hook's "Safety model" entry below), and then one of the ten covered
-subcommands (`status`, `add`, `commit`, `push`, `restore`, `diff`, `rev-parse`, `merge-base`,
-`reset --soft`, `log`), with nothing else in between — an injected `-c`/`--exec-path`, a second
-`-C`, an unrecognized path or subcommand, a non-conforming composite part, or any command
-substitution all get **no opinion** (empty stdout, exit 0), so the normal permission flow
-applies. A handler `"if": "Bash(git -C *)"` gate on the hook's registration (Claude Code 2.1.85+)
-restricts when the hook process is even spawned to Bash commands whose constituents — matched
-after composite splitting and after any leading `VAR=value` assignment is stripped — match that
-pattern; it can only *reduce* spawns, never widen approval, since the hook itself is the only
-thing that ever emits `allow`; a command the filter doesn't match simply gets no hook opinion and
-follows the normal permission flow, and per Claude Code's own docs the filter fails open (spawns
-the hook anyway) on `$()`/backtick, `$VAR`, or an otherwise-unparseable command — which the guard
-then rejects on its own terms, same as if `if` weren't there at all. Hook decisions
-never override a deny: Claude Code evaluates deny and ask rules regardless of what a `PreToolUse`
-hook returns, so the `-C` deny mirrors above keep winning over the hook's allow, and the guard
-itself never emits anything but `allow` or nothing — never `deny`/`ask` — so a bug in it degrades
-to a prompt, not a bypass. It also never invokes `git` (or anything else) against the untrusted
-`-C` path it is validating, which matters because — per the same docs — a plain `cd` into a
-different directory prompts before the `git` command that follows it, since running `git` in a
-new directory can execute that directory's hooks; `cd`-with-`git` is therefore not a simpler
-escape hatch for either the template or the guard. Hooks shipped by a plugin fire inside
-subagents too (carrying `agent_id`/`agent_type` alongside the usual fields), which matters here
-because the implementer and verifier subagents issue most of the `-C` commands, not just the
-orchestrator — and it is also the mechanism `hooks/agent-boundary.sh` (#235, below) reads to
-resolve which role, if any, issued a given Bash call. The guard fails open in every direction: no `jq` on `PATH`, the plugin disabled or
-not yet updated, `disableAllHooks: true` in any of the three settings files, or a headless
-`--bare` run all leave a `-C` call unapproved by the hook — a prompt in default mode (or a
-recorded denial headless), never a silent bypass. Below the `if` gate's 2.1.85 floor (see
-"Prerequisites"), Claude Code predates support for the handler's `if` field, and its handling
-there is unverified: either it runs the hook on every Bash call as before — prior behaviour,
-with `-C` calls still approved by the guard — or it rejects the handler and the guard never
-fires, degrading to the same prompt (or recorded denial headless) as above; either way, never a
-silent bypass. `check-harness.sh` WARNs when it finds
-`disableAllHooks: true`, and separately when `.claude/settings.json` still carries a legacy
-`Bash(git -C * …)` allow entry the hook now supersedes. A heredoc body
-(e.g. `reconcile-ledger.sh - <<'LEDGER'`, used by `issue-cycle`) is not split into
-separately-matched subcommands, so it stays covered by its single prefix grant. A third fact from
-the same probe series: no allow rule can approve a Bash command containing command substitution
-— `$(...)` or backticks, which behave identically — even when every constituent command is
-individually granted; such a command instead falls through to the session's permission mode
-(prompt on manual/default, a recorded denial headless, silent auto-approval under `auto`), while
-a deny rule *does* match inside a substitution body and blocks the whole composite. That's why
-the WIP-collapse step ("Resilience") runs as two plain `git` calls — a `merge-base` lookup
-followed by `reset --soft` on its literal SHA — rather than one command with the SHA substituted
-in, and it is also why the guard hook rejects any `$(...)`/backtick span outright rather than
-trying to reason about what it might expand to. Composites joined by `&&` or `|` behave the
-opposite way to substitution, and identically to each other: they **are** statically split, and
-each constituent is matched on its own, so such a command is approved exactly when every
-constituent that requires approval has its own matching allow entry. One part's grant does not
-cover the whole (`Bash(git add:*)` alone does not approve `git add -A && git commit …`, and the
-reverse fails too), and a single rule written across the operator — `Bash(git add -A && git
-commit:*)` — matches nothing at all. Not every constituent needs an entry: some commands are
-approved without one (`cd`, `tr` and `head` were each confirmed), which is why the three
-`… | tr -d '\r'` pipelines the harness issues need no `tr` grant; the bare-form WIP checkpoint
-(`git add -A && git commit …`) is covered because both of its constituents are already granted, while its
-`-C` counterpart is covered by the guard hook validating `git -C <worktree> add -A` and `git -C
-<worktree> commit …` as two conforming segments of the same `&&`-joined command (the
-`checkpoint-composite` case in `dev/hook-tests.sh` pins this, including the double-quoted `#`,
-`(`, `)`, and `:` a WIP commit message carries). A path-qualified invocation matches no bare-name
-rule — allow or deny — so such a command needs its own grant on the literal path prefix (this is
-why a worktree's venv-interpreter verification command needs a dedicated entry; see the
-issue-implementer skill's worktree-parallel reference). Every command the harness issues across
-either operator is therefore approved — by the template's allow rules for the bare-form and
-path-qualified-grant cases, and by the guard hook for the worktree `-C` forms — exactly as the
-plugin and template ship. As with substitution, a deny matching any one constituent blocks the
-entire composite.
+- **WSL is its own machine.** `gh` inside WSL has its own credential store, so run
+  `gh auth login` there even if the Windows-side `gh` is already authenticated. Keep repos in the
+  WSL filesystem (`~/...`), not under `/mnt/c/...`. Repos mounted from NTFS are much slower and
+  bring back the exec-bit and line-ending quirks the harness otherwise avoids.
+- **Use forward-slash paths** in anything that reaches a Bash command. Git Bash accepts
+  `C:/Users/...` and `/c/Users/...`, but backslash paths get mangled by quoting. Python venvs on
+  Windows put the interpreter at `.venv/Scripts/python.exe`, not `.venv/bin/python`.
+- **The doctor's exec-bit check is informational on Windows.** NTFS has no POSIX exec bit, and
+  Git Bash runs the scripts through their shebang.
+- **Check that the hooks fire.** `hooks/hooks.json` runs each hook as
+  `bash "${CLAUDE_PLUGIN_ROOT}/hooks/<name>.sh"`. If Claude Code ever exported that variable with
+  backslashes, a hook could silently fail to run. For `git-c-guard.sh` that's harmless (you'd see
+  permission prompts). For `agent-boundary.sh`, `push-guard.sh`, and `claude-dir-guard.sh` it
+  would silently remove a safety boundary. Spot-check this before relying on unattended runs on
+  Windows. The live probes in the [safety model](docs/reference/safety-model.md) covered macOS only.
 
-All of the bare-form facts above (prefix matching, the substitution gap, and the `&&`/`|`
-composite split) were verified by live probe against Claude Code 2.1.220 (#41, #39, #55, #79,
-#80) and are unaffected by the `-C` guard hook. The hook's own allow/no-opinion boundary — the
-ten `-C` forms, the injected-option and malformed-input rejections, the composite checkpoint, and
-the never-execute-`git` guarantee — is pinned by fixture in `dev/hook-tests.sh`, and was also
-confirmed live against Claude Code **2.1.246** on macOS (2026-08-26): a throwaway consumer repo
-with a real sibling worktree, the template's `permissions` block copied verbatim (49 allows, the
-seven `-C` deny mirrors, no `-C` allows), run both headless (`-p`, model-driven) and through a
-real interactive session. Two controls proved the method: with the template's permissions alone
-and no plugin loaded, the same `git -C <worktree> status --porcelain` command is **denied**, so
-every "ran" below is attributable to the hook, not the permissions block alone; and the startup
-wildcard warning is independently observable by this method — a single `Bash(git -C * status *)`
-allow prints exactly one such warning line on a fresh start in an already-trusted workspace
-(never in `-p` mode, and never on the run where the trust dialog is first accepted).
+**First-run smoke test (30 seconds, from Git Bash or WSL, in any git repo):**
 
-| row | tested against | command / observation | expected | observed |
-|---|---|---|---|---|
-| (a) / (a-rel) | the hook as shipped before this issue | `git -C <worktree> status --porcelain` (absolute and relative-sibling forms) | runs, no prompt | **ran**, `?? probe-anchor.txt`, no denial |
-| (b) | as shipped | `git -C <worktree> -c core.pager=cat status` | prompts | **"This command requires approval"** |
-| (c) | as shipped | `git -C <worktree> push --force` | blocked by the deny mirror | **"Permission to use Bash with command … has been denied."** — deny-rule wording, distinct from (b)'s prompt wording: the deny mirror wins over the hook's allow |
-| (d) | as shipped | `git -C <worktree> add -A && git -C <worktree> commit -m "wip: checkpoint verifier (#12)"` | runs, no prompt | **ran**, one commit; both `&&` constituents validated as conforming segments |
-| (g-pre) | as shipped (no `log`) | `git -C <worktree> log main..HEAD --format=%s` | the #154 gap | **"This command requires approval"** — gap confirmed live |
-| (g) | this issue's state (`log` added) | same `log` command | runs | **ran** |
-| (a-if) / (d-if) | this issue's state (`if` gate added) | rows (a) and (d) again | run, no prompt | **ran** — the `if` gate matched each constituent of the (d) composite too |
-| (b-if) | this issue's state | row (b) again | prompts | **"This command requires approval"** — the `if` gate loosens nothing |
-| spawn trace | no `if` | `echo hi` | hook spawns | **1 spawn** |
-| spawn trace | with `if` | `echo hi` | no spawn | **0 spawns** |
-| spawn trace | with `if` | `git -C <worktree> status --porcelain` | spawns and runs | **1 spawn**, ran |
-| (e) | as shipped | interactive session start, template block only | zero wildcard warnings | **0** (a positive control on the same path printed 1) |
-| (f) | this issue's state | interactive session start with the `if` gate on the handler | zero wildcard warnings; hook still fires | **0** warnings; firing shown by (a-if)/(d-if)/the spawn trace |
+1. Confirm the toolchain is on the Bash PATH:
+   ```bash
+   bash --version && gh --version && jq --version && gh auth status
+   ```
+2. Run the doctor by **bare name**. This tests both the PATH and the line endings:
+   ```bash
+   check-harness.sh
+   ```
 
-The seven `Bash(git -C * …)` deny mirrors were present throughout and produced no warning in any
-row above — Claude Code 2.1.246's startup scan is allow-only. The one item this probe left
-unconfirmed is the Windows/Git-Bash spot-check of row (a) — see "Prerequisites" and the Windows
-section below.
+- **A `== harness doctor ==` PASS/WARN/FAIL table prints:** both risks are clear. Any remaining
+  WARN or FAIL items are normal setup, not Windows problems.
+- **`check-harness.sh: command not found`:** Claude Code didn't put the plugin's `bin/` on the Bash
+  PATH. As a fallback, run `bash "$CLAUDE_PLUGIN_ROOT/bin/check-harness.sh"`. That won't match the
+  bare-name permission entries, so expect prompts, and please
+  [report it](https://github.com/msummer/trail-blazer-flow/issues).
+- **`bad interpreter` / `$'\r': command not found`:** a copy with CRLF line endings slipped
+  through. Run `git config --global core.autocrlf input`, then reinstall the plugin.
 
-**Four PreToolUse hooks.** `hooks/git-c-guard.sh` above is one of four plugin-shipped
-`PreToolUse` hooks registered in `hooks/hooks.json` — three matching `Bash`, and a fourth,
-`hooks/claude-dir-guard.sh` (#327, described in its own paragraph after the third hook below),
-matching `Edit|Write`; the second `Bash`-matching hook, `hooks/agent-boundary.sh`
-(#235, review F3), is what the "no git, no gh" caveat earlier in this section now names. It reads each Bash
-call's `agent_type` from the hook's own stdin JSON — the field a `PreToolUse` handler's `if` gate
-cannot see, which is why this handler carries no `if` at all, unlike the guard hook's — and
-resolves it against a role (both the bare `implementer`/`verifier` and the namespaced
-`trail-blazer-flow:implementer`/`trail-blazer-flow:verifier` spellings are matched — the
-namespaced form is the live spelling, confirmed by the live-probe record below; the bare form is
-retained as insurance against a future de-namespacing). For the implementer role it denies
-(exit 2, one stderr line, empty stdout) any Bash command whose parsed command-position word
-resolves to `git` or `gh`, regardless of `git`
-subcommand — the implementer needs neither. For the verifier role it denies `gh` outright and
-denies `git` unless the resolved subcommand is one of `status diff log show rev-parse ls-files
-merge-base blame grep restore`; an unlisted subcommand, a global option before the subcommand, and
-a bare `git` all deny too — fail-closed, not an enumerated allow-list of "safe" subcommands. Since
-#340, both roles ALSO deny a Bash command that puts a `.claude`-segment path in a write position —
-a `>`-family redirect target, an argument to `tee`/`cp`/`mv`/`cd`/`pushd`, or an in-place `sed`'s
-argument — closing most of the Bash-issued write route into `.claude/` (see `hooks/claude-dir-guard.sh`'s
-own paragraph below for the Edit/Write-issued route that hook already closed). Every other case —
-the main session (no `agent_type`), the planner or another agent, `permission_mode: "plan"`,
-malformed stdin, another tool, or `tool_input.command` absent — is "no opinion" (exit 0, empty
-stdout, empty stderr), the same convention `git-c-guard.sh` uses; a blocked call's stderr names the
-role and the command it blocked, since a subagent can't answer a permission prompt the way an
-interactive session could. Pinned by fixture cases in `dev/hook-tests.sh`, including the same
-never-executes-anything guarantee (a booby-trapped `git`/`gh`/`rm` on `PATH` proves nothing runs)
-and the same fail-open properties as the guard hook: the plugin disabled, `disableAllHooks: true`,
-no `jq` on `PATH`, an unresolved `${CLAUDE_PLUGIN_ROOT}` on Windows, or a Claude Code that omits
-`agent_type` all leave this hook silent — but unlike the guard hook (whose non-firing degrades to
-an ordinary permission prompt), this hook's non-firing removes a control with **no** visible sign,
-since nothing else in the permission model was narrowing the implementer/verifier's `git`/`gh`
-surface to begin with. The scan is deliberately quote-blind (it strips quote characters rather than
-tracking quote state, the same trade-off `git-c-guard.sh` makes in the opposite direction) and
-processes `tool_input.command` one line at a time, so several over-blocking classes are expected
-and documented in the script's own header: a literal `git`/`gh` word starting a quoted span right
-after a separator (e.g. `echo "a; git push"`) denies; **any line of a multi-line Bash command that
-begins with `git`/`gh`** is a command-position token after its own newline break and denies,
-including a heredoc line that merely *writes* a fixture file containing the text `git push`; and,
-since #340, a `.claude`-segment write class covering quoted prose (`echo "tip: >> .claude/x"`), a
-heredoc body line, a `sed -i` whose script text itself spells a `.claude` segment, a copy or move
-*out of* `.claude`, a `cd` into any `.claude` directory, an input redirect from `.claude` into
-one of those commands (`tee /tmp/x < .claude/x`), and any `~/.claude/...` write — the remedy
-for a file-content case is to write through the Write/Edit tools rather than a Bash heredoc. Known
-evasions, documented rather than hidden: `$(which git) push` (the literal `git` token is never in
-command position), `sudo -u foo git push` (the argument to `-u` becomes the resolved command word
-instead of `git`), interpreter indirection outside the recognised prefix words (`env`, `command`,
-`builtin`, `exec`, `sudo`, `nohup`, `time`, `nice`, `stdbuf`, `xargs`, `bash`, `sh`, `zsh`, `ksh`,
-`dash`), and, for the `.claude`-write class specifically, an interpreter (`python3 -c`, `perl -i`),
-`install`/`ln`/`touch`/`truncate`/`dd of=…`, or a variable-built or glob target — this is a
-tripwire against an off-script subagent, the same framing this document already uses for the
-body-hash grant pattern, not a sandbox against a determined adversary.
+---
 
-**The third hook, `hooks/push-guard.sh` (#260), governs every session — main session included,**
-unlike `hooks/agent-boundary.sh` above, which only governs the implementer/verifier subagents.
-It closes the gap the settings template's own default-branch deny entries leave open: those two
-entries (`Bash(git push origin main:*)` and its `-C` mirror) are prefix-matched, so a refspec
-spelling such as `git push origin HEAD:main`, `git push origin +HEAD:refs/heads/main`, a remote
-other than `origin`, or `git push origin :main` slips past them. This hook instead parses the
-`git push` refspec itself: it denies (exit 2, one stderr line naming the blocked destination,
-empty stdout) any push whose resolved DESTINATION — after stripping a leading `+`, taking
-everything after a refspec's first `:`, and substituting `HEAD`/`@` with the current branch — is
-the repo's default branch, or unconditionally denies `--all`/`--mirror` (both push every local
-branch, including the default one). The default branch is resolved by reading (never executing)
-the current repo's `refs/remotes/origin/HEAD` symref, located by walking up from the PreToolUse
-hook's own `cwd` field (a documented stdin field; this hook falls back to `$PWD` when `cwd` is
-absent) through at most 64 parent directories, following a worktree pointer file
-(`gitdir: <path>`) when `.git` is a file rather than a directory — the same shape
-`hooks/git-c-guard.sh`'s worktree-parallel forms use. An unconditional fallback deny set,
-`main`/`master`, is always in force in addition to whatever default branch actually resolves, so
-the hook still denies a plain `git push origin main` even with no `cwd` or an unreadable `.git`.
-Since #269, a push segment's own `git -C <path>` value is ALSO resolved, but only when it satisfies
-the same `PATH_ERE` predicate `hooks/git-c-guard.sh` already enforces for its own worktree-parallel
-allow forms (a byte-identical declaration in both hooks, mechanically pinned by the gate): the
-current branch and any REPO-LOCAL `.git/config` route for that segment then come solely from the
-RESOLVED checkout (since #290, the GLOBAL config candidates below are read identically for every
-checkout resolved, so a resolved segment still sees the same global routes the session would),
-while the default-branch deny member becomes the union of the fallback, the session's own
-default, and the resolved checkout's own default — never a pure replacement, so a target lacking its
-own `refs/remotes/origin/HEAD` cannot silently lose the guard. A `-C` value that does not match the
-predicate (including a plain `git -C ../other-checkout push` with no `-wt-<n>` suffix), the attached
-`-C<path>` form, two or more `-C` tokens, `--git-dir=<path>`/`--work-tree`, or a predicate-matching
-directory holding no `.git` of its own (this resolution never walks upward the way git itself would
-from a real `-C`) all stay judged only against the session — see the hook's own header for the full,
-measured evasion/over-blocking inventory. It enforces only the
-"deny the default branch" half of this issue's Decision, not an allow-list of
-`claude/<n>-<slug>` destinations — that would also deny a `release/vX.Y.Z` branch, an annotated
-tag push, or any ordinary `git push origin feature/x` a human runs in any plugin-enabled session,
-for no matching safety gain. Since #268, a push carrying no explicit refspec (a bare `git push` or
-`git push <remote>`) also consults the same common dir's `config` file — text-parsed, never
-executed as `git config` — for `remote.<name>.push` and `push.default`/`branch.<n>.merge`: a
-repo's own `remote.origin.push = HEAD:main` or `push.default = upstream` with the current
-branch's upstream on the default branch now denies where this hook was previously silent, closing
-the gap #260's own settings-template entries and this hook's earlier refspec parser both left
-open. This closed only the repo-local half of that class — a GLOBAL or system git config setting
-either key was, at the time, filed as a follow-up. **Closed in v2.7.3 by #290**: the same two keys
-are now also read from `$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config` (or its
-`$HOME/.config/git/config` default), and `$HOME/.gitconfig`, unioned with the repo-local routes
-above — `$GIT_CONFIG_GLOBAL` is itself unioned with (not a replacement for) the other two global
-paths, and a repo-local AND a global `push.default` value are both evaluated unconditionally, each
-a deliberate, documented over-block (real git reads only one file for `$GIT_CONFIG_GLOBAL` and
-gives a single scalar precedence to `push.default`). A SYSTEM git config (`/etc/gitconfig`) and
-`include`/`includeIf` directives inside any of the four files this hook now reads remain unread,
-each filed as its own follow-up (see the hook's own header for the full, measured inventory). The
-union is deliberately
-over-broad rather than modelling git's own remote-selection precedence: a bare push checks EVERY
-configured remote's push
-route (not only the one git would actually pick) union the `push.default` route, and
-`push.default = matching` or a wildcard (`*`) configured destination both deny unconditionally,
-the same reasoning as `--all`/`--mirror` — three of the four new documented over-blocking classes
-named in the hook's own header (the fourth, an unquoted `#`/`;` truncating a configured
-destination mid-value, is described there instead). A segment carrying an explicit refspec
-(including the harness's own `git push
--u origin "claude/<n>-<slug>"`) never consults config at all. Pinned by fixture in
-`dev/hook-tests.sh`, including the same never-executes-anything guarantee and a
-byte-identical-file-listing fixture proving this hook only reads the filesystem, never writes to
-it — extended to the config-read route specifically. Composition with the deny-outranks-allow mechanism
-`hooks/agent-boundary.sh`'s live-probe record establishes below was **not** separately
-re-measured for this third hook — it uses the identical mechanism, but only two hooks were ever
-replayed together live.
+## Reference documentation
 
-**The fourth hook, `hooks/claude-dir-guard.sh` (#327), denies an implementer or verifier
-subagent's `Edit` or `Write` to any path carrying a `.claude` path segment.** It closes #323's
-LESSONS.md dispatch guard's own documented blind spot: that guard is orchestrator prose that
-detects a subagent's `.claude/LESSONS.md` change only after the dispatch returns, and has no
-baseline at all to compare against while the file exists untracked. This hook instead denies the
-`Edit`/`Write` itself, mechanically, before it can land — tracked or not. Unlike its three
-siblings, it matches `Edit|Write`, not `Bash` (the exact matcher measured live, below), and reuses
-`hooks/agent-boundary.sh`'s identical `agent_type` role vocabulary (both spellings, per role) — a
-role the `if` field cannot see, so this handler also carries no `if` key. Its classifier is a pure
-string decision with **no filesystem access at all**, strictly less than `hooks/push-guard.sh`
-above: it denies (exit 2, one stderr line naming the role, the tool, and the blocked path, empty
-stdout) when `tool_input.file_path` carries any path segment equal to `.claude` case-insensitively
-— nested, a relative path's own first segment, or the path's final segment, and whether spelled
-with a forward slash, a Windows drive-letter prefix, or a backslash (normalised to a forward slash
-first) — and denies, fail-closed, when the path cannot be classified as absolute (`/…` or
-`[A-Za-z]:/…`) and free of a `..` segment; a case that matches both classes resolves to the more
-specific `.claude` message. Every other case — the main session (no `agent_type`), another agent,
-`permission_mode: "plan"`, a tool other than `Edit`/`Write`, malformed stdin, an absent or empty
-`file_path`, or an ordinary absolute path outside any `.claude` segment — is "no opinion" (exit 0,
-empty stdout, empty stderr), including two release-blocker controls: the orchestrator's own
-main-session `.claude/LESSONS.md` append still works, and so does the verifier's own transient
-mutation-probe `Edit` of a tracked source file. Pinned by 31 fixture cases in `dev/hook-tests.sh`
-(prefix `cdg-`): the same booby-trapped-`PATH` idiom (widened here to
-`git`/`gh`/`rm`/`dirname`/`tr`/`awk`/`grep`/`sed`, since this hook uses none of them) proves it
-executes none of them, and a byte-identical fixture-tree listing proves it writes nothing to the
-filesystem — this hook also never *reads* the filesystem at all, true by construction (it opens no
-path), not something either fixture demonstrates — backed by its own 14-mutant measured
-mutation-proof table. Mass-deny risk, disclosed rather than hidden: today's live-probe record
-(below) found every captured `file_path` absolute, so no captured payload fell into the
-fail-closed unclassifiable class — but if a future Claude Code ever sends a relative `file_path`,
-every implementer/verifier `Edit`/`Write` would deny, with the unclassifiable message's own
-distinct wording naming the path so the cause is visible in the first blocked call. The same
-fail-open properties as its three siblings apply here too: the plugin disabled,
-`disableAllHooks: true`, no `jq` on `PATH`, an unresolved `${CLAUDE_PLUGIN_ROOT}`, or a Claude Code
-that stops sending `agent_type` all leave this hook silent, with no prompt and no visible sign —
-`templates/repo-settings.json` declares no `Edit(`/`Write(` entry at all, so this hook is the only
-mechanical control on this surface. A live probe run 2026-09-17 against Claude Code **2.1.274**
-(macOS, a temporary logging `PreToolUse` hook matching `Edit|Write`) measured the matcher this
-hook is registered with (`Edit|Write`, exactly) and a verifier subagent's `Edit` payload, not just
-an implementer's: it carried `agent_type: "trail-blazer-flow:verifier"` (the same namespaced
-spelling `hooks/agent-boundary.sh` already measures for `Bash`), so this hook's verifier-role
-coverage is measured, not inferred, on `Edit` — the verifier role has no `Write` tool
-(`agents/verifier.md`), so there is no verifier `Write` payload to measure — the same way
-`hooks/agent-boundary.sh`'s own record already measures verifier coverage on `Bash`.
+This README is the guide. The detailed spec, meaning every mechanism, guarantee, and known limit,
+lives in [`docs/reference/`](docs/reference/README.md):
 
-**Live-probe record (#259).** The two limits #235 shipped unresolved were closed by a probe the
-maintainer ran on 2026-09-08 against Claude Code **2.1.263** (plugin 2.7.0 from the marketplace
-cache), on macOS: a temporary logging `PreToolUse` hook (matcher `Bash`, appending each call's
-stdin JSON to a log file) declared in `.claude/settings.local.json` alongside the plugin's own two
-hooks, then one `implementer` and one `verifier` subagent each dispatched via the Agent tool to
-run a single `git -C <repo> status --porcelain`. Captured stdin carried `agent_type` as the
-namespaced `trail-blazer-flow:implementer` / `trail-blazer-flow:verifier` form for both roles
-(alongside `agent_id`, `tool_name: "Bash"`, and `permission_mode: "auto"`) — the current Claude
-Code hooks reference documents `agent_type` as present "when the session uses `--agent` or the
-hook fires inside a subagent" and lists namespaced `plugin-name:agent-name` forms in its
-matcher-patterns table, but had not stated the `PreToolUse` stdin spelling explicitly until this
-probe. Both spellings still ship: the namespaced form is now the confirmed live value, and the
-bare form is retained as insurance against a future de-namespacing, not as a hedge against an
-unknown one. Replaying the implementer's captured stdin through both installed hooks,
-`git-c-guard.sh` emitted `allow` (rc 0) for the identical `git -C <worktree> status --porcelain`
-call and this hook exited 2 (deny); Claude Code's composed verdict was a **block** — the
-implementer reported the call never ran — while the verifier's identical read-only call **ran**
-(then failed on a nonexistent path, rc 128, unrelated to this hook). Scope: one Claude Code
-version, one platform (macOS), one install shape (marketplace cache) — not verified across
-versions, platforms, or install shapes; the Windows spot-check named under "Prerequisites" is
-still open, and `dev/hook-tests.sh`'s own `git -C <worktree> push`/`commit` cases keep pinning
-this hook's OWN verdict independent of that composition.
+- [How the workflow works](docs/reference/workflow.md): each stage in depth, resilience and
+  retries, working from the phone, the stop switch, and the label lifecycle
+- [The CLAUDE.md contract](docs/reference/claude-md-contract.md): every section and its hard
+  floor, plus `LESSONS.md` and `BASELINE.md`
+- [The per-repo settings file](docs/reference/settings.md): every grant and deny
+- [Safety model](docs/reference/safety-model.md): hooks, provenance, trust gates, and the lock
+- [Architecture](docs/reference/architecture.md): repo layout, model tiering, and distribution
+- [Decision records](docs/adr/README.md): where the harness is heading
+- [`CHANGELOG.md`](CHANGELOG.md): per-PR history
 
-**Verdict provenance.** The kickback loop is enforced the same way as the rest of this section:
-the orchestrator never edits a source, test, or doc file to resolve a verifier finding or a red
-CI run itself — its only edits anywhere in this pipeline are harness bookkeeping
-(`.claude/LESSONS.md`, the PR body, issue comments) — and the merge pass's hard floor requires
-three artifacts to agree before any autonomous merge: the PR body carries the verifier's own
-closing status line (`<!-- harness-status: stage=verifier issue=<n> outcome=pass retries=<k>
-harness=<version> -->`) verbatim, checked mechanically (`gh pr view … --jq 'contains(...)'`); the dispatch ledger's
-`verifier` row for that issue reads `pass`; and the verifier's verdict is separately archived,
-also verbatim, as an issue comment opening with `<!-- verifier-verdict -->` — posted by the
-orchestrator after every verifier pass, including a CI-fix re-verification — whose second line
-keys the archive to this PR's head branch (`<!-- verifier-verdict-branch: claude/<n>-<slug>
--->`). The merge pass matches the newest verdict archived **for that branch**, not the newest on
-the issue, so a deliberately multi-PR issue split across several `claude/<n>-*` branches has each
-slice match its own verdict instead of an earlier slice losing to whichever slice verified last.
-That keyed comment's own closing status line is what the PR body's line is checked against
-literally before the merge pass proceeds. A prose "verifier verdict: pass" without the PR-body
-line, or a PR body with no archived comment keyed to its head branch, does not qualify —
-including a PR opened before this keying existed, whose archive carries no key line and which
-therefore waits for a human merge rather than being retrofitted. Since #287 (consolidating #277's
-narrower original), a rejected or unparseable read of that archive comment — never a determinate
-"no archive for this branch" — gets the same one bounded re-check every floor provenance read now
-gets (`sleep 30`, then one more `gh issue view`, per #223's rule) before the PR is held; a read
-still failing after that one retry holds the PR **not eligible** exactly as before — the retry
-narrows how often a transient API blip strands an otherwise-mergeable PR, it does not relax what
-the floor accepts. Honest limit: the check proves
-a matching line is present in the PR body, agrees with the ledger, and agrees with a comment
-independently timestamped on the issue —
-not that a human witnessed the dispatch. All three artifacts are still orchestrator-written, so a
-misreporting orchestrator can still fabricate them; the gain is that doing so now requires two
-consistent, durably visible artifacts instead of one, raising the cost of asserting a verification
-event that didn't happen rather than eliminating the possibility.
-
-**Approval provenance** (#174, content binding added by #192, current-label-state pre-filter added
-by #229). The `plan-approved` label attaches
-to the *issue*, not to a specific plan comment, so a naive read of the label alone can't tell a
-still-current approval from one a later revision has silently outrun — or one whose text has
-since been edited in place. The single cheapest check runs first, at zero extra API cost, reading
-a field on a call `find-implementation-work.sh` already makes: is `plan-approved` currently in the
-issue's `labels`? Its absence (`reason: "approval-label-absent"`) means the human withdrew the
-approval, or never applied it, and short-circuits everything below — no events lookup, no
-plan-edit lookup, `covers_plan: false`, `binding_line: null`. Only once the label is confirmed
-present does `find-implementation-work.sh` compute an
-identity-timing-and-content binding, fresh every time it's asked: it reads the newest
-`labeled` event for `plan-approved` from GitHub's own issue-events API and compares its timestamp
-against the selected plan comment's `createdAt` — the approval **covers** the plan only when the
-label's newest application is not earlier than the comment (equal timestamps count, so the
-auto-approval path — which labels immediately after posting — always covers its own plan) — AND
-(#192) against that same comment's REST `updated_at`: an in-place edit made *after* the approval
-event un-covers the plan too (`reason: "plan-edited-after-approval"`, no `binding_line`, one
-extra read-only API call made only on this otherwise-covered branch AND ONLY when gh's own
-per-comment `includesCreatedEdit` on the plan comment is not exactly `false` — see
-`CHANGELOG.md` (the archived v2.7.2 migration notes, #240) for the cost reduction), the implementer's gate and
-the merge floor holding exactly as they do for `plan-after-approval`, with no changes of their
-own; an edit made *before* approval stays covered on purpose (the approver read the edited text);
-an unreadable edit-state lookup fails closed to `covers_plan: null`, an **unknown** verdict
-(`reason: "plan-edit-unreadable"`), the same tri-state `approval-unreadable` already used. When
-the plan covers, the script emits a `binding_line` naming the specific plan comment and approval
-timestamp; the `issue-implementer` skill revalidates this **before dispatch and again before
-push**, splitting its remedy by verdict since #219: a same-run revision (or in-place edit)
-landing in between and demonstrably un-covering the plan (`covers_plan: false`) makes the skill
-remove `plan-approved` and return the issue to review rather than build a plan nobody approved;
-**at the pre-push re-check only, a same-plan re-approval is accepted instead (#238)** —
-`covers_plan: true` still naming the *same* plan comment, only `approved_at` moved because a human
-removed and re-added `plan-approved` while the implementer worked — and the run proceeds, pasting
-this run's fresh `binding_line`, never the one captured before dispatch, into the PR body; a
-`covers_plan: true` verdict naming a *different* plan comment is a real change of plan, not a
-re-approval, and still returns the issue to review exactly as before, with `plan-approved` removed;
-an **unknown** verdict — a GitHub API call failed, so a same-run outage is indistinguishable from
-one that revoked nothing — first gets one bounded re-check at both checkpoints (`sleep 30`, then
-`find-implementation-work.sh --issue <n>` once more, #223) before the verdict is concluded; only a
-verdict still unknown after that retry holds
-non-destructively: no label is touched; before dispatch,
-the issue is simply left undispatched for the next run to re-check; before push, the
-already-staged, already-implemented tree is checkpointed (`wip: checkpoint binding-recheck`)
-rather than discarded. Either way one `<!-- harness-audit -->`-marked comment records the hold —
-its second line carrying the key `<!-- harness-hold: issue=<n> stage=<stage> reason=<reason>
-comments=<ids> -->` (#222, the same de-dup treatment #208 gives the planner's staleness note) —
-and is skipped when the issue's newest maintainer-authored hold
-comment already carries the identical key, so a multi-hour outage no longer buries the issue under
-one duplicate hold per scheduled cycle; the run-summary flag is never suppressed, only the comment
-is, and only `OWNER`/`MEMBER`/`COLLABORATOR` comments satisfy the guard, so a forged key cannot
-silence a real hold. The `approval-label-absent` hold above is deliberately unkeyed: batch
-discovery already excludes any issue without `plan-approved`, so it cannot repeat across scheduled
-runs, and keying it would suppress a genuine second withdrawal notice after a re-approval. Either
-way, the issue stays queued for the next run's fresh check rather than being bounced back to the
-human. One accepted consequence of the pre-push hold: a held issue keeps `plan-approved`, gains no
-`impl-blocked`,
-and so is reported as a `contradiction` by `issue-cycle`'s closing reconciliation (its chain
-otherwise shows the implementer complete and the verifier passing) — expected, not a bug, and
-`issue-cycle` treats a `contradiction` as "report with evidence, unfinished," never an escalation.
-The `issue-cycle` merge pass revalidates the covered case once more, requiring that the PR body
-carry one of `approval.approved_at_history[]`'s `binding_line` values verbatim before an
-autonomous merge (#213 — see below for why the check now accepts more than just the freshest
-`binding_line`) — the held case never reaches a PR, so the merge pass never sees it. Since #287
-(consolidating #245's narrower original), an **unknown** `covers_plan` verdict at that same
-merge-floor read gets the same one bounded re-check every floor provenance read now gets — the
-implementer's two checkpoints already get an identical one above (`sleep 30`, then one more
-`find-implementation-work.sh --issue <n>`, per #223's rule) — before the PR is held; a verdict
-still unknown after that one retry holds the PR **not eligible** exactly as before — the retry
-narrows how often a transient API blip strands an otherwise-mergeable PR, it does not relax what
-the floor accepts. Honest limit:
-like verdict
-provenance above, all three checkpoints (the discovery script, the PR body, the merge pass) are
-orchestrator-written and share one `gh` identity, so this raises the cost of asserting an approval
-that didn't happen rather than eliminating it; the edit check itself is a **tripwire, not a
-control**, for the same reason — the same `gh` identity that edits the comment can also re-approve
-it (removing and re-adding `plan-approved` moves `approved_at` past the edit and re-covers it, the
-audited path already documented below), and the comment's content is never hashed or otherwise
-verified, only its *edit timestamp*. #240 adds a second, narrower honest limit on top of that one:
-the plan-comment and every covered decision-comment lookup below are skipped entirely — no
-`updated_at` read at all — when gh's own per-comment `includesCreatedEdit` reports exactly `false`.
-This can only ever WIDEN the covered set on a determinate `false`; it is a tripwire, not a control,
-in the same sense as the edit check itself — a `false` GitHub reports for a comment that WAS
-genuinely edited would skip the lookup silently, same as any other tripwire the harness trusts
-GitHub's own field for. The same binding also governs each trusted post-plan
-*comment*, not just the plan (#194): `find-implementation-work.sh` marks every `trusted_post_plan`
-entry `covered_by_approval: true` when the comment's `createdAt` is not later than
-`approval.approved_at` and `false` when it is later — a maintainer who comments after approving is
-not silently treated as having amended the approved plan; the comment is reported to the human
-(`counts.post_approval_comments`, a `warn:` line) instead of becoming a binding `RESOLVED:`
-decision. Since #230, the same content-edit binding #192 applies to the plan comment ALSO applies
-to every decision comment workstream B marked covered: one extra read-only REST call per *covered*
-comment (never an already-uncovered one, never on an already-uncovered issue, and — since #240,
-see `CHANGELOG.md` (the archived v2.7.2 migration notes) — never a comment gh's own `includesCreatedEdit`
-already reports as never edited) compares its own
-`updated_at` against `approval.approved_at` — a covered decision comment edited in place strictly
-*after* approval flips that entry to `covered_by_approval: false`,
-`covered_by_approval_reason: "decision-edited-after-approval"`, and collapses the ISSUE-LEVEL
-verdict to `covers_plan: false` too (the same `RESOLVED:` decision nobody actually approved, #192's
-gap closed for decisions as well as the plan); an entry whose own edit state cannot be established
-(an unparseable comment id, a rejected lookup, or an unreadable `updated_at`) instead collapses the
-verdict to **unknown** (`covered_by_approval_reason: "decision-edit-unreadable"`), with edited
-beating unreadable when an issue has both. `counts.post_approval_comments` keeps its name but
-narrows: it now counts only entries whose `false` comes from postdating the label, not from their
-own edit (which is counted separately, `counts.decision_edited_after_approval` /
-`counts.decision_edit_unreadable`) — the same tripwire-not-a-control caveat as the plan-comment
-check applies identically here (a re-approval, not a content hash, is the remedy). To
-make a post-approval comment binding **before a PR exists**, remove and re-add `plan-approved` —
-the same audited path #174 already documents, not a new surface (see below — since #213, this
-same act also releases an already-open PR, provided the plan itself is unchanged). A comment that
-arrives *while the implementer is
-working* is not silently missed either (#198): the pre-push re-validation above diffs that same
-fresh run's uncovered `trusted_post_plan` set against the set captured before dispatch, and any
-newly-arrived entry is quoted verbatim in the PR body and the run summary — still non-binding,
-still never holding the push; **on a same-plan re-approval (#238), that same re-check also
-surfaces any comment the re-approval itself newly covered** — one whose `covered_by_approval`
-flips to `true` and whose `createdAt` postdates the `approval.approved_at` captured before
-dispatch — quoted verbatim in the PR body and the run summary and flagged as covered by the
-re-approval but **not** implemented, so the human decides whether the PR is still what they want;
-the residual race between that re-check and `gh pr create` itself
-is a named, out-of-scope honest limit. Since #206, the merge pass's hard floor goes further: it
-reads that same uncovered `trusted_post_plan` set at merge time, from the identical fresh
-`find-implementation-work.sh --issue <n>` run it already makes for the plan-binding check above
-(the retry run, when one ran, #245), so a comment posted even *after* the PR opened is caught
-too, not just the dispatch-window race
-above. One or more uncovered entries hold the PR in the normal "waits on the human" queue
-(`outcome=not-eligible`), with each entry's comment URL (or author + `createdAt` when the URL is
-null) as the one-line reason — a normal wait, not an escalation. Release path: the human merges
-the PR themselves, withdraws the comment and lets the next cycle re-evaluate a clean set, **or
-re-adds `plan-approved` (#213)** — since re-approving covers every comment posted before it (the
-same rule the sentence above already states for the pre-PR case), and since the *plan-binding*
-check above now accepts a PR body written under any real earlier approval of the same plan, not
-just the freshest one, re-approval also **releases an already-open PR**. This is a deliberate
-widening: a maintainer who comments on an open PR's issue and then re-approves the same plan
-releases that PR **without the comment having been implemented**. The documented remedy is
-ordering, not a new marker: **close the PR first, then re-approve** — the comment then binds the
-next dispatch instead of being silently released underneath the old one. A different plan
-comment's url, a timestamp matching no real `plan-approved` labeling event, an empty approval
-history, or an unreadable events lookup all still hold the PR exactly as before — re-approval only
-ever pastes a needle this issue's own history actually produced.
-
-**The body-hash grant pattern is a tripwire, not a control** (see "The CLAUDE.md contract" item
-8). It exists only as a documented convention a consuming repo may adopt in its own CLAUDE.md —
-this harness never computes or verifies a body hash itself. Even where a repo adopts it, the
-harness and the human share one `gh` identity, so anyone able to post the `grant: <sha256>`
-comment can also edit the issue body and re-post a matching hash; a mismatch means "grant void,
-standard flow" only because the repo's own instructions say so, not because the harness enforces
-anything. Separately, and unconditionally: the harness never applies or removes a scoped-autonomy
-grant label itself, on any issue — `check-harness.sh` and `check-decision-record.sh` only report
-whether the label exists and whether the declared record is present.
-
-Two honest caveats. First, the implementer/verifier "no git, no gh" rule is mechanically
-enforced, not just prompt convention (#235, review F3): the settings allow-list must still permit
-`git`/`gh` for the orchestrator, and permission grants are session-wide — but a second
-plugin-shipped `PreToolUse` hook, `hooks/agent-boundary.sh`, reads each Bash call's `agent_type`
-and denies (exit 2, before permission rules are even evaluated) any command whose command-position
-word resolves to `git`/`gh` for the implementer, or to `gh`/a non-read-only `git` subcommand for
-the verifier; see "Safety model" for the full contract, including its live-probe record
-(2026-09-08, Claude Code 2.1.263: the namespaced `agent_type` spelling, and this hook's `deny`
-beating `git-c-guard.sh`'s `allow` on the same call) and its no-opinion edges (the main
-session, any other agent, `permission_mode: "plan"`, and a Claude Code that omits `agent_type`
-altogether all leave the hook silent — the same session-wide allow list this caveat used to
-describe in full, now narrowed to exactly those cases). The staged-file reconciliation and branch
-isolation remain the backstop for whatever this mechanical boundary doesn't reach. Second, plan auto-approval and
-merge autonomy (each opt-in via `CLAUDE.md` — see "The CLAUDE.md contract" items 4–5, or item 9's
-"Autonomy mode" section, which turns both on together as one combination)
-deliberately trade human gates for throughput on low-risk work. Their hard floors are not
-configurable by the policy section — the one exception is itself part of the floor's fixed
-definition, not something a policy can widen: on an issue the human granted under the repo's
-scoped-autonomy declarations (see "The CLAUDE.md contract" item 8, "Autonomy decision record"),
-an orchestrator-proposed answer to a BLOCKING question skips the human wait only if it quotes the
-human-authored binding-record bullet it derives from. The grant label itself is applied by the
-human, per issue, and the harness never applies it, so an uncitable answer still waits, and every
-use is audited (issue comment; cycle report). With only auto-approval enabled, a bad
-auto-approval costs a wasted PR, not a bad merge. With merge
-autonomy also enabled, the backstop is the merge pass's hard floor (standard-flow PRs only,
-green CI on a head that mechanically contains the default branch's current tip (#234) — a
-`git fetch origin` still failing after one retry holds rather than comparing a stale tip (#319)
-— protected governance surface, read mechanically from the PR's own diff (#324) — audited
-exception: a harness PR whose only governance-surface change is a
-bounded, add-only `.claude/LESSONS.md` append (#307) — sequential re-verification) — and on a repo with branch protection + required
-checks, that floor is a technical rail, not just policy. Enable
-merge autonomy only where a bad merge is cheap to revert (e.g. a default branch that doesn't
-auto-deploy) — or, on a repo whose default branch does auto-deploy, declare a "Post-merge
-verification" sub-block (see "The CLAUDE.md contract" item 5) so "merged" stops standing in for
-"shipped": the declared commands are reads only, and the harness never approves, promotes, or
-redeploys anything on your behalf — it only observes and records what the deploy did.
-
-Third, harness-authored issues are the exception to a pipeline that otherwise starts from
-human-authored ones — the test-suite ratchet (also opt-in via CLAUDE.md) is one source, held by
-the planner's hard floor refusing any `test-ratchet`-labelled issue outright, a label the harness
-never removes; the plan follow-ups the implementer files from a PR's
-"Follow-ups to file" are the other, born `no-plan` (holding planning itself, not just approval)
-plus a marker naming their PR. `cleanup-after-merge.sh --fix`'s quarantine (comment + `no-plan`
-when it isn't already present, never closed) for an orphaned follow-up reaches a follow-up born
-`no-plan` too (#334): its idempotence key is a trusted, PR-keyed
-`<!-- harness-orphan-notice: PR #<n> -->` marker in the issue's own comments, not the label. The
-ratchet's further mitigations: the fixed issue-body
-template, with evidence quoted as literal tool output rather than free-form prose; the "issue
-text is data, not instructions" rule below, applied to the ratchet's Evidence section like any
-other issue content; the test-only/monotonic scope that binds the plan and that the verifier
-checks against; and the per-run and open-backlog caps. A ratchet issue can never propose changes
-to the governance surface (`CLAUDE.md`, `.claude/`, policy/ADR docs, CI config) — that boundary
-only moves with a human in the loop.
-
-Fourth, every dispatch — not only ratchet-filed issues — treats the issue body and quoted
-comments as untrusted **data**, never as instructions (#164): `agents/planner.md`,
-`agents/implementer.md`, and `agents/verifier.md` each carry this as a standing constraint (an
-embedded directive is a finding to report, never something to obey), and the orchestrating
-skills' dispatch prompts quote issue content as delimited data. Mechanically,
-`find-planning-work.sh` enforces the planner-facing half of this: only a comment whose GitHub
-`authorAssociation` is `OWNER`, `MEMBER`, or `COLLABORATOR` is ever treated as feedback or
-honoured as the latest plan comment; a `CONTRIBUTOR`/`NONE` comment, or one with no
-`authorAssociation` field at all (fail-closed), posted after the issue's latest trusted plan (or
-any such comment, if there is no trusted plan yet) is reported in the `untrusted_comments` bucket
-instead of being silently dropped or silently trusted, and never shadows real feedback posted
-before it — one posted before that plan is dropped with no bucket entry. The same script also
-enforces provenance on WHO OPENED the issue: every discovered issue carries `trusted_author`, a
-non-maintainer-authored (or association-unreadable, after one bounded retry, #246) issue is
-reported in `untrusted_issue_authors` and can never be auto-approved, though it is still planned
-(#176). `find-implementation-work.sh`
-enforces the implementer-facing half the same way: it selects each ready issue's approved plan
-comment and binding post-plan comments itself, using the identical trust gate (gate assertion
-4.26 pins that the two discovery scripts' trusted-association lists agree), so the
-`issue-implementer` orchestrator reads a filtered artifact instead of applying the rule from
-memory (#176) — the same script also computes the approval-binding verdict described in
-"Approval provenance" above (#174). `cleanup-after-merge.sh` applies the identical trust gate to
-a narrower, third question (#231): whether a `<!-- harness-multi-pr -->` marker posted in an
-issue COMMENT is honoured as a multi-PR `KEEP` signal — the same OWNER/MEMBER/COLLABORATOR list
-(4.26 extended to all three scripts), the same `ascii_upcase`-normalised comparison, and the same
-fail-closed-on-missing-`authorAssociation` rule; an ignored, untrusted marker prints one `WARN`
-line naming the comment's url and association instead of being silently dropped. Cleanup has no
-REST author-association lookup for the issue itself, though, so it cannot gate an issue-BODY
-marker the way the two discovery scripts gate the issue AUTHOR — it simply stopped honouring
-that path; a human-applied `multi-pr` label is the primary, permission-controlled signal instead
-(see "Label lifecycle"). Both
-scripts share a second, orthogonal exclusion inside the trusted set (#182): any trusted comment
-containing `<!-- harness-audit -->` (a harness-authored audit/hygiene record — the planner's
-auto-approval audit trail, its `plan-approved` staleness note — whose second line, since #208,
-also carries a `<!-- harness-staleness: issue=<n> prs=<prs> -->` key naming the merged PRs that
-caused the staleness, so a repeat run skips re-posting it once the issue's newest
-maintainer-authored staleness comment already records that same PR set — the
-implementer's unknown-verdict hold comment (see "Approval provenance" above) — whose second line
-also carries a `<!-- harness-hold: issue=<n> stage=<stage> reason=<reason> comments=<ids> -->`
-key, so a repeat run skips re-posting it once the issue's newest maintainer-authored hold comment
-already records that same key (#222) — the
-implementer's interrupted-run and worktree-sweep notes, `cleanup-after-merge.sh`'s hygiene
-comments), `<!-- verifier-verdict
--->` (the orchestrator's own archive), or, since #309, `<!-- harness-escalation -->` — the marker
-every durable escalation opens with, whether posted by the implementer (see
-`skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection) or, since #349, by the
-planner's own step 7 for a stalled stage — whose second line
-carries a `<!-- harness-escalation-key: issue=<n> stage=<stage> reason=<slug> comments=<ids> -->`
-key (an older planner's step-7 record instead opened with `<!-- harness-audit -->` and carried a
-`<!-- harness-escalation: bucket=<bucket> stage=<stage> -->` key; such legacy comments are still
-excluded above by the audit marker) — anywhere in its body is excluded from
-`find-planning-work.sh`'s feedback detection (counted in `counts.escalation_records_skipped`) and
-`find-implementation-work.sh`'s
-`trusted_post_plan` alike — a harness-authored record is never binding context, on either side of
-the pipeline. All three markers are matched with `contains` for these two sets, not anchored to the
-comment's first line (the same behaviour the verdict marker has always had) — a maintainer who
-quotes a marker verbatim inside their own feedback, without opening the comment with it, still has
-that comment dropped from both binding sets (no revision, no `trusted_post_plan` entry), but since
-v2.7.6 (#321, extended #309) it is no longer silent: both scripts name it in a `warn:` line and
-count it in `counts.harness_marker_quoters` (see `CHANGELOG.md` for the archived v2.7.6
-migration notes for #321 and #309). Only a comment that itself
-OPENS WITH a verbatim marker copy at byte 0 is still silently dropped, indistinguishable from a
-genuine harness-authored record — accepted as an inherited risk rather than fixed here, for the
-feedback/binding sets specifically. Since #281
-(superseding #275), plan selection on both scripts is a POSITIVE, first-line anchor rather than a
-harness-marker exclusion: the newest trusted comment either script would treat as "the plan" must
-itself OPEN WITH (`startswith`, anchored to the comment's first line) the plan marker
-(`<!-- planner-plan -->`) — not merely `contains` it, the strength the feedback/binding sets above
-still use. Because opening with the plan marker implies both containing it and not opening with
-either harness marker, this positive anchor subsumes #275's original exclusion (a harness-authored
-record opens with its OWN marker, never the plan marker) and additionally closes the gap #275 left
-open: a record whose harness marker is preceded by prose, that also quotes the plan marker
-mid-body, is excluded from plan selection too, because it does not open with the plan marker
-either. This asymmetry (anchored at plan selection, `contains` at feedback/binding) is deliberate,
-not an oversight: over-excluding at the feedback/binding sets is safe (a record is merely
-dropped), but over-excluding at plan selection is destructive (an approved plan would be thrown
-away, and `issue-implementer`'s step 2a remedy for the resulting `no-plan` verdict is to strip
-`plan-approved` and post a revision-triggering comment) — so a plan comment that merely quotes a
-harness marker in its own prose is still selected as the plan, while a maintainer-authored record
-that quotes the plan marker verbatim, wherever its own harness marker sits (or absent entirely) —
-the live #245 shape, generalised — is not. The named limit is now split differently: a maintainer
-who quotes a harness marker inside their own FEEDBACK, without opening the comment with it, is
-named and counted since v2.7.6 (#321, above); a trusted comment that quotes the plan marker
-mid-body is still excluded from BOTH plan selection and the feedback/binding sets, and since
-v2.7.4 (#302) both scripts now name it in a `warn:` line (author, createdAt, url) and count it in
-`counts.plan_marker_quoters` — but only when that same comment was posted after the latest plan
-(or at any time when there is none) AND carries neither harness-record marker of its own; a
-trusted comment that quotes the plan marker mid-body AND also carries `<!-- harness-audit -->` or
-`<!-- verifier-verdict -->` without opening with it (a maintainer's own prose-then-harness-marker
-copy) is a harness-marker quoter too — disjoint from `counts.plan_marker_quoters`, it is named and
-counted instead in `counts.harness_marker_quoters`; a genuine harness record, which opens with its
-own marker, is counted in neither key and is not warned about, as before (#321). For both
-classes, the drop is no longer silent — #302's own diagnosis also covers a
-hand-posted plan with text before its own marker,
-since the window covers "any time" when there is no selectable plan yet; and a hand-posted plan
-comment with anything before the marker is not selectable — repost it with the
-marker as the comment's first line (editing the comment in place would trip the
-plan-edited-after-approval check instead). The filter only ever narrows the trusted set: a forged marker from an untrusted
-author still surfaces, unfiltered, in `untrusted_comments` / `untrusted_post_plan`, exactly like
-a forged plan marker does — and, since #194, is additionally FLAGGED there: both scripts add a
-`has_harness_marker: true` boolean to that entry (alongside the existing `has_plan_marker`),
-counted in `counts.untrusted_harness_markers` and named in a `warn:` line, so the human sees the
-impersonation called out rather than having to notice the marker text themselves — annotation
-only, the untrusted bucket is still never filtered by it (gate assertion 4.29 pins that the two
-scripts' flag names agree; gate
-assertion 4.27 pins the marker's presence in every writer and consumer). Three comment surfaces
-stay deliberately unmarked because they *are* the feedback that drives a subsequent dispatch, not
-a record of one: the planner's `plan-proposed` staleness note, its proposed-answers comment, and
-the implementer's blocked-path comment (which step 2b explicitly reads back into the retry
-dispatch). The honest limit: this mechanical coverage (the `has_harness_marker` annotation, the
-`<!-- harness-audit -->` exclusion) is planner- and implementer-side only, and stays that way for
-`cleanup-after-merge.sh` too — its comment-marker trust gate (#231, above) is real, but the
-verifier-side half of the untrusted-data rule is still prompt-enforced, not mechanically checked.
-
-**One active cycle per checkout (#232).** `bin/harness-lock.sh` is a single-flight lock: an
-atomic `mkdir` of `<git-common-dir>/trail-blazer/lock` (`git rev-parse --git-common-dir`, so
-every worktree of one checkout — including a worktree-parallel swarm — shares a single lock;
-never inside the tracked working tree, never committed). The lock directory holds six plain
-files: `run-id`, `pid`, `host`, `started-at`, `harness-version`, `checkout-path`. The
-`issue-cycle`, `issue-planner`, and `issue-implementer` skills each `acquire` it at their own
-step 0 and `release` it at their closing step — except that the outermost run owns the lock:
-when `issue-cycle` runs the planner or implementer's own step 0 as part of a composed pass, that
-sub-skill's acquire/release are skipped, because `acquire` is deliberately not
-same-pid-idempotent (a second acquire from the same live session would itself refuse and abort
-the run). A refused acquire aborts the run loudly, before any tree-mutating command, printing the
-holder record and the exact `harness-lock.sh release --force` remedy; the lock is released on
-every STOP/abort path too, not only the normal close, since the recorded pid outlives the run
-that acquired it. The recorded pid is `${CLAUDE_PID:-$PPID}`: under Claude Code, `CLAUDE_PID` is
-the long-lived session process (exported to every Bash tool call), while a Bash tool call's own
-`$PPID` is already dead by the time the next call starts — measured live (two separate Bash tool
-invocations, same `CLAUDE_PID`, the second `acquire` refusing rather than reclaiming); recording
-bare `$PPID` would make the very next `acquire` see a dead pid and reclaim its own lock, an inert
-guard. `$PPID` remains the fallback for a human running the script by hand from an interactive
-shell. **Reclaim rule:** a lock held by a live process on the SAME host, or by ANY process on a
-DIFFERENT host, refuses; a same-host holder whose pid is no longer alive is reclaimed
-automatically (one audit line quoting the stale record); a record with a missing or non-digits
-`pid`/`host` file always refuses rather than reclaiming — the remedy is always
-`harness-lock.sh release --force`. **Honest limits:** this is an advisory lock, not a kernel
-mutex — `mkdir` atomicity holds on a local filesystem only, not a synced/shared network volume;
-liveness is same-host only, so a lock held on a different machine is never inspected, only
-refused; a dead pid recycled by an unrelated process before the next check fails CLOSED (refuses,
-never silently reclaims); and a run interrupted (Ctrl-C, crash) inside a still-live Claude Code
-session leaves its lock held until that session exits or a human runs `release --force`, since
-the recorded pid is the session, not the interrupted run. `dev/lock-tests.sh` pins the script's
-own behavior above — the acquire/reclaim/release/status semantics, the shared-worktree lock path,
-and the recorded-pid rule; see CLAUDE.md's "Verification" section. The skills' acquire-at-step-0 /
-release-at-close-or-abort placement is prompt-enforced, not mechanically checked — gate assertion
-4.36 pins only the subcommand vocabulary the three skills invoke against `LOCK_SUBCOMMANDS`.
-
-## Distribution
-
-This repo **is the plugin and its own marketplace** (`.claude-plugin/plugin.json` +
-`marketplace.json`): skills + agents versioned together, installable per-project, with the
-agent model pins (`planner: claude-opus-5-5`, `implementer: claude-sonnet-5`, `verifier: claude-opus-5-5`) travelling with
-the plugin. Install/update flow is in "Installing in a new repo".
-
-Project-side files that never live in this repo: `LESSONS.md`, `BASELINE.md`,
-`settings.local.json`, and the label setup (per-repo, via `setup-labels.sh`). This repo does
-carry its own root `CLAUDE.md` — see "Working on the harness itself" below — but that file
-governs work *on* the harness itself, not on a project that consumes it; a consumer repo's own
-`CLAUDE.md` (conventions, verification commands) is a separate, project-owned file that never
-lives here. Nothing in the skills/agents should reference a specific project — if you find such
-a reference, that content belongs in the target repo's `CLAUDE.md` or `LESSONS.md` instead.
+---
 
 ## Working on the harness itself
 
-This repo has its own root `CLAUDE.md` — separate from, and with a different audience than, the
-`CLAUDE.md` contract this harness expects of a *consumer* repo (see "The CLAUDE.md contract"
-above). It governs changes to this repo's own agents, skills, scripts, and docs. The gate is one
-command, run from the repo root:
+This repo **is** the plugin and its own marketplace (`.claude-plugin/plugin.json` +
+`marketplace.json`). Its root `CLAUDE.md` governs changes to the harness's own agents, skills,
+scripts, and docs. That's a separate audience from the `CLAUDE.md` contract above, which is what
+the harness expects of a *consumer* repo. Nothing project-specific belongs in `agents/` or
+`skills/`. That content belongs in a consumer repo's `CLAUDE.md` or `LESSONS.md` instead (see
+[Distribution](docs/reference/architecture.md#distribution)).
+
+The gate is one command, run from the repo root:
 
 ```bash
 bash dev/selfcheck.sh
 ```
 
-It prints a `PASS`/`FAIL` line per assertion and a `== summary: N pass, M fail ==` footer — run
-it to see exactly what it checks. There is no test suite and no build step: this repo is
-Markdown instruction files, Bash scripts, and JSON manifests. The gate and its eight negative-test
-harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tests.sh`, `dev/hook-tests.sh`,
-`dev/cleanup-tests.sh`, `dev/planning-tests.sh`, `dev/lock-tests.sh`, `dev/stop-tests.sh`, and
-`dev/mutant-driver-tests.sh`) all run in CI on every pull request on ubuntu, and again under
-Apple's bash 3.2 on macOS after each merge to `main` and nightly (#365). `dev/mutant-driver.sh`
-(#359), the checked-in mutant driver that re-runs every `dev/mutants/*.json` record, runs in both
-jobs too, but only post-merge on `main`, nightly, and on manual dispatch — never on a pull
-request — see this repo's `CLAUDE.md` "Verification" section for the exact commands and jobs.
-`dev/selfcheck-tests.sh` runs its case rows concurrently by default (#336); `SELFCHECK_TESTS_JOBS=<n>`
-or `-j <n>` overrides the detected job count, and `--serial` restores one case at a time.
+It prints a `PASS`/`FAIL` line per assertion and a `== summary: N pass, M fail ==` footer. There's
+no build step: this repo is Markdown instruction files, Bash scripts, and JSON manifests. The gate
+and its eight negative-test harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tests.sh`,
+`dev/hook-tests.sh`, `dev/cleanup-tests.sh`, `dev/planning-tests.sh`, `dev/lock-tests.sh`,
+`dev/stop-tests.sh`, and `dev/mutant-driver-tests.sh`) all run in CI on every pull request on
+ubuntu, and again under Apple's bash 3.2 on macOS after each merge to `main` and nightly.
+`dev/mutant-driver.sh`, which re-runs every `dev/mutants/*.json` record, runs only post-merge on
+`main`, nightly, and on manual dispatch. This repo's `CLAUDE.md` "Verification" section lists the
+exact commands and jobs.
 
-This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that script is the
-*consumer* doctor. Onboarding it here would mean checking in a `.claude/settings.json` that
-registers this repo's own published marketplace (with `autoUpdate: true`) and enables a cached
-copy of itself over the working tree being edited.
+This repo deliberately does **not** aim to pass `bin/check-harness.sh`, the *consumer* doctor.
+Onboarding it here would mean checking in a `.claude/settings.json` that registers this repo's own
+published marketplace (with `autoUpdate: true`) and enables a cached copy of itself over the
+working tree being edited.
 
-## Known future improvements
+### Releasing a new version
 
-- **Decided direction:** the larger planned changes are recorded as ADRs in
-  [`docs/adr/`](docs/adr/README.md) — [0001 Autonomy mode](docs/adr/0001-autonomy-mode.md), a
-  single opt-in profile for unattended runs, and
-  [0002 Codex compatibility](docs/adr/0002-codex-compatibility.md), running the harness under
-  OpenAI Codex. ADR 0002's Codex compatibility is not implemented yet; it lists its tracking
-  issues. ADR 0001's combined "Autonomy mode" profile has landed in part: decisions 1, 2, and 5
-  (the "Autonomy mode" CLAUDE.md section itself — see "The CLAUDE.md contract" item 9 — reading a
-  missing Plan auto-approval/Merge autonomy policy section as present, and the kickback budget)
-  shipped with #311. Decision 6 (carry-over auto-approval — see "The CLAUDE.md contract" item 9's
-  own bullet) shipped with #312. Decision 7 (serial merge train, folding in #257's update-branch
-  fallback — see "The CLAUDE.md contract" item 9's own bullet) shipped with #313. One piece of
-  ADR 0001 has shipped
-  standalone, since it applies "in every mode" and needed no Autonomy mode section of its
-  own: decision 9, the lesson-append carve-out, landed with #307 (see "The LESSONS.md contract"
-  above).
-- **Parallel-mode ergonomics:** worktree-parallel is gated on manually comparing Affected areas;
-  a small script that diffs the file lists of two plans could make eligibility mechanical. (The
-  final batching call should stay with the orchestrator — wave sequencing sometimes depends on
-  semantic ordering a file-diff can't see.)
+The plugin uses semantic versioning (the `version` field in `.claude-plugin/plugin.json`):
 
-*(Settled 2026-06: verifier calibration — across 10+ live runs the loop neither rubber-stamped
-nor churned; it caught a real resource leak, a factual error in a docs change that originated in
-the planner's Verified facts, and proved new tests non-tautological by mutation. Verdict semantics
-were tightened to "any blocker/major finding ⇒ fail". Worktree-parallel validated at 2- and
-4-wide.)*
+```bash
+# 1. bump "version" in .claude-plugin/plugin.json (e.g. 1.1.0 -> 1.2.0)
+# 2. retitle CHANGELOG.md's "## Unreleased" heading to "## vX.Y.Z"
+git commit -am "Release vX.Y.Z: <summary>"
+git tag -a vX.Y.Z -m "trail-blazer-flow vX.Y.Z"   # match the version field exactly
+git push origin main
+git push origin vX.Y.Z
+```
 
-## Prerequisites
+`hooks/push-guard.sh` denies the `git push origin main` step from inside a Claude Code session with
+the plugin enabled. Run the ritual from a plain terminal, or ship the release through a
+`release/vX.Y.Z` PR instead. The tag push is unaffected. The `version` field on the default branch
+is what actually drives updates. The annotated tag is an immutable anchor for rollback, bisecting,
+and pinning, so always tag in the same step as the bump. (`main` is branch-protected:
+collaborators land changes by pull request, and the maintainer pushes directly through admin
+bypass. Force-pushes and branch deletion are blocked for everyone.)
 
-- `gh` (GitHub CLI), authenticated.
-- `jq`.
-- A Claude Code subscription (Pro/Max). Runs entirely locally.
-- Claude Code **2.1.85 or newer** — the plugin's `git -C` guard hook is registered with a handler
-  `if` filter, added in 2.1.85 (composite `&&` matching fixed in 2.1.89; a `$()`/backtick
-  false-fire fixed in 2.1.243). Probed against 2.1.246 on macOS — see "Safety model".
+### Roadmap
 
-**On Windows:** the automation layer is Bash (`bin/*.sh`) plus `gh`/`jq`, so run Claude Code
-under **Git Bash or WSL** — there is no native cmd/PowerShell path. Install `gh` and `jq` so
-they're on the *Bash* PATH you launch Claude Code from (e.g. `winget install GitHub.cli
-jqlang.jq`, or scoop/choco). This repo ships a `.gitattributes` that pins `*.sh` to LF so Git
-for Windows' line-ending conversion can't corrupt the scripts after install. One thing to
-confirm on first run: the harness invokes its scripts by bare name (e.g. `check-harness.sh`),
-which assumes Claude Code puts the plugin's `bin/` on the Bash PATH — if a script "isn't found",
-that's the cause. macOS and Linux need nothing beyond the three prerequisites above.
+- **Decided direction** lives in [`docs/adr/`](docs/adr/README.md).
+  [ADR 0001 (Autonomy mode)](docs/adr/0001-autonomy-mode.md) is fully shipped as of v2.8.0 (#307–#313).
+  [ADR 0002 (Codex compatibility)](docs/adr/0002-codex-compatibility.md), running the harness under
+  OpenAI Codex, isn't implemented yet and lists its tracking issues.
+- **Parallel-mode ergonomics:** worktree-parallel mode (up to 4 implementers at once on issues
+  whose files don't overlap) is currently gated on comparing Affected areas by hand. A small script
+  that diffs two plans' file lists could make the eligibility check mechanical. The final batching
+  call would stay with the orchestrator.
 
-Windows specifics worth knowing:
-
-- **WSL is its own machine.** `gh` inside WSL has its own credential store — run `gh auth
-  login` there even if the Windows-side `gh` is already authenticated. And keep repos in the
-  WSL filesystem (`~/...`), not under `/mnt/c/...`: NTFS-mounted repos are dramatically slower
-  and reintroduce the exec-bit and line-ending quirks the harness otherwise avoids.
-- **Prefer forward-slash paths** in anything that reaches a Bash command — worktree paths in
-  parallel mode, `--body-file` temp files. Git Bash accepts `C:/Users/...` and `/c/Users/...`;
-  backslash paths get mangled by quoting. (`mktemp` works in Git Bash and yields safe temp
-  paths.) Python venvs on Windows put the interpreter at `.venv/Scripts/python.exe`, not
-  `.venv/bin/python` — the worktree-parallel instructions account for this.
-- **The doctor's exec-bit check is informational on Windows.** NTFS has no POSIX exec bit; Git
-  Bash runs the scripts via their shebang, so the check reports that and moves on. The
-  harness's `gh`-output parsing also strips stray `\r` defensively, in case a CRLF-translating
-  layer sits between `gh` and Bash.
-- **All four hooks' `${CLAUDE_PLUGIN_ROOT}` path.** `hooks/hooks.json` invokes each hook the same
-  way — e.g. `bash "${CLAUDE_PLUGIN_ROOT}/hooks/git-c-guard.sh"`; if Claude Code ever exports that
-  variable in backslash form on Windows, the quoted path could fail to resolve under Git Bash and
-  a hook simply never runs for that session. For `git-c-guard.sh` this is fail-safe (worktree-mode
-  `git -C` commands then prompt, same as if the plugin were disabled). For `hooks/agent-boundary.sh`
-  (#235), `hooks/push-guard.sh` (#260), and `hooks/claude-dir-guard.sh` (#327) it is **not**: their
-  non-firing is silent, not a prompt — it just removes the mechanical implementer/verifier "no git,
-  no gh" boundary, the default-branch push guard, or the `.claude`-path write boundary, with
-  nothing visible marking the loss, since each was the only thing narrowing its own surface. A
-  Windows spot-check of all four hooks actually firing is worth doing before relying on unattended
-  worktree-parallel mode there (the probe table under "Safety model" covers macOS only).
-
-### Windows: first-run smoke test
-
-Before relying on the harness on Windows, run this 30-second check from **Git Bash or WSL** (in
-any git repo, after installing the plugin). It verifies the two Windows-specific risks at once —
-the line-ending fix and the `bin/`-on-PATH assumption.
-
-1. Confirm the toolchain is visible on the Bash PATH:
-   ```bash
-   bash --version && gh --version && jq --version && gh auth status
-   ```
-   If any of these is "command not found", install it / authenticate before continuing.
-2. Run the harness doctor by **bare name** (this is the real test — it exercises both the PATH
-   assumption and the scripts' line endings):
-   ```bash
-   check-harness.sh
-   ```
-   Or just tell Claude Code: *"run the harness-setup skill"*.
-
-**Reading the result:**
-
-- **Prints a `== harness doctor ==` PASS/WARN/FAIL table** → ✅ both risks are clear: `bin/` is on
-  the Bash PATH and the LF fix held. The remaining WARN/FAIL items are normal setup, not Windows
-  problems — proceed as on any platform.
-- **`check-harness.sh: command not found`** → Claude Code did not put the plugin's `bin/` on the
-  Bash PATH. As a fallback, invoke scripts via the plugin root, e.g.
-  `bash "$CLAUDE_PLUGIN_ROOT/bin/check-harness.sh"`. Note this won't match the bare-name
-  permission entries (`Bash(check-harness.sh:*)`), so you'll see permission prompts — please
-  [report it](https://github.com/msummer/trail-blazer-flow/issues) so the fallback can be made
-  first-class.
-- **`bad interpreter` / `$'\r': command not found`** → a CRLF copy slipped through (shouldn't
-  happen with the shipped `.gitattributes`). Re-clone/reinstall with `core.autocrlf=false`, or
-  run `git config --global core.autocrlf input`, then reinstall the plugin.
+---
 
 ## License
 
-[MIT](LICENSE) © 2026 Mark Summer. You're free to use, modify, and redistribute it — please keep
-the copyright notice. Provided as-is, without warranty; see the `LICENSE` file for the full text.
+[MIT](LICENSE) © 2026 Mark Summer. You're free to use, modify, and redistribute it. Please keep the
+copyright notice. It's provided as-is, without warranty; see the `LICENSE` file for the full text.

@@ -1,8 +1,8 @@
 # Architecture decision records
 
 Decisions about the harness's direction that outlive a single issue or pull request. `README.md`
-stays the canonical spec of current behavior; an ADR records *why* a direction was chosen and what
-it commits the project to. When a later decision changes one, the ADR is amended with a dated note
+and [`docs/reference/`](../reference/README.md) stay the canonical spec of current behavior; an
+ADR records *why* a direction was chosen and what it commits the project to. When a later decision changes one, the ADR is amended with a dated note
 or superseded by a new ADR — never silently rewritten.
 
 - Files are numbered `NNNN-kebab-title.md` and never renumbered.

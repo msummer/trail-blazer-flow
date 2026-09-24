@@ -506,8 +506,8 @@ fi
 pairs=(
   "planner.md|## Acceptance criteria"       # referenced by agents/verifier.md
   "planner.md|## Verified facts"            # referenced by agents/verifier.md and skills/issue-implementer/SKILL.md
-  "planner.md|## Follow-ups to file"        # referenced by README.md and skills/test-ratchet/SKILL.md
-  "planner.md|### Claims this change falsifies" # referenced by README.md
+  "planner.md|## Follow-ups to file"        # referenced by docs/reference/workflow.md and skills/test-ratchet/SKILL.md
+  "planner.md|### Claims this change falsifies" # referenced by docs/reference/workflow.md
   "planner.md|## Reserve touch list"        # referenced by skills/issue-planner/SKILL.md
   "implementer.md|## Resume brief"          # referenced by skills/issue-implementer/SKILL.md
   "implementer.md|## Evidence"              # the pre-report evidence contract; also referenced by skills/issue-implementer/SKILL.md; deleting the block must fail the gate
