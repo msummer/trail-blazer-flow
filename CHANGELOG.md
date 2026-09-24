@@ -16,7 +16,7 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Updating").
 
-## Unreleased
+## v2.8.0
 
 - #313 (absorbs #257, ADR 0001 decision 7): Under "Autonomy mode" `mode: autonomous`, whenever the
   merge pass's activation (1) holds (a declared or implied merge-autonomy policy — even while the
