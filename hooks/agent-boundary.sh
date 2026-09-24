@@ -7,13 +7,19 @@
 # whose parsed command-position word resolves to `git` or `gh`; for the verifier subagent, denies
 # `gh` outright and denies `git` unless the resolved subcommand is on VERIFIER_GIT_READONLY below
 # (fail closed: an unlisted subcommand, a global option before the subcommand, and a bare `git`
-# all deny). Every other case — main session (no agent_type), any other agent, `permission_mode:
-# "plan"`, malformed stdin, another tool, or `tool_input.command` absent — is "no opinion" (exit
-# 0, empty stdout, empty stderr), the same convention hooks/git-c-guard.sh already uses. Never
-# executes anything (no git, no gh, nothing derived from the untrusted command string), never
-# `eval`s, never writes a file. bash + jq + POSIX awk only — no python, no perl, no GNU-only
-# flags (this repo's CLAUDE.md portability convention); exercised under Apple's bash 3.2 by the
-# selfcheck-macos CI job, same as bin/*.sh and hooks/git-c-guard.sh.
+# all deny). Since #340, this hook also denies, for both roles, a Bash command that puts a path
+# under a `.claude` segment in a write position — a `>`-family redirect target, an argument to a
+# CLAUDE_PATH_ARG_COMMANDS member (`tee`/`cp`/`mv`/`cd`/`pushd`), or an in-place `sed`'s argument —
+# closing the Bash-issued write route into `.claude/` (e.g. `.claude/LESSONS.md`) that
+# hooks/claude-dir-guard.sh's Edit/Write-only matcher cannot see; see the role-policy comment below
+# and the "#340 .claude Bash-write class" paragraph further down for the concrete over-/under-
+# blocking this adds. Every other case — main session (no agent_type), any other agent,
+# `permission_mode: "plan"`, malformed stdin, another tool, or `tool_input.command` absent — is
+# "no opinion" (exit 0, empty stdout, empty stderr), the same convention hooks/git-c-guard.sh
+# already uses. Never executes anything (no git, no gh, nothing derived from the untrusted command
+# string), never `eval`s, never writes a file. bash + jq + POSIX awk only — no python, no perl, no
+# GNU-only flags (this repo's CLAUDE.md portability convention); exercised under Apple's bash 3.2
+# by the selfcheck-macos CI job, same as bin/*.sh and hooks/git-c-guard.sh.
 #
 # Tokenizer cross-reference (#260): hooks/push-guard.sh inlines a near-twin of "the scan" below
 # (same segment-break characters, same normalize(), same repeat-until-exhausted PREFIX_WORDS
@@ -44,10 +50,33 @@
 #
 # Contract: read the PreToolUse hook JSON on stdin; print nothing and exit 0 ("no opinion") unless
 # the call is a Bash command from a recognised implementer/verifier agent_type that the role policy
-# denies, in which case print exactly one reason line to stderr and exit 2 ("deny"); stdout is
-# always empty. Wired in hooks/hooks.json via `${CLAUDE_PLUGIN_ROOT}`, with no `if` gate (the `if`
-# field is permission-rule syntax over tool input only — it cannot see `agent_type`, so any `if`
-# here would silence the boundary for exactly the commands it exists to block).
+# denies — a git/gh command the role's BLOCKED_COMMANDS policy denies, OR (since #340) a command
+# that writes a path under a `.claude` segment — in which case print exactly one reason line to
+# stderr and exit 2 ("deny"); stdout is always empty. Wired in hooks/hooks.json via
+# `${CLAUDE_PLUGIN_ROOT}`, with no `if` gate (the `if` field is permission-rule syntax over tool
+# input only — it cannot see `agent_type`, so any `if` here would silence the boundary for exactly
+# the commands it exists to block).
+#
+# Documented over-blocking / under-blocking (the #340 `.claude` Bash-write class). Newly denied for
+# implementer/verifier: quoted prose containing a `.claude` write shape (e.g.
+# `echo "tip: append with >> .claude/LESSONS.md"`); a heredoc body line with `> .claude/…`, or one
+# starting with `tee`/`cp`/`mv`/`cd` plus a `.claude` path — the remedy is the Write tool, the same
+# remedy this header already gives for a git/gh heredoc body line; a `sed -i` whose SCRIPT TEXT
+# spells a `.claude` segment (e.g. `sed -i.bak 's/\.claude/.config/' README.md`) — skipping the
+# script argument would need `-e`/`-f` parsing, not attempted; a copy or move OUT OF `.claude`
+# (`cp .claude/settings.json /tmp/s.bak`); a `cd` into any `.claude` directory, including a
+# read-only look at the installed plugin cache; a consumer workflow that logs into `.claude`
+# (`npm test > .claude/test.log`); any user-level `~/.claude/...` write (intentional — the same
+# location-independence hooks/claude-dir-guard.sh's own classifier already has); an INPUT redirect
+# from `.claude` into a vocabulary or in-place-`sed` command (`tee /tmp/x < .claude/LESSONS.md`) —
+# the scan turns `<` into a separator, so the input path reads as that command's argument. Still possible
+# (under-blocking, not closed): `install`, `ln`, `touch`, `truncate`, `dd of=…`, `rsync`,
+# `tar -C`; interpreters (`python3 -c "open('.claude/LESSONS.md','a')…"`, `perl -i`,
+# `awk -i inplace`, `ed`/`ex`, `patch`); variable-built or glob targets
+# (`d=.cla; echo x >> ${d}ude/L.md`, `>> .cla*/L.md`); the backslash-escape spelling `.cl\aude`; a
+# symlink made earlier via `ln` whose own name has no `.claude` segment; a quoted redirect target
+# containing a space (`> "a b/.claude/c"`). Like the rest of this
+# hook, this is a tripwire against an off-script subagent, not a sandbox.
 set -uo pipefail
 
 # --- vocabulary --------------------------------------------------------------------------------
@@ -59,6 +88,12 @@ AGENT_TYPES_VERIFIER="verifier trail-blazer-flow:verifier"
 VERIFIER_GIT_READONLY="status diff log show rev-parse ls-files merge-base blame grep restore"
 BLOCKED_COMMANDS="git gh"
 PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash"
+# CLAUDE_PATH_ARG_COMMANDS (#340) — command words whose FIRST argument carrying a `.claude` path
+# segment is a one-step write: `tee` (named in the issue), `cp`/`mv` (the other one-step ways to
+# land text at a path), and `cd`/`pushd` (stops `cd .claude && cat >> LESSONS.md` from defeating
+# the redirect check below by moving the write out of the redirect target entirely). See
+# emit_segment()'s arg_set walk further down.
+CLAUDE_PATH_ARG_COMMANDS="tee cp mv cd pushd"
 DENY_STEM="trail-blazer-flow agent boundary:"
 
 input="$(cat)"
@@ -83,20 +118,33 @@ case "$input" in
 esac
 
 # Fast path 2: this hook only ever denies a command whose command-position word is literally
-# "git" or "gh" — if neither substring appears anywhere in the raw stdin at all, no segment of
-# tool_input.command could possibly resolve to either, so skip the jq/awk spawn. Semantics-
-# preserving except for a command word split by quote, backslash, or carriage-return characters:
-# normalize() (below) strips quote/backslash characters before comparing, and the #270 CR strip
-# (applied to $cmd after the jq extraction, before the scan) removes an actual \r byte, so e.g.
-# `g"i"t push` normalises to "git" while the raw stdin substring "git" never appears — this fast
-# path exits silently where the slower scan would have denied. The CR case is narrower still: a
-# CR *inside* this raw-stdin literal (e.g. `g<CR>it push`, escaped by any conforming JSON writer
-# as the two characters `\`+`r`, never a literal CR byte) also exits here, before the #270 strip
-# ever runs — the resulting command cannot execute as a real `git`/`gh` invocation either, so this
-# is documented, not fixed, for the same "tripwire, not a sandbox" reason as the scan's other
-# quote-blind behaviour.
+# "git" or "gh", OR (since #340) a command that writes a path under a `.claude` segment — if none
+# of "git", "gh", or "claude" (case-insensitively — see below) appears anywhere in the raw stdin at
+# all, no segment of tool_input.command could possibly resolve to a git/gh command word or carry a
+# `.claude` path, so skip the jq/awk spawn. Semantics-preserving except for a command word split by
+# quote, backslash, or carriage-return characters: normalize() (below) strips quote/backslash
+# characters before comparing, and the #270 CR strip (applied to $cmd after the jq extraction,
+# before the scan) removes an actual \r byte, so e.g. `g"i"t push` normalises to "git" while the
+# raw stdin substring "git" never appears — this fast path exits silently where the slower scan
+# would have denied. The CR case is narrower still: a CR *inside* this raw-stdin literal (e.g.
+# `g<CR>it push`, escaped by any conforming JSON writer as the two characters `\`+`r`, never a
+# literal CR byte) also exits here, before the #270 strip ever runs — the resulting command cannot
+# execute as a real `git`/`gh` invocation either, so this is documented, not fixed, for the same
+# "tripwire, not a sandbox" reason as the scan's other quote-blind behaviour. The same class
+# applies to the new "claude" arm: a `.claude` segment split by a quote/backslash character inside
+# THIS raw-stdin literal (not the awk scan's own per-token has_claude_seg(), which does strip
+# those) can miss this fast path the same way; also, per this repo's CLAUDE.md portability
+# convention, `[Cc][Ll][Aa][Uu][Dd][Ee]` is the POSIX-glob case-fold idiom (no bash-only
+# `shopt -s nocasematch` or `,,`/`^^` expansion) so this fast path stays bash-3.2-safe under the
+# selfcheck-macos CI job. Live Bash payloads issued by a subagent call likely always carry a
+# "claude" substring somewhere (the plugin's own `${CLAUDE_PLUGIN_ROOT}`-derived paths, an
+# `agent_type` value, or similar) — this is UNVERIFIED in this repo (see the #340 plan's Open
+# questions), and if true this fast path rarely short-circuits a subagent call any more; that is a
+# performance cost only (one extra jq/awk spawn per implementer/verifier Bash call), not a
+# semantics change — the main session is unaffected either way (fast path 1 above already excludes
+# it).
 case "$input" in
-  *git*|*gh*) : ;;
+  *git*|*gh*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;
   *) exit 0 ;;
 esac
 
@@ -160,9 +208,17 @@ cmd="${cmd//$cr/}"
 # the jq extraction above) before this scan ever runs — normalize() below only ever strips quote
 # and backslash characters because a carriage return can no longer reach it.
 #
-# Per line: every one of `; & | ( ) { } `` (the eight segment-break characters) starts a new
-# segment; `<`/`>` are ordinary token separators (not segment breaks) — a Bash redirection never
-# starts a new command. Within each segment, tokens are walked from the start:
+# Per line: BEFORE segments are broken out, a separate redirect pass (since #340) walks a copy of
+# the raw line looking for every `>`-family redirect (`>`, `>>`, `>|`, `>&`) and, for each one,
+# extracts its target token and emits "-claude-write- <target>" if that target carries a `.claude`
+# path segment (has_claude_seg() below) — this is what catches a redirect target the later
+# command-word walk would never see, since a redirect argument is never itself a command word. `<`
+# is never matched by this pass, so an input redirect (e.g. `wc -l < .claude/LESSONS.md`) is
+# ignored, and `>&2`/`2>&1` yield the target "2"/"1" (or no match at all), never a `.claude` hit.
+# THEN, exactly as before #340: every one of `; & | ( ) { } `` (the eight segment-break characters)
+# starts a new segment; `<`/`>` are ordinary token separators for THIS pass (not segment breaks) —
+# a Bash redirection never starts a new command — the redirect pass above already read `>` targets
+# before this gsub blanks them out. Within each segment, tokens are walked from the start:
 #   - a token matching ^[A-Za-z_][A-Za-z0-9_]*= (an assignment prefix, e.g. FOO=1) is skipped;
 #   - a token whose normalised form (quote/backslash characters stripped; basename taken after the
 #     last '/') is a member of PREFIX_WORDS is skipped, and a "saw prefix" flag is set;
@@ -175,13 +231,23 @@ cmd="${cmd//$cr/}"
 #     the sentinel "-globalopt-" (fail-closed for the verifier: an unrecognised global option
 #     could be anything, including one that mutates); no subcommand at all emits "-none-" (a bare
 #     `git`, also fail-closed for the verifier). "git <subcommand>" is emitted for a git command
-#     word, or the bare command word otherwise. A segment with no surviving token (blank, or only
-#     assignments/prefix words) emits nothing.
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" '
+#     word, or the bare command word otherwise. If it is a member of CLAUDE_PATH_ARG_COMMANDS
+#     (since #340), the token(s) after it are walked once more, emitting
+#     "-claude-write- <token>" for the FIRST one carrying a `.claude` segment — this catches
+#     `tee`/`cp`/`mv`/`cd`/`pushd` writing or moving into (or navigating into) a `.claude`
+#     directory via a plain argument, not a redirect. If it is exactly "sed" (since #340), those
+#     same tokens are first scanned for an in-place flag (`-i`, `-i.bak`, or `--in-place`); only
+#     when one is found does the identical `.claude`-segment token walk run — `sed -n` (no
+#     in-place flag) never triggers it, even when a `.claude` path is its argument, since that
+#     invocation only reads. A segment with no surviving token (blank, or only assignments/prefix
+#     words) emits nothing.
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
   for (i = 1; i <= n; i++) prefix_set[pwarr[i]] = 1
+  na = split(arg_cmds, acarr, " ")
+  for (i = 1; i <= na; i++) arg_set[acarr[i]] = 1
 }
 function normalize(tok,    t, parts, np) {
   t = tok
@@ -191,7 +257,21 @@ function normalize(tok,    t, parts, np) {
   np = split(t, parts, "/")
   return parts[np]
 }
-function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, gitsub) {
+# has_claude_seg (#340) — TRUE iff tok, after stripping quote characters and normalising a
+# backslash to a forward slash, case-folded, has an EXACT ".claude" path segment (not merely a
+# ".claude"-containing substring like ".claude-backup", and not a bare basename match — this is
+# deliberately NOT normalize(), which takes the basename after the last "/" and would miss a
+# ".claude" segment that is not the final path component). The leading/trailing "/" wrap turns
+# both a leading and a trailing segment into an interior one for the index() search.
+function has_claude_seg(tok,    u) {
+  u = tok
+  gsub(sq, "", u)
+  gsub(/"/, "", u)
+  gsub(/\\/, "/", u)
+  u = tolower(u)
+  return index("/" u "/", "/.claude/") > 0
+}
+function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, gitsub, inplace) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
@@ -223,9 +303,32 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
     print "git " gitsub
   } else {
     print cmdword
+    if (cmdword in arg_set) {
+      for (j = idx; j <= ntok; j++) {
+        if (has_claude_seg(toks[j])) { print "-claude-write- " toks[j]; break }
+      }
+    } else if (cmdword == "sed") {
+      inplace = 0
+      for (j = idx; j <= ntok; j++) {
+        if (match(toks[j], /^-[A-Za-z]*i/) == 1) { inplace = 1; break }
+        if (match(toks[j], /^--in-place/) == 1) { inplace = 1; break }
+      }
+      if (inplace) {
+        for (j = idx; j <= ntok; j++) {
+          if (has_claude_seg(toks[j])) { print "-claude-write- " toks[j]; break }
+        }
+      }
+    }
   }
 }
 {
+  rd_rest = $0
+  while (match(rd_rest, />[>|&]?[ \t]*[^ \t;&|(){}`<>]+/)) {
+    rd_tgt = substr(rd_rest, RSTART, RLENGTH)
+    sub(/^>[>|&]?[ \t]*/, "", rd_tgt)
+    if (has_claude_seg(rd_tgt)) print "-claude-write- " rd_tgt
+    rd_rest = substr(rd_rest, RSTART + RLENGTH)
+  }
   line = $0
   gsub(/[;&|(){}`]/, "\n", line)
   gsub(/[<>]/, " ", line)
@@ -238,12 +341,23 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
 # Implementer: deny on ANY segment whose command word is git or gh, regardless of git subcommand
 # (the implementer needs neither — see the Decision this issue implements). Verifier: deny on gh
 # outright; for git, deny unless the resolved subcommand is a member of VERIFIER_GIT_READONLY —
-# so "-globalopt-", "-none-", and any subcommand not on that list all deny (fail closed). The
-# first offending segment (scan order) decides; stdout stays empty on every path.
+# so "-globalopt-", "-none-", and any subcommand not on that list all deny (fail closed). Since
+# #340, BOTH roles also deny on a "-claude-write- <target>" line emitted by the awk scan's redirect
+# pass, CLAUDE_PATH_ARG_COMMANDS vocabulary walk, or in-place-sed walk above — a `.claude`-segment
+# write is denied for the implementer AND the verifier alike, unlike the git/gh policy's per-role
+# split (the verifier's own writes are meant to be transient mutation-probe edits restored before
+# it returns, per agents/verifier.md — a `.claude` write from Bash is never one of those). The
+# first offending line (scan order) decides; stdout stays empty on every path.
 deny_cmd=""
+deny_kind="git"
 while IFS= read -r line; do
   [ -n "$line" ] || continue
   case "$line" in
+    "-claude-write- "*)
+      deny_kind="claude"
+      deny_cmd="${line#-claude-write- }"
+      break
+      ;;
     "git "*)
       if [ "$role" = "implementer" ]; then
         deny_cmd="$line"
@@ -265,7 +379,10 @@ $scan_out
 EOF
 
 if [ -n "$deny_cmd" ]; then
-  if [ "$role" = "implementer" ]; then
+  if [ "$deny_kind" = "claude" ]; then
+    printf '%s %s role may not write a path under a .claude segment from Bash (blocked: %s) — record it in your report'"'"'s Reviewer notes instead; see agents/%s.md\n' \
+      "$DENY_STEM" "$role" "$deny_cmd" "$role" >&2
+  elif [ "$role" = "implementer" ]; then
     printf '%s implementer role may not run any of: %s (blocked: %s) — see agents/implementer.md\n' \
       "$DENY_STEM" "$BLOCKED_COMMANDS" "$deny_cmd" >&2
   else

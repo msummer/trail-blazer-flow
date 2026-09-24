@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #340: hooks/agent-boundary.sh denies an implementer/verifier Bash redirect/tee/cp/mv/cd/
+  in-place-sed into a .claude path segment; gate 4.53 pins claude-dir-guard.sh's GUARDED_TOOLS
+  against both roles' tools: lines (absorbs #341). No consumer step.
 - #384: A kickback or CI-fix re-verification now checks only prior findings plus the fix's delta
   since the previously reviewed commit, and a new mutant surviving on unchanged code is a Note.
   Fix dispatches iterate narrow and run the full verification once. The implementer keeps counts

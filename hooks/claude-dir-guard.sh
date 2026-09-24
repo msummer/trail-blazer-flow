@@ -60,10 +60,15 @@
 #     verifier Write payload exists to measure.
 #   - NOT measured: a MultiEdit/NotebookEdit payload (agents/implementer.md:9 and
 #     agents/verifier.md:12 list neither tool for either role today, so GUARDED_TOOLS below does
-#     not need to cover them); a Bash-issued write into .claude/ (e.g. a redirect) -- outside an
-#     Edit/Write hook's matcher by construction, and hooks/agent-boundary.sh's Bash policy does
-#     not cover it either (filed as a follow-up); symlink/hard-link/`..`-normalisation resolution
+#     not need to cover them; gate 4.53 pins this by comparing GUARDED_TOOLS against both roles'
+#     tools: lines, so a future MultiEdit/NotebookEdit grant fails the gate rather than silently
+#     reopening this hook's own blind spot); symlink/hard-link/`..`-normalisation resolution
 #     (documented below as an under-blocking class instead); whether `cwd` is always the repo root.
+#     A Bash-issued write into .claude/ (e.g. a redirect) is still outside an Edit/Write hook's
+#     matcher by construction, but since #340 hooks/agent-boundary.sh's own Bash policy now covers
+#     part of that route (a `>`-family redirect, tee/cp/mv/cd/pushd, or in-place sed) for the
+#     implementer/verifier roles -- see that hook's own header for what it covers and the
+#     under-blocking note below for what it still doesn't.
 #
 # Contract: read the PreToolUse hook JSON on stdin; print nothing and exit 0 ("no opinion") unless
 # the call is an Edit/Write from a recognised implementer/verifier agent_type whose file_path the
@@ -87,12 +92,18 @@
 # the test script's own Bash, as this repo's harnesses (dev/hook-tests.sh included) already do.
 #
 # Documented under-blocking classes (evasions, named rather than hidden): a Bash-issued write
-# (`cat >>`, `tee`, `sed -i`) never reaches an Edit/Write hook by construction, and
-# hooks/agent-boundary.sh's Bash policy does not cover it either (filed as a follow-up -- see the
-# #327 plan's "Follow-ups to file"); a symlink or hard link whose own spelling carries no
-# `.claude` segment (this hook performs no filesystem access, so it cannot resolve one); a write
-# tool outside GUARDED_TOOLS -- measured: no role's tools: line names MultiEdit or NotebookEdit
-# today (agents/implementer.md:9, agents/verifier.md:12); any other agent role -- measured: an
+# (`cat >>`, `tee`, `sed -i`) never reaches an Edit/Write hook by construction; since #340,
+# hooks/agent-boundary.sh's own Bash policy denies the redirect/tee/cp/mv/cd-pushd/in-place-sed
+# forms of that route for the implementer/verifier roles, but an interpreter write
+# (`python3 -c "open('.claude/LESSONS.md','a')…"`, `perl -i`), `install`/`ln`/`touch`/`truncate`/
+# `dd of=…`, and a variable-built or glob target still evade it (see that hook's own header for the
+# full list, and #340's own filed follow-up for the interpreter/dd/install gap specifically); a
+# symlink or hard link whose own spelling carries no `.claude` segment (this hook performs no
+# filesystem access, so it cannot resolve one); a write tool outside GUARDED_TOOLS -- measured: no
+# role's tools: line names MultiEdit or NotebookEdit today (agents/implementer.md:9,
+# agents/verifier.md:12; gate 4.53 pins GUARDED_TOOLS against both roles' tools: lines, so this
+# stays true only until a role's tools: line changes without a matching GUARDED_TOOLS update); any
+# other agent role -- measured: an
 # agent_type of "Explore" -> rc 0; a Claude Code that stops sending agent_type at all -- fails
 # open, the same documented note hooks/agent-boundary.sh's header already carries for its own
 # vocabulary; the plugin disabled, `disableAllHooks: true`, no `jq` on PATH, or an unresolved

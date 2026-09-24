@@ -1854,6 +1854,67 @@ else
   fi
 fi
 
+# 4.53 (#340, absorbs #341) — hooks/claude-dir-guard.sh's GUARDED_TOOLS="..." vocabulary <->
+# agents/implementer.md's and agents/verifier.md's own tools: frontmatter lines, in BOTH
+# directions: (a) every GUARDED_TOOLS member is on at least one role's tools: line — a tool named
+# there that neither role actually has reads as a guard that isn't there; (b) every tool on either
+# role's tools: line is either in GUARDED_TOOLS or in this assertion's own reviewed exemption list,
+# ab453_exempt="Read Grep Glob Bash" (Bash is covered by hooks/agent-boundary.sh's own #340
+# `.claude`-write policy instead; the rest are read-only) — a role gaining a file-writing tool (for
+# example MultiEdit or NotebookEdit) that is neither guarded nor exempt FAILs loudly, closing the
+# gap hooks/claude-dir-guard.sh's own header names (a write tool outside GUARDED_TOOLS). The
+# exemption list fails CLOSED on any future tool this gate doesn't already know about, by design
+# (see the #340 plan's Open questions) — a role gaining a genuinely non-writing tool this list
+# hasn't seen yet (e.g. WebFetch) fails 4.53 until the list is updated, the safer direction for a
+# permission-boundary gate. GUARDED_TOOLS is anchored single-line sed -nE extraction (the
+# 4.26/4.39-4.42 idiom); each role's tools: line comes from frontmatter_text (3.1's own helper)
+# then a single-line sed extraction, split on ',' and squeezed to one space per gap (the same
+# comma-separated-list shape 3.1 already parses for other keys). An empty extraction on ANY of the
+# three FAILs loudly ("structure changed") rather than passing vacuously. Proves only that the
+# three declarations' vocabulary agrees, not that either hook's runtime behavior is correct — the
+# same honest limit 4.33/4.34/4.39-4.42/4.45/4.46/4.48-4.52's comments state.
+guarded_453="$(sed -nE 's/^GUARDED_TOOLS="([^"]*)"$/\1/p' "$root/hooks/claude-dir-guard.sh")"
+impl_tools_453="$(frontmatter_text "$root/agents/implementer.md" | sed -n 's/^tools: *//p')"
+verif_tools_453="$(frontmatter_text "$root/agents/verifier.md" | sed -n 's/^tools: *//p')"
+if [ -z "$guarded_453" ] || [ -z "$impl_tools_453" ] || [ -z "$verif_tools_453" ]; then
+  bad "4.53 hooks/claude-dir-guard.sh's GUARDED_TOOLS=\"...\" line, agents/implementer.md's tools: line, or agents/verifier.md's tools: line didn't match (structure changed) — extraction failed"
+else
+  impl_set_453=" $(printf '%s' "$impl_tools_453" | tr ',' ' ' | tr -s '[:space:]' ' ') "
+  verif_set_453=" $(printf '%s' "$verif_tools_453" | tr ',' ' ' | tr -s '[:space:]' ' ') "
+  role_union_453="$(printf '%s\n' $impl_set_453 $verif_set_453 | sort -u)"
+  ab453_exempt="Read Grep Glob Bash"
+
+  ab453_missing=""
+  for g453 in $guarded_453; do
+    case "$impl_set_453$verif_set_453" in
+      *" $g453 "*) ;;
+      *) ab453_missing="$ab453_missing $g453" ;;
+    esac
+  done
+
+  ab453_unguarded=""
+  for t453 in $role_union_453; do
+    case " $guarded_453 " in
+      *" $t453 "*) ;;
+      *)
+        case " $ab453_exempt " in
+          *" $t453 "*) ;;
+          *) ab453_unguarded="$ab453_unguarded $t453" ;;
+        esac
+        ;;
+    esac
+  done
+
+  if [ -n "$ab453_missing" ] || [ -n "$ab453_unguarded" ]; then
+    msg453="4.53 GUARDED_TOOLS vs agents/*.md tools: drift:"
+    [ -n "$ab453_missing" ] && msg453="$msg453 GUARDED_TOOLS member(s) on neither role's tools: line:$ab453_missing;"
+    [ -n "$ab453_unguarded" ] && msg453="$msg453 tools: member(s) neither guarded nor exempt ('$ab453_exempt'):$ab453_unguarded;"
+    bad "$msg453"
+  else
+    ok "4.53 hooks/claude-dir-guard.sh's GUARDED_TOOLS ('$guarded_453') is covered by, and covers within the exemption list ('$ab453_exempt'), the union of agents/implementer.md's and agents/verifier.md's tools: lines"
+  fi
+fi
+
 # ============================================================================
 echo
 echo "-- Group 5: script and extracted-program behavior --"
