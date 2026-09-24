@@ -17,11 +17,16 @@ scheduled routine has one thing to call. It is a *conductor*: the planning and i
 logic lives entirely in the `issue-planner` and `issue-implementer` skills, invoked unchanged —
 do not re-implement their procedures here. Unattended, a cycle can: turn new issues into plans,
 revise on feedback, propose grounded answers, auto-approve plans **only** under CLAUDE.md's
-auto-approval policy (hard floor always applies), implement through the verifier gate, open PRs,
-merge PRs **only** under a merge autonomy policy (own hard floor — see the merge pass), file
+auto-approval policy — or "Autonomy mode" declaring `mode: autonomous` (README contract item 9),
+which reads a missing auto-approval section as present (hard floor only) and a missing merge-autonomy
+section as present for harness PRs only —
+(hard floor always applies), implement through the verifier gate, open PRs,
+merge PRs **only** under a merge autonomy policy, declared or implied by "Autonomy mode" (own hard
+floor — see the merge pass), file
 coverage-increasing issues **only** under a test-suite ratchet policy (see the ratchet pass), and
-repair queue hygiene. No auto-approval policy → ends with plans awaiting review; no merge
-autonomy policy (or `gh pr merge` still denied) → ends with PRs awaiting merge — both the
+repair queue hygiene. No auto-approval policy and no "Autonomy mode" → ends with plans awaiting
+review; no merge autonomy policy or implied autonomy (or `gh pr merge` still denied) → ends with
+PRs awaiting merge — both the
 human's.
 
 ## Dispatch ledger
@@ -116,12 +121,17 @@ approved, skip this pass.
 **Stop check** before this pass — see *Stop switch* below.
 
 Skip this pass entirely — **silently** — when there is no "Merge autonomy
-policy" section at all; that silence is the only silent case, everything past activation is
+policy" section at all AND no "Autonomy mode" section declares `mode: autonomous`; that silence
+is the only silent case, everything past activation is
 loud. Activation requires **both**: (1) `CLAUDE.md` has a section titled exactly **"Merge
-autonomy policy"** — no section means merging stays fully manual, exactly as before, that trust
+autonomy policy"** — or its "Autonomy mode" section declares `mode: autonomous` (README contract
+item 9), which reads an absent "Merge autonomy policy" section as present, covering harness PRs
+only — never Dependabot, never a no-CI opt-in; below, "the policy" includes that implied one — no
+section and no implied one means merging stays fully manual, exactly as before, that trust
 decision belongs in the repo's file, not this plugin (skip silently); (2) `gh pr merge` actually
 runs, i.e. the human has removed it from the deny list in `.claude/settings.json` — if the
-section exists but the command is denied or prompts, that is the **loud** case (guard (c)
+section (declared or implied) exists but the command is denied or prompts, that is the **loud**
+case (guard (c)
 below), not a silent skip: the half-finished double opt-in gets escalated, not passed over
 quietly.
 

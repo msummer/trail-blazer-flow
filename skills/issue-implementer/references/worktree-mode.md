@@ -21,7 +21,7 @@ holder, acquired once before the fan-out and released once after it, never per w
 There is no separate coordinator process — **you are the supervisor**. Keep a **worktree table**
 in context for the life of the swarm, one row per issue: issue number, worktree path, branch,
 current stage (`implementer` → `checks` → `verifier` → `pr` → `ci` → terminal), dispatch attempt
-`k`, kickbacks used (of 2), resume relaunches used (of 2), last WIP SHA, and whether a dispatch
+`k`, kickbacks used (of the budget), resume relaunches used (of 2), last WIP SHA, and whether a dispatch
 is in flight. Every budget in the issue-implementer skill's "Resilient dispatch" is **per
 issue**: a ladder retry or a resume relaunch in one worktree never consumes another's.
 

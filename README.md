@@ -193,7 +193,10 @@ policy's conditions AND a non-negotiable hard floor (see "The CLAUDE.md contract
 auto-approval leaves an audit comment, opening with `<!-- harness-audit -->` — the marker (matched
 anywhere in the body) is what excludes it from both discovery scripts' binding sets (which
 conditions were met, how to veto). No policy section ⇒ no auto-approval — the default is fully
-manual. The **`no-auto-approve` label** opts any individual issue back out of the policy. Note that an auto-approved plan may be implemented in
+manual, UNLESS `CLAUDE.md`'s "Autonomy mode" section declares `mode: autonomous` (item 9), in
+which case a missing policy section is read as present with no conditions beyond the hard floor —
+schema, security, and reserve-touching work are still never opted in by the mode alone. The
+**`no-auto-approve` label** opts any individual issue back out of the policy. Note that an auto-approved plan may be implemented in
 the same run — for that work, PR review is the human gate.
 
 ### Implementation ("implement the approved issues" / "implement issue 14")
@@ -257,9 +260,11 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    re-check confirms each prior finding is resolved and reviews only the fix's own delta. Its
    mutation probe targets only production code the fix changed, and a new surviving mutant on
    code the previous round already reviewed is a Note, not a finding, so the loop converges.
-   **Max 2 kickbacks**, then `impl-blocked` with the findings; **the orchestrator itself never patches a
+   **The kickback budget — 2 by default, or `CLAUDE.md`'s "Autonomy mode" `kickback-budget:`
+   value (item 9) when that section declares `mode: autonomous` — is never exceeded**, then
+   `impl-blocked` with the findings; **the orchestrator itself never patches a
    finding** — it never edits a source, test, or doc file to resolve one, only re-dispatches the
-   implementer or, once kickbacks are exhausted, takes the blocked path. All of this happens
+   implementer or, once the budget is spent, takes the blocked path. All of this happens
    *before* anything is pushed or a PR exists — the branch may already carry local WIP checkpoint
    commits by this point (see "Resilience: checkpointing, retries, and the dispatch ledger"
    below), but nothing leaves the machine until the verifier passes, so every PR the human sees is
@@ -410,8 +415,10 @@ next run re-examines it.
 ### The steady state, as one command ("run the cycle")
 
 The `issue-cycle` skill composes the above into a single bounded pass: pre-flight → planning
-pass → implementation pass → merge pass (**opt-in**: only with a CLAUDE.md "Merge autonomy
-policy" *and* the `gh pr merge` deny lifted; guarded per PR, one at a time, re-verified between,
+pass → implementation pass → merge pass (**opt-in**: with a CLAUDE.md "Merge autonomy
+policy" *and* the `gh pr merge` deny lifted, or with "Autonomy mode" declaring `mode: autonomous`
+(item 9), which implies the policy for harness PRs only — the deny still has to be lifted by
+hand either way; guarded per PR, one at a time, re-verified between,
 audited in the report) → a closing reconciliation, comparing the run's **dispatch ledger**
 against `harness-status.sh`'s live queues via `reconcile-ledger.sh` (an issue with no recorded
 outcome is escalated, never dropped; a degraded live read is escalated too, never reported
@@ -703,7 +710,8 @@ subagents need:
    stale, no overlap, schema/security work only if explicitly opted in, and the issue's author is
    a maintainer), every auto-approval is audited with an issue comment, and the `no-auto-approve`
    label opts any issue out. **No section means no auto-approval** — this is a trust decision that
-   belongs in your file, not the plugin's.
+   belongs in your file, not the plugin's (or "Autonomy mode", item 9, which reads a missing
+   section as present with no conditions beyond the hard floor above).
 
 5. **Merge autonomy policy** (optional) — a section titled exactly "Merge autonomy policy"
    stating which PRs the `issue-cycle` merge pass may merge on your behalf, e.g.:
@@ -758,13 +766,16 @@ subagents need:
    parks the PR for you instead of merging past it (#206) — one merge at a time with
    re-verification between, every merge audited in the cycle report). **No section means no
    autonomous merges** — behavior is exactly the
-   pre-1.5 default. **"No checks configured" is not green.** A repo with no CI wired up gets a
+   pre-1.5 default — UNLESS "Autonomy mode" (item 9) declares `mode: autonomous`, in which case a
+   missing section here is read as present for harness PRs only (never Dependabot, never an
+   opt-in for a repo with no CI). **"No checks configured" is not green.** A repo with no CI wired up gets a
    "no checks configured" result from `gh pr checks`, and the hard floor above treats that the
    same as red: no PR qualifies for the merge pass unless your "Merge autonomy policy" section
    explicitly opts a no-CI repo in. Absent that opt-in, the PR simply waits, with the reason
    recorded in the cycle report. Recommended pairing: branch protection with required status
-   checks, so the policy has a technical rail under it, not just prompt adherence — once a
-   "Merge autonomy policy" section is present, `check-harness.sh` reads the protection document
+   checks, so the policy has a technical rail under it, not just prompt adherence — once merge
+   autonomy is effectively active (a "Merge autonomy policy" section present, or "Autonomy mode"
+   implying it), `check-harness.sh` reads the protection document
    itself and WARNs (never FAILs) when `required_status_checks.strict` isn't exactly `true`, when
    zero status check contexts are required, and reports informationally whether required PR
    reviews are configured (#234).
@@ -772,9 +783,10 @@ subagents need:
    `.claude/settings.json`, `.claude/settings.local.json`, and your user-level settings file —
    and reports off, active (with a note when no `.github/workflows` file is found, naming the
    same no-checks-configured precondition), or (the trap it exists to catch) half-activated: a
-   "Merge autonomy policy" section present while `Bash(gh pr merge:*)` is still denied in one of
+   "Merge autonomy policy" section present (or "Autonomy mode" implying it) while `Bash(gh pr
+   merge:*)` is still denied in one of
    those files, which the doctor WARNs on by naming the file, because it leaves the cycle
-   reporting `verified, merge blocked` on every run. Once this section is present,
+   reporting `verified, merge blocked` on every run. Once merge autonomy is effectively active,
    `check-harness.sh` also WARNs on any `uses:` ref in `.github/workflows/*.yml`/`*.yaml` and in
    any `action.yml`/`action.yaml` anywhere in the repo (so a local composite action gets its own
    refs checked no matter where it lives, not only under `.github/actions/`) — local (`./…`,
@@ -932,14 +944,76 @@ subagents need:
    its own `CLAUDE.md` and add `Bash(shasum:*)` / `Bash(sha256sum:*)` to its allow-list; the
    template does not ship either grant.
 
+9. **Autonomy mode** (optional) — a section titled exactly "Autonomy mode" declaring a fenced
+   block of `key: value` lines that turns on several of the policies above together, as one
+   combination, instead of requiring each declared separately (ADR 0001), e.g.:
+
+   ````markdown
+   ## Autonomy mode
+   ```
+   mode: autonomous
+   kickback-budget: 2
+   ```
+   ````
+
+   `mode: autonomous` (required) is the only recognised value — anything else, or the section's
+   absence, leaves the mode off; a section present with no `mode: autonomous` line is **inert**,
+   same as absent. `kickback-budget:` (optional) is an integer from 0 to 3, default 2 — any other
+   value falls back to the default, with a WARN from `check-harness.sh` naming the bad value; the
+   budget is never exceeded.
+
+   In autonomous mode:
+   - A missing "Plan auto-approval policy" section (item 4) is read as present with no conditions
+     beyond item 4's own hard floor — that floor alone decides, so schema, security, and
+     reserve-touching work are never opted in by the mode alone.
+   - A missing "Merge autonomy policy" section (item 5) is read as present for harness PRs
+     only — never Dependabot, and never an opt-in for a repo with no CI wired up (item 5's own
+     "no checks configured is not green" hard floor still applies).
+   - A section this repo DOES declare still applies in full, exactly as items 4/5 describe — the
+     mode can only narrow what it allows, never widen a policy this repo wrote narrower.
+   - The "Test-suite ratchet policy" (item 6), "Autonomy reserve" (item 7), and "Autonomy decision
+     record" (item 8) sections stay separate opt-ins; the mode implies none of them.
+   - Lifting the `Bash(gh pr merge:*)` deny stays a manual, human edit to `.claude/settings.json`
+     or `.claude/settings.local.json` (item 5's own double opt-in) — the mode never lifts it and
+     never edits a settings file itself.
+   - Every hard floor named in items 4 through 8 is unchanged; the mode only widens *which*
+     section is read as present, never *what* a present section is allowed to authorize.
+   - The kickback budget (see "Implementation" step 4 above) bounds how many times the verifier's
+     fail finding re-dispatches the implementer before the run takes the blocked path. The
+     orchestrator never writes the fix itself; a spent budget always takes the blocked path,
+     exactly like the fixed limit does without this section.
+
+   `check-harness.sh` prints exactly one verdict line whenever `CLAUDE.md` exists — off (no
+   section), autonomous (naming the effective kickback budget), or inert (section present, no
+   `mode: autonomous` line) — and, in autonomous mode, widens the merge-autonomy, CI-pinning, and
+   branch-protection checks (item 5's own WARN stems, unchanged) to fire from the implied
+   activation too, even with no "Merge autonomy policy" section declared. Only in autonomous mode
+   it also prints one informational line reporting each settings file's `permissions.defaultMode`
+   value (a validated bare word, or `(unset)`/`(unrecognised value)` otherwise) —
+   `.claude/settings.json`, `.claude/settings.local.json`, and the user-level settings file
+   included — never an allow/deny entry from any of them.
+
+   **Recommended headless invocation**, once this section is on:
+
+   ```bash
+   claude -p --permission-mode auto --permission-prompts none "run the cycle"
+   ```
+
+   Under `--permission-prompts none`, a would-be permission prompt becomes a denial instead of
+   stalling unattended. The skills already escalate a denial durably (see "Durable escalation"
+   under "Implementation") and never route around it, so this changes nothing about how a denial
+   is handled. The plugin's `PreToolUse` hooks (see "Safety model") still run and still deny
+   exactly what they deny today; `--permission-mode auto` and `--permission-prompts none` change
+   the CLI's own prompting behavior, never the hooks'.
+
 The subagents read `CLAUDE.md` at the start of every task — it is the real input that makes
 the harness work well in a given repo. Too little and they're guessing; too much and the
 contract above drowns in restatement of what the file system, manifests, and linter config
-already say. The eight items above are the floor, not a template to pad: leave out directory
+already say. The nine items above are the floor, not a template to pad: leave out directory
 tours, framework defaults, and formatter-enforced style, and keep the non-obvious — invariants,
 why-this-way decisions, traps a fresh reader would hit — instead. `check-harness.sh` turns "too
 much" into a mechanical proxy: it WARNs once `CLAUDE.md` passes 300 lines or 20,000 bytes,
-pointing at the harness-setup skill's leanness audit — not at the eight contract items themselves.
+pointing at the harness-setup skill's leanness audit — not at the nine contract items themselves.
 
 ## The LESSONS.md contract (project-owned)
 
@@ -1220,10 +1294,13 @@ file, which could be fooled by a rule merely mentioned in an unrelated string (a
 `env` value) or by a deny-side entry that a whole-file search can't tell apart from an allow-side
 one. Every check here — the harness-script sentinel, template drift, the stale-`-C`-allow WARN,
 and default-branch guard coverage — stays scoped to `.claude/settings.json` by design: they judge
-the shared, checked-in file, not effective permission. Four checks are the exception, because
-they need *effective* state across all three files: the toolchain bare-name check above, the
-path-qualified interpreter probe, the merge-autonomy verdict (see "The CLAUDE.md contract" item
-5), and the post-merge allow-entry check. `settings.local.json` is machine-local (may hold
+the shared, checked-in file, not effective permission. The exceptions need *effective* state
+across all three files: the toolchain bare-name check above, the path-qualified interpreter
+probe, the merge-autonomy verdict (see "The CLAUDE.md contract" item 5), the post-merge
+allow-entry check, the `disableAllHooks` WARN, and (#311, only in "Autonomy mode" item 9's
+autonomous mode) the informational `permissions.defaultMode` report, which reads a SANITISED
+bare word from all three files, including the user-level one, and never prints an allow/deny
+entry from any of them. `settings.local.json` is machine-local (may hold
 secrets) — never commit it.
 
 ## Safety model
@@ -1759,7 +1836,8 @@ session, any other agent, `permission_mode: "plan"`, and a Claude Code that omit
 altogether all leave the hook silent — the same session-wide allow list this caveat used to
 describe in full, now narrowed to exactly those cases). The staged-file reconciliation and branch
 isolation remain the backstop for whatever this mechanical boundary doesn't reach. Second, plan auto-approval and
-merge autonomy (each opt-in via `CLAUDE.md` — see "The CLAUDE.md contract" items 4–5)
+merge autonomy (each opt-in via `CLAUDE.md` — see "The CLAUDE.md contract" items 4–5, or item 9's
+"Autonomy mode" section, which turns both on together as one combination)
 deliberately trade human gates for throughput on low-risk work. Their hard floors are not
 configurable by the policy section — the one exception is itself part of the floor's fixed
 definition, not something a policy can widen: on an issue the human granted under the repo's
@@ -2000,9 +2078,13 @@ copy of itself over the working tree being edited.
   [`docs/adr/`](docs/adr/README.md) — [0001 Autonomy mode](docs/adr/0001-autonomy-mode.md), a
   single opt-in profile for unattended runs, and
   [0002 Codex compatibility](docs/adr/0002-codex-compatibility.md), running the harness under
-  OpenAI Codex. Neither ADR 0001's combined "Autonomy mode" profile nor ADR 0002's Codex
-  compatibility is implemented yet; each ADR lists its tracking issues. One piece of ADR 0001 has
-  shipped standalone, since it applies "in every mode" and needed no Autonomy mode section of its
+  OpenAI Codex. ADR 0002's Codex compatibility is not implemented yet; it lists its tracking
+  issues. ADR 0001's combined "Autonomy mode" profile has landed in part: decisions 1, 2, and 5
+  (the "Autonomy mode" CLAUDE.md section itself — see "The CLAUDE.md contract" item 9 — reading a
+  missing Plan auto-approval/Merge autonomy policy section as present, and the kickback budget)
+  shipped with #311. Decision 6 (carry-over auto-approval) and decision 7 (serial merge train)
+  remain unimplemented; ADR 0001 lists their tracking issues. One piece of ADR 0001 has shipped
+  standalone, since it applies "in every mode" and needed no Autonomy mode section of its
   own: decision 9, the lesson-append carve-out, landed with #307 (see "The LESSONS.md contract"
   above).
 - **Parallel-mode ergonomics:** worktree-parallel is gated on manually comparing Affected areas;
