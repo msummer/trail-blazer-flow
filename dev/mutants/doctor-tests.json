@@ -126,6 +126,556 @@
       "expect_fail": [
         "autonomy-mode-unfenced"
       ]
+    },
+    {
+      "name": "331-no-renames",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "diff_err=\"$(git diff --no-renames --name-only -z \"$base\" \"$head\" 2>&1 >\"$tmp\")\"",
+          "to": "diff_err=\"$(git diff --name-only -z \"$base\" \"$head\" 2>&1 >\"$tmp\")\""
+        }
+      ],
+      "expect_fail": [
+        "gov-github-renamed"
+      ]
+    },
+    {
+      "name": "331-case-fold",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "lp=\"$(printf '%s' \"$p\" | tr '[:upper:]' '[:lower:]')\"",
+          "to": "lp=\"$p\""
+        }
+      ],
+      "expect_fail": [
+        "gov-builtin-rules",
+        "gov-case-varied-claude-dir",
+        "gov-declared-from-base",
+        "gov-declared-globs"
+      ]
+    },
+    {
+      "name": "331-seg-claude",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    */.claude/*|*/.github/*|*/adr/*|*/adrs/*) return 0 ;;\n",
+          "to": "    */.github/*|*/adr/*|*/adrs/*) return 0 ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-builtin-rules",
+        "gov-case-varied-claude-dir",
+        "gov-lessons-only",
+        "gov-lessons-plus-other"
+      ]
+    },
+    {
+      "name": "331-seg-github",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    */.claude/*|*/.github/*|*/adr/*|*/adrs/*) return 0 ;;\n",
+          "to": "    */.claude/*|*/adr/*|*/adrs/*) return 0 ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-builtin-rules",
+        "gov-declared-globs",
+        "gov-diff-relative",
+        "gov-github-renamed",
+        "gov-lessons-plus-other"
+      ]
+    },
+    {
+      "name": "331-seg-adr",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    */.claude/*|*/.github/*|*/adr/*|*/adrs/*) return 0 ;;\n",
+          "to": "    */.claude/*|*/.github/*|*/adrs/*) return 0 ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-builtin-rules"
+      ]
+    },
+    {
+      "name": "331-seg-adrs",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    */.claude/*|*/.github/*|*/adr/*|*/adrs/*) return 0 ;;\n",
+          "to": "    */.claude/*|*/.github/*|*/adr/*) return 0 ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-builtin-rules"
+      ]
+    },
+    {
+      "name": "331-seg-substring",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    */.claude/*|*/.github/*|*/adr/*|*/adrs/*) return 0 ;;\n",
+          "to": "    */.claude/*|*/.github/*|*adr*|*/adrs/*) return 0 ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-builtin-rules"
+      ]
+    },
+    {
+      "name": "331-final-claude-md",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    claude.md|action.yml|action.yaml) return 0 ;;\n",
+          "to": "    action.yml|action.yaml) return 0 ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-builtin-rules",
+        "gov-declared-from-base"
+      ]
+    },
+    {
+      "name": "331-final-action-yml",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    claude.md|action.yml|action.yaml) return 0 ;;\n",
+          "to": "    claude.md|action.yaml) return 0 ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-builtin-rules"
+      ]
+    },
+    {
+      "name": "331-final-action-yaml",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    claude.md|action.yml|action.yaml) return 0 ;;\n",
+          "to": "    claude.md|action.yml) return 0 ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-builtin-rules"
+      ]
+    },
+    {
+      "name": "331-lessons-exact-case",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  elif [ \"$gov_count\" -eq 1 ] && [ \"$gov_paths\" = $'.claude/LESSONS.md\\n' ]; then",
+          "to": "  elif [ \"$gov_count\" -eq 1 ] && [ \"$(printf '%s' \"${gov_paths%$'\\n'}\" | tr '[:upper:]' '[:lower:]')\" = \".claude/lessons.md\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "gov-case-varied-claude-dir"
+      ]
+    },
+    {
+      "name": "331-lessons-sole",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  elif [ \"$gov_count\" -eq 1 ] && [ \"$gov_paths\" = $'.claude/LESSONS.md\\n' ]; then",
+          "to": "  elif grep -qF -- \".claude/LESSONS.md\" <<<\"$gov_paths\"; then"
+        }
+      ],
+      "expect_fail": [
+        "gov-lessons-plus-other"
+      ]
+    },
+    {
+      "name": "331-declared-ignored",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    is_gov=false\n    is_builtin \"$lp\" && is_gov=true\n    if ! $is_gov && is_declared \"$lp\"; then\n      is_gov=true\n    fi\n",
+          "to": "    is_gov=false\n    is_builtin \"$lp\" && is_gov=true\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-declared-globs",
+        "gov-declared-from-base"
+      ]
+    },
+    {
+      "name": "331-declared-replaces-builtin",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    is_gov=false\n    is_builtin \"$lp\" && is_gov=true\n    if ! $is_gov && is_declared \"$lp\"; then\n      is_gov=true\n    fi\n",
+          "to": "    is_gov=false\n    if [ -n \"$gp_globs\" ]; then\n      is_declared \"$lp\" && is_gov=true\n    else\n      is_builtin \"$lp\" && is_gov=true\n    fi\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-declared-globs",
+        "gov-declared-from-base"
+      ]
+    },
+    {
+      "name": "331-read-head",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  if git cat-file -e \"$base:CLAUDE.md\" 2>/dev/null; then\n    local claude_content\n    claude_content=\"$(git cat-file blob \"$base:CLAUDE.md\" 2>&1)\" || \\\n",
+          "to": "  if git cat-file -e \"$head:CLAUDE.md\" 2>/dev/null; then\n    local claude_content\n    claude_content=\"$(git cat-file blob \"$head:CLAUDE.md\" 2>&1)\" || \\\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-declared-from-base"
+      ]
+    },
+    {
+      "name": "331-negation-accepted",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    case \"$trimmed\" in\n      '#'*) continue ;;\n      '!'*) gp_state=\"malformed\"; gp_reason=\"negation\"; return 0 ;;\n      /*|./*) gp_state=\"malformed\"; gp_reason=\"leading-slash\"; return 0 ;;\n    esac\n",
+          "to": "    case \"$trimmed\" in\n      '#'*) continue ;;\n      /*|./*) gp_state=\"malformed\"; gp_reason=\"leading-slash\"; return 0 ;;\n    esac\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-section-negation"
+      ]
+    },
+    {
+      "name": "331-leading-slash",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    case \"$trimmed\" in\n      '#'*) continue ;;\n      '!'*) gp_state=\"malformed\"; gp_reason=\"negation\"; return 0 ;;\n      /*|./*) gp_state=\"malformed\"; gp_reason=\"leading-slash\"; return 0 ;;\n    esac\n",
+          "to": "    case \"$trimmed\" in\n      '#'*) continue ;;\n      '!'*) gp_state=\"malformed\"; gp_reason=\"negation\"; return 0 ;;\n    esac\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-doctor-leading-slash"
+      ]
+    },
+    {
+      "name": "331-comment-skip",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    case \"$trimmed\" in\n      '#'*) continue ;;\n      '!'*) gp_state=\"malformed\"; gp_reason=\"negation\"; return 0 ;;\n      /*|./*) gp_state=\"malformed\"; gp_reason=\"leading-slash\"; return 0 ;;\n    esac\n",
+          "to": "    case \"$trimmed\" in\n      '!'*) gp_state=\"malformed\"; gp_reason=\"negation\"; return 0 ;;\n      /*|./*) gp_state=\"malformed\"; gp_reason=\"leading-slash\"; return 0 ;;\n    esac\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-doctor-declared",
+        "gov-doctor-empty"
+      ]
+    },
+    {
+      "name": "331-no-fence-reason",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  case \"$fence_status\" in\n    NOFENCE) gp_state=\"malformed\"; gp_reason=\"no-fence\"; return 0 ;;\n    UNTERMINATED) gp_state=\"malformed\"; gp_reason=\"unterminated-fence\"; return 0 ;;\n  esac\n",
+          "to": "  case \"$fence_status\" in\n    UNTERMINATED) gp_state=\"malformed\"; gp_reason=\"unterminated-fence\"; return 0 ;;\n  esac\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-section-no-fence"
+      ]
+    },
+    {
+      "name": "331-unterminated",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  case \"$fence_status\" in\n    NOFENCE) gp_state=\"malformed\"; gp_reason=\"no-fence\"; return 0 ;;\n    UNTERMINATED) gp_state=\"malformed\"; gp_reason=\"unterminated-fence\"; return 0 ;;\n  esac\n",
+          "to": "  case \"$fence_status\" in\n    NOFENCE) gp_state=\"malformed\"; gp_reason=\"no-fence\"; return 0 ;;\n  esac\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-doctor-unterminated"
+      ]
+    },
+    {
+      "name": "331-empty-list",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  if [ \"$n\" -eq 0 ]; then\n    gp_state=\"malformed\"\n    gp_reason=\"no-globs\"\n    return 0\n  fi\n  gp_state=\"declared\"\n  gp_globs=\"$globs\"\n  gp_count=\"$n\"\n  return 0\n",
+          "to": "  gp_state=\"declared\"\n  gp_globs=\"$globs\"\n  gp_count=\"$n\"\n  return 0\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-doctor-empty"
+      ]
+    },
+    {
+      "name": "331-empty-diff",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  [ \"$total_count\" -gt 0 ] || error_out \"git diff printed no paths\" 1\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "gov-empty-diff"
+      ]
+    },
+    {
+      "name": "331-hex-args",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  is_hex \"$base\" && is_hex \"$head\" || \\\n    error_out \"usage: governance-paths.sh <base-sha> <head-oid> (each exactly 40 or 64 lowercase hex characters)\" 2\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "gov-bad-args"
+      ]
+    },
+    {
+      "name": "331-git-error",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  [ \"$diff_rc\" -eq 0 ] || error_out \"git diff failed: $diff_err\" 1\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "gov-missing-object"
+      ]
+    },
+    {
+      "name": "331-control-char",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    case \"$p\" in\n      *[[:cntrl:]]*) error_out \"a changed path contains a control character\" 1 ;;\n    esac\n",
+          "to": "    case \"$p\" in\n    esac\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-control-char-path"
+      ]
+    },
+    {
+      "name": "331-absent-is-error",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  if git cat-file -e \"$base:CLAUDE.md\" 2>/dev/null; then\n    local claude_content\n    claude_content=\"$(git cat-file blob \"$base:CLAUDE.md\" 2>&1)\" || \\\n      error_out \"could not read CLAUDE.md at $base: $claude_content\" 1\n    parse_section <<<\"$claude_content\"\n    if [ \"$gp_state\" = \"malformed\" ]; then\n      error_out \"malformed 'Governance paths' section at $base: $gp_reason\" 1\n    fi\n  fi\n",
+          "to": "  if git cat-file -e \"$base:CLAUDE.md\" 2>/dev/null; then\n    local claude_content\n    claude_content=\"$(git cat-file blob \"$base:CLAUDE.md\" 2>&1)\" || \\\n      error_out \"could not read CLAUDE.md at $base: $claude_content\" 1\n    parse_section <<<\"$claude_content\"\n    if [ \"$gp_state\" = \"malformed\" ]; then\n      error_out \"malformed 'Governance paths' section at $base: $gp_reason\" 1\n    fi\n  else\n    error_out \"no CLAUDE.md at $base\" 1\n  fi\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-base-no-claude-md",
+        "gov-builtin-rules",
+        "gov-case-varied-claude-dir",
+        "gov-diff-relative",
+        "gov-empty-diff",
+        "gov-github-renamed",
+        "gov-lessons-only",
+        "gov-lessons-plus-other",
+        "gov-missing-object"
+      ]
+    },
+    {
+      "name": "331-doctor-malformed-pass",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "        wrn \"governance paths: 'Governance paths' section is malformed (${gov_out#malformed }) — every PR is held until this is fixed (README's CLAUDE.md contract, item 10)\" ;;\n",
+          "to": "        ok \"governance paths: 'Governance paths' section is malformed (${gov_out#malformed }) — every PR is held until this is fixed (README's CLAUDE.md contract, item 10)\" ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-doctor-empty",
+        "gov-doctor-unterminated",
+        "gov-doctor-leading-slash"
+      ]
+    },
+    {
+      "name": "331-doctor-script-missing",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  else\n    wrn \"governance paths: could not validate\"\n  fi\nfi\n",
+          "to": "  fi\nfi\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-doctor-script-missing"
+      ]
+    },
+    {
+      "name": "331-none-verdict",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  if [ \"$gov_count\" -eq 0 ]; then\n    verdict=\"none\"\n",
+          "to": "  if [ \"$gov_count\" -eq 0 ]; then\n    verdict=\"hold\"\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-base-no-claude-md",
+        "gov-none"
+      ]
+    },
+    {
+      "name": "331-doctor-absent-pass",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "      absent)\n        ok \"governance paths: none declared\" ;;\n",
+          "to": "      absent)\n        wrn \"governance paths: could not validate\" ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "gov-doctor-absent"
+      ]
+    },
+    {
+      "name": "331-hex-64",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "    40|64) return 0 ;;",
+          "to": "    40) return 0 ;;"
+        }
+      ],
+      "expect_fail": [
+        "gov-sha256-arg"
+      ]
+    },
+    {
+      "name": "331-glob-anchor",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "      */*)\n        case \"$lp\" in\n          $pat) return 0 ;;",
+          "to": "      */*)\n        case \"$lp\" in\n          *$pat) return 0 ;;"
+        }
+      ],
+      "expect_fail": [
+        "gov-declared-globs"
+      ]
+    },
+    {
+      "name": "331-check-unreadable",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  [ -f \"$file\" ] && [ -r \"$file\" ] || exit 2",
+          "to": "  [ -f \"$file\" ] && [ -r \"$file\" ] || { echo absent; exit 0; }"
+        }
+      ],
+      "expect_fail": [
+        "gov-check-unreadable"
+      ]
+    },
+    {
+      "name": "331-toplevel-cd",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "  cd \"$toplevel\" 2>/dev/null || error_out",
+          "to": "  true \"$toplevel\" 2>/dev/null || error_out"
+        }
+      ],
+      "expect_fail": [
+        "gov-diff-relative"
+      ]
+    },
+    {
+      "name": "331-unbuffered",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "gov-",
+      "edits": [
+        {
+          "from": "      paths_out=\"${paths_out}changed: ${p}\n\"\n    fi\n  done",
+          "to": "      echo \"changed: ${p}\"\n    fi\n  done"
+        }
+      ],
+      "expect_fail": [
+        "gov-control-char-path"
+      ]
     }
   ]
 }

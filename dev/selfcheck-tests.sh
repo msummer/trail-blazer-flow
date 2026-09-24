@@ -395,10 +395,11 @@ p_4_41_extraction() { edit "$1/bin/find-planning-work.sh" 's/\$planC/\$plnC/g'; 
 # that file (the header prose spells this shape "-wt-<n>", never the bracket form).
 p_4_42_extraction() { edit "$1/hooks/git-c-guard.sh" 's/PATH_ERE/PATH_RE/g'; }
 p_4_42_drift()      { edit "$1/hooks/push-guard.sh" 's/-wt-\[0-9\]/-wt-[0-8]/'; }
-# p_4_43_norenames (#324) — delete characters from inside the flag (' --no-renames', not a suffix
-# appended to it — LESSON 2026-09-04b) so the gate's fixed-string extraction of the governance
-# path list's Bash call comes back empty.
-p_4_43_norenames() { edit "$1/skills/issue-cycle/SKILL.md" 's/ --no-renames//'; }
+# p_4_43_scriptname (#331, folds in #324) — delete a character from inside the script name
+# ('governance-paths.sh' -> 'governancepaths.sh', characters removed, not a suffix appended —
+# LESSON 2026-09-04b) so the gate's fixed-string count of the governance path list's Bash call
+# comes back empty.
+p_4_43_scriptname() { edit "$1/skills/issue-cycle/SKILL.md" 's/governance-paths\.sh </governancepaths.sh </'; }
 # p_4_44 (#308) — append a line applying no-auto-approve via --label to bin/harness-status.sh
 # (the append helper p_1_1/p_1_7 already use, proving an append there trips nothing else besides
 # what it's meant to), so assertion 4.44 clause (a)'s ERE scan finds a match in bin/*.sh.
@@ -907,7 +908,7 @@ cases=(
   "4.41-extraction|4.41|p_4_41_extraction|rename the \$planC binding in bin/find-planning-work.sh so the gate's extraction comes back empty -- measured: \"4.41 bin/find-planning-work.sh's or bin/find-implementation-work.sh's '... as \$planC' line didn't match (structure changed) — extraction failed\""
   "4.42-extraction|4.42|p_4_42_extraction|rename hooks/git-c-guard.sh's PATH_ERE identifier to PATH_RE (both declaration and use, characters changed inside the token) so the gate's anchored extraction comes back empty -- measured: \"4.42 hooks/git-c-guard.sh's or hooks/push-guard.sh's PATH_ERE='...' line didn't match (structure changed) — extraction failed\""
   "4.42-drift|4.42|p_4_42_drift|alter one character inside hooks/push-guard.sh's own PATH_ERE value (the digit class [0-9] -> [0-8]), so it no longer agrees with hooks/git-c-guard.sh's -- measured: \"4.42 PATH_ERE predicate disagrees: hooks/git-c-guard.sh has '^([A-Za-z]:/|/|\\.\\./)([A-Za-z0-9._ +-]+/)*[A-Za-z0-9._+-]+-wt-[0-9]+/?\$', hooks/push-guard.sh has '^([A-Za-z]:/|/|\\.\\./)([A-Za-z0-9._ +-]+/)*[A-Za-z0-9._+-]+-wt-[0-8]+/?\$'\""
-  "4.43-norenames|4.43|p_4_43_norenames|delete ' --no-renames' (characters removed, not a suffix appended) from skills/issue-cycle/SKILL.md's governance-path-list command line, so the gate's fixed-string extraction of 'git diff --no-renames --name-only' comes back empty -- measured: \"4.43 skills/issue-cycle/SKILL.md: expected exactly one 'git diff --no-renames --name-only' line, found 0\""
+  "4.43-scriptname|4.43|p_4_43_scriptname|delete the hyphen from 'governance-paths.sh' (a character removed, not a suffix appended) in skills/issue-cycle/SKILL.md's governance-path-list command line, so the gate's fixed-string count of 'governance-paths.sh <paste the base tip here> <paste the head OID here>' comes back empty -- measured: \"4.43 skills/issue-cycle/SKILL.md: expected exactly one 'governance-paths.sh <paste the base tip here> <paste the head OID here>' line, found 0\""
   "4.44|4.44|p_4_44|append a line applying no-auto-approve via --label to bin/harness-status.sh -- measured failing set: {4.44} (70 pass, 1 fail)"
   "5.14-reasons-unread|5.14|p_5_14_reasons_unread|rename degraded_reasons -> degraded_raesons throughout bin/reconcile-ledger.sh (characters swapped, not a suffix) so the script's own read targets a key no fixture sets -- measured: c1, c2, c3, c4, c6, c8, c9, c10, and c11 all collapse to the same 'unspecified' line, and c7 goes silent/rc=0 instead of dying (see the perturbation function's own comment above for the full mechanism)"
   "5.14-status-filter|5.14|p_5_14_status_filter|rewrite the \"status.\" exclusion literal to \"stat_us.\" inside bin/reconcile-ledger.sh's own jq program (characters changed inside the token) so a genuine status.<key> reason no longer matches the exclusion -- measured: c3 (status.-only reasons no longer stay silent) and c4 (both reasons refuse instead of only the planning one) fail"

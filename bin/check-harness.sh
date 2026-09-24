@@ -45,7 +45,12 @@
 # when merge autonomy is effectively active (a declared "Merge autonomy policy" section, or an
 # "Autonomy mode" section's implied merge autonomy) and the protection endpoint call succeeds,
 # whether required_status_checks.strict is true, the number of required status check contexts,
-# and whether required PR reviews are configured (#234 — all three WARN-only, never FAIL).
+# and whether required PR reviews are configured (#234 — all three WARN-only, never FAIL), and
+# (#331, folds in #330) whether an optional "Governance paths" section — read by the merge floor's
+# own governance-path classifier, bin/governance-paths.sh, run here by a FIXED path (same
+# precedent as bin/harness-version.sh) via its `--check` mode — is absent, declared (naming the
+# glob count), or malformed (naming the reason token); never FAILs, and never runs the classifier
+# against anything but this repo's own CLAUDE.md.
 #
 # The test-suite-ratchet check never executes, evals, or shells out to anything read from
 # CLAUDE.md: it only looks up the measurement command's first word with `command -v` (a lookup,
@@ -298,7 +303,7 @@ if [ -f "$root/CLAUDE.md" ]; then
   cm_lines="$(wc -l < "$root/CLAUDE.md" | tr -d '[:space:]')"
   cm_bytes="$(wc -c < "$root/CLAUDE.md" | tr -d '[:space:]')"
   if [ "$cm_lines" -gt 300 ] || [ "$cm_bytes" -gt 20000 ]; then
-    wrn "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes — over the 300-line/20000-byte guideline; run the harness-setup skill's leanness audit to trim restatement (directory tours, framework defaults, formatter-enforced style — not the contract's nine items themselves)"
+    wrn "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes — over the 300-line/20000-byte guideline; run the harness-setup skill's leanness audit to trim restatement (directory tours, framework defaults, formatter-enforced style — not the contract's ten items themselves)"
   else
     ok "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes"
   fi
@@ -1036,6 +1041,33 @@ EOF
         wrn "scoped autonomy: grant label '$scoped_grant_label' existence unknown (gh not ready)"
       fi
     fi
+  fi
+
+  # --- governance paths (#331, folds in #330) --- validates the optional "Governance paths"
+  # section (README item 10) that the merge floor's governance-path classifier,
+  # bin/governance-paths.sh, reads from a repo's base-tip CLAUDE.md. Run here by a FIXED path,
+  # $script_dir/governance-paths.sh --check "$root/CLAUDE.md" — same precedent as
+  # bin/harness-version.sh above (#233) — never a path derived from repo content, and never
+  # against anything but THIS repo's own CLAUDE.md (never the classifier's floor mode, never a
+  # git object). Missing, non-executable, a non-zero exit, or any stdout shape but the three the
+  # script documents (absent / declared <n> / malformed <token>) is the same "could not validate"
+  # WARN, never a FAIL — this doctor never blocks a run on this, matching the ratchet and
+  # post-merge-verification declaration checks above.
+  gov_script="$script_dir/governance-paths.sh"
+  gov_out=""
+  if [ -x "$gov_script" ] && gov_out="$("$gov_script" --check "$root/CLAUDE.md" 2>/dev/null)"; then
+    case "$gov_out" in
+      absent)
+        ok "governance paths: none declared" ;;
+      declared\ *)
+        ok "governance paths: ${gov_out#declared } declared glob(s)" ;;
+      malformed\ *)
+        wrn "governance paths: 'Governance paths' section is malformed (${gov_out#malformed }) — every PR is held until this is fixed (README's CLAUDE.md contract, item 10)" ;;
+      *)
+        wrn "governance paths: could not validate" ;;
+    esac
+  else
+    wrn "governance paths: could not validate"
   fi
 fi
 

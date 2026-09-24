@@ -62,7 +62,16 @@
 # implied widening of merge autonomy above, and, only in autonomous mode, an informational
 # permissions.defaultMode PASS reporting a validated bare word (or "(unset)"/"(unrecognised
 # value)") per settings file read — never an allow/deny entry, from any of the three files,
-# including the user-level one.
+# including the user-level one, and (#331, folds in #330) bin/governance-paths.sh — the merge
+# floor's governance-path classifier — run directly in both its floor mode (base/head object ids)
+# and its --check mode (a CLAUDE.md's "Governance paths" section), pinning the built-in rules,
+# --no-renames, the declared-glob grammar (only the first fenced block, comment/blank lines
+# skipped, case-insensitive, final-segment vs whole-path matching, trailing-slash-means-beneath),
+# the add-only OR of built-in and declared, the base-tip-only read, the lessons-only exact-set
+# compare, every malformed reason token, and every fail-closed error path (bad arguments before
+# any git call, a git failure, an empty diff, a control-character path) — plus the doctor's own
+# validation-only wrapper around it (PASS none/declared <n>, WARN malformed/could not validate,
+# never FAIL).
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -180,6 +189,8 @@ mk_repo() {
   chmod +x "$dir/bin/check-decision-record.sh"
   cp "$root/bin/harness-version.sh" "$dir/bin/harness-version.sh"
   chmod +x "$dir/bin/harness-version.sh"
+  cp "$root/bin/governance-paths.sh" "$dir/bin/governance-paths.sh"
+  chmod +x "$dir/bin/governance-paths.sh"
   mkdir -p "$dir/.claude-plugin"
   cp "$root/.claude-plugin/plugin.json" "$dir/.claude-plugin/plugin.json"
   cp "$root/templates/repo-settings.json" "$dir/templates/repo-settings.json"
@@ -351,6 +362,50 @@ mode: manual
 ```
 EOF
         ;;
+      gov-declared)
+        # (#331) a well-formed "Governance paths" section: three globs, a '#'-prefixed comment
+        # line between two of them (must not be counted).
+        cat <<'EOF'
+
+## Governance paths
+```
+docs/policies/
+# CI and bots
+Jenkinsfile
+.gitlab-ci.yml
+```
+EOF
+        ;;
+      gov-empty)
+        # (#331) a fenced block with no globs at all (blank lines and a comment only) -> no-globs.
+        cat <<'EOF'
+
+## Governance paths
+```
+# nothing declared here yet
+
+```
+EOF
+        ;;
+      gov-unterminated)
+        # (#331) an opening fence that is never closed -> unterminated-fence.
+        cat <<'EOF'
+
+## Governance paths
+```
+Jenkinsfile
+EOF
+        ;;
+      gov-leading-slash)
+        # (#331) a glob starting '/' -> leading-slash.
+        cat <<'EOF'
+
+## Governance paths
+```
+/Jenkinsfile
+```
+EOF
+        ;;
     esac
   } > "$dir/CLAUDE.md"
   [ "$mode" = missing ] || write_settings "$dir" "$mode"
@@ -383,6 +438,32 @@ seed_commit() {
 point_origin_ref() {
   local dir="$1" sha="$2"
   (cd "$dir" && git update-ref refs/remotes/origin/main "$sha")
+}
+
+# mk_gov_repo NAME (#331) — a bare fixture git repo for bin/governance-paths.sh's floor-mode
+# cases, under $tmpbase/NAME: no doctor/settings/CLAUDE.md boilerplate (unlike mk_repo above) —
+# each gov-* case writes its own CLAUDE.md and other fixture files directly, then commits with
+# gov_commit below. Same local-identity idiom as seed_commit. Prints the fixture path.
+mk_gov_repo() {
+  local name="$1" dir="$tmpbase/$name"
+  mkdir -p "$dir"
+  (
+    cd "$dir" &&
+    git init -q &&
+    git config user.name "doctor-tests" &&
+    git config user.email "doctor-tests@example.invalid" &&
+    git config commit.gpgsign false &&
+    git symbolic-ref HEAD refs/heads/main
+  ) >/dev/null
+  printf '%s' "$dir"
+}
+
+# gov_commit DIR (#331) — stages everything under DIR and commits; prints the new HEAD SHA. May be
+# called more than once per fixture to build a short history (same pattern as seed_commit).
+gov_commit() {
+  local dir="$1"
+  (cd "$dir" && git add -A && git commit -q -m "fixture commit") >/dev/null
+  (cd "$dir" && git rev-parse HEAD)
 }
 
 # write_baseline DIR SHA_TEXT — writes DIR/.claude/BASELINE.md in harness-setup's documented
@@ -511,6 +592,32 @@ ERR: $version_err"
   doctor_rc=$version_rc
 }
 
+# run_gov DIR ARGS… (#331) — same never-a-command-substitution idiom as run_doctor/
+# run_version_script, running bin/governance-paths.sh FROM THIS CHECKOUT (never a fixture copy —
+# these fixtures are plain git repos, not doctor fixtures, and the script never writes anywhere)
+# with cwd = DIR and HOME/XDG_CONFIG_HOME pointed into DIR (so a developer's real global git
+# config can never leak into a verdict) and GIT_CONFIG_NOSYSTEM=1. Captures stdout/stderr to
+# SEPARATE files, same rationale as run_version_script (a capture that merges both streams cannot
+# pin a criterion that names a stream), leaving $gov_out/$gov_err/$gov_rc set as globals, and
+# copies a merged view into $doctor_out/$doctor_rc so a failing gov-* case's captured output still
+# reaches the generic runner loop's diagnostics dump below.
+gov_out=""
+gov_err=""
+gov_rc=0
+run_gov() {
+  local dir="$1" outfile errfile
+  shift
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  (cd "$dir" && HOME="$dir/home" XDG_CONFIG_HOME="$dir/home/.config" GIT_CONFIG_NOSYSTEM=1 "$bash_bin" "$root/bin/governance-paths.sh" "$@") >"$outfile" 2>"$errfile"
+  gov_rc=$?
+  gov_out="$(cat "$outfile")"
+  gov_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $gov_out
+ERR: $gov_err"
+  doctor_rc=$gov_rc
+}
+
 # needle_required NAME NEEDLE (#262) — guards every needle-taking helper below: an empty NEEDLE
 # degenerates `grep -qF -- ""` into an unconditional match (expect "" always passes,
 # expect_absent "" always fails, regardless of $doctor_out), so treat an empty needle as a harness
@@ -552,6 +659,32 @@ expect_rc() {
 }
 expect_no_file() {
   [ ! -e "$1" ] || { __ok=0; __why="${__why}unexpected file present: $1\n"; }
+}
+
+# expect_gov_out/expect_gov_out_absent/expect_gov_err/expect_gov_last (#331) — same idiom as
+# expect/expect_absent above, but against $gov_out/$gov_err specifically (run_gov's own captures)
+# rather than the merged $doctor_out, so a floor-mode case can pin a claim about one stream without
+# the other stream's content being able to satisfy it by coincidence. All four are guarded by
+# needle_required (#262). expect_gov_last additionally asserts the needle is $gov_out's LAST line
+# exactly — the floor mode's own contract (this file's header: "the last stdout line is always
+# exactly one verdict=<token>").
+expect_gov_out() {
+  needle_required expect_gov_out "$1" || return 0
+  grep -qF -- "$1" <<<"$gov_out" || { __ok=0; __why="${__why}missing (stdout): $1\n"; }
+}
+expect_gov_out_absent() {
+  needle_required expect_gov_out_absent "$1" || return 0
+  grep -qF -- "$1" <<<"$gov_out" && { __ok=0; __why="${__why}unexpected (stdout): $1\n"; }
+}
+expect_gov_err() {
+  needle_required expect_gov_err "$1" || return 0
+  grep -qF -- "$1" <<<"$gov_err" || { __ok=0; __why="${__why}missing (stderr): $1\n"; }
+}
+expect_gov_last() {
+  needle_required expect_gov_last "$1" || return 0
+  local last
+  last="$(printf '%s\n' "$gov_out" | tail -1)"
+  [ "$last" = "$1" ] || { __ok=0; __why="${__why}last stdout line: expected '$1', got '$last'\n"; }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1966,6 +2099,443 @@ case_autonomy_mode_default_mode() {
   expect_absent "not a mode!"
 }
 
+# --- governance paths (#331, folds in #330) -----------------------------------------------------
+# Mutation proof lives in dev/mutants/doctor-tests.json (suite dev/doctor-tests.sh, filter
+# "gov-"), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
+# mutant:331-no-renames — drops --no-renames from the floor mode's own git diff call, so a rename
+#   disappears instead of printing both its old and new path.
+# mutant:331-case-fold — classifies the unlowered path, so case-insensitive matching breaks.
+# mutant:331-seg-claude, mutant:331-seg-github, mutant:331-seg-adr, mutant:331-seg-adrs — each
+#   removes one built-in path-segment alternative from is_builtin.
+# mutant:331-final-claude-md, mutant:331-final-action-yml, mutant:331-final-action-yaml — each
+#   removes one built-in final-segment alternative from is_builtin.
+# mutant:331-seg-substring — widens */adr/* to *adr*, so a near-miss like src/adr-notes/x.txt
+#   wrongly becomes governance.
+# mutant:331-lessons-exact-case — folds both sides of the lessons-only comparison to lowercase,
+#   so a case-varied .Claude/LESSONS.md wrongly qualifies for lessons-only.
+# mutant:331-lessons-sole — treats ANY governance set containing .claude/LESSONS.md as
+#   lessons-only, dropping the "exactly one path" requirement.
+# mutant:331-declared-ignored — skips the declared-glob matcher entirely.
+# mutant:331-declared-replaces-builtin — runs the declared matcher INSTEAD of the built-in one
+#   whenever any glob is declared, rather than OR'ing the two.
+# mutant:331-read-head — reads $head:CLAUDE.md instead of $base:CLAUDE.md for the declared
+#   section, so a PR can loosen (or lose) the rule it's held against.
+# mutant:331-negation-accepted — deletes the '!'-prefixed-line malformed check.
+# mutant:331-no-fence-reason — deletes the no-fence malformed check.
+# mutant:331-unterminated — deletes the unterminated-fence malformed check.
+# mutant:331-empty-list — deletes the no-globs malformed check.
+# mutant:331-leading-slash — deletes the leading-slash malformed check.
+# mutant:331-comment-skip — stops skipping '#'-prefixed lines inside the fenced block.
+# mutant:331-empty-diff — deletes the zero-paths error, so an empty diff silently reports
+#   verdict=none instead of erroring.
+# mutant:331-hex-args — deletes the hex-format argument validation inside run_floor.
+# mutant:331-git-error — ignores git diff's own exit status.
+# mutant:331-control-char — deletes the control-character path check.
+# mutant:331-absent-is-error — treats a base tip with no CLAUDE.md at all as an error, instead of
+#   "only the built-in rules apply".
+# mutant:331-doctor-malformed-pass — maps the doctor's malformed verdict to `ok` (PASS) instead of
+#   `wrn` (WARN) in bin/check-harness.sh.
+# mutant:331-doctor-script-missing — deletes the doctor's "could not validate" fallback WARN when
+#   bin/governance-paths.sh is missing or unrunnable.
+# mutant:331-none-verdict — reports verdict=hold instead of verdict=none when the governance set
+#   is empty.
+# mutant:331-doctor-absent-pass — reports the doctor's "none declared" PASS as a WARN instead.
+# mutant:331-hex-64 — accepts 40-hex arguments only, so a 64-hex (SHA-256) base gets the usage error.
+# mutant:331-glob-anchor — unanchors a declared glob containing '/', so x/infra/net/main.tf matches
+#   infra/*.tf.
+# mutant:331-check-unreadable — makes --check print "absent" for a missing file instead of exiting 2.
+# mutant:331-toplevel-cd — drops the cd to the repo toplevel, so diff.relative hides paths outside
+#   the caller's subdirectory.
+# mutant:331-unbuffered — prints each governance:/changed: line as it is classified, so an error
+#   after the first path leaves a path line ahead of verdict=error.
+
+# Floor-mode fixtures (bin/governance-paths.sh run directly via run_gov, on mk_gov_repo fixtures).
+
+case_gov_none() {
+  local dir base head
+  dir="$(mk_gov_repo gov-none)"
+  printf '# CLAUDE.md\n\n## Verification\nRun `true`.\n' > "$dir/CLAUDE.md"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/src"
+  printf 'x\n' > "$dir/src/app.txt"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 0
+  expect_gov_out "changed: src/app.txt"
+  expect_gov_out_absent "governance:"
+  expect_gov_last "verdict=none"
+  [ -z "$gov_err" ] || { __ok=0; __why="${__why}stderr: expected empty, got '$gov_err'\n"; }
+}
+
+case_gov_builtin_rules() {
+  local dir base head
+  dir="$(mk_gov_repo gov-builtin-rules)"
+  printf 'seed\n' > "$dir/seed.txt"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/.github" "$dir/.claude" "$dir/docs/adr" "$dir/adrs" "$dir/pkg/sub" \
+    "$dir/tools/a" "$dir/tools/b" "$dir/src/adr-notes" "$dir/notes" "$dir/pkg/my.github"
+  printf 'x\n' > "$dir/.github/dependabot.yml"
+  printf 'x\n' > "$dir/.claude/settings.json"
+  printf 'x\n' > "$dir/docs/adr/0001-x.md"
+  printf 'x\n' > "$dir/adrs/0002-y.md"
+  printf 'x\n' > "$dir/pkg/sub/CLAUDE.md"
+  printf 'x\n' > "$dir/tools/a/action.yml"
+  printf 'x\n' > "$dir/tools/b/Action.YAML"
+  printf 'x\n' > "$dir/src/adr-notes/x.txt"
+  printf 'x\n' > "$dir/notes/claude.md.txt"
+  printf 'x\n' > "$dir/pkg/my.github/x.txt"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 0
+  expect_gov_out "governance: .github/dependabot.yml"
+  expect_gov_out "governance: .claude/settings.json"
+  expect_gov_out "governance: docs/adr/0001-x.md"
+  expect_gov_out "governance: adrs/0002-y.md"
+  expect_gov_out "governance: pkg/sub/CLAUDE.md"
+  expect_gov_out "governance: tools/a/action.yml"
+  expect_gov_out "governance: tools/b/Action.YAML"
+  expect_gov_out "changed: src/adr-notes/x.txt"
+  expect_gov_out "changed: notes/claude.md.txt"
+  expect_gov_out "changed: pkg/my.github/x.txt"
+  expect_gov_out_absent "governance: src/adr-notes/x.txt"
+  expect_gov_out_absent "governance: notes/claude.md.txt"
+  expect_gov_out_absent "governance: pkg/my.github/x.txt"
+  expect_gov_last "verdict=hold"
+}
+
+case_gov_github_renamed() {
+  local dir base head
+  dir="$(mk_gov_repo gov-github-renamed)"
+  (cd "$dir" && git config diff.renames true) >/dev/null
+  mkdir -p "$dir/.github/workflows"
+  printf 'name: ci\nfiller filler filler filler filler filler filler filler filler filler\n' \
+    > "$dir/.github/workflows/ci.yml"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/ci"
+  (cd "$dir" && git mv .github/workflows/ci.yml ci/pipeline.yml) >/dev/null
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 0
+  expect_gov_out "governance: .github/workflows/ci.yml"
+  expect_gov_out "changed: ci/pipeline.yml"
+  expect_gov_last "verdict=hold"
+}
+
+case_gov_case_varied_claude_dir() {
+  local dir base head
+  dir="$(mk_gov_repo gov-case-varied-claude-dir)"
+  printf 'seed\n' > "$dir/seed.txt"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/.Claude"
+  printf 'x\n' > "$dir/.Claude/LESSONS.md"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 0
+  expect_gov_out "governance: .Claude/LESSONS.md"
+  expect_gov_last "verdict=hold"
+}
+
+case_gov_lessons_only() {
+  local dir base head
+  dir="$(mk_gov_repo gov-lessons-only)"
+  mkdir -p "$dir/.claude"
+  printf 'line1\n' > "$dir/.claude/LESSONS.md"
+  base="$(gov_commit "$dir")"
+  printf 'line2\n' >> "$dir/.claude/LESSONS.md"
+  mkdir -p "$dir/src"
+  printf 'x\n' > "$dir/src/app.txt"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 0
+  expect_gov_out "governance: .claude/LESSONS.md"
+  expect_gov_out "changed: src/app.txt"
+  expect_gov_last "verdict=lessons-only"
+}
+
+case_gov_lessons_plus_other() {
+  local dir base head
+  dir="$(mk_gov_repo gov-lessons-plus-other)"
+  mkdir -p "$dir/.claude"
+  printf 'line1\n' > "$dir/.claude/LESSONS.md"
+  base="$(gov_commit "$dir")"
+  printf 'line2\n' >> "$dir/.claude/LESSONS.md"
+  mkdir -p "$dir/.github"
+  printf 'x\n' > "$dir/.github/CODEOWNERS"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 0
+  expect_gov_out "governance: .claude/LESSONS.md"
+  expect_gov_out "governance: .github/CODEOWNERS"
+  expect_gov_last "verdict=hold"
+}
+
+case_gov_declared_globs() {
+  local dir base head
+  dir="$(mk_gov_repo gov-declared-globs)"
+  cat > "$dir/CLAUDE.md" <<'EOF'
+# CLAUDE.md
+
+## Governance paths
+```
+docs/policies/
+# CI and bots
+Jenkinsfile
+.gitlab-ci.yml
+infra/*.tf
+```
+EOF
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/docs/policies/sec" "$dir/ci" "$dir/infra/net" "$dir/.github/workflows"
+  printf 'x\n' > "$dir/docs/policies/sec/p.md"
+  printf 'x\n' > "$dir/ci/Jenkinsfile"
+  printf 'x\n' > "$dir/.GitLab-CI.yml"
+  printf 'x\n' > "$dir/infra/net/main.tf"
+  printf 'x\n' > "$dir/.github/workflows/ci.yml"
+  printf 'x\n' > "$dir/docs/policy.md"
+  printf 'x\n' > "$dir/Jenkinsfile.bak"
+  mkdir -p "$dir/x/infra/net" "$dir/sub/docs/policies"
+  printf 'x\n' > "$dir/x/infra/net/main.tf"
+  printf 'x\n' > "$dir/sub/docs/policies/p.md"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 0
+  expect_gov_out "governance: docs/policies/sec/p.md"
+  expect_gov_out "governance: ci/Jenkinsfile"
+  expect_gov_out "governance: .GitLab-CI.yml"
+  expect_gov_out "governance: infra/net/main.tf"
+  expect_gov_out "governance: .github/workflows/ci.yml"
+  expect_gov_out "changed: docs/policy.md"
+  expect_gov_out "changed: Jenkinsfile.bak"
+  expect_gov_out "changed: x/infra/net/main.tf"
+  expect_gov_out "changed: sub/docs/policies/p.md"
+  expect_gov_last "verdict=hold"
+}
+
+case_gov_declared_from_base() {
+  local dir base head
+  dir="$(mk_gov_repo gov-declared-from-base)"
+  cat > "$dir/CLAUDE.md" <<'EOF'
+# CLAUDE.md
+
+## Governance paths
+```
+ops/
+```
+EOF
+  base="$(gov_commit "$dir")"
+  rm "$dir/CLAUDE.md"
+  mkdir -p "$dir/ops"
+  printf 'x\n' > "$dir/ops/deploy.sh"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 0
+  expect_gov_out "governance: ops/deploy.sh"
+  expect_gov_out "governance: CLAUDE.md"
+  expect_gov_last "verdict=hold"
+}
+
+case_gov_section_negation() {
+  local dir base head
+  dir="$(mk_gov_repo gov-section-negation)"
+  cat > "$dir/CLAUDE.md" <<'EOF'
+# CLAUDE.md
+
+## Governance paths
+```
+!.github/**
+docs/
+```
+EOF
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/src"
+  printf 'x\n' > "$dir/src/app.txt"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_err "negation"
+  expect_gov_out_absent "changed:"
+}
+
+case_gov_section_no_fence() {
+  local dir base head
+  dir="$(mk_gov_repo gov-section-no-fence)"
+  cat > "$dir/CLAUDE.md" <<'EOF'
+# CLAUDE.md
+
+## Governance paths
+
+Just prose, no fenced block at all.
+EOF
+  base="$(gov_commit "$dir")"
+  printf 'x\n' > "$dir/app.txt"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_err "no-fence"
+}
+
+case_gov_empty_diff() {
+  local dir base head
+  dir="$(mk_gov_repo gov-empty-diff)"
+  printf 'seed\n' > "$dir/seed.txt"
+  base="$(gov_commit "$dir")"
+  (cd "$dir" && git commit -q --allow-empty -m "empty") >/dev/null
+  head="$(cd "$dir" && git rev-parse HEAD)"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_err "no paths"
+}
+
+case_gov_bad_args() {
+  local dir base head
+  dir="$(mk_gov_repo gov-bad-args)"
+  printf 'seed\n' > "$dir/seed.txt"
+  base="$(gov_commit "$dir")"
+  printf 'x\n' > "$dir/app.txt"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "--output=$dir/leak.txt" "$head"
+  expect_rc 2
+  expect_gov_last "verdict=error"
+  expect_no_file "$dir/leak.txt"
+}
+
+case_gov_missing_object() {
+  local dir base fake_head
+  dir="$(mk_gov_repo gov-missing-object)"
+  printf 'seed\n' > "$dir/seed.txt"
+  base="$(gov_commit "$dir")"
+  # A well-formed-looking 40-hex value, derived from $base so it's guaranteed hex and (with
+  # overwhelming probability) not a real object in this fixture's tiny history.
+  fake_head="0${base%?}"
+  run_gov "$dir" "$base" "$fake_head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_err "git diff failed"
+}
+
+case_gov_control_char_path() {
+  local dir base head blob basetree newtree mktree_input
+  dir="$(mk_gov_repo gov-control-char-path)"
+  printf 'x\n' > "$dir/normal.txt"
+  base="$(gov_commit "$dir")"
+  blob="$(cd "$dir" && printf 'evil content\n' | git hash-object -w --stdin)"
+  basetree="$(cd "$dir" && git rev-parse "$base^{tree}")"
+  mktree_input="$(mktemp)"
+  # a.txt sorts before the newline path, so an unbuffered writer would already have printed its
+  # changed: line when the control-character check fires — that is what pins the buffering.
+  { (cd "$dir" && git ls-tree -z "$basetree"); printf '100644 blob %s\ta.txt\0' "$blob";
+    printf '100644 blob %s\tevil\nfile.txt\0' "$blob"; } \
+    > "$mktree_input"
+  newtree="$(cd "$dir" && git mktree -z < "$mktree_input")"
+  rm -f "$mktree_input"
+  head="$(cd "$dir" && git commit-tree "$newtree" -p "$base" -m "embedded newline path")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_out_absent "changed:"
+}
+
+case_gov_sha256_arg() {
+  local dir base head
+  dir="$(mk_gov_repo gov-sha256-arg)"
+  printf 'seed\n' > "$dir/seed.txt"
+  base="$(gov_commit "$dir")"
+  printf 'x\n' > "$dir/app.txt"
+  head="$(gov_commit "$dir")"
+  # A 64-hex base passes argument validation (rc 1, base not found), never the usage error (rc 2).
+  # Not "$base" plus zero padding: git reads a SHA-1 zero-padded to 64 hex as that SHA-1.
+  run_gov "$dir" "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" "$head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_err "base commit not found"
+}
+
+case_gov_diff_relative() {
+  local dir base head
+  dir="$(mk_gov_repo gov-diff-relative)"
+  mkdir -p "$dir/src" "$dir/.github"
+  printf 'seed\n' > "$dir/src/seed.txt"
+  base="$(gov_commit "$dir")"
+  printf 'x\n' > "$dir/src/app.txt"
+  printf 'x\n' > "$dir/.github/CODEOWNERS"
+  head="$(gov_commit "$dir")"
+  (cd "$dir" && git config diff.relative true)
+  # Run from src/ with diff.relative set: only the cd to the toplevel keeps .github/ in the list.
+  run_gov "$dir/src" "$base" "$head"
+  expect_rc 0
+  expect_gov_out "governance: .github/CODEOWNERS"
+  expect_gov_last "verdict=hold"
+}
+
+case_gov_check_unreadable() {
+  local dir
+  dir="$(mk_gov_repo gov-check-unreadable)"
+  run_gov "$dir" --check "$dir/no-such-CLAUDE.md"
+  expect_rc 2
+  [ -z "$gov_out" ] || { __ok=0; __why="${__why}stdout: expected empty, got '$gov_out'\n"; }
+}
+
+case_gov_base_no_claude_md() {
+  local dir base head
+  dir="$(mk_gov_repo gov-base-no-claude-md)"
+  printf 'seed\n' > "$dir/seed.txt"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/src"
+  printf 'x\n' > "$dir/src/app.txt"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 0
+  expect_gov_last "verdict=none"
+}
+
+# Doctor-mode fixtures (through run_doctor on mk_repo variants).
+
+case_gov_doctor_absent() {
+  local dir; dir="$(mk_repo gov-doctor-absent base verbatim)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "governance paths: none declared"
+}
+
+case_gov_doctor_declared() {
+  local dir; dir="$(mk_repo gov-doctor-declared gov-declared verbatim)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "governance paths: 3 declared glob(s)"
+}
+
+case_gov_doctor_empty() {
+  local dir; dir="$(mk_repo gov-doctor-empty gov-empty verbatim)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "WARN  governance paths: 'Governance paths' section is malformed (no-globs)"
+}
+
+case_gov_doctor_unterminated() {
+  local dir; dir="$(mk_repo gov-doctor-unterminated gov-unterminated verbatim)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "WARN  governance paths: 'Governance paths' section is malformed (unterminated-fence)"
+}
+
+case_gov_doctor_leading_slash() {
+  local dir; dir="$(mk_repo gov-doctor-leading-slash gov-leading-slash verbatim)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "WARN  governance paths: 'Governance paths' section is malformed (leading-slash)"
+}
+
+case_gov_doctor_script_missing() {
+  local dir; dir="$(mk_repo gov-doctor-script-missing base verbatim)"
+  rm -f "$dir/bin/governance-paths.sh"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "governance paths: could not validate"
+}
+
 # ---------------------------------------------------------------------------------------------
 stub_gh_dir="$tmpbase/stub-gh"
 build_stub_gh "$stub_gh_dir"
@@ -2099,6 +2669,30 @@ cases=(
   "autonomy-mode-budget-out-of-range|case_autonomy_mode_budget_out_of_range|autonomy mode (#311): kickback-budget: 9 -> WARN naming the bad value, default budget 2 applies"
   "autonomy-mode-default-mode|case_autonomy_mode_default_mode|autonomy mode (#311): permissions.defaultMode reported per settings file, sanitised to a bare word or '(unset)'/'(unrecognised value)'"
   "empty-needle-guard|case_empty_needle_guard|#262: expect/expect_absent both refuse an empty needle rather than degenerating into an unconditional match/never-match"
+  "gov-none|case_gov_none|governance-paths.sh floor mode: no governance path changed -> verdict=none, empty stderr"
+  "gov-builtin-rules|case_gov_builtin_rules|governance-paths.sh floor mode: every built-in alternative fires, three near-misses stay changed: -> verdict=hold"
+  "gov-github-renamed|case_gov_github_renamed|governance-paths.sh floor mode: --no-renames prints both the old and new path of a rename regardless of diff.renames"
+  "gov-case-varied-claude-dir|case_gov_case_varied_claude_dir|governance-paths.sh floor mode: .Claude/LESSONS.md is governance (case-insensitive built-in match) but not lessons-only (case-sensitive exact-set compare) -> hold"
+  "gov-lessons-only|case_gov_lessons_only|governance-paths.sh floor mode: .claude/LESSONS.md alone (plus a non-governance path) -> verdict=lessons-only"
+  "gov-lessons-plus-other|case_gov_lessons_plus_other|governance-paths.sh floor mode: a LESSONS.md append plus another governance path -> verdict=hold, not lessons-only"
+  "gov-declared-globs|case_gov_declared_globs|governance-paths.sh floor mode: declared globs (fence-internal comment skipped) OR the built-in rule, both fire on the same PR -> verdict=hold"
+  "gov-declared-from-base|case_gov_declared_from_base|governance-paths.sh floor mode: declared globs are read from the BASE tip's CLAUDE.md even after the head deletes the section"
+  "gov-section-negation|case_gov_section_negation|governance-paths.sh floor mode: a '!'-prefixed declared line -> verdict=error, negation, no changed: line printed"
+  "gov-section-no-fence|case_gov_section_no_fence|governance-paths.sh floor mode: a 'Governance paths' section with prose only -> verdict=error, no-fence"
+  "gov-empty-diff|case_gov_empty_diff|governance-paths.sh floor mode: an empty diff (allow-empty head commit) -> verdict=error, not verdict=none"
+  "gov-bad-args|case_gov_bad_args|governance-paths.sh floor mode: a --output= argument injection attempt -> rc 2, verdict=error, before any git call (no file written)"
+  "gov-missing-object|case_gov_missing_object|governance-paths.sh floor mode: a well-formed but nonexistent head object -> verdict=error, quoting git diff's own failure"
+  "gov-control-char-path|case_gov_control_char_path|governance-paths.sh floor mode: a changed path containing an embedded newline -> verdict=error, no changed: line printed (buffered output, forged-line guard)"
+  "gov-sha256-arg|case_gov_sha256_arg|governance-paths.sh floor mode: a 64-hex base passes argument validation (rc 1, base not found), never the rc 2 usage error"
+  "gov-diff-relative|case_gov_diff_relative|governance-paths.sh floor mode: run from a subdirectory with diff.relative=true still lists paths outside it (cd to the toplevel)"
+  "gov-check-unreadable|case_gov_check_unreadable|governance-paths.sh --check on a missing file -> rc 2 with empty stdout, never 'absent'"
+  "gov-base-no-claude-md|case_gov_base_no_claude_md|governance-paths.sh floor mode: no CLAUDE.md at all at the base tip -> not an error, built-in rules only, verdict=none"
+  "gov-doctor-absent|case_gov_doctor_absent|governance-paths.sh --check via the doctor: no 'Governance paths' section -> PASS none declared"
+  "gov-doctor-declared|case_gov_doctor_declared|governance-paths.sh --check via the doctor: a well-formed section with a fence-internal comment -> PASS 3 declared glob(s)"
+  "gov-doctor-empty|case_gov_doctor_empty|governance-paths.sh --check via the doctor: a fenced block with no globs -> WARN malformed (no-globs), never FAIL"
+  "gov-doctor-unterminated|case_gov_doctor_unterminated|governance-paths.sh --check via the doctor: an opening fence never closed -> WARN malformed (unterminated-fence), never FAIL"
+  "gov-doctor-leading-slash|case_gov_doctor_leading_slash|governance-paths.sh --check via the doctor: a glob starting '/' -> WARN malformed (leading-slash), never FAIL"
+  "gov-doctor-script-missing|case_gov_doctor_script_missing|governance-paths.sh --check via the doctor: the fixture's own bin/governance-paths.sh deleted -> WARN could not validate, never FAIL"
 )
 
 matched=0
