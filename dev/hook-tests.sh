@@ -140,6 +140,23 @@ expect_no_opinion() {
   [ -z "$boundary_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$boundary_out'\n"; }
   [ -z "$boundary_err" ] || { __ok=0; __why="${__why}expected empty stderr, got: '$boundary_err'\n"; }
 }
+# expect_ab_deny_claude (#340) — the .claude-write deny class's own assertion: rc 2, empty stdout,
+# exactly one non-blank stderr line, containing BOTH the DENY_STEM literal (hand-typed here, same
+# convention as expect_deny above) and the fixed "a path under a .claude segment" phrase
+# hooks/agent-boundary.sh's role-policy printf emits for this deny kind specifically (distinguishing
+# it from a git/gh deny, which expect_deny alone cannot). Both literals are hand-typed inline, not
+# extracted from the script, so no needle parameter and no needle_required guard is needed.
+expect_ab_deny_claude() {
+  [ "$boundary_rc" -eq 2 ] || { __ok=0; __why="${__why}rc: expected 2, got $boundary_rc\n"; }
+  [ -z "$boundary_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$boundary_out'\n"; }
+  local err_lines
+  err_lines="$(printf '%s\n' "$boundary_err" | grep -c '[^[:space:]]')"
+  [ "$err_lines" -eq 1 ] || { __ok=0; __why="${__why}expected exactly 1 non-blank stderr line, got $err_lines: '$boundary_err'\n"; }
+  case "$boundary_err" in
+    *"trail-blazer-flow agent boundary:"*"a path under a .claude segment"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain both the DENY_STEM literal and 'a path under a .claude segment': '$boundary_err'\n" ;;
+  esac
+}
 
 # ---------------------------------------------------------------------------------------------
 # Allow cases — every one of the ten `-C` forms worktree-parallel mode issues, plus quoting,
@@ -470,6 +487,139 @@ case_boundary_never_executes_noop() {
   run_boundary "$(mk_agent_cmd 'verifier' 'git status --porcelain')" "$trapdir:$PATH"
   expect_no_opinion
   [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — the boundary invoked something on the booby-trapped PATH\n"; }
+}
+
+# --- hooks/agent-boundary.sh: the #340 `.claude` Bash-write deny class -----------------------
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter
+# "ab-claude-"), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
+# mutant:340-fastpath — deletes the widened fast path 2's `*[Cc]…[Ee]*` alternative, so every
+#   deny fixture below whose raw stdin carries no "git"/"gh" substring exits silently before ever
+#   reaching the scan.
+# mutant:340-fastpath-case — narrows that same alternative to the literal `*claude*` (no case
+#   fold), isolating ab-claude-deny-case-variant's `.Claude` spelling as the one fixture that
+#   depends on the fast path's OWN case-insensitivity (the scan's tolower() still runs regardless).
+# mutant:340-redirect-pass — disables the redirect pass's own `print`, so a bare `>`/`>>` target
+#   carrying a `.claude` segment is never emitted, even though the scan still runs.
+# mutant:340-arg-vocab — empties CLAUDE_PATH_ARG_COMMANDS, so `tee`/`cp`/`cd` writing into
+#   `.claude` via a plain argument (not a redirect) is never checked.
+# mutant:340-sed-short — makes the `^-[A-Za-z]*i` in-place-flag regex unmatchable, isolating the
+#   short `sed -i`/`-i.bak` spelling from the long `--in-place` one.
+# mutant:340-sed-long — makes the `--in-place` regex unmatchable, the long-spelling mirror of
+#   340-sed-short.
+# mutant:340-segment-exact — widens has_claude_seg()'s `index("/" u "/", "/.claude/")` exact-
+#   segment check to a bare substring test, so `.claude-backup` would start matching too.
+# mutant:340-tolower — removes has_claude_seg()'s `tolower()`, so a case-variant segment like
+#   `.Claude` no longer matches.
+# mutant:340-backslash — removes has_claude_seg()'s backslash-to-slash `gsub`, so a
+#   backslash-separated path never normalises to a `.claude` segment.
+# mutant:340-input-redirect — widens the redirect pass's `>` to `[<>]`, so an input redirect
+#   (`wc -l < .claude/LESSONS.md`) starts wrongly denying.
+# mutant:340-quote-strip-dq — turns has_claude_seg()'s double-quote strip into a no-op, so a double
+#   quote directly adjacent to the segment (`".claude/…`) hides it.
+# mutant:340-quote-strip-sq — the single-quote mirror of 340-quote-strip-dq (`'.claude/…`).
+# mutant:340-sed-combined — narrows the short in-place regex to a bare `-i`, so a combined flag
+#   cluster such as `-Ei` is no longer recognised as in-place.
+# mutant:340-arg-gate — applies the vocabulary walk to every command word, not only tee/cp/mv/cd/
+#   pushd, so reading a `.claude` path with `cat` starts wrongly denying.
+# mutant:340-inplace-gate — applies the sed `.claude` walk without an in-place flag, so a read-only
+#   `sed -n` on a `.claude` path starts wrongly denying.
+# mutant:340-policy-arm — makes the role-policy loop's `"-claude-write- "*)` arm unmatchable, so
+#   a `-claude-write-` line the scan emits is never turned into a deny at all.
+case_ab_claude_deny_append_redirect() {
+  run_boundary "$(mk_agent_cmd 'trail-blazer-flow:implementer' "printf '%s\n' '- 2026-09-24: always do X' >> .claude/LESSONS.md")"
+  expect_ab_deny_claude
+}
+case_ab_claude_deny_redirect_nospace_quoted() {
+  run_boundary "$(mk_agent_cmd 'verifier' 'echo x >"/Users/x/proj/.claude/LESSONS.md"')"
+  expect_ab_deny_claude
+}
+case_ab_claude_deny_heredoc() {
+  run_boundary "$(mk_agent_cmd 'implementer' "cat >> /repo/.claude/LESSONS.md <<'EOF'${LF}- lesson${LF}EOF")"
+  expect_ab_deny_claude
+}
+case_ab_claude_deny_case_variant() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'echo x >> .Claude/LESSONS.md')"
+  expect_ab_deny_claude
+}
+case_ab_claude_deny_backslash() {
+  run_boundary "$(mk_agent_cmd 'implementer' "echo x >> 'C:\\repo\\.claude\\LESSONS.md'")"
+  expect_ab_deny_claude
+}
+case_ab_claude_deny_tee() {
+  run_boundary "$(mk_agent_cmd 'trail-blazer-flow:verifier' 'cat notes.txt | tee -a .claude/LESSONS.md')"
+  expect_ab_deny_claude
+}
+case_ab_claude_deny_cp() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'cp /tmp/lesson.md .claude/LESSONS.md')"
+  expect_ab_deny_claude
+}
+case_ab_claude_deny_cd() {
+  run_boundary "$(mk_agent_cmd 'trail-blazer-flow:implementer' 'cd .claude && cat /tmp/l >> LESSONS.md')"
+  expect_ab_deny_claude
+}
+case_ab_claude_deny_sed_short() {
+  run_boundary "$(mk_agent_cmd 'implementer' "sed -i.bak '\$a x' .claude/LESSONS.md")"
+  expect_ab_deny_claude
+}
+case_ab_claude_deny_sed_long() {
+  run_boundary "$(mk_agent_cmd 'verifier' "sed --in-place '\$a x' .claude/LESSONS.md")"
+  expect_ab_deny_claude
+}
+case_ab_claude_deny_quoted_double() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'echo x >> ".claude/LESSONS.md"')"
+  expect_ab_deny_claude
+}
+case_ab_claude_deny_quoted_single() {
+  run_boundary "$(mk_agent_cmd 'verifier' "cat notes.txt | tee -a '.claude/LESSONS.md'")"
+  expect_ab_deny_claude
+}
+case_ab_claude_deny_sed_combined() {
+  run_boundary "$(mk_agent_cmd 'implementer' "sed -Ei 's/a/b/' .claude/LESSONS.md")"
+  expect_ab_deny_claude
+}
+case_ab_claude_deny_never_writes() {
+  local trapdir="$tmpbase/trapbin-ab-claude-never-writes" sentinel="$tmpbase/sentinel-ab-claude-never-writes"
+  local target_dir="$tmpbase/ab-claude-tree/.claude"
+  local target_file="$target_dir/LESSONS.md"
+  mkdir -p "$trapdir" "$target_dir"
+  rm -f "$sentinel"
+  for bin in git gh rm; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  # Run from inside the fixture tree with a RELATIVE target: the scanned command text then carries no
+  # random mktemp characters, which could otherwise contain "gh" and defeat the 340-fastpath mutant.
+  local oldpwd="$PWD"
+  cd "$tmpbase/ab-claude-tree" || { __ok=0; __why="${__why}cannot cd into the fixture tree\n"; return; }
+  run_boundary "$(mk_agent_cmd 'implementer' 'echo x >> .claude/LESSONS.md')" "$trapdir:$PATH"
+  cd "$oldpwd" || { __ok=0; __why="${__why}cannot cd back to $oldpwd\n"; return; }
+  expect_ab_deny_claude
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — the boundary invoked something on the booby-trapped PATH\n"; }
+  [ ! -e "$target_file" ] || { __ok=0; __why="${__why}target file present — the boundary performed the redirect it was scanning\n"; }
+}
+case_ab_claude_noop_input_redirect() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'wc -l < .claude/LESSONS.md')"
+  expect_no_opinion
+}
+case_ab_claude_noop_tee_elsewhere() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'cat .claude/LESSONS.md | tee /tmp/out.txt')"
+  expect_no_opinion
+}
+case_ab_claude_noop_sed_no_inplace() {
+  run_boundary "$(mk_agent_cmd 'verifier' "sed -n '1,5p' .claude/LESSONS.md")"
+  expect_no_opinion
+}
+case_ab_claude_noop_near_miss() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'echo x >> .claude-backup/notes.md')"
+  expect_no_opinion
+}
+case_ab_claude_noop_main_session() {
+  run_boundary "$(mk_plain_cmd 'echo x >> .claude/LESSONS.md')"
+  expect_no_opinion
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1957,7 +2107,7 @@ cases=(
   # "143-case"/"140 pass"/"143 pass" figures were re-measured. #327 then added 29 cdg-* fixtures
   # (none containing the substring "push"), growing the whole-file total to 228; the #327 round-1
   # kickback then added two more cdg-* fixtures (also push-free), growing the whole-file total to
-  # the CURRENT 230 while leaving the push-filtered unit at 116 — see hooks/claude-dir-guard.sh's
+  # the then-current 230 while leaving the push-filtered unit at 116 — see hooks/claude-dir-guard.sh's
   # own header for the fourth hook's own paragraph, and the cdg-* section's own mutation-proof
   # table further below for its 14 mutants.
   # M1/M2 (the two raw-stdin fast paths) are
@@ -2004,7 +2154,7 @@ cases=(
   #       verif-noop-crlf-status, are the only cases that flip; NOT re-measured against the
   #       167-case file that stood after #268 (round 1), its round-2 kickback, or its round-3
   #       kickback (grown to 181 by #269 below and its own round-2 kickback, then to 197 by #290,
-  #       then to 199 by #290's own round-2 kickback, then to the CURRENT 230 by #327's cdg-*
+  #       then to 199 by #290's own round-2 kickback, then to the then-current 230 by #327's cdg-*
   #       section and its round-1 kickback, none of which touched agent-boundary.sh either) — see
   #       this section's header note above)
   #   M25 the shipped global strip narrowed to once-only                    -> 143 pass,  0 fail
@@ -2034,7 +2184,7 @@ cases=(
   # run_claude_guard — no mutant M1-M25 in THIS table edits that file, so this table's recorded
   # failing sets are unchanged by that addition, and its whole-file PASS figures above all predate
   # it. Made non-vacuous, not just reasoned by inspection (LESSON 2026-09-15): M1 (fast path 1
-  # pattern corrupted) re-run against the CURRENT 230-case file (re-measured after the #327
+  # pattern corrupted) re-run against the then-current 230-case file (re-measured after the #327
   # round-1 kickback's two new cdg-* fixtures) still fails exactly its own 31-case set (199 pass,
   # 31 fail) with NO cdg-* case among them.
   "impl-deny-push-bare|case_ib_push_bare|implementer deny: git push (agent_type: implementer) -- measured: M1/M2, 55 pass 27 fail"
@@ -2089,6 +2239,26 @@ cases=(
   "role-noop-missing-command|case_ra_missing_command|role-agnostic no opinion: tool_input.command absent -- measured: M18, 81 pass 1 fail"
   "boundary-never-executes-deny|case_boundary_never_executes_deny|deny, AND the boundary never invokes git/gh/rm on the booby-trapped PATH — sentinel absent -- measured: M1/M2, 55 pass 27 fail"
   "boundary-never-executes-noop|case_boundary_never_executes_noop|no opinion, AND the boundary never invokes git/gh/rm on the booby-trapped PATH — sentinel absent -- measured: M13b, 80 pass 2 fail (with verif-noop-status)"
+  # --- hooks/agent-boundary.sh: the #340 `.claude` Bash-write deny class -----------------------
+  "ab-claude-deny-append-redirect|case_ab_claude_deny_append_redirect|.claude deny: implementer, printf appended via >> .claude/LESSONS.md (the exact shape the issue names) -- mutation proof: dev/mutants/hook-tests.json (340-fastpath)"
+  "ab-claude-deny-redirect-nospace-quoted|case_ab_claude_deny_redirect_nospace_quoted|.claude deny: verifier, echo x >\"...\" (no space after >, quoted, absolute path) -- mutation proof: dev/mutants/hook-tests.json (340-fastpath)"
+  "ab-claude-deny-heredoc|case_ab_claude_deny_heredoc|.claude deny: implementer, a multi-line heredoc whose first line redirects into .claude/LESSONS.md -- mutation proof: dev/mutants/hook-tests.json (340-fastpath)"
+  "ab-claude-deny-case-variant|case_ab_claude_deny_case_variant|.claude deny: implementer, echo x >> .Claude/LESSONS.md (case-variant segment) -- mutation proof: dev/mutants/hook-tests.json (340-fastpath-case, 340-tolower)"
+  "ab-claude-deny-backslash|case_ab_claude_deny_backslash|.claude deny: implementer, echo x >> 'C:\\repo\\.claude\\LESSONS.md' (backslash-separated path) -- mutation proof: dev/mutants/hook-tests.json (340-backslash)"
+  "ab-claude-deny-tee|case_ab_claude_deny_tee|.claude deny: trail-blazer-flow:verifier, cat notes.txt piped into tee -a .claude/LESSONS.md (the vocabulary walk, not a redirect target) -- mutation proof: dev/mutants/hook-tests.json (340-arg-vocab)"
+  "ab-claude-deny-cp|case_ab_claude_deny_cp|.claude deny: implementer, cp /tmp/lesson.md .claude/LESSONS.md (a plain-argument write, not a redirect) -- mutation proof: dev/mutants/hook-tests.json (340-arg-vocab)"
+  "ab-claude-deny-cd|case_ab_claude_deny_cd|.claude deny: trail-blazer-flow:implementer, cd .claude && cat /tmp/l >> LESSONS.md (cd defeats the redirect target check on its own; the arg-vocab walk catches it instead) -- mutation proof: dev/mutants/hook-tests.json (340-arg-vocab)"
+  "ab-claude-deny-sed-short|case_ab_claude_deny_sed_short|.claude deny: implementer, sed -i.bak '\$a x' .claude/LESSONS.md (short in-place flag) -- mutation proof: dev/mutants/hook-tests.json (340-sed-short)"
+  "ab-claude-deny-sed-long|case_ab_claude_deny_sed_long|.claude deny: verifier, sed --in-place '\$a x' .claude/LESSONS.md (long in-place flag) -- mutation proof: dev/mutants/hook-tests.json (340-sed-long)"
+  "ab-claude-deny-quoted-double|case_ab_claude_deny_quoted_double|.claude deny: implementer, echo x >> \".claude/LESSONS.md\" (a double quote directly adjacent to the segment) -- mutation proof: dev/mutants/hook-tests.json (340-quote-strip-dq)"
+  "ab-claude-deny-quoted-single|case_ab_claude_deny_quoted_single|.claude deny: verifier, tee -a '.claude/LESSONS.md' (a single quote directly adjacent to the segment, via the vocabulary walk) -- mutation proof: dev/mutants/hook-tests.json (340-quote-strip-sq)"
+  "ab-claude-deny-sed-combined|case_ab_claude_deny_sed_combined|.claude deny: implementer, sed -Ei (in-place flag combined with another short flag) -- mutation proof: dev/mutants/hook-tests.json (340-sed-combined)"
+  "ab-claude-deny-never-writes|case_ab_claude_deny_never_writes|.claude deny, AND the boundary never invokes git/gh/rm on the booby-trapped PATH, AND the redirect target file is never actually created — sentinel absent, target file absent -- mutation proof: dev/mutants/hook-tests.json (340-policy-arm)"
+  "ab-claude-noop-input-redirect|case_ab_claude_noop_input_redirect|.claude no opinion: implementer, wc -l < .claude/LESSONS.md (an input redirect, never a write position) -- mutation proof: dev/mutants/hook-tests.json (340-input-redirect)"
+  "ab-claude-noop-tee-elsewhere|case_ab_claude_noop_tee_elsewhere|.claude no opinion: implementer, cat .claude/LESSONS.md piped into tee /tmp/out.txt (the READ is under .claude, tee's own target isn't) -- mutation proof: dev/mutants/hook-tests.json (340-arg-gate)"
+  "ab-claude-noop-sed-no-inplace|case_ab_claude_noop_sed_no_inplace|.claude no opinion: verifier, sed -n '1,5p' .claude/LESSONS.md (no in-place flag) -- mutation proof: dev/mutants/hook-tests.json (340-inplace-gate)"
+  "ab-claude-noop-near-miss|case_ab_claude_noop_near_miss|.claude no opinion: implementer, echo x >> .claude-backup/notes.md (a near-miss segment, not an exact .claude match) -- mutation proof: dev/mutants/hook-tests.json (340-segment-exact)"
+  "ab-claude-noop-main-session|case_ab_claude_noop_main_session|.claude no opinion: main session (no agent_type key), echo x >> .claude/LESSONS.md (blocking this would stop a release -- the orchestrator's own lesson append) -- release-blocker control, not part of the mutation-proof registry"
   # --- hooks/push-guard.sh (#260) cases -----------------------------------------------------------
   # Mutation-proof table (LESSON 2026-09-01, LESSON 2026-09-07(b)): each row below cites one of
   # the mutants actually applied to hooks/push-guard.sh via a Python literal-string replace
@@ -3090,7 +3260,7 @@ cases=(
   # run_claude_guard -- no mutant M1-M70 in THIS table edits that file, so this table's recorded
   # failing sets are unchanged by that addition, and its whole-file PASS figures above all predate
   # it. Made non-vacuous, not just reasoned by inspection (LESSON 2026-09-15): M16
-  # (PUSH_DEFAULT_BRANCH_FALLBACK emptied) re-run against the CURRENT 230-case file (re-measured
+  # (PUSH_DEFAULT_BRANCH_FALLBACK emptied) re-run against the then-current 230-case file (re-measured
   # after the #327 round-1 kickback's two new cdg-* fixtures) still fails exactly
   # push-deny-origin-master/push-deny-c-per-segment-session-reset/push-deny-c-target-global-route
   # (227 pass, 3 fail) with NO cdg-* case among them.
@@ -3211,11 +3381,11 @@ cases=(
   # Mutation-proof table (LESSON 2026-09-01/2026-09-07(b), one mutant per classifier clause,
   # applied in place with an immediately-refreshed backup and a full `diff` verify after every
   # restore -- LESSON 2026-09-07), measured against THIS section's own 31-case set (29 plus the
-  # #327 round-1 kickback's two embedded-LF fixtures, K1) embedded in the CURRENT 230-case whole
+  # #327 round-1 kickback's two embedded-LF fixtures, K1) embedded in the then-current 230-case whole
   # file (a fresh mktemp copy of hooks/claude-dir-guard.sh, never `mv`-ed over -- LESSON 2026-09-15b's
   # exec-bit concern does not apply here, since run_claude_guard always invokes the script through
-  # an explicit `bash <path>`, never by PATH lookup); M1-M13 were RE-MEASURED against the CURRENT
-  # 230-case file for the round-1 kickback (LESSON 2026-09-15 -- reasoning by inspection undercounted
+  # an explicit `bash <path>`, never by PATH lookup); M1-M13 were RE-MEASURED against the
+  # then-current 230-case file for the round-1 kickback (LESSON 2026-09-15 -- reasoning by inspection undercounted
   # M10's own kill set, below):
   #   M1  role resolution forced to "implementer" regardless of match                -> 228 pass,
   #       (role="" -> role="implementer", unconditionally)                              2 fail

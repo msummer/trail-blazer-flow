@@ -60,7 +60,7 @@ or share).
 ├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
 │   ├── hooks.json                 # registers the four PreToolUse hooks below
 │   ├── git-c-guard.sh             # approves only the exact git -C <worktree> <subcommand> forms worktree-parallel mode issues
-│   ├── agent-boundary.sh          # mechanically denies git/gh Bash commands for the implementer/verifier subagents (#235)
+│   ├── agent-boundary.sh          # mechanically denies git/gh Bash commands, and a Bash write into .claude/, for the implementer/verifier subagents (#235, #340)
 │   ├── push-guard.sh              # mechanically denies any git push whose destination is the default branch, every session (#260)
 │   └── claude-dir-guard.sh        # mechanically denies an implementer/verifier Edit or Write to any .claude/ path (#327)
 ├── dev/
@@ -957,9 +957,13 @@ unless the file already existed untracked before that dispatch started, in which
 has no baseline to take and says so instead of blocking. Since #327, this untracked-baseline gap
 no longer applies to an `Edit` or `Write` of `.claude/LESSONS.md` specifically: the
 `hooks/claude-dir-guard.sh` `PreToolUse` hook denies that call outright for both roles, tracked or
-not, with no orchestrator compare required. The dispatch guard above is still the only control on
-a Bash-issued write (`cat >>`, `tee`, `sed -i`) into `.claude/LESSONS.md`, and still carries the
-untracked-baseline gap for that route (filed as a follow-up).
+not, with no orchestrator compare required. Since #340, `hooks/agent-boundary.sh` also denies an
+implementer/verifier Bash redirection, `tee`, `cp`, `mv`, `cd`/`pushd`, or in-place `sed` that
+targets a `.claude` path segment — closing most of the Bash-issued write route into
+`.claude/LESSONS.md` for those two roles specifically. The dispatch guard above is still the only
+control on the remaining Bash writers (an interpreter such as `python3 -c "open(...)"` or `perl
+-i`, `dd`, `install`, `ln`, or a variable-built path), and still carries the untracked-baseline gap
+for those.
 
 Under a Merge autonomy policy (#307, ADR 0001 decision 9), a harness PR that carries a lesson
 this way is not automatically held by the *Never the governance surface* rule just because it
@@ -1388,33 +1392,42 @@ resolves to `git` or `gh`, regardless of `git`
 subcommand — the implementer needs neither. For the verifier role it denies `gh` outright and
 denies `git` unless the resolved subcommand is one of `status diff log show rev-parse ls-files
 merge-base blame grep restore`; an unlisted subcommand, a global option before the subcommand, and
-a bare `git` all deny too — fail-closed, not an enumerated allow-list of "safe" subcommands. Every
-other case — the main session (no `agent_type`), the planner or another agent, `permission_mode:
-"plan"`, malformed stdin, another tool, or `tool_input.command` absent — is "no opinion" (exit 0,
-empty stdout, empty stderr), the same convention `git-c-guard.sh` uses; a blocked call's stderr
-names the role and the command it blocked, since a subagent can't answer a permission prompt the
-way an interactive session could. Pinned by 52 fixture cases in `dev/hook-tests.sh`, including the
-same never-executes-anything guarantee (a booby-trapped `git`/`gh`/`rm` on `PATH` proves nothing
-runs) and the same fail-open properties as the guard hook: the plugin disabled, `disableAllHooks:
-true`, no `jq` on `PATH`, an unresolved `${CLAUDE_PLUGIN_ROOT}` on Windows, or a Claude Code that
-omits `agent_type` all leave this hook silent — but unlike the guard hook (whose non-firing
-degrades to an ordinary permission prompt), this hook's non-firing removes a control with **no**
-visible sign, since nothing else in the permission model was narrowing the implementer/verifier's
-`git`/`gh` surface to begin with. The scan is deliberately quote-blind (it strips quote characters
-rather than tracking quote state, the same trade-off `git-c-guard.sh` makes in the opposite
-direction) and processes `tool_input.command` one line at a time, so two over-blocking classes are
-expected and documented in the script's own header: a literal `git`/`gh` word starting a quoted
-span right after a separator (e.g. `echo "a; git push"`) denies, and — more consequentially for
-this repo's own contributors — **any line of a multi-line Bash command that begins with
-`git`/`gh`** is a command-position token after its own newline break and denies, including a
-heredoc line that merely *writes* a fixture file containing the text `git push`; the remedy is to
-write such file content through the Write/Edit tools rather than a Bash heredoc. Known evasions,
-documented rather than hidden: `$(which git) push` (the literal `git` token is never in command
-position), `sudo -u foo git push` (the argument to `-u` becomes the resolved command word instead
-of `git`), and interpreter indirection outside the recognised prefix words (`env`, `command`,
+a bare `git` all deny too — fail-closed, not an enumerated allow-list of "safe" subcommands. Since
+#340, both roles ALSO deny a Bash command that puts a `.claude`-segment path in a write position —
+a `>`-family redirect target, an argument to `tee`/`cp`/`mv`/`cd`/`pushd`, or an in-place `sed`'s
+argument — closing most of the Bash-issued write route into `.claude/` (see `hooks/claude-dir-guard.sh`'s
+own paragraph below for the Edit/Write-issued route that hook already closed). Every other case —
+the main session (no `agent_type`), the planner or another agent, `permission_mode: "plan"`,
+malformed stdin, another tool, or `tool_input.command` absent — is "no opinion" (exit 0, empty
+stdout, empty stderr), the same convention `git-c-guard.sh` uses; a blocked call's stderr names the
+role and the command it blocked, since a subagent can't answer a permission prompt the way an
+interactive session could. Pinned by fixture cases in `dev/hook-tests.sh`, including the same
+never-executes-anything guarantee (a booby-trapped `git`/`gh`/`rm` on `PATH` proves nothing runs)
+and the same fail-open properties as the guard hook: the plugin disabled, `disableAllHooks: true`,
+no `jq` on `PATH`, an unresolved `${CLAUDE_PLUGIN_ROOT}` on Windows, or a Claude Code that omits
+`agent_type` all leave this hook silent — but unlike the guard hook (whose non-firing degrades to
+an ordinary permission prompt), this hook's non-firing removes a control with **no** visible sign,
+since nothing else in the permission model was narrowing the implementer/verifier's `git`/`gh`
+surface to begin with. The scan is deliberately quote-blind (it strips quote characters rather than
+tracking quote state, the same trade-off `git-c-guard.sh` makes in the opposite direction) and
+processes `tool_input.command` one line at a time, so several over-blocking classes are expected
+and documented in the script's own header: a literal `git`/`gh` word starting a quoted span right
+after a separator (e.g. `echo "a; git push"`) denies; **any line of a multi-line Bash command that
+begins with `git`/`gh`** is a command-position token after its own newline break and denies,
+including a heredoc line that merely *writes* a fixture file containing the text `git push`; and,
+since #340, a `.claude`-segment write class covering quoted prose (`echo "tip: >> .claude/x"`), a
+heredoc body line, a `sed -i` whose script text itself spells a `.claude` segment, a copy or move
+*out of* `.claude`, a `cd` into any `.claude` directory, an input redirect from `.claude` into
+one of those commands (`tee /tmp/x < .claude/x`), and any `~/.claude/...` write — the remedy
+for a file-content case is to write through the Write/Edit tools rather than a Bash heredoc. Known
+evasions, documented rather than hidden: `$(which git) push` (the literal `git` token is never in
+command position), `sudo -u foo git push` (the argument to `-u` becomes the resolved command word
+instead of `git`), interpreter indirection outside the recognised prefix words (`env`, `command`,
 `builtin`, `exec`, `sudo`, `nohup`, `time`, `nice`, `stdbuf`, `xargs`, `bash`, `sh`, `zsh`, `ksh`,
-`dash`) — this is a tripwire against an off-script subagent, the same framing this document
-already uses for the body-hash grant pattern, not a sandbox against a determined adversary.
+`dash`), and, for the `.claude`-write class specifically, an interpreter (`python3 -c`, `perl -i`),
+`install`/`ln`/`touch`/`truncate`/`dd of=…`, or a variable-built or glob target — this is a
+tripwire against an off-script subagent, the same framing this document already uses for the
+body-hash grant pattern, not a sandbox against a determined adversary.
 
 **The third hook, `hooks/push-guard.sh` (#260), governs every session — main session included,**
 unlike `hooks/agent-boundary.sh` above, which only governs the implementer/verifier subagents.

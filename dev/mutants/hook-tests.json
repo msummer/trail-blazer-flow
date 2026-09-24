@@ -1,0 +1,282 @@
+{
+  "mutants": [
+    {
+      "name": "340-fastpath",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "  *git*|*gh*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;",
+          "to": "  *git*|*gh*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-deny-append-redirect",
+        "ab-claude-deny-backslash",
+        "ab-claude-deny-case-variant",
+        "ab-claude-deny-cd",
+        "ab-claude-deny-cp",
+        "ab-claude-deny-heredoc",
+        "ab-claude-deny-never-writes",
+        "ab-claude-deny-quoted-double",
+        "ab-claude-deny-quoted-single",
+        "ab-claude-deny-redirect-nospace-quoted",
+        "ab-claude-deny-sed-combined",
+        "ab-claude-deny-sed-long",
+        "ab-claude-deny-sed-short",
+        "ab-claude-deny-tee"
+      ]
+    },
+    {
+      "name": "340-fastpath-case",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "  *git*|*gh*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;",
+          "to": "  *git*|*gh*|*claude*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-deny-case-variant"
+      ]
+    },
+    {
+      "name": "340-redirect-pass",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "    if (has_claude_seg(rd_tgt)) print \"-claude-write- \" rd_tgt",
+          "to": "    if (0 && has_claude_seg(rd_tgt)) print \"-claude-write- \" rd_tgt"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-deny-append-redirect",
+        "ab-claude-deny-backslash",
+        "ab-claude-deny-case-variant",
+        "ab-claude-deny-heredoc",
+        "ab-claude-deny-never-writes",
+        "ab-claude-deny-quoted-double",
+        "ab-claude-deny-redirect-nospace-quoted"
+      ]
+    },
+    {
+      "name": "340-arg-vocab",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "CLAUDE_PATH_ARG_COMMANDS=\"tee cp mv cd pushd\"",
+          "to": "CLAUDE_PATH_ARG_COMMANDS=\"\""
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-deny-cd",
+        "ab-claude-deny-cp",
+        "ab-claude-deny-quoted-single",
+        "ab-claude-deny-tee"
+      ]
+    },
+    {
+      "name": "340-sed-short",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "        if (match(toks[j], /^-[A-Za-z]*i/) == 1) { inplace = 1; break }",
+          "to": "        if (match(toks[j], /^-[A-Za-z]*iZZZNEVER/) == 1) { inplace = 1; break }"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-deny-sed-combined",
+        "ab-claude-deny-sed-short"
+      ]
+    },
+    {
+      "name": "340-sed-long",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "        if (match(toks[j], /^--in-place/) == 1) { inplace = 1; break }",
+          "to": "        if (match(toks[j], /^--in-placeZZZNEVER/) == 1) { inplace = 1; break }"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-deny-sed-long"
+      ]
+    },
+    {
+      "name": "340-segment-exact",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "  return index(\"/\" u \"/\", \"/.claude/\") > 0",
+          "to": "  return index(u, \".claude\") > 0"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-noop-near-miss"
+      ]
+    },
+    {
+      "name": "340-tolower",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "  u = tolower(u)",
+          "to": "  u = u"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-deny-case-variant"
+      ]
+    },
+    {
+      "name": "340-backslash",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "  gsub(/\\\\/, \"/\", u)",
+          "to": "  gsub(/ZZZNEVERMATCH/, \"/\", u)"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-deny-backslash"
+      ]
+    },
+    {
+      "name": "340-input-redirect",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "  while (match(rd_rest, />[>|&]?[ \\t]*[^ \\t;&|(){}`<>]+/)) {\n    rd_tgt = substr(rd_rest, RSTART, RLENGTH)\n    sub(/^>[>|&]?[ \\t]*/, \"\", rd_tgt)",
+          "to": "  while (match(rd_rest, /[<>][>|&]?[ \\t]*[^ \\t;&|(){}`<>]+/)) {\n    rd_tgt = substr(rd_rest, RSTART, RLENGTH)\n    sub(/^[<>][>|&]?[ \\t]*/, \"\", rd_tgt)"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-noop-input-redirect"
+      ]
+    },
+    {
+      "name": "340-policy-arm",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "    \"-claude-write- \"*)",
+          "to": "    \"-claude-write-ZZZNEVER \"*)"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-deny-append-redirect",
+        "ab-claude-deny-backslash",
+        "ab-claude-deny-case-variant",
+        "ab-claude-deny-cd",
+        "ab-claude-deny-cp",
+        "ab-claude-deny-heredoc",
+        "ab-claude-deny-never-writes",
+        "ab-claude-deny-quoted-double",
+        "ab-claude-deny-quoted-single",
+        "ab-claude-deny-redirect-nospace-quoted",
+        "ab-claude-deny-sed-combined",
+        "ab-claude-deny-sed-long",
+        "ab-claude-deny-sed-short",
+        "ab-claude-deny-tee"
+      ]
+    },
+    {
+      "name": "340-quote-strip-dq",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "gsub(/\"/, \"\", u)",
+          "to": "u = u"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-deny-quoted-double"
+      ]
+    },
+    {
+      "name": "340-quote-strip-sq",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "gsub(sq, \"\", u)",
+          "to": "u = u"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-deny-quoted-single"
+      ]
+    },
+    {
+      "name": "340-sed-combined",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "match(toks[j], /^-[A-Za-z]*i/)",
+          "to": "match(toks[j], /^-i/)"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-deny-sed-combined"
+      ]
+    },
+    {
+      "name": "340-arg-gate",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "if (cmdword in arg_set) {",
+          "to": "if (1) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-noop-input-redirect",
+        "ab-claude-noop-sed-no-inplace",
+        "ab-claude-noop-tee-elsewhere"
+      ]
+    },
+    {
+      "name": "340-inplace-gate",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-claude-",
+      "edits": [
+        {
+          "from": "      if (inplace) {",
+          "to": "      if (1) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-claude-noop-sed-no-inplace"
+      ]
+    }
+  ]
+}

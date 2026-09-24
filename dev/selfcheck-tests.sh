@@ -528,6 +528,17 @@ p_4_52_record_without_token() {
 p_4_52_noncomment_token() {
   printf 'x="mutant:ghost — not a comment, never extracted"\n' | append "$1/dev/planning-tests.sh"
 }
+# p_4_53_* (#340, absorbs #341) — the GUARDED_TOOLS="..." <-> agents/*.md tools: cross-check.
+# p_4_53_unguarded_tool appends MultiEdit to agents/implementer.md's tools: line (characters
+# appended after the existing comma-separated list, not altered inside it) without touching
+# GUARDED_TOOLS — clause (b): a tool on a role's tools: line that is neither guarded nor exempt.
+# p_4_53_stale_guard appends NotebookEdit to hooks/claude-dir-guard.sh's own GUARDED_TOOLS value
+# without either role ever gaining that tool — clause (a): a GUARDED_TOOLS member on neither role's
+# tools: line. p_4_53_extraction renames the GUARDED_TOOLS identifier itself throughout
+# hooks/claude-dir-guard.sh so the gate's anchored extraction comes back empty — clause (c).
+p_4_53_unguarded_tool() { edit "$1/agents/implementer.md" 's/^tools: Read, Write, Edit, Grep, Glob, Bash$/tools: Read, Write, Edit, Grep, Glob, Bash, MultiEdit/'; }
+p_4_53_stale_guard()    { edit "$1/hooks/claude-dir-guard.sh" 's/^GUARDED_TOOLS="Edit Write"$/GUARDED_TOOLS="Edit Write NotebookEdit"/'; }
+p_4_53_extraction()     { edit "$1/hooks/claude-dir-guard.sh" 's/GUARDED_TOOLS/GUARDED_TOLS/g'; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -927,6 +938,9 @@ cases=(
   "4.52-token-without-record|4.52|p_4_52_token_without_record|append a '# mutant:ghost' comment to dev/planning-tests.sh: a comment-side token with no dev/mutants/*.json record naming it"
   "4.52-record-without-token|4.52|p_4_52_record_without_token|add a well-formed 'ghost-record' record (suite dev/planning-tests.sh) to dev/mutants/planning-tests.json via jq into a temp file then cat back: a registry-side record with no citing comment"
   "4.52-noncomment-token||p_4_52_noncomment_token|control: a plain (non-comment) variable assignment containing the substring 'mutant:ghost' — assertion 4.52's comment-line-scoped extraction must not be tripped by it"
+  "4.53-unguarded-tool|4.53|p_4_53_unguarded_tool|append MultiEdit to agents/implementer.md's tools: line without touching GUARDED_TOOLS: a tool on a role's tools: line that is neither guarded nor exempt"
+  "4.53-stale-guard|4.53|p_4_53_stale_guard|append NotebookEdit to hooks/claude-dir-guard.sh's own GUARDED_TOOLS value without either role ever gaining that tool: a GUARDED_TOOLS member on neither role's tools: line"
+  "4.53-extraction|4.53|p_4_53_extraction|rename GUARDED_TOOLS to GUARDED_TOLS throughout hooks/claude-dir-guard.sh so the gate's anchored extraction comes back empty"
 )
 
 # ---------------------------------------------------------------------------------------------
