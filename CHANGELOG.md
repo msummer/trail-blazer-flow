@@ -14,7 +14,7 @@ To add a new entry: under `## Unreleased`, add one bullet per pull request, newe
 counts, mutation-proof figures, or other measured numbers (those live in each suite's own header
 and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` record — see
 CLAUDE.md's Conventions). At release time, retitle the `##
-Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Updating").
+Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
 ## v2.8.0
 

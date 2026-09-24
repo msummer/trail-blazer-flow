@@ -1,9 +1,10 @@
 # CLAUDE.md — trail-blazer-flow (the harness itself)
 
 This repo **is** the Claude Code plugin (the harness), not a project that consumes it. The
-README is the canonical spec; this file governs work **on** the harness's own code, docs, and
-scripts — not the contract this harness expects of a *consumer* repo's `CLAUDE.md` (see the
-README's "The CLAUDE.md contract" for that).
+README (the user guide) and `docs/reference/` (the detailed rules behind it) are the canonical
+spec; this file governs work **on** the harness's own code, docs, and scripts — not the contract
+this harness expects of a *consumer* repo's `CLAUDE.md` (see the README's "The CLAUDE.md contract"
+and `docs/reference/claude-md-contract.md` for that).
 
 ## Setup
 
@@ -184,14 +185,14 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
 ## Conventions
 
 - **Plugin/consumer boundary**: nothing project-specific belongs in `agents/` or `skills/` —
-  that content belongs in a *consumer* repo's `CLAUDE.md`/`LESSONS.md` instead. See the README's
-  "Distribution".
+  that content belongs in a *consumer* repo's `CLAUDE.md`/`LESSONS.md` instead. See
+  `docs/reference/architecture.md`'s "Distribution".
 - `bin/` is on consumers' Bash PATH; every `bin/*.sh` needs a matching allow entry in
   `templates/repo-settings.json` (the gate's bijection assertion checks this). Scripts meant
   only for developing this repo (not for consumers) go in `dev/` instead. `hooks/*.sh` is a
   third case: invoked by Claude Code itself (via `hooks/hooks.json`), never by the model issuing
   a Bash command, so a hook script takes no permission allow entry and stays out of the `bin/`
-  bijection — see the README's "Safety model".
+  bijection — see `docs/reference/safety-model.md`.
 - **Gate assertions compare machine-parsed artifacts only.** An assertion may only compare two
   mechanically extracted artifacts (JSON↔JSON, script↔script, script↔JSON, filename↔frontmatter);
   no assertion may parse or pin English prose. Duplicated spec text is resolved by **deleting a
@@ -226,8 +227,10 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   `dev/stop-tests.sh` each guard every needle-taking helper with a `needle_required` check that fails the case
   instead; `dev/hook-tests.sh` needs no guard (its only substring test hand-types the literal
   inline, never through a needle-taking helper).
-- The README is part of "done": every factual claim it makes about this repo's behavior must be
-  checkable against the code (the verifier's Documentation changes check applies to docs).
+- The README and `docs/reference/` are part of "done": every factual claim they make about this
+  repo's behavior must be checkable against the code (the verifier's Documentation changes check
+  applies to docs). The README stays a user guide — short recipes that link to `docs/reference/`
+  for the full rules — so a new mechanism's detail goes in the matching `docs/reference/` file.
 - **Per-PR history lives in `CHANGELOG.md`, never in CLAUDE.md, a `dev/*.sh` header, or a README
   migration note.** (1) A new entry goes under `CHANGELOG.md`'s `## Unreleased` heading;
   `CHANGELOG.md` is history — not governance, not a gate target, and never updated to track later
@@ -254,7 +257,7 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   trailing tag comment.
 - Release ritual: bump `version` in `.claude-plugin/plugin.json`, create the matching `vX.Y.Z`
   annotated tag, and retitle `CHANGELOG.md`'s `## Unreleased` heading to `## vX.Y.Z`, all in the
-  same commit — see the README's "Updating".
+  same commit — see the README's "Releasing a new version".
 - **Fixture comment urls in `dev/planning-tests.sh` use GitHub's real shape**,
   `https://example.invalid/<issue>#issuecomment-<id>`, never the invented `...#c<n>` form —
   a future URL-parsing change could otherwise pass the whole fixture suite against a shape no
