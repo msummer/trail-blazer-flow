@@ -253,8 +253,11 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    a `major` finding) — scope, declared constraints, and, when CLAUDE.md declares an "Autonomy
    reserve", the diff's changed paths against those same globs (an undeclared reserve touch is a
    `blocker` finding). **Verifier fail → kickback**: the
-   implementer is re-dispatched with the findings ("fix ONLY these"), then re-checked — **max 2
-   kickbacks**, then `impl-blocked` with the findings; **the orchestrator itself never patches a
+   implementer is re-dispatched with the findings ("fix ONLY these"), then re-checked. The
+   re-check confirms each prior finding is resolved and reviews only the fix's own delta. Its
+   mutation probe targets only production code the fix changed, and a new surviving mutant on
+   code the previous round already reviewed is a Note, not a finding, so the loop converges.
+   **Max 2 kickbacks**, then `impl-blocked` with the findings; **the orchestrator itself never patches a
    finding** — it never edits a source, test, or doc file to resolve one, only re-dispatches the
    implementer or, once kickbacks are exhausted, takes the blocked path. All of this happens
    *before* anything is pushed or a PR exists — the branch may already carry local WIP checkpoint

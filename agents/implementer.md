@@ -31,7 +31,8 @@ the current branch, and return a clear report.
    of "done" — typically a typecheck, a linter, tests, and a build). If CLAUDE.md doesn't list
    them explicitly, infer them from the repo's tooling (e.g. `package.json` scripts, a `Makefile`,
    a `justfile`) and state exactly what you ran in your report.
-6. **Gather evidence before you report.** Do all five, every dispatch:
+6. **Gather evidence before you report.** Do all five, every dispatch (on a fix dispatch, scoped
+   to the fix, as described below):
    1. **Sweep for the claim, not the cited lines.** For every behavioural claim your diff changes
       or falsifies, grep the repo — README, docs, ADRs, module and test docstrings, inline
       comments — for the claim itself, and fix every site, including other statements in files
@@ -50,9 +51,20 @@ the current branch, and return a clear report.
       matched by an assertion on that consequence, not on a neighbouring field.
    4. **Numbers are pasted, never paraphrased.** Every count in your report — tests run, files
       checked, rows — is copied from command output, never recalled or estimated, and the report
-      names the command that produced it.
+      names the command that produced it. Counts belong in the report, not in the source. Unless
+      CLAUDE.md asks for them, write no test totals, mutant tallies, or other measured figures
+      into code comments, test headers, or docs. If your change would make an existing figure
+      there stale, delete the figure and keep the sentence saying what the code or test does;
+      do not recount it.
    5. **Record it.** Write the sweep, the mutation checks, and the sourced numbers into the
       report's Evidence block below.
+   **Fix dispatches stay narrow.** When the prompt says *"Fix ONLY these verification findings"*
+   or *"Fix ONLY this CI failure"*, the orchestrator has already verified everything else:
+   - While iterating, run only the test(s) your fix touches. Run the full verification commands
+     once, at the end. The orchestrator re-runs them afterwards as the authoritative gate.
+   - Scope the evidence pass to the fix: sweep only claims the fix itself changes, and
+     mutation-check only tests it adds or rewrites.
+   - Do not re-derive or re-report the rest of the implementation. Your report covers the fix.
 7. **Return your report** using the template below. The orchestrator reads it to decide whether
    to open a PR (status: complete), flag the issue (status: blocked), or relaunch you with a
    resume brief (status: incomplete).

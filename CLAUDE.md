@@ -44,6 +44,11 @@ and JSON manifests. The gate prints what it checks — run it. A change existing
 is closed by a new fixture or case in the relevant suite, not waived; a new gate assertion is the
 exception, governed by the machine-parsed-artifacts convention below.
 
+**Iterate narrow, finish full.** While iterating, run only the suite your change touches — the
+paragraphs below name which script each suite covers, and a suite takes a name filter for a
+single case. Run the full command set once, before reporting done; on a Mac, that final pass also
+runs under `PATH=/bin:$PATH`, not every iteration.
+
 `dev/selfcheck-tests.sh` is the gate's own negative-test harness — a separate script, not part of
 `dev/selfcheck.sh` itself, that copies this repo to a throwaway temp directory, applies one
 documented perturbation per case, and asserts the gate fails with exactly the expected assertion
@@ -230,8 +235,10 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   else. (4) A new fixture or case comment states its mechanism — what it pins, which mutant kills
   it — never a pass/fail figure or a failing-set enumeration; a mutant migrated into
   `dev/mutants/*.json` (#359) is replaced by one `# mutant:<name> — <mechanism>` comment (gate
-  assertion 4.52 cross-checks the two), and every other existing measured figure in
-  `dev/*-tests.sh` stays prose until its own follow-up migrates it. (5) This is a
+  assertion 4.52 cross-checks the two). A newly measured mutant goes straight into a
+  `dev/mutants/*.json` record with its `# mutant:` comment, never into prose. An existing prose
+  figure in `dev/*-tests.sh` (a pass total, a mutant tally, a "killed N of M") that a change would
+  make stale is deleted, keeping the mechanism sentence, never recounted. (5) This is a
   review-level convention; no gate assertion checks it.
 - Every `uses:` step in `.github/workflows/` is pinned to a full 40-hex commit SHA, with the
   human-readable release tag in a trailing comment — a mutable tag ref would let the action's
