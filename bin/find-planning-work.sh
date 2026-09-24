@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
 # find-planning-work.sh
-# Lists the GitHub issues the planner should act on, as JSON with two buckets:
+# Usage: find-planning-work.sh [--carry-over]
+# Lists the GitHub issues the planner should act on, as JSON with two buckets (a third,
+# awaiting_approval, is added only under --carry-over — see below):
 #   needs_initial_plan : open issues with NO plan-* label (never planned yet)
 #   needs_revision     : open issues labelled plan-proposed (and not plan-approved) that have
 #                        a comment posted by a maintainer (OWNER/MEMBER/COLLABORATOR) AFTER the
@@ -124,6 +126,27 @@
 # counted by BOTH escalation_records_skipped and harness_marker_quoters, the same double-counting
 # the pre-existing per-marker counters already have with harness_marker_quoters.
 #
+# --carry-over (#312, ADR 0001 decision 6) is off by default; with no flag this script's output
+# and API-call count are exactly what they were before this flag existed. With the flag, a THIRD
+# bucket, awaiting_approval, is added: every needs_revision-candidate issue that has a latest
+# trusted plan, has NO newer trusted feedback (has_feedback false), whose selected plan comment
+# has a non-null url, and whose /issues/<n>/events read (one extra `gh api` call per such
+# candidate, not retried) shows no labeled or unlabeled plan-approved event at or after that
+# plan's createdAt. That last, inclusive (>=) window is what honours a label WITHDRAWAL — whether
+# a human removed plan-approved after adding it, or an earlier auto-approval was reverted — and
+# what stops a second audit comment when GitHub's search index simply hasn't caught up with a
+# recent label edit yet: a same-second tie WITHHOLDS the candidate rather than re-approving it. An
+# events read that fails withholds too (fail-closed) rather than risking a duplicate approval —
+# one warn line names the issue, counts.approval_events_unreadable is incremented, and the next
+# run's read tries again fresh; other candidates are unaffected. A withheld-by-events candidate
+# increments counts.prior_approval_withheld instead. Each awaiting_approval item carries the same
+# {number, title, url, author, association, trusted_author} shape needs_revision items do, PLUS
+# plan_url and plan_created_at identifying the specific plan comment an approval must bind to —
+# selected with the identical expression bin/find-implementation-work.sh:471 uses, so what this
+# script reports is exactly what that script's own approval-binding check will later accept. No
+# issue is ever in both needs_revision and awaiting_approval (has_feedback is mutually exclusive
+# between the two paths). counts also gains awaiting_approval (the bucket's own length).
+#
 # Wall clock: the retry budget is deliberately UNCAPPED — one retry per site (the REST
 # author-association lookup, the needs_initial_plan query, the revision-candidates query) plus one
 # retry per candidate in the per-candidate fetch loop, no run-level ceiling on top of that. Worst
@@ -137,6 +160,9 @@
 #
 # Skipped automatically:
 #   - plan-proposed with no newer trusted non-plan comment -> awaiting your review, nothing to do
+#                                                      (unless --carry-over is passed and the
+#                                                      events rule above admits it into
+#                                                      awaiting_approval instead — see above)
 #   - plan-approved                                -> handed off to the implementer
 #   - needs-human (#309)                           -> a durable escalation is waiting on a human;
 #                                                      excluded from both buckets until they remove
@@ -147,6 +173,25 @@
 #
 # Requires: gh (authenticated), jq. Run from anywhere inside the repo.
 set -euo pipefail
+
+# --carry-over (#312, ADR 0001 decision 6) — opt-in flag, off by default. With no argument the
+# script's behaviour and output are exactly what they were before this flag existed: no
+# awaiting_approval bucket, no new counts keys, and no extra `gh api` call. Any argument other
+# than exactly `--carry-over` (including a second argument) is a usage error.
+carry_over=false
+case "$#" in
+  0) ;;
+  1)
+    case "$1" in
+      --carry-over) carry_over=true ;;
+      *) echo "usage: find-planning-work.sh [--carry-over]" >&2; exit 2 ;;
+    esac
+    ;;
+  *) echo "usage: find-planning-work.sh [--carry-over]" >&2; exit 2 ;;
+esac
+awaiting_approval="[]"
+prior_approval_withheld=0
+approval_events_unreadable=0
 
 LIMIT=100
 # ESCALATION_LABEL (#309) — the durable-escalation label a skill applies (see
@@ -337,6 +382,11 @@ for n in $candidates; do
     # about exactly this class by name, instead of dropping it with no diagnostic.
     | ($trustedC | map(select(.body | startswith($m)))) as $planC
     | ([ $planC[] | .createdAt ] | max) as $lastPlan
+    # #312 — the SAME plan-selection expression bin/find-implementation-work.sh:471 uses (byte-
+    # identical), so the plan_url/plan_created_at a carry-over audit comment binds to is exactly
+    # the comment the implementer script own $planSel would select. On a same-second tie the LAST
+    # matching comment in the array wins (see that script own #240 comment for why).
+    | ([ $planC[] | select(.createdAt == $lastPlan) ] | last) as $planSel
     | {
         has_feedback: (
           if $lastPlan == null then false
@@ -348,6 +398,10 @@ for n in $candidates; do
                   | select(.createdAt > $lastPlan) ] | length) > 0
           end
         ),
+        # #312 — published only under --carry-over (see the awaiting_approval block below); null
+        # when there is no latest trusted plan at all.
+        plan_url: ($planSel | if . == null then null else (.url // null) end),
+        plan_created_at: ($planSel | if . == null then null else .createdAt end),
         untrusted: [ $c[]
           | select( ((.authorAssociation // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) == null )
           | select(.createdAt > ($lastPlan // ""))
@@ -419,6 +473,61 @@ for n in $candidates; do
          trusted_author: ((($p.association // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null)
         }')
     needs_revision=$(jq -n --argjson arr "$needs_revision" --argjson e "$entry" '$arr + [$e]')
+  fi
+
+  # #312 (ADR 0001 decision 6) — carry-over auto-approval candidates: only computed under
+  # --carry-over, only for an issue with a latest trusted plan (plan_url non-empty) and no newer
+  # trusted feedback. One extra `gh api` call per such candidate, made ONLY here — never for an
+  # issue already in needs_revision (has_feedback excludes it above) or with no trusted plan at
+  # all (plan_url is empty).
+  plan_url=$(printf '%s' "$result" | jq -r '.plan_url // empty')
+  plan_created_at=$(printf '%s' "$result" | jq -r '.plan_created_at // empty')
+  if [ "$carry_over" = true ] && [ "$has_feedback" = "false" ] && [ -n "$plan_url" ]; then
+    # #312 — mirrors bin/find-implementation-work.sh's own events lookup shape (lines 627-630),
+    # widened to both labeled AND unlabeled plan-approved events so a label WITHDRAWAL (added
+    # then removed, by a human or a prior auto-approval) is honoured too, and so a plan-approved
+    # label whose addition simply hasn't reached GitHub's search index yet (search lag) still
+    # withholds the candidate instead of risking a second audit comment. Not retried (unlike this
+    # script's other `gh` call sites, which each get one bounded retry): one warn, fail closed for
+    # this one issue, and the next run retries it naturally.
+    if ! events=$(gh api "repos/{owner}/{repo}/issues/$n/events?per_page=100" --paginate --jq '
+        .[] | select((.event == "labeled" or .event == "unlabeled") and .label.name == "plan-approved")
+        | .created_at
+      ' 2>/dev/null); then
+      echo "warn: issue #$n: could not read plan-approved label events — not evaluated for carry-over auto-approval this run" >&2
+      approval_events_unreadable=$((approval_events_unreadable+1))
+    else
+      # sed, not `grep -v`, to drop blank lines — see find-implementation-work.sh's own comment
+      # at its identical site (line 636) for why: under this script's `set -o pipefail`, a
+      # `grep -v` matching nothing (the common "no events" case) would exit 1 and abort the run.
+      event_lines=$(printf '%s\n' "$events" | sed '/^$/d')
+      withheld=false
+      if [ -n "$event_lines" ]; then
+        while IFS= read -r evt; do
+          [ -n "$evt" ] || continue
+          # #312 — the window is INCLUSIVE (>=): a same-second tie withholds, failing toward the
+          # human rather than toward a second auto-approval.
+          if [[ "$evt" > "$plan_created_at" || "$evt" = "$plan_created_at" ]]; then
+            withheld=true
+          fi
+        done <<<"$event_lines"
+      fi
+      if [ "$withheld" = true ]; then
+        prior_approval_withheld=$((prior_approval_withheld+1))
+      else
+        entry=$(printf '%s' "$issue" | jq --arg trusted "$TRUSTED_ASSOCIATIONS" --argjson map "$issue_authors" --arg pu "$plan_url" --arg pc "$plan_created_at" '
+          ($trusted | split(" ")) as $ok
+          | ($map[(.number|tostring)] // {}) as $p
+          | {number, title, url,
+             author: ($p.author // .author.login // "unknown"),
+             association: (($p.association // "MISSING") | ascii_upcase),
+             trusted_author: ((($p.association // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null),
+             plan_url: $pu,
+             plan_created_at: $pc
+            }')
+        awaiting_approval=$(jq -n --argjson arr "$awaiting_approval" --argjson e "$entry" '$arr + [$e]')
+      fi
+    fi
   fi
 
   untrusted_arr=$(printf '%s' "$result" | jq -c '.untrusted')
@@ -512,7 +621,7 @@ untrusted_issue_author_count=$(printf '%s' "$untrusted_issue_authors" | jq 'leng
 # the truncation flag — if either query hit LIMIT, the buckets may be incomplete).
 candidate_count=$(printf '%s\n' $candidates | grep -c . || true)
 
-jq -n \
+doc=$(jq -n \
   --argjson initial "$needs_initial_plan" \
   --argjson revision "$needs_revision" \
   --argjson untrusted "$untrusted_comments" \
@@ -558,4 +667,15 @@ jq -n \
              candidates_query_unavailable: $cqu,
              plan_marker_quoters: $pmq,
              harness_marker_quoters: $hmq,
-             fetch_retries: $fr}}'
+             fetch_retries: $fr}}')
+
+# #312 — only under --carry-over does the document gain awaiting_approval and its three counts
+# keys; without the flag $doc from above is emitted byte-identical to before this change, with no
+# member added or removed.
+if [ "$carry_over" = true ]; then
+  doc=$(printf '%s' "$doc" | jq --argjson aa "$awaiting_approval" --argjson paw "$prior_approval_withheld" --argjson aeu "$approval_events_unreadable" '
+    . + {awaiting_approval: $aa}
+    | .counts += {awaiting_approval: ($aa | length), prior_approval_withheld: $paw, approval_events_unreadable: $aeu}
+  ')
+fi
+printf '%s\n' "$doc"

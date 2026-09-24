@@ -18,6 +18,16 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #312: Under "Autonomy mode" `mode: autonomous`, the planner now also evaluates auto-approval for
+  a `plan-proposed` plan posted or revised in an EARLIER run, not only one from this run (ADR 0001
+  decision 6). `find-planning-work.sh` gains an opt-in `--carry-over` flag adding a third
+  `awaiting_approval` bucket ({number, title, url, author, association, trusted_author, plan_url,
+  plan_created_at}) and three `counts` keys; without the flag, output and API-call count are
+  unchanged. A candidate is admitted only with no newer trusted feedback, a non-null plan url, and
+  no prior `plan-approved` labeled/unlabeled event at or after the plan (honouring a withdrawal
+  and search lag alike; a failed events read withholds, fail-closed). The skill re-judges the full
+  unchanged hard floor now, binds the approval to `plan_url`, and writes nothing to GitHub on a
+  failing candidate. No consumer step.
 - #349 (absorbs #350): Moved the planner's step-7 stalled-stage record and the implementer's step
   2b open-PR sub-branch onto the #309 durable-escalation mechanism (`needs-human` label, shared
   `<!-- harness-escalation -->`/`<!-- harness-escalation-key: ... -->` comment). New closed-list

@@ -171,6 +171,11 @@ Run:
 find-planning-work.sh
 ```
 
+Under "Autonomy mode" `mode: autonomous` (README contract item 9), run
+`find-planning-work.sh --carry-over` instead (#312): it adds an `awaiting_approval` array (rule in the script's header),
+whose items also carry `plan_url` and `plan_created_at` and are consumed only by step 6b. Report a
+non-zero `counts.approval_events_unreadable` prominently.
+
 This returns JSON with `needs_initial_plan` and `needs_revision` arrays (each item has `number`,
 `title`, `url`, `author`, `association`, `trusted_author`), an `untrusted_comments` array (each
 item additionally has `comments: [{author, association, createdAt, has_plan_marker,
@@ -203,7 +208,8 @@ do, but because the query itself failed closed; do not read it as "nothing to do
 outage in your summary and expect it to resolve on the next scheduled run. If instead only the
 `*_retried` flag is `true` (unavailable stays `false`), mention the absorbed blip briefly, same as
 the author-association case above. If
-`needs_initial_plan` and `needs_revision` are both empty, say so and stop (empty
+`needs_initial_plan`, `needs_revision` and (under `--carry-over`) `awaiting_approval` are all
+empty, say so and stop (empty
 `untrusted_comments`/`untrusted_issue_authors` buckets need no separate stop condition — report
 them as empty and continue, or as part of the same "nothing to do" message).
 
@@ -375,8 +381,8 @@ If you could answer none of the BLOCKING questions, leave the plan as posted.
 **6a. Scoped-autonomy inputs.** This part runs regardless of whether a "Plan auto-approval
 policy" section exists. Read the repo's `CLAUDE.md` for a section titled exactly **"Autonomy
 decision record"**; if present, take the `grant-label:` value from its fenced block. For each
-issue you planned or revised **this run** that carries that label, run — as a plain Bash
-command with the literal issue number, never a command substitution:
+issue you planned or revised **this run**, OR a 6b carry-over candidate, that carries that label,
+run — as a plain Bash command with the literal issue number, never a command substitution:
 
 ```bash
 check-decision-record.sh <number>
@@ -393,7 +399,8 @@ policy"**. If there is no such section, and no "Autonomy mode" section declares 
 (README contract item 9), skip the rest of this step — every approval is the human's. Under
 `mode: autonomous`, a missing policy section is read as present with no policy conditions beyond
 the hard floor below — the hard floor alone decides. Either way, evaluate each plan you posted or
-revised **this run** against BOTH of the following. The policy can loosen nothing in the hard
+revised **this run** — and, under `mode: autonomous` only, each 6b carry-over candidate (see
+below) — against BOTH of the following. The policy can loosen nothing in the hard
 floor; it can only add conditions.
 
 **Hard floor (non-negotiable, regardless of what the policy says):**
@@ -425,6 +432,16 @@ floor; it can only add conditions.
   whose author association could not be read this run (`counts.author_association_unavailable:
   true`), is planned but never auto-approved.
 
+**Carry-over (#312, `mode: autonomous` only)** — each `awaiting_approval` item this run did not
+post or revise a plan for. Fetch it fresh (`gh issue view <n> --json number,title,url,labels,comments`)
+and read the plan from the comment whose `url` equals `plan_url`; skip it, with the reason in
+step 7, if that comment is gone or the fetched `labels` already carry `plan-approved`. Otherwise
+judge every hard-floor clause above against that plan now — staleness via step 4, overlap against
+every other pending plan, labels from this fetch, `trusted_author` from the item; an earlier-run
+`RESOLVED (orchestrator-proposed):` decision counts exactly like a this-run one. Pass: approve and
+audit below, binding to `plan_url`, and say it is a carry-over. Fail: write nothing to GitHub and
+report the failing clause in step 7; the next run re-evaluates it.
+
 **Policy conditions:** whatever the CLAUDE.md section states — typically a max size (e.g. "S
 only"), allowed areas, excluded paths. Judge them honestly against the plan; when a condition
 is ambiguous, the answer is no. With no "Plan auto-approval policy" section declared (only
@@ -445,15 +462,17 @@ its "remove `plan-approved`, add `no-auto-approve`" veto instructions would othe
 implementer as a binding `RESOLVED:` decision about the issue's own labels. It must state: that
 this was an auto-approval under the CLAUDE.md policy (or, with no such section declared, under
 "Autonomy mode"'s implied policy); which policy conditions it satisfied (one
-line, or "none declared — hard floor only" under the implied policy); the URL of the plan comment this approval binds to (#174) — since the label is
-added right after the plan is posted, an auto-approved plan is always covered by its own
+line, or "none declared — hard floor only" under the implied policy); the URL of the plan comment this approval binds to (#174) — the label is
+always added AFTER the plan it binds to was posted (whether that posting happened this run or,
+for a carry-over approval, an earlier one), so an auto-approved plan is always covered by its own
 approval; how to veto — remove `plan-approved`, and add `no-auto-approve` to keep this issue manual
 in future; and, if step 6's granted-issue exception approved any decision, the record bullet(s)
 each such decision cited. Include the warning: *"An auto-approved plan may be implemented in the
 same run — the PR review is your gate for this work."*
 
-In the summary, list auto-approved plans in their own group; they are the ones the human never
-saw pre-implementation.
+In the summary, list auto-approved plans in their own group, carry-overs labelled as such; they
+are the ones the human never saw pre-implementation. List each carry-over not approved, with its
+failing clause.
 
 ### 7. Summarise
 
@@ -508,7 +527,8 @@ deliver — the harness itself never applies, removes, or creates the label.
 
 **Reconcile discovery against outcomes.** Before closing, walk `find-planning-work.sh`'s
 `needs_initial_plan` and `needs_revision` lists and confirm every issue on them has a row in the
-table above. Any issue discovered but with no recorded outcome (planned, revised, or explicitly
+table above (`awaiting_approval` items are never reconciled or escalated: they wait in
+`harness-status.sh`'s `plans_to_review`). Any issue discovered but with no recorded outcome (planned, revised, or explicitly
 skipped-with-reason, including an issue a stop left undispatched) is an **escalated skipped stage** — report it prominently in the summary,
 never let it drop silently. This is the standalone-run equivalent of the pre-advance checks
 `issue-cycle` performs when it runs this skill as part of a full pass. **Make the escalation durable (#309, #349):** escalate each stalled issue per
