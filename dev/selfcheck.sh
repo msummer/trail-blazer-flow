@@ -649,6 +649,7 @@ Merge autonomy policy
 Test-suite ratchet policy
 Autonomy reserve
 Autonomy decision record
+Autonomy mode
 EOF
 if [ -z "$bad_list" ]; then
   ok "4.8 policy section titles cross-referenced in README.md and skills/harness-setup/SKILL.md"
@@ -765,12 +766,12 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 865
-issue-cycle 600
-issue-planner 560
+budget_table="issue-implementer 870
+issue-cycle 605
+issue-planner 565
 project-kickoff 215
 test-ratchet 200
-harness-setup 185"
+harness-setup 195"
 bad_list=""
 while IFS=' ' read -r skill cap; do
   [ -n "$skill" ] || continue

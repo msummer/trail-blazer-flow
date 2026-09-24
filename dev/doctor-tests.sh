@@ -35,25 +35,34 @@
 # agent-boundary hook, whose absence is silent rather than a prompt), the
 # stale-legacy-'-C'-allow-entry WARN on
 # .claude/settings.json (#150 — the entries the guard hook now supersedes), and (#175, ex-#166,
-# widened by #179, widened again by #186) the CI action pinning WARN — gated on a "Merge autonomy
-# policy" section, it lists any `uses:` ref in .github/workflows/*.yml|*.yaml AND in any
-# action.yml/action.yaml anywhere in the repo (pruning .git/, node_modules/, and
+# widened by #179, widened again by #186) the CI action pinning WARN — gated on $merge_effective
+# (merge autonomy effectively active: a "Merge autonomy policy" section, or #311's "Autonomy mode"
+# implying it for harness PRs only), it lists any `uses:` ref in .github/workflows/*.yml|*.yaml
+# AND in any action.yml/action.yaml anywhere in the repo (pruning .git/, node_modules/, and
 # .github/workflows/ so a local composite action is found regardless of where it lives, and a
 # workflow file literally named action.yml is never double-counted) — local (./…, ../…) and
 # docker:// refs excepted in both file classes — not pinned to a full 40-hex commit SHA,
 # comment-stripped by line, string comparison only, never executed, (#233) the installed
 # harness version report — bin/harness-version.sh's printed "<version> <sha>" line surfaced
 # verbatim as a PASS when resolvable, a WARN (never a FAIL) naming the expected fixed path when
-# it isn't, and (#234, review F4) the branch-protection document's up-to-date strictness — only
-# under a "Merge autonomy policy" section and a successful protection endpoint call,
+# it isn't, (#234, review F4) the branch-protection document's up-to-date strictness — only when
+# merge autonomy is effectively active ($merge_effective, same combination as the CI-pinning gate
+# above) and a successful protection endpoint call,
 # required_status_checks.strict (WARN when not exactly true), the required-status-check-context
 # count via max(checks|length, contexts|length) (WARN when zero, including when
 # required_status_checks itself is absent), and required PR reviews (informational PASS either
-# way) — WARN-only, never FAIL, silent with no policy section, and unaffected by (never reading)
-# $has_merge_policy while unset on a repo with no CLAUDE.md at all, and (#262-2) bin/harness-
-# version.sh's own `.git`-presence guard: run directly (not through the doctor), a cache-shaped
-# copy nested inside an enclosing repo with a resolvable HEAD prints "<version> -", never that
-# repo's short sha, paired with a non-vacuity control whose plugin root is itself the checkout.
+# way) — WARN-only, never FAIL, silent with the mode off and no policy section, and unaffected by
+# (never reading) $has_merge_policy/$merge_effective while unset on a repo with no CLAUDE.md at
+# all, (#262-2) bin/harness-version.sh's own `.git`-presence guard: run directly (not through the
+# doctor), a cache-shaped copy nested inside an enclosing repo with a resolvable HEAD prints
+# "<version> -", never that repo's short sha, paired with a non-vacuity control whose plugin root
+# is itself the checkout, and (#311) the optional "Autonomy mode" section — validated as a
+# combination, not a single flag: PASS off/WARN inert/PASS autonomous (naming the effective
+# kickback budget, default 2, bounded 0-3 with a WARN and fallback to the default otherwise), the
+# implied widening of merge autonomy above, and, only in autonomous mode, an informational
+# permissions.defaultMode PASS reporting a validated bare word (or "(unset)"/"(unrecognised
+# value)") per settings file read — never an allow/deny entry, from any of the three files,
+# including the user-level one.
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -290,6 +299,58 @@ element: Rollback plan
 ```
 EOF
         ;;
+      autonomy)
+        # (#311) mode: autonomous, no explicit kickback-budget -> the doctor's own default (2).
+        cat <<'EOF'
+
+## Autonomy mode
+```
+mode: autonomous
+```
+EOF
+        ;;
+      autonomy-budget)
+        cat <<'EOF'
+
+## Autonomy mode
+```
+mode: autonomous
+kickback-budget: 3
+```
+EOF
+        ;;
+      autonomy-badbudget)
+        cat <<'EOF'
+
+## Autonomy mode
+```
+mode: autonomous
+kickback-budget: 9
+```
+EOF
+        ;;
+      autonomy-unfenced)
+        # (#311) `mode: autonomous` as a bare line OUTSIDE the fence, with the fence saying
+        # `mode: manual` -> inert: only the first fenced block is read, so the mode fails closed.
+        cat <<'EOF'
+
+## Autonomy mode
+mode: autonomous
+```
+mode: manual
+```
+EOF
+        ;;
+      autonomy-inert)
+        # (#311) a section present but with no 'mode: autonomous' line -> inert, same as absent.
+        cat <<'EOF'
+
+## Autonomy mode
+```
+mode: manual
+```
+EOF
+        ;;
     esac
   } > "$dir/CLAUDE.md"
   [ "$mode" = missing ] || write_settings "$dir" "$mode"
@@ -494,7 +555,7 @@ expect_no_file() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# The 71 cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
+# The cases. Every fixture also emits the LESSONS.md auto-seed line — expected, deliberately
 # unasserted below. Every fixture except the three baseline-* ones also emits a no-baseline WARN
 # (also unasserted); the baseline-* fixtures write their own .claude/BASELINE.md instead, via
 # seed_commit/point_origin_ref/write_baseline, so they exercise the baseline compare itself.
@@ -1617,11 +1678,10 @@ case_version_unresolvable() {
 # with the plugin root ITSELF the git checkout, so its own resolvable HEAD's short SHA is expected
 # output, proving the harness can observe a real SHA at all. Measured mutant (delete
 # `&& [ -e "$plugin_root/.git" ]` from bin/harness-version.sh's `if command -v git >/dev/null
-# 2>&1 && [ -e "$plugin_root/.git" ]; then` line): `bash dev/doctor-tests.sh` goes from 71 pass, 0
-# fail to 70 pass, 1 fail — failing exactly: version-cache-under-repo (its stdout now contains the
-# enclosing repo's short SHA instead of "-"); version-plugin-root-checkout stays green (its own
-# checkout's SHA is the enclosing repo either way, so the mutant is a no-op there — the pairing
-# that makes version-cache-under-repo's fail non-vacuous).
+# 2>&1 && [ -e "$plugin_root/.git" ]; then` line) — failing exactly: version-cache-under-repo (its
+# stdout now contains the enclosing repo's short SHA instead of "-"); version-plugin-root-checkout
+# stays green (its own checkout's SHA is the enclosing repo either way, so the mutant is a no-op
+# there — the pairing that makes version-cache-under-repo's fail non-vacuous).
 case_version_cache_under_repo() {
   local dir cache repo_sha
   dir="$tmpbase/version-cache-under-repo"
@@ -1669,8 +1729,7 @@ case_version_plugin_root_checkout() {
 # (required_status_checks.strict true, non-empty checks/contexts, required_pull_request_reviews
 # present): the strict PASS line prints, neither WARN stem prints, and the reviews line reads
 # "configured". Measured mutant: inverting the strict compare (`= "true"` -> `= "false"` on the
-# `if [ "$strict" = "true" ]` line) -- measured: `bash dev/doctor-tests.sh` reports "64 pass, 4
-# fail", the four failures being protection-strict-true, protection-strict-false,
+# `if [ "$strict" = "true" ]` line) — failing exactly protection-strict-true, protection-strict-false,
 # protection-zero-contexts, and protection-no-status-checks (every fixture whose document
 # reaches the strict compare flips).
 case_protection_strict_true() {
@@ -1689,9 +1748,8 @@ case_protection_strict_true() {
 # absent: the strict WARN stem prints, the contexts WARN stem is absent (contexts are non-zero),
 # and the reviews line reads "not configured". Measured mutant: the reviews jq filter's `if
 # .required_pull_request_reviews then "configured" else "not configured" end` replaced by the
-# constant "configured" -- measured: `bash dev/doctor-tests.sh` reports "67 pass, 1 fail", only
-# protection-strict-false (the only new case whose fixture has required_pull_request_reviews
-# absent and asserts the "not configured" line).
+# constant "configured" — failing exactly protection-strict-false (the only new case whose fixture
+# has required_pull_request_reviews absent and asserts the "not configured" line).
 case_protection_strict_false() {
   local dir; dir="$(mk_repo protection-strict-false merge verbatim)"
   local ghdir="$tmpbase/protection-strict-false-gh"
@@ -1706,10 +1764,10 @@ case_protection_strict_false() {
 # protection-zero-contexts — strict true, both checks and contexts empty: the contexts WARN stem
 # prints, the strict WARN stem is absent. Measured mutant: the context-count comparison's `-gt 0`
 # widened to `-ge 0` (`if [ "$ctx_count" -ge 0 ]`, true for the zero count this fixture and
-# protection-no-status-checks both produce) -- measured: `bash dev/doctor-tests.sh` reports "66
-# pass, 2 fail" — protection-zero-contexts (its own contexts WARN goes missing) and
-# protection-no-status-checks (its contexts WARN also goes missing, so its "both WARN stems"
-# assertion fails too; its strict WARN, from a different clause, is unaffected).
+# protection-no-status-checks both produce) — failing exactly protection-zero-contexts (its own
+# contexts WARN goes missing) and protection-no-status-checks (its contexts WARN also goes
+# missing, so its "both WARN stems" assertion fails too; its strict WARN, from a different clause,
+# is unaffected).
 case_protection_zero_contexts() {
   local dir; dir="$(mk_repo protection-zero-contexts merge verbatim)"
   local ghdir="$tmpbase/protection-zero-contexts-gh"
@@ -1726,8 +1784,7 @@ case_protection_zero_contexts() {
 # strict/contexts/reviews block requiring `.required_status_checks != null`
 # (`if $has_merge_policy && $jq_ready && printf '%s' "$prot" | jq -e '.required_status_checks !=
 # null' >/dev/null 2>&1; then`), which skips the block entirely for this fixture's document only
-# -- measured: `bash dev/doctor-tests.sh` reports "67 pass, 1 fail", only
-# protection-no-status-checks (every other fixture's document has a non-null
+# — failing exactly protection-no-status-checks (every other fixture's document has a non-null
 # required_status_checks key, so the added guard never trips for them).
 case_protection_no_status_checks() {
   local dir; dir="$(mk_repo protection-no-status-checks merge verbatim)"
@@ -1742,10 +1799,10 @@ case_protection_no_status_checks() {
 # protection-no-policy — no "Merge autonomy policy" section at all (base variant), fed the
 # strict-false protection document: today's single "branch protection enabled on main" PASS line
 # prints and neither new stem prints — the widened report is silent without the policy gate,
-# byte-for-byte the pre-#234 behaviour. Measured mutant: dropping the `$has_merge_policy` gate
-# (`if $has_merge_policy && $jq_ready; then` -> `if $jq_ready; then`) -- measured: `bash
-# dev/doctor-tests.sh` reports "67 pass, 1 fail", only protection-no-policy (the strict-false
-# document now produces its WARN even with no policy section declared).
+# byte-for-byte the pre-#234 behaviour. Measured mutant: dropping the `$merge_effective` gate
+# (`if $merge_effective && $jq_ready; then` -> `if $jq_ready; then`) — failing exactly
+# protection-no-policy (the strict-false document now produces its WARN even with no policy
+# section declared and no "Autonomy mode" section either).
 case_protection_no_policy() {
   local dir; dir="$(mk_repo protection-no-policy base verbatim)"
   local ghdir="$tmpbase/protection-no-policy-gh"
@@ -1762,10 +1819,9 @@ case_protection_no_policy() {
 # stem prints (the widened report never runs — there is no document to read). Measured mutant:
 # appending `|| true` to the api-capturing condition (`if [ -n "$repo_slug" ] && prot="$(gh api
 # ... 2>/dev/null)"; then` -> `... 2>/dev/null)" || true; then`), which makes the branch always
-# taken regardless of gh's exit status -- measured: `bash dev/doctor-tests.sh` reports "67 pass,
-# 1 fail", only protection-endpoint-fails (the doctor now claims "branch protection enabled on
-# main" instead of the no-protection WARN; every other new fixture's `gh api` call already
-# succeeds, so `|| true` changes nothing for them).
+# taken regardless of gh's exit status — failing exactly protection-endpoint-fails (the doctor now
+# claims "branch protection enabled on main" instead of the no-protection WARN; every other new
+# fixture's `gh api` call already succeeds, so `|| true` changes nothing for them).
 case_protection_endpoint_fails() {
   local dir; dir="$(mk_repo protection-endpoint-fails merge verbatim)"
   local ghdir="$tmpbase/protection-endpoint-fails-gh"
@@ -1779,16 +1835,17 @@ case_protection_endpoint_fails() {
 
 # protection-no-claude-md — no CLAUDE.md at all (removed after mk_repo, the only case that does
 # so): the pre-existing "no CLAUDE.md" FAIL still fires (rc 1) and the `== summary:` footer still
-# prints — the discriminator that proves the branch-protection section never reads
-# $has_merge_policy while unset under `set -u` (a hard abort cannot produce that footer). Neither
-# new WARN stem prints (has_merge_policy is false with no CLAUDE.md to declare the policy
-# section). Measured mutant: deleting the hoisted top-level `has_merge_policy=false` line (the
-# assignment inside the CLAUDE.md-exists branch stays, so every other fixture — which always has
-# a CLAUDE.md — is unaffected) -- measured: `bash dev/doctor-tests.sh` reports "67 pass, 1 fail",
-# only protection-no-claude-md, with reason "missing: == summary:" (the doctor now dies with an
-# unbound-variable error under `set -u` before reaching the branch-protection section's summary
-# footer at all; `expect_rc 1` still happens to pass, since bash's own unbound-variable abort
-# also exits 1 — the footer-presence assertion is what actually catches the crash).
+# prints — the discriminator that proves the branch-protection section never reads $merge_effective
+# (#311 — the variable it actually gates on now, in place of the pre-#311 $has_merge_policy) while
+# unset under `set -u` (a hard abort cannot produce that footer). Neither new WARN stem prints
+# (merge_effective is false with no CLAUDE.md to declare either the "Merge autonomy policy" or
+# "Autonomy mode" section). Measured mutant: deleting the hoisted top-level `merge_effective=false`
+# line (the assignment inside the CLAUDE.md-exists branch stays, so every other fixture — which
+# always has a CLAUDE.md — is unaffected) — failing exactly protection-no-claude-md, with reason
+# "missing: == summary:" (the doctor now dies with an unbound-variable error under `set -u` before
+# reaching the branch-protection section's summary footer at all; `expect_rc 1` still happens to
+# pass, since bash's own unbound-variable abort also exits 1 — the footer-presence assertion is
+# what actually catches the crash).
 case_protection_no_claude_md() {
   local dir; dir="$(mk_repo protection-no-claude-md merge verbatim)"
   rm -f "$dir/CLAUDE.md"
@@ -1800,6 +1857,113 @@ case_protection_no_claude_md() {
   expect "== summary:"
   expect_absent "branch protection: up-to-date branches are not required"
   expect_absent "branch protection: zero required status check contexts"
+}
+
+# --- autonomy mode (#311) -----------------------------------------------------------------------
+# Mutation proof lives in dev/mutants/doctor-tests.json (suite dev/doctor-tests.sh, filter
+# "autonomy-mode-"), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
+# mutant:311-merge-gate — reverts the merge verdict chain's $merge_effective back to
+#   $has_merge_policy, so autonomous mode's implied merge autonomy no longer reaches it.
+# mutant:311-ci-gate — reverts the CI-pinning gate back to $has_merge_policy, same regression for
+#   that gate alone.
+# mutant:311-protection-gate — reverts the branch-protection gate back to $has_merge_policy.
+# mutant:311-first-fence — makes the first-fenced-block extraction pass the whole section through,
+#   so a bare `mode: autonomous` line outside the fence switches the mode on (fail-open).
+# mutant:311-mode-value — sets $autonomy_on on the "Autonomy mode" section's mere presence instead
+#   of requiring a 'mode: autonomous' line, so an inert section (e.g. 'mode: manual') would
+#   wrongly activate the mode.
+# mutant:311-budget-bounds — widens the `0|1|2|3` kickback-budget case arm to also accept 9, so an
+#   out-of-range value is silently honoured instead of falling back to the default with a WARN.
+# mutant:311-defaultmode-sanitize — bypasses the bare-word `[A-Za-z]+` sanitiser, so an
+#   unrecognised defaultMode value is echoed verbatim instead of printed as "(unrecognised value)".
+# mutant:311-defaultmode-gate — prints the permissions.defaultMode line regardless of
+#   $autonomy_on, so it leaks even with the mode off or inert.
+case_autonomy_mode_off() {
+  local dir; dir="$(mk_repo autonomy-mode-off base verbatim)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "autonomy mode: off"
+  expect_absent "permissions.defaultMode"
+}
+
+case_autonomy_mode_deny_in_place() {
+  local dir; dir="$(mk_repo autonomy-mode-deny-in-place autonomy verbatim)"
+  mkdir -p "$dir/.github/workflows"
+  printf 'name: ci\non: [pull_request]\njobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n' > "$dir/.github/workflows/ci.yml"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "autonomy mode: autonomous (kickback budget 2)"
+  expect "half-activated"
+  expect_absent "merge autonomy: off"
+  expect "CI action pinning: 1 uses: ref(s)"
+  expect_absent "post-merge verification"
+}
+
+case_autonomy_mode_active() {
+  local dir; dir="$(mk_repo autonomy-mode-active autonomy merge-allow-only)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "merge autonomy: active"
+  expect_absent "half-activated"
+}
+
+case_autonomy_mode_protection() {
+  local dir; dir="$(mk_repo autonomy-mode-protection autonomy merge-allow-only)"
+  local ghdir="$tmpbase/autonomy-mode-protection-gh"
+  build_stub_gh "$ghdir" main "" no-status-checks
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect "branch protection: up-to-date branches are not required"
+  expect "branch protection: zero required status check contexts"
+}
+
+case_autonomy_mode_inert() {
+  local dir; dir="$(mk_repo autonomy-mode-inert autonomy-inert verbatim)"
+  local ghdir="$tmpbase/autonomy-mode-inert-gh"
+  build_stub_gh "$ghdir" main "" strict-false
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect "autonomy mode: inert"
+  expect "merge autonomy: off"
+  expect_absent "branch protection: up-to-date branches are not required"
+  expect_absent "permissions.defaultMode"
+}
+
+case_autonomy_mode_unfenced() {
+  local dir; dir="$(mk_repo autonomy-mode-unfenced autonomy-unfenced verbatim)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "autonomy mode: inert"
+  expect_absent "autonomy mode: autonomous"
+}
+
+case_autonomy_mode_budget() {
+  local dir; dir="$(mk_repo autonomy-mode-budget autonomy-budget verbatim)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "autonomy mode: autonomous (kickback budget 3)"
+}
+
+case_autonomy_mode_budget_out_of_range() {
+  local dir; dir="$(mk_repo autonomy-mode-budget-out-of-range autonomy-badbudget verbatim)"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "autonomy mode: kickback-budget '9'"
+  expect "(kickback budget 2)"
+}
+
+case_autonomy_mode_default_mode() {
+  local dir; dir="$(mk_repo autonomy-mode-default-mode autonomy verbatim)"
+  printf '{"permissions":{"defaultMode":"auto"}}' > "$dir/.claude/settings.local.json"
+  mkdir -p "$dir/claudecfg"
+  printf '{"permissions":{"defaultMode":"not a mode!"}}' > "$dir/claudecfg/settings.json"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "permissions.defaultMode:"
+  expect ".claude/settings.json: (unset)"
+  expect ".claude/settings.local.json: auto"
+  expect "claudecfg/settings.json: (unrecognised value)"
+  expect_absent "not a mode!"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1829,8 +1993,8 @@ tmpl_branch_ops="$(jq -r '.permissions.deny[]? // empty' "$root/templates/repo-s
 # value first (so a non-guarded regression couldn't pass vacuously against empty captured output),
 # calls both helpers with "", then checks the ACCUMULATED __ok/__why saved off before this case's
 # own __ok/__why are reset by the runner loop. Measured mutant: delete `needle_required expect
-# "$1" || return 0` from expect() only — `bash dev/doctor-tests.sh` goes from 71 pass, 0 fail to
-# 70 pass, 1 fail, failing exactly: empty-needle-guard (saved_why no longer names "expect:").
+# "$1" || return 0` from expect() only — failing exactly empty-needle-guard (saved_why no longer
+# names "expect:").
 case_empty_needle_guard() {
   local saved_ok saved_why
   doctor_out="fixture output for the empty-needle guard (#262)"
@@ -1925,6 +2089,15 @@ cases=(
   "protection-no-policy|case_protection_no_policy|branch protection (#234): no Merge autonomy policy section -> neither WARN stem, today's PASS line unchanged"
   "protection-endpoint-fails|case_protection_endpoint_fails|branch protection (#234): protection endpoint call fails -> today's WARN only"
   "protection-no-claude-md|case_protection_no_claude_md|branch protection (#234): no CLAUDE.md at all -> set -u hoist proven by the summary footer still printing"
+  "autonomy-mode-off|case_autonomy_mode_off|autonomy mode (#311): no 'Autonomy mode' section -> PASS off, no permissions.defaultMode line"
+  "autonomy-mode-deny-in-place|case_autonomy_mode_deny_in_place|autonomy mode (#311): mode: autonomous with no Merge autonomy policy section and the deny still in place -> half-activated WARN and CI pinning WARN fire from the implied activation, post-merge verification stays silent"
+  "autonomy-mode-active|case_autonomy_mode_active|autonomy mode (#311): mode: autonomous plus a lifted deny and allow entry -> merge autonomy: active"
+  "autonomy-mode-protection|case_autonomy_mode_protection|autonomy mode (#311): mode: autonomous with no Merge autonomy policy section -> branch-protection gate still fires from the implied activation"
+  "autonomy-mode-unfenced|case_autonomy_mode_unfenced|autonomy mode (#311): a bare mode: autonomous line outside the fenced block -> inert; only the first fence is read"
+  "autonomy-mode-inert|case_autonomy_mode_inert|autonomy mode (#311): a section with no 'mode: autonomous' line -> inert WARN, none of the implied gates activate"
+  "autonomy-mode-budget|case_autonomy_mode_budget|autonomy mode (#311): kickback-budget: 3 -> PASS names the declared budget"
+  "autonomy-mode-budget-out-of-range|case_autonomy_mode_budget_out_of_range|autonomy mode (#311): kickback-budget: 9 -> WARN naming the bad value, default budget 2 applies"
+  "autonomy-mode-default-mode|case_autonomy_mode_default_mode|autonomy mode (#311): permissions.defaultMode reported per settings file, sanitised to a bare word or '(unset)'/'(unrecognised value)'"
   "empty-needle-guard|case_empty_needle_guard|#262: expect/expect_absent both refuse an empty needle rather than degenerating into an unconditional match/never-match"
 )
 

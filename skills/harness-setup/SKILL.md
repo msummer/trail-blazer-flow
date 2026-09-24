@@ -66,7 +66,9 @@ it without guessing?"**:
 5. **Plan auto-approval policy (optional)** — if a section titled "Plan auto-approval policy"
    exists, the issue-planner may auto-approve plans that meet its conditions (a hard floor
    still always applies — see the plugin README). Explain the semantics to the user either
-   way: no section means every approval is manual. If they want more autonomy, offer to draft
+   way: no section means every approval is manual, UNLESS item 9's "Autonomy mode" declares
+   `mode: autonomous`, which reads a missing section as present with no conditions beyond the
+   hard floor. If they want more autonomy, offer to draft
    a conservative starting policy (e.g. *"Auto-approve plans that are size S with no
    data/schema impact and no security-sensitive risks"*) for their review — it's their trust
    decision, in their file, and the `no-auto-approve` label opts individual issues back out.
@@ -77,7 +79,8 @@ it without guessing?"**:
    `Bash(gh pr merge:*)` deny in `.claude/settings.json`. Both halves are theirs — unlike
    the step-1 allow-list additions, never lift that deny yourself, even if asked to finish
    the setup. Explain the semantics either way: no section means no autonomous merges, and
-   every PR merge stays manual. Report which halves are in place: a policy section with the
+   every PR merge stays manual, UNLESS item 9's "Autonomy mode" declares `mode: autonomous`,
+   which reads a missing section as present for harness PRs only. Report which halves are in place: a policy section with the
    deny still standing is inert — the cycle reports `verified, merge blocked` with the exact
    merge command instead of merging. If they want it, offer to draft a conservative starting
    policy (e.g. *"Merge harness PRs whose plan was approved, whose verifier verdict is pass,
@@ -105,6 +108,13 @@ it without guessing?"**:
    well-formed, and whether the declared label exists. This only makes the grant checkable — it
    never decides what the grant means, and the harness never applies or removes the label; that
    stays entirely with this repo and its human. Neither section means nothing changes.
+9. **Autonomy mode (optional)** — if a section titled exactly "Autonomy mode" declares
+   `mode: autonomous`, it turns on items 5 and 6 together, for a missing section, as one
+   combination (see the plugin README's contract item 9) — a declared item 5/6 section still
+   applies in full either way. No section, or one with no `mode: autonomous` line, means the
+   mode is off (or inert) and items 5/6 behave exactly as described above. Offer to draft a
+   starting section (`mode: autonomous`, default `kickback-budget: 2`) only once the user
+   confirms they want unattended merges too, since this is the same trust decision as item 6.
 
 If `CLAUDE.md` is missing or thin: explore the repo (manifests, CI workflow files, test
 configs, existing docs) and **draft** the missing sections — or a full `CLAUDE.md` — and
@@ -158,8 +168,9 @@ Summarise for the user:
 - CLAUDE.md verdict — satisfies the contract / draft pending review / gaps named, trim
   proposals if any — and which autonomy policies exist: plan auto-approval (and what it
   allows), and merge autonomy (and whether the `gh pr merge` deny has been lifted, i.e.
-  whether the double opt-in is complete) — and the test-suite ratchet (present or absent, and
-  whether its measurement command actually runs).
+  whether the double opt-in is complete) — the test-suite ratchet (present or absent, and
+  whether its measurement command actually runs) — and Autonomy mode (off / autonomous with its
+  effective kickback budget / inert).
 - Verification baseline — the exact commands and their green outcomes, and confirmation that
   `.claude/BASELINE.md` was written (and is gitignored).
 - Remaining human items — typically: branch protection, allow-list confirmation, CLAUDE.md

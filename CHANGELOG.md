@@ -18,6 +18,14 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #311: Added an optional "Autonomy mode" CLAUDE.md section (`mode: autonomous`,
+  `kickback-budget:`) that turns on plan auto-approval and merge autonomy together as one
+  combination: a missing "Plan auto-approval policy" section is read as present with no
+  conditions beyond the hard floor, and a missing "Merge autonomy policy" section is read as
+  present for harness PRs only. Declared policy sections still apply in full and only narrow the
+  mode; hard floors and the `gh pr merge` deny are unchanged. `check-harness.sh` validates the
+  combination and reports it, and, only in autonomous mode, each settings file's
+  `permissions.defaultMode`. No consumer step (opt-in).
 - #340: hooks/agent-boundary.sh denies an implementer/verifier Bash redirect/tee/cp/mv/cd/
   in-place-sed into a .claude path segment; gate 4.53 pins claude-dir-guard.sh's GUARDED_TOOLS
   against both roles' tools: lines (absorbs #341). No consumer step.

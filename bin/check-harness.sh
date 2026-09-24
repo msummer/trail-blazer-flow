@@ -11,20 +11,29 @@
 # three-file union the next clause names, whether the "Merge autonomy policy" section is
 # activated by the effective merge-permission state across .claude/settings.json,
 # .claude/settings.local.json, and the user-level settings file (a deny in any of them wins,
-# regardless of allows elsewhere — union semantics, not just the checked-in file), whether a
-# consumer's CI workflows and every action.yml/action.yaml anywhere in the repo pin every
-# `uses:` ref to a full 40-hex commit SHA rather than a mutable tag or branch, when that "Merge
-# autonomy policy" section is present (#166, #179, #186 — under merge autonomy the cycle merges on
-# "CI green", so a repointed tag would change what CI runs with no diff visible in this repo;
+# regardless of allows elsewhere — union semantics, not just the checked-in file), whether an
+# optional "Autonomy mode" section (#311) declares `mode: autonomous` — validated as a
+# COMBINATION, not read as a single flag: it makes merge autonomy effectively active for harness
+# PRs only even with no "Merge autonomy policy" section declared, so every WARN merge autonomy
+# already has (half-activated, CI pinning, branch-protection strictness/contexts) fires from the
+# implied state too, while a section the repo DOES declare still applies in full and can only
+# narrow what the mode allows — the mode never lifts the `Bash(gh pr merge:*)` deny itself, only
+# reports it, whether a consumer's CI workflows and every action.yml/action.yaml anywhere in the
+# repo pin every `uses:` ref to a full 40-hex commit SHA rather than a mutable tag or branch, when
+# merge autonomy is effectively active (#166, #179, #186 — under merge autonomy the cycle merges
+# on "CI green", so a repointed tag would change what CI runs with no diff visible in this repo;
 # string comparison only — never executes, evals, or expands anything read from a workflow file or
 # an action.yml/action.yaml anywhere in the repo), whether its optional "Post-merge verification"
 # declaration is present and, if so, fenced (declared/no-fence/not-declared — never whether the
-# declared commands are any good) and whether each declared command's first token has a matching
-# allow entry in that same three-file union, whether a "Test-suite ratchet policy" section exists
-# and names a measurement command via a fence-aware, depth-aware section slice (looked up with
-# `command -v`, never executed), whether "Autonomy reserve" and "Autonomy decision record"
-# sections are declared and well-formed (and, when gh is ready, whether the declared grant label
-# exists — never applied, removed, or judged for content), the verification baseline
+# declared commands are any good; gated on a declared "Merge autonomy policy" section only, never
+# on the "Autonomy mode" implication) and whether each declared command's first token has a
+# matching allow entry in that same three-file union, whether a "Test-suite ratchet policy"
+# section exists and names a measurement command via a fence-aware, depth-aware section slice
+# (looked up with `command -v`, never executed), whether "Autonomy reserve" and "Autonomy decision
+# record" sections are declared and well-formed (and, when gh is ready, whether the declared grant
+# label exists — never applied, removed, or judged for content), and, only in autonomous mode,
+# each settings file's `permissions.defaultMode` value (a validated bare word only — never an
+# allow/deny entry from any of the three files), the verification baseline
 # (.claude/BASELINE.md, machine-local — an abbreviated recorded commit SHA of 7+ hex characters
 # is accepted as a prefix), whether the template's branch-scoped deny entries actually cover this
 # repo's default branch, whether any of the three settings files disables all hooks (silently
@@ -33,7 +42,8 @@
 # hook now supersedes (#150 — Claude Code 2.1.246+ warns about these at startup), the installed
 # harness plugin's own version and short commit SHA (#233, via bin/harness-version.sh, run by a
 # fixed path — never derived from repo content), and branch protection — presence, plus, only
-# when a "Merge autonomy policy" section is declared and the protection endpoint call succeeds,
+# when merge autonomy is effectively active (a declared "Merge autonomy policy" section, or an
+# "Autonomy mode" section's implied merge autonomy) and the protection endpoint call succeeds,
 # whether required_status_checks.strict is true, the number of required status check contexts,
 # and whether required PR reviews are configured (#234 — all three WARN-only, never FAIL).
 #
@@ -288,7 +298,7 @@ if [ -f "$root/CLAUDE.md" ]; then
   cm_lines="$(wc -l < "$root/CLAUDE.md" | tr -d '[:space:]')"
   cm_bytes="$(wc -c < "$root/CLAUDE.md" | tr -d '[:space:]')"
   if [ "$cm_lines" -gt 300 ] || [ "$cm_bytes" -gt 20000 ]; then
-    wrn "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes — over the 300-line/20000-byte guideline; run the harness-setup skill's leanness audit to trim restatement (directory tours, framework defaults, formatter-enforced style — not the contract's eight items themselves)"
+    wrn "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes — over the 300-line/20000-byte guideline; run the harness-setup skill's leanness audit to trim restatement (directory tours, framework defaults, formatter-enforced style — not the contract's nine items themselves)"
   else
     ok "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes"
   fi
@@ -338,9 +348,13 @@ fi
 # accumulator below the moment the loop exits (same idiom as diff_side/guard_missing further
 # down). The user-level file is read no differently than the other two — same two jq paths,
 # .permissions.deny[]?/.permissions.allow[]? — and only ever contributes its LABEL to
-# merge_deny_src/merge_allow_src, and its allow entries to allow_union; no entry from it, nor
-# anything else in the file, is ever printed, diffed, or counted on its own. allow_union is only
-# ever consumed by entry_has and allow_has, both boolean tests (entry_has a literal-prefix test,
+# merge_deny_src/merge_allow_src, its allow entries to allow_union, and (#311) a SANITISED
+# `permissions.defaultMode` bare word to default_mode_report; no entry from it, nor anything else
+# in the file, is ever printed, diffed, or counted on its own — defaultMode is the sole,
+# deliberate carve-out from that rule, and only a value matching `[A-Za-z]+` exactly is ever
+# printed (anything else prints as the fixed string "(unrecognised value)", never echoed), and
+# only when "Autonomy mode" is on (see the autonomy-mode block below). allow_union is only ever
+# consumed by entry_has and allow_has, both boolean tests (entry_has a literal-prefix test,
 # allow_has a regex prefix test) — neither ever prints an entry: never print allow_union or any
 # slice of it in a verdict, or a user's private grants would leak into doctor output.
 broken_list=""
@@ -349,6 +363,7 @@ merge_deny_src=""
 merge_allow_src=""
 disable_hooks_src=""
 allow_union=""
+default_mode_report=""
 if $jq_ready; then
   while IFS='|' read -r settings_file settings_label; do
     [ -n "$settings_file" ] || continue
@@ -365,6 +380,16 @@ if $jq_ready; then
     allow_union="${allow_union}${file_allow}"$'\n'
     file_disable="$(jq -r '.disableAllHooks? // empty' "$settings_file" 2>/dev/null)"
     [ "$file_disable" = "true" ] && disable_hooks_src="$disable_hooks_src$settings_label, "
+    file_default_mode="$(jq -r '.permissions.defaultMode? // empty' "$settings_file" 2>/dev/null)"
+    if [ -z "$file_default_mode" ]; then
+      dm_display="(unset)"
+    else
+      case "$file_default_mode" in
+        *[!A-Za-z]*) dm_display="(unrecognised value)" ;;
+        *) dm_display="$file_default_mode" ;;
+      esac
+    fi
+    default_mode_report="$default_mode_report$settings_label: $dm_display, "
   done <<EOF
 $settings|.claude/settings.json
 $settings_local|.claude/settings.local.json
@@ -376,6 +401,7 @@ read_list="${read_list%, }"
 merge_deny_src="${merge_deny_src%, }"
 merge_allow_src="${merge_allow_src%, }"
 disable_hooks_src="${disable_hooks_src%, }"
+default_mode_report="${default_mode_report%, }"
 
 # --- settings.json toolchain allow-list ----------------------------------------
 # Read only through jq below — never a raw-text grep/sed/awk of any settings* path variable
@@ -627,15 +653,65 @@ fi
 # Hoisted above the CLAUDE.md-exists check below (rather than left to the assignment inside it)
 # so the "# --- branch protection ---" section further down can read it under `set -u` even on a
 # repo with no CLAUDE.md at all (#234) — the policy-gated branch-protection report is otherwise
-# reachable with $has_merge_policy never assigned.
+# reachable with its gate variable never assigned. Since #311 that gate reads $merge_effective
+# ($has_merge_policy widened by autonomous mode), hoisted here with autonomy_on/kickback_budget;
+# has_merge_policy stays hoisted as the default the CLAUDE.md-exists branch reassigns.
 has_merge_policy=false
+autonomy_on=false
+merge_effective=false
+kickback_budget=2
 if [ ! -f "$root/CLAUDE.md" ]; then
   wrn "policy activation checks skipped (no CLAUDE.md)"
 else
+  # --- autonomy mode (#311) --- an optional "Autonomy mode" section, same fenced key: value
+  # shape as "Autonomy decision record". `mode: autonomous` is the only value this doctor
+  # recognises; anything else (including the section's absence) leaves the mode off. Read BEFORE
+  # the merge-autonomy block below, which consumes $autonomy_on to compute $merge_effective —
+  # never itself lifts the `Bash(gh pr merge:*)` deny, only reports the combination.
+  has_autonomy_section=false
+  has_policy_section "Autonomy mode" && has_autonomy_section=true
+  if $has_autonomy_section; then
+    autonomy_sec="$(claude_md_section "Autonomy mode")"
+    autonomy_blk="$(printf '%s\n' "$autonomy_sec" | awk '
+      /^```/ { if (infence) { exit } else { infence=1; next } }
+      infence { print }
+    ')"
+    autonomy_mode_val="$(printf '%s\n' "$autonomy_blk" | sed -nE 's/^[[:space:]]*mode:[[:space:]]*(.*[^[:space:]])[[:space:]]*$/\1/p' | head -1)"
+    [ "$autonomy_mode_val" = "autonomous" ] && autonomy_on=true
+    autonomy_budget_val="$(printf '%s\n' "$autonomy_blk" | sed -nE 's/^[[:space:]]*kickback-budget:[[:space:]]*(.*[^[:space:]])[[:space:]]*$/\1/p' | head -1)"
+    if [ -n "$autonomy_budget_val" ]; then
+      case "$autonomy_budget_val" in
+        0|1|2|3) kickback_budget="$autonomy_budget_val" ;;
+        *) wrn "autonomy mode: kickback-budget '$autonomy_budget_val' is not an integer from 0 to 3 — the default 2 applies" ;;
+      esac
+    fi
+  fi
+  if ! $has_autonomy_section; then
+    ok "autonomy mode: off — no 'Autonomy mode' section in CLAUDE.md"
+  elif ! $autonomy_on; then
+    wrn "autonomy mode: inert — 'Autonomy mode' section present but its fenced block declares no 'mode: autonomous' line; the harness behaves as if it were absent"
+  else
+    ok "autonomy mode: autonomous (kickback budget $kickback_budget) — an absent 'Plan auto-approval policy' / 'Merge autonomy policy' section is read as present (merge: harness PRs only); declared sections still apply in full"
+    if $jq_ready && [ -n "$read_list" ]; then
+      ok "permissions.defaultMode: $default_mode_report (informational)"
+    fi
+  fi
+
   # --- merge autonomy (#28, #66) --- exactly one 'merge autonomy: ' line; states mutually
-  # exclusive.
+  # exclusive. merge_effective (#311) is $has_merge_policy widened by autonomous mode: a
+  # declared "Merge autonomy policy" section still applies in full either way, but its absence no
+  # longer silences the merge/CI/branch-protection gates when "Autonomy mode" declares
+  # mode: autonomous — that implied activation covers harness PRs only, never Dependabot or a
+  # no-CI opt-in (the merge pass's own hard floor still requires CI green).
   has_merge_policy=false
   has_policy_section "Merge autonomy policy" && has_merge_policy=true
+  merge_effective="$has_merge_policy"
+  $autonomy_on && merge_effective=true
+  if $has_merge_policy; then
+    merge_decl="'Merge autonomy policy' section present"
+  else
+    merge_decl="'Autonomy mode' declares mode: autonomous (merge autonomy implied, harness PRs only)"
+  fi
 
   if ! $jq_ready; then
     wrn "merge autonomy: activation state unknown — jq not installed (see the FAIL above)"
@@ -658,22 +734,23 @@ else
       [ -f "$wf" ] && { has_ci_workflow=true; break; }
     done
     merge_ci_note=""
-    $has_ci_workflow || merge_ci_note=" — but no .github/workflows file exists, so gh pr checks likely reports 'no checks configured', which the merge pass's hard floor treats as NOT green: no PR qualifies unless your 'Merge autonomy policy' section explicitly opts a no-CI repo in"
+    $has_ci_workflow || merge_ci_note=" — but no .github/workflows file exists, so gh pr checks likely reports 'no checks configured', which the merge pass's hard floor treats as NOT green: no PR qualifies unless a declared 'Merge autonomy policy' section explicitly opts a no-CI repo in (the policy 'Autonomy mode' implies never does)"
 
-    if $has_merge_policy && $merge_denied; then
-      wrn "merge autonomy: half-activated — 'Merge autonomy policy' section present but 'Bash(gh pr merge:*)' is still denied in $merge_deny_src — a deny wins over any allow, in any settings file; to activate, remove \"Bash(gh pr merge:*)\" from permissions.deny in $merge_deny_src AND add it to permissions.allow in .claude/settings.json (both edits are yours, never an agent's)"
-    elif $has_merge_policy && ! $merge_denied && $merge_allowed; then
-      ok "merge autonomy: active ('Merge autonomy policy' section present, no deny found in $read_list, allow present in $merge_allow_src)$merge_ci_note"
-    elif $has_merge_policy && ! $merge_denied && ! $merge_allowed; then
+    if $merge_effective && $merge_denied; then
+      wrn "merge autonomy: half-activated — $merge_decl but 'Bash(gh pr merge:*)' is still denied in $merge_deny_src — a deny wins over any allow, in any settings file; to activate, remove \"Bash(gh pr merge:*)\" from permissions.deny in $merge_deny_src AND add it to permissions.allow in .claude/settings.json (both edits are yours, never an agent's)"
+    elif $merge_effective && ! $merge_denied && $merge_allowed; then
+      ok "merge autonomy: active ($merge_decl, no deny found in $read_list, allow present in $merge_allow_src)$merge_ci_note"
+    elif $merge_effective && ! $merge_denied && ! $merge_allowed; then
       wrn "merge autonomy: deny on 'Bash(gh pr merge:*)' lifted (no deny found in $read_list) but no matching allow entry — unattended cycles will stall on the permission prompt; add the allow entry to .claude/settings.json, or to .claude/settings.local.json to opt in on this machine only"
-    elif ! $has_merge_policy && ! $merge_denied; then
+    elif ! $merge_effective && ! $merge_denied; then
       wrn "merge autonomy: 'Bash(gh pr merge:*)' deny lifted (no deny found in $read_list) but no 'Merge autonomy policy' section in CLAUDE.md — the cycle skips the merge pass anyway; add the section (or restore the deny)"
     else
       ok "merge autonomy: off (default — no 'Merge autonomy policy' section, deny in place in $merge_deny_src; every PR merge is manual)"
     fi
   fi
 
-  # --- CI action pinning (#166, #179, #186) --- gated on $has_merge_policy: under merge autonomy
+  # --- CI action pinning (#166, #179, #186) --- gated on $merge_effective (#311: $has_merge_policy
+  # widened by "Autonomy mode"'s implied merge autonomy): under merge autonomy
   # the cycle merges on "CI green" (see the merge-autonomy verdict above), so a `uses:` ref pinned
   # to a mutable tag or branch lets that tag's owner repoint what CI executes with no diff visible
   # in this repo — the workflow's own green check is the blast radius. String comparison only:
@@ -704,7 +781,7 @@ else
   # of a reusable workflow owned by another repo (the ref to it is still checked, just not its
   # body). Never FAILs: this is a WARN-only, advisory check, so the doctor's exit code is
   # unaffected.
-  if $has_merge_policy; then
+  if $merge_effective; then
     ci_uses_total=0
     ci_bad_count=0
     ci_bad_list=""
@@ -776,7 +853,10 @@ EOF
   # above, so the declaration state still reports even when the merge-autonomy activation state
   # itself is unknown (no settings file, unparseable, ...) — the declaration lives in CLAUDE.md,
   # not in any settings file, and doesn't depend on activation state. Never executes, evals,
-  # command -v's, or expands anything read from the declaration.
+  # command -v's, or expands anything read from the declaration. Deliberately gated on
+  # $has_merge_policy, NOT $merge_effective (#311): a "Post-merge verification" sub-block only
+  # ever lives nested under a declared "Merge autonomy policy" heading, so "Autonomy mode"'s
+  # implied merge autonomy has no such sub-block to find.
   if $has_merge_policy; then
     merge_sec="$(claude_md_section "Merge autonomy policy")"
     postdeploy_found=false
@@ -1010,12 +1090,13 @@ if $gh_ready && [ -n "$default_branch" ]; then
   repo_slug="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null | tr -d '\r' || true)"
   if [ -n "$repo_slug" ] && prot="$(gh api "repos/$repo_slug/branches/$default_branch/protection" 2>/dev/null)"; then
     ok "branch protection enabled on $default_branch"
-    # Only when the consumer opted into merge autonomy AND jq is available: read the protection
-    # document itself (through jq only — never a raw-text grep/sed/awk of $prot) and report on
-    # exactly the fields the merge floor's up-to-date rail and CI-greenness check care about.
-    # WARN-only, never FAIL — an unparseable document collapses both signals closed (both WARNs
-    # fire) rather than silently passing.
-    if $has_merge_policy && $jq_ready; then
+    # Only when merge autonomy is effectively active ($merge_effective, #311 — a declared "Merge
+    # autonomy policy" section OR "Autonomy mode"'s implied merge autonomy) AND jq is available:
+    # read the protection document itself (through jq only — never a raw-text grep/sed/awk of
+    # $prot) and report on exactly the fields the merge floor's up-to-date rail and CI-greenness
+    # check care about. WARN-only, never FAIL — an unparseable document collapses both signals
+    # closed (both WARNs fire) rather than silently passing.
+    if $merge_effective && $jq_ready; then
       strict="$(printf '%s' "$prot" | jq -r 'if .required_status_checks.strict == true then "true" else "false" end' 2>/dev/null || true)"
       if [ "$strict" = "true" ]; then
         ok "branch protection: up-to-date branches are required before merge (required_status_checks.strict)"

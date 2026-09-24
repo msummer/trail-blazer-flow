@@ -390,9 +390,12 @@ decides what the label and the record permit. If CLAUDE.md declares no "Autonomy
 record" section, or no issue this run carries the declared label, there is nothing to do here.
 
 **6b. Auto-approval.** Read the repo's `CLAUDE.md` for a section titled **"Plan auto-approval
-policy"**. If there is no such section, skip the rest of this step — every approval is the
-human's. If there is one, evaluate each plan you posted or revised **this run** against BOTH of
-the following. The policy can loosen nothing in the hard floor; it can only add conditions.
+policy"**. If there is no such section, and no "Autonomy mode" section declares `mode: autonomous`
+(README contract item 9), skip the rest of this step — every approval is the human's. Under
+`mode: autonomous`, a missing policy section is read as present with no policy conditions beyond
+the hard floor below — the hard floor alone decides. Either way, evaluate each plan you posted or
+revised **this run** against BOTH of the following. The policy can loosen nothing in the hard
+floor; it can only add conditions.
 
 **Hard floor (non-negotiable, regardless of what the policy says):**
 - the issue does NOT carry the `no-auto-approve` label;
@@ -425,7 +428,9 @@ the following. The policy can loosen nothing in the hard floor; it can only add 
 
 **Policy conditions:** whatever the CLAUDE.md section states — typically a max size (e.g. "S
 only"), allowed areas, excluded paths. Judge them honestly against the plan; when a condition
-is ambiguous, the answer is no.
+is ambiguous, the answer is no. With no "Plan auto-approval policy" section declared (only
+"Autonomy mode" implying one), there are no policy conditions to satisfy — the hard floor above is
+the whole test.
 
 If everything passes: add the label and leave an audit trail —
 
@@ -439,8 +444,9 @@ directive, and the marker is what keeps it out of `find-implementation-work.sh`'
 `trusted_post_plan` and `find-planning-work.sh`'s feedback detection on later runs; without it,
 its "remove `plan-approved`, add `no-auto-approve`" veto instructions would otherwise reach the
 implementer as a binding `RESOLVED:` decision about the issue's own labels. It must state: that
-this was an auto-approval under the CLAUDE.md policy; which policy conditions it satisfied (one
-line); the URL of the plan comment this approval binds to (#174) — since the label is
+this was an auto-approval under the CLAUDE.md policy (or, with no such section declared, under
+"Autonomy mode"'s implied policy); which policy conditions it satisfied (one
+line, or "none declared — hard floor only" under the implied policy); the URL of the plan comment this approval binds to (#174) — since the label is
 added right after the plan is posted, an auto-approved plan is always covered by its own
 approval; how to veto — remove `plan-approved`, and add `no-auto-approve` to keep this issue manual
 in future; and, if step 6's granted-issue exception approved any decision, the record bullet(s)
@@ -544,7 +550,8 @@ harness-lock.sh release <run-id>
 - **The subagent writes the plan; you do all `gh` calls.** The subagent is read-only and cannot
   post to GitHub.
 - **`plan-approved` is set by the human — or by step 6's policy path, never otherwise.** No
-  CLAUDE.md policy section ⇒ no auto-approval, full stop. The hard floor is not negotiable, and
+  CLAUDE.md policy section and no "Autonomy mode" `mode: autonomous` ⇒ no auto-approval, full
+  stop. The hard floor is not negotiable, and
   orchestrator-proposed answers to BLOCKING questions keep a plan manual unless step 6's
   granted-issue exception applies.
 - **If a subagent's plan is dominated by open questions** (i.e. it couldn't form a real plan),

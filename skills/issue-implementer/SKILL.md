@@ -18,7 +18,8 @@ session) are the orchestrator: you delegate code-writing to the `implementer` su
 (`agents/implementer.md`), one dispatch per issue. After it completes and the mechanical checks
 pass, a `verifier` subagent (`agents/verifier.md`) adversarially reviews the diff against the
 plan and acceptance criteria before anything is pushed or a PR exists — failures are kicked back
-to the implementer (max 2 kickbacks), so the PR the human reviews is already verifier-clean.
+to the implementer (the kickback budget — see step 2e), so the PR the human reviews is already
+verifier-clean.
 
 This skill is project-agnostic: conventions, the verification commands that define "done", how
 dependencies are installed, and schema/migration rules all come from the repo's **CLAUDE.md**,
@@ -42,7 +43,8 @@ once under "Hard rules" below.
   "Worktree-parallel mode" below (full mechanics in `references/worktree-mode.md`).
 - **Never merge in this skill** and **never push to the default branch**. One issue → one
   `claude/<n>-<slug>` branch → one PR. Merging belongs to the human — or, where CLAUDE.md defines
-  a merge autonomy policy and the human has lifted the default `gh pr merge` deny, to the
+  a merge autonomy policy (declared, or implied by "Autonomy mode" — README contract item 9) and
+  the human has lifted the default `gh pr merge` deny, to the
   `issue-cycle` skill's merge pass, the sole place any harness merge authority exists.
 - **The subagent writes code; you do every git and `gh` command.** This holds after a verifier
   `fail` and after red CI, too: you never edit a source, test, or doc file yourself to resolve a
@@ -77,8 +79,8 @@ or no parseable report — including a transient subagent death: re-dispatch per
 a special case; only repeated identical deaths through attempt 5 become the escalation above.
 
 **Not retryable — different paths:** a well-formed `status: blocked` report (the blocked path,
-step 2f) or a verifier `fail` verdict (the kickback loop, step 2e, its own max-2 limit). The
-ladder never composes with the kickback loop into more than 3 implementer attempts per
+step 2f) or a verifier `fail` verdict (the kickback loop, step 2e, its own budget). The
+ladder never composes with the kickback loop into more than budget + 1 implementer attempts per
 verification round, plus the ladder's own retries within each attempt. State the attempt number
 in every dispatch prompt ("Dispatch attempt: `<k>`", starting at 1) so the subagent's echoed
 status line carries the right `retries` value.
@@ -184,7 +186,7 @@ with it as the resume brief and adapting the instruction to "this plan/verdict i
 continue it, do not restart."
 
 **Cap:** at most 2 resume relaunches per issue per run (3 implementer contexts total),
-independent of the 2-kickback limit. Exceeding it routes to the blocked path (step 2f) — the
+independent of the kickback budget (step 2e). Exceeding it routes to the blocked path (step 2f) — the
 work is preserved either way.
 
 ### Durable escalation (#309)
@@ -547,8 +549,10 @@ e. **Dispatch the `verifier` subagent** (Task tool, `agents/verifier.md`) — th
      `Previously reviewed commit: <sha>` (the failing round's recorded commit). This makes the
      round a re-verification under the verifier's own "Re-verification" rules: it confirms each
      prior finding is resolved and checks only the kickback's delta, so a new survivor on code
-     the prior round already accepted cannot restart the loop. **Maximum 2
-     kickbacks** (3 implementer attempts total). Still failing → blocked path (step f), with the
+     the prior round already accepted cannot restart the loop. **The kickback budget — 2 by
+     default, or CLAUDE.md's "Autonomy mode" `kickback-budget:` value (README contract item 9)
+     when that section declares `mode: autonomous`, bounded 0-3 — is never exceeded** (budget + 1
+     implementer attempts total). Still failing → blocked path (step f), with the
      latest findings as the blocker explanation. Record verification rounds and ladder retries
      used for the summary table.
 
@@ -755,8 +759,8 @@ gh issue edit <number> --add-label pr-open
      subsequent dispatch this run. Then return to the default branch (`git checkout
      <default-branch>`).
 
-f. **On `status: blocked`** (or failed mechanical checks, or a verifier fail that survived 2
-   kickbacks): do NOT push or open a PR. Preserve the work for inspection on a local branch, flag
+f. **On `status: blocked`** (or failed mechanical checks, or a verifier fail still failing once
+   the kickback budget is spent, step 2e): do NOT push or open a PR. Preserve the work for inspection on a local branch, flag
    the issue, and reset the tree. The blocker comment below carries **no** `<!-- harness-audit -->`
    marker, deliberately — step 2b explicitly carries a blocked attempt's findings from the issue's
    comments into the retry dispatch, so marking this comment would strip the only channel that
@@ -782,7 +786,7 @@ When you acquired the lock yourself at step 0 (standalone run), the report's **f
 line when `issue-cycle` acquired it instead (composed run) — its own report carries the line.
 
 Report a table: issue number, title, outcome (PR opened → link / blocked → branch name),
-verification rounds (1 = clean; 2–3 = kickbacks — say what the verifier caught), retries (ladder
+verification rounds (1 = clean; 2+ = kickbacks — say what the verifier caught), retries (ladder
 retries per stage, resume relaunches out of the cap of 2), CI status (pass / fixed after 1
 attempt / fail / no checks), and any issues skipped and why — a stage with no recorded outcome is
 a gap to report, never a silent skip (a `plan: null`, a missing `plan_selection` entry, or
