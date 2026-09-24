@@ -16,6 +16,12 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #394: README restructured into a user guide (getting started for new and existing repos,
+  everyday recipes, an Autonomous mode section); the detailed spec moved verbatim into
+  `docs/reference/`. No consumer step.
+
 ## v2.8.0
 
 - #313 (absorbs #257, ADR 0001 decision 7): Under "Autonomy mode" `mode: autonomous`, whenever the
