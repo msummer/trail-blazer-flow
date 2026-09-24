@@ -38,6 +38,7 @@
       "Bash(gh pr create:*)",
       "Bash(gh pr edit:*)",
       "Bash(gh pr list:*)",
+      "Bash(gh pr update-branch:*)",
       "Bash(gh pr view:*)",
       "Bash(gh repo view:*)",
       "Bash(gh run view:*)",

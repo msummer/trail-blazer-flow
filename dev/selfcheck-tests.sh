@@ -727,6 +727,7 @@ p_4_20_orphan_grant() {
   local f="$1/templates/repo-settings.json"
   awk '{print} /"Bash\(gh pr edit:\*\)",/ && !done {print "      \"Bash(gh pr close:*)\","; done=1}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
+p_4_20_hyphen_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(gh pr update-branch:\*\)"'; }
 p_5_1()               { edit "$1/bin/reconcile-ledger.sh" 's/blocked incomplete died/blocked incomplete/'; }
 p_5_2()               { edit "$1/bin/reconcile-ledger.sh" 's/stage-skipped issue/stage_skipped issue/'; }
 p_5_5()               { edit "$1/skills/issue-cycle/SKILL.md" 's/sort_by(.createdAt) | //'; }
@@ -827,6 +828,7 @@ cases=(
   "4.19|4.19 5.5 5.6 5.7|p_4_19|rename the verifier-verdict marker throughout skills/issue-cycle/SKILL.md so the writer and the checker disagree (also renames both needles inside the extracted archived-verdict --jq program, so 5.5/5.6/5.7 no longer match the unrenamed fixtures and fail alongside it)"
   "4.20-missing-grant|4.20|p_4_20_missing_grant|drop the Bash(gh pr edit:*) allow entry while a skill still names 'gh pr edit'"
   "4.20-orphan-grant|4.20|p_4_20_orphan_grant|add a Bash(gh pr close:*) allow entry no skill names"
+  "4.20-hyphen-missing-grant|4.20|p_4_20_hyphen_missing_grant|drop the Bash(gh pr update-branch:*) allow entry while a skill still names 'gh pr update-branch' (hyphenated subcommand)"
   "4.21|4.21|p_4_21|re-case 'Autonomy reserve' to 'Autonomy Reserve' in agents/verifier.md so the case-sensitive marker no longer matches"
   "4.22|4.22|p_4_22|re-case 'Post-merge verification' to 'Post-Merge Verification' in skills/issue-cycle/SKILL.md so the case-sensitive marker no longer matches"
   "4.24-tag-pin|4.24|p_4_24_tag_pin|rewrite the checkout SHA pin back to the mutable @v4 tag"

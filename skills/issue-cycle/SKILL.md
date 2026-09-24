@@ -19,8 +19,7 @@ do not re-implement their procedures here. Unattended, a cycle can: turn new iss
 revise on feedback, propose grounded answers, auto-approve plans **only** under CLAUDE.md's
 auto-approval policy — or "Autonomy mode" declaring `mode: autonomous` (README contract item 9),
 which reads a missing auto-approval section as present (hard floor only) and a missing merge-autonomy
-section as present for harness PRs only —
-(hard floor always applies), implement through the verifier gate, open PRs,
+section as present for harness PRs only (hard floor always applies), implement through the verifier gate, open PRs,
 merge PRs **only** under a merge autonomy policy, declared or implied by "Autonomy mode" (own hard
 floor — see the merge pass), file
 coverage-increasing issues **only** under a test-suite ratchet policy (see the ratchet pass), and
@@ -112,11 +111,13 @@ in the `planned` column (incl. retry counts from each status line); **pre-advanc
 
 Invoke the **`issue-implementer`** skill for everything now `plan-approved` — including plans
 auto-approved in step 1 (the PR gate still applies) — skipping its step 0. Sequential by
-default; its worktree-parallel mode applies under its own rules and changes nothing here (one
-worktree is one issue, so the ledger row, status lines, and step 5's reconciliation are the
-same). Fill in the `implemented` and `verified` columns from its summary table; **pre-advance
-check** applies as in step 1. If step 1 produced nothing to implement and nothing was already
-approved, skip this pass.
+default; its worktree-parallel mode applies under its own rules (one worktree is one issue, so
+the ledger row, status lines, and step 5's reconciliation are the same). **Serial train:** when
+"Autonomy mode" declares `mode: autonomous` and step 3's activation (1) holds, steps 2 and 3 run
+instead as one serial train — read `references/serial-train.md` (next to this SKILL.md) and
+follow it; never otherwise. Fill in the `implemented` and `verified` columns from its summary
+table; **pre-advance check** applies as in step 1. If step 1 produced nothing to implement and
+nothing was already approved, skip this pass.
 
 ### 3. Merge pass (only under a repo merge autonomy policy)
 
@@ -244,9 +245,8 @@ on top and is not configurable**:
     reports), `CLEAN`, `UNSTABLE`, `BEHIND`, `HAS_HOOKS` — is not a signal this clause acts on.
     This clause is advisory, since its semantics depend on protection settings; the ancestor
     check above is the required rail.
-  - Because merges are sequential with re-verification between, after the first merge of a pass
-    every other queued PR is behind by construction and holds with this reason — expected, not
-    an error.
+  - Outside the serial train (step 2), after the first merge of a pass every other queued PR is
+    behind by construction and holds with this reason — expected, not an error.
   - This rail subsumes conflict detection: a head that already contains the base tip cannot
     conflict with it.
 - **Never the governance surface**: any PR touching `CLAUDE.md`, `.claude/`, the repo's
@@ -567,8 +567,9 @@ step 5.
 - **Recurring runs:** pair with `/loop` (e.g. "loop the issue-cycle every 30m") or a scheduled
   routine; each invocation stays ONE bounded pass — recurrence is the wrapper's job, never this
   skill's (never polls for new work or repeats a pass; the merge pass's bounded waits — guard
-  (e)'s declared deploy wait, the pre-first-merge recheck, and the one-shot
-  re-read of a transiently failed read — are the three bounded exceptions).
+  (e)'s declared deploy wait, the pre-first-merge recheck, the one-shot
+  re-read of a transiently failed read, and the serial train's update-branch CI wait — are the
+  four bounded exceptions).
 - **Single-flight:** mechanically enforced by `harness-lock.sh`, an atomic `mkdir` under
   `<git-common-dir>/trail-blazer/lock` acquired at step 0 and released at step 5 (see step 0
   above for the full ownership/abort/release-before-every-exit rules) — never start a cycle while

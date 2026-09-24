@@ -334,7 +334,8 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    see "The CLAUDE.md contract"). Blockers → local `wip:` branch + `impl-blocked` label +
    explanatory comment.
 
-**Worktree-parallel mode:** when 2+ approved plans have pairwise **disjoint Affected areas**
+**Worktree-parallel mode:** never used inside the cycle's serial merge train (item 9) — the train
+hands the implementer one issue at a time. When 2+ approved plans have pairwise **disjoint Affected areas**
 (production + test files), the orchestrator may create one git worktree per issue and dispatch up
 to **4 implementers concurrently**, acting as their **supervisor**: it tracks each worktree in an
 in-context table, handles each completion as it arrives instead of waiting for the batch,
@@ -420,7 +421,8 @@ pass → implementation pass → merge pass (**opt-in**: with a CLAUDE.md "Merge
 policy" *and* the `gh pr merge` deny lifted, or with "Autonomy mode" declaring `mode: autonomous`
 (item 9), which implies the policy for harness PRs only — the deny still has to be lifted by
 hand either way; guarded per PR, one at a time, re-verified between,
-audited in the report) → a closing reconciliation, comparing the run's **dispatch ledger**
+audited in the report — in autonomous mode, item 9's serial merge train instead interleaves the
+implementation and merge passes per issue) → a closing reconciliation, comparing the run's **dispatch ledger**
 against `harness-status.sh`'s live queues via `reconcile-ledger.sh` (an issue with no recorded
 outcome is escalated, never dropped; a degraded live read is escalated too, never reported
 clean), then a **per-issue summary table** and a two-halves report
@@ -751,8 +753,9 @@ subagents need:
    current tip (`git merge-base --is-ancestor`) immediately before each PR's own merge attempt,
    otherwise held with "PR is behind `<default>` at `<short-sha>` — update the branch and let CI
    re-run" (#234, review F4 — because merges are sequential, every PR queued behind the first one
-   in a pass holds this way by construction, expected rather than an error, until the pre-named
-   auto-update follow-up ships) — never the governance surface, read mechanically per PR by
+   in a pass holds this way by construction, expected rather than an error, outside the serial
+   merge train — item 9's "Autonomy mode" runs the update-branch fallback there instead) — never
+   the governance surface, read mechanically per PR by
    `governance-paths.sh` (item 10 below) — CLAUDE.md, `.claude/`, policy/ADR docs, CI config, and
    any path this repo's own CLAUDE.md declares (harness PRs get
    one narrow, audited exception: a PR whose only
@@ -989,6 +992,26 @@ subagents need:
      never re-approved by the harness this way (a withdrawal is honoured); post new feedback or
      re-add the label yourself to get it reconsidered. A carry-over candidate that fails the floor
      gets no comment and no label — it is only reported in that run's summary.
+   - **Serial merge train** (ADR 0001 decision 7, folds in #257): whenever this mode is on AND
+     the merge pass's activation (1) holds, the `issue-cycle` skill runs its implementation and
+     merge passes as one serial train instead of implementing everything first and merging after
+     — see `skills/issue-cycle/references/serial-train.md` for the full procedure. It drains any
+     open harness PRs left over from earlier passes first, then carries each ready issue through
+     implement → verify → PR → CI → the merge floor → merge → post-merge re-verification before
+     the next branch is cut; worktree-parallel mode is never entered inside the train. A held PR
+     moves the train on to the next issue; a merge-halting event (e.g. a merge denial or an
+     unconfirmed merge) makes the rest of the run implement-only, opening PRs but attempting no
+     further merge; a train-stopping event (a red baseline after a merge, or a stop-switch stop)
+     dispatches no further issue. For a PR whose only hold is the up-to-date rail ("behind"),
+     the train tries `gh pr update-branch <pr>` once (merge-from-base, never `--rebase`, skipped
+     when the repo's merge method is rebase), waits a bounded time for CI, then re-evaluates the
+     whole merge floor from the top on the new head; a conflict or a further failure leaves the
+     PR held, named, with the old → new head recorded in the report. Activation (1) does not
+     require the `gh pr merge` deny to be lifted, so until a merge is confirmed in a run the train
+     applies at most one update-branch (and its CI wait) — with the deny still in place, guard
+     (c)'s denial then stops merging for the run.
+     Outside this mode, the
+     merge pass is unchanged: one merge per pass, no update-branch.
 
    `check-harness.sh` prints exactly one verdict line whenever `CLAUDE.md` exists — off (no
    section), autonomous (naming the effective kickback budget), or inert (section present, no
@@ -1279,7 +1302,7 @@ already-parked follow-ups `triaged-held` by hand. Precondition: your provider mu
 `claude-opus-5-5` (#358); otherwise stay on v2.7.6.
 
 **v2.7.7 → v2.8.0** — re-copy the permissions block from `templates/repo-settings.json` or add
-`"Bash(governance-paths.sh:*)"` by hand.
+`"Bash(governance-paths.sh:*)"` and `"Bash(gh pr update-branch:*)"` by hand.
 
 ## The per-repo settings file (required)
 
@@ -1293,7 +1316,10 @@ lifting it is a human edit reserved for repos that define a CLAUDE.md merge auto
 follow-up issue numbers, and replacing the verifier status line and mutation-probe line with a
 fresh verdict's after a CI-fix round; `gh pr comment` is deliberately **not** granted — the
 verifier's verdict is archived on the *issue* instead (`Bash(gh issue comment:*)`, already
-granted), which is also where the merge pass reads it back with one `gh issue view` call. The same
+granted), which is also where the merge pass reads it back with one `gh issue view` call.
+`Bash(gh pr update-branch:*)` is used only by the serial merge train's update-branch fallback
+(item 9) — it merges the default branch into a held PR's own branch, never `--rebase`, and never
+touches the default branch itself. The same
 file also carries the non-permission keys a clone needs to bootstrap
 the plugin — `extraKnownMarketplaces` (auto-registering + auto-updating the marketplace) and
 `enabledPlugins` — covered in "Installing in a new repo". Four grants exist solely for the
@@ -2132,8 +2158,9 @@ copy of itself over the working tree being edited.
   (the "Autonomy mode" CLAUDE.md section itself — see "The CLAUDE.md contract" item 9 — reading a
   missing Plan auto-approval/Merge autonomy policy section as present, and the kickback budget)
   shipped with #311. Decision 6 (carry-over auto-approval — see "The CLAUDE.md contract" item 9's
-  own bullet) shipped with #312. Decision 7 (serial merge train) remains unimplemented; ADR 0001
-  lists its tracking issue. One piece of ADR 0001 has shipped
+  own bullet) shipped with #312. Decision 7 (serial merge train, folding in #257's update-branch
+  fallback — see "The CLAUDE.md contract" item 9's own bullet) shipped with #313. One piece of
+  ADR 0001 has shipped
   standalone, since it applies "in every mode" and needed no Autonomy mode section of its
   own: decision 9, the lesson-append carve-out, landed with #307 (see "The LESSONS.md contract"
   above).

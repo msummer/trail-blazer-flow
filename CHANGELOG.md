@@ -18,6 +18,17 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #313 (absorbs #257, ADR 0001 decision 7): Under "Autonomy mode" `mode: autonomous`, whenever the
+  merge pass's activation (1) holds (a declared or implied merge-autonomy policy — even while the
+  `gh pr merge` deny is still in place, which guard (c) then reports), the `issue-cycle` skill now runs its implementation and merge
+  passes as one serial train — drain the open harness PRs left over from earlier passes, then
+  carry each ready issue through implement → verify → PR → CI → merge floor → merge → post-merge
+  re-verification before the next branch is cut, with worktree-parallel mode never entered. A PR
+  whose only hold is the up-to-date rail gets one `gh pr update-branch` attempt (merge-from-base,
+  never `--rebase`), a bounded CI wait, then a full floor re-evaluation from the top; a conflict or
+  further failure leaves it held; until a merge is confirmed in the run, at most one update-branch runs. The non-autonomous merge-autonomy path is unchanged: one merge
+  per pass, no update-branch. Consumer step: re-copy the permissions block from
+  `templates/repo-settings.json` or add `"Bash(gh pr update-branch:*)"` by hand.
 - #312: Under "Autonomy mode" `mode: autonomous`, the planner now also evaluates auto-approval for
   a `plan-proposed` plan posted or revised in an EARLIER run, not only one from this run (ADR 0001
   decision 6). `find-planning-work.sh` gains an opt-in `--carry-over` flag adding a third

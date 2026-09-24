@@ -892,14 +892,16 @@ fi
 # skills/*/references/*.md <-> 'Bash(gh pr <sub>:*)' allow entries in
 # templates/repo-settings.json, with 'merge' as the single documented exception (merge is only
 # ever reached through the deny-lifted merge pass — see the merge pass's activation contract —
-# never a plain allow grant). Report both directions separately, like 2.4, plus a clause that
-# Bash(gh pr merge:*) is still present in permissions.deny (mirrors 4.13's 'seed' clause), so the
-# exception can't be used to quietly hide a granted merge.
-skill_pr_subs="$(grep -ohE 'gh pr [a-z]+' "$root"/skills/*/SKILL.md "$root"/skills/*/references/*.md 2>/dev/null \
+# never a plain allow grant). Both extractions take a hyphenated subcommand (e.g.
+# 'update-branch') whole, on either side, rather than stopping at the hyphen. Report both
+# directions separately, like 2.4, plus a clause that Bash(gh pr merge:*) is still present in
+# permissions.deny (mirrors 4.13's 'seed' clause), so the exception can't be used to quietly hide
+# a granted merge.
+skill_pr_subs="$(grep -ohE 'gh pr [a-z][a-z-]*' "$root"/skills/*/SKILL.md "$root"/skills/*/references/*.md 2>/dev/null \
   | sed -E 's/^gh pr //' \
   | sort -u)"
 allow_pr_subs="$(jq -r '.permissions.allow[]? // empty' "$settings_json" 2>/dev/null \
-  | grep -oE '^Bash\(gh pr [a-z]+:' \
+  | grep -oE '^Bash\(gh pr [a-z][a-z-]*:' \
   | sed -E 's/^Bash\(gh pr //; s/:$//' \
   | sort -u)"
 skill_pr_subs_noexc="$(comm -23 <(_lines "$skill_pr_subs") <(_lines "merge"))"
