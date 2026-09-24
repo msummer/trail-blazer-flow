@@ -18,6 +18,11 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #384: A kickback or CI-fix re-verification now checks only prior findings plus the fix's delta
+  since the previously reviewed commit, and a new mutant surviving on unchanged code is a Note.
+  Fix dispatches iterate narrow and run the full verification once. The implementer keeps counts
+  in its report, not in source comments; this repo deletes a stale prose figure rather than
+  recounting it.
 - #359: Added `dev/mutant-driver.sh`, a checked-in mutant driver that reads `dev/mutants/*.json`
   registry records and re-runs each one's recorded exact-text edits against a scratch copy, and
   `dev/mutant-driver-tests.sh`, its own negative-test harness; gate assertion 4.52 cross-checks a

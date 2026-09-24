@@ -524,7 +524,8 @@ e. **Dispatch the `verifier` subagent** (Task tool, `agents/verifier.md`) — th
    from CLAUDE.md's `## Autonomy reserve` fenced block, or the literal `none declared` — plus the
    plan's "Reserve touch list" (or that it has none), which feed the verifier's `## Reserve touch
    check`, and *"Verify this implementation against the plan and acceptance criteria following
-   your process. Return your verdict."*
+   your process. Return your verdict."* Before every verifier dispatch, record `git rev-parse
+   HEAD` — the commit this round reviews (a kickback's re-verification passes it on).
    - **Verdict `pass`:** archive it first, then carry it. Archive: `gh issue comment <number>
      --body-file <tempfile>`, whose temp file's first line is exactly `<!-- verifier-verdict -->`,
      second line is exactly `<!-- verifier-verdict-branch: claude/<number>-<slug> -->` (this
@@ -542,8 +543,11 @@ e. **Dispatch the `verifier` subagent** (Task tool, `agents/verifier.md`) — th
      findings verbatim, plus *"Fix ONLY these verification findings. Do not expand scope. Return
      your report."* On return, run the guard's compare, then checkpoint: `git add -A && git
      commit -m "wip: checkpoint kickback (#<n>)"` (skip if nothing changed). Re-run the mechanical
-     checks and re-dispatch the **verifier** (include its prior findings so it confirms each is
-     resolved). **Maximum 2
+     checks and re-dispatch the **verifier**, adding its prior findings verbatim and the line
+     `Previously reviewed commit: <sha>` (the failing round's recorded commit). This makes the
+     round a re-verification under the verifier's own "Re-verification" rules: it confirms each
+     prior finding is resolved and checks only the kickback's delta, so a new survivor on code
+     the prior round already accepted cannot restart the loop. **Maximum 2
      kickbacks** (3 implementer attempts total). Still failing → blocked path (step f), with the
      latest findings as the blocker explanation. Record verification rounds and ladder retries
      used for the summary table.
@@ -724,7 +728,8 @@ gh issue edit <number> --add-label pr-open
        fails) with the plan, its report, the failing log excerpt, and *"Fix ONLY this CI failure.
        Do not expand scope. Return your report."* On return, run the guard's compare, then
        checkpoint: `git add -A && git commit -m "wip: checkpoint ci-fix (#<n>)"` (skip if nothing
-       changed). Re-run the mechanical checks, re-dispatch the **verifier** (scope: the fix); once
+       changed). Re-run the mechanical checks, re-dispatch the **verifier** (scope: the fix — pass
+       `Previously reviewed commit: <sha>` naming the pushed `feat:` commit); once
        it confirms, archive its fresh verdict the same way as any other pass (above), then
        refresh the PR body — rewrite it with the fresh verdict's closing status line and
        `Mutation probe:` line replacing the superseded ones — and apply it with `gh pr edit

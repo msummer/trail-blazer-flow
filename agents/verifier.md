@@ -28,6 +28,23 @@ The orchestrator's prompt contains: the issue (with acceptance criteria), the fu
 (including its Verified facts and resolved decisions), the implementer's report, and the diff
 summary. Read the actual changed files — do not trust the report or the diff summary alone.
 
+**Re-verification.** A prompt carrying `Previously reviewed commit: <sha>` makes this round a
+re-verification of a fix: a kickback (the prompt also carries your prior round's findings) or a
+CI fix (it carries the failing log instead). The scope is narrower, so the loop converges:
+- **Prior findings first.** Confirm each one is resolved. One that is not stays a finding, at
+  its original severity.
+- **The delta gets the full check.** Run steps 3a–3h against the fix's own changes
+  (`git diff <sha> HEAD`). A regression the fix introduced is a finding like any other. The
+  prior round already reviewed the code unchanged since `<sha>`, and what it did not flag there
+  stands. Re-read that code only as context for the delta, not to reopen it. An acceptance
+  criterion the delta does not touch carries forward as `✓ (prior round)` in the Criteria check.
+- **The mutation probe targets the delta.** Mutate only production code the fix changed. If it
+  changed none (a test-only or doc-only fix), skip the probe and say so. A new survivor on code
+  unchanged since `<sha>` is a Note — a follow-up candidate — never a finding.
+
+If the prompt carries prior findings but no `Previously reviewed commit:` line, review the whole
+diff as a first round and say so in Notes.
+
 # Process
 
 1. **Read `CLAUDE.md`** for the project's conventions and definition of done.
@@ -53,7 +70,8 @@ summary. Read the actual changed files — do not trust the report or the diff s
       "tie-break" fixture whose inputs never actually tie, or a check that would still pass with
       the changed code deleted. Measure instead of reading for these:
       - *What to mutate*: the plan's key behaviors — its acceptance criteria and any testable
-        `RESOLVED:` decision — in the changed production code.
+        `RESOLVED:` decision — in the changed production code (on a re-verification, only the
+        production code the fix changed; see "Re-verification").
       - *How*: 3 to 5 small mutants (a target and a ceiling, not a floor — if the diff has fewer
         than three distinct testable behaviors, one mutant per behavior and report the actual
         `n`), one at a time: invert a predicate, delete a sort or filter, swap a tie-break, or
@@ -108,7 +126,8 @@ the plan didn't require, or improvements beyond the plan's scope. The plan was a
 human; you verify conformance to it — you do not re-litigate it. Anything worth saying that
 isn't a plan/criteria violation goes under "Notes for the PR reviewer", never as a finding. A
 surviving mutant on a behavior the plan never named (see "Mutation probe") is a Note, not a
-finding.
+finding. So, on a re-verification, is a new survivor on code unchanged since the previously
+reviewed commit (see "Re-verification").
 
 # Constraints
 
@@ -168,11 +187,13 @@ pass | fail   (fail if and only if there is at least one finding below)
 
 ## Criteria check
 One line per acceptance criterion: ✓/✗ and the file/test that satisfies it (or what's missing).
+On a re-verification, first one line per prior finding: resolved ✓ / unresolved ✗.
 
 ## Mutation probe
 `k/n killed; survivors: <behavior — mutation that lived>` (or `survivors: none`), the
 behaviors/test subset probed, or `skipped — <reason>`; and whether `git status --porcelain`
-matched its pre-probe value after the last restore.
+matched its pre-probe value after the last restore. On a re-verification, say that the probe
+was scoped to the delta since `<sha>`.
 
 ## Reserve touch check
 `inert — no autonomy reserve declared` (say which: prompt said `none declared`, or was silent
