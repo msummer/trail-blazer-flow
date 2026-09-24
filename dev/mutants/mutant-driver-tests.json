@@ -1,0 +1,353 @@
+{
+  "mutants": [
+    {
+      "name": "drv-once",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "      | if $matches != 1 then",
+          "to": "      | if $matches < 1 then"
+        }
+      ],
+      "expect_fail": [
+        "recipe-multi-match"
+      ]
+    },
+    {
+      "name": "drv-mv",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "write_target() {\n  cat > \"$1\"\n}",
+          "to": "write_target() {\n  local tmp; tmp=\"$(mktemp)\"; cat > \"$tmp\"; mv \"$tmp\" \"$1\"\n}"
+        }
+      ],
+      "expect_fail": [
+        "pass-exact",
+        "fail-extra-joiner",
+        "fail-missing-member",
+        "fail-swapped-member",
+        "multi-edit-sequential",
+        "byte-exact-multiline",
+        "exec-bit-preserved",
+        "tracked-tree-untouched",
+        "suite-runs-from-copy",
+        "declared-order",
+        "unknown-case",
+        "unknown-case-prefix",
+        "suite-no-summary",
+        "total-mismatch",
+        "jobs-line",
+        "footer-format",
+        "unsorted-set-order"
+      ]
+    },
+    {
+      "name": "drv-order",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "  local k=0 idx v out\n  while [ \"$k\" -lt \"$wave_n\" ]; do\n    idx=\"${wave_idx[$k]}\"",
+          "to": "  local k=0 idx v out\n  local order_list; order_list=\"$(ls -tr \"$resdir\"/*.verdict 2>/dev/null | sed -E 's#.*/([0-9]+)\\.verdict$#\\1#')\"\n  for idx in $order_list; do"
+        }
+      ],
+      "expect_fail": [
+        "pass-exact",
+        "child-dies",
+        "declared-order",
+        "footer-format"
+      ]
+    },
+    {
+      "name": "drv-noverdict",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "      *)\n        fail=$((fail+1))\n        echo \"FAIL ${job_name[$idx]} - -\"\n        echo \"    reason no-verdict\"\n        ;;",
+          "to": "      *)\n        pass=$((pass+1))\n        ;;"
+        }
+      ],
+      "expect_fail": [
+        "child-dies"
+      ]
+    },
+    {
+      "name": "drv-setcmp",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "  if [ \"$expect_set\" = \"$observed_set\" ]; then",
+          "to": "  if [ \"$(count_lines \"$expect_names\")\" = \"$(count_lines \"$parsed_fail_names\")\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "fail-swapped-member"
+      ]
+    },
+    {
+      "name": "drv-total",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "  if [ -z \"$footer\" ]; then\n    parsed_ok=0; parsed_reason=\"no-summary\"; parsed_total=\"-\"\n    return\n  fi\n  fp=\"${footer%% *}\"; fc=\"${footer##* }\"",
+          "to": "  fp=\"${footer%% *}\"; fc=\"${footer##* }\""
+        }
+      ],
+      "expect_fail": [
+        "suite-no-summary"
+      ]
+    },
+    {
+      "name": "drv-precedence",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "if [ -n \"$jobs_flag\" ]; then\n  jobs=\"$jobs_flag\"\nelif [ -n \"${MUTANT_DRIVER_JOBS:-}\" ]; then\n  jobs=\"$MUTANT_DRIVER_JOBS\"\n  case \"$jobs\" in\n    ''|*[!0-9]*|0) usage_die \"MUTANT_DRIVER_JOBS must be a positive integer, got '$jobs'\" ;;\n  esac\nelse\n  jobs=\"$(detect_jobs)\"\nfi",
+          "to": "if [ -n \"${MUTANT_DRIVER_JOBS:-}\" ]; then\n  jobs=\"$MUTANT_DRIVER_JOBS\"\n  case \"$jobs\" in\n    ''|*[!0-9]*|0) usage_die \"MUTANT_DRIVER_JOBS must be a positive integer, got '$jobs'\" ;;\n  esac\nelif [ -n \"$jobs_flag\" ]; then\n  jobs=\"$jobs_flag\"\nelse\n  jobs=\"$(detect_jobs)\"\nfi"
+        }
+      ],
+      "expect_fail": [
+        "jobs-line"
+      ]
+    },
+    {
+      "name": "drv-unsorted",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "LC_ALL=C sort -u",
+          "to": "cat"
+        }
+      ],
+      "expect_fail": [
+        "unsorted-set-order"
+      ]
+    },
+    {
+      "name": "drv-abs",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "        /*) add_err \"$f[$i] ($name): target '$target' must not be absolute\" ;;",
+          "to": "        ZZZNEVERZZZ*) add_err \"$f[$i] ($name): target '$target' must not be absolute\" ;;"
+        }
+      ],
+      "expect_fail": [
+        "reg-absolute-target"
+      ]
+    },
+    {
+      "name": "drv-dotdot",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "        *..*) add_err \"$f[$i] ($name): target '$target' must not contain '..'\" ;;",
+          "to": "        ZZZNEVERZZZ*) add_err \"$f[$i] ($name): target '$target' must not contain '..'\" ;;"
+        }
+      ],
+      "expect_fail": [
+        "reg-dotdot-target"
+      ]
+    },
+    {
+      "name": "drv-toplevel",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "if ! jq -e 'type==\"object\" and has(\"mutants\") and (.mutants|type==\"array\")' \"$f\" >/dev/null 2>&1; then",
+          "to": "if ! true; then"
+        }
+      ],
+      "expect_fail": [
+        "reg-bad-top-level"
+      ]
+    },
+    {
+      "name": "drv-recobj",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "if [ \"$(jq -r 'type' <<<\"$rec\")\" != \"object\" ]; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "reg-record-not-object"
+      ]
+    },
+    {
+      "name": "drv-keys",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "if [ \"$keys_ok\" != \"true\" ]; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "reg-bad-keys"
+      ]
+    },
+    {
+      "name": "drv-targettype",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "if [ -z \"$target\" ] || [ \"$target\" = \"null\" ]; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "reg-target-not-string"
+      ]
+    },
+    {
+      "name": "drv-targetexists",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "[ -f \"$root/$target\" ] || add_err \"$f[$i] ($name): target '$target' does not exist\"",
+          "to": "true || add_err \"$f[$i] ($name): target '$target' does not exist\""
+        }
+      ],
+      "expect_fail": [
+        "reg-missing-target"
+      ]
+    },
+    {
+      "name": "drv-suiteexists",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "elif [ ! -f \"$root/$suite\" ]; then",
+          "to": "elif false; then"
+        }
+      ],
+      "expect_fail": [
+        "reg-suite-missing"
+      ]
+    },
+    {
+      "name": "drv-filtertype",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "if [ \"$(jq -r '.filter | type' <<<\"$rec\")\" != \"string\" ]; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "reg-bad-filter-type"
+      ]
+    },
+    {
+      "name": "drv-fromtype",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "if [ \"$(jq -r \".edits[$ei].from // \\\"\\\" | type\" <<<\"$rec\")\" != \"string\" ] || [ -z \"$efrom\" ]; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "reg-empty-from"
+      ]
+    },
+    {
+      "name": "drv-fromto",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "elif [ \"$efrom\" = \"$eto\" ]; then",
+          "to": "elif false; then"
+        }
+      ],
+      "expect_fail": [
+        "reg-from-equals-to"
+      ]
+    },
+    {
+      "name": "drv-suiteshape",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "    if ! grep -qE '^dev/[A-Za-z0-9._-]+\\.sh$' <<<\"$suite\"; then",
+          "to": "    if false; then"
+        }
+      ],
+      "expect_fail": [
+        "reg-bad-suite-path"
+      ]
+    },
+    {
+      "name": "drv-nobreak",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "      fail_reason=\"edit $ei matched $matches time(s) (expected exactly 1)\"\n      break\n    fi",
+          "to": "      fail_reason=\"edit $ei matched $matches time(s) (expected exactly 1)\"\n    fi"
+        }
+      ],
+      "expect_fail": [
+        "recipe-first-edit-fails"
+      ]
+    },
+    {
+      "name": "drv-unknownexact",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "    if ! grep -qxF -- \"$ex\" <<<\"$all_names\"; then",
+          "to": "    if ! grep -qF -- \"$ex\" <<<\"$all_names\"; then"
+        }
+      ],
+      "expect_fail": [
+        "unknown-case-prefix"
+      ]
+    }
+  ]
+}

@@ -71,11 +71,14 @@ or share).
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 │   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
 │   ├── lock-tests.sh             # fixture-based negative-test harness for bin/harness-lock.sh (not run by the gate)
-│   └── stop-tests.sh             # fixture-based negative-test harness for bin/harness-stop.sh (not run by the gate)
+│   ├── stop-tests.sh             # fixture-based negative-test harness for bin/harness-stop.sh (not run by the gate)
+│   ├── mutant-driver.sh          # checked-in mutant driver: applies dev/mutants/*.json's recorded edits to a scratch copy and re-runs each record's suite (#359)
+│   ├── mutant-driver-tests.sh    # the driver's own negative-test harness, over synthetic targets/suites (not run by the gate)
+│   └── mutants/                  # machine-readable mutant registries the driver reads — {name,target,suite,filter,edits,expect_fail} per record
 ├── docs/
 │   └── adr/                      # architecture decision records: direction the README doesn't specify yet
 ├── .github/
-│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the four hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness, then the stop switch script's negative-test harness — on ubuntu-latest per PR and, pinned to Apple's bash 3.2, on macos-latest post-merge and nightly (#365)
+│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the four hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness, then the stop switch script's negative-test harness, then the mutant driver (post-merge/nightly/dispatch only), then the driver's own negative-test harness — on ubuntu-latest per PR and, pinned to Apple's bash 3.2, on macos-latest post-merge and nightly (#365)
 │   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
 └── templates/
     └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
@@ -1959,11 +1962,14 @@ bash dev/selfcheck.sh
 
 It prints a `PASS`/`FAIL` line per assertion and a `== summary: N pass, M fail ==` footer — run
 it to see exactly what it checks. There is no test suite and no build step: this repo is
-Markdown instruction files, Bash scripts, and JSON manifests. The gate and its seven negative-test
+Markdown instruction files, Bash scripts, and JSON manifests. The gate and its eight negative-test
 harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tests.sh`, `dev/hook-tests.sh`,
-`dev/cleanup-tests.sh`, `dev/planning-tests.sh`, `dev/lock-tests.sh`, `dev/stop-tests.sh`) all run in CI on every pull
-request on ubuntu, and again under Apple's bash 3.2 on macOS after each merge to `main` and
-nightly (#365) — see this repo's `CLAUDE.md` "Verification" section for the exact commands and jobs.
+`dev/cleanup-tests.sh`, `dev/planning-tests.sh`, `dev/lock-tests.sh`, `dev/stop-tests.sh`, and
+`dev/mutant-driver-tests.sh`) all run in CI on every pull request on ubuntu, and again under
+Apple's bash 3.2 on macOS after each merge to `main` and nightly (#365). `dev/mutant-driver.sh`
+(#359), the checked-in mutant driver that re-runs every `dev/mutants/*.json` record, runs in both
+jobs too, but only post-merge on `main`, nightly, and on manual dispatch — never on a pull
+request — see this repo's `CLAUDE.md` "Verification" section for the exact commands and jobs.
 `dev/selfcheck-tests.sh` runs its case rows concurrently by default (#336); `SELFCHECK_TESTS_JOBS=<n>`
 or `-j <n>` overrides the detected job count, and `--serial` restores one case at a time.
 

@@ -1,0 +1,922 @@
+{
+  "mutants": [
+    {
+      "name": "285-i",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "\n  + [ ($i.counts // {}) | to_entries[] | select((.key | endswith(\"_unavailable\")) and .value == true) | \"implementation.\" + .key ]",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "status-degraded-both-scripts",
+        "status-degraded-implementer-ready-query",
+        "status-degraded-reasons-all-halves"
+      ]
+    },
+    {
+      "name": "285-j",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "| select((.key | endswith(\"_unavailable\")) and .value == true) | \"planning.\" + .key ]",
+          "to": "| select((.key == \"initial_query_unavailable\" or .key == \"candidates_query_unavailable\") and .value == true) | \"planning.\" + .key ]"
+        },
+        {
+          "from": "| select((.key | endswith(\"_unavailable\")) and .value == true) | \"implementation.\" + .key ]",
+          "to": "| select((.key == \"initial_query_unavailable\" or .key == \"candidates_query_unavailable\") and .value == true) | \"implementation.\" + .key ]"
+        }
+      ],
+      "expect_fail": [
+        "status-degraded-author-association",
+        "status-degraded-both-scripts",
+        "status-degraded-implementer-ready-query",
+        "status-degraded-reasons-all-halves"
+      ]
+    },
+    {
+      "name": "285-k",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "(($all | length) > 0) as $deg",
+          "to": "(false) as $deg"
+        }
+      ],
+      "expect_fail": [
+        "status-blocked-query-unavailable",
+        "status-degraded-author-association",
+        "status-degraded-implementer-ready-query",
+        "status-degraded-planner-initial-query",
+        "status-degraded-reasons-all-halves",
+        "status-escalations-query-unavailable",
+        "status-followups-degraded-order",
+        "status-followups-query-unavailable",
+        "status-proposed-query-unavailable",
+        "status-prs-query-unavailable",
+        "status-stop-degraded-order",
+        "status-stop-unavailable-with-carriers",
+        "status-stop-unknown",
+        "status-stop-usage-error"
+      ]
+    },
+    {
+      "name": "285-l",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "(($all | length) > 0) as $deg",
+          "to": "(true) as $deg"
+        }
+      ],
+      "expect_fail": [
+        "status-blocked-query-retry-succeeds",
+        "status-clean-not-degraded",
+        "status-escalations-bucket-populated",
+        "status-escalations-query-retry-succeeds",
+        "status-followups-bucket-populated",
+        "status-followups-query-retry-succeeds",
+        "status-own-queries-healthy",
+        "status-own-retry-sleep-failure-survives",
+        "status-proposed-query-retry-succeeds",
+        "status-prs-query-retry-succeeds",
+        "status-stop-clear",
+        "status-stop-set-both-routes",
+        "status-stop-set-github"
+      ]
+    },
+    {
+      "name": "297-a",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "if ! proposed=$(list_proposed); then\n  proposed_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n  if proposed=$(list_proposed); then\n    echo \"warn: plan-proposed query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2\n  else\n    echo \"warn: could not list plan-proposed issues (gh issue list) \u2014 reporting an empty plans_to_review bucket this run (fail-closed)\" >&2\n    proposed_query_unavailable=true\n    proposed='[]'\n  fi\nfi",
+          "to": "proposed=$(list_proposed)"
+        }
+      ],
+      "expect_fail": [
+        "status-degraded-reasons-all-halves",
+        "status-followups-degraded-order",
+        "status-own-retry-sleep-failure-survives",
+        "status-proposed-query-retry-succeeds",
+        "status-proposed-query-unavailable",
+        "status-stop-degraded-order"
+      ]
+    },
+    {
+      "name": "297-b",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "if ! blocked=$(list_blocked); then\n  blocked_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n  if blocked=$(list_blocked); then\n    echo \"warn: impl-blocked query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2\n  else\n    echo \"warn: could not list impl-blocked issues (gh issue list) \u2014 reporting an empty blocked bucket this run (fail-closed)\" >&2\n    blocked_query_unavailable=true\n    blocked='[]'\n  fi\nfi",
+          "to": "blocked=$(list_blocked)"
+        }
+      ],
+      "expect_fail": [
+        "status-blocked-query-retry-succeeds",
+        "status-blocked-query-unavailable",
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "297-c",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "if ! prs_raw=$(list_prs); then\n  prs_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n  if prs_raw=$(list_prs); then\n    echo \"warn: open-PR query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2\n  else\n    echo \"warn: could not list open PRs (gh pr list) \u2014 reporting an empty prs_to_review bucket this run (fail-closed)\" >&2\n    prs_query_unavailable=true\n    prs_raw='[]'\n  fi\nfi",
+          "to": "prs_raw=$(list_prs)"
+        }
+      ],
+      "expect_fail": [
+        "status-degraded-reasons-all-halves",
+        "status-followups-degraded-order",
+        "status-own-retry-sleep-failure-survives",
+        "status-prs-query-retry-succeeds",
+        "status-prs-query-unavailable"
+      ]
+    },
+    {
+      "name": "297-d1",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "  proposed_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n",
+          "to": "  proposed_query_retried=true\n  sleep \"$RETRY_SLEEP\"\n"
+        }
+      ],
+      "expect_fail": [
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "297-d2",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "  blocked_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n",
+          "to": "  blocked_query_retried=true\n  sleep \"$RETRY_SLEEP\"\n"
+        }
+      ],
+      "expect_fail": [
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "297-d3",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "  prs_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n",
+          "to": "  prs_query_retried=true\n  sleep \"$RETRY_SLEEP\"\n"
+        }
+      ],
+      "expect_fail": [
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "297-e",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "  if proposed=$(list_proposed); then\n    echo \"warn: plan-proposed query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2\n  else\n    echo \"warn: could not list plan-proposed issues (gh issue list) \u2014 reporting an empty plans_to_review bucket this run (fail-closed)\" >&2\n    proposed_query_unavailable=true\n    proposed='[]'\n  fi",
+          "to": "    echo \"warn: could not list plan-proposed issues (gh issue list) \u2014 reporting an empty plans_to_review bucket this run (fail-closed)\" >&2\n    proposed_query_unavailable=true\n    proposed='[]'"
+        }
+      ],
+      "expect_fail": [
+        "status-degraded-reasons-all-halves",
+        "status-followups-degraded-order",
+        "status-own-retry-sleep-failure-survives",
+        "status-proposed-query-retry-succeeds",
+        "status-proposed-query-unavailable",
+        "status-stop-degraded-order"
+      ]
+    },
+    {
+      "name": "297-f",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "($dr + [ $sf | to_entries[] | select((.key|endswith(\"_unavailable\")) and .value == true) | \"status.\" + .key ]) as $all",
+          "to": "($dr) as $all"
+        }
+      ],
+      "expect_fail": [
+        "status-blocked-query-unavailable",
+        "status-degraded-reasons-all-halves",
+        "status-escalations-query-unavailable",
+        "status-followups-degraded-order",
+        "status-followups-query-unavailable",
+        "status-proposed-query-unavailable",
+        "status-prs-query-unavailable",
+        "status-stop-degraded-order",
+        "status-stop-unavailable-with-carriers",
+        "status-stop-unknown",
+        "status-stop-usage-error"
+      ]
+    },
+    {
+      "name": "297-g",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "(($all | length) > 0) as $deg",
+          "to": "(($dr | length) > 0) as $deg"
+        }
+      ],
+      "expect_fail": [
+        "status-blocked-query-unavailable",
+        "status-escalations-query-unavailable",
+        "status-followups-degraded-order",
+        "status-followups-query-unavailable",
+        "status-proposed-query-unavailable",
+        "status-prs-query-unavailable",
+        "status-stop-degraded-order",
+        "status-stop-unavailable-with-carriers",
+        "status-stop-unknown",
+        "status-stop-usage-error"
+      ]
+    },
+    {
+      "name": "297-h1",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "proposed_query_unavailable: $pqu,",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "status-degraded-reasons-all-halves",
+        "status-followups-degraded-order",
+        "status-own-queries-healthy",
+        "status-own-retry-sleep-failure-survives",
+        "status-proposed-query-retry-succeeds",
+        "status-proposed-query-unavailable",
+        "status-stop-degraded-order"
+      ]
+    },
+    {
+      "name": "297-h2",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": " blocked_query_unavailable: $bqu,",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "status-blocked-query-retry-succeeds",
+        "status-blocked-query-unavailable",
+        "status-degraded-reasons-all-halves",
+        "status-followups-degraded-order",
+        "status-own-queries-healthy",
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "297-h3",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": " prs_query_unavailable: $prqu,",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "status-degraded-reasons-all-halves",
+        "status-followups-degraded-order",
+        "status-own-queries-healthy",
+        "status-own-retry-sleep-failure-survives",
+        "status-prs-query-retry-succeeds",
+        "status-prs-query-unavailable"
+      ]
+    },
+    {
+      "name": "297-i",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "proposed_query_retried: $pqr, ",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "status-own-queries-healthy",
+        "status-own-retry-sleep-failure-survives",
+        "status-proposed-query-retry-succeeds",
+        "status-proposed-query-unavailable"
+      ]
+    },
+    {
+      "name": "297-j",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "($dr + [ $sf | to_entries[] | select((.key|endswith(\"_unavailable\")) and .value == true) | \"status.\" + .key ]) as $all",
+          "to": "([ $sf | to_entries[] | select((.key|endswith(\"_unavailable\")) and .value == true) | \"status.\" + .key ] + $dr) as $all"
+        }
+      ],
+      "expect_fail": [
+        "status-degraded-reasons-all-halves"
+      ]
+    },
+    {
+      "name": "297-k",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "if ! proposed=$(list_proposed); then",
+          "to": "proposed=$(list_proposed) || true\nif true; then"
+        }
+      ],
+      "expect_fail": [
+        "status-blocked-query-retry-succeeds",
+        "status-blocked-query-unavailable",
+        "status-escalations-bucket-populated",
+        "status-escalations-query-retry-succeeds",
+        "status-escalations-query-unavailable",
+        "status-followups-bucket-populated",
+        "status-followups-query-retry-succeeds",
+        "status-followups-query-unavailable",
+        "status-own-queries-healthy",
+        "status-prs-query-retry-succeeds",
+        "status-prs-query-unavailable",
+        "status-stop-clear",
+        "status-stop-true-no-carrier"
+      ]
+    },
+    {
+      "name": "297-l",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "    echo \"warn: plan-proposed query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2",
+          "to": "    echo \"warn: plan-proposed query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2\n    echo \"warn: plan-proposed query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2"
+        }
+      ],
+      "expect_fail": [
+        "status-own-retry-sleep-failure-survives",
+        "status-proposed-query-retry-succeeds"
+      ]
+    },
+    {
+      "name": "333-N1",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "if ! followups_raw=$(list_followups); then\n  followups_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n  if followups_raw=$(list_followups); then\n    echo \"warn: held-follow-up query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2\n  else\n    echo \"warn: could not list held follow-ups (gh issue list) \u2014 reporting an empty followups_to_triage bucket this run (fail-closed)\" >&2\n    followups_query_unavailable=true\n    followups_raw='[]'\n  fi\nfi",
+          "to": "followups_raw=$(list_followups)"
+        }
+      ],
+      "expect_fail": [
+        "status-followups-degraded-order",
+        "status-followups-query-retry-succeeds",
+        "status-followups-query-unavailable",
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "333-N2",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "  if followups_raw=$(list_followups); then\n    echo \"warn: held-follow-up query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2\n  else\n    echo \"warn: could not list held follow-ups (gh issue list) \u2014 reporting an empty followups_to_triage bucket this run (fail-closed)\" >&2\n    followups_query_unavailable=true\n    followups_raw='[]'\n  fi",
+          "to": "    echo \"warn: could not list held follow-ups (gh issue list) \u2014 reporting an empty followups_to_triage bucket this run (fail-closed)\" >&2\n    followups_query_unavailable=true\n    followups_raw='[]'"
+        }
+      ],
+      "expect_fail": [
+        "status-followups-degraded-order",
+        "status-followups-query-retry-succeeds",
+        "status-followups-query-unavailable",
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "333-N3",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "  followups_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n",
+          "to": "  followups_query_retried=true\n  sleep \"$RETRY_SLEEP\"\n"
+        }
+      ],
+      "expect_fail": [
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "333-N4",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "followups_query_unavailable: $fqu,",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "status-followups-bucket-populated",
+        "status-followups-degraded-order",
+        "status-followups-query-retry-succeeds",
+        "status-followups-query-unavailable",
+        "status-own-queries-healthy",
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "333-N5",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "followups_query_retried: $fqr, ",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "status-followups-bucket-populated",
+        "status-followups-query-retry-succeeds",
+        "status-followups-query-unavailable",
+        "status-own-queries-healthy",
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "333-N6",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "select((.body // \"\") | startswith(\"<!-- harness-follow-up: PR #\"))",
+          "to": "select((.body // \"\") | contains(\"<!-- harness-follow-up: PR #\"))"
+        }
+      ],
+      "expect_fail": [
+        "status-followups-bucket-populated"
+      ]
+    },
+    {
+      "name": "333-N7",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "[ .[] | select((.body // \"\") | startswith(\"<!-- harness-follow-up: PR #\")) | {number, title, url} ]",
+          "to": "[ .[] | {number, title, url} ]"
+        }
+      ],
+      "expect_fail": [
+        "status-followups-bucket-populated"
+      ]
+    },
+    {
+      "name": "333-N8",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "[] as $excluded",
+          "to": "[\"followups_to_triage\"] as $excluded"
+        }
+      ],
+      "expect_fail": [
+        "status-followups-bucket-populated",
+        "status-followups-query-retry-succeeds"
+      ]
+    },
+    {
+      "name": "333-N9",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "startswith(\"<!-- harness-follow-up: PR #\")) | {number, title, url} ]",
+          "to": "startswith(\"<!-- harness-follow-up: PR #\")) ]"
+        }
+      ],
+      "expect_fail": [
+        "status-followups-bucket-populated"
+      ]
+    },
+    {
+      "name": "333-QT",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "label:no-plan -label:$TRIAGED_HELD_LABEL",
+          "to": "label:no-plan"
+        }
+      ],
+      "expect_fail": [
+        "status-followups-bucket-populated",
+        "status-followups-degraded-order",
+        "status-followups-query-retry-succeeds",
+        "status-followups-query-unavailable",
+        "status-own-queries-healthy",
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "333-sum",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "       human_actions: ([ $woh | to_entries[]\n                         | select((.value | type) == \"array\")\n                         | .key as $k | select(($excluded | index($k)) | not)\n                         | (.value | length) ] | add // 0),",
+          "to": "       human_actions: (($woh.plans_to_review|length) + ($woh.prs_to_review|length) + ($woh.blocked|length)),"
+        }
+      ],
+      "expect_fail": [
+        "status-escalations-bucket-populated",
+        "status-followups-bucket-populated",
+        "status-followups-query-retry-succeeds",
+        "status-stop-set-both-routes",
+        "status-stop-set-github",
+        "status-stop-set-local"
+      ]
+    },
+    {
+      "name": "309-P1",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "if ! escalations=$(list_escalations); then\n  escalations_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n  if escalations=$(list_escalations); then\n    echo \"warn: escalations query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2\n  else\n    echo \"warn: could not list escalated issues (gh issue list) \u2014 reporting an empty escalations bucket this run (fail-closed)\" >&2\n    escalations_query_unavailable=true\n    escalations='[]'\n  fi\nfi",
+          "to": "escalations=$(list_escalations)"
+        }
+      ],
+      "expect_fail": [
+        "status-escalations-query-retry-succeeds",
+        "status-escalations-query-unavailable",
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "309-P2",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "  if escalations=$(list_escalations); then\n    echo \"warn: escalations query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2\n  else\n    echo \"warn: could not list escalated issues (gh issue list) \u2014 reporting an empty escalations bucket this run (fail-closed)\" >&2\n    escalations_query_unavailable=true\n    escalations='[]'\n  fi",
+          "to": "    echo \"warn: could not list escalated issues (gh issue list) \u2014 reporting an empty escalations bucket this run (fail-closed)\" >&2\n    escalations_query_unavailable=true\n    escalations='[]'"
+        }
+      ],
+      "expect_fail": [
+        "status-escalations-query-retry-succeeds",
+        "status-escalations-query-unavailable",
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "309-P3",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "  escalations_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n",
+          "to": "  escalations_query_retried=true\n  sleep \"$RETRY_SLEEP\"\n"
+        }
+      ],
+      "expect_fail": [
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "309-P4",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": " escalations_query_unavailable: $equ,",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "status-escalations-bucket-populated",
+        "status-escalations-query-retry-succeeds",
+        "status-escalations-query-unavailable",
+        "status-own-queries-healthy",
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "309-P5",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "escalations_query_retried: $eqr, ",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "status-escalations-bucket-populated",
+        "status-escalations-query-retry-succeeds",
+        "status-escalations-query-unavailable",
+        "status-own-queries-healthy",
+        "status-own-retry-sleep-failure-survives"
+      ]
+    },
+    {
+      "name": "309-P6",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "[] as $excluded",
+          "to": "[\"escalations\"] as $excluded"
+        }
+      ],
+      "expect_fail": [
+        "status-escalations-bucket-populated"
+      ]
+    },
+    {
+      "name": "353-S1",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "stop_out=\"$(harness-stop.sh)\" || stop_rc=$?",
+          "to": "stop_out=\"$(harness-stop.sh)\""
+        }
+      ],
+      "expect_fail": [
+        "status-stop-degraded-order",
+        "status-stop-not-on-path",
+        "status-stop-set-both-routes",
+        "status-stop-set-github",
+        "status-stop-set-local",
+        "status-stop-true-no-carrier",
+        "status-stop-unavailable-with-carriers",
+        "status-stop-unknown",
+        "status-stop-unparseable-first-line",
+        "status-stop-usage-error"
+      ]
+    },
+    {
+      "name": "353-S2",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "  4)\n    if [ \"$stop_line1\" = \"${STOP_STATE_PREFIX}${STOP_STATE_UNKNOWN}\" ]; then\n      stop_state=\"$STOP_STATE_UNKNOWN\"\n    else\n      stop_state=\"$STOP_STATE_UNAVAILABLE\"\n    fi\n    ;;",
+          "to": "  4)\n    stop_state=\"$STOP_STATE_CLEAR\"\n    ;;"
+        }
+      ],
+      "expect_fail": [
+        "status-stop-degraded-order",
+        "status-stop-unknown"
+      ]
+    },
+    {
+      "name": "353-S3",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "escalations_query_unavailable: $equ,\n    stop_check_unavailable: $scu} as $sf",
+          "to": "escalations_query_unavailable: $equ} as $sf"
+        }
+      ],
+      "expect_fail": [
+        "status-own-queries-healthy",
+        "status-stop-clear",
+        "status-stop-degraded-order",
+        "status-stop-not-on-path",
+        "status-stop-rc-token-disagreement",
+        "status-stop-set-both-routes",
+        "status-stop-set-github",
+        "status-stop-set-local",
+        "status-stop-true-no-carrier",
+        "status-stop-unavailable-with-carriers",
+        "status-stop-unknown",
+        "status-stop-unparseable-first-line",
+        "status-stop-usage-error"
+      ]
+    },
+    {
+      "name": "353-S4",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "case \"$stop_rc\" in\n  0)\n    if [ \"$stop_line1\" = \"${STOP_STATE_PREFIX}${STOP_STATE_CLEAR}\" ]; then\n      stop_state=\"$STOP_STATE_CLEAR\"\n    else\n      stop_state=\"$STOP_STATE_UNAVAILABLE\"\n    fi\n    ;;\n  3)\n    if [ \"$stop_line1\" = \"${STOP_STATE_PREFIX}${STOP_STATE_SET}\" ]; then\n      stop_state=\"$STOP_STATE_SET\"\n    else\n      stop_state=\"$STOP_STATE_UNAVAILABLE\"\n    fi\n    ;;\n  4)\n    if [ \"$stop_line1\" = \"${STOP_STATE_PREFIX}${STOP_STATE_UNKNOWN}\" ]; then\n      stop_state=\"$STOP_STATE_UNKNOWN\"\n    else\n      stop_state=\"$STOP_STATE_UNAVAILABLE\"\n    fi\n    ;;\n  *)\n    stop_state=\"$STOP_STATE_UNAVAILABLE\"\n    ;;\nesac",
+          "to": "if [ \"$stop_line1\" = \"${STOP_STATE_PREFIX}${STOP_STATE_CLEAR}\" ]; then\n  stop_state=\"$STOP_STATE_CLEAR\"\nelif [ \"$stop_line1\" = \"${STOP_STATE_PREFIX}${STOP_STATE_SET}\" ]; then\n  stop_state=\"$STOP_STATE_SET\"\nelif [ \"$stop_line1\" = \"${STOP_STATE_PREFIX}${STOP_STATE_UNKNOWN}\" ]; then\n  stop_state=\"$STOP_STATE_UNKNOWN\"\nelse\n  stop_state=\"$STOP_STATE_UNAVAILABLE\"\nfi"
+        }
+      ],
+      "expect_fail": [
+        "status-stop-rc-token-disagreement",
+        "status-stop-unavailable-with-carriers"
+      ]
+    },
+    {
+      "name": "353-S5",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "      | { route: $lines[$i],\n          clear: (if (($i + 1) < ($lines | length)) and ($lines[$i + 1] | startswith($cp))\n                  then $lines[$i + 1] else null end) }",
+          "to": "      | { route: $lines[$i] }"
+        }
+      ],
+      "expect_fail": [
+        "status-stop-set-both-routes",
+        "status-stop-set-github",
+        "status-stop-set-local"
+      ]
+    },
+    {
+      "name": "353-S6",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "          clear: (if (($i + 1) < ($lines | length)) and ($lines[$i + 1] | startswith($cp))\n                  then $lines[$i + 1] else null end) }",
+          "to": "          clear: (if (($i - 1) >= 0) and ($lines[$i - 1] | startswith($cp))\n                  then $lines[$i - 1] else null end) }"
+        }
+      ],
+      "expect_fail": [
+        "status-stop-set-both-routes",
+        "status-stop-set-github",
+        "status-stop-set-local"
+      ]
+    },
+    {
+      "name": "353-S7",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "    ] as $routes\n",
+          "to": "    ] as $routes_fwd\n    | ($routes_fwd | reverse) as $routes\n"
+        }
+      ],
+      "expect_fail": [
+        "status-stop-set-both-routes"
+      ]
+    },
+    {
+      "name": "353-S8",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": ", stop_routes: $sp.routes} as $woh",
+          "to": "} as $woh"
+        }
+      ],
+      "expect_fail": [
+        "status-stop-clear",
+        "status-stop-set-both-routes",
+        "status-stop-set-github",
+        "status-stop-set-local",
+        "status-stop-true-no-carrier",
+        "status-stop-unavailable-with-carriers",
+        "status-stop-unknown"
+      ]
+    },
+    {
+      "name": "353-S9",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "[] as $excluded",
+          "to": "[\"stop_routes\"] as $excluded"
+        }
+      ],
+      "expect_fail": [
+        "status-stop-set-both-routes",
+        "status-stop-set-github",
+        "status-stop-set-local"
+      ]
+    },
+    {
+      "name": "353-S10",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "stop_out=\"$(harness-stop.sh)\" || stop_rc=$?",
+          "to": "if ! stop_out=\"$(harness-stop.sh)\"; then sleep \"$RETRY_SLEEP\" || true; stop_out=\"$(harness-stop.sh)\" || stop_rc=$?; fi"
+        }
+      ],
+      "expect_fail": [
+        "status-stop-degraded-order",
+        "status-stop-not-on-path",
+        "status-stop-set-both-routes",
+        "status-stop-set-github",
+        "status-stop-set-local",
+        "status-stop-true-no-carrier",
+        "status-stop-unavailable-with-carriers",
+        "status-stop-unknown",
+        "status-stop-unparseable-first-line",
+        "status-stop-usage-error"
+      ]
+    },
+    {
+      "name": "353-S11",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "if [ \"$stop_state\" = \"$STOP_STATE_SET\" ] || [ \"$stop_state\" = \"$STOP_STATE_CLEAR\" ]; then\n  stop_check_unavailable=false\nelse\n  stop_check_unavailable=true\nfi",
+          "to": "if ( [ \"$stop_state\" = \"$STOP_STATE_SET\" ] || [ \"$stop_state\" = \"$STOP_STATE_CLEAR\" ] ) && { case \"$stop_out\" in *\"${STOP_REASON_PREFIX}\"*) false ;; *) true ;; esac; }; then\n  stop_check_unavailable=false\nelse\n  stop_check_unavailable=true\nfi"
+        }
+      ],
+      "expect_fail": [
+        "status-stop-set-local"
+      ]
+    },
+    {
+      "name": "353-S12",
+      "target": "bin/harness-status.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "status-",
+      "edits": [
+        {
+          "from": "if [ \"$stop_state\" = \"$STOP_STATE_UNAVAILABLE\" ]; then\n  stop_parsed=$(jq -c '.routes = []' <<<\"$stop_parsed\")\nfi",
+          "to": "true"
+        }
+      ],
+      "expect_fail": [
+        "status-stop-unavailable-with-carriers"
+      ]
+    }
+  ]
+}
