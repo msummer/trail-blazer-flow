@@ -515,9 +515,10 @@ listing the same way it caps `plans_to_review`'s, `prs_to_review`'s, `blocked`'s
 `escalations` (#309): this bucket's query is not excluded from `plans_to_review`/`blocked`, so an
 issue carrying `needs-human` alongside `plan-proposed` or `impl-blocked` counts twice in
 `counts.human_actions` until you remove one of the two labels; an escalation from a red-CI site
-(`ci-red-after-fix`, `ci-red-unrelated`) sits on an issue whose open PR is already in
-`prs_to_review`, so that one problem counts twice too (once as the PR, once as the escalated
-issue); and GitHub's issue search can trail a label edit (measured on this repo, 2026-09-17 and
+(`ci-red-after-fix`, `ci-red-unrelated`) or from the implementer's open-PR sub-branch
+(`branch-has-open-pr`) sits on an issue whose open PR is already in `prs_to_review`, so that one
+problem counts twice too (once as the PR, once as the escalated issue); and GitHub's issue search
+can trail a label edit (measured on this repo, 2026-09-17 and
 again 2026-09-19: a list query made right after a label edit missed an issue that a later run
 returned), so an issue escalated moments earlier may be missing from the same run's `escalations`
 bucket. Honest limits on `stop_routes` (#353): a `stop.state` of `"true"` carrying no carrier line
@@ -1760,8 +1761,8 @@ the issue is simply left undispatched for the next run to re-check; before push,
 already-staged, already-implemented tree is checkpointed (`wip: checkpoint binding-recheck`)
 rather than discarded. Either way one `<!-- harness-audit -->`-marked comment records the hold —
 its second line carrying the key `<!-- harness-hold: issue=<n> stage=<stage> reason=<reason>
-comments=<ids> -->` (#222, the same de-dup treatment #199 and #208 already gave the planner's
-escalation and staleness notes) — and is skipped when the issue's newest maintainer-authored hold
+comments=<ids> -->` (#222, the same de-dup treatment #208 gives the planner's staleness note) —
+and is skipped when the issue's newest maintainer-authored hold
 comment already carries the identical key, so a multi-hour outage no longer buries the issue under
 one duplicate hold per scheduled cycle; the run-summary flag is never suppressed, only the comment
 is, and only `OWNER`/`MEMBER`/`COLLABORATOR` comments satisfy the guard, so a forged key cannot
@@ -1955,23 +1956,21 @@ containing `<!-- harness-audit -->` (a harness-authored audit/hygiene record —
 auto-approval audit trail, its `plan-approved` staleness note — whose second line, since #208,
 also carries a `<!-- harness-staleness: issue=<n> prs=<prs> -->` key naming the merged PRs that
 caused the staleness, so a repeat run skips re-posting it once the issue's newest
-maintainer-authored staleness comment already records that same PR set — its step-7 stalled-stage
-escalation comment (#194) — whose second line also carries a `<!-- harness-escalation:
-bucket=<bucket> stage=<stage> -->` key, so a repeat run skips re-posting it once the issue's
-newest maintainer-authored escalation comment already records that same key (#199) — the
+maintainer-authored staleness comment already records that same PR set — the
 implementer's unknown-verdict hold comment (see "Approval provenance" above) — whose second line
 also carries a `<!-- harness-hold: issue=<n> stage=<stage> reason=<reason> comments=<ids> -->`
 key, so a repeat run skips re-posting it once the issue's newest maintainer-authored hold comment
 already records that same key (#222) — the
 implementer's interrupted-run and worktree-sweep notes, `cleanup-after-merge.sh`'s hygiene
 comments), `<!-- verifier-verdict
--->` (the orchestrator's own archive), or, since #309, `<!-- harness-escalation -->` — the
-implementer's own durable-escalation comment (see `skills/issue-implementer/SKILL.md`'s "Durable
-escalation" subsection), whose second line
+-->` (the orchestrator's own archive), or, since #309, `<!-- harness-escalation -->` — the marker
+every durable escalation opens with, whether posted by the implementer (see
+`skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection) or, since #349, by the
+planner's own step 7 for a stalled stage — whose second line
 carries a `<!-- harness-escalation-key: issue=<n> stage=<stage> reason=<slug> comments=<ids> -->`
-key — a DIFFERENT string from the planner's own `<!-- harness-escalation: bucket=<bucket>
-stage=<stage> -->` key two sentences above (neither `contains` nor `startswith` cross-matches the
-other in either direction) — anywhere in its body is excluded from
+key (an older planner's step-7 record instead opened with `<!-- harness-audit -->` and carried a
+`<!-- harness-escalation: bucket=<bucket> stage=<stage> -->` key; such legacy comments are still
+excluded above by the audit marker) — anywhere in its body is excluded from
 `find-planning-work.sh`'s feedback detection (counted in `counts.escalation_records_skipped`) and
 `find-implementation-work.sh`'s
 `trusted_post_plan` alike — a harness-authored record is never binding context, on either side of

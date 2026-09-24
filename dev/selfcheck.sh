@@ -766,9 +766,9 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 870
+budget_table="issue-implementer 875
 issue-cycle 600
-issue-planner 565
+issue-planner 560
 project-kickoff 215
 test-ratchet 200
 harness-setup 195"
@@ -2196,111 +2196,6 @@ if [ "$mn_ok" = "1" ]; then
   fi
 fi
 
-# 5.10 — extract the planner's escalation de-dup --jq program out of skills/issue-planner/
-# SKILL.md (#199, the step-7 pre-post guard) — the actual instruction text, not a copy of it —
-# and execute it with jq against literal offline fixtures, plus a writer/checker round-trip on
-# the escalation key-line template. Read-only, offline: no files written, no gh call. This pins
-# the mechanism (program behaviour + the writer's key-line template agreeing with the checker's
-# own needle), not that the orchestrating model actually runs the guard before posting — the
-# same honesty 4.28's comment uses. Since #208 added a second de-dup guard line (5.11, the
-# staleness guard) to this same file, the selection below is marker-scoped to
-# `<!-- harness-escalation:` on top of `--json comments --jq ` so the two guard lines never
-# collide.
-plan="$root/skills/issue-planner/SKILL.md"
-esc_n="$(grep -F -- '--json comments --jq ' "$plan" | grep -c -- '<!-- harness-escalation:')"
-esc_line="$(grep -F -- '--json comments --jq ' "$plan" | grep -F -- '<!-- harness-escalation:' | head -1)"
-esc_prog="$(printf '%s\n' "$esc_line" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
-
-esc_extraction_ok=1
-if [ "$esc_n" != "1" ]; then
-  bad "5.10 escalation de-dup --jq extraction: expected exactly one line matching both '--json comments --jq ' and '<!-- harness-escalation:' in skills/issue-planner/SKILL.md, found $esc_n"
-  esc_extraction_ok=0
-elif [ -z "$esc_prog" ]; then
-  bad "5.10 escalation de-dup --jq extraction: extracted program is empty"
-  esc_extraction_ok=0
-else
-  case "$esc_prog" in
-    '[.comments[]'*) : ;;
-    *)
-      bad "5.10 escalation de-dup --jq extraction: extracted program does not start with [.comments[ -- got: $esc_prog"
-      esc_extraction_ok=0
-      ;;
-  esac
-fi
-
-if [ "$esc_extraction_ok" = "1" ]; then
-  # none / audit-comment-with-no-key / single-escalation / newest-wins-out-of-array-order /
-  # null-body / forged-key-from-a-NONE-author / newer-keyless-comment-does-not-shadow-escalation
-  # fixtures.
-  fx_esc_none='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"no marker here at all"}]}'
-  fx_esc_audit_no_key='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\nescalation: issue #7 (bucket: needs_revision) produced no recorded outcome this run"}]}'
-  fx_esc_one='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-escalation: bucket=needs_revision stage=dispatch -->\nescalation: issue #7"}]}'
-  fx_esc_two='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-05T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-escalation: bucket=needs_revision stage=post -->\nescalation: issue #7"},{"authorAssociation":"MEMBER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-escalation: bucket=needs_revision stage=dispatch -->\nescalation: issue #7"}]}'
-  fx_esc_null_body='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":null}]}'
-  fx_esc_forged='{"comments":[{"authorAssociation":"NONE","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-escalation: bucket=needs_revision stage=dispatch -->\nescalation: issue #7"}]}'
-  # A trusted escalation followed by a newer trusted comment that carries no key at all must
-  # still return the escalation's key, not "none" -- the guard's inner select() filters the
-  # candidate array down to escalation comments BEFORE sort_by/last picks the newest one, so a
-  # later plain comment can never bump an escalation out of contention. Measured directly
-  # (2026-09-04): deleting that inner select() from skills/issue-planner/SKILL.md:435 makes this
-  # fixture return "none" instead of the escalation's key line -- i.e. any comment posted after
-  # the escalation would silently defeat the de-dup guard and cause a duplicate escalation
-  # comment, exactly the failure #199 exists to prevent.
-  fx_esc_shadow='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-escalation: bucket=needs_revision stage=dispatch -->\nescalation: issue #7"},{"authorAssociation":"OWNER","createdAt":"2026-02-01T00:00:00Z","body":"thanks, looking into it"}]}'
-
-  fail_510=""
-  out="$(printf '%s' "$fx_esc_none" | jq -r "$esc_prog" 2>&1)"
-  [ "$out" = "none" ] || fail_510="$fail_510 none-fixture: got '$out';"
-
-  out="$(printf '%s' "$fx_esc_audit_no_key" | jq -r "$esc_prog" 2>&1)"
-  [ "$out" = "none" ] || fail_510="$fail_510 audit-comment-without-key fixture: got '$out';"
-
-  out="$(printf '%s' "$fx_esc_one" | jq -r "$esc_prog" 2>&1)"
-  expected='<!-- harness-escalation: bucket=needs_revision stage=dispatch -->'
-  [ "$out" = "$expected" ] || fail_510="$fail_510 single-escalation fixture: got '$out';"
-
-  out="$(printf '%s' "$fx_esc_two" | jq -r "$esc_prog" 2>&1)"
-  expected='<!-- harness-escalation: bucket=needs_revision stage=post -->'
-  [ "$out" = "$expected" ] || fail_510="$fail_510 newest-wins-out-of-array-order fixture: got '$out';"
-
-  out="$(printf '%s' "$fx_esc_null_body" | jq -r "$esc_prog" 2>&1)"
-  [ "$out" = "none" ] || fail_510="$fail_510 null-body fixture: got '$out';"
-
-  out="$(printf '%s' "$fx_esc_forged" | jq -r "$esc_prog" 2>&1)"
-  [ "$out" = "none" ] || fail_510="$fail_510 forged-key-from-NONE-author fixture: got '$out';"
-
-  out="$(printf '%s' "$fx_esc_shadow" | jq -r "$esc_prog" 2>&1)"
-  expected='<!-- harness-escalation: bucket=needs_revision stage=dispatch -->'
-  [ "$out" = "$expected" ] || fail_510="$fail_510 newer-keyless-comment-does-not-shadow-escalation fixture: got '$out';"
-
-  # writer/checker round-trip: exactly one harness-escalation key-line template in the file, the
-  # program's own startswith() needle is a prefix of it, and a fixture comment built from the
-  # substituted template resolves through the program to exactly that line.
-  key_n="$(grep -c -- '<!-- harness-escalation: bucket=' "$plan")"
-  key_tpl="$(grep -o '<!-- harness-escalation: [^`]*-->' "$plan" | head -1)"
-  needle="$(printf '%s' "$esc_prog" | sed -nE 's/.*startswith\("([^"]*)"\).*/\1/p')"
-  if [ "$key_n" != "1" ] || [ -z "$key_tpl" ]; then
-    fail_510="$fail_510 round-trip: expected exactly one harness-escalation key-line template in skills/issue-planner/SKILL.md, found $key_n (extracted: '$key_tpl');"
-  elif [ -z "$needle" ]; then
-    fail_510="$fail_510 round-trip: could not extract a startswith() needle from the escalation program;"
-  else
-    case "$key_tpl" in
-      "$needle"*) : ;;
-      *) fail_510="$fail_510 round-trip: key-line template '$key_tpl' does not start with the program's own needle '$needle';" ;;
-    esac
-    key_line="$(printf '%s' "$key_tpl" | sed -e 's/<bucket>/needs_revision/' -e 's/<stage>/dispatch/')"
-    fx_esc_writer='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n'"$key_line"'\nescalation: issue #7"}]}'
-    out="$(printf '%s' "$fx_esc_writer" | jq -r "$esc_prog" 2>&1)"
-    [ "$out" = "$key_line" ] || fail_510="$fail_510 round-trip: expected '$key_line', got '$out';"
-  fi
-
-  if [ -z "$fail_510" ]; then
-    ok "5.10 escalation de-dup --jq program (#199): none/audit-without-key/single/newest-wins/null-body/forged-NONE-key/newer-keyless-comment-does-not-shadow-escalation fixtures all match, and the writer's key-line template round-trips through the checker's own needle"
-  else
-    bad "5.10 escalation de-dup --jq program:$fail_510"
-  fi
-fi
-
 # 5.11 — extract the planner's staleness de-dup --jq program out of skills/issue-planner/
 # SKILL.md (#208, the step-4 plan-approved-and-stale pre-post guard) — the actual instruction
 # text, not a copy of it — and execute it with jq against literal offline fixtures, plus a
@@ -2308,20 +2203,19 @@ fi
 # written, no gh call. This pins the mechanism (program behaviour + the writer's key-line
 # template agreeing with the checker's own needle), not that the orchestrating model actually
 # runs the guard before posting, and not the ascending/comma-separated spelling of <prs> (prose,
-# unpinnable under CLAUDE.md's machine-parsed-artifacts rule) — the same honesty 5.10's comment
-# uses. Selection is the `--json comments --jq ` line that does NOT carry 5.10's
-# `<!-- harness-escalation:` marker, rather than a positive `<!-- harness-staleness:` match:
-# `p_5_11_needle` (the marker-needle-specificity negative case) widens that exact literal
-# substring on this guard's own line, which would otherwise defeat a positive-marker selector too
-# and turn a should-be-behavioural failure into an extraction failure -- measured directly
-# (2026-09-04) before settling on exclusion-based scoping here.
-stale_n="$(grep -F -- '--json comments --jq ' "$plan" | grep -vc -- '<!-- harness-escalation:')"
-stale_line="$(grep -F -- '--json comments --jq ' "$plan" | grep -v -- '<!-- harness-escalation:' | head -1)"
+# unpinnable under CLAUDE.md's machine-parsed-artifacts rule).
+# skills/issue-planner/SKILL.md's only other `--json` occurrence bearing
+# `comments` is `gh issue view <number> --json number,title,body,url,labels,comments`, which does
+# not match `--json comments --jq `, so the selection below is a plain positive match, exactly
+# like 5.12's.
+plan="$root/skills/issue-planner/SKILL.md"
+stale_n="$(grep -cF -- '--json comments --jq ' "$plan")"
+stale_line="$(grep -F -- '--json comments --jq ' "$plan" | head -1)"
 stale_prog="$(printf '%s\n' "$stale_line" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
 
 stale_extraction_ok=1
 if [ "$stale_n" != "1" ]; then
-  bad "5.11 staleness de-dup --jq extraction: expected exactly one '--json comments --jq ' line not carrying the '<!-- harness-escalation:' marker in skills/issue-planner/SKILL.md, found $stale_n"
+  bad "5.11 staleness de-dup --jq extraction: expected exactly one '--json comments --jq ' line in skills/issue-planner/SKILL.md, found $stale_n"
   stale_extraction_ok=0
 elif [ -z "$stale_prog" ]; then
   bad "5.11 staleness de-dup --jq extraction: extracted program is empty"
@@ -2342,7 +2236,7 @@ if [ "$stale_extraction_ok" = "1" ]; then
   # newer-keyless-comment-does-not-shadow fixtures.
   fx_stale_none='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"no marker here at all"}]}'
   fx_stale_audit_no_key='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\nStaleness note: PRs #12 and #14 merged after this plan and changed api/routes.py"}]}'
-  fx_stale_cross='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-escalation: bucket=needs_revision stage=dispatch -->\nescalation: issue #7"}]}'
+  fx_stale_cross='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-escalation -->\n<!-- harness-escalation-key: issue=7 stage=plan-revision reason=stalled-dispatch comments=none -->\nescalation: issue #7"}]}'
   fx_stale_one='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-staleness: issue=7 prs=12,14 -->\nStaleness note: PRs #12 and #14 merged after this plan"}]}'
   fx_stale_two='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-05T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-staleness: issue=7 prs=12,14,16 -->"},{"authorAssociation":"MEMBER","createdAt":"2026-01-01T00:00:00Z","body":"<!-- harness-audit -->\n<!-- harness-staleness: issue=7 prs=12,14 -->"}]}'
   fx_stale_null_body='{"comments":[{"authorAssociation":"OWNER","createdAt":"2026-01-01T00:00:00Z","body":null}]}'
@@ -2412,11 +2306,10 @@ fi
 # files written, no gh call. This pins the mechanism (program behaviour + the writer's key-line
 # template agreeing with the checker's own needle), not that the orchestrating model actually
 # runs the guard before posting, and not the <reason>/<ids> spelling rules (prose, unpinnable
-# under CLAUDE.md's machine-parsed-artifacts rule) — the same honesty 5.10's and 5.11's comments
-# use. Unlike 5.10/5.11, which share one file and so scope their selection to their own marker,
-# skills/issue-implementer/SKILL.md currently carries no other `--json comments --jq ` line (its
-# only `--json` occurrences are `gh repo view --json defaultBranchRef` and `gh issue view
-# <number> --json number,title,body,url,comments`), so a plain positive
+# under CLAUDE.md's machine-parsed-artifacts rule) — the same limits 5.11's comment states.
+# skills/issue-implementer/SKILL.md currently carries no other `--json comments --jq `
+# line (its only `--json` occurrences are `gh repo view --json defaultBranchRef` and `gh issue
+# view <number> --json number,title,body,url,comments`), so a plain positive
 # `grep -F -- '--json comments --jq '` selects the new guard line with exactly one match; a wrong
 # count, an empty extraction, or a program not starting with `[.comments[` all FAIL loudly rather
 # than skip. A fresh file variable is used rather than reusing $impl (assigned only inside

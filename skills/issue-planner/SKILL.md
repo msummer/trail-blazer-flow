@@ -26,7 +26,7 @@ the orchestrator: you handle all GitHub I/O, and you delegate the actual plan-wr
 | Opted out | `no-plan` | Planner ignores this issue entirely (tracking/discussion/question) | human; the implementer on every follow-up it files; cleanup-after-merge.sh --fix (orphaned follow-ups, keyed on a trusted comment marker) |
 | Manual approval only | `no-auto-approve` | This issue's plans are never auto-approved, even under a CLAUDE.md policy | human only — the harness never applies this label |
 | Harness-authored | `test-ratchet` | Filed by the `test-ratchet` skill; the body is machine-authored evidence; step 6b's hard floor refuses auto-approval outright | the `test-ratchet` skill |
-| Escalated | `needs-human` | A durable escalation (#309): a skill asked the human a question and moved on; excluded from both this skill's and the implementer's discovery until the human answers and removes it | `issue-implementer`, via a Durable escalation |
+| Escalated | `needs-human` | A durable escalation (#309): a skill asked the human a question and moved on; excluded from both this skill's and the implementer's discovery until the human answers and removes it | `issue-implementer`, or this skill's own step 7, via a Durable escalation |
 
 **Requesting changes is comment-driven, not label-driven.** To ask for a revision, a maintainer
 (`OWNER`/`MEMBER`/`COLLABORATOR` — see "Trust and provenance" below) simply comments on the
@@ -72,10 +72,9 @@ non-maintainer-authored issue is still planned; it is reported in `untrusted_iss
 or the implementer posts under its own identity — an audit record, a hygiene notice, an archived
 verdict, or (#309) a durable escalation — opens with the marker `<!-- harness-audit -->` (or, for
 a verifier verdict archive, `<!-- verifier-verdict -->`, or for a durable escalation, `<!--
-harness-escalation -->` — see `issue-implementer`'s own SKILL.md "Durable escalation" subsection;
-distinct from, and never cross-matched with, this skill's OWN `<!-- harness-escalation:
-bucket=<bucket> stage=<stage> -->` stalled-stage key below). Both discovery scripts exclude any
-such comment from the sets they
+harness-escalation -->`, defined in `issue-implementer`'s own SKILL.md "Durable escalation"
+subsection and reused, unmodified, by this skill's own step-7 stalled-stage record below). Both
+discovery scripts exclude any such comment from the sets they
 treat as binding: `find-planning-work.sh` never lets one count as feedback (so it never
 re-triggers a revision), and `find-implementation-work.sh` never lets one land in
 `trusted_post_plan`. Both scripts (#281, superseding #275) also restrict **plan selection itself**
@@ -510,27 +509,20 @@ deliver — the harness itself never applies, removes, or creates the label.
 **Reconcile discovery against outcomes.** Before closing, walk `find-planning-work.sh`'s
 `needs_initial_plan` and `needs_revision` lists and confirm every issue on them has a row in the
 table above. Any issue discovered but with no recorded outcome (planned, revised, or explicitly
-skipped-with-reason) is an **escalated skipped stage** — report it prominently in the summary,
+skipped-with-reason, including an issue a stop left undispatched) is an **escalated skipped stage** — report it prominently in the summary,
 never let it drop silently. This is the standalone-run equivalent of the pre-advance checks
-`issue-cycle` performs when it runs this skill as part of a full pass. **Make the escalation
-durable, not just summary-only (#194):** report it in the run summary AND post it as a comment on
-the stalled issue — regardless of its label state — whose first line is exactly
-`<!-- harness-audit -->` and whose second line is exactly the key template
-`<!-- harness-escalation: bucket=<bucket> stage=<stage> -->`, naming the issue, the bucket it was
-discovered in (`needs_initial_plan` or `needs_revision`), and the stage that produced no recorded
-outcome — one of `dispatch` (the subagent dispatch produced no plan), `post` (a plan/revision
-existed but was never posted or labelled), or `unknown`. The `<!-- harness-audit -->` marker is
-what keeps this comment out of `find-planning-work.sh`'s feedback detection and
-`find-implementation-work.sh`'s `trusted_post_plan` (#182), so — unlike an unmarked comment from
-the harness's own trusted `gh` identity — it does not spuriously re-open a plan nobody asked to
-revise. **De-dup guard (#199):** before posting, run this one-line, substitution-free command to
-print the newest maintainer-authored escalation key already on the issue, or `none`:
-`gh issue view <n> --json comments --jq '[.comments[] | select(((.authorAssociation // "") | ascii_upcase) as $a | (["OWNER","MEMBER","COLLABORATOR"] | index($a)) != null) | select((.body // "") | contains("<!-- harness-escalation:"))] | sort_by(.createdAt) | last | ((.body // "") | split("\n") | map(select(startswith("<!-- harness-escalation:"))) | last // "none")' | tr -d '\r'`
-If the printed line is byte-identical to the key you are about to post, **skip the comment** —
-a prior run already recorded this exact bucket/stage — and say so in the summary, citing that a
-prior escalation already records it; otherwise post. The summary escalation itself is never
-skipped: every stalled issue is reported there regardless of whether its comment was posted or
-skipped this run. At most one such comment per stalled issue per run.
+`issue-cycle` performs when it runs this skill as part of a full pass. **Make the escalation durable (#309, #349):** escalate each stalled issue per
+`issue-implementer`'s own SKILL.md "Durable escalation" subsection, procedure steps 1–2 (cited
+here, not restated — step 3 is implementer-specific; this skill's own orchestrator instead
+continues closing the run). Use stage `plan-initial` for a `needs_initial_plan` issue or
+`plan-revision` for a `needs_revision` issue; reason `stalled-dispatch` (the subagent dispatch
+produced no plan), `stalled-post` (a plan or revision existed but was never posted or labelled),
+or `stalled-unknown`; and `comments=none`. Applying `needs-human` removes the issue from both
+this skill's and the implementer's discovery buckets, so a later pass never re-enters the stall —
+this mechanism has no comment-level de-dup guard, exactly as the implementer's own. Report each
+escalation in the summary: the issue, its stage, its reason, the comment URL, and "excluded from
+discovery until a human removes `needs-human`". At most one escalation comment per stalled issue
+per run.
 
 **Release the lock — the literal last action of this step, after the report above** — but only
 when you acquired it yourself at step 0 (standalone run; `issue-cycle` releases its own at its
