@@ -18,6 +18,13 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #331: Added an optional "Governance paths" CLAUDE.md section (README contract item 10) letting a
+  repo declare extra path globs the merge floor treats as governance, on top of the unchanged
+  built-in rules. The floor's *Governance path list* read moved out of the issue-cycle skill's
+  prose into a new script, `bin/governance-paths.sh` (floor mode: classifies a diff and prints a
+  `verdict=`; `--check` mode: the doctor's validation), fixture-pinned in `dev/doctor-tests.sh`
+  instead of hand-verified. Consumer step: re-copy the permissions block from
+  `templates/repo-settings.json` or add `"Bash(governance-paths.sh:*)"` by hand.
 - #311: Added an optional "Autonomy mode" CLAUDE.md section (`mode: autonomous`,
   `kickback-budget:`) that turns on plan auto-approval and merge autonomy together as one
   combination: a missing "Plan auto-approval policy" section is read as present with no

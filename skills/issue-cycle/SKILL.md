@@ -248,34 +248,26 @@ on top and is not configurable**:
   - This rail subsumes conflict detection: a head that already contains the base tip cannot
     conflict with it.
 - **Never the governance surface**: any PR touching `CLAUDE.md`, `.claude/`, the repo's
-  policy/ADR documents, or CI configuration waits for the human regardless of what the policy
-  says — the autonomy boundary only moves with a human in the loop — except the *Lesson-append
-  carve-out* below, its only exception. "Touching" is established mechanically, by the
-  *Governance path list* read immediately below, evaluated before the carve-out decides.
-  - *Governance path list, read mechanically* (#324): every PR this pass evaluates, harness and
-    Dependabot alike, no "harness PRs only" scoping of its own; runs after the up-to-date rail
-    above (reusing its base tip SHA and head OID) and before the carve-out below; not
-    retried — a local-object read is determinate. One Bash call, on one line, no substitution:
-    `git diff --no-renames --name-only <paste the base tip here> <paste the head OID here>`.
-    Measured (git 2.54.0): `--no-renames` prints a rename as its old path plus its new one —
-    unaffected by a repo's own `diff.renames` config — so a moved governance file is still caught
-    under the path it moved from; and, because
-    the rail already proved the head contains the base tip, this two-commit diff is the PR's own
-    net change against that tip, read from local objects with no server-side page limit to truncate
-    it. Path rules, case-insensitive (matching check 1's `ascii_downcase`): any
-    path segment equal to `.claude`, `.github`, `adr` or `adrs`; or a final segment equal to
-    `claude.md`, `action.yml` or `action.yaml` — beyond that list, the rule's own words above
-    still apply to the printed paths, a policy/ADR document or CI/build config under a name
-    those rules don't match (`docs/policies/…`, `.gitlab-ci.yml`, `Jenkinsfile`), and **any doubt
-    holds**. Verdict: any governance path other than `.claude/LESSONS.md` ⇒ **not eligible**,
-    one-line reason naming each, and the carve-out below is not evaluated; exactly
-    `.claude/LESSONS.md` and nothing else ⇒ the carve-out below decides; none ⇒ this rule does
-    not hold the PR. Git erroring rather than answering (an unknown flag on an old git, or the
-    head object not being present locally), or printing an empty list while the rail's two SHAs
-    differ, is **not eligible** too, quoting git's message — never a file list read from
-    anywhere else instead. Record the printed governance paths (or `none`) as evidence in the
-    cycle report for this PR's row, merged or held alike, mirroring the rail's own evidence
-    sentence.
+  policy/ADR documents, CI configuration, or a path this repo's own CLAUDE.md declares (README
+  item 10) waits for the human regardless of what the policy says — the autonomy boundary only
+  moves with a human in the loop — except the *Lesson-append carve-out* below, its only
+  exception. "Touching" is established mechanically, by the *Governance path list* read
+  immediately below, evaluated before the carve-out decides.
+  - *Governance path list, read mechanically* (#331, folds in #324/#330): every PR this pass
+    evaluates, harness and Dependabot alike, no "harness PRs only" scoping of its own; runs after
+    the up-to-date rail above (reusing its base tip SHA and head OID) and before the carve-out
+    below; not retried — a local-object read is determinate. One Bash call, on one line, no
+    substitution: `governance-paths.sh <paste the base tip here> <paste the head OID here>`.
+    Record every printed `governance:`/`changed:` line (or `none`) as evidence in the cycle
+    report for this PR's row, merged or held alike, mirroring the rail's own evidence sentence.
+    Verdict, from the command's own last line: `verdict=hold` ⇒ **not eligible**, one-line reason
+    naming each printed `governance:` path, and the carve-out below is not evaluated;
+    `verdict=lessons-only` ⇒ the carve-out below decides; `verdict=none` ⇒ this rule does not hold
+    the PR — its own words above still apply to the printed `changed:` paths (a policy/ADR
+    document or CI/build config under another name the built-in rules don't match, or a path this
+    repo's own CLAUDE.md declares — item 10), and **any doubt holds**; any other last line, or a
+    non-zero exit, is **not eligible** too, quoting its stderr — never a file list read from
+    anywhere else instead.
   - *Lesson-append carve-out* (#307, ADR 0001 decision 9). Harness PRs only — Dependabot and
     human PRs are never released by it. A PR whose only governance-surface path — established by
     the *Governance path list* read above — is `.claude/LESSONS.md` is not held by this rule

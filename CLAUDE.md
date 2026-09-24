@@ -65,15 +65,18 @@ case rather than silently dropped. The single-case/filter form
 (`bash dev/selfcheck-tests.sh <case>`) is unchanged.
 
 `dev/doctor-tests.sh` is a separate negative-test harness for the *consumer* doctor
-(`bin/check-harness.sh`) and its scoped-autonomy companion (`bin/check-decision-record.sh`): it
+(`bin/check-harness.sh`), its scoped-autonomy companion (`bin/check-decision-record.sh`), and the
+merge floor's governance-path classifier (`bin/governance-paths.sh`, #331): it
 builds throwaway fixture repos under `mktemp` and pins each check's verdict (PASS/WARN/FAIL, by
 ASCII stem) against a copy of the doctor script — settings-file grants, the template diff, the
 test-suite ratchet, merge-autonomy activation, the default-branch guard, post-merge-verification
 declarations, and branch-protection strictness among them — covering cases that would otherwise
 only be hand-verified. It also runs `bin/harness-version.sh`'s own `.git`-presence guard
-directly, not only through the doctor. It runs in CI as the third command, but it is not part of
-`dev/selfcheck.sh` itself; run it by hand whenever `bin/check-harness.sh` or
-`bin/check-decision-record.sh` changes.
+directly, not only through the doctor, and `bin/governance-paths.sh`'s own floor mode and
+`--check` mode directly, against fixture git repos it builds for that purpose, not only through
+the doctor's own validation of it. It runs in CI as the third command, but it is not part of
+`dev/selfcheck.sh` itself; run it by hand whenever `bin/check-harness.sh`,
+`bin/check-decision-record.sh`, or `bin/governance-paths.sh` changes.
 
 `dev/hook-tests.sh` is a separate negative-test harness for all four plugin-shipped `PreToolUse`
 hooks (`hooks/git-c-guard.sh`, `hooks/agent-boundary.sh`, `hooks/push-guard.sh`, and

@@ -56,6 +56,7 @@ or share).
 │   ├── harness-lock.sh            # single-flight lock: at most one active cycle per checkout
 │   ├── harness-version.sh         # prints the installed plugin's "<version> <sha>", one line
 │   ├── harness-stop.sh            # read-only maintainer stop switch: GitHub label or local file (#310)
+│   ├── governance-paths.sh        # merge floor's governance-path classifier + doctor's --check validator (#331)
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
 │   ├── hooks.json                 # registers the four PreToolUse hooks below
@@ -66,7 +67,7 @@ or share).
 ├── dev/
 │   ├── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
 │   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
-│   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh (not run by the gate)
+│   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh AND bin/governance-paths.sh (not run by the gate)
 │   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh, hooks/agent-boundary.sh, hooks/push-guard.sh, AND hooks/claude-dir-guard.sh (not run by the gate)
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 │   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
@@ -750,12 +751,9 @@ subagents need:
    otherwise held with "PR is behind `<default>` at `<short-sha>` — update the branch and let CI
    re-run" (#234, review F4 — because merges are sequential, every PR queued behind the first one
    in a pass holds this way by construction, expected rather than an error, until the pre-named
-   auto-update follow-up ships) — never the governance surface, read mechanically per PR (#324)
-   from `git diff --no-renames --name-only` over the up-to-date rail's own base-tip/head-OID
-   pair — case-insensitively, any path segment named `.claude`, `.github` (all of it, not only
-   workflow files), `adr`, or `adrs`, at any depth, or a final segment named `CLAUDE.md`,
-   `action.yml`, or `action.yaml`, plus an explicit "any doubt holds" residual for a policy/CI
-   file under another name — CLAUDE.md, `.claude/`, policy/ADR docs, CI config (harness PRs get
+   auto-update follow-up ships) — never the governance surface, read mechanically per PR by
+   `governance-paths.sh` (item 10 below) — CLAUDE.md, `.claude/`, policy/ADR docs, CI config, and
+   any path this repo's own CLAUDE.md declares (harness PRs get
    one narrow, audited exception: a PR whose only
    governance-surface change is an end-of-file append to `.claude/LESSONS.md`, at most 40 lines,
    with no deletions, no changed lines, and no `<!--`, and whose added lines the orchestrator
@@ -1006,14 +1004,55 @@ subagents need:
    exactly what they deny today; `--permission-mode auto` and `--permission-prompts none` change
    the CLI's own prompting behavior, never the hooks'.
 
+10. **Governance paths** (optional) — a section titled exactly "Governance paths" declaring extra
+    path globs the merge pass's *Governance path list* read (item 5 above) treats as governance,
+    on top of the built-in rules below, e.g.:
+
+    ````markdown
+    ## Governance paths
+    ```
+    docs/policies/
+    .gitlab-ci.yml
+    Jenkinsfile
+    renovate.json
+    ```
+    ````
+
+    Read mechanically by `bin/governance-paths.sh` — the same script the merge pass calls for
+    item 5's read, and the one `check-harness.sh` calls (in a validation-only mode, never to
+    compute a verdict) — from the section's first fenced code block only; blank lines and
+    `#`-prefixed lines inside it are ignored, and every other line is trimmed and treated as one
+    glob. **Built-in rules** (case-insensitive, always active whether or not this section exists):
+    any path segment equal to `.claude`, `.github` (all of it, not only workflow files), `adr`, or
+    `adrs`; or a final segment equal to `CLAUDE.md`, `action.yml`, or `action.yaml`. **Declared
+    globs only ever ADD holds** — the result is the built-in test OR the declared test, never a
+    replacement or a narrowing. **Glob dialect:** matching is case-insensitive; a glob with no `/`
+    matches the path's final segment at any depth (`Jenkinsfile` also catches `ci/Jenkinsfile`); a
+    glob with a `/` matches the whole repo-relative path, anchored at the repo root; a trailing
+    `/` means "everything beneath" (`docs/policies/` becomes `docs/policies/*`); `*`, `?`, and
+    `[...]` follow plain shell `case`-pattern (fnmatch) semantics, and `*` crosses `/` (so `**` is
+    no different from `*`); a line starting `!` (negation) or `/` or `./` (a leading slash) makes
+    the WHOLE section malformed, fail-closed, rather than silently matching nothing forever. Read
+    from the **base tip's** CLAUDE.md only — never the PR head, never the working tree, so a PR
+    can't loosen the rule it's held against by editing this section in the same PR. No section, or
+    no CLAUDE.md at all at the base tip, means only the built-in rules apply — not an error. A
+    malformed section means the merge pass holds every PR (`verdict=error`) until a human fixes
+    it; `check-harness.sh` WARNs, never FAILs, naming the malformed reason (`no-fence`,
+    `unterminated-fence`, `no-globs`, `negation`, or `leading-slash`) — or, with no section at all,
+    PASSes `governance paths: none declared`, or, with a well-formed section, PASSes
+    `governance paths: <n> declared glob(s)`. The rule's own words apply beyond any explicit list
+    too — a policy/ADR document or CI/build config under a name these rules don't match, and **any
+    doubt holds**. Only the merge pass's *Governance path list* read (item 5) and the doctor's
+    validation ever read this section; nothing else in the harness does.
+
 The subagents read `CLAUDE.md` at the start of every task — it is the real input that makes
 the harness work well in a given repo. Too little and they're guessing; too much and the
 contract above drowns in restatement of what the file system, manifests, and linter config
-already say. The nine items above are the floor, not a template to pad: leave out directory
+already say. The ten items above are the floor, not a template to pad: leave out directory
 tours, framework defaults, and formatter-enforced style, and keep the non-obvious — invariants,
 why-this-way decisions, traps a fresh reader would hit — instead. `check-harness.sh` turns "too
 much" into a mechanical proxy: it WARNs once `CLAUDE.md` passes 300 lines or 20,000 bytes,
-pointing at the harness-setup skill's leanness audit — not at the nine contract items themselves.
+pointing at the harness-setup skill's leanness audit — not at the ten contract items themselves.
 
 ## The LESSONS.md contract (project-owned)
 
@@ -1229,6 +1268,9 @@ re-copy the permissions block from `templates/repo-settings.json` or add
 **v2.7.6 → v2.7.7** — re-run `bin/setup-labels.sh` (creates `triaged-held`); one-time: label
 already-parked follow-ups `triaged-held` by hand. Precondition: your provider must serve
 `claude-opus-5-5` (#358); otherwise stay on v2.7.6.
+
+**v2.7.7 → v2.8.0** — re-copy the permissions block from `templates/repo-settings.json` or add
+`"Bash(governance-paths.sh:*)"` by hand.
 
 ## The per-repo settings file (required)
 
