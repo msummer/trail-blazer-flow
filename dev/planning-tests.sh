@@ -5341,18 +5341,20 @@ EOF
   expect_api_calls "$dir" 2
 }
 
-# plan-escalation-audit-comment-no-revision — workstream C: the planner skill's step 7 posts a
-# stalled-stage escalation as a two-line comment — first line exactly <!-- harness-audit -->,
-# second line the <!-- harness-escalation: bucket=... stage=... --> key the #199 de-dup guard
-# matches on — instead of keeping it summary-only. This fixture is that exact posted comment,
-# from OWNER, after the plan: it does not trigger a revision. Honest note: this exercises the
-# SAME filter as plan-audit-comment-no-revision (find-planning-work.sh's has_feedback audit
-# exclusion), which matches on `contains("<!-- harness-audit -->")` — the added escalation-key
-# second line changes nothing about that filter, since it only ever inspects whether the marker
-# substring is present anywhere in the body. Its value here is pinning the documented step-7
-# USAGE of that filter against the current two-line comment shape, not independent script
-# coverage; no new mutation was run beyond what plan-audit-comment-no-revision already proves,
-# per this case's own honest-limits note.
+# plan-escalation-audit-comment-no-revision — workstream C legacy fixture: before #349, the
+# planner skill's step 7 posted a stalled-stage escalation as a two-line comment — first line
+# exactly <!-- harness-audit -->, second line the <!-- harness-escalation: bucket=... stage=... -->
+# key the now-retired #199 de-dup guard matched on. #349 moved step 7 onto the #309
+# durable-escalation mechanism instead (a comment opening with <!-- harness-escalation -->, plus
+# the needs-human label), but an old-shape comment like this one can still sit on a consumer issue
+# from before the upgrade, so this fixture is that legacy record, from OWNER, after the plan: it
+# still does not trigger a revision. Honest note: this exercises the SAME filter as
+# plan-audit-comment-no-revision (find-planning-work.sh's has_feedback audit exclusion), which
+# matches on `contains("<!-- harness-audit -->")` — the escalation-key second line changes nothing
+# about that filter, since it only ever inspects whether the marker substring is present anywhere
+# in the body. Its value here is pinning this legacy shape against the current filter, not
+# independent script coverage; no new mutation was run beyond what plan-audit-comment-no-revision
+# already proves, per this case's own honest-limits note.
 case_plan_escalation_audit_comment_no_revision() {
   local dir; dir="$(mk_fixture plan-escalation-audit-comment-no-revision)"
   cat > "$dir/initial.json" <<'EOF'
@@ -10362,7 +10364,7 @@ cases=(
   "impl-single-issue-decision-edited-after-approval|case_impl_single_issue_decision_edited_after_approval|--issue <n> mode carries the decision-edited-after-approval reason too, not just batch mode"
   "impl-single-issue-decision-edit-unreadable|case_impl_single_issue_decision_edit_unreadable|--issue <n> mode carries the decision-edit-unreadable reason too, not just batch mode"
   "impl-decision-not-looked-up-when-plan-uncovered|case_impl_decision_not_looked_up_when_plan_uncovered|guard-pin: a covered decision comment is never looked up when the issue is ALREADY uncovered for another reason (plan-edited-after-approval) before the #230 block ever runs"
-  "plan-escalation-audit-comment-no-revision|case_plan_escalation_audit_comment_no_revision|workstream C: a step-7 escalation comment opening with harness-audit does not re-open the plan for revision"
+  "plan-escalation-audit-comment-no-revision|case_plan_escalation_audit_comment_no_revision|workstream C legacy fixture: a pre-#349 step-7 escalation comment opening with harness-audit does not re-open the plan for revision"
   "plan-candidates-filter-error|case_plan_candidates_filter_error|the revision-candidates query answers with a document the script's own --jq filter cannot process on both attempts: retried once, then fail-closed — exit 0, empty needs_revision, candidates_query_unavailable true"
   "stub-json-unknown-field-rejected|case_stub_json_unknown_field_rejected|an unsupported --json field on gh issue list is rejected with gh's own Unknown JSON field line, even though a fixture would otherwise serve it"
   "stub-json-unknown-field-rejected-view|case_stub_json_unknown_field_rejected_view|the same unsupported-field rejection on the gh issue view arm, a separate case branch in the stub"

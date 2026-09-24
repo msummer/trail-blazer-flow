@@ -114,9 +114,9 @@
 # warn — tracked as a separate follow-up.
 #
 # #309 adds a third marker to HARNESS_RECORD_MARKERS, ESCALATION_MARKER ("<!-- harness-escalation
-# -->" — distinct from, and never cross-matched with, the pre-existing
-# "<!-- harness-escalation: bucket=... stage=... -->" key the planner skill's own step-7
-# stalled-stage record uses — see skills/issue-planner/SKILL.md), and one more counter to go with
+# -->" — also the first line of the planner skill's own step-7 stalled-stage record (#349) — see
+# skills/issue-planner/SKILL.md, which reuses this same marker unmodified, never a separate
+# colon-keyed marker), and one more counter to go with
 # it: escalation_records_skipped (how many trusted, post-latest-plan comments contained the
 # escalation marker — a durable-escalation record itself, or a trusted comment quoting that marker
 # mid-body — excluded from has_feedback via the same contains($e)/createdAt > $lastPlan shape

@@ -18,6 +18,13 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #349 (absorbs #350): Moved the planner's step-7 stalled-stage record and the implementer's step
+  2b open-PR sub-branch onto the #309 durable-escalation mechanism (`needs-human` label, shared
+  `<!-- harness-escalation -->`/`<!-- harness-escalation-key: ... -->` comment). New closed-list
+  slugs: planner stages `plan-initial`/`plan-revision`, planner reasons
+  `stalled-dispatch`/`stalled-post`/`stalled-unknown`, and 2b reason `branch-has-open-pr` (2b no
+  longer "skips and warns"). The planner's #199 comment-level de-dup guard and gate assertion 5.10
+  are retired; 5.11's selection is now a plain positive match, like 5.12's. No consumer step.
 - #331: Added an optional "Governance paths" CLAUDE.md section (README contract item 10) letting a
   repo declare extra path globs the merge floor treats as governance, on top of the unchanged
   built-in rules. The floor's *Governance path list* read moved out of the issue-cycle skill's

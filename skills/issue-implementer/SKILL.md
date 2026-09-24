@@ -212,10 +212,12 @@ gh issue edit <number> --add-label needs-human
 ```
 3. **Continue with the next issue (step 2g)** — never wait on an answer.
 
-**Vocabulary (closed).** `<stage>` is one of `2a`, `2b`, `2c`, `2e` (the citing step); `<reason>`
-is one of `plan-contradicted` (2a), `branch-has-committed-work` (2b),
-`blocking-question-unanswered` (2c), `ci-red-after-fix` (2e), `ci-red-unrelated` (2e), or
-`permission-denied` (2e) — no site here ever posts a slug outside this list.
+**Vocabulary (closed, shared with `issue-planner` step 7).** `<stage>`: `2a`, `2b`, `2c`, `2e`
+(this skill), or `plan-initial` / `plan-revision` (planner step 7, from the discovery bucket).
+`<reason>`: `plan-contradicted` (2a); `branch-has-committed-work` or `branch-has-open-pr` (2b);
+`blocking-question-unanswered` (2c); `ci-red-after-fix`, `ci-red-unrelated`, `permission-denied`
+(2e); `stalled-dispatch`, `stalled-post`, `stalled-unknown` (planner step 7) — no site in either
+skill ever posts a slug outside this list.
 
 **Label rules.** No other label changes: `plan-approved` is not removed, `impl-blocked` is not
 added. This is a different path from step 2f's blocked path, whose comment stays deliberately
@@ -472,11 +474,12 @@ Build a slug from the title (lowercase; non-alphanumerics → hyphens; trim; ~40
   implementer with it, carrying forward the issue's prior-attempt comments too. Do not rebase or
   re-cut the branch. If checkout fails because the branch is checked out in another worktree,
   sweep it per step 0's stale-worktree sweep, then retry. Say so in the summary.
-- **Any non-wip commit** → real prior work. If an OPEN PR exists, skip and warn (the `pr-open`
-  label was probably removed by mistake) and move to the next issue. Otherwise escalate per
-  "Durable escalation" above (stage `2b`, reason `branch-has-committed-work`), quoting the
-  branch's non-wip commit list as the evidence — reusing or discarding committed work is the
-  human's call — then move to the next issue (step 2g).
+- **Any non-wip commit** → real prior work: escalate per "Durable escalation" above, stage `2b`.
+  If an OPEN PR exists, reason `branch-has-open-pr`, quoting the PR URL as evidence (the
+  `pr-open` label was probably removed by mistake — release text: if the PR is this issue's,
+  re-add `pr-open`, then remove `needs-human`). Otherwise reason `branch-has-committed-work`,
+  quoting the branch's non-wip commit list as the evidence — reusing or discarding committed
+  work is the human's call. Either way, then move to the next issue (step 2g).
 
 c. **Dispatch the `implementer` subagent** (Task tool). It starts from a fresh context and sees
    only what you send, so the prompt must carry **every decision and verified fact** — it should

@@ -107,10 +107,11 @@
 # Honest limits on escalations (#309): list_proposed and list_blocked do not exclude needs-human,
 # so an issue carrying needs-human alongside plan-proposed or impl-blocked appears in both buckets
 # and counts twice in human_actions — removing either label clears its own entry; and an escalation
-# filed from a red-CI site (ci-red-after-fix, ci-red-unrelated) sits on an issue whose open PR is
-# already in prs_to_review — list_prs carries no --search string of its own for anything to be
-# excluded from — so that one problem counts twice in human_actions too (once as the PR, once as
-# the escalated issue). GitHub's issue search can trail a label edit
+# filed from a red-CI site (ci-red-after-fix, ci-red-unrelated) or from step 2b's open-PR
+# sub-branch (branch-has-open-pr) sits on an issue whose open PR is already in prs_to_review —
+# list_prs carries no --search string of its own for anything to be excluded from — so that one
+# problem counts twice in human_actions too (once as the PR, once as the escalated issue).
+# GitHub's issue search can trail a label edit
 # (measured on this repo, 2026-09-17 and again 2026-09-19: a list query made right after a label
 # edit missed an issue that a later run returned), so an issue escalated moments earlier may be
 # missing from the same run's escalations bucket.
