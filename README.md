@@ -981,6 +981,14 @@ subagents need:
      fail finding re-dispatches the implementer before the run takes the blocked path. The
      orchestrator never writes the fix itself; a spent budget always takes the blocked path,
      exactly like the fixed limit does without this section.
+   - Auto-approval (item 4) is also evaluated on every run for each `plan-proposed` plan posted in
+     an EARLIER run, not just one posted or revised this run (ADR 0001 decision 6), as long as its
+     latest plan has no newer maintainer feedback. The same hard floor and the same approval
+     binding (item 4's own plan-comment binding) apply — nothing is loosened for a carry-over
+     candidate. A plan whose `plan-approved` label was added or removed after it was posted is
+     never re-approved by the harness this way (a withdrawal is honoured); post new feedback or
+     re-add the label yourself to get it reconsidered. A carry-over candidate that fails the floor
+     gets no comment and no label — it is only reported in that run's summary.
 
    `check-harness.sh` prints exactly one verdict line whenever `CLAUDE.md` exists — off (no
    section), autonomous (naming the effective kickback budget), or inert (section present, no
@@ -2123,8 +2131,9 @@ copy of itself over the working tree being edited.
   issues. ADR 0001's combined "Autonomy mode" profile has landed in part: decisions 1, 2, and 5
   (the "Autonomy mode" CLAUDE.md section itself — see "The CLAUDE.md contract" item 9 — reading a
   missing Plan auto-approval/Merge autonomy policy section as present, and the kickback budget)
-  shipped with #311. Decision 6 (carry-over auto-approval) and decision 7 (serial merge train)
-  remain unimplemented; ADR 0001 lists their tracking issues. One piece of ADR 0001 has shipped
+  shipped with #311. Decision 6 (carry-over auto-approval — see "The CLAUDE.md contract" item 9's
+  own bullet) shipped with #312. Decision 7 (serial merge train) remains unimplemented; ADR 0001
+  lists its tracking issue. One piece of ADR 0001 has shipped
   standalone, since it applies "in every mode" and needed no Autonomy mode section of its
   own: decision 9, the lesson-append carve-out, landed with #307 (see "The LESSONS.md contract"
   above).

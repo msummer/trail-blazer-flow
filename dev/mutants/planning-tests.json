@@ -917,6 +917,247 @@
       "expect_fail": [
         "status-stop-unavailable-with-carriers"
       ]
+    },
+    {
+      "name": "312-a",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": "carry_over=false",
+          "to": "carry_over=true"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-no-flag-unchanged"
+      ]
+    },
+    {
+      "name": "312-b",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": "if [ \"$carry_over\" = true ] && [ \"$has_feedback\" = \"false\" ] && [ -n \"$plan_url\" ]; then",
+          "to": "if [ \"$carry_over\" = true ] && [ -n \"$plan_url\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-feedback-excluded"
+      ]
+    },
+    {
+      "name": "312-c",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": "if [ \"$carry_over\" = true ] && [ \"$has_feedback\" = \"false\" ] && [ -n \"$plan_url\" ]; then",
+          "to": "if [ \"$carry_over\" = true ] && [ \"$has_feedback\" = \"false\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-plan-url-missing"
+      ]
+    },
+    {
+      "name": "312-d",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": "([ $planC[] | select(.createdAt == $lastPlan) ] | last) as $planSel",
+          "to": "([ $planC[] | select(.createdAt == $lastPlan) ] | first) as $planSel"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-latest-plan-bound"
+      ]
+    },
+    {
+      "name": "312-e",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": "    if ! events=$(gh api \"repos/{owner}/{repo}/issues/$n/events?per_page=100\" --paginate --jq '\n        .[] | select((.event == \"labeled\" or .event == \"unlabeled\") and .label.name == \"plan-approved\")\n        | .created_at\n      ' 2>/dev/null); then",
+          "to": "    if ! events=\"\"; then"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-eligible",
+        "plan-carry-over-events-unreadable",
+        "plan-carry-over-tie-withheld",
+        "plan-carry-over-unlabeled-only",
+        "plan-carry-over-withdrawn-approval",
+        "plan-carry-over-withheld-then-eligible"
+      ]
+    },
+    {
+      "name": "312-f",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": "(.event == \"labeled\" or .event == \"unlabeled\") and .label.name == \"plan-approved\")",
+          "to": "(.event == \"labeled\") and .label.name == \"plan-approved\")"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-unlabeled-only"
+      ]
+    },
+    {
+      "name": "312-g",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": "if [[ \"$evt\" > \"$plan_created_at\" || \"$evt\" = \"$plan_created_at\" ]]; then",
+          "to": "if true; then"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-unrelated-events-ignored"
+      ]
+    },
+    {
+      "name": "312-h",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": " and .label.name == \"plan-approved\")",
+          "to": ")"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-unrelated-events-ignored"
+      ]
+    },
+    {
+      "name": "312-i",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": "if [[ \"$evt\" > \"$plan_created_at\" || \"$evt\" = \"$plan_created_at\" ]]; then",
+          "to": "if [[ \"$evt\" > \"$plan_created_at\" ]]; then"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-tie-withheld"
+      ]
+    },
+    {
+      "name": "312-j",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": "    if ! events=$(gh api \"repos/{owner}/{repo}/issues/$n/events?per_page=100\" --paginate --jq '\n        .[] | select((.event == \"labeled\" or .event == \"unlabeled\") and .label.name == \"plan-approved\")\n        | .created_at\n      ' 2>/dev/null); then",
+          "to": "    if events=$(gh api \"repos/{owner}/{repo}/issues/$n/events?per_page=100\" --paginate --jq '\n        .[] | select((.event == \"labeled\" or .event == \"unlabeled\") and .label.name == \"plan-approved\")\n        | .created_at\n      ' 2>/dev/null); then"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-eligible",
+        "plan-carry-over-events-unreadable",
+        "plan-carry-over-latest-plan-bound",
+        "plan-carry-over-tie-withheld",
+        "plan-carry-over-unlabeled-only",
+        "plan-carry-over-unrelated-events-ignored",
+        "plan-carry-over-untrusted-author",
+        "plan-carry-over-withdrawn-approval",
+        "plan-carry-over-withheld-then-eligible"
+      ]
+    },
+    {
+      "name": "312-k",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": "trusted_author: ((($p.association // \"\") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null),\n             plan_url: $pu,",
+          "to": "trusted_author: true,\n             plan_url: $pu,"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-untrusted-author"
+      ]
+    },
+    {
+      "name": "312-l",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": ".counts += {awaiting_approval: ($aa | length), prior_approval_withheld: $paw, approval_events_unreadable: $aeu}",
+          "to": ".counts += {awaiting_approval: ($aa | length), prior_approval_withheld: $paw}"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-eligible",
+        "plan-carry-over-events-unreadable",
+        "plan-carry-over-output-shape",
+        "plan-carry-over-withdrawn-approval"
+      ]
+    },
+    {
+      "name": "312-m",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": "    ;;\n  *) echo \"usage: find-planning-work.sh [--carry-over]\" >&2; exit 2 ;;\nesac",
+          "to": "    ;;\n  *) carry_over=true ;;\nesac"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-extra-arg"
+      ]
+    },
+    {
+      "name": "312-n",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": "             author: ($p.author // .author.login // \"unknown\"),",
+          "to": "             author: \"unknown\","
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-untrusted-author"
+      ]
+    },
+    {
+      "name": "312-o",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "carry-over",
+      "edits": [
+        {
+          "from": "      withheld=false\n",
+          "to": "      withheld=${withheld:-false}\n"
+        }
+      ],
+      "expect_fail": [
+        "plan-carry-over-withheld-then-eligible"
+      ]
     }
   ]
 }

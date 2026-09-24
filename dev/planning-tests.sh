@@ -181,8 +181,8 @@
 #                               statement inside the `issue)` arm — before EITHER `list)` or
 #                               `view)` runs, so every attempt of every retried call is logged, one
 #                               line per attempt — read by the new expect_issue_calls helper
-#   - events-<n>.json          : (#174) the `gh api .../issues/<n>/events` payload for ready
-#                               issue <n> — a plain JSON array of GitHub issue-event objects
+#   - events-<n>.json          : (#174, #312) the `gh api .../issues/<n>/events` payload for
+#                               issue <n> (implementer ready issue or planner carry-over) — a plain JSON array of GitHub issue-event objects
 #                               ({event, label:{name}, created_at, actor:{login}}); absent means
 #                               no plan-approved labeling event, degrading to
 #                               reason: no-approval-event rather than a hard failure; present but a
@@ -1657,6 +1657,18 @@ run_implementation_args() {
   local dir="$1"
   shift
   PATH="$dir:$PATH" "$bash_bin" "$root/bin/find-implementation-work.sh" "$@" >"$dir/.stdout" 2>"$dir/.stderr"
+  planning_rc=$?
+  planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
+  planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
+}
+
+# run_planning_args DIR [ARGS...] (#312) — same contract as run_planning, but forwards ARGS... to
+# bin/find-planning-work.sh, modelled on run_implementation_args above (added for --carry-over and
+# its argument-validation path).
+run_planning_args() {
+  local dir="$1"
+  shift
+  PATH="$dir:$PATH" "$bash_bin" "$root/bin/find-planning-work.sh" "$@" >"$dir/.stdout" 2>"$dir/.stderr"
   planning_rc=$?
   planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
   planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
@@ -6873,8 +6885,11 @@ EOF
 # v1 at T0, OWNER feedback at T1, a revised plan v2 at T2 that OPENS WITH <!-- planner-plan -->
 # but whose own prose quotes <!-- harness-audit -->: v2 still becomes the latest plan, so the T1
 # feedback (superseded by v2) does NOT trigger a phantom revision. No tie fixture is needed on the
-# planner side: find-planning-work.sh has only the $lastPlan site (no `| last` selection), so a
-# same-second tie is not discriminating here, unlike impl-audit-record-plan-tie-not-selected. The
+# planner side for THIS case: find-planning-work.sh's own `| last` selection (#312, $planSel) now
+# exists, but it feeds only the --carry-over plan_url/plan_created_at members — never
+# has_feedback or needs_revision, which read $lastPlan alone — so a same-second tie still does not
+# discriminate this case, unlike impl-audit-record-plan-tie-not-selected (see
+# plan-carry-over-latest-plan-bound for the $planSel tie fixture). The
 # positive anchor tests the PLAN marker, not the harness markers, so this case is unaffected by
 # M-2 — but mutant M-5 (the same over-exclusion probe as M-4, applied here) kills this case alone,
 # proving the over-exclusion control is a live mechanical guard, not a comment-only claim; see the
@@ -10199,6 +10214,465 @@ EOF
 # <<<"$stop_parsed"); fi` block collapsed to the single statement `true`), so an untrusted exit's
 # own carrier-shaped stdout is trusted and published anyway.
 
+# ---------------------------------------------------------------------------------------------
+# Part 15 (#312, ADR 0001 decision 6), against bin/find-planning-work.sh --carry-over — the
+# awaiting_approval bucket. All fixtures run run_planning_args "$dir" --carry-over except
+# plan-carry-over-no-flag-unchanged (#1, deliberately run with NO flag) and
+# plan-carry-over-unknown-arg (#13, run with a bogus flag). rest-issues.json makes the issue's
+# author OWNER (trusted_author: true) unless stated otherwise. Fixture comment ids start at 7130
+# (gate 4.31); only comments that ARE the plan candidate carry a url (plan_url selection is the
+# only thing that reads one).
+
+# plan-carry-over-no-flag-unchanged — the byte-identical, no-behaviour-change control: the exact
+# same fixture shape as plan-carry-over-eligible below, run with NO flag at all. Asserts the
+# document carries no awaiting_approval key and none of the three new counts keys, and that
+# exactly one `gh api` call is made all run (the REST author-association lookup — no events call).
+case_plan_carry_over_no_flag_unchanged() {
+  local dir; dir="$(mk_fixture plan-carry-over-no-flag-unchanged)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7130"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq 'has("awaiting_approval")' 'false'
+  expect_jq '.counts | has("awaiting_approval")' 'false'
+  expect_jq '.counts | has("prior_approval_withheld")' 'false'
+  expect_jq '.counts | has("approval_events_unreadable")' 'false'
+  expect_jq '.needs_revision' '[]'
+  expect_api_calls "$dir" 1
+}
+
+# plan-carry-over-eligible (positive control) — one OWNER plan, no later comment, no
+# events-1.json (the stub's own `/events` arm answers empty with no file present, modelling a
+# real "no plan-approved event yet" answer). The candidate is admitted: awaiting_approval holds
+# exactly it, with plan_url/plan_created_at bound to the plan comment, needs_revision stays
+# empty, and exactly 2 `gh api` calls are made (the author lookup, then the events read).
+case_plan_carry_over_eligible() {
+  local dir; dir="$(mk_fixture plan-carry-over-eligible)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7130"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --carry-over
+  expect_rc 0
+  expect_jq '.awaiting_approval | length' '1'
+  expect_jq '.awaiting_approval[0].number' '1'
+  expect_jq '.awaiting_approval[0].plan_url' '"https://example.invalid/1#issuecomment-7130"'
+  expect_jq '.awaiting_approval[0].plan_created_at' '"2026-01-01T00:00:00Z"'
+  expect_jq '.awaiting_approval[0].trusted_author' 'true'
+  expect_jq '.awaiting_approval[0].association' '"OWNER"'
+  expect_jq '.needs_revision' '[]'
+  expect_jq '.counts.awaiting_approval' '1'
+  expect_jq '.counts.prior_approval_withheld' '0'
+  expect_jq '.counts.approval_events_unreadable' '0'
+  expect_api_calls "$dir" 2
+}
+
+# plan-carry-over-latest-plan-bound — plan v1 (T0), trusted feedback (T1), v2 (T2), v3 (T2, the
+# SAME second, listed last in the array). plan_url must bind to v3's, not v2's — a same-second
+# tie is broken by array order (last wins), the identical rule
+# bin/find-implementation-work.sh's own $planSel uses.
+case_plan_carry_over_latest_plan_bound() {
+  local dir; dir="$(mk_fixture plan-carry-over-latest-plan-bound)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7131"},
+  {"body":"please also handle the edge case","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7132"},
+  {"body":"<!-- planner-plan -->\nplan v2","createdAt":"2026-01-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7133"},
+  {"body":"<!-- planner-plan -->\nplan v3","createdAt":"2026-01-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7134"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --carry-over
+  expect_rc 0
+  expect_jq '.awaiting_approval | length' '1'
+  expect_jq '.awaiting_approval[0].plan_url' '"https://example.invalid/1#issuecomment-7134"'
+  expect_jq '.awaiting_approval[0].plan_created_at' '"2026-01-03T00:00:00Z"'
+  expect_jq '.needs_revision' '[]'
+}
+
+# plan-carry-over-feedback-excluded — a plan followed by trusted feedback: the issue lands in
+# needs_revision (unchanged today's behaviour) and NOT in awaiting_approval — has_feedback is the
+# gate.
+case_plan_carry_over_feedback_excluded() {
+  local dir; dir="$(mk_fixture plan-carry-over-feedback-excluded)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7135"},
+  {"body":"please change X","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7136"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --carry-over
+  expect_rc 0
+  expect_jq '.needs_revision | length' '1'
+  expect_jq '.awaiting_approval' '[]'
+  expect_jq '.counts.awaiting_approval' '0'
+}
+
+# plan-carry-over-plan-url-missing — the plan candidate's own comment object carries no "url" key
+# at all: awaiting_approval stays empty and no events call is ever made (the plan_url gate short-
+# circuits before the events read).
+case_plan_carry_over_plan_url_missing() {
+  local dir; dir="$(mk_fixture plan-carry-over-plan-url-missing)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --carry-over
+  expect_rc 0
+  expect_jq '.awaiting_approval' '[]'
+  expect_api_calls "$dir" 1
+}
+
+# plan-carry-over-withdrawn-approval — a plan at T0, with a `labeled` plan-approved event at T1
+# and an `unlabeled` one at T2 (both after the plan): withheld, never a second audit comment —
+# this is also the search-lag / double-audit dedupe case (a label the harness itself applied and
+# a human then removed).
+case_plan_carry_over_withdrawn_approval() {
+  local dir; dir="$(mk_fixture plan-carry-over-withdrawn-approval)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7137"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"unlabeled","label":{"name":"plan-approved"},"created_at":"2026-01-03T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --carry-over
+  expect_rc 0
+  expect_jq '.awaiting_approval' '[]'
+  expect_jq '.counts.prior_approval_withheld' '1'
+  expect_jq '.counts.approval_events_unreadable' '0'
+}
+
+# plan-carry-over-unlabeled-only — a `labeled` plan-approved event BEFORE the plan (irrelevant on
+# its own) and an `unlabeled` one AFTER it: the unlabeled event alone withholds — pins that the
+# rule reads unlabeled events too, not just labeled ones.
+case_plan_carry_over_unlabeled_only() {
+  local dir; dir="$(mk_fixture plan-carry-over-unlabeled-only)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7138"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-01T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"unlabeled","label":{"name":"plan-approved"},"created_at":"2026-01-03T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --carry-over
+  expect_rc 0
+  expect_jq '.awaiting_approval' '[]'
+  expect_jq '.counts.prior_approval_withheld' '1'
+}
+
+# plan-carry-over-tie-withheld — a `labeled` plan-approved event whose created_at exactly equals
+# the plan's createdAt (same second): withheld — the window is inclusive (>=), failing toward the
+# human on a tie rather than toward a second auto-approval.
+case_plan_carry_over_tie_withheld() {
+  local dir; dir="$(mk_fixture plan-carry-over-tie-withheld)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7139"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-01T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --carry-over
+  expect_rc 0
+  expect_jq '.awaiting_approval' '[]'
+  expect_jq '.counts.prior_approval_withheld' '1'
+}
+
+# plan-carry-over-unrelated-events-ignored — plan-approved labeled AND unlabeled events both
+# BEFORE the plan (irrelevant — they predate it), plus a labeled `pr-open` event AFTER it (a
+# different label, so ignored regardless of timing): eligible, prior_approval_withheld stays 0.
+case_plan_carry_over_unrelated_events_ignored() {
+  local dir; dir="$(mk_fixture plan-carry-over-unrelated-events-ignored)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-02T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7140"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-01T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"unlabeled","label":{"name":"plan-approved"},"created_at":"2026-01-01T00:00:01Z","actor":{"login":"msummer"}},
+ {"event":"labeled","label":{"name":"pr-open"},"created_at":"2026-01-03T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --carry-over
+  expect_rc 0
+  expect_jq '.awaiting_approval | length' '1'
+  expect_jq '.counts.prior_approval_withheld' '0'
+}
+
+# plan-carry-over-events-unreadable — issues 1 and 2 are both eligible-shaped; issue 1's events
+# read is rejected (reject-events-1). Only issue 2 reaches awaiting_approval, exactly one warn
+# line names issue 1, no sleep is spent, and the run still exits 0.
+case_plan_carry_over_events_unreadable() {
+  local dir; dir="$(mk_fixture plan-carry-over-events-unreadable)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1},{"number":2}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7141"}
+]}
+EOF
+  cat > "$dir/issue-2.json" <<'EOF'
+{"number":2,"title":"Issue two","url":"https://example.invalid/2","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/2#issuecomment-7142"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"OWNER","user":{"login":"owner"}},
+ {"number":2,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  : > "$dir/reject-events-1"
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --carry-over
+  expect_rc 0
+  expect_jq '.awaiting_approval | length' '1'
+  expect_jq '.awaiting_approval[0].number' '2'
+  expect_jq '.counts.approval_events_unreadable' '1'
+  expect_warn_count "could not read plan-approved label events" 1
+  expect_sleep_calls "$dir" 0
+}
+
+# plan-carry-over-untrusted-author — the issue's own AUTHOR (not the plan commenter) is NONE-
+# associated (rest-issues.json), distinct from the plan comment itself, which stays OWNER so it
+# is still recognised as the plan. The item still appears in awaiting_approval — issue-planner's
+# step 6b hard floor, not this script, is what blocks auto-approval on trusted_author: false.
+case_plan_carry_over_untrusted_author() {
+  local dir; dir="$(mk_fixture plan-carry-over-untrusted-author)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"outsider"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7143"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"NONE","user":{"login":"outsider-rest"}}]
+EOF
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --carry-over
+  expect_rc 0
+  expect_jq '.awaiting_approval | length' '1'
+  # The REST login differs from the issue's own author.login, so this pins the REST map as the
+  # author source rather than the .author.login fallback.
+  expect_jq '.awaiting_approval[0].author' '"outsider-rest"'
+  expect_jq '.awaiting_approval[0].title' '"Issue one"'
+  expect_jq '.awaiting_approval[0].url' '"https://example.invalid/1"'
+  expect_jq '.awaiting_approval[0].trusted_author' 'false'
+  expect_jq '.awaiting_approval[0].association' '"NONE"'
+  expect_jq '.untrusted_issue_authors' '[]'
+}
+
+# plan-carry-over-output-shape — empty candidates, with the flag: the document still carries
+# awaiting_approval and its three counts keys.
+case_plan_carry_over_output_shape() {
+  local dir; dir="$(mk_fixture plan-carry-over-output-shape)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --carry-over
+  expect_rc 0
+  expect_jq 'has("awaiting_approval")' 'true'
+  expect_jq '.counts | has("awaiting_approval")' 'true'
+  expect_jq '.counts | has("prior_approval_withheld")' 'true'
+  expect_jq '.counts | has("approval_events_unreadable")' 'true'
+}
+
+# plan-carry-over-unknown-arg — an argument other than exactly --carry-over is a usage error:
+# exit 2, empty stdout, a usage line on stderr.
+case_plan_carry_over_unknown_arg() {
+  local dir; dir="$(mk_fixture plan-carry-over-unknown-arg)"
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --bogus
+  expect_rc 2
+  expect_empty_out
+  expect_err "usage"
+}
+
+# plan-carry-over-extra-arg — a second argument, even a repeated --carry-over, is a usage error:
+# exit 2, empty stdout, a usage line on stderr — never a silent carry-over run.
+case_plan_carry_over_extra_arg() {
+  local dir; dir="$(mk_fixture plan-carry-over-extra-arg)"
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --carry-over --carry-over
+  expect_rc 2
+  expect_empty_out
+  expect_err "usage"
+}
+
+# plan-carry-over-withheld-then-eligible — issue 1 is withheld by a post-plan plan-approved event,
+# issue 2 (evaluated next) has none: issue 2 is still admitted, pinning that the withheld flag is
+# reset per candidate rather than leaking from the previous one.
+case_plan_carry_over_withheld_then_eligible() {
+  local dir; dir="$(mk_fixture plan-carry-over-withheld-then-eligible)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1},{"number":2}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7144"}
+]}
+EOF
+  cat > "$dir/issue-2.json" <<'EOF'
+{"number":2,"title":"Issue two","url":"https://example.invalid/2","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/2#issuecomment-7145"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"OWNER","user":{"login":"owner"}},
+ {"number":2,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  build_stub_gh "$dir"
+  run_planning_args "$dir" --carry-over
+  expect_rc 0
+  expect_jq '[.awaiting_approval[].number]' '[2]'
+  expect_jq '.counts.prior_approval_withheld' '1'
+}
+
+# REGISTRY MUTANTS (#312) — recorded in dev/mutants/planning-tests.json; run
+# bash dev/mutant-driver.sh 312-. Each edits bin/find-planning-work.sh's --carry-over
+# machinery, reached only via run_planning_args ... --carry-over (filter "carry-over").
+#
+# mutant:312-a — flips the flag's own default (`carry_over=false` -> `carry_over=true`), so the
+# awaiting_approval bucket and its three counts keys appear even with no flag at all.
+#
+# mutant:312-b — deletes the `has_feedback` clause from the carry-over admission `if`, so an
+# issue with newer trusted feedback (already in needs_revision) is ALSO admitted into
+# awaiting_approval.
+#
+# mutant:312-c — deletes the `plan_url` non-empty clause from the same `if`, so a candidate with
+# no url on its plan comment reaches the events read (and a null plan_url ships in the entry)
+# instead of being excluded up front.
+#
+# mutant:312-d — swaps the plan-selection tie-break from `| last` to `| first`, so a same-second
+# tie between two plan revisions binds to the OLDER one instead of the newer.
+#
+# mutant:312-e — bypasses the events `gh api` call entirely (`if ! events=$(gh api ...); then`
+# collapsed to the unconditional `if ! events=""; then`), so a real plan-approved labeled/
+# unlabeled event never withholds anything — every has_feedback:false candidate with a plan url
+# is admitted regardless of its approval history.
+#
+# mutant:312-f — drops the `or .event == "unlabeled"` disjunct from the events jq filter, so an
+# unlabeled plan-approved event alone can never withhold a candidate.
+#
+# mutant:312-g — deletes the time-window comparison entirely (the `if [[ "$evt" >
+# "$plan_created_at" || "$evt" = "$plan_created_at" ]]; then withheld=true; fi` block collapsed to
+# the unconditional `withheld=true`), so ANY matching event — even one that predates the plan —
+# withholds the candidate.
+#
+# mutant:312-h — drops the ` and .label.name == "plan-approved"` clause from the events jq
+# filter, so an unrelated label's labeled/unlabeled event (e.g. pr-open) is read into the window
+# and can wrongly withhold a candidate.
+#
+# mutant:312-i — narrows the inclusive window to exclusive (drops the `|| "$evt" =
+# "$plan_created_at"` disjunct), so a same-second tie no longer withholds.
+#
+# mutant:312-j — flips the events-read `if`'s polarity (`if ! events=$(gh api ...); then` loses
+# its `!`), so a REAL read failure takes the success/append branch (fail-OPEN) and a real success
+# takes the warn/skip branch instead.
+#
+# mutant:312-k — forces the carry-over entry's own `trusted_author` to the literal `true`, so an
+# untrusted issue author is reported as trusted in awaiting_approval.
+#
+# mutant:312-l — deletes `approval_events_unreadable: $aeu` from the final `.counts +=` object, so
+# `counts.approval_events_unreadable` reads `null` under --carry-over.
+# mutant:312-m — turns the more-than-one-argument usage arm into a silent carry-over run.
+# mutant:312-n — replaces the carry-over entry's REST-map author with a literal, so the item no
+#   longer reports who opened the issue.
+# mutant:312-o — stops resetting the withheld flag per candidate, so one withheld candidate
+#   withholds every later one.
+
+# ---------------------------------------------------------------------------------------------
 # empty-needle-guard (#262-1) — exercises every guarded helper in this file (expect_err,
 # expect_no_err, expect_warn_count) with an empty needle, and asserts the guard fired for each:
 # sets $planning_err to a fixed non-empty value first (so a non-guarded regression couldn't pass
@@ -10463,6 +10937,21 @@ cases=(
   "status-stop-unparseable-first-line|case_status_stop_unparseable_first_line|#353: rc 3 but line 1 is not stop=<state> at all — a different bash case arm from status-stop-rc-token-disagreement, state \"unavailable\""
   "status-stop-degraded-order|case_status_stop_degraded_order|#353: reject-proposed (permanent) + rc 4 stop=unknown — degraded_reasons puts stop_check_unavailable LAST, after every #297/#333/#309 flag"
   "status-stop-unavailable-with-carriers|case_status_stop_unavailable_with_carriers|#353 (verifier kickback round 2, F2): rc 1 stop=true plus a local carrier — the discard-on-unavailable fix empties stop_routes even though a carrier line was printed, human_actions unchanged, one warn naming exit 1"
+  "plan-carry-over-no-flag-unchanged|case_plan_carry_over_no_flag_unchanged|#312: no flag -> no awaiting_approval key, no new counts keys, exactly one gh api call"
+  "plan-carry-over-eligible|case_plan_carry_over_eligible|#312: positive control — one OWNER plan, no newer feedback, no prior approval event: admitted into awaiting_approval bound to its plan_url"
+  "plan-carry-over-latest-plan-bound|case_plan_carry_over_latest_plan_bound|#312: a same-second tie between two plan revisions binds plan_url to the LAST one in the array"
+  "plan-carry-over-feedback-excluded|case_plan_carry_over_feedback_excluded|#312: trusted feedback after the plan keeps the issue in needs_revision and out of awaiting_approval"
+  "plan-carry-over-plan-url-missing|case_plan_carry_over_plan_url_missing|#312: a plan comment with no url key is never admitted, and no events call is made"
+  "plan-carry-over-withdrawn-approval|case_plan_carry_over_withdrawn_approval|#312: a labeled-then-unlabeled plan-approved event pair after the plan withholds — the withdrawal/search-lag dedupe case"
+  "plan-carry-over-unlabeled-only|case_plan_carry_over_unlabeled_only|#312: an unlabeled plan-approved event alone (after the plan) withholds"
+  "plan-carry-over-tie-withheld|case_plan_carry_over_tie_withheld|#312: a plan-approved event whose created_at exactly equals the plan's createdAt withholds (inclusive window)"
+  "plan-carry-over-unrelated-events-ignored|case_plan_carry_over_unrelated_events_ignored|#312: pre-plan plan-approved events and a post-plan pr-open event are all ignored — eligible"
+  "plan-carry-over-events-unreadable|case_plan_carry_over_events_unreadable|#312: one candidate's events read fails (fail-closed, no retry) — the other candidate is unaffected"
+  "plan-carry-over-untrusted-author|case_plan_carry_over_untrusted_author|#312: a NONE-associated issue author is still admitted, with trusted_author false"
+  "plan-carry-over-output-shape|case_plan_carry_over_output_shape|#312: empty candidates, with the flag — awaiting_approval and its three counts keys are still present"
+  "plan-carry-over-unknown-arg|case_plan_carry_over_unknown_arg|#312: an argument other than --carry-over is a usage error — exit 2, empty stdout, stderr usage line"
+  "plan-carry-over-extra-arg|case_plan_carry_over_extra_arg|#312: a second argument (even a repeated --carry-over) is a usage error — exit 2, empty stdout, stderr usage line"
+  "plan-carry-over-withheld-then-eligible|case_plan_carry_over_withheld_then_eligible|#312: a withheld candidate does not leak its withheld flag into the next candidate"
   "empty-needle-guard|case_empty_needle_guard|#262: expect_err/expect_no_err/expect_warn_count all refuse an empty needle"
 )
 

@@ -94,7 +94,9 @@ is what lets the pre-advance checks and step 5's reconciliation catch an untouch
 `counts.initial_query_unavailable`, `counts.candidates_query_unavailable` (#272/#273), or
 `counts.ready_query_unavailable` (#284) on this seed run means the seed itself is incomplete —
 the corresponding bucket failed closed, not "nothing to do" — record it in the run report rather
-than reading an empty bucket as a clean result.
+than reading an empty bucket as a clean result. This seed run of `find-planning-work.sh` is
+deliberately WITHOUT `--carry-over` (#312) — a carry-over auto-approval the planner reports in
+step 1 below gets its own `<n> seed -` row then, not here.
 
 ### 1. Planning pass
 

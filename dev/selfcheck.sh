@@ -768,7 +768,7 @@ fi
 # read on demand, not on every run.
 budget_table="issue-implementer 875
 issue-cycle 600
-issue-planner 560
+issue-planner 580
 project-kickoff 215
 test-ratchet 200
 harness-setup 195"
