@@ -1804,6 +1804,56 @@ else
   fi
 fi
 
+# 4.52 (#359) — mutant:<name> comment tokens in dev/*.sh <-> dev/mutants/*.json registry records,
+# the 4.50/4.51 shape reused: a comment-side `# mutant:<name> — ...` paragraph cites a specific,
+# mechanically re-run mutation-kill proof; a registry record with no citing comment has no stated
+# mechanism, and a citing comment whose registry record is gone (renamed or deleted) still reads as
+# a live proof when it is not. Extraction is comment-line-scoped (`^[[:space:]]*#`, 1.4's own
+# comment-stripping idiom) so a `mutant:` token inside a non-comment string (e.g. quoted in a
+# fixture) is never mistaken for a citation. Pairs are (script basename, name) on the comment side
+# and (basename(.suite), .name) on the registry side, so a token in one dev/*.sh script is never
+# satisfied by a same-named record targeting a different suite. Any dev/mutants/*.json file jq
+# cannot parse FAILs outright, before any comparison. This proves only that the two vocabularies
+# agree end to end, nothing about whether the driver run itself currently passes — the same honest
+# limit 4.33/4.34/4.35/4.45/4.46/4.48/4.49/4.50/4.51's comments state.
+mt_comment_pairs_452=""
+for s_452 in "$root"/dev/*.sh; do
+  [ -f "$s_452" ] || continue
+  base_452="$(basename "$s_452")"
+  hits_452="$(grep -oE '^[[:space:]]*#.*mutant:[A-Za-z0-9][A-Za-z0-9-]*' "$s_452" | grep -oE 'mutant:[A-Za-z0-9][A-Za-z0-9-]*' | sed "s/^mutant:/$base_452 /")"
+  [ -n "$hits_452" ] && mt_comment_pairs_452="$mt_comment_pairs_452
+$hits_452"
+done
+mt_comment_pairs_452="$(printf '%s\n' "$mt_comment_pairs_452" | grep -v '^$' | sort -u)"
+
+mt_bad_files_452=""
+mt_registry_pairs_452=""
+for rf_452 in "$root"/dev/mutants/*.json; do
+  [ -f "$rf_452" ] || continue
+  if ! rf_out_452="$(jq -r '.mutants[] | (.suite | split("/") | last) + " " + .name' "$rf_452" 2>/dev/null)"; then
+    mt_bad_files_452="$mt_bad_files_452 $rf_452"
+  else
+    mt_registry_pairs_452="$mt_registry_pairs_452
+$rf_out_452"
+  fi
+done
+mt_registry_pairs_452="$(printf '%s\n' "$mt_registry_pairs_452" | grep -v '^$' | sort -u)"
+
+if [ -n "$mt_bad_files_452" ]; then
+  bad "4.52 unparseable dev/mutants/*.json file(s) (cannot cross-check comment tokens against registry records):$mt_bad_files_452"
+else
+  tokens_without_record_452="$(comm -23 <(_lines "$mt_comment_pairs_452") <(_lines "$mt_registry_pairs_452"))"
+  records_without_token_452="$(comm -13 <(_lines "$mt_comment_pairs_452") <(_lines "$mt_registry_pairs_452"))"
+  if [ -z "$tokens_without_record_452" ] && [ -z "$records_without_token_452" ]; then
+    ok "4.52 every 'mutant:<name>' comment token in dev/*.sh has a matching dev/mutants/*.json record (by script/suite basename), and every registry record has a matching comment token"
+  else
+    msg="4.52 mutant comment token <-> registry record mismatch:"
+    [ -n "$tokens_without_record_452" ] && msg="$msg comment token(s) with no registry record: $(printf '%s' "$tokens_without_record_452" | tr '\n' ' ');"
+    [ -n "$records_without_token_452" ] && msg="$msg registry record(s) with no comment token: $(printf '%s' "$records_without_token_452" | tr '\n' ' ');"
+    bad "$msg"
+  fi
+fi
+
 # ============================================================================
 echo
 echo "-- Group 5: script and extracted-program behavior --"

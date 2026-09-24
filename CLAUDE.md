@@ -21,17 +21,22 @@ bash dev/selfcheck.sh
 
 It prints a `PASS`/`FAIL` line per assertion (grouped and labelled in its own output) and a
 `== summary: N pass, M fail ==` footer, and exits 0 iff nothing failed. The same command runs in
-CI (`.github/workflows/selfcheck.yml`, two jobs running the same eight commands — `selfcheck` on
-`ubuntu-latest`, the only required check on every pull request, and `selfcheck-macos` on
-`macos-latest`, which prepends `/bin` to `PATH` so the same commands run under Apple's bash 3.2
-instead of a newer bash, and which since #365 runs only post-merge on `main`, nightly, and on
-manual dispatch — never on a pull request, because the maintainer's own local run already happens
-under bash 3.2, so a BSD-only regression is caught on `main` within a day rather than holding
-every merge for the ~12 minutes that job takes); a red check means one of the
-jobs' eight commands failed — reproduce locally with `bash dev/selfcheck.sh`,
-`bash dev/selfcheck-tests.sh`, `bash dev/doctor-tests.sh`, `bash dev/hook-tests.sh`,
-`bash dev/cleanup-tests.sh`, `bash dev/planning-tests.sh`, `bash dev/lock-tests.sh`, and
-`bash dev/stop-tests.sh` (on a
+CI (`.github/workflows/selfcheck.yml`, two jobs — `selfcheck` on `ubuntu-latest`, the only
+required check on every pull request, and `selfcheck-macos` on `macos-latest`, which prepends
+`/bin` to `PATH` so the same commands run under Apple's bash 3.2 instead of a newer bash, and
+which since #365 runs only post-merge on `main`, nightly, and on manual dispatch — never on a pull
+request, because the maintainer's own local run already happens under bash 3.2, so a BSD-only
+regression is caught on `main` within a day rather than holding every merge for the still-longer
+time that job now takes with `dev/mutant-driver.sh` appended (`timeout-minutes: 35`, since #359,
+raised from 20 to absorb the driver's own post-merge run). Each job runs ten commands, but the
+ninth, `bash dev/mutant-driver.sh` (#359), is
+gated `if: github.event_name != 'pull_request'`, so a pull request runs nine of them on `ubuntu`
+only (driver-tests still runs; the driver itself, and the whole `selfcheck-macos` job, run only
+post-merge/nightly/dispatch); a red check means one of the commands that ran failed — reproduce
+locally with `bash dev/selfcheck.sh`, `bash dev/selfcheck-tests.sh`, `bash dev/doctor-tests.sh`,
+`bash dev/hook-tests.sh`, `bash dev/cleanup-tests.sh`, `bash dev/planning-tests.sh`,
+`bash dev/lock-tests.sh`, `bash dev/stop-tests.sh`, `bash dev/mutant-driver.sh`, and
+`bash dev/mutant-driver-tests.sh` (on a
 Mac, prefix each with `PATH=/bin:$PATH` to match the macOS job's shell, e.g.
 `PATH=/bin:$PATH bash dev/selfcheck.sh`).
 There is no test suite and no build step: this repo is Markdown instruction files, Bash scripts,
@@ -130,8 +135,36 @@ carrying the same `GH_ISSUE_JSON_FIELDS` copy `dev/cleanup-tests.sh` and
 stop routes, the stdout grammar, the one-bounded-retry `gh` query, and a
 `never-mutates` case (a recording `git` wrapper plus a byte-identical fixture-tree
 listing) proving the script only reads the tree it checks, never writes to it. It runs in CI as
-the eighth and last command, but it is not part of `dev/selfcheck.sh` itself; run it by hand
+the eighth command, but it is not part of `dev/selfcheck.sh` itself; run it by hand
 whenever `bin/harness-stop.sh` changes.
+
+`dev/mutant-driver.sh` (#359) is a checked-in mutant driver: it reads every `dev/mutants/*.json`
+registry file, and for each record applies the recorded exact-text `{from,to}` edits (each
+required to match exactly once) to a scratch copy of the record's `target` file — never the
+tracked tree — then runs the record's own `suite`, name-filtered by its own `filter`, from inside
+that copy, and compares the observed failing-case set against the record's `expect_fail`. A
+baseline run (no edits) proves each distinct `(suite, filter)` pair is clean before any dependent
+mutant is trusted; a red baseline short-circuits every mutant that depends on it. It runs mutants
+in bounded concurrent waves (the same idiom `dev/selfcheck-tests.sh` uses) and prints results in
+declared order regardless of completion order, with its own `PASS <name> <total> <set>`/
+`FAIL <name> <total|-> <set|->` grammar and a `== summary: N pass, M fail ==` footer. Run it by
+hand before pushing any change to a registry `target`, a registry `suite`, or the registry itself
+— it runs in CI as the ninth command, but only post-merge on `main`, nightly, and on manual
+dispatch (never on a pull request, `if: github.event_name != 'pull_request'`), so a stale recorded
+set turns the post-merge/nightly run red within a day rather than blocking the pull request that
+introduced it.
+
+`dev/mutant-driver-tests.sh` is the driver's own negative-test harness: over synthetic targets and
+suites built under `mktemp`, it pins the driver's registry validation (name/target/suite/edits/
+expect_fail shape, each violation exiting 2 before any suite ever runs), the exactly-once edit
+match, multi-edit sequencing, multi-line edits, the preserved executable bit, that the tracked
+fixture tree is never touched, that a same-named decoy earlier on `PATH` is never invoked, the
+`MUTANT_DRIVER_FAULT=die:<name>`/`slow:<name>` self-tests (mirroring
+`dev/selfcheck-tests.sh`'s own), and the CLI (`-j <n>`/`--serial`/`MUTANT_DRIVER_JOBS`/an unknown
+filter). It runs in CI as the tenth and last command in both jobs — but since #365's job-level
+`if:` already keeps `selfcheck-macos` off pull requests entirely, a pull request runs it only via
+the `selfcheck` (ubuntu) job; both jobs run it post-merge, nightly, and on manual dispatch. It is
+not part of `dev/selfcheck.sh` itself — run it by hand whenever `dev/mutant-driver.sh` changes.
 
 Per-PR history of what each suite pins — the "Since #N, X gains…" narrative — lives in
 `CHANGELOG.md`'s archive, not here; each suite's own header comment and fixture/case comments
@@ -195,8 +228,10 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   hop unless the hop has a consumer step (a grant, label, script, settings entry, baseline step,
   one-time manual action, or upgrade precondition), in which case it states the step and nothing
   else. (4) A new fixture or case comment states its mechanism — what it pins, which mutant kills
-  it — never a pass/fail figure or a failing-set enumeration; existing measured figures already in
-  `dev/*-tests.sh` stay until #359's machine-readable registry replaces them. (5) This is a
+  it — never a pass/fail figure or a failing-set enumeration; a mutant migrated into
+  `dev/mutants/*.json` (#359) is replaced by one `# mutant:<name> — <mechanism>` comment (gate
+  assertion 4.52 cross-checks the two), and every other existing measured figure in
+  `dev/*-tests.sh` stays prose until its own follow-up migrates it. (5) This is a
   review-level convention; no gate assertion checks it.
 - Every `uses:` step in `.github/workflows/` is pinned to a full 40-hex commit SHA, with the
   human-readable release tag in a trailing comment — a mutable tag ref would let the action's

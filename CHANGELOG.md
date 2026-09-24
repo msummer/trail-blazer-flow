@@ -12,11 +12,22 @@ of the move — it is not kept in sync with that file's current content.
 To add a new entry: under `## Unreleased`, add one bullet per pull request, newest first, shaped
 `- #<issue>: <one to three lines>` naming what changed and any consumer-facing step — no fixture
 counts, mutation-proof figures, or other measured numbers (those live in each suite's own header
-and fixture/case comments; see CLAUDE.md's Conventions). At release time, retitle the `##
+and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` record — see
+CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Updating").
 
 ## Unreleased
 
+- #359: Added `dev/mutant-driver.sh`, a checked-in mutant driver that reads `dev/mutants/*.json`
+  registry records and re-runs each one's recorded exact-text edits against a scratch copy, and
+  `dev/mutant-driver-tests.sh`, its own negative-test harness; gate assertion 4.52 cross-checks a
+  `# mutant:<name>` comment token in `dev/*.sh` against its registry record. Migrated the
+  `bin/harness-status.sh` mutants from `dev/planning-tests.sh`'s prose `MEASURED MUTANTS
+  (#284/#285)`/`(#297)`/`(#333)`/`(#309)`/`(#353)` blocks — the harness-status tranche — into
+  `dev/mutants/planning-tests.json`; the driver's own self-mutants live in
+  `dev/mutants/mutant-driver-tests.json`. `dev/mutant-driver-tests.sh` runs on every pull request
+  (ubuntu) and in both jobs post-merge/nightly/dispatch; `dev/mutant-driver.sh` runs only
+  post-merge on `main`, nightly, and on manual dispatch.
 - #364: `dev/selfcheck.sh`'s header no longer hand-maintains an assertion total (the summary
   footer's pass + fail is the total), so a new assertion never edits a shared line; the
   tautological header-count self-test is removed; CLAUDE.md now makes "no new gate assertion" the

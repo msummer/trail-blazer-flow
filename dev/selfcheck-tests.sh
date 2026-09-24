@@ -505,6 +505,29 @@ p_4_50_applied()        { printf 'gh issue edit 1 --add-label triaged-held\n' | 
 # appears as a fixed string in bin/harness-stop.sh, whose own literal is "stop=unknown" (clause b).
 p_4_51_extraction() { edit "$1/bin/harness-status.sh" 's/STOP_ROUTE_PREFIX/STOP_ROUTE_PREFX/g'; }
 p_4_51_drift()      { edit "$1/bin/harness-status.sh" 's/^STOP_STATE_UNKNOWN="unknown"$/STOP_STATE_UNKNOWN="unkown"/'; }
+# p_4_52_* (#359) — the mutant:<name> comment token <-> dev/mutants/*.json registry record
+# cross-check. p_4_52_token_without_record appends a comment line naming a ghost mutant (the
+# literal token text lives in the function body below, not in this paragraph, so this explanatory
+# comment itself never becomes a stray citation) to dev/planning-tests.sh: a comment-side token
+# with no registry record naming it. p_4_52_record_without_token adds a new, otherwise well-formed
+# record named "ghost-record" (suite dev/planning-tests.sh) to dev/mutants/planning-tests.json via
+# jq into a temp file, then `cat` back over the original (no `sed -i`, the repo's own
+# convention) — a registry-side record with no citing comment. p_4_52_noncomment_token is the
+# non-vacuity control: it appends a plain variable assignment (never a comment — the line does not
+# start with '#') that happens to contain the same ghost-mutant token text, proving assertion
+# 4.52's extraction is comment-line-scoped rather than a whole-file grep.
+p_4_52_token_without_record() {
+  printf '# mutant:ghost — a comment token with no registry record\n' | append "$1/dev/planning-tests.sh"
+}
+p_4_52_record_without_token() {
+  local f="$1/dev/mutants/planning-tests.json"
+  jq '.mutants += [{"name":"ghost-record","target":"bin/harness-status.sh","suite":"dev/planning-tests.sh","filter":"status-","edits":[{"from":"LIMIT=100","to":"LIMIT=100 "}],"expect_fail":["status-own-queries-healthy"]}]' "$f" > "$f.tmp"
+  cat "$f.tmp" > "$f"
+  rm -f "$f.tmp"
+}
+p_4_52_noncomment_token() {
+  printf 'x="mutant:ghost — not a comment, never extracted"\n' | append "$1/dev/planning-tests.sh"
+}
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -777,7 +800,7 @@ cases=(
   "4.6|4.6|p_4_6|drop a label bin/setup-labels.sh creates from the doctor's required list"
   "4.9-missing-step|4.9|p_4_9_missing_step|drop the 'bash dev/doctor-tests.sh' run step from the workflow"
   "4.9-orphan-step|4.9|p_4_9_orphan_step|add a CI run step for a nonexistent dev/nonexistent.sh"
-  "4.9-uneven-jobs|4.9|p_4_9_one_job_only|delete the workflow's last line (the macOS job's dev/stop-tests.sh step, #310), leaving that script covered on ubuntu only"
+  "4.9-uneven-jobs|4.9|p_4_9_one_job_only|delete the workflow's last line (the macOS job's dev/mutant-driver-tests.sh step, #359), leaving that script covered on ubuntu only"
   "4.11-local|4.11|p_4_11_local|reintroduce a raw sed of \"\$settings_local\" in bin/check-harness.sh"
   "4.11-comment||p_4_11_comment|control: an indented comment mentioning grep and quoting \"\$settings\" is not flagged"
   "4.13-script|4.13|p_4_13_script|add a 'docs' stage to reconcile-ledger.sh's STAGES= list only"
@@ -901,6 +924,9 @@ cases=(
   "4.50-applied|1.9 4.50|p_4_50_applied|append 'gh issue edit 1 --add-label triaged-held' to bin/harness-status.sh — since #355 (assertion 1.9), this same bare unguarded write also trips the new gh-issue-write scan -- measured failing set: {1.9 4.50} (79 pass, 2 fail)"
   "4.51-extraction|4.51|p_4_51_extraction|rename STOP_ROUTE_PREFIX to STOP_ROUTE_PREFX throughout bin/harness-status.sh (both the declaration and its jq --arg use site) so the gate's anchored extraction comes back empty -- measured: \"4.51 a STOP_*_PREFIX or STOP_STATE_{SET,CLEAR,UNKNOWN} declaration didn't match (structure changed) in bin/harness-status.sh — extraction failed\" (78 pass, 1 fail)"
   "4.51-drift|4.51|p_4_51_drift|alter one character inside bin/harness-status.sh's own STOP_STATE_UNKNOWN value (characters removed inside the token, not a suffix) so the stop=<state> concatenation no longer appears as a fixed string in bin/harness-stop.sh -- measured: \"4.51 bin/harness-stop.sh is missing one or more of bin/harness-status.sh's own stop-grammar tokens as fixed strings: 'stop=unkown'\" (78 pass, 1 fail)"
+  "4.52-token-without-record|4.52|p_4_52_token_without_record|append a '# mutant:ghost' comment to dev/planning-tests.sh: a comment-side token with no dev/mutants/*.json record naming it"
+  "4.52-record-without-token|4.52|p_4_52_record_without_token|add a well-formed 'ghost-record' record (suite dev/planning-tests.sh) to dev/mutants/planning-tests.json via jq into a temp file then cat back: a registry-side record with no citing comment"
+  "4.52-noncomment-token||p_4_52_noncomment_token|control: a plain (non-comment) variable assignment containing the substring 'mutant:ghost' — assertion 4.52's comment-line-scoped extraction must not be tripped by it"
 )
 
 # ---------------------------------------------------------------------------------------------

@@ -17,7 +17,14 @@ permissions:
 jobs:
   selfcheck:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # ADVISORY Q1 (#359): the driver step below is gated off pull requests (see that step's own
+    # `if:`), so the per-PR ceiling stays exactly 10; only the post-merge/nightly/dispatch ceiling
+    # rises, to bound the driver's own estimated ubuntu wall-clock (measured locally: 2:44 for the
+    # full registry — 49 tranche mutants plus 6 driver self-mutants plus 2 baselines — at 12-way
+    # concurrency; ubuntu-latest's 4 vCPUs give roughly a third of that concurrency, so a rough
+    # linear projection is ~8 min) added on top of the ~4 min the pre-existing eight commands
+    # already take, for a projected post-merge job total around 12 min — comfortably inside 25.
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 10 || 25 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: bash dev/selfcheck.sh
@@ -28,13 +35,19 @@ jobs:
       - run: bash dev/planning-tests.sh
       - run: bash dev/lock-tests.sh
       - run: bash dev/stop-tests.sh
+      - run: bash dev/mutant-driver.sh
+        if: github.event_name != 'pull_request'
+      - run: bash dev/mutant-driver-tests.sh
 
   selfcheck-macos:
     # Post-merge and nightly only (#365) — never a pull_request check. Keep this job LAST in the
-    # file: dev/selfcheck-tests.sh's 4.9-uneven-jobs case deletes the workflow's final line.
+    # file: dev/selfcheck-tests.sh's 4.9-uneven-jobs case deletes the workflow's final line, which
+    # must therefore stay a `- run:` step line — see the mutant-driver step pair below, whose `if:`
+    # sibling key on the step BEFORE the last is why the last step itself must be the plain
+    # `dev/mutant-driver-tests.sh` run, not the gated `dev/mutant-driver.sh` one.
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Apple's /bin/bash is 3.2.57 (last GPLv2 bash). Put /bin first so bare `bash` — including
@@ -56,3 +69,6 @@ jobs:
       - run: bash dev/planning-tests.sh
       - run: bash dev/lock-tests.sh
       - run: bash dev/stop-tests.sh
+      - run: bash dev/mutant-driver.sh
+        if: github.event_name != 'pull_request'
+      - run: bash dev/mutant-driver-tests.sh
