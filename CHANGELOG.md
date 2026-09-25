@@ -18,6 +18,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #383: Every `dev/*-tests.sh` runner now reports a `cases=()` row whose function (or, in
+  `dev/selfcheck-tests.sh`, whose perturbation function) no longer exists as a FAIL naming it,
+  instead of a silent PASS; proven per runner by `dev/mutants/case-fn-guard.json`. No consumer
+  step.
 - #394: README restructured into a user guide (getting started for new and existing repos,
   everyday recipes, an Autonomous mode section); the detailed spec moved verbatim into
   `docs/reference/`. No consumer step.

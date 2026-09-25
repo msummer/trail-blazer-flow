@@ -949,6 +949,15 @@ cases=(
 run_case() {
   local name="$1" expected="$2" perturb="$3" desc="$4"
   local dir out observed exp_norm obs_norm literal_ok eid diag
+  # mutant:383-fn-selfcheck-tests — renames a row's perturbation function in a scratch copy of
+  #   this suite; this declare -F guard must report that row FAIL naming the missing function,
+  #   instead of a silent PASS a control row (empty expected set) would otherwise get when its
+  #   perturbation never runs and the fresh copy stays pristine.
+  if [ "$perturb" != "none" ] && ! declare -F "$perturb" >/dev/null 2>&1; then
+    case_bad "$name" "$desc"
+    echo "    perturbation function '$perturb' is not defined (deleted or renamed?) — this case never ran"
+    return 1
+  fi
   dir="$(fresh_copy "$name")"
   if [ "$perturb" != "none" ]; then
     "$perturb" "$dir"
