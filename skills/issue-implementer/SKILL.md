@@ -388,7 +388,7 @@ someone forged a harness-authored record — call either out too).
 
 - **`false` — the approval demonstrably does not cover this plan** (`reason` one of `no-plan`,
   `plan-url-missing`, `no-approval-event`, `plan-after-approval`, `plan-edited-after-approval`,
-  `decision-edited-after-approval` (#230), or
+  `decision-edited-after-approval` (#230), `closed-after-approval` (#375), or
   `approval-label-absent`):
   - **`approval-label-absent` (#229) — the human's own withdrawal, not a stale plan.** The
     `plan-approved` label is not currently on the issue, so there is nothing to remove and no
@@ -407,7 +407,8 @@ someone forged a harness-authored record — call either out too).
     `decision-edited-after-approval` (#230), the comment must also name the `url` of every
     `trusted_post_plan` entry whose `covered_by_approval_reason` is
     `"decision-edited-after-approval"` — the edited decision the human needs to re-read before
-    re-approving.
+    re-approving. When `reason` is `closed-after-approval` (#375), also note the issue was closed
+    after that approval and later reopened.
 - **unknown — the verdict is unknown because a GitHub API call failed**, covering `reason`
   `approval-unreadable`, `plan-edit-unreadable`, or `decision-edit-unreadable` (#230),
   this issue having **no** `plan_selection` entry
