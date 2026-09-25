@@ -1160,6 +1160,151 @@
       ]
     },
     {
+      "name": "375-a",
+      "target": "bin/find-implementation-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "impl-reopened",
+      "edits": [
+        {
+          "from": " or .event == \"closed\"",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "impl-reopened-close-tie-not-covered",
+        "impl-reopened-closed-after-approval",
+        "impl-reopened-precedence-two-issues"
+      ]
+    },
+    {
+      "name": "375-b",
+      "target": "bin/find-implementation-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "impl-reopened",
+      "edits": [
+        {
+          "from": "[ -n \"$closed_latest\" ] && ! [[ \"$approved_at\" > \"$closed_latest\" ]]",
+          "to": "false"
+        }
+      ],
+      "expect_fail": [
+        "impl-reopened-close-tie-not-covered",
+        "impl-reopened-closed-after-approval",
+        "impl-reopened-precedence-two-issues"
+      ]
+    },
+    {
+      "name": "375-c",
+      "target": "bin/find-implementation-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "impl-reopened",
+      "edits": [
+        {
+          "from": "! [[ \"$approved_at\" > \"$closed_latest\" ]]",
+          "to": "[[ \"$closed_latest\" > \"$approved_at\" ]]"
+        }
+      ],
+      "expect_fail": [
+        "impl-reopened-close-tie-not-covered"
+      ]
+    },
+    {
+      "name": "375-d",
+      "target": "bin/find-implementation-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "impl-reopened",
+      "edits": [
+        {
+          "from": "sed -n 's/^closed \\([^ ]*\\).*$/\\1/p' | sort | tail -1",
+          "to": "sed -n 's/^closed \\([^ ]*\\).*$/\\1/p' | sort | head -1"
+        }
+      ],
+      "expect_fail": [
+        "impl-reopened-closed-after-approval"
+      ]
+    },
+    {
+      "name": "375-e",
+      "target": "bin/find-implementation-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "impl-reopened",
+      "edits": [
+        {
+          "from": "      events=$(printf '%s\\n' \"$events\" | sed -n 's/^labeled //p')\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "impl-reopened-close-tie-not-covered",
+        "impl-reopened-closed-after-approval",
+        "impl-reopened-closed-no-approval-event",
+        "impl-reopened-never-closed-multi-pr-covered",
+        "impl-reopened-precedence-two-issues",
+        "impl-reopened-reapproved-covered"
+      ]
+    },
+    {
+      "name": "375-f",
+      "target": "bin/find-implementation-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "impl-reopened",
+      "edits": [
+        {
+          "from": "closed_after_approval=$((closed_after_approval+1))",
+          "to": "closed_after_approval=1"
+        }
+      ],
+      "expect_fail": [
+        "impl-reopened-precedence-two-issues"
+      ]
+    },
+    {
+      "name": "375-g",
+      "target": "bin/find-implementation-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "impl-reopened",
+      "edits": [
+        {
+          "from": "if [ -n \"$closed_latest\" ] && ! [[ \"$approved_at\" > \"$closed_latest\" ]]; then",
+          "to": "if [ -n \"$closed_latest\" ] && ! [[ \"$approved_at\" > \"$closed_latest\" ]] && ! [[ \"$plan_created\" > \"$approved_at\" ]]; then"
+        }
+      ],
+      "expect_fail": [
+        "impl-reopened-precedence-two-issues"
+      ]
+    },
+    {
+      "name": "375-h",
+      "target": "bin/find-implementation-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "impl-reopened",
+      "edits": [
+        {
+          "from": "      if [ -z \"$latest\" ]; then\n        reason=\"no-approval-event\"",
+          "to": "      if [ -z \"$latest\" ] && [ -z \"$closed_latest\" ]; then\n        reason=\"no-approval-event\""
+        }
+      ],
+      "expect_fail": [
+        "impl-reopened-closed-no-approval-event"
+      ]
+    },
+    {
+      "name": "375-i",
+      "target": "bin/find-implementation-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "impl-reopened",
+      "edits": [
+        {
+          "from": "          reason=\"closed-after-approval\"\n",
+          "to": "          reason=\"closed-after-approval\"\n          echo \"warn: issue #$n: duplicate \u2014 at or after its newest plan-approved label\" >&2\n"
+        }
+      ],
+      "expect_fail": [
+        "impl-reopened-closed-after-approval",
+        "impl-reopened-precedence-two-issues"
+      ]
+    },
+    {
       "name": "395-a",
       "target": "bin/find-planning-work.sh",
       "suite": "dev/planning-tests.sh",

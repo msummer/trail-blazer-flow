@@ -172,7 +172,12 @@ a bare `git` all deny too — fail-closed, not an enumerated allow-list of "safe
 #340, both roles ALSO deny a Bash command that puts a `.claude`-segment path in a write position —
 a `>`-family redirect target, an argument to `tee`/`cp`/`mv`/`cd`/`pushd`, or an in-place `sed`'s
 argument — closing most of the Bash-issued write route into `.claude/` (see `hooks/claude-dir-guard.sh`'s
-own paragraph below for the Edit/Write-issued route that hook already closed). Every other case —
+own paragraph below for the Edit/Write-issued route that hook already closed). Since #387, both
+roles ALSO deny a Bash command whose command word is an interpreter or one-step writer (`python`,
+`perl`, `dd`, `install`, and the rest of `CLAUDE_CMDLINE_WRITE_COMMANDS`) when that same command
+text names a `.claude` segment anywhere — closing the interpreter/one-step-writer gap #340 left
+open, at the cost of denying a vocabulary command sharing a call with a `.claude` *read* too (see
+the over-blocking list below). Every other case —
 the main session (no `agent_type`), the planner or another agent, `permission_mode: "plan"`,
 malformed stdin, another tool, or `tool_input.command` absent — is "no opinion" (exit 0, empty
 stdout, empty stderr), the same convention `git-c-guard.sh` uses; a blocked call's stderr names the
@@ -194,14 +199,23 @@ including a heredoc line that merely *writes* a fixture file containing the text
 since #340, a `.claude`-segment write class covering quoted prose (`echo "tip: >> .claude/x"`), a
 heredoc body line, a `sed -i` whose script text itself spells a `.claude` segment, a copy or move
 *out of* `.claude`, a `cd` into any `.claude` directory, an input redirect from `.claude` into
-one of those commands (`tee /tmp/x < .claude/x`), and any `~/.claude/...` write — the remedy
-for a file-content case is to write through the Write/Edit tools rather than a Bash heredoc. Known
+one of those commands (`tee /tmp/x < .claude/x`), and any `~/.claude/...` write; and, since #387,
+a `CLAUDE_CMDLINE_WRITE_COMMANDS` command word sharing a call with any `.claude` mention anywhere
+(every line, heredoc bodies included) — even a pure read (`python3 -c "json.load(open('.claude/x'))"`,
+`awk 'NR<5' .claude/x`), an unrelated vocabulary command sharing the call
+(`cat .claude/x && python3 -m pytest`), or a checkout/worktree path carrying a `.claude` segment —
+the remedy for a file-content case is to write through the Write/Edit tools rather than a Bash
+heredoc, and for the #387 read-adjacent case, the Read/Grep tools or a separate Bash call. Known
 evasions, documented rather than hidden: `$(which git) push` (the literal `git` token is never in
 command position), `sudo -u foo git push` (the argument to `-u` becomes the resolved command word
 instead of `git`), interpreter indirection outside the recognised prefix words (`env`, `command`,
 `builtin`, `exec`, `sudo`, `nohup`, `time`, `nice`, `stdbuf`, `xargs`, `bash`, `sh`, `zsh`, `ksh`,
-`dash`), and, for the `.claude`-write class specifically, an interpreter (`python3 -c`, `perl -i`),
-`install`/`ln`/`touch`/`truncate`/`dd of=…`, or a variable-built or glob target — this is a
+`dash`), and, for the `.claude`-write class specifically, a writer outside
+`CLAUDE_CMDLINE_WRITE_COMMANDS` (`sort -o`, `split`, `unzip -d`, `scp`, `cpio`, `vim -es`, `sed`'s
+`w` command), a launcher that becomes the resolved command word instead of a vocabulary member
+(`uv run python`, `npx`, `poetry run`, `sudo -u x python3`), a script file whose own CONTENTS name
+the path rather than the command line itself (`python3 /tmp/w.py`), or a variable-built, glob, or
+quote/backslash-split target — this is a
 tripwire against an off-script subagent, the same framing this document already uses for the
 body-hash grant pattern, not a sandbox against a determined adversary.
 
@@ -396,7 +410,11 @@ per-comment `includesCreatedEdit` on the plan comment is not exactly `false` —
 the merge floor holding exactly as they do for `plan-after-approval`, with no changes of their
 own; an edit made *before* approval stays covered on purpose (the approver read the edited text);
 an unreadable edit-state lookup fails closed to `covers_plan: null`, an **unknown** verdict
-(`reason: "plan-edit-unreadable"`), the same tri-state `approval-unreadable` already used. When
+(`reason: "plan-edit-unreadable"`), the same tri-state `approval-unreadable` already used. The
+same events call (#375) also reports a `closed` event: a close at or after the newest labeling
+means that approval was consumed by the close (`reason: "closed-after-approval"`,
+`covers_plan: false`, handled exactly like `plan-after-approval`) at no extra API cost, and
+re-approving after a reopen (removing and re-adding `plan-approved`) restores coverage. When
 the plan covers, the script emits a `binding_line` naming the specific plan comment and approval
 timestamp; the `issue-implementer` skill revalidates this **before dispatch and again before
 push**, splitting its remedy by verdict since #219: a same-run revision (or in-place edit)

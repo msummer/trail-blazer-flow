@@ -11103,6 +11103,231 @@ case_empty_needle_guard() {
   done
 }
 
+# impl-reopened-* (#375) — a completed issue loses pr-open when it closes (#370); if a maintainer
+# later reopens it, its earlier plan-approved approval must no longer cover the plan. All four
+# fixtures share the impl-approval-covers-plan shape (ready.json issue 1, an OWNER plan comment
+# opening with <!-- planner-plan -->, plan-approved on issue-1.json's current labels), widened
+# only in events-1.json to also carry closed/reopened events — the same one events call as before.
+case_impl_reopened_closed_after_approval() {
+  local dir; dir="$(mk_fixture impl-reopened-closed-after-approval)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7146"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  # Older close/reopen BEFORE approval (kills 375-d, the oldest-instead-of-newest-close mutant),
+  # then the labeling, then a pr-open cycle, then the newer close/reopen that consumes it.
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"closed","created_at":"2025-12-01T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"reopened","created_at":"2025-12-02T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"labeled","label":{"name":"pr-open"},"created_at":"2026-01-03T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"closed","created_at":"2026-01-05T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"reopened","created_at":"2026-01-06T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'false'
+  expect_jq '.plan_selection[0].approval.reason' '"closed-after-approval"'
+  expect_jq '.plan_selection[0].binding_line' 'null'
+  expect_jq '.plan_selection[0].approval.approved_at' '"2026-01-02T00:00:00Z"'
+  expect_jq '.plan_selection[0].approval.approved_by' '"msummer"'
+  expect_jq '.plan_selection[0].approval.approved_at_history | length' '1'
+  expect_jq '.plan_selection[0].approval.approved_at_history[0].binding_line' 'null'
+  expect_jq '.counts.closed_after_approval' '1'
+  expect_jq '.counts.plan_after_approval' '0'
+  expect_err "at or after its newest plan-approved label"
+  expect_warn_count "at or after its newest plan-approved label" 1
+  expect_warn_count "plan comment was edited" 0
+  expect_api_calls "$dir" 1
+}
+
+# impl-reopened-close-tie-not-covered — the closed event's created_at exactly equals the newest
+# plan-approved labeling's: fail-closed, still not covered. Kills 375-c (the tie-boundary mutant).
+case_impl_reopened_close_tie_not_covered() {
+  local dir; dir="$(mk_fixture impl-reopened-close-tie-not-covered)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7147"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"closed","created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'false'
+  expect_jq '.plan_selection[0].approval.reason' '"closed-after-approval"'
+  expect_jq '.counts.closed_after_approval' '1'
+}
+
+# impl-reopened-reapproved-covered — closed then reopened then RE-approved by a second person:
+# approved_at moves past the close and coverage is restored. Kills 375-e (the events-narrowing
+# deletion mutant) via the approved_at assertion below (without the narrowing, approved_at would
+# be cut from a still-"labeled "-prefixed $latest and come out wrong).
+case_impl_reopened_reapproved_covered() {
+  local dir; dir="$(mk_fixture impl-reopened-reapproved-covered)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7148"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"closed","created_at":"2026-01-05T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"reopened","created_at":"2026-01-06T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-07T00:00:00Z","actor":{"login":"second"}}]
+EOF
+  cat > "$dir/comment-7148.json" <<'EOF'
+{"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'true'
+  expect_jq '.plan_selection[0].approval.reason' '"covered"'
+  expect_jq '.plan_selection[0].approval.approved_at' '"2026-01-07T00:00:00Z"'
+  expect_jq '.plan_selection[0].binding_line' '"<!-- harness-plan-binding: issue=1 plan=https://example.invalid/1#issuecomment-7148 approved-at=2026-01-07T00:00:00Z -->"'
+  expect_jq '.counts.closed_after_approval' '0'
+  expect_no_err "at or after its newest plan-approved label"
+  expect_api_calls "$dir" 2
+}
+
+# impl-reopened-never-closed-multi-pr-covered — the multi-PR slice re-queue shape: labeled/
+# unlabeled pr-open events around the approval, no closed event at all. Behaviour control for the
+# multi-PR criterion; also reached by 375-e through the approved_at assertion below.
+case_impl_reopened_never_closed_multi_pr_covered() {
+  local dir; dir="$(mk_fixture impl-reopened-never-closed-multi-pr-covered)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7149"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"labeled","label":{"name":"pr-open"},"created_at":"2026-01-03T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"unlabeled","label":{"name":"pr-open"},"created_at":"2026-01-04T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"labeled","label":{"name":"pr-open"},"created_at":"2026-01-05T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  cat > "$dir/comment-7149.json" <<'EOF'
+{"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'true'
+  expect_jq '.plan_selection[0].approval.reason' '"covered"'
+  expect_jq '.plan_selection[0].approval.approved_at' '"2026-01-02T00:00:00Z"'
+  expect_jq '.counts.closed_after_approval' '0'
+  expect_api_calls "$dir" 2
+}
+
+# Two closed-after issues in one run. Issue 1's plan ALSO postdates its labeling, so it pins
+# closed-after-approval's precedence over plan-after-approval; together they pin that the counter
+# and the warn line are per issue (kills 375-f, 375-g, 375-i).
+case_impl_reopened_precedence_two_issues() {
+  local dir; dir="$(mk_fixture impl-reopened-precedence-two-issues)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"},
+ {"number":2,"title":"Issue two","url":"https://example.invalid/2"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v2","createdAt":"2026-01-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7150"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  cat > "$dir/issue-2.json" <<'EOF'
+{"number":2,"title":"Issue two","url":"https://example.invalid/2","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/2#issuecomment-7151"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"labeled","label":{"name":"plan-approved"},"created_at":"2026-01-02T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"closed","created_at":"2026-01-05T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"reopened","created_at":"2026-01-06T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  cp "$dir/events-1.json" "$dir/events-2.json"
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '[.plan_selection[] | select(.number == 1) | .approval.reason][0]' '"closed-after-approval"'
+  expect_jq '[.plan_selection[] | select(.number == 2) | .approval.reason][0]' '"closed-after-approval"'
+  expect_jq '.counts.closed_after_approval' '2'
+  expect_jq '.counts.plan_after_approval' '0'
+  expect_warn_count "at or after its newest plan-approved label" 2
+  expect_warn_count "postdates the plan-approved label" 0
+}
+
+# Closed events but no plan-approved labeling at all: no-approval-event keeps its precedence over
+# closed-after-approval (kills 375-h).
+case_impl_reopened_closed_no_approval_event() {
+  local dir; dir="$(mk_fixture impl-reopened-closed-no-approval-event)"
+  cat > "$dir/ready.json" <<'EOF'
+[{"number":1,"title":"Issue one","url":"https://example.invalid/1"}]
+EOF
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER","url":"https://example.invalid/1#issuecomment-7152"}
+],"labels":[{"name":"plan-approved"}]}
+EOF
+  cat > "$dir/events-1.json" <<'EOF'
+[{"event":"closed","created_at":"2026-01-05T00:00:00Z","actor":{"login":"msummer"}},
+ {"event":"reopened","created_at":"2026-01-06T00:00:00Z","actor":{"login":"msummer"}}]
+EOF
+  build_stub_gh "$dir"
+  run_implementation "$dir"
+  expect_rc 0
+  expect_jq '.plan_selection[0].approval.covers_plan' 'false'
+  expect_jq '.plan_selection[0].approval.reason' '"no-approval-event"'
+  expect_jq '.counts.closed_after_approval' '0'
+  expect_jq '.counts.no_approval_event' '1'
+}
+
+# REGISTRY MUTANTS (#375) — recorded in dev/mutants/planning-tests.json; run
+# bash dev/mutant-driver.sh 375-. Each edits bin/find-implementation-work.sh's closed-event
+# handling, reached only via run_implementation (filter "impl-reopened").
+#
+# mutant:375-a — drops ` or .event == "closed"` from the events jq filter, so no closed event is
+# ever returned and no issue can reach the closed-after-approval branch.
+#
+# mutant:375-b — replaces the new condition with the literal `false`, so a closed event never
+# un-covers an approval regardless of timing.
+#
+# mutant:375-c — flips the tie-boundary comparison so a closed event whose created_at exactly
+# equals the newest labeling's no longer counts as closed-after.
+#
+# mutant:375-d — computes closed_latest from the OLDEST closed event instead of the newest
+# (`sort | head -1` instead of `sort | tail -1`).
+#
+# mutant:375-e — deletes the `events=$(... sed -n 's/^labeled //p')` narrowing line, so $latest
+# and history_json are derived from the still event-prefixed lines instead of the pre-#375 shape.
+#
+# mutant:375-f — assigns closed_after_approval=1 instead of incrementing it, so two closed-after
+# issues in one run are counted as one.
+#
+# mutant:375-g — also requires the plan not to postdate the labeling in the closed-after condition,
+# so plan-after-approval wins over closed-after-approval when both hold.
+#
+# mutant:375-h — lets a closed event alone skip the no-approval-event branch, so an issue with a
+# close but no plan-approved labeling is misreported instead of reaching no-approval-event.
+#
+# mutant:375-i — emits the closed-after warn line twice per issue.
+
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
@@ -11299,6 +11524,12 @@ cases=(
   "plan-carry-over-extra-arg|case_plan_carry_over_extra_arg|#312: a second argument (even a repeated --carry-over) is a usage error — exit 2, empty stdout, stderr usage line"
   "plan-carry-over-withheld-then-eligible|case_plan_carry_over_withheld_then_eligible|#312: a withheld candidate does not leak its withheld flag into the next candidate"
   "empty-needle-guard|case_empty_needle_guard|#262: expect_err/expect_no_err/expect_warn_count all refuse an empty needle"
+  "impl-reopened-closed-after-approval|case_impl_reopened_closed_after_approval|#375: an older close/reopen before approval, then a newer close/reopen after it: not covered, reason closed-after-approval"
+  "impl-reopened-close-tie-not-covered|case_impl_reopened_close_tie_not_covered|#375: a closed event's created_at ties the newest plan-approved labeling: fail-closed, not covered"
+  "impl-reopened-reapproved-covered|case_impl_reopened_reapproved_covered|#375: closed, reopened, then re-approved by a second person: coverage restored"
+  "impl-reopened-never-closed-multi-pr-covered|case_impl_reopened_never_closed_multi_pr_covered|#375: multi-PR slice re-queue shape (labeled/unlabeled pr-open, no closed event): still covered"
+  "impl-reopened-precedence-two-issues|case_impl_reopened_precedence_two_issues|#375: two closed-after issues, one whose plan also postdates its labeling: closed-after-approval wins, and the counter and warn line are per issue"
+  "impl-reopened-closed-no-approval-event|case_impl_reopened_closed_no_approval_event|#375: closed events with no plan-approved labeling still report no-approval-event"
   "plan-stall-none|case_plan_stall_none|#395: no comments key at all -> prior_stalls 0, escalate_on_stall false"
   "plan-stall-one-record|case_plan_stall_one_record|#395: one trusted stall record -> prior_stalls 1, escalate_on_stall false, still in needs_initial_plan"
   "plan-stall-two-records-escalates|case_plan_stall_two_records_escalates|#395: OWNER + MEMBER stall records -> prior_stalls 2, escalate_on_stall true"
