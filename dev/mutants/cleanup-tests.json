@@ -1,0 +1,78 @@
+{
+  "mutants": [
+    {
+      "name": "376-reopened-gate",
+      "target": "bin/cleanup-after-merge.sh",
+      "suite": "dev/cleanup-tests.sh",
+      "filter": "reopened",
+      "edits": [
+        {
+          "from": "          elif [[ \"$state_reason\" == \"REOPENED\" ]]; then\n            # #376 — this issue was reopened after it was closed, so it must never be closed\n            # again. Checked before the comment-marker lookup below, so that lookup and its #249\n            # fail-closed hold are skipped entirely for a reopened issue. Deliberately does not\n            # set keep_reason: the reopened decision arm below has its own wording, never the\n            # multi-PR KEEP arm's.\n            reopened=true\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "reopened-not-reclosed",
+        "reopened-no-fix",
+        "reopened-write-failure-comment",
+        "reopened-short-circuits-view-failure",
+        "reopened-trusted-marker-never-read",
+        "reopened-then-ordinary-still-closes"
+      ]
+    },
+    {
+      "name": "376-reopened-field",
+      "target": "bin/cleanup-after-merge.sh",
+      "suite": "dev/cleanup-tests.sh",
+      "filter": "reopened",
+      "edits": [
+        {
+          "from": ",stateReason --limit 100",
+          "to": " --limit 100"
+        }
+      ],
+      "expect_fail": [
+        "reopened-not-reclosed",
+        "reopened-no-fix",
+        "reopened-write-failure-comment",
+        "reopened-short-circuits-view-failure",
+        "reopened-trusted-marker-never-read",
+        "reopened-then-ordinary-still-closes"
+      ]
+    },
+    {
+      "name": "376-reopened-lookup-order",
+      "target": "bin/cleanup-after-merge.sh",
+      "suite": "dev/cleanup-tests.sh",
+      "filter": "reopened",
+      "edits": [
+        {
+          "from": "            reopened=true\n          else\n",
+          "to": "            reopened=true\n          fi\n          if [[ -z \"$keep_reason\" ]]; then\n"
+        }
+      ],
+      "expect_fail": [
+        "reopened-trusted-marker-never-read"
+      ]
+    },
+    {
+      "name": "376-reopened-reset",
+      "target": "bin/cleanup-after-merge.sh",
+      "suite": "dev/cleanup-tests.sh",
+      "filter": "reopened",
+      "edits": [
+        {
+          "from": "          reopened=false\n",
+          "to": ""
+        },
+        {
+          "from": "    while IFS= read -r issue; do\n",
+          "to": "    reopened=false\n    while IFS= read -r issue; do\n"
+        }
+      ],
+      "expect_fail": [
+        "reopened-then-ordinary-still-closes"
+      ]
+    }
+  ]
+}

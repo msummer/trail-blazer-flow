@@ -1186,7 +1186,7 @@ case_stub_json_script_field_lists_accepted() {
 [{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
 EOF
   cat > "$dir/issues.json" <<'EOF'
-[{"number":7,"title":"T","labels":[]}]
+[{"number":7,"title":"T","labels":[],"stateReason":"REOPENED"}]
 EOF
   cat > "$dir/comments.json" <<'EOF'
 {"comments":[]}
@@ -1198,9 +1198,10 @@ EOF
   run_stub_gh "$dir" pr list --state all --limit 200 --json number,state,headRefName,body
   expect_rc 0
   expect '"headRefName":"claude/7-x"'
-  run_stub_gh "$dir" issue list --label pr-open --state open --json number,title,labels --limit 100
+  run_stub_gh "$dir" issue list --label pr-open --state open --json number,title,labels,stateReason --limit 100
   expect_rc 0
   expect '"title":"T"'
+  expect '"stateReason":"REOPENED"'
   run_stub_gh "$dir" issue list --search "is:open is:issue -label:pr-open" --json number,title,body,labels --limit 200
   expect_rc 0
   [ "$cleanup_out" = "[]" ] || { __ok=0; __why="${__why}expected [] from the follow-up candidates query, got: $cleanup_out\n"; }
@@ -3557,6 +3558,180 @@ EOF
 # every other helper in this file already does (no arrays, no `declare -A`, no GNU-only flags).
 
 # ---------------------------------------------------------------------------------------------
+# #376 cases: a MERGED claude/<n>-* PR whose issue's own stateReason is REOPENED (it was
+# reopened after it was closed) must never be re-closed. The check sits in the cheap
+# KEEP-signal chain, before the multi-PR comment-marker lookup, so a reopened issue short-
+# circuits that lookup entirely. The fixtures below start from the same base shape unless their
+# own comment says otherwise: one MERGED claude/7-x PR (#12) with a valid Closes #7, no sibling,
+# no multi-pr label, and one open pr-open issue (#7) whose stateReason is REOPENED — measured
+# against dev/mutants/cleanup-tests.json, cross-checked by gate assertion 4.52.
+#
+# mutant:376-reopened-gate — deletes the `elif [[ "$state_reason" == "REOPENED" ]]; then` arm
+#   (plus its `reopened=true` line) from the cheap-signal chain in
+#   bin/cleanup-after-merge.sh, so a reopened issue falls through to the ordinary comment-marker
+#   lookup and close path instead of the reopened KEEP arm.
+# mutant:376-reopened-field — drops `,stateReason` from the open-issue query's own `--json`
+#   field list in bin/cleanup-after-merge.sh, so the stub's field projection serves issues with
+#   no stateReason key at all and the reopened gate above never fires.
+
+# reopened-not-reclosed (#376) — the headline: a MERGED claude/7-* PR with a valid Closes #7, no
+# sibling, no multi-pr signal at all, but the issue's own stateReason is REOPENED: --fix never
+# re-closes it — no `gh issue close` call, no FIXED line, no "didn't auto-close" comment —
+# instead it gets the same two-write KEEP shape (comment, then remove-label) the multi-PR KEEP
+# arm uses, with its own distinct wording.
+case_reopened_not_reclosed() {
+  local dir; dir="$(mk_repo reopened-not-reclosed)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Reopened issue","labels":[],"stateReason":"REOPENED"}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "KEEP  #7 (Reopened issue): PR #12 merged, but the issue was reopened after being closed"
+  expect "pr-open removed"
+  expect_call "issue comment 7"
+  expect_call "harness-audit"
+  expect_call "issue edit 7 --remove-label pr-open"
+  expect_no_call "issue close"
+  expect_no_call "didn't auto-close"
+  expect_absent "FIXED #7"
+}
+
+# reopened-no-fix (#376) — the same reopened fixture without --fix: the KEEP line still prints,
+# zero gh mutation calls are made, and the report-only "close manually" WARN the ordinary close
+# path would otherwise print never prints either — a reopened issue is never even suggested for
+# closing.
+case_reopened_no_fix() {
+  local dir; dir="$(mk_repo reopened-no-fix)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Reopened issue","labels":[],"stateReason":"REOPENED"}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir"
+  expect_rc 0
+  expect "KEEP  #7 (Reopened issue): PR #12 merged, but the issue was reopened after being closed"
+  expect_calls_empty
+  expect_absent "close manually"
+}
+
+# reopened-write-failure-comment (#376) — the #355 skip-the-rest shape on the new arm: with
+# reject-comment, the KEEP line still prints (it's unconditional, above the $FIX branch), the
+# comment write fails, remove-label is never attempted, and no "pr-open removed" sub-line
+# prints — one WARN names the failed write, and the run still exits 0.
+case_reopened_write_failure_comment() {
+  local dir; dir="$(mk_repo reopened-write-failure-comment)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Reopened issue","labels":[],"stateReason":"REOPENED"}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-comment"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "KEEP  #7 (Reopened issue): PR #12 merged, but the issue was reopened after being closed"
+  expect "WARN  #7 (Reopened issue): posting the cleanup comment failed"
+  expect_no_call "remove-label"
+  expect_absent "pr-open removed"
+  expect "WARN    1 repair write(s) failed this run"
+}
+
+# reopened-short-circuits-view-failure (#376) — with the view arm failing (VIEW_MODE fail), a
+# reopened issue still reaches the reopened arm, still removes pr-open under --fix, and prints no
+# "the multi-PR comment-marker lookup failed" WARN. The reopened decision arm also sits above the
+# #249 arm, so this fixture alone cannot tell whether the lookup ran; the lookup-never-runs
+# ordering is pinned by reopened-trusted-marker-never-read below.
+case_reopened_short_circuits_view_failure() {
+  local dir; dir="$(mk_repo reopened-short-circuits-view-failure)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Reopened issue","labels":[],"stateReason":"REOPENED"}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir" ok ok fail
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "KEEP  #7 (Reopened issue): PR #12 merged, but the issue was reopened after being closed"
+  expect_absent "the multi-PR comment-marker lookup failed"
+  expect_call "issue edit 7 --remove-label pr-open"
+  expect_no_call "issue close"
+}
+
+# reopened-trusted-marker-never-read (#376) — the reopened check runs BEFORE the multi-PR
+# comment-marker lookup, so the lookup never runs for a reopened issue: the view arm is healthy
+# and serves an OWNER comment carrying <!-- harness-multi-pr -->, which the lookup would turn into
+# a keep_reason (and the multi-PR KEEP arm's wording) if it ran, plus an untrusted (NONE) marker
+# comment, whose "ignoring a harness-multi-pr marker" WARN the lookup itself prints whatever the
+# decision chain's order. The reopened KEEP line prints and neither of those ever does.
+# mutant:376-reopened-lookup-order — closes the cheap-signal chain after `reopened=true` and runs
+#   the lookup under `if [[ -z "$keep_reason" ]]` instead of `else`, so a reopened issue's
+#   comments are read too and the trusted marker wins the decision chain.
+case_reopened_trusted_marker_never_read() {
+  local dir; dir="$(mk_repo reopened-trusted-marker-never-read)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Reopened issue","labels":[],"stateReason":"REOPENED"}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[{"body":"Heads up, splitting this one.\n<!-- harness-multi-pr -->\n","authorAssociation":"OWNER","url":"https://example.invalid/7#issuecomment-9401"},{"body":"Me too.\n<!-- harness-multi-pr -->\n","authorAssociation":"NONE","url":"https://example.invalid/7#issuecomment-9402"}]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "KEEP  #7 (Reopened issue): PR #12 merged, but the issue was reopened after being closed"
+  expect_absent "multi-PR issue"
+  expect_absent "ignoring a harness-multi-pr marker"
+  expect_no_call "issue close"
+}
+
+# reopened-then-ordinary-still-closes (#376) — `reopened` is reset per issue: a reopened issue
+# (#7) listed before an ordinary one (#8) in the same run leaves #8 on the normal close path —
+# closed, FIXED — not the reopened arm.
+# mutant:376-reopened-reset — moves `reopened=false` from the per-issue resets to once before the
+#   issue loop, so #7's reopened=true leaks into #8 and #8 is kept open instead of closed.
+case_reopened_then_ordinary_still_closes() {
+  local dir; dir="$(mk_repo reopened-then-ordinary-still-closes)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"},{"number":13,"state":"MERGED","headRefName":"claude/8-y","body":"Closes #8"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Reopened issue","labels":[],"stateReason":"REOPENED"},{"number":8,"title":"Ordinary issue","labels":[]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "KEEP  #7 (Reopened issue): PR #12 merged, but the issue was reopened after being closed"
+  expect "FIXED #8 (Ordinary issue): PR #13 merged — commented, closed the issue, removed pr-open"
+  expect_call "issue close 8"
+  expect_no_call "issue close 7"
+}
+
+# ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
   "keep-part-of|case_keep_part_of|MERGED PR body says Part of #n: issue left open, pr-open removed to re-queue"
@@ -3630,6 +3805,12 @@ cases=(
   "closed-sweep-skipped-when-pr-list-fails|case_closed_sweep_skipped_when_pr_list_fails|#370: PR list unavailable: the sweep prints its own skip WARN and makes zero writes"
   "closed-sweep-other-issue-pr-open-still-removes|case_closed_sweep_other_issue_pr_open_still_removes|#370 kickback round 2: an OPEN PR for a DIFFERENT issue (claude/70-x, claude/8-x) does not keep the label — the sweep is scoped to claude/<n>-* for that issue"
   "closed-sweep-none|case_closed_sweep_none|#370: no closed-pr-open.json at all: prints the empty-list line"
+  "reopened-not-reclosed|case_reopened_not_reclosed|#376: MERGED PR, Closes #7, but stateReason REOPENED: --fix never re-closes it, KEEP + comment + remove-label instead"
+  "reopened-no-fix|case_reopened_no_fix|#376: the same reopened fixture without --fix: KEEP line still prints, zero gh mutation calls, no 'close manually' WARN"
+  "reopened-write-failure-comment|case_reopened_write_failure_comment|#376: reject-comment on the reopened arm: KEEP line still prints, remove-label never attempted, no 'pr-open removed' line"
+  "reopened-short-circuits-view-failure|case_reopened_short_circuits_view_failure|#376: view arm failing: the reopened arm still wins, pr-open removed, no lookup-failure WARN"
+  "reopened-trusted-marker-never-read|case_reopened_trusted_marker_never_read|#376: a reopened issue's comments are never read: a trusted harness-multi-pr marker cannot move it to the multi-PR KEEP arm"
+  "reopened-then-ordinary-still-closes|case_reopened_then_ordinary_still_closes|#376: reopened is reset per issue: an ordinary issue after a reopened one in the same run is still closed"
 )
 
 matched=0
