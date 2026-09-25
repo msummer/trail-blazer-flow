@@ -1,0 +1,124 @@
+{
+  "mutants": [
+    {
+      "name": "383-fn-cleanup",
+      "target": "dev/cleanup-tests.sh",
+      "suite": "dev/cleanup-tests.sh",
+      "filter": "empty-needle-guard",
+      "edits": [
+        {
+          "from": "case_empty_needle_guard()",
+          "to": "case_empty_needle_guard_deleted()"
+        }
+      ],
+      "expect_fail": [
+        "empty-needle-guard"
+      ]
+    },
+    {
+      "name": "383-fn-doctor",
+      "target": "dev/doctor-tests.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "empty-needle-guard",
+      "edits": [
+        {
+          "from": "case_empty_needle_guard()",
+          "to": "case_empty_needle_guard_deleted()"
+        }
+      ],
+      "expect_fail": [
+        "empty-needle-guard"
+      ]
+    },
+    {
+      "name": "383-fn-hook",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "status-abs",
+      "edits": [
+        {
+          "from": "case_status_abs()",
+          "to": "case_status_abs_deleted()"
+        }
+      ],
+      "expect_fail": [
+        "status-abs"
+      ]
+    },
+    {
+      "name": "383-fn-lock",
+      "target": "dev/lock-tests.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "empty-needle-guard",
+      "edits": [
+        {
+          "from": "case_empty_needle_guard()",
+          "to": "case_empty_needle_guard_deleted()"
+        }
+      ],
+      "expect_fail": [
+        "empty-needle-guard"
+      ]
+    },
+    {
+      "name": "383-fn-planning",
+      "target": "dev/planning-tests.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "empty-needle-guard",
+      "edits": [
+        {
+          "from": "case_empty_needle_guard()",
+          "to": "case_empty_needle_guard_deleted()"
+        }
+      ],
+      "expect_fail": [
+        "empty-needle-guard"
+      ]
+    },
+    {
+      "name": "383-fn-stop",
+      "target": "dev/stop-tests.sh",
+      "suite": "dev/stop-tests.sh",
+      "filter": "help",
+      "edits": [
+        {
+          "from": "case_help()",
+          "to": "case_help_deleted()"
+        }
+      ],
+      "expect_fail": [
+        "help"
+      ]
+    },
+    {
+      "name": "383-fn-mutant-driver-tests",
+      "target": "dev/mutant-driver-tests.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "empty-needle-guard",
+      "edits": [
+        {
+          "from": "case_empty_needle_guard()",
+          "to": "case_empty_needle_guard_deleted()"
+        }
+      ],
+      "expect_fail": [
+        "empty-needle-guard"
+      ]
+    },
+    {
+      "name": "383-fn-selfcheck-tests",
+      "target": "dev/selfcheck-tests.sh",
+      "suite": "dev/selfcheck-tests.sh",
+      "filter": "1.7-comment",
+      "edits": [
+        {
+          "from": "p_1_7_comment()",
+          "to": "p_1_7_comment_deleted()"
+        }
+      ],
+      "expect_fail": [
+        "1.7-comment"
+      ]
+    }
+  ]
+}

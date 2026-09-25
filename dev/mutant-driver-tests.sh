@@ -1273,7 +1273,14 @@ for row in "${cases[@]}"; do
   fn="${rest%%|*}"
   desc="${rest#*|}"
   __ok=1; __why=""
-  "$fn"
+  # mutant:383-fn-mutant-driver-tests — renames a cases=() row's target function in a scratch copy
+  #   of this suite; this declare -F guard must report that row FAIL naming the missing function,
+  #   instead of a silent PASS the row would otherwise get by falling through with $__ok unchanged.
+  if declare -F "$fn" >/dev/null 2>&1; then
+    "$fn"
+  else
+    __ok=0; __why="${__why}case function '$fn' is not defined (deleted or renamed?) — this row never ran\n"
+  fi
   if [ "$__ok" -eq 1 ]; then
     case_ok "$name" "$desc"
   else
