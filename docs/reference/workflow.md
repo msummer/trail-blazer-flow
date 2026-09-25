@@ -304,7 +304,10 @@ closed-issue sweep, just retrying the label removal); without `--fix`
 it only reports label problems instead of repairing them.
 
 A merged `claude/<n>-*` PR only closes its issue when the PR body carries a closing keyword
-(`Closes`/`Fixes`/`Resolves #<n>`) for that issue and no multi-PR signal is present. A PR that
+(`Closes`/`Fixes`/`Resolves #<n>`) for that issue, no multi-PR signal is present, and the issue
+was not reopened after it was closed (GitHub's own `stateReason` field is
+`REOPENED`) — checked after the cheaper multi-PR signals below but before the comment-marker
+lookup, so a reopened issue never reaches that lookup at all. A PR that
 delivers only part of an issue — its body says `Part of #<n>` / `PR <k> of <m>`, another
 `claude/<n>-*` PR is still open, the issue carries the `multi-pr` label, or a maintainer
 (`OWNER`/`MEMBER`/`COLLABORATOR`) comment carries a `<!-- harness-multi-pr -->` marker — leaves
@@ -323,7 +326,13 @@ returns a document that isn't valid JSON, the script no longer falls back to "no
 it reports a `WARN` naming the failure route and leaves the issue exactly as found (`pr-open`
 still attached, not closed, not commented, not relabelled) in both `--fix` and report-only modes,
 so a rate-limit or auth blip during that one lookup can no longer manufacture a false close; the
-next run re-examines it.
+next run re-examines it. Since #376, a reopened issue (`stateReason` `REOPENED`) is also
+reported `KEEP` and never closed again; `--fix` posts an audited comment and drops `pr-open`, the
+same two writes as the multi-PR `KEEP` case above, and a human closes it by hand if the work is
+actually finished. Honest limit: `REOPENED` means "reopened at any time" — an issue reopened
+before it was ever implemented, whose later PR also failed to auto-close, is left open and loses
+`pr-open` instead of being closed, erring toward leaving the issue open, the same direction as
+the #249 case above; the harness itself never reopens an issue.
 
 ## The steady state, as one command ("run the cycle")
 

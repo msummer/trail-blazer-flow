@@ -30,13 +30,21 @@
 #      never fatal — same for any other delete failure (WARN, with git's stderr).
 #   3. Label hygiene for open issues still labelled pr-open (skipped, with a WARN, if the PR
 #      list or the pr-open issue list could not be fetched):
-#        - PR merged, closing keyword present, no multi-PR signal -> issue should have
-#          auto-closed but didn't; close it
+#        - PR merged, closing keyword present, no multi-PR signal, and the issue was not
+#          reopened -> issue should have auto-closed but didn't; close it
 #        - PR merged but the issue looks like one slice of a multi-PR issue (no closing
 #          keyword, a "Part of #n" / "PR k of m" marker, an OPEN sibling PR, the multi-pr
 #          label, or a maintainer (OWNER/MEMBER/COLLABORATOR) comment carrying
 #          <!-- harness-multi-pr -->) -> KEEP, leave the issue open. The issue-body marker is
 #          no longer honoured; an untrusted comment's marker is ignored and WARNed instead.
+#        - PR merged, closing keyword present, no cheaper multi-PR signal, but the issue's own
+#          stateReason is REOPENED (#376: it was reopened after it was closed) -> KEEP,
+#          never re-closed again; checked before the multi-PR comment-marker lookup below, so
+#          that lookup (and its #249 fail-closed hold) never runs for a reopened issue. Honest
+#          limit: REOPENED means "reopened at any time" — an issue reopened before it was ever
+#          implemented, whose later PR also failed to auto-close, is left open and loses
+#          pr-open instead of being closed; that fails toward leaving the issue open, the same
+#          direction as #249's own fail-closed idiom. The harness itself never reopens an issue.
 #        - PR merged, every cheaper KEEP signal absent, but the multi-PR comment-marker lookup
 #          itself failed or returned a malformed document -> WARN once (naming the failure
 #          route) and leave the issue exactly as found (pr-open still attached, not closed,
@@ -76,13 +84,21 @@
 # writes run in the order listed and stop at the first failure (#355), so every partial state
 # below either leaves the issue re-examinable by the next --fix run, or is the one bounded
 # residue named on the close arm:
-#   - PR merged, issue still open, closing keyword present, no multi-PR signal -> comment,
-#     close the issue, remove pr-open (audited with a marked issue comment). If the comment
-#     fails, nothing else in this arm runs and the issue is left untouched; if closing fails
-#     after a successful comment, pr-open stays attached and the next run posts another audit
-#     comment before retrying; if only the final remove-label fails, the issue ends up CLOSED but
-#     still carrying pr-open — the closed-issue sweep further down (#370) picks it up on the next
-#     --fix run and removes the label then, with no further comment posted.
+#   - PR merged, issue still open, closing keyword present, no multi-PR signal, and the issue
+#     was not reopened -> comment, close the issue, remove pr-open (audited with a marked issue
+#     comment). If the comment fails, nothing else in this arm runs and the issue is left untouched;
+#     if closing fails after a successful comment, pr-open stays attached and the next run posts
+#     another audit comment before retrying; if only the final remove-label fails, the issue
+#     ends up CLOSED but still carrying pr-open — the closed-issue sweep further down (#370) picks
+#     it up on the next --fix run and removes the label then, with no further comment posted.
+#   - PR merged, closing keyword present, but the issue's own stateReason is REOPENED (#376: it was
+#     reopened after it was closed) -> issue stays open (KEEP, never re-closed again);
+#     it is commented (with the same audit marker) and pr-open is removed, since no other
+#     claude/<n>-* PR is left open by definition (an open sibling is an earlier KEEP signal, so
+#     this arm only ever runs when there is none) — a human closes it by hand if the work is
+#     actually finished. Same partial-failure shape as the multi-PR KEEP arm just below: a failed
+#     comment leaves the issue untouched, a failed remove-label after a successful comment leaves
+#     pr-open attached and duplicates the audit comment on the next run.
 #   - PR merged but a multi-PR signal is present (KEEP: the multi-pr label, or a maintainer
 #     comment carrying <!-- harness-multi-pr -->) -> issue stays open; when no other
 #     claude/<n>-* PR is still open, the issue is commented (with the same marker) and pr-open is
@@ -242,7 +258,7 @@ fi
 issues=""
 issues_ok=true
 if $prs_ok; then
-  if ! issues="$(gh issue list --label pr-open --state open --json number,title,labels --limit 100 2>/dev/null)" \
+  if ! issues="$(gh issue list --label pr-open --state open --json number,title,labels,stateReason --limit 100 2>/dev/null)" \
      || ! printf '%s' "$issues" | jq -e . >/dev/null 2>&1; then
     issues_ok=false
     echo "WARN    could not fetch issues labelled pr-open (gh issue list failed — rate limit, auth, or network?) — skipping pr-open label hygiene."
@@ -291,6 +307,12 @@ if $prs_ok && $issues_ok; then
           # are read only by the decision chain further down, never left stale across issues.
           comments_ok=true
           lookup_failure=""
+          # #376 — reset per issue, same idiom: reopened is read only by the decision chain
+          # further down. state_reason is the issue's own GitHub stateReason field; the `(… //
+          # "") | tostring` form maps an absent or null field to the empty string, so only the
+          # literal REOPENED ever matches below.
+          reopened=false
+          state_reason=$(printf '%s' "$issue" | jq -r '(.stateReason // "") | tostring')
           # Here-strings, not a `printf` writer piped into `grep`'s quiet mode (#255): that
           # early-exit reader exits on its first match, which can send the printf writer SIGPIPE
           # and, under this script's `set -euo pipefail`, turn a genuine match into a reported
@@ -307,6 +329,13 @@ if $prs_ok && $issues_ok; then
             keep_reason="another claude/${n}-* PR is still open"
           elif [[ "$has_multi_pr_label" == "true" ]]; then
             keep_reason="the issue carries the multi-pr label"
+          elif [[ "$state_reason" == "REOPENED" ]]; then
+            # #376 — this issue was reopened after it was closed, so it must never be closed
+            # again. Checked before the comment-marker lookup below, so that lookup and its #249
+            # fail-closed hold are skipped entirely for a reopened issue. Deliberately does not
+            # set keep_reason: the reopened decision arm below has its own wording, never the
+            # multi-PR KEEP arm's.
+            reopened=true
           else
             # Only fetched when every cheaper signal above came up empty — the marker may
             # still be sitting in a maintainer comment. Fetched once. Since #249, a failed or
@@ -373,6 +402,20 @@ EOF
               fi
             else
               echo "        re-run with --fix to drop pr-open so it re-queues (once no sibling PR is open)"
+            fi
+          elif $reopened; then
+            # #376 — this issue was reopened after it was closed, so it is never re-closed:
+            # no open-sibling check is needed here (open_siblings > 0 is an earlier keep_reason
+            # above, so this arm only ever runs when there are none).
+            echo "KEEP  #${n} (${title}): PR #${prnum} merged, but the issue was reopened after being closed; leaving it open (not closing it again)"
+            if $FIX; then
+              if try_write "$n" "$title" "posting the cleanup comment" gh issue comment "$n" --body "${AUDIT_MARKER}
+🧹 Harness cleanup: PR #${prnum} for this issue merged, but the issue was reopened after it was closed, so it was left open rather than closed again. \`pr-open\` has been removed since no \`claude/${n}-*\` PR is still open — close it by hand if the work is actually finished." \
+                 && try_write "$n" "$title" "removing the pr-open label" gh issue edit "$n" --remove-label pr-open; then
+                echo "        pr-open removed — reopened issue left open"
+              fi
+            else
+              echo "        re-run with --fix to drop pr-open (no claude/${n}-* PR is still open)"
             fi
           elif ! $comments_ok; then
             # #249 — fail closed on the KEEP side: an unreadable comment-marker lookup is

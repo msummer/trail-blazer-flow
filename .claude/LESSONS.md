@@ -231,12 +231,6 @@ bites: 1–3 lines, written as an instruction to a future agent.
   no real git/gh runs. By design (do not loosen the hook). For a documentation-heavy dispatch, write or
   edit prose that quotes git/gh commands through the Edit/Write tools, never a Bash heredoc. Found by the
   implementer on #363.
-- 2026-09-24 (b): A `cases=()` row whose function no longer exists is reported PASS by every `dev/*-tests.sh`
-  runner: bash prints "command not found" to stderr and the per-case `__ok` flag keeps its preset 1. On #359 the
-  implementer accidentally deleted three `case_status_escalations_*` functions mid-edit and the suite stayed
-  178/0; only the mutant driver noticed (those cases vanished from mutants' failing sets). Until the runners
-  check `declare -F "$fn"` before calling, run `bash dev/<suite>.sh <prefix> 2>&1 | grep -c "command not found"`
-  after any large comment edit to a suite, and treat any hit as a deleted case.
 - 2026-09-24 (c): A verifier with a "probe at least one own mutant per round" mandate against a 500-line script
   has no natural stopping point: on #359 rounds 2–5 each closed the previous finding and found one NEW surviving
   single-point mutant with no false PASS and no wrong exit code. When the pattern appears (two consecutive rounds

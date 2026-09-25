@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #376: `cleanup-after-merge.sh` no longer re-closes an open `pr-open` issue that was
+  reopened (`stateReason` `REOPENED`): it is reported `KEEP`, and `--fix` posts an audited
+  comment and removes `pr-open` instead. No consumer step.
 - #395: A planner `stalled-dispatch` (a dispatch that produced no plan) is now retried rather than
   escalated until the same issue stalls on three consecutive runs (`STALL_ESCALATE_AFTER`); each
   earlier stall is recorded as a trusted, counted `<!-- harness-audit -->` comment
