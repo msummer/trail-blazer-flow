@@ -622,6 +622,99 @@ case_ab_claude_noop_main_session() {
   expect_no_opinion
 }
 
+# --- hooks/agent-boundary.sh: the #387 .claude command-level interpreter/writer class -----------
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter
+# "ab-cwrite-"), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
+# mutant:387-vocab-empty — empties CLAUDE_CMDLINE_WRITE_COMMANDS, so no command word is ever a
+#   member and the command-level rule never fires at all.
+# mutant:387-version-strip — makes the trailing-version-suffix strip a no-op, isolating a versioned
+#   command word (e.g. python3.12) from an unversioned one.
+# mutant:387-cross-line — resets cw_word/cw_tok at the start of every record instead of letting them
+#   accumulate across the whole tool_input.command, isolating the heredoc-fed case whose command
+#   word and .claude mention are on different lines.
+# mutant:387-word-gate — drops the END block's cw_word != "" condition, so a .claude mention alone
+#   (with no vocabulary command word anywhere) starts wrongly denying.
+# mutant:387-tok-gate — drops the END block's cw_tok != "" condition, so a vocabulary command word
+#   alone (with no .claude mention anywhere) starts wrongly denying.
+# mutant:387-boundary-lead — widens claude_seg_in_text()'s LEADING boundary class to match any
+#   character, so a near-miss segment like "my.claude" starts wrongly matching.
+# mutant:387-boundary-trail — widens claude_seg_in_text()'s TRAILING boundary class to match any
+#   character, so a near-miss segment like ".claude-plugin" starts wrongly matching.
+# mutant:387-tolower — removes claude_seg_in_text()'s tolower(), so a case-variant segment like
+#   ".Claude" no longer matches.
+case_ab_cwrite_deny_python_c() {
+  run_boundary "$(mk_agent_cmd 'implementer' "python3 -c \"open('.claude/LESSONS.md','a').write('- lesson')\"")"
+  expect_ab_deny_claude
+}
+case_ab_cwrite_deny_python_heredoc() {
+  run_boundary "$(mk_agent_cmd 'trail-blazer-flow:implementer' "python3 - <<'EOF'${LF}open('.claude/LESSONS.md','a').write('- lesson')${LF}EOF")"
+  expect_ab_deny_claude
+}
+case_ab_cwrite_deny_perl_i() {
+  run_boundary "$(mk_agent_cmd 'verifier' "perl -i.bak -pe 's/a/b/' .claude/LESSONS.md")"
+  expect_ab_deny_claude
+}
+case_ab_cwrite_deny_dd() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'dd if=/tmp/lesson.md of=.claude/LESSONS.md')"
+  expect_ab_deny_claude
+}
+case_ab_cwrite_deny_install() {
+  run_boundary "$(mk_agent_cmd 'trail-blazer-flow:verifier' 'install -m 644 /tmp/lesson.md .claude/LESSONS.md')"
+  expect_ab_deny_claude
+}
+case_ab_cwrite_deny_versioned_abs() {
+  run_boundary "$(mk_agent_cmd 'implementer' "/usr/local/bin/python3.12 -c \"open('.claude/LESSONS.md','a')\"")"
+  expect_ab_deny_claude
+}
+case_ab_cwrite_deny_case_variant() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'install -m 644 /tmp/lesson.md .Claude/LESSONS.md')"
+  expect_ab_deny_claude
+}
+case_ab_cwrite_deny_never_writes() {
+  local trapdir="$tmpbase/trapbin-ab-cwrite-never-writes" sentinel="$tmpbase/sentinel-ab-cwrite-never-writes"
+  local target_dir="$tmpbase/ab-cwrite-tree/.claude"
+  local target_file="$target_dir/LESSONS.md"
+  mkdir -p "$trapdir" "$target_dir"
+  rm -f "$sentinel"
+  for bin in git gh rm; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  # Run from inside the fixture tree with a RELATIVE target: the scanned command text then carries no
+  # random mktemp characters, which could otherwise contain "gh" and defeat the 340-fastpath mutant.
+  local oldpwd="$PWD"
+  cd "$tmpbase/ab-cwrite-tree" || { __ok=0; __why="${__why}cannot cd into the fixture tree\n"; return; }
+  run_boundary "$(mk_agent_cmd 'implementer' "python3 -c \"open('.claude/LESSONS.md','a').write('x')\"")" "$trapdir:$PATH"
+  cd "$oldpwd" || { __ok=0; __why="${__why}cannot cd back to $oldpwd\n"; return; }
+  expect_ab_deny_claude
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — the boundary invoked something on the booby-trapped PATH\n"; }
+  [ ! -e "$target_file" ] || { __ok=0; __why="${__why}target file present — the boundary performed the write it was scanning\n"; }
+}
+case_ab_cwrite_noop_reader() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'npm install && grep -n lesson .claude/LESSONS.md && cat .claude/BASELINE.md')"
+  expect_no_opinion
+}
+case_ab_cwrite_noop_no_claude_seg() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'python3 -m pytest tests/test_claude_client.py')"
+  expect_no_opinion
+}
+case_ab_cwrite_noop_claude_plugin() {
+  run_boundary "$(mk_agent_cmd 'verifier' "python3 -c \"import json; json.load(open('.claude-plugin/plugin.json'))\"")"
+  expect_no_opinion
+}
+case_ab_cwrite_noop_my_claude() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'touch build/my.claude')"
+  expect_no_opinion
+}
+case_ab_cwrite_noop_main_session() {
+  run_boundary "$(mk_plain_cmd "python3 -c \"open('.claude/LESSONS.md','a').write('- lesson')\"")"
+  expect_no_opinion
+}
+
 # ---------------------------------------------------------------------------------------------
 # hooks/push-guard.sh (#260) fixture builders, runner, and assertions.
 
@@ -2259,6 +2352,20 @@ cases=(
   "ab-claude-noop-sed-no-inplace|case_ab_claude_noop_sed_no_inplace|.claude no opinion: verifier, sed -n '1,5p' .claude/LESSONS.md (no in-place flag) -- mutation proof: dev/mutants/hook-tests.json (340-inplace-gate)"
   "ab-claude-noop-near-miss|case_ab_claude_noop_near_miss|.claude no opinion: implementer, echo x >> .claude-backup/notes.md (a near-miss segment, not an exact .claude match) -- mutation proof: dev/mutants/hook-tests.json (340-segment-exact)"
   "ab-claude-noop-main-session|case_ab_claude_noop_main_session|.claude no opinion: main session (no agent_type key), echo x >> .claude/LESSONS.md (blocking this would stop a release -- the orchestrator's own lesson append) -- release-blocker control, not part of the mutation-proof registry"
+  # --- hooks/agent-boundary.sh: the #387 .claude command-level interpreter/writer class -----------
+  "ab-cwrite-deny-python-c|case_ab_cwrite_deny_python_c|.claude command-level deny: implementer, python3 -c \"open('.claude/LESSONS.md','a').write('- lesson')\" (the issue's exact shape) -- mutation proof: dev/mutants/hook-tests.json (387-vocab-empty)"
+  "ab-cwrite-deny-python-heredoc|case_ab_cwrite_deny_python_heredoc|.claude command-level deny: trail-blazer-flow:implementer, a heredoc whose command word (python3) and .claude mention are on DIFFERENT lines -- mutation proof: dev/mutants/hook-tests.json (387-cross-line)"
+  "ab-cwrite-deny-perl-i|case_ab_cwrite_deny_perl_i|.claude command-level deny: verifier, perl -i.bak -pe 's/a/b/' .claude/LESSONS.md -- mutation proof: dev/mutants/hook-tests.json (387-vocab-empty)"
+  "ab-cwrite-deny-dd|case_ab_cwrite_deny_dd|.claude command-level deny: implementer, dd if=/tmp/lesson.md of=.claude/LESSONS.md (segment bounded by =) -- mutation proof: dev/mutants/hook-tests.json (387-vocab-empty)"
+  "ab-cwrite-deny-install|case_ab_cwrite_deny_install|.claude command-level deny: trail-blazer-flow:verifier, install -m 644 /tmp/lesson.md .claude/LESSONS.md -- mutation proof: dev/mutants/hook-tests.json (387-vocab-empty)"
+  "ab-cwrite-deny-versioned-abs|case_ab_cwrite_deny_versioned_abs|.claude command-level deny: implementer, /usr/local/bin/python3.12 -c \"open('.claude/LESSONS.md','a')\" (versioned basename after path stripping) -- mutation proof: dev/mutants/hook-tests.json (387-version-strip)"
+  "ab-cwrite-deny-case-variant|case_ab_cwrite_deny_case_variant|.claude command-level deny: implementer, install -m 644 /tmp/lesson.md .Claude/LESSONS.md (case-variant segment) -- mutation proof: dev/mutants/hook-tests.json (387-tolower)"
+  "ab-cwrite-deny-never-writes|case_ab_cwrite_deny_never_writes|.claude command-level deny, AND the boundary never invokes git/gh/rm on the booby-trapped PATH, AND the target file is never actually created -- sentinel absent, target file absent -- mutation proof: dev/mutants/hook-tests.json (387-vocab-empty)"
+  "ab-cwrite-noop-reader|case_ab_cwrite_noop_reader|.claude command-level no opinion: implementer, npm install && grep -n lesson .claude/LESSONS.md && cat .claude/BASELINE.md (install appears only as an argument, never a command word) -- mutation proof: dev/mutants/hook-tests.json (387-word-gate)"
+  "ab-cwrite-noop-no-claude-seg|case_ab_cwrite_noop_no_claude_seg|.claude command-level no opinion: implementer, python3 -m pytest tests/test_claude_client.py (a vocabulary command word, no .claude segment anywhere) -- mutation proof: dev/mutants/hook-tests.json (387-tok-gate)"
+  "ab-cwrite-noop-claude-plugin|case_ab_cwrite_noop_claude_plugin|.claude command-level no opinion: verifier, python3 -c \"import json; json.load(open('.claude-plugin/plugin.json'))\" (trailing-boundary near-miss) -- mutation proof: dev/mutants/hook-tests.json (387-boundary-trail)"
+  "ab-cwrite-noop-my-claude|case_ab_cwrite_noop_my_claude|.claude command-level no opinion: implementer, touch build/my.claude (leading-boundary near-miss) -- mutation proof: dev/mutants/hook-tests.json (387-boundary-lead)"
+  "ab-cwrite-noop-main-session|case_ab_cwrite_noop_main_session|.claude command-level no opinion: main session (no agent_type key), the D1 command (blocking this would stop a release -- the orchestrator's own lesson append) -- release-blocker control, not part of the mutation-proof registry"
   # --- hooks/push-guard.sh (#260) cases -----------------------------------------------------------
   # Mutation-proof table (LESSON 2026-09-01, LESSON 2026-09-07(b)): each row below cites one of
   # the mutants actually applied to hooks/push-guard.sh via a Python literal-string replace

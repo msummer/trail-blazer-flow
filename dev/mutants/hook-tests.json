@@ -277,6 +277,138 @@
       "expect_fail": [
         "ab-claude-noop-sed-no-inplace"
       ]
+    },
+    {
+      "name": "387-vocab-empty",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-cwrite-",
+      "edits": [
+        {
+          "from": "CLAUDE_CMDLINE_WRITE_COMMANDS=\"python perl ruby node nodejs deno bun php lua awk gawk ed ex dd install ln touch truncate rsync tar patch curl wget\"",
+          "to": "CLAUDE_CMDLINE_WRITE_COMMANDS=\"\""
+        }
+      ],
+      "expect_fail": [
+        "ab-cwrite-deny-case-variant",
+        "ab-cwrite-deny-dd",
+        "ab-cwrite-deny-install",
+        "ab-cwrite-deny-never-writes",
+        "ab-cwrite-deny-perl-i",
+        "ab-cwrite-deny-python-c",
+        "ab-cwrite-deny-python-heredoc",
+        "ab-cwrite-deny-versioned-abs"
+      ]
+    },
+    {
+      "name": "387-version-strip",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-cwrite-",
+      "edits": [
+        {
+          "from": "    sub(/[0-9.]+$/, \"\", lw)",
+          "to": "    sub(/ZZZNEVERMATCH/, \"\", lw)"
+        }
+      ],
+      "expect_fail": [
+        "ab-cwrite-deny-never-writes",
+        "ab-cwrite-deny-python-c",
+        "ab-cwrite-deny-python-heredoc",
+        "ab-cwrite-deny-versioned-abs"
+      ]
+    },
+    {
+      "name": "387-cross-line",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-cwrite-",
+      "edits": [
+        {
+          "from": "  rd_rest = $0",
+          "to": "  cw_word = \"\"; cw_tok = \"\"; rd_rest = $0"
+        }
+      ],
+      "expect_fail": [
+        "ab-cwrite-deny-python-heredoc"
+      ]
+    },
+    {
+      "name": "387-word-gate",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-cwrite-",
+      "edits": [
+        {
+          "from": "END { if (cw_word != \"\" && cw_tok != \"\") print \"-claude-write- \" cw_word \" with \" cw_tok }",
+          "to": "END { if (cw_tok != \"\") print \"-claude-write- \" cw_word \" with \" cw_tok }"
+        }
+      ],
+      "expect_fail": [
+        "ab-cwrite-noop-reader"
+      ]
+    },
+    {
+      "name": "387-tok-gate",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-cwrite-",
+      "edits": [
+        {
+          "from": "END { if (cw_word != \"\" && cw_tok != \"\") print \"-claude-write- \" cw_word \" with \" cw_tok }",
+          "to": "END { if (cw_word != \"\") print \"-claude-write- \" cw_word \" with \" cw_tok }"
+        }
+      ],
+      "expect_fail": [
+        "ab-cwrite-noop-claude-plugin",
+        "ab-cwrite-noop-my-claude",
+        "ab-cwrite-noop-no-claude-seg"
+      ]
+    },
+    {
+      "name": "387-boundary-lead",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-cwrite-",
+      "edits": [
+        {
+          "from": "  return match(v, /[^a-z0-9_.-]\\.claude[^a-z0-9_.-]/) > 0",
+          "to": "  return match(v, /.\\.claude[^a-z0-9_.-]/) > 0"
+        }
+      ],
+      "expect_fail": [
+        "ab-cwrite-noop-my-claude"
+      ]
+    },
+    {
+      "name": "387-boundary-trail",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-cwrite-",
+      "edits": [
+        {
+          "from": "  return match(v, /[^a-z0-9_.-]\\.claude[^a-z0-9_.-]/) > 0",
+          "to": "  return match(v, /[^a-z0-9_.-]\\.claude./) > 0"
+        }
+      ],
+      "expect_fail": [
+        "ab-cwrite-noop-claude-plugin"
+      ]
+    },
+    {
+      "name": "387-tolower",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-cwrite-",
+      "edits": [
+        {
+          "from": "  v = tolower(\" \" s \" \")",
+          "to": "  v = \" \" s \" \""
+        }
+      ],
+      "expect_fail": [
+        "ab-cwrite-deny-case-variant"
+      ]
     }
   ]
 }

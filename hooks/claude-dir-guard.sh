@@ -94,11 +94,13 @@
 # Documented under-blocking classes (evasions, named rather than hidden): a Bash-issued write
 # (`cat >>`, `tee`, `sed -i`) never reaches an Edit/Write hook by construction; since #340,
 # hooks/agent-boundary.sh's own Bash policy denies the redirect/tee/cp/mv/cd-pushd/in-place-sed
-# forms of that route for the implementer/verifier roles, but an interpreter write
-# (`python3 -c "open('.claude/LESSONS.md','a')…"`, `perl -i`), `install`/`ln`/`touch`/`truncate`/
-# `dd of=…`, and a variable-built or glob target still evade it (see that hook's own header for the
-# full list, and #340's own filed follow-up for the interpreter/dd/install gap specifically); a
-# symlink or hard link whose own spelling carries no `.claude` segment (this hook performs no
+# forms of that route for the implementer/verifier roles, and since #387 it also denies an
+# interpreter or one-step-writer command word (`python3 -c "open('.claude/LESSONS.md','a')…"`,
+# `perl -i`, `dd of=…`, `install`, …) when the same Bash call names a `.claude` segment anywhere;
+# a writer outside that vocabulary, a script file whose own CONTENTS name the path rather than the
+# command line itself, and a variable-built or glob target still evade it (see that hook's own
+# header for the full list); a symlink or hard link whose own spelling carries no `.claude` segment
+# (this hook performs no
 # filesystem access, so it cannot resolve one); a write tool outside GUARDED_TOOLS -- measured: no
 # role's tools: line names MultiEdit or NotebookEdit today (agents/implementer.md:9,
 # agents/verifier.md:12; gate 4.53 pins GUARDED_TOOLS against both roles' tools: lines, so this
