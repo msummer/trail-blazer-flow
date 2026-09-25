@@ -4,7 +4,9 @@
 # the implementer/verifier subagents' "no git, no gh" boundary, which was previously prompt-only
 # (README's Safety model, before this issue). Reads the hook's stdin JSON; for a Bash tool call
 # issued by the implementer subagent, denies (exit 2, one stderr line, empty stdout) any command
-# whose parsed command-position word resolves to `git` or `gh`; for the verifier subagent, denies
+# whose parsed command-position word resolves, case-insensitively and after skipping a leading
+# shell keyword such as `if`/`then`/`!` (since #398 — see PREFIX_WORDS below), to `git` or `gh`;
+# for the verifier subagent, denies
 # `gh` outright and denies `git` unless the resolved subcommand is on VERIFIER_GIT_READONLY below
 # (fail closed: an unlisted subcommand, a global option before the subcommand, and a bare `git`
 # all deny). Since #340, this hook also denies, for both roles, a Bash command that puts a path
@@ -28,12 +30,16 @@
 #
 # Tokenizer cross-reference (#260): hooks/push-guard.sh inlines a near-twin of "the scan" below
 # (same segment-break characters, same normalize(), same repeat-until-exhausted PREFIX_WORDS
-# skip) for its own, different emitter, and, since #270, the same bash-native carriage-return
+# skip, and, since #398, the same tolower() fold applied to the command word and to prefix-word
+# matching) for its own, different emitter, and, since #270, the same bash-native carriage-return
 # strip of $cmd applied immediately after the jq extraction and before this script's own
 # `[ -n "$cmd" ]` guard (see that same point in each file). A future fix to the shared behaviour
-# (segment breaking, normalize(), the prefix-word skip, the CR strip) must be applied to
-# BOTH files — dev/selfcheck.sh's assertion 4.40 clause (c) mechanically pins the two scripts'
-# PREFIX_WORDS vocabulary stays byte-identical.
+# (segment breaking, normalize(), the prefix-word skip, the command-word case fold, the CR strip)
+# must be applied to BOTH files — dev/selfcheck.sh's assertion 4.40 clause (c) mechanically pins
+# the two scripts' PREFIX_WORDS vocabulary stays byte-identical; since #398, PREFIX_WORDS also
+# includes shell reserved words (`if`/`then`/`elif`/`else`/`do`/`while`/`until`/`!`/`coproc`) that
+# can directly precede a command in the same segment, alongside the pre-existing interpreter-
+# indirection words.
 #
 # Live-probe record, #259 (maintainer-measured 2026-09-08 against Claude Code 2.1.263, plugin
 # 2.7.0 from the marketplace cache -- one Claude Code version, one platform (macOS), one install
@@ -91,6 +97,17 @@
 # call. This rule is agent-boundary-only: it is not part of the tokenizer behaviour shared with
 # hooks/push-guard.sh (see the cross-reference above), so no mirror edit was made there.
 #
+# Newly denied since #398 (the shell-keyword skip and the command-word case fold, both new
+# over-block classes, all new denies): any line of a multi-line command or heredoc body (quote-blind
+# per line, the same class the scan's own comment documents) whose first word is a keyword followed
+# by `git`/`gh` (e.g. a heredoc writing a shell script with `  then git push`); any line or
+# quote-blind segment whose first word case-folds to `git`/`gh`/a vocabulary member (a heredoc prose
+# line starting `Git …`, `GH …`, `Then gh …`; `echo "a; Git push"`); a case-variant vocabulary
+# command sharing a call with `.claude` (`CP`, `Tee`, `Sed -i`, `Python3`); a genuinely distinct
+# program named `GIT`/`GH`/etc. on a case-sensitive filesystem; and an uppercase non-keyword such as
+# `THEN git push`, which would fail in a real shell anyway. The remedy is the same as the existing
+# heredoc remedy above: use the Write/Edit tools.
+#
 # Still possible (under-blocking, not closed): a writer outside CLAUDE_CMDLINE_WRITE_COMMANDS
 # (`sort -o`, `split`, `unzip -d`, `scp`, `cpio`, `vim -es`, `sed`'s `w` command); a launcher that
 # becomes the resolved command word instead of the vocabulary member (`uv run python`, `npx`,
@@ -100,8 +117,14 @@
 # spelling split by quote or backslash at the command-text level (`.cl"au"de`, `.cl\aude`), or built
 # from variables, globs, or string concatenation
 # (`d=.cla; python3 -c "open(f'{d}ude/L.md','a')"`); a symlink made earlier via `ln` whose own name
-# has no `.claude` segment; a quoted redirect target containing a space (`> "a b/.claude/c"`). Like
-# the rest of this hook, this is a tripwire against an off-script subagent, not a sandbox.
+# has no `.claude` segment; a quoted redirect target containing a space (`> "a b/.claude/c"`). Since
+# #398: a `!` glued to the following word (`!git push`) — not a reserved word in that glued form, so
+# a non-interactive shell treats it as a command literally named `!git`, which does not exist; zsh's
+# precommand modifiers `noglob`/`nocorrect`/`repeat N`; and the `eval` builtin (`eval git push`). A
+# case-variant git subcommand (`git STATUS`) is NOT an evasion: the subcommand is never case-folded
+# (see the scan's emit_segment() comment below), so the verifier's VERIFIER_GIT_READONLY match stays
+# exact and fails closed (denies). Like the rest of this hook, this is a tripwire against an
+# off-script subagent, not a sandbox.
 set -uo pipefail
 
 # --- vocabulary --------------------------------------------------------------------------------
@@ -112,7 +135,15 @@ AGENT_TYPES_IMPLEMENTER="implementer trail-blazer-flow:implementer"
 AGENT_TYPES_VERIFIER="verifier trail-blazer-flow:verifier"
 VERIFIER_GIT_READONLY="status diff log show rev-parse ls-files merge-base blame grep restore"
 BLOCKED_COMMANDS="git gh"
-PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash"
+# Since #398, the trailing words above `dash` are shell reserved words that can directly precede a
+# command in the same segment (`if true; then git push; fi`, `! gh issue close 5`, `while … do git
+# push; done`) — `time`, itself a bash reserved word, was already here for the identical reason.
+# `{`/`}`/`(`/`)` need no entry: gsub() already turns them into segment breaks (see "the scan"
+# below), never a prefix word. `for`/`select`/`case`/`function`/`in`/`fi`/`done`/`esac`/`[[` are
+# deliberately omitted: none of them runs the NEXT word as a command in the same segment. Keywords
+# share the ordinary prefix-word skip below, including its dash-token skip after a prefix word —
+# harmless here because no valid keyword is ever followed by a `-`-leading command.
+PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc"
 # CLAUDE_PATH_ARG_COMMANDS (#340) — command words whose FIRST argument carrying a `.claude` path
 # segment is a one-step write: `tee` (named in the issue), `cp`/`mv` (the other one-step ways to
 # land text at a path), and `cd`/`pushd` (stops `cd .claude && cat >> LESSONS.md` from defeating
@@ -152,12 +183,13 @@ case "$input" in
   *) exit 0 ;;
 esac
 
-# Fast path 2: this hook only ever denies a command whose command-position word is literally
-# "git" or "gh", OR (since #340) a command that writes a path under a `.claude` segment, OR (since
-# #387) a vocabulary command word sharing the call with a `.claude` mention — if none
-# of "git", "gh", or "claude" (case-insensitively — see below) appears anywhere in the raw stdin at
-# all, no segment of tool_input.command could possibly resolve to a git/gh command word or carry a
-# `.claude` path, so skip the jq/awk spawn. Semantics-preserving except for a command word split by
+# Fast path 2: this hook only ever denies a command whose command-position word resolves,
+# case-insensitively (since #398), to "git" or "gh", OR (since #340) a command that writes a path
+# under a `.claude` segment, OR (since #387) a vocabulary command word sharing the call with a
+# `.claude` mention — if none of "git", "gh", or "claude" (all three case-insensitively — see
+# below) appears anywhere in the raw stdin at all, no segment of tool_input.command could possibly
+# resolve to a git/gh command word or carry a `.claude` path, so skip the jq/awk spawn.
+# Semantics-preserving except for a command word split by
 # quote, backslash, or carriage-return characters: normalize() (below) strips quote/backslash
 # characters before comparing, and the #270 CR strip (applied to $cmd after the jq extraction,
 # before the scan) removes an actual \r byte, so e.g. `g"i"t push` normalises to "git" while the
@@ -171,7 +203,8 @@ esac
 # THIS raw-stdin literal (not the awk scan's own per-token has_claude_seg(), which does strip
 # those) can miss this fast path the same way; also, per this repo's CLAUDE.md portability
 # convention, `[Cc][Ll][Aa][Uu][Dd][Ee]` is the POSIX-glob case-fold idiom (no bash-only
-# `shopt -s nocasematch` or `,,`/`^^` expansion) so this fast path stays bash-3.2-safe under the
+# `shopt -s nocasematch` or `,,`/`^^` expansion) — since #398, the same `[Gg][Ii][Tt]`/`[Gg][Hh]`
+# idiom case-folds the "git"/"gh" arms too, so this fast path stays bash-3.2-safe under the
 # selfcheck-macos CI job. Live Bash payloads issued by a subagent call likely always carry a
 # "claude" substring somewhere (the plugin's own `${CLAUDE_PLUGIN_ROOT}`-derived paths, an
 # `agent_type` value, or similar) — this is UNVERIFIED in this repo (see the #340 plan's Open
@@ -180,7 +213,7 @@ esac
 # semantics change — the main session is unaffected either way (fast path 1 above already excludes
 # it).
 case "$input" in
-  *git*|*gh*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;
+  *[Gg][Ii][Tt]*|*[Gg][Hh]*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;
   *) exit 0 ;;
 esac
 
@@ -256,12 +289,18 @@ cmd="${cmd//$cr/}"
 # a Bash redirection never starts a new command — the redirect pass above already read `>` targets
 # before this gsub blanks them out. Within each segment, tokens are walked from the start:
 #   - a token matching ^[A-Za-z_][A-Za-z0-9_]*= (an assignment prefix, e.g. FOO=1) is skipped;
-#   - a token whose normalised form (quote/backslash characters stripped; basename taken after the
-#     last '/') is a member of PREFIX_WORDS is skipped, and a "saw prefix" flag is set;
+#   - a token whose normalised, lower-cased form (quote/backslash characters stripped; basename
+#     taken after the last '/'; case-folded, since #398) is a member of PREFIX_WORDS is skipped,
+#     and a "saw prefix" flag is set — PREFIX_WORDS itself now also includes the shell reserved
+#     words listed at its declaration above (`if`/`then`/`elif`/`else`/`do`/`while`/`until`/`!`/
+#     `coproc`), so a keyword directly preceding a command in the same segment is skipped exactly
+#     like an interpreter-indirection word;
 #   - once that flag is set, a further token starting with '-' is also skipped (an option to the
 #     prefix word, e.g. `bash -c`, `xargs -I{}`);
 #   - the first token that survives all three skips is the segment's command word, emitted in its
-#     normalised form. If it is exactly "git", the token(s) after it are walked once more to
+#     normalised, lower-cased form (since #398 — only the command word and prefix-word matching are
+#     case-folded; the git subcommand below, redirect targets, and other arguments are not). If it
+#     is exactly "git" (already case-folded), the token(s) after it are walked once more to
 #     resolve the subcommand: a "-C" token is skipped together with the token right after it (a
 #     worktree path); any OTHER token starting with '-' seen before a subcommand is found emits
 #     the sentinel "-globalopt-" (fail-closed for the verifier: an unrecognised global option
@@ -279,7 +318,8 @@ cmd="${cmd//$cr/}"
 #     words) emits nothing.
 #
 # Command-level, since #387: emit_segment() additionally captures, into the GLOBAL cw_word, the
-# first segment's command word (in its ORIGINAL, non-version-stripped form) found anywhere across
+# first segment's command word (in its case-folded since #398, non-version-stripped form) found
+# anywhere across
 # every record whose version-stripped basename is a CLAUDE_CMDLINE_WRITE_COMMANDS member — this
 # check runs regardless of CLAUDE_PATH_ARG_COMMANDS/"sed" membership, so a plain `python3 -c …`
 # segment is captured too. Separately, the per-record block below the segment loop calls
@@ -346,7 +386,7 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
     tok = toks[idx]
     if (tok == "") { idx++; continue }
     if (match(tok, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) { idx++; continue }
-    norm = normalize(tok)
+    norm = tolower(normalize(tok))
     if (norm in prefix_set) { saw_prefix = 1; idx++; continue }
     if (saw_prefix && substr(tok, 1, 1) == "-") { idx++; continue }
     cmdword = norm

@@ -164,11 +164,16 @@ resolves it against a role (both the bare `implementer`/`verifier` and the names
 namespaced form is the live spelling, confirmed by the live-probe record below; the bare form is
 retained as insurance against a future de-namespacing). For the implementer role it denies
 (exit 2, one stderr line, empty stdout) any Bash command whose parsed command-position word
-resolves to `git` or `gh`, regardless of `git`
+resolves, case-insensitively and after skipping a leading shell reserved word (`if`/`then`/`elif`/
+`else`/`do`/`while`/`until`/`!`/`coproc`, since #398 — see "Known evasions" below for the
+remaining residuals), to `git` or `gh`, regardless of `git`
 subcommand — the implementer needs neither. For the verifier role it denies `gh` outright and
 denies `git` unless the resolved subcommand is one of `status diff log show rev-parse ls-files
 merge-base blame grep restore`; an unlisted subcommand, a global option before the subcommand, and
-a bare `git` all deny too — fail-closed, not an enumerated allow-list of "safe" subcommands. Since
+a bare `git` all deny too — fail-closed, not an enumerated allow-list of "safe" subcommands. Only
+the command word and the shell-keyword skip are case-folded (since #398) — the resolved `git`
+subcommand itself stays an exact match, so a case-variant subcommand such as `git STATUS` also
+denies (fail closed), never widening the verifier's read-only allowance. Since
 #340, both roles ALSO deny a Bash command that puts a `.claude`-segment path in a write position —
 a `>`-family redirect target, an argument to `tee`/`cp`/`mv`/`cd`/`pushd`, or an in-place `sed`'s
 argument — closing most of the Bash-issued write route into `.claude/` (see `hooks/claude-dir-guard.sh`'s
@@ -195,7 +200,13 @@ processes `tool_input.command` one line at a time, so several over-blocking clas
 and documented in the script's own header: a literal `git`/`gh` word starting a quoted span right
 after a separator (e.g. `echo "a; git push"`) denies; **any line of a multi-line Bash command that
 begins with `git`/`gh`** is a command-position token after its own newline break and denies,
-including a heredoc line that merely *writes* a fixture file containing the text `git push`; and,
+including a heredoc line that merely *writes* a fixture file containing the text `git push`; since
+#398, that same per-line rule also denies any line whose first word is a shell keyword followed by
+`git`/`gh` (e.g. a heredoc writing a shell script with `  then git push`) or whose first word
+case-folds to `git`/`gh`/a vocabulary member (a heredoc prose line starting `Git …`/`Then gh …`,
+or `echo "a; Git push"`), a case-variant vocabulary command sharing a call with `.claude` (`CP`,
+`Tee`, `Python3`), and a genuinely distinct program named `GIT`/`GH`/etc. on a case-sensitive
+filesystem — the remedy is the same Write/Edit-tools remedy already given above; and,
 since #340, a `.claude`-segment write class covering quoted prose (`echo "tip: >> .claude/x"`), a
 heredoc body line, a `sed -i` whose script text itself spells a `.claude` segment, a copy or move
 *out of* `.claude`, a `cd` into any `.claude` directory, an input redirect from `.claude` into
@@ -210,7 +221,12 @@ evasions, documented rather than hidden: `$(which git) push` (the literal `git` 
 command position), `sudo -u foo git push` (the argument to `-u` becomes the resolved command word
 instead of `git`), interpreter indirection outside the recognised prefix words (`env`, `command`,
 `builtin`, `exec`, `sudo`, `nohup`, `time`, `nice`, `stdbuf`, `xargs`, `bash`, `sh`, `zsh`, `ksh`,
-`dash`), and, for the `.claude`-write class specifically, a writer outside
+`dash`, and, since #398, the shell reserved words `if`, `then`, `elif`, `else`, `do`, `while`,
+`until`, `!`, `coproc`); a `!` glued directly to the following word (`!git push` — not a reserved
+word in that glued form, so a non-interactive shell treats it as a command literally named `!git`,
+which does not exist); zsh's precommand modifiers `noglob`/`nocorrect`/`repeat N`; and the `eval`
+builtin (`eval git push`) — all three residuals are out of scope for #398 and documented rather
+than closed; and, for the `.claude`-write class specifically, a writer outside
 `CLAUDE_CMDLINE_WRITE_COMMANDS` (`sort -o`, `split`, `unzip -d`, `scp`, `cpio`, `vim -es`, `sed`'s
 `w` command), a launcher that becomes the resolved command word instead of a vocabulary member
 (`uv run python`, `npx`, `poetry run`, `sudo -u x python3`), a script file whose own CONTENTS name
