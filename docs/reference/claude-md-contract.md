@@ -418,11 +418,13 @@ no longer applies to an `Edit` or `Write` of `.claude/LESSONS.md` specifically: 
 `hooks/claude-dir-guard.sh` `PreToolUse` hook denies that call outright for both roles, tracked or
 not, with no orchestrator compare required. Since #340, `hooks/agent-boundary.sh` also denies an
 implementer/verifier Bash redirection, `tee`, `cp`, `mv`, `cd`/`pushd`, or in-place `sed` that
-targets a `.claude` path segment — closing most of the Bash-issued write route into
-`.claude/LESSONS.md` for those two roles specifically. The dispatch guard above is still the only
-control on the remaining Bash writers (an interpreter such as `python3 -c "open(...)"` or `perl
--i`, `dd`, `install`, `ln`, or a variable-built path), and still carries the untracked-baseline gap
-for those.
+targets a `.claude` path segment; since #387, it also denies a Bash call whose command word is an
+interpreter or one-step writer (`python`, `perl`, `dd`, `install`, `ln`, and the rest of
+`CLAUDE_CMDLINE_WRITE_COMMANDS`) when that same command text names a `.claude` path segment
+anywhere — closing most of the Bash-issued write route into `.claude/LESSONS.md` for those two
+roles specifically. The dispatch guard above is still the only control on the remaining Bash
+writers (a writer outside that vocabulary, a script file whose own contents name the path, or a
+variable-built or glob path), and still carries the untracked-baseline gap for those.
 
 Under a Merge autonomy policy (#307, ADR 0001 decision 9), a harness PR that carries a lesson
 this way is not automatically held by the *Never the governance surface* rule just because it

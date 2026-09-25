@@ -41,7 +41,7 @@
 ├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
 │   ├── hooks.json                 # registers the four PreToolUse hooks below
 │   ├── git-c-guard.sh             # approves only the exact git -C <worktree> <subcommand> forms worktree-parallel mode issues
-│   ├── agent-boundary.sh          # mechanically denies git/gh Bash commands, and a Bash write into .claude/, for the implementer/verifier subagents (#235, #340)
+│   ├── agent-boundary.sh          # mechanically denies git/gh Bash commands, and a Bash write into .claude/, for the implementer/verifier subagents (#235, #340, #387)
 │   ├── push-guard.sh              # mechanically denies any git push whose destination is the default branch, every session (#260)
 │   └── claude-dir-guard.sh        # mechanically denies an implementer/verifier Edit or Write to any .claude/ path (#327)
 ├── dev/
