@@ -177,7 +177,8 @@ whose items also carry `plan_url` and `plan_created_at` and are consumed only by
 non-zero `counts.approval_events_unreadable` prominently.
 
 This returns JSON with `needs_initial_plan` and `needs_revision` arrays (each item has `number`,
-`title`, `url`, `author`, `association`, `trusted_author`), an `untrusted_comments` array (each
+`title`, `url`, `author`, `association`, `trusted_author`, `prior_stalls`, `escalate_on_stall` —
+#395, see step 7), an `untrusted_comments` array (each
 item additionally has `comments: [{author, association, createdAt, has_plan_marker,
 has_harness_marker}]` — `has_harness_marker` (#194) flags a forged `<!-- harness-audit -->` or
 `<!-- verifier-verdict -->` marker on an untrusted comment; it only annotates the bucket, never
@@ -531,18 +532,33 @@ table above (`awaiting_approval` items are never reconciled or escalated: they w
 `harness-status.sh`'s `plans_to_review`). Any issue discovered but with no recorded outcome (planned, revised, or explicitly
 skipped-with-reason, including an issue a stop left undispatched) is an **escalated skipped stage** — report it prominently in the summary,
 never let it drop silently. This is the standalone-run equivalent of the pre-advance checks
-`issue-cycle` performs when it runs this skill as part of a full pass. **Make the escalation durable (#309, #349):** escalate each stalled issue per
-`issue-implementer`'s own SKILL.md "Durable escalation" subsection, procedure steps 1–2 (cited
-here, not restated — step 3 is implementer-specific; this skill's own orchestrator instead
-continues closing the run). Use stage `plan-initial` for a `needs_initial_plan` issue or
-`plan-revision` for a `needs_revision` issue; reason `stalled-dispatch` (the subagent dispatch
-produced no plan), `stalled-post` (a plan or revision existed but was never posted or labelled),
-or `stalled-unknown`; and `comments=none`. Applying `needs-human` removes the issue from both
-this skill's and the implementer's discovery buckets, so a later pass never re-enters the stall —
-this mechanism has no comment-level de-dup guard, exactly as the implementer's own. Report each
-escalation in the summary: the issue, its stage, its reason, the comment URL, and "excluded from
-discovery until a human removes `needs-human`". At most one escalation comment per stalled issue
-per run.
+`issue-cycle` performs when it runs this skill as part of a full pass. **Make the escalation
+durable, or retry (#309, #349, #395):** `stalled-post`, `stalled-unknown`, and `stalled-dispatch`
+with `escalate_on_stall: true` escalate per `issue-implementer`'s own SKILL.md "Durable
+escalation" subsection, procedure steps 1–2 (cited here, not restated — step 3 is
+implementer-specific; this skill's own orchestrator instead continues closing the run). Use stage
+`plan-initial` (a `needs_initial_plan` issue) or `plan-revision` (a `needs_revision` issue),
+reason `stalled-dispatch` (the subagent dispatch produced no
+plan), `stalled-post` (a plan or revision existed but was never posted or labelled), or
+`stalled-unknown` as today, and `comments=none`. Applying `needs-human` removes the issue from
+both discovery buckets, so a later pass never re-enters that stall — no comment-level de-dup
+guard, exactly as the implementer's own. A `stalled-dispatch` item whose `escalate_on_stall` is
+`false` (its first or second consecutive stall — `find-planning-work.sh`'s header documents the
+counting/reset rule and the `STALL_ESCALATE_AFTER` threshold) is retried instead: post one stall
+record via `gh issue comment <n> --body-file <tempfile>` (no command substitution) whose body is
+exactly:
+```
+<!-- harness-audit -->
+<!-- harness-stall: issue=<n> stage=<plan-initial|plan-revision> reason=stalled-dispatch -->
+<!-- harness-version: <version> <sha> -->
+The planner produced no plan this run; the next run retries automatically; repeated consecutive
+stalls escalate to needs-human.
+```
+No label. If posting the record itself fails, report the stall in this run's summary only — there
+is nothing durable to show for it. Report each stall or escalation: the issue, its stage and
+reason, `prior_stalls + 1`, and either "stalled, will retry" or the escalation comment URL plus
+"excluded from discovery until a human removes `needs-human`". At most one stall record or
+escalation comment per stalled issue per run.
 
 **Release the lock — the literal last action of this step, after the report above** — but only
 when you acquired it yourself at step 0 (standalone run; `issue-cycle` releases its own at its

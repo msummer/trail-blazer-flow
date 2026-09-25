@@ -241,7 +241,8 @@
 # query, #309) is served from escalations.json (#309: after checking
 # reject-escalations-once/reject-escalations first; absent means `[]`); anything else (#202:
 # find-planning-work.sh's now-unconditional needs_initial_plan query,
-# which requests only number,title,url,author) falls through to initial.json (#273: after checking
+# which requests number,title,url,author,comments — #395 added ,comments) falls through to
+# initial.json (#273: after checking
 # reject-initial-once/reject-initial first). A separate top-level `pr)` arm (#285) logs its own raw
 # invocation to DIR/.pr-calls as its first statement (#297, mirroring .issue-calls), then serves
 # bin/harness-status.sh's own `gh pr list` call from prs.json (#297: after checking
@@ -8810,9 +8811,11 @@ EOF
 # attempt: each called exactly once, no sleeps, all ten pre-#353 counts flags false, degraded
 # false, empty degraded_reasons — and (non-vacuity) the canned planning stand-in's own unplanned
 # issue (#650) surfaces in the output, while zero .issue-calls lines carry
-# "number,title,url,author" — the real find-planning-work.sh's own needs_initial_plan field
-# list, which build_stub_discovery's stand-in never sends since it never calls gh at all — proving
-# the canned stand-in ran instead of the real planner. This fixture writes no followups.json or
+# "number,title,url,author" — a prefix of the real find-planning-work.sh's own needs_initial_plan
+# field list (#395 extended it to "number,title,url,author,comments", so the needle still matches
+# any such call), which build_stub_discovery's stand-in never sends since it never calls gh at
+# all — proving the canned stand-in ran instead of the real planner. This fixture writes no
+# followups.json or
 # escalations.json at all, deliberately, so it also pins the absent-file ⇒ `[]` convention (#333,
 # #309) the other three sites' own absent-file convention already documents. (#353) This fixture
 # also writes no stop-stdout.txt and never calls build_stub_stop itself, so run_status installs
@@ -10673,6 +10676,349 @@ EOF
 #   withholds every later one.
 
 # ---------------------------------------------------------------------------------------------
+# Part 15 cases (#395), against bin/find-planning-work.sh — stall-record accounting. A planner
+# dispatch that stalled (produced no plan) is recorded as a trusted comment opening with
+# AUDIT_MARKER whose second line contains STALL_KEY_PREFIX; find-planning-work.sh's shared
+# stall_fields jq def counts these on both needs_initial_plan and needs_revision items and annotates
+# each with prior_stalls/escalate_on_stall.
+
+# plan-stall-none (#395) — a needs_initial_plan item with no "comments" key at all (the shape real
+# gh returns for an issue with zero comments): stall_fields treats a missing .comments the same as
+# an empty array, so prior_stalls is 0 and escalate_on_stall is false, and the issue stays in
+# needs_initial_plan (no label-based removal).
+case_plan_stall_none() {
+  local dir; dir="$(mk_fixture plan-stall-none)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":900,"title":"No stall history","url":"https://example.invalid/900","author":{"login":"owner"}}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_initial_plan[0].number' '900'
+  expect_jq '.needs_initial_plan[0].prior_stalls' '0'
+  expect_jq '.needs_initial_plan[0].escalate_on_stall' 'false'
+}
+
+# plan-stall-one-record (#395) — one trusted (OWNER) stall record on a needs_initial_plan issue:
+# prior_stalls 1, escalate_on_stall false (1 + 1 < STALL_ESCALATE_AFTER), and the issue is still in
+# needs_initial_plan — a first stall is retried, never removed.
+case_plan_stall_one_record() {
+  local dir; dir="$(mk_fixture plan-stall-one-record)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":901,"title":"One stall","url":"https://example.invalid/901","author":{"login":"owner"},"comments":[
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=901 stage=plan-initial reason=stalled-dispatch -->\n<!-- harness-version: 2.8.0 abc1234 -->\nThe planner produced no plan this run; the next run retries automatically.","createdAt":"2026-01-01T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"}
+]}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_initial_plan[0].number' '901'
+  expect_jq '.needs_initial_plan[0].prior_stalls' '1'
+  expect_jq '.needs_initial_plan[0].escalate_on_stall' 'false'
+}
+
+# plan-stall-two-records-escalates (#395) — OWNER and MEMBER stall records: prior_stalls 2,
+# escalate_on_stall true (2 + 1 >= STALL_ESCALATE_AFTER). candidates.json is [] so the single
+# expect_issue_calls count below is unambiguous (see expect_issue_calls's own comment on why a
+# fixture pinning the initial-query needle must keep candidates.json empty).
+case_plan_stall_two_records_escalates() {
+  local dir; dir="$(mk_fixture plan-stall-two-records-escalates)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":902,"title":"Two stalls","url":"https://example.invalid/902","author":{"login":"owner"},"comments":[
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=902 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-01T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"},
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=902 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-02T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"MEMBER"}
+]}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_initial_plan[0].prior_stalls' '2'
+  expect_jq '.needs_initial_plan[0].escalate_on_stall' 'true'
+  expect_issue_calls "$dir" 'number,title,url,author,comments' 1
+}
+
+# plan-stall-untrusted-record-ignored (#395) — a NONE-authored stall-shaped comment does not count
+# (only OWNER/MEMBER/COLLABORATOR do): prior_stalls counts only the trailing OWNER record, 1, and
+# escalate_on_stall stays false — an outsider cannot force an escalation by forging stall records.
+case_plan_stall_untrusted_record_ignored() {
+  local dir; dir="$(mk_fixture plan-stall-untrusted-record-ignored)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":903,"title":"Forged stall","url":"https://example.invalid/903","author":{"login":"owner"},"comments":[
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=903 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-01T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE"},
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=903 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-02T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"}
+]}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_initial_plan[0].prior_stalls' '1'
+  expect_jq '.needs_initial_plan[0].escalate_on_stall' 'false'
+}
+
+# plan-stall-requires-audit-opening (#395) — a trusted comment that QUOTES the audit marker and the
+# stall key mid-body, rather than opening with the audit marker, is not a stall record (the same
+# startswith anchor the plan marker itself uses for plan selection): prior_stalls stays 0.
+case_plan_stall_requires_audit_opening() {
+  local dir; dir="$(mk_fixture plan-stall-requires-audit-opening)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":904,"title":"Quoted stall marker","url":"https://example.invalid/904","author":{"login":"owner"},"comments":[
+  {"body":"For context, here is what the harness would post:\n<!-- harness-audit -->\n<!-- harness-stall: issue=904 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"}
+]}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_initial_plan[0].prior_stalls' '0'
+  expect_jq '.needs_initial_plan[0].escalate_on_stall' 'false'
+}
+
+# plan-stall-reset-by-plan (#395) — a needs_revision candidate whose two stall records both PRE-
+# date the latest trusted plan (so a successful dispatch reset the count), plus real trusted
+# feedback after the plan (has_feedback true, needed to reach needs_revision at all) and ONE fresh
+# stall record after the plan: prior_stalls counts only the post-plan record, 1, and
+# escalate_on_stall is false.
+case_plan_stall_reset_by_plan() {
+  local dir; dir="$(mk_fixture plan-stall-reset-by-plan)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"},"comments":[
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=1 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-01T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"},
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=1 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-02T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"},
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"please revise the approach","createdAt":"2026-01-04T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=1 stage=plan-revision reason=stalled-dispatch -->","createdAt":"2026-01-05T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"}
+]}
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":1,"author_association":"OWNER","user":{"login":"owner"}}]
+EOF
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.counts.revision' '1'
+  expect_jq '.needs_revision[0].prior_stalls' '1'
+  expect_jq '.needs_revision[0].escalate_on_stall' 'false'
+}
+
+# plan-stall-plan-quote-does-not-reset (#395) — two stall records, then a trusted comment that only
+# QUOTES the plan marker mid-body (never opens with it, so it is never selected as the plan and
+# never resets the count): prior_stalls stays 2 and escalate_on_stall is true.
+case_plan_stall_plan_quote_does_not_reset() {
+  local dir; dir="$(mk_fixture plan-stall-plan-quote-does-not-reset)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":905,"title":"Quoted plan marker","url":"https://example.invalid/905","author":{"login":"owner"},"comments":[
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=905 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-01T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"},
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=905 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-02T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"},
+  {"body":"I was quoting <!-- planner-plan --> in my earlier message, but this is not a plan.","createdAt":"2026-01-03T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"}
+]}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_initial_plan[0].prior_stalls' '2'
+  expect_jq '.needs_initial_plan[0].escalate_on_stall' 'true'
+}
+
+# plan-stall-newest-plan-resets (#395) — two trusted plans with stall records between them: only
+# the record after the NEWEST plan counts, so prior_stalls is 1, not 3 (kills 395-j).
+case_plan_stall_newest_plan_resets() {
+  local dir; dir="$(mk_fixture plan-stall-newest-plan-resets)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":906,"title":"Two plans","url":"https://example.invalid/906","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=906 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-02T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"},
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=906 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-03T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"},
+  {"body":"<!-- planner-plan -->\nplan v2","createdAt":"2026-01-04T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=906 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-05T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"}
+]}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_initial_plan[0].prior_stalls' '1'
+  expect_jq '.needs_initial_plan[0].escalate_on_stall' 'false'
+}
+
+# plan-stall-untrusted-plan-no-reset (#395) — two trusted stall records, then a NONE-authored
+# comment that opens with the plan marker: an untrusted plan-shaped comment never resets the count,
+# so prior_stalls stays 2 and the next stall escalates (kills 395-k).
+case_plan_stall_untrusted_plan_no_reset() {
+  local dir; dir="$(mk_fixture plan-stall-untrusted-plan-no-reset)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":907,"title":"Untrusted plan","url":"https://example.invalid/907","author":{"login":"owner"},"comments":[
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=907 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-01T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"},
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=907 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-02T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"},
+  {"body":"<!-- planner-plan -->\nnot really a plan","createdAt":"2026-01-03T00:00:00Z","author":{"login":"outsider"},"authorAssociation":"NONE"}
+]}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_initial_plan[0].prior_stalls' '2'
+  expect_jq '.needs_initial_plan[0].escalate_on_stall' 'true'
+}
+
+# plan-stall-requires-stall-key (#395) — one real stall record plus a trusted comment that opens
+# with the audit marker but carries no stall key (any other harness audit record): only the keyed
+# record counts, so prior_stalls is 1 (kills 395-l).
+case_plan_stall_requires_stall_key() {
+  local dir; dir="$(mk_fixture plan-stall-requires-stall-key)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":908,"title":"Other audit record","url":"https://example.invalid/908","author":{"login":"owner"},"comments":[
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=908 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-01T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"},
+  {"body":"<!-- harness-audit -->\nPlan auto-approved under this repo's policy.","createdAt":"2026-01-02T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"}
+]}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_initial_plan[0].prior_stalls' '1'
+  expect_jq '.needs_initial_plan[0].escalate_on_stall' 'false'
+}
+
+# plan-stall-record-not-feedback (#395) — a candidate with a trusted plan and, after it, ONLY a
+# trusted stall record (no other trusted comment): has_feedback stays false (a stall record opens
+# with the audit marker, already excluded via contains($a)), so needs_revision is [] and the record
+# is counted in counts.audit_comments_skipped instead — a stall record is never binding feedback.
+case_plan_stall_record_not_feedback() {
+  local dir; dir="$(mk_fixture plan-stall-record-not-feedback)"
+  cat > "$dir/initial.json" <<'EOF'
+[]
+EOF
+  printf '[{"number":1}]\n' > "$dir/candidates.json"
+  cat > "$dir/issue-1.json" <<'EOF'
+{"number":1,"title":"Issue one","url":"https://example.invalid/1","author":{"login":"owner"},"comments":[
+  {"body":"<!-- planner-plan -->\nplan v1","createdAt":"2026-01-01T00:00:00Z","author":{"login":"owner"},"authorAssociation":"OWNER"},
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=1 stage=plan-revision reason=stalled-dispatch -->","createdAt":"2026-01-02T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"}
+]}
+EOF
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_revision' '[]'
+  expect_jq '.counts.audit_comments_skipped' '1'
+}
+
+# plan-stall-untrusted-author-shape (#395) — a NONE-authored (issue-author, via rest-issues.json)
+# needs_initial_plan issue with one trusted stall record: prior_stalls 1 on the needs_initial_plan
+# item, and the untrusted_issue_authors entry keeps EXACTLY its documented six-key shape — the two
+# new stall fields (prior_stalls, escalate_on_stall) are dropped there, never leaked (#395 step 5).
+case_plan_stall_untrusted_author_shape() {
+  local dir; dir="$(mk_fixture plan-stall-untrusted-author-shape)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":906,"title":"Outsider issue","url":"https://example.invalid/906","author":{"login":"outsider"},"comments":[
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=906 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-01T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"}
+]}]
+EOF
+  cat > "$dir/rest-issues.json" <<'EOF'
+[{"number":906,"author_association":"NONE","user":{"login":"outsider"}}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_initial_plan[0].prior_stalls' '1'
+  expect_jq '.untrusted_issue_authors[0] | keys' '["association","author","bucket","number","title","url"]'
+}
+
+# plan-stall-initial-retry-requests-comments (#395) — the needs_initial_plan query's FIRST attempt
+# fails (reject-initial-once) and the bounded retry succeeds: exactly 2 matching .issue-calls lines
+# for the FULL field list 'number,title,url,author,comments' — the only way to catch a dropped
+# ",comments" on either attempt specifically, since the stub serves initial.json verbatim whatever
+# fields are requested. prior_stalls is still correctly 1, proving the bucket was built from the
+# retry's own output.
+case_plan_stall_initial_retry_requests_comments() {
+  local dir; dir="$(mk_fixture plan-stall-initial-retry-requests-comments)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":907,"title":"Retried with a stall","url":"https://example.invalid/907","author":{"login":"owner"},"comments":[
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=907 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-01T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"}
+]}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  : > "$dir/reject-initial-once"
+  build_stub_gh "$dir"
+  run_planning "$dir"
+  expect_rc 0
+  expect_jq '.needs_initial_plan[0].prior_stalls' '1'
+  expect_issue_calls "$dir" 'number,title,url,author,comments' 2
+}
+
+# plan-stall-surfaces-in-harness-status (#395) — end-to-end via run_status (Part 13: the REAL
+# find-planning-work.sh/find-implementation-work.sh, never build_stub_discovery's canned stand-in):
+# ready.json and candidates.json are both [], and initial.json carries one item with one trusted
+# stall record. bin/harness-status.sh passes needs_initial_plan through verbatim (#395 needs no
+# code change there), so harness_will_handle.unplanned[0].prior_stalls is 1 — visible between runs
+# without opening the issue.
+case_plan_stall_surfaces_in_harness_status() {
+  local dir; dir="$(mk_fixture plan-stall-surfaces-in-harness-status)"
+  cat > "$dir/initial.json" <<'EOF'
+[{"number":908,"title":"Stalled, visible in status","url":"https://example.invalid/908","author":{"login":"owner"},"comments":[
+  {"body":"<!-- harness-audit -->\n<!-- harness-stall: issue=908 stage=plan-initial reason=stalled-dispatch -->","createdAt":"2026-01-01T00:00:00Z","author":{"login":"harness-bot"},"authorAssociation":"OWNER"}
+]}]
+EOF
+  printf '[]\n' > "$dir/candidates.json"
+  printf '[]\n' > "$dir/ready.json"
+  build_stub_gh "$dir"
+  run_status "$dir"
+  expect_rc 0
+  expect_jq '.harness_will_handle.unplanned[0].number' '908'
+  expect_jq '.harness_will_handle.unplanned[0].prior_stalls' '1'
+}
+
+# REGISTRY MUTANTS (#395) — recorded in dev/mutants/planning-tests.json; run
+# bash dev/mutant-driver.sh 395-. Each edits bin/find-planning-work.sh's stall-record accounting
+# (STALL_KEY_PREFIX / STALL_ESCALATE_AFTER / stall_fields), reached via run_planning or run_status
+# against the plan-stall-* fixtures above (filter "plan-stall").
+#
+# mutant:395-a — drops the trust filter from stall_fields's own $st binding, so an untrusted
+# (forged) stall-shaped comment counts toward prior_stalls.
+#
+# mutant:395-b — drops the `createdAt > $sreset` clause, so a stall record posted BEFORE the
+# latest trusted plan still counts — a successful dispatch no longer resets the count.
+#
+# mutant:395-c — widens the reset anchor from `startswith($m)` to `contains($m)`, so a trusted
+# comment that only QUOTES the plan marker mid-body also resets the count.
+#
+# mutant:395-d — widens the audit anchor from `startswith($a)` to `contains($a)`, so a trusted
+# comment that only QUOTES the audit marker mid-body is counted as a stall record.
+#
+# mutant:395-e — loosens the escalation threshold from `>=` to `>`, so the STALL_ESCALATE_AFTER'th
+# stall is retried instead of escalated (one extra retry before escalation).
+#
+# mutant:395-f — drops `,comments` from the FIRST-attempt needs_initial_plan --json line (the
+# two-space-indented one), so a first-attempt call's logged field list no longer names comments.
+#
+# mutant:395-g — drops `,comments` from the RETRY needs_initial_plan --json line (the
+# four-space-indented one), so a retried call's logged field list no longer names comments.
+#
+# mutant:395-h — narrows the needs_initial_plan half of the untrusted_issue_authors del() back to
+# `del(.trusted_author)` only, so the stall fields leak into that bucket's documented shape.
+#
+# mutant:395-i — replaces the needs_revision entry's `stall_fields` merge with an empty object, so
+# a needs_revision item never carries prior_stalls/escalate_on_stall at all.
+#
+# mutant:395-j — takes the OLDEST trusted plan as the reset point instead of the newest, so stall
+# records from before a later successful revision keep counting.
+#
+# mutant:395-k — computes the reset point from every comment instead of only trusted ones, so an
+# outsider's plan-shaped comment resets the count and the issue never escalates.
+#
+# mutant:395-l — drops the stall-key requirement, so any trusted audit-opening comment counts as a
+# stall.
+
+# ---------------------------------------------------------------------------------------------
 # empty-needle-guard (#262-1) — exercises every guarded helper in this file (expect_err,
 # expect_no_err, expect_warn_count) with an empty needle, and asserts the guard fired for each:
 # sets $planning_err to a fixed non-empty value first (so a non-guarded regression couldn't pass
@@ -11184,6 +11530,20 @@ cases=(
   "impl-reopened-never-closed-multi-pr-covered|case_impl_reopened_never_closed_multi_pr_covered|#375: multi-PR slice re-queue shape (labeled/unlabeled pr-open, no closed event): still covered"
   "impl-reopened-precedence-two-issues|case_impl_reopened_precedence_two_issues|#375: two closed-after issues, one whose plan also postdates its labeling: closed-after-approval wins, and the counter and warn line are per issue"
   "impl-reopened-closed-no-approval-event|case_impl_reopened_closed_no_approval_event|#375: closed events with no plan-approved labeling still report no-approval-event"
+  "plan-stall-none|case_plan_stall_none|#395: no comments key at all -> prior_stalls 0, escalate_on_stall false"
+  "plan-stall-one-record|case_plan_stall_one_record|#395: one trusted stall record -> prior_stalls 1, escalate_on_stall false, still in needs_initial_plan"
+  "plan-stall-two-records-escalates|case_plan_stall_two_records_escalates|#395: OWNER + MEMBER stall records -> prior_stalls 2, escalate_on_stall true"
+  "plan-stall-untrusted-record-ignored|case_plan_stall_untrusted_record_ignored|#395: a NONE-authored stall-shaped comment never counts"
+  "plan-stall-requires-audit-opening|case_plan_stall_requires_audit_opening|#395: quoting the audit marker mid-body is not a stall record"
+  "plan-stall-reset-by-plan|case_plan_stall_reset_by_plan|#395: a newer trusted plan resets prior_stalls; only a later record counts again"
+  "plan-stall-plan-quote-does-not-reset|case_plan_stall_plan_quote_does_not_reset|#395: quoting the plan marker mid-body never resets the count"
+  "plan-stall-record-not-feedback|case_plan_stall_record_not_feedback|#395: a stall record alone after the plan is not feedback — needs_revision stays empty"
+  "plan-stall-untrusted-author-shape|case_plan_stall_untrusted_author_shape|#395: untrusted_issue_authors keeps its exact six-key shape; the stall fields never leak into it"
+  "plan-stall-initial-retry-requests-comments|case_plan_stall_initial_retry_requests_comments|#395: both the first and retried needs_initial_plan attempts request ,comments"
+  "plan-stall-surfaces-in-harness-status|case_plan_stall_surfaces_in_harness_status|#395: harness-status.sh reports prior_stalls on harness_will_handle.unplanned end-to-end"
+  "plan-stall-newest-plan-resets|case_plan_stall_newest_plan_resets|#395: only stall records after the NEWEST trusted plan count"
+  "plan-stall-untrusted-plan-no-reset|case_plan_stall_untrusted_plan_no_reset|#395: an untrusted comment opening with the plan marker never resets the count"
+  "plan-stall-requires-stall-key|case_plan_stall_requires_stall_key|#395: a trusted audit-opening comment without the stall key never counts"
 )
 
 # MEASURED MUTANTS (#275/#281) — #281 replaced #275's exclusion-based $planC test

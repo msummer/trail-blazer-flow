@@ -18,6 +18,11 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #395: A planner `stalled-dispatch` (a dispatch that produced no plan) is now retried rather than
+  escalated until the same issue stalls on three consecutive runs (`STALL_ESCALATE_AFTER`); each
+  earlier stall is recorded as a trusted, counted `<!-- harness-audit -->` comment
+  (`find-planning-work.sh`'s new `prior_stalls`/`escalate_on_stall` fields), never feedback or the
+  plan. `stalled-post`/`stalled-unknown` still escalate immediately. No consumer step.
 - #375: A reopened issue's earlier `plan-approved` approval no longer covers its plan once the
   issue has closed: `find-implementation-work.sh`'s existing events call now also reads `closed`
   events, and a close at or after the newest plan-approved labeling yields

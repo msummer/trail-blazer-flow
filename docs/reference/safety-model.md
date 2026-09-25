@@ -634,7 +634,15 @@ maintainer-authored staleness comment already records that same PR set — the
 implementer's unknown-verdict hold comment (see "Approval provenance" above) — whose second line
 also carries a `<!-- harness-hold: issue=<n> stage=<stage> reason=<reason> comments=<ids> -->`
 key, so a repeat run skips re-posting it once the issue's newest maintainer-authored hold comment
-already records that same key (#222) — the
+already records that same key (#222) — the planner's own step-7 stall record (#395), whose second
+line carries a `<!-- harness-stall: issue=<n> stage=<plan-initial|plan-revision>
+reason=stalled-dispatch -->` key — posted on a `stalled-dispatch` run (the subagent dispatch
+produced no plan) that has not yet reached the escalation threshold; unlike the staleness/hold
+comments above it has NO de-dup guard, because it is meant to be counted, not collapsed:
+`find-planning-work.sh` sums every trusted stall record posted after the issue's newest trusted
+plan comment into `prior_stalls` (a posted plan resets the count), so it is always a record, never
+feedback and never a plan candidate (excluded by the same audit-marker rules as every other
+harness-authored comment here) — the
 implementer's interrupted-run and worktree-sweep notes, `cleanup-after-merge.sh`'s hygiene
 comments), `<!-- verifier-verdict
 -->` (the orchestrator's own archive), or, since #309, `<!-- harness-escalation -->` — the marker
