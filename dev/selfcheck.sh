@@ -1428,8 +1428,8 @@ fi
 #   (c) hooks/push-guard.sh's PREFIX_WORDS="..." value is byte-identical to
 #       hooks/agent-boundary.sh's own PREFIX_WORDS="..." value (script↔script, the 4.26 idiom) —
 #       the two hooks inline near-twin tokenizers (see either hook's header) and must agree on
-#       which interpreter-indirection words to skip; either extraction coming back empty FAILs
-#       loudly too.
+#       which interpreter-indirection and shell-keyword words to skip; either extraction coming
+#       back empty FAILs loudly too.
 # Proves only that these three vocabularies are spelled identically across the named files, not
 # that push-guard.sh's runtime behavior is correct — the same honest limit 4.33/4.34/4.37/4.38/
 # 4.39's comments state.

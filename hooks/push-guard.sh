@@ -24,12 +24,17 @@
 # (see that script's "the scan" section, lines 143-236) — same segment-break characters, same
 # normalize() (quote/backslash strip + basename), same repeat-until-exhausted PREFIX_WORDS skip
 # (never once-only — a once-only skip is the M23 regression class agent-boundary.sh's own
-# dev/hook-tests.sh table documents), and, since #270, the same bash-native carriage-return strip
+# dev/hook-tests.sh table documents), since #398 the same tolower() fold applied to the command word
+# and to prefix-word matching (so `if true; then git push origin main; fi`, `! git push origin
+# main`, and `GIT push origin main` all still resolve `git` as the command word — see PREFIX_WORDS'
+# own declaration above for the added shell-keyword vocabulary), and, since #270, the same
+# bash-native carriage-return strip
 # of $cmd applied immediately after the jq extraction and before this script's own `[ -n "$cmd" ]`
 # guard (see that same point in each file — a CRLF-carrying transport can otherwise deliver a
 # command whose tokens carry a trailing `\r`, which every exact-match comparison below would miss).
 # A future fix to either tokenizer's shared behaviour (segment breaking, normalize(), the
-# prefix-word skip, the CR strip) must be applied to BOTH files — see this repo's
+# prefix-word skip, the command-word case fold, the CR strip) must be applied to BOTH files — see
+# this repo's
 # CLAUDE.md and dev/selfcheck.sh's assertion 4.40 clause (c), which mechanically pins the two
 # scripts' PREFIX_WORDS vocabulary stays byte-identical. Differences from agent-boundary.sh's
 # tokenizer: after resolving a segment's command word as `git`, this script walks forward again
@@ -139,7 +144,10 @@
 #
 # Documented over-blocking classes (deliberate, not a bug): a heredoc body line beginning `git
 # push origin main` (the same quote-blind, line-at-a-time class hooks/agent-boundary.sh documents
-# — write file content with the Write/Edit tools, never a Bash heredoc); a remote literally named
+# — write file content with the Write/Edit tools, never a Bash heredoc); since #398, that same
+# per-line class also denies a heredoc body line whose first word is a shell keyword followed by
+# `git push origin main` (e.g. `  then git push origin main`) or whose first word case-folds to
+# `git` (e.g. `Git push origin main`) — the same remedy; a remote literally named
 # `main`/`master` (`git push main` is evaluated defensively as if `main` might be a branch, not
 # only a remote name — see evaluate_segment()'s "n == 1" handling below); `--all`/`--mirror` deny
 # unconditionally, since both push every local branch, including the default one; a repo whose
@@ -209,7 +217,12 @@
 # resulting command cannot execute as a real `git push` either, so this is documented, not fixed
 # (see the fast-path comment below); `nice -n 5 git push origin main` (the same class
 # as the `sudo -u foo` bullet above — `nice`'s option value `5` becomes the resolved command word,
-# not `git`). Since #269 narrowed this next class to its residuals (see the "Repo resolution"
+# not `git`); since #398, `git PUSH origin main` — the command word is case-folded (so `GIT push
+# origin main` IS caught), but the subcommand comparison (`subcmd == "push"` in emit_segment()
+# below) stays exact, out of scope per this issue's decision, so an uppercase or mixed-case
+# subcommand is never recognised as a push and this hook opines "no opinion" on the whole segment;
+# whether a given git build would itself execute `PUSH` as `push` on a case-insensitive filesystem
+# is UNVERIFIED here. Since #269 narrowed this next class to its residuals (see the "Repo resolution"
 # paragraph above for what a `-C` value IS now resolved against), a `git -C <path> push` into a
 # repo whose default branch differs from the session's is STILL judged only against the session's
 # own facts in every one of these shapes — each measured directly, exact command -> rc, session on
@@ -330,7 +343,11 @@ set -f  # noglob: untrusted refspec tokens are word-split unquoted below (e.g. i
 # own lines with this exact shape so dev/selfcheck.sh's assertion 4.40 can extract them
 # mechanically.
 PUSH_DEFAULT_BRANCH_FALLBACK="main master"
-PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash"
+# Since #398, byte-identical to hooks/agent-boundary.sh's own PREFIX_WORDS (see that file's
+# vocabulary comment for the full reasoning): the trailing words above `dash` are shell reserved
+# words that can directly precede a command in the same segment (`if true; then git push origin
+# main; fi`, `! git push origin main`), sharing the ordinary prefix-word skip below.
+PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc"
 GIT_GLOBAL_OPTS_WITH_VALUE="-c -C --git-dir --work-tree --namespace --config-env --exec-path"
 # #269: byte-identical to hooks/git-c-guard.sh's own PATH_ERE (that script's twin declaration,
 # a few lines above its own GIT_C_SUBCOMMANDS) — dev/selfcheck.sh's assertion 4.42 extracts both
@@ -361,13 +378,17 @@ input="$(cat)"
 # substring like `pu<CR>sh`, where a conforming JSON writer has already escaped the `\r`) still
 # exits here, before the strip ever runs — see this file's header "Documented under-blocking
 # classes" for that residual case. A miss on either fast path always means "this call is out of
-# scope for this hook", which is also what the slower checks below it would conclude.
+# scope for this hook", which is also what the slower checks below it would conclude. Since #398,
+# the second fast path (below) case-folds `git` — `*push*` (the first fast path, immediately below)
+# stays case-sensitive: the push SUBCOMMAND itself is never case-folded (see this file's header
+# "Documented under-blocking classes" for the `git PUSH …` residual this leaves), so a
+# case-sensitive `*push*` never rejects a call the slower tokenizer would still recognise.
 case "$input" in
   *push*) : ;;
   *) exit 0 ;;
 esac
 case "$input" in
-  *git*) : ;;
+  *[Gg][Ii][Tt]*) : ;;
   *) exit 0 ;;
 esac
 
@@ -439,7 +460,7 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
     tok = toks[idx]
     if (tok == "") { idx++; continue }
     if (match(tok, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) { idx++; continue }
-    norm = normalize(tok)
+    norm = tolower(normalize(tok))
     if (norm in prefix_set) { saw_prefix = 1; idx++; continue }
     if (saw_prefix && substr(tok, 1, 1) == "-") { idx++; continue }
     cmdword = norm

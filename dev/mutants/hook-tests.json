@@ -7,8 +7,8 @@
       "filter": "ab-claude-",
       "edits": [
         {
-          "from": "  *git*|*gh*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;",
-          "to": "  *git*|*gh*) : ;;"
+          "from": "  *[Gg][Ii][Tt]*|*[Gg][Hh]*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;",
+          "to": "  *[Gg][Ii][Tt]*|*[Gg][Hh]*) : ;;"
         }
       ],
       "expect_fail": [
@@ -35,8 +35,8 @@
       "filter": "ab-claude-",
       "edits": [
         {
-          "from": "  *git*|*gh*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;",
-          "to": "  *git*|*gh*|*claude*) : ;;"
+          "from": "  *[Gg][Ii][Tt]*|*[Gg][Hh]*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;",
+          "to": "  *[Gg][Ii][Tt]*|*[Gg][Hh]*|*claude*) : ;;"
         }
       ],
       "expect_fail": [
@@ -408,6 +408,133 @@
       ],
       "expect_fail": [
         "ab-cwrite-deny-case-variant"
+      ]
+    },
+    {
+      "name": "398-ab-kw-vocab",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-kw-",
+      "edits": [
+        {
+          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc\"",
+          "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash\""
+        }
+      ],
+      "expect_fail": [
+        "ab-kw-deny-bang-gh",
+        "ab-kw-deny-chained",
+        "ab-kw-deny-coproc",
+        "ab-kw-deny-elif",
+        "ab-kw-deny-else",
+        "ab-kw-deny-if-cond",
+        "ab-kw-deny-if-then",
+        "ab-kw-deny-kw-python",
+        "ab-kw-deny-until",
+        "ab-kw-deny-verifier-bang",
+        "ab-kw-deny-verifier-then",
+        "ab-kw-deny-while-do",
+        "ab-kw-deny-while-cond"
+      ]
+    },
+    {
+      "name": "398-ab-case-fold",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-kw-",
+      "edits": [
+        {
+          "from": "    norm = tolower(normalize(tok))",
+          "to": "    norm = normalize(tok)"
+        }
+      ],
+      "expect_fail": [
+        "ab-kw-deny-mixed-gh",
+        "ab-kw-deny-upper-abs",
+        "ab-kw-deny-upper-git",
+        "ab-kw-deny-upper-prefix",
+        "ab-kw-deny-upper-python",
+        "ab-kw-deny-upper-tee",
+        "ab-kw-deny-upper-touch",
+        "ab-kw-deny-kw-python"
+      ]
+    },
+    {
+      "name": "398-ab-fastpath-case",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-kw-",
+      "edits": [
+        {
+          "from": "  *[Gg][Ii][Tt]*|*[Gg][Hh]*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;",
+          "to": "  *git*|*gh*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "ab-kw-deny-mixed-gh",
+        "ab-kw-deny-upper-abs",
+        "ab-kw-deny-upper-git"
+      ]
+    },
+    {
+      "name": "398-pg-kw-vocab",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-kw-",
+      "edits": [
+        {
+          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc\"",
+          "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash\""
+        }
+      ],
+      "expect_fail": [
+        "push-kw-deny-bang",
+        "push-kw-deny-then"
+      ]
+    },
+    {
+      "name": "398-pg-case-fold",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-kw-",
+      "edits": [
+        {
+          "from": "    norm = tolower(normalize(tok))",
+          "to": "    norm = normalize(tok)"
+        }
+      ],
+      "expect_fail": [
+        "push-kw-deny-upper-git"
+      ]
+    },
+    {
+      "name": "398-pg-fastpath-case",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-kw-",
+      "edits": [
+        {
+          "from": "  *[Gg][Ii][Tt]*) : ;;",
+          "to": "  *git*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-kw-deny-upper-git"
+      ]
+    },
+    {
+      "name": "398-ab-gitsub-exact",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-kw-",
+      "edits": [
+        {
+          "from": "      gitsub = normalize(tok)\n",
+          "to": "      gitsub = tolower(normalize(tok))\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-kw-deny-verifier-upper-sub"
       ]
     }
   ]

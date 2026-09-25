@@ -18,6 +18,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #398: `agent-boundary.sh` and `push-guard.sh` now skip a leading shell keyword (`if`/`then`/
+  `elif`/`else`/`do`/`while`/`until`/`!`/`coproc`) before the command word and match the command
+  word case-insensitively, so `if …; then git push; fi`, `! gh …`, and `GIT push` no longer slip
+  past either hook. No consumer step.
 - #376: `cleanup-after-merge.sh` no longer re-closes an open `pr-open` issue that was
   reopened (`stateReason` `REOPENED`): it is reported `KEEP`, and `--fix` posts an audited
   comment and removes `pr-open` instead. No consumer step.

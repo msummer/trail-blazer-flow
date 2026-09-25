@@ -715,6 +715,131 @@ case_ab_cwrite_noop_main_session() {
   expect_no_opinion
 }
 
+# --- hooks/agent-boundary.sh: the #398 shell-keyword / case-fold class -------------------------
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "ab-kw-"),
+# re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
+# mutant:398-ab-kw-vocab — reverts PREFIX_WORDS to its pre-#398 value (drops the shell-keyword
+#   words), so every fixture below whose command relies on skipping a leading keyword no longer
+#   resolves git/gh as the command word.
+# mutant:398-ab-case-fold — removes emit_segment()'s tolower() around normalize(tok), so an
+#   upper/mixed-case command word no longer resolves to "git"/"gh"/a vocabulary member.
+# mutant:398-ab-fastpath-case — narrows fast path 2's widened `*[Gg][Ii][Tt]*|*[Gg][Hh]*`
+#   alternative back to the plain `*git*|*gh*` (no case fold), isolating a fixture whose raw stdin
+#   carries no case-insensitive git/gh/claude substring at all.
+case_ab_kw_deny_if_then() {
+  # The issue's own headline shape.
+  run_boundary "$(mk_agent_cmd 'implementer' 'if true; then git push; fi')"
+  expect_deny
+}
+case_ab_kw_deny_bang_gh() {
+  run_boundary "$(mk_agent_cmd 'trail-blazer-flow:implementer' '! gh issue close 5')"
+  expect_deny
+}
+case_ab_kw_deny_while_do() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'while true; do git push; done')"
+  expect_deny
+}
+case_ab_kw_deny_while_cond() {
+  # 'while' directly in front of the command word (the condition list runs it) — the only fixture
+  # that pins 'while' itself; case_ab_kw_deny_while_do above rests on 'do' alone.
+  run_boundary "$(mk_agent_cmd 'implementer' 'while git push; do break; done')"
+  expect_deny
+}
+case_ab_kw_deny_until() {
+  run_boundary "$(mk_agent_cmd 'trail-blazer-flow:implementer' 'until git push; do sleep 1; done')"
+  expect_deny
+}
+case_ab_kw_deny_if_cond() {
+  # The keyword sits in the CONDITION position, not the body — 'if' is the segment's own prefix
+  # word regardless of which clause the git/gh command sits in.
+  run_boundary "$(mk_agent_cmd 'implementer' 'if gh pr list; then echo x; fi')"
+  expect_deny
+}
+case_ab_kw_deny_else() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'if false; then :; else git push; fi')"
+  expect_deny
+}
+case_ab_kw_deny_elif() {
+  run_boundary "$(mk_agent_cmd 'trail-blazer-flow:implementer' 'if false; then :; elif git push; then :; fi')"
+  expect_deny
+}
+case_ab_kw_deny_coproc() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'coproc git push')"
+  expect_deny
+}
+case_ab_kw_deny_chained() {
+  # Two chained keywords ('if' then '!') in front of the command word — the repeat-until-exhausted
+  # PREFIX_WORDS skip's 0/1/2+ boundary, the keyword-class sibling of case_ib_chained_prefix above.
+  run_boundary "$(mk_agent_cmd 'implementer' 'if ! git push; then :; fi')"
+  expect_deny
+}
+case_ab_kw_deny_verifier_then() {
+  run_boundary "$(mk_agent_cmd 'verifier' 'if true; then git push; fi')"
+  expect_deny
+}
+case_ab_kw_deny_verifier_bang() {
+  run_boundary "$(mk_agent_cmd 'trail-blazer-flow:verifier' '! gh issue close 5')"
+  expect_deny
+}
+case_ab_kw_deny_upper_git() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'GIT push')"
+  expect_deny
+}
+case_ab_kw_deny_mixed_gh() {
+  run_boundary "$(mk_agent_cmd 'verifier' 'Gh issue close 5')"
+  expect_deny
+}
+case_ab_kw_deny_upper_abs() {
+  run_boundary "$(mk_agent_cmd 'implementer' '/usr/bin/GIT push')"
+  expect_deny
+}
+case_ab_kw_deny_upper_prefix() {
+  # tolower() runs before the prefix-word membership test, so an upper-case prefix word ("ENV")
+  # is skipped too, not only an upper-case command word.
+  run_boundary "$(mk_agent_cmd 'implementer' 'ENV git push')"
+  expect_deny
+}
+case_ab_kw_deny_upper_python() {
+  run_boundary "$(mk_agent_cmd 'implementer' "PYTHON3 -c \"open('.claude/LESSONS.md','a')\"")"
+  expect_ab_deny_claude
+}
+case_ab_kw_deny_upper_tee() {
+  # The arg-vocabulary path (CLAUDE_PATH_ARG_COMMANDS), not the command-level #387 rule: "TEE"
+  # case-folds to the "tee" member.
+  run_boundary "$(mk_agent_cmd 'implementer' 'echo x | TEE -a .claude/LESSONS.md')"
+  expect_ab_deny_claude
+}
+case_ab_kw_deny_upper_touch() {
+  run_boundary "$(mk_agent_cmd 'trail-blazer-flow:implementer' 'Touch .claude/LESSONS.md')"
+  expect_ab_deny_claude
+}
+case_ab_kw_deny_kw_python() {
+  # Combines both #398 classes with the #387 command-level rule: a keyword-skipped, upper-case
+  # command word that case-folds to a CLAUDE_CMDLINE_WRITE_COMMANDS member.
+  run_boundary "$(mk_agent_cmd 'implementer' "if true; then PYTHON3 -c \"open('.claude/LESSONS.md','a')\"; fi")"
+  expect_ab_deny_claude
+}
+case_ab_kw_deny_verifier_upper_sub() {
+  # RESOLVED Q4: the git SUBCOMMAND is never case-folded, so a case-variant read-only subcommand is
+  # not on the verifier's VERIFIER_GIT_READONLY list and denies (fail closed).
+  # mutant:398-ab-gitsub-exact — case-folds gitsub in emit_segment(), so "STATUS" matches the
+  #   read-only "status" entry and the verifier is let through.
+  run_boundary "$(mk_agent_cmd 'verifier' 'git STATUS')"
+  expect_deny
+}
+case_ab_kw_noop_keyword_arg() {
+  # Control: proves the keyword skip applies only in COMMAND position. 'then' here is echo's
+  # own argument, not a segment-leading token, so it must not be treated as a prefix word; the raw
+  # stdin still contains "git", so the scan genuinely runs.
+  run_boundary "$(mk_agent_cmd 'implementer' 'echo then git push')"
+  expect_no_opinion
+}
+case_ab_kw_noop_verifier_if_diff() {
+  # Release-blocker control: the keyword skip must not widen the verifier's read-only git allowance.
+  run_boundary "$(mk_agent_cmd 'verifier' 'if git diff --quiet; then echo same; fi')"
+  expect_no_opinion
+}
+
 # ---------------------------------------------------------------------------------------------
 # hooks/push-guard.sh (#260) fixture builders, runner, and assertions.
 
@@ -1893,6 +2018,38 @@ case_push_reads_only() {
   [ "$before" = "$after" ] || { __ok=0; __why="${__why}fixture repo's file listing changed — push-guard.sh wrote to or altered a file it should only read\n"; }
 }
 
+# --- #398: the shell-keyword / case-fold class -------------------------------------------------
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter
+# "push-kw-"), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
+# mutant:398-pg-kw-vocab — reverts PREFIX_WORDS to its pre-#398 value (drops the shell-keyword
+#   words), so a fixture below whose command relies on skipping a leading keyword no longer
+#   resolves git as the command word.
+# mutant:398-pg-case-fold — removes emit_segment()'s tolower() around normalize(tok), so an
+#   upper-case command word no longer resolves to "git".
+# mutant:398-pg-fastpath-case — narrows the widened `*[Gg][Ii][Tt]*` fast path back to the plain
+#   `*git*` (no case fold), isolating a fixture whose raw stdin carries no case-insensitive "git"
+#   substring at all. No `cwd` is passed for any fixture below: each carries n >= 2 refspec
+#   tokens, so the unconditional PUSH_DEFAULT_BRANCH_FALLBACK ("main"/"master") decides without
+#   needing a resolved repo.
+case_push_kw_deny_then() {
+  run_push_guard "$(mk_push_cmd 'if true; then git push origin main; fi')"
+  expect_push_deny
+}
+case_push_kw_deny_bang() {
+  run_push_guard "$(mk_push_cmd '! git push origin main')"
+  expect_push_deny
+}
+case_push_kw_deny_upper_git() {
+  run_push_guard "$(mk_push_cmd 'GIT push origin main')"
+  expect_push_deny
+}
+case_push_kw_noop_then_feature() {
+  # Control: the keyword skip must not widen the destination rule — a non-default-branch
+  # destination behind a keyword still gets no opinion.
+  run_push_guard "$(mk_push_cmd 'if true; then git push origin feature/x; fi')"
+  expect_push_no_opinion
+}
+
 # ---------------------------------------------------------------------------------------------
 # hooks/claude-dir-guard.sh (#327) fixture builders, runner, and assertions. This hook has three
 # verdicts — deny via the ".claude" segment class (exit 2, empty stdout, one stderr line naming
@@ -2366,6 +2523,29 @@ cases=(
   "ab-cwrite-noop-claude-plugin|case_ab_cwrite_noop_claude_plugin|.claude command-level no opinion: verifier, python3 -c \"import json; json.load(open('.claude-plugin/plugin.json'))\" (trailing-boundary near-miss) -- mutation proof: dev/mutants/hook-tests.json (387-boundary-trail)"
   "ab-cwrite-noop-my-claude|case_ab_cwrite_noop_my_claude|.claude command-level no opinion: implementer, touch build/my.claude (leading-boundary near-miss) -- mutation proof: dev/mutants/hook-tests.json (387-boundary-lead)"
   "ab-cwrite-noop-main-session|case_ab_cwrite_noop_main_session|.claude command-level no opinion: main session (no agent_type key), the D1 command (blocking this would stop a release -- the orchestrator's own lesson append) -- release-blocker control, not part of the mutation-proof registry"
+  "ab-kw-deny-if-then|case_ab_kw_deny_if_then|shell-keyword deny: implementer, if true; then git push; fi (the issue's own shape) -- mutation proof: dev/mutants/hook-tests.json (398-ab-kw-vocab)"
+  "ab-kw-deny-bang-gh|case_ab_kw_deny_bang_gh|shell-keyword deny: trail-blazer-flow:implementer, ! gh issue close 5 -- mutation proof: dev/mutants/hook-tests.json (398-ab-kw-vocab)"
+  "ab-kw-deny-while-do|case_ab_kw_deny_while_do|shell-keyword deny: implementer, while true; do git push; done -- mutation proof: dev/mutants/hook-tests.json (398-ab-kw-vocab)"
+  "ab-kw-deny-while-cond|case_ab_kw_deny_while_cond|shell-keyword deny: implementer, while git push; do break; done ('while' itself, not 'do') -- mutation proof: dev/mutants/hook-tests.json (398-ab-kw-vocab)"
+  "ab-kw-deny-until|case_ab_kw_deny_until|shell-keyword deny: trail-blazer-flow:implementer, until git push; do sleep 1; done -- mutation proof: dev/mutants/hook-tests.json (398-ab-kw-vocab)"
+  "ab-kw-deny-if-cond|case_ab_kw_deny_if_cond|shell-keyword deny: implementer, if gh pr list; then echo x; fi (keyword in the condition, not the body) -- mutation proof: dev/mutants/hook-tests.json (398-ab-kw-vocab)"
+  "ab-kw-deny-else|case_ab_kw_deny_else|shell-keyword deny: implementer, if false; then :; else git push; fi -- mutation proof: dev/mutants/hook-tests.json (398-ab-kw-vocab)"
+  "ab-kw-deny-elif|case_ab_kw_deny_elif|shell-keyword deny: trail-blazer-flow:implementer, if false; then :; elif git push; then :; fi -- mutation proof: dev/mutants/hook-tests.json (398-ab-kw-vocab)"
+  "ab-kw-deny-coproc|case_ab_kw_deny_coproc|shell-keyword deny: implementer, coproc git push -- mutation proof: dev/mutants/hook-tests.json (398-ab-kw-vocab)"
+  "ab-kw-deny-chained|case_ab_kw_deny_chained|shell-keyword deny: implementer, if ! git push; then :; fi (two chained keywords, the 0/1/2+ prefix-skip boundary) -- mutation proof: dev/mutants/hook-tests.json (398-ab-kw-vocab)"
+  "ab-kw-deny-verifier-then|case_ab_kw_deny_verifier_then|shell-keyword deny: verifier, if true; then git push; fi -- mutation proof: dev/mutants/hook-tests.json (398-ab-kw-vocab)"
+  "ab-kw-deny-verifier-bang|case_ab_kw_deny_verifier_bang|shell-keyword deny: trail-blazer-flow:verifier, ! gh issue close 5 -- mutation proof: dev/mutants/hook-tests.json (398-ab-kw-vocab)"
+  "ab-kw-deny-upper-git|case_ab_kw_deny_upper_git|case-fold deny: implementer, GIT push -- mutation proof: dev/mutants/hook-tests.json (398-ab-case-fold, 398-ab-fastpath-case)"
+  "ab-kw-deny-mixed-gh|case_ab_kw_deny_mixed_gh|case-fold deny: verifier, Gh issue close 5 -- mutation proof: dev/mutants/hook-tests.json (398-ab-case-fold, 398-ab-fastpath-case)"
+  "ab-kw-deny-upper-abs|case_ab_kw_deny_upper_abs|case-fold deny: implementer, /usr/bin/GIT push (case fold after basename normalisation) -- mutation proof: dev/mutants/hook-tests.json (398-ab-case-fold, 398-ab-fastpath-case)"
+  "ab-kw-deny-upper-prefix|case_ab_kw_deny_upper_prefix|case-fold deny: implementer, ENV git push (tolower runs before the prefix-word match too) -- mutation proof: dev/mutants/hook-tests.json (398-ab-case-fold)"
+  "ab-kw-deny-upper-python|case_ab_kw_deny_upper_python|case-fold deny: implementer, PYTHON3 -c \"open('.claude/LESSONS.md','a')\" (the #387 command-level rule via a case-folded command word) -- mutation proof: dev/mutants/hook-tests.json (398-ab-case-fold)"
+  "ab-kw-deny-upper-tee|case_ab_kw_deny_upper_tee|case-fold deny: implementer, echo x \| TEE -a .claude/LESSONS.md (the arg-vocabulary path via a case-folded command word) -- mutation proof: dev/mutants/hook-tests.json (398-ab-case-fold)"
+  "ab-kw-deny-upper-touch|case_ab_kw_deny_upper_touch|case-fold deny: trail-blazer-flow:implementer, Touch .claude/LESSONS.md -- mutation proof: dev/mutants/hook-tests.json (398-ab-case-fold)"
+  "ab-kw-deny-kw-python|case_ab_kw_deny_kw_python|shell-keyword + case fold combined: implementer, if true; then PYTHON3 -c \"open('.claude/LESSONS.md','a')\"; fi -- mutation proof: dev/mutants/hook-tests.json (398-ab-kw-vocab, 398-ab-case-fold)"
+  "ab-kw-deny-verifier-upper-sub|case_ab_kw_deny_verifier_upper_sub|case-variant git subcommand: verifier, git STATUS denies (subcommand never case-folded) -- mutation proof: dev/mutants/hook-tests.json (398-ab-gitsub-exact)"
+  "ab-kw-noop-keyword-arg|case_ab_kw_noop_keyword_arg|shell-keyword no opinion: implementer, echo then git push (the skip applies only in command position; the raw stdin still contains \"git\") -- control, not part of the mutation-proof registry"
+  "ab-kw-noop-verifier-if-diff|case_ab_kw_noop_verifier_if_diff|shell-keyword no opinion: verifier, if git diff --quiet; then echo same; fi (release-blocker control: the keyword skip must not widen the verifier's read-only git allowance) -- control, not part of the mutation-proof registry"
   # --- hooks/push-guard.sh (#260) cases -----------------------------------------------------------
   # Mutation-proof table (LESSON 2026-09-01, LESSON 2026-09-07(b)): each row below cites one of
   # the mutants actually applied to hooks/push-guard.sh via a Python literal-string replace
@@ -3484,6 +3664,10 @@ cases=(
   "push-noop-global-explicit-refspec|case_pn_global_explicit_refspec|no opinion: git push -u origin \"claude/17-a\" (release-blocker control, bare) against a GLOBAL config carrying BOTH a denying remote.origin.push AND push.default=matching -- config is never consulted for an explicit refspec -- measured: M39, 111 pass 3 fail (with push-noop-config-explicit-refspec and push-noop-global-explicit-refspec-c)"
   "push-noop-global-explicit-refspec-c|case_pn_global_explicit_refspec_c|no opinion: git -C <wt> push -u origin \"claude/17-a\" (release-blocker control, the \"-C\" variant) against the SAME denying GLOBAL config -- measured: M39, 111 pass 3 fail (with push-noop-config-explicit-refspec and push-noop-global-explicit-refspec)"
   "push-noop-global-none-present|case_pn_global_none_present|no opinion: a dedicated, empty fixture HOME with no .gitconfig/.config/git/config, XDG_CONFIG_HOME and GIT_CONFIG_GLOBAL both unset, repo config absent (the \"none present\" boundary AND this file's own isolation positive control) -- measured: not flipped by M14-M69 (this fixture's dedicated HOME has no candidate file at all, so no mutant in this table -- none of which invents a route from a file that does not exist -- can produce a deny here)"
+  "push-kw-deny-then|case_push_kw_deny_then|shell-keyword deny: if true; then git push origin main; fi -- mutation proof: dev/mutants/hook-tests.json (398-pg-kw-vocab)"
+  "push-kw-deny-bang|case_push_kw_deny_bang|shell-keyword deny: ! git push origin main -- mutation proof: dev/mutants/hook-tests.json (398-pg-kw-vocab)"
+  "push-kw-deny-upper-git|case_push_kw_deny_upper_git|case-fold deny: GIT push origin main -- mutation proof: dev/mutants/hook-tests.json (398-pg-case-fold, 398-pg-fastpath-case)"
+  "push-kw-noop-then-feature|case_push_kw_noop_then_feature|shell-keyword no opinion: if true; then git push origin feature/x; fi (control: the keyword skip must not widen the destination rule) -- control, not part of the mutation-proof registry"
   # --- hooks/claude-dir-guard.sh (#327) cases -----------------------------------------------------
   # Mutation-proof table (LESSON 2026-09-01/2026-09-07(b), one mutant per classifier clause,
   # applied in place with an immediately-refreshed backup and a full `diff` verify after every
