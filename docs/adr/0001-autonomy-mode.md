@@ -1,6 +1,6 @@
 # ADR 0001 — Autonomy mode
 
-- **Status:** Accepted, 2026-09-16 (maintainer decision)
+- **Status:** Accepted, 2026-09-16 (maintainer decision); amended 2026-09-25 (#395, decision 3)
 - **Verified against:** `main` at `4402354` (v2.7.3); Claude Code 2.1.273
 - **Tracking issues:** see [Implementation](#implementation)
 
@@ -90,6 +90,11 @@ rather than something to route around.
    can answer a permission prompt is escalated the same way, never routed around. An attended
    session may also ask in the conversation, but the run never waits on the answer. The label
    name, comment marker and dedupe key are settled in the implementing plan.
+
+   *Amended 2026-09-25 (#395):* a planner `stalled-dispatch` is retried rather than escalated
+   until the same issue stalls on three consecutive runs; each earlier stall is still recorded
+   durably (a keyed `<!-- harness-audit -->` comment) and reported; `stalled-post`/
+   `stalled-unknown` escalate immediately.
 
 4. **Follow-ups are held with `no-plan`; `no-auto-approve` is a human-only veto — in every
    mode.** The harness files a plan's follow-ups with `no-plan` only, and triage (a human) lifts

@@ -1158,6 +1158,191 @@
       "expect_fail": [
         "plan-carry-over-withheld-then-eligible"
       ]
+    },
+    {
+      "name": "395-a",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "plan-stall",
+      "edits": [
+        {
+          "from": "  | [ (.comments // [])[] | select(((.authorAssociation // \"\") | ascii_upcase) as $x | ($sok | index($x)) != null) ] as $st\n",
+          "to": "  | [ (.comments // [])[] ] as $st\n"
+        }
+      ],
+      "expect_fail": [
+        "plan-stall-untrusted-plan-no-reset",
+        "plan-stall-untrusted-record-ignored"
+      ]
+    },
+    {
+      "name": "395-b",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "plan-stall",
+      "edits": [
+        {
+          "from": "  | ([ $st[] | select((.body // \"\") | startswith($a)) | select((.body // \"\") | contains($sk))\n       | select(.createdAt > ($sreset // \"\")) ] | length) as $sp\n",
+          "to": "  | ([ $st[] | select((.body // \"\") | startswith($a)) | select((.body // \"\") | contains($sk))\n       ] | length) as $sp\n"
+        }
+      ],
+      "expect_fail": [
+        "plan-stall-newest-plan-resets",
+        "plan-stall-reset-by-plan"
+      ]
+    },
+    {
+      "name": "395-c",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "plan-stall",
+      "edits": [
+        {
+          "from": "  | ([ $st[] | select((.body // \"\") | startswith($m)) | .createdAt ] | max) as $sreset\n",
+          "to": "  | ([ $st[] | select((.body // \"\") | contains($m)) | .createdAt ] | max) as $sreset\n"
+        }
+      ],
+      "expect_fail": [
+        "plan-stall-plan-quote-does-not-reset"
+      ]
+    },
+    {
+      "name": "395-d",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "plan-stall",
+      "edits": [
+        {
+          "from": "select((.body // \"\") | startswith($a)) | select((.body // \"\") | contains($sk))",
+          "to": "select((.body // \"\") | contains($a)) | select((.body // \"\") | contains($sk))"
+        }
+      ],
+      "expect_fail": [
+        "plan-stall-requires-audit-opening"
+      ]
+    },
+    {
+      "name": "395-e",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "plan-stall",
+      "edits": [
+        {
+          "from": "{prior_stalls: $sp, escalate_on_stall: (($sp + 1) >= $sn)};",
+          "to": "{prior_stalls: $sp, escalate_on_stall: (($sp + 1) > $sn)};"
+        }
+      ],
+      "expect_fail": [
+        "plan-stall-plan-quote-does-not-reset",
+        "plan-stall-two-records-escalates",
+        "plan-stall-untrusted-plan-no-reset"
+      ]
+    },
+    {
+      "name": "395-f",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "plan-stall",
+      "edits": [
+        {
+          "from": "\n  --json number,title,url,author,comments \\",
+          "to": "\n  --json number,title,url,author \\"
+        }
+      ],
+      "expect_fail": [
+        "plan-stall-two-records-escalates",
+        "plan-stall-initial-retry-requests-comments"
+      ]
+    },
+    {
+      "name": "395-g",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "plan-stall",
+      "edits": [
+        {
+          "from": "\n    --json number,title,url,author,comments \\",
+          "to": "\n    --json number,title,url,author \\"
+        }
+      ],
+      "expect_fail": [
+        "plan-stall-initial-retry-requests-comments"
+      ]
+    },
+    {
+      "name": "395-h",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "plan-stall",
+      "edits": [
+        {
+          "from": "bucket: \"needs_initial_plan\"}) | del(.trusted_author, .prior_stalls, .escalate_on_stall) ] )",
+          "to": "bucket: \"needs_initial_plan\"}) | del(.trusted_author) ] )"
+        }
+      ],
+      "expect_fail": [
+        "plan-stall-untrusted-author-shape"
+      ]
+    },
+    {
+      "name": "395-i",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "plan-stall",
+      "edits": [
+        {
+          "from": "\n      | (stall_fields) as $sf\n",
+          "to": "\n      | ({}) as $sf\n"
+        }
+      ],
+      "expect_fail": [
+        "plan-stall-reset-by-plan"
+      ]
+    },
+    {
+      "name": "395-j",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "plan-stall",
+      "edits": [
+        {
+          "from": "  | ([ $st[] | select((.body // \"\") | startswith($m)) | .createdAt ] | max) as $sreset",
+          "to": "  | ([ $st[] | select((.body // \"\") | startswith($m)) | .createdAt ] | min) as $sreset"
+        }
+      ],
+      "expect_fail": [
+        "plan-stall-newest-plan-resets"
+      ]
+    },
+    {
+      "name": "395-k",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "plan-stall",
+      "edits": [
+        {
+          "from": "  | ([ $st[] | select((.body // \"\") | startswith($m)) | .createdAt ] | max) as $sreset",
+          "to": "  | ([ (.comments // [])[] | select((.body // \"\") | startswith($m)) | .createdAt ] | max) as $sreset"
+        }
+      ],
+      "expect_fail": [
+        "plan-stall-untrusted-plan-no-reset"
+      ]
+    },
+    {
+      "name": "395-l",
+      "target": "bin/find-planning-work.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "plan-stall",
+      "edits": [
+        {
+          "from": "  | ([ $st[] | select((.body // \"\") | startswith($a)) | select((.body // \"\") | contains($sk))",
+          "to": "  | ([ $st[] | select((.body // \"\") | startswith($a))"
+        }
+      ],
+      "expect_fail": [
+        "plan-stall-requires-stall-key"
+      ]
     }
   ]
 }

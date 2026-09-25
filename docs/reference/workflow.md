@@ -58,6 +58,26 @@ The `issue-planner` skill:
    artifact instead of two rounds. Ungroundable questions stay open for the human.
 7. **Auto-approves under the repo's policy, if one exists** — see "Approval" below.
 
+**Planner stalls (#395).** When a `planner` subagent dispatch produces no plan at all
+(`stalled-dispatch`), the first and second consecutive stall on that issue are retried, not
+escalated: the planner posts a trusted record — a comment opening with `<!-- harness-audit -->`
+whose second line is `<!-- harness-stall: issue=<n> stage=<plan-initial|plan-revision>
+reason=stalled-dispatch -->` — and the issue stays in discovery for the next run to retry
+automatically. `find-planning-work.sh` counts these records itself: a `needs_initial_plan` or
+`needs_revision` item's `prior_stalls` is the number of trusted stall records posted after the
+issue's newest trusted plan comment (a posted plan resets the count), and `escalate_on_stall` is
+true once `prior_stalls + 1` reaches the fixed threshold, 3 (`STALL_ESCALATE_AFTER` in the
+script). Only on that third consecutive stall does the planner escalate durably, the same way it
+already does for `stalled-post` and `stalled-unknown` (an issue whose plan/revision existed but
+was never posted, or an unrecognised failure) — both of those still escalate immediately, never
+retried. Honest limits: a stall record posted under a harness `gh` identity that isn't itself a
+maintainer never counts, so that issue retries forever but is still reported every run rather than
+silently dropped. Revision candidates are read in full, so their count is exact, but the
+initial-plan query sees only each issue's oldest 100 comments. On an initial-plan issue with more
+comments than that, the count can be off either way: stall records past the window are missed
+(the issue keeps retrying), and a plan past the window is missed too, so older stall records still
+count and a stall can escalate early — the pre-#395 outcome, a `needs-human` escalation you clear.
+
 The plan template (see `agents/planner.md`) includes: Summary, **Acceptance criteria** (the
 testable definition of done the verifier later checks against — derived even when the issue
 didn't state any), Estimated size (S/M/L), Affected areas (including a **"Claims this change
@@ -396,7 +416,10 @@ above: it fails the revision-candidates query closed, so `find-planning-work.sh`
 `needs_revision` bucket comes back empty, and this script subtracts that (now-empty) bucket from
 the plan-proposed query — so a plan-proposed issue with real unaddressed maintainer feedback stays
 counted as awaiting your review instead of the planner's. Nothing in that JSON is phone-specific —
-it's the same summary a scheduled routine's own report already gives you. Honest limits on
+it's the same summary a scheduled routine's own report already gives you. Since #395,
+`harness_will_handle.unplanned`/`in_revision` items each carry `prior_stalls`, so a first or
+second planner stall on an issue (see "Planner stalls" above) is visible between runs, before it
+would otherwise escalate. Honest limits on
 `followups_to_triage` (#333, #346): a follow-up you read and parked WITHOUT applying
 `triaged-held` still counts; a hand-written `no-plan` issue whose body happens to open with the
 same marker text would count too even though the harness never filed it; GitHub's issue search can

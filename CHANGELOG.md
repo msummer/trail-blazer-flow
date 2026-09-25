@@ -18,6 +18,11 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #395: A planner `stalled-dispatch` (a dispatch that produced no plan) is now retried rather than
+  escalated until the same issue stalls on three consecutive runs (`STALL_ESCALATE_AFTER`); each
+  earlier stall is recorded as a trusted, counted `<!-- harness-audit -->` comment
+  (`find-planning-work.sh`'s new `prior_stalls`/`escalate_on_stall` fields), never feedback or the
+  plan. `stalled-post`/`stalled-unknown` still escalate immediately. No consumer step.
 - #383: Every `dev/*-tests.sh` runner now reports a `cases=()` row whose function (or, in
   `dev/selfcheck-tests.sh`, whose perturbation function) no longer exists as a FAIL naming it,
   instead of a silent PASS; proven per runner by `dev/mutants/case-fn-guard.json`. No consumer

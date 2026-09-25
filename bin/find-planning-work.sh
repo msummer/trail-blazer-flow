@@ -63,7 +63,8 @@
 # of the retry block).
 #
 # Output (JSON): needs_initial_plan, needs_revision (each item now additionally carries author,
-# association, trusted_author) plus untrusted_comments — an array of {number, title, url,
+# association, trusted_author, prior_stalls, escalate_on_stall — #395, see below) plus
+# untrusted_comments — an array of {number, title, url,
 # comments: [{author, association, createdAt, has_plan_marker, has_harness_marker}, ...]}, one
 # entry per issue that has at least one untrusted comment posted after its latest trusted plan
 # (or, if it has no trusted plan yet, any untrusted comment) — and untrusted_issue_authors (see
@@ -147,6 +148,29 @@
 # issue is ever in both needs_revision and awaiting_approval (has_feedback is mutually exclusive
 # between the two paths). counts also gains awaiting_approval (the bucket's own length).
 #
+# #395 adds prior_stalls (integer) and escalate_on_stall (boolean) to every needs_initial_plan and
+# needs_revision item, so a planner dispatch that stalled (produced no plan) can be retried instead
+# of escalated. A stall is recorded as a trusted comment whose body opens with AUDIT_MARKER and
+# whose second line contains STALL_KEY_PREFIX (posted by skills/issue-planner/SKILL.md step 7).
+# prior_stalls counts trusted comments meeting BOTH: they open with the audit marker and contain
+# the stall key, AND their createdAt is strictly later than the newest trusted comment that opens
+# with PLAN_MARKER (every such record counts when the issue has no trusted plan yet) — so a
+# successful plan resets the count, and a run that does not attempt the issue at all neither
+# increments nor resets it. escalate_on_stall is true once prior_stalls + 1 >= STALL_ESCALATE_AFTER
+# (a fixed constant, see below): the planner posts one more stall record and retries on the first
+# STALL_ESCALATE_AFTER-1 stalls, then escalates through the existing durable-escalation path on the
+# STALL_ESCALATE_AFTER'th. A stall record is never feedback and never a plan candidate: it opens
+# with the audit marker, so the existing contains($a)/startswith($m) exclusions above already keep
+# it out of has_feedback and out of plan selection. Honest limits: a stall record posted under a
+# harness identity that is not itself OWNER/MEMBER/COLLABORATOR never counts, so that issue retries
+# forever but is still reported every run (never silently dropped). Revision candidates are read
+# with `gh issue view`, which returns every comment, so their count is exact. The
+# needs_initial_plan query (`gh issue list --json comments`) sees only each issue's OLDEST 100
+# comments, so on an initial-plan issue with more comments than that the count can be off either
+# way: stall records past the window are missed (the issue keeps retrying), and a trusted plan past
+# the window is missed too, so older stall records still count and a stall can escalate early —
+# the pre-#395 outcome, a needs-human escalation the maintainer clears.
+#
 # Wall clock: the retry budget is deliberately UNCAPPED — one retry per site (the REST
 # author-association lookup, the needs_initial_plan query, the revision-candidates query) plus one
 # retry per candidate in the per-candidate fetch loop, no run-level ceiling on top of that. Worst
@@ -205,6 +229,15 @@ AUDIT_MARKER="<!-- harness-audit -->"
 VERDICT_MARKER="<!-- verifier-verdict -->"
 ESCALATION_MARKER="<!-- harness-escalation -->"
 
+# STALL_KEY_PREFIX / STALL_ESCALATE_AFTER (#395) — accounting for a planner dispatch that produces
+# no plan (stalled-dispatch). STALL_KEY_PREFIX is the second line of the stall record the planner
+# skill posts (see skills/issue-planner/SKILL.md step 7); its first line is AUDIT_MARKER above, so
+# a stall record is excluded from has_feedback/plan selection exactly like any other harness-audit
+# comment. STALL_ESCALATE_AFTER is the fixed threshold: an issue escalates only once it has
+# stalled this many times in a row without an intervening plan (see stall_fields below).
+STALL_KEY_PREFIX="<!-- harness-stall:"
+STALL_ESCALATE_AFTER=3
+
 # HARNESS_RECORD_MARKERS (#321, extended by #309) — the harness-record marker SET, one marker per
 # line. A later marker is a ONE-LINE addition here and nowhere else in the harness_marker_quoters
 # member below. The per-marker counters above/below keep their own $a/$v/$e tests on purpose: each
@@ -219,6 +252,23 @@ $ESCALATION_MARKER"
 # everything else is reported in untrusted_comments and never acted on. To act on an
 # outside contributor's suggestion, a maintainer comments themselves.
 TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"
+
+# stall_fields (#395) — a shared, non-parameterised jq def merged into both the needs_initial_plan
+# annotation and the needs_revision entry below: it reads only the global --arg/--argjson bindings
+# each call site supplies ($trusted, $m the plan marker, $a the audit marker, $sk
+# STALL_KEY_PREFIX, $sn STALL_ESCALATE_AFTER) plus the implicit input's own .comments, so it works
+# unchanged whether that input is a needs_initial_plan raw item or a freshly fetched $issue. It
+# counts trusted stall records — a comment that opens with the audit marker and contains the
+# stall key — posted after the newest trusted comment that opens with the plan marker (a plan
+# resets the count; an issue with no trusted plan yet counts every trusted stall record it has).
+STALL_FIELDS_JQ_DEF='def stall_fields:
+  ($trusted | split(" ")) as $sok
+  | [ (.comments // [])[] | select(((.authorAssociation // "") | ascii_upcase) as $x | ($sok | index($x)) != null) ] as $st
+  | ([ $st[] | select((.body // "") | startswith($m)) | .createdAt ] | max) as $sreset
+  | ([ $st[] | select((.body // "") | startswith($a)) | select((.body // "") | contains($sk))
+       | select(.createdAt > ($sreset // "")) ] | length) as $sp
+  | {prior_stalls: $sp, escalate_on_stall: (($sp + 1) >= $sn)};
+'
 
 # #202: gh has never exposed an issue-level authorAssociation `--json` field, so author
 # provenance is read from GitHub's REST issues endpoint into a number -> {author, association}
@@ -273,13 +323,13 @@ candidates_query_unavailable=false
 fetch_retries=0
 if ! needs_initial_plan=$(gh issue list \
   --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan -label:$ESCALATION_LABEL" \
-  --json number,title,url,author \
+  --json number,title,url,author,comments \
   --limit "$LIMIT"); then
   initial_query_retried=true
   sleep "$ASSOCIATION_RETRY_SLEEP" || true
   if needs_initial_plan=$(gh issue list \
     --search "is:open is:issue -label:plan-proposed -label:plan-approved -label:no-plan -label:$ESCALATION_LABEL" \
-    --json number,title,url,author \
+    --json number,title,url,author,comments \
     --limit "$LIMIT"); then
     echo "warn: needs_initial_plan query failed once — retried after 30s and succeeded (transient API blip absorbed)" >&2
   else
@@ -289,18 +339,20 @@ if ! needs_initial_plan=$(gh issue list \
   fi
 fi
 
-# Annotate needs_initial_plan items with author/association/trusted_author from the REST map.
-# An issue absent from the map (author_association_unavailable, or simply not returned by the
-# REST call this run) resolves to association "MISSING" and trusted_author: false — fail-closed,
-# the same rule the comment-side gate uses.
-needs_initial_plan=$(printf '%s' "$needs_initial_plan" | jq --arg trusted "$TRUSTED_ASSOCIATIONS" --argjson map "$issue_authors" '
+# Annotate needs_initial_plan items with author/association/trusted_author from the REST map, plus
+# (#395) prior_stalls/escalate_on_stall from stall_fields, computed from each raw item's own
+# .comments (requested by the --json line above). The output item never carries comments itself.
+needs_initial_plan=$(printf '%s' "$needs_initial_plan" | jq --arg trusted "$TRUSTED_ASSOCIATIONS" --argjson map "$issue_authors" \
+  --arg m "$PLAN_MARKER" --arg a "$AUDIT_MARKER" --arg sk "$STALL_KEY_PREFIX" --argjson sn "$STALL_ESCALATE_AFTER" \
+  "$STALL_FIELDS_JQ_DEF"'
   ($trusted | split(" ")) as $ok
   | map(($map[(.number|tostring)] // {}) as $p
+        | (stall_fields) as $sf
         | {number, title, url,
            author: ($p.author // .author.login // "unknown"),
            association: (($p.association // "MISSING") | ascii_upcase),
            trusted_author: ((($p.association // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null)
-          })
+          } + $sf)
 ')
 
 # Candidates for revision: awaiting review, not yet approved, not opted out.
@@ -464,14 +516,19 @@ for n in $candidates; do
 
   has_feedback=$(printf '%s' "$result" | jq -r '.has_feedback')
   if [ "$has_feedback" = "true" ]; then
-    entry=$(printf '%s' "$issue" | jq --arg trusted "$TRUSTED_ASSOCIATIONS" --argjson map "$issue_authors" '
+    # (#395) stall_fields is computed from $issue's own .comments (already fetched above) and
+    # merged in, so needs_revision items carry prior_stalls/escalate_on_stall too.
+    entry=$(printf '%s' "$issue" | jq --arg trusted "$TRUSTED_ASSOCIATIONS" --argjson map "$issue_authors" \
+      --arg m "$PLAN_MARKER" --arg a "$AUDIT_MARKER" --arg sk "$STALL_KEY_PREFIX" --argjson sn "$STALL_ESCALATE_AFTER" \
+      "$STALL_FIELDS_JQ_DEF"'
       ($trusted | split(" ")) as $ok
       | ($map[(.number|tostring)] // {}) as $p
+      | (stall_fields) as $sf
       | {number, title, url,
          author: ($p.author // .author.login // "unknown"),
          association: (($p.association // "MISSING") | ascii_upcase),
          trusted_author: ((($p.association // "") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null)
-        }')
+        } + $sf')
     needs_revision=$(jq -n --argjson arr "$needs_revision" --argjson e "$entry" '$arr + [$e]')
   fi
 
@@ -609,11 +666,11 @@ done
 
 # untrusted_issue_authors: every needs_initial_plan/needs_revision item with trusted_author:
 # false, from EITHER bucket, tagged with which bucket it came from. trusted_author itself is
-# dropped from the entry — the documented shape is {number, title, url, author, association,
-# bucket}.
+# dropped from the entry, and so (#395) are the stall fields (prior_stalls, escalate_on_stall) —
+# the documented shape stays exactly {number, title, url, author, association, bucket}.
 untrusted_issue_authors=$(jq -n --argjson initial "$needs_initial_plan" --argjson revision "$needs_revision" '
-  ( [ $initial[] | select(.trusted_author == false) | (. + {bucket: "needs_initial_plan"}) | del(.trusted_author) ] )
-  + ( [ $revision[] | select(.trusted_author == false) | (. + {bucket: "needs_revision"}) | del(.trusted_author) ] )
+  ( [ $initial[] | select(.trusted_author == false) | (. + {bucket: "needs_initial_plan"}) | del(.trusted_author, .prior_stalls, .escalate_on_stall) ] )
+  + ( [ $revision[] | select(.trusted_author == false) | (. + {bucket: "needs_revision"}) | del(.trusted_author, .prior_stalls, .escalate_on_stall) ] )
 ')
 untrusted_issue_author_count=$(printf '%s' "$untrusted_issue_authors" | jq 'length')
 
