@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #387: `hooks/agent-boundary.sh` also denies an implementer/verifier Bash call whose command word
+  is an interpreter or one-step writer (python/perl/ruby/node/awk, dd/install/ln/touch/…) when the
+  same call names a `.claude` path segment anywhere. No consumer step.
 - #383: Every `dev/*-tests.sh` runner now reports a `cases=()` row whose function (or, in
   `dev/selfcheck-tests.sh`, whose perturbation function) no longer exists as a FAIL naming it,
   instead of a silent PASS; proven per runner by `dev/mutants/case-fn-guard.json`. No consumer
