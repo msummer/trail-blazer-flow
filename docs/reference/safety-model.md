@@ -410,7 +410,11 @@ per-comment `includesCreatedEdit` on the plan comment is not exactly `false` —
 the merge floor holding exactly as they do for `plan-after-approval`, with no changes of their
 own; an edit made *before* approval stays covered on purpose (the approver read the edited text);
 an unreadable edit-state lookup fails closed to `covers_plan: null`, an **unknown** verdict
-(`reason: "plan-edit-unreadable"`), the same tri-state `approval-unreadable` already used. When
+(`reason: "plan-edit-unreadable"`), the same tri-state `approval-unreadable` already used. The
+same events call (#375) also reports a `closed` event: a close at or after the newest labeling
+means that approval was consumed by the close (`reason: "closed-after-approval"`,
+`covers_plan: false`, handled exactly like `plan-after-approval`) at no extra API cost, and
+re-approving after a reopen (removing and re-adding `plan-approved`) restores coverage. When
 the plan covers, the script emits a `binding_line` naming the specific plan comment and approval
 timestamp; the `issue-implementer` skill revalidates this **before dispatch and again before
 push**, splitting its remedy by verdict since #219: a same-run revision (or in-place edit)

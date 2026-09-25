@@ -73,8 +73,8 @@
 #
 # #230 extends #194 workstream B with decision-comment CONTENT binding, closing for decision
 # comments the same gap #192 closed for the plan comment itself: on the branch that would
-# otherwise leave this issue's approval.covers_plan "true" (after the #229 label pre-filter and
-# the #192 plan-edit check below both pass), the script looks up every trusted_post_plan entry
+# otherwise leave this issue's approval.covers_plan "true" (after the #229 label pre-filter, the
+# #375 close check, and the #192 plan-edit check below all pass), the script looks up every trusted_post_plan entry
 # whose covered_by_approval workstream B computed as true AND whose own gh-reported
 # includesCreatedEdit is not exactly false (#240, see below) — via one read-only
 # `gh api repos/{owner}/{repo}/issues/comments/<id> --jq '.updated_at // empty'` call per such
@@ -121,11 +121,13 @@
 #                 createdAt (the plan comment posted after the label fails it), the plan comment's
 #                 own REST updated_at is not later than that same approved_at (#192 — an in-place
 #                 edit of the comment made AFTER approval un-covers it too, not just a later
-#                 revision's own createdAt), AND every trusted_post_plan comment covered_by_approval
+#                 revision's own createdAt), every trusted_post_plan comment covered_by_approval
 #                 already marked true has its own REST updated_at no later than approved_at either
-#                 (#230, see below); reason is one of covered (covers_plan: true),
-#                 approval-label-absent, plan-after-approval, no-approval-event, no-plan,
-#                 plan-url-missing, plan-edited-after-approval, decision-edited-after-approval
+#                 (#230, see below), AND no `closed` event on the issue is at or after that label's
+#                 newest application (#375 — a close consumes the approval; a reopened issue needs
+#                 a fresh one); reason is one of covered (covers_plan: true),
+#                 approval-label-absent, plan-after-approval, closed-after-approval, no-approval-event,
+#                 no-plan, plan-url-missing, plan-edited-after-approval, decision-edited-after-approval
 #                 (covers_plan: false), or approval-unreadable / plan-edit-unreadable /
 #                 decision-edit-unreadable (covers_plan: null — the events lookup, the plan
 #                 comment's, or a covered decision comment's updated_at lookup respectively failed,
@@ -147,10 +149,10 @@
 #                 template, derived once, not two). The events lookup being unreadable, or
 #                 returning no plan-approved event at all, or the approval-label-absent pre-filter
 #                 above short-circuiting before the events lookup ever runs, all yield [] — an
-#                 events-readable-but-not-covered issue (plan-after-approval, plan-edited-after-
-#                 approval, decision-edited-after-approval, or the plan-edit or a covered decision
-#                 comment's edit lookup itself being unreadable) still yields a non-empty history,
-#                 just with every binding_line null.
+#                 events-readable-but-not-covered issue (plan-after-approval, closed-after-approval,
+#                 plan-edited-after-approval, decision-edited-after-approval, or the plan-edit or a
+#                 covered decision comment's edit lookup itself being unreadable) still yields a
+#                 non-empty history, just with every binding_line null.
 #   binding_line: derived from approved_at_history[0].binding_line — the literal
 #                 `<!-- harness-plan-binding: issue=<n> plan=<plan.url> approved-at=<approved_at>
 #                 -->` when and only when covers_plan is true; null in every other case. Revalidated
@@ -229,7 +231,9 @@
 # untrusted_harness_markers (#194 workstream A, see above), verdict_archives_skipped (trusted,
 # post-plan, verdict-marker-carrying comments excluded from trusted_post_plan),
 # audit_comments_skipped (trusted, post-plan, harness-audit-marker-carrying comments excluded from
-# trusted_post_plan the same way), missing_association, plan_after_approval, no_approval_event,
+# trusted_post_plan the same way), missing_association, plan_after_approval, closed_after_approval
+# (#375, one per issue whose newest closed event is at or after its newest plan-approved labeling —
+# see approval.reason above), no_approval_event,
 # and approval_unreadable (from #174's approval binding, one per corresponding `reason`),
 # post_approval_comments (#194 workstream B, see above — trusted_post_plan entries with
 # covered_by_approval: false AND covered_by_approval_reason: null (#230) — an entry uncovered
@@ -400,6 +404,7 @@ plan_edit_unreadable=0
 decision_edited_after_approval=0
 decision_edit_unreadable=0
 approval_label_absent=0
+closed_after_approval=0
 for n in $ready_numbers; do
   # Tolerate per-issue failures: one transient gh/API error must not kill the whole
   # discovery run (matters for unattended/scheduled runs). #284: a first failure is retried once
@@ -576,6 +581,8 @@ for n in $ready_numbers; do
   # API call when there is a plan to bind (skips the issues already skipped for no_trusted_plan)
   # AND the plan-approved label is currently on the issue (#229's pre-filter above skips this
   # whole branch, and its events/plan-edit lookups below, at zero extra API cost, when it isn't).
+  # #375 — the same call also returns `closed` events (still one call per issue, no extra API
+  # cost), so a close at or after the newest plan-approved labeling can be detected below.
   # #196 — the --jq filter below MUST open with `.[] | `: `gh api --paginate --jq 'EXPR'` applies
   # EXPR once to each page's response document AS-IS (a JSON array of event objects), not once per
   # element — gh never prepends its own `.[] | `. Without the leading `.[] | `, `select(...)` runs
@@ -596,6 +603,7 @@ for n in $ready_numbers; do
   plan_url=""
   history_json="[]"
   approved_at_history="[]"
+  closed_latest=""
   # #229 — the pre-filter: current label state is the authority, checked BEFORE the events lookup
   # and the #192 plan-edit lookup below, so a withdrawn approval costs zero further API calls.
   # Wins over no-plan (the most actionable fact — "the human withdrew approval" — regardless of
@@ -625,14 +633,21 @@ for n in $ready_numbers; do
       reason="plan-url-missing"
       echo "warn: issue #$n: plan comment has no url — cannot bind approval to it" >&2
     elif ! events=$(gh api "repos/{owner}/{repo}/issues/$n/events?per_page=100" --paginate --jq '
-        .[] | select(.event == "labeled" and .label.name == "plan-approved")
-        | "\(.created_at) \(.actor.login // "unknown")"
+        .[] | select((.event == "labeled" and .label.name == "plan-approved") or .event == "closed")
+        | "\(.event) \(.created_at) \(.actor.login // "unknown")"
       ' 2>/dev/null); then
       covers_plan="null"
       reason="approval-unreadable"
       echo "warn: issue #$n: could not read plan-approved label events — approval unreadable" >&2
       approval_unreadable=$((approval_unreadable+1))
     else
+      # #375 — closed_latest first, then narrow $events back down to the pre-#375
+      # "<created_at> <actor>" shape: sed, not grep, for the same pipefail reason as below (a
+      # `grep -v`/`grep` that matches nothing would exit 1 under `set -o pipefail` and abort the
+      # script). Dropping the "closed ..." lines and stripping the "labeled " prefix from what
+      # remains keeps `latest`/`history_json` below byte-identical to before this change.
+      closed_latest=$(printf '%s\n' "$events" | sed -n 's/^closed \([^ ]*\).*$/\1/p' | sort | tail -1)
+      events=$(printf '%s\n' "$events" | sed -n 's/^labeled //p')
       # sed, not `grep -v`, to drop blank lines: with `set -o pipefail`, a `grep -v` that
       # matches nothing (the common "no events" case) exits 1 and would abort the whole script
       # under `set -e`; `sed` exits 0 regardless of how many lines it deletes.
@@ -660,7 +675,19 @@ for n in $ready_numbers; do
       else
         approved_at=$(printf '%s' "$latest" | cut -d' ' -f1)
         approved_by=$(printf '%s' "$latest" | cut -d' ' -f2-)
-        if [[ "$plan_created" > "$approved_at" ]]; then
+        # #375 — a close at or after the newest plan-approved labeling consumes that approval: a
+        # reopened issue needs a fresh one. A tie counts as closed-after (fail-closed; there is no
+        # auto-approval reason for a tie here, unlike the plan_created/approved_at tie below, which
+        # favours the auto-approval path that labels immediately after posting). Multi-PR KEEP
+        # (bin/cleanup-after-merge.sh) never closes the issue, so the slice re-queue shape (labeled/
+        # unlabeled pr-open events with no closed event) is unaffected. Re-approving after a reopen
+        # (removing and re-adding plan-approved) moves approved_at past the close and restores
+        # coverage.
+        if [ -n "$closed_latest" ] && ! [[ "$approved_at" > "$closed_latest" ]]; then
+          reason="closed-after-approval"
+          echo "warn: issue #$n: issue was closed ($closed_latest) at or after its newest plan-approved label ($approved_at) — that approval was consumed by the close; a reopened issue needs a fresh approval, so it does not cover this plan" >&2
+          closed_after_approval=$((closed_after_approval+1))
+        elif [[ "$plan_created" > "$approved_at" ]]; then
           reason="plan-after-approval"
           echo "warn: issue #$n: plan comment ($plan_created) postdates the plan-approved label ($approved_at) — approval does not cover this plan" >&2
           plan_after_approval=$((plan_after_approval+1))
@@ -969,6 +996,7 @@ jq -n \
   --argjson deaa "$decision_edited_after_approval" \
   --argjson deu "$decision_edit_unreadable" \
   --argjson ala "$approval_label_absent" \
+  --argjson caa "$closed_after_approval" \
   --argjson rqr "$ready_query_retried" \
   --argjson rqu "$ready_query_unavailable" \
   --argjson fr "$fetch_retries" \
@@ -996,6 +1024,7 @@ jq -n \
              decision_edited_after_approval: $deaa,
              decision_edit_unreadable: $deu,
              approval_label_absent: $ala,
+             closed_after_approval: $caa,
              ready_query_retried: $rqr,
              ready_query_unavailable: $rqu,
              plan_marker_quoters: $pmq,

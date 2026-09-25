@@ -18,6 +18,12 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #375: A reopened issue's earlier `plan-approved` approval no longer covers its plan once the
+  issue has closed: `find-implementation-work.sh`'s existing events call now also reads `closed`
+  events, and a close at or after the newest plan-approved labeling yields
+  `covers_plan: false`, `reason: "closed-after-approval"`, so the implementer returns the issue to
+  plan review instead of rebuilding the merged plan; re-approving restores coverage. No consumer
+  step.
 - #387: `hooks/agent-boundary.sh` also denies an implementer/verifier Bash call whose command word
   is an interpreter or one-step writer (python/perl/ruby/node/awk, dd/install/ln/touch/…) when the
   same call names a `.claude` path segment anywhere. No consumer step.
