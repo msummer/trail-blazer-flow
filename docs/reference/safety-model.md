@@ -745,13 +745,20 @@ same-pid-idempotent (a second acquire from the same live session would itself re
 the run). A refused acquire aborts the run loudly, before any tree-mutating command, printing the
 holder record and the exact `harness-lock.sh release --force` remedy; the lock is released on
 every STOP/abort path too, not only the normal close, since the recorded pid outlives the run
-that acquired it. The recorded pid is `${CLAUDE_PID:-$PPID}`: under Claude Code, `CLAUDE_PID` is
+that acquired it. The recorded pid follows a precedence (#408): `acquire --owner-pid <pid>` >
+`TBF_OWNER_PID` > `${CLAUDE_PID:-$PPID}` (the original rule). Under Claude Code, `CLAUDE_PID` is
 the long-lived session process (exported to every Bash tool call), while a Bash tool call's own
 `$PPID` is already dead by the time the next call starts — measured live (two separate Bash tool
 invocations, same `CLAUDE_PID`, the second `acquire` refusing rather than reclaiming); recording
 bare `$PPID` would make the very next `acquire` see a dead pid and reclaim its own lock, an inert
 guard. `$PPID` remains the fallback for a human running the script by hand from an interactive
-shell. **Reclaim rule:** a lock held by a live process on the SAME host, or by ANY process on a
+shell; Claude Code passes neither flag nor env var, so its own behavior is unchanged. On Codex,
+where `$PPID` is the session's own `codex` process under `codex exec`/`codex --no-daemon` (ADR
+0002 P6), a caller that can't rely on that fallback passes it explicitly:
+`harness-lock.sh acquire --owner-pid "$PPID"`. Before creating anything, `acquire` also refuses
+(exit 2) when the resolved owner's own command line names a Codex `app-server` daemon — such an
+owner never dies, so a lock recorded against it could never be reclaimed; see
+`docs/reference/codex.md`. **Reclaim rule:** a lock held by a live process on the SAME host, or by ANY process on a
 DIFFERENT host, refuses; a same-host holder whose pid is no longer alive is reclaimed
 automatically (one audit line quoting the stale record); a record with a missing or non-digits
 `pid`/`host` file always refuses rather than reclaiming — the remedy is always

@@ -26,8 +26,8 @@
 # $$) — so wrapping the invocation in a subshell would fork an extra process whose pid becomes
 # bin/harness-lock.sh's own $PPID, which would never equal this file's own top-level $$, breaking
 # cases 19/20's fallback-pid assertion (case 19's own comment below records the measured proof).
-# Avoiding subshells everywhere (not just for 19/20) keeps one runner for all 21 cases instead of
-# a second, parallel helper.
+# Avoiding subshells everywhere (not just for 19/20) keeps one runner for every case in this file
+# instead of a second, parallel helper.
 #
 # CLAUDE_PID PER FIXTURE (RESOLVED): every case passes an explicit CLAUDE_PID value to run_lock —
 # live-holder fixtures pass "$$" (this harness's own pid, alive for the whole run), stale
@@ -147,20 +147,28 @@ lockdir_of() { printf '%s/.git/trail-blazer/lock' "$1"; }
 # $lock_rc/$lock_stdout/$lock_stderr set as globals, plus $lock_out — the two streams concatenated
 # (stdout then stderr) — kept for the cases that only ever assert presence and don't care which
 # stream carries it.
+#
+# TBF_OWNER_PID CONTROL (#408): run_lock also always exports TBF_OWNER_PID="$lock_tbf_owner" — a
+# new global, reset to "" by the runner loop before every case — to BOTH branches below, including
+# the UNSET one. An empty value means unset to bin/harness-lock.sh itself (its own check is
+# `[ -n "${TBF_OWNER_PID:-}" ]`), so a case that never sets $lock_tbf_owner runs exactly as before
+# #408; explicitly assigning it every time (rather than leaving it to inherit) keeps a developer's
+# own real TBF_OWNER_PID, if any, from ever leaking into a fixture.
 lock_rc=0
 lock_out=""
 lock_stdout=""
 lock_stderr=""
+lock_tbf_owner=""
 run_lock() {
   local dir="$1" pidval="$2"; shift 2
   local orig; orig="$(pwd)"
   cd "$dir" || { lock_rc=90; lock_out="cd $dir failed"; lock_stdout=""; lock_stderr=""; return; }
   if [ "$pidval" = "UNSET" ]; then
-    HOME="$dir/home" XDG_CONFIG_HOME="$dir/xdgcfg" \
+    HOME="$dir/home" XDG_CONFIG_HOME="$dir/xdgcfg" TBF_OWNER_PID="$lock_tbf_owner" \
       "$bash_bin" -c 'unset CLAUDE_PID; exec "$@"' _ "$bash_bin" "$root/bin/harness-lock.sh" "$@" \
       > "$dir/.lock-out" 2> "$dir/.lock-err"
   else
-    HOME="$dir/home" XDG_CONFIG_HOME="$dir/xdgcfg" CLAUDE_PID="$pidval" \
+    HOME="$dir/home" XDG_CONFIG_HOME="$dir/xdgcfg" CLAUDE_PID="$pidval" TBF_OWNER_PID="$lock_tbf_owner" \
       "$bash_bin" "$root/bin/harness-lock.sh" "$@" \
       > "$dir/.lock-out" 2> "$dir/.lock-err"
   fi
@@ -281,29 +289,14 @@ run_id_from_out() { printf '%s\n' "$lock_stdout" | sed -n 's/^run-id=//p' | tail
 # instruction to "record the measured set honestly" when a mutant fails several cases.
 
 # 1. acquire-fresh (control). Mutant: write_record — drop the `pid` file (delete
-# `printf '%s' "$p" > "$lockdir/pid"`). Re-measured 2026-09-09 (after #262's empty-needle guard
-# added a 21st case, empty-needle-guard, unaffected by this mutant): 18 pass, 3 fail — acquire-fresh
-# (this case, via the missing/empty pid file and the pid==$$ check), fallback-ppid-when-unset,
-# fallback-ppid-when-garbage (both check the pid file's content too, via a plain `[ "$got" = "$$"
-# ]` compare, not an `expect*` helper — unaffected by the #262 guard).
+# `printf '%s' "$p" > "$lockdir/pid"`), so the recorded pid is never written to disk at all.
 #
 # Second mutant (#232 kickback 2 finding — the "run-id=<id> as the LAST line of stdout"
 # acceptance criterion was only checked against the merged stdout+stderr capture, so a mutant
-# moving the fresh-acquire echo to stderr survived): line 178's
+# moving the fresh-acquire echo to stderr survived): the fresh-acquire
 # `echo "run-id=$(cat "$lockdir/run-id")"` -> `... >&2`. Fixed by pointing `expect_last_line_prefix`
 # and `run_id_from_out` at $lock_stdout alone (both were reading the merged $lock_out before) and
-# adding `expect_out "run-id="` / `expect_absent_err "run-id="` here. Re-measured 2026-09-09 (#262
-# changed this mutant's failing set — see below): 16 pass, 5 fail — acquire-fresh (this case, all
-# three of the new/repointed assertions), release-own-run-id and release-wrong-run-id (both call
-# run_id_from_out right after this same fresh-acquire path; with run-id no longer on stdout,
-# run_id_from_out now returns empty for them too — release-own-run-id then releases with an empty
-# argument (usage triggers, rc 2 instead of 0); release-wrong-run-id's own trailing "$now" = "$rid"
-# check now sees $rid="" against the real stored id and fails "run-id changed on mismatch"), PLUS
-# two cases that used to stay green precisely because $rid was empty and are caught by #262's guard
-# now: release-force (its `expect "$rid"` used to degenerate to `grep -qF -- ""`, an unconditional
-# match; needle_required now marks it `expect: empty needle (harness bug)` instead) and
-# status-free-and-held (same shape: it also calls `run_id_from_out` after a fresh acquire and
-# asserts `expect "$rid"`).
+# adding `expect_out "run-id="` / `expect_absent_err "run-id="` here.
 case_acquire_fresh() {
   local dir; dir="$(mk_repo acquire-fresh)"
   run_lock "$dir" "$$" acquire
@@ -329,7 +322,7 @@ case_acquire_fresh() {
 # 2. acquire-twice-refused. Mutant: drop the mkdir-failure (else) branch in cmd_acquire —
 # `mkdir "$lockdir"` -> `mkdir -p "$lockdir"`, which never fails on an already-existing lock dir,
 # so the entire already-held branch (reclaim rule, refuse-foreign-host, refuse-live-pid,
-# refuse-incomplete-record, refuse-unparseable-pid) never runs. Measured: 13 pass, 7 fail —
+# refuse-incomplete-record, refuse-unparseable-pid) never runs. Fails
 # acquire-twice-refused (this case), reclaim-stale-same-host, refuse-foreign-host,
 # refuse-live-pid-same-host, refuse-incomplete-record, refuse-unparseable-pid,
 # worktree-shares-lock (all seven already-held-lock cases).
@@ -347,7 +340,7 @@ case_acquire_twice_refused() {
 }
 
 # 3. reclaim-stale-same-host. Mutant: delete the `stale reclaim: run-id=…` audit-line echo in
-# cmd_acquire's reclaim branch. Measured: 19 pass, 1 fail — failing exactly: THIS case.
+# cmd_acquire's reclaim branch. Fails exactly: THIS case.
 case_reclaim_stale_same_host() {
   local dir; dir="$(mk_repo reclaim-stale-same-host)"
   local dead host
@@ -368,7 +361,7 @@ case_reclaim_stale_same_host() {
 }
 
 # 4. refuse-foreign-host — pins the host conjunct. Mutant: `if [ "$held_host" != "$this_host" ]`
-# -> `if false`. Measured: 19 pass, 1 fail — failing exactly: THIS case.
+# -> `if false`. Fails exactly: THIS case.
 case_refuse_foreign_host() {
   local dir; dir="$(mk_repo refuse-foreign-host)"
   local dead; dead="$(dead_pid)"
@@ -381,7 +374,7 @@ case_refuse_foreign_host() {
 }
 
 # 5. refuse-live-pid-same-host — pins the liveness conjunct. Mutant: pid_alive() body replaced
-# with `return 1` unconditionally (never alive). Measured: 17 pass, 3 fail —
+# with `return 1` unconditionally (never alive). Fails
 # acquire-twice-refused, refuse-live-pid-same-host (this case), worktree-shares-lock (all three
 # depend on a live-pid refusal).
 case_refuse_live_pid_same_host() {
@@ -397,8 +390,7 @@ case_refuse_live_pid_same_host() {
 # `[ -n "$held_pid" ] || bad_record=true` check and the case statement's own `''` alternative are
 # redundant with each other (either alone still catches an empty pid file), so isolating this
 # case requires disabling both together: delete the standalone check line AND drop the `''|`
-# alternative from `case "$held_pid" in ''|*[!0-9]*) …`. Measured: 19 pass, 1 fail — failing
-# exactly: THIS case.
+# alternative from `case "$held_pid" in ''|*[!0-9]*) …`. Fails exactly: THIS case.
 case_refuse_incomplete_record() {
   local dir; dir="$(mk_repo refuse-incomplete-record)"
   write_lock "$dir" "run-incomplete" OMIT "$(uname -n)" "2020-01-01T00:00:00Z" "0.0.0" "/nowhere"
@@ -412,7 +404,7 @@ case_refuse_incomplete_record() {
 # 7. refuse-unparseable-pid — pins the *[!0-9]* arm. Mutant: delete
 # `case "$held_pid" in ''|*[!0-9]*) bad_record=true ;; esac` entirely (the standalone
 # `[ -n "$held_pid" ]`/`[ -n "$held_host" ]` checks stay, so this isolates the non-digits arm from
-# case 6's empty-pid guard). Measured: 19 pass, 1 fail — failing exactly: THIS case.
+# case 6's empty-pid guard). Fails exactly: THIS case.
 case_refuse_unparseable_pid() {
   local dir; dir="$(mk_repo refuse-unparseable-pid)"
   write_lock "$dir" "run-unparseable" "not-a-pid" "$(uname -n)" "2020-01-01T00:00:00Z" "0.0.0" "/nowhere"
@@ -425,7 +417,7 @@ case_refuse_unparseable_pid() {
 
 # 8. release-own-run-id. Mutant: remove_lock — drop the `rmdir "$lockdir"` call (and its warning
 # branch), so the lock dir's six files are removed but the now-empty directory itself is left
-# behind. Measured: 17 pass, 3 fail — reclaim-stale-same-host (its second `mkdir "$lockdir"` after
+# behind. Fails reclaim-stale-same-host (its second `mkdir "$lockdir"` after
 # remove_lock now loses the race against the leftover empty dir), release-own-run-id (this case),
 # release-force (same leftover-dir check as this case).
 case_release_own_run_id() {
@@ -439,7 +431,7 @@ case_release_own_run_id() {
 }
 
 # 9. release-wrong-run-id. Mutant: cmd_release's `if [ "$stored" = "$arg" ]; then` -> `if true;
-# then` (mismatch is never detected). Measured: 19 pass, 1 fail — failing exactly: THIS case.
+# then` (mismatch is never detected). Fails exactly: THIS case.
 case_release_wrong_run_id() {
   local dir; dir="$(mk_repo release-wrong-run-id)"
   run_lock "$dir" "$$" acquire
@@ -454,8 +446,8 @@ case_release_wrong_run_id() {
   [ "$now" = "$rid" ] || { __ok=0; __why="${__why}run-id changed on mismatch\n"; }
 }
 
-# 10. release-force. Same mutant as case 8 (remove_lock's `rmdir` dropped). Measured: 17 pass, 3
-# fail — reclaim-stale-same-host, release-own-run-id, release-force (this case) — see case 8's
+# 10. release-force. Same mutant as case 8 (remove_lock's `rmdir` dropped). Fails
+# reclaim-stale-same-host, release-own-run-id, release-force (this case) — see case 8's
 # comment; recorded once there in full, not restated per-run here.
 case_release_force() {
   local dir; dir="$(mk_repo release-force)"
@@ -469,8 +461,7 @@ case_release_force() {
 }
 
 # 11. release-no-lock. Mutant: cmd_release — delete the `if [ ! -d "$lockdir" ]; then echo
-# "released=none"; exit 0; fi` shortcut entirely. Measured: 19 pass, 1 fail — failing exactly:
-# THIS case.
+# "released=none"; exit 0; fi` shortcut entirely. Fails exactly: THIS case.
 case_release_no_lock() {
   local dir; dir="$(mk_repo release-no-lock)"
   run_lock "$dir" "$$" release some-run-id
@@ -481,7 +472,7 @@ case_release_no_lock() {
 # 12. release-missing-argument — usage on stderr, not stdout (#232 kickback 1 finding 2: the
 # runner now captures the two streams separately, so this and case 16 can pin which stream). Mutant:
 # cmd_release's own `usage >&2` call site -> `usage` (case 16's dispatch call site is untouched).
-# Measured: 19 pass, 1 fail — failing exactly: THIS case.
+# Fails exactly: THIS case.
 case_release_missing_argument() {
   local dir; dir="$(mk_repo release-missing-argument)"
   run_lock "$dir" "$$" release
@@ -490,8 +481,7 @@ case_release_missing_argument() {
   expect_absent_out "usage"
 }
 
-# 13. worktree-shares-lock. Mutant: --git-common-dir -> --git-dir. Measured: 19 pass, 1 fail —
-# failing exactly: THIS case.
+# 13. worktree-shares-lock. Mutant: --git-common-dir -> --git-dir. Fails exactly: THIS case.
 case_worktree_shares_lock() {
   local dir; dir="$(mk_repo worktree-shares-lock)"
   local wt="$tmpbase/worktree-shares-lock-wt"
@@ -505,8 +495,8 @@ case_worktree_shares_lock() {
 }
 
 # 14. status-free-and-held — the safety pin that no case can touch this repo's own .git. Mutant:
-# cmd_status — delete the free-branch's `echo "lock-path=$lockdir"` line. Measured: 19 pass, 1
-# fail — failing exactly: THIS case.
+# cmd_status — delete the free-branch's `echo "lock-path=$lockdir"` line. Fails exactly: THIS
+# case.
 case_status_free_and_held() {
   local dir; dir="$(mk_repo status-free-and-held)"
   run_lock "$dir" "$$" status
@@ -525,9 +515,9 @@ case_status_free_and_held() {
   expect "$rid"
 }
 
-# 15. help-exit-0. Mutant: usage()'s heredoc — delete the "Recorded pid: ${CLAUDE_PID:-$PPID} —
-# under Claude Code, CLAUDE_PID is …" paragraph (the only place `CLAUDE_PID` appears in the help
-# text). Measured: 19 pass, 1 fail — failing exactly: THIS case.
+# 15. help-exit-0. Mutant: usage()'s heredoc — delete the "Recorded pid precedence: `--owner-pid
+# <pid>` > `TBF_OWNER_PID` > `${CLAUDE_PID:-$PPID}` …" paragraph (the only place `CLAUDE_PID` or
+# `--owner-pid` appears in the help text). Fails exactly: THIS case.
 case_help_exit_0() {
   local dir; dir="$(mk_repo help-exit-0)"
   run_lock "$dir" "$$" --help
@@ -536,12 +526,13 @@ case_help_exit_0() {
   expect "release"
   expect "status"
   expect "CLAUDE_PID"
+  expect "--owner-pid"
+  expect "TBF_OWNER_PID"
 }
 
 # 16. unknown-subcommand — usage on stderr, not stdout (see case 12's note on the runner's split
 # streams). Mutant: the dispatch's own `usage >&2` call site -> `usage` (`*) usage >&2; exit 2
-# ;;`; case 12's cmd_release call site is untouched). Measured: 19 pass, 1 fail — failing exactly:
-# THIS case.
+# ;;`; case 12's cmd_release call site is untouched). Fails exactly: THIS case.
 case_unknown_subcommand() {
   local dir; dir="$(mk_repo unknown-subcommand)"
   run_lock "$dir" "$$" frobnicate
@@ -553,7 +544,7 @@ case_unknown_subcommand() {
 
 # 17. not-a-git-repo — the exit-2 message names the cause, on stderr. Mutant: blank the "not
 # inside a git repository (git rev-parse --git-common-dir failed)" message text down to
-# "harness-lock.sh: error". Measured: 19 pass, 1 fail — failing exactly: THIS case.
+# "harness-lock.sh: error". Fails exactly: THIS case.
 case_not_a_git_repo() {
   local dir="$tmpbase/not-a-git-repo"
   mkdir -p "$dir/home" "$dir/xdgcfg"
@@ -574,8 +565,7 @@ case_not_a_git_repo() {
 
 # 18. harness-version-recorded. Mutant: `[ -n "$v" ] && [ "$v" != "null" ] && version="$v"` ->
 # `false && version="$v"`, so `version` stays "unknown" regardless of plugin.json (whose real
-# version, 2.6.1, is neither empty nor "unknown"). Measured: 19 pass, 1 fail — failing exactly:
-# THIS case.
+# version, 2.6.1, is neither empty nor "unknown"). Fails exactly: THIS case.
 case_harness_version_recorded() {
   local dir; dir="$(mk_repo harness-version-recorded)"
   run_lock "$dir" "$$" acquire
@@ -593,7 +583,7 @@ case_harness_version_recorded() {
 # substitution instead of a plain redirected statement — the exact thing the "RUNNER SHAPE"
 # header note says must not happen, since a forked subshell's real OS pid differs from this
 # file's own top-level $$, which resolved_pid()'s $PPID fallback then records instead of $$.
-# Measured: 19 pass, 1 fail — failing exactly: THIS case.
+# Fails exactly: THIS case.
 case_fallback_ppid_when_unset() {
   local dir; dir="$(mk_repo fallback-ppid-when-unset)"
   run_lock "$dir" UNSET acquire
@@ -608,7 +598,7 @@ case_fallback_ppid_when_unset() {
 # `note=` line is on stderr (resolved_pid's non-digits arm), asserted there. Mutant: resolved_pid's
 # `*[!0-9]*)` case-arm pattern changed to `*ZZZNEVERMATCHZZZ*)` so it never matches (falls through
 # to the catch-all `*)` arm, which prints the garbage value as-is instead of falling back to
-# $PPID). Measured: 19 pass, 1 fail — failing exactly: THIS case.
+# $PPID). Fails exactly: THIS case.
 case_fallback_ppid_when_garbage() {
   local dir; dir="$(mk_repo fallback-ppid-when-garbage)"
   run_lock "$dir" "not-a-pid" acquire
@@ -625,10 +615,9 @@ case_fallback_ppid_when_garbage() {
 # each: sets $lock_out/$lock_stdout/$lock_stderr to fixed non-empty values first (so a
 # non-guarded regression couldn't pass vacuously against empty captured output), calls all nine
 # with "", then checks the ACCUMULATED __ok/__why saved off before this case's own __ok/__why are
-# reset by the runner loop. Measured mutant: delete `needle_required expect_last_line_prefix "$1"
-# || return 0` from expect_last_line_prefix only — `bash dev/lock-tests.sh` goes from 21 pass, 0
-# fail to 20 pass, 1 fail, failing exactly: empty-needle-guard (saved_why no longer names
-# "expect_last_line_prefix:").
+# reset by the runner loop. Mutant: delete `needle_required expect_last_line_prefix "$1"
+# || return 0` from expect_last_line_prefix only — fails exactly: empty-needle-guard (saved_why no
+# longer names "expect_last_line_prefix:").
 case_empty_needle_guard() {
   local saved_ok saved_why
   lock_out="fixture output for the empty-needle guard (#262)"
@@ -660,6 +649,113 @@ case_empty_needle_guard() {
   done
 }
 
+# 22. owner-pid-flag (#408) — --owner-pid outranks CLAUDE_PID: CLAUDE_PID is set to a dead pid
+# (which would be recorded if the flag weren't honored), --owner-pid $$ is live. Expect rc 0,
+# recorded pid == $$, run-id ending -$$.
+# mutant:408-lock-flag-ignored — bypasses the --owner-pid resolution branch in
+#   bin/harness-lock.sh's cmd_acquire, falling through to TBF_OWNER_PID/CLAUDE_PID instead.
+case_owner_pid_flag() {
+  local dir; dir="$(mk_repo owner-pid-flag)"
+  local dead; dead="$(dead_pid)"
+  run_lock "$dir" "$dead" acquire --owner-pid "$$"
+  expect_rc 0
+  local got; got="$(cat "$(lockdir_of "$dir")/pid" 2>/dev/null)"
+  [ "$got" = "$$" ] || { __ok=0; __why="${__why}pid: expected \$\$ ($$), got '$got'\n"; }
+  local rid; rid="$(run_id_from_out)"
+  case "$rid" in
+    *"-$$") : ;;
+    *) __ok=0; __why="${__why}run-id does not end with -$$: '$rid'\n" ;;
+  esac
+}
+
+# 23. owner-pid-env (#408) — TBF_OWNER_PID outranks CLAUDE_PID with no --owner-pid flag given:
+# same dead-CLAUDE_PID setup as owner-pid-flag. Expect rc 0, recorded pid == $$.
+# mutant:408-lock-env-ignored — bypasses the TBF_OWNER_PID resolution branch in
+#   bin/harness-lock.sh's cmd_acquire, falling through to CLAUDE_PID instead.
+case_owner_pid_env() {
+  local dir; dir="$(mk_repo owner-pid-env)"
+  local dead; dead="$(dead_pid)"
+  lock_tbf_owner="$$"
+  run_lock "$dir" "$dead" acquire
+  expect_rc 0
+  local got; got="$(cat "$(lockdir_of "$dir")/pid" 2>/dev/null)"
+  [ "$got" = "$$" ] || { __ok=0; __why="${__why}pid: expected \$\$ ($$), got '$got'\n"; }
+}
+
+# 24. owner-pid-flag-beats-env (#408) — pins the flag-over-env precedence directly: TBF_OWNER_PID
+# names a LIVE background sleep (never $$), and --owner-pid $$ must still win. Expect pid == $$;
+# the background sleep is killed and reaped afterward.
+case_owner_pid_flag_beats_env() {
+  local dir; dir="$(mk_repo owner-pid-flag-beats-env)"
+  sleep 30 &
+  local live=$!
+  lock_tbf_owner="$live"
+  run_lock "$dir" "$$" acquire --owner-pid "$$"
+  expect_rc 0
+  local got; got="$(cat "$(lockdir_of "$dir")/pid" 2>/dev/null)"
+  [ "$got" = "$$" ] || { __ok=0; __why="${__why}pid: expected \$\$ ($$), got '$got'\n"; }
+  kill "$live" 2>/dev/null
+  wait "$live" 2>/dev/null
+}
+
+# 25. owner-pid-nondigits (#408) — a non-digits --owner-pid value, and a bare --owner-pid with no
+# following value: both rc 2, no lock directory created; the first names the bad value on
+# stderr, the second prints usage.
+# mutant:408-lock-owner-digits — neutralises the digits-only case-arm on the --owner-pid value in
+#   bin/harness-lock.sh's cmd_acquire, so a non-digits value is accepted instead of refused.
+case_owner_pid_nondigits() {
+  local dir; dir="$(mk_repo owner-pid-nondigits)"
+  run_lock "$dir" "$$" acquire --owner-pid abc
+  expect_rc 2
+  expect_err "abc"
+  [ -e "$dir/.git/trail-blazer" ] && { __ok=0; __why="${__why}lock dir created for a non-digits --owner-pid value\n"; }
+  run_lock "$dir" "$$" acquire --owner-pid
+  expect_rc 2
+  expect_err "usage"
+  [ -e "$dir/.git/trail-blazer" ] && { __ok=0; __why="${__why}lock dir created for a bare --owner-pid with no value\n"; }
+}
+
+# 26. owner-pid-env-nondigits (#408) — TBF_OWNER_PID=abc: rc 2, no lock directory created. Same
+# digits-only guard as owner-pid-nondigits, applied to the env var instead of the flag.
+case_owner_pid_env_nondigits() {
+  local dir; dir="$(mk_repo owner-pid-env-nondigits)"
+  lock_tbf_owner="abc"
+  run_lock "$dir" "$$" acquire
+  expect_rc 2
+  expect_err "abc"
+  [ -e "$dir/.git/trail-blazer" ] && { __ok=0; __why="${__why}lock dir created for a non-digits TBF_OWNER_PID\n"; }
+}
+
+# 27. owner-daemon-refused (#408) — a background process whose own command line contains
+# "app-server" (a Codex managed app-server daemon's own tell): --owner-pid names it. Expect rc 2,
+# stderr naming `codex --no-daemon`, and no lock directory created. The trailing `:` after
+# `sleep 30` stops bash from exec-optimising the sleep into its own argv slot, so the extra
+# "tbf-fake-app-server" argv element (itself containing "app-server" as a substring) stays visible
+# to `ps -o command=`.
+# mutant:408-lock-daemon-check — neutralises the "app-server" case-arm match in
+#   bin/harness-lock.sh's cmd_acquire, so a daemon owner is never refused.
+case_owner_daemon_refused() {
+  local dir; dir="$(mk_repo owner-daemon-refused)"
+  "$bash_bin" -c 'sleep 30; :' tbf-fake-app-server &
+  local fake=$!
+  run_lock "$dir" "$$" acquire --owner-pid "$fake"
+  expect_rc 2
+  expect_err "codex --no-daemon"
+  [ -e "$dir/.git/trail-blazer" ] && { __ok=0; __why="${__why}lock dir created for a daemon owner\n"; }
+  kill "$fake" 2>/dev/null
+  wait "$fake" 2>/dev/null
+}
+
+# 28. owner-unknown-flag (#408) — an unrecognised acquire flag: rc 2, usage on stderr, no lock
+# directory created.
+case_owner_unknown_flag() {
+  local dir; dir="$(mk_repo owner-unknown-flag)"
+  run_lock "$dir" "$$" acquire --bogus
+  expect_rc 2
+  expect_err "usage"
+  [ -e "$dir/.git/trail-blazer" ] && { __ok=0; __why="${__why}lock dir created for an unknown flag\n"; }
+}
+
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
@@ -677,13 +773,20 @@ cases=(
   "release-missing-argument|case_release_missing_argument|rc 2, usage on stderr"
   "worktree-shares-lock|case_worktree_shares_lock|git worktree add a sibling; acquire in main, then from the worktree: rc 3, holder's checkout-path names the main checkout"
   "status-free-and-held|case_status_free_and_held|before acquire: state=free; after: state=held + record; lock-path never this repo's own .git"
-  "help-exit-0|case_help_exit_0|--help rc 0, output names acquire, release, status, and CLAUDE_PID"
+  "help-exit-0|case_help_exit_0|--help rc 0, output names acquire, release, status, CLAUDE_PID, --owner-pid, and TBF_OWNER_PID"
   "unknown-subcommand|case_unknown_subcommand|rc 2, usage on stderr, no lock created"
   "not-a-git-repo|case_not_a_git_repo|run under GIT_CEILING_DIRECTORIES with no .git present: rc 2, message names the cause, nothing written"
   "harness-version-recorded|case_harness_version_recorded|after acquire, harness-version equals jq -r .version of .claude-plugin/plugin.json"
   "fallback-ppid-when-unset|case_fallback_ppid_when_unset|acquire with CLAUDE_PID unset via bash -c 'unset …; exec \"\$@\"': rc 0, recorded pid == this harness's own \$\$"
   "fallback-ppid-when-garbage|case_fallback_ppid_when_garbage|CLAUDE_PID=not-a-pid: rc 0, recorded pid == this harness's own \$\$, exactly one note= line"
   "empty-needle-guard|case_empty_needle_guard|#262: all nine needle-taking helpers refuse an empty needle"
+  "owner-pid-flag|case_owner_pid_flag|#408: --owner-pid \$\$ outranks a dead CLAUDE_PID: rc 0, recorded pid == \$\$"
+  "owner-pid-env|case_owner_pid_env|#408: TBF_OWNER_PID=\$\$ outranks a dead CLAUDE_PID with no flag: rc 0, recorded pid == \$\$"
+  "owner-pid-flag-beats-env|case_owner_pid_flag_beats_env|#408: --owner-pid \$\$ outranks a live TBF_OWNER_PID: rc 0, recorded pid == \$\$"
+  "owner-pid-nondigits|case_owner_pid_nondigits|#408: --owner-pid abc and a bare --owner-pid both rc 2, no lock dir created"
+  "owner-pid-env-nondigits|case_owner_pid_env_nondigits|#408: TBF_OWNER_PID=abc: rc 2, no lock dir created"
+  "owner-daemon-refused|case_owner_daemon_refused|#408: --owner-pid names a process whose command line contains app-server: rc 2, stderr names codex --no-daemon, no lock dir created"
+  "owner-unknown-flag|case_owner_unknown_flag|#408: acquire --bogus: rc 2, usage on stderr, no lock created"
 )
 
 matched=0
@@ -698,6 +801,7 @@ for row in "${cases[@]}"; do
   fn="${rest%%|*}"
   desc="${rest#*|}"
   __ok=1; __why=""
+  lock_tbf_owner=""
   # mutant:383-fn-lock — renames a cases=() row's target function in a scratch copy of this
   #   suite; this declare -F guard must report that row FAIL naming the missing function, instead
   #   of a silent PASS the row would otherwise get by falling through with $__ok unchanged.

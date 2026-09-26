@@ -66,18 +66,24 @@ case rather than silently dropped. The single-case/filter form
 (`bash dev/selfcheck-tests.sh <case>`) is unchanged.
 
 `dev/doctor-tests.sh` is a separate negative-test harness for the *consumer* doctor
-(`bin/check-harness.sh`), its scoped-autonomy companion (`bin/check-decision-record.sh`), and the
-merge floor's governance-path classifier (`bin/governance-paths.sh`, #331): it
+(`bin/check-harness.sh`), its scoped-autonomy companion (`bin/check-decision-record.sh`), the
+merge floor's governance-path classifier (`bin/governance-paths.sh`, #331), and the Codex
+compatibility installer (`bin/codex-setup.sh`, #408 — its own `--check` drift mode is #410's
+companion, hence living here rather than in a new suite): it
 builds throwaway fixture repos under `mktemp` and pins each check's verdict (PASS/WARN/FAIL, by
 ASCII stem) against a copy of the doctor script — settings-file grants, the template diff, the
 test-suite ratchet, merge-autonomy activation, the default-branch guard, post-merge-verification
 declarations, and branch-protection strictness among them — covering cases that would otherwise
 only be hand-verified. It also runs `bin/harness-version.sh`'s own `.git`-presence guard
-directly, not only through the doctor, and `bin/governance-paths.sh`'s own floor mode and
+directly, not only through the doctor, `bin/governance-paths.sh`'s own floor mode and
 `--check` mode directly, against fixture git repos it builds for that purpose, not only through
-the doctor's own validation of it. It runs in CI as the third command, but it is not part of
-`dev/selfcheck.sh` itself; run it by hand whenever `bin/check-harness.sh`,
-`bin/check-decision-record.sh`, or `bin/governance-paths.sh` changes.
+the doctor's own validation of it, and `bin/codex-setup.sh` directly against a fake Codex
+plugin-cache install and fixture repos it builds for that purpose (write mode and its `--check`
+twin alike — the generated agent TOMLs' byte-fidelity to `agents/*.md`, the installed rules
+file's allow/forbidden/gated content, contract-loading into an `AGENTS.md` or a
+`.codex/config.toml`, and every `--check` drift token). It runs in CI as the third command, but
+it is not part of `dev/selfcheck.sh` itself; run it by hand whenever `bin/check-harness.sh`,
+`bin/check-decision-record.sh`, `bin/governance-paths.sh`, or `bin/codex-setup.sh` changes.
 
 `dev/hook-tests.sh` is a separate negative-test harness for all four plugin-shipped `PreToolUse`
 hooks (`hooks/git-c-guard.sh`, `hooks/agent-boundary.sh`, `hooks/push-guard.sh`, and
@@ -127,12 +133,15 @@ whenever `bin/find-planning-work.sh`, `bin/find-implementation-work.sh`, or
 `dev/lock-tests.sh` is a separate negative-test harness for `bin/harness-lock.sh`, the
 single-flight lock that guards against two harness cycles running concurrently in one checkout:
 it builds throwaway repos (and, for the shared-lock case, a worktree-added sibling) under
-`mktemp`, with `CLAUDE_PID` set explicitly per fixture, and runs the real script against them. It
-pins the six-file lock record (`run-id`, `pid`, `host`, `started-at`, `harness-version`,
-`checkout-path`), refusal against a live same- or different-host holder, reclaiming a same-host
-holder whose pid is no longer alive, `release`/`release --force` semantics, that `status` always
-exits 0, that a worktree of the same checkout shares one lock, and that the recorded pid is
-`${CLAUDE_PID:-$PPID}`. It runs in CI as the seventh command, but it is not part of
+`mktemp`, with `CLAUDE_PID` and (#408) `TBF_OWNER_PID` set explicitly per fixture, and runs the
+real script against them. It pins the six-file lock record (`run-id`, `pid`, `host`,
+`started-at`, `harness-version`, `checkout-path`), refusal against a live same- or
+different-host holder, reclaiming a same-host holder whose pid is no longer alive,
+`release`/`release --force` semantics, that `status` always
+exits 0, that a worktree of the same checkout shares one lock, that the recorded pid follows the
+precedence `--owner-pid` > `TBF_OWNER_PID` > `${CLAUDE_PID:-$PPID}` (#408), and that `acquire`
+refuses outright, before creating anything, when the resolved owner's own command line names a
+Codex `app-server` daemon (#408). It runs in CI as the seventh command, but it is not part of
 `dev/selfcheck.sh` itself; run it by hand whenever `bin/harness-lock.sh` changes.
 
 `dev/stop-tests.sh` is a separate negative-test harness for `bin/harness-stop.sh`, the read-only
@@ -187,9 +196,14 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
 - **Plugin/consumer boundary**: nothing project-specific belongs in `agents/` or `skills/` —
   that content belongs in a *consumer* repo's `CLAUDE.md`/`LESSONS.md` instead. See
   `docs/reference/architecture.md`'s "Distribution".
-- `bin/` is on consumers' Bash PATH; every `bin/*.sh` needs a matching allow entry in
-  `templates/repo-settings.json` (the gate's bijection assertion checks this). Scripts meant
-  only for developing this repo (not for consumers) go in `dev/` instead. `hooks/*.sh` is a
+- `bin/` is on consumers' Bash PATH **on Claude Code**; every `bin/*.sh` needs a matching allow
+  entry in `templates/repo-settings.json` (the gate's bijection assertion checks this). On Codex,
+  `bin/` is never on the shell PATH (ADR 0002 P5) — `bin/codex-setup.sh` (#408) installs a rules
+  file that gates each script that calls `gh` (directly, or through `harness-status.sh`) or
+  writes `.git`, by its absolute install path instead (see `docs/reference/codex.md`), and
+  `bin/harness-status.sh` and `bin/reconcile-ledger.sh`
+  resolve their own sibling scripts with PATH first, falling back to their own directory. Scripts
+  meant only for developing this repo (not for consumers) go in `dev/` instead. `hooks/*.sh` is a
   third case: invoked by Claude Code itself (via `hooks/hooks.json`), never by the model issuing
   a Bash command, so a hook script takes no permission allow entry and stays out of the `bin/`
   bijection — see `docs/reference/safety-model.md`.

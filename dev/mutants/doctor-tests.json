@@ -676,6 +676,167 @@
       "expect_fail": [
         "gov-control-char-path"
       ]
+    },
+    {
+      "name": "408-cx-host-exec-dropped",
+      "target": "templates/codex.rules",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "host_executable(name = \"harness-lock.sh\", paths = [\"@PLUGIN_BIN@/harness-lock.sh\"])\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-rules-gated"
+      ]
+    },
+    {
+      "name": "408-cx-desc-escape",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "  desc_esc=\"${desc_esc//\\\"/\\\\\\\"}\"\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-agents-roundtrip"
+      ]
+    },
+    {
+      "name": "408-cx-agents-md-inverted",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "if [ -f \"$agents_md\" ]; then",
+          "to": "if [ ! -f \"$agents_md\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-agents-md-malformed",
+        "codex-setup-agents-roundtrip",
+        "codex-setup-check-drift",
+        "codex-setup-check-stale-version",
+        "codex-setup-config-conflict",
+        "codex-setup-config-merge",
+        "codex-setup-contract-agents-md",
+        "codex-setup-fresh",
+        "codex-setup-idempotent",
+        "codex-setup-rules-content",
+        "codex-setup-rules-gated"
+      ]
+    },
+    {
+      "name": "408-cx-whitespace-off",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "  *[[:space:]]*) report_unsupported repo-path whitespace \"$repo_top\" ;;",
+          "to": "  *ZZZNEVERMATCHZZZ*) report_unsupported repo-path whitespace \"$repo_top\" ;;"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-whitespace-repo"
+      ]
+    },
+    {
+      "name": "408-cx-stale-reason",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "      *) rules_reason=\"stale-plugin-path\" ;;",
+          "to": "      *) rules_reason=\"differs\" ;;"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-check-stale-version"
+      ]
+    },
+    {
+      "name": "408-cx-config-append",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "      {\n        printf '%s\\n' \"$CONFIG_COMMENT_LINE\"\n        printf '%s\\n' \"$CONFIG_KEY_LINE\"\n        cat \"$config_dest\"\n      } > \"$configfile\"",
+          "to": "      {\n        cat \"$config_dest\"\n        printf '%s\\n' \"$CONFIG_COMMENT_LINE\"\n        printf '%s\\n' \"$CONFIG_KEY_LINE\"\n      } > \"$configfile\""
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-config-merge"
+      ]
+    },
+    {
+      "name": "408-cx-malformed-off",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "    malformed=true",
+          "to": "    malformed=false"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-agents-md-malformed"
+      ]
+    },
+    {
+      "name": "408-cx-substring-guard",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "    exact_only=false",
+          "to": "    exact_only=true"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-agents-md-malformed"
+      ]
+    },
+    {
+      "name": "408-cx-rules-preflight",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "queue_install \".codex/rules/trail-blazer-flow.rules\" \"$rulesfile\" \"$rules_reason\"",
+          "to": "emit_result \".codex/rules/trail-blazer-flow.rules\" \"$rulesfile\" \"$rules_reason\""
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-agents-md-malformed",
+        "codex-setup-config-conflict"
+      ]
+    },
+    {
+      "name": "408-cx-end-guard",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "  end_any=\"$(grep -cF -- \"$END_MARKER\" \"$agents_md\")\"",
+          "to": "  end_any=\"$(grep -xcF -- \"$END_MARKER\" \"$agents_md\")\""
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-agents-md-malformed"
+      ]
     }
   ]
 }

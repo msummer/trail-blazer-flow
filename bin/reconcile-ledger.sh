@@ -86,6 +86,8 @@
 set -uo pipefail
 set -f
 
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+
 usage() {
   cat <<'EOF'
 usage: reconcile-ledger.sh <ledger-file|-> [status-json-file]
@@ -206,9 +208,17 @@ if [ -n "$status_src" ]; then
   # can be a /dev/fd/N process substitution. Attempt the read directly and die on failure instead.
   status_json="$(cat "$status_src" 2>/dev/null)" || die "cannot read status JSON file: $status_src"
 else
-  command -v harness-status.sh >/dev/null 2>&1 \
-    || die "harness-status.sh not on the PATH — pass its JSON as the second argument"
-  status_json="$(harness-status.sh </dev/null)" \
+  # (#408) PATH first, falling back to this script's own directory — on Codex, bin/ is never on
+  # the shell PATH (ADR 0002 P5), but reconcile-ledger.sh is still invoked by its own absolute
+  # path, so $script_dir always resolves.
+  if command -v harness-status.sh >/dev/null 2>&1; then
+    status_bin="harness-status.sh"
+  elif [ -x "$script_dir/harness-status.sh" ]; then
+    status_bin="$script_dir/harness-status.sh"
+  else
+    die "harness-status.sh not on the PATH or next to reconcile-ledger.sh ($script_dir) — pass its JSON as the second argument"
+  fi
+  status_json="$("$status_bin" </dev/null)" \
     || die "harness-status.sh failed (is gh authenticated?)"
 fi
 jq -e . >/dev/null 2>&1 <<<"$status_json" || die "status input is not valid JSON"

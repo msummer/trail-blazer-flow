@@ -18,6 +18,15 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #408: new `bin/codex-setup.sh` installs the Codex compatibility layer into a repo — agent
+  TOMLs, a `.codex/rules/trail-blazer-flow.rules` allow/forbidden/gated rules file, and
+  `CLAUDE.md` contract loading (an `AGENTS.md` pointer block or a `.codex/config.toml` fallback
+  key), plus a read-only `--check` drift mode. `bin/harness-lock.sh acquire` now takes
+  `--owner-pid`/`TBF_OWNER_PID` and refuses an owner that is a Codex `app-server` daemon.
+  `bin/harness-status.sh` and `bin/reconcile-ledger.sh` resolve their own sibling scripts with
+  PATH first, falling back to their own directory, since Codex never puts `bin/` on the shell
+  PATH. Consumer step: re-copy `templates/repo-settings.json`'s permissions block to pick up the
+  new `Bash(codex-setup.sh:*)` allow entry.
 - #406: ADR 0002 amended with the S0 spike results (script reach via host_executable rules, TUI
   daemon pid lineage, apply_patch vs `.codex/`, install from GitHub, CLAUDE.md fallback vs an
   AGENTS.md shim, `.codex-plugin` precedence, shell-issued apply_patch). Docs only.

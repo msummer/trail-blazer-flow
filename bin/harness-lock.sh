@@ -3,7 +3,7 @@
 # harness-lock.sh — single-flight lock: at most one active harness cycle per checkout.
 #
 # Usage:
-#   harness-lock.sh acquire
+#   harness-lock.sh acquire [--owner-pid <pid>]
 #   harness-lock.sh release <run-id> | release --force
 #   harness-lock.sh status
 #   harness-lock.sh --help
@@ -14,8 +14,9 @@
 # harness-version, checkout-path.
 #
 # EXIT CODES: 0 = success (acquired, released, or a status query in either state); 2 = usage or
-# environment error (bad/missing arguments, not inside a git repository); 3 = conflict (the lock
-# is held by someone else, or a release's run-id doesn't match the current holder).
+# environment error (bad/missing arguments, not inside a git repository, a malformed owner pid, an
+# owner that is a Codex app-server daemon); 3 = conflict (the lock is held by someone else, or a
+# release's run-id doesn't match the current holder).
 #
 # RECLAIM RULE — applied only when `acquire` finds the lock already held:
 #   - the stored record is unreadable (pid or host file missing/empty, or pid is not
@@ -25,9 +26,10 @@
 #   - stored host == `uname -n` and the stored pid is NOT alive    -> RECLAIM (prints one audit
 #     line quoting the stale record, then acquires normally)
 #
-# RECORDED-PID RULE (RESOLVED, measured live 2026-09-08): the recorded pid is
-# `${CLAUDE_PID:-$PPID}`. Under Claude Code, every Bash tool call runs in a FRESH shell whose pid
-# is already dead by the time the next tool call starts (measured: one call saw $PPID=19328 /
+# RECORDED-PID RULE (RESOLVED, measured live 2026-09-08; extended #408): the recorded pid's
+# precedence is `--owner-pid <pid>` (highest) > `TBF_OWNER_PID` > `${CLAUDE_PID:-$PPID}` (lowest,
+# the original rule). Under Claude Code, every Bash tool call runs in a FRESH shell whose pid is
+# already dead by the time the next tool call starts (measured: one call saw $PPID=19328 /
 # $$=19330; from the very next call, both were dead, while the ancestor `claude` session process
 # was still alive and exported as CLAUDE_PID). Recording the invoking shell's bare $PPID would
 # therefore make the very next `acquire` see a dead pid and reclaim its own lock — an inert
@@ -35,9 +37,31 @@
 # it is used when present; $PPID (the invoking shell's own parent) is the fallback for a human
 # running this script by hand from an interactive shell. A non-empty CLAUDE_PID that is not
 # digits-only is ignored (falls back to $PPID) and prints one `note=` line naming the ignored
-# value. The run id is `run-<YYYYMMDDTHHMMSSZ>-<recorded pid>`, using that same pid.
+# value. `--owner-pid`/`TBF_OWNER_PID` have no such fallback: a present-but-not-digits-only value
+# is a usage error (exit 2), never silently ignored, because a caller that names an owner
+# explicitly (the Codex contract below) gets an explicit failure rather than a silently wrong one.
+# The run id is `run-<YYYYMMDDTHHMMSSZ>-<recorded pid>`, using that same pid.
 # CLAUDE_CODE_SESSION_ID is deliberately NOT written to the lock — it belongs to the (future)
 # JSONL run-journal follow-up, not this lock.
+#
+# CODEX CALLER CONTRACT (#408): Codex sets neither CLAUDE_PID nor TBF_OWNER_PID, and under
+# `codex exec`/`codex --no-daemon` the session's own native `codex` process is every shell call's
+# $PPID for the whole session (ADR 0002 P6) — so bare $PPID already works there. A harness session
+# started under the DEFAULT Codex TUI instead runs inside a shared, long-lived `app-server`
+# daemon, whose pid would never die and so would never let a later acquire reclaim; run Codex
+# sessions with `codex --no-daemon`, and pass the session's own pid explicitly with
+# `harness-lock.sh acquire --owner-pid "$PPID"` for a caller that can't rely on this script's
+# fallback order. `acquire` also refuses outright (exit 2, before creating anything) when the
+# resolved owner's own command line names `app-server` — see the DAEMON REFUSAL paragraph below.
+#
+# DAEMON REFUSAL (#408): before creating any lock file, `acquire` reads the resolved owner pid's
+# own command line (`ps -o command= -p <pid>`, read-only, capture-then-test — never piped into
+# `grep -q`). A command line containing `app-server` names a Codex managed app-server daemon
+# (ADR 0002 amendment 2026-09-26(2), Q2): such an owner outlives every session it serves, so a
+# lock recorded against it could never be reclaimed by a dead-pid check. `acquire` refuses (exit 2,
+# stderr names `codex --no-daemon`) rather than record it. When `ps` can't answer (its output is
+# empty — e.g. Git-Bash's `ps` has no `-o`), this check fails OPEN (proceeds) rather than refuse on
+# a guess; see HONEST LIMITS below.
 #
 # HONEST LIMITS: advisory, not a kernel mutex — `mkdir` atomicity holds on a local filesystem
 # only, not a synced/shared network volume, where the host-equality assumption also breaks down.
@@ -46,7 +70,9 @@
 # it) fails CLOSED — such a lock refuses, never silently reclaims; the remedy is always
 # `release --force`. A run interrupted (Ctrl-C, crash) inside a still-live Claude Code session
 # leaves its lock held until that session exits or a human runs `release --force` — the recorded
-# pid (the session) outlives the interrupted run.
+# pid (the session) outlives the interrupted run. The daemon refusal above fails OPEN, not closed,
+# when `ps` can't answer: a daemon owner that slips through only ever produces a
+# never-reclaimed lock, with the same `release --force` remedy as any other unreclaimable lock.
 #
 # Read-only except its own lock directory: never touches the tracked working tree, makes no
 # network call. #233 landed bin/harness-version.sh; this file's own direct `jq .version` read
@@ -64,7 +90,7 @@ LOCK_SUBCOMMANDS="acquire release status"
 
 usage() {
   cat <<'EOF'
-usage: harness-lock.sh acquire
+usage: harness-lock.sh acquire [--owner-pid <pid>]
        harness-lock.sh release <run-id> | release --force
        harness-lock.sh status
        harness-lock.sh --help
@@ -76,7 +102,9 @@ directory holds six plain files: run-id, pid, host, started-at, harness-version,
   acquire          Create the lock. Prints `run-id=<id>` as the LAST stdout line on success
                     (exit 0). If already held: refuses (exit 3, prints the holder record) unless
                     the holder is on this same host and its pid is no longer alive, in which case
-                    it reclaims (exit 0, one audit line first, then a new run-id).
+                    it reclaims (exit 0, one audit line first, then a new run-id). Refuses (exit 2,
+                    before creating anything) when the resolved owner pid is a Codex app-server
+                    daemon — run Codex sessions with `codex --no-daemon` instead.
   release <run-id>  Remove the lock only if its stored run-id matches (exit 0); a mismatch
                     refuses (exit 3, prints the holder record); no lock present -> `released=none`
                     (exit 0).
@@ -86,14 +114,18 @@ directory holds six plain files: run-id, pid, host, started-at, harness-version,
                     and the holder record when held.
   -h, --help        This text (exit 0).
 
-Recorded pid: ${CLAUDE_PID:-$PPID} — under Claude Code, CLAUDE_PID is the long-lived session
-process (exported to every Bash tool call); a Claude Code Bash tool call itself runs in a fresh
-shell whose own pid is already dead by the next call, so recording bare $PPID there would make
-the very next acquire reclaim its own lock. $PPID (the invoking shell's parent) is the fallback
-for a human running this script by hand. A non-digits CLAUDE_PID is ignored (one `note=` line)
-and falls back to $PPID too.
+Recorded pid precedence: `--owner-pid <pid>` > `TBF_OWNER_PID` > `${CLAUDE_PID:-$PPID}`. Under
+Claude Code, CLAUDE_PID is the long-lived session process (exported to every Bash tool call); a
+Claude Code Bash tool call itself runs in a fresh shell whose own pid is already dead by the next
+call, so recording bare $PPID there would make the very next acquire reclaim its own lock. $PPID
+(the invoking shell's parent) is the fallback for a human running this script by hand. A
+non-digits CLAUDE_PID is ignored (one `note=` line) and falls back to $PPID too; a
+non-digits-only `--owner-pid`/`TBF_OWNER_PID` value is a usage error instead (exit 2), not
+silently ignored. On Codex, pass the session's own pid explicitly: `harness-lock.sh acquire
+--owner-pid "$PPID"`.
 
-Exit codes: 0 = success, 2 = usage/environment error, 3 = conflict (held, or release mismatch).
+Exit codes: 0 = success, 2 = usage/environment error (including a malformed owner pid or a
+Codex app-server daemon owner), 3 = conflict (held, or release mismatch).
 EOF
 }
 
@@ -167,13 +199,76 @@ resolved_pid() {
 # --- subcommands ---------------------------------------------------------------------------
 
 cmd_acquire() {
+  # --- argument parsing (#408) --------------------------------------------------------------
+  # `--owner-pid <pid>` only; anything else (an unknown flag, a bare `--owner-pid` with no
+  # value, or a stray positional argument) is a usage error. This runs in the MAIN shell, never
+  # inside a `$(…)` command substitution, so a validation failure's `exit 2` actually aborts —
+  # the same reason the owner-pid resolution and the daemon check below never run inside one.
+  local owner_flag="" owner_flag_set=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --owner-pid)
+        shift
+        if [ "$#" -eq 0 ]; then
+          usage >&2
+          exit 2
+        fi
+        owner_flag="$1"
+        owner_flag_set=true
+        shift
+        ;;
+      *)
+        usage >&2
+        exit 2
+        ;;
+    esac
+  done
+
+  # --- owner resolution (#408) --------------------------------------------------------------
+  # Precedence: --owner-pid > TBF_OWNER_PID > ${CLAUDE_PID:-$PPID} (resolved_pid's existing
+  # rule, note= fallback and all). The flag and the env var each get their OWN digits-only check
+  # here — unlike CLAUDE_PID, a malformed explicit owner is a usage error, not a silent fallback.
+  local used_pid
+  if $owner_flag_set; then
+    case "$owner_flag" in
+      ''|*[!0-9]*)
+        echo "harness-lock.sh: --owner-pid value must be digits-only, got '$owner_flag'" >&2
+        exit 2
+        ;;
+      *) used_pid="$owner_flag" ;;
+    esac
+  elif [ -n "${TBF_OWNER_PID:-}" ]; then
+    case "$TBF_OWNER_PID" in
+      *[!0-9]*)
+        echo "harness-lock.sh: TBF_OWNER_PID value must be digits-only, got '$TBF_OWNER_PID'" >&2
+        exit 2
+        ;;
+      *) used_pid="$TBF_OWNER_PID" ;;
+    esac
+  else
+    used_pid="$(resolved_pid)"
+  fi
+
+  # --- daemon refusal (#408) ----------------------------------------------------------------
+  # Read-only: the resolved owner's own command line, capture-then-test (never piped into
+  # `grep -q` — CLAUDE.md's grep-quiet-mode class, #255). A command line naming "app-server"
+  # is a Codex managed app-server daemon (ADR 0002 amendment 2026-09-26(2)) — such an owner
+  # outlives every session it serves, so a lock recorded against it could never be reclaimed.
+  # When `ps` can't answer (empty output — e.g. Git-Bash's `ps` has no `-o`), this fails OPEN
+  # (proceeds) rather than refuse on a guess; see the header's HONEST LIMITS.
+  local owner_cmd
+  owner_cmd="$(ps -o command= -p "$used_pid" 2>/dev/null || true)"
+  case "$owner_cmd" in
+    *app-server*)
+      echo "harness-lock.sh: owner pid $used_pid is a Codex app-server daemon (command: $owner_cmd) — a daemon outlives every session it serves, so its lock would never be reclaimed; run the harness with codex --no-daemon instead" >&2
+      exit 2
+      ;;
+  esac
+
   if ! mkdir -p "$lockroot" 2>/dev/null; then
     echo "harness-lock.sh: cannot create $lockroot (unwritable git dir?) — out of scope, see header" >&2
     exit 2
   fi
-
-  local used_pid
-  used_pid="$(resolved_pid)"
 
   if mkdir "$lockdir" 2>/dev/null; then
     write_record "$used_pid"

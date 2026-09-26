@@ -697,6 +697,8 @@ lives in [`docs/reference/`](docs/reference/README.md):
 - [The per-repo settings file](docs/reference/settings.md): every grant and deny
 - [Safety model](docs/reference/safety-model.md): hooks, provenance, trust gates, and the lock
 - [Architecture](docs/reference/architecture.md): repo layout, model tiering, and distribution
+- [Codex compatibility](docs/reference/codex.md): running this plugin on the Codex CLI —
+  `codex-setup.sh`, the rules file, contract loading, and the honest limits
 - [Decision records](docs/adr/README.md): where the harness is heading
 - [`CHANGELOG.md`](CHANGELOG.md): per-PR history
 
