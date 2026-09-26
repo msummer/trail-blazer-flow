@@ -2,6 +2,8 @@
 
 - **Status:** Accepted, 2026-09-16, for direction and sequencing (maintainer decision). Choices
   marked *pending probe* are settled by the probe issue (#314) and recorded by amending this ADR.
+  Amended 2026-09-26 with the probe results — see "Amendment 2026-09-26" at the end, which
+  supersedes the sections above wherever they disagree.
 - **Verified against:** `main` at `4402354` (v2.7.3); Codex CLI 0.136.0 as installed
   (`codex features list`, `codex exec --help`); the Codex manual (developers.openai.com/codex,
   fetched 2026-09-16, which describes CLI 0.147.0); and the openai/codex source on `main`.
@@ -136,3 +138,154 @@ Matching lines per `git grep -n`, excluding `docs/`; counts include the `dev/` t
 - From then on, every hook change is tested against both payload shapes in `dev/hook-tests.sh` — a
   standing cost on the part of the repo that has needed the most review rounds.
 - Nothing here changes behavior for Claude Code consumers.
+
+## Amendment 2026-09-26: probe results (#314)
+
+- **Verified against:** plugin at `main` `5b7ceb9` (v2.9.0), installed unchanged; Codex CLI
+  0.156.1 (P1–P7) and 0.157.1, the latest release on npm that day (P1–P7 repeated with the same
+  results, plus the `forbidden`-rule check, which ran on 0.157.1 only); macOS Seatbelt sandbox. The coupling table above stays
+  pinned to `4402354` and was not recounted.
+- **Method:** a throwaway fixture repo and a separate `CODEX_HOME`, both outside this repo.
+  `config.toml` set `sandbox_mode = "workspace-write"` and trusted the fixture project. A user
+  hook on `SessionStart`, `PreToolUse` (matcher `.*`), `PermissionRequest`, `SubagentStart` and
+  `SubagentStop` logged every stdin payload and the hook's parent pid. Custom agents `probe_ro`
+  (`sandbox_mode = "read-only"`), `probe_rw`, `implementer` and `verifier` lived in
+  `.codex/agents/`. The bare remote was served over `git://127.0.0.1`, so a push needs the
+  network; a remote on disk under `/tmp` doesn't, because `/tmp` and `$TMPDIR` are writable roots.
+  Every run was `codex exec --json` with a prompt naming the exact commands. Hooks were trusted by
+  writing the `hooks.state.<key>.trusted_hash` values that app-server `hooks/list` reports (what
+  the TUI's "Trust all" persists), not with `--dangerously-bypass-hook-trust`.
+
+### Answers
+
+**P1: yes.** Every `PreToolUse`, `SubagentStart` and `SubagentStop` payload from a spawned
+custom agent carries `agent_type` (the agent file's bare `name`) and `agent_id`. The main
+session's payloads carry neither key:
+
+```
+{"hook_event_name":"PreToolUse","agent_type":"probe_ro","agent_id":"01a0dc89-e95b-…","tool_name":"Bash","tool_input":{"command":"touch ro_test.txt && echo touched"},"permission_mode":"bypassPermissions",…}
+```
+
+With agents named `implementer` and `verifier`, the unchanged `hooks/agent-boundary.sh` enforced
+both roles live: `implementer role may not run any of: git gh (blocked: git push)`, and `verifier
+role may only run read-only git (…) (blocked: git commit)`. `permission_mode` reads
+`bypassPermissions` under `codex exec` even with the sandbox on, so no hook may rely on it.
+
+**P2: no.** The parent's `workspace-write` came from `config.toml`, with no `-s` and no `-c`. A
+custom agent with `sandbox_mode = "read-only"` still ran `touch ro_test.txt` successfully. Its
+rollout shows the agent file loaded (`agent_role: "probe_ro"`, its instructions present) and
+`"sandbox_policy":{"type":"workspace-write",…}`. The agent-file key doesn't hold against a
+config-sourced parent sandbox either.
+
+**P3: yes, for both, through rules; no permission profile is needed.** Two allow rules were in
+`$CODEX_HOME/rules/default.rules`: `prefix_rule(pattern = ["git", ["add", "commit", "push"]],
+decision = "allow")` and `prefix_rule(pattern = ["gh"], decision = "allow")`. The matching
+commands then ran outside the sandbox automatically, with no escalation request and under
+`codex exec`'s forced `never` approvals. This held for the orchestrator and for a subagent alike:
+both committed, pushed to the network remote, and got `5000` from `gh api rate_limit --jq
+.rate.limit`. The control run used the same prompt with `--ignore-rules`, and every one of these
+commands failed:
+
+- `git add`: `Unable to create '…/.git/index.lock': Operation not permitted`;
+- `git push`: `unable to connect to 127.0.0.1: … Operation not permitted`;
+- `gh`: `error connecting to api.github.com`.
+
+An unlisted command (`git tag`) stayed sandboxed and failed in both runs. Three consequences:
+
+- `.git` protection doesn't constrain a subagent once rules exist, because rules apply to the
+  whole session, not per agent.
+- An allow rule is an unsandboxed pass. `hooks/push-guard.sh` is all that stands between an
+  allowed `git push` and the default branch, and it held (`denies pushing to "main"`).
+- A command with a redirection is matched as one invocation, so `echo one > orch.txt && git add
+  orch.txt` missed the `git add` rule and failed in the sandbox. A command that relies on a rule
+  must be issued on its own.
+
+**P4.** `apply_patch` reaches `PreToolUse` as `tool_name: "apply_patch"`, with the whole patch in
+`tool_input.command`. Paths are relative to the cwd, and there is no `file_path`:
+
+```
+{"tool_name":"apply_patch","tool_input":{"command":"*** Begin Patch\n*** Add File: allowed.txt\n+allowed\n*** End Patch"},…}
+```
+
+A hook's exit 2 stops the edit, for the orchestrator and for a subagent: the file is not
+created. The model sees `Command blocked by PreToolUse hook: <stderr>. Command: *** Begin Patch
+…`. A matcher of `Edit|Write` also fires on `apply_patch`.
+
+**P5: installs unchanged, with gaps.**
+
+- **Install.** `codex plugin marketplace add <clone>` reads `.claude-plugin/marketplace.json`, and
+  `codex plugin add trail-blazer-flow@trail-blazer-flow` installs 2.9.0.
+- **Skills.** All six load, named `trail-blazer-flow:<skill>`.
+- **Hooks.** All four `hooks/hooks.json` handlers load with `${CLAUDE_PLUGIN_ROOT}` expanded. They
+  start `untrusted`: plugin hooks need the same trust review as any other hook. `git-c-guard`'s
+  `if` key is dropped without a warning, so that hook now runs on every shell call.
+- **`push-guard.sh` and `agent-boundary.sh`** work as written (P1, P3). A logged Codex payload
+  replayed through `agent-boundary.sh` also gets the #387 interpreter `.claude`-write deny.
+- **`claude-dir-guard.sh`** has no effect. It fires on `apply_patch` through `Edit|Write`, but it
+  reads `tool_input.file_path`, which Codex doesn't send, so it exits 0. The implementer created
+  `.claude/settings.local.json`.
+- **`git-c-guard.sh`.** Its allow is ignored silently: no warning appears in stderr, the `--json`
+  stream or the rollout. `git -C ../repo-wt-1 commit --allow-empty` still ran sandboxed and failed
+  on `.git/worktrees/repo-wt-1/index.lock`.
+- **Scripts.** `bin/` isn't on the shell PATH, and `CLAUDE_PLUGIN_ROOT` and `PLUGIN_ROOT` are
+  unset in shell commands.
+
+**P6: the `codex` process.** Under `codex exec`, one native `codex` process is every shell call's
+`$PPID` and every hook's parent, for the whole session, subagents included. `$$` changes on
+every call: `shell pid=47459 ppid=47319`, then `shell pid=47483 ppid=47319`, then subagent `sub
+pid=47584 ppid=47319`, with hook parent `47319 … /bin/codex`. A shell command can therefore pass
+`CLAUDE_PID=$PPID`. Two caveats:
+
+- An interactive TUI session was not probed, because it can't be driven headless. Its lineage is
+  checked in slice (ii). A TUI attached to the shared app-server daemon (`daemon_auto_start` is
+  off by default) would put a daemon shared across sessions in that position.
+- A Codex started from inside a Claude Code session inherits that session's `CLAUDE_PID`: the
+  probe's shells saw the parent Claude Code session's pid. The adapter must always set the
+  variable and never rely on it already being set.
+
+**P7: it reaches the orchestrator only through the subagent's own report.**
+
+- **Approvals are pinned.** `codex exec` forces approvals to `never`. The config's
+  `approval_policy = "on-request"` and a `-c approval_policy="on-request"` override both came out
+  as `Approval policy is currently never`.
+- **Needs approval.** A command that needs approval (a `prompt` rule) is rejected before it runs:
+  `Rejected("approval required by policy, but AskForApproval is set to Never")`.
+- **Escalation.** An escalation request is rejected outright: `approval policy is Never; reject
+  command — you cannot ask for escalated permissions if the approval policy is Never`.
+- **Where it shows up.** Both errors reach only the calling agent's tool result:
+  - no `PermissionRequest` hook fires;
+  - the `--json` stream has no approval event;
+  - the only other trace is an `ERROR codex_core::tools::router` line on stderr that doesn't
+    name the agent.
+
+The orchestrator learns of a failed approval only if the subagent's final message reports it.
+
+### Corrections to "What doesn't carry over"
+
+- **Deny list.** There is one after all. A `forbidden` rule rejects a matching command before it
+  runs, sandboxed or not: `` `/bin/zsh -lc 'git stash list'` rejected: probe: forbidden ``
+  (0.157.1). A `prompt` rule does the same under `codex exec` (P7, both versions). Rules match by
+  prefix, with the same single-invocation limit as P3.
+- **Sandbox inheritance.** An agent file's `sandbox_mode` doesn't hold against a config-sourced
+  parent sandbox either, not only against a runtime override (P2).
+- **`hooks/git-c-guard.sh`.** Codex ignores its allow silently. It isn't reported as a failure.
+- **Writable roots.** `/tmp` and `$TMPDIR` are writable roots by default, alongside the workspace.
+- **Headless errors.** The manual says Codex "surfaces the error back to the parent workflow".
+  In practice the error reaches only the subagent (P7).
+
+### Minimum supported Codex version
+
+**0.156.1.**
+
+### Effect on the decisions
+
+- **Decision 3.** The sandbox adds no layer for subagents. It can't make an agent read-only
+  (P2), and a rule that allows the orchestrator's git/`gh` allows them for every agent (P3). On
+  Codex the floor is hooks and rules only:
+  - `hooks/agent-boundary.sh` and `hooks/push-guard.sh`, unchanged;
+  - a `claude-dir-guard` and a planner read-only hook that read the `apply_patch` patch text;
+  - a rules file installed per repo: `allow` for the harness's own git/`gh` prefixes, and
+    `forbidden` for the template's deny entries.
+- **Decision 6.** Slice (iv)'s prerequisite (ADR 0001's durable escalations and stop switch)
+  shipped in v2.8.0. Under `codex exec`, a subagent's failed approval is visible only in its own
+  report (P7). Slice (iv) must therefore treat a missing or malformed report as an escalation.
