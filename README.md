@@ -5,8 +5,9 @@ issue; the harness plans it, you approve the plan, it writes the code, an indepe
 checks the work, and a PR shows up for you to merge. Once you trust it, you can let it approve
 low-risk plans and merge its own PRs as well.
 
-Everything runs locally on your Claude Code subscription. You don't need API keys, OAuth tokens, or
-GitHub Actions.
+Everything runs locally, on your Claude Code subscription or (supervised only, see
+[Running on Codex](#running-on-codex)) your Codex CLI login. You don't need API keys, OAuth
+tokens, or GitHub Actions.
 
 > **Status: early access.** This harness is being tested by a small group. Expect rough edges and
 > the occasional breaking change, and note that updates arrive automatically by default (see
@@ -25,6 +26,7 @@ GitHub Actions.
 - [The CLAUDE.md contract](#the-claudemd-contract): configuring the harness for your repo
 - [Labels at a glance](#labels-at-a-glance)
 - [Safety model](#safety-model)
+- [Running on Codex](#running-on-codex)
 - [Updating](#updating)
 - [Troubleshooting](#troubleshooting)
 - [Reference documentation](#reference-documentation)
@@ -523,6 +525,45 @@ The short version (full detail in
 
 ---
 
+## Running on Codex
+
+**Status: Codex CLI 0.156.1 or newer, macOS, supervised only.** Verified live at the v3.0.0
+release gate (#411) — full detail in
+[docs/reference/codex.md](docs/reference/codex.md) and
+[ADR 0002](docs/adr/0002-codex-compatibility.md)'s amendment (3).
+
+The recipe, in the same order the gate used:
+
+1. Install the plugin (`codex plugin marketplace add msummer/trail-blazer-flow`, then
+   `codex plugin add trail-blazer-flow@trail-blazer-flow`).
+2. Run `<plugin root>/bin/codex-setup.sh` from a normal (non-sandboxed) terminal.
+3. Trust the project and the plugin's hooks in Codex.
+4. Start a session with `codex --no-daemon`.
+5. Run `harness-setup`, then use the skills (`issue-planner`, `issue-implementer`, `issue-cycle`),
+   with the differences listed below.
+6. Merge every PR by hand — there is no merge autonomy on Codex — and re-run
+   `bin/codex-setup.sh` after every plugin upgrade.
+
+**What's different on Codex:**
+
+- No merge autonomy and no Autonomy mode: every PR merge is by hand, and `gh pr merge` is
+  additionally `forbidden` by the installed rules.
+- No worktree-parallel mode: sessions stay sequential.
+- No `codex exec` and no unattended or scheduled runs: only the interactive `codex --no-daemon`
+  session is supported.
+- No `project-kickoff` or standalone `test-ratchet`.
+
+**Supported / not supported / not verified**, in short (full matrix, with reasons, in
+[docs/reference/codex.md](docs/reference/codex.md#support-matrix)):
+
+- **Supported:** Codex CLI 0.156.1+ on macOS, interactive `codex --no-daemon`, supervised.
+- **Not supported:** the default TUI's managed daemon, `codex exec` and unattended runs,
+  worktree-parallel mode, the merge pass and merge autonomy, Autonomy mode, `project-kickoff`, and
+  standalone `test-ratchet`.
+- **Not verified:** Linux, Windows, and the Codex desktop app.
+
+---
+
 ## Updating
 
 **Getting updates.** The settings template registers the plugin with `"autoUpdate": true`, so
@@ -552,7 +593,7 @@ check-harness.sh
 It lists what the new version needs that your repo is missing. Fix what it flags and you're done.
 
 <details>
-<summary>Per-version migration notes (v1.9.0 → v2.9.0)</summary>
+<summary>Per-version migration notes (v1.9.0 → v3.0.0)</summary>
 
 For older history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration notes, v1.9.0
 to v2.7.7" subsection).
@@ -624,7 +665,20 @@ already-parked follow-ups `triaged-held` by hand. Precondition: your provider mu
 **v2.8.0 → v2.9.0** needs no grant, label, script, or baseline step — stricter subagent
 hooks, reopened-issue fixes, and quiet retry of a stalled planner dispatch.
 
+**v2.9.0 → v3.0.0** — re-copy the permissions block from `templates/repo-settings.json` or add
+`"Bash(codex-setup.sh:*)"` by hand.
+
 </details>
+
+**Rolling back.** The published `vX.Y.Z` tags are the known-good points (`git show
+vX.Y.Z:.claude-plugin/plugin.json` shows what shipped). Repo-side additions such as the
+`Bash(codex-setup.sh:*)` grant can stay after rolling back a version: the doctor treats
+repo-only allow entries as legitimate extras. Claude Code's own plugin installer tracks this
+repo's `main` branch, so there's no documented command to pin it to an older tag; to run an older
+version for one session, clone the repo at the target tag and start that session with
+`claude --plugin-dir <path to that checkout>` (see `claude --help`). To leave the Codex layer
+entirely, see [docs/reference/codex.md](docs/reference/codex.md#removing-the-codex-layer)'s
+"Removing the Codex layer".
 
 ---
 
@@ -699,7 +753,8 @@ lives in [`docs/reference/`](docs/reference/README.md):
 - [Safety model](docs/reference/safety-model.md): hooks, provenance, trust gates, and the lock
 - [Architecture](docs/reference/architecture.md): repo layout, model tiering, and distribution
 - [Codex compatibility](docs/reference/codex.md): running this plugin on the Codex CLI —
-  `codex-setup.sh`, the rules file, contract loading, and the honest limits
+  `codex-setup.sh`, the rules file, contract loading, the support matrix, removing the Codex
+  layer, and the honest limits
 - [Decision records](docs/adr/README.md): where the harness is heading
 - [`CHANGELOG.md`](CHANGELOG.md): per-PR history
 
@@ -761,7 +816,9 @@ bypass. Force-pushes and branch deletion are blocked for everyone.)
 - **Decided direction** lives in [`docs/adr/`](docs/adr/README.md).
   [ADR 0001 (Autonomy mode)](docs/adr/0001-autonomy-mode.md) is fully shipped as of v2.8.0 (#307–#313).
   [ADR 0002 (Codex compatibility)](docs/adr/0002-codex-compatibility.md), running the harness under
-  OpenAI Codex, isn't implemented yet and lists its tracking issues.
+  OpenAI Codex, ships supervised only in v3.0.0, on the Codex CLI on macOS (see
+  [Running on Codex](#running-on-codex)); unattended runs (slice iv) and the provider-neutral
+  rename remain future work.
 - **Parallel-mode ergonomics:** worktree-parallel mode (up to 4 implementers at once on issues
   whose files don't overlap) is currently gated on comparing Affected areas by hand. A small script
   that diffs two plans' file lists could make the eligibility check mechanical. The final batching

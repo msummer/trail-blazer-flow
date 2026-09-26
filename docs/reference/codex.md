@@ -1,18 +1,45 @@
 # Codex compatibility
 
 > Part of the [reference documentation](README.md). See [`docs/adr/0002-codex-compatibility.md`](../adr/0002-codex-compatibility.md)
-> for the direction, the probe results this reference draws on, and the decisions still pending a
-> live check.
+> for the direction, the probe results this reference draws on, and amendment (3)'s v3.0.0
+> release-gate results, which settle the decisions the earlier amendments left pending a live
+> check.
 
 This plugin installs unchanged on the Codex CLI (`codex plugin add trail-blazer-flow@trail-blazer-flow`,
 or from a local clone / a public GitHub repo). Its skills and hooks load; `bin/codex-setup.sh`
 adds the pieces Codex needs that a Claude Code consumer gets for free: custom agent files, an
 unsandboxed-command rules file, and a way to load `CLAUDE.md` as the project contract. Codex
-support ships **supervised only** — see "Honest limits" below.
+support ships **supervised only**, on Codex CLI **0.156.1 or newer**, on **macOS** — see "Support
+matrix" below for exactly what that covers, and "Honest limits" for what remains unverified.
+
+See also: the README's ["Running on Codex"](../../README.md#running-on-codex) for the day-to-day
+recipe; [ADR 0002](../adr/0002-codex-compatibility.md)'s amendment (3) for the v3.0.0 release-gate
+method and results; "The doctor on Codex" and "Running the skills on Codex" below for how the
+doctor and the skills each behave; and [safety-model.md](safety-model.md)'s "Hook canary"
+paragraph for why every Codex dispatch opens with one.
+
+## Support matrix
+
+Verified live at the v3.0.0 release gate (#411; ADR 0002 amendment (3), Codex CLI `codex-cli
+0.156.1`, macOS 27.0). **Minimum supported Codex CLI version: 0.156.1** — the doctor's own floor
+(`CODEX_MIN_VERSION` in `bin/check-harness.sh`), and the version the gate itself ran on.
+
+| Surface | Status | Why |
+|---|---|---|
+| Codex CLI 0.156.1+ on macOS, interactive `codex --no-daemon`, supervised | **Supported** | Install, trust, `harness-setup`, planning, implementation, verification, the stop switch, and the lock's refusal of a concurrent holder all held live at the gate (the daemon refusal is fixture-covered by `dev/lock-tests.sh`) |
+| The default Codex TUI's managed `app-server` daemon | **Not supported** | `harness-lock.sh acquire` refuses an owner whose command line names `app-server` — that daemon outlives every session it serves, so a lock recorded against it would never be reclaimed |
+| `codex exec` and unattended or scheduled runs | **Not supported** | Codex support ships supervised only in 3.0.0 (ADR 0002 decision 4) |
+| Worktree-parallel mode | **Not supported** | A worktree's gitdir is read-only in the sandbox, and `git-c-guard`'s allow is ignored under Codex's own rules — see "Worktree mode" below |
+| The merge pass and merge autonomy | **Not supported** | Every merge on Codex is by hand; `gh pr merge` is additionally `forbidden` by the installed rules, verified live at the gate |
+| Autonomy mode | **Not supported** | Read as absent on Codex: no implied auto-approval, no `--carry-over`, no serial train |
+| `project-kickoff` and standalone `test-ratchet` | **Not supported** | Neither skill has a Codex path |
+| Linux, Windows, the Codex desktop app | **Not verified** | The gate ran on macOS only |
 
 ## Setup
 
-Run once per repo, from a normal (non-sandboxed) terminal, after trusting the plugin in Codex:
+Run once per repo, from a normal (non-sandboxed) terminal — this is the first step of the gate's
+own recipe, and doesn't require the project to be trusted in Codex yet (trust comes after, see
+"Trust steps" below):
 
 ```
 bash <plugin root>/bin/codex-setup.sh
@@ -233,6 +260,32 @@ After a successful write, `codex-setup.sh` prints three reminders:
    (ADR 0002 amendment 2026-09-26, P5); trusting them needs the same review as any other hook.
 3. **Run harness sessions with `codex --no-daemon`** — see "Lock owner on Codex" above.
 
+## Removing the Codex layer
+
+Delete the files `codex-setup.sh` wrote (see "What `codex-setup.sh` writes" above):
+
+- `.codex/agents/planner.toml`, `.codex/agents/implementer.toml`, `.codex/agents/verifier.toml`;
+- `.codex/rules/trail-blazer-flow.rules`;
+- the `project_doc_fallback_filenames` line (and its preceding comment line) from
+  `.codex/config.toml` — or, if the repo has an `AGENTS.md`, the marked
+  `<!-- trail-blazer-flow:contract-pointer -->` block instead.
+
+Then uninstall the plugin from Codex itself:
+
+```
+codex plugin remove trail-blazer-flow@trail-blazer-flow
+```
+
+and, if nothing else uses it, the marketplace source too:
+
+```
+codex plugin marketplace remove trail-blazer-flow
+```
+
+(both confirmed against `codex plugin remove --help` and `codex plugin marketplace remove
+--help`). Claude Code's own use of this plugin is unaffected either way — the two hosts share
+nothing but this repo's own files.
+
 ## Honest limits
 
 - **Supervised only.** Per [ADR 0002](../adr/0002-codex-compatibility.md) decision 4, Codex
@@ -245,13 +298,30 @@ After a successful write, `codex-setup.sh` prints three reminders:
   redirection or a `bash -c` wrapper, and every `git -C <path> ...` form (which Codex's rules
   can't express at all) are not matched. The hooks (`agent-boundary.sh`, `push-guard.sh`) remain
   the floor regardless of what the rules file allows.
-- **Not yet live-verified; deferred to #411's release gate:** that Codex actually loads a
-  project-level `.codex/rules/*.rules` file the way its documented rules
-  precedence implies (the ADR's own probes used `$CODEX_HOME/rules/default.rules`); that a
-  command carrying an expanded `$PPID` (`harness-lock.sh acquire --owner-pid "$PPID"`) still
-  matches a gated prefix rule; and that `host_executable` matching resolves a command's logical
-  absolute path the way this file assumes. If any of these doesn't hold, the affected scripts run
-  sandboxed and fail loudly (a permission error), which is safe — just noisy — rather than unsafe.
+- **Project rules load, verified live at the gate.** Codex loads the project-level
+  `.codex/rules/*.rules` file the way its documented rules precedence implies, not only
+  `$CODEX_HOME/rules/default.rules` (the ADR's own earlier probes had used only the latter) — see
+  [ADR 0002](../adr/0002-codex-compatibility.md)'s amendment (3), G9.
+- **`host_executable` matching, verified live at the gate.** It resolves a command's logical
+  absolute path the way this file assumes: every gated script matched only the plugin's own
+  `bin/`, and a same-named decoy elsewhere ran sandboxed — amendment (3), G10.
+- **A command carrying an expanded `$PPID` still matching a gated prefix rule remains unverified.**
+  Every gate session passed the lock owner as literal digits instead of the quoted
+  `--owner-pid "$PPID"` form — exactly as "Running the skills on Codex" below already tells every
+  Codex caller to do — so that form was never exercised live. If a caller used it anyway and it
+  didn't match, the command would run sandboxed and fail loudly (a permission error), which is
+  safe — just noisy — rather than unsafe.
+- **Malformed planner output, and the planner's own write route through `apply_patch`/`touch`,
+  are not live-verified — by maintainer decision.** The gate's method for producing
+  malformed output (a temporary override appended to the installed `agents/planner.md`) was
+  refused by the orchestrator's own safety classifier as instruction poisoning, and the maintainer
+  chose not to run it; the stall-record handling it would have exercised is covered by
+  `dev/planning-tests.sh`'s stall fixtures, and the retry ladder itself is skill text unchanged from
+  Claude Code, with no fixture (amendment (3), G5). Separately, the planner refused its own
+  `apply_patch`/`touch` write probes on its own
+  role instructions before either probe ever reached `planner-guard.sh`, so that hook's
+  deny-on-write path for the planner also stayed unverified live; it too is covered by
+  `dev/hook-tests.sh`'s fixtures (amendment (3), G8).
 - **The hook canary relies on the subagent's own report.** "Running the skills on Codex" below
   opens every dispatch with a `gh --version` canary so the orchestrator can tell, per run, that
   the plugin's hooks are trusted and actually running before it trusts anything else that

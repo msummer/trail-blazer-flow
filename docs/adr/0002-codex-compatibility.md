@@ -2,8 +2,10 @@
 
 - **Status:** Accepted, 2026-09-16, for direction and sequencing (maintainer decision). Choices
   marked *pending probe* are settled by the probe issue (#314) and recorded by amending this ADR.
-  Amended 2026-09-26 with the probe results — see "Amendment 2026-09-26" at the end, which
-  supersedes the sections above wherever they disagree.
+  Amended three times: 2026-09-26 with the probe results (#314); 2026-09-26 (2) with the S0 spike
+  results (#406); and 2026-09-26 (3) with the v3.0.0 live release-gate results (#411), which ships
+  Codex support supervised only and supersedes decision 5's version coupling — see "Amendment
+  2026-09-26 (3)" at the end, which supersedes the sections above wherever they disagree.
 - **Verified against:** `main` at `4402354` (v2.7.3); Codex CLI 0.136.0 as installed
   (`codex features list`, `codex exec --help`); the Codex manual (developers.openai.com/codex,
   fetched 2026-09-16, which describes CLI 0.147.0); and the openai/codex source on `main`.
@@ -428,3 +430,91 @@ the `codex` binary). Two parts were checked; the hook shape is pending the usage
   list, but a second manifest's `version` must then be kept equal in the release ritual.
 - **Usage budget.** Codex usage limits can stop a live run midway. #411's gate should plan for
   the quota.
+
+## Amendment 2026-09-26 (3): v3.0.0 release gate (#411)
+
+- **Verified against:** `main` at `bd36452` (v2.9.0 plus #407–#410) for the gate install; Codex CLI
+  `codex-cli 0.156.1`; macOS 27.0 (26A428); the private sandbox repo `msummer/tbf-codex-sandbox`.
+- **Method:** a scratch `CODEX_HOME` held a copy of the maintainer's Codex login, deleted at
+  teardown. A user-level logging hook recorded every hook payload with its parent pid. Project
+  trust and hook trust were persisted through config (`[projects."<path>"] trust_level` and each
+  hook's `trusted_hash`, read from `codex app-server`'s `hooks/list`) — never through
+  `--dangerously-bypass-hook-trust`. The pid-lineage session (T0) ran in the interactive TUI
+  (`codex --no-daemon`, driven through a pty by the orchestrator, as the S0 spike did); every other
+  session (R1, P1, R2, R2x, R3, R5) ran as `codex exec --json`, under which approvals are forced to
+  `never` — stricter than an attended TUI. The maintainer's grant let the orchestrator apply
+  `plan-approved` and merge the sandbox PR from its own Claude Code shell, never from Codex.
+  Evidence came from the hook log, the `--json` event streams, rollout files, and GitHub snapshots.
+- **Gate finding fixed before release: #419.** The verifier's mutation-probe `git restore <file>`
+  failed inside the sandbox on Codex (`.git/index.lock: Operation not permitted`), because
+  `templates/codex.rules` allowed only `git restore --staged`. It failed safe: the verifier
+  reported the leftover mutant, and the orchestrator restored the file from its checkpoint. #419
+  widened the rule to `git restore`. After #419 merged, the install was upgraded to `main`
+  `5c28fac`, and the restore path was re-checked live on that SHA: a full implementer and verifier
+  run whose verifier probe restored each mutant with a top-level `git restore <file>`, every restore
+  succeeding and the tree matching its pre-probe state.
+
+### Results
+
+| Item | Verdict | Notes |
+|---|---|---|
+| G0 install and setup | PASS | Install from git at the recorded SHA; all four train pieces present; `harness-setup` created the labels, wrote a gitignored baseline, and left a clean in-session doctor |
+| G1 planning-only issue | PASS | Plan posted with the marker lines and `plan-proposed`; after `plan-approved`, `find-implementation-work.sh --issue` gave `covers_plan: true`; the stop switch halted its implementation (G3) |
+| G2 implementation issue | PASS | Implementer and verifier spawns both canary-denied; verifier pass; PR with `Closes #3`; `test` green; merged by the maintainer's account (the orchestrator under the grant) from Claude Code |
+| G3 stop switch | PASS | The label landed shortly after the first harness PR appeared; `harness-stop.sh` soon read `stop=true route=github issue=4`; no further dispatch; the other issue got no branch or `pr-open`; the lock was released |
+| G4 lock refusal | PASS | A concurrent `acquire` exited 3, named the live holder (matching run-id), and printed the `release --force` remedy; zero `gh`/git/`apply_patch` writes followed |
+| G5 malformed role output | NOT LIVE-VERIFIED (maintainer decision) | The override method read as instruction poisoning to the orchestrator's own safety classifier; the maintainer chose not to run it live. The stall-record handling it would exercise is covered by `dev/planning-tests.sh`'s stall fixtures; the retry ladder is skill text unchanged from Claude Code, with no fixture |
+| G6 untrusted hook | PASS | With planner-guard's trust removed, the doctor FAILed offline and in-session with `hook(s) not trusted` naming that hook; the planner canary came back not denied; the run aborted with a `hook-canary-failed` escalation (`<!-- harness-escalation -->`, then its `plan-initial` key line) and `needs-human`, posted no plan, dispatched nothing more, and released the lock. The first attempt was cut off by the usage limit; the re-run reclaimed that attempt's stale lock |
+| G7 no merge call | PASS | `codex execpolicy check` gives `gh pr merge` forbidden; a sweep of every command across every session found zero merge-pattern hits; the sandbox PR was merged outside Codex |
+| G8 shell-issued `apply_patch` (Q7) | PASS for the implementer; the planner write route NOT LIVE-VERIFIED | The Q7 shell heredoc reaches `PreToolUse` with `tool_name: "Bash"`; every implementer write probe into `.claude/` or `.codex/` was denied, and none of the files exist. The planner refused its own write probes on its own role instructions before either probe reached `planner-guard.sh`, so that hook's write route stayed unverified live; covered by `dev/hook-tests.sh`'s fixtures |
+| G9 project rules load | PASS | No user rules file exists; the rules came from `.codex/rules/` in the trusted project; `git add`/`git commit` exited 0; `harness-stop.sh` reached GitHub |
+| G10 `host_executable` gating | PASS | Every `host_executable` path is the plugin's own `bin/`; the real script printed `stop=false` (ran outside the sandbox); a same-named decoy ran sandboxed; `execpolicy check --resolve-host-executables` agreed |
+| G11 lock owner | PASS | In the TUI, P1, R2, and R3, the lock pid equalled `$PPID` and the hook log's `ppid`; that pid is the native `codex` process, never `app-server`, never the inherited `CLAUDE_PID` |
+| G12 contract loading | PASS | `codex debug prompt-input` contains the CLAUDE.md sentinel through `project_doc_fallback_filenames`; the model quoted it with no file read before |
+| G13 doctor | PASS in-session (the in-session FAIL is covered by G6) | R1 and P1 both showed a clean in-session doctor, including the live hook-trust PASS from the `app-server` `hooks/list` exchange; offline before trust it FAILed, naming every untrusted key |
+| G14 canary | PASS (the abort path is covered by G6) | Denied for the planner and, separately, for the implementer/verifier, with the documented deny stems; main-session `gh --version` printed a version |
+| G15 git and `gh` forms | PASS | Split `git add`/`git commit`, `gh … --jq` reads, and `reconcile-ledger.sh` on a `/tmp` ledger all exited with no permission error |
+| G16 quota (informational) | — | Sessions T0, R1, P1, P1b, R2, R2x, and R3 ran within one usage window that day, then R5 was cut off by the usage limit; after a fresh sign-in the same evening, R5 and the post-#419 restore re-check ran to completion |
+
+### Answers to deferred checks
+
+- **S0 Q7's `tool_name`:** a shell-issued `apply_patch` heredoc reaches `PreToolUse` as
+  `tool_name: "Bash"`, for the main session and a subagent alike (G8).
+- **Project rules loading:** the installed rules load from this repo's own
+  `.codex/rules/trail-blazer-flow.rules`, not `$CODEX_HOME/rules/default.rules` (G9).
+- **`host_executable` path matching:** resolves to the plugin's own absolute `bin/` path only; a
+  same-named decoy outside the plugin's `bin/` runs sandboxed (G10).
+- **The TUI lock owner:** under `codex --no-daemon`, the lock pid is the native `codex` process,
+  matching `$PPID` and the hook log's own `ppid` — never `app-server`, never the inherited
+  `CLAUDE_PID` (G11).
+- **Contract fallback:** `project_doc_fallback_filenames` injects the `CLAUDE.md` sentinel into
+  `codex debug prompt-input`, with no file read before the model quotes it (G12).
+- **The doctor in-session:** a clean pass, including the live hook-trust PASS, in R1 and P1; the
+  in-session FAIL, with planner-guard untrusted, is recorded under G6 (G13).
+- **The canary:** denied for the planner (`trail-blazer-flow planner guard:`) and for the
+  implementer/verifier (`trail-blazer-flow agent boundary:`) alike (G14).
+- **git and `gh` forms:** split `git add`/`git commit`, `gh … --jq` reads, and
+  `reconcile-ledger.sh` against a `/tmp` ledger all ran with no permission error (G15).
+
+### 3.0.0 scope
+
+Ships: Codex CLI 0.156.1+ on macOS, interactive `codex --no-daemon`, supervised only. Does not
+ship: the default TUI's managed `app-server` daemon; `codex exec` and unattended or scheduled
+runs; worktree-parallel mode; the merge pass and merge autonomy; Autonomy mode (read as absent);
+`project-kickoff` and standalone `test-ratchet`. Matches `docs/reference/codex.md`'s "Support
+matrix".
+
+### Effect on the decisions
+
+- **Decision 4 holds.** Codex runs start supervised. The gate found no path from a subagent to a
+  git write or a GitHub write outside the enforced floor (G2, G7, G9, G10); the guardrail's own failure
+  path, an untrusted hook, was caught by the canary and escalated without a plan being posted (G6).
+- **Decision 5 is decoupled from 3.0.** Names stay: `CLAUDE.md` stays the contract file, and the
+  `claude/` branch prefix and `.claude/` paths stay, on both providers. The provider-neutral rename
+  is deferred, with no version attached.
+- **Decision 6.** Slices (ii) planning on Codex and (iii) supervised implement and verify shipped
+  (G0–G3, G9–G15). Slice (iv), unattended runs via `codex exec` and an external scheduler, did not.
+
+### Minimum supported Codex version
+
+**0.156.1.** The gate itself ran on Codex CLI `codex-cli 0.156.1`, the same version as the floor.
