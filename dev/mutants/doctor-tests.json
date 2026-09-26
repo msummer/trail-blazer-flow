@@ -837,6 +837,264 @@
       "expect_fail": [
         "codex-setup-agents-md-malformed"
       ]
+    },
+    {
+      "name": "410-provider-wrapper",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-healthy",
+      "edits": [
+        {
+          "from": "if [ \"$provider\" = claude ]; then  # Claude Code-only checks (settings, toolchain, hooks toggle, policy activation) — skipped with --provider codex; closes at \"end of Claude Code-only checks\"",
+          "to": "if true; then  # Claude Code-only checks (settings, toolchain, hooks toggle, policy activation) — skipped with --provider codex; closes at \"end of Claude Code-only checks\""
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-healthy"
+      ]
+    },
+    {
+      "name": "410-version-numeric",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-version-",
+      "edits": [
+        {
+          "from": "      cx_ge=false\n      if [ \"$((10#$cx_maj))\" -gt \"$((10#$cx_min_maj))\" ]; then\n        cx_ge=true\n      elif [ \"$((10#$cx_maj))\" -eq \"$((10#$cx_min_maj))\" ]; then\n        if [ \"$((10#$cx_min))\" -gt \"$((10#$cx_min_min))\" ]; then\n          cx_ge=true\n        elif [ \"$((10#$cx_min))\" -eq \"$((10#$cx_min_min))\" ]; then\n          [ \"$((10#$cx_pat))\" -ge \"$((10#$cx_min_pat))\" ] && cx_ge=true\n        fi\n      fi",
+          "to": "      cx_ge=false\n      case \"$cx_version\" in\n        \"$CODEX_MIN_VERSION\") cx_ge=true ;;\n        *) [ \"$cx_version\" \\> \"$CODEX_MIN_VERSION\" ] && cx_ge=true ;;\n      esac"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-version-lexical"
+      ]
+    },
+    {
+      "name": "410-version-inclusive",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-version-",
+      "edits": [
+        {
+          "from": "          [ \"$((10#$cx_pat))\" -ge \"$((10#$cx_min_pat))\" ] && cx_ge=true",
+          "to": "          [ \"$((10#$cx_pat))\" -gt \"$((10#$cx_min_pat))\" ] && cx_ge=true"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-version-floor"
+      ]
+    },
+    {
+      "name": "410-paths-whitespace",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-paths-",
+      "edits": [
+        {
+          "from": "  cx_has_ws() {\n    case \"$1\" in\n      *[[:space:]]*) return 0 ;;\n      *) return 1 ;;\n    esac\n  }",
+          "to": "  cx_has_ws() {\n    case \"\" in\n      *[[:space:]]*) return 0 ;;\n      *) return 1 ;;\n    esac\n  }"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-paths-plugin-space",
+        "codex-doctor-paths-repo-space"
+      ]
+    },
+    {
+      "name": "410-setup-drift-pass",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-setup-",
+      "edits": [
+        {
+          "from": "      bad \"codex setup: out of sync: $cx_setup_list$more — run bin/codex-setup.sh from a normal terminal to re-sync\"",
+          "to": "      ok \"codex setup: out of sync: $cx_setup_list$more — run bin/codex-setup.sh from a normal terminal to re-sync\""
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-setup-drift"
+      ]
+    },
+    {
+      "name": "410-trust-untrusted-only",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-hooks-",
+      "edits": [
+        {
+          "from": "              select(.enabled!=false and (.trustStatus!=\"trusted\" and .trustStatus!=\"managed\")) |",
+          "to": "              select(.enabled!=false and (.trustStatus==\"untrusted\")) |"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-hooks-modified"
+      ]
+    },
+    {
+      "name": "410-trust-managed",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-hooks-",
+      "edits": [
+        {
+          "from": "              select(.enabled!=false and (.trustStatus!=\"trusted\" and .trustStatus!=\"managed\")) |",
+          "to": "              select(.enabled!=false and (.trustStatus!=\"trusted\")) |"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-hooks-tolerated"
+      ]
+    },
+    {
+      "name": "410-trust-enabled",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-hooks-",
+      "edits": [
+        {
+          "from": "              select(.enabled!=false and (.trustStatus!=\"trusted\" and .trustStatus!=\"managed\")) |",
+          "to": "              select(.trustStatus!=\"trusted\" and .trustStatus!=\"managed\") |"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-hooks-tolerated"
+      ]
+    },
+    {
+      "name": "410-trust-plugin-only",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-hooks-",
+      "edits": [
+        {
+          "from": "              .result.data[]?.hooks[]? |\n              select(.enabled!=false and (.trustStatus!=\"trusted\" and .trustStatus!=\"managed\")) |",
+          "to": "              .result.data[]?.hooks[]? |\n              select(.source==\"plugin\" and .enabled!=false and (.trustStatus!=\"trusted\" and .trustStatus!=\"managed\")) |"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-hooks-user-untrusted"
+      ]
+    },
+    {
+      "name": "410-plugin-expected",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-hooks-",
+      "edits": [
+        {
+          "from": "            grep -qF -- \"/hooks/$cx_hook_name\" <<<\"$cx_loaded\" || cx_missing=\"$cx_missing $cx_hook_name\"",
+          "to": "            :"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-hooks-plugin-absent"
+      ]
+    },
+    {
+      "name": "410-no-reply-pass",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-hooks-",
+      "edits": [
+        {
+          "from": "      bad \"hook trust: no hooks/list reply$cx_hooks_fix\"",
+          "to": "      ok \"hook trust: no hooks/list reply$cx_hooks_fix\""
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-hooks-no-reply",
+        "codex-doctor-hooks-hang"
+      ]
+    },
+    {
+      "name": "410-config-errors",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-hooks-",
+      "edits": [
+        {
+          "from": "        cx_has_cfg_errors=\"$(printf '%s' \"$cx_reply\" | jq -r 'if ([.result.data[]?.errors[]?] | length) > 0 then \"true\" else \"false\" end' 2>/dev/null)\"\n        if [ \"$cx_has_cfg_errors\" = \"true\" ]; then",
+          "to": "        cx_has_cfg_errors=\"false\"\n        if [ \"$cx_has_cfg_errors\" = \"true\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-hooks-config-errors"
+      ]
+    },
+    {
+      "name": "410-protection-fail",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-protection-",
+      "edits": [
+        {
+          "from": "      bad \"no branch protection detected on $default_branch (or no admin scope to check) — on Codex this is a FAIL: push-guard.sh and branch protection are all that stand between an allowed git push and $default_branch; require a PR before merging\"",
+          "to": "      wrn \"no branch protection detected on $default_branch (or no admin scope to check) — on Codex this is a FAIL: push-guard.sh and branch protection are all that stand between an allowed git push and $default_branch; require a PR before merging\""
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-protection-missing"
+      ]
+    },
+    {
+      "name": "410-protection-unknown",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-protection-",
+      "edits": [
+        {
+          "from": "elif [ \"$provider\" = codex ]; then\n  bad \"branch protection: could not check (gh not ready or default branch unknown) — push-guard.sh and branch protection are all that stand between an allowed git push and the default branch; run gh auth login and re-run\"\nfi",
+          "to": "fi"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-protection-unknown"
+      ]
+    },
+    {
+      "name": "410-init-clientinfo",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-healthy",
+      "edits": [
+        {
+          "from": "    req_init=\"$(jq -cn --arg version \"$cx_client_version\" '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"check-harness\",\"version\":$version}}}')\"",
+          "to": "    req_init=\"$(jq -cn --arg version \"$cx_client_version\" '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}')\""
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-healthy"
+      ]
+    },
+    {
+      "name": "410-hooks-json-empty-guard",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-hooks-json-",
+      "edits": [
+        {
+          "from": "  elif [ -z \"$cx_expected\" ]; then\n    bad \"hook trust: could not check (could not determine the plugin's hooks — hooks/hooks.json is missing, unreadable, or unparseable)\"",
+          "to": "  elif false; then\n    bad \"hook trust: could not check (could not determine the plugin's hooks — hooks/hooks.json is missing, unreadable, or unparseable)\""
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-hooks-json-missing",
+        "codex-doctor-hooks-json-unparseable"
+      ]
+    },
+    {
+      "name": "410-key-sanitize",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-hooks-",
+      "edits": [
+        {
+          "from": "\"\\(.source):\\(.key|gsub(\"[^A-Za-z0-9._:/@-]\";\"?\")) (\\(.trustStatus))\"",
+          "to": "\"\\(.source):\\(.key) (\\(.trustStatus))\""
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-hooks-key-sanitize"
+      ]
     }
   ]
 }

@@ -29,6 +29,6 @@ to its file.
 | "The per-repo settings file" | [settings.md](settings.md) |
 | "Safety model" (with its "Five PreToolUse hooks", "Live-probe record", "Verdict provenance", "Approval provenance", and "One active cycle per checkout" paragraphs) | [safety-model.md](safety-model.md) |
 | "What's in here", "The model tiering", "Distribution" | [architecture.md](architecture.md) |
-| "Setup", "What `codex-setup.sh` writes", "Rules", "Contract loading", "Upgrades and `--check`", "Lock owner on Codex", "Trust steps", "Running the skills on Codex", "Honest limits" (Codex) | [codex.md](codex.md) |
+| "Setup", "What `codex-setup.sh` writes", "Rules", "Contract loading", "Upgrades and `--check`", "The doctor on Codex", "Lock owner on Codex", "Trust steps", "Running the skills on Codex", "Honest limits" (Codex) | [codex.md](codex.md) |
 | "Prerequisites", "Windows", "Getting started", "Updating", "Working on the harness itself" | the top-level [README](../../README.md) |
 | "Durable escalation", "Resilient dispatch" | [`skills/issue-implementer/SKILL.md`](../../skills/issue-implementer/SKILL.md) |

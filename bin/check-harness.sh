@@ -41,8 +41,9 @@
 # `.claude/settings.json` still carries legacy `Bash(git -C * <sub> *)` allow entries the guard
 # hook now supersedes (#150 — Claude Code 2.1.246+ warns about these at startup), the installed
 # harness plugin's own version and short commit SHA (#233, via bin/harness-version.sh, run by a
-# fixed path — never derived from repo content), and branch protection — presence, plus, only
-# when merge autonomy is effectively active (a declared "Merge autonomy policy" section, or an
+# fixed path — never derived from repo content), and branch protection — presence (WARN on
+# Claude Code; FAIL under `--provider codex`), plus, only when merge autonomy is effectively
+# active (a declared "Merge autonomy policy" section, or an
 # "Autonomy mode" section's implied merge autonomy) and the protection endpoint call succeeds,
 # whether required_status_checks.strict is true, the number of required status check contexts,
 # and whether required PR reviews are configured (#234 — all three WARN-only, never FAIL), and
@@ -51,6 +52,17 @@
 # precedent as bin/harness-version.sh) via its `--check` mode — is absent, declared (naming the
 # glob count), or malformed (naming the reason token); never FAILs, and never runs the classifier
 # against anything but this repo's own CLAUDE.md.
+#
+# --provider codex (#410, default: claude) runs a different, additive check set after the shared
+# preamble above instead of the settings/toolchain/policy-activation checks below (all skipped on
+# Codex — wrapped in one unindented `if [ "$provider" = claude ]; then … fi`): a Codex version
+# floor (top-level CODEX_MIN_VERSION), whitespace in the plugin/repo path, bin/codex-setup.sh
+# --check drift (#408), a bounded codex app-server hooks/list exchange that only ever REPORTS
+# hook trust (auto-trusting would defeat Codex's own review gate — it never writes trust state),
+# and a manual-merge report (merge autonomy does not exist on Codex). The shared baseline and
+# branch-protection checks below still run afterward, unchanged except that a missing/unreadable
+# branch-protection document is a FAIL rather than a WARN on Codex. See docs/reference/codex.md's
+# "The doctor on Codex" section for the fix for each FAIL.
 #
 # The test-suite-ratchet check never executes, evals, or shells out to anything read from
 # CLAUDE.md: it only looks up the measurement command's first word with `command -v` (a lookup,
@@ -65,12 +77,16 @@
 # Read-only except two safe, idempotent fixes it applies automatically:
 #   - chmod +x on the harness's own scripts
 #   - seeding an empty .claude/LESSONS.md if the project has none
+# On --provider codex, it also creates and removes a temp dir under ${TMPDIR:-/tmp} and briefly
+# starts the user's own `codex app-server` to read (never write) hook trust state — the repo
+# itself is still written only by the two fixes above.
 #
 # Quality judgments (is CLAUDE.md actually good enough? do the verification commands
 # pass?) are NOT this script's job — that's the harness-setup skill, which runs this
 # script first and then does the audit.
 #
-# Exit 0 = no FAILs (WARNs allowed). Exit 1 = at least one FAIL.
+# Exit 0 = no FAILs (WARNs allowed). Exit 1 = at least one FAIL. Exit 2 = usage error
+# (--provider requires claude or codex; see -h/--help).
 set -uo pipefail
 
 pass=0; warn=0; fail=0
@@ -181,10 +197,63 @@ verification_candidates() {
   printf '%s\n' "$1" | grep -o "${bt}[^${bt}]*${bt}" | tr -d "$bt"
 }
 
+# --- arguments (#410) -----------------------------------------------------------
+# --provider selects the check set: claude (default, unchanged) or codex. Parsed before any
+# check runs, so a usage error (exit 2) never leaves a partial report on stdout.
+usage() {
+  cat <<'EOF'
+usage: check-harness.sh [--provider claude|codex]
+       check-harness.sh -h|--help
+
+--provider selects which checks run: claude (default) or codex.
+EOF
+}
+
+provider=claude
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --provider)
+      if [ $# -lt 2 ]; then
+        echo "check-harness.sh: --provider needs a value (claude or codex)" >&2
+        usage >&2
+        exit 2
+      fi
+      provider="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "check-harness.sh: unrecognized argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+case "$provider" in
+  claude|codex) : ;;
+  *)
+    echo "check-harness.sh: unknown --provider value: $provider (expected claude or codex)" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
+if [ "$provider" = codex ] && ! command -v git >/dev/null 2>&1; then
+  echo "  FAIL  git not installed"
+  exit 1
+fi
+
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "  FAIL  not inside a git repository"; exit 1; }
 cd "$root"
 claude_dir="$root/.claude"
-echo "== harness doctor: $root =="
+if [ "$provider" = codex ]; then
+  echo "== harness doctor (codex): $root =="
+else
+  echo "== harness doctor: $root =="
+fi
 
 # --- git remote ---------------------------------------------------------------
 if git remote get-url origin >/dev/null 2>&1; then
@@ -208,11 +277,15 @@ fi
 
 # --- jq -----------------------------------------------------------------------
 jq_ready=false
+jq_fail_msg="jq not installed — the discovery scripts need it"
+if [ "$provider" = codex ]; then
+  jq_fail_msg="${jq_fail_msg}, and on Codex the plugin's hooks (hooks/planner-guard.sh included) fail open without it"
+fi
 if command -v jq >/dev/null 2>&1; then
   ok "jq installed"
   jq_ready=true
 else
-  bad "jq not installed — the discovery scripts need it"
+  bad "$jq_fail_msg"
 fi
 
 # --- default branch -----------------------------------------------------------
@@ -329,6 +402,235 @@ EOF
   ok "seeded empty .claude/LESSONS.md (project-owned; append dated gotchas as they bite)"
 fi
 
+# --- top-level literals (anchored `NAME="..."` lines, never indented) --------------------------
+# PROTECTION_STRICT_WARN_STEM/PROTECTION_CHECKS_WARN_STEM (#234) are matched verbatim against
+# dev/doctor-tests.sh by dev/selfcheck.sh assertion 4.38 — keep them anchored, top-level
+# `NAME="..."` literals so the assertion's sed extraction keeps working, and never let either
+# contain the substring "no checks configured" (a different, unrelated WARN in the settings
+# section) or "branch protection enabled on" (the PASS line in the branch-protection section). CODEX_MIN_VERSION and CODEX_HOOKS_LIST_WAIT (#410) are grouped here for the
+# same reason — every top-level literal a fixture or a mutant might anchor on lives in one place —
+# even though both are consumed only inside the Codex block below, well before branch protection
+# runs; a plain top-level assignment is visible to everything that runs after it, so the physical
+# distance to branch protection's own use of the WARN stems is not a problem.
+PROTECTION_STRICT_WARN_STEM="branch protection: up-to-date branches are not required"
+PROTECTION_CHECKS_WARN_STEM="branch protection: zero required status check contexts"
+CODEX_MIN_VERSION="0.156.1"
+CODEX_HOOKS_LIST_WAIT=15
+
+# --- Codex checks (#410) ---------------------------------------------------------------------
+# --provider codex runs this block instead of the settings/toolchain/policy-activation checks
+# wrapped in the Claude-only `if` just below: a Codex version floor, plugin/repo path whitespace,
+# bin/codex-setup.sh's own --check drift, a bounded codex app-server hooks/list exchange that
+# only ever REPORTS hook trust (never grants it — auto-trusting would defeat Codex's own review
+# gate), and a manual-merge report. merge_effective stays false: the branch-protection section
+# further down reads it (skipping the strictness sub-checks, which are merge-autonomy-gated), the
+# Claude-only hoist that normally sets it is skipped on Codex, and merge autonomy doesn't exist
+# on Codex at all.
+if [ "$provider" = codex ]; then
+  merge_effective=false
+
+  # --- Codex version ------------------------------------------------------------
+  cx_found=false
+  if command -v codex >/dev/null 2>&1; then
+    cx_found=true
+    cx_version_line="$(codex --version 2>/dev/null | head -1)"
+    cx_triple="$(printf '%s\n' "$cx_version_line" | sed -nE 's/^[^0-9]*([0-9]{1,9})\.([0-9]{1,9})\.([0-9]{1,9}).*/\1 \2 \3/p')"
+    if [ -z "$cx_triple" ]; then
+      bad "codex version: could not parse"
+    else
+      cx_min_triple="$(printf '%s\n' "$CODEX_MIN_VERSION" | sed -nE 's/^([0-9]{1,9})\.([0-9]{1,9})\.([0-9]{1,9})$/\1 \2 \3/p')"
+      cx_maj="$(printf '%s' "$cx_triple" | awk '{print $1}')"
+      cx_min="$(printf '%s' "$cx_triple" | awk '{print $2}')"
+      cx_pat="$(printf '%s' "$cx_triple" | awk '{print $3}')"
+      cx_min_maj="$(printf '%s' "$cx_min_triple" | awk '{print $1}')"
+      cx_min_min="$(printf '%s' "$cx_min_triple" | awk '{print $2}')"
+      cx_min_pat="$(printf '%s' "$cx_min_triple" | awk '{print $3}')"
+      cx_version="$((10#$cx_maj)).$((10#$cx_min)).$((10#$cx_pat))"
+      cx_ge=false
+      if [ "$((10#$cx_maj))" -gt "$((10#$cx_min_maj))" ]; then
+        cx_ge=true
+      elif [ "$((10#$cx_maj))" -eq "$((10#$cx_min_maj))" ]; then
+        if [ "$((10#$cx_min))" -gt "$((10#$cx_min_min))" ]; then
+          cx_ge=true
+        elif [ "$((10#$cx_min))" -eq "$((10#$cx_min_min))" ]; then
+          [ "$((10#$cx_pat))" -ge "$((10#$cx_min_pat))" ] && cx_ge=true
+        fi
+      fi
+      if $cx_ge; then
+        ok "codex version: $cx_version"
+      else
+        bad "codex version: $cx_version is below the supported floor $CODEX_MIN_VERSION"
+      fi
+    fi
+  else
+    bad "codex version: codex not installed"
+  fi
+
+  # --- Codex plugin/repo paths ----------------------------------------------------
+  cx_plugin_root="$(cd "$script_dir/.." && pwd)"
+  # cx_has_ws VALUE — does VALUE contain whitespace? Shared by both path checks below, so one
+  # mutation to this single case arm breaks detection for both.
+  cx_has_ws() {
+    case "$1" in
+      *[[:space:]]*) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+  cx_paths_ok=true
+  if cx_has_ws "$cx_plugin_root"; then
+    bad "codex plugin paths: the plugin root contains whitespace"
+    cx_paths_ok=false
+  fi
+  if cx_has_ws "$root"; then
+    bad "codex plugin paths: the repo path contains whitespace"
+    cx_paths_ok=false
+  fi
+  $cx_paths_ok && ok "codex plugin paths: no whitespace in the plugin root or repo path"
+
+  # --- Codex setup in sync (bin/codex-setup.sh --check, #408) ----------------------
+  cx_setup="$script_dir/codex-setup.sh"
+  if [ -x "$cx_setup" ]; then
+    cx_setup_out="$(cd "$root" && "$cx_setup" --check 2>/dev/null)"
+    cx_setup_rc=$?
+  else
+    cx_setup_out=""
+    cx_setup_rc=127
+  fi
+  case "$cx_setup_rc" in
+    0) ok "codex setup: in sync" ;;
+    1)
+      cx_setup_lines="$(printf '%s\n' "$cx_setup_out" | grep -E '^(drift|unsupported)=')"
+      n_missing="$(printf '%s\n' "$cx_setup_lines" | grep -c .)"
+      more=""; [ "$n_missing" -gt 6 ] && more=" (+$((n_missing-6)) more)"
+      cx_setup_list="$(printf '%s\n' "$cx_setup_lines" | head -6 | tr '\n' ',' | sed 's/,/, /g; s/, $//')"
+      bad "codex setup: out of sync: $cx_setup_list$more — run bin/codex-setup.sh from a normal terminal to re-sync"
+      ;;
+    *) bad "codex setup: could not check (missing, not executable, or exited $cx_setup_rc)" ;;
+  esac
+
+  # --- Codex plugin version (#410) — the initialize request's clientInfo
+  # names this doctor and the installed plugin's own version, or "0" when it can't be resolved
+  # (missing/unreadable/unparseable plugin.json, or jq not ready); a real codex app-server (0.156.1
+  # confirmed live) rejects initialize outright without clientInfo, so a doctor that omitted it
+  # could never reach hooks/list at all.
+  cx_client_version="0"
+  if $jq_ready; then
+    cx_v="$(jq -r '.version // empty' "$cx_plugin_root/.claude-plugin/plugin.json" 2>/dev/null)"
+    [ -n "$cx_v" ] && [ "$cx_v" != "null" ] && cx_client_version="$cx_v"
+  fi
+
+  # --- Codex hook trust (bounded codex app-server hooks/list exchange) -------------
+  # cx_expected — the plugin's own hook script basenames, derived from hooks/hooks.json. Computed
+  # up front, before ever starting codex app-server: an empty result —
+  # from a missing, unreadable, or unparseable hooks.json, or one with no recognisable hook
+  # entries — fails the same "can't tell" way as codex/jq being absent, rather than only being
+  # caught later (or not at all) once the exchange has already run.
+  cx_expected="$(jq -r '.hooks[][]?.hooks[]?.command // empty' "$cx_plugin_root/hooks/hooks.json" 2>/dev/null | sed -n 's|.*/hooks/\([A-Za-z0-9._-]*\.sh\).*|\1|p')"
+  cx_reply=""
+  # cx_hooks_list — starts `codex app-server`, sends exactly two JSON-RPC requests plus the
+  # `initialized` notification through a background pipeline writer (initialize with clientInfo,
+  # initialized, hooks/list with params.cwds == [$root]), polls in THIS shell (bounded, at most
+  # CODEX_HOOKS_LIST_WAIT + 2 one-second polls) for the process to exit on its own once it has
+  # emitted the id==2 reply, kills it if it hasn't, then signals the writer to stop and waits for
+  # it (bounded — the writer notices within a second) before extracting $cx_reply (the id==2 line,
+  # or empty on no reply). Never sends anything but those two requests and the notification; never
+  # trusts anything — read-only throughout.
+  cx_hooks_list() {
+    local tmp req_init req_inited req_hooks pid n m have
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/tbf-codex-hooks.XXXXXX" 2>/dev/null)" || return 1
+    req_init="$(jq -cn --arg version "$cx_client_version" '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"check-harness","version":$version}}}')"
+    req_inited="$(jq -cn '{"jsonrpc":"2.0","method":"initialized","params":{}}')"
+    req_hooks="$(jq -cn --arg cwd "$root" '{"jsonrpc":"2.0","id":2,"method":"hooks/list","params":{"cwds":[$cwd]}}')"
+    (
+      printf '%s\n%s\n%s\n' "$req_init" "$req_inited" "$req_hooks"
+      n=0
+      while [ "$n" -lt "$CODEX_HOOKS_LIST_WAIT" ]; do
+        [ -f "$tmp/done" ] && break
+        have="$(jq -R -c 'fromjson? | select(type=="object" and .id==2)' "$tmp/out" 2>/dev/null | head -1)"
+        [ -n "$have" ] && break
+        sleep 1
+        n=$((n+1))
+      done
+    ) 2>/dev/null | codex app-server >"$tmp/out" 2>"$tmp/err" &
+    pid=$!
+    m=0
+    while [ "$m" -lt "$((CODEX_HOOKS_LIST_WAIT + 2))" ]; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+      m=$((m+1))
+    done
+    kill "$pid" 2>/dev/null
+    : >"$tmp/done"
+    wait 2>/dev/null
+    cx_reply="$(jq -R -c 'fromjson? | select(type=="object" and .id==2)' "$tmp/out" 2>/dev/null | head -1)"
+    rm -rf "$tmp"
+  }
+
+  cx_hooks_fix=" — trust the hooks in Codex (its hook review, \"Trust all\"), because Codex skips an untrusted hook silently; see docs/reference/codex.md"
+  if ! $cx_found; then
+    bad "hook trust: could not check (codex not installed)"
+  elif ! $jq_ready; then
+    bad "hook trust: could not check (jq not installed)"
+  elif [ -z "$cx_expected" ]; then
+    bad "hook trust: could not check (could not determine the plugin's hooks — hooks/hooks.json is missing, unreadable, or unparseable)"
+  else
+    cx_hooks_list
+    if [ -z "$cx_reply" ]; then
+      bad "hook trust: no hooks/list reply$cx_hooks_fix"
+    else
+      cx_has_error="$(printf '%s' "$cx_reply" | jq -r 'if .error then "true" else "false" end' 2>/dev/null)"
+      if [ "$cx_has_error" = "true" ]; then
+        bad "hook trust: codex app-server rejected hooks/list$cx_hooks_fix"
+      else
+        cx_has_cfg_errors="$(printf '%s' "$cx_reply" | jq -r 'if ([.result.data[]?.errors[]?] | length) > 0 then "true" else "false" end' 2>/dev/null)"
+        if [ "$cx_has_cfg_errors" = "true" ]; then
+          bad "hook trust: Codex reported hook configuration error(s)$cx_hooks_fix"
+        else
+          cx_loaded="$(printf '%s' "$cx_reply" | jq -r '.result.data[]?.hooks[]? | select(.source=="plugin" and .enabled!=false) | .command' 2>/dev/null)"
+          cx_missing=""
+          while IFS= read -r cx_hook_name; do
+            [ -n "$cx_hook_name" ] || continue
+            grep -qF -- "/hooks/$cx_hook_name" <<<"$cx_loaded" || cx_missing="$cx_missing $cx_hook_name"
+          done <<EOF
+$cx_expected
+EOF
+          if [ -n "$cx_missing" ]; then
+            bad "hook trust: plugin hook(s) not loaded by Codex:$cx_missing$cx_hooks_fix"
+          else
+            cx_untrusted="$(printf '%s' "$cx_reply" | jq -r '
+              .result.data[]?.hooks[]? |
+              select(.enabled!=false and (.trustStatus!="trusted" and .trustStatus!="managed")) |
+              "\(.source):\(.key|gsub("[^A-Za-z0-9._:/@-]";"?")) (\(.trustStatus))"
+            ' 2>/dev/null)"
+            if [ -n "$cx_untrusted" ]; then
+              n_missing="$(printf '%s\n' "$cx_untrusted" | grep -c .)"
+              more=""; [ "$n_missing" -gt 6 ] && more=" (+$((n_missing-6)) more)"
+              cx_untrusted_list="$(printf '%s\n' "$cx_untrusted" | head -6 | tr '\n' ',' | sed 's/,/, /g; s/, $//')"
+              bad "hook(s) not trusted: $cx_untrusted_list$more$cx_hooks_fix"
+            else
+              ok "hook trust: every hook Codex loads for this repo is trusted"
+            fi
+          fi
+        fi
+      fi
+    fi
+  fi
+
+  # --- manual merge (Codex has no merge autonomy) ----------------------------------
+  cx_merge_names=""
+  if [ -f "$root/CLAUDE.md" ]; then
+    has_policy_section "Merge autonomy policy" && cx_merge_names="${cx_merge_names}'Merge autonomy policy', "
+    has_policy_section "Autonomy mode" && cx_merge_names="${cx_merge_names}'Autonomy mode', "
+    cx_merge_names="${cx_merge_names%, }"
+  fi
+  if [ -n "$cx_merge_names" ]; then
+    ok "merge: manual on Codex — $cx_merge_names does not apply here; merge autonomy doesn't exist on Codex, so every PR merge is manual"
+  else
+    ok "merge: manual on Codex — every PR merge is manual"
+  fi
+fi
+
+if [ "$provider" = claude ]; then  # Claude Code-only checks (settings, toolchain, hooks toggle, policy activation) — skipped with --provider codex; closes at "end of Claude Code-only checks"
 # --- settings-file candidates: the three-file union (#66, #147) ------------------------------
 # The three files whose union this script consults more than once: the merge-autonomy verdict
 # below (deny-and-allow-aware, via merge_deny_src/merge_allow_src — never $allow_union), the
@@ -1070,6 +1372,7 @@ EOF
     wrn "governance paths: could not validate"
   fi
 fi
+fi  # end of Claude Code-only checks
 
 # --- verification baseline ------------------------------------------------------
 # BASELINE.md records THIS machine's last known-green run of the verification commands
@@ -1111,13 +1414,9 @@ else
 fi
 
 # --- branch protection ----------------------------------------------------------
-# The two WARN stems below (#234) are matched verbatim against dev/doctor-tests.sh by
-# dev/selfcheck.sh assertion 4.38 — keep them anchored, top-level `NAME="..."` literals so the
-# assertion's sed extraction keeps working, and never let either contain the substring "no
-# checks configured" (a different, unrelated WARN a few hundred lines above) or "branch
-# protection enabled on" (the PASS line just below).
-PROTECTION_STRICT_WARN_STEM="branch protection: up-to-date branches are not required"
-PROTECTION_CHECKS_WARN_STEM="branch protection: zero required status check contexts"
+# PROTECTION_STRICT_WARN_STEM/PROTECTION_CHECKS_WARN_STEM (used below) are defined as top-level
+# literals near CODEX_MIN_VERSION/CODEX_HOOKS_LIST_WAIT, well before this section — see that
+# block's comment.
 if $gh_ready && [ -n "$default_branch" ]; then
   repo_slug="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null | tr -d '\r' || true)"
   if [ -n "$repo_slug" ] && prot="$(gh api "repos/$repo_slug/branches/$default_branch/protection" 2>/dev/null)"; then
@@ -1151,8 +1450,14 @@ if $gh_ready && [ -n "$default_branch" ]; then
       esac
     fi
   else
-    wrn "no branch protection detected on $default_branch (or no admin scope to check) — recommended: require a PR before merge; it's the real backstop behind the deny-list"
+    if [ "$provider" = codex ]; then
+      bad "no branch protection detected on $default_branch (or no admin scope to check) — on Codex this is a FAIL: push-guard.sh and branch protection are all that stand between an allowed git push and $default_branch; require a PR before merging"
+    else
+      wrn "no branch protection detected on $default_branch (or no admin scope to check) — recommended: require a PR before merge; it's the real backstop behind the deny-list"
+    fi
   fi
+elif [ "$provider" = codex ]; then
+  bad "branch protection: could not check (gh not ready or default branch unknown) — push-guard.sh and branch protection are all that stand between an allowed git push and the default branch; run gh auth login and re-run"
 fi
 
 # --- summary --------------------------------------------------------------------

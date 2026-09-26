@@ -131,6 +131,72 @@ current, 1 when anything drifted or a path is unsupported, 2 on a usage or envir
 (not inside a git repository, a broken plugin install missing its own `agents/*.md` or
 `templates/codex.rules`).
 
+## The doctor on Codex
+
+`bin/check-harness.sh --provider codex` (#410) runs a different, additive check set after the
+shared preamble (git remote, `gh`, `jq`, default branch, labels, exec bits, harness version,
+`CLAUDE.md`, `LESSONS.md`) — with `--provider claude` (the default) or no flag at all, the doctor
+is byte-for-byte unchanged. An unrecognised `--provider` value, or any other unrecognised
+argument, exits 2 before any check runs; `-h`/`--help` exits 0.
+
+- **git/jq preflight.** If `git` isn't on `PATH`, the doctor FAILs and exits 1 immediately (before
+  even locating the repo). The `jq` FAIL adds a Codex-specific clause: the plugin's hooks
+  (`hooks/planner-guard.sh` included) fail open without it, so a missing `jq` is silently
+  unenforced, not merely unchecked.
+- **Codex version.** FAILs below a floor (`CODEX_MIN_VERSION` in `bin/check-harness.sh`, currently
+  `0.156.1`), compared numerically component-by-component against the first `X.Y.Z` triple on
+  `codex --version`'s first line (a pre-release suffix like `-alpha` is ignored). Fix: upgrade
+  Codex. FAILs the same way when `codex --version` prints no triple, or when `codex` isn't
+  installed at all.
+- **Plugin/repo paths.** FAILs when the plugin's install root or this repo's own path contains
+  whitespace — both would break the rules file's `sed` substitution (see "What `codex-setup.sh`
+  writes" above). Fix: move the install or the repo to a path with no spaces.
+- **Setup in sync.** Runs `bin/codex-setup.sh --check` by a fixed path. FAILs "out of sync" and
+  lists up to six of its `drift=`/`unsupported=` lines (see "Upgrades and `--check`" above) when
+  anything has drifted; fix by re-running `bin/codex-setup.sh` from a normal terminal. FAILs
+  "could not check" when the script is missing, not executable, or exits any other way.
+- **Hook trust.** Starts `codex app-server` and sends exactly two read-only JSON-RPC requests plus
+  the `initialized` notification — `initialize` (naming this doctor and the installed plugin
+  version in `clientInfo`, which a real `codex app-server` requires before it will answer
+  anything else), `initialized`, and `hooks/list` scoped to this repo's git toplevel — bounded so
+  the exchange can never hang (a kill fallback fires after at most `CODEX_HOOKS_LIST_WAIT + 2`
+  one-second polls). **This check only ever lists hook trust state; it never trusts a hook
+  itself** — auto-trusting would defeat Codex's own review gate, and doing it from a doctor script
+  would make the floor meaningless. FAILs "could not check" when `codex` or `jq` is missing, or
+  when the plugin's expected hook set can't be determined at all (`hooks/hooks.json` missing,
+  unreadable, or unparseable); FAILs "no hooks/list reply" or "rejected hooks/list" when the
+  exchange itself fails; FAILs "hook configuration error(s)" when Codex itself reports one; FAILs
+  "not loaded by Codex" when a plugin hook the plugin ships isn't an enabled `source: "plugin"`
+  entry in the reply; FAILs "hook(s) not trusted" when any enabled hook (plugin, user, or project)
+  reports a `trustStatus` other than `trusted` or `managed` — its key sanitised to
+  `[A-Za-z0-9._:/@-]` (any other character becomes `?`) before it's ever printed. Fix for the last
+  two: open Codex's own hook review and trust all of this plugin's hooks ("Trust all") — an
+  untrusted hook is skipped silently by Codex, with no other warning.
+- **Manual merge.** Always PASSes — merge autonomy doesn't exist on Codex, so every PR merge is
+  manual. When `CLAUDE.md` declares a "Merge autonomy policy" and/or "Autonomy mode" section, the
+  PASS names them as not applying here; neither section's own verdict line (`merge autonomy:`,
+  `autonomy mode:`) ever prints on Codex.
+
+The shared baseline check and the branch-protection check still run afterward. Branch protection
+gets one Codex-specific change: a missing or unreadable protection document is a **FAIL** on
+Codex (`push-guard.sh` and branch protection are all that stand between an allowed `git push` and
+the default branch), where it's only a WARN on Claude Code; `gh` not ready, or an unknown default
+branch, is also a FAIL on Codex rather than a silent skip. The strictness sub-checks
+(`required_status_checks.strict`, required contexts, required reviews) stay gated on merge
+autonomy being effectively active, which never happens on Codex, so they never print here.
+**Rulesets limit:** the doctor detects protection only through GitHub's legacy
+`repos/<r>/branches/<b>/protection` endpoint, which doesn't see a repository ruleset — a repo
+protected only by a ruleset gets a FAIL here even though pushes are, in fact, blocked (tracked as
+a follow-up).
+
+Everything the settings-file union, toolchain, template-drift, `disableAllHooks`, and
+policy-activation sections check on Claude Code (`.claude/settings.json`, merge-autonomy
+activation, the test-suite ratchet, scoped autonomy, governance paths) is skipped entirely on
+Codex — none of those lines print. The doctor still writes only its two safe fixes (`chmod +x` on
+harness scripts, seeding `.claude/LESSONS.md`); the Codex branch additionally creates and removes
+a temp dir under `${TMPDIR:-/tmp}` and briefly starts the user's own `codex app-server`, which may
+write Codex's own state under `CODEX_HOME` — the doctor sends it no write request.
+
 ## Lock owner on Codex
 
 `bin/harness-lock.sh acquire` records an owner pid with precedence `--owner-pid <pid>` >
