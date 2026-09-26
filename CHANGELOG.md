@@ -16,6 +16,11 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #314: ADR 0002 amended with the Codex probe results (P1–P7, Codex CLI 0.156.1 and 0.157.1) and
+  the minimum supported Codex version, 0.156.1. Docs only; no behaviour change.
+
 ## v2.9.0
 
 - #398: `agent-boundary.sh` and `push-guard.sh` now skip a leading shell keyword (`if`/`then`/
