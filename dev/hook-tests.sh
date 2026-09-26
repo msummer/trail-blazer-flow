@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #
-# hook-tests.sh — fixture-based negative-test harness for the four plugin-shipped PreToolUse
+# hook-tests.sh — fixture-based negative-test harness for the five plugin-shipped PreToolUse
 # hooks, in the style of dev/doctor-tests.sh: feeds fixture stdin JSON straight into the real
-# script and pins its verdict.
+# script and pins its verdict. Since #407, this includes Codex-shaped payload fixtures (bare
+# agent_type, plus agent_id for subagents, neither for the main session — see ADR 0002's amendment)
+# for all five hooks, and the new hooks/planner-guard.sh itself.
 #
 # Per-PR history of what this harness pins: CHANGELOG.md (archive, #363). Each hook's own header
 # and each case's own comment state its mechanism.
@@ -12,9 +14,10 @@
 # footer, exit 0 iff nothing failed; a filter with no match exits 1.
 #
 # Every write happens under one `mktemp -d` root, removed via an EXIT trap; this repo's own
-# hooks/git-c-guard.sh, hooks/agent-boundary.sh, hooks/push-guard.sh, and hooks/claude-dir-guard.sh
-# are read-only here — each script is run directly, never copied or edited (push-guard.sh's own
-# fixture-repo builder below writes ONLY under that same mktemp root, never inside this checkout).
+# hooks/git-c-guard.sh, hooks/agent-boundary.sh, hooks/push-guard.sh, hooks/claude-dir-guard.sh, and
+# hooks/planner-guard.sh are read-only here — each script is run directly, never copied or edited
+# (push-guard.sh's own fixture-repo builder below writes ONLY under that same mktemp root, never
+# inside this checkout).
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,6 +26,7 @@ guard="$root/hooks/git-c-guard.sh"
 boundary="$root/hooks/agent-boundary.sh"
 push_guard="$root/hooks/push-guard.sh"
 claude_dir_guard="$root/hooks/claude-dir-guard.sh"
+planner_guard="$root/hooks/planner-guard.sh"
 
 tmpbase="$(mktemp -d)"
 cleanup() {
@@ -2051,7 +2055,9 @@ case_push_kw_noop_then_feature() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# hooks/claude-dir-guard.sh (#327) fixture builders, runner, and assertions. This hook has three
+# hooks/claude-dir-guard.sh (#327; apply_patch/.codex/Bash-shim routes added #407 — see the
+# separate cdg-patch-*/cdg-codexseg-* section further down for those) fixture builders, runner,
+# and assertions for the ORIGINAL Edit/Write, ".claude"-only surface. This hook has three
 # verdicts — deny via the ".claude" segment class (exit 2, empty stdout, one stderr line naming
 # the role, the tool, and the blocked path), deny via the unclassifiable/fail-closed class (exit
 # 2, empty stdout, one stderr line with DISTINCT wording naming the path), or no opinion (exit 0,
@@ -2059,7 +2065,10 @@ case_push_kw_noop_then_feature() {
 # approach": the ".claude" segment class across both tools (Edit/Write), both roles
 # (implementer/verifier), and all four agent_type spellings distributed across those combinations;
 # a nested segment; a user-level path entirely outside any repo checkout (pins deliberate
-# location-independence — this hook reads no cwd/repo-root at all); a case-variant spelling; the
+# location-independence — the file_path route this section exercises reads no cwd/repo-root at
+# all; the apply_patch and Bash routes #407 added DO read the stdin JSON's own cwd field to resolve
+# a relative header path, still with no filesystem access — see the cdg-patch-*/cdg-codexseg-*
+# section's own header); a case-variant spelling; the
 # Windows drive-letter and backslash-spelled forms; ".claude" as the path's final segment; a
 # CR-carrying spelling; a relative path that IS ".claude/..." (still denies via the ".claude"
 # message, discriminated from a relative PLAIN path via the unclassifiable message by
@@ -2277,6 +2286,729 @@ case_cdg_writes_nothing() {
   after="$(find "$dir" -type f -exec ls -la {} \; | sort)"
   expect_cdg_deny_claude
   [ "$before" = "$after" ] || { __ok=0; __why="${__why}fixture tree's file listing changed — claude-dir-guard.sh wrote to or altered a file it should only judge by its path string\n"; }
+}
+
+# ---------------------------------------------------------------------------------------------
+# Codex payload shapes (#407): fixture builders, runners, and assertions for hooks/planner-guard.sh
+# (new), claude-dir-guard.sh's new apply_patch/.codex/Bash-shim routes, every existing hook fed a
+# Codex-shaped payload, and the gh --version canary. A Codex PreToolUse payload's DOCUMENTED key
+# set (ADR 0002 amendment, P1/P4) is session_id, turn_id, cwd, hook_event_name, model,
+# permission_mode, tool_name, tool_use_id, transcript_path, and tool_input -- plus agent_type and
+# agent_id for a subagent, neither for the main session (the same M1 shape every Claude-shaped
+# fixture above already exercises for its own hook).
+
+# mk_codex_shell AGENT CMD [CWD] -- a Codex Bash payload. CWD defaults to "/repo". AGENT ""
+# omits agent_type/agent_id entirely (the main-session shape); non-empty adds both.
+mk_codex_shell() {
+  local agent="$1" cmd="$2" cwd="${3:-/repo}"
+  jq -n --arg agent "$agent" --arg cmd "$cmd" --arg cwd "$cwd" '
+    {
+      session_id: "codex-sess-1", turn_id: "codex-turn-1", cwd: $cwd,
+      hook_event_name: "PreToolUse", model: "codex-x", permission_mode: "bypassPermissions",
+      tool_name: "Bash", tool_use_id: "codex-tu-1", transcript_path: "/tmp/codex-transcript",
+      tool_input: {command: $cmd}
+    } + (if $agent != "" then {agent_type: $agent, agent_id: "codex-agent-1"} else {} end)'
+}
+# mk_codex_patch AGENT PATCH [CWD|-none-] -- a Codex apply_patch payload (no file_path at all).
+# "-none-" for CWD omits the cwd field entirely; anything else (including the default "/repo")
+# sets it.
+mk_codex_patch() {
+  local agent="$1" patch="$2" cwd="${3:-/repo}"
+  if [ "$cwd" = "-none-" ]; then
+    jq -n --arg agent "$agent" --arg patch "$patch" '
+      {
+        session_id: "codex-sess-1", turn_id: "codex-turn-1",
+        hook_event_name: "PreToolUse", model: "codex-x", permission_mode: "bypassPermissions",
+        tool_name: "apply_patch", tool_use_id: "codex-tu-1", transcript_path: "/tmp/codex-transcript",
+        tool_input: {command: $patch}
+      } + (if $agent != "" then {agent_type: $agent, agent_id: "codex-agent-1"} else {} end)'
+  else
+    jq -n --arg agent "$agent" --arg patch "$patch" --arg cwd "$cwd" '
+      {
+        session_id: "codex-sess-1", turn_id: "codex-turn-1", cwd: $cwd,
+        hook_event_name: "PreToolUse", model: "codex-x", permission_mode: "bypassPermissions",
+        tool_name: "apply_patch", tool_use_id: "codex-tu-1", transcript_path: "/tmp/codex-transcript",
+        tool_input: {command: $patch}
+      } + (if $agent != "" then {agent_type: $agent, agent_id: "codex-agent-1"} else {} end)'
+  fi
+}
+
+# run_planner_guard -- same separate stdout/stderr capture idiom as run_claude_guard/run_boundary
+# above.
+plg_out=""
+plg_err=""
+plg_rc=0
+run_planner_guard() {
+  local json="$1" pathval="${2:-$PATH}" errfile="$tmpbase/plg-stderr"
+  plg_out="$(printf '%s' "$json" | PATH="$pathval" "$bash_bin" "$planner_guard" 2>"$errfile")"
+  plg_rc=$?
+  plg_err="$(cat "$errfile" 2>/dev/null)"
+  rm -f "$errfile"
+}
+# expect_plg_deny/expect_plg_no_opinion -- hand-typed DENY_STEM literal, same convention as
+# expect_deny/expect_cdg_deny_claude above.
+expect_plg_deny() {
+  [ "$plg_rc" -eq 2 ] || { __ok=0; __why="${__why}rc: expected 2, got $plg_rc\n"; }
+  [ -z "$plg_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$plg_out'\n"; }
+  local err_lines
+  err_lines="$(printf '%s\n' "$plg_err" | grep -c '[^[:space:]]')"
+  [ "$err_lines" -eq 1 ] || { __ok=0; __why="${__why}expected exactly 1 non-blank stderr line, got $err_lines: '$plg_err'\n"; }
+  case "$plg_err" in
+    *"trail-blazer-flow planner guard:"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain the DENY_STEM literal 'trail-blazer-flow planner guard:': '$plg_err'\n" ;;
+  esac
+}
+expect_plg_no_opinion() {
+  [ "$plg_rc" -eq 0 ] || { __ok=0; __why="${__why}rc: expected 0, got $plg_rc\n"; }
+  [ -z "$plg_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$plg_out'\n"; }
+  [ -z "$plg_err" ] || { __ok=0; __why="${__why}expected empty stderr, got: '$plg_err'\n"; }
+}
+# expect_cdg_deny_codex/expect_cdg_deny_unparseable -- the same hand-typed-phrase convention as
+# expect_cdg_deny_claude/expect_cdg_deny_unclassifiable above, against claude-dir-guard.sh's own
+# .codex-segment and apply_patch-unparseable deny messages (#407).
+expect_cdg_deny_codex() {
+  [ "$cdg_rc" -eq 2 ] || { __ok=0; __why="${__why}rc: expected 2, got $cdg_rc\n"; }
+  [ -z "$cdg_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$cdg_out'\n"; }
+  local err_lines
+  err_lines="$(printf '%s\n' "$cdg_err" | grep -c '[^[:space:]]')"
+  [ "$err_lines" -eq 1 ] || { __ok=0; __why="${__why}expected exactly 1 non-blank stderr line, got $err_lines: '$cdg_err'\n"; }
+  case "$cdg_err" in
+    *"trail-blazer-flow claude-dir guard:"*"a path under a .codex segment"*) ;;
+    *) __ok=0; __why="${__why}stderr does not carry the .codex-segment deny stem/phrase: '$cdg_err'\n" ;;
+  esac
+}
+expect_cdg_deny_unparseable() {
+  [ "$cdg_rc" -eq 2 ] || { __ok=0; __why="${__why}rc: expected 2, got $cdg_rc\n"; }
+  [ -z "$cdg_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$cdg_out'\n"; }
+  local err_lines
+  err_lines="$(printf '%s\n' "$cdg_err" | grep -c '[^[:space:]]')"
+  [ "$err_lines" -eq 1 ] || { __ok=0; __why="${__why}expected exactly 1 non-blank stderr line, got $err_lines: '$cdg_err'\n"; }
+  case "$cdg_err" in
+    *"trail-blazer-flow claude-dir guard:"*"could not be parsed"*) ;;
+    *) __ok=0; __why="${__why}stderr does not carry the 'could not be parsed' deny stem/phrase: '$cdg_err'\n" ;;
+  esac
+}
+
+# --- hooks/planner-guard.sh (#407) cases --------------------------------------------------------
+# The default shape is Codex with bare "planner" (mk_codex_shell ""|"planner" ...). Deny verdicts
+# split into two classes with distinct messages: an Edit/Write/apply_patch call (always deny, no
+# classification needed) and a Bash call whose shell command the allowlist/lexer rejects.
+#
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "plg-"
+# unless noted), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
+# mutant:407-plg-fastpath — widens the `*planner*` fast path 2 to an unmatchable string, so every
+#   plg-deny-* fixture exits silently before jq is ever spawned.
+# mutant:407-plg-edit-tools — empties PLANNER_EDIT_TOOLS, so Edit/Write/apply_patch are no longer
+#   denied outright.
+# mutant:407-plg-git-restore — adds "restore" to PLANNER_GIT_READONLY, so `git restore` is no
+#   longer denied.
+# mutant:407-plg-git-opts — drops the `--output*` arm from the git option-denial list.
+# mutant:407-plg-git-grep-readded (#407 kickback finding 1) — adds "grep" back to
+#   PLANNER_GIT_READONLY, so `git grep`'s own abbreviated-long-option/bundled-short-option
+#   evasions of the (grep-only, in real git) `-O`/`--open-files-in-pager` option are no longer
+#   denied by the plain subcommand-membership check.
+# mutant:407-plg-rg-hostname-bin (#407 kickback finding 1) — drops the `--hostname-bin*` arm from
+#   the rg option-denial list, so `rg --hostname-bin=<cmd> …` is no longer denied.
+# mutant:407-plg-redirect — drops `>` from the lexer's reject set, so a redirect is no longer
+#   rejected outright.
+# mutant:407-plg-backtick — drops the backtick from the lexer's reject set.
+# mutant:407-plg-dquote-dollar — drops the double-quoted `$` rejection inside the lexer's dquote
+#   state.
+# mutant:407-plg-multiline — widens the lexer's NR>1 rejection threshold so an embedded newline no
+#   longer trips it (the command still ends up denied via the allowlist itself, since the two
+#   lines concatenate into one unallowlisted token — the fixture pins the SPECIFIC lexer-rejection
+#   wording, not just any deny).
+# mutant:407-plg-lone-amp — treats a lone `&` as a segment separator instead of rejecting it.
+# mutant:407-plg-sed-shape — replaces the whole `sed)` validation arm with a no-op, so neither the
+#   `-n` gate nor the range-address shape is checked at all.
+# mutant:407-plg-rg-pre — renames the `--pre*` arm so it can never match.
+# mutant:407-plg-empty-command — changes the empty-command deny to `exit 0`.
+# mutant:407-plg-plan-skip — inserts a sibling-style `permission_mode == "plan"` skip after role
+#   resolution, which this hook deliberately does not have.
+# mutant:407-canary-plg-gh (filter "canary-") — adds "gh" to PLANNER_READONLY_COMMANDS, so the
+#   `gh --version` canary is no longer denied for the planner role.
+
+case_plg_deny_edit_ns()   { run_planner_guard "$(mk_cdg_agent_path 'trail-blazer-flow:planner' 'Edit' '/repo/x')"; expect_plg_deny; }
+case_plg_deny_write_bare() { run_planner_guard "$(mk_cdg_agent_path 'planner' 'Write' '/repo/x')"; expect_plg_deny; }
+case_plg_deny_apply_patch() {
+  run_planner_guard "$(mk_codex_patch 'planner' '*** Begin Patch
+*** Add File: allowed.txt
++hello
+*** End Patch')"
+  expect_plg_deny
+}
+case_plg_deny_touch()            { run_planner_guard "$(mk_codex_shell 'planner' 'touch ro_test.txt && echo touched')"; expect_plg_deny; }
+case_plg_deny_gh()                { run_planner_guard "$(mk_codex_shell 'planner' 'gh issue list')"; expect_plg_deny; }
+case_plg_deny_git_commit()        { run_planner_guard "$(mk_codex_shell 'planner' 'git commit -am x')"; expect_plg_deny; }
+case_plg_deny_git_restore()       { run_planner_guard "$(mk_codex_shell 'planner' 'git restore x')"; expect_plg_deny; }
+case_plg_deny_git_global_opt()    { run_planner_guard "$(mk_codex_shell 'planner' 'git -c core.pager=sh log')"; expect_plg_deny; }
+case_plg_deny_git_diff_output()   { run_planner_guard "$(mk_codex_shell 'planner' 'git diff --output=/tmp/x')"; expect_plg_deny; }
+case_plg_deny_git_ext_diff()      { run_planner_guard "$(mk_codex_shell 'planner' 'git diff --ext-diff')"; expect_plg_deny; }
+# #407 kickback finding 1: real git accepts abbreviated long options and bundled short options, so
+# "git grep" could be steered into -O/--open-files-in-pager (an arbitrary-pager-program option) in
+# a shape the old per-token check never caught. "grep" is no longer a PLANNER_GIT_READONLY member
+# at all, so both deny via the plain subcommand-membership check now.
+case_plg_deny_git_grep()          { run_planner_guard "$(mk_codex_shell 'planner' 'git grep -lOrm .')"; expect_plg_deny; }
+case_plg_deny_git_grep_abbrev()   { run_planner_guard "$(mk_codex_shell 'planner' 'git grep --open=rm -l .')"; expect_plg_deny; }
+case_plg_deny_rg_hostname_bin()   { run_planner_guard "$(mk_codex_shell 'planner' 'rg --hostname-bin=x foo')"; expect_plg_deny; }
+case_plg_deny_redirect()          { run_planner_guard "$(mk_codex_shell 'planner' 'cat a > b')"; expect_plg_deny; }
+case_plg_deny_stderr_devnull()    { run_planner_guard "$(mk_codex_shell 'planner' 'ls 2>/dev/null')"; expect_plg_deny; }
+case_plg_deny_dollar_paren()      { run_planner_guard "$(mk_codex_shell 'planner' 'cat $(ls)')"; expect_plg_deny; }
+case_plg_deny_backtick()          { run_planner_guard "$(mk_codex_shell 'planner' 'cat `ls`')"; expect_plg_deny; }
+case_plg_deny_dquote_subst()      { run_planner_guard "$(mk_codex_shell 'planner' 'rg "$(id)" .')"; expect_plg_deny; }
+case_plg_deny_process_subst()     { run_planner_guard "$(mk_codex_shell 'planner' 'diff <(ls) b')"; expect_plg_deny; }
+case_plg_deny_subshell()          { run_planner_guard "$(mk_codex_shell 'planner' '(ls)')"; expect_plg_deny; }
+case_plg_deny_background()        { run_planner_guard "$(mk_codex_shell 'planner' 'ls &')"; expect_plg_deny; }
+case_plg_deny_chain_rm()          { run_planner_guard "$(mk_codex_shell 'planner' 'ls && rm -rf x')"; expect_plg_deny; }
+case_plg_deny_pipe_tee()          { run_planner_guard "$(mk_codex_shell 'planner' 'cat a | tee b')"; expect_plg_deny; }
+case_plg_deny_assignment()        { run_planner_guard "$(mk_codex_shell 'planner' 'PAGER=sh git log')"; expect_plg_deny; }
+case_plg_deny_abs_path()          { run_planner_guard "$(mk_codex_shell 'planner' '/bin/cat x')"; expect_plg_deny; }
+case_plg_deny_bash_c()            { run_planner_guard "$(mk_codex_shell 'planner' 'bash -c ls')"; expect_plg_deny; }
+case_plg_deny_multiline() {
+  run_planner_guard "$(mk_codex_shell 'planner' "ls${LF}rm x")"
+  expect_plg_deny
+  # mutant:407-plg-multiline — without this phrase check, disabling the lexer's NR>1 rejection
+  # still denies (the two lines concatenate into one unallowlisted token, "lsrm", via the
+  # allowlist's OWN deny_policy() path), so a bare rc==2 check alone would not notice; this pins
+  # the SPECIFIC lexer-rejection wording, not just "some deny happened".
+  case "$plg_err" in
+    *"could not be classified as read-only"*) ;;
+    *) __ok=0; __why="${__why}stderr does not carry the lexer-rejection phrase 'could not be classified as read-only': '$plg_err'\n" ;;
+  esac
+}
+case_plg_deny_unterminated()      { run_planner_guard "$(mk_codex_shell 'planner' "rg 'foo")"; expect_plg_deny; }
+# #407 kickback finding 6: three more lexer-rejection shapes.
+case_plg_deny_backslash()         { run_planner_guard "$(mk_codex_shell 'planner' "cat \\'; rm -rf x; \\'")"; expect_plg_deny; }
+case_plg_deny_brace() {
+  run_planner_guard "$(mk_codex_shell 'planner' '{ ls; }')"
+  expect_plg_deny
+  # A bare rc==2 check alone does not pin the LEXER's own rejection of "{"/"}": with those two
+  # characters dropped from the reject set, "{"/"}" become ordinary tokens, and "{"/"}" as t0 is
+  # STILL denied by the allowlist-membership check below -- a different, redundant layer. Pin the
+  # specific lexer-rejection phrase so this fixture proves what its own description claims.
+  case "$plg_err" in
+    *"could not be classified as read-only"*) ;;
+    *) __ok=0; __why="${__why}stderr does not carry the lexer-rejection phrase 'could not be classified as read-only': '$plg_err'\n" ;;
+  esac
+}
+case_plg_deny_bang() {
+  run_planner_guard "$(mk_codex_shell 'planner' '! ls')"
+  expect_plg_deny
+  # Same reasoning as case_plg_deny_brace above: "!" as t0 is also denied by the allowlist
+  # check alone, redundantly with the lexer.
+  case "$plg_err" in
+    *"could not be classified as read-only"*) ;;
+    *) __ok=0; __why="${__why}stderr does not carry the lexer-rejection phrase 'could not be classified as read-only': '$plg_err'\n" ;;
+  esac
+}
+case_plg_deny_sed_inplace()       { run_planner_guard "$(mk_codex_shell 'planner' 'sed -i.bak s/a/b/ f')"; expect_plg_deny; }
+case_plg_deny_sed_w()              { run_planner_guard "$(mk_codex_shell 'planner' "sed -n 'w /tmp/x' f")"; expect_plg_deny; }
+# #407 kickback finding 5: two more sed shapes that must stay denied.
+case_plg_deny_sed_trailing_opt()   { run_planner_guard "$(mk_codex_shell 'planner' 'sed -n 1p f -i')"; expect_plg_deny; }
+case_plg_deny_sed_range_suffix()   { run_planner_guard "$(mk_codex_shell 'planner' "sed -n '1p;w /tmp/x' f")"; expect_plg_deny; }
+case_plg_deny_rg_pre()             { run_planner_guard "$(mk_codex_shell 'planner' 'rg --pre=sh foo')"; expect_plg_deny; }
+case_plg_deny_find()               { run_planner_guard "$(mk_codex_shell 'planner' 'find . -delete')"; expect_plg_deny; }
+case_plg_deny_empty_command()     { run_planner_guard "$(jq -n --arg a "planner" '{tool_name:"Bash", agent_type:$a, tool_input:{}}')"; expect_plg_deny; }
+case_plg_deny_plan_mode() {
+  run_planner_guard "$(jq -n '{tool_name:"Bash", agent_type:"planner", permission_mode:"plan", tool_input:{command:"touch x"}}')"
+  expect_plg_deny
+}
+case_plg_deny_apply_patch_heredoc() {
+  # #407 amendment A3: a planner shell apply_patch heredoc is denied by planner-guard (multi-line
+  # -> NR>1 in the lexer), even though claude-dir-guard.sh's own matcher covers Bash too now --
+  # this is the planner's OWN allowlist doing the denying, not claude-dir-guard.sh.
+  run_planner_guard "$(mk_codex_shell 'planner' "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: .claude/x${LF}*** End Patch${LF}EOF")"
+  expect_plg_deny
+}
+
+case_plg_noop_rg()          { run_planner_guard "$(mk_codex_shell 'planner' 'rg -n "foo" src')"; expect_plg_no_opinion; }
+case_plg_noop_sed_print()   { run_planner_guard "$(mk_codex_shell 'planner' "sed -n '1,120p' README.md")"; expect_plg_no_opinion; }
+case_plg_noop_pipe()        { run_planner_guard "$(mk_codex_shell 'planner' 'git log --oneline -5 | head -3')"; expect_plg_no_opinion; }
+case_plg_noop_chain()       { run_planner_guard "$(mk_codex_shell 'planner' 'ls docs && cat README.md; wc -l CLAUDE.md')"; expect_plg_no_opinion; }
+case_plg_noop_git_show_ns() { run_planner_guard "$(mk_agent_cmd 'trail-blazer-flow:planner' 'git show HEAD')"; expect_plg_no_opinion; }
+case_plg_noop_quoted_meta() { run_planner_guard "$(mk_codex_shell 'planner' "rg 'a|b>c\$(x)' docs")"; expect_plg_no_opinion; }
+case_plg_noop_glob()        { run_planner_guard "$(mk_codex_shell 'planner' 'ls docs/*.md')"; expect_plg_no_opinion; }
+case_plg_noop_main_session() { run_planner_guard "$(mk_codex_shell '' 'touch x')"; expect_plg_no_opinion; }
+case_plg_noop_implementer() { run_planner_guard "$(mk_codex_shell 'implementer' 'touch x')"; expect_plg_no_opinion; }
+case_plg_noop_explore_edit() { run_planner_guard "$(mk_cdg_agent_path 'Explore' 'Edit' '/repo/x')"; expect_plg_no_opinion; }
+case_plg_noop_read_tool()   { run_planner_guard "$(mk_cdg_agent_path 'planner' 'Read' '/repo/x')"; expect_plg_no_opinion; }
+case_plg_noop_malformed_json() {
+  run_planner_guard 'not json at all, but mentions agent_type and planner anyway'
+  expect_plg_no_opinion
+}
+
+case_plg_never_executes_deny() {
+  local trapdir="$tmpbase/trapbin-plg-deny" sentinel="$tmpbase/sentinel-plg-deny"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm touch; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  run_planner_guard "$(mk_codex_shell 'planner' 'touch ro_test.txt')" "$trapdir:$PATH"
+  expect_plg_deny
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — planner-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+case_plg_never_executes_noop() {
+  local trapdir="$tmpbase/trapbin-plg-noop" sentinel="$tmpbase/sentinel-plg-noop"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm touch; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  run_planner_guard "$(mk_codex_shell 'planner' 'ls -la')" "$trapdir:$PATH"
+  expect_plg_no_opinion
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — planner-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+
+# --- hooks/claude-dir-guard.sh apply_patch route (#407) cases -----------------------------------
+# Default cwd is "/repo" (mk_codex_patch's own default). Every header in a patch is checked, not
+# only the first (cdg-patch-deny-second-file/-move-to below).
+#
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter
+# "cdg-patch-" unless noted), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a
+# prose table.
+# mutant:407-cdg-patch-tools — empties PATCH_TOOLS, so no apply_patch call reaches the tool gate
+#   at all.
+# mutant:407-cdg-codex-arm (filter "cdg-") — makes the `.codex` segment pattern unmatchable, so
+#   neither the apply_patch route nor the file_path route (cdg-codexseg-* below) recognises it.
+# mutant:407-cdg-codex-exact (filter "cdg-") — widens the same pattern to a bare substring match,
+#   so a near-miss spelling like `.codex-backup` also denies.
+# mutant:407-cdg-cwd-join — drops the `$pcwd/` prefix when resolving a relative header path, so
+#   every relative path becomes unclassifiable (denied fail-closed) instead of resolving against
+#   cwd.
+# mutant:407-cdg-all-headers — `break`s the line loop right after the first header, so a second
+#   header in the same patch is never reached.
+# mutant:407-cdg-unknown-marker — turns the unrecognised-marker deny into a no-op (the fixture
+#   pins the SPECIFIC "unrecognised marker" reason text, not just the generic "could not be
+#   parsed" phrase the "no file header" fallback shares).
+# mutant:407-cdg-no-header — widens the zero-header deny's comparison so it can never trigger.
+# mutant:407-cdg-trim — disables the line loop's leading-whitespace trim, so an indented header
+#   line no longer matches its own marker pattern.
+# mutant:407-cdg-patch-cr — disables the whole-patch CR strip, so a CRLF-terminated patch's own
+#   structural markers ("*** Begin Patch\r", …) stop matching their exact-text case arms.
+# mutant:407-cdg-empty-command — changes the absent-command deny to `exit 0`.
+
+case_cdg_patch_deny_add_claude()   { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Add File: .claude/settings.local.json
++{}
+*** End Patch')"; expect_cdg_deny_claude; }
+case_cdg_patch_deny_update_ns()    { run_claude_guard "$(mk_codex_patch 'trail-blazer-flow:implementer' '*** Begin Patch
+*** Update File: .claude/LESSONS.md
++x
+*** End Patch')"; expect_cdg_deny_claude; }
+case_cdg_patch_deny_verifier()     { run_claude_guard "$(mk_codex_patch 'verifier' '*** Begin Patch
+*** Add File: .claude/x
+*** End Patch')"; expect_cdg_deny_claude; }
+case_cdg_patch_deny_delete()       { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Delete File: .claude/x
+*** End Patch')"; expect_cdg_deny_claude; }
+case_cdg_patch_deny_move_to()      { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Update File: src/a.txt
+*** Move to: .claude/a.txt
+*** End Patch')"; expect_cdg_deny_claude; }
+case_cdg_patch_deny_second_file()  { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Add File: src/a.txt
++x
+*** Add File: .claude/a.txt
++y
+*** End Patch')"; expect_cdg_deny_claude; }
+case_cdg_patch_deny_case_variant() { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Add File: .Claude/x
+*** End Patch')"; expect_cdg_deny_claude; }
+case_cdg_patch_deny_abs_header()   { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Add File: /Users/x/.claude/settings.json
+*** End Patch')"; expect_cdg_deny_claude; }
+case_cdg_patch_deny_indented_header() { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+  *** Add File: .claude/x
+*** End Patch')"; expect_cdg_deny_claude; }
+
+case_cdg_patch_deny_codex()      { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Add File: .codex/config.toml
+*** End Patch')"; expect_cdg_deny_codex; }
+case_cdg_patch_deny_codex_case() { run_claude_guard "$(mk_codex_patch 'verifier' '*** Begin Patch
+*** Add File: .CODEX/agents/x.toml
+*** End Patch')"; expect_cdg_deny_codex; }
+
+case_cdg_patch_deny_dotdot() { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Add File: ../escape/x
+*** End Patch')"; expect_cdg_deny_unclassifiable; }
+case_cdg_patch_deny_no_cwd() { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Add File: src/a.txt
+*** End Patch' '-none-')"; expect_cdg_deny_unclassifiable; }
+
+case_cdg_patch_deny_no_header()     { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** End Patch')"; expect_cdg_deny_unparseable; }
+case_cdg_patch_deny_unknown_header() {
+  run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Copy File: .claude/x
+*** End Patch')"
+  expect_cdg_deny_unparseable
+  # mutant:407-cdg-unknown-marker — the generic "could not be parsed" phrase alone does not
+  # distinguish this deny from the "no file header" fallback that fires when the unknown marker
+  # is silently ignored (headers stays 0); pin the SPECIFIC reason text too.
+  case "$cdg_err" in
+    *"unrecognised marker"*) ;;
+    *) __ok=0; __why="${__why}stderr does not carry the specific 'unrecognised marker' reason: '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_patch_deny_empty_path()    { run_claude_guard "$(mk_codex_patch 'implementer' "$(printf '*** Begin Patch\n*** Add File: \n*** End Patch')")"; expect_cdg_deny_unparseable; }
+case_cdg_patch_deny_empty_command() { run_claude_guard "$(jq -n --arg a 'implementer' '{tool_name:"apply_patch", agent_type:$a, cwd:"/repo", tool_input:{}}')"; expect_cdg_deny_unparseable; }
+
+case_cdg_patch_noop_add_src()      { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Add File: src/new.rs
++fn main() {}
+*** End Patch')"; expect_cdg_no_opinion; }
+case_cdg_patch_noop_update_readme() { run_claude_guard "$(mk_codex_patch 'verifier' '*** Begin Patch
+*** Update File: README.md
+@@
+-old
++new
+*** End Patch')"; expect_cdg_no_opinion; }
+case_cdg_patch_noop_content_mentions() {
+  run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Update File: README.md
+@@
++see .claude/LESSONS.md
++*** Add File: .claude/x
+*** End Patch')"
+  expect_cdg_no_opinion
+}
+case_cdg_patch_noop_crlf() {
+  local patch
+  patch="$(printf '*** Begin Patch\r\n*** Update File: README.md\r\n@@\r\n-old\r\n+new\r\n*** End Patch\r\n')"
+  run_claude_guard "$(mk_codex_patch 'verifier' "$patch")"
+  expect_cdg_no_opinion
+}
+case_cdg_patch_noop_main_session() { run_claude_guard "$(mk_codex_patch '' '*** Begin Patch
+*** Add File: .claude/LESSONS.md
++x
+*** End Patch')"; expect_cdg_no_opinion; }
+case_cdg_patch_noop_planner() { run_claude_guard "$(mk_codex_patch 'planner' '*** Begin Patch
+*** Add File: .claude/x
+*** End Patch')"; expect_cdg_no_opinion; }
+case_cdg_patch_noop_near_miss() { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Add File: .codex-backup/x
+*** End Patch')"; expect_cdg_no_opinion; }
+
+case_cdg_patch_never_executes() {
+  local trapdir="$tmpbase/trapbin-cdg-patch" sentinel="$tmpbase/sentinel-cdg-patch"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname tr awk grep sed; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Add File: .claude/x
+*** End Patch')" "$trapdir:$PATH"
+  expect_cdg_deny_claude
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+
+# --- hooks/claude-dir-guard.sh file_path route, .codex segment (#407) cases ---------------------
+case_cdg_codexseg_deny_write()        { run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Write' '/repo/.codex/config.toml')"; expect_cdg_deny_codex; }
+case_cdg_codexseg_deny_verifier_edit_ns() { run_claude_guard "$(mk_cdg_agent_path 'trail-blazer-flow:verifier' 'Edit' '/repo/.codex/x')"; expect_cdg_deny_codex; }
+case_cdg_codexseg_noop_backup()       { run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/repo/.codex-backup/x')"; expect_cdg_no_opinion; }
+case_cdg_codexseg_noop_my_codex()     { run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/repo/my.codex/x')"; expect_cdg_no_opinion; }
+
+# --- hooks/claude-dir-guard.sh Bash apply_patch-shim route (#407 amendment A1/A3) cases ----------
+# The S0 spike (#412, Q7) payload: a shell-issued apply_patch heredoc reaches this hook as an
+# ordinary Bash call.
+#
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter
+# "cdg-bash-"), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
+# mutant:407-cdg-bash-trigger — makes the `*** Begin Patch` case-selector pattern unmatchable, so
+#   every heredoc payload (including the benign src-only one) falls into the "no inline patch"
+#   arm instead, which denies unconditionally once the command word is `apply_patch`.
+# mutant:407-cdg-bash-no-inline-patch — short-circuits the `is_apply_patch_word` check with
+#   `false &&`, so `apply_patch < x.patch` is no longer denied.
+# mutant:407-cdg-bash-decoy-claude-mention — widens the belt-and-braces `.claude`/`.codex`
+#   case arm's own bracket classes so they can never match, isolating the ANSI-C-quoted decoy
+#   fixture's own dependency on that specific check from the generic "no inline patch" fallback.
+# mutant:407-cdg-bash-belt-braces-order (#407 kickback round 2, finding A) — disables the
+#   belt-and-braces check's own guard with `false &&`, so it can never run at all, isolating every
+#   fixture whose deny depends on it running UNCONDITIONALLY/FIRST (both decoys, plus the two
+#   genuine-structure fixtures whose message text names the belt-and-braces reason specifically).
+# mutant:407-cdg-bash-parens (#407 kickback round 2, finding B) — drops `(`/`)` from the segment-
+#   break bracket expression, so a subshell or command substitution hides the command word.
+# mutant:407-cdg-bash-gt-break (#407 kickback round 2, finding C) — disables the `>` word-break
+#   substitution entirely, so a glued `>` redirect hides the command word.
+# mutant:407-cdg-bash-indented-trigger-trim (#407 kickback round 2, finding C) — replaces
+#   has_exact_begin_patch_line's own full trim with a no-op, so an INDENTED "*** Begin Patch" line
+#   no longer matches the exact-line trigger.
+case_cdg_bash_deny_heredoc_claude() {
+  # #407 kickback round 2, finding A: the belt-and-braces raw-text check now runs FIRST and
+  # unconditionally, before the structured parse gets a chance to emit the more specific
+  # classify_path message -- this payload denies via the belt-and-braces reason now, not via
+  # expect_cdg_deny_claude's own phrase.
+  run_claude_guard "$(mk_codex_shell 'implementer' "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: .claude/settings.local.json${LF}+{}${LF}*** End Patch${LF}EOF")"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"mentioning a .claude/.codex path"*) ;;
+    *) __ok=0; __why="${__why}stderr does not carry the specific belt-and-braces reason: '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_bash_deny_heredoc_codex() {
+  run_claude_guard "$(mk_codex_shell 'verifier' "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: .codex/x${LF}*** End Patch${LF}EOF")"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"mentioning a .claude/.codex path"*) ;;
+    *) __ok=0; __why="${__why}stderr does not carry the specific belt-and-braces reason: '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_bash_noop_heredoc_src() {
+  run_claude_guard "$(mk_codex_shell 'implementer' "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}*** End Patch${LF}EOF")"
+  expect_cdg_no_opinion
+}
+# #407 kickback round 3: the belt-and-braces check matches a `.claude`/`.codex` SEGMENT (leading
+# dot), not the bare word -- a benign patch to CLAUDE.md, a body mentioning Claude Code, or a path
+# containing "codex" gets no opinion.
+# mutant:407-cdg-bash-segment-dot — dropping the leading dot from the belt-and-braces pattern makes
+#   a bare "claude"/"codex" substring deny.
+case_cdg_bash_noop_heredoc_claude_md() {
+  run_claude_guard "$(mk_codex_shell 'implementer' "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Update File: CLAUDE.md${LF}@@${LF}-Claude Code${LF}+Claude Code 2${LF}*** End Patch${LF}EOF")"
+  expect_cdg_no_opinion
+}
+case_cdg_bash_noop_heredoc_codex_name() {
+  run_claude_guard "$(mk_codex_shell 'implementer' "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/codex_client.py${LF}+x${LF}*** End Patch${LF}EOF")"
+  expect_cdg_no_opinion
+}
+case_cdg_bash_deny_no_inline_patch() {
+  run_claude_guard "$(mk_codex_shell 'implementer' 'apply_patch < x.patch')"
+  expect_cdg_deny_unparseable
+}
+# #407 kickback finding 2: the command-word detection missed common positions -- glued to a
+# redirect with no space, inside a brace group, past a shell keyword, and past an assignment
+# prefix. Each denies via the SAME "no inline patch" reason as case_cdg_bash_deny_no_inline_patch.
+case_cdg_bash_deny_no_inline_patch_glued()     { run_claude_guard "$(mk_codex_shell 'implementer' 'apply_patch<x.patch')"; expect_cdg_deny_unparseable; }
+case_cdg_bash_deny_no_inline_patch_brace()     { run_claude_guard "$(mk_codex_shell 'implementer' '{ apply_patch < x.patch; }')"; expect_cdg_deny_unparseable; }
+case_cdg_bash_deny_no_inline_patch_keyword()   { run_claude_guard "$(mk_codex_shell 'implementer' 'if true; then apply_patch < x.patch; fi')"; expect_cdg_deny_unparseable; }
+case_cdg_bash_deny_no_inline_patch_assignment() { run_claude_guard "$(mk_codex_shell 'implementer' 'FOO=1 apply_patch < x.patch')"; expect_cdg_deny_unparseable; }
+case_cdg_bash_deny_no_inline_patch_chain()     { run_claude_guard "$(mk_codex_shell 'implementer' 'cd src && applypatch < x.patch')"; expect_cdg_deny_unparseable; }
+case_cdg_bash_deny_no_inline_patch_pipe()      { run_claude_guard "$(mk_codex_shell 'implementer' 'cat x.patch | apply_patch')"; expect_cdg_deny_unparseable; }
+# #407 kickback finding 2's "belt and braces": an ANSI-C-quoted ($'...') decoy whose "\n"
+# sequences are literal backslash+n bytes, not real newlines, so has_exact_begin_patch_line never
+# fires on it (there is no genuine line break) -- the raw-text .claude mention still denies.
+case_cdg_bash_deny_decoy_dollar_quote() {
+  # The decoy itself is one physical line (its "\n"s are the two literal characters
+  # backslash+n, never a real line break); a genuine SECOND, real line follows with an ordinary
+  # benign header, proving the deny isn't an artifact of the decoy being the only content -- the
+  # command still denies via the belt-and-braces raw-text check, not the (never-triggered)
+  # structured parse.
+  run_claude_guard "$(mk_codex_shell 'implementer' "apply_patch \$'*** Begin Patch\\n*** Add File: .claude/x\\n+x\\n*** End Patch'${LF}*** Add File: src/ok.txt")"
+  expect_cdg_deny_unparseable
+  # mutant:407-cdg-bash-decoy-claude-mention — the generic "could not be parsed" phrase alone does
+  # not distinguish the belt-and-braces reason from the "no inline patch text" fallback; pin the
+  # SPECIFIC reason text too.
+  case "$cdg_err" in
+    *"mentioning a .claude/.codex path"*) ;;
+    *) __ok=0; __why="${__why}stderr does not carry the specific belt-and-braces reason: '$cdg_err'\n" ;;
+  esac
+}
+# #407 kickback round 2, finding A's second decoy: the FIRST header is preceded by U+00A0
+# NO-BREAK SPACE (ltrim() strips only ASCII space/tab, never Unicode whitespace -- the header
+# hides from the structured parse as an ordinary content line, per this file's own header
+# residual note), sitting next to a SECOND, genuinely benign header -- if the belt-and-braces
+# check were not unconditional/first, the structured parse alone would see only the benign header
+# and return no opinion despite the raw text plainly mentioning ".claude".
+case_cdg_bash_deny_decoy_nbsp_header() {
+  local nbsp
+  nbsp="$(printf '\xc2\xa0')"
+  run_claude_guard "$(mk_codex_shell 'implementer' "apply_patch <<'EOF'${LF}*** Begin Patch${LF}${nbsp}*** Add File: .claude/x${LF}*** Add File: src/ok.txt${LF}*** End Patch${LF}EOF")"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"mentioning a .claude/.codex path"*) ;;
+    *) __ok=0; __why="${__why}stderr does not carry the specific belt-and-braces reason: '$cdg_err'\n" ;;
+  esac
+}
+# #407 kickback round 2, finding B: "(" and ")" were already segment breaks -- pin it.
+case_cdg_bash_deny_no_inline_patch_subshell()      { run_claude_guard "$(mk_codex_shell 'implementer' '(apply_patch < x.patch)')"; expect_cdg_deny_unparseable; }
+case_cdg_bash_deny_no_inline_patch_cmdsubst()      { run_claude_guard "$(mk_codex_shell 'implementer' 'echo $(apply_patch < x.patch)')"; expect_cdg_deny_unparseable; }
+# #407 kickback round 2, finding C: the ">" word break, and has_exact_begin_patch_line's OWN full
+# trim (not is_apply_patch_word's command-word detection -- the leading "\" defeats that, so this
+# denies via the STRUCTURED parse's classify_path message instead).
+case_cdg_bash_deny_no_inline_patch_gt()            { run_claude_guard "$(mk_codex_shell 'implementer' 'apply_patch>out.txt')"; expect_cdg_deny_unparseable; }
+case_cdg_bash_deny_backslash_indented_begin_patch() {
+  run_claude_guard "$(mk_codex_shell 'implementer' "\\apply_patch <<'EOF'${LF}  *** Begin Patch${LF}  *** Add File: .claude/x${LF}  *** End Patch${LF}EOF")"
+  expect_cdg_deny_claude
+}
+# #407 kickback round 2, finding D: a leading redirect (with or without a bare-digits fd) must not
+# hide the command word that follows it.
+case_cdg_bash_deny_leading_redirect()    { run_claude_guard "$(mk_codex_shell 'implementer' '< x.patch apply_patch')"; expect_cdg_deny_unparseable; }
+case_cdg_bash_deny_leading_redirect_fd() { run_claude_guard "$(mk_codex_shell 'implementer' '2>/dev/null apply_patch < x')"; expect_cdg_deny_unparseable; }
+# #407 kickback round 3: a run of redirect operators (`>>`) is one redirect, and an fd duplication
+# (`>&2`, `2>&1`) keeps its `&` -- neither may hide the command word.
+# mutant:407-cdg-bash-redirect-run — skipping only one marker of a `>>` run makes the redirect
+#   target the resolved word.
+case_cdg_bash_deny_leading_redirect_append() { run_claude_guard "$(mk_codex_shell 'implementer' '>> log apply_patch < x.patch')"; expect_cdg_deny_unparseable; }
+case_cdg_bash_deny_leading_redirect_fd_append() { run_claude_guard "$(mk_codex_shell 'implementer' '2>>err apply_patch < x')"; expect_cdg_deny_unparseable; }
+# mutant:407-cdg-bash-fd-dup — letting `>&` split the segment leaves the fd as the resolved word.
+case_cdg_bash_deny_leading_redirect_fd_dup() { run_claude_guard "$(mk_codex_shell 'implementer' '>&2 apply_patch < x.patch')"; expect_cdg_deny_unparseable; }
+case_cdg_bash_deny_leading_redirect_fd_dup2() { run_claude_guard "$(mk_codex_shell 'implementer' '2>&1 apply_patch < x.patch')"; expect_cdg_deny_unparseable; }
+# mutant:407-cdg-bash-clobber — letting `>|` split the segment makes the redirect target the
+#   resolved word.
+case_cdg_bash_deny_leading_redirect_clobber() { run_claude_guard "$(mk_codex_shell 'implementer' '>| log apply_patch < x.patch')"; expect_cdg_deny_unparseable; }
+# mutant:407-cdg-bash-in-dup — letting `<&` split the segment leaves the fd as the resolved word.
+case_cdg_bash_deny_leading_redirect_in_dup() { run_claude_guard "$(mk_codex_shell 'implementer' '<&0 apply_patch')"; expect_cdg_deny_unparseable; }
+# A quoted mention after ordinary words is an argument: no opinion (documented over-block boundary).
+case_cdg_bash_noop_quoted_mention() { run_claude_guard "$(mk_codex_shell 'implementer' 'git commit -m "the apply_patch shim"')"; expect_cdg_no_opinion; }
+# #407 kickback round 2, finding E: a path-qualified spelling still counts, matched by basename.
+case_cdg_bash_deny_path_qualified() { run_claude_guard "$(mk_codex_shell 'implementer' './apply_patch < x')"; expect_cdg_deny_unparseable; }
+# #407 kickback finding 3: the "*** Begin Patch" trigger was a raw substring match, so a benign
+# command that merely MENTIONS the marker denied too. Requiring an exact, fully-trimmed line
+# closes it -- neither of these carries a genuine patch-grammar line break.
+case_cdg_bash_noop_begin_patch_mention_grep()   { run_claude_guard "$(mk_codex_shell 'implementer' "grep -rn '*** Begin Patch' hooks/")"; expect_cdg_no_opinion; }
+case_cdg_bash_noop_begin_patch_mention_commit() { run_claude_guard "$(mk_codex_shell 'implementer' 'git commit -m "docs: mention *** Begin Patch marker"')"; expect_cdg_no_opinion; }
+case_cdg_bash_noop_arg_only() { run_claude_guard "$(mk_codex_shell 'implementer' 'rg apply_patch hooks/')"; expect_cdg_no_opinion; }
+case_cdg_bash_noop_quoted()   { run_claude_guard "$(mk_codex_shell 'implementer' 'grep -n "apply_patch" x')"; expect_cdg_no_opinion; }
+case_cdg_bash_noop_main_session() {
+  run_claude_guard "$(mk_codex_shell '' "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: .claude/x${LF}*** End Patch${LF}EOF")"
+  expect_cdg_no_opinion
+}
+case_cdg_bash_noop_ab_fixture_reuse() {
+  # #407 amendment reviewer emphasis: the new Bash route must not deny an existing ab-*/pg-*
+  # fixture's own command for these roles unless it carries a patch -- reuse an actual
+  # agent-boundary.sh deny fixture's command text (git push) against THIS hook and expect no
+  # opinion (it carries no apply_patch-shaped patch at all).
+  run_claude_guard "$(mk_agent_cmd 'implementer' 'git push origin main')"
+  expect_cdg_no_opinion
+}
+case_cdg_bash_never_executes() {
+  local trapdir="$tmpbase/trapbin-cdg-bash" sentinel="$tmpbase/sentinel-cdg-bash"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname tr awk grep sed; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  run_claude_guard "$(mk_codex_shell 'implementer' "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: .claude/x${LF}*** End Patch${LF}EOF")" "$trapdir:$PATH"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"mentioning a .claude/.codex path"*) ;;
+    *) __ok=0; __why="${__why}stderr does not carry the specific belt-and-braces reason: '$cdg_err'\n" ;;
+  esac
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+# #407 kickback round 2, finding H: a SECOND never-executes fixture specifically for the
+# is_apply_patch_word "no inline patch" route (the belt-and-braces check above mentions no
+# .claude/.codex, so THIS is the route that actually denies here), proving that route also never
+# executes anything on the booby-trapped PATH.
+case_cdg_bash_never_executes_no_inline_patch() {
+  local trapdir="$tmpbase/trapbin-cdg-bash-nip" sentinel="$tmpbase/sentinel-cdg-bash-nip"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname tr awk grep sed; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  run_claude_guard "$(mk_codex_shell 'implementer' 'apply_patch < x.patch')" "$trapdir:$PATH"
+  expect_cdg_deny_unparseable
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+
+# --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
+# These exercise EXISTING logic under a new payload shape (the full documented Codex key set --
+# session_id, turn_id, cwd, hook_event_name, model, permission_mode, tool_name, tool_use_id,
+# transcript_path -- plus agent_type/agent_id for a subagent), pinning shape-compatibility: no new
+# code path, so no new mutant record is needed for these (the plan's own Testing approach note).
+
+case_codex_gcg_main_status() { run_hook "$(mk_codex_shell '' 'git -C ../demo-wt-1 status --porcelain')"; expect_rc 0; expect_allow; }
+case_codex_gcg_apply_patch() {
+  hook_out="$(printf '%s' "$(mk_codex_patch '' '*** Begin Patch
+*** Add File: x
+*** End Patch')" | PATH="$PATH" "$bash_bin" "$guard" 2>/dev/null)"
+  hook_rc=$?
+  expect_rc 0
+  expect_silent
+}
+
+case_codex_ab_impl_push()  { run_boundary "$(mk_codex_shell 'implementer' 'git push origin main')"; expect_deny; }
+case_codex_ab_verif_commit() { run_boundary "$(mk_codex_shell 'verifier' 'git commit -am x')"; expect_deny; }
+case_codex_ab_verif_status() { run_boundary "$(mk_codex_shell 'verifier' 'git status')"; expect_no_opinion; }
+case_codex_ab_impl_python_claude() {
+  run_boundary "$(mk_codex_shell 'implementer' "python3 -c \"open('.claude/settings.local.json','w').write('{}')\"")"
+  expect_ab_deny_claude
+}
+case_codex_ab_main_push()  { run_boundary "$(mk_codex_shell '' 'git push origin main')"; expect_no_opinion; }
+case_codex_ab_impl_apply_patch() {
+  local errfile="$tmpbase/codex-ab-apply-patch-stderr"
+  boundary_out="$(printf '%s' "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Add File: .claude/x
+*** End Patch')" | PATH="$PATH" "$bash_bin" "$boundary" 2>"$errfile")"
+  boundary_rc=$?
+  boundary_err="$(cat "$errfile" 2>/dev/null)"
+  rm -f "$errfile"
+  expect_no_opinion
+}
+
+case_codex_pg_main_push_main() {
+  local badcwd="$tmpbase/codex-pg-nonexistent"
+  run_push_guard "$(mk_codex_shell '' 'git push origin main' "$badcwd")"
+  expect_push_deny
+}
+case_codex_pg_impl_push_claude() { run_push_guard "$(mk_codex_shell 'implementer' 'git push -u origin "claude/17-a"')"; expect_push_no_opinion; }
+case_codex_pg_apply_patch() {
+  local errfile="$tmpbase/codex-pg-apply-patch-stderr"
+  push_out="$(printf '%s' "$(mk_codex_patch 'implementer' '*** Begin Patch
+*** Add File: x
+*** End Patch')" | PATH="$PATH" "$bash_bin" "$push_guard" 2>"$errfile")"
+  push_rc=$?
+  push_err="$(cat "$errfile" 2>/dev/null)"
+  rm -f "$errfile"
+  expect_push_no_opinion
+}
+
+# --- hook canary (#407): gh --version, documented in docs/reference/safety-model.md -------------
+# Harmless if it runs; a denial for implementer/verifier/planner proves each hook is loaded,
+# trusted, and firing. The main session must see no opinion from any of the five hooks.
+#
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter
+# "canary-"), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
+# mutant:407-canary-ab-gh (target hooks/agent-boundary.sh) — makes the role-policy loop's `gh)`
+#   arm unmatchable, so the canary is no longer denied for the implementer or verifier role.
+# mutant:407-canary-plg-gh (target hooks/planner-guard.sh) — see the plg-* section above.
+case_canary_implementer()    { run_boundary "$(mk_codex_shell 'implementer' 'gh --version')"; expect_deny; }
+case_canary_implementer_ns() { run_boundary "$(mk_agent_cmd 'trail-blazer-flow:implementer' 'gh --version')"; expect_deny; }
+case_canary_verifier()       { run_boundary "$(mk_codex_shell 'verifier' 'gh --version')"; expect_deny; }
+case_canary_verifier_ns()    { run_boundary "$(mk_agent_cmd 'trail-blazer-flow:verifier' 'gh --version')"; expect_deny; }
+case_canary_planner()        { run_planner_guard "$(mk_codex_shell 'planner' 'gh --version')"; expect_plg_deny; }
+case_canary_planner_ns()     { run_planner_guard "$(mk_agent_cmd 'trail-blazer-flow:planner' 'gh --version')"; expect_plg_deny; }
+case_canary_main_session() {
+  local payload
+  payload="$(mk_codex_shell '' 'gh --version')"
+  hook_out="$(printf '%s' "$payload" | PATH="$PATH" "$bash_bin" "$guard" 2>/dev/null)"
+  hook_rc=$?
+  expect_silent
+  run_boundary "$payload"
+  expect_no_opinion
+  run_push_guard "$payload"
+  expect_push_no_opinion
+  run_claude_guard "$payload"
+  expect_cdg_no_opinion
+  run_planner_guard "$payload"
+  expect_plg_no_opinion
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -3671,129 +4403,254 @@ cases=(
   # --- hooks/claude-dir-guard.sh (#327) cases -----------------------------------------------------
   # Mutation-proof table (LESSON 2026-09-01/2026-09-07(b), one mutant per classifier clause,
   # applied in place with an immediately-refreshed backup and a full `diff` verify after every
-  # restore -- LESSON 2026-09-07), measured against THIS section's own 31-case set (29 plus the
-  # #327 round-1 kickback's two embedded-LF fixtures, K1) embedded in the then-current 230-case whole
-  # file (a fresh mktemp copy of hooks/claude-dir-guard.sh, never `mv`-ed over -- LESSON 2026-09-15b's
-  # exec-bit concern does not apply here, since run_claude_guard always invokes the script through
-  # an explicit `bash <path>`, never by PATH lookup); M1-M13 were RE-MEASURED against the
-  # then-current 230-case file for the round-1 kickback (LESSON 2026-09-15 -- reasoning by inspection undercounted
-  # M10's own kill set, below):
-  #   M1  role resolution forced to "implementer" regardless of match                -> 228 pass,
-  #       (role="" -> role="implementer", unconditionally)                              2 fail
-  #       (kills cdg-noop-unrecognised-agent and cdg-noop-empty-agent -- a genuinely unrecognised
-  #       or empty agent_type no longer exits "no opinion" early; every already-matching
-  #       implementer/verifier case is unaffected, since role only ever changes the DENY MESSAGE
-  #       text, never the policy itself)
-  #   M2  fast path deleted (*agent_type*) widened to *) so it always matches         -> 230 pass,
-  #       0 fail -- NOT FLIPPED (a measured finding, not an oversight): every payload that reaches
-  #       jq via the fast path already re-derives the identical "no opinion" from an empty/absent
-  #       .agent_type extraction, exactly the redundancy hooks/agent-boundary.sh's own M1/M2-class
-  #       fast paths do NOT have (there, breaking a fast path is coarse and flips every deny case,
-  #       since jq is never reached to re-derive the verdict another way)
-  #   M3  the GUARDED_TOOLS membership check disabled (always matches)               -> 229 pass,
-  #                                                                                      1 fail
-  #       (kills cdg-noop-wrong-tool only)
-  #   M4  the permission_mode == "plan" check disabled                               -> 229 pass,
-  #                                                                                      1 fail
-  #       (kills cdg-noop-plan-mode only)
-  #   M5  the CR strip disabled (p="${file_path//$cr/}" -> p="$file_path")           -> 229 pass,
-  #                                                                                      1 fail
-  #       (kills cdg-deny-crlf only)
-  #   M6  the backslash-to-slash separator normalisation disabled (p="${p//\\//}"    -> 229 pass,
-  #       -> p="$p")                                                                    1 fail
-  #       (kills cdg-deny-backslash only)
-  #   M7  the case-insensitive bracket classes narrowed to a bare lowercase literal  -> 229 pass,
-  #       (*/.[Cc][Ll][Aa][Uu][Dd][Ee]/* -> */.claude/*)                                1 fail
-  #       (kills cdg-deny-case-variant only)
-  #   M8  the classifier's leading+trailing slash boundary wrap removed              -> 228 pass,
-  #       (case "/$p/" in -> case "$p" in)                                              2 fail
-  #       (kills cdg-deny-final-segment and cdg-deny-rel-claude -- the two shapes whose own
-  #       natural string has no PRE-EXISTING "/" immediately before ".claude": a final segment
-  #       with nothing after it, and a relative path whose FIRST segment is ".claude". Every other
-  #       deny-claude fixture's path already contains a naturally-occurring "/.claude/" substring
-  #       without either boundary character added, so this mutant is inert for them -- INCLUDING
-  #       cdg-deny-lf-claude, whose ".claude" segment is likewise naturally bounded by real "/"
-  #       characters on both sides; re-measured directly, not merely reasoned by analogy.)
-  #   M9  the segment match widened to a bare substring test                         -> 228 pass,
-  #       (*/.[Cc][Ll][Aa][Uu][Dd][Ee]/* -> *[Cc][Ll][Aa][Uu][Dd][Ee]*)                  2 fail
-  #       (kills cdg-noop-claude-backup and cdg-noop-my-claude -- the two near-miss fixtures whose
-  #       segment CONTAINS, but does not EQUAL, ".claude")
-  #  M10  the absoluteness check's deny arm disabled (the trailing "*)" case          -> 228 pass,
-  #       becomes a no-op)                                                              2 fail
-  #       (kills cdg-deny-rel-plain AND cdg-deny-lf-unclassifiable -- the two fixtures whose deny
-  #       verdict depends solely on this clause, not the ".claude" segment class checked earlier;
-  #       re-measured for the round-1 kickback -- cdg-deny-lf-unclassifiable is the SAME
-  #       no-".claude"/relative shape as cdg-deny-rel-plain, so this mutant flips both, a kill-set
-  #       widening LESSON 2026-09-15 warns reasoning-by-inspection alone would have missed)
-  #  M11  the ".." segment check's deny arm disabled (the trailing "*)" case          -> 229 pass,
-  #       becomes a no-op)                                                              1 fail
-  #       (kills cdg-deny-dotdot-no-claude only -- cdg-deny-dotdot-claude denies earlier, via the
-  #       ".claude" segment class, and never reaches this clause at all; cdg-deny-lf-unclassifiable
-  #       carries no ".." segment, so it is unaffected by this mutant, unlike M10 above)
-  #  M12  every "exit 2" in the classifier changed to "exit 0"                        -> 211 pass,
-  #                                                                                     19 fail
+  # restore -- LESSON 2026-09-07), each measured against this section's own case set embedded in
+  # the then-current whole file (a fresh mktemp copy of hooks/claude-dir-guard.sh, never `mv`-ed
+  # over -- LESSON 2026-09-15b's exec-bit concern does not apply here, since run_claude_guard
+  # always invokes the script through an explicit `bash <path>`, never by PATH lookup); M1-M13
+  # were re-measured for the #327 round-1 kickback (LESSON 2026-09-15 -- reasoning by inspection
+  # undercounted M10's own kill set). Pass/fail totals and kill-set enumerations are not recorded
+  # here: both shift every time a fixture is added to this file (#407 added many), so a stale
+  # figure or a stale enumeration would silently stop meaning anything (this repo's CLAUDE.md
+  # convention) -- each entry instead states the code mutation and the shape of fixture it
+  # affects; the row that cites each mutant ID (below) is the durable link.
+  #   M1  role resolution forced to "implementer" regardless of match
+  #       (role="" -> role="implementer", unconditionally)
+  #       (an unrecognised or empty agent_type no longer exits "no opinion" early; every
+  #       already-matching implementer/verifier fixture is unaffected, since role only ever
+  #       changes the DENY MESSAGE text, never the policy itself)
+  #   M2  fast path deleted (*agent_type*) widened to *) so it always matches
+  #       NOT FLIPPED (a measured finding, not an oversight): every payload that reaches jq via
+  #       the fast path already re-derives the identical "no opinion" from an empty/absent
+  #       .agent_type extraction, exactly the redundancy hooks/agent-boundary.sh's own fast paths
+  #       do NOT have (there, breaking a fast path is coarse and flips every deny fixture, since
+  #       jq is never reached to re-derive the verdict another way)
+  #   M3  the GUARDED_TOOLS membership check disabled (always matches)
+  #       (a tool other than Edit/Write now also reaches the classifier)
+  #   M4  the permission_mode == "plan" check disabled
+  #       (a plan-mode call is no longer skipped)
+  #   M5  the CR strip disabled (p="${raw//$cr/}" -> p="$raw", inside classify_path())
+  #       (a CR-carrying spelling no longer widens toward .claude)
+  #   M6  the backslash-to-slash separator normalisation disabled (p="${p//\\//}" -> p="$p")
+  #       (a backslash-spelled .claude segment is no longer recognised)
+  #   M7  the case-insensitive bracket classes narrowed to a bare lowercase literal
+  #       (*/.[Cc][Ll][Aa][Uu][Dd][Ee]/* -> */.claude/*)
+  #       (a case-varied spelling is no longer recognised)
+  #   M8  the classifier's leading+trailing slash boundary wrap removed
+  #       (case "/$p/" in -> case "$p" in)
+  #       (a path whose own string has no PRE-EXISTING "/" immediately before ".claude" -- a
+  #       final segment with nothing after it, or a relative path whose FIRST segment is
+  #       ".claude" -- is no longer recognised; a path that already contains a naturally-occurring
+  #       "/.claude/" substring is unaffected)
+  #   M9  the segment match widened to a bare substring test
+  #       (*/.[Cc][Ll][Aa][Uu][Dd][Ee]/* -> *[Cc][Ll][Aa][Uu][Dd][Ee]*)
+  #       (a near-miss segment spelling that merely CONTAINS, rather than EQUALS, ".claude" now
+  #       also denies)
+  #  M10  the absoluteness check's deny arm disabled (the trailing "*)" case becomes a no-op)
+  #       (a relative path with no ".claude" segment anywhere no longer denies via the
+  #       unclassifiable message; re-measured for the round-1 kickback -- an embedded-LF path of
+  #       the same shape is affected too, a widening reasoning-by-inspection alone would have
+  #       missed)
+  #  M11  the ".." segment check's deny arm disabled (the trailing "*)" case becomes a no-op)
+  #       (an absolute ".."-carrying path with no ".claude" segment anywhere no longer denies via
+  #       the unclassifiable message; a path that also carries a real ".claude" segment denies
+  #       earlier, via that class, and never reaches this clause at all)
+  #  M12  every "exit 2" in the classifier changed to "exit 0"
   #       (coarse -- like hooks/agent-boundary.sh's own M1/M2, this silences EVERY deny verdict at
-  #       once, so it only distinguishes an intended-deny case from everything else, never one
-  #       deny case from another: kills every cdg-deny-* case (now including cdg-deny-lf-claude and
-  #       cdg-deny-lf-unclassifiable) plus cdg-never-executes-deny and cdg-writes-nothing, i.e.
-  #       every fixture whose correct verdict is "deny")
-  #  M13  the AGENT_TYPES_VERIFIER="..." line deleted entirely                        -> 226 pass,
-  #                                                                                      4 fail
-  #       (kills cdg-deny-verif-write-ns, cdg-deny-verif-edit-bare, cdg-noop-verifier-mutation-probe
-  #       -- the verifier-role fixtures, which no longer resolve a role at all -- AND
-  #       cdg-noop-unrecognised-agent: with the variable gone entirely, referencing
+  #       once, so it only distinguishes an intended-deny fixture from everything else, never one
+  #       deny fixture from another)
+  #  M13  the AGENT_TYPES_VERIFIER="..." line deleted entirely
+  #       (the verifier-role fixtures no longer resolve a role at all; referencing
   #       $AGENT_TYPES_VERIFIER for ANY non-empty, IMPLEMENTER-non-matching agent_type -- not just
   #       a genuine "verifier" spelling -- trips this script's own `set -uo pipefail` "unbound
-  #       variable" abort; cdg-noop-empty-agent is unaffected, since an EMPTY agent_type never
-  #       enters the `[ -n "$agent_type" ]` block that references the deleted variable at all)
+  #       variable" abort; an EMPTY agent_type is unaffected, since it never enters the
+  #       `[ -n "$agent_type" ]` block that references the deleted variable at all)
   #  M14  the print-only LF-fold reverted (p_disp="${p//$lf/\\n}" -> p_disp="$p") (#327 round-1
-  #       kickback K1, new this round)                                                -> 228 pass,
-  #                                                                                       2 fail
-  #       (kills cdg-deny-lf-claude and cdg-deny-lf-unclassifiable -- both fixtures' deny verdict is
-  #       unaffected (the classifier still matches $p, unchanged by this mutant), but the printed
-  #       message reverts to embedding the raw LF byte, so expect_cdg_deny_claude/
-  #       expect_cdg_deny_unclassifiable's "exactly 1 non-blank stderr line" assertion now sees 2)
-  # Five fixtures are, verified by direct measurement, NOT flipped by any of M1-M14:
-  # cdg-noop-ordinary-abs and cdg-never-executes-noop (the identical "ordinary absolute path, no
-  # .claude/".." segment" shape, with and without the booby-trapped PATH) survive every mutant in
-  # this table, since none of M1-M14 makes an ordinary path deny; cdg-noop-main-session-lessons
-  # carries no `agent_type` substring at all, so it never reaches past the fast path regardless of
-  # which downstream check M1-M14 breaks; cdg-noop-malformed-json's failure mode is jq's own parse
-  # error, independent of which check runs afterward; and cdg-noop-missing-file-path exits before
-  # the classifier itself ever runs, on every mutant in this table (none of M1-M14 touches the
-  # `[ -n "$file_path" ] || exit 0` gate). Their row states this instead of citing a mutant that
-  # was never observed to fail them.
-  "cdg-deny-impl-write-bare|case_cdg_deny_impl_write_bare|.claude deny: implementer (bare), Write, /repo/.claude/settings.json -- measured: M12, 211 pass 19 fail"
-  "cdg-deny-impl-edit-ns|case_cdg_deny_impl_edit_ns|.claude deny: trail-blazer-flow:implementer (namespaced), Edit, /repo/.claude/foo.md -- measured: M12, 211 pass 19 fail"
-  "cdg-deny-verif-write-ns|case_cdg_deny_verif_write_ns|.claude deny: trail-blazer-flow:verifier (namespaced), Write, /repo/.claude/bar.json -- measured: M13, 226 pass 4 fail (also M12, 211 pass 19 fail)"
-  "cdg-deny-verif-edit-bare|case_cdg_deny_verif_edit_bare|.claude deny: verifier (bare), Edit, /repo/.claude/baz.md -- measured: M13, 226 pass 4 fail (also M12, 211 pass 19 fail)"
-  "cdg-deny-nested|case_cdg_deny_nested|.claude deny: a nested segment, /Users/x/proj/.claude/settings.json -- measured: M12, 211 pass 19 fail"
-  "cdg-deny-user-level|case_cdg_deny_user_level|.claude deny: a path entirely outside any repo checkout, /Users/x/.claude/settings.json (pins deliberate location-independence -- this hook reads no cwd/repo-root at all) -- measured: M12, 211 pass 19 fail"
-  "cdg-deny-case-variant|case_cdg_deny_case_variant|.claude deny: case-varied spelling, /repo/.Claude/x -- measured: M7, 229 pass 1 fail (also M12, 211 pass 19 fail)"
-  "cdg-deny-drive-letter|case_cdg_deny_drive_letter|.claude deny: Windows drive-letter absolute form, C:/Users/x/.claude/foo -- measured: M12, 211 pass 19 fail"
-  "cdg-deny-backslash|case_cdg_deny_backslash|.claude deny: backslash-spelled form, C:\Users\x\.claude\foo (separator normalisation) -- measured: M6, 229 pass 1 fail (also M12, 211 pass 19 fail)"
-  "cdg-deny-final-segment|case_cdg_deny_final_segment|.claude deny: .claude as the path's FINAL segment, /repo/foo/.claude -- measured: M8, 228 pass 2 fail (with cdg-deny-rel-claude; also M12, 211 pass 19 fail)"
-  "cdg-deny-crlf|case_cdg_deny_crlf|.claude deny: a CR embedded inside the spelling itself, /repo/.clau<CR>de/foo (the strip can only widen toward deny) -- measured: M5, 229 pass 1 fail (also M12, 211 pass 19 fail)"
-  "cdg-deny-rel-claude|case_cdg_deny_rel_claude|.claude deny: a RELATIVE path whose first segment is .claude, .claude/LESSONS.md (discriminated from cdg-deny-rel-plain below) -- measured: M8, 228 pass 2 fail (with cdg-deny-final-segment; also M12, 211 pass 19 fail)"
-  "cdg-deny-dotdot-claude|case_cdg_deny_dotdot_claude|.claude deny: a \"..\"-carrying ABSOLUTE path that also carries a real .claude segment, /Users/x/../.claude/y (the more specific message wins) -- measured: M12, 211 pass 19 fail"
-  "cdg-deny-lf-claude|case_cdg_deny_lf_claude|.claude deny: an embedded LF elsewhere in the path, /repo/.claude/a<LF>b.md (#327 round-1 kickback K1 -- pre-fix this printed 2 stderr lines) -- measured: M14, 228 pass 2 fail (with cdg-deny-lf-unclassifiable; also M12, 211 pass 19 fail)"
-  "cdg-deny-rel-plain|case_cdg_deny_rel_plain|unclassifiable deny: the SAME relative, no-leading-slash shape as cdg-deny-rel-claude, but no .claude segment anywhere, src/main.rs (discriminates the two deny classes) -- measured: M10, 228 pass 2 fail (with cdg-deny-lf-unclassifiable; also M12, 211 pass 19 fail)"
-  "cdg-deny-dotdot-no-claude|case_cdg_deny_dotdot_no_claude|unclassifiable deny: a \"..\"-carrying ABSOLUTE path with no .claude segment anywhere, /Users/x/../etc/passwd -- measured: M11, 229 pass 1 fail (also M12, 211 pass 19 fail)"
-  "cdg-deny-lf-unclassifiable|case_cdg_deny_lf_unclassifiable|unclassifiable deny: an embedded LF in a relative, no-.claude path, src/a<LF>b.rs (#327 round-1 kickback K1's own second example -- pre-fix this printed 2 stderr lines) -- measured: M10, 228 pass 2 fail (with cdg-deny-rel-plain -- the SAME no-.claude/relative shape, a kill-set widening found only by re-measuring, not by inspection); also M14, 228 pass 2 fail (with cdg-deny-lf-claude; also M12, 211 pass 19 fail)"
-  "cdg-noop-ordinary-abs|case_cdg_noop_ordinary_abs|no opinion: an ordinary absolute path with no .claude segment, /repo/src/main.rs -- measured: not flipped by M1-M14 (an ordinary absolute path never denies under any of these mutants)"
-  "cdg-noop-claude-backup|case_cdg_noop_claude_backup|no opinion: near-miss segment spelling, /repo/.claude-backup/x (pins exact-segment matching) -- measured: M9, 228 pass 2 fail (with cdg-noop-my-claude)"
-  "cdg-noop-my-claude|case_cdg_noop_my_claude|no opinion: near-miss segment spelling, /repo/my.claude/x (pins exact-segment matching) -- measured: M9, 228 pass 2 fail (with cdg-noop-claude-backup)"
-  "cdg-noop-main-session-lessons|case_cdg_noop_main_session_lessons|no opinion: main session (no agent_type key), Write, /repo/.claude/LESSONS.md (release-blocker control -- the orchestrator's own lesson append) -- measured: not flipped by M1-M14 (no agent_type key anywhere in the raw stdin -- the fast path alone already excludes it)"
-  "cdg-noop-unrecognised-agent|case_cdg_noop_unrecognised_agent|no opinion: agent_type is \"Explore\" (unrecognised role) -- measured: M1, 228 pass 2 fail (with cdg-noop-empty-agent; also M13, 226 pass 4 fail)"
-  "cdg-noop-empty-agent|case_cdg_noop_empty_agent|no opinion: agent_type is the empty string -- measured: M1, 228 pass 2 fail (with cdg-noop-unrecognised-agent)"
-  "cdg-noop-plan-mode|case_cdg_noop_plan_mode|no opinion: implementer Edit of /repo/.claude/x under permission_mode: \"plan\" -- measured: M4, 229 pass 1 fail"
-  "cdg-noop-wrong-tool|case_cdg_noop_wrong_tool|no opinion: tool_name is \"Read\", not Edit/Write -- measured: M3, 229 pass 1 fail"
-  "cdg-noop-malformed-json|case_cdg_noop_malformed_json|no opinion: unparseable stdin (carries both agent_type and .claude substrings) -- measured: not flipped by M1-M14 (jq's own parse failure independently yields an empty extraction regardless of which downstream check runs)"
-  "cdg-noop-missing-file-path|case_cdg_noop_missing_file_path|no opinion: tool_input.file_path absent -- measured: not flipped by M1-M14 (an empty file_path exits before the classifier itself ever runs, on every mutant in this table)"
-  "cdg-noop-verifier-mutation-probe|case_cdg_noop_verifier_mutation_probe|no opinion: verifier Edit of a tracked source file, /repo/bin/find-planning-work.sh (release-blocker control -- the mutation probe) -- measured: M13, 226 pass 4 fail"
-  "cdg-never-executes-deny|case_cdg_never_executes_deny|deny, AND claude-dir-guard.sh never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent -- measured: M12, 211 pass 19 fail"
-  "cdg-never-executes-noop|case_cdg_never_executes_noop|no opinion, AND claude-dir-guard.sh never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent -- measured: not flipped by M1-M14 (the identical \"ordinary absolute path\" shape as cdg-noop-ordinary-abs, plus a booby-trapped PATH none of these mutants ever reads)"
-  "cdg-writes-nothing|case_cdg_writes_nothing|deny, AND a fixture tree containing .claude/LESSONS.md has a byte-identical recursive file listing before/after — this hook performs no filesystem access at all -- measured: M12, 211 pass 19 fail"
+  #       kickback K1)
+  #       (the deny verdict itself is unaffected -- the classifier still matches $p, unchanged by
+  #       this mutant -- but the printed message reverts to embedding the raw LF byte, so the
+  #       "exactly 1 non-blank stderr line" assertion now sees 2)
+  # A path with no ".claude"/".." segment and no unrecognised shape survives every mutant in this
+  # table, since none of M1-M14 makes an ordinary path deny; a payload carrying no `agent_type`
+  # substring at all never reaches past the fast path regardless of which downstream check M1-M14
+  # breaks; an unparseable stdin's failure mode is jq's own parse error, independent of which check
+  # runs afterward; and an absent file_path exits before the classifier itself ever runs, on every
+  # mutant in this table (none of M1-M14 touches the `[ -n "$file_path" ] || exit 0` gate). Each
+  # such row's own comment states this instead of citing a mutant that was never observed to fail
+  # it.
+  "cdg-deny-impl-write-bare|case_cdg_deny_impl_write_bare|.claude deny: implementer (bare), Write, /repo/.claude/settings.json -- mutation proof: M12 (above)"
+  "cdg-deny-impl-edit-ns|case_cdg_deny_impl_edit_ns|.claude deny: trail-blazer-flow:implementer (namespaced), Edit, /repo/.claude/foo.md -- mutation proof: M12 (above)"
+  "cdg-deny-verif-write-ns|case_cdg_deny_verif_write_ns|.claude deny: trail-blazer-flow:verifier (namespaced), Write, /repo/.claude/bar.json -- mutation proof: M13 (also M12; above)"
+  "cdg-deny-verif-edit-bare|case_cdg_deny_verif_edit_bare|.claude deny: verifier (bare), Edit, /repo/.claude/baz.md -- mutation proof: M13 (also M12; above)"
+  "cdg-deny-nested|case_cdg_deny_nested|.claude deny: a nested segment, /Users/x/proj/.claude/settings.json -- mutation proof: M12 (above)"
+  "cdg-deny-user-level|case_cdg_deny_user_level|.claude deny: a path entirely outside any repo checkout, /Users/x/.claude/settings.json (pins deliberate location-independence -- the file_path route reads no cwd/repo-root at all) -- mutation proof: M12 (above)"
+  "cdg-deny-case-variant|case_cdg_deny_case_variant|.claude deny: case-varied spelling, /repo/.Claude/x -- mutation proof: M7 (also M12; above)"
+  "cdg-deny-drive-letter|case_cdg_deny_drive_letter|.claude deny: Windows drive-letter absolute form, C:/Users/x/.claude/foo -- mutation proof: M12 (above)"
+  "cdg-deny-backslash|case_cdg_deny_backslash|.claude deny: backslash-spelled form, C:\Users\x\.claude\foo (separator normalisation) -- mutation proof: M6 (also M12; above)"
+  "cdg-deny-final-segment|case_cdg_deny_final_segment|.claude deny: .claude as the path's FINAL segment, /repo/foo/.claude -- mutation proof: M8 (also M12; above)"
+  "cdg-deny-crlf|case_cdg_deny_crlf|.claude deny: a CR embedded inside the spelling itself, /repo/.clau<CR>de/foo (the strip can only widen toward deny) -- mutation proof: M5 (also M12; above)"
+  "cdg-deny-rel-claude|case_cdg_deny_rel_claude|.claude deny: a RELATIVE path whose first segment is .claude, .claude/LESSONS.md (discriminated from cdg-deny-rel-plain below) -- mutation proof: M8 (also M12; above)"
+  "cdg-deny-dotdot-claude|case_cdg_deny_dotdot_claude|.claude deny: a \"..\"-carrying ABSOLUTE path that also carries a real .claude segment, /Users/x/../.claude/y (the more specific message wins) -- mutation proof: M12 (above)"
+  "cdg-deny-lf-claude|case_cdg_deny_lf_claude|.claude deny: an embedded LF elsewhere in the path, /repo/.claude/a<LF>b.md (#327 round-1 kickback K1 -- pre-fix this printed 2 stderr lines) -- mutation proof: M14 (also M12; above)"
+  "cdg-deny-rel-plain|case_cdg_deny_rel_plain|unclassifiable deny: the SAME relative, no-leading-slash shape as cdg-deny-rel-claude, but no .claude segment anywhere, src/main.rs (discriminates the two deny classes) -- mutation proof: M10 (also M12; above)"
+  "cdg-deny-dotdot-no-claude|case_cdg_deny_dotdot_no_claude|unclassifiable deny: a \"..\"-carrying ABSOLUTE path with no .claude segment anywhere, /Users/x/../etc/passwd -- mutation proof: M11 (also M12; above)"
+  "cdg-deny-lf-unclassifiable|case_cdg_deny_lf_unclassifiable|unclassifiable deny: an embedded LF in a relative, no-.claude path, src/a<LF>b.rs (#327 round-1 kickback K1's own second example -- pre-fix this printed 2 stderr lines) -- mutation proof: M10 (a kill-set widening found only by re-measuring, not by inspection; also M14, also M12; above)"
+  "cdg-noop-ordinary-abs|case_cdg_noop_ordinary_abs|no opinion: an ordinary absolute path with no .claude segment, /repo/src/main.rs -- not flipped by M1-M14 (an ordinary absolute path never denies under any of these mutants)"
+  "cdg-noop-claude-backup|case_cdg_noop_claude_backup|no opinion: near-miss segment spelling, /repo/.claude-backup/x (pins exact-segment matching) -- mutation proof: M9 (above)"
+  "cdg-noop-my-claude|case_cdg_noop_my_claude|no opinion: near-miss segment spelling, /repo/my.claude/x (pins exact-segment matching) -- mutation proof: M9 (above)"
+  "cdg-noop-main-session-lessons|case_cdg_noop_main_session_lessons|no opinion: main session (no agent_type key), Write, /repo/.claude/LESSONS.md (release-blocker control -- the orchestrator's own lesson append) -- not flipped by M1-M14 (no agent_type key anywhere in the raw stdin -- the fast path alone already excludes it)"
+  "cdg-noop-unrecognised-agent|case_cdg_noop_unrecognised_agent|no opinion: agent_type is \"Explore\" (unrecognised role) -- mutation proof: M1 (also M13; above)"
+  "cdg-noop-empty-agent|case_cdg_noop_empty_agent|no opinion: agent_type is the empty string -- mutation proof: M1 (above)"
+  "cdg-noop-plan-mode|case_cdg_noop_plan_mode|no opinion: implementer Edit of /repo/.claude/x under permission_mode: \"plan\" -- mutation proof: M4 (above)"
+  "cdg-noop-wrong-tool|case_cdg_noop_wrong_tool|no opinion: tool_name is \"Read\", not Edit/Write -- mutation proof: M3 (above)"
+  "cdg-noop-malformed-json|case_cdg_noop_malformed_json|no opinion: unparseable stdin (carries both agent_type and .claude substrings) -- not flipped by M1-M14 (jq's own parse failure independently yields an empty extraction regardless of which downstream check runs)"
+  "cdg-noop-missing-file-path|case_cdg_noop_missing_file_path|no opinion: tool_input.file_path absent -- not flipped by M1-M14 (an empty file_path exits before the classifier itself ever runs, on every mutant in this table)"
+  "cdg-noop-verifier-mutation-probe|case_cdg_noop_verifier_mutation_probe|no opinion: verifier Edit of a tracked source file, /repo/bin/find-planning-work.sh (release-blocker control -- the mutation probe) -- mutation proof: M13 (above)"
+  "cdg-never-executes-deny|case_cdg_never_executes_deny|deny, AND claude-dir-guard.sh never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent -- mutation proof: M12 (above)"
+  "cdg-never-executes-noop|case_cdg_never_executes_noop|no opinion, AND claude-dir-guard.sh never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent -- not flipped by M1-M14 (the identical \"ordinary absolute path\" shape as cdg-noop-ordinary-abs, plus a booby-trapped PATH none of these mutants ever reads)"
+  "cdg-writes-nothing|case_cdg_writes_nothing|deny, AND a fixture tree containing .claude/LESSONS.md has a byte-identical recursive file listing before/after — this hook performs no filesystem access at all -- mutation proof: M12 (above)"
+  # --- hooks/planner-guard.sh (#407) cases --------------------------------------------------------
+  "plg-deny-edit-ns|case_plg_deny_edit_ns|deny: Claude-shaped trail-blazer-flow:planner, Edit"
+  "plg-deny-write-bare|case_plg_deny_write_bare|deny: bare planner, Write"
+  "plg-deny-apply-patch|case_plg_deny_apply_patch|deny: Codex apply_patch, planner (the ADR's Add File: allowed.txt patch) -- the planner is read-only regardless of tool"
+  "plg-deny-touch|case_plg_deny_touch|deny: touch ro_test.txt && echo touched"
+  "plg-deny-gh|case_plg_deny_gh|deny: gh issue list"
+  "plg-deny-git-commit|case_plg_deny_git_commit|deny: git commit -am x"
+  "plg-deny-git-restore|case_plg_deny_git_restore|deny: git restore x (restore writes the working tree, deliberately excluded from PLANNER_GIT_READONLY)"
+  "plg-deny-git-global-opt|case_plg_deny_git_global_opt|deny: git -c core.pager=sh log (a global option in subcommand position)"
+  "plg-deny-git-diff-output|case_plg_deny_git_diff_output|deny: git diff --output=/tmp/x"
+  "plg-deny-git-ext-diff|case_plg_deny_git_ext_diff|deny (#407 kickback finding 4): git diff --ext-diff"
+  "plg-deny-git-grep|case_plg_deny_git_grep|deny (#407 kickback finding 1): git grep -lOrm . (a bundled short-option cluster real git accepts, steering -O's arbitrary pager program)"
+  "plg-deny-git-grep-abbrev|case_plg_deny_git_grep_abbrev|deny (#407 kickback finding 1): git grep --open=rm -l . (real git accepts abbreviated long options)"
+  "plg-deny-rg-hostname-bin|case_plg_deny_rg_hostname_bin|deny (#407 kickback finding 1): rg --hostname-bin=x foo (runs an arbitrary program to resolve the hostname)"
+  "plg-deny-redirect|case_plg_deny_redirect|deny: cat a > b (lexer rejection)"
+  "plg-deny-stderr-devnull|case_plg_deny_stderr_devnull|deny: ls 2>/dev/null (no carve-out, per the approved plan)"
+  "plg-deny-dollar-paren|case_plg_deny_dollar_paren|deny: cat \$(ls) (lexer rejection)"
+  "plg-deny-backtick|case_plg_deny_backtick|deny: cat \`ls\` (lexer rejection)"
+  "plg-deny-dquote-subst|case_plg_deny_dquote_subst|deny: rg \"\$(id)\" . (double-quoted \$ rejected)"
+  "plg-deny-process-subst|case_plg_deny_process_subst|deny: diff <(ls) b (lexer rejection)"
+  "plg-deny-subshell|case_plg_deny_subshell|deny: (ls) (lexer rejection)"
+  "plg-deny-background|case_plg_deny_background|deny: ls & (a lone & rejects)"
+  "plg-deny-chain-rm|case_plg_deny_chain_rm|deny: ls && rm -rf x (second segment's command word not allowlisted)"
+  "plg-deny-pipe-tee|case_plg_deny_pipe_tee|deny: cat a | tee b (a single pipe is a segment break; tee is not allowlisted)"
+  "plg-deny-assignment|case_plg_deny_assignment|deny: PAGER=sh git log (the assignment token itself is the segment's t0, not allowlisted)"
+  "plg-deny-abs-path|case_plg_deny_abs_path|deny: /bin/cat x (an absolute command word is not an exact PLANNER_READONLY_COMMANDS member)"
+  "plg-deny-bash-c|case_plg_deny_bash_c|deny: bash -c ls (no PREFIX_WORDS skip in this hook at all)"
+  "plg-deny-multiline|case_plg_deny_multiline|deny: ls<LF>rm x (NR>1 in the lexer)"
+  "plg-deny-backslash|case_plg_deny_backslash|deny (#407 kickback finding 6): cat \\'; rm -rf x; \\' (lexer rejection)"
+  "plg-deny-brace|case_plg_deny_brace|deny (#407 kickback finding 6): { ls; } (lexer rejection)"
+  "plg-deny-bang|case_plg_deny_bang|deny (#407 kickback finding 6): ! ls (lexer rejection)"
+  "plg-deny-unterminated|case_plg_deny_unterminated|deny: rg 'foo (unterminated quote)"
+  "plg-deny-sed-inplace|case_plg_deny_sed_inplace|deny: sed -i.bak s/a/b/ f (t1 != -n)"
+  "plg-deny-sed-w|case_plg_deny_sed_w|deny: sed -n 'w /tmp/x' f (t2 does not match the read-only range shape)"
+  "plg-deny-sed-trailing-opt|case_plg_deny_sed_trailing_opt|deny (#407 kickback finding 5): sed -n 1p f -i (a trailing option after the range)"
+  "plg-deny-sed-range-suffix|case_plg_deny_sed_range_suffix|deny (#407 kickback finding 5): sed -n '1p;w /tmp/x' f (t2 carries a trailing w command, not just the range)"
+  "plg-deny-rg-pre|case_plg_deny_rg_pre|deny: rg --pre=sh foo"
+  "plg-deny-find|case_plg_deny_find|deny: find . -delete (find excluded, per the approved plan's Open questions)"
+  "plg-deny-empty-command|case_plg_deny_empty_command|deny: tool_input: {} (absent command denies fail-closed, unlike every sibling hook)"
+  "plg-deny-plan-mode|case_plg_deny_plan_mode|deny: touch x under permission_mode: \"plan\" -- deliberately NO plan-mode skip in this hook"
+  "plg-deny-apply-patch-heredoc|case_plg_deny_apply_patch_heredoc|deny (#407 amendment A3): a planner shell apply_patch heredoc denies via the multi-line/NR>1 lexer rejection, independent of claude-dir-guard.sh's own Bash route"
+  "plg-noop-rg|case_plg_noop_rg|no opinion: rg -n \"foo\" src"
+  "plg-noop-sed-print|case_plg_noop_sed_print|no opinion: sed -n '1,120p' README.md"
+  "plg-noop-pipe|case_plg_noop_pipe|no opinion: git log --oneline -5 | head -3"
+  "plg-noop-chain|case_plg_noop_chain|no opinion: ls docs && cat README.md; wc -l CLAUDE.md"
+  "plg-noop-git-show-ns|case_plg_noop_git_show_ns|no opinion: Claude-shaped trail-blazer-flow:planner, git show HEAD"
+  "plg-noop-quoted-meta|case_plg_noop_quoted_meta|no opinion: rg 'a|b>c\$(x)' docs (every metacharacter is inside single quotes)"
+  "plg-noop-glob|case_plg_noop_glob|no opinion: ls docs/*.md (glob characters are ordinary tokens now, not rejected)"
+  "plg-noop-main-session|case_plg_noop_main_session|no opinion: Codex main session (no agent_type), touch x"
+  "plg-noop-implementer|case_plg_noop_implementer|no opinion: implementer role, touch x (not this hook's role)"
+  "plg-noop-explore-edit|case_plg_noop_explore_edit|no opinion: agent_type Explore, Edit"
+  "plg-noop-read-tool|case_plg_noop_read_tool|no opinion: planner role, Read tool (outside PLANNER_EDIT_TOOLS and not Bash)"
+  "plg-noop-malformed-json|case_plg_noop_malformed_json|no opinion: unparseable stdin (carries both agent_type and planner substrings)"
+  "plg-never-executes-deny|case_plg_never_executes_deny|deny, AND planner-guard.sh never invokes git/gh/rm/touch on the booby-trapped PATH — sentinel absent"
+  "plg-never-executes-noop|case_plg_never_executes_noop|no opinion, AND planner-guard.sh never invokes git/gh/rm/touch on the booby-trapped PATH — sentinel absent"
+  # --- hooks/claude-dir-guard.sh apply_patch route (#407) cases -----------------------------------
+  "cdg-patch-deny-add-claude|case_cdg_patch_deny_add_claude|.claude deny: implementer (bare), Add File: .claude/settings.local.json (the S0/P5 escape itself)"
+  "cdg-patch-deny-update-ns|case_cdg_patch_deny_update_ns|.claude deny: trail-blazer-flow:implementer (namespaced), Update File: .claude/LESSONS.md"
+  "cdg-patch-deny-verifier|case_cdg_patch_deny_verifier|.claude deny: verifier (bare), Add File: .claude/x"
+  "cdg-patch-deny-delete|case_cdg_patch_deny_delete|.claude deny: Delete File: .claude/x"
+  "cdg-patch-deny-move-to|case_cdg_patch_deny_move_to|.claude deny: Update File: src/a.txt then Move to: .claude/a.txt"
+  "cdg-patch-deny-second-file|case_cdg_patch_deny_second_file|.claude deny: a benign first header then a .claude second header -- every header is checked, not only the first"
+  "cdg-patch-deny-case-variant|case_cdg_patch_deny_case_variant|.claude deny: case-varied spelling, Add File: .Claude/x"
+  "cdg-patch-deny-abs-header|case_cdg_patch_deny_abs_header|.claude deny: an absolute header path, Add File: /Users/x/.claude/settings.json"
+  "cdg-patch-deny-indented-header|case_cdg_patch_deny_indented_header|.claude deny: an indented header line, '  *** Add File: .claude/x' (left-trim tolerance)"
+  "cdg-patch-deny-codex|case_cdg_patch_deny_codex|.codex deny: Add File: .codex/config.toml"
+  "cdg-patch-deny-codex-case|case_cdg_patch_deny_codex_case|.codex deny: case-varied spelling, Add File: .CODEX/agents/x.toml"
+  "cdg-patch-deny-dotdot|case_cdg_patch_deny_dotdot|unclassifiable deny: Add File: ../escape/x"
+  "cdg-patch-deny-no-cwd|case_cdg_patch_deny_no_cwd|unclassifiable deny: Add File: src/a.txt with no cwd field at all -- a relative header path with nothing to resolve against"
+  "cdg-patch-deny-no-header|case_cdg_patch_deny_no_header|unparseable deny: a patch with Begin/End Patch but zero file headers"
+  "cdg-patch-deny-unknown-header|case_cdg_patch_deny_unknown_header|unparseable deny: an unrecognised marker, *** Copy File: .claude/x"
+  "cdg-patch-deny-empty-path|case_cdg_patch_deny_empty_path|unparseable deny: Add File: with nothing after the marker (an empty header path)"
+  "cdg-patch-deny-empty-command|case_cdg_patch_deny_empty_command|unparseable deny: tool_input.command absent"
+  "cdg-patch-noop-add-src|case_cdg_patch_noop_add_src|no opinion: implementer, Add File: src/new.rs (release-blocker control)"
+  "cdg-patch-noop-update-readme|case_cdg_patch_noop_update_readme|no opinion: verifier, the benign Update File: README.md form"
+  "cdg-patch-noop-content-mentions|case_cdg_patch_noop_content_mentions|no opinion: content lines merely MENTIONING .claude/LESSONS.md and *** Add File: .claude/x, under a benign Update File: README.md header"
+  "cdg-patch-noop-crlf|case_cdg_patch_noop_crlf|no opinion: the benign Update File: README.md form with CRLF line endings throughout"
+  "cdg-patch-noop-main-session|case_cdg_patch_noop_main_session|no opinion: main session (no agent_type), Add File: .claude/LESSONS.md"
+  "cdg-patch-noop-planner|case_cdg_patch_noop_planner|no opinion: planner role, Add File: .claude/x (planner is not this hook's role -- planner-guard.sh's own read-only policy covers it instead)"
+  "cdg-patch-noop-near-miss|case_cdg_patch_noop_near_miss|no opinion: near-miss segment spelling, Add File: .codex-backup/x"
+  "cdg-patch-never-executes|case_cdg_patch_never_executes|deny, AND the apply_patch route never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent"
+  # --- hooks/claude-dir-guard.sh file_path route, .codex segment (#407) cases ---------------------
+  "cdg-codexseg-deny-write|case_cdg_codexseg_deny_write|.codex deny: implementer (bare), Write, /repo/.codex/config.toml"
+  "cdg-codexseg-deny-verifier-edit-ns|case_cdg_codexseg_deny_verifier_edit_ns|.codex deny: trail-blazer-flow:verifier (namespaced), Edit, /repo/.codex/x"
+  "cdg-codexseg-noop-backup|case_cdg_codexseg_noop_backup|no opinion: near-miss segment spelling, /repo/.codex-backup/x"
+  "cdg-codexseg-noop-my-codex|case_cdg_codexseg_noop_my_codex|no opinion: near-miss segment spelling, /repo/my.codex/x"
+  # --- hooks/claude-dir-guard.sh Bash apply_patch-shim route (#407 amendment A1/A3) cases ----------
+  "cdg-bash-deny-heredoc-claude|case_cdg_bash_deny_heredoc_claude|.claude deny: the S0/#412 Q7 payload -- an implementer shell-issued apply_patch heredoc adding .claude/settings.local.json, replayed as tool_name: \"Bash\""
+  "cdg-bash-deny-heredoc-codex|case_cdg_bash_deny_heredoc_codex|.codex deny: a verifier shell-issued apply_patch heredoc adding .codex/x"
+  "cdg-bash-noop-heredoc-src|case_cdg_bash_noop_heredoc_src|no opinion: an implementer shell-issued apply_patch heredoc adding src/a.txt (resolved against cwd, no .claude/.codex segment)"
+  "cdg-bash-deny-no-inline-patch|case_cdg_bash_deny_no_inline_patch|unparseable deny: apply_patch < x.patch -- the shim is the command word but no inline patch text is visible to this hook"
+  "cdg-bash-deny-no-inline-patch-glued|case_cdg_bash_deny_no_inline_patch_glued|unparseable deny (#407 kickback finding 2): apply_patch<x.patch -- no space before the redirect"
+  "cdg-bash-deny-no-inline-patch-brace|case_cdg_bash_deny_no_inline_patch_brace|unparseable deny (#407 kickback finding 2): { apply_patch < x.patch; } -- a brace group"
+  "cdg-bash-deny-no-inline-patch-keyword|case_cdg_bash_deny_no_inline_patch_keyword|unparseable deny (#407 kickback finding 2): if true; then apply_patch < x.patch; fi -- past a shell keyword"
+  "cdg-bash-deny-no-inline-patch-assignment|case_cdg_bash_deny_no_inline_patch_assignment|unparseable deny (#407 kickback finding 2): FOO=1 apply_patch < x.patch -- past an assignment prefix"
+  "cdg-bash-deny-no-inline-patch-chain|case_cdg_bash_deny_no_inline_patch_chain|unparseable deny (#407 kickback finding 2/7): cd src && applypatch < x.patch -- a && chain, the no-underscore spelling"
+  "cdg-bash-deny-no-inline-patch-pipe|case_cdg_bash_deny_no_inline_patch_pipe|unparseable deny (#407 kickback finding 2/7): cat x.patch | apply_patch -- a pipe"
+  "cdg-bash-deny-decoy-dollar-quote|case_cdg_bash_deny_decoy_dollar_quote|unparseable deny (#407 kickback finding 2, belt and braces): an ANSI-C-quoted (\$'...') decoy whose \\n sequences are literal backslash+n bytes, not real newlines -- the raw-text .claude mention still denies"
+  "cdg-bash-deny-decoy-nbsp-header|case_cdg_bash_deny_decoy_nbsp_header|unparseable deny (#407 kickback round 2, finding A): a U+00A0-indented .claude header next to a genuinely benign one -- the belt-and-braces check catches it even though the structured parse alone would have missed it"
+  "cdg-bash-deny-no-inline-patch-subshell|case_cdg_bash_deny_no_inline_patch_subshell|unparseable deny (#407 kickback round 2, finding B): (apply_patch < x.patch) -- a subshell"
+  "cdg-bash-deny-no-inline-patch-cmdsubst|case_cdg_bash_deny_no_inline_patch_cmdsubst|unparseable deny (#407 kickback round 2, finding B): echo \$(apply_patch < x.patch) -- a command substitution"
+  "cdg-bash-deny-no-inline-patch-gt|case_cdg_bash_deny_no_inline_patch_gt|unparseable deny (#407 kickback round 2, finding C): apply_patch>out.txt -- the \">\" word break"
+  "cdg-bash-deny-backslash-indented-begin-patch|case_cdg_bash_deny_backslash_indented_begin_patch|.claude deny (#407 kickback round 2, finding C): \\apply_patch heredoc with an INDENTED exact Begin Patch/Add File line -- has_exact_begin_patch_line's own full trim is what denies here, not command-word detection (the leading backslash defeats that)"
+  "cdg-bash-deny-leading-redirect|case_cdg_bash_deny_leading_redirect|unparseable deny (#407 kickback round 2, finding D): < x.patch apply_patch -- a leading redirect must not hide the command word that follows it"
+  "cdg-bash-deny-leading-redirect-fd|case_cdg_bash_deny_leading_redirect_fd|unparseable deny (#407 kickback round 2, finding D): 2>/dev/null apply_patch < x -- a bare-digits fd immediately before a redirect operator"
+  "cdg-bash-deny-leading-redirect-append|case_cdg_bash_deny_leading_redirect_append|unparseable deny (#407 kickback round 3): >> log apply_patch < x.patch -- a >> run is one redirect"
+  "cdg-bash-deny-leading-redirect-fd-append|case_cdg_bash_deny_leading_redirect_fd_append|unparseable deny (#407 kickback round 3): 2>>err apply_patch < x"
+  "cdg-bash-deny-leading-redirect-fd-dup|case_cdg_bash_deny_leading_redirect_fd_dup|unparseable deny (#407 kickback round 3): >&2 apply_patch < x.patch -- an fd duplication keeps its &"
+  "cdg-bash-deny-leading-redirect-fd-dup2|case_cdg_bash_deny_leading_redirect_fd_dup2|unparseable deny (#407 kickback round 3): 2>&1 apply_patch < x.patch"
+  "cdg-bash-deny-leading-redirect-clobber|case_cdg_bash_deny_leading_redirect_clobber|unparseable deny (#407 kickback round 4): >| log apply_patch < x.patch -- >| is one redirect"
+  "cdg-bash-deny-leading-redirect-in-dup|case_cdg_bash_deny_leading_redirect_in_dup|unparseable deny (#407 kickback round 4): <&0 apply_patch -- an input fd duplication keeps its &"
+  "cdg-bash-noop-quoted-mention|case_cdg_bash_noop_quoted_mention|no opinion (#407 kickback round 4): git commit -m \"the apply_patch shim\" -- a quoted mention after ordinary words"
+  "cdg-bash-noop-heredoc-claude-md|case_cdg_bash_noop_heredoc_claude_md|no opinion (#407 kickback round 3): a heredoc patch updating CLAUDE.md with Claude Code in its body"
+  "cdg-bash-noop-heredoc-codex-name|case_cdg_bash_noop_heredoc_codex_name|no opinion (#407 kickback round 3): a heredoc patch adding src/codex_client.py"
+  "cdg-bash-deny-path-qualified|case_cdg_bash_deny_path_qualified|unparseable deny (#407 kickback round 2, finding E): ./apply_patch < x -- matched by basename"
+  "cdg-bash-noop-begin-patch-mention-grep|case_cdg_bash_noop_begin_patch_mention_grep|no opinion (#407 kickback finding 3): grep -rn '*** Begin Patch' hooks/ -- mentions the marker but carries no genuine patch-grammar line"
+  "cdg-bash-noop-begin-patch-mention-commit|case_cdg_bash_noop_begin_patch_mention_commit|no opinion (#407 kickback finding 3): a commit message mentioning the marker"
+  "cdg-bash-noop-arg-only|case_cdg_bash_noop_arg_only|no opinion: rg apply_patch hooks/ -- \"apply_patch\" is an argument, not the command word"
+  "cdg-bash-noop-quoted|case_cdg_bash_noop_quoted|no opinion: grep -n \"apply_patch\" x -- \"apply_patch\" appears only inside quoted text"
+  "cdg-bash-noop-main-session|case_cdg_bash_noop_main_session|no opinion: main session (no agent_type), the identical apply_patch heredoc adding .claude/x"
+  "cdg-bash-noop-ab-fixture-reuse|case_cdg_bash_noop_ab_fixture_reuse|no opinion: an existing hooks/agent-boundary.sh deny fixture's own command (git push origin main) replayed against THIS hook -- the new Bash route must not deny a command that carries no apply_patch-shaped patch"
+  "cdg-bash-never-executes|case_cdg_bash_never_executes|deny, AND the Bash route never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent"
+  "cdg-bash-never-executes-no-inline-patch|case_cdg_bash_never_executes_no_inline_patch|deny via the is_apply_patch_word \"no inline patch\" route specifically, AND it never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent"
+  # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
+  "codex-gcg-main-status|case_codex_gcg_main_status|allow: git-c-guard.sh under a Codex-shaped main-session payload, git -C ../demo-wt-1 status --porcelain (pins the unchanged verdict -- Codex ignores this hook's if gate, but the script itself never reads it)"
+  "codex-gcg-apply-patch|case_codex_gcg_apply_patch|silent: a Codex apply_patch payload (tool_name != Bash)"
+  "codex-ab-impl-push|case_codex_ab_impl_push|deny: agent-boundary.sh under Codex, bare implementer, git push origin main"
+  "codex-ab-verif-commit|case_codex_ab_verif_commit|deny: agent-boundary.sh under Codex, verifier, git commit -am x"
+  "codex-ab-verif-status|case_codex_ab_verif_status|no opinion: agent-boundary.sh under Codex, verifier, git status"
+  "codex-ab-impl-python-claude|case_codex_ab_impl_python_claude|deny (#387 replay under Codex): implementer, python3 -c \"open('.claude/settings.local.json','w').write('{}')\""
+  "codex-ab-main-push|case_codex_ab_main_push|no opinion: agent-boundary.sh under Codex, main session, git push origin main"
+  "codex-ab-impl-apply-patch|case_codex_ab_impl_apply_patch|no opinion: agent-boundary.sh under Codex, implementer, apply_patch (Bash-only hook -- tool_name gate excludes it regardless of command content)"
+  "codex-pg-main-push-main|case_codex_pg_main_push_main|deny: push-guard.sh under Codex, main session, git push origin main, cwd a nonexistent path (deny through the default-branch fallback)"
+  "codex-pg-impl-push-claude|case_codex_pg_impl_push_claude|no opinion: push-guard.sh under Codex, implementer, git push -u origin \"claude/17-a\""
+  "codex-pg-apply-patch|case_codex_pg_apply_patch|no opinion: push-guard.sh under Codex, implementer, apply_patch (Bash-only hook)"
+  # --- hook canary (#407) cases -----------------------------------------------------------------
+  "canary-implementer|case_canary_implementer|deny: gh --version, Codex-shaped bare implementer, through hooks/agent-boundary.sh"
+  "canary-implementer-ns|case_canary_implementer_ns|deny: gh --version, Claude-shaped namespaced implementer, through hooks/agent-boundary.sh"
+  "canary-verifier|case_canary_verifier|deny: gh --version, Codex-shaped bare verifier, through hooks/agent-boundary.sh"
+  "canary-verifier-ns|case_canary_verifier_ns|deny: gh --version, Claude-shaped namespaced verifier, through hooks/agent-boundary.sh"
+  "canary-planner|case_canary_planner|deny: gh --version, Codex-shaped bare planner, through hooks/planner-guard.sh"
+  "canary-planner-ns|case_canary_planner_ns|deny: gh --version, Claude-shaped namespaced planner, through hooks/planner-guard.sh"
+  "canary-main-session|case_canary_main_session|gh --version, Codex-shaped main session, through all five runners: git-c-guard.sh silent, agent-boundary.sh/push-guard.sh/claude-dir-guard.sh/planner-guard.sh all no opinion"
 )
 
 matched=0

@@ -342,19 +342,23 @@ fi
 #   (a) each type=="command" handler's own .matcher (read from the .hooks.PreToolUse[] element
 #       that contains it) equals what a basename-keyed expected-matcher table says that script
 #       should carry — git-c-guard.sh/agent-boundary.sh/push-guard.sh -> "Bash",
-#       claude-dir-guard.sh (#327) -> "Edit|Write" (the exact matcher its own live-probe record
-#       measured, M5) — with an unregistered basename FAILing loudly ("add its expected matcher to
-#       this table") rather than silently passing or defaulting to "Bash";
+#       claude-dir-guard.sh (#327; widened to "Bash|Edit|Write|apply_patch" #407) and
+#       planner-guard.sh (#407) -> "Bash|Edit|Write|apply_patch" (the exact matcher claude-dir-
+#       guard.sh's own live-probe record measured for Edit/Write, M5, since widened by the #407
+#       apply_patch/Bash-shim amendment; planner-guard.sh's own matcher is the same string by
+#       construction, so it needs the same tool coverage its own policy classifies) — with an
+#       unregistered basename FAILing loudly ("add its expected matcher to this table") rather than
+#       silently passing or defaulting to "Bash";
 #   (b) every type=="command" handler's .command, with ${CLAUDE_PLUGIN_ROOT} textually replaced by
 #       $root and the surrounding 'bash "' / '"' stripped, names a file that exists;
 #   (c) each handler's "if" (jq's `.["if"]`, since `if` is a jq keyword; an absent/empty value
 #       normalises to the sentinel "-none-") equals what a basename-keyed expectation table says
 #       that script should carry — git-c-guard.sh -> "Bash(git -C *)" (#155); agent-boundary.sh,
-#       push-guard.sh (#260), and claude-dir-guard.sh (#327) -> "-none-" (the `if` field is
-#       permission-rule syntax over tool input only and cannot see agent_type, a `-C`/`env`/
-#       `bash -c`-wrapped push, or a `.claude` path segment — see each hook's own header) — with an
-#       unregistered basename FAILing loudly ("add its expected if to this table") rather than
-#       silently passing;
+#       push-guard.sh (#260), claude-dir-guard.sh (#327), and planner-guard.sh (#407) -> "-none-"
+#       (the `if` field is permission-rule syntax over tool input only and cannot see agent_type, a
+#       `-C`/`env`/`bash -c`-wrapped push, a `.claude`/`.codex` path segment, or an apply_patch
+#       command's own patch grammar — see each hook's own header) — with an unregistered basename
+#       FAILing loudly ("add its expected if to this table") rather than silently passing;
 #   (d) every hooks/*.sh file on disk is named by some handler's .command (the reverse direction:
 #       an orphan hook script — shipped but never registered — is exactly this issue's failure
 #       mode, since an unregistered hook never fires).
@@ -405,6 +409,7 @@ EOF
           agent-boundary.sh) expect_if='-none-' ;;
           push-guard.sh) expect_if='-none-' ;;
           claude-dir-guard.sh) expect_if='-none-' ;;
+          planner-guard.sh) expect_if='-none-' ;;
           *) bad_if="$bad_if $base has no expected-if table entry (add its expected if to this table);" ;;
         esac
         if [ -n "$expect_if" ] && [ "$hi" != "$expect_if" ]; then
@@ -415,7 +420,8 @@ EOF
           git-c-guard.sh) expect_matcher='Bash' ;;
           agent-boundary.sh) expect_matcher='Bash' ;;
           push-guard.sh) expect_matcher='Bash' ;;
-          claude-dir-guard.sh) expect_matcher='Edit|Write' ;;
+          claude-dir-guard.sh) expect_matcher='Bash|Edit|Write|apply_patch' ;;
+          planner-guard.sh) expect_matcher='Bash|Edit|Write|apply_patch' ;;
           *) bad_matcher="$bad_matcher $base has no expected-matcher table entry (add its expected matcher to this table);" ;;
         esac
         if [ -n "$expect_matcher" ] && [ "$hm" != "$expect_matcher" ]; then
@@ -1355,28 +1361,38 @@ else
   fi
 fi
 
-# 4.39 (#235) — hooks/agent-boundary.sh's agent_type vocabulary <-> agents/*.md and plugin.json's
-# name. Extracts AGENT_TYPES_IMPLEMENTER= and AGENT_TYPES_VERIFIER= with the same anchored
-# sed -nE idiom as 2.5/4.13/4.35/4.36/4.37/4.38 — either extraction coming back empty FAILs
-# loudly ("structure changed") rather than passing vacuously. Each space-delimited value in
-# either list must be either a bare X, requiring agents/X.md to exist with frontmatter name: X
-# (same frontmatter_text + sed idiom as 3.1), or <plugin.json .name>:X, requiring the same
-# agents/X.md / name: X condition on the part after the colon; and each list must carry at least
-# one bare-form AND at least one namespaced-form entry ("both spellings"): the namespaced form is
-# the spelling measured live on 2026-09-08 (Claude Code 2.1.263, #259), and the bare form is
-# retained as insurance against a future de-namespacing (see the hook's own header). This proves
-# only that the hook's vocabulary agrees with the agent files and the plugin's own name — not that
-# either spelling is the one Claude Code actually sends at runtime, the same honest limit
-# 4.33/4.34/4.37/4.38's comments state.
+# 4.39 (#235; extended to hooks/planner-guard.sh's AGENT_TYPES_PLANNER #407) —
+# hooks/agent-boundary.sh's agent_type vocabulary, PLUS hooks/planner-guard.sh's own
+# AGENT_TYPES_PLANNER, <-> agents/*.md and plugin.json's name. Extracts AGENT_TYPES_IMPLEMENTER=
+# and AGENT_TYPES_VERIFIER= from hooks/agent-boundary.sh, and AGENT_TYPES_PLANNER= from
+# hooks/planner-guard.sh, with the same anchored sed -nE idiom as 2.5/4.13/4.35/4.36/4.37/4.38 —
+# any of the three extractions coming back empty FAILs loudly ("structure changed") rather than
+# passing vacuously. Each space-delimited value in any of the three lists must be either a bare X,
+# requiring agents/X.md to exist with frontmatter name: X (same frontmatter_text + sed idiom as
+# 3.1), or <plugin.json .name>:X, requiring the same agents/X.md / name: X condition on the part
+# after the colon; and each list must carry at least one bare-form AND at least one
+# namespaced-form entry ("both spellings"): the namespaced form is the spelling measured live on
+# 2026-09-08 (Claude Code 2.1.263, #259) for agent-boundary.sh's own two lists — planner-guard.sh's
+# own AGENT_TYPES_PLANNER carries no independent live measurement of its own (#407's plan does not
+# claim one; the namespaced spelling is retained by the same insurance rationale, not a
+# measurement) — and the bare form is retained as insurance against a future de-namespacing (see
+# each hook's own header). This proves only that each hook's vocabulary agrees with the agent files
+# and the plugin's own name — not that any spelling is the one Claude Code or Codex actually sends
+# at runtime, the same honest limit 4.33/4.34/4.37/4.38's comments state. Closes a drift class
+# 4.39 could not otherwise catch: a renamed agents/planner.md (or a planner-guard.sh vocabulary
+# edit) would leave every plg-* fixture green (they hand-type "planner"/"trail-blazer-flow:planner"
+# directly), silently stopping the guard from matching without any gate assertion noticing.
 ab="$root/hooks/agent-boundary.sh"
+plg439="$root/hooks/planner-guard.sh"
 ab_impl="$(sed -nE 's/^AGENT_TYPES_IMPLEMENTER="([^"]*)"$/\1/p' "$ab")"
 ab_verif="$(sed -nE 's/^AGENT_TYPES_VERIFIER="([^"]*)"$/\1/p' "$ab")"
-if [ -z "$ab_impl" ] || [ -z "$ab_verif" ]; then
-  bad "4.39 hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER= or AGENT_TYPES_VERIFIER= line didn't match (structure changed) — extraction failed"
+plg_planner="$(sed -nE 's/^AGENT_TYPES_PLANNER="([^"]*)"$/\1/p' "$plg439")"
+if [ -z "$ab_impl" ] || [ -z "$ab_verif" ] || [ -z "$plg_planner" ]; then
+  bad "4.39 hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER=/AGENT_TYPES_VERIFIER= or hooks/planner-guard.sh's AGENT_TYPES_PLANNER= line didn't match (structure changed) — extraction failed"
 else
   ab_plugin_name="$(jq -r '.name // empty' "$plugin_json" 2>/dev/null)"
   bad_list=""
-  for pair in "AGENT_TYPES_IMPLEMENTER $ab_impl" "AGENT_TYPES_VERIFIER $ab_verif"; do
+  for pair in "AGENT_TYPES_IMPLEMENTER $ab_impl" "AGENT_TYPES_VERIFIER $ab_verif" "AGENT_TYPES_PLANNER $plg_planner"; do
     listname="${pair%% *}"
     values="${pair#* }"
     bare_n=0
@@ -1406,7 +1422,7 @@ else
     [ "$ns_n" -ge 1 ] || bad_list="$bad_list $listname has no namespaced-form spelling;"
   done
   if [ -z "$bad_list" ]; then
-    ok "4.39 hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER ('$ab_impl') and AGENT_TYPES_VERIFIER ('$ab_verif') both agree with agents/*.md and plugin.json's name, each carrying both spellings"
+    ok "4.39 hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER ('$ab_impl') and AGENT_TYPES_VERIFIER ('$ab_verif'), and hooks/planner-guard.sh's AGENT_TYPES_PLANNER ('$plg_planner'), all agree with agents/*.md and plugin.json's name, each carrying both spellings"
   else
     bad "4.39 agent_type vocabulary disagreement:$bad_list"
   fi

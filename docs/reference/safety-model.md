@@ -152,10 +152,11 @@ row above — Claude Code 2.1.246's startup scan is allow-only. The one item thi
 unconfirmed is the Windows/Git-Bash spot-check of row (a) — see the README's
 ["Windows"](../../README.md#windows) section.
 
-**Four PreToolUse hooks.** `hooks/git-c-guard.sh` above is one of four plugin-shipped
-`PreToolUse` hooks registered in `hooks/hooks.json` — three matching `Bash`, and a fourth,
-`hooks/claude-dir-guard.sh` (#327, described in its own paragraph after the third hook below),
-matching `Edit|Write`; the second `Bash`-matching hook, `hooks/agent-boundary.sh`
+**Five PreToolUse hooks.** `hooks/git-c-guard.sh` above is one of five plugin-shipped
+`PreToolUse` hooks registered in `hooks/hooks.json` — three matching `Bash`, and two matching
+`Bash|Edit|Write|apply_patch`: the fourth, `hooks/claude-dir-guard.sh` (#327, widened to that
+matcher by #407; described in its own paragraph after the third hook below), and the fifth,
+`hooks/planner-guard.sh` (#407, its own paragraph further below); the second `Bash`-matching hook, `hooks/agent-boundary.sh`
 (#235, review F3), is what the "no git, no gh" caveat earlier in this section now names. It reads each Bash
 call's `agent_type` from the hook's own stdin JSON — the field a `PreToolUse` handler's `if` gate
 cannot see, which is why this handler carries no `if` at all, unlike the guard hook's — and
@@ -303,50 +304,164 @@ it — extended to the config-read route specifically. Composition with the deny
 re-measured for this third hook — it uses the identical mechanism, but only two hooks were ever
 replayed together live.
 
-**The fourth hook, `hooks/claude-dir-guard.sh` (#327), denies an implementer or verifier
-subagent's `Edit` or `Write` to any path carrying a `.claude` path segment.** It closes #323's
-LESSONS.md dispatch guard's own documented blind spot: that guard is orchestrator prose that
-detects a subagent's `.claude/LESSONS.md` change only after the dispatch returns, and has no
-baseline at all to compare against while the file exists untracked. This hook instead denies the
-`Edit`/`Write` itself, mechanically, before it can land — tracked or not. Unlike its three
-siblings, it matches `Edit|Write`, not `Bash` (the exact matcher measured live, below), and reuses
-`hooks/agent-boundary.sh`'s identical `agent_type` role vocabulary (both spellings, per role) — a
-role the `if` field cannot see, so this handler also carries no `if` key. Its classifier is a pure
-string decision with **no filesystem access at all**, strictly less than `hooks/push-guard.sh`
-above: it denies (exit 2, one stderr line naming the role, the tool, and the blocked path, empty
-stdout) when `tool_input.file_path` carries any path segment equal to `.claude` case-insensitively
-— nested, a relative path's own first segment, or the path's final segment, and whether spelled
-with a forward slash, a Windows drive-letter prefix, or a backslash (normalised to a forward slash
-first) — and denies, fail-closed, when the path cannot be classified as absolute (`/…` or
-`[A-Za-z]:/…`) and free of a `..` segment; a case that matches both classes resolves to the more
-specific `.claude` message. Every other case — the main session (no `agent_type`), another agent,
-`permission_mode: "plan"`, a tool other than `Edit`/`Write`, malformed stdin, an absent or empty
-`file_path`, or an ordinary absolute path outside any `.claude` segment — is "no opinion" (exit 0,
-empty stdout, empty stderr), including two release-blocker controls: the orchestrator's own
-main-session `.claude/LESSONS.md` append still works, and so does the verifier's own transient
-mutation-probe `Edit` of a tracked source file. Pinned by 31 fixture cases in `dev/hook-tests.sh`
-(prefix `cdg-`): the same booby-trapped-`PATH` idiom (widened here to
+**The fourth hook, `hooks/claude-dir-guard.sh` (#327; apply_patch, `.codex`, and a Bash
+apply_patch-shim route added #407), denies an implementer or verifier subagent's `Edit`, `Write`,
+`apply_patch`, or apply_patch-shaped `Bash` call whose target path carries a `.claude` or `.codex`
+path segment.** It closes #323's LESSONS.md dispatch guard's own documented blind spot: that guard
+is orchestrator prose that detects a subagent's `.claude/LESSONS.md` change only after the
+dispatch returns, and has no baseline at all to compare against while the file exists untracked.
+This hook instead denies the `Edit`/`Write`/`apply_patch` itself, mechanically, before it can land
+— tracked or not. It was measured live matching `Edit|Write` exactly (below); #407 widened its
+matcher to `Bash|Edit|Write|apply_patch` for two reasons: Codex's own `apply_patch` tool call
+carries no `file_path` at all (ADR 0002 amendment, P4), and Codex separately puts an
+`apply_patch`/`applypatch` shim on the shell PATH, so a shell-issued `apply_patch <<'EOF' … EOF`
+heredoc can reach this hook as an ordinary `Bash` call instead — an S0 spike (ADR 0002 "Amendment
+2026-09-26 (2)", #412, Q7) captured exactly that shape writing `.claude/settings.local.json` inside
+the Codex sandbox. It reuses `hooks/agent-boundary.sh`'s identical `agent_type` role vocabulary
+(both spellings, per role) — a role the `if` field cannot see, so this handler also carries no
+`if` key, for a widened reason since #407: the `if` field also cannot parse `apply_patch`'s own
+patch-header grammar or distinguish a Bash command's own command word from an argument. Its
+classifier is a pure string decision with **no filesystem access at all**, strictly less than
+`hooks/push-guard.sh` above (the apply_patch and Bash-shim routes read the stdin JSON's own `cwd`
+field to resolve a relative header path, but never open, stat, or list anything): it denies (exit
+2, one stderr line naming the role, the tool, and the blocked path, empty stdout) when a target
+path carries any path segment equal to `.claude` or `.codex` case-insensitively — nested, a
+relative path's own first segment, or the path's final segment, and whether spelled with a forward
+slash, a Windows drive-letter prefix, or a backslash (normalised to a forward slash first) — and
+denies, fail-closed, when the path cannot be classified as absolute (`/…` or `[A-Za-z]:/…`) and
+free of a `..` segment, or when an apply_patch (or apply_patch-shaped Bash) command cannot be
+parsed at all (an absent command, an unrecognised `*** ` marker, an empty header path, or zero
+headers found); a case that matches more than one class resolves to the most specific message. For
+a plain Bash call, whenever `apply_patch`/`applypatch` (bare, or a path-qualified spelling such as
+`./apply_patch`, matched by basename) resolves as the command word of any `;`/`&`/`|`/`(`/`)`/`{`/
+`}`/backtick-delimited segment — skipping a leading redirect's own target/source and a bare-digits
+file-descriptor token immediately before one (a `>>`/`<>` run counts as one redirect, and an fd
+duplication such as `>&2` or `2>&1` keeps its `&`), so a LEADING redirect cannot hide the command word
+either (`< x.patch apply_patch`, `2>/dev/null apply_patch < x`) — a belt-and-braces check runs
+FIRST and UNCONDITIONALLY, before any structured parse: if the raw command text mentions
+`.claude`/`.codex` anywhere at all (case-insensitive), it denies immediately, regardless of
+whether the text also happens to contain a genuine `*** Begin Patch` line elsewhere (this is what
+defeats a decoy built to slip a `.claude` mention past the structured parse — an ANSI-C-quoted
+(`$'…'`) line whose own `\n`s are literal backslash-n bytes rather than real line breaks, or a
+Unicode-whitespace-hidden header sitting next to a genuinely benign one). Only when that check
+finds no `.claude`/`.codex` mention does the command fall through to: a genuine, exactly-matched,
+fully-trimmed `*** Begin Patch` line (which triggers the same structured parse as the apply_patch
+tool route), or — command word present but no such line — a fail-closed "no inline patch text"
+deny (the hook cannot verify what it writes when the patch itself is invisible, e.g. `apply_patch
+< x.patch`). The command-word walk is quote-blind and backslash-blind, the same tripwire-not-
+sandbox trade-off every scan in this directory makes: a backslash-quoted spelling, a quoted or
+variable-built name, a PREFIX_WORDS option that itself takes a separate argument
+(`nice -n 5 apply_patch`), `eval`, a quoted `bash -c "apply_patch < x.patch"`, or an unrecognised
+launcher can all still evade both checks — while the SAME quote-blindness can also over-block: a
+commit message or `echo` that merely mentions `apply_patch`/`applypatch` between a matching pair
+of BACKTICKS, or right after a `;`, `(`, `|` or `&` (all segment-break characters of this walk)
+denies too, even inside an enclosing pair of ordinary quotes — `git commit -m "See
+\`apply_patch\` docs"` or `git commit -m "fix; apply_patch now works"` denies on Claude Code as
+readily as on Codex. A quoted mention that follows ordinary words (`git commit -m "the
+apply_patch shim"`) gets no opinion. `apply_patch`/`applypatch` appearing only as an ordinary argument
+(`rg apply_patch hooks/`) still gets no opinion. Every other case — the main session (no `agent_type`), another
+agent, `permission_mode: "plan"`, a tool other than `Edit`/`Write`/`apply_patch`/`Bash`, malformed
+stdin, an absent or empty `file_path`/command, an ordinary Bash call that neither carries an inline
+patch nor invokes the shim as its command word, or an ordinary absolute path outside any
+`.claude`/`.codex` segment — is "no opinion" (exit 0, empty stdout, empty stderr), including two
+release-blocker controls: the orchestrator's own main-session `.claude/LESSONS.md` append still
+works, and so does the verifier's own transient mutation-probe `Edit` of a tracked source file.
+Pinned by fixture cases in `dev/hook-tests.sh` (prefixes `cdg-`, `cdg-patch-`, `cdg-codexseg-`, and
+`cdg-bash-`): the same booby-trapped-`PATH` idiom (widened here to
 `git`/`gh`/`rm`/`dirname`/`tr`/`awk`/`grep`/`sed`, since this hook uses none of them) proves it
-executes none of them, and a byte-identical fixture-tree listing proves it writes nothing to the
-filesystem — this hook also never *reads* the filesystem at all, true by construction (it opens no
-path), not something either fixture demonstrates — backed by its own 14-mutant measured
-mutation-proof table. Mass-deny risk, disclosed rather than hidden: today's live-probe record
-(below) found every captured `file_path` absolute, so no captured payload fell into the
-fail-closed unclassifiable class — but if a future Claude Code ever sends a relative `file_path`,
-every implementer/verifier `Edit`/`Write` would deny, with the unclassifiable message's own
-distinct wording naming the path so the cause is visible in the first blocked call. The same
-fail-open properties as its three siblings apply here too: the plugin disabled,
-`disableAllHooks: true`, no `jq` on `PATH`, an unresolved `${CLAUDE_PLUGIN_ROOT}`, or a Claude Code
-that stops sending `agent_type` all leave this hook silent, with no prompt and no visible sign —
-`templates/repo-settings.json` declares no `Edit(`/`Write(` entry at all, so this hook is the only
-mechanical control on this surface. A live probe run 2026-09-17 against Claude Code **2.1.274**
-(macOS, a temporary logging `PreToolUse` hook matching `Edit|Write`) measured the matcher this
-hook is registered with (`Edit|Write`, exactly) and a verifier subagent's `Edit` payload, not just
-an implementer's: it carried `agent_type: "trail-blazer-flow:verifier"` (the same namespaced
-spelling `hooks/agent-boundary.sh` already measures for `Bash`), so this hook's verifier-role
-coverage is measured, not inferred, on `Edit` — the verifier role has no `Write` tool
-(`agents/verifier.md`), so there is no verifier `Write` payload to measure — the same way
-`hooks/agent-boundary.sh`'s own record already measures verifier coverage on `Bash`.
+executes none of them, and a byte-identical fixture-tree listing proves the `Edit`/`Write` route
+writes nothing to the filesystem — this hook also never *reads* the filesystem at all, true by
+construction (it opens no path), not something either fixture demonstrates — backed by a
+mutation-proof table (the `Edit`/`Write` route) and a registry of `dev/mutants/hook-tests.json`
+records re-run by `dev/mutant-driver.sh` (the apply_patch, `.codex`, and Bash-shim routes). A
+future Claude Code or Codex that ever sends a relative `file_path`/header path with no `cwd` to
+resolve against would deny every implementer/verifier call on that route, with the unclassifiable
+message's own distinct wording naming the path so the cause is visible in the first blocked call —
+mass-deny risk, disclosed rather than hidden. The same fail-open properties as its siblings apply
+here too: the plugin disabled, `disableAllHooks: true`, no `jq` on `PATH`, an unresolved
+`${CLAUDE_PLUGIN_ROOT}`, or a Claude Code/Codex that stops sending `agent_type` all leave this hook
+silent, with no prompt and no visible sign — `templates/repo-settings.json` declares no
+`Edit(`/`Write(` entry at all, so this hook is the only mechanical control on this surface. A live
+probe run 2026-09-17 against Claude Code **2.1.274** (macOS, a temporary logging `PreToolUse` hook
+matching `Edit|Write`) measured the matcher this hook was registered with AT THE TIME (`Edit|Write`,
+exactly — since widened by #407) and a verifier subagent's `Edit` payload, not just an
+implementer's: it carried `agent_type: "trail-blazer-flow:verifier"` (the same namespaced spelling
+`hooks/agent-boundary.sh` already measures for `Bash`), so this hook's verifier-role coverage is
+measured, not inferred, on `Edit` — the verifier role has no `Write` tool (`agents/verifier.md`),
+so there is no verifier `Write` payload to measure — the same way `hooks/agent-boundary.sh`'s own
+record already measures verifier coverage on `Bash`. The apply_patch and Bash-shim routes are NOT
+separately live-probe-measured against Codex; see "On Codex" below for what #407 relied on
+instead.
+
+**The fifth hook, `hooks/planner-guard.sh` (#407), enforces the planner subagent's read-only
+boundary — the whole point of P2 of the ADR 0002 amendment, which found that Codex's own
+`sandbox_mode = "read-only"` does not hold: the model can still invoke `apply_patch` regardless of
+what the sandbox mode claims, and P3 found that a Codex plugin's hook rules apply to every agent
+regardless of its own declared tool grant, so an off-script planner is not stopped by tool
+configuration alone.** Unlike every sibling hook above, this one is an ALLOWLIST, not a denylist:
+an unclassifiable shell command denies (fails closed), never passes silently. It denies (exit 2,
+one stderr line, empty stdout) `Edit`/`Write`/`apply_patch` outright for a recognised planner
+`agent_type` (both spellings), and denies a `Bash` call unless every `;`/`|`/`||`/`&&`-separated
+segment's command word is an exact member of `PLANNER_READONLY_COMMANDS` (`cat head tail ls pwd wc
+grep rg nl sed git echo printf true diff cmp stat basename dirname jq cut tr`), with extra shape
+constraints for three of them: `git`'s own subcommand must be one of `status diff log show
+rev-parse ls-files merge-base blame` (deliberately excluding `restore`, which writes the working
+tree, and `grep`: real git accepts abbreviated long options and bundled short options, so `git
+grep` could be steered into `-O`/`--open-files-in-pager`, an arbitrary-pager-program option, in a
+shape a per-token check cannot reliably catch — the planner already has the `rg`/`grep` TOOLS for
+searching), with no later token starting `--output` or equal to `--ext-diff`; `rg` may carry no
+`--pre*`/`--hostname-bin*` argument (the latter also runs an arbitrary program, to resolve a
+hyperlink's hostname); and `sed` is accepted only as the exact shape `sed -n '<N|$>[,<N|$>]p'
+[files]` — an in-place flag, a `w` command, or any other `-`-leading argument after the range all
+deny. The lexer is a copy of `hooks/git-c-guard.sh`'s own awk
+state machine, with `;`/a single `|`/`||`/`&&` turned into segment breaks instead of outright
+rejections (this hook validates each segment on its own), and a narrower reject set (`$` backtick
+`\` `<` `>` `(` `)` `{` `}` `!` — a lone `&` still rejects, which also covers `|&`) — but UNLIKE
+`git-c-guard.sh`, a lexer rejection here means DENY, fail-closed, never "no opinion": this hook's
+whole purpose is a read-only guarantee, not a convenience shortcut. There is deliberately **no**
+`permission_mode: "plan"` skip, unlike every sibling hook — `permission_mode` cannot be relied on
+under Codex (P1), and a read-only role loses nothing from a denial during a genuine plan-mode
+turn. An absent or empty `tool_input.command` also denies fail-closed here, unlike every sibling
+hook's "no opinion": there is nothing to classify as read-only, so there is nothing to allow. Every
+other case — the main session (no `agent_type`), any other agent, a tool outside `Edit`/`Write`/
+`apply_patch`/`Bash`, or malformed stdin — is "no opinion". On Claude Code, this hook is a
+documented no-op today: `agents/planner.md`'s own `tools:` line lists only `Read, Grep, Glob`, so
+the planner is never given a tool this hook's matcher covers at all; it exists for Codex, where
+tool configuration alone does not stop an off-script call (P2/P3 above). Never executes anything
+other than `jq` and `awk` (the lexer) — pinned by a never-executes fixture trapping
+`git`/`gh`/`rm`/`touch` specifically (not the wider `awk`/`grep`/`sed`/`tr`/`dirname` set the
+`Edit`/`Write`/`apply_patch`-only hooks trap, since this hook's own lexer legitimately uses `awk`).
+Documented over-blocking, since this is an allowlist with no carve-outs: `2>/dev/null` and every
+other unquoted `$VAR`/redirect/substitution denies; a heredoc or any other multi-line command
+denies outright; and a genuinely read-only command excluded from the allowlist (`find`, `sort`,
+`uniq`, `awk`, `less`, `xargs`, `cd` — each excluded because it can write, run another command, or
+leave the checkout) denies too. An allowlisted `git diff`/`show`/`log` can still run a textconv or
+external-diff driver the repo's OWN git config declares (`--ext-diff` itself is denied, but a
+driver configured via `diff.<driver>.command` and invoked through a `diff=<driver>` gitattribute is
+not distinguishable from an ordinary `git diff` by this lexer); the same repo config can also
+declare `core.fsmonitor = <script>`, an external filesystem-monitor hook that `status`/`diff`
+(among others) invoke on every run, regardless of any command-line option — documented residuals,
+not code changes.
+
+**Hook canary (#407).** `gh --version` is denied for the implementer, verifier, and planner roles
+(through `hooks/agent-boundary.sh` and `hooks/planner-guard.sh` respectively), and gets no opinion
+in the main session, across every hook that could plausibly see it. It is harmless if it ever runs
+(it only prints a version string), so denying it costs nothing; a denial for one of these roles is
+a live signal that the hooks are loaded, trusted by the host (Claude Code or Codex), and actually
+firing for that session — the opposite of every fail-open class this document catalogues, which
+degrade silently. It is documented here and pinned only by `dev/hook-tests.sh` fixtures (prefix
+`canary-`), with no separate mechanical declaration tying this specific command to the skill text
+that might one day use it as a pre-dispatch self-test (see #409, out of scope for #407).
+
+**On Codex (ADR 0002 amendment).** `hooks/git-c-guard.sh`'s `if` gate is dropped entirely under
+Codex, leaving that hook inert there — worktree-parallel mode is off on Codex regardless.
+`hooks/agent-boundary.sh` and `hooks/push-guard.sh` work as written: neither relies on an `if` gate,
+and both read only the same documented stdin fields a Codex payload also carries. Codex's
+`apply_patch` tool call (and the shell-issued heredoc/shim form it can also take) is covered by
+`hooks/claude-dir-guard.sh`'s own routes above; for the planner role specifically, it is ALSO
+covered by `hooks/planner-guard.sh`'s own denial of every non-allowlisted `Bash` command (a
+multi-line `apply_patch <<'EOF' … EOF` heredoc denies there via the lexer's own NR>1 rejection,
+independent of which tool_name Codex ultimately reports it as).
 
 **Live-probe record (#259).** The two limits #235 shipped unresolved were closed by a probe the
 maintainer ran on 2026-09-08 against Claude Code **2.1.263** (plugin 2.7.0 from the marketplace

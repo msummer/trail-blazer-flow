@@ -18,6 +18,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #407: adds `hooks/planner-guard.sh` (the planner's read-only boundary on Codex) and widens
+  `hooks/claude-dir-guard.sh` to cover `apply_patch` and `.codex` paths — on Claude Code too, a
+  `Bash` command that invokes or merely mentions `apply_patch`/`applypatch` as a command word can
+  now deny.
 - #408: new `bin/codex-setup.sh` installs the Codex compatibility layer into a repo — agent
   TOMLs, a `.codex/rules/trail-blazer-flow.rules` allow/forbidden/gated rules file, and
   `CLAUDE.md` contract loading (an `AGENTS.md` pointer block or a `.codex/config.toml` fallback
