@@ -289,3 +289,115 @@ The orchestrator learns of a failed approval only if the subagent's final messag
 - **Decision 6.** Slice (iv)'s prerequisite (ADR 0001's durable escalations and stop switch)
   shipped in v2.8.0. Under `codex exec`, a subagent's failed approval is visible only in its own
   report (P7). Slice (iv) must therefore treat a missing or malformed report as an escalation.
+
+## Amendment 2026-09-26 (2): S0 spike (#406)
+
+- **Verified against:** Codex CLI 0.157.1 (every answer) and 0.156.1 (Q1 cross-check attempted);
+  plugin at `main` `cd07439`; macOS. The Codex usage limit was reached partway through ("You've
+  hit your usage limit … try again at 1:00 PM"), so Q2, Q3 and Q5 were answered without model
+  turns: through hook logs, the `codex sandbox` command, and `codex debug prompt-input`. The live
+  model-turn checks move to the release gate (#411).
+- **Method:** as in the first amendment, using the #314 fixture and a separate `CODEX_HOME`.
+  Two fresh `CODEX_HOME`s were used for the install questions.
+
+### Answers
+
+**Q1: script reach.** Three parts: how the model finds the scripts, how a rule matches them, and
+the mechanisms that don't work.
+
+- **Finding the scripts.** The model sees each plugin skill as `(file: r1/issue-planner/SKILL.md)`,
+  plus an alias map (`` `r1` = `<CODEX_HOME>/plugins/cache/trail-blazer-flow/trail-blazer-flow/2.9.0/skills` ``).
+  Codex's own instructions say "resolve relative paths against the directory containing a
+  filesystem-backed `SKILL.md`". A skill can therefore name `../../bin/<script>.sh` relative to
+  itself, but the resolved path contains the plugin version.
+- **Matching a rule.** Rules match argv tokens exactly; `bash <path>` never matches a script rule,
+  because the program is `bash`. A live session does resolve an absolute program path against a
+  rule's bare name. With only `prefix_rule(pattern = ["netprobe.sh"], decision = "allow")`,
+  invoking `<abs>/netprobe.sh` ran outside the sandbox (`CODEX_SANDBOX` unset,
+  `gh api rate_limit` → `5000`). That match is **ungated**: any file with that basename, anywhere,
+  qualifies, including one a subagent writes into the workspace. Adding
+  `host_executable(name = "netprobe.sh", paths = ["<abs>"])` gates the match to the listed paths
+  (`codex execpolicy check --resolve-host-executables`: the listed path gives `allow`, an
+  unlisted path gives no match).
+- **Spaces break it.** The same invocation with a space in the path, quoted, stayed sandboxed in
+  E1 and E2, with and without `host_executable`.
+- **`shell_environment_policy` can't prepend.** Project `.codex/config.toml` is honoured
+  (`TBF_PROBE=project-config-honoured`), but `set = { PATH = "<dir>:$PATH" }` replaces PATH
+  literally: `$PATH` isn't expanded, so `tr` and `head` were not found.
+
+**Q2: TUI pid lineage.** By default the 0.157.1 TUI installs and starts a **managed app-server
+daemon**, `codex app-server --listen unix:// --managed-daemon` with parent pid 1, and runs the
+session inside it:
+
+- The TUI was pid `48065`. The `SessionStart` hook's parent was the daemon, `48077`.
+- The daemon kept running after the TUI exited.
+- With `--no-daemon`, the hook's parent was the session's own `codex` process (`48391`, a child of
+  the TUI's node wrapper), matching `codex exec` (P6).
+- Starting the daemon failed with a long `CODEX_HOME` path: `path must be shorter than SUN_LEN`.
+
+Shell-command `$PPID` wasn't observed directly because of the usage limit. In `codex exec`, hooks
+and shells shared their parent (P6).
+
+**Q3: `apply_patch` under `.codex/`: blocked.** Codex's own `apply_patch` helper was run under
+`codex sandbox -P :workspace`:
+
+- An Add to `.codex/evil.rules` or `.codex/agents/evil.toml` failed: `Failed to write file …`.
+- An Update of `.codex/agents/probe-rw.toml` failed: `Failed to write file`.
+- A Delete failed: `Failed to delete file`.
+- An Add under `.agents/` failed: `Failed to create parent directories`.
+- The control, an Add at the repo root, succeeded.
+
+A shell write to `.codex/` or `.agents/` is denied as well (`Operation not permitted`). Whether a
+model-issued `apply_patch` tool call runs through that same sandboxed helper was not observed live.
+
+**Q4: install from GitHub: yes.** The repo is public. `codex plugin marketplace add
+msummer/trail-blazer-flow` resolved to `https://github.com/msummer/trail-blazer-flow.git`
+(`source_type = "git"`), and `codex plugin add trail-blazer-flow@trail-blazer-flow` installed 2.9.0.
+Through app-server, all six skills and all four hooks were listed, with the hooks `untrusted`, as
+with a local clone.
+
+**Q5: `AGENTS.md` shim.** `codex debug prompt-input` renders the model's input without a model
+call:
+
+- **Shim.** In a repo containing only `AGENTS.md` ("The project contract is CLAUDE.md in this
+  repo; read it before any work.") and `CLAUDE.md`, the shim is injected as `# AGENTS.md
+  instructions for <repo>`, but `CLAUDE.md`'s content is not. Following the pointer is left to the
+  model; that was not observed (usage limit).
+- **No shim.** With `CLAUDE.md` alone, nothing is injected.
+- **Fallback.** `project_doc_fallback_filenames = ["CLAUDE.md"]` in the **project**
+  `.codex/config.toml` injects `CLAUDE.md` when the project is trusted, and not when it isn't. A
+  user-level `-c` override also works.
+- **The two conflict.** When an `AGENTS.md` exists, the fallback is **not** used: the shim
+  suppresses the deterministic injection.
+
+**Q6: `.codex-plugin/plugin.json` wins.** Take a clone with `.codex-plugin/plugin.json` (`version`
+`2.9.0-q6`, `hooks` `./hooks/codex-hooks.json` listing push-guard only) alongside the unchanged
+`.claude-plugin/`. It installed as `2.9.0-q6`, and only the Codex manifest's hooks loaded. All six
+skills loaded, and the marketplace entry still came from `.claude-plugin/marketplace.json`.
+
+### Recommendations for #408
+
+- **Script reach.** Skills invoke each script directly by its absolute path, resolved from the
+  skill's own location (`<skill root>/../bin/<script>.sh`), never as `bash <path>`. The rules
+  file pairs each `gh`-calling script's bare-name `prefix_rule` with a
+  `host_executable(name = …, paths = [<installed bin path>])`.
+  - **Why gated:** an ungated basename rule would let a subagent run a same-named file of its own
+    outside the sandbox.
+  - **Upgrades:** the gated path contains the plugin version, so `codex-setup.sh` must rewrite it
+    after each plugin upgrade, and `--check` (doctor) must report drift.
+  - **Spaces:** a plugin root containing whitespace is unsupported, and the doctor should report
+    it.
+- **Lock owner.** `$PPID` is the session's `codex` process under `codex exec` and `codex
+  --no-daemon`, but a shared, long-lived daemon under the default TUI. Harness sessions on Codex
+  should run with `--no-daemon`. The lock or setup should detect a daemon parent (its command
+  contains `app-server`) and refuse or warn, rather than record a pid that never dies.
+- **Contract loading.** In a repo without `AGENTS.md`, `codex-setup.sh` writes
+  `project_doc_fallback_filenames = ["CLAUDE.md"]` to the project `.codex/config.toml`: the
+  injection is deterministic, and the project is trusted anyway for its rules and agents. In a
+  repo that already has an `AGENTS.md`, it adds a marked pointer block, and #411's gate verifies
+  that the model follows it. It never creates a new `AGENTS.md` shim, because one would suppress
+  the fallback.
+- **Codex manifest.** A `.codex-plugin/plugin.json` is optional. It could give Codex its own hooks
+  list, but a second manifest's `version` must then be kept equal in the release ritual.
+- **Usage budget.** Codex usage limits can stop a live run midway. #411's gate should plan for
+  the quota.

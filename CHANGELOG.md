@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #406: ADR 0002 amended with the S0 spike results (script reach via host_executable rules, TUI
+  daemon pid lineage, apply_patch vs `.codex/`, install from GitHub, CLAUDE.md fallback vs an
+  AGENTS.md shim, `.codex-plugin` precedence). Docs only.
 - #314: ADR 0002 amended with the Codex probe results (P1–P7, Codex CLI 0.156.1 and 0.157.1) and
   the minimum supported Codex version, 0.156.1. Docs only; no behaviour change.
 
