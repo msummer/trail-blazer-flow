@@ -16,8 +16,16 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v3.0.0
 
+This release adds supervised Codex CLI support on macOS alongside Claude Code, verified live against
+a branch-protected sandbox repo; it ships without merge autonomy, `codex exec`, or worktree-parallel
+mode on Codex. On Claude Code, the `.claude` guard also denies `apply_patch` and the doctor rejects
+unknown arguments. Consumer step: re-copy the permissions block (adds `Bash(codex-setup.sh:*)`).
+
+- #411: live Codex qualification gate on a branch-protected sandbox; README "Running on Codex",
+  a support matrix, and a rollback paragraph; ADR 0002 amendment (3) with the gate's results.
+  Consumer step: re-copy the permissions block (adds `"Bash(codex-setup.sh:*)"`).
 - #419: widens `templates/codex.rules`' allow rule from `git restore --staged` to `git restore`,
   so the verifier's own top-level mutation-probe restore also matches on Codex instead of staying
   sandboxed and failing on `.git/index.lock`. Codex consumers re-run `bin/codex-setup.sh`.
