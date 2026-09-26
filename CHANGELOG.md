@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #419: widens `templates/codex.rules`' allow rule from `git restore --staged` to `git restore`,
+  so the verifier's own top-level mutation-probe restore also matches on Codex instead of staying
+  sandboxed and failing on `.git/index.lock`. Codex consumers re-run `bin/codex-setup.sh`.
 - #410: `bin/check-harness.sh --provider codex` checks the Codex version floor, path whitespace,
   `codex-setup.sh --check` drift, hook trust via `codex app-server` (never granting it), manual
   merge, and FAILs without branch protection; unknown arguments now exit 2 on both providers.

@@ -2857,6 +2857,11 @@ case_codex_setup_agents_triple_quote_verifier() {
 # SET equals the set derived by jq from templates/repo-settings.json's own .permissions.deny[]
 # (bare Bash(<words>:*) entries only, excluding every `git -C *` entry); no @PLUGIN_BIN@ literal
 # remains anywhere in the installed rules file.
+# mutant:419-cx-restore-narrowed — narrowing templates/codex.rules' git-restore allow pattern back
+#   to ["git", "restore", "--staged"] makes this case's token check fail to find the widened
+#   ["git", "restore"] allow rule.
+# mutant:419-cx-restore-prompt — changing that rule's decision from "allow" to "prompt" breaks the
+#   restore token, which pins the pattern and the decision together.
 case_codex_setup_rules_content() {
   local plugin repo rules
   plugin="$(mk_cx_plugin cx-rules-content-plugin 2.9.0)"
@@ -2868,7 +2873,7 @@ case_codex_setup_rules_content() {
   local tok
   for tok in 'pattern = ["git", "add"]' 'pattern = ["git", "commit"]' 'pattern = ["git", "push"]' \
              'pattern = ["git", "fetch"]' 'pattern = ["git", "pull"]' 'pattern = ["git", "checkout"]' \
-             'pattern = ["git", "switch"]' 'pattern = ["git", "restore", "--staged"]' \
+             'pattern = ["git", "switch"]' 'pattern = ["git", "restore"], decision = "allow"' \
              'pattern = ["git", "reset", "--soft"]' 'pattern = ["gh"]'; do
     grep -qF "$tok" "$rules" || { __ok=0; __why="${__why}missing allow rule: $tok\n"; }
   done

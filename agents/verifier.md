@@ -140,6 +140,11 @@ reviewed commit (see "Re-verification").
   `git -C <worktree> restore <file>`; `git checkout -- <file>` is **not** an alternative — the
   harness's own boundary hook denies `git checkout` for the verifier role, so use `git restore` in
   every mode). These restore commands touch only the working tree — no ref, no commit, no remote.
+  Run each restore as its own simple command, `git restore <file>` alone, never from inside a
+  script or an interpreter subprocess (e.g. `python3`), and never in a `&&`/`;`/pipe chain — keep
+  each mutant's edit, test run, and restore as separate steps. On Codex, only a top-level
+  `git restore` command matches the installed rules' allow rule; one issued any other way stays
+  sandboxed and fails on `.git/index.lock`.
   Never `git stash`, never `git add/commit/push`, never `gh`, never any command that moves a ref
   or touches the remote — this is no longer prompt-only: `hooks/agent-boundary.sh` (#235)
   mechanically denies `gh` outright and denies any `git` subcommand for the verifier role except
