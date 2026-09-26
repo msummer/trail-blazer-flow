@@ -25,7 +25,7 @@
 │   ├── issue-implementer/references/worktree-mode.md  # worktree-parallel procedure (read on demand)
 │   ├── issue-cycle/SKILL.md      # steady-state loop: cleanup → plan → implement → status report
 │   └── test-ratchet/SKILL.md     # optional, policy-gated: files coverage-increasing issues (never implements)
-├── bin/                          # on the Bash PATH when the plugin is enabled
+├── bin/                          # on the Bash PATH when the plugin is enabled, on Claude Code — never on Codex (#408, ADR 0002 P5)
 │   ├── check-harness.sh           # mechanical preflight ("doctor"); safe to re-run any time
 │   ├── check-decision-record.sh   # scoped-autonomy: checks an issue body against a declared decision record
 │   ├── find-planning-work.sh
@@ -37,6 +37,7 @@
 │   ├── harness-version.sh         # prints the installed plugin's "<version> <sha>", one line
 │   ├── harness-stop.sh            # read-only maintainer stop switch: GitHub label or local file (#310)
 │   ├── governance-paths.sh        # merge floor's governance-path classifier + doctor's --check validator (#331)
+│   ├── codex-setup.sh             # installs the Codex compatibility layer into a repo: agent TOMLs, rules, contract loading (#408)
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
 │   ├── hooks.json                 # registers the four PreToolUse hooks below
@@ -47,7 +48,7 @@
 ├── dev/
 │   ├── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
 │   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
-│   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh AND bin/governance-paths.sh (not run by the gate)
+│   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh, bin/governance-paths.sh, AND bin/codex-setup.sh (not run by the gate)
 │   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh, hooks/agent-boundary.sh, hooks/push-guard.sh, AND hooks/claude-dir-guard.sh (not run by the gate)
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 │   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
@@ -63,13 +64,17 @@
 │   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the four hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness, then the stop switch script's negative-test harness, then the mutant driver (post-merge/nightly/dispatch only), then the driver's own negative-test harness — on ubuntu-latest per PR and, pinned to Apple's bash 3.2, on macos-latest post-merge and nightly (#365)
 │   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
 └── templates/
-    └── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
+    ├── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
+    └── codex.rules                # Codex rules template bin/codex-setup.sh installs per repo (#408)
 ```
 
 Skills are invoked with the plugin namespace (`/trail-blazer-flow:issue-planner`, …) or by natural
-language ("plan issue 14"). The `bin/` scripts are plain commands on the session's PATH — that
-is why the per-repo permission entries are portable bare names (`Bash(check-harness.sh:*)`)
-rather than machine-specific plugin-cache paths.
+language ("plan issue 14"). On Claude Code, the `bin/` scripts are plain commands on the
+session's PATH — that is why the per-repo permission entries are portable bare names
+(`Bash(check-harness.sh:*)`) rather than machine-specific plugin-cache paths. Codex has no such
+PATH (#408, ADR 0002 P5): `bin/codex-setup.sh` gates each script that calls `gh` (directly, or
+through `harness-status.sh`) or writes `.git` by its absolute install path instead — see
+`docs/reference/codex.md`.
 
 ## The model tiering (deliberate design)
 

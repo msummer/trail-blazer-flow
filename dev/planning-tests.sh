@@ -8867,6 +8867,74 @@ EOF
   expect_stop_calls "$dir" 1
 }
 
+# status-siblings-via-script-dir (#408) — bin/harness-status.sh resolves find-planning-work.sh,
+# find-implementation-work.sh and harness-stop.sh with PATH first, falling back to its own
+# directory (Codex never puts bin/ on the shell PATH, ADR 0002 P5). This fixture runs a COPY of
+# harness-status.sh from its own "selfbin" directory, alongside build_stub_discovery/
+# build_stub_stop's own stand-ins placed in that SAME directory — never on $dir, the only
+# directory this fixture puts on PATH (via run_script_at) besides the ambient PATH, which carries
+# none of the three sibling scripts on this or any CI host. A `command -v` lookup for any of the
+# three therefore fails, so this fixture is non-vacuous only if the fallback to $script_dir
+# actually runs: without it, this case would see bash's own "command not found" (rc 127), not the
+# canned stand-ins' output. See dev/mutants/lock-tests.json and dev/mutants/doctor-tests.json for
+# this train's other #408 mutants; harness-status.sh's own resolve_sibling has no registry mutant
+# (the plan names none), so this fixture's proof is the healthy-path assertions below succeeding
+# at all.
+case_status_siblings_via_script_dir() {
+  local dir; dir="$(mk_fixture status-siblings-via-script-dir)"
+  local selfbin="$dir/selfbin"
+  mkdir -p "$selfbin"
+  cp "$root/bin/harness-status.sh" "$selfbin/harness-status.sh"
+  chmod +x "$selfbin/harness-status.sh"
+  build_stub_discovery "$selfbin"
+  build_stub_stop "$selfbin"
+  cat > "$dir/proposed.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/blocked.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/prs.json" <<'EOF'
+[]
+EOF
+  build_stub_gh "$dir"
+  run_script_at "$dir" "$selfbin/harness-status.sh"
+  expect_rc 0
+  expect_jq '.harness_will_handle.unplanned[0].number' '650'
+  expect_jq '.harness_will_handle.ready_to_implement' '[]'
+  expect_jq '.stop.state' '"false"'
+  expect_jq '.degraded' 'false'
+  expect_jq '.degraded_reasons' '[]'
+}
+
+# reconcile-status-via-script-dir (#408) — bin/reconcile-ledger.sh resolves harness-status.sh with
+# PATH first, falling back to its own directory (the same Codex PATH gap as
+# status-siblings-via-script-dir above). This fixture runs a COPY of reconcile-ledger.sh from its
+# own "selfbin" directory, alongside a canned harness-status.sh stand-in placed in that SAME
+# directory — never on $dir, the only directory this fixture puts on PATH (via run_script_at)
+# besides the ambient PATH, which carries no harness-status.sh on this or any CI host. An empty
+# ledger against the stand-in's own empty harness_will_handle buckets reconciles clean (rc 0, no
+# output) — non-vacuous only if the fallback to $script_dir actually runs, since a `command -v`
+# lookup for harness-status.sh fails first.
+case_reconcile_status_via_script_dir() {
+  local dir; dir="$(mk_fixture reconcile-status-via-script-dir)"
+  local selfbin="$dir/selfbin"
+  mkdir -p "$selfbin"
+  cp "$root/bin/reconcile-ledger.sh" "$selfbin/reconcile-ledger.sh"
+  chmod +x "$selfbin/reconcile-ledger.sh"
+  cat > "$selfbin/harness-status.sh" <<EOF
+#!$bash_bin
+cat <<'JSON'
+{"harness_will_handle":{"unplanned":[],"in_revision":[],"ready_to_implement":[]},"degraded":false,"degraded_reasons":[]}
+JSON
+EOF
+  chmod +x "$selfbin/harness-status.sh"
+  : > "$dir/ledger.txt"
+  run_script_at "$dir" "$selfbin/reconcile-ledger.sh" "$dir/ledger.txt"
+  expect_rc 0
+  expect_empty_out
+}
+
 # status-proposed-query-retry-succeeds (AC1) — the plan-proposed site's first attempt fails, the
 # retry succeeds: retried true, unavailable false, EXACTLY one succeed-warn (expect_warn_count,
 # not mere presence), one sleep(30), two logged attempts; the impl-blocked and open-PR sites are
@@ -10162,10 +10230,10 @@ EOF
 # bin/harness-stop.sh invocation, never a second gh query — or the stop_routes/human_actions
 # plumbing that site feeds, reached only via run_status.
 #
-# mutant:353-S1 — deletes the `|| stop_rc=$?` capture (`stop_out="$(harness-stop.sh)" ||
-# stop_rc=$?` collapsed to the bare `stop_out="$(harness-stop.sh)"`), so a non-zero
-# harness-stop.sh exit aborts the whole script under `set -euo pipefail` instead of being
-# captured.
+# mutant:353-S1 — deletes the `|| stop_rc=$?` capture (#408: the site now reads
+# `stop_out="$("$(resolve_sibling harness-stop.sh)")" || stop_rc=$?`, collapsed to the bare
+# `stop_out="$("$(resolve_sibling harness-stop.sh)")"`), so a non-zero harness-stop.sh exit
+# aborts the whole script under `set -euo pipefail` instead of being captured.
 #
 # mutant:353-S2 — maps rc 4 unconditionally to the "false"/clear token (the `4)` case arm's own
 # `if [ "$stop_line1" = ... ]` test and its else branch collapsed to the single statement
@@ -10201,10 +10269,9 @@ EOF
 # human_actions instead of joining it.
 #
 # mutant:353-S10 — wraps the stop check in a retry (mirrors the five gh sites' own
-# `if ! cmd; then sleep; cmd; fi` shape: `stop_out="$(harness-stop.sh)" || stop_rc=$?` replaced
-# with `if ! stop_out="$(harness-stop.sh)"; then sleep "$RETRY_SLEEP" || true;
-# stop_out="$(harness-stop.sh)" || stop_rc=$?; fi`), so a permanently-failing harness-stop.sh logs
-# a second `.stop-calls` line even though harness-stop.sh's own header documents this site as
+# `if ! cmd; then sleep; cmd; fi` shape; #408: the site's own resolve_sibling wrapping carried
+# through both the guarded call and the retried one), so a permanently-failing harness-stop.sh
+# logs a second `.stop-calls` line even though harness-stop.sh's own header documents this site as
 # never retried at this layer.
 #
 # mutant:353-S11 — sets `stop_check_unavailable` true whenever a `reason=` line is present,
@@ -11481,6 +11548,8 @@ cases=(
   "status-degraded-author-association|case_status_degraded_author_association|#285: the generic rule picks up a flag neither #284 nor #273 added — author_association_unavailable — with no enumeration to drift"
   "status-degraded-both-scripts|case_status_degraded_both_scripts|#285: both discovery scripts fail closed at once — degraded_reasons carries both halves, planning first, in order"
   "status-own-queries-healthy|case_status_own_queries_healthy|#297 (extended #333, #309): all five of harness-status.sh's own sites succeed on first attempt — each called once, no sleeps, all eleven new counts flags false, and the canned discovery stand-ins ran instead of the real scripts"
+  "status-siblings-via-script-dir|case_status_siblings_via_script_dir|#408: with none of find-planning-work.sh/find-implementation-work.sh/harness-stop.sh on PATH, harness-status.sh falls back to its own directory (Codex has no bin/ on PATH, ADR 0002 P5)"
+  "reconcile-status-via-script-dir|case_reconcile_status_via_script_dir|#408: with harness-status.sh not on PATH, reconcile-ledger.sh falls back to its own directory"
   "status-proposed-query-retry-succeeds|case_status_proposed_query_retry_succeeds|#297: the plan-proposed site fails once then succeeds on the bounded retry — retried true, unavailable false, one succeed-warn, one sleep(30), the impl-blocked and open-PR sites unaffected"
   "status-proposed-query-unavailable|case_status_proposed_query_unavailable|#297: the plan-proposed site fails on both attempts — fails closed to an empty plans_to_review bucket, degraded_reasons is exactly [\"status.proposed_query_unavailable\"]"
   "status-blocked-query-retry-succeeds|case_status_blocked_query_retry_succeeds|#297: the impl-blocked site's twin of status-proposed-query-retry-succeeds"

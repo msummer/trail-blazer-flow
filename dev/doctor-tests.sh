@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
 # doctor-tests.sh — fixture-based negative-test harness for the CONSUMER doctor
-# (bin/check-harness.sh) and its scoped-autonomy companion script (bin/check-decision-record.sh),
-# not this repo's own gate (that's dev/selfcheck.sh + dev/selfcheck-tests.sh). Builds throwaway
+# (bin/check-harness.sh), its scoped-autonomy companion script (bin/check-decision-record.sh), and
+# (#408) the Codex compatibility installer (bin/codex-setup.sh) — not this repo's own gate (that's
+# dev/selfcheck.sh + dev/selfcheck-tests.sh). Builds throwaway
 # git repos under mktemp, runs a COPY of the real scripts against each, and pins verdicts that
 # were previously only hand-verified: the settings.json block, the template-diff scenarios, the
 # ratchet's never-execute guarantee, entry_has's allow/deny distinction, the active verdict's
@@ -71,7 +72,17 @@
 # compare, every malformed reason token, and every fail-closed error path (bad arguments before
 # any git call, a git failure, an empty diff, a control-character path) — plus the doctor's own
 # validation-only wrapper around it (PASS none/declared <n>, WARN malformed/could not validate,
-# never FAIL).
+# never FAIL), and (#408) bin/codex-setup.sh — the Codex compatibility installer, whose own
+# `--check` drift mode is #410's companion, hence living here rather than in a new suite — run
+# directly against a fake Codex plugin-cache install (mk_cx_plugin, a copy of this checkout's
+# bin/*.sh, agents/*.md and templates/codex.rules) and fixture repos it builds for that purpose
+# (mk_cx_repo): write mode and `--check` alike, pinning the generated agent TOMLs' byte-fidelity
+# to agents/*.md (name, escaped description, developer_instructions body), the installed rules
+# file's allow/forbidden/gated content against templates/repo-settings.json and bin/ themselves,
+# contract loading into either an AGENTS.md pointer block or a .codex/config.toml fallback key,
+# every `--check` drift token (missing/differs/stale-plugin-path/missing-fallback/
+# fallback-conflict/missing-pointer/malformed-pointer), and the whitespace/unsupported-character
+# path refusals — plus the never-writes guarantee `--check` makes.
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -2587,6 +2598,587 @@ case_empty_needle_guard() {
   esac
 }
 
+# --- codex setup (#408) -------------------------------------------------------------------------
+# bin/codex-setup.sh — the Codex compatibility installer. Its own --check drift mode is this
+# script's own companion (#410 consumes it), so it lives here rather than in a new suite.
+
+# mk_cx_plugin NAME VERSION [ROOTDIR] — builds a fake Codex plugin-cache install under
+# $tmpbase/NAME/<ROOTDIR default "plugins">/cache/trail-blazer-flow/trail-blazer-flow/VERSION/,
+# containing copies of THIS checkout's bin/*.sh, agents/{planner,implementer,verifier}.md and
+# templates/codex.rules — the same copy-script-into-a-fake-plugin-root pattern
+# version-cache-under-repo (#262-2) uses above, generalised to a whole plugin tree. Prints the
+# VERSION directory (the plugin root codex-setup.sh itself would resolve from its own location).
+mk_cx_plugin() {
+  local name="$1" version="$2" rootdir="${3:-plugins}"
+  local proot="$tmpbase/$name/$rootdir/cache/trail-blazer-flow/trail-blazer-flow/$version"
+  mkdir -p "$proot/bin" "$proot/agents" "$proot/templates"
+  cp "$root"/bin/*.sh "$proot/bin/"
+  chmod +x "$proot"/bin/*.sh
+  cp "$root/agents/planner.md" "$root/agents/implementer.md" "$root/agents/verifier.md" "$proot/agents/"
+  cp "$root/templates/codex.rules" "$proot/templates/codex.rules"
+  printf '%s' "$proot"
+}
+
+# mk_cx_repo NAME — a fresh throwaway git repo under $tmpbase/NAME with a CLAUDE.md and its own
+# home/ (for HOME/XDG_CONFIG_HOME isolation, same idiom as mk_gov_repo). No AGENTS.md — codex-setup
+# fixtures that need one write it themselves. Prints the fixture path.
+mk_cx_repo() {
+  local name="$1" dir="$tmpbase/$name"
+  mkdir -p "$dir/home"
+  (
+    cd "$dir" &&
+    git init -q &&
+    git config user.name "doctor-tests" &&
+    git config user.email "doctor-tests@example.invalid" &&
+    git config commit.gpgsign false &&
+    git symbolic-ref HEAD refs/heads/main &&
+    git commit -q --allow-empty -m init
+  ) >/dev/null
+  printf '# CLAUDE.md\n\n## Verification\n\nRun `true` to verify. (fixture stub)\n' > "$dir/CLAUDE.md"
+  printf '%s' "$dir"
+}
+
+# run_cx PLUGIN REPO ARGS… — same never-a-command-substitution idiom as run_gov, running THIS
+# fixture's own bin/codex-setup.sh (never $root's) with cwd = REPO and HOME/XDG_CONFIG_HOME pointed
+# into REPO (so a developer's real global git config can never leak into a verdict) and
+# GIT_CONFIG_NOSYSTEM=1. Captures stdout/stderr to SEPARATE files, leaving $cx_out/$cx_err/$cx_rc
+# set as globals, and copies a merged view into $doctor_out/$doctor_rc so a failing codex-setup-*
+# case's captured output still reaches the generic runner loop's diagnostics dump below.
+cx_out=""
+cx_err=""
+cx_rc=0
+run_cx() {
+  local plugin="$1" repo="$2" outfile errfile
+  shift 2
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  (cd "$repo" && HOME="$repo/home" XDG_CONFIG_HOME="$repo/home/.config" GIT_CONFIG_NOSYSTEM=1 "$bash_bin" "$plugin/bin/codex-setup.sh" "$@") >"$outfile" 2>"$errfile"
+  cx_rc=$?
+  cx_out="$(cat "$outfile")"
+  cx_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $cx_out
+ERR: $cx_err"
+  doctor_rc=$cx_rc
+}
+
+# expect_cx_out/expect_cx_err/expect_cx_out_absent (#408) — same idiom as expect_gov_out/
+# expect_gov_err above, against $cx_out/$cx_err specifically rather than the merged $doctor_out.
+# All three are guarded by needle_required (#262).
+expect_cx_out() {
+  needle_required expect_cx_out "$1" || return 0
+  grep -qF -- "$1" <<<"$cx_out" || { __ok=0; __why="${__why}missing (cx stdout): $1\n"; }
+}
+expect_cx_err() {
+  needle_required expect_cx_err "$1" || return 0
+  grep -qF -- "$1" <<<"$cx_err" || { __ok=0; __why="${__why}missing (cx stderr): $1\n"; }
+}
+expect_cx_out_absent() {
+  needle_required expect_cx_out_absent "$1" || return 0
+  grep -qF -- "$1" <<<"$cx_out" && { __ok=0; __why="${__why}unexpected (cx stdout): $1\n"; }
+}
+
+# codex-setup-fresh — no AGENTS.md: rc 0, all five files, no AGENTS.md created, the fallback line
+# in .codex/config.toml, five wrote= lines, and the three next: lines including codex --no-daemon.
+# mutant:408-cx-agents-md-inverted — inverting bin/codex-setup.sh's `if [ -f "$agents_md" ]; then`
+#   test swaps the AGENTS.md and config.toml branches for every fixture that reaches contract
+#   loading: this case's AGENTS.md-less repo takes the AGENTS.md branch and writes one, and
+#   codex-setup-contract-agents-md's repo takes the config.toml branch instead.
+case_codex_setup_fresh() {
+  local plugin repo
+  plugin="$(mk_cx_plugin cx-fresh-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-fresh-repo)"
+  run_cx "$plugin" "$repo"
+  expect_rc 0
+  expect_cx_out "wrote=.codex/agents/planner.toml"
+  expect_cx_out "wrote=.codex/agents/implementer.toml"
+  expect_cx_out "wrote=.codex/agents/verifier.toml"
+  expect_cx_out "wrote=.codex/rules/trail-blazer-flow.rules"
+  expect_cx_out "wrote=.codex/config.toml"
+  expect_no_file "$repo/AGENTS.md"
+  if [ -f "$repo/.codex/config.toml" ]; then
+    grep -qF 'project_doc_fallback_filenames' "$repo/.codex/config.toml" \
+      || { __ok=0; __why="${__why}config.toml missing the fallback key\n"; }
+    grep -qF '"CLAUDE.md"' "$repo/.codex/config.toml" \
+      || { __ok=0; __why="${__why}config.toml missing the CLAUDE.md fallback entry\n"; }
+  else
+    __ok=0; __why="${__why}config.toml was not written\n"
+  fi
+  expect_cx_out "next: trust this project in Codex"
+  expect_cx_out "next: trust this plugin's hooks"
+  expect_cx_out "codex --no-daemon"
+}
+
+# codex-setup-idempotent — a second run gives only unchanged= lines, every file byte-identical to
+# the first run's copies, and --check afterward is rc 0 with no drift= line.
+case_codex_setup_idempotent() {
+  local plugin repo
+  plugin="$(mk_cx_plugin cx-idem-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-idem-repo)"
+  run_cx "$plugin" "$repo"
+  expect_rc 0
+  local saved="$tmpbase/cx-idem-saved"
+  mkdir -p "$saved"
+  cp -R "$repo/.codex" "$saved/.codex"
+  run_cx "$plugin" "$repo"
+  expect_rc 0
+  expect_cx_out_absent "wrote="
+  expect_cx_out "unchanged=.codex/agents/planner.toml"
+  expect_cx_out "unchanged=.codex/agents/implementer.toml"
+  expect_cx_out "unchanged=.codex/agents/verifier.toml"
+  expect_cx_out "unchanged=.codex/rules/trail-blazer-flow.rules"
+  expect_cx_out "unchanged=.codex/config.toml"
+  local f
+  for f in agents/planner.toml agents/implementer.toml agents/verifier.toml \
+           rules/trail-blazer-flow.rules config.toml; do
+    cmp -s "$repo/.codex/$f" "$saved/.codex/$f" \
+      || { __ok=0; __why="${__why}$f changed between runs\n"; }
+  done
+  run_cx "$plugin" "$repo" --check
+  expect_rc 0
+  expect_cx_out_absent "drift="
+}
+
+# codex-setup-agents-roundtrip — for each role: name == role; description == this fixture's own
+# awk fold of the real agents/<role>.md (verifier's own line contains the escaped
+# \"Resilient dispatch\"); the lines between developer_instructions = ''' and the closing ''' cmp
+# equal to this fixture's own tail-based extraction of the md body; no ^tools/^model line. Where
+# `python3 -c 'import tomllib'` succeeds, also parses each TOML and cross-checks the same values
+# structurally (ADVISORY Q9).
+# mutant:408-cx-desc-escape — dropping bin/codex-setup.sh's `"` escape on the description leaves
+#   an unescaped quote in verifier.toml's generated line, breaking this case's own escaped compare.
+case_codex_setup_agents_roundtrip() {
+  local plugin repo role
+  plugin="$(mk_cx_plugin cx-roundtrip-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-roundtrip-repo)"
+  run_cx "$plugin" "$repo"
+  expect_rc 0
+  for role in planner implementer verifier; do
+    local toml="$repo/.codex/agents/$role.toml" md="$root/agents/$role.md"
+    [ -f "$toml" ] || { __ok=0; __why="${__why}$role.toml missing\n"; continue; }
+    grep -qF "name = \"$role\"" "$toml" \
+      || { __ok=0; __why="${__why}$role.toml: name != $role\n"; }
+    local fm_end want_desc
+    fm_end="$(awk '$0=="---"{n++; if(n==2){print NR; exit}}' "$md")"
+    want_desc="$(awk -v lim="$fm_end" '
+      NR>=lim { exit }
+      /^description:[ \t]*/ { v=$0; sub(/^description:[ \t]*/,"",v); if (v==">"||v==">-") { indesc=1 } else { desc=v; indesc=0 }; next }
+      indesc==1 && /^[ \t]+[^ \t]/ { v=$0; sub(/^[ \t]+/,"",v); if (desc=="") desc=v; else desc=desc " " v; next }
+      { indesc=0 }
+      END { print desc }
+    ' "$md")"
+    local want_desc_esc="${want_desc//\\/\\\\}"
+    want_desc_esc="${want_desc_esc//\"/\\\"}"
+    grep -qF "description = \"$want_desc_esc\"" "$toml" \
+      || { __ok=0; __why="${__why}$role.toml: description mismatch\n"; }
+    if [ "$role" = "verifier" ]; then
+      grep -qF '\"Resilient dispatch\"' "$toml" \
+        || { __ok=0; __why="${__why}verifier.toml: description does not carry the escaped Resilient dispatch quote\n"; }
+    fi
+    grep -qE '^tools' "$toml" && { __ok=0; __why="${__why}$role.toml: unexpected tools line\n"; }
+    grep -qE '^model' "$toml" && { __ok=0; __why="${__why}$role.toml: unexpected model line\n"; }
+    local start end
+    start="$(grep -n '^developer_instructions = ' "$toml" | head -1 | cut -d: -f1)"
+    end="$(tail -n +"$((start + 1))" "$toml" | grep -n "^'''$" | head -1 | cut -d: -f1)"
+    end=$((start + end))
+    sed -n "$((start + 1)),$((end - 1))p" "$toml" > "$tmpbase/cx-extracted-$role.txt"
+    tail -n +"$((fm_end + 1))" "$md" | tr -d '\r' > "$tmpbase/cx-real-$role.txt"
+    cmp -s "$tmpbase/cx-extracted-$role.txt" "$tmpbase/cx-real-$role.txt" \
+      || { __ok=0; __why="${__why}$role.toml: developer_instructions body is not byte-identical to agents/$role.md's body\n"; }
+    if command -v python3 >/dev/null 2>&1 && python3 -c 'import tomllib' >/dev/null 2>&1; then
+      python3 - "$toml" "$role" "$want_desc" <<'PYEOF' || { __ok=0; __why="${__why}$role.toml: tomllib cross-check failed\n"; }
+import sys, tomllib
+path, role, want_desc = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path, "rb") as f:
+    data = tomllib.load(f)
+assert data["name"] == role, (data.get("name"), role)
+assert data["description"] == want_desc, (data.get("description"), want_desc)
+assert "tools" not in data
+assert "model" not in data
+assert "developer_instructions" in data
+PYEOF
+    fi
+  done
+}
+
+# codex-setup-agents-triple-quote-refused — the fixture plugin's own planner.md body gets ''' appended:
+# rc 2, stderr names planner.md, and no .codex directory is created at all.
+case_codex_setup_agents_triple_quote_refused() {
+  local plugin repo
+  plugin="$(mk_cx_plugin cx-triplequote-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-triplequote-repo)"
+  printf "\nsome text with a ''' triple quote\n" >> "$plugin/agents/planner.md"
+  run_cx "$plugin" "$repo"
+  expect_rc 2
+  expect_cx_err "planner.md"
+  expect_no_file "$repo/.codex"
+}
+
+# codex-setup-agents-triple-quote-verifier (#408 kickback finding 1) — the SAME corruption as
+# above, but on verifier.md, the LAST role in CODEX_AGENT_ROLES: rc 2, stderr names verifier.md,
+# and .codex is still entirely absent — planner.toml and implementer.toml were already generated
+# (both earlier roles are clean) but never installed, proving generation for every role happens
+# before any role's file is moved into place.
+case_codex_setup_agents_triple_quote_verifier() {
+  local plugin repo
+  plugin="$(mk_cx_plugin cx-triplequote-verifier-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-triplequote-verifier-repo)"
+  printf "\nsome text with a ''' triple quote\n" >> "$plugin/agents/verifier.md"
+  run_cx "$plugin" "$repo"
+  expect_rc 2
+  expect_cx_err "verifier.md"
+  expect_no_file "$repo/.codex"
+  expect_no_file "$repo/.codex/agents/planner.toml"
+  expect_no_file "$repo/.codex/agents/implementer.toml"
+}
+
+# codex-setup-rules-content — every ADVISORY-Q1 allow line is present; the forbidden token-list
+# SET equals the set derived by jq from templates/repo-settings.json's own .permissions.deny[]
+# (bare Bash(<words>:*) entries only, excluding every `git -C *` entry); no @PLUGIN_BIN@ literal
+# remains anywhere in the installed rules file.
+case_codex_setup_rules_content() {
+  local plugin repo rules
+  plugin="$(mk_cx_plugin cx-rules-content-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-rules-content-repo)"
+  run_cx "$plugin" "$repo"
+  expect_rc 0
+  rules="$repo/.codex/rules/trail-blazer-flow.rules"
+  [ -f "$rules" ] || { __ok=0; __why="${__why}rules file missing\n"; return; }
+  local tok
+  for tok in 'pattern = ["git", "add"]' 'pattern = ["git", "commit"]' 'pattern = ["git", "push"]' \
+             'pattern = ["git", "fetch"]' 'pattern = ["git", "pull"]' 'pattern = ["git", "checkout"]' \
+             'pattern = ["git", "switch"]' 'pattern = ["git", "restore", "--staged"]' \
+             'pattern = ["git", "reset", "--soft"]' 'pattern = ["gh"]'; do
+    grep -qF "$tok" "$rules" || { __ok=0; __why="${__why}missing allow rule: $tok\n"; }
+  done
+  grep -qF '@PLUGIN_BIN@' "$rules" && { __ok=0; __why="${__why}unsubstituted @PLUGIN_BIN@ literal remains\n"; }
+
+  local want_forbidden got_forbidden
+  want_forbidden="$(jq -r '.permissions.deny[]?' "$root/templates/repo-settings.json" \
+    | sed -n 's/^Bash(\(.*\):\*)$/\1/p' \
+    | grep -v '^git -C ' \
+    | awk '{ printf "["; for(i=1;i<=NF;i++){ printf "%s\"%s\"", (i>1?", ":""), $i }; print "]" }' \
+    | sort -u)"
+  got_forbidden="$(grep -oE 'pattern = \[[^]]*\], decision = "forbidden"' "$rules" \
+    | sed -E 's/pattern = (\[[^]]*\]), decision = "forbidden"/\1/' \
+    | sort -u)"
+  [ "$want_forbidden" = "$got_forbidden" ] \
+    || { __ok=0; __why="${__why}forbidden token-list set mismatch\nwant:\n$want_forbidden\ngot:\n$got_forbidden\n"; }
+}
+
+# codex-setup-rules-gated — the .sh prefix_rule names, the host_executable names, and the set of
+# ten listed scripts are all the SAME set; every host_executable path is exactly
+# <plugin>/bin/<name>; every one of those names exists under $root/bin; codex-setup.sh,
+# harness-version.sh and governance-paths.sh are absent from both sets.
+# mutant:408-cx-host-exec-dropped — deleting one host_executable line from templates/codex.rules
+#   drops it from the installed rules file's own host_executable-name set, breaking the equality.
+case_codex_setup_rules_gated() {
+  local plugin repo rules
+  plugin="$(mk_cx_plugin cx-rules-gated-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-rules-gated-repo)"
+  run_cx "$plugin" "$repo"
+  expect_rc 0
+  rules="$repo/.codex/rules/trail-blazer-flow.rules"
+  [ -f "$rules" ] || { __ok=0; __why="${__why}rules file missing\n"; return; }
+  local sh_names hx_names want_names
+  sh_names="$(grep -oE '^prefix_rule\(pattern = \["[a-z-]+\.sh"\]' "$rules" \
+    | sed -E 's/^prefix_rule\(pattern = \["([a-z-]+\.sh)"\]/\1/' | sort -u)"
+  hx_names="$(grep -oE '^host_executable\(name = "[a-z-]+\.sh"' "$rules" \
+    | sed -E 's/^host_executable\(name = "([a-z-]+\.sh)"/\1/' | sort -u)"
+  want_names="$(printf '%s\n' check-decision-record.sh check-harness.sh cleanup-after-merge.sh \
+    find-implementation-work.sh find-planning-work.sh harness-lock.sh harness-status.sh \
+    harness-stop.sh reconcile-ledger.sh setup-labels.sh | sort -u)"
+  [ "$sh_names" = "$want_names" ] || { __ok=0; __why="${__why}gated .sh prefix_rule names != the ten listed scripts\ngot:\n$sh_names\n"; }
+  [ "$hx_names" = "$want_names" ] || { __ok=0; __why="${__why}host_executable names != the ten listed scripts\ngot:\n$hx_names\n"; }
+  local n
+  for n in $want_names; do
+    grep -qF "host_executable(name = \"$n\", paths = [\"$plugin/bin/$n\"])" "$rules" \
+      || { __ok=0; __why="${__why}host_executable path for $n is not exactly <plugin>/bin/$n\n"; }
+    [ -f "$root/bin/$n" ] || { __ok=0; __why="${__why}$n does not exist under $root/bin\n"; }
+  done
+  local absent
+  for absent in codex-setup.sh harness-version.sh governance-paths.sh; do
+    case " $sh_names $hx_names " in
+      *" $absent "*) __ok=0; __why="${__why}$absent unexpectedly gated\n" ;;
+    esac
+  done
+}
+
+# codex-setup-contract-agents-md — a pre-existing AGENTS.md keeps its original content, gains
+# exactly one begin marker with CLAUDE.md named in the block, and .codex/config.toml never gets the
+# fallback key; a second run still leaves exactly one begin marker. --check before the first run
+# pins the missing-pointer token (#408 kickback finding 3).
+case_codex_setup_contract_agents_md() {
+  local plugin repo
+  plugin="$(mk_cx_plugin cx-agents-md-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-agents-md-repo)"
+  printf '# AGENTS.md\n\nSome pre-existing repo-specific note.\n' > "$repo/AGENTS.md"
+  run_cx "$plugin" "$repo" --check
+  expect_rc 1
+  expect_cx_out "drift=AGENTS.md reason=missing-pointer"
+  expect_no_file "$repo/.codex"
+  run_cx "$plugin" "$repo"
+  expect_rc 0
+  expect_cx_out "wrote=AGENTS.md"
+  grep -qF "Some pre-existing repo-specific note." "$repo/AGENTS.md" \
+    || { __ok=0; __why="${__why}original AGENTS.md content lost\n"; }
+  cx_marker_count() { grep -cF -- "$1" "$repo/AGENTS.md"; }
+  [ "$(cx_marker_count '<!-- trail-blazer-flow:contract-pointer -->')" = "1" ] \
+    || { __ok=0; __why="${__why}begin marker count != 1\n"; }
+  grep -qF "CLAUDE.md" "$repo/AGENTS.md" || { __ok=0; __why="${__why}block does not name CLAUDE.md\n"; }
+  [ -f "$repo/.codex/config.toml" ] && grep -qF 'project_doc_fallback_filenames' "$repo/.codex/config.toml" \
+    && { __ok=0; __why="${__why}config.toml unexpectedly got the fallback key alongside AGENTS.md\n"; }
+  run_cx "$plugin" "$repo"
+  expect_rc 0
+  expect_cx_out "unchanged=AGENTS.md"
+  [ "$(cx_marker_count '<!-- trail-blazer-flow:contract-pointer -->')" = "1" ] \
+    || { __ok=0; __why="${__why}begin marker count != 1 after a second run\n"; }
+}
+
+# codex-setup-agents-md-malformed (#408 kickback) — AGENTS.md shapes whose marker lines are not
+# exact whole-line matches, or are unpaired: a trailing-text end marker, a CRLF end marker, an
+# unpaired begin marker, CRLF on both markers, trailing text on both markers, a trailing-text begin
+# marker before an exact end marker, and a valid pair plus a prose line quoting the begin marker
+# or the end marker.
+# Each: write mode rc 2 with AGENTS.md byte-identical (tail content preserved) and no .codex at all
+# (the pre-flight installs nothing, rules file included); --check reports
+# drift=AGENTS.md reason=malformed-pointer (rc 1).
+# mutant:408-cx-malformed-off — forcing bin/codex-setup.sh's `malformed=true` assignment to
+#   `malformed=false` makes the malformed shapes rewrite instead of refuse.
+# mutant:408-cx-substring-guard — disabling the substring-vs-exact count comparison lets a file
+#   carrying a non-exact begin-marker line read as missing-pointer or a valid pair.
+# mutant:408-cx-end-guard — exact-matching the end marker's substring count switches the guard off
+#   for the end marker, so a prose mention of it next to a valid pair is rewritten.
+case_codex_setup_agents_md_malformed() {
+  local plugin
+  plugin="$(mk_cx_plugin cx-malformed-plugin 2.9.0)"
+
+  local variant content repo before
+  for variant in trailing-text crlf unpaired-begin crlf-both trailing-both begin-trailing prose-mention end-prose-mention; do
+    repo="$(mk_cx_repo "cx-malformed-repo-$variant")"
+    case "$variant" in
+      trailing-text)
+        printf '# AGENTS.md\n\nNote.\n\n<!-- trail-blazer-flow:contract-pointer -->\nold body\n<!-- /trail-blazer-flow:contract-pointer --> extra\n\nTail content.\n' > "$repo/AGENTS.md"
+        ;;
+      crlf)
+        printf '# AGENTS.md\n\nNote.\n\n<!-- trail-blazer-flow:contract-pointer -->\nold body\n<!-- /trail-blazer-flow:contract-pointer -->\r\n\nTail content.\n' > "$repo/AGENTS.md"
+        ;;
+      unpaired-begin)
+        printf '# AGENTS.md\n\nNote.\n\n<!-- trail-blazer-flow:contract-pointer -->\nold body\n\nTail content.\n' > "$repo/AGENTS.md"
+        ;;
+      crlf-both)
+        printf '# AGENTS.md\r\n\r\n<!-- trail-blazer-flow:contract-pointer -->\r\nold body\r\n<!-- /trail-blazer-flow:contract-pointer -->\r\n\r\nTail content.\r\n' > "$repo/AGENTS.md"
+        ;;
+      trailing-both)
+        printf '# AGENTS.md\n\n<!-- trail-blazer-flow:contract-pointer --> x\nold body\n<!-- /trail-blazer-flow:contract-pointer --> x\n\nTail content.\n' > "$repo/AGENTS.md"
+        ;;
+      begin-trailing)
+        printf '# AGENTS.md\n\n<!-- trail-blazer-flow:contract-pointer --> x\nold body\n<!-- /trail-blazer-flow:contract-pointer -->\n\nTail content.\n' > "$repo/AGENTS.md"
+        ;;
+      end-prose-mention)
+        printf '# AGENTS.md\n\n<!-- trail-blazer-flow:contract-pointer -->\nold body\n<!-- /trail-blazer-flow:contract-pointer -->\n\nThe marker <!-- /trail-blazer-flow:contract-pointer --> closes the block.\n\nTail content.\n' > "$repo/AGENTS.md"
+        ;;
+      prose-mention)
+        printf '# AGENTS.md\n\nThe marker <!-- trail-blazer-flow:contract-pointer --> opens the block.\n\n<!-- trail-blazer-flow:contract-pointer -->\nold body\n<!-- /trail-blazer-flow:contract-pointer -->\n\nTail content.\n' > "$repo/AGENTS.md"
+        ;;
+    esac
+    before="$(cat "$repo/AGENTS.md")"
+    run_cx "$plugin" "$repo"
+    expect_rc 2
+    [ "$(cat "$repo/AGENTS.md")" = "$before" ] \
+      || { __ok=0; __why="${__why}$variant: AGENTS.md was modified despite the malformed marker\n"; }
+    grep -qF "Tail content." "$repo/AGENTS.md" \
+      || { __ok=0; __why="${__why}$variant: tail content after the marker was lost\n"; }
+    expect_no_file "$repo/.codex"
+    run_cx "$plugin" "$repo" --check
+    expect_rc 1
+    expect_cx_out "drift=AGENTS.md reason=malformed-pointer"
+  done
+}
+
+# codex-setup-config-merge — a pre-existing .codex/config.toml with a top-level key plus a
+# [profiles.x] table: the fallback key is inserted ABOVE the first table header, and both the
+# original top-level key and the table survive untouched. --check before the first run pins the
+# missing-fallback token (#408 kickback finding 3).
+# mutant:408-cx-config-append — reordering bin/codex-setup.sh's insert block to write the
+#   existing content FIRST puts the fallback key after the table instead of before it.
+case_codex_setup_config_merge() {
+  local plugin repo
+  plugin="$(mk_cx_plugin cx-config-merge-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-config-merge-repo)"
+  mkdir -p "$repo/.codex"
+  printf 'some_other_key = "keep-me"\n\n[profiles.x]\nmodel = "gpt-5"\n' > "$repo/.codex/config.toml"
+  run_cx "$plugin" "$repo" --check
+  expect_rc 1
+  expect_cx_out "drift=.codex/config.toml reason=missing-fallback"
+  run_cx "$plugin" "$repo"
+  expect_rc 0
+  expect_cx_out "wrote=.codex/config.toml"
+  grep -qF 'some_other_key = "keep-me"' "$repo/.codex/config.toml" \
+    || { __ok=0; __why="${__why}pre-existing top-level key lost\n"; }
+  grep -qF '[profiles.x]' "$repo/.codex/config.toml" \
+    || { __ok=0; __why="${__why}pre-existing table lost\n"; }
+  local key_line table_line
+  key_line="$(grep -n 'project_doc_fallback_filenames' "$repo/.codex/config.toml" | head -1 | cut -d: -f1)"
+  table_line="$(grep -n '^\[' "$repo/.codex/config.toml" | head -1 | cut -d: -f1)"
+  [ -n "$key_line" ] && [ -n "$table_line" ] && [ "$key_line" -lt "$table_line" ] \
+    || { __ok=0; __why="${__why}fallback key not inserted above the first table header\n"; }
+}
+
+# codex-setup-config-conflict — a pre-existing top-level project_doc_fallback_filenames value that
+# does NOT name CLAUDE.md: write mode refuses (rc 2, file unchanged, and .codex/agents absent —
+# #408 kickback finding 1, proving the conflict is caught before any earlier-generated agent TOML
+# is installed); --check reports reason=fallback-conflict (rc 1).
+# mutant:408-cx-rules-preflight — installing the rules file directly instead of queueing it for the
+#   post-validation drain leaves .codex/rules behind when a later step refuses.
+case_codex_setup_config_conflict() {
+  local plugin repo before
+  plugin="$(mk_cx_plugin cx-config-conflict-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-config-conflict-repo)"
+  mkdir -p "$repo/.codex"
+  printf 'project_doc_fallback_filenames = ["README.md"]\n' > "$repo/.codex/config.toml"
+  before="$(cat "$repo/.codex/config.toml")"
+  run_cx "$plugin" "$repo"
+  expect_rc 2
+  [ "$(cat "$repo/.codex/config.toml")" = "$before" ] \
+    || { __ok=0; __why="${__why}config.toml was modified despite the conflict\n"; }
+  expect_no_file "$repo/.codex/agents"
+  expect_no_file "$repo/.codex/rules"
+  run_cx "$plugin" "$repo" --check
+  expect_rc 1
+  expect_cx_out "drift=.codex/config.toml reason=fallback-conflict"
+}
+
+# codex-setup-check-drift — --check on a fresh repo: rc 1, reason=missing for every file, and no
+# .codex directory created. After a real setup, one agent TOML is hand-edited: --check then
+# reports reason=differs for exactly that file.
+case_codex_setup_check_drift() {
+  local plugin repo
+  plugin="$(mk_cx_plugin cx-check-drift-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-check-drift-repo)"
+  run_cx "$plugin" "$repo" --check
+  expect_rc 1
+  expect_cx_out "drift=.codex/agents/planner.toml reason=missing"
+  expect_cx_out "drift=.codex/rules/trail-blazer-flow.rules reason=missing"
+  expect_cx_out "drift=.codex/config.toml reason=missing"
+  expect_no_file "$repo/.codex"
+
+  run_cx "$plugin" "$repo"
+  expect_rc 0
+  printf '\n# hand-edited\n' >> "$repo/.codex/agents/planner.toml"
+  run_cx "$plugin" "$repo" --check
+  expect_rc 1
+  expect_cx_out "drift=.codex/agents/planner.toml reason=differs"
+  expect_cx_out_absent "drift=.codex/agents/implementer.toml"
+}
+
+# codex-setup-check-stale-version — rules generated from a 2.9.0 plugin root, then --checked from
+# a COPY of the repo at 3.0.0, report reason=stale-plugin-path (rc 1) and write nothing at all — a
+# find-listing plus per-file checksums taken immediately before and after that --check call prove
+# it. A write from 3.0.0 then pins the 3.0.0 path, and a further --check from 3.0.0 is rc 0.
+# mutant:408-cx-stale-reason — replacing bin/codex-setup.sh's `rules_reason="stale-plugin-path"`
+#   assignment with "differs" reports the generic reason instead of naming the stale path.
+case_codex_setup_check_stale_version() {
+  local old_plugin new_plugin repo before after
+  old_plugin="$(mk_cx_plugin cx-stale-plugin 2.9.0)"
+  new_plugin="$(mk_cx_plugin cx-stale-plugin 3.0.0)"
+  repo="$(mk_cx_repo cx-stale-repo)"
+  run_cx "$old_plugin" "$repo"
+  expect_rc 0
+
+  before="$( (cd "$repo" && find .codex -type f | sort && find .codex -type f -exec cksum {} \; | sort) )"
+  run_cx "$new_plugin" "$repo" --check
+  expect_rc 1
+  expect_cx_out "drift=.codex/rules/trail-blazer-flow.rules reason=stale-plugin-path"
+  after="$( (cd "$repo" && find .codex -type f | sort && find .codex -type f -exec cksum {} \; | sort) )"
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}--check modified .codex despite reporting drift only\n"; }
+
+  run_cx "$new_plugin" "$repo"
+  expect_rc 0
+  expect_cx_out "wrote=.codex/rules/trail-blazer-flow.rules"
+  run_cx "$new_plugin" "$repo" --check
+  expect_rc 0
+  expect_cx_out_absent "drift="
+}
+
+# codex-setup-whitespace-plugin-root — a plugin root containing a space (via mk_cx_plugin's
+# ROOTDIR override): write mode rc 2 with nothing written; --check rc 1 with
+# unsupported=plugin-root reason=whitespace.
+case_codex_setup_whitespace_plugin_root() {
+  local plugin repo
+  plugin="$(mk_cx_plugin cx-ws-plugin 2.9.0 "plug ins")"
+  repo="$(mk_cx_repo cx-ws-repo)"
+  run_cx "$plugin" "$repo"
+  expect_rc 2
+  expect_no_file "$repo/.codex"
+  run_cx "$plugin" "$repo" --check
+  expect_rc 1
+  expect_cx_out "unsupported=plugin-root reason=whitespace"
+}
+
+# codex-setup-whitespace-repo — a repo directory whose own path contains a space: write mode rc 2;
+# --check rc 1 with unsupported=repo-path reason=whitespace.
+# mutant:408-cx-whitespace-off — neutralising bin/codex-setup.sh's repo_top whitespace case-arm
+#   pattern (its only guard, unlike plugin_root's own character-class backstop) lets it through.
+case_codex_setup_whitespace_repo() {
+  local plugin repo
+  plugin="$(mk_cx_plugin cx-ws-repo-plugin 2.9.0)"
+  local base="$tmpbase/cx ws repo"
+  mkdir -p "$base/home"
+  (
+    cd "$base" &&
+    git init -q &&
+    git config user.name "doctor-tests" &&
+    git config user.email "doctor-tests@example.invalid" &&
+    git config commit.gpgsign false &&
+    git symbolic-ref HEAD refs/heads/main &&
+    git commit -q --allow-empty -m init
+  ) >/dev/null
+  printf '# CLAUDE.md\n' > "$base/CLAUDE.md"
+  repo="$base"
+  run_cx "$plugin" "$repo"
+  expect_rc 2
+  run_cx "$plugin" "$repo" --check
+  expect_rc 1
+  expect_cx_out "unsupported=repo-path reason=whitespace"
+}
+
+# codex-setup-unsupported-character — a plugin root containing '&' (via ROOTDIR): write mode rc 2
+# with nothing written.
+case_codex_setup_unsupported_character() {
+  local plugin repo
+  plugin="$(mk_cx_plugin cx-amp-plugin 2.9.0 "plug&ins")"
+  repo="$(mk_cx_repo cx-amp-repo)"
+  run_cx "$plugin" "$repo"
+  expect_rc 2
+  expect_no_file "$repo/.codex"
+}
+
+# codex-setup-usage — --help rc 0; an unrecognised flag rc 2; run outside a git repository (via
+# GIT_CEILING_DIRECTORIES) rc 2.
+case_codex_setup_usage() {
+  local plugin repo
+  plugin="$(mk_cx_plugin cx-usage-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-usage-repo)"
+  run_cx "$plugin" "$repo" --help
+  expect_rc 0
+  expect_cx_out "usage: codex-setup.sh"
+
+  run_cx "$plugin" "$repo" --bogus
+  expect_rc 2
+
+  local nogit="$tmpbase/cx-usage-nogit"
+  mkdir -p "$nogit/home"
+  (cd "$nogit" && HOME="$nogit/home" GIT_CEILING_DIRECTORIES="$tmpbase" "$bash_bin" "$plugin/bin/codex-setup.sh") \
+    >"$tmpbase/cx-nogit-out" 2>"$tmpbase/cx-nogit-err"
+  cx_rc=$?
+  cx_out="$(cat "$tmpbase/cx-nogit-out")"
+  cx_err="$(cat "$tmpbase/cx-nogit-err")"
+  doctor_out="OUT: $cx_out
+ERR: $cx_err"
+  doctor_rc=$cx_rc
+  expect_rc 2
+}
+
 # name|fn|desc
 cases=(
   "settings-missing|case_settings_missing|settings block: file missing"
@@ -2693,6 +3285,23 @@ cases=(
   "gov-doctor-unterminated|case_gov_doctor_unterminated|governance-paths.sh --check via the doctor: an opening fence never closed -> WARN malformed (unterminated-fence), never FAIL"
   "gov-doctor-leading-slash|case_gov_doctor_leading_slash|governance-paths.sh --check via the doctor: a glob starting '/' -> WARN malformed (leading-slash), never FAIL"
   "gov-doctor-script-missing|case_gov_doctor_script_missing|governance-paths.sh --check via the doctor: the fixture's own bin/governance-paths.sh deleted -> WARN could not validate, never FAIL"
+  "codex-setup-fresh|case_codex_setup_fresh|#408: no AGENTS.md: rc 0, all five files wrote=, no AGENTS.md created, config.toml carries the CLAUDE.md fallback, and the three next: lines including codex --no-daemon"
+  "codex-setup-idempotent|case_codex_setup_idempotent|#408: a second run gives only unchanged= lines and byte-identical files; --check afterward is rc 0 with no drift="
+  "codex-setup-agents-roundtrip|case_codex_setup_agents_roundtrip|#408: each agent TOML's name/description/developer_instructions round-trips against agents/*.md, byte-identical body, no tools/model lines"
+  "codex-setup-agents-triple-quote-refused|case_codex_setup_agents_triple_quote_refused|#408: a ''' in planner.md's body: rc 2 naming planner.md, no .codex created"
+  "codex-setup-agents-triple-quote-verifier|case_codex_setup_agents_triple_quote_verifier|#408 kickback: a ''' in verifier.md (the LAST role): rc 2 naming verifier.md, no .codex created — proves planner/implementer's already-generated TOMLs are never installed"
+  "codex-setup-rules-content|case_codex_setup_rules_content|#408: every ADVISORY-Q1 allow line present; forbidden token-list set == templates/repo-settings.json's bare deny entries (jq-derived); no @PLUGIN_BIN@ literal remains"
+  "codex-setup-rules-gated|case_codex_setup_rules_gated|#408: the gated .sh prefix_rule names and host_executable names both equal the ten listed scripts, each path <plugin>/bin/<s>, each name exists under bin/; codex-setup.sh/harness-version.sh/governance-paths.sh absent from both"
+  "codex-setup-contract-agents-md|case_codex_setup_contract_agents_md|#408: a pre-existing AGENTS.md keeps its content, gains exactly one begin marker naming CLAUDE.md, no fallback key in config.toml, still one marker after a second run; --check before it pins reason=missing-pointer"
+  "codex-setup-agents-md-malformed|case_codex_setup_agents_md_malformed|#408 kickback: non-exact or unpaired marker shapes (trailing text or CR on either or both markers, a prose mention of either marker, an unpaired begin) refuse (rc 2, byte-identical, tail content preserved, no .codex) and --check reports reason=malformed-pointer"
+  "codex-setup-config-merge|case_codex_setup_config_merge|#408: a pre-existing config.toml with a top-level key plus a [profiles.x] table: the fallback key is inserted above the first table, both originals survive; --check before it pins reason=missing-fallback"
+  "codex-setup-config-conflict|case_codex_setup_config_conflict|#408: a top-level project_doc_fallback_filenames not naming CLAUDE.md: write refuses (rc 2, unchanged, .codex/agents and .codex/rules absent); --check reports reason=fallback-conflict"
+  "codex-setup-check-drift|case_codex_setup_check_drift|#408: --check on a fresh repo: rc 1, reason=missing per file, no .codex created; after setup, a hand-edited agent TOML gives reason=differs for exactly that file"
+  "codex-setup-check-stale-version|case_codex_setup_check_stale_version|#408: rules generated from 2.9.0, then --checked from a 3.0.0 copy: reason=stale-plugin-path, proven to write nothing via a find-listing plus checksums; a write from 3.0.0 then --check is rc 0"
+  "codex-setup-whitespace-plugin-root|case_codex_setup_whitespace_plugin_root|#408: a plugin root containing a space: write rc 2 nothing written; --check rc 1 unsupported=plugin-root reason=whitespace"
+  "codex-setup-whitespace-repo|case_codex_setup_whitespace_repo|#408: a repo path containing a space: write rc 2; --check rc 1 unsupported=repo-path reason=whitespace"
+  "codex-setup-unsupported-character|case_codex_setup_unsupported_character|#408: a plugin root containing '&': write rc 2, nothing written"
+  "codex-setup-usage|case_codex_setup_usage|#408: --help rc 0; an unknown flag rc 2; run outside a git repository rc 2"
 )
 
 matched=0

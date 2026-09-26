@@ -142,8 +142,24 @@
 #
 # Read-only. Used by the issue-cycle skill's closing report, and handy standalone:
 # "what is waiting on me?" Requires: gh (authenticated), jq, harness-stop.sh, and the other harness
-# scripts on the PATH. Run from anywhere inside the repo.
+# scripts either on the PATH or next to this script (#408 — on Codex, bin/ is not on the PATH,
+# ADR 0002 P5; see resolve_sibling below). Run from anywhere inside the repo.
 set -euo pipefail
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+
+# resolve_sibling NAME (#408) — PATH first (command -v), falling back to this script's own
+# directory: on Codex, bin/ is never on the shell PATH, but this script is still invoked by its
+# own absolute path, so $script_dir always resolves. Prints the bare name (PATH hit, Claude Code's
+# unchanged behaviour) or the sibling's absolute path (the fallback) — never executes anything.
+resolve_sibling() {
+  local name="$1"
+  if command -v "$name" >/dev/null 2>&1; then
+    printf '%s' "$name"
+  else
+    printf '%s' "$script_dir/$name"
+  fi
+}
 
 LIMIT=100
 # RETRY_SLEEP (#297): mirrors find-implementation-work.sh's own RETRY_SLEEP — same value (30s),
@@ -181,8 +197,8 @@ STOP_STATE_UNKNOWN="unknown"
 # stop=<state> first line at all.
 STOP_STATE_UNAVAILABLE="unavailable"
 
-planning=$(find-planning-work.sh)
-implementation=$(find-implementation-work.sh)
+planning=$("$(resolve_sibling find-planning-work.sh)")
+implementation=$("$(resolve_sibling find-implementation-work.sh)")
 
 # degraded_reasons (#284/#285) — see the header's own paragraph above for the generic rule this
 # implements: select every `*_unavailable: true` key from EITHER script's own `counts` object,
@@ -331,7 +347,7 @@ fi
 # bounded retry around its GitHub-route query, so this site adds no second retry of its own, unlike
 # the five gh call sites above.
 stop_rc=0
-stop_out="$(harness-stop.sh)" || stop_rc=$?
+stop_out="$("$(resolve_sibling harness-stop.sh)")" || stop_rc=$?
 # Never pipe this through `head -1` (CLAUDE.md's grep-quiet-mode class, #255, the same SIGPIPE
 # risk): parameter expansion keeps this a pure bash operation with no second process to signal.
 stop_line1="${stop_out%%$'\n'*}"

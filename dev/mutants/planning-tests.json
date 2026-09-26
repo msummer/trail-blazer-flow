@@ -89,6 +89,7 @@
         "status-own-retry-sleep-failure-survives",
         "status-proposed-query-retry-succeeds",
         "status-prs-query-retry-succeeds",
+        "status-siblings-via-script-dir",
         "status-stop-clear",
         "status-stop-set-both-routes",
         "status-stop-set-github"
@@ -701,8 +702,8 @@
       "filter": "status-",
       "edits": [
         {
-          "from": "stop_out=\"$(harness-stop.sh)\" || stop_rc=$?",
-          "to": "stop_out=\"$(harness-stop.sh)\""
+          "from": "stop_out=\"$(\"$(resolve_sibling harness-stop.sh)\")\" || stop_rc=$?",
+          "to": "stop_out=\"$(\"$(resolve_sibling harness-stop.sh)\")\""
         }
       ],
       "expect_fail": [
@@ -871,8 +872,8 @@
       "filter": "status-",
       "edits": [
         {
-          "from": "stop_out=\"$(harness-stop.sh)\" || stop_rc=$?",
-          "to": "if ! stop_out=\"$(harness-stop.sh)\"; then sleep \"$RETRY_SLEEP\" || true; stop_out=\"$(harness-stop.sh)\" || stop_rc=$?; fi"
+          "from": "stop_out=\"$(\"$(resolve_sibling harness-stop.sh)\")\" || stop_rc=$?",
+          "to": "if ! stop_out=\"$(\"$(resolve_sibling harness-stop.sh)\")\"; then sleep \"$RETRY_SLEEP\" || true; stop_out=\"$(\"$(resolve_sibling harness-stop.sh)\")\" || stop_rc=$?; fi"
         }
       ],
       "expect_fail": [

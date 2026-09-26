@@ -12,6 +12,7 @@ code. Read the README first; come here when you need the exact rule.
 | [settings.md](settings.md) | The per-repo `.claude/settings.json`: every grant and deny, and what the doctor checks |
 | [safety-model.md](safety-model.md) | The permission model, the four `PreToolUse` hooks, verdict and approval provenance, trust gates on comments and issue authors, and the single-flight lock |
 | [architecture.md](architecture.md) | Repository layout, the model tiering, and the plugin/consumer boundary |
+| [codex.md](codex.md) | Installing and running this plugin on the Codex CLI: `codex-setup.sh`, the rules file, contract loading, `--check` drift, the lock's Codex owner contract, and the honest limits |
 
 Decisions about where the harness is heading, rather than how it behaves today, are recorded as
 ADRs in [`docs/adr/`](../adr/README.md). Per-PR history lives in [`CHANGELOG.md`](../../CHANGELOG.md).
@@ -28,5 +29,6 @@ to its file.
 | "The per-repo settings file" | [settings.md](settings.md) |
 | "Safety model" (with its "Four PreToolUse hooks", "Live-probe record", "Verdict provenance", "Approval provenance", and "One active cycle per checkout" paragraphs) | [safety-model.md](safety-model.md) |
 | "What's in here", "The model tiering", "Distribution" | [architecture.md](architecture.md) |
+| "Setup", "What `codex-setup.sh` writes", "Rules", "Contract loading", "Upgrades and `--check`", "Lock owner on Codex", "Trust steps", "Honest limits" (Codex) | [codex.md](codex.md) |
 | "Prerequisites", "Windows", "Getting started", "Updating", "Working on the harness itself" | the top-level [README](../../README.md) |
 | "Durable escalation", "Resilient dispatch" | [`skills/issue-implementer/SKILL.md`](../../skills/issue-implementer/SKILL.md) |

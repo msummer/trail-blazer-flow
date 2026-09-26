@@ -25,6 +25,7 @@
       "Bash(harness-version.sh:*)",
       "Bash(harness-stop.sh:*)",
       "Bash(governance-paths.sh:*)",
+      "Bash(codex-setup.sh:*)",
       "Bash(gh auth status:*)",
       "Bash(gh issue list:*)",
       "Bash(gh issue view:*)",

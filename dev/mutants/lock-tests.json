@@ -1,0 +1,68 @@
+{
+  "mutants": [
+    {
+      "name": "408-lock-flag-ignored",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "owner-",
+      "edits": [
+        {
+          "from": "if $owner_flag_set; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "owner-daemon-refused",
+        "owner-pid-flag",
+        "owner-pid-flag-beats-env",
+        "owner-pid-nondigits"
+      ]
+    },
+    {
+      "name": "408-lock-env-ignored",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "owner-",
+      "edits": [
+        {
+          "from": "elif [ -n \"${TBF_OWNER_PID:-}\" ]; then",
+          "to": "elif false; then"
+        }
+      ],
+      "expect_fail": [
+        "owner-pid-env",
+        "owner-pid-env-nondigits"
+      ]
+    },
+    {
+      "name": "408-lock-owner-digits",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "owner-",
+      "edits": [
+        {
+          "from": "    case \"$owner_flag\" in\n      ''|*[!0-9]*)",
+          "to": "    case \"$owner_flag\" in\n      ZZZNEVERMATCHZZZ)"
+        }
+      ],
+      "expect_fail": [
+        "owner-pid-nondigits"
+      ]
+    },
+    {
+      "name": "408-lock-daemon-check",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "owner-",
+      "edits": [
+        {
+          "from": "    *app-server*)",
+          "to": "    *ZZZNEVERMATCHZZZ*)"
+        }
+      ],
+      "expect_fail": [
+        "owner-daemon-refused"
+      ]
+    }
+  ]
+}
