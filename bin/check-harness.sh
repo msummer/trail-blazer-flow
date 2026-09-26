@@ -42,10 +42,12 @@
 # hook now supersedes (#150 — Claude Code 2.1.246+ warns about these at startup), the installed
 # harness plugin's own version and short commit SHA (#233, via bin/harness-version.sh, run by a
 # fixed path — never derived from repo content), and branch protection — presence (WARN on
-# Claude Code; FAIL under `--provider codex`), plus, only when merge autonomy is effectively
-# active (a declared "Merge autonomy policy" section, or an
-# "Autonomy mode" section's implied merge autonomy) and the protection endpoint call succeeds,
-# whether required_status_checks.strict is true, the number of required status check contexts,
+# Claude Code; FAIL under `--provider codex`; found via the classic protection endpoint or, when
+# that call fails, via at least one qualifying rule — `pull_request`, `required_status_checks` or
+# `update` — among the branch's effective ruleset rules, #418), plus, only when merge autonomy is
+# effectively active (a declared "Merge autonomy policy" section, or an
+# "Autonomy mode" section's implied merge autonomy) and a protection document is found, whether
+# required_status_checks.strict is true, the number of required status check contexts,
 # and whether required PR reviews are configured (#234 — all three WARN-only, never FAIL), and
 # (#331, folds in #330) whether an optional "Governance paths" section — read by the merge floor's
 # own governance-path classifier, bin/governance-paths.sh, run here by a FIXED path (same
@@ -60,8 +62,9 @@
 # --check drift (#408), a bounded codex app-server hooks/list exchange that only ever REPORTS
 # hook trust (auto-trusting would defeat Codex's own review gate — it never writes trust state),
 # and a manual-merge report (merge autonomy does not exist on Codex). The shared baseline and
-# branch-protection checks below still run afterward, unchanged except that a missing/unreadable
-# branch-protection document is a FAIL rather than a WARN on Codex. See docs/reference/codex.md's
+# branch-protection checks below still run afterward, unchanged except that no protection found —
+# neither a classic protection document nor any qualifying ruleset rule for the branch — is a FAIL
+# rather than a WARN on Codex. See docs/reference/codex.md's
 # "The doctor on Codex" section for the fix for each FAIL.
 #
 # The test-suite-ratchet check never executes, evals, or shells out to anything read from
@@ -1417,16 +1420,66 @@ fi
 # PROTECTION_STRICT_WARN_STEM/PROTECTION_CHECKS_WARN_STEM (used below) are defined as top-level
 # literals near CODEX_MIN_VERSION/CODEX_HOOKS_LIST_WAIT, well before this section — see that
 # block's comment.
+#
+# Branch protection is found through the classic `branches/<b>/protection` endpoint or, when that
+# call fails (a 404 when the branch is unprotected, or a 403/404 without admin scope — the two
+# can't be told apart without parsing stderr, so any classic failure falls through the same way),
+# through the branch's effective ruleset rules (`rules/branches/<b>?per_page=100`, covering
+# repository and organization rulesets; needs only read access, and jq must be ready). A ruleset
+# counts as protection only when it contains at least one QUALIFYING rule — type `pull_request`,
+# `required_status_checks` or `update` — because a ruleset made only of non-qualifying rules (for
+# example `deletion`, `non_fast_forward` or `copilot_code_review`) does not stop a direct push and
+# would otherwise produce a false PASS (#418). Any rules-lookup failure, a non-array or
+# unparseable body, or an array with no qualifying rule falls through to exactly today's
+# no-protection verdict. When multiple `required_status_checks` rules exist, the sub-checks below
+# treat them as strict if any one of them is strict, and their required contexts as the unique
+# union of every `.context` value across them; a `pull_request` rule maps to "required PR reviews
+# are configured". $rules and $prot are read through jq only — never grep/sed/awk — and nothing
+# from $rules is echoed except the integer contexts count.
 if $gh_ready && [ -n "$default_branch" ]; then
   repo_slug="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null | tr -d '\r' || true)"
+  prot_src=""
   if [ -n "$repo_slug" ] && prot="$(gh api "repos/$repo_slug/branches/$default_branch/protection" 2>/dev/null)"; then
-    ok "branch protection enabled on $default_branch"
+    prot_src=classic
+  elif [ -n "$repo_slug" ] && $jq_ready && rules="$(gh api "repos/$repo_slug/rules/branches/$default_branch?per_page=100" 2>/dev/null)"; then
+    rules_n="$(printf '%s' "$rules" | jq -r '
+      if type == "array" then
+        [.[] | objects | select(
+          .type == "pull_request" or
+          .type == "required_status_checks" or
+          .type == "update"
+        )] | length
+      else
+        0
+      end
+    ' 2>/dev/null || true)"
+    case "$rules_n" in
+      ''|*[!0-9]*) rules_n=0 ;;
+    esac
+    if [ "$rules_n" -gt 0 ]; then
+      prot="$(printf '%s' "$rules" | jq -c '
+        [.[] | objects | select(.type == "required_status_checks")] as $rsc
+        | [.[] | objects | select(.type == "pull_request")] as $pr
+        | (if ($rsc|length) > 0 then {required_status_checks: {strict: any($rsc[]; .parameters.strict_required_status_checks_policy == true), contexts: ([$rsc[] | .parameters.required_status_checks[]? | .context // empty] | unique)}} else {} end)
+        + (if ($pr|length) > 0 then {required_pull_request_reviews: ($pr[0].parameters // {})} else {} end)
+      ' 2>/dev/null || true)"
+      prot_src=ruleset
+    fi
+  fi
+  if [ -n "$prot_src" ]; then
+    if [ "$prot_src" = ruleset ]; then
+      ok "branch protection enabled on $default_branch (via rulesets)"
+    else
+      ok "branch protection enabled on $default_branch"
+    fi
     # Only when merge autonomy is effectively active ($merge_effective, #311 — a declared "Merge
     # autonomy policy" section OR "Autonomy mode"'s implied merge autonomy) AND jq is available:
     # read the protection document itself (through jq only — never a raw-text grep/sed/awk of
     # $prot) and report on exactly the fields the merge floor's up-to-date rail and CI-greenness
     # check care about. WARN-only, never FAIL — an unparseable document collapses both signals
-    # closed (both WARNs fire) rather than silently passing.
+    # closed (both WARNs fire) rather than silently passing. This runs unchanged for a
+    # ruleset-derived $prot, since the normaliser above shapes it identically to the classic
+    # document.
     if $merge_effective && $jq_ready; then
       strict="$(printf '%s' "$prot" | jq -r 'if .required_status_checks.strict == true then "true" else "false" end' 2>/dev/null || true)"
       if [ "$strict" = "true" ]; then

@@ -94,7 +94,11 @@ subagents need:
    implying it), `check-harness.sh` reads the protection document
    itself and WARNs (never FAILs) when `required_status_checks.strict` isn't exactly `true`, when
    zero status check contexts are required, and reports informationally whether required PR
-   reviews are configured (#234).
+   reviews are configured (#234). When the classic endpoint call fails, the doctor falls back to
+   the branch's effective ruleset rules; a ruleset counts as protection only via a qualifying
+   `pull_request`, `required_status_checks` or `update` rule, and the same three signals then come
+   from those rules — strict if any `required_status_checks` rule is strict, contexts as their
+   unique union, and reviews "configured" when a `pull_request` rule exists (#418).
    `check-harness.sh` judges activation from *effective* merge-permission state — across
    `.claude/settings.json`, `.claude/settings.local.json`, and your user-level settings file —
    and reports off, active (with a note when no `.github/workflows` file is found, naming the

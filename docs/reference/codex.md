@@ -208,16 +208,22 @@ argument, exits 2 before any check runs; `-h`/`--help` exits 0.
   `autonomy mode:`) ever prints on Codex.
 
 The shared baseline check and the branch-protection check still run afterward. Branch protection
-gets one Codex-specific change: a missing or unreadable protection document is a **FAIL** on
-Codex (`push-guard.sh` and branch protection are all that stand between an allowed `git push` and
-the default branch), where it's only a WARN on Claude Code; `gh` not ready, or an unknown default
-branch, is also a FAIL on Codex rather than a silent skip. The strictness sub-checks
-(`required_status_checks.strict`, required contexts, required reviews) stay gated on merge
-autonomy being effectively active, which never happens on Codex, so they never print here.
-**Rulesets limit:** the doctor detects protection only through GitHub's legacy
-`repos/<r>/branches/<b>/protection` endpoint, which doesn't see a repository ruleset — a repo
-protected only by a ruleset gets a FAIL here even though pushes are, in fact, blocked (tracked as
-a follow-up).
+is found through the classic `repos/<r>/branches/<b>/protection` endpoint or, when that call
+fails, through the branch's effective ruleset rules (`repos/<r>/rules/branches/<b>`, covering
+repository and organization rulesets; needs only read access). A ruleset counts as protection only
+when it contains at least one QUALIFYING rule — type `pull_request`, `required_status_checks` or
+`update` — because a ruleset made only of non-qualifying rules (for example `deletion`,
+`non_fast_forward` or `copilot_code_review`) does not stop a direct push (#418). Branch protection
+gets one Codex-specific change: no protection found — neither a classic protection document nor
+any qualifying ruleset rule for the branch, including a failed rules lookup such as HTTP 403 on a
+plan without rulesets — is a **FAIL** on Codex (`push-guard.sh` and branch protection are all that
+stand between an allowed `git push` and the default branch), where it's only a WARN on Claude
+Code; `gh` not ready, or an unknown default branch, is also a FAIL on Codex rather than a silent
+skip. The strictness sub-checks (`required_status_checks.strict`, required contexts, required
+reviews) stay gated on merge autonomy being effectively active, which never happens on Codex, so
+they never print here; when the protection document comes from a ruleset instead, multiple
+`required_status_checks` rules combine as strict-if-any-strict, with required contexts as the
+unique union of every rule's contexts, and a `pull_request` rule maps to reviews "configured".
 
 Everything the settings-file union, toolchain, template-drift, `disableAllHooks`, and
 policy-activation sections check on Claude Code (`.claude/settings.json`, merge-autonomy

@@ -1032,7 +1032,9 @@
         }
       ],
       "expect_fail": [
-        "codex-doctor-protection-missing"
+        "codex-doctor-protection-missing",
+        "codex-doctor-protection-ruleset-403",
+        "codex-doctor-protection-ruleset-exit1"
       ]
     },
     {
@@ -1124,6 +1126,147 @@
       ],
       "expect_fail": [
         "codex-setup-rules-content"
+      ]
+    },
+    {
+      "name": "418-rules-fallback-dropped",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "protection-ruleset",
+      "edits": [
+        {
+          "from": "  elif [ -n \"$repo_slug\" ] && $jq_ready && rules=\"$(gh api \"repos/$repo_slug/rules/branches/$default_branch?per_page=100\" 2>/dev/null)\"; then",
+          "to": "  elif false; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-protection-ruleset",
+        "protection-ruleset-healthy",
+        "protection-ruleset-multi",
+        "protection-ruleset-pr-only",
+        "protection-ruleset-update-only"
+      ]
+    },
+    {
+      "name": "418-rules-exit-gate",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "protection-ruleset",
+      "edits": [
+        {
+          "from": "  elif [ -n \"$repo_slug\" ] && $jq_ready && rules=\"$(gh api \"repos/$repo_slug/rules/branches/$default_branch?per_page=100\" 2>/dev/null)\"; then",
+          "to": "  elif [ -n \"$repo_slug\" ] && $jq_ready && rules=\"$(gh api \"repos/$repo_slug/rules/branches/$default_branch?per_page=100\" 2>/dev/null)\" || true; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-protection-ruleset-exit1"
+      ]
+    },
+    {
+      "name": "418-rules-nonempty",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "protection-ruleset",
+      "edits": [
+        {
+          "from": "    if [ \"$rules_n\" -gt 0 ]; then",
+          "to": "    if [ \"$rules_n\" -ge 0 ]; then"
+        }
+      ],
+      "expect_fail": [
+        "protection-ruleset-empty",
+        "protection-ruleset-no-checks"
+      ]
+    },
+    {
+      "name": "418-rules-any-strict",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "protection-ruleset",
+      "edits": [
+        {
+          "from": "any($rsc[]; .parameters.strict_required_status_checks_policy == true)",
+          "to": "all($rsc[]; .parameters.strict_required_status_checks_policy == true)"
+        }
+      ],
+      "expect_fail": [
+        "protection-ruleset-multi"
+      ]
+    },
+    {
+      "name": "418-rules-context-union",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "protection-ruleset",
+      "edits": [
+        {
+          "from": ".context // empty] | unique)",
+          "to": ".context // empty])"
+        }
+      ],
+      "expect_fail": [
+        "protection-ruleset-multi"
+      ]
+    },
+    {
+      "name": "418-rules-pull-request",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "protection-ruleset",
+      "edits": [
+        {
+          "from": "        + (if ($pr|length) > 0 then {required_pull_request_reviews: ($pr[0].parameters // {})} else {} end)",
+          "to": "        + {}"
+        }
+      ],
+      "expect_fail": [
+        "protection-ruleset-healthy",
+        "protection-ruleset-pr-only"
+      ]
+    },
+    {
+      "name": "418-rules-qualify-pr",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "protection-ruleset",
+      "edits": [
+        {
+          "from": "          .type == \"pull_request\" or\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "protection-ruleset-pr-only"
+      ]
+    },
+    {
+      "name": "418-rules-qualify-rsc",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "protection-ruleset",
+      "edits": [
+        {
+          "from": "          .type == \"required_status_checks\" or\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "protection-ruleset-multi"
+      ]
+    },
+    {
+      "name": "418-rules-qualify-update",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "protection-ruleset",
+      "edits": [
+        {
+          "from": "          .type == \"required_status_checks\" or\n          .type == \"update\"\n",
+          "to": "          .type == \"required_status_checks\"\n"
+        }
+      ],
+      "expect_fail": [
+        "protection-ruleset-update-only"
       ]
     }
   ]

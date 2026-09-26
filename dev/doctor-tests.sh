@@ -48,7 +48,9 @@
 # verbatim as a PASS when resolvable, a WARN (never a FAIL) naming the expected fixed path when
 # it isn't, (#234, review F4) the branch-protection document's up-to-date strictness — only when
 # merge autonomy is effectively active ($merge_effective, same combination as the CI-pinning gate
-# above) and a successful protection endpoint call,
+# above) and a protection document is found (the classic endpoint, or, when that call fails and jq
+# is ready, at least one qualifying rule — pull_request, required_status_checks or update — among
+# the branch's effective ruleset rules, #418),
 # required_status_checks.strict (WARN when not exactly true), the required-status-check-context
 # count via max(checks|length, contexts|length) (WARN when zero, including when
 # required_status_checks itself is absent), and required PR reviews (informational PASS either
@@ -530,17 +532,34 @@ EOF
 # issue view returns DIR/gh-issue-body.json verbatim (a case writes that file before calling
 # check-decision-record.sh against this stub); api (branch protection) serves DIR/gh-protection.json
 # and exits 0, EXCEPT PROTECTION_MODE "fail", which exits 1 with no document (the pre-#234
-# behaviour); anything else fails. PROTECTION_MODE (default "healthy") selects which document
-# api serves — healthy (required_status_checks.strict true, one entry each in checks/contexts,
+# behaviour), and EXCEPT a "rules-*" PROTECTION_MODE (#418, see below), whose api arm dispatches on
+# the requested path instead. PROTECTION_MODE (default "healthy") selects which document api
+# serves — healthy (required_status_checks.strict true, one entry each in checks/contexts,
 # required_pull_request_reviews present — modelled on a live `gh api
 # .../branches/main/protection` response, LESSON 2026-09-01(c)), strict-false (strict false,
 # checks/contexts non-empty, required_pull_request_reviews absent), zero-contexts (strict true,
-# checks/contexts both empty), no-status-checks (required_status_checks key itself absent), or
-# fail (see above). Making "healthy" the default means every one of the ~60 pre-#234 fixtures
-# that reaches the branch-protection section now gets PASS lines there instead of the ad hoc
-# empty-body WARNs an unparsed document produced before this stub understood protection
-# documents at all — FAIL-free by design either way — no real network call, no gh-driven FAIL,
-# ever, which is what makes the WARN-never-affects-exit pin (drift-missing-entries) meaningful.
+# checks/contexts both empty), no-status-checks (required_status_checks key itself absent), fail
+# (see above), or a "rules-*" mode that pins the #418 ruleset fallback: except in rules-403 (below),
+# the classic `branches/<b>/protection` path always fails (404 body, exit 1) and only the
+# `rules/branches/<b>?per_page=100` path answers, modelled on the verified vercel/next.js element
+# shape (each element carries ruleset_source_type/ruleset_source/ruleset_id) — rules-healthy
+# (deletion, non_fast_forward, a qualifying pull_request rule, and a qualifying
+# required_status_checks rule, strict true, two contexts), rules-multi (two qualifying
+# required_status_checks rules, one org-sourced and strict false with one context, one
+# repo-sourced and strict true with two contexts — the strict-false element comes first on
+# purpose — plus a non-qualifying deletion rule, no pull_request), rules-no-checks (deletion,
+# non_fast_forward only — no qualifying rule), rules-empty (`[]`), rules-pr-only (a single
+# qualifying pull_request rule, no required_status_checks rule at all), rules-update-only (a
+# single qualifying update rule, no required_status_checks or pull_request rule), rules-exit1 (the
+# rules path prints rules-healthy's qualifying array but exits 1 — only the call's exit status can
+# reject it), and rules-403 (both the classic and the rules path answer 403, modelled on a live
+# `gh api` 403 response, which prints its JSON body to stdout and exits 1). Making "healthy" the
+# default means every one of the
+# ~60 pre-#234 fixtures that reaches the branch-protection section now gets PASS lines there
+# instead of the ad hoc empty-body WARNs an unparsed document produced before this stub understood
+# protection documents at all — FAIL-free by design either way — no real network call, no
+# gh-driven FAIL, ever, which is what makes the WARN-never-affects-exit pin (drift-missing-entries)
+# meaningful.
 build_stub_gh() {
   local dir="$1" branch="${2:-main}" extra_label="${3:-}" protection="${4:-healthy}"
   mkdir -p "$dir"
@@ -560,6 +579,24 @@ build_stub_gh() {
       printf '%s\n' '{"url":"https://api.github.com/repos/acme/demo/branches/main/protection","enforce_admins":{"url":"https://api.github.com/repos/acme/demo/branches/main/protection/enforce_admins","enabled":false}}' \
         > "$dir/gh-protection.json" ;;
     fail) : ;;
+    rules-healthy|rules-exit1)
+      printf '%s\n' '[{"type":"deletion","ruleset_source_type":"Repository","ruleset_source":"acme/demo","ruleset_id":1,"parameters":{}},{"type":"non_fast_forward","ruleset_source_type":"Repository","ruleset_source":"acme/demo","ruleset_id":1,"parameters":{}},{"type":"pull_request","ruleset_source_type":"Repository","ruleset_source":"acme/demo","ruleset_id":1,"parameters":{"required_approving_review_count":0,"dismiss_stale_reviews_on_push":false,"require_code_owner_review":false,"require_last_push_approval":false,"required_review_thread_resolution":false}},{"type":"required_status_checks","ruleset_source_type":"Repository","ruleset_source":"acme/demo","ruleset_id":1,"parameters":{"strict_required_status_checks_policy":true,"do_not_enforce_on_create":false,"required_status_checks":[{"context":"selfcheck","integration_id":15368},{"context":"selfcheck-macos","integration_id":15368}]}}]' \
+        > "$dir/gh-rules.json" ;;
+    rules-multi)
+      printf '%s\n' '[{"type":"required_status_checks","ruleset_source_type":"Organization","ruleset_source":"acme","ruleset_id":2,"parameters":{"strict_required_status_checks_policy":false,"do_not_enforce_on_create":false,"required_status_checks":[{"context":"selfcheck","integration_id":15368}]}},{"type":"required_status_checks","ruleset_source_type":"Repository","ruleset_source":"acme/demo","ruleset_id":3,"parameters":{"strict_required_status_checks_policy":true,"do_not_enforce_on_create":false,"required_status_checks":[{"context":"selfcheck","integration_id":15368},{"context":"lint","integration_id":15368}]}},{"type":"deletion","ruleset_source_type":"Repository","ruleset_source":"acme/demo","ruleset_id":3,"parameters":{}}]' \
+        > "$dir/gh-rules.json" ;;
+    rules-no-checks)
+      printf '%s\n' '[{"type":"deletion","ruleset_source_type":"Repository","ruleset_source":"acme/demo","ruleset_id":4,"parameters":{}},{"type":"non_fast_forward","ruleset_source_type":"Repository","ruleset_source":"acme/demo","ruleset_id":4,"parameters":{}}]' \
+        > "$dir/gh-rules.json" ;;
+    rules-empty)
+      printf '%s\n' '[]' > "$dir/gh-rules.json" ;;
+    rules-pr-only)
+      printf '%s\n' '[{"type":"pull_request","ruleset_source_type":"Repository","ruleset_source":"acme/demo","ruleset_id":5,"parameters":{"required_approving_review_count":1,"dismiss_stale_reviews_on_push":false,"require_code_owner_review":false,"require_last_push_approval":false,"required_review_thread_resolution":false}}]' \
+        > "$dir/gh-rules.json" ;;
+    rules-update-only)
+      printf '%s\n' '[{"type":"update","ruleset_source_type":"Repository","ruleset_source":"acme/demo","ruleset_id":6,"parameters":{"update_allows_fetch_and_merge":false}}]' \
+        > "$dir/gh-rules.json" ;;
+    rules-403) : ;;
   esac
   { printf '#!%s\n' "$bash_bin"; cat <<'EOF'
 case "$1" in
@@ -568,11 +605,45 @@ EOF
   printf '  repo) case "$*" in *nameWithOwner*) echo acme/demo ;; *) echo %s ;; esac; exit 0 ;;\n' "$branch"
   printf '  label) cat "%s/gh-labels.txt"; exit 0 ;;\n' "$dir"
   printf '  issue) cat "%s/gh-issue-body.json"; exit 0 ;;\n' "$dir"
-  if [ "$protection" = "fail" ]; then
-    printf '  api) exit 1 ;;\n  *) exit 1 ;;\nesac\n'
-  else
-    printf '  api) cat "%s/gh-protection.json"; exit 0 ;;\n  *) exit 1 ;;\nesac\n' "$dir"
-  fi
+  case "$protection" in
+    fail)
+      printf '  api) exit 1 ;;\n  *) exit 1 ;;\nesac\n' ;;
+    rules-403)
+      cat <<EOF
+  api) case "\$2" in
+    "repos/acme/demo/branches/$branch/protection") printf '%s' '{"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","status":"403"}'; exit 1 ;;
+    "repos/acme/demo/rules/branches/$branch?per_page=100") printf '%s' '{"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","status":"403"}'; exit 1 ;;
+    *) exit 1 ;;
+  esac ;;
+  *) exit 1 ;;
+esac
+EOF
+      ;;
+    rules-exit1)
+      cat <<EOF
+  api) case "\$2" in
+    "repos/acme/demo/branches/$branch/protection") printf '%s' '{"message":"Branch not protected","status":"404"}'; exit 1 ;;
+    "repos/acme/demo/rules/branches/$branch?per_page=100") cat "$dir/gh-rules.json"; exit 1 ;;
+    *) exit 1 ;;
+  esac ;;
+  *) exit 1 ;;
+esac
+EOF
+      ;;
+    rules-*)
+      cat <<EOF
+  api) case "\$2" in
+    "repos/acme/demo/branches/$branch/protection") printf '%s' '{"message":"Branch not protected","status":"404"}'; exit 1 ;;
+    "repos/acme/demo/rules/branches/$branch?per_page=100") cat "$dir/gh-rules.json"; exit 0 ;;
+    *) exit 1 ;;
+  esac ;;
+  *) exit 1 ;;
+esac
+EOF
+      ;;
+    *)
+      printf '  api) cat "%s/gh-protection.json"; exit 0 ;;\n  *) exit 1 ;;\nesac\n' "$dir" ;;
+  esac
   } > "$dir/gh"
   chmod +x "$dir/gh"
 }
@@ -1887,16 +1958,16 @@ case_version_plugin_root_checkout() {
 # --- branch protection reporting (#234, review F4) -------------------------------------------
 # The two WARN stems below are hand-typed literals that must match bin/check-harness.sh's
 # PROTECTION_STRICT_WARN_STEM / PROTECTION_CHECKS_WARN_STEM verbatim — dev/selfcheck.sh
-# assertion 4.38 pins that agreement mechanically. Each case's comment states the single-clause
-# mutant actually run against bin/check-harness.sh and its measured result.
+# assertion 4.38 pins that agreement mechanically. Each case's comment names the single-clause
+# mutant actually run against bin/check-harness.sh.
 
 # protection-strict-true — merge policy + the stub's default "healthy" protection document
 # (required_status_checks.strict true, non-empty checks/contexts, required_pull_request_reviews
-# present): the strict PASS line prints, neither WARN stem prints, and the reviews line reads
-# "configured". Measured mutant: inverting the strict compare (`= "true"` -> `= "false"` on the
-# `if [ "$strict" = "true" ]` line) — failing exactly protection-strict-true, protection-strict-false,
-# protection-zero-contexts, and protection-no-status-checks (every fixture whose document
-# reaches the strict compare flips).
+# present): the strict PASS line prints, neither WARN stem prints, the reviews line reads
+# "configured", and no "(via rulesets)" suffix appears (the classic call succeeds). Measured
+# mutant: inverting the strict compare (`= "true"` -> `= "false"` on the `if [ "$strict" =
+# "true" ]` line) — the same shared block reads a ruleset-derived $prot unchanged (#418), so this
+# also flips whichever protection-ruleset-* fixtures reach the strict compare.
 case_protection_strict_true() {
   local dir; dir="$(mk_repo protection-strict-true merge verbatim)"
   local ghdir="$tmpbase/protection-strict-true-gh"
@@ -1907,14 +1978,16 @@ case_protection_strict_true() {
   expect_absent "branch protection: up-to-date branches are not required"
   expect_absent "branch protection: zero required status check contexts"
   expect "branch protection: required PR reviews are configured"
+  expect_absent "(via rulesets)"
 }
 
 # protection-strict-false — strict false, non-empty checks/contexts, required_pull_request_reviews
 # absent: the strict WARN stem prints, the contexts WARN stem is absent (contexts are non-zero),
 # and the reviews line reads "not configured". Measured mutant: the reviews jq filter's `if
 # .required_pull_request_reviews then "configured" else "not configured" end` replaced by the
-# constant "configured" — failing exactly protection-strict-false (the only new case whose fixture
-# has required_pull_request_reviews absent and asserts the "not configured" line).
+# constant "configured" — the same shared block reads a ruleset-derived $prot unchanged (#418), so
+# this also fails whichever protection-ruleset-* fixtures have no pull_request rule and assert the
+# "not configured" line.
 case_protection_strict_false() {
   local dir; dir="$(mk_repo protection-strict-false merge verbatim)"
   local ghdir="$tmpbase/protection-strict-false-gh"
@@ -1928,11 +2001,9 @@ case_protection_strict_false() {
 
 # protection-zero-contexts — strict true, both checks and contexts empty: the contexts WARN stem
 # prints, the strict WARN stem is absent. Measured mutant: the context-count comparison's `-gt 0`
-# widened to `-ge 0` (`if [ "$ctx_count" -ge 0 ]`, true for the zero count this fixture and
-# protection-no-status-checks both produce) — failing exactly protection-zero-contexts (its own
-# contexts WARN goes missing) and protection-no-status-checks (its contexts WARN also goes
-# missing, so its "both WARN stems" assertion fails too; its strict WARN, from a different clause,
-# is unaffected).
+# widened to `-ge 0` (`if [ "$ctx_count" -ge 0 ]`, true for any zero count this comparison sees) —
+# the same shared block reads a ruleset-derived $prot unchanged (#418), so this also fails
+# whichever protection-ruleset-* fixtures produce a zero context count.
 case_protection_zero_contexts() {
   local dir; dir="$(mk_repo protection-zero-contexts merge verbatim)"
   local ghdir="$tmpbase/protection-zero-contexts-gh"
@@ -1948,9 +2019,10 @@ case_protection_zero_contexts() {
 # "nothing required, so nothing to warn about"). Measured mutant: a guard added before the whole
 # strict/contexts/reviews block requiring `.required_status_checks != null`
 # (`if $has_merge_policy && $jq_ready && printf '%s' "$prot" | jq -e '.required_status_checks !=
-# null' >/dev/null 2>&1; then`), which skips the block entirely for this fixture's document only
-# — failing exactly protection-no-status-checks (every other fixture's document has a non-null
-# required_status_checks key, so the added guard never trips for them).
+# null' >/dev/null 2>&1; then`), which skips the block entirely whenever that key is absent — the
+# same shared block reads a ruleset-derived $prot unchanged (#418), so this also skips the block
+# for whichever protection-ruleset-* fixtures' normalised document has no required_status_checks
+# rule at all.
 case_protection_no_status_checks() {
   local dir; dir="$(mk_repo protection-no-status-checks merge verbatim)"
   local ghdir="$tmpbase/protection-no-status-checks-gh"
@@ -1979,14 +2051,13 @@ case_protection_no_policy() {
   expect "branch protection enabled on main"
 }
 
-# protection-endpoint-fails — the protection endpoint call itself fails (stub `api) exit 1`, no
-# document at all): today's "no branch protection detected on main" WARN prints and neither new
-# stem prints (the widened report never runs — there is no document to read). Measured mutant:
-# appending `|| true` to the api-capturing condition (`if [ -n "$repo_slug" ] && prot="$(gh api
-# ... 2>/dev/null)"; then` -> `... 2>/dev/null)" || true; then`), which makes the branch always
-# taken regardless of gh's exit status — failing exactly protection-endpoint-fails (the doctor now
-# claims "branch protection enabled on main" instead of the no-protection WARN; every other new
-# fixture's `gh api` call already succeeds, so `|| true` changes nothing for them).
+# protection-endpoint-fails — the protection endpoint call itself fails (stub `api) exit 1` on
+# every path, including the ruleset fallback path): today's "no branch protection detected on
+# main" WARN prints and neither new stem prints (the widened report never runs — there is no
+# document to read). Measured mutant: appending `|| true` to the classic api-capturing condition
+# (`if [ -n "$repo_slug" ] && prot="$(gh api ... 2>/dev/null)"; then` -> `... 2>/dev/null)" ||
+# true; then`), which makes the classic branch always taken regardless of gh's exit status — this
+# also breaks every protection-ruleset-* fixture, since the ruleset elif is then never reached.
 case_protection_endpoint_fails() {
   local dir; dir="$(mk_repo protection-endpoint-fails merge verbatim)"
   local ghdir="$tmpbase/protection-endpoint-fails-gh"
@@ -2022,6 +2093,130 @@ case_protection_no_claude_md() {
   expect "== summary:"
   expect_absent "branch protection: up-to-date branches are not required"
   expect_absent "branch protection: zero required status check contexts"
+}
+
+# --- branch protection: ruleset fallback (#418) -----------------------------------------------
+# When the classic `branches/<b>/protection` call fails, the doctor falls back to the branch's
+# effective ruleset rules (`rules/branches/<b>?per_page=100`). A ruleset counts as protection only
+# via a QUALIFYING rule — type pull_request, required_status_checks or update (amendment A1) — so
+# these fixtures also pin the qualifying-type filter, not just the fallback itself. The
+# strict/contexts/reviews sub-checks below run through the exact same shared block #234 already
+# pins above, fed a normalised document instead of the classic one.
+
+# protection-ruleset-healthy — the classic call fails but the effective rules include a qualifying
+# pull_request rule and a qualifying required_status_checks rule (strict true, two contexts),
+# alongside two non-qualifying rules (deletion, non_fast_forward): PASS labelled "(via rulesets)",
+# with the same three sub-check lines a classic document produces.
+# mutant:418-rules-fallback-dropped — forcing the ruleset elif to `elif false; then` drops the
+#   fallback entirely, so every PASSing protection-ruleset-* fixture falls through to "no branch
+#   protection detected" instead.
+# mutant:418-rules-pull-request — replacing the pull_request clause with a constant `{}` drops
+#   required_pull_request_reviews from the normalised document, so this fixture's "configured"
+#   line is replaced by "not configured".
+case_protection_ruleset_healthy() {
+  local dir; dir="$(mk_repo protection-ruleset-healthy merge verbatim)"
+  local ghdir="$tmpbase/protection-ruleset-healthy-gh"
+  build_stub_gh "$ghdir" main "" rules-healthy
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect "branch protection enabled on main (via rulesets)"
+  expect "branch protection: up-to-date branches are required before merge"
+  expect "branch protection: 2 required status check context(s) configured"
+  expect "branch protection: required PR reviews are configured"
+  expect_absent "no branch protection detected"
+  expect_absent "branch protection: up-to-date branches are not required"
+  expect_absent "branch protection: zero required status check contexts"
+}
+
+# protection-ruleset-multi — two qualifying required_status_checks rules (one org-sourced, strict
+# false, context "selfcheck"; one repo-sourced, strict true, contexts "selfcheck" and "lint") plus
+# a non-qualifying deletion rule, and no pull_request rule: strict reads true because ANY element
+# is strict, contexts is the UNIQUE UNION (2, not the naive sum of 3), and reviews reads "not
+# configured".
+# mutant:418-rules-any-strict — replacing `any($rsc[]; ...)` with `all($rsc[]; ...)` flips the
+#   strict PASS to the WARN, since the first element is not strict.
+# mutant:418-rules-context-union — dropping `| unique` from the contexts expression widens the
+#   count from 2 to 3 (the sum, double-counting "selfcheck").
+# mutant:418-rules-qualify-rsc — removing required_status_checks from the qualifying-type filter
+#   drops this fixture's only qualifying rule, so it falls through to "no branch protection
+#   detected" instead of PASSing.
+case_protection_ruleset_multi() {
+  local dir; dir="$(mk_repo protection-ruleset-multi merge verbatim)"
+  local ghdir="$tmpbase/protection-ruleset-multi-gh"
+  build_stub_gh "$ghdir" main "" rules-multi
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect "branch protection enabled on main (via rulesets)"
+  expect "branch protection: up-to-date branches are required before merge"
+  expect "branch protection: 2 required status check context(s) configured"
+  expect "branch protection: required PR reviews are not configured"
+  expect_absent "branch protection: up-to-date branches are not required"
+}
+
+# protection-ruleset-no-checks — the effective rules contain only non-qualifying types (deletion,
+# non_fast_forward): under amendment A1's qualifying-rule rule, this does NOT count as protection —
+# exactly today's "no branch protection detected" verdict, the same as an empty array.
+# mutant:418-rules-nonempty — widening `[ "$rules_n" -gt 0 ]` to `-ge 0` makes a zero
+#   qualifying-rule count also PASS, so this fixture (and protection-ruleset-empty, whose
+#   qualifying count is likewise zero) claims "branch protection enabled" instead.
+case_protection_ruleset_no_checks() {
+  local dir; dir="$(mk_repo protection-ruleset-no-checks merge verbatim)"
+  local ghdir="$tmpbase/protection-ruleset-no-checks-gh"
+  build_stub_gh "$ghdir" main "" rules-no-checks
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect "no branch protection detected on main"
+  expect_absent "branch protection enabled on main"
+}
+
+# protection-ruleset-empty — the rules endpoint returns `[]` (no rules at all): falls through to
+# exactly today's "no branch protection detected" verdict.
+# mutant:418-rules-nonempty — widening `[ "$rules_n" -gt 0 ]` to `-ge 0` makes a zero qualifying
+#   count also PASS, so this fixture claims "branch protection enabled" instead.
+case_protection_ruleset_empty() {
+  local dir; dir="$(mk_repo protection-ruleset-empty merge verbatim)"
+  local ghdir="$tmpbase/protection-ruleset-empty-gh"
+  build_stub_gh "$ghdir" main "" rules-empty
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect "no branch protection detected on main"
+  expect_absent "branch protection enabled on main"
+  expect_absent "branch protection: up-to-date branches are not required"
+  expect_absent "branch protection: zero required status check contexts"
+}
+
+# protection-ruleset-pr-only — the only rule is a qualifying pull_request rule (no
+# required_status_checks rule at all): PASS "(via rulesets)", the no-checks WARNs (strict false,
+# zero contexts, since there is no required_status_checks rule to read), and reviews "configured".
+# mutant:418-rules-qualify-pr — removing pull_request from the qualifying-type filter drops this
+#   fixture's only qualifying rule, so it falls through to "no branch protection detected" instead.
+case_protection_ruleset_pr_only() {
+  local dir; dir="$(mk_repo protection-ruleset-pr-only merge verbatim)"
+  local ghdir="$tmpbase/protection-ruleset-pr-only-gh"
+  build_stub_gh "$ghdir" main "" rules-pr-only
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect "branch protection enabled on main (via rulesets)"
+  expect "branch protection: up-to-date branches are not required"
+  expect "branch protection: zero required status check contexts"
+  expect "branch protection: required PR reviews are configured"
+}
+
+# protection-ruleset-update-only — the only rule is a qualifying update rule (no
+# required_status_checks or pull_request rule): PASS "(via rulesets)" — update counts toward
+# protection on its own — and the no-checks WARNs, with reviews reading "not configured".
+# mutant:418-rules-qualify-update — removing update from the qualifying-type filter drops this
+#   fixture's only qualifying rule, so it falls through to "no branch protection detected" instead.
+case_protection_ruleset_update_only() {
+  local dir; dir="$(mk_repo protection-ruleset-update-only merge verbatim)"
+  local ghdir="$tmpbase/protection-ruleset-update-only-gh"
+  build_stub_gh "$ghdir" main "" rules-update-only
+  run_doctor "$dir" "$ghdir:$PATH"
+  expect_rc 0
+  expect "branch protection enabled on main (via rulesets)"
+  expect "branch protection: up-to-date branches are not required"
+  expect "branch protection: zero required status check contexts"
+  expect "branch protection: required PR reviews are not configured"
 }
 
 # --- autonomy mode (#311) -----------------------------------------------------------------------
@@ -3784,8 +3979,8 @@ EOF
 
 # codex-doctor-protection-missing — the branch-protection endpoint call itself fails (no document
 # at all) -> FAIL naming the branch, and rc 1 (a hard floor on Codex, unlike Claude's WARN).
-# mutant:410-protection-fail — turning the Codex arm's `bad` into `wrn` demotes this back to a
-#   WARN, so rc stays 0.
+# mutant:410-protection-fail — turning the Codex arm's `bad` into `wrn` demotes every fixture that
+#   reaches this line back to a WARN, so rc stays 0.
 case_codex_doctor_protection_missing() {
   mk_cx_doctor cx-doctor-protection-missing
   local ghdir="$tmpbase/cx-doctor-protection-missing-gh"
@@ -3819,6 +4014,62 @@ EOF
   mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
   run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$ghdir:$PATH" --provider codex
   expect "branch protection: could not check"
+  expect_rc 1
+}
+
+# codex-doctor-protection-ruleset — the classic protection endpoint fails but the branch's
+# effective ruleset rules include a qualifying required_status_checks rule -> PASS labelled "(via
+# rulesets)", not a FAIL, and rc 0 (#418).
+# mutant:418-rules-fallback-dropped — see the protection-ruleset-* fixtures near
+#   case_protection_ruleset_healthy.
+case_codex_doctor_protection_ruleset() {
+  mk_cx_doctor cx-doctor-protection-ruleset
+  local ghdir="$tmpbase/cx-doctor-protection-ruleset-gh"
+  build_stub_gh "$ghdir" main "" rules-healthy
+  local cxstub="$tmpbase/cx-doctor-protection-ruleset-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$ghdir:$PATH" --provider codex
+  expect "branch protection enabled on main (via rulesets)"
+  expect_absent "no branch protection detected"
+  expect_rc 0
+}
+
+# codex-doctor-protection-ruleset-403 — both the classic call and the rules call fail with HTTP 403
+# (a plan without rulesets): exactly today's FAIL, never a PASS, and rc 1 (#418).
+# mutant:410-protection-fail — see case_codex_doctor_protection_missing above.
+case_codex_doctor_protection_ruleset_403() {
+  mk_cx_doctor cx-doctor-protection-ruleset-403
+  local ghdir="$tmpbase/cx-doctor-protection-ruleset-403-gh"
+  build_stub_gh "$ghdir" main "" rules-403
+  local cxstub="$tmpbase/cx-doctor-protection-ruleset-403-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$ghdir:$PATH" --provider codex
+  expect "no branch protection detected on main"
+  expect_absent "branch protection enabled on main"
+  expect_rc 1
+}
+
+# codex-doctor-protection-ruleset-exit1 — the rules call prints a qualifying array (rules-healthy's)
+# but exits 1: only the call's own exit status rejects it, so the verdict is exactly today's FAIL,
+# never a PASS, rc 1 (#418). The 403 case above can't pin that gate on its own — its object body
+# already counts as zero through the array guard and the objects filter.
+# mutant:418-rules-exit-gate — the rules call's exit status is ignored, so a failed call's
+# qualifying stdout reaches the PASS.
+case_codex_doctor_protection_ruleset_exit1() {
+  mk_cx_doctor cx-doctor-protection-ruleset-exit1
+  local ghdir="$tmpbase/cx-doctor-protection-ruleset-exit1-gh"
+  build_stub_gh "$ghdir" main "" rules-exit1
+  local cxstub="$tmpbase/cx-doctor-protection-ruleset-exit1-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$ghdir:$PATH" --provider codex
+  expect "no branch protection detected on main"
+  expect_absent "branch protection enabled on main"
   expect_rc 1
 }
 
@@ -3948,6 +4199,12 @@ cases=(
   "protection-no-policy|case_protection_no_policy|branch protection (#234): no Merge autonomy policy section -> neither WARN stem, today's PASS line unchanged"
   "protection-endpoint-fails|case_protection_endpoint_fails|branch protection (#234): protection endpoint call fails -> today's WARN only"
   "protection-no-claude-md|case_protection_no_claude_md|branch protection (#234): no CLAUDE.md at all -> set -u hoist proven by the summary footer still printing"
+  "protection-ruleset-healthy|case_protection_ruleset_healthy|branch protection (#418): classic call fails, a qualifying pull_request + required_status_checks rule exists -> PASS (via rulesets), same three sub-check lines"
+  "protection-ruleset-multi|case_protection_ruleset_multi|branch protection (#418): two required_status_checks rules -> strict if any, contexts as the unique union (2, not 3), reviews not configured"
+  "protection-ruleset-no-checks|case_protection_ruleset_no_checks|branch protection (#418): only non-qualifying rules (deletion, non_fast_forward) -> no branch protection detected, same as empty"
+  "protection-ruleset-empty|case_protection_ruleset_empty|branch protection (#418): rules endpoint returns [] -> no branch protection detected"
+  "protection-ruleset-pr-only|case_protection_ruleset_pr_only|branch protection (#418): only a qualifying pull_request rule -> PASS (via rulesets), no-checks WARNs, reviews configured"
+  "protection-ruleset-update-only|case_protection_ruleset_update_only|branch protection (#418): only a qualifying update rule -> PASS (via rulesets), no-checks WARNs, reviews not configured"
   "autonomy-mode-off|case_autonomy_mode_off|autonomy mode (#311): no 'Autonomy mode' section -> PASS off, no permissions.defaultMode line"
   "autonomy-mode-deny-in-place|case_autonomy_mode_deny_in_place|autonomy mode (#311): mode: autonomous with no Merge autonomy policy section and the deny still in place -> half-activated WARN and CI pinning WARN fire from the implied activation, post-merge verification stays silent"
   "autonomy-mode-active|case_autonomy_mode_active|autonomy mode (#311): mode: autonomous plus a lifted deny and allow entry -> merge autonomy: active"
@@ -4024,6 +4281,9 @@ cases=(
   "codex-doctor-manual-merge|case_codex_doctor_manual_merge|#410: CLAUDE.md declares Merge autonomy policy and Autonomy mode -> PASS naming both as not applying on Codex; neither Claude-only verdict line prints"
   "codex-doctor-protection-missing|case_codex_doctor_protection_missing|#410: the branch-protection endpoint call fails -> FAIL (hard floor on Codex, unlike Claude's WARN)"
   "codex-doctor-protection-unknown|case_codex_doctor_protection_unknown|#410: gh never authenticates, default branch unknown -> FAIL could not check, never a silent skip"
+  "codex-doctor-protection-ruleset|case_codex_doctor_protection_ruleset|#418: classic call fails, a qualifying ruleset rule exists -> PASS (via rulesets), not a FAIL, rc 0"
+  "codex-doctor-protection-ruleset-403|case_codex_doctor_protection_ruleset_403|#418: both the classic and rules calls fail with HTTP 403 -> exactly today's FAIL, rc 1"
+  "codex-doctor-protection-ruleset-exit1|case_codex_doctor_protection_ruleset_exit1|#418: the rules call prints a qualifying array but exits 1 -> exactly today's FAIL, rc 1"
   "codex-doctor-jq-missing|case_codex_doctor_jq_missing|#410: no jq anywhere on a closed PATH -> the Codex-specific hooks/planner-guard.sh clause on the jq FAIL, hook trust could not check"
   "codex-doctor-git-missing|case_codex_doctor_git_missing|#410: no git anywhere on a closed PATH -> the Codex-only git precheck FAILs and exits before anything else runs"
   "codex-doctor-usage|case_codex_doctor_usage|#410: --provider bogus and an unrelated unknown flag exit 2; --help exits 0 naming --provider; --provider claude is unchanged (no codex version line)"

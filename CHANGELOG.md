@@ -21,6 +21,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 - #415: `project-kickoff` and standalone `test-ratchet` gain a supervised Codex path
   (docs/reference/codex.md); not live-verified. In a new project directory, `git init` comes
   before `codex-setup.sh`.
+- #418: the doctor recognises repository/organization rulesets as default-branch protection (falls
+  back to the branch's effective rules when classic protection is absent, and counts a ruleset as
+  protection only via a qualifying `pull_request`, `required_status_checks` or `update` rule); a
+  failed rules lookup keeps today's WARN/FAIL.
 
 ## v3.0.0
 
