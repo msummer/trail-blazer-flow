@@ -241,11 +241,13 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    PR's fault — escalates durably instead of blocking the run (#309, see
    `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection). If the failure was a
    project gotcha, **append it to `LESSONS.md`**.
-8. Never merges (merging is the human's, or the cycle's merge pass under an opt-in policy —
-   see "The CLAUDE.md contract"). Blockers → local `wip:` branch + `impl-blocked` label +
+8. Never merges (merging is the human's, or, on Claude Code only, the cycle's merge pass under an
+   opt-in policy — see "The CLAUDE.md contract"; never on Codex, see
+   [`docs/reference/codex.md`](codex.md)). Blockers → local `wip:` branch + `impl-blocked` label +
    explanatory comment.
 
-**Worktree-parallel mode:** never used inside the cycle's serial merge train (item 9) — the train
+**Worktree-parallel mode:** never on Codex (see [`docs/reference/codex.md`](codex.md)); on
+Claude Code, never used inside the cycle's serial merge train (item 9) — the train
 hands the implementer one issue at a time. When 2+ approved plans have pairwise **disjoint Affected areas**
 (production + test files), the orchestrator may create one git worktree per issue and dispatch up
 to **4 implementers concurrently**, acting as their **supervisor**: it tracks each worktree in an

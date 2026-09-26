@@ -28,6 +28,10 @@ review; no merge autonomy policy or implied autonomy (or `gh pr merge` still den
 PRs awaiting merge — both the
 human's.
 
+**On Codex** (not Claude Code): before step 0, read `../../docs/reference/codex.md`
+"Running the skills on Codex" (relative to this SKILL.md's directory), and apply it throughout
+the run — no merge pass ever runs, and "Autonomy mode" is read as absent.
+
 ## Dispatch ledger
 
 A cycle tracks every issue it touches in a **per-issue dispatch ledger**, kept **in the run's
@@ -70,7 +74,7 @@ acquire from this same live session would itself refuse and abort the run). **Re
 every exit:** this lock is released at step 5's close AND on every STOP/abort path in this skill
 or a sub-skill it runs (red baseline, exhausted retry ladder, dirty-tree stop, a stop-switch stop)
 — the recorded pid
-is the Claude Code session, which outlives the run, so a lock left unreleased here blocks this
+is the harness session, which outlives the run, so a lock left unreleased here blocks this
 checkout's very next invocation until a human runs `release --force`.
 
 **Stop check.** Immediately after the lock acquire above, before the implementer pre-flight below:
@@ -119,7 +123,7 @@ follow it; never otherwise. Fill in the `implemented` and `verified` columns fro
 table; **pre-advance check** applies as in step 1. If step 1 produced nothing to implement and
 nothing was already approved, skip this pass.
 
-### 3. Merge pass (only under a repo merge autonomy policy)
+### 3. Merge pass (only under a repo merge autonomy policy; never on Codex)
 
 **Stop check** before this pass — see *Stop switch* below.
 
@@ -494,8 +498,8 @@ may under-report; never report every issue accounted for when reconcile-ledger.s
 exit 0). `contradiction` →
 report with evidence, treat as unfinished. `unledgered` → usually a mid-run filing (say so, let the
 next cycle take it; name a ratchet-pass filing as such, not a discrepancy) — unless it was in the
-pre-flight discovery output, in which case the seed step missed it: escalate that. No script on
-PATH → fall back to comparing the ledger against the JSON by hand, same criteria.
+pre-flight discovery output, in which case the seed step missed it: escalate that. Script not
+found → fall back to comparing the ledger against the JSON by hand, same criteria.
 
 **Per-issue summary table**, before the two-halves report: issue, planned / implemented /
 verified / merged (outcome or "—"), retries, duration, final state, escalations.

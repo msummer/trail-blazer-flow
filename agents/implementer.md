@@ -79,6 +79,10 @@ the current branch, and return a clear report.
   allow. If a Bash call is blocked, its stderr names the boundary and the command it blocked —
   that's expected and is the harness's own control working correctly; don't try to work around it
   (e.g. via `bash -c`, an absolute `git` path, or another interpreter).
+- **Hook canary (Codex only).** When your prompt contains a "Hook canary (Codex)" block, its one
+  command, `gh --version`, is the single exception to the rule above. Run it first, exactly as
+  written, and follow the block. Being denied is the expected result, and proves the harness's
+  hooks guard your role. Never run it otherwise.
 - **No changes against live data stores.** If the plan needs a schema or data-model change,
   follow the project's migration conventions in CLAUDE.md (e.g. add a new migration file; never
   edit an already-applied one) and note in your report that applying it is a human step. Do not
@@ -113,7 +117,8 @@ the current branch, and return a clear report.
 
 # Report template
 
-Return exactly this structure (Markdown), and nothing before or after it. The closing status
+Return exactly this structure (Markdown), and nothing before or after it (on Codex, except the
+one `Canary:` line a hook-canary block asks for, which comes first). The closing status
 line's `issue` and `retries` values come from the orchestrator's prompt (the issue number, and
 `Dispatch attempt: <k>` if present — echo `retries=<k-1>`, or `retries=0` if the prompt states no
 attempt number); `harness` comes from the prompt's `Harness version: <version>` line — echo

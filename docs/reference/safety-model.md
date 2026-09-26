@@ -449,9 +449,11 @@ in the main session, across every hook that could plausibly see it. It is harmle
 (it only prints a version string), so denying it costs nothing; a denial for one of these roles is
 a live signal that the hooks are loaded, trusted by the host (Claude Code or Codex), and actually
 firing for that session — the opposite of every fail-open class this document catalogues, which
-degrade silently. It is documented here and pinned only by `dev/hook-tests.sh` fixtures (prefix
-`canary-`), with no separate mechanical declaration tying this specific command to the skill text
-that might one day use it as a pre-dispatch self-test (see #409, out of scope for #407).
+degrade silently. It is documented here and pinned by `dev/hook-tests.sh` fixtures (prefix
+`canary-`). On Codex the skills run it as a pre-dispatch self-test before every agent spawn — see
+[`codex.md`](codex.md)'s "Running the skills on Codex" — with no gate assertion coupling the
+skill text to the fixtures (a review-level convention, per CLAUDE.md's machine-parsed-artifacts
+rule).
 
 **On Codex (ADR 0002 amendment).** `hooks/git-c-guard.sh`'s `if` gate is dropped entirely under
 Codex, leaving that hook inert there — worktree-parallel mode is off on Codex regardless.

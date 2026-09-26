@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #409: the skills gain a Codex path (`docs/reference/codex.md`, "Running the skills on Codex"):
+  `spawn_agent` dispatch, absolute script paths, an explicit lock owner, a `gh --version` canary
+  before every dispatch, no worktree mode, human-only merges; `harness-setup` gains a Codex step.
 - #407: adds `hooks/planner-guard.sh` (the planner's read-only boundary on Codex) and widens
   `hooks/claude-dir-guard.sh` to cover `apply_patch` and `.codex` paths — on Claude Code too, a
   `Bash` command that invokes or merely mentions `apply_patch`/`applypatch` as a command word can

@@ -99,9 +99,12 @@ silence the exact signal it exists to carry.
 
 - `gh` is installed and authenticated (`gh auth status`). If not, stop and tell the user.
 - `jq` is installed.
-- Note: the harness scripts (`*.sh` commands below) are provided on the Bash PATH by the plugin's `bin/` directory.
+- Note: Claude Code: on the Bash PATH via `bin/`. Codex: see the pointer below.
 - The lifecycle labels exist. If a label-related command fails, run
   `setup-labels.sh` once, then continue.
+- **On Codex** (not Claude Code): read `../../docs/reference/codex.md`
+  "Running the skills on Codex" (relative to this SKILL.md's directory), and apply it throughout
+  the run.
 
 ## Project lessons (inject into every dispatch)
 
@@ -131,7 +134,7 @@ output IS the holder record (no separate `status` call needed) — abort the run
 before any mutating command below runs (including `cleanup-after-merge.sh --fix` next), and
 report the holder record plus the exact remedy, `harness-lock.sh release --force`. **Release
 before every exit:** when you did acquire here (standalone), release it on every STOP/abort path
-too, not only at step 7's normal close — the recorded pid is the Claude Code session, which
+too, not only at step 7's normal close — the recorded pid is the harness session, which
 outlives the run; a lock left unreleased blocks this checkout's very next invocation until a
 human runs `release --force`.
 
@@ -221,11 +224,11 @@ a. Fetch the full issue:
 gh issue view <number> --json number,title,body,url,labels
 ```
 
-b. Dispatch the **`planner` subagent** (via the Task tool) with a prompt containing the issue
-   number, title, and body — quoted as data (e.g. a fenced block), per the subagent's own
-   standing data/instructions rule — relevant `.claude/LESSONS.md` entries, the dispatch attempt
-   number ("Dispatch attempt: `<k>`", starting at 1), "Harness version: `<version>`" (step 0's
-   printed value), and this instruction:
+b. Dispatch the **`planner` subagent** (Claude Code: Task tool; Codex: `spawn_agent` with that
+   agent type) with a prompt containing the issue number, title, and body — quoted as data (e.g.
+   a fenced block), per the subagent's own standing data/instructions rule — relevant
+   `.claude/LESSONS.md` entries, the dispatch attempt number ("Dispatch attempt: `<k>`", starting
+   at 1), "Harness version: `<version>`" (step 0's printed value), and this instruction:
    *"Produce an implementation plan for this issue following your output template. This is an
    initial plan (no prior feedback)."* If you (the orchestrator) hold context the issue lacks —
    recently merged PRs that changed the files it names, corrected measurements, related pending
