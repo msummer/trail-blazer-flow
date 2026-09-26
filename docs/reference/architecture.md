@@ -40,16 +40,17 @@
 │   ├── codex-setup.sh             # installs the Codex compatibility layer into a repo: agent TOMLs, rules, contract loading (#408)
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
-│   ├── hooks.json                 # registers the four PreToolUse hooks below
+│   ├── hooks.json                 # registers the five PreToolUse hooks below
 │   ├── git-c-guard.sh             # approves only the exact git -C <worktree> <subcommand> forms worktree-parallel mode issues
 │   ├── agent-boundary.sh          # mechanically denies git/gh Bash commands, and a Bash write into .claude/, for the implementer/verifier subagents (#235, #340, #387)
 │   ├── push-guard.sh              # mechanically denies any git push whose destination is the default branch, every session (#260)
-│   └── claude-dir-guard.sh        # mechanically denies an implementer/verifier Edit or Write to any .claude/ path (#327)
+│   ├── claude-dir-guard.sh        # mechanically denies an implementer/verifier Edit, Write, apply_patch, or apply_patch-shaped Bash call into any .claude/.codex path (#327, #407)
+│   └── planner-guard.sh           # mechanically enforces the planner subagent's read-only boundary (allowlist; fails closed) (#407)
 ├── dev/
 │   ├── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
 │   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
 │   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh, bin/governance-paths.sh, AND bin/codex-setup.sh (not run by the gate)
-│   ├── hook-tests.sh             # fixture-based negative-test harness for hooks/git-c-guard.sh, hooks/agent-boundary.sh, hooks/push-guard.sh, AND hooks/claude-dir-guard.sh (not run by the gate)
+│   ├── hook-tests.sh             # fixture-based negative-test harness for all five hooks/*.sh scripts, including Codex-shaped payload fixtures (#407) (not run by the gate)
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 │   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
 │   ├── lock-tests.sh             # fixture-based negative-test harness for bin/harness-lock.sh (not run by the gate)
@@ -61,7 +62,7 @@
 │   ├── reference/                # the detailed spec: workflow, CLAUDE.md contract, settings, safety model
 │   └── adr/                      # architecture decision records: direction the spec doesn't cover yet
 ├── .github/
-│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the four hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness, then the stop switch script's negative-test harness, then the mutant driver (post-merge/nightly/dispatch only), then the driver's own negative-test harness — on ubuntu-latest per PR and, pinned to Apple's bash 3.2, on macos-latest post-merge and nightly (#365)
+│   ├── workflows/selfcheck.yml # CI: gate, then its negative-test harness, then the doctor's negative-test harness, then the five hooks' shared negative-test harness, then the cleanup script's negative-test harness, then the two discovery scripts' shared negative-test harness, then the lock script's negative-test harness, then the stop switch script's negative-test harness, then the mutant driver (post-merge/nightly/dispatch only), then the driver's own negative-test harness — on ubuntu-latest per PR and, pinned to Apple's bash 3.2, on macos-latest post-merge and nightly (#365)
 │   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
 └── templates/
     ├── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)

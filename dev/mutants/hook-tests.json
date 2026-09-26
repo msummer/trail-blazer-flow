@@ -536,6 +536,712 @@
       "expect_fail": [
         "ab-kw-deny-verifier-upper-sub"
       ]
+    },
+    {
+      "name": "407-cdg-patch-tools",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-patch-",
+      "edits": [
+        {
+          "from": "PATCH_TOOLS=\"apply_patch\"\n",
+          "to": "PATCH_TOOLS=\"\"\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-patch-deny-abs-header",
+        "cdg-patch-deny-add-claude",
+        "cdg-patch-deny-case-variant",
+        "cdg-patch-deny-codex",
+        "cdg-patch-deny-codex-case",
+        "cdg-patch-deny-delete",
+        "cdg-patch-deny-dotdot",
+        "cdg-patch-deny-empty-command",
+        "cdg-patch-deny-empty-path",
+        "cdg-patch-deny-indented-header",
+        "cdg-patch-deny-move-to",
+        "cdg-patch-deny-no-cwd",
+        "cdg-patch-deny-no-header",
+        "cdg-patch-deny-second-file",
+        "cdg-patch-deny-unknown-header",
+        "cdg-patch-deny-update-ns",
+        "cdg-patch-deny-verifier",
+        "cdg-patch-never-executes"
+      ]
+    },
+    {
+      "name": "407-cdg-codex-arm",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-",
+      "edits": [
+        {
+          "from": "    */.[Cc][Oo][Dd][Ee][Xx]/*)\n",
+          "to": "    */.[Cc][Oo][Dd][Ee][Xx]Z/*)\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-codexseg-deny-verifier-edit-ns",
+        "cdg-codexseg-deny-write",
+        "cdg-patch-deny-codex",
+        "cdg-patch-deny-codex-case"
+      ]
+    },
+    {
+      "name": "407-cdg-codex-exact",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-",
+      "edits": [
+        {
+          "from": "    */.[Cc][Oo][Dd][Ee][Xx]/*)\n",
+          "to": "    *[Cc][Oo][Dd][Ee][Xx]*)\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-bash-noop-heredoc-codex-name",
+        "cdg-codexseg-noop-backup",
+        "cdg-codexseg-noop-my-codex",
+        "cdg-patch-noop-near-miss"
+      ]
+    },
+    {
+      "name": "407-cdg-cwd-join",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-patch-",
+      "edits": [
+        {
+          "from": "              p=\"$pcwd/$hdr_path\"\n",
+          "to": "              p=\"$hdr_path\"\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-patch-deny-move-to",
+        "cdg-patch-deny-second-file",
+        "cdg-patch-noop-add-src",
+        "cdg-patch-noop-content-mentions",
+        "cdg-patch-noop-crlf",
+        "cdg-patch-noop-near-miss",
+        "cdg-patch-noop-update-readme"
+      ]
+    },
+    {
+      "name": "407-cdg-all-headers",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-patch-",
+      "edits": [
+        {
+          "from": "        classify_path \"$ptool\" \"$p\"\n        ;;\n",
+          "to": "        classify_path \"$ptool\" \"$p\"\n        break\n        ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-patch-deny-move-to",
+        "cdg-patch-deny-second-file"
+      ]
+    },
+    {
+      "name": "407-cdg-unknown-marker",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-patch-",
+      "edits": [
+        {
+          "from": "        deny_patch_unparseable \"unrecognised marker: $line\"\n",
+          "to": "        : # deny_patch_unparseable \"unrecognised marker: $line\" (disabled by mutant)\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-patch-deny-unknown-header"
+      ]
+    },
+    {
+      "name": "407-cdg-no-header",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-patch-",
+      "edits": [
+        {
+          "from": "  [ \"$headers\" -gt 0 ] || deny_patch_unparseable \"no file header\"\n",
+          "to": "  [ \"$headers\" -ge 0 ] || deny_patch_unparseable \"no file header\"\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-patch-deny-no-header"
+      ]
+    },
+    {
+      "name": "407-cdg-trim",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-patch-",
+      "edits": [
+        {
+          "from": "    line=\"$(ltrim \"$raw_line\")\"\n",
+          "to": "    line=\"$raw_line\"\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-patch-deny-indented-header"
+      ]
+    },
+    {
+      "name": "407-cdg-patch-cr",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-patch-",
+      "edits": [
+        {
+          "from": "  patch=\"${patch_cmd//$cr/}\"\n",
+          "to": "  patch=\"$patch_cmd\"\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-patch-noop-crlf"
+      ]
+    },
+    {
+      "name": "407-cdg-empty-command",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-patch-",
+      "edits": [
+        {
+          "from": "  [ -n \"$patch_cmd\" ] || deny_patch_unparseable \"no command\"\n",
+          "to": "  [ -n \"$patch_cmd\" ] || exit 0\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-patch-deny-empty-command"
+      ]
+    },
+    {
+      "name": "407-plg-fastpath",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "  *planner*) : ;;\n",
+          "to": "  *plannerZZZ*) : ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-abs-path",
+        "plg-deny-apply-patch",
+        "plg-deny-apply-patch-heredoc",
+        "plg-deny-assignment",
+        "plg-deny-background",
+        "plg-deny-backslash",
+        "plg-deny-backtick",
+        "plg-deny-bang",
+        "plg-deny-bash-c",
+        "plg-deny-brace",
+        "plg-deny-chain-rm",
+        "plg-deny-dollar-paren",
+        "plg-deny-dquote-subst",
+        "plg-deny-edit-ns",
+        "plg-deny-empty-command",
+        "plg-deny-find",
+        "plg-deny-gh",
+        "plg-deny-git-commit",
+        "plg-deny-git-diff-output",
+        "plg-deny-git-ext-diff",
+        "plg-deny-git-global-opt",
+        "plg-deny-git-grep",
+        "plg-deny-git-grep-abbrev",
+        "plg-deny-git-restore",
+        "plg-deny-multiline",
+        "plg-deny-pipe-tee",
+        "plg-deny-plan-mode",
+        "plg-deny-process-subst",
+        "plg-deny-redirect",
+        "plg-deny-rg-hostname-bin",
+        "plg-deny-rg-pre",
+        "plg-deny-sed-inplace",
+        "plg-deny-sed-range-suffix",
+        "plg-deny-sed-trailing-opt",
+        "plg-deny-sed-w",
+        "plg-deny-stderr-devnull",
+        "plg-deny-subshell",
+        "plg-deny-touch",
+        "plg-deny-unterminated",
+        "plg-deny-write-bare",
+        "plg-never-executes-deny"
+      ]
+    },
+    {
+      "name": "407-plg-edit-tools",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "PLANNER_EDIT_TOOLS=\"Edit Write apply_patch\"\n",
+          "to": "PLANNER_EDIT_TOOLS=\"\"\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-apply-patch",
+        "plg-deny-edit-ns",
+        "plg-deny-write-bare"
+      ]
+    },
+    {
+      "name": "407-plg-git-restore",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "PLANNER_GIT_READONLY=\"status diff log show rev-parse ls-files merge-base blame\"\n",
+          "to": "PLANNER_GIT_READONLY=\"status diff log show rev-parse ls-files merge-base blame restore\"\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-git-restore"
+      ]
+    },
+    {
+      "name": "407-plg-git-opts",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "          --output*|--ext-diff) return 1 ;;\n",
+          "to": "          --ext-diff) return 1 ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-git-diff-output"
+      ]
+    },
+    {
+      "name": "407-plg-redirect",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "  reject = \"$`\" \"\\\\\" \"<>(){}!\"\n",
+          "to": "  reject = \"$`\" \"\\\\\" \"<(){}!\"\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-redirect",
+        "plg-deny-stderr-devnull"
+      ]
+    },
+    {
+      "name": "407-plg-backtick",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "  reject = \"$`\" \"\\\\\" \"<>(){}!\"\n",
+          "to": "  reject = \"$\" \"\\\\\" \"<>(){}!\"\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-backtick"
+      ]
+    },
+    {
+      "name": "407-plg-dquote-dollar",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "      if (c == \"$\" || c == \"`\" || c == \"\\\\\") { ok = 0; break }\n",
+          "to": "      if (c == \"`\" || c == \"\\\\\") { ok = 0; break }\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-dquote-subst"
+      ]
+    },
+    {
+      "name": "407-plg-multiline",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "  if (NR > 1) ok = 0\n",
+          "to": "  if (NR > 999999) ok = 0\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-multiline"
+      ]
+    },
+    {
+      "name": "407-plg-lone-amp",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "      if (c == \"&\") {\n        nc = (i < n) ? substr($0, i + 1, 1) : \"\"\n        if (nc == \"&\") {\n          if (havetoken) { print \"T\" token; token = \"\"; havetoken = 0 }\n          print \"S\"\n          i += 2\n          continue\n        }\n        ok = 0; break\n      }\n",
+          "to": "      if (c == \"&\") {\n        nc = (i < n) ? substr($0, i + 1, 1) : \"\"\n        if (havetoken) { print \"T\" token; token = \"\"; havetoken = 0 }\n        print \"S\"\n        i += (nc == \"&\") ? 2 : 1\n        continue\n      }\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-background"
+      ]
+    },
+    {
+      "name": "407-plg-sed-shape",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "    sed)\n      local t2=\"${3:-}\" tok\n      [ \"$t1\" = \"-n\" ] || return 1\n      [[ \"$t2\" =~ $PLANNER_SED_RANGE_ERE ]] || return 1\n      shift 3\n      for tok in \"$@\"; do\n        case \"$tok\" in\n          -*) return 1 ;;\n        esac\n      done\n      ;;\n",
+          "to": "    sed)\n      ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-sed-inplace",
+        "plg-deny-sed-range-suffix",
+        "plg-deny-sed-trailing-opt",
+        "plg-deny-sed-w"
+      ]
+    },
+    {
+      "name": "407-plg-rg-pre",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "          --pre*|--hostname-bin*) return 1 ;;\n",
+          "to": "          --hostname-bin*) return 1 ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-rg-pre"
+      ]
+    },
+    {
+      "name": "407-plg-empty-command",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "if [ -z \"$cmd\" ]; then\n  printf '%s planner role'\"'\"'s shell command is empty, and is denied fail-closed\\n' \\\n    \"$PLANNER_DENY_STEM\" >&2\n  exit 2\nfi\n",
+          "to": "if [ -z \"$cmd\" ]; then\n  printf '%s planner role'\"'\"'s shell command is empty, and is denied fail-closed\\n' \\\n    \"$PLANNER_DENY_STEM\" >&2\n  exit 0\nfi\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-empty-command"
+      ]
+    },
+    {
+      "name": "407-plg-plan-skip",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "[ -n \"$role\" ] || exit 0\n\ntool_name=\"$(printf '%s' \"$input\" | jq -r '.tool_name? // empty' 2>/dev/null)\"\n",
+          "to": "[ -n \"$role\" ] || exit 0\n\npmode407=\"$(printf '%s' \"$input\" | jq -r '.permission_mode? // empty' 2>/dev/null)\"\n[ \"$pmode407\" != \"plan\" ] || exit 0\n\ntool_name=\"$(printf '%s' \"$input\" | jq -r '.tool_name? // empty' 2>/dev/null)\"\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-plan-mode"
+      ]
+    },
+    {
+      "name": "407-canary-ab-gh",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "canary-",
+      "edits": [
+        {
+          "from": "    gh)\n      deny_cmd=\"gh\"\n      break\n      ;;\n",
+          "to": "    ghZZZ)\n      deny_cmd=\"gh\"\n      break\n      ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "canary-implementer",
+        "canary-implementer-ns",
+        "canary-verifier",
+        "canary-verifier-ns"
+      ]
+    },
+    {
+      "name": "407-canary-plg-gh",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "canary-",
+      "edits": [
+        {
+          "from": "PLANNER_READONLY_COMMANDS=\"cat head tail ls pwd wc grep rg nl sed git echo printf true diff cmp stat basename dirname jq cut tr\"\n",
+          "to": "PLANNER_READONLY_COMMANDS=\"cat head tail ls pwd wc grep rg nl sed git echo printf true diff cmp stat basename dirname jq cut tr gh\"\n"
+        }
+      ],
+      "expect_fail": [
+        "canary-planner",
+        "canary-planner-ns"
+      ]
+    },
+    {
+      "name": "407-cdg-bash-trigger",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-bash-",
+      "edits": [
+        {
+          "from": "    [ \"$line\" = \"*** Begin Patch\" ] && found=0\n",
+          "to": "    [ \"$line\" = \"*** Begin PatchZZZ\" ] && found=0\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-bash-deny-backslash-indented-begin-patch",
+        "cdg-bash-noop-heredoc-claude-md",
+        "cdg-bash-noop-heredoc-codex-name",
+        "cdg-bash-noop-heredoc-src"
+      ]
+    },
+    {
+      "name": "407-cdg-bash-no-inline-patch",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-bash-",
+      "edits": [
+        {
+          "from": "elif is_apply_patch_word \"$bash_cmd\"; then\n",
+          "to": "elif false && is_apply_patch_word \"$bash_cmd\"; then\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-bash-deny-leading-redirect",
+        "cdg-bash-deny-leading-redirect-append",
+        "cdg-bash-deny-leading-redirect-clobber",
+        "cdg-bash-deny-leading-redirect-fd",
+        "cdg-bash-deny-leading-redirect-fd-append",
+        "cdg-bash-deny-leading-redirect-fd-dup",
+        "cdg-bash-deny-leading-redirect-fd-dup2",
+        "cdg-bash-deny-leading-redirect-in-dup",
+        "cdg-bash-deny-no-inline-patch",
+        "cdg-bash-deny-no-inline-patch-assignment",
+        "cdg-bash-deny-no-inline-patch-brace",
+        "cdg-bash-deny-no-inline-patch-chain",
+        "cdg-bash-deny-no-inline-patch-cmdsubst",
+        "cdg-bash-deny-no-inline-patch-glued",
+        "cdg-bash-deny-no-inline-patch-gt",
+        "cdg-bash-deny-no-inline-patch-keyword",
+        "cdg-bash-deny-no-inline-patch-pipe",
+        "cdg-bash-deny-no-inline-patch-subshell",
+        "cdg-bash-deny-path-qualified",
+        "cdg-bash-never-executes-no-inline-patch"
+      ]
+    },
+    {
+      "name": "407-cdg-bash-decoy-claude-mention",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-bash-",
+      "edits": [
+        {
+          "from": "      *.[Cc][Ll][Aa][Uu][Dd][Ee]*|*.[Cc][Oo][Dd][Ee][Xx]*)\n",
+          "to": "      *.[Cc][Ll][Aa][Uu][Dd][Ee]Z*|*.[Cc][Oo][Dd][Ee][Xx]Z*)\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-bash-deny-decoy-dollar-quote",
+        "cdg-bash-deny-decoy-nbsp-header",
+        "cdg-bash-deny-heredoc-claude",
+        "cdg-bash-deny-heredoc-codex",
+        "cdg-bash-never-executes"
+      ]
+    },
+    {
+      "name": "407-plg-git-grep-readded",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "PLANNER_GIT_READONLY=\"status diff log show rev-parse ls-files merge-base blame\"\n",
+          "to": "PLANNER_GIT_READONLY=\"status diff log show rev-parse ls-files merge-base blame grep\"\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-git-grep",
+        "plg-deny-git-grep-abbrev"
+      ]
+    },
+    {
+      "name": "407-plg-rg-hostname-bin",
+      "target": "hooks/planner-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "plg-",
+      "edits": [
+        {
+          "from": "          --pre*|--hostname-bin*) return 1 ;;\n",
+          "to": "          --pre*) return 1 ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "plg-deny-rg-hostname-bin"
+      ]
+    },
+    {
+      "name": "407-cdg-bash-belt-braces-order",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-bash-",
+      "edits": [
+        {
+          "from": "  if is_apply_patch_word \"$bash_cmd\"; then\n",
+          "to": "  if false && is_apply_patch_word \"$bash_cmd\"; then\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-bash-deny-decoy-dollar-quote",
+        "cdg-bash-deny-decoy-nbsp-header",
+        "cdg-bash-deny-heredoc-claude",
+        "cdg-bash-deny-heredoc-codex",
+        "cdg-bash-never-executes"
+      ]
+    },
+    {
+      "name": "407-cdg-bash-parens",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-bash-",
+      "edits": [
+        {
+          "from": "  flat=\"${text//[;\\&\\|()\\`]/$lf}\"\n",
+          "to": "  flat=\"${text//[;\\&\\|\\`]/$lf}\"\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-bash-deny-no-inline-patch-cmdsubst",
+        "cdg-bash-deny-no-inline-patch-subshell"
+      ]
+    },
+    {
+      "name": "407-cdg-bash-gt-break",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-bash-",
+      "edits": [
+        {
+          "from": "  flat=\"${flat//>/ $mark_out }\"\n",
+          "to": "  flat=\"${flat}\"\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-bash-deny-leading-redirect-append",
+        "cdg-bash-deny-leading-redirect-clobber",
+        "cdg-bash-deny-leading-redirect-fd",
+        "cdg-bash-deny-leading-redirect-fd-append",
+        "cdg-bash-deny-leading-redirect-fd-dup",
+        "cdg-bash-deny-leading-redirect-fd-dup2",
+        "cdg-bash-deny-no-inline-patch-gt"
+      ]
+    },
+    {
+      "name": "407-cdg-bash-indented-trigger-trim",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-bash-",
+      "edits": [
+        {
+          "from": "    line=\"$(trim \"$raw_line\")\"\n",
+          "to": "    line=\"$raw_line\"\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-bash-deny-backslash-indented-begin-patch"
+      ]
+    },
+    {
+      "name": "407-cdg-bash-redirect-run",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-bash-",
+      "edits": [
+        {
+          "from": "        while [ \"$i\" -lt \"$n\" ] && { [ \"${toks[$i]}\" = \"$mark_in\" ] || [ \"${toks[$i]}\" = \"$mark_out\" ]; }; do\n",
+          "to": "        while false; do\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-bash-deny-leading-redirect-append",
+        "cdg-bash-deny-leading-redirect-fd-append"
+      ]
+    },
+    {
+      "name": "407-cdg-bash-fd-dup",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-bash-",
+      "edits": [
+        {
+          "from": "  text=\"${text//>&/>}\"\n",
+          "to": "  :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-bash-deny-leading-redirect-fd-dup",
+        "cdg-bash-deny-leading-redirect-fd-dup2"
+      ]
+    },
+    {
+      "name": "407-cdg-bash-segment-dot",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-bash-",
+      "edits": [
+        {
+          "from": "      *.[Cc][Ll][Aa][Uu][Dd][Ee]*|*.[Cc][Oo][Dd][Ee][Xx]*)\n",
+          "to": "      *[Cc][Ll][Aa][Uu][Dd][Ee]*|*[Cc][Oo][Dd][Ee][Xx]*)\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-bash-noop-heredoc-claude-md",
+        "cdg-bash-noop-heredoc-codex-name"
+      ]
+    },
+    {
+      "name": "407-cdg-bash-clobber",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-bash-",
+      "edits": [
+        {
+          "from": "  text=\"${text//>|/>}\"\n",
+          "to": "  :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-bash-deny-leading-redirect-clobber"
+      ]
+    },
+    {
+      "name": "407-cdg-bash-in-dup",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-bash-",
+      "edits": [
+        {
+          "from": "  text=\"${text//<&/<}\"\n",
+          "to": "  :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-bash-deny-leading-redirect-in-dup"
+      ]
     }
   ]
 }

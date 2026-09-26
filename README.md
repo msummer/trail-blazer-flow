@@ -659,9 +659,10 @@ the scripts.
 - **Check that the hooks fire.** `hooks/hooks.json` runs each hook as
   `bash "${CLAUDE_PLUGIN_ROOT}/hooks/<name>.sh"`. If Claude Code ever exported that variable with
   backslashes, a hook could silently fail to run. For `git-c-guard.sh` that's harmless (you'd see
-  permission prompts). For `agent-boundary.sh`, `push-guard.sh`, and `claude-dir-guard.sh` it
-  would silently remove a safety boundary. Spot-check this before relying on unattended runs on
-  Windows. The live probes in the [safety model](docs/reference/safety-model.md) covered macOS only.
+  permission prompts). For `agent-boundary.sh`, `push-guard.sh`, `claude-dir-guard.sh`, and
+  `planner-guard.sh` it would silently remove a safety boundary. Spot-check this before relying on
+  unattended runs on Windows. The live probes in the [safety model](docs/reference/safety-model.md)
+  covered macOS only.
 
 **First-run smoke test (30 seconds, from Git Bash or WSL, in any git repo):**
 

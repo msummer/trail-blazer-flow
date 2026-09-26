@@ -85,20 +85,30 @@ file's allow/forbidden/gated content, contract-loading into an `AGENTS.md` or a
 it is not part of `dev/selfcheck.sh` itself; run it by hand whenever `bin/check-harness.sh`,
 `bin/check-decision-record.sh`, `bin/governance-paths.sh`, or `bin/codex-setup.sh` changes.
 
-`dev/hook-tests.sh` is a separate negative-test harness for all four plugin-shipped `PreToolUse`
-hooks (`hooks/git-c-guard.sh`, `hooks/agent-boundary.sh`, `hooks/push-guard.sh`, and
-`hooks/claude-dir-guard.sh`): it feeds fixture stdin JSON straight into each real script and pins
-its verdict — allow, deny, or no opinion, per hook's own documented contract — across every
-conforming and rejecting case each hook's own header describes. A booby-trapped `PATH` entry for
-the executables each hook would otherwise invoke proves `hooks/git-c-guard.sh` (traps `git`/`rm`)
-and `hooks/agent-boundary.sh` (traps `git`/`gh`/`rm`) never execute anything against the untrusted
-string they scan — sentinel-absence only, no fixture-tree listing for either.
-`hooks/push-guard.sh` and `hooks/claude-dir-guard.sh` (the latter trapping several more tools)
-pair that same booby-trapped-`PATH` idiom with a byte-identical fixture-tree listing, proving
-those two hooks also never write anything. `run_push_guard` isolates `HOME`, `XDG_CONFIG_HOME`,
-and `GIT_CONFIG_GLOBAL` for every push-guard fixture, so no fixture can read the developer's or CI
-runner's real global `git` config. It runs in CI as the fourth command, but it is not part of
-`dev/selfcheck.sh` itself; run it by hand whenever any of the four `hooks/*.sh` scripts changes.
+`dev/hook-tests.sh` is a separate negative-test harness for all five plugin-shipped `PreToolUse`
+hooks (`hooks/git-c-guard.sh`, `hooks/agent-boundary.sh`, `hooks/push-guard.sh`,
+`hooks/claude-dir-guard.sh`, and `hooks/planner-guard.sh`, #407): it feeds fixture stdin JSON
+straight into each real script and pins its verdict — allow, deny, or no opinion, per hook's own
+documented contract — across every conforming and rejecting case each hook's own header
+describes, including Codex-shaped payload fixtures (the full documented Codex key set, plus
+`agent_type`/`agent_id` for a subagent, neither for the main session) alongside every existing
+Claude-shaped fixture, and a `gh --version` canary denied for the implementer, verifier, and
+planner roles. A booby-trapped `PATH` entry for the executables each hook would otherwise invoke
+proves `hooks/git-c-guard.sh` (traps `git`/`rm`) and `hooks/agent-boundary.sh` (traps
+`git`/`gh`/`rm`) never execute anything against the untrusted string they scan — sentinel-absence
+only, no fixture-tree listing for either. `hooks/push-guard.sh` and `hooks/claude-dir-guard.sh`
+(the latter trapping several more tools, across its `Edit`/`Write`, `apply_patch`, and Bash
+apply_patch-shim routes alike) pair that same booby-trapped-`PATH` idiom with a byte-identical
+fixture-tree listing on their own primary write surface, proving those two hooks also never write
+anything there — for `hooks/claude-dir-guard.sh` that is its original `Edit`/`Write` route only;
+its `apply_patch` and Bash apply_patch-shim routes carry the sentinel-absence check but not a
+separate tree-listing comparison of their own. `hooks/planner-guard.sh`
+traps `git`/`gh`/`rm`/`touch` with sentinel-absence only, the same as its first two siblings (its
+own lexer legitimately uses `awk`, so that isn't in its trap set). `run_push_guard` isolates
+`HOME`, `XDG_CONFIG_HOME`, and `GIT_CONFIG_GLOBAL` for every push-guard fixture, so no fixture can
+read the developer's or CI runner's real global `git` config. It runs in CI as the fourth command,
+but it is not part of `dev/selfcheck.sh` itself; run it by hand whenever any of the five
+`hooks/*.sh` scripts changes.
 
 `dev/cleanup-tests.sh` is a separate negative-test harness for `bin/cleanup-after-merge.sh`: it
 builds throwaway fixture repos under `mktemp`, with a stub `gh` (and, where needed, a stub

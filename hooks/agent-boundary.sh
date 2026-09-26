@@ -13,7 +13,9 @@
 # under a `.claude` segment in a write position — a `>`-family redirect target, an argument to a
 # CLAUDE_PATH_ARG_COMMANDS member (`tee`/`cp`/`mv`/`cd`/`pushd`), or an in-place `sed`'s argument —
 # closing most of the Bash-issued write route into `.claude/` (e.g. `.claude/LESSONS.md`) that
-# hooks/claude-dir-guard.sh's Edit/Write-only matcher cannot see. Since #387, both roles ALSO deny a
+# hooks/claude-dir-guard.sh's file-edit-only (`Edit|Write|apply_patch`) matcher cannot see (an
+# ORDINARY Bash-issued write, as opposed to an apply_patch-shaped one, which #407 gave that hook
+# its own separate Bash route for). Since #387, both roles ALSO deny a
 # command whose command word (anywhere in tool_input.command, across every line) resolves to a
 # CLAUDE_CMDLINE_WRITE_COMMANDS member — an interpreter (`python3`, `perl`, …) or a one-step writer
 # (`dd`, `install`, …) — when that same command text names a `.claude` path segment anywhere,

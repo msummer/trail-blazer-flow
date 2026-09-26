@@ -360,6 +360,10 @@ p_4_39_extraction() { edit "$1/hooks/agent-boundary.sh" 's/AGENT_TYPES_IMPLEMENT
 p_4_39_unknown_agent() { edit "$1/hooks/agent-boundary.sh" 's/^AGENT_TYPES_VERIFIER="verifier trail-blazer-flow:verifier"$/AGENT_TYPES_VERIFIER="verifer trail-blazer-flow:verifier"/'; }
 p_4_39_namespace() { edit "$1/hooks/agent-boundary.sh" 's/trail-blazer-flow:implementer/trail-blazer-flo:implementer/'; }
 p_4_39_missing_spelling() { edit "$1/hooks/agent-boundary.sh" 's/^AGENT_TYPES_IMPLEMENTER="implementer trail-blazer-flow:implementer"$/AGENT_TYPES_IMPLEMENTER="implementer"/'; }
+# p_4_39_planner_unknown (#407) — 4.39's extension to hooks/planner-guard.sh's own
+# AGENT_TYPES_PLANNER: typo the bare spelling to "planer" (characters changed inside the token, not
+# a suffix appended, LESSON 2026-09-04b), naming an agents/*.md file that doesn't exist.
+p_4_39_planner_unknown() { edit "$1/hooks/planner-guard.sh" 's/^AGENT_TYPES_PLANNER="planner trail-blazer-flow:planner"$/AGENT_TYPES_PLANNER="planer trail-blazer-flow:planner"/'; }
 # p_2_7_pushguard_if_added / p_2_7_pushguard_missing_script (#260) — the same two templates as
 # p_2_7_boundary_if_added/p_2_7_boundary_missing_script above, retargeted at the THIRD
 # (push-guard.sh) handler, located by the literal substring "push-guard.sh" (present nowhere else
@@ -404,12 +408,25 @@ p_4_43_scriptname() { edit "$1/skills/issue-cycle/SKILL.md" 's/governance-paths\
 # (the append helper p_1_1/p_1_7 already use, proving an append there trips nothing else besides
 # what it's meant to), so assertion 4.44 clause (a)'s ERE scan finds a match in bin/*.sh.
 p_4_44() { printf 'gh issue create --title x --label no-auto-approve\n' | append "$1/bin/harness-status.sh"; }
-# p_2_7_cdg_matcher (#327) — flip the FOURTH (claude-dir-guard.sh) handler's matcher from
-# "Edit|Write" to "Bash", located by the literal '"matcher": "Edit|Write"' string (present exactly
-# once in hooks/hooks.json — the description prose spells "Edit|Write" too, but never inside a
-# quoted "matcher": key), tripping reworked 2.7's basename-keyed matcher table's clause (a) without
-# touching any other handler's matcher/if/command text.
-p_2_7_cdg_matcher() { edit "$1/hooks/hooks.json" 's/"matcher": "Edit|Write"/"matcher": "Bash"/'; }
+# p_2_7_cdg_matcher / p_2_7_plg_matcher (#327; retargeted #407) — since #407's Bash apply_patch-
+# shim amendment widened claude-dir-guard.sh's own matcher to the SAME string planner-guard.sh's
+# fifth handler carries, '"matcher": "Bash|Edit|Write|apply_patch"' now appears TWICE in
+# hooks/hooks.json (the FOURTH handler, claude-dir-guard.sh, then the FIFTH, planner-guard.sh) —
+# the description prose spells the bare string "Bash|Edit|Write|apply_patch" too, but never inside
+# a quoted "matcher": key, so it does not add a third occurrence. An awk counter (the same idiom
+# p_2_7_matcher above already uses for "matcher": "Bash", which repeats three times) targets the
+# FIRST occurrence (claude-dir-guard.sh) or the SECOND (planner-guard.sh) specifically, flipping
+# only that one handler's matcher to "Bash" and tripping reworked 2.7's basename-keyed matcher
+# table's clause (a) for exactly that basename, without touching the other handler's matcher/if/
+# command text.
+p_2_7_cdg_matcher() {
+  local f="$1/hooks/hooks.json"
+  awk '{ if ($0 ~ /"matcher": "Bash\|Edit\|Write\|apply_patch"/) { n++; if (n == 1) sub(/"Bash\|Edit\|Write\|apply_patch"/, "\"Bash\"") } print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+p_2_7_plg_matcher() {
+  local f="$1/hooks/hooks.json"
+  awk '{ if ($0 ~ /"matcher": "Bash\|Edit\|Write\|apply_patch"/) { n++; if (n == 2) sub(/"Bash\|Edit\|Write\|apply_patch"/, "\"Bash\"") } print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
 # p_4_45_* (#327) — rename characters INSIDE the identifier/value, never append a suffix (LESSON
 # 2026-09-04b). p_4_45_drift alters hooks/claude-dir-guard.sh's own AGENT_TYPES_VERIFIER value
 # (characters changed inside the namespaced token, not a suffix) so it no longer agrees with
@@ -867,6 +884,7 @@ cases=(
   "4.39-unknown-agent|4.39 4.45|p_4_39_unknown_agent|typo AGENT_TYPES_VERIFIER's bare spelling to 'verifer', naming an agents/*.md file that doesn't exist -- since #327, this also makes hooks/agent-boundary.sh's AGENT_TYPES_VERIFIER disagree with hooks/claude-dir-guard.sh's untouched copy, so 4.45 fails alongside 4.39 -- measured: 71 pass, 2 fail"
   "4.39-namespace|4.39 4.45|p_4_39_namespace|typo the namespaced spelling's plugin-name prefix to 'trail-blazer-flo', no longer matching plugin.json's .name -- since #327, this also makes hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER disagree with hooks/claude-dir-guard.sh's untouched copy, so 4.45 fails alongside 4.39 -- measured: 71 pass, 2 fail"
   "4.39-missing-spelling|4.39 4.45|p_4_39_missing_spelling|drop the namespaced spelling from AGENT_TYPES_IMPLEMENTER, leaving only the bare form -- since #327, this also makes hooks/agent-boundary.sh's AGENT_TYPES_IMPLEMENTER disagree with hooks/claude-dir-guard.sh's untouched copy, so 4.45 fails alongside 4.39 -- measured: 71 pass, 2 fail"
+  "4.39-planner-unknown|4.39|p_4_39_planner_unknown|typo hooks/planner-guard.sh's AGENT_TYPES_PLANNER bare spelling to 'planer', naming an agents/*.md file that doesn't exist -- unlike the agent-boundary.sh perturbations above, planner-guard.sh's own vocabulary has no hooks/claude-dir-guard.sh-style byte-identical copy elsewhere, so no other assertion fails alongside it -- measured: \"4.39 agent_type vocabulary disagreement: AGENT_TYPES_PLANNER value 'planer' names agents/planer.md, which doesn't exist;\""
   "5.13-harness-pass|5.13|p_5_13_harness_pass|disable only the harness-only sed pass in bin/reconcile-ledger.sh (retries=([^ ]+) (harness= anchor) so a harness-only status line falls through to the malformed-line die -- measured: 'harness-only planner line: expected silence/rc=0, got rc=2 output=...malformed harness-status line...'"
   "5.13-deploy-harness-pass|5.13|p_5_13_deploy_harness_pass|disable only the deploy+harness sed pass in bin/reconcile-ledger.sh ((deploy=[^ ]+) (harness= anchor) so a deploy+harness status line falls through to the malformed-line die -- measured: 'deploy+harness merge line: expected silence/rc=0, got rc=2 output=...malformed harness-status line...'"
   "5.1|5.1|p_5_1|drop 'died' from reconcile-ledger.sh's implementer outcome vocabulary -- measured: 5.1's own accounted-for ledger now reports an unknown-outcome discrepancy instead of staying silent; 5.14's c0 uses a DIFFERENT ledger+status fixture pair (a seed-only ledger with no implementer row, against the empty-queue fixture) that this mutation never reaches, so 5.14 stays green"
@@ -912,7 +930,8 @@ cases=(
   "5.14-short-circuit|5.14|p_5_14_short_circuit|locate the degraded-emit block's own end-delimiter comment via awk's index() and insert an early '[ \"\$found\" -eq 1 ] && exit 1' immediately after it in bin/reconcile-ledger.sh, so a run that printed a degraded line exits before the per-issue loop ever runs -- measured: c6 (the degraded line prints, then the per-issue stage-skipped comparison never runs) fails alone"
   "5.14-escline|5.14|p_5_14_escline|delete the escline mapping bin/reconcile-ledger.sh's degraded-lines jq program applies to each refusing entry ('(\$refuse[] | escline)' -> bare '\$refuse[]'), so a refusing entry reaches emit() raw instead of rendered -- measured: c8 (an empty-string reason once again prints as a silently-dropped blank line), c9 (a reason carrying an embedded newline once again splits raw across two lines), c10 (a NUL-only reason is once again silently dropped by bash's command substitution), and c11 (the same NUL-only entry silently dropped out of a two-reason mixed list) all fail"
   "5.16-ledger-guard|5.16|p_5_16_ledger_guard|remove the ' || die \"cannot read ledger file: \$ledger_src\"' clause from bin/reconcile-ledger.sh's ledger read (characters removed from inside the guard, not a suffix appended) so an unreadable ledger path no longer dies -- measured failing set: {5.16} (71 pass, 1 fail)"
-  "2.7-cdg-matcher|2.7|p_2_7_cdg_matcher|change the FOURTH (claude-dir-guard.sh) handler's matcher from Edit|Write to Bash -- measured: \"2.7 hooks/hooks.json structure broken: claude-dir-guard.sh's matcher is 'Bash', expected 'Edit|Write';\" (72 pass, 1 fail)"
+  "2.7-cdg-matcher|2.7|p_2_7_cdg_matcher|change the FOURTH (claude-dir-guard.sh) handler's matcher from Bash|Edit|Write|apply_patch to Bash (an awk counter targeting the FIRST of the two identical occurrences) -- measured: \"2.7 hooks/hooks.json structure broken: claude-dir-guard.sh's matcher is 'Bash', expected 'Bash|Edit|Write|apply_patch';\""
+  "2.7-plg-matcher|2.7|p_2_7_plg_matcher|change the FIFTH (planner-guard.sh) handler's matcher from Bash|Edit|Write|apply_patch to Bash (an awk counter targeting the SECOND of the two identical occurrences, leaving claude-dir-guard.sh's own matcher untouched) -- measured: \"2.7 hooks/hooks.json structure broken: planner-guard.sh's matcher is 'Bash', expected 'Bash|Edit|Write|apply_patch';\""
   "4.45-drift|4.45|p_4_45_drift|alter one character inside hooks/claude-dir-guard.sh's own AGENT_TYPES_VERIFIER value (characters changed inside the token, not a suffix) so it no longer agrees with hooks/agent-boundary.sh's -- measured: \"4.45 AGENT_TYPES_* vocabulary disagrees: hooks/agent-boundary.sh has AGENT_TYPES_IMPLEMENTER='implementer trail-blazer-flow:implementer' AGENT_TYPES_VERIFIER='verifier trail-blazer-flow:verifier', hooks/claude-dir-guard.sh has AGENT_TYPES_IMPLEMENTER='implementer trail-blazer-flow:implementer' AGENT_TYPES_VERIFIER='verifier trail-blazer-flow:verifer'\" (72 pass, 1 fail)"
   "4.45-extraction|4.45|p_4_45_extraction|rename hooks/claude-dir-guard.sh's AGENT_TYPES_IMPLEMENTER identifier throughout so the gate's anchored extraction comes back empty -- measured: \"4.45 hooks/agent-boundary.sh's or hooks/claude-dir-guard.sh's AGENT_TYPES_IMPLEMENTER= or AGENT_TYPES_VERIFIER= line didn't match (structure changed) — extraction failed\" (72 pass, 1 fail)"
   "4.46-extraction|4.46|p_4_46_extraction|rename HARNESS_RECORD_MARKERS to HARNESS_RECORD_MARKS throughout bin/find-planning-work.sh (both the declaration and its --arg use site, characters removed inside the token, not a suffix) so the gate's anchored extraction comes back empty -- measured: \"4.46 bin/find-planning-work.sh's or bin/find-implementation-work.sh's HARNESS_RECORD_MARKERS=\"...\" block didn't match (structure changed) — extraction failed\" (74 pass, 1 fail)"
