@@ -552,7 +552,7 @@ check-harness.sh
 It lists what the new version needs that your repo is missing. Fix what it flags and you're done.
 
 <details>
-<summary>Per-version migration notes (v1.9.0 → v2.8.0)</summary>
+<summary>Per-version migration notes (v1.9.0 → v2.9.0)</summary>
 
 For older history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration notes, v1.9.0
 to v2.7.7" subsection).
@@ -620,6 +620,9 @@ already-parked follow-ups `triaged-held` by hand. Precondition: your provider mu
 
 **v2.7.7 → v2.8.0** — re-copy the permissions block from `templates/repo-settings.json` or add
 `"Bash(governance-paths.sh:*)"` and `"Bash(gh pr update-branch:*)"` by hand.
+
+**v2.8.0 → v2.9.0** needs no grant, label, script, or baseline step — stricter subagent
+hooks, reopened-issue fixes, and quiet retry of a stalled planner dispatch.
 
 </details>
 

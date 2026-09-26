@@ -16,7 +16,7 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v2.9.0
 
 - #398: `agent-boundary.sh` and `push-guard.sh` now skip a leading shell keyword (`if`/`then`/
   `elif`/`else`/`do`/`while`/`until`/`!`/`coproc`) before the command word and match the command
