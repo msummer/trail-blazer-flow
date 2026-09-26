@@ -775,8 +775,8 @@ fi
 budget_table="issue-implementer 885
 issue-cycle 605
 issue-planner 600
-project-kickoff 215
-test-ratchet 200
+project-kickoff 220
+test-ratchet 205
 harness-setup 205"
 bad_list=""
 while IFS=' ' read -r skill cap; do

@@ -22,6 +22,10 @@ Its entire output is filed issues. The ordinary pipeline — plan → approval �
 `CLAUDE.md`. This skill adds no authority to any of those stages. You (the main session) do
 everything here; there are no subagent dispatches.
 
+**On Codex** (not Claude Code): before step 0, read `../../docs/reference/codex.md`
+"Standalone `test-ratchet` on Codex" (relative to this SKILL.md's directory), and apply it
+throughout.
+
 ## Activation (policy-gated)
 
 Read the repo's `CLAUDE.md` for a section titled exactly **"Test-suite ratchet policy"**. If

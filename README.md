@@ -536,11 +536,14 @@ The recipe, in the same order the gate used:
 
 1. Install the plugin (`codex plugin marketplace add msummer/trail-blazer-flow`, then
    `codex plugin add trail-blazer-flow@trail-blazer-flow`).
-2. Run `<plugin root>/bin/codex-setup.sh` from a normal (non-sandboxed) terminal.
+2. Run `<plugin root>/bin/codex-setup.sh` from a normal (non-sandboxed) terminal (in a brand-new
+   project directory, run `git init` first). Then add `.codex/rules/trail-blazer-flow.rules` to
+   `.git/info/exclude`: it holds this machine's plugin paths and must never be committed.
 3. Trust the project and the plugin's hooks in Codex.
 4. Start a session with `codex --no-daemon`.
-5. Run `harness-setup`, then use the skills (`issue-planner`, `issue-implementer`, `issue-cycle`),
-   with the differences listed below.
+5. Run `harness-setup` — or, for a brand-new project, `project-kickoff` (not live-verified) — then
+   use the skills (`issue-planner`, `issue-implementer`, `issue-cycle`, and `test-ratchet`, the last
+   not live-verified standalone), with the differences listed below.
 6. Merge every PR by hand — there is no merge autonomy on Codex — and re-run
    `bin/codex-setup.sh` after every plugin upgrade.
 
@@ -551,15 +554,14 @@ The recipe, in the same order the gate used:
 - No worktree-parallel mode: sessions stay sequential.
 - No `codex exec` and no unattended or scheduled runs: only the interactive `codex --no-daemon`
   session is supported.
-- No `project-kickoff` or standalone `test-ratchet`.
 
 **Supported / not supported / not verified**, in short (full matrix, with reasons, in
 [docs/reference/codex.md](docs/reference/codex.md#support-matrix)):
 
-- **Supported:** Codex CLI 0.156.1+ on macOS, interactive `codex --no-daemon`, supervised.
+- **Supported:** Codex CLI 0.156.1+ on macOS, interactive `codex --no-daemon`, supervised;
+  `project-kickoff` and standalone `test-ratchet` (not live-verified).
 - **Not supported:** the default TUI's managed daemon, `codex exec` and unattended runs,
-  worktree-parallel mode, the merge pass and merge autonomy, Autonomy mode, `project-kickoff`, and
-  standalone `test-ratchet`.
+  worktree-parallel mode, the merge pass and merge autonomy, and Autonomy mode.
 - **Not verified:** Linux, Windows, and the Codex desktop app.
 
 ---

@@ -24,6 +24,10 @@ capable model in the stack, and kickoff is pure judgment work: drawing out the v
 an architecture, and right-sizing the first slice of work. Lean into being **opinionated** — the
 user wants help *settling* on an approach, not a stenographer.
 
+**On Codex** (not Claude Code): before step 0, read `../../docs/reference/codex.md`
+"`project-kickoff` on Codex" (relative to this SKILL.md's directory) — the maintainer's
+normal-terminal setup comes first — and apply it throughout.
+
 ## What this skill produces (the definition of done)
 
 1. A **Project Brief** at `docs/PROJECT-BRIEF.md` — vision, users, scope, non-goals, key
