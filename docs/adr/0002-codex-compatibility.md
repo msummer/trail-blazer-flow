@@ -375,6 +375,24 @@ call:
 `.claude-plugin/`. It installed as `2.9.0-q6`, and only the Codex manifest's hooks loaded. All six
 skills loaded, and the marketplace entry still came from `.claude-plugin/marketplace.json`.
 
+**Q7: `apply_patch` issued through the shell** (`apply_patch <<'EOF' … EOF`). Codex puts an
+`apply_patch` shim on the shell's PATH (its arg0 directory links `apply_patch` and `applypatch` to
+the `codex` binary). Two parts were checked; the hook shape is pending the usage limit.
+
+- **Writes in the sandbox.** The shell form runs as a subprocess under the workspace sandbox. With
+  the helper on PATH, `codex sandbox -P :workspace -- zsh -c "apply_patch <<'EOF' …"` gave:
+  - `.claude/settings.local.json`: **written** (`A .claude/settings.local.json`, rc 0);
+  - `.codex/evil.rules`: blocked, `Failed to write file`;
+  - `.agents/x.md`: blocked, `Failed to create parent directories`;
+  - the control, a new file at the repo root: written.
+- **The v2.9.0 hooks let it through.** Replaying the Bash-shaped payload
+  (`{"agent_type":"implementer","tool_name":"Bash","tool_input":{"command":"apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: .claude/settings.local.json\n…"}}`)
+  through the v2.9.0 hooks gives exit 0 from both `agent-boundary.sh` and `claude-dir-guard.sh`.
+- **How it reaches `PreToolUse`: not observed.** It may arrive as `tool_name: "Bash"` with the
+  heredoc in `tool_input.command`, or be intercepted and reported as `apply_patch`. The usage limit
+  blocked the live model turn, and the binary's strings don't settle it. #411's gate runs this
+  check with the #314 logging hook and the `blocked.txt` blocker.
+
 ### Recommendations for #408
 
 - **Script reach.** Skills invoke each script directly by its absolute path, resolved from the
@@ -397,6 +415,15 @@ skills loaded, and the marketplace entry still came from `.claude-plugin/marketp
   repo that already has an `AGENTS.md`, it adds a marked pointer block, and #411's gate verifies
   that the model follows it. It never creates a new `AGENTS.md` shim, because one would suppress
   the fallback.
+- **Shell-issued `apply_patch` (for #407).** Whatever Q7's live answer turns out to be, the hooks
+  must treat a shell command whose command word is `apply_patch` or `applypatch` as a file edit:
+  - **implementer and verifier:** parse the heredoc's patch headers with the same parser as the
+    tool-call form, and deny a `.claude` or `.codex` segment, failing closed;
+  - **planner:** deny it outright.
+
+  Otherwise the `.claude/` write shown in Q7 passes whenever Codex reports the shell form as
+  `Bash`. If Codex instead intercepts it as `apply_patch`, the tool-call parser covers it, and this
+  rule costs nothing.
 - **Codex manifest.** A `.codex-plugin/plugin.json` is optional. It could give Codex its own hooks
   list, but a second manifest's `version` must then be kept equal in the release ritual.
 - **Usage budget.** Codex usage limits can stop a live run midway. #411's gate should plan for
