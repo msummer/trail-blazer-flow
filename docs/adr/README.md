@@ -15,4 +15,4 @@ or superseded by a new ADR — never silently rewritten.
 | ADR | Title | Status |
 |---|---|---|
 | [0001](0001-autonomy-mode.md) | Autonomy mode | Accepted 2026-09-16; amended 2026-09-25 |
-| [0002](0002-codex-compatibility.md) | Codex compatibility | Accepted 2026-09-16 (direction); amended 2026-09-26 (probe results, min Codex 0.156.1) |
+| [0002](0002-codex-compatibility.md) | Codex compatibility | Accepted 2026-09-16 (direction); amended 2026-09-26 (probe results, min Codex 0.156.1; S0 spike #406) |
