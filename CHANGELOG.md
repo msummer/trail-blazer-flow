@@ -16,6 +16,12 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #415: `project-kickoff` and standalone `test-ratchet` gain a supervised Codex path
+  (docs/reference/codex.md); not live-verified. In a new project directory, `git init` comes
+  before `codex-setup.sh`.
+
 ## v3.0.0
 
 This release adds supervised Codex CLI support on macOS alongside Claude Code, verified live against

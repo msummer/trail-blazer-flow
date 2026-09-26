@@ -32,7 +32,7 @@ Verified live at the v3.0.0 release gate (#411; ADR 0002 amendment (3), Codex CL
 | Worktree-parallel mode | **Not supported** | A worktree's gitdir is read-only in the sandbox, and `git-c-guard`'s allow is ignored under Codex's own rules — see "Worktree mode" below |
 | The merge pass and merge autonomy | **Not supported** | Every merge on Codex is by hand; `gh pr merge` is additionally `forbidden` by the installed rules, verified live at the gate |
 | Autonomy mode | **Not supported** | Read as absent on Codex: no implied auto-approval, no `--carry-over`, no serial train |
-| `project-kickoff` and standalone `test-ratchet` | **Not supported** | Neither skill has a Codex path |
+| `project-kickoff` and standalone `test-ratchet` | **Supported, not live-verified** | Codex path added after the v3.0.0 gate (#415) — see "`project-kickoff` on Codex" and "Standalone `test-ratchet` on Codex" below; never run live on Codex |
 | Linux, Windows, the Codex desktop app | **Not verified** | The gate ran on macOS only |
 
 ## Setup
@@ -333,15 +333,24 @@ nothing but this repo's own files.
   `.codex/rules/trail-blazer-flow.rules` out of version control (for example, via
   `.git/info/exclude`) — `codex-setup.sh` never edits `.gitignore` itself. The generated agent
   TOMLs and `.codex/config.toml` carry no machine-specific paths and may be committed.
+- **`project-kickoff` and standalone `test-ratchet` are not live-verified on Codex.** Their Codex
+  paths (#415) postdate the v3.0.0 gate. The only rule-matched commands they issue are `gh`,
+  `git`, and (kickoff only) the gated `setup-labels.sh`/`check-harness.sh`, through the same
+  installed rules as every other skill, but neither run has been exercised live, including
+  `gh repo create`'s own remote write, whether `.claude/` is writable in the sandbox, and the
+  standalone ratchet's measurement command under the sandbox.
 
 ## Running the skills on Codex
 
-This is the model-facing procedure `issue-cycle`, `issue-planner`, `issue-implementer`, and
-`harness-setup` each point to for a Codex run. It changes HOW those skills run — script calls,
-the lock, dispatch, and the shape of a git write — never WHAT they decide; every other rule in
-each skill's own `SKILL.md` still applies. A composed run (`issue-cycle`) does the steps below
-once, at its own step 0; `issue-planner` and `issue-implementer` skip their own copies exactly as
-they already skip them under Claude Code.
+This is the model-facing procedure `issue-cycle`, `issue-planner`, `issue-implementer`,
+`harness-setup`, `project-kickoff`, and `test-ratchet` each point to for a Codex run. It changes
+HOW those skills run — script calls, the lock, dispatch, and the shape of a git write — never WHAT
+they decide; every other rule in each skill's own `SKILL.md` still applies. A composed run
+(`issue-cycle`) does the steps below once, at its own step 0; `issue-planner` and
+`issue-implementer` skip their own copies exactly as they already skip them under Claude Code. A
+standalone `test-ratchet` or a `project-kickoff` run takes no lock and dispatches nothing — it
+runs only what its own subsection below names; a composed ratchet pass (inside `issue-cycle`) runs
+none of its preflight.
 
 ### Plugin root and scripts
 
@@ -412,6 +421,8 @@ exactly as the skill already writes it. Never run `bash <path>`, and never fold 
   `gh`/script call that reads it.
 - **`gh … --jq … | tr -d '\r'` reads** — issue the `gh … --jq …` call alone, without the trailing
   pipe (the strip only guards a CRLF transport this path never carries).
+- **A command written across lines with a trailing `\`** (for example `test-ratchet`'s
+  `gh issue list` and `gh issue create`) — issue it as one line.
 
 Body and ledger files always land under `/tmp` (a writable root under the sandbox — see the ADR),
 in a command of their own, before the command that reads them.
@@ -500,6 +511,67 @@ Matches the skill's own "0. Codex only" step:
 5. Run the doctor: `<plugin root>/bin/check-harness.sh --provider codex`.
 6. Remind the maintainer to keep `.codex/rules/trail-blazer-flow.rules` out of version control
    (see "Honest limits" above).
+
+### `project-kickoff` on Codex
+
+Keyed to the skill's own numbered steps; every other rule in `skills/project-kickoff/SKILL.md`
+still applies.
+
+1. **Before the session** (maintainer, normal terminal, in the new project directory), in this
+   order: `git init` if the directory isn't a repo yet — `codex-setup.sh` refuses outside a git
+   repository, and there is no allow rule for `git init` in-session; then
+   `<plugin root>/bin/codex-setup.sh`; then add `.codex/rules/trail-blazer-flow.rules` to
+   `.git/info/exclude` (`.git` is read-only in the sandbox — ADR 0002, "The sandbox protects
+   `.git`"); then `gh auth login` if `gh` isn't authenticated; then the three `next:` lines: trust
+   the project, trust the plugin's hooks, restart with `codex --no-daemon`.
+2. **Step 0 (in-session, its own call):** `<plugin root>/bin/codex-setup.sh --check`. Any
+   non-zero exit — exit 2 "not inside a git repository" is the expected greenfield case — means
+   STOP before the interview: quote the output verbatim and give the maintainer item 1's list
+   above. The interview isn't persisted anywhere, and the restart would lose it. For the skill's
+   own greenfield check, the `.codex/` files and `.git` count as config. No lock, no
+   `echo $PPID`, no dispatch, no canary — the kickoff has none of those on Claude Code either;
+   the first skill after handoff that dispatches a subagent runs the canary.
+3. **Steps 1–3 (Intake, Interview, Synthesize):** `AskUserQuestion` is a Claude Code tool — ask
+   each batched round as one numbered chat message, recommendation-first. Skip the voice-input
+   nudge: nothing in this repo verifies the Codex CLI offers voice input.
+4. **Step 4:** run `gh auth status` alone; on failure the maintainer runs `gh auth login` in a
+   normal terminal. Before any `git add`, run `git check-ignore -q
+   .codex/rules/trail-blazer-flow.rules` alone: a non-zero exit means the rules file isn't
+   excluded, so STOP and give the maintainer item 1's `.git/info/exclude` step — never commit it.
+   New repo: the directory is already a repo from item 1 above — if it has no commit yet,
+   `git add -A` then `git commit -m "…"`, then `gh repo create <name> --private --source .
+   --remote origin` as one line. Existing empty repo: `git remote add origin <url>` has no allow
+   rule, so the maintainer runs it in a normal terminal.
+5. **Step 5:** `.claude/settings.json` is still laid down (Codex never reads it, but a Claude Code
+   clone needs it; the main session's own write gets no opinion from `claude-dir-guard.sh` — if it
+   fails, say so and leave it to the maintainer). Labels: `<plugin root>/bin/setup-labels.sh`. Each
+   issue: write the body to its own `/tmp` file, then run `gh issue create --title "…" --body-file
+   /tmp/…` as one line. Doctor: `<plugin root>/bin/check-harness.sh --provider codex` — expected
+   outstanding items are the baseline items plus a branch-protection **FAIL** (a FAIL on Codex,
+   not a WARN — see "The doctor on Codex" above); protecting the default branch is the human's
+   job. `.codex/agents/*.toml` and `.codex/config.toml` may be committed (step 4's initial commit
+   already includes them); the rules file never is.
+6. **Step 6:** hand off unchanged — each next skill runs in a `codex --no-daemon` session under
+   the rest of this section.
+
+### Standalone `test-ratchet` on Codex
+
+Keyed to the skill's own numbered steps; every other rule in `skills/test-ratchet/SKILL.md` still
+applies.
+
+- **Preflight:** `<plugin root>/bin/codex-setup.sh --check`, handled exactly as in "Preamble"
+  above. No `echo $PPID`, no lock, no dispatch, no canary.
+- **Step 0:** `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` alone, without
+  the trailing `| tr -d '\r'` (see "One simple command per call" above).
+- **Step 1 (measure):** the policy's command is not a git write, a `gh` call, or a gated script,
+  so it runs verbatim inside the sandbox, compound or not. A failure caused by the sandbox
+  (permission denied outside the workspace, no network) is hard floor 3: report the command, its
+  exit status, and an output excerpt, and file nothing — never re-run it outside the sandbox or in
+  another form. Suggest a policy command that runs offline, inside the repo.
+- **Steps 2 and 4:** one-line `gh` calls (see "One simple command per call" above); step 4's body
+  goes to its own `/tmp` file in its own call first.
+- **Composed inside `issue-cycle`:** skip this preflight — the cycle's own step 0 already ran it;
+  the rest of this subsection still applies.
 
 ### Attended only
 
