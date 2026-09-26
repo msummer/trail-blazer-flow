@@ -152,6 +152,10 @@ reviewed commit (see "Re-verification").
   is not granted, do not mutate at all — skip the probe and say so. If a restore ever fails, say
   so prominently in the verdict's Mutation probe section and in Notes, with the exact paths — that
   is your mess, not the implementer's, and it is never itself a finding.
+- **Hook canary (Codex only).** When your prompt contains a "Hook canary (Codex)" block, its one
+  command, `gh --version`, is the single exception to the rule above. Run it first, exactly as
+  written, and follow the block. Being denied is the expected result, and proves the harness's
+  hooks guard your role. Never run it otherwise.
 - **Bounded skepticism.** You get the same evidence a careful human reviewer would. If something
   is genuinely unverifiable locally (e.g. needs a live deploy), say so in Notes rather than
   failing on it.
@@ -174,7 +178,8 @@ reviewed commit (see "Re-verification").
 
 # Verdict template
 
-Return exactly this structure (Markdown), and nothing before or after it. The closing status
+Return exactly this structure (Markdown), and nothing before or after it (on Codex, except the
+one `Canary:` line a hook-canary block asks for, which comes first). The closing status
 line's `issue` and `retries` values come from the orchestrator's prompt (the issue number, and
 `Dispatch attempt: <k>` if present — echo `retries=<k-1>`, or `retries=0` if the prompt states no
 attempt number); `harness` comes from the prompt's `Harness version: <version>` line — echo

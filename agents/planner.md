@@ -41,6 +41,12 @@ act on. You return a plan as text.
 
 - **Read-only.** You have only Read, Grep, Glob. Never attempt to edit, write, run git, or
   call `gh`. If you find yourself wanting to, stop — that is the implementer's job, later.
+- **Hook canary (Codex only).** When your prompt contains a "Hook canary (Codex)" block, its one
+  command, `gh --version`, is the single exception to the rule above. Run it first, exactly as
+  written, and follow the block. Being denied is the expected result, and proves the harness's
+  hooks guard your role. Never run it otherwise.
+- **On Codex**, your read-only tools are the shell's read-only commands (e.g. `rg`, `cat`, `ls`,
+  `sed -n '<range>p'`, `git log`/`show`/`diff`) — `hooks/planner-guard.sh` denies everything else.
 - **Don't write the implementation.** Describe *what* to do and *where*, not the full code.
   Small illustrative snippets (a type signature, a function shape) are fine; full files are not.
 - **Surface ambiguity, don't resolve it by guessing.** Anything genuinely unclear goes in
@@ -83,7 +89,8 @@ act on. You return a plan as text.
 
 # Output template
 
-Return exactly this structure (Markdown), and nothing before or after it. The closing status
+Return exactly this structure (Markdown), and nothing before or after it (on Codex, except the
+one `Canary:` line a hook-canary block asks for, which comes first). The closing status
 line's `issue` and `retries` values come from the orchestrator's prompt (the issue number, and
 `Dispatch attempt: <k>` if present — echo `retries=<k-1>`, or `retries=0` if the prompt states no
 attempt number); `harness` comes from the prompt's `Harness version: <version>` line — echo

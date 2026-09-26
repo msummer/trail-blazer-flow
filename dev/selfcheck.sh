@@ -772,12 +772,12 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 875
-issue-cycle 600
-issue-planner 595
+budget_table="issue-implementer 885
+issue-cycle 605
+issue-planner 600
 project-kickoff 215
 test-ratchet 200
-harness-setup 195"
+harness-setup 205"
 bad_list=""
 while IFS=' ' read -r skill cap; do
   [ -n "$skill" ] || continue

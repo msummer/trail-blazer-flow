@@ -19,14 +19,25 @@ secure: a contract-satisfying `CLAUDE.md`, and a **known-green verification base
 implementation run compares against "the suite was green at N before my change", so that
 baseline must exist and be true.
 
-You (the main session) do everything here yourself — no subagent dispatches needed.
+You (the main session) do everything here yourself — no subagent dispatches needed (Codex: one
+canary-only `planner` spawn, step 0 below).
 
 ## Procedure
+
+### 0. Codex only
+
+Skip this step on Claude Code. On Codex: the maintainer runs `<plugin root>/bin/codex-setup.sh`
+from the repo root in a normal terminal, then follows its three `next:` lines (trust the project,
+trust the plugin's hooks, restart with `codex --no-daemon`). Confirm with
+`<plugin root>/bin/codex-setup.sh --check`, then dispatch one canary-only `planner` spawn — see
+`../../docs/reference/codex.md`, "Running the skills on Codex", for the canary block and the full
+step-by-step detail. Step 1's doctor becomes `check-harness.sh --provider codex`. Merge autonomy
+and "Autonomy mode" are inert on Codex.
 
 ### 1. Mechanical preflight (the doctor)
 
 ```bash
-check-harness.sh   # on PATH via the plugin's bin/
+check-harness.sh   # Claude Code: on PATH via bin/; Codex: see step 0
 ```
 
 Report the full PASS/WARN/FAIL output to the user. The script auto-fixes two safe things

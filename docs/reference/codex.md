@@ -137,10 +137,13 @@ current, 1 when anything drifted or a path is unsupported, 2 on a usage or envir
 `TBF_OWNER_PID` > `${CLAUDE_PID:-$PPID}` (the original Claude Code rule, unchanged when neither
 flag nor env var is given). Under `codex exec` or `codex --no-daemon`, the session's own native
 `codex` process is every shell call's `$PPID` for the whole session (ADR 0002 P6), so a Codex
-caller that can't rely on that fallback passes it explicitly:
+caller that can't rely on that fallback passes it explicitly — run `echo $PPID` as its own call,
+then paste the printed digits literally into `--owner-pid <pid>` (never the inline
+`--owner-pid "$PPID"` form: a variable folded into a gated command is exactly what "Running the
+skills on Codex" below asks every Codex caller to avoid):
 
 ```
-harness-lock.sh acquire --owner-pid "$PPID"
+harness-lock.sh acquire --owner-pid <pid>
 ```
 
 The **default Codex TUI** instead starts a shared, long-lived `app-server` daemon and runs the
@@ -180,8 +183,186 @@ After a successful write, `codex-setup.sh` prints three reminders:
   matches a gated prefix rule; and that `host_executable` matching resolves a command's logical
   absolute path the way this file assumes. If any of these doesn't hold, the affected scripts run
   sandboxed and fail loudly (a permission error), which is safe — just noisy — rather than unsafe.
+- **The hook canary relies on the subagent's own report.** "Running the skills on Codex" below
+  opens every dispatch with a `gh --version` canary so the orchestrator can tell, per run, that
+  the plugin's hooks are trusted and actually running before it trusts anything else that
+  dispatch reports. The orchestrator only ever sees the subagent's final message (ADR 0002 P7) —
+  a subagent that fabricated the canary's denial line, quoting the exact stem, would pass
+  unnoticed. This is a per-run sanity check, not a proof.
 - **The installed rules file is machine-specific.** Its `host_executable` paths embed this
   install's own absolute plugin path, which varies by machine and by plugin version. Keep
   `.codex/rules/trail-blazer-flow.rules` out of version control (for example, via
   `.git/info/exclude`) — `codex-setup.sh` never edits `.gitignore` itself. The generated agent
   TOMLs and `.codex/config.toml` carry no machine-specific paths and may be committed.
+
+## Running the skills on Codex
+
+This is the model-facing procedure `issue-cycle`, `issue-planner`, `issue-implementer`, and
+`harness-setup` each point to for a Codex run. It changes HOW those skills run — script calls,
+the lock, dispatch, and the shape of a git write — never WHAT they decide; every other rule in
+each skill's own `SKILL.md` still applies. A composed run (`issue-cycle`) does the steps below
+once, at its own step 0; `issue-planner` and `issue-implementer` skip their own copies exactly as
+they already skip them under Claude Code.
+
+### Plugin root and scripts
+
+Codex shows each skill's file as `(file: r1/<skill>/SKILL.md)`, with an alias map entry for `r1`.
+The plugin root is that alias value with the trailing `/skills` segment removed. Write every path
+in full: `<plugin root>/bin/<script>.sh`, `<plugin root>/docs/reference/codex.md` — no `..`, no
+`~`, no variable, no quotes, and never `bash <path>` (see "Script reach" above: a rule matches the
+program name, and running a script through `bash` makes `bash` the program, not the script).
+Report the resolved root once, in the run summary.
+
+- **Gated** (run outside the sandbox only through the installed rules — see "Rules" above):
+  `check-decision-record.sh`, `check-harness.sh`, `cleanup-after-merge.sh`,
+  `find-implementation-work.sh`, `find-planning-work.sh`, `harness-lock.sh`, `harness-status.sh`,
+  `harness-stop.sh`, `reconcile-ledger.sh`, `setup-labels.sh`.
+- **Ungated** (run sandboxed): `harness-version.sh`, `governance-paths.sh`, and
+  `codex-setup.sh`, whose write mode runs once from a normal terminal, never in-session, while its
+  read-only `--check` runs in-session.
+
+### Preamble (read-only, before step 0's lock)
+
+Run, as its own call:
+```
+<plugin root>/bin/codex-setup.sh --check
+```
+Exit 0: continue. Any other exit: STOP before the lock, dispatching nothing. Quote every
+`drift=`/`unsupported=` line verbatim, and give the remedy — the maintainer re-runs
+`<plugin root>/bin/codex-setup.sh` from a normal terminal, completes its three `next:` lines
+(see "Trust steps" above), and restarts the session with `codex --no-daemon`.
+
+Then, as its own call:
+```
+echo $PPID
+```
+Copy the printed digits literally — they are this session's own pid, passed to the lock next.
+
+### Lock
+
+```
+<plugin root>/bin/harness-lock.sh acquire --owner-pid <pid>
+```
+with `<pid>` the literal digits the preamble printed — never the inline `--owner-pid "$PPID"`
+form (see "One simple command per call" below). Exit 0 and exit 3 are handled exactly as the
+skill already handles them. Exit 2: abort the run before any mutating command and quote the
+command's own stderr verbatim; when it names the Codex `app-server` daemon, tell the human to
+restart with `codex --no-daemon` (see "Lock owner on Codex" above). Release the same
+way, by absolute path: `<plugin root>/bin/harness-lock.sh release <run-id>`.
+
+### One simple command per call
+
+Every git write, `gh` call, and gated script is its own simple command: no pipe, `&&`/`;` chain,
+redirection, heredoc, command substitution, or variable (see "Script reach" above). Read-only git
+(`status`, `log`, `diff`, `rev-parse`, `merge-base`, `worktree list`) needs no rule and runs
+exactly as the skill already writes it. Never run `bash <path>`, and never fold a variable or
+`..` into a gated command. The Codex form of each composite the skills use elsewhere:
+
+- **`git add -A && git commit -m "…"`** — two calls: `git add -A`, then `git commit -m "…"`.
+- **The blocked path's `if git diff --cached --quiet; then … else … fi`** (issue-implementer step
+  2f) — run `git diff --cached --quiet` alone; exit 0 means run
+  `git commit --allow-empty -m "wip: blocked — <short reason> (#<n>)"` next; exit 1 means run
+  `git commit -m "wip: blocked — <short reason> (#<n>)"` next.
+- **Reset-fresh** (issue-implementer step 2b) — `git branch -D <branch>` has no allow rule; run
+  `git checkout <default-branch>` then `git checkout -B <branch> <default-branch>` instead, the
+  same end state.
+- **`reconcile-ledger.sh`'s heredoc** — write the ledger as plain text to a file under `/tmp`
+  (e.g. `/tmp/tbf-ledger-<run-id>.txt`) with a single redirect, never a multi-line heredoc; then
+  run `<plugin root>/bin/reconcile-ledger.sh /tmp/tbf-ledger-<run-id>.txt` as its own call.
+- **A `--body-file`** — write the body to its own file under `/tmp`, in its own call, before the
+  `gh`/script call that reads it.
+- **`gh … --jq … | tr -d '\r'` reads** — issue the `gh … --jq …` call alone, without the trailing
+  pipe (the strip only guards a CRLF transport this path never carries).
+
+Body and ledger files always land under `/tmp` (a writable root under the sandbox — see the ADR),
+in a command of their own, before the command that reads them.
+
+### Dispatch
+
+Dispatch with `spawn_agent`, `agent_type` set to `planner`, `implementer`, or `verifier` and
+`message` set to the prompt the skill specifies — prefixed with the canary block below — then
+`wait_agent`. The subagent's final message is its entire report (ADR 0002 P7): there is no other
+channel back. Every dispatch carries the canary block: the initial dispatch, every retry-ladder
+attempt, every resume relaunch, every kickback, and every CI-fix re-dispatch.
+
+### Canary
+
+Prefix every Codex dispatch prompt with this block, verbatim:
+
+> **Hook canary (Codex).** Before anything else, run exactly `gh --version`, alone, as your first
+> action. If a hook blocked it, begin your final message with one line, `Canary: denied — `
+> followed by the block message quoted verbatim, then continue with the rest of your task
+> normally. Otherwise stop immediately: do nothing else at all, and your final message must be
+> exactly `Canary: not denied — ` followed by the command's output.
+
+On return, before anything else (including the LESSONS.md guard's own compare):
+
+- **No final message at all** — the existing retry ladder; handle it as such.
+- **A first line starting `Canary: denied — ` that quotes `trail-blazer-flow agent boundary:`**
+  (implementer or verifier) **or `trail-blazer-flow planner guard:`** (planner) — strip that one
+  line and continue normally; never carry it into a posted comment, an archive, or a PR body.
+- **Anything else** — a **canary abort**:
+  - Push nothing: whatever the agent did ran without its hooks. Run `git status --porcelain` and
+    name every dirty path in the escalation.
+  - Implementer or verifier stage (2c/2e): if the tree is dirty, `git add -A`; then
+    `git commit --allow-empty -m "wip: blocked — hook canary failed (#<n>)"`; then
+    `git checkout <default-branch>`. That commit is local and never pushed.
+    - **Before the PR exists** (2c, and 2e's first verifier dispatch or a kickback): the branch
+      holds only `wip:` commits, so the next run's step 2b sees `wip: blocked` as the newest and
+      resets the branch fresh (codex.md's `git checkout -B` form), discarding the unguarded work
+      instead of step 0's crash recovery resuming it — including that issue's implementation
+      checkpoints; the next run re-implements.
+    - **A CI-fix re-dispatch** (the branch already carries the pushed `feat:` commit and an open
+      PR): also run `git checkout -B claude/<n>-<slug> origin/claude/<n>-<slug>` and then
+      `git checkout <default-branch>`, re-pointing the local branch at its pushed head so the
+      unguarded commit is unreachable and can never be pushed; the escalation says so.
+  - Planner stage: no git.
+  - Emit that stage's own status line yourself, `outcome=died` — the ledger stays complete; this
+    is not the death/resume path.
+  - Post a durable escalation — stage `2c`, `2e`, `plan-initial`, or `plan-revision`; reason
+    `hook-canary-failed`; `comments=none` — quoting the canary line and naming the likely causes:
+    the plugin's hooks are untrusted or not running (see "Trust steps" above); `jq` is missing
+    (the hooks fail open); Codex did not send `agent_type`; or the installed agent TOMLs are stale
+    (run `<plugin root>/bin/codex-setup.sh --check`).
+  - Stop the run as a stop-switch stop does: dispatch nothing new, report the undispatched
+    issues, and release the lock.
+
+### Worktree mode
+
+Never used on Codex: `git-c-guard`'s allow is ignored under Codex's own rules, and a worktree's
+own gitdir is read-only in the sandbox (ADR 0002 P5) — stay sequential, always. At step 0's
+stale-worktree sweep, skip `git worktree prune`/`remove` and every `git -C` sweep commit; run
+only `git worktree list --porcelain`, report any surviving `<repo>-wt-<n>` worktree for the human
+to clear, and skip any issue whose branch one holds.
+
+### Merges and autonomy
+
+The merge pass never runs on Codex, whatever `CLAUDE.md` delegates. When a "Merge autonomy
+policy" section exists, say once, in "waits on the human": "merge pass not run: on Codex every
+merge is the human's." List the PRs exactly as usual. `mode: autonomous` is read as **absent**:
+no implied auto-approval or merge-autonomy section, no `--carry-over`, no serial train, and a
+kickback budget of 2 (the skill's own default). A declared "Plan auto-approval policy" still
+applies — every PR still waits for a human merge either way. `gh pr merge` is additionally
+`forbidden` by the installed rules (see "Rules" above) — the mechanical backstop behind this.
+
+### `harness-setup` on Codex
+
+Matches the skill's own "0. Codex only" step:
+
+1. The maintainer runs `<plugin root>/bin/codex-setup.sh` from the repo root, in a normal
+   terminal — it cannot run in-session: the sandbox write-protects `.codex/`, and the script is
+   deliberately ungated.
+2. The maintainer follows its three `next:` lines: trust the project, trust the plugin's hooks,
+   restart with `codex --no-daemon`.
+3. Confirm with `<plugin root>/bin/codex-setup.sh --check`.
+4. Dispatch one canary-only `planner` spawn, whose message is only the canary block above plus
+   "then stop and report." Denied: continue. Anything else: STOP, naming the same likely causes
+   the canary abort above names.
+5. Run the doctor: `<plugin root>/bin/check-harness.sh --provider codex`.
+6. Remind the maintainer to keep `.codex/rules/trail-blazer-flow.rules` out of version control
+   (see "Honest limits" above).
+
+### Attended only
+
+Codex support is supervised only in 3.0.0: `codex exec` and `/loop`-style unattended scheduling
+are not supported.

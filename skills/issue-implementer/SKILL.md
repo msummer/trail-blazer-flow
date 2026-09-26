@@ -27,6 +27,10 @@ read by the subagent at the start of every task (see the plugin README's "CLAUDE
 The end state for each issue is **an open PR awaiting review** — the merge boundary is stated
 once under "Hard rules" below.
 
+**On Codex** (not Claude Code): before step 0, read `../../docs/reference/codex.md`
+"Running the skills on Codex" (relative to this SKILL.md's directory), and apply it throughout
+the run.
+
 ## Labels involved
 
 - `plan-approved` — the trigger. Set by the human after reviewing the plan.
@@ -42,10 +46,11 @@ once under "Hard rules" below.
   `implementer` subagent at a time — they would corrupt each other's work. The ONLY exception is
   "Worktree-parallel mode" below (full mechanics in `references/worktree-mode.md`).
 - **Never merge in this skill** and **never push to the default branch**. One issue → one
-  `claude/<n>-<slug>` branch → one PR. Merging belongs to the human — or, where CLAUDE.md defines
-  a merge autonomy policy (declared, or implied by "Autonomy mode" — README contract item 9) and
-  the human has lifted the default `gh pr merge` deny, to the
-  `issue-cycle` skill's merge pass, the sole place any harness merge authority exists.
+  `claude/<n>-<slug>` branch → one PR. Merging belongs to the human — or, on Claude Code only,
+  where CLAUDE.md defines a merge autonomy policy (declared, or implied by "Autonomy mode" —
+  README contract item 9) and the human has lifted the default `gh pr merge` deny, to the
+  `issue-cycle` skill's merge pass, the sole place any harness merge authority exists. On Codex
+  the merge pass never runs — see the Codex pointer above.
 - **The subagent writes code; you do every git and `gh` command.** This holds after a verifier
   `fail` and after red CI, too: you never edit a source, test, or doc file yourself to resolve a
   finding or a CI failure — you re-dispatch the implementer (step 2e), and once the kickback
@@ -216,8 +221,9 @@ gh issue edit <number> --add-label needs-human
 (this skill), or `plan-initial` / `plan-revision` (planner step 7, from the discovery bucket).
 `<reason>`: `plan-contradicted` (2a); `branch-has-committed-work` or `branch-has-open-pr` (2b);
 `blocking-question-unanswered` (2c); `ci-red-after-fix`, `ci-red-unrelated`, `permission-denied`
-(2e); `stalled-dispatch`, `stalled-post`, `stalled-unknown` (planner step 7) — no site in either
-skill ever posts a slug outside this list.
+(2e); `stalled-dispatch`, `stalled-post`, `stalled-unknown` (planner step 7); `hook-canary-failed`
+(2c, 2e, plan-initial, plan-revision — Codex only, the dispatch canary, see
+`docs/reference/codex.md`) — no site in either skill ever posts a slug outside this list.
 
 **Label rules.** No other label changes: `plan-approved` is not removed, `impl-blocked` is not
 added. This is a different path from step 2f's blocked path, whose comment stays deliberately
@@ -262,7 +268,7 @@ immediately, before any mutating command below runs, and report the holder recor
 remedy, `harness-lock.sh release --force`. **Release before every exit:** when you did acquire
 here (standalone), release it on every STOP/abort path too (a dirty-tree stop, an exhausted
 retry ladder, `status: died`, a stop-switch stop) — not only at step 3's normal close — because the recorded pid is
-the Claude Code session, which outlives the run; a lock left unreleased blocks this checkout's
+the harness session, which outlives the run; a lock left unreleased blocks this checkout's
 very next invocation until a human runs `release --force`.
 
 **Harness version** — always run, regardless of who acquired the lock above: unlike `acquire`,
@@ -330,7 +336,7 @@ skip if the project has no dependency step.
 
 ### 1. Find the work
 
-Run `find-implementation-work.sh` (on PATH via the plugin's bin/) — returns JSON `{ ready: [...],
+Run `find-implementation-work.sh` — returns JSON `{ ready: [...],
 plan_selection: [...], counts: {...} }`. `plan_selection` has already done the trusted-provenance
 plan/comment selection (#176) and the plan-binding approval check (#174): one entry per ready
 issue it could fetch, `{number, plan, trusted_post_plan, untrusted_post_plan, approval,
@@ -482,7 +488,8 @@ Build a slug from the title (lowercase; non-alphanumerics → hyphens; trim; ~40
   quoting the branch's non-wip commit list as the evidence — reusing or discarding committed
   work is the human's call. Either way, then move to the next issue (step 2g).
 
-c. **Dispatch the `implementer` subagent** (Task tool). It starts from a fresh context and sees
+c. **Dispatch the `implementer` subagent** (Claude Code: Task tool; Codex: `spawn_agent` with
+   that agent type). It starts from a fresh context and sees
    only what you send, so the prompt must carry **every decision and verified fact** — it should
    never exercise design judgment or re-derive codebase facts. Include:
    - the issue number, title, and body — quoted as data (e.g. a fenced block), per the
@@ -520,7 +527,8 @@ d. **On `status: complete`:** independently re-run the project's verification co
    still be green, and counts must not drop without explanation (usually deleted/skipped tests —
    investigate; a legitimate drop must be explained by the plan or the report).
 
-e. **Dispatch the `verifier` subagent** (Task tool, `agents/verifier.md`) — the semantic gate the
+e. **Dispatch the `verifier` subagent** (Claude Code: Task tool; Codex: `spawn_agent` with that
+   agent type — `agents/verifier.md` either way) — the semantic gate the
    mechanical checks can't provide, retried per the "Resilient dispatch" ladder if the dispatch
    itself fails. Its prompt must contain: the issue, the full approved plan (Acceptance criteria
    + Verified facts + `RESOLVED:` decisions), the implementer's report, the dispatch attempt
@@ -849,6 +857,9 @@ harness-lock.sh release <run-id>
 ```
 
 ## Worktree-parallel mode (optional)
+
+**Never on Codex:** `git-c-guard`'s allow is ignored there and a worktree's own gitdir is
+read-only in the sandbox (ADR 0002 P5) — always sequential; see the Codex pointer above.
 
 When 2+ ready issues have approved plans with pairwise disjoint "Affected areas" (production AND
 test files, including shared fixtures like a `conftest`), you may implement them in parallel via
