@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #410: `bin/check-harness.sh --provider codex` checks the Codex version floor, path whitespace,
+  `codex-setup.sh --check` drift, hook trust via `codex app-server` (never granting it), manual
+  merge, and FAILs without branch protection; unknown arguments now exit 2 on both providers.
 - #409: the skills gain a Codex path (`docs/reference/codex.md`, "Running the skills on Codex"):
   `spawn_agent` dispatch, absolute script paths, an explicit lock owner, a `gh --version` canary
   before every dispatch, no worktree mode, human-only merges; `harness-setup` gains a Codex step.

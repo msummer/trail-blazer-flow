@@ -82,7 +82,24 @@
 # contract loading into either an AGENTS.md pointer block or a .codex/config.toml fallback key,
 # every `--check` drift token (missing/differs/stale-plugin-path/missing-fallback/
 # fallback-conflict/missing-pointer/malformed-pointer), and the whitespace/unsupported-character
-# path refusals — plus the never-writes guarantee `--check` makes.
+# path refusals — plus the never-writes guarantee `--check` makes, and (#410)
+# `bin/check-harness.sh --provider codex` — a separate check set from the Claude branch above,
+# run against fixtures built by mk_cx_doctor (a copy of THIS checkout's own hooks/hooks.json
+# alongside a fake Codex plugin-cache install, plus a repo with the Codex compatibility layer
+# already installed via run_cx) and a stub `codex` (build_stub_codex): the numeric (not lexical)
+# version-floor compare, whitespace in the plugin/repo path, `codex-setup.sh --check` drift
+# relayed verbatim, a bounded `codex app-server` `hooks/list` exchange (an initialize request
+# naming this doctor and the plugin version in clientInfo — required before a real app-server
+# answers anything else — plus the initialized notification and one hooks/list request, tolerant
+# of a notification and a non-JSON line, bounded by up to CODEX_HOOKS_LIST_WAIT + 2 one-second
+# polls plus a kill fallback so a hung app-server can never hang this suite) that only ever
+# reports hook trust (`trusted`/`managed` pass; anything else, or a hook the plugin ships but
+# Codex doesn't load, FAILs; a key is sanitised before it's ever printed; an empty expected-hook
+# set — hooks/hooks.json missing, unreadable, or unparseable — FAILs before the exchange even
+# starts; never trusts anything itself), the manual-merge report, and the Codex-specific FAIL
+# arms on branch protection (a WARN on Claude Code) — plus that every settings/toolchain/policy
+# line is absent on Codex, and that an unrecognised argument (including a bare --provider with no
+# value) exits 2 on both providers.
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -93,7 +110,10 @@
 # doctor derives the template path from $0, so "template missing" is otherwise untestable
 # against the real tree); every run points HOME/CLAUDE_CONFIG_DIR into the fixture and prepends
 # a stub `gh` (offline, deterministic, FAIL-free) to PATH, so a developer's real
-# ~/.claude/settings.json or gh session can never leak into a verdict.
+# ~/.claude/settings.json or gh session can never leak into a verdict. Every `--provider codex`
+# run also isolates CODEX_HOME into the fixture and puts a stub `codex` first on PATH (or, for
+# the tool-absence cases, uses a codex-free tool farm with no fallback to the real PATH at all),
+# so a developer's real Codex install can never leak into a verdict either.
 #
 # Prose coupling: the doctor has no verdict ids, so cases pin short, ASCII-only verdict STEMS
 # (stop before its em dashes) plus machine-derived payloads — settings.json is always derived
@@ -456,7 +476,8 @@ point_origin_ref() {
 # each gov-* case writes its own CLAUDE.md and other fixture files directly, then commits with
 # gov_commit below. Same local-identity idiom as seed_commit. Prints the fixture path.
 mk_gov_repo() {
-  local name="$1" dir="$tmpbase/$name"
+  local name="$1"
+  local dir="$tmpbase/$name"
   mkdir -p "$dir"
   (
     cd "$dir" &&
@@ -2623,7 +2644,8 @@ mk_cx_plugin() {
 # home/ (for HOME/XDG_CONFIG_HOME isolation, same idiom as mk_gov_repo). No AGENTS.md — codex-setup
 # fixtures that need one write it themselves. Prints the fixture path.
 mk_cx_repo() {
-  local name="$1" dir="$tmpbase/$name"
+  local name="$1"
+  local dir="$tmpbase/$name"
   mkdir -p "$dir/home"
   (
     cd "$dir" &&
@@ -3179,6 +3201,676 @@ ERR: $cx_err"
   expect_rc 2
 }
 
+# --- codex doctor (#410) ----------------------------------------------------------------------
+# bin/check-harness.sh --provider codex — a separate check set from the Claude branch above,
+# sharing only the preamble (git remote/gh/jq/default-branch/labels/exec-bits/harness-version/
+# CLAUDE.md/LESSONS.md), the baseline section, and (with a Codex-specific FAIL arm) the
+# branch-protection section. Every fixture isolates CODEX_HOME (never a developer's real Codex
+# install) the same way the rest of this suite isolates HOME/CLAUDE_CONFIG_DIR, and every case
+# uses a stub `codex` (never the real binary, even when one is on the developer's PATH) so this
+# suite can pin exact requests without depending on a live app-server.
+
+# build_stub_codex DIR MODE VERSION_LINE — writes DIR/codex, a stub standing in for the real
+# `codex` CLI. `--version` prints VERSION_LINE. `app-server` reads stdin lines (each appended
+# verbatim to DIR/requests.log, the request-log pin), replies to an "initialize" line with an
+# id-1 result, a remoteControl/status/changed notification, and a non-JSON line (tolerance pins),
+# and to a "hooks/list" line depending on MODE: reply (cats DIR/hooks-list.json, built by
+# mk_hooks_reply below), error (a JSON-RPC error object), or silent/hang (nothing at all). At
+# EOF, every mode but hang exits 0; hang execs the REAL sleep (resolved via `command -v` at BUILD
+# time, in this process's own PATH — never the fixture's restricted one) for 30s, standing in for
+# an app-server that ignores stdin EOF, so the doctor's own kill fallback is what ends it.
+build_stub_codex() {
+  local dir="$1" mode="$2" version_line="$3" real_sleep
+  real_sleep="$(command -v sleep)"
+  cat > "$dir/codex" <<EOF
+#!$bash_bin
+case "\$1" in
+  --version)
+    printf '%s\n' "$version_line"
+    exit 0
+    ;;
+  app-server)
+    initialized_ok=false
+    while IFS= read -r line; do
+      printf '%s\n' "\$line" >> "$dir/requests.log"
+      case "\$line" in
+        *'"method":"initialize"'*)
+          case "\$line" in
+            *'"clientInfo"'*)
+              initialized_ok=true
+              printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}'
+              printf '%s\n' '{"jsonrpc":"2.0","method":"remoteControl/status/changed","params":{}}'
+              printf '%s\n' 'stub: not json'
+              ;;
+            *)
+              printf '%s\n' '{"error":{"code":-32600,"message":"Invalid request: missing field \`clientInfo\`"},"id":1}'
+              ;;
+          esac
+          ;;
+        *'"method":"hooks/list"'*)
+          if ! \$initialized_ok; then
+            printf '%s\n' '{"error":{"code":-32600,"message":"Not initialized"},"id":2}'
+          else
+            case "$mode" in
+              reply) cat "$dir/hooks-list.json" ;;
+              error) printf '%s\n' '{"id":2,"error":{"code":-32601,"message":"stub: method not found"}}' ;;
+              silent|hang) : ;;
+            esac
+          fi
+          ;;
+      esac
+    done
+    case "$mode" in
+      hang) exec "$real_sleep" 30 ;;
+      *) exit 0 ;;
+    esac
+    ;;
+esac
+EOF
+  chmod +x "$dir/codex"
+}
+
+# build_stub_sleep_instant DIR — writes DIR/sleep, exiting 0 immediately regardless of its
+# argument (the dev/planning-tests.sh build_stub_sleep precedent). Placed first on PATH for the
+# hooks-no-reply/hooks-hang cases below, so the doctor's own CODEX_HOOKS_LIST_WAIT-bounded polling
+# (and the stub app-server's own writer loop) burns no real wall-clock time; build_stub_codex's
+# "hang" exec always resolves the REAL sleep at build time regardless of this stub's PATH position.
+build_stub_sleep_instant() {
+  local dir="$1"
+  mkdir -p "$dir"
+  cat > "$dir/sleep" <<EOF
+#!$bash_bin
+exit 0
+EOF
+  chmod +x "$dir/sleep"
+}
+
+# mk_hooks_reply STUBDIR PLUGIN TOPLEVEL STATUS [JQ_EDIT] — writes STUBDIR/hooks-list.json: the
+# id-2 hooks/list result the stub codex's "reply" mode serves, derived from THIS checkout's own
+# hooks/hooks.json via jq (never hand-typed), one hooks/list "data" entry for TOPLEVEL (the probed
+# reply shape — cwd/hooks/warnings/errors). Each plugin hook's command has
+# "${CLAUDE_PLUGIN_ROOT}" replaced by PLUGIN (split/join, no regex needed) and carries
+# source:"plugin", pluginId:"trail-blazer-flow@trail-blazer-flow", eventName:"preToolUse",
+# enabled:true, isManaged:false, trustStatus:STATUS, and a key in the probed shape
+# ("<pluginId>:hooks/hooks.json:pre_tool_use:<i>:0"). JQ_EDIT (default identity) is applied last,
+# so a case can add/mutate entries (an extra user/project hook, a config error) without hand-
+# building the whole envelope.
+mk_hooks_reply() {
+  local stubdir="$1" plugin="$2" toplevel="$3" status="$4" jqedit="${5:-.}"
+  local hooks_json envelope
+  hooks_json="$(jq -c --arg plugin "$plugin" --arg status "$status" '
+    [ .hooks[][]?.hooks[]? ] as $entries
+    | [ range(0; ($entries|length)) as $i
+        | ($entries[$i].command | split("${CLAUDE_PLUGIN_ROOT}") | join($plugin)) as $cmd
+        | { command: $cmd, source: "plugin", pluginId: "trail-blazer-flow@trail-blazer-flow",
+            eventName: "preToolUse", enabled: true, isManaged: false, trustStatus: $status,
+            key: ("trail-blazer-flow@trail-blazer-flow:hooks/hooks.json:pre_tool_use:" + ($i|tostring) + ":0") }
+      ]
+  ' "$root/hooks/hooks.json")"
+  envelope="$(jq -nc --argjson hooks "$hooks_json" --arg cwd "$toplevel" \
+    '{"jsonrpc":"2.0","id":2,"result":{"data":[{"cwd":$cwd,"hooks":$hooks,"warnings":[],"errors":[]}]}}')"
+  printf '%s\n' "$envelope" | jq -c "$jqedit" > "$stubdir/hooks-list.json"
+}
+
+# mk_cx_doctor NAME [ROOTDIR] [REPONAME] — builds one #410 doctor fixture: a fake Codex
+# plugin-cache install (mk_cx_plugin, version 3.0.0, at ROOTDIR when given — the whitespace-path
+# cases pass one) with THIS checkout's own hooks/hooks.json copied alongside it, and a repo
+# (mk_cx_repo, at REPONAME when given — default "NAME-repo") with a fake origin remote. Then
+# installs the Codex compatibility layer for real via run_cx (write mode, never --check) so
+# "codex setup: in sync" is the default PASS — skipped when ROOTDIR or REPONAME contains
+# whitespace, since codex-setup.sh's own path validation would refuse before writing anything.
+# Sets globals cx_plugin/cx_repo (mirroring run_cx's cx_out/cx_err/cx_rc idiom) and cx_top (the
+# repo's git toplevel via `rev-parse --show-toplevel`, since $tmpbase itself isn't -P-resolved).
+cx_plugin=""
+cx_repo=""
+cx_top=""
+mk_cx_doctor() {
+  local name="$1" rootdir="${2:-plugins}" reponame="${3:-}"
+  [ -n "$reponame" ] || reponame="$name-repo"
+  cx_plugin="$(mk_cx_plugin "$name-plugin" 3.0.0 "$rootdir")"
+  mkdir -p "$cx_plugin/hooks"
+  cp "$root/hooks/hooks.json" "$cx_plugin/hooks/hooks.json"
+  cx_repo="$(mk_cx_repo "$reponame")"
+  (cd "$cx_repo" && git remote add origin https://example.invalid/acme/demo.git) >/dev/null
+  case "$rootdir$reponame" in
+    *[[:space:]]*) : ;;
+    *) run_cx "$cx_plugin" "$cx_repo" ;;
+  esac
+  cx_top="$(cd "$cx_repo" && git rev-parse --show-toplevel)"
+}
+
+# mk_farm DIR [EXCLUDE…] — symlinks a fixed, closed tool list into DIR (each resolved with
+# `command -v` in THIS process's own PATH; only an absolute result is linked; any EXCLUDE name is
+# skipped) so a fixture's PATH can be exactly this farm with no fallback to the real PATH — the
+# only way to guarantee a tool the case means to test as ABSENT (codex, jq, or git) truly isn't
+# reachable, even on a developer machine that has a real one installed. `codex` is never in this
+# list, under any circumstance. Prints DIR.
+mk_farm() {
+  local dir="$1"
+  shift
+  local excl=" $* "
+  mkdir -p "$dir"
+  local tools="awk basename bash cat chmod cmp cp cut date dirname env find grep head jq ln ls mkdir mktemp mv ps rm sed sleep sort tail tr uname wc git"
+  local t p
+  for t in $tools; do
+    case "$excl" in
+      *" $t "*) continue ;;
+    esac
+    p="$(command -v "$t" 2>/dev/null)" || continue
+    case "$p" in
+      /*) ln -s "$p" "$dir/$t" ;;
+    esac
+  done
+  printf '%s' "$dir"
+}
+
+# run_doctor_at PLUGIN REPO PATHVAL ARGS… — same never-a-command-substitution idiom as run_doctor,
+# running PLUGIN/bin/check-harness.sh with cwd = REPO, PATH = PATHVAL (no fallback to the real
+# PATH unless a caller appends ":$PATH" itself), and HOME/XDG_CONFIG_HOME/CLAUDE_CONFIG_DIR/
+# CODEX_HOME all pointed into REPO (so neither a developer's real global git config, Claude
+# settings, nor Codex state can ever leak into a verdict) plus GIT_CONFIG_NOSYSTEM=1. Leaves
+# $doctor_out/$doctor_rc set, so the existing expect/expect_absent/expect_rc helpers apply
+# unchanged.
+run_doctor_at() {
+  local plugin="$1" repo="$2" pathval="$3"
+  shift 3
+  doctor_out="$(cd "$repo" && HOME="$repo/home" XDG_CONFIG_HOME="$repo/home/.config" CLAUDE_CONFIG_DIR="$repo/claudecfg" CODEX_HOME="$repo/home/.codex" GIT_CONFIG_NOSYSTEM=1 PATH="$pathval" "$bash_bin" "$plugin/bin/check-harness.sh" "$@" 2>&1)"
+  doctor_rc=$?
+}
+
+# codex-doctor-healthy — every #410 check PASSes: version, paths, setup, hook trust, manual
+# merge, and (via the shared healthy stub_gh_dir) branch protection; every Claude-only line is
+# absent; and the stub's own request log pins the three-request, notification/non-JSON-tolerant
+# exchange contract.
+# mutant:410-provider-wrapper — turning the `if [ "$provider" = claude ]` wrapper into `if true`
+#   re-enables every Claude-only check on Codex too, so this case's expect_absent assertions
+#   (settings.json, merge autonomy:, autonomy mode:, governance paths:, test-suite ratchet) fail.
+# mutant:410-init-clientinfo — dropping clientInfo from the initialize request (#410 kickback
+#   finding 1) makes the stub reject it and answer hooks/list with "Not initialized" instead of
+#   the trust reply, so this case's "every hook Codex loads for this repo is trusted" PASS and
+#   rc 0 both fail.
+case_codex_doctor_healthy() {
+  mk_cx_doctor cx-doctor-healthy
+  local cxstub="$tmpbase/cx-doctor-healthy-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect_rc 0
+  expect "codex version: 0.157.1"
+  expect "codex plugin paths:"
+  expect "codex setup: in sync"
+  expect "hook trust: every hook Codex loads for this repo is trusted"
+  expect "merge: manual on Codex"
+  expect "branch protection enabled on main"
+  expect_absent "settings.json"
+  expect_absent "merge autonomy:"
+  expect_absent "autonomy mode:"
+  expect_absent "governance paths:"
+  expect_absent "test-suite ratchet"
+  local reqlog="$cxstub/requests.log" reqcount methods cwd3 clientname
+  reqcount="$(grep -c . "$reqlog" 2>/dev/null)"
+  [ "$reqcount" = "3" ] || { __ok=0; __why="${__why}requests.log: expected 3 lines, got $reqcount\n"; }
+  methods="$(jq -r '.method' "$reqlog" 2>/dev/null | tr '\n' ',')"
+  [ "$methods" = "initialize,initialized,hooks/list," ] || { __ok=0; __why="${__why}requests.log methods: $methods\n"; }
+  # #410 kickback finding 1: a real codex app-server rejects initialize outright without
+  # params.clientInfo, so this must never regress silently.
+  clientname="$(sed -n '1p' "$reqlog" | jq -r '.params.clientInfo.name' 2>/dev/null)"
+  [ "$clientname" = "check-harness" ] || { __ok=0; __why="${__why}requests.log line 1 clientInfo.name: $clientname (want check-harness)\n"; }
+  cwd3="$(sed -n '3p' "$reqlog" | jq -c '.params.cwds' 2>/dev/null)"
+  [ "$cwd3" = "[\"$cx_top\"]" ] || { __ok=0; __why="${__why}requests.log line 3 cwds: $cwd3 (want [\"$cx_top\"])\n"; }
+}
+
+# codex-doctor-version-floor — exactly at CODEX_MIN_VERSION -> PASS.
+# mutant:410-version-inclusive — loosening the final component compare from -ge to -gt makes an
+#   exact-floor version FAIL instead of PASS.
+case_codex_doctor_version_floor() {
+  mk_cx_doctor cx-doctor-version-floor
+  local cxstub="$tmpbase/cx-doctor-version-floor-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.156.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "codex version: 0.156.1"
+  expect_rc 0
+}
+
+# codex-doctor-version-below — one patch under the floor -> FAIL naming the floor.
+case_codex_doctor_version_below() {
+  mk_cx_doctor cx-doctor-version-below
+  local cxstub="$tmpbase/cx-doctor-version-below-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.156.0"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "codex version: 0.156.0 is below the supported floor 0.156.1"
+  expect_rc 1
+}
+
+# codex-doctor-version-lexical — 0.99.9 is lexically ABOVE 0.156.1 ('9' > '1') but numerically
+# below -> FAIL, proving the compare is numeric, not a string compare.
+# mutant:410-version-numeric — a string compare would read 0.99.9 as >= 0.156.1 and PASS.
+case_codex_doctor_version_lexical() {
+  mk_cx_doctor cx-doctor-version-lexical
+  local cxstub="$tmpbase/cx-doctor-version-lexical-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.99.9"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "codex version: 0.99.9 is below the supported floor 0.156.1"
+  expect_rc 1
+}
+
+# codex-doctor-version-unparseable — no X.Y.Z triple anywhere on the first line -> FAIL naming
+# the parse failure, not a version.
+case_codex_doctor_version_unparseable() {
+  mk_cx_doctor cx-doctor-version-unparseable
+  local cxstub="$tmpbase/cx-doctor-version-unparseable-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli dev"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "codex version: could not parse"
+  expect_rc 1
+}
+
+# codex-doctor-version-missing — a closed farm with no codex anywhere on PATH -> FAIL codex not
+# installed, and hook trust can't even try.
+case_codex_doctor_version_missing() {
+  mk_cx_doctor cx-doctor-version-missing
+  local farm; farm="$(mk_farm "$tmpbase/cx-doctor-version-missing-farm")"
+  run_doctor_at "$cx_plugin" "$cx_repo" "$stub_gh_dir:$farm" --provider codex
+  expect "FAIL  codex version: codex not installed"
+  expect "FAIL  hook trust: could not check"
+  expect_rc 1
+}
+
+# codex-doctor-paths-plugin-space — a plugin root containing a space -> FAIL naming the plugin
+# root, and codex-setup.sh's own --check (run from that same unsupported path) relays
+# unsupported=plugin-root, proving the doctor's own path check and codex-setup.sh's agree.
+# mutant:410-paths-whitespace — making cx_has_ws's single shared whitespace-detecting case arm
+#   unmatchable breaks detection for BOTH this case and codex-doctor-paths-repo-space, since both
+#   calls go through the one function.
+case_codex_doctor_paths_plugin_space() {
+  mk_cx_doctor cx-doctor-paths-plugin-space "plug ins"
+  local cxstub="$tmpbase/cx-doctor-paths-plugin-space-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "FAIL  codex plugin paths: the plugin root contains whitespace"
+  expect "unsupported=plugin-root"
+  expect_rc 1
+}
+
+# codex-doctor-paths-repo-space — a repo directory whose own path contains a space -> FAIL naming
+# the repo path.
+case_codex_doctor_paths_repo_space() {
+  mk_cx_doctor cx-doctor-paths-repo-space "" "cx doctor repo space"
+  local cxstub="$tmpbase/cx-doctor-paths-repo-space-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "FAIL  codex plugin paths: the repo path contains whitespace"
+  expect_rc 1
+}
+
+# codex-doctor-setup-drift — a hand-edited installed file after setup -> FAIL naming the exact
+# drift= line codex-setup.sh --check reports.
+# mutant:410-setup-drift-pass — turning the rc-1 arm's `bad` into `ok` reports drift as a PASS.
+case_codex_doctor_setup_drift() {
+  mk_cx_doctor cx-doctor-setup-drift
+  printf '\n# drift\n' >> "$cx_repo/.codex/agents/planner.toml"
+  local cxstub="$tmpbase/cx-doctor-setup-drift-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "codex setup: out of sync"
+  expect "drift=.codex/agents/planner.toml"
+  expect_rc 1
+}
+
+# codex-doctor-setup-script-missing — the fixture's own bin/codex-setup.sh deleted -> FAIL "could
+# not check", never a crash, never a false PASS.
+case_codex_doctor_setup_script_missing() {
+  mk_cx_doctor cx-doctor-setup-script-missing
+  rm -f "$cx_plugin/bin/codex-setup.sh"
+  local cxstub="$tmpbase/cx-doctor-setup-script-missing-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "FAIL  codex setup: could not check"
+  expect_rc 1
+}
+
+# codex-doctor-hooks-untrusted — every plugin hook untrusted -> FAIL naming the plugin source and
+# the untrusted status.
+case_codex_doctor_hooks_untrusted() {
+  mk_cx_doctor cx-doctor-hooks-untrusted
+  local cxstub="$tmpbase/cx-doctor-hooks-untrusted-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" untrusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "hook(s) not trusted"
+  expect "plugin:"
+  expect "(untrusted)"
+  expect_rc 1
+}
+
+# codex-doctor-hooks-modified — one plugin hook reports "modified" (Codex's own tamper signal,
+# distinct from "untrusted") -> FAIL, proving the not-trusted test isn't narrowed to untrusted
+# alone.
+# mutant:410-trust-untrusted-only — narrowing the not-trusted test to trustStatus=="untrusted"
+#   lets a "modified" plugin hook pass silently.
+case_codex_doctor_hooks_modified() {
+  mk_cx_doctor cx-doctor-hooks-modified
+  local cxstub="$tmpbase/cx-doctor-hooks-modified-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted '.result.data[0].hooks[0].trustStatus="modified"'
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "hook(s) not trusted"
+  expect "(modified)"
+  expect_rc 1
+}
+
+# codex-doctor-hooks-tolerated — every plugin hook "managed" (not user-trustable, so it must PASS
+# same as "trusted"), plus an extra disabled, untrusted, non-plugin ("user") hook, which must be
+# ignored because it's disabled -> PASS, rc 0.
+# mutant:410-trust-managed — no longer excluding "managed" from the not-trusted test flags every
+#   managed plugin hook as untrusted.
+# mutant:410-trust-enabled — dropping the enabled!=false guard from the not-trusted test flags the
+#   disabled untrusted user hook too.
+case_codex_doctor_hooks_tolerated() {
+  mk_cx_doctor cx-doctor-hooks-tolerated
+  local cxstub="$tmpbase/cx-doctor-hooks-tolerated-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" managed \
+    '.result.data[0].hooks += [{"command":"user hook","source":"user","pluginId":null,"eventName":"preToolUse","enabled":false,"isManaged":false,"trustStatus":"untrusted","key":"user:extra:0"}]'
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "hook trust: every hook Codex loads for this repo is trusted"
+  expect_rc 0
+}
+
+# codex-doctor-hooks-user-untrusted — every plugin hook trusted, plus an ENABLED, untrusted
+# "user"-source hook -> FAIL naming the user source, proving the trust test isn't restricted to
+# plugin hooks.
+# mutant:410-trust-plugin-only — restricting the not-trusted test to source=="plugin" lets an
+#   enabled untrusted user hook pass silently.
+case_codex_doctor_hooks_user_untrusted() {
+  mk_cx_doctor cx-doctor-hooks-user-untrusted
+  local cxstub="$tmpbase/cx-doctor-hooks-user-untrusted-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted \
+    '.result.data[0].hooks += [{"command":"user hook","source":"user","pluginId":null,"eventName":"preToolUse","enabled":true,"isManaged":false,"trustStatus":"untrusted","key":"user:extra:0"}]'
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "hook(s) not trusted"
+  expect "user:"
+  expect_rc 1
+}
+
+# codex-doctor-hooks-plugin-absent — the push-guard.sh entry deleted from the reply entirely, and
+# agent-boundary.sh's entry present but enabled:false -> FAIL naming BOTH scripts as not loaded,
+# distinguishing "absent" from "disabled" (both count as "not loaded").
+# mutant:410-plugin-expected — neutralising the presence loop (over hooks/hooks.json's own
+#   expected names) always reports every plugin hook as loaded, even when it plainly isn't.
+case_codex_doctor_hooks_plugin_absent() {
+  mk_cx_doctor cx-doctor-hooks-plugin-absent
+  local cxstub="$tmpbase/cx-doctor-hooks-plugin-absent-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted \
+    '.result.data[0].hooks |= ([.[] | select((.command | contains("push-guard.sh")) | not)] | map(if (.command | contains("agent-boundary.sh")) then .enabled=false else . end))'
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "hook trust: plugin hook(s) not loaded by Codex:"
+  expect "push-guard.sh"
+  expect "agent-boundary.sh"
+  expect_rc 1
+}
+
+# codex-doctor-hooks-no-reply — "silent" mode (app-server never answers hooks/list) with the
+# instant sleep stub first on PATH -> FAIL "no hooks/list reply", fast (no real wall-clock wait).
+# mutant:410-no-reply-pass — turning the no-reply arm's `bad` into `ok` reports silence as trust,
+#   killing both this case and codex-doctor-hooks-hang.
+case_codex_doctor_hooks_no_reply() {
+  mk_cx_doctor cx-doctor-hooks-no-reply
+  local cxstub="$tmpbase/cx-doctor-hooks-no-reply-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" silent "codex-cli 0.157.1"
+  local sleepstub="$tmpbase/cx-doctor-hooks-no-reply-sleep"
+  build_stub_sleep_instant "$sleepstub"
+  run_doctor_at "$cx_plugin" "$cx_repo" "$sleepstub:$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "hook trust: no hooks/list reply"
+  expect_rc 1
+}
+
+# codex-doctor-hooks-hang — "hang" mode (app-server keeps running past stdin EOF) with the instant
+# sleep stub first on PATH -> the SAME FAIL as silent mode, and the suite's own "== summary:"
+# footer still prints, proving the doctor's kill fallback actually bounds the exchange rather than
+# hanging the whole suite. Deliberately no mutant here: one would remove the kill and hang this
+# suite for real, not just fail a case.
+case_codex_doctor_hooks_hang() {
+  mk_cx_doctor cx-doctor-hooks-hang
+  local cxstub="$tmpbase/cx-doctor-hooks-hang-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" hang "codex-cli 0.157.1"
+  local sleepstub="$tmpbase/cx-doctor-hooks-hang-sleep"
+  build_stub_sleep_instant "$sleepstub"
+  run_doctor_at "$cx_plugin" "$cx_repo" "$sleepstub:$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "hook trust: no hooks/list reply"
+  expect_rc 1
+}
+
+# codex-doctor-hooks-rpc-error — codex app-server itself rejects hooks/list (a JSON-RPC error
+# object) -> FAIL naming the rejection, distinct from a plain no-reply.
+case_codex_doctor_hooks_rpc_error() {
+  mk_cx_doctor cx-doctor-hooks-rpc-error
+  local cxstub="$tmpbase/cx-doctor-hooks-rpc-error-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" error "codex-cli 0.157.1"
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "hook trust: codex app-server rejected hooks/list"
+  expect_rc 1
+}
+
+# codex-doctor-hooks-config-errors — Codex itself reports a per-cwd configuration error (a
+# malformed hooks.json, from Codex's point of view) -> FAIL distinct from a trust problem.
+# mutant:410-config-errors — skipping the configuration-error check lets a reported error pass
+#   through to the trust checks below unnoticed (and, since every hook here is otherwise trusted,
+#   the case would wrongly PASS).
+case_codex_doctor_hooks_config_errors() {
+  mk_cx_doctor cx-doctor-hooks-config-errors
+  local cxstub="$tmpbase/cx-doctor-hooks-config-errors-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted \
+    '.result.data[0].errors=[{"message":"stub: bad hooks.json","path":"/x"}]'
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "hook trust: Codex reported hook configuration error(s)"
+  expect_rc 1
+}
+
+# codex-doctor-hooks-json-missing (#410 kickback finding 4) — the plugin's own hooks/hooks.json
+# deleted -> FAIL could not check, before the app-server exchange even starts (no requests.log at
+# all would be wrong too, but this case only pins the verdict — codex-doctor-hooks-json-unparseable
+# below is the sibling that also proves cx_expected, not just the file's readability, is what
+# gates this).
+# mutant:410-hooks-json-empty-guard — neutralising the empty-cx_expected gate lets both this case
+#   and codex-doctor-hooks-json-unparseable fall through to cx_hooks_list with nothing to compare
+#   against.
+case_codex_doctor_hooks_json_missing() {
+  mk_cx_doctor cx-doctor-hooks-json-missing
+  rm -f "$cx_plugin/hooks/hooks.json"
+  local cxstub="$tmpbase/cx-doctor-hooks-json-missing-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "FAIL  hook trust: could not check"
+  expect_rc 1
+}
+
+# codex-doctor-hooks-json-unparseable (#410 kickback finding 4) — the plugin's own hooks.json
+# replaced with invalid JSON -> the same FAIL as a missing file, proving the guard is "can jq
+# derive at least one expected hook name", not merely "does the file exist".
+case_codex_doctor_hooks_json_unparseable() {
+  mk_cx_doctor cx-doctor-hooks-json-unparseable
+  printf 'not valid json{{{\n' > "$cx_plugin/hooks/hooks.json"
+  local cxstub="$tmpbase/cx-doctor-hooks-json-unparseable-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect "FAIL  hook trust: could not check"
+  expect_rc 1
+}
+
+# codex-doctor-hooks-key-sanitize (#410 kickback finding 7) — an untrusted entry's key contains a
+# space and a '$', both outside the doctor's own [A-Za-z0-9._:/@-] allow-set: the
+# printed line must carry the '?'-substituted form and never the raw key (a literal '$' or space
+# in a FAIL line is, at minimum, confusing to a shell that copy-pastes it; at worst, in a
+# differently-quoted context, live).
+# mutant:410-key-sanitize — dropping the gsub prints the raw, unsanitised key instead.
+case_codex_doctor_hooks_key_sanitize() {
+  mk_cx_doctor cx-doctor-hooks-key-sanitize
+  local cxstub="$tmpbase/cx-doctor-hooks-key-sanitize-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted \
+    '.result.data[0].hooks[0].trustStatus="untrusted" | .result.data[0].hooks[0].key="plugin key$value"'
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect 'plugin?key?value'
+  expect_absent 'plugin key$value'
+  expect_rc 1
+}
+
+# codex-doctor-manual-merge — CLAUDE.md declares both 'Merge autonomy policy' and 'Autonomy mode'
+# (mode: autonomous) -> PASS naming both section titles as not applying on Codex, rc 0, and
+# neither Claude-only verdict line (merge autonomy:, autonomy mode: autonomous) ever prints.
+case_codex_doctor_manual_merge() {
+  mk_cx_doctor cx-doctor-manual-merge
+  cat >> "$cx_repo/CLAUDE.md" <<'EOF'
+
+## Merge autonomy policy
+
+The cycle may merge fixture PRs. (fixture stub policy)
+
+## Autonomy mode
+```
+mode: autonomous
+```
+EOF
+  local cxstub="$tmpbase/cx-doctor-manual-merge-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect_rc 0
+  expect "merge: manual on Codex"
+  expect "'Merge autonomy policy'"
+  expect "'Autonomy mode'"
+  expect_absent "merge autonomy:"
+  expect_absent "autonomy mode: autonomous"
+}
+
+# codex-doctor-protection-missing — the branch-protection endpoint call itself fails (no document
+# at all) -> FAIL naming the branch, and rc 1 (a hard floor on Codex, unlike Claude's WARN).
+# mutant:410-protection-fail — turning the Codex arm's `bad` into `wrn` demotes this back to a
+#   WARN, so rc stays 0.
+case_codex_doctor_protection_missing() {
+  mk_cx_doctor cx-doctor-protection-missing
+  local ghdir="$tmpbase/cx-doctor-protection-missing-gh"
+  build_stub_gh "$ghdir" main "" fail
+  local cxstub="$tmpbase/cx-doctor-protection-missing-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$ghdir:$PATH" --provider codex
+  expect "no branch protection detected on main"
+  expect_rc 1
+}
+
+# codex-doctor-protection-unknown — gh installed but never authenticates, so gh_ready is false and
+# the default branch is never determined -> FAIL "could not check", never a silent skip (unlike
+# Claude, where the whole section is simply skipped).
+# mutant:410-protection-unknown — removing the added `elif [ "$provider" = codex ]` clause drops
+#   this FAIL entirely, so the section prints nothing and rc goes back to 0.
+case_codex_doctor_protection_unknown() {
+  mk_cx_doctor cx-doctor-protection-unknown
+  local ghdir="$tmpbase/cx-doctor-protection-unknown-gh"
+  mkdir -p "$ghdir"
+  cat > "$ghdir/gh" <<EOF
+#!$bash_bin
+exit 1
+EOF
+  chmod +x "$ghdir/gh"
+  local cxstub="$tmpbase/cx-doctor-protection-unknown-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$ghdir:$PATH" --provider codex
+  expect "branch protection: could not check"
+  expect_rc 1
+}
+
+# codex-doctor-jq-missing — a closed farm with no jq, but the stub codex still first on PATH -> the
+# Codex-specific hooks/planner-guard.sh clause on the jq FAIL, and hook trust can't even try.
+case_codex_doctor_jq_missing() {
+  mk_cx_doctor cx-doctor-jq-missing
+  local cxstub="$tmpbase/cx-doctor-jq-missing-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  local farm; farm="$(mk_farm "$tmpbase/cx-doctor-jq-missing-farm" jq)"
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$farm" --provider codex
+  expect "FAIL  jq not installed"
+  expect "fail open without it"
+  expect "FAIL  hook trust: could not check"
+  expect_rc 1
+}
+
+# codex-doctor-git-missing — a closed farm with no git anywhere on PATH -> the doctor's Codex-only
+# git precheck FAILs and exits before anything else runs.
+case_codex_doctor_git_missing() {
+  mk_cx_doctor cx-doctor-git-missing
+  local farm; farm="$(mk_farm "$tmpbase/cx-doctor-git-missing-farm" git)"
+  run_doctor_at "$cx_plugin" "$cx_repo" "$farm" --provider codex
+  expect "git not installed"
+  expect_rc 1
+}
+
+# codex-doctor-usage — run on a plain mk_repo fixture (plugin and repo are the same dir, since
+# this is an argument-parsing pin, not a Codex-specific one): an unknown --provider value names
+# the bad token and exits 2; an unrelated unknown flag exits 2; a bare --provider with no
+# following value exits 2 naming the missing value (#410 kickback finding 6); --help exits 0
+# naming --provider; and --provider claude still exits 0 with the unchanged Claude branch's
+# output (no "codex version" line).
+case_codex_doctor_usage() {
+  local dir; dir="$(mk_repo cx-doctor-usage base verbatim)"
+  run_doctor_at "$dir" "$dir" "$stub_gh_dir:$PATH" --provider bogus
+  expect_rc 2
+  expect "bogus"
+
+  run_doctor_at "$dir" "$dir" "$stub_gh_dir:$PATH" --frobnicate
+  expect_rc 2
+
+  run_doctor_at "$dir" "$dir" "$stub_gh_dir:$PATH" --provider
+  expect_rc 2
+  expect "--provider needs a value"
+
+  run_doctor_at "$dir" "$dir" "$stub_gh_dir:$PATH" --help
+  expect_rc 0
+  expect "--provider"
+
+  run_doctor_at "$dir" "$dir" "$stub_gh_dir:$PATH" --provider claude
+  expect_rc 0
+  expect "settings.json permissions match"
+  expect_absent "codex version"
+}
+
 # name|fn|desc
 cases=(
   "settings-missing|case_settings_missing|settings block: file missing"
@@ -3302,6 +3994,34 @@ cases=(
   "codex-setup-whitespace-repo|case_codex_setup_whitespace_repo|#408: a repo path containing a space: write rc 2; --check rc 1 unsupported=repo-path reason=whitespace"
   "codex-setup-unsupported-character|case_codex_setup_unsupported_character|#408: a plugin root containing '&': write rc 2, nothing written"
   "codex-setup-usage|case_codex_setup_usage|#408: --help rc 0; an unknown flag rc 2; run outside a git repository rc 2"
+  "codex-doctor-healthy|case_codex_doctor_healthy|#410: --provider codex, healthy install: every check PASSes, every Claude-only line absent, requests.log pins the three-request exchange"
+  "codex-doctor-version-floor|case_codex_doctor_version_floor|#410: codex version exactly at the floor (0.156.1) -> PASS"
+  "codex-doctor-version-below|case_codex_doctor_version_below|#410: codex version one patch under the floor -> FAIL naming the floor"
+  "codex-doctor-version-lexical|case_codex_doctor_version_lexical|#410: codex version 0.99.9 (lexically above the floor, numerically below) -> FAIL, proving the compare is numeric"
+  "codex-doctor-version-unparseable|case_codex_doctor_version_unparseable|#410: codex --version prints no X.Y.Z triple -> FAIL could not parse"
+  "codex-doctor-version-missing|case_codex_doctor_version_missing|#410: no codex anywhere on a closed PATH -> FAIL codex not installed, hook trust could not check"
+  "codex-doctor-paths-plugin-space|case_codex_doctor_paths_plugin_space|#410: a plugin root containing a space -> FAIL naming the plugin root; codex-setup.sh --check relays unsupported=plugin-root"
+  "codex-doctor-paths-repo-space|case_codex_doctor_paths_repo_space|#410: a repo path containing a space -> FAIL naming the repo path"
+  "codex-doctor-setup-drift|case_codex_doctor_setup_drift|#410: a hand-edited installed file -> FAIL out of sync naming the drift= line"
+  "codex-doctor-setup-script-missing|case_codex_doctor_setup_script_missing|#410: the fixture's own bin/codex-setup.sh deleted -> FAIL could not check"
+  "codex-doctor-hooks-untrusted|case_codex_doctor_hooks_untrusted|#410: every plugin hook untrusted -> FAIL naming the plugin source and status"
+  "codex-doctor-hooks-modified|case_codex_doctor_hooks_modified|#410: one plugin hook reports modified -> FAIL, not narrowed to untrusted alone"
+  "codex-doctor-hooks-tolerated|case_codex_doctor_hooks_tolerated|#410: every plugin hook managed, plus a disabled untrusted user hook -> PASS, rc 0"
+  "codex-doctor-hooks-user-untrusted|case_codex_doctor_hooks_user_untrusted|#410: every plugin hook trusted plus an enabled untrusted user hook -> FAIL naming the user source"
+  "codex-doctor-hooks-plugin-absent|case_codex_doctor_hooks_plugin_absent|#410: one plugin hook entry missing, another present but disabled -> FAIL naming both scripts as not loaded"
+  "codex-doctor-hooks-no-reply|case_codex_doctor_hooks_no_reply|#410: app-server never answers hooks/list -> FAIL no hooks/list reply (instant sleep stub, no real wait)"
+  "codex-doctor-hooks-hang|case_codex_doctor_hooks_hang|#410: app-server ignores stdin EOF -> the same FAIL via the kill fallback, and the suite's own summary still prints"
+  "codex-doctor-hooks-rpc-error|case_codex_doctor_hooks_rpc_error|#410: app-server rejects hooks/list with a JSON-RPC error -> FAIL naming the rejection"
+  "codex-doctor-hooks-config-errors|case_codex_doctor_hooks_config_errors|#410: Codex reports a per-cwd hook configuration error -> FAIL distinct from a trust problem"
+  "codex-doctor-hooks-json-missing|case_codex_doctor_hooks_json_missing|#410 kickback: the plugin's own hooks/hooks.json deleted -> FAIL could not check, before the app-server exchange starts"
+  "codex-doctor-hooks-json-unparseable|case_codex_doctor_hooks_json_unparseable|#410 kickback: the plugin's own hooks.json replaced with invalid JSON -> the same FAIL as a missing file"
+  "codex-doctor-hooks-key-sanitize|case_codex_doctor_hooks_key_sanitize|#410 kickback: an untrusted entry's key contains a space and a '\$' -> the printed line carries the '?'-substituted form, never the raw key"
+  "codex-doctor-manual-merge|case_codex_doctor_manual_merge|#410: CLAUDE.md declares Merge autonomy policy and Autonomy mode -> PASS naming both as not applying on Codex; neither Claude-only verdict line prints"
+  "codex-doctor-protection-missing|case_codex_doctor_protection_missing|#410: the branch-protection endpoint call fails -> FAIL (hard floor on Codex, unlike Claude's WARN)"
+  "codex-doctor-protection-unknown|case_codex_doctor_protection_unknown|#410: gh never authenticates, default branch unknown -> FAIL could not check, never a silent skip"
+  "codex-doctor-jq-missing|case_codex_doctor_jq_missing|#410: no jq anywhere on a closed PATH -> the Codex-specific hooks/planner-guard.sh clause on the jq FAIL, hook trust could not check"
+  "codex-doctor-git-missing|case_codex_doctor_git_missing|#410: no git anywhere on a closed PATH -> the Codex-only git precheck FAILs and exits before anything else runs"
+  "codex-doctor-usage|case_codex_doctor_usage|#410: --provider bogus and an unrelated unknown flag exit 2; --help exits 0 naming --provider; --provider claude is unchanged (no codex version line)"
 )
 
 matched=0
