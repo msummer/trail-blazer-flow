@@ -1095,6 +1095,36 @@
       "expect_fail": [
         "codex-doctor-hooks-key-sanitize"
       ]
+    },
+    {
+      "name": "419-cx-restore-narrowed",
+      "target": "templates/codex.rules",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "prefix_rule(pattern = [\"git\", \"restore\"], decision = \"allow\", justification = \"harness unstages its own work; the verifier restores its mutation probe\")\n",
+          "to": "prefix_rule(pattern = [\"git\", \"restore\", \"--staged\"], decision = \"allow\", justification = \"harness unstages its own work; the verifier restores its mutation probe\")\n"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-rules-content"
+      ]
+    },
+    {
+      "name": "419-cx-restore-prompt",
+      "target": "templates/codex.rules",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "prefix_rule(pattern = [\"git\", \"restore\"], decision = \"allow\", justification = \"harness unstages its own work; the verifier restores its mutation probe\")\n",
+          "to": "prefix_rule(pattern = [\"git\", \"restore\"], decision = \"prompt\", justification = \"harness unstages its own work; the verifier restores its mutation probe\")\n"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-rules-content"
+      ]
     }
   ]
 }

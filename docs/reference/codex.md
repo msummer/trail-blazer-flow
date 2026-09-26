@@ -53,10 +53,13 @@ sandbox** when it matches an `allow` rule, refuses it outright when it matches a
 rule, and otherwise leaves it to the sandbox. `templates/codex.rules` has three sections:
 
 - **Allow** — the harness's own git/`gh` usage: `git add`, `commit`, `push`, `fetch`, `pull`,
-  `checkout`, `switch`, `restore --staged`, `reset --soft`, and `gh` (widened from the issue's own
+  `checkout`, `switch`, `restore`, `reset --soft`, and `gh` (widened from the issue's own
   list per the maintainer's ADVISORY Q1 decision — the orchestrator skills also issue `git
   checkout <default-branch>`, `git pull --ff-only`, and `git restore --staged`, none of which the
-  narrower list would have covered).
+  narrower list would have covered). `restore` covers every form, so the verifier's top-level
+  `git restore <file>` mutation-probe restore (see `agents/verifier.md`) runs outside the sandbox
+  too; a restore issued from inside a script or a compound command matches nothing and fails on
+  `.git/index.lock`.
 - **Forbidden** — a port of `templates/repo-settings.json`'s bare deny entries (the ones with no
   `git -C` prefix, which Codex's rules can't express at all): `gh pr merge`, `git push --force`
   (and `-f`, `--force-with-lease`), `git reset --hard`, `git clean`, `rm -rf`, `git branch -D

@@ -18,7 +18,7 @@ prefix_rule(pattern = ["git", "fetch"], decision = "allow", justification = "har
 prefix_rule(pattern = ["git", "pull"], decision = "allow", justification = "harness syncs the default branch")
 prefix_rule(pattern = ["git", "checkout"], decision = "allow", justification = "harness switches branches")
 prefix_rule(pattern = ["git", "switch"], decision = "allow", justification = "harness switches branches")
-prefix_rule(pattern = ["git", "restore", "--staged"], decision = "allow", justification = "harness unstages its own work")
+prefix_rule(pattern = ["git", "restore"], decision = "allow", justification = "harness unstages its own work; the verifier restores its mutation probe")
 prefix_rule(pattern = ["git", "reset", "--soft"], decision = "allow", justification = "harness rewinds its own commits")
 prefix_rule(pattern = ["gh"], decision = "allow", justification = "harness reads and writes issues, PRs and labels")
 
