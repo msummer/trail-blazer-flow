@@ -1646,6 +1646,674 @@
       ]
     },
     {
+      "name": "304-sys-env-var",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-sysconf-",
+      "edits": [
+        {
+          "from": "      sys_records=\"your system git config${cfg_tab}${GIT_CONFIG_SYSTEM:-}\"$'\\n'",
+          "to": "      sys_records=\"\""
+        }
+      ],
+      "expect_fail": [
+        "push-sysconf-deny-env-var"
+      ]
+    },
+    {
+      "name": "304-sys-etc",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-sysconf-",
+      "edits": [
+        {
+          "from": "PUSH_SYSTEM_CONFIG_PATHS=\"/etc/gitconfig /opt/homebrew/etc/gitconfig /usr/local/etc/gitconfig\"",
+          "to": "PUSH_SYSTEM_CONFIG_PATHS=\"/opt/homebrew/etc/gitconfig /usr/local/etc/gitconfig\""
+        }
+      ],
+      "expect_fail": [
+        "push-sysconf-deny-etc",
+        "push-sysconf-deny-env-var-union-not-replace",
+        "push-sysconf-deny-nosystem-false",
+        "push-sysconf-deny-repo-merge-last",
+        "push-sysconf-deny-c-target",
+        "push-sysconf-deny-never-executes"
+      ]
+    },
+    {
+      "name": "304-sys-homebrew-arm",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-sysconf-",
+      "edits": [
+        {
+          "from": "PUSH_SYSTEM_CONFIG_PATHS=\"/etc/gitconfig /opt/homebrew/etc/gitconfig /usr/local/etc/gitconfig\"",
+          "to": "PUSH_SYSTEM_CONFIG_PATHS=\"/etc/gitconfig /usr/local/etc/gitconfig\""
+        }
+      ],
+      "expect_fail": [
+        "push-sysconf-deny-homebrew-arm"
+      ]
+    },
+    {
+      "name": "304-sys-homebrew-intel",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-sysconf-",
+      "edits": [
+        {
+          "from": "PUSH_SYSTEM_CONFIG_PATHS=\"/etc/gitconfig /opt/homebrew/etc/gitconfig /usr/local/etc/gitconfig\"",
+          "to": "PUSH_SYSTEM_CONFIG_PATHS=\"/etc/gitconfig /opt/homebrew/etc/gitconfig\""
+        }
+      ],
+      "expect_fail": [
+        "push-sysconf-deny-homebrew-intel"
+      ]
+    },
+    {
+      "name": "304-sys-clt",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-sysconf-",
+      "edits": [
+        {
+          "from": "      sys_records=\"${sys_records}your system git config${cfg_tab}${sysroot}${PUSH_APPLE_CLT_CONFIG}\"",
+          "to": "      sys_records=\"${sys_records}\""
+        }
+      ],
+      "expect_fail": [
+        "push-sysconf-deny-apple-clt"
+      ]
+    },
+    {
+      "name": "304-nosystem-ignored",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-sysconf-",
+      "edits": [
+        {
+          "from": "      [Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|1) nosys=1 ;;",
+          "to": "      [Tt][Rr][Uu][Ee]Z|[Yy][Ee][Ss]Z|[Oo][Nn]Z|1Z) nosys=1 ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-sysconf-noop-clt-nosystem",
+        "push-sysconf-noop-nosystem-one",
+        "push-sysconf-noop-nosystem-word"
+      ]
+    },
+    {
+      "name": "304-nosystem-word",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-sysconf-",
+      "edits": [
+        {
+          "from": "      [Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|1) nosys=1 ;;",
+          "to": "      1) nosys=1 ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-sysconf-noop-nosystem-word"
+      ]
+    },
+    {
+      "name": "304-nosystem-any-value",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-sysconf-",
+      "edits": [
+        {
+          "from": "      *) nosys=0 ;;",
+          "to": "      *) [ -z \"${GIT_CONFIG_NOSYSTEM:-}\" ] && nosys=0 || nosys=1 ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-sysconf-deny-nosystem-false"
+      ]
+    },
+    {
+      "name": "304-nosystem-covers-clt",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-sysconf-",
+      "edits": [
+        {
+          "from": "      done\n      sys_records=\"${sys_records}your system git config${cfg_tab}${sysroot}${PUSH_APPLE_CLT_CONFIG}\"\n    fi",
+          "to": "      done\n    fi\n    sys_records=\"${sys_records}your system git config${cfg_tab}${sysroot}${PUSH_APPLE_CLT_CONFIG}\""
+        }
+      ],
+      "expect_fail": [
+        "push-sysconf-noop-clt-nosystem"
+      ]
+    },
+    {
+      "name": "304-sys-order",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-sysconf-",
+      "edits": [
+        {
+          "from": "    done <<CFGLIST\n$sys_records\nyour global git config${cfg_tab}${GIT_CONFIG_GLOBAL:-}\nyour global git config${cfg_tab}$xdg_cfg\nyour global git config${cfg_tab}$home_cfg\n.git/config${cfg_tab}$common/config\nCFGLIST",
+          "to": "    done <<CFGLIST\n.git/config${cfg_tab}$common/config\nyour global git config${cfg_tab}${GIT_CONFIG_GLOBAL:-}\nyour global git config${cfg_tab}$xdg_cfg\nyour global git config${cfg_tab}$home_cfg\n$sys_records\nCFGLIST"
+        }
+      ],
+      "expect_fail": [
+        "push-sysconf-deny-repo-merge-last"
+      ]
+    },
+    {
+      "name": "304-sys-label",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-sysconf-",
+      "edits": [
+        {
+          "from": "      sys_records=\"your system git config${cfg_tab}${GIT_CONFIG_SYSTEM:-}\"$'\\n'",
+          "to": "      sys_records=\"your global git config${cfg_tab}${GIT_CONFIG_SYSTEM:-}\"$'\\n'"
+        }
+      ],
+      "expect_fail": [
+        "push-sysconf-deny-env-var"
+      ]
+    },
+    {
+      "name": "304-inc-section",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "      \\[[Ii][Nn][Cc][Ll][Uu][Dd][Ee]\\]*)",
+          "to": "      \\[[Ii][Nn][Cc][Ll][Uu][Dd][Ee]Z\\]*)"
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-absolute-from-global",
+        "push-include-deny-at-depth-cap",
+        "push-include-deny-c-target-fresh-budget",
+        "push-include-deny-mixed-case",
+        "push-include-deny-mutual-cycle",
+        "push-include-deny-nested-system-relative",
+        "push-include-deny-never-executes",
+        "push-include-deny-relative-from-repo",
+        "push-include-deny-second-path-after-return",
+        "push-include-deny-tilde",
+        "push-include-deny-within-char-budget",
+        "push-include-deny-within-line-budget",
+        "push-include-deny-within-line-chars"
+      ]
+    },
+    {
+      "name": "304-incif-section",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "      \\[[Ii][Nn][Cc][Ll][Uu][Dd][Ee][Ii][Ff]\\ \\\"*\\\"\\]*)",
+          "to": "      \\[[Ii][Nn][Cc][Ll][Uu][Dd][Ee][Ii][Ff]Z\\ \\\"*\\\"\\]*)"
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-includeif-unmatched-condition"
+      ]
+    },
+    {
+      "name": "304-inc-key-case",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "          [Pp][Aa][Tt][Hh])",
+          "to": "          path)"
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-mixed-case"
+      ]
+    },
+    {
+      "name": "304-inc-relative",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "              *)\n                inc_resolved=\"${path%/*}/$cfg_val\"\n                ;;",
+          "to": "              *)\n                inc_resolved=\"$cfg_val\"\n                ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-at-depth-cap",
+        "push-include-deny-c-target-fresh-budget",
+        "push-include-deny-includeif-unmatched-condition",
+        "push-include-deny-mixed-case",
+        "push-include-deny-mutual-cycle",
+        "push-include-deny-nested-system-relative",
+        "push-include-deny-never-executes",
+        "push-include-deny-relative-from-repo",
+        "push-include-deny-second-path-after-return",
+        "push-include-deny-within-char-budget",
+        "push-include-deny-within-line-budget",
+        "push-include-deny-within-line-chars"
+      ]
+    },
+    {
+      "name": "304-inc-tilde",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "              \\~/*)\n                [ -n \"${HOME:-}\" ] && inc_resolved=\"$HOME/${cfg_val#\\~/}\"\n                ;;",
+          "to": "              \\~/Z*)\n                [ -n \"${HOME:-}\" ] && inc_resolved=\"$HOME/${cfg_val#\\~/}\"\n                ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-tilde"
+      ]
+    },
+    {
+      "name": "304-inc-prefix-skip",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "              %\\(prefix\\)/*|\\~*)\n                : ;;",
+          "to": "              %\\(prefix\\)Z/*|\\~*)\n                : ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-prefix-form"
+      ]
+    },
+    {
+      "name": "304-inc-depth-lo",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "CFG_INCLUDE_MAX_DEPTH=10",
+          "to": "CFG_INCLUDE_MAX_DEPTH=9"
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-at-depth-cap"
+      ]
+    },
+    {
+      "name": "304-inc-depth-hi",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "CFG_INCLUDE_MAX_DEPTH=10",
+          "to": "CFG_INCLUDE_MAX_DEPTH=11"
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-beyond-depth-cap"
+      ]
+    },
+    {
+      "name": "304-inc-section-local",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "  local cfg_section=\"\" cfg_subsection=\"\" cfgline cfg_h cfg_s cfg_key cfg_val",
+          "to": "  local cfgline cfg_h cfg_s cfg_key cfg_val\n  cfg_section=\"\"\n  cfg_subsection=\"\""
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-second-path-after-return"
+      ]
+    },
+    {
+      "name": "304-inc-label",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "              case \"$label\" in\n                *\" (via include)\") inc_childlabel=\"$label\" ;;\n                *) inc_childlabel=\"$label (via include)\" ;;\n              esac",
+          "to": "              inc_childlabel=\"$label\""
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-relative-from-repo",
+        "push-include-deny-nested-system-relative"
+      ]
+    },
+    {
+      "name": "304-sys-clt-label",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-sysconf-",
+      "edits": [
+        {
+          "from": "      sys_records=\"${sys_records}your system git config${cfg_tab}${sysroot}${PUSH_APPLE_CLT_CONFIG}\"",
+          "to": "      sys_records=\"${sys_records}your global git config${cfg_tab}${sysroot}${PUSH_APPLE_CLT_CONFIG}\""
+        }
+      ],
+      "expect_fail": [
+        "push-sysconf-deny-apple-clt"
+      ]
+    },
+    {
+      "name": "304-inc-seen-global",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "  local saved_seen=\"$cfg_seen\"\n  cfg_seen=\"${cfg_seen}${path}${nl}\"",
+          "to": "  cfg_seen=\"${cfg_seen}${path}${nl}\""
+        },
+        {
+          "from": "  done < \"$path\"\n  cfg_seen=\"$saved_seen\"\n}",
+          "to": "  done < \"$path\"\n}"
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-repo-config-reincluded"
+      ]
+    },
+    {
+      "name": "304-inc-tilde-user",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "              %\\(prefix\\)/*|\\~*)\n                : ;;",
+          "to": "              %\\(prefix\\)/*)\n                : ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-tilde-user"
+      ]
+    },
+    {
+      "name": "304-inc-regular-file",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "  [ -f \"$path\" ] || return 0",
+          "to": "  [ -e \"$path\" ] || return 0"
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-directory-target"
+      ]
+    },
+    {
+      "name": "304-inc-tilde-empty-home",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "                [ -n \"${HOME:-}\" ] && inc_resolved=\"$HOME/${cfg_val#\\~/}\"",
+          "to": "                inc_resolved=\"${HOME:-}/${cfg_val#\\~/}\""
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-tilde-empty-home"
+      ]
+    },
+    {
+      "name": "304-inc-drive-letter",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "              /*|[A-Za-z]:/*)\n                inc_resolved=\"$cfg_val\"\n                ;;",
+          "to": "              /*)\n                inc_resolved=\"$cfg_val\"\n                ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-drive-letter"
+      ]
+    },
+    {
+      "name": "304-inc-follow-budget",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "              && [ \"$cfg_inc_budget\" -gt 0 ] \\\n              && [ \"$cfg_inc_line_budget\" -gt 0 ] && [ \"$cfg_inc_char_budget\" -gt 0 ]; then",
+          "to": "              && [ \"$cfg_inc_line_budget\" -gt 0 ] && [ \"$cfg_inc_char_budget\" -gt 0 ]; then"
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-over-budget"
+      ]
+    },
+    {
+      "name": "304-inc-follow-budget-off-by-one",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "              && [ \"$cfg_inc_budget\" -gt 0 ] \\",
+          "to": "              && [ \"$cfg_inc_budget\" -ge 0 ] \\"
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-over-budget"
+      ]
+    },
+    {
+      "name": "304-inc-line-budget",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "      [ \"$cfg_inc_line_budget\" -gt 0 ] || break",
+          "to": "      :"
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-over-line-budget"
+      ]
+    },
+    {
+      "name": "304-inc-line-budget-off-by-one",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "      [ \"$cfg_inc_line_budget\" -gt 0 ] || break",
+          "to": "      [ \"$cfg_inc_line_budget\" -ge 0 ] || break"
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-over-line-budget"
+      ]
+    },
+    {
+      "name": "304-inc-line-budget-depth0",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "    if [ \"$depth\" -ge 1 ]; then\n      [ \"$cfg_inc_line_budget\" -gt 0 ] || break\n      cfg_inc_line_budget=$((cfg_inc_line_budget - 1))\n      cfg_inc_char_budget=$((cfg_inc_char_budget - ${#cfgline} - 1))\n      [ \"$cfg_inc_char_budget\" -ge 0 ] || break\n      [ \"${#cfgline}\" -le \"$CFG_INCLUDE_MAX_LINE_CHARS\" ] || continue\n    fi",
+          "to": "      [ \"$cfg_inc_line_budget\" -gt 0 ] || break\n      cfg_inc_line_budget=$((cfg_inc_line_budget - 1))\n      cfg_inc_char_budget=$((cfg_inc_char_budget - ${#cfgline} - 1))\n      [ \"$cfg_inc_char_budget\" -ge 0 ] || break\n      [ \"${#cfgline}\" -le \"$CFG_INCLUDE_MAX_LINE_CHARS\" ] || continue"
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-long-toplevel-route",
+        "push-include-deny-within-char-budget",
+        "push-include-deny-within-line-budget"
+      ]
+    },
+    {
+      "name": "304-inc-line-chars",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "      [ \"${#cfgline}\" -le \"$CFG_INCLUDE_MAX_LINE_CHARS\" ] || continue",
+          "to": "      :"
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-over-line-chars"
+      ]
+    },
+    {
+      "name": "304-inc-line-chars-off-by-one",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "      [ \"${#cfgline}\" -le \"$CFG_INCLUDE_MAX_LINE_CHARS\" ] || continue",
+          "to": "      [ \"${#cfgline}\" -lt \"$CFG_INCLUDE_MAX_LINE_CHARS\" ] || continue"
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-within-line-chars"
+      ]
+    },
+    {
+      "name": "304-inc-char-budget",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "      [ \"$cfg_inc_char_budget\" -ge 0 ] || break",
+          "to": "      :"
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-over-char-budget"
+      ]
+    },
+    {
+      "name": "304-inc-char-budget-off-by-one",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "      [ \"$cfg_inc_char_budget\" -ge 0 ] || break",
+          "to": "      [ \"$cfg_inc_char_budget\" -gt 0 ] || break"
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-within-char-budget"
+      ]
+    },
+    {
+      "name": "304-inc-follow-budget-reset",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "  cfg_inc_budget=\"$CFG_INCLUDE_MAX_FOLLOWS\"",
+          "to": "  : \"${cfg_inc_budget:=$CFG_INCLUDE_MAX_FOLLOWS}\""
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-c-target-fresh-budget"
+      ]
+    },
+    {
+      "name": "304-inc-line-budget-reset",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "  cfg_inc_line_budget=\"$CFG_INCLUDE_MAX_LINES\"",
+          "to": "  : \"${cfg_inc_line_budget:=$CFG_INCLUDE_MAX_LINES}\""
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-c-target-fresh-budget"
+      ]
+    },
+    {
+      "name": "304-inc-char-budget-reset",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "  cfg_inc_char_budget=\"$CFG_INCLUDE_MAX_CHARS\"",
+          "to": "  : \"${cfg_inc_char_budget:=$CFG_INCLUDE_MAX_CHARS}\""
+        }
+      ],
+      "expect_fail": [
+        "push-include-deny-c-target-fresh-budget"
+      ]
+    },
+    {
+      "name": "304-cfg-trim-tab",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cfg-",
+      "edits": [
+        {
+          "from": "  s=\"${s%\"${s##*[![:space:]]}\"}\"",
+          "to": "  s=\"${s%\"${s##*[! ]}\"}\""
+        }
+      ],
+      "expect_fail": [
+        "push-cfg-deny-trailing-tab-default"
+      ]
+    },
+    {
+      "name": "304-inc-follow-gate",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "            if [ -n \"$inc_resolved\" ] && [ \"$((depth + 1))\" -le \"$CFG_INCLUDE_MAX_DEPTH\" ] \\\n              && [ \"$cfg_inc_budget\" -gt 0 ] \\\n              && [ \"$cfg_inc_line_budget\" -gt 0 ] && [ \"$cfg_inc_char_budget\" -gt 0 ]; then",
+          "to": "            if [ -n \"$inc_resolved\" ] && [ \"$((depth + 1))\" -le \"$CFG_INCLUDE_MAX_DEPTH\" ] \\\n              && [ \"$cfg_inc_budget\" -gt 0 ]; then"
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-budget-gates-follow",
+        "push-include-noop-line-budget-gates-follow"
+      ]
+    },
+    {
+      "name": "304-inc-line-follow-gate",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-include-",
+      "edits": [
+        {
+          "from": "            if [ -n \"$inc_resolved\" ] && [ \"$((depth + 1))\" -le \"$CFG_INCLUDE_MAX_DEPTH\" ] \\\n              && [ \"$cfg_inc_budget\" -gt 0 ] \\\n              && [ \"$cfg_inc_line_budget\" -gt 0 ] && [ \"$cfg_inc_char_budget\" -gt 0 ]; then",
+          "to": "            if [ -n \"$inc_resolved\" ] && [ \"$((depth + 1))\" -le \"$CFG_INCLUDE_MAX_DEPTH\" ] \\\n              && [ \"$cfg_inc_budget\" -gt 0 ] \\\n              && [ \"$cfg_inc_char_budget\" -gt 0 ]; then"
+        }
+      ],
+      "expect_fail": [
+        "push-include-noop-line-budget-gates-follow"
+      ]
+    },
+    {
       "name": "403-cdg-pc-vocab",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",

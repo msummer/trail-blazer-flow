@@ -308,10 +308,67 @@ are now also read from `$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config` (or i
 above — `$GIT_CONFIG_GLOBAL` is itself unioned with (not a replacement for) the other two global
 paths, and a repo-local AND a global `push.default` value are both evaluated unconditionally, each
 a deliberate, documented over-block (real git reads only one file for `$GIT_CONFIG_GLOBAL` and
-gives a single scalar precedence to `push.default`). A SYSTEM git config (`/etc/gitconfig`) and
-`include`/`includeIf` directives inside any of the four files this hook now reads remain unread,
-each filed as its own follow-up (see the hook's own header for the full, measured inventory). The
-union is deliberately
+gives a single scalar precedence to `push.default`). **Closed further by #304/#305**: this hook
+now also reads a SYSTEM class, and follows `include`/`includeIf` directives inside any file it
+reads. The system class is read FIRST (before the global and repo-local candidates):
+`$GIT_CONFIG_SYSTEM` (unioned with, never replacing, the static candidates — the same over-block
+stance #290 already took for `$GIT_CONFIG_GLOBAL`), `/etc/gitconfig`, `/opt/homebrew/etc/gitconfig`,
+`/usr/local/etc/gitconfig`, and the CommandLineTools file
+(`/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig`) — all skipped together when
+`$GIT_CONFIG_NOSYSTEM` holds a canonical true value (`1`/`true`/`yes`/`on`, case-insensitively; a
+non-canonical value such as `2` does NOT disable the read, a documented over-block). The CLT file
+sits inside that same NOSYSTEM guard, not outside it — verified live on the maintainer's Mac that
+`GIT_CONFIG_NOSYSTEM=1` drops its scope from real git's own `--show-origin --show-scope` output
+too. An `include`/`includeIf` directive found inside ANY parsed file (system, global, repo-local,
+a resolved `-C` target's, or another included file) is followed inline, at the point of the
+directive, in git's own order; `includeIf`'s own condition is always ignored, so a conditional
+include is followed unconditionally (another documented over-block); nesting is capped at depth
+10 (top-level = depth 0), and a seen-list, scoped to one ancestor chain (never the whole
+`resolve_repo()` call, so a sibling or unrelated top-level candidate can still legitimately re-read
+an identical path), stops a self- or mutual-include cycle. Since that same ancestor-only scope lets
+a repeated sibling include re-expand every time, a config tree that names the same child file more
+than once per level can FAN OUT to an exponential number of follow operations as nesting deepens.
+Four independent, depth-1-or-deeper-only caps bound the resulting work, all shared for the whole
+`resolve_repo()` call and never reset per file: `CFG_INCLUDE_MAX_FOLLOWS` (64) bounds the TOTAL
+number of follow operations, regardless of fan-out shape; `CFG_INCLUDE_MAX_LINES` (2048) separately
+bounds the TOTAL lines read across every followed file combined — a follow-count cap alone does not
+bound total work, since a handful of follows of one large file can still cost as many lines of
+parsing as the file is long; `CFG_INCLUDE_MAX_LINE_CHARS` (512) caps a single line's own length
+(CHARACTERS, not bytes, in a UTF-8 locale — a multi-byte character such as U+3000 or NBSP still
+counts as one), checked before comment-strip or trim ever run on it, so a line past this cap never
+reaches `cfg_trim()`'s own pattern matching, which is not uniformly fast for a long line or
+whitespace run; and `CFG_INCLUDE_MAX_CHARS` (65536) separately bounds the TOTAL characters charged
+across every followed line combined, closing a shape the line-count cap alone cannot (many lines
+each just under the line-length cap). Critically, a follow is only ever attempted while the
+line-count AND character budgets are both still positive, not just the follow-count one: once
+either runs out, no further include is opened at all, not even to test whether it exists — without
+that gate, a follow still within its own count budget would still open its target and read that
+file's own first line in full, once per remaining follow, even after the line-count or character
+budget had already been exhausted elsewhere. The one line this cannot prevent is whichever SINGLE
+line, in whichever file already happens to be open, drives the line-count or character budget past
+zero: that one line is read in full (a read loop takes a whole line at a time) before the check
+that follows it can break. Every depth-0 top-level candidate is still always read in full, with
+none of these four caps of its own, so none of them can ever mask a pre-#304/#305 route WITHIN ONE
+RESOLUTION. Per `resolve_repo()` call, the residual this class of fix leaves is: a TOP-LEVEL
+(depth-0) file with very many lines, or a single very long line or whitespace run, and — grouped
+with it, the same class — a single INCLUDED line, read once per `resolve_repo()` call, whose own
+length is what crosses the line-count or character budget; both predate or survive #304/#305 rather
+than being closed by it. All four caps, and the uncapped depth-0 read, are bounded PER
+`resolve_repo()` call, never across the whole hook invocation: since #269, this hook resolves once
+for the session checkout and once more for every push segment whose own `-C` value resolves a
+checkout of its own, so a command naming enough resolved `-C` targets, each carrying its own
+at-cap-but-legal include content or its own large top-level file, multiplies this same bounded work
+across resolutions exactly as it already multiplies the uncapped depth-0 read, and can still cross
+Claude Code's own hook timeout — the identical class of residual, reached a different way, also not
+closed here. A
+deny whose route came from a system file names the source `your system git config`; one from an
+included file appends ` (via include)` to whichever source label already applies, exactly once no
+matter how deep the nesting goes. The complete residual — a system config at a path not on this
+static list (another git build's prefix, Xcode.app's own copy, a Git-for-Windows path), an include
+form this hook cannot resolve (`%(prefix)/…`, `~user/…`, beyond the depth cap, a path already
+parsed, or beyond any of the four follow/line/character/length caps above), `config.worktree`, an
+inline command-line environment assignment, and the env-injected `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`
+form — lives in the hook's own header, not here. The union is deliberately
 over-broad rather than modelling git's own remote-selection precedence: a bare push checks EVERY
 configured remote's push
 route (not only the one git would actually pick) union the `push.default` route, and
