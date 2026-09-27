@@ -67,9 +67,10 @@ case rather than silently dropped. The single-case/filter form
 
 `dev/doctor-tests.sh` is a separate negative-test harness for the *consumer* doctor
 (`bin/check-harness.sh`), its scoped-autonomy companion (`bin/check-decision-record.sh`), the
-merge floor's governance-path classifier (`bin/governance-paths.sh`, #331), and the Codex
+merge floor's governance-path classifier (`bin/governance-paths.sh`, #331), the Codex
 compatibility installer (`bin/codex-setup.sh`, #408 — its own `--check` drift mode is #410's
-companion, hence living here rather than in a new suite): it
+companion, hence living here rather than in a new suite), and the launchd-driven unattended
+`codex exec` wrapper (`bin/codex-scheduled-run.sh`, #427): it
 builds throwaway fixture repos under `mktemp` and pins each check's verdict (PASS/WARN/FAIL, by
 ASCII stem) against a copy of the doctor script — settings-file grants, the template diff, the
 test-suite ratchet, merge-autonomy activation, the default-branch guard, post-merge-verification
@@ -77,13 +78,21 @@ declarations, and branch-protection strictness among them — covering cases tha
 only be hand-verified. It also runs `bin/harness-version.sh`'s own `.git`-presence guard
 directly, not only through the doctor, `bin/governance-paths.sh`'s own floor mode and
 `--check` mode directly, against fixture git repos it builds for that purpose, not only through
-the doctor's own validation of it, and `bin/codex-setup.sh` directly against a fake Codex
+the doctor's own validation of it, `bin/codex-setup.sh` directly against a fake Codex
 plugin-cache install and fixture repos it builds for that purpose (write mode and its `--check`
 twin alike — the generated agent TOMLs' byte-fidelity to `agents/*.md`, the installed rules
 file's allow/forbidden/gated content, contract-loading into an `AGENTS.md` or a
-`.codex/config.toml`, and every `--check` drift token). It runs in CI as the third command, but
+`.codex/config.toml`, and every `--check` drift token), and `bin/codex-scheduled-run.sh` directly
+against that same fake plugin install, a stub `codex`, and a stub `gh`: the `CLAUDE_PID` refusal,
+the preflight order (bad-timeout, missing-tool, `codex-setup.sh --check` drift, `harness-stop.sh`'s
+stop/stop-unknown, `harness-lock.sh status`'s free/live-holder/stale-reclaim/other-host/
+unreadable-holder), that every sibling
+resolves from the wrapper's own directory only, the exact launch argv and its `/dev/null` stdin,
+the watchdog's timeout/kill-grace with no orphan left behind, the outcome classification, and the
+run-record pruning. It runs in CI as the third command, but
 it is not part of `dev/selfcheck.sh` itself; run it by hand whenever `bin/check-harness.sh`,
-`bin/check-decision-record.sh`, `bin/governance-paths.sh`, or `bin/codex-setup.sh` changes.
+`bin/check-decision-record.sh`, `bin/governance-paths.sh`, `bin/codex-setup.sh`, or
+`bin/codex-scheduled-run.sh` changes.
 
 `dev/hook-tests.sh` is a separate negative-test harness for all five plugin-shipped `PreToolUse`
 hooks (`hooks/git-c-guard.sh`, `hooks/agent-boundary.sh`, `hooks/push-guard.sh`,
@@ -210,7 +219,9 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   entry in `templates/repo-settings.json` (the gate's bijection assertion checks this). On Codex,
   `bin/` is never on the shell PATH (ADR 0002 P5) — `bin/codex-setup.sh` (#408) installs a rules
   file that gates each script that calls `gh` (directly, or through `harness-status.sh`) or
-  writes `.git`, by its absolute install path instead (see `docs/reference/codex.md`), and
+  writes `.git`, by its absolute install path instead (see `docs/reference/codex.md`) — except
+  `bin/codex-scheduled-run.sh` (#427), which the rules file forbids outright, never gates: a
+  scheduled Codex run must never be launched from inside a session — and
   `bin/harness-status.sh` and `bin/reconcile-ledger.sh`
   resolve their own sibling scripts with PATH first, falling back to their own directory. Scripts
   meant only for developing this repo (not for consumers) go in `dev/` instead. `hooks/*.sh` is a

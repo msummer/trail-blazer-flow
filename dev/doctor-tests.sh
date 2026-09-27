@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
 # doctor-tests.sh — fixture-based negative-test harness for the CONSUMER doctor
-# (bin/check-harness.sh), its scoped-autonomy companion script (bin/check-decision-record.sh), and
-# (#408) the Codex compatibility installer (bin/codex-setup.sh) — not this repo's own gate (that's
+# (bin/check-harness.sh), its scoped-autonomy companion script (bin/check-decision-record.sh),
+# (#408) the Codex compatibility installer (bin/codex-setup.sh), and (#427) the launchd-driven
+# unattended `codex exec` wrapper (bin/codex-scheduled-run.sh) — not this repo's own gate (that's
 # dev/selfcheck.sh + dev/selfcheck-tests.sh). Builds throwaway
 # git repos under mktemp, runs a COPY of the real scripts against each, and pins verdicts that
 # were previously only hand-verified: the settings.json block, the template-diff scenarios, the
@@ -101,7 +102,20 @@
 # starts; never trusts anything itself), the manual-merge report, and the Codex-specific FAIL
 # arms on branch protection (a WARN on Claude Code) — plus that every settings/toolchain/policy
 # line is absent on Codex, and that an unrecognised argument (including a bare --provider with no
-# value) exits 2 on both providers.
+# value) exits 2 on both providers, and (#427) bin/codex-scheduled-run.sh — the launchd-driven
+# wrapper for one unattended `codex exec` pass, run directly (never through PATH, and never the
+# real `codex`) against a fixture repo with the Codex compatibility layer installed via run_cx, a
+# stub `codex` (build_stub_sched_codex) and a stub `gh` (build_stub_sched_gh): the CLAUDE_PID
+# refusal (even set to empty) before any other side effect, the preflight order (bad timeout env
+# vars, missing tools, codex-setup.sh --check drift, harness-stop.sh's stop/stop-unknown, and
+# harness-lock.sh status's free/live-holder/stale-same-host-reclaim), that every sibling is
+# resolved from the wrapper's own directory only (a decoy earlier on PATH is never run), the exact
+# launch argv and its `< /dev/null` stdin (a sentinel file proves it never reaches the child), the
+# watchdog's timeout/kill-grace and that it leaves no orphan, the outcome classification (completed,
+# failed, died-mid-run, timed-out, and the `Unattended stop: permission-denied` whole-line match),
+# and the run-record pruning (newest 100 kept, bounded deletion, non-matching entries untouched) —
+# plus the narrowed `codex-setup-rules-gated` case this addition requires (the gated allow-rule
+# names no longer include a `.sh` FORBIDDEN rule by coincidence).
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -3057,6 +3071,10 @@ case_codex_setup_agents_triple_quote_verifier() {
 #   ["git", "restore"] allow rule.
 # mutant:419-cx-restore-prompt — changing that rule's decision from "allow" to "prompt" breaks the
 #   restore token, which pins the pattern and the decision together.
+# mutant:427-cx-forbidden-dropped — templates/codex.rules: deleting the codex-scheduled-run.sh
+#   forbidden line makes the forbidden token-list set derived from the installed rules file lose an
+#   entry that templates/repo-settings.json's own deny list (jq-derived) still names, breaking the
+#   set equality this case checks.
 case_codex_setup_rules_content() {
   local plugin repo rules
   plugin="$(mk_cx_plugin cx-rules-content-plugin 2.9.0)"
@@ -3087,10 +3105,12 @@ case_codex_setup_rules_content() {
     || { __ok=0; __why="${__why}forbidden token-list set mismatch\nwant:\n$want_forbidden\ngot:\n$got_forbidden\n"; }
 }
 
-# codex-setup-rules-gated — the .sh prefix_rule names, the host_executable names, and the set of
-# ten listed scripts are all the SAME set; every host_executable path is exactly
+# codex-setup-rules-gated — the ALLOW-decision .sh prefix_rule names, the host_executable names,
+# and the set of ten listed scripts are all the SAME set; every host_executable path is exactly
 # <plugin>/bin/<name>; every one of those names exists under $root/bin; codex-setup.sh,
-# harness-version.sh and governance-paths.sh are absent from both sets.
+# harness-version.sh, governance-paths.sh, and (#427) codex-scheduled-run.sh are absent from both
+# sets — the allow-decision filter on sh_names is what keeps codex-scheduled-run.sh's own
+# FORBIDDEN .sh prefix_rule from being counted as gated by coincidence.
 # mutant:408-cx-host-exec-dropped — deleting one host_executable line from templates/codex.rules
 #   drops it from the installed rules file's own host_executable-name set, breaking the equality.
 case_codex_setup_rules_gated() {
@@ -3102,14 +3122,14 @@ case_codex_setup_rules_gated() {
   rules="$repo/.codex/rules/trail-blazer-flow.rules"
   [ -f "$rules" ] || { __ok=0; __why="${__why}rules file missing\n"; return; }
   local sh_names hx_names want_names
-  sh_names="$(grep -oE '^prefix_rule\(pattern = \["[a-z-]+\.sh"\]' "$rules" \
-    | sed -E 's/^prefix_rule\(pattern = \["([a-z-]+\.sh)"\]/\1/' | sort -u)"
+  sh_names="$(grep -oE '^prefix_rule\(pattern = \["[a-z-]+\.sh"\], decision = "allow"' "$rules" \
+    | sed -E 's/^prefix_rule\(pattern = \["([a-z-]+\.sh)"\], decision = "allow"/\1/' | sort -u)"
   hx_names="$(grep -oE '^host_executable\(name = "[a-z-]+\.sh"' "$rules" \
     | sed -E 's/^host_executable\(name = "([a-z-]+\.sh)"/\1/' | sort -u)"
   want_names="$(printf '%s\n' check-decision-record.sh check-harness.sh cleanup-after-merge.sh \
     find-implementation-work.sh find-planning-work.sh harness-lock.sh harness-status.sh \
     harness-stop.sh reconcile-ledger.sh setup-labels.sh | sort -u)"
-  [ "$sh_names" = "$want_names" ] || { __ok=0; __why="${__why}gated .sh prefix_rule names != the ten listed scripts\ngot:\n$sh_names\n"; }
+  [ "$sh_names" = "$want_names" ] || { __ok=0; __why="${__why}allow-rule .sh names != the ten listed scripts\ngot:\n$sh_names\n"; }
   [ "$hx_names" = "$want_names" ] || { __ok=0; __why="${__why}host_executable names != the ten listed scripts\ngot:\n$hx_names\n"; }
   local n
   for n in $want_names; do
@@ -3118,7 +3138,7 @@ case_codex_setup_rules_gated() {
     [ -f "$root/bin/$n" ] || { __ok=0; __why="${__why}$n does not exist under $root/bin\n"; }
   done
   local absent
-  for absent in codex-setup.sh harness-version.sh governance-paths.sh; do
+  for absent in codex-setup.sh harness-version.sh governance-paths.sh codex-scheduled-run.sh; do
     case " $sh_names $hx_names " in
       *" $absent "*) __ok=0; __why="${__why}$absent unexpectedly gated\n" ;;
     esac
@@ -3401,6 +3421,1174 @@ ERR: $cx_err"
   expect_rc 2
 }
 
+# --- codex scheduled run (#427) -----------------------------------------------------------------
+# bin/codex-scheduled-run.sh — the launchd-driven wrapper for one unattended `codex exec` pass.
+# Every fixture below runs the REAL sibling scripts (codex-setup.sh, harness-stop.sh,
+# harness-lock.sh) via a fake plugin install (mk_cx_plugin) against a stub `codex` and a stub
+# `gh` — never the real `codex` binary a developer machine may have installed. run_sched always
+# unsets CLAUDE_PID (#384): a Claude Code Bash tool call always exports it
+# (bin/harness-lock.sh:29-37), so every case would otherwise see an immediate exit 2.
+
+sched_plugin=""
+sched_repo=""
+sched_top=""
+sched_common=""
+sched_stub=""
+sched_sentinel=""
+
+# mk_sched NAME — builds one #427 fixture: a fake Codex plugin-cache install (mk_cx_plugin, 3.0.0)
+# whose bin/ carries this checkout's own codex-scheduled-run.sh, a fresh repo with the Codex
+# compatibility layer installed for real (mk_cx_repo + run_cx, write mode — so codex-setup.sh
+# --check starts clean), a stub-tools directory, and a stdin sentinel file (so a case can prove the
+# wrapper's own stdin never reaches the launched codex). Sets the globals above.
+mk_sched() {
+  local name="$1"
+  sched_plugin="$(mk_cx_plugin "$name-plugin" 3.0.0)"
+  sched_repo="$(mk_cx_repo "$name-repo")"
+  run_cx "$sched_plugin" "$sched_repo"
+  sched_top="$(cd "$sched_repo" && git rev-parse --show-toplevel)"
+  sched_common="$(cd "$sched_repo" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+  sched_stub="$tmpbase/$name-stub"
+  mkdir -p "$sched_stub"
+  sched_sentinel="$tmpbase/$name-sentinel"
+  printf 'STDIN-SENTINEL' > "$sched_sentinel"
+}
+
+# dead_pid_sched — a pid guaranteed dead and not yet recycled (dev/lock-tests.sh's own dead_pid):
+# backgrounds `sleep 30`, kills it, reaps it, and prints its pid.
+dead_pid_sched() {
+  sleep 30 &
+  local p=$!
+  kill "$p" 2>/dev/null
+  wait "$p" 2>/dev/null
+  printf '%s' "$p"
+}
+
+# build_stub_sched_codex DIR MODE — writes DIR/codex, a stub standing in for the real `codex` CLI.
+# Every mode first records $$ (DIR/codex.pid), $# (DIR/argc), each argument (DIR/arg.<i>), and the
+# full stdin it received (DIR/stdin.capture), then acts on MODE: complete (writes a run-id plus
+# summary line to the file named after "-o", echoes one JSON line, exit 0); fail (stderr line, exit
+# 1); nomsg (exit 0, never writes the -o file); denied (the -o file's only line is exactly
+# "Unattended stop: permission-denied"); denied-midline (the same phrase embedded mid-line); die
+# (kills itself with SIGKILL); hang/hang-noterm (exec the REAL sleep, resolved via `command -v` at
+# BUILD time in this process's own PATH, for 20s — hang-noterm first sets TERM's disposition to
+# ignore, which persists across exec, so only SIGKILL ends it; both replace the process image via
+# exec rather than forking a child, so no orphan can outlive the stub's own pid; kept short because
+# a case relying on the WRAPPER's own watchdog to end it, with no external fallback kill of its own,
+# bounds its own worst-case runtime by this stub's duration); hang-long/hang-noterm-long (the same
+# two, but with a much longer sleep, for a case that instead polls externally for the pid's own
+# death and force-kills it once its own bound is reached — the long duration then only sets a
+# large, load-tolerant margin between "actually killed" and "outlived the case's own poll and ran
+# out its own sleep," and is never actually waited out); forwarder (models
+# the real `codex` CLI's own shape — a Node launcher that spawns the native binary as a child and
+# forwards SIGTERM to it from a JS handler: backgrounds a real long-sleeping child (same
+# load-tolerant-margin reasoning as hang-noterm-long above), records that child's pid to
+# DIR/forwarder-child.pid, traps TERM to kill that child and exit, then waits on it — so a case can
+# assert the child is ALSO gone, not just the launcher stub itself).
+build_stub_sched_codex() {
+  local dir="$1" mode="$2" real_sleep
+  real_sleep="$(command -v sleep)"
+  mkdir -p "$dir"
+  {
+    printf '#!%s\n' "$bash_bin"
+    printf 'dir=%q\n' "$dir"
+    printf 'mode=%q\n' "$mode"
+    printf 'real_sleep=%q\n' "$real_sleep"
+    cat <<'STUBEOF'
+printf '%s' "$$" > "$dir/codex.pid"
+printf '%s' "$#" > "$dir/argc"
+i=1
+for a in "$@"; do
+  printf '%s' "$a" > "$dir/arg.$i"
+  i=$((i + 1))
+done
+cat > "$dir/stdin.capture"
+outfile=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then
+    outfile="$a"
+  fi
+  prev="$a"
+done
+case "$mode" in
+  complete)
+    if [ -n "$outfile" ]; then
+      printf 'run-id: run-x\n' > "$outfile"
+      printf 'summary: fixture ok\n' >> "$outfile"
+    fi
+    printf '%s\n' '{"type":"stub"}'
+    exit 0
+    ;;
+  forwarder)
+    "$real_sleep" 300 &
+    fchild=$!
+    printf '%s' "$fchild" > "$dir/forwarder-child.pid"
+    trap 'kill "$fchild" 2>/dev/null; exit 0' TERM
+    wait "$fchild"
+    exit 0
+    ;;
+  fail)
+    echo "stub: codex fail mode" >&2
+    exit 1
+    ;;
+  nomsg)
+    exit 0
+    ;;
+  denied)
+    [ -n "$outfile" ] && printf 'Unattended stop: permission-denied\n' > "$outfile"
+    exit 0
+    ;;
+  denied-midline)
+    [ -n "$outfile" ] && printf 'note: Unattended stop: permission-denied (embedded)\n' > "$outfile"
+    exit 0
+    ;;
+  die)
+    kill -KILL $$
+    ;;
+  hang)
+    exec "$real_sleep" 20
+    ;;
+  hang-long)
+    exec "$real_sleep" 300
+    ;;
+  hang-noterm)
+    trap '' TERM
+    exec "$real_sleep" 20
+    ;;
+  hang-noterm-long)
+    trap '' TERM
+    exec "$real_sleep" 300
+    ;;
+esac
+STUBEOF
+  } > "$dir/codex"
+  chmod +x "$dir/codex"
+}
+
+# build_stub_sched_gh DIR MODE — writes DIR/gh, logging "$*" to DIR/gh.log on every call. ok prints
+# "[]" (a valid empty JSON array — satisfies harness-stop.sh's own is_json_array shape check) and
+# exits 0; fail exits 1 (no output).
+build_stub_sched_gh() {
+  local dir="$1" mode="$2"
+  mkdir -p "$dir"
+  {
+    printf '#!%s\n' "$bash_bin"
+    printf 'dir=%q\n' "$dir"
+    printf 'mode=%q\n' "$mode"
+    cat <<'STUBEOF'
+printf '%s\n' "$*" >> "$dir/gh.log"
+case "$mode" in
+  ok)
+    printf '%s\n' '[]'
+    exit 0
+    ;;
+  fail)
+    exit 1
+    ;;
+esac
+STUBEOF
+  } > "$dir/gh"
+  chmod +x "$dir/gh"
+}
+
+# run_sched PATHVAL [NO_DEFAULT_TIMEOUT] [VAR=val…] -- [ARGS…] — runs THIS fixture's own
+# bin/codex-scheduled-run.sh (never $root's) with cwd = $sched_repo, HOME/XDG_CONFIG_HOME pointed
+# into $sched_repo, PATH = PATHVAL (no fallback to the real PATH unless a caller appends ":$PATH"
+# itself), CLAUDE_PID always unset (see the block header above), and stdin fed from
+# $sched_sentinel — files, never $(…), so no background child of the wrapper can ever hold a pipe
+# open. Unless a caller's own VAR=val list already names TBF_CODEX_RUN_TIMEOUT/
+# TBF_CODEX_RUN_KILL_GRACE, a bounded fixture-only default (20s/5s, deliberately NOT the wrapper's
+# own 14400s/30s production default) is injected instead, so a mutant that breaks the watchdog's
+# own timing bounds a stuck run to seconds on a developer's real machine, never hours. The literal
+# keyword NO_DEFAULT_TIMEOUT (anywhere before --, stripped before building the env, never itself a
+# VAR=val) opts a case OUT of that injection entirely, for a case that means to exercise the wrapper's own
+# production defaults — safe only for a case that never reaches the watchdog (stops at or before
+# the lock-status preflight step), since an opted-out case that DOES launch would start a real
+# 14400s timer. Leaves $sched_out/$sched_err/$doctor_rc set, plus $doctor_out (merged) for the
+# generic expect/expect_absent/expect_rc/expect_no_file helpers and the runner loop's own
+# diagnostics dump.
+sched_out=""
+sched_err=""
+run_sched() {
+  local pathval="$1"
+  shift
+  local envargs=() has_timeout=false has_grace=false skip_defaults=false
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    if [ "$1" = "NO_DEFAULT_TIMEOUT" ]; then
+      skip_defaults=true
+      shift
+      continue
+    fi
+    envargs+=("$1")
+    case "$1" in
+      TBF_CODEX_RUN_TIMEOUT=*) has_timeout=true ;;
+      TBF_CODEX_RUN_KILL_GRACE=*) has_grace=true ;;
+    esac
+    shift
+  done
+  if [ "${1:-}" = "--" ]; then
+    shift
+  fi
+  if ! $skip_defaults; then
+    $has_timeout || envargs+=("TBF_CODEX_RUN_TIMEOUT=20")
+    $has_grace || envargs+=("TBF_CODEX_RUN_KILL_GRACE=5")
+  fi
+  local outfile errfile
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  (
+    cd "$sched_repo" &&
+    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
+    env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+        PATH="$pathval" ${envargs[@]+"${envargs[@]}"} \
+        "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh" "$@"
+  ) < "$sched_sentinel" > "$outfile" 2> "$errfile"
+  doctor_rc=$?
+  sched_out="$(cat "$outfile")"
+  sched_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $sched_out
+ERR: $sched_err"
+}
+
+# sched_run_dir — prints the single newest run directory under
+# $sched_common/trail-blazer/runs/ (lexical order — the stamp shape sorts chronologically).
+sched_run_dir() {
+  find "$sched_common/trail-blazer/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1
+}
+
+# expect_sched_out — like expect, but against $sched_out (stdout ALONE), pinning that the
+# outcome=/reason=/record= summary line is on stdout, not stderr. expect_record — like expect, but
+# against the newest run directory's own record.txt file (read straight off disk, not a pipe: no
+# writer-into-grep's-quiet-mode shape here) — a SUBSTRING match. expect_record_line is the same,
+# but a whole-LINE match (`grep -qxF`), for a case that must reject a value merely prefixed by the
+# needle (e.g. `timeout-seconds=14400` must not be satisfied by a record.txt line reading
+# `timeout-seconds=144000`, which a substring match would wrongly accept). All three are guarded by
+# needle_required (#262).
+expect_sched_out() {
+  needle_required expect_sched_out "$1" || return 0
+  grep -qF -- "$1" <<<"$sched_out" || { __ok=0; __why="${__why}missing (sched stdout): $1\n"; }
+}
+expect_record() {
+  needle_required expect_record "$1" || return 0
+  local rd rec
+  rd="$(sched_run_dir)"
+  rec="$rd/record.txt"
+  if [ -z "$rd" ] || [ ! -f "$rec" ]; then
+    __ok=0; __why="${__why}record.txt missing (run dir: '$rd')\n"
+    return
+  fi
+  grep -qF -- "$1" "$rec" || { __ok=0; __why="${__why}missing (record.txt): $1\n"; }
+}
+expect_record_line() {
+  needle_required expect_record_line "$1" || return 0
+  local rd rec
+  rd="$(sched_run_dir)"
+  rec="$rd/record.txt"
+  if [ -z "$rd" ] || [ ! -f "$rec" ]; then
+    __ok=0; __why="${__why}record.txt missing (run dir: '$rd')\n"
+    return
+  fi
+  grep -qxF -- "$1" "$rec" || { __ok=0; __why="${__why}missing (record.txt, whole line): $1\n"; }
+}
+
+# codex-sched-completed — a clean pass: exit 0, outcome=completed (both on stdout and as
+# record.txt's first line), the exact 9-element argv (exec --cd <toplevel> -s workspace-write
+# --json -o <run dir>/last-message.md <prompt>) captured by the stub, no forbidden flag or
+# resume/fork token anywhere on it, the prompt naming trail-blazer-flow:issue-cycle and carrying
+# the whole line "Harness mode: unattended (codex exec)", stdin.capture created but EMPTY (the
+# sentinel never reaches the launched codex), the run directory under
+# $sched_common/trail-blazer/runs/ with last-message.md and events.jsonl present, the repo tree
+# (excluding .git) byte-identical before and after, gh.log holding only "issue list" calls (from
+# harness-stop.sh's own preflight query), and the lock reported free both before and after.
+# mutant:427-claude-pid-guard — bin: `if [ -n "${CLAUDE_PID+set}" ]; then` becomes `if false;
+#   then`, so the guard never fires. Killed by codex-sched-claude-pid (rc/outcome no longer show a
+#   refusal).
+# mutant:427-stdin-inherited — bin: the launch line's `< /dev/null` becomes `<&0`, so the wrapper's
+#   own stdin (the sentinel) reaches the launched codex. Killed here: stdin.capture is no longer
+#   empty. (See plan Open question Q1: a bare drop of the redirect is equivalent under an
+#   asynchronous, non-interactive bash — only the explicit `<&0` form is a measurable mutant.)
+# mutant:427-marker-midline — bin: the PROMPT heredoc's first two lines are joined into one
+#   physical line, so the marker no longer sits on a line of its own. Killed here: the whole-line
+#   `grep -qxF` no longer finds it (a `grep -qF` substring match would have missed this mutant).
+case_codex_sched_completed() {
+  mk_sched sched-completed
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  local before after
+  before="$( (cd "$sched_repo" && find . -path ./.git -prune -o -type f -print | sort && find . -path ./.git -prune -o -type f -exec cksum {} \; | sort) )"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=completed"
+  expect_record "outcome=completed"
+
+  local rd
+  rd="$(sched_run_dir)"
+  if [ -z "$rd" ]; then
+    __ok=0; __why="${__why}no run directory created\n"
+    return
+  fi
+  case "$rd" in
+    "$sched_common/trail-blazer/runs/"*) : ;;
+    *) __ok=0; __why="${__why}run dir not under sched_common/trail-blazer/runs: $rd\n" ;;
+  esac
+  [ "$(head -1 "$rd/record.txt" 2>/dev/null)" = "outcome=completed" ] \
+    || { __ok=0; __why="${__why}record.txt's FIRST line is not exactly outcome=completed\n"; }
+  [ -f "$rd/last-message.md" ] || { __ok=0; __why="${__why}last-message.md missing\n"; }
+  [ -f "$rd/events.jsonl" ] || { __ok=0; __why="${__why}events.jsonl missing\n"; }
+
+  [ "$(cat "$sched_stub/argc" 2>/dev/null)" = "9" ] \
+    || { __ok=0; __why="${__why}argc != 9 (got '$(cat "$sched_stub/argc" 2>/dev/null)')\n"; }
+  local i want a
+  i=1
+  for want in exec --cd "$sched_top" -s workspace-write --json -o "$rd/last-message.md"; do
+    a="$(cat "$sched_stub/arg.$i" 2>/dev/null)"
+    [ "$a" = "$want" ] \
+      || { __ok=0; __why="${__why}arg.$i expected '$want', got '$a'\n"; }
+    i=$((i + 1))
+  done
+  grep -qxF -- 'Harness mode: unattended (codex exec)' "$sched_stub/arg.9" \
+    || { __ok=0; __why="${__why}prompt (arg.9) does not carry the marker on a line of its own\n"; }
+  grep -qF -- 'trail-blazer-flow:issue-cycle' "$sched_stub/arg.9" \
+    || { __ok=0; __why="${__why}prompt (arg.9) does not name trail-blazer-flow:issue-cycle\n"; }
+
+  local j
+  for j in 1 2 3 4 5 6 7 8 9; do
+    a="$(cat "$sched_stub/arg.$j" 2>/dev/null)"
+    case "$a" in
+      resume|fork) __ok=0; __why="${__why}arg.$j is a bare '$a' subcommand\n" ;;
+      *--dangerously*|*--approve-for-me*|*danger-full-access*|*--ignore-rules*|*--ignore-user-config*|*--ephemeral*)
+        __ok=0; __why="${__why}arg.$j carries a forbidden flag: $a\n" ;;
+    esac
+  done
+
+  [ -f "$sched_stub/stdin.capture" ] || { __ok=0; __why="${__why}stdin.capture was never created\n"; }
+  [ -s "$sched_stub/stdin.capture" ] \
+    && { __ok=0; __why="${__why}stdin.capture is non-empty — the sentinel reached the launched codex\n"; }
+
+  after="$( (cd "$sched_repo" && find . -path ./.git -prune -o -type f -print | sort && find . -path ./.git -prune -o -type f -exec cksum {} \; | sort) )"
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}repo tree changed (excluding .git)\n"; }
+
+  if [ -f "$sched_stub/gh.log" ]; then
+    local nonlist
+    nonlist="$(grep -vF -- "issue list" "$sched_stub/gh.log")"
+    [ -z "$nonlist" ] || { __ok=0; __why="${__why}gh.log holds a call other than issue list: $nonlist\n"; }
+  else
+    __ok=0; __why="${__why}gh.log was never written\n"
+  fi
+
+  local lock_status
+  lock_status="$(cd "$sched_repo" && "$sched_plugin/bin/harness-lock.sh" status 2>/dev/null)"
+  case "$lock_status" in
+    *"state=free"*) : ;;
+    *) __ok=0; __why="${__why}lock not free after the run: $lock_status\n" ;;
+  esac
+}
+
+# codex-sched-claude-pid — CLAUDE_PID set, even to an empty string, refuses before any other side
+# effect: exit 2, stderr names CLAUDE_PID, no argc/gh.log written (codex and gh never run), and no
+# trail-blazer/runs directory at all.
+case_codex_sched_claude_pid() {
+  mk_sched sched-claude-pid
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  run_sched "$sched_stub:$PATH" CLAUDE_PID=4242 --
+  expect_rc 2
+  expect "CLAUDE_PID"
+  expect_no_file "$sched_stub/argc"
+  expect_no_file "$sched_stub/gh.log"
+  expect_no_file "$sched_common/trail-blazer/runs"
+
+  run_sched "$sched_stub:$PATH" CLAUDE_PID= --
+  expect_rc 2
+  expect "CLAUDE_PID"
+  expect_no_file "$sched_stub/argc"
+  expect_no_file "$sched_stub/gh.log"
+  expect_no_file "$sched_common/trail-blazer/runs"
+}
+
+# codex-sched-stop-local — the local stop file set: skipped-stop reason=stop, exit 0, no argc
+# (codex never runs), a record written. Runs with NO_DEFAULT_TIMEOUT (this suite's own fixture
+# default opted OUT — see run_sched) so both TBF_CODEX_RUN_TIMEOUT and TBF_CODEX_RUN_KILL_GRACE
+# fall through to the wrapper's own production defaults (14400/30); safe here because the local
+# stop is caught at the preflight's stop step, well before the lock check or launch, so no
+# watchdog — and so no real 14400s timer — is ever started. record.txt's own timeout-seconds=14400
+# proves the production TIMEOUT default reached the wrapper; reaching skipped-stop at all (rather
+# than preflight-failed reason=bad-timeout) proves the production GRACE default validated too,
+# since both are checked before the stop step ever runs.
+# mutant:427-stop-inverted — bin: swap the stop-handling case's `0) : ;;` and
+#   `3|4) finish skipped-stop "$stop_reason" ;;` arms. Killed here and by codex-sched-stop-unknown
+#   (a stop is no longer honoured — rc 0 with an argc file, since the launch proceeds instead), and
+#   by every OTHER launch case (codex-sched-completed included): rc=0 now incorrectly reports
+#   skipped-stop instead of the run actually completing.
+# mutant:427-timeout-default — bin: `${TBF_CODEX_RUN_TIMEOUT:-14400}` becomes `${TBF_CODEX_RUN_TIMEOUT:-0}`.
+#   Killed here: with no override, the production default is now 0, which fails the ">0" check, so
+#   the run ends preflight-failed reason=bad-timeout instead of skipped-stop.
+# mutant:427-grace-default — bin: `${TBF_CODEX_RUN_KILL_GRACE:-30}` becomes `${TBF_CODEX_RUN_KILL_GRACE:-0}`.
+#   Killed here the same way, via the grace default instead of the timeout default.
+case_codex_sched_stop_local() {
+  mk_sched sched-stop-local
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+  mkdir -p "$sched_common/trail-blazer"
+  touch "$sched_common/trail-blazer/stop"
+
+  run_sched "$sched_stub:$PATH" NO_DEFAULT_TIMEOUT --
+  expect_rc 0
+  expect_sched_out "outcome=skipped-stop reason=stop"
+  expect_no_file "$sched_stub/argc"
+  expect_record "outcome=skipped-stop"
+  expect_record_line "timeout-seconds=14400"
+}
+
+# codex-sched-stop-unknown — gh fails (both harness-stop.sh attempts), so the GitHub route is
+# unreadable and there's no local file either: skipped-stop reason=stop-unknown, exit 0, no argc.
+# build_stub_sleep_instant is placed first on PATH so harness-stop.sh's own 30s retry wait costs
+# nothing.
+case_codex_sched_stop_unknown() {
+  mk_sched sched-stop-unknown
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" fail
+  build_stub_sleep_instant "$sched_stub/sleepstub"
+
+  run_sched "$sched_stub/sleepstub:$sched_stub:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=skipped-stop reason=stop-unknown"
+  expect_no_file "$sched_stub/argc"
+}
+
+# codex-sched-lock-live — a live, same-host lock holder (this suite's own $$, guaranteed alive —
+# dev/lock-tests.sh's own precedent): skipped-busy reason=live-holder, exit 0, no argc, and the
+# lock directory's own files byte-identical after the run (the wrapper never touches the lock).
+# mutant:427-lock-live-ignored — bin: `if pid_alive "$held_pid"; then` becomes `if false; then`, so
+#   a live holder is never detected. Killed here: the run wrongly launches and completes instead of
+#   skipping.
+case_codex_sched_lock_live() {
+  mk_sched sched-lock-live
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  (cd "$sched_repo" && "$sched_plugin/bin/harness-lock.sh" acquire --owner-pid "$$" >/dev/null 2>&1)
+
+  local before after
+  before="$( (cd "$sched_common/trail-blazer/lock" && find . -type f | sort && find . -type f -exec cksum {} \; | sort) )"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=skipped-busy reason=live-holder"
+  expect_no_file "$sched_stub/argc"
+
+  after="$( (cd "$sched_common/trail-blazer/lock" && find . -type f | sort && find . -type f -exec cksum {} \; | sort) )"
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}lock files changed across the run\n"; }
+}
+
+# codex-sched-lock-stale — a same-host lock holder whose pid is already dead: the wrapper leaves it
+# for the launched session to reclaim — completed, and the lock directory's own files stay
+# byte-identical (the wrapper neither released nor reclaimed it itself).
+case_codex_sched_lock_stale() {
+  mk_sched sched-lock-stale
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  local dp
+  dp="$(dead_pid_sched)"
+  (cd "$sched_repo" && "$sched_plugin/bin/harness-lock.sh" acquire --owner-pid "$dp" >/dev/null 2>&1)
+
+  local before after
+  before="$( (cd "$sched_common/trail-blazer/lock" && find . -type f | sort && find . -type f -exec cksum {} \; | sort) )"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=completed"
+
+  after="$( (cd "$sched_common/trail-blazer/lock" && find . -type f | sort && find . -type f -exec cksum {} \; | sort) )"
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}lock files changed — the wrapper touched the dead-pid lock\n"; }
+}
+
+# codex-sched-lock-other-host — a real lock, then its own host file rewritten to a foreign
+# hostname (the pid stays valid and alive): skipped-busy reason=other-host, exit 0, no argc.
+# mutant:427-lock-other-host — bin: `if [ "$held_host" != "$this_host" ]; then` becomes
+#   `if false; then`. Killed here: the host mismatch is never detected, so the (still-alive) pid
+#   falls through to the live-holder check instead and the reason comes out wrong.
+case_codex_sched_lock_other_host() {
+  mk_sched sched-lock-other-host
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  (cd "$sched_repo" && "$sched_plugin/bin/harness-lock.sh" acquire --owner-pid "$$" >/dev/null 2>&1)
+  printf '%s' "some-other-host.invalid" > "$sched_common/trail-blazer/lock/host"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=skipped-busy reason=other-host"
+  expect_no_file "$sched_stub/argc"
+}
+
+# codex-sched-lock-unreadable — a real lock, then its own pid file rewritten to a non-digit value:
+# skipped-busy reason=unreadable-holder, exit 0, no argc.
+# mutant:427-lock-unreadable — bin: the `''|*[!0-9]*) lock_reason=unreadable-holder ;;` arm drops
+#   its assignment. Killed here: lock_reason stays empty, so the wrapper wrongly falls through to
+#   launch instead of skipping.
+case_codex_sched_lock_unreadable() {
+  mk_sched sched-lock-unreadable
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  (cd "$sched_repo" && "$sched_plugin/bin/harness-lock.sh" acquire --owner-pid "$$" >/dev/null 2>&1)
+  printf '%s' "notapid" > "$sched_common/trail-blazer/lock/pid"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=skipped-busy reason=unreadable-holder"
+  expect_no_file "$sched_stub/argc"
+}
+
+# codex-sched-preflight-tools — three sub-cases, each with exactly one tool absent from the
+# combined PATH: (a) a closed farm excluding jq, plus a stub dir with both codex and gh ->
+# missing-tool:jq; (b) a stub dir with only gh, plus a full closed farm (jq present, codex/gh never
+# in any farm) -> missing-tool:codex; (c) a stub dir with only codex, plus a full closed farm ->
+# missing-tool:gh. Each: preflight-failed, exit 1, no argc.
+case_codex_sched_preflight_tools() {
+  mk_sched sched-preflight-tools
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  local farm
+  farm="$(mk_farm "$tmpbase/sched-farm-nojq" jq)"
+  run_sched "$sched_stub:$farm" --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=missing-tool:jq"
+  expect_no_file "$sched_stub/argc"
+
+  local gh_only="$tmpbase/sched-gh-only"
+  mkdir -p "$gh_only"
+  build_stub_sched_gh "$gh_only" ok
+  farm="$(mk_farm "$tmpbase/sched-farm-full-1")"
+  run_sched "$gh_only:$farm" --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=missing-tool:codex"
+
+  local codex_only="$tmpbase/sched-codex-only"
+  mkdir -p "$codex_only"
+  build_stub_sched_codex "$codex_only" complete
+  farm="$(mk_farm "$tmpbase/sched-farm-full-2")"
+  run_sched "$codex_only:$farm" --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=missing-tool:gh"
+}
+
+# codex-sched-preflight-drift — a hand-edited .codex/agents/planner.toml (drift): preflight-failed
+# reason=codex-setup-drift, preflight.log names the exact drift= line, no argc, and no gh.log at
+# all — pinning that harness-stop.sh (which is what would call gh) is never reached once
+# codex-setup.sh --check has already failed.
+case_codex_sched_preflight_drift() {
+  mk_sched sched-preflight-drift
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  printf '\n# fixture drift\n' >> "$sched_repo/.codex/agents/planner.toml"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=codex-setup-drift"
+  expect_no_file "$sched_stub/argc"
+  expect_no_file "$sched_stub/gh.log"
+
+  local rd
+  rd="$(sched_run_dir)"
+  if [ -n "$rd" ] && [ -f "$rd/preflight.log" ]; then
+    grep -qF -- "drift=.codex/agents/planner.toml reason=differs" "$rd/preflight.log" \
+      || { __ok=0; __why="${__why}preflight.log missing the expected drift= line\n"; }
+  else
+    __ok=0; __why="${__why}preflight.log missing\n"
+  fi
+}
+
+# codex-sched-setup-error — the fake plugin's own codex-setup.sh replaced with a stub that exits 3
+# (neither 0 nor 1): preflight-failed reason=codex-setup-error, exit 1, no argc.
+case_codex_sched_setup_error() {
+  mk_sched sched-setup-error
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  {
+    printf '#!%s\n' "$bash_bin"
+    printf 'exit 3\n'
+  } > "$sched_plugin/bin/codex-setup.sh"
+  chmod +x "$sched_plugin/bin/codex-setup.sh"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=codex-setup-error"
+  expect_no_file "$sched_stub/argc"
+}
+
+# codex-sched-stop-exit — the fake plugin's own harness-stop.sh replaced with a stub that exits 2
+# (neither 0, 3, nor 4): preflight-failed reason=harness-stop-exit-2, exit 1, no argc.
+case_codex_sched_stop_exit() {
+  mk_sched sched-stop-exit
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  {
+    printf '#!%s\n' "$bash_bin"
+    printf 'exit 2\n'
+  } > "$sched_plugin/bin/harness-stop.sh"
+  chmod +x "$sched_plugin/bin/harness-stop.sh"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=harness-stop-exit-2"
+  expect_no_file "$sched_stub/argc"
+}
+
+# codex-sched-rundir-uncreatable — trail-blazer/runs pre-created as a plain FILE (not a directory):
+# `mkdir -p` on it fails, so the wrapper exits 2 directly, before any record can ever be written —
+# the same failure shape a read-only .git under Codex's own sandbox produces (see
+# docs/reference/codex.md "Scheduling unattended runs (macOS)").
+case_codex_sched_rundir_uncreatable() {
+  mk_sched sched-rundir-uncreatable
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  mkdir -p "$sched_common/trail-blazer"
+  : > "$sched_common/trail-blazer/runs"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 2
+  expect_no_file "$sched_stub/argc"
+}
+
+# codex-sched-failed — the launched codex exits 1: failed reason=exit-1, exit 1, stderr.log
+# non-empty. A second run with the nomsg stub (exit 0, no -o file written): failed
+# reason=no-final-message.
+case_codex_sched_failed() {
+  mk_sched sched-failed
+  build_stub_sched_codex "$sched_stub" fail
+  build_stub_sched_gh "$sched_stub" ok
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  expect_sched_out "outcome=failed reason=exit-1"
+  local rd
+  rd="$(sched_run_dir)"
+  [ -s "$rd/stderr.log" ] || { __ok=0; __why="${__why}stderr.log is empty\n"; }
+
+  mk_sched sched-failed-nomsg
+  build_stub_sched_codex "$sched_stub" nomsg
+  build_stub_sched_gh "$sched_stub" ok
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  expect_sched_out "outcome=failed reason=no-final-message"
+}
+
+# codex-sched-unattended-stop — last-message.md's ONLY line is exactly "Unattended stop:
+# permission-denied": failed reason=unattended-stop-permission-denied, exit 1. Control: the same
+# phrase embedded mid-line (denied-midline) is NOT a whole-line match: completed.
+# mutant:427-unattended-stop-ignored — bin: the whole-line `grep -qxF` classification condition
+#   becomes `false`. Killed here (the denied stub no longer classifies as failed).
+case_codex_sched_unattended_stop() {
+  mk_sched sched-unattended-stop
+  build_stub_sched_codex "$sched_stub" denied
+  build_stub_sched_gh "$sched_stub" ok
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  expect_sched_out "outcome=failed reason=unattended-stop-permission-denied"
+
+  mk_sched sched-unattended-stop-midline
+  build_stub_sched_codex "$sched_stub" denied-midline
+  build_stub_sched_gh "$sched_stub" ok
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=completed"
+}
+
+# codex-sched-died — the launched codex is killed outright (SIGKILL): died-mid-run reason=signal-9,
+# exit 1.
+case_codex_sched_died() {
+  mk_sched sched-died
+  build_stub_sched_codex "$sched_stub" die
+  build_stub_sched_gh "$sched_stub" ok
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  expect_sched_out "outcome=died-mid-run reason=signal-9"
+}
+
+# codex-sched-timeout — a 1s timeout against a stub that hangs 20s and takes the default TERM
+# action: timed-out, exit 1, watchdog-fired present, and the stub's own pid no longer alive
+# (kill -0 fails).
+# mutant:427-timeout-marker — bin: delete the `: > "$run_dir/watchdog-fired"` line. Killed here and
+#   by codex-sched-timeout-kill: both become died-mid-run (rc still 1, but the wrong reason and the
+#   wrong outcome token — the classifier's first rule never gets to fire).
+# mutant:427-watchdog-ignores-elapsed — bin: the watchdog's own first poll loop's deadline check
+#   (`while [ "$SECONDS" -lt "$deadline" ] && kill -0 ...`) becomes an always-true condition,
+#   ignoring the timeout entirely. Killed here and by codex-sched-timeout-kill: the watchdog never
+#   fires; the stub's own 20s hang ends the run instead (whatever outcome that stub's own mode
+#   reaches on its own), never timed-out.
+case_codex_sched_timeout() {
+  mk_sched sched-timeout
+  build_stub_sched_codex "$sched_stub" hang
+  build_stub_sched_gh "$sched_stub" ok
+  run_sched "$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=1 TBF_CODEX_RUN_KILL_GRACE=1 --
+  expect_rc 1
+  expect_sched_out "outcome=timed-out"
+  local rd cpid
+  rd="$(sched_run_dir)"
+  [ -f "$rd/watchdog-fired" ] || { __ok=0; __why="${__why}watchdog-fired missing\n"; }
+  cpid="$(cat "$sched_stub/codex.pid" 2>/dev/null)"
+  if [ -n "$cpid" ] && kill -0 "$cpid" 2>/dev/null; then
+    __ok=0; __why="${__why}stub codex pid $cpid still alive after timeout\n"
+  fi
+}
+
+# codex-sched-timeout-kill — a stub that ignores TERM (its own disposition set to ignore, inherited
+# across its own exec, so no separate child can be orphaned): TERM alone does nothing, so the
+# watchdog's kill-grace KILL is what actually ends it. timed-out, and the stub pid is dead. Also
+# pins that the KILL actually ran, rather than the stub merely outliving the wrapper on its own:
+# exit-status=137 (128+9) can only come from the stub itself dying to SIGKILL, never from its own
+# unhindered 20s sleep completing (which would exit 0), and the whole run is bounded to well under
+# that stub's own natural lifetime — a skipped KILL would otherwise let the case still pass, just
+# by taking as long as the stub's own hang.
+# mutant:427-watchdog-kill-skipped — bin: the watchdog's own post-grace `kill -KILL "$codex_pid"`
+#   becomes a no-op. Killed here: the TERM-ignoring stub is never actually killed, so it survives on
+#   its own until its own hang ends naturally, well past this case's wall-clock bound, and its exit
+#   status is 0 rather than 137.
+case_codex_sched_timeout_kill() {
+  mk_sched sched-timeout-kill
+  build_stub_sched_codex "$sched_stub" hang-noterm
+  build_stub_sched_gh "$sched_stub" ok
+  local t0=$SECONDS
+  run_sched "$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=1 TBF_CODEX_RUN_KILL_GRACE=1 --
+  local elapsed=$((SECONDS - t0))
+  expect_rc 1
+  expect_sched_out "outcome=timed-out"
+  expect_record_line "exit-status=137"
+  if [ "$elapsed" -ge 15 ]; then
+    __ok=0; __why="${__why}run took ${elapsed}s, not well under the stub's own 20s natural hang — the post-grace KILL may not have run\n"
+  fi
+  local cpid
+  cpid="$(cat "$sched_stub/codex.pid" 2>/dev/null)"
+  if [ -n "$cpid" ] && kill -0 "$cpid" 2>/dev/null; then
+    __ok=0; __why="${__why}stub codex pid $cpid still alive after timeout+kill\n"
+  fi
+}
+
+# codex-sched-wrapper-killed — the wrapper process itself (not codex, not the watchdog) is sent
+# TERM mid-run (simulating launchd unloading the job, or an operator/logout): outcome=died-mid-run,
+# exit 1, and — the actual point of this case — the launched codex stub does not survive it. Uses
+# the hang-long codex stub (a real window to signal the WRAPPER's own pid while codex is still
+# running, and a natural exit far past this case's own bounded poll — see build_stub_sched_codex's
+# own header for why — so the mutant below can't be masked by the stub simply outliving the
+# wrapper and running out its own sleep). Does not check the watchdog's own poll sleep: a `sleep 1`
+# slice outliving the watchdog by up to a second is the accepted, self-ending behaviour the
+# watchdog's own design now has, not a leak this case means to catch (see
+# codex-sched-wrapper-killed-forwards-term for the codex-side kill sequence this case doesn't
+# itself probe).
+# mutant:427-wrapper-signal-trap — bin: delete both `trap '...' TERM`/`trap '...' INT` lines
+#   installing on_wrapper_signal. Killed here: with no trap, the default TERM disposition kills the
+#   wrapper outright, leaving the codex stub alive.
+case_codex_sched_wrapper_killed() {
+  mk_sched sched-wrapper-killed
+  build_stub_sched_codex "$sched_stub" hang-long
+  build_stub_sched_gh "$sched_stub" ok
+
+  local outfile errfile
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  # exec (not a bare `env ...`) so this subshell's own pid becomes the wrapper script's pid: `env`
+  # itself execs its target rather than forking a child to run it — it is this outer `(...)`
+  # subshell that would otherwise fork a child to run `env` in, leaving $! naming that subshell
+  # rather than the wrapper this case means to signal.
+  (
+    cd "$sched_repo" &&
+    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
+    exec env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+        PATH="$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=30 TBF_CODEX_RUN_KILL_GRACE=5 \
+        "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
+  ) < "$sched_sentinel" > "$outfile" 2> "$errfile" &
+  local wrapper_pid=$!
+
+  local waited=0
+  while [ ! -s "$sched_stub/codex.pid" ] && [ "$waited" -lt 10000 ]; do
+    sleep 0.05
+    waited=$((waited + 50))
+  done
+  if [ ! -s "$sched_stub/codex.pid" ]; then
+    __ok=0; __why="${__why}the codex stub never started — can't exercise a mid-run kill\n"
+    kill -9 "$wrapper_pid" 2>/dev/null
+    rm -f "$outfile" "$errfile"
+    return
+  fi
+  local codex_stub_pid
+  codex_stub_pid="$(cat "$sched_stub/codex.pid")"
+
+  kill -TERM "$wrapper_pid" 2>/dev/null
+  wait "$wrapper_pid" 2>/dev/null
+  doctor_rc=$?
+  sched_out="$(cat "$outfile")"
+  sched_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $sched_out
+ERR: $sched_err"
+
+  expect_rc 1
+  expect_sched_out "outcome=died-mid-run"
+
+  # The wrapper's own TERM handler signals codex_pid and then, per the new poll design, may take up
+  # to $grace seconds before escalating to KILL — poll for up to a generous multiple of that window
+  # (wide enough to absorb scheduling delay under heavy concurrent load without flaking) before
+  # declaring a survivor.
+  local codex_alive="" waited=0
+  while [ "$waited" -lt 10000 ]; do
+    codex_alive=""
+    kill -0 "$codex_stub_pid" 2>/dev/null && codex_alive="$codex_stub_pid"
+    [ -z "$codex_alive" ] && break
+    sleep 0.1
+    waited=$((waited + 100))
+  done
+
+  if [ -n "$codex_alive" ]; then
+    __ok=0; __why="${__why}codex stub pid $codex_stub_pid still alive after the wrapper was killed\n"
+    kill -9 "$codex_stub_pid" 2>/dev/null
+  fi
+}
+
+# codex-sched-wrapper-killed-forwards-term — the codex stub is in forwarder mode (models the real
+# `codex` CLI: a launcher that spawns a native child and forwards SIGTERM to it). The wrapper
+# itself is sent TERM mid-run; on_wrapper_signal must TERM codex_pid and then POLL for it to exit
+# (up to $grace) before ever sending KILL, so the forwarder gets a real chance to run its own trap
+# and kill its own child — the actual point of this case. Both the forwarder stub itself and its
+# child must be gone.
+# mutant:427-wrapper-kill-immediate — bin: on_wrapper_signal's TERM-then-poll-then-KILL sequence
+#   collapses back to an immediate TERM followed by an immediate KILL. Killed here: the forwarder is
+#   killed before it can run its own trap, so its child (the simulated native binary) survives.
+case_codex_sched_wrapper_killed_forwards_term() {
+  mk_sched sched-wrapper-forward
+  build_stub_sched_codex "$sched_stub" forwarder
+  build_stub_sched_gh "$sched_stub" ok
+
+  local outfile errfile
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  (
+    cd "$sched_repo" &&
+    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
+    exec env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+        PATH="$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=30 TBF_CODEX_RUN_KILL_GRACE=5 \
+        "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
+  ) < "$sched_sentinel" > "$outfile" 2> "$errfile" &
+  local wrapper_pid=$!
+
+  local waited=0
+  while [ ! -s "$sched_stub/forwarder-child.pid" ] && [ "$waited" -lt 10000 ]; do
+    sleep 0.05
+    waited=$((waited + 50))
+  done
+  if [ ! -s "$sched_stub/codex.pid" ] || [ ! -s "$sched_stub/forwarder-child.pid" ]; then
+    __ok=0; __why="${__why}the forwarder stub never started its own child — can't exercise this\n"
+    kill -9 "$wrapper_pid" 2>/dev/null
+    rm -f "$outfile" "$errfile"
+    return
+  fi
+  local codex_stub_pid child_pid
+  codex_stub_pid="$(cat "$sched_stub/codex.pid")"
+  child_pid="$(cat "$sched_stub/forwarder-child.pid")"
+
+  kill -TERM "$wrapper_pid" 2>/dev/null
+  wait "$wrapper_pid" 2>/dev/null
+  doctor_rc=$?
+  sched_out="$(cat "$outfile")"
+  sched_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $sched_out
+ERR: $sched_err"
+
+  expect_rc 1
+  expect_sched_out "outcome=died-mid-run"
+
+  # Poll for a generous multiple of $grace, wide enough to absorb scheduling delay under heavy
+  # concurrent load without flaking.
+  local codex_alive="" child_alive="" waited=0
+  while [ "$waited" -lt 10000 ]; do
+    codex_alive=""; child_alive=""
+    kill -0 "$codex_stub_pid" 2>/dev/null && codex_alive="$codex_stub_pid"
+    kill -0 "$child_pid" 2>/dev/null && child_alive="$child_pid"
+    [ -z "$codex_alive" ] && [ -z "$child_alive" ] && break
+    sleep 0.1
+    waited=$((waited + 100))
+  done
+
+  if [ -n "$codex_alive" ]; then
+    __ok=0; __why="${__why}forwarder stub pid $codex_stub_pid still alive after the wrapper was killed\n"
+    kill -9 "$codex_stub_pid" 2>/dev/null
+  fi
+  if [ -n "$child_alive" ]; then
+    __ok=0; __why="${__why}forwarder's own child pid $child_pid still alive after the wrapper was killed\n"
+    kill -9 "$child_pid" 2>/dev/null
+  fi
+}
+
+# codex-sched-wrapper-killed-noterm — the codex stub ignores TERM outright (its own disposition set
+# to ignore, inherited across its own exec), so unlike codex-sched-wrapper-killed's plain hang stub
+# (which dies to TERM alone), only on_wrapper_signal's own post-grace KILL can end it — the actual
+# point of this case: codex-sched-wrapper-killed and codex-sched-wrapper-killed-forwards-term both
+# use stubs that already die to TERM, so neither one actually exercises this KILL line. Uses the
+# hang-noterm-long stub (a much longer natural hang than the plain hang-noterm mode) precisely so a
+# bounded wall-clock margin below "actually killed" and "survived, outliving the wrapper" stays
+# large and load-tolerant rather than bumping into the stub's own eventual natural exit — the
+# wrapper itself is sent TERM mid-run; the stub must die within that bounded window, not merely by
+# outliving the wrapper and running out its own sleep.
+# mutant:427-wrapper-kill-skipped — bin: on_wrapper_signal's own post-grace
+#   `kill -KILL "$codex_pid"` becomes a no-op. Killed here: the TERM-ignoring stub is never actually
+#   killed, so it survives well past this case's bounded poll.
+# mutant:427-wrapper-grace-ignored — bin: on_wrapper_signal's grace deadline is pushed far past the
+#   stub's own natural hang, so the handler never reaches its KILL. Killed here: the wrapper is still
+#   running past this case's bounded wait on it.
+case_codex_sched_wrapper_killed_noterm() {
+  mk_sched sched-wrapper-noterm
+  build_stub_sched_codex "$sched_stub" hang-noterm-long
+  build_stub_sched_gh "$sched_stub" ok
+
+  local outfile errfile
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  (
+    cd "$sched_repo" &&
+    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
+    exec env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+        PATH="$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=30 TBF_CODEX_RUN_KILL_GRACE=5 \
+        "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
+  ) < "$sched_sentinel" > "$outfile" 2> "$errfile" &
+  local wrapper_pid=$!
+
+  local waited=0
+  while [ ! -s "$sched_stub/codex.pid" ] && [ "$waited" -lt 10000 ]; do
+    sleep 0.05
+    waited=$((waited + 50))
+  done
+  if [ ! -s "$sched_stub/codex.pid" ]; then
+    __ok=0; __why="${__why}the codex stub never started — can't exercise a mid-run kill\n"
+    kill -9 "$wrapper_pid" 2>/dev/null
+    rm -f "$outfile" "$errfile"
+    return
+  fi
+  local codex_stub_pid
+  codex_stub_pid="$(cat "$sched_stub/codex.pid")"
+
+  # The wrapper must itself exit within its grace window plus a margin, never by waiting out the
+  # stub's own long natural hang: a bare `wait` here would let a handler that ignores its grace
+  # deadline pass after the stub's own sleep ends. Past the bound, both processes are killed and the
+  # case fails fast.
+  kill -TERM "$wrapper_pid" 2>/dev/null
+  local wrapper_waited=0
+  while kill -0 "$wrapper_pid" 2>/dev/null && [ "$wrapper_waited" -lt 20000 ]; do
+    sleep 0.1
+    wrapper_waited=$((wrapper_waited + 100))
+  done
+  if kill -0 "$wrapper_pid" 2>/dev/null; then
+    __ok=0; __why="${__why}the wrapper was still running well past its kill grace — on_wrapper_signal did not escalate within its own deadline\n"
+    kill -9 "$wrapper_pid" "$codex_stub_pid" 2>/dev/null
+    wait "$wrapper_pid" 2>/dev/null
+    rm -f "$outfile" "$errfile"
+    return
+  fi
+  wait "$wrapper_pid" 2>/dev/null
+  doctor_rc=$?
+  sched_out="$(cat "$outfile")"
+  sched_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $sched_out
+ERR: $sched_err"
+
+  expect_rc 1
+  expect_sched_out "outcome=died-mid-run"
+
+  # Bounded well short of the stub's own long natural hang: a real KILL should end it within a
+  # couple of seconds of the $grace=5s window; a generous multiple of that window still leaves
+  # ample margin against the stub's own eventual natural exit, so this distinguishes "actually
+  # killed" from "outlived the wrapper and hung until its own sleep ended" even under heavy load.
+  local codex_alive="" waited=0
+  while [ "$waited" -lt 12000 ]; do
+    codex_alive=""
+    kill -0 "$codex_stub_pid" 2>/dev/null && codex_alive="$codex_stub_pid"
+    [ -z "$codex_alive" ] && break
+    sleep 0.1
+    waited=$((waited + 100))
+  done
+
+  if [ -n "$codex_alive" ]; then
+    __ok=0; __why="${__why}TERM-ignoring codex stub pid $codex_stub_pid still alive after the wrapper was killed — post-grace KILL did not run\n"
+    kill -9 "$codex_stub_pid" 2>/dev/null
+  fi
+}
+
+# codex-sched-timeout-invalid — TBF_CODEX_RUN_TIMEOUT=abc, then =0, then TBF_CODEX_RUN_KILL_GRACE
+# =abc, then =0: all four give preflight-failed reason=bad-timeout, exit 1, no argc (codex never
+# runs in any of the four).
+case_codex_sched_timeout_invalid() {
+  mk_sched sched-timeout-invalid
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  run_sched "$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=abc --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=bad-timeout"
+  expect_no_file "$sched_stub/argc"
+
+  run_sched "$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=0 --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=bad-timeout"
+  expect_no_file "$sched_stub/argc"
+
+  run_sched "$sched_stub:$PATH" TBF_CODEX_RUN_KILL_GRACE=abc --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=bad-timeout"
+  expect_no_file "$sched_stub/argc"
+
+  run_sched "$sched_stub:$PATH" TBF_CODEX_RUN_KILL_GRACE=0 --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=bad-timeout"
+  expect_no_file "$sched_stub/argc"
+}
+
+# codex-sched-prune — 101 pre-created stamp-shaped run directories, one non-matching FILE
+# (notes.txt), and two non-matching DIRECTORIES that both sort lexically before every stamp
+# ("0-manual", entirely the wrong shape, and "19990101T000000Z-abc", the right date shape but a
+# non-digit pid suffix) directly under runs/. After one completed run: exactly 100 stamp-shaped
+# directories remain, the two lexically oldest FAKE STAMP ones are gone, the new run's own
+# directory survives, and notes.txt plus both non-matching directories are untouched — proving the
+# name filter, not merely a directory head-count, decides what is prunable.
+# mutant:427-prune-filter — bin: the whole two-stage name filter in prune_runs collapses to
+#   `*)` (every directory counts as a run, no digits-only-suffix check). Killed here: both
+#   non-matching decoys — sorting before every real stamp — are wrongly swept away as "the oldest".
+case_codex_sched_prune() {
+  mk_sched sched-prune
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  mkdir -p "$sched_common/trail-blazer/runs"
+  local i=1 tf stamp
+  while [ "$i" -le 101 ]; do
+    tf="$(printf '%06d' "$i")"
+    stamp="20000101T${tf}Z-1"
+    mkdir -p "$sched_common/trail-blazer/runs/$stamp"
+    printf 'outcome=completed\n' > "$sched_common/trail-blazer/runs/$stamp/record.txt"
+    i=$((i + 1))
+  done
+  printf 'not a run dir\n' > "$sched_common/trail-blazer/runs/notes.txt"
+  mkdir -p "$sched_common/trail-blazer/runs/0-manual"
+  mkdir -p "$sched_common/trail-blazer/runs/19990101T000000Z-abc"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=completed"
+
+  local remaining_stamped=0 d name suffix new_rd
+  for d in "$sched_common/trail-blazer/runs"/*; do
+    [ -d "$d" ] || continue
+    name="${d##*/}"
+    case "$name" in
+      [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z-*)
+        suffix="${name##*-}"
+        case "$suffix" in
+          ''|*[!0-9]*) : ;;
+          *) remaining_stamped=$((remaining_stamped + 1)) ;;
+        esac
+        ;;
+    esac
+  done
+  [ "$remaining_stamped" = "100" ] \
+    || { __ok=0; __why="${__why}expected exactly 100 stamp-shaped dirs, got $remaining_stamped\n"; }
+  new_rd="$(sched_run_dir)"
+  [ -d "$new_rd" ] || { __ok=0; __why="${__why}the new run's own directory is missing after pruning\n"; }
+  [ -f "$sched_common/trail-blazer/runs/notes.txt" ] \
+    || { __ok=0; __why="${__why}notes.txt (non-matching file) was removed\n"; }
+  [ -d "$sched_common/trail-blazer/runs/0-manual" ] \
+    || { __ok=0; __why="${__why}0-manual (non-matching directory) was removed\n"; }
+  [ -d "$sched_common/trail-blazer/runs/19990101T000000Z-abc" ] \
+    || { __ok=0; __why="${__why}19990101T000000Z-abc (non-digit-suffix directory) was removed\n"; }
+  [ -d "$sched_common/trail-blazer/runs/20000101T000001Z-1" ] \
+    && { __ok=0; __why="${__why}oldest fake dir 000001 still present\n"; }
+  [ -d "$sched_common/trail-blazer/runs/20000101T000002Z-1" ] \
+    && { __ok=0; __why="${__why}oldest fake dir 000002 still present\n"; }
+}
+
+# codex-sched-own-dir — a decoy directory first on PATH shadows harness-stop.sh, harness-lock.sh
+# and codex-setup.sh, each touching a sentinel and exiting in a way that would block the run.
+# Result: completed, and the sentinel is never created — siblings are resolved only from the
+# wrapper's own directory, never PATH.
+case_codex_sched_own_dir() {
+  mk_sched sched-own-dir
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  local decoy="$tmpbase/sched-own-dir-decoy"
+  mkdir -p "$decoy"
+  local sentinel="$tmpbase/sched-own-dir-sentinel-hit"
+  rm -f "$sentinel"
+  local name
+  for name in harness-stop.sh harness-lock.sh codex-setup.sh; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf ': > %q\n' "$sentinel"
+      printf 'exit 9\n'
+    } > "$decoy/$name"
+    chmod +x "$decoy/$name"
+  done
+
+  run_sched "$decoy:$sched_stub:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=completed"
+  [ -e "$sentinel" ] && { __ok=0; __why="${__why}a decoy sibling on PATH was executed\n"; }
+}
+
+# codex-sched-usage — --help exits 0 naming usage:; --bogus exits 2; outside a repo
+# (GIT_CEILING_DIRECTORIES) exits 2 with no trail-blazer directory created anywhere; a closed farm
+# with no git exits 2.
+case_codex_sched_usage() {
+  mk_sched sched-usage
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  run_sched "$sched_stub:$PATH" -- --help
+  expect_rc 0
+  expect_sched_out "usage:"
+
+  run_sched "$sched_stub:$PATH" -- --bogus
+  expect_rc 2
+
+  local nogit="$tmpbase/sched-usage-nogit"
+  mkdir -p "$nogit/home"
+  (
+    cd "$nogit" &&
+    unset CLAUDE_PID &&
+    env HOME="$nogit/home" GIT_CEILING_DIRECTORIES="$tmpbase" PATH="$sched_stub:$PATH" \
+      "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
+  ) >"$tmpbase/sched-nogit-out" 2>"$tmpbase/sched-nogit-err"
+  doctor_rc=$?
+  sched_out="$(cat "$tmpbase/sched-nogit-out")"
+  sched_err="$(cat "$tmpbase/sched-nogit-err")"
+  doctor_out="OUT: $sched_out
+ERR: $sched_err"
+  expect_rc 2
+  [ -d "$nogit/trail-blazer" ] && { __ok=0; __why="${__why}a runs directory was created outside a repo\n"; }
+
+  local farm nogit2
+  farm="$(mk_farm "$tmpbase/sched-usage-farm" git)"
+  nogit2="$tmpbase/sched-usage-nogit2"
+  mkdir -p "$nogit2/home"
+  (
+    cd "$nogit2" &&
+    unset CLAUDE_PID &&
+    env HOME="$nogit2/home" PATH="$farm" "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
+  ) >"$tmpbase/sched-nogit2-out" 2>"$tmpbase/sched-nogit2-err"
+  doctor_rc=$?
+  sched_out="$(cat "$tmpbase/sched-nogit2-out")"
+  sched_err="$(cat "$tmpbase/sched-nogit2-err")"
+  doctor_out="OUT: $sched_out
+ERR: $sched_err"
+  expect_rc 2
+}
+
 # --- codex doctor (#410) ----------------------------------------------------------------------
 # bin/check-harness.sh --provider codex — a separate check set from the Claude branch above,
 # sharing only the preamble (git remote/gh/jq/default-branch/labels/exec-bits/harness-version/
@@ -3550,7 +4738,7 @@ mk_farm() {
   shift
   local excl=" $* "
   mkdir -p "$dir"
-  local tools="awk basename bash cat chmod cmp cp cut date dirname env find grep head jq ln ls mkdir mktemp mv ps rm sed sleep sort tail tr uname wc git"
+  local tools="awk basename bash cat chmod cmp cp cut date dirname env find grep head jq ln ls mkdir mktemp mv ps rm rmdir sed sleep sort tail tr uname wc git"
   local t p
   for t in $tools; do
     case "$excl" in
@@ -4245,7 +5433,7 @@ cases=(
   "codex-setup-agents-triple-quote-refused|case_codex_setup_agents_triple_quote_refused|#408: a ''' in planner.md's body: rc 2 naming planner.md, no .codex created"
   "codex-setup-agents-triple-quote-verifier|case_codex_setup_agents_triple_quote_verifier|#408 kickback: a ''' in verifier.md (the LAST role): rc 2 naming verifier.md, no .codex created — proves planner/implementer's already-generated TOMLs are never installed"
   "codex-setup-rules-content|case_codex_setup_rules_content|#408: every ADVISORY-Q1 allow line present; forbidden token-list set == templates/repo-settings.json's bare deny entries (jq-derived); no @PLUGIN_BIN@ literal remains"
-  "codex-setup-rules-gated|case_codex_setup_rules_gated|#408: the gated .sh prefix_rule names and host_executable names both equal the ten listed scripts, each path <plugin>/bin/<s>, each name exists under bin/; codex-setup.sh/harness-version.sh/governance-paths.sh absent from both"
+  "codex-setup-rules-gated|case_codex_setup_rules_gated|#408: the allow-rule .sh names and host_executable names both equal the ten listed scripts, each path <plugin>/bin/<s>, each name exists under bin/; codex-setup.sh/harness-version.sh/governance-paths.sh/codex-scheduled-run.sh absent from both"
   "codex-setup-contract-agents-md|case_codex_setup_contract_agents_md|#408: a pre-existing AGENTS.md keeps its content, gains exactly one begin marker naming CLAUDE.md, no fallback key in config.toml, still one marker after a second run; --check before it pins reason=missing-pointer"
   "codex-setup-agents-md-malformed|case_codex_setup_agents_md_malformed|#408 kickback: non-exact or unpaired marker shapes (trailing text or CR on either or both markers, a prose mention of either marker, an unpaired begin) refuse (rc 2, byte-identical, tail content preserved, no .codex) and --check reports reason=malformed-pointer"
   "codex-setup-config-merge|case_codex_setup_config_merge|#408: a pre-existing config.toml with a top-level key plus a [profiles.x] table: the fallback key is inserted above the first table, both originals survive; --check before it pins reason=missing-fallback"
@@ -4287,6 +5475,31 @@ cases=(
   "codex-doctor-jq-missing|case_codex_doctor_jq_missing|#410: no jq anywhere on a closed PATH -> the Codex-specific hooks/planner-guard.sh clause on the jq FAIL, hook trust could not check"
   "codex-doctor-git-missing|case_codex_doctor_git_missing|#410: no git anywhere on a closed PATH -> the Codex-only git precheck FAILs and exits before anything else runs"
   "codex-doctor-usage|case_codex_doctor_usage|#410: --provider bogus and an unrelated unknown flag exit 2; --help exits 0 naming --provider; --provider claude is unchanged (no codex version line)"
+  "codex-sched-completed|case_codex_sched_completed|#427: a clean pass: outcome=completed on stdout and as record.txt's first line, the exact 9-element argv with the marker prompt, stdin.capture empty, the repo tree untouched outside .git, gh.log holds only issue list, the lock stays free"
+  "codex-sched-claude-pid|case_codex_sched_claude_pid|#427: CLAUDE_PID set (even to empty) refuses before any side effect: exit 2, stderr names CLAUDE_PID, no argc/gh.log/runs directory"
+  "codex-sched-stop-local|case_codex_sched_stop_local|#427: the local stop file set, with the wrapper's own production TIMEOUT/GRACE defaults (no fixture override) -> skipped-stop reason=stop, exit 0, no argc, record.txt shows timeout-seconds=14400"
+  "codex-sched-stop-unknown|case_codex_sched_stop_unknown|#427: gh fails both harness-stop.sh attempts -> skipped-stop reason=stop-unknown, exit 0, no argc"
+  "codex-sched-lock-live|case_codex_sched_lock_live|#427: a live same-host lock holder -> skipped-busy reason=live-holder, exit 0, no argc, lock files byte-identical afterwards"
+  "codex-sched-lock-stale|case_codex_sched_lock_stale|#427: a dead same-host lock holder -> completed (the launched session reclaims it), lock files byte-identical afterwards — the wrapper never touches the lock"
+  "codex-sched-lock-other-host|case_codex_sched_lock_other_host|#427: a real lock whose host file is rewritten to a foreign hostname -> skipped-busy reason=other-host, exit 0, no argc"
+  "codex-sched-lock-unreadable|case_codex_sched_lock_unreadable|#427: a real lock whose pid file is rewritten to a non-digit value -> skipped-busy reason=unreadable-holder, exit 0, no argc"
+  "codex-sched-preflight-tools|case_codex_sched_preflight_tools|#427: exactly one of codex/gh/jq missing on the combined PATH each gives preflight-failed reason=missing-tool:<name>, exit 1, no argc"
+  "codex-sched-preflight-drift|case_codex_sched_preflight_drift|#427: a hand-edited .codex/agents/planner.toml -> preflight-failed reason=codex-setup-drift, preflight.log names the drift, no argc, no gh.log (stop is never reached)"
+  "codex-sched-setup-error|case_codex_sched_setup_error|#427: codex-setup.sh replaced with a stub exiting 3 -> preflight-failed reason=codex-setup-error, no argc"
+  "codex-sched-stop-exit|case_codex_sched_stop_exit|#427: harness-stop.sh replaced with a stub exiting 2 -> preflight-failed reason=harness-stop-exit-2, no argc"
+  "codex-sched-rundir-uncreatable|case_codex_sched_rundir_uncreatable|#427: trail-blazer/runs pre-created as a regular file -> mkdir -p fails, exit 2, no argc (the same failure shape a read-only .git under Codex produces)"
+  "codex-sched-failed|case_codex_sched_failed|#427: the launched codex exits 1 -> failed reason=exit-1, stderr.log non-empty; a no-final-message run -> failed reason=no-final-message"
+  "codex-sched-unattended-stop|case_codex_sched_unattended_stop|#427: last-message.md's only line is exactly \"Unattended stop: permission-denied\" -> failed reason=unattended-stop-permission-denied; the same phrase embedded mid-line -> completed"
+  "codex-sched-died|case_codex_sched_died|#427: the launched codex is SIGKILLed -> died-mid-run reason=signal-9"
+  "codex-sched-timeout|case_codex_sched_timeout|#427: a 1s timeout against a stub that takes the default TERM action -> timed-out, watchdog-fired present, the stub pid no longer alive"
+  "codex-sched-timeout-kill|case_codex_sched_timeout_kill|#427: a stub that ignores TERM -> the kill-grace KILL ends it -> timed-out, the stub pid dead"
+  "codex-sched-wrapper-killed|case_codex_sched_wrapper_killed|#427: the wrapper process itself is sent TERM mid-run (codex hung) -> outcome=died-mid-run, exit 1, and the launched codex stub does not survive it"
+  "codex-sched-wrapper-killed-forwards-term|case_codex_sched_wrapper_killed_forwards_term|#427: the codex stub forwards TERM to its own child (models the real Node launcher) -> the wrapper's TERM-then-poll-then-KILL gives it time to react, so neither the stub nor its child survives"
+  "codex-sched-wrapper-killed-noterm|case_codex_sched_wrapper_killed_noterm|#427: the codex stub ignores TERM outright -> on_wrapper_signal's own post-grace KILL is the only thing that can end it, and does, well inside the bounded poll"
+  "codex-sched-timeout-invalid|case_codex_sched_timeout_invalid|#427: TBF_CODEX_RUN_TIMEOUT=abc/=0 and TBF_CODEX_RUN_KILL_GRACE=abc/=0 -> all four preflight-failed reason=bad-timeout, no argc"
+  "codex-sched-prune|case_codex_sched_prune|#427: 101 pre-seeded run directories plus a non-matching file and two non-matching directories (wrong shape; right shape but non-digit suffix), all sorting before every stamp -> exactly 100 stamp-shaped dirs remain after one run, the two oldest stamp dirs gone, the new run's directory present, every non-matching entry untouched"
+  "codex-sched-own-dir|case_codex_sched_own_dir|#427: a decoy directory first on PATH shadows every sibling script -> completed, the decoy's sentinel is never created — siblings resolve only from the wrapper's own directory"
+  "codex-sched-usage|case_codex_sched_usage|#427: --help exits 0 naming usage:; --bogus exits 2; outside a repo or with no git on PATH exits 2, no trail-blazer directory created"
 )
 
 matched=0

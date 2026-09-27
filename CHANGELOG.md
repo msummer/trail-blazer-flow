@@ -21,6 +21,12 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 - #371 (follow-on): `dev/mutants/cleanup-tests.json`'s `376-reopened-gate` and
   `376-reopened-field` records list `reopened-write-failure-edit`, which #371 added and both
   mutants also fail, so the post-merge mutant driver is green again. No consumer step.
+- #427: adds `bin/codex-scheduled-run.sh`, the launchd-driven wrapper for one unattended
+  `codex exec` pass of `issue-cycle` (preflight, timeout/watchdog, outcome classification, local
+  run records under `<git-common-dir>/trail-blazer/runs/`); `codex exec` stays Not supported until
+  the live gate (I4, #429). Codex/Claude Code consumers: re-copy `templates/repo-settings.json`'s
+  permissions block (or add `"Bash(codex-scheduled-run.sh:*)"` to both `permissions.allow` and
+  `permissions.deny`), then re-run `bin/codex-setup.sh` on Codex.
 - #426: Codex unattended-run rules (`docs/reference/codex.md`'s "Unattended runs (`codex exec`)"):
   a session-opening marker line, an orchestrator-side `permission-denied` escalation at any stage
   (stopping the run, never re-issuing the rejected command in another form), and a `## Denied

@@ -32,6 +32,7 @@ prefix_rule(pattern = ["git", "clean"], decision = "forbidden", justification = 
 prefix_rule(pattern = ["rm", "-rf"], decision = "forbidden", justification = "recursive force delete is a destructive footgun")
 prefix_rule(pattern = ["git", "branch", "-D", "main"], decision = "forbidden", justification = "protects the default branch")
 prefix_rule(pattern = ["git", "push", "origin", "main"], decision = "forbidden", justification = "protects the default branch")
+prefix_rule(pattern = ["codex-scheduled-run.sh"], decision = "forbidden", justification = "a scheduled Codex run is launched by launchd, never from inside a session")
 
 # --- gated: harness scripts that call gh or write .git, host_executable-pinned -----------------
 # Each pair below allows the script's bare name AND pins the match to this plugin install's own
