@@ -38,6 +38,28 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
   `--git-dir`/`--work-tree`, or a `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR` assignment — instead of
   judging it against the session checkout; a `-C` value that is lexically the session checkout
   itself is unaffected. No consumer step.
+- #403: `hooks/agent-boundary.sh` and `hooks/push-guard.sh`'s shared tokenizer now also resolves
+  past `eval`/`trap` (a quoted string argument's words), zsh's precommand modifiers
+  `noglob`/`nocorrect`/`-`/`repeat N`, and a token that normalises to empty; the two awk tokenizers
+  also handle a standalone `]]` additively (an extra pass emitting only the FIRST segment of the
+  text after each `]]`, never truncating an existing segment), closing zsh's short `if [[ cond ]]
+  cmd` form; each tail is DISJOINT from every other, ending at the next real segment break OR the
+  next standalone `]]`, whichever comes first, so resolving a command word, a git subcommand, or a
+  `.claude` write no longer scales with how much of the record remains beyond that cutoff; each
+  record is handled at most
+  DBRACKET_MAX standalone `]]` at a time, and a record carrying more denies unconditionally instead
+  of being analysed further. A tail cut short by a following `]]` also denies unconditionally when it
+  resolves to a `git … push`, including when the cut arrives mid-subcommand-search (push-guard), or
+  when its command word is `tee`/`cp`/`mv`/`cd`/`pushd` or any `sed` and no `.claude` segment appears
+  among its own available tokens (agent-boundary) — since the text on the far side of that `]]` is
+  deliberately never read, neither hook can rule out a destination or a `.claude` path it did not
+  see. `hooks/claude-dir-guard.sh`'s own `PREFIX_WORDS`
+  copy gains only the vocabulary (the unquoted
+  forms) and the `repeat`-count skip — it does not gain the `]]` handling or the empty-token skip,
+  so a quoted `eval`/`trap` argument and zsh's short `if [[ … ]] apply_patch` form remain open
+  there. New deliberate over-block: a line or segment starting `- git`/`- gh` (a markdown bullet)
+  now resolves as a command. `dev/selfcheck.sh`'s gate 1.6 ("no `eval` in `hooks/*.sh`") now exempts
+  the `PREFIX_WORDS` vocabulary line itself, since it contains the word "eval" only as data.
 - #415: `project-kickoff` and standalone `test-ratchet` gain a supervised Codex path
   (docs/reference/codex.md); not live-verified. In a new project directory, `git init` comes
   before `codex-setup.sh`.

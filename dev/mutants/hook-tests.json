@@ -417,8 +417,8 @@
       "filter": "ab-kw-",
       "edits": [
         {
-          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc\"",
-          "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash\""
+          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat\"",
+          "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash eval trap noglob nocorrect - repeat\""
         }
       ],
       "expect_fail": [
@@ -477,14 +477,217 @@
       ]
     },
     {
+      "name": "403-ab-pc-vocab",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-",
+      "edits": [
+        {
+          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat\"",
+          "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc\""
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-dash",
+        "ab-pc-deny-eval-git",
+        "ab-pc-deny-eval-lead-space",
+        "ab-pc-deny-eval-quoted-gh",
+        "ab-pc-deny-noglob",
+        "ab-pc-deny-nocorrect",
+        "ab-pc-deny-repeat",
+        "ab-pc-deny-trap-gh",
+        "ab-pc-deny-verifier-eval"
+      ]
+    },
+    {
+      "name": "403-ab-pc-repeat",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-",
+      "edits": [
+        {
+          "from": "    if (norm in prefix_set) { saw_prefix = 1; idx += (norm == \"repeat\") ? 2 : 1; continue }",
+          "to": "    if (norm in prefix_set) { saw_prefix = 1; idx++; continue }"
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-repeat"
+      ]
+    },
+    {
+      "name": "403-ab-pc-dbracket",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-",
+      "edits": [
+        {
+          "from": "  db_rest = \" \" $0 \" \"",
+          "to": "  db_rest = \"\""
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-dbracket-cap",
+        "ab-pc-deny-dbracket-disjoint",
+        "ab-pc-deny-dbracket-multiline",
+        "ab-pc-deny-dbracket-second",
+        "ab-pc-deny-dbracket-second-gh",
+        "ab-pc-deny-dbracket-sed-cut",
+        "ab-pc-deny-dbracket-sed-inplace-cut",
+        "ab-pc-deny-dbracket-tab",
+        "ab-pc-deny-short-if",
+        "ab-pc-deny-short-if-and"
+      ]
+    },
+    {
+      "name": "403-ab-pc-dbracket-truncate",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-",
+      "edits": [
+        {
+          "from": "  line = $0\n  gsub(/[;&|(){}`]/, \"\\n\", line)",
+          "to": "  line = \" \" $0 \" \"\n  gsub(/[ \\t]]][ \\t]/, \" \\n \", line)\n  gsub(/[;&|(){}`]/, \"\\n\", line)"
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-dbracket-tee-claude"
+      ]
+    },
+    {
+      "name": "403-ab-pc-dbracket-nopad",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-",
+      "edits": [
+        {
+          "from": "  db_rest = \" \" $0 \" \"",
+          "to": "  db_rest = $0"
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-dbracket-cap",
+        "ab-pc-deny-dbracket-multiline"
+      ]
+    },
+    {
+      "name": "403-ab-pc-dbracket-spaceonly",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-",
+      "edits": [
+        {
+          "from": "  while (db_go && match(db_rest, /[ \\t]]][ \\t]/)) {",
+          "to": "  while (db_go && match(db_rest, /[ ]]][ ]/)) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-dbracket-tab"
+      ]
+    },
+    {
+      "name": "403-ab-pc-dbracket-once",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-",
+      "edits": [
+        {
+          "from": "  while (db_go && match(db_rest, /[ \\t]]][ \\t]/)) {",
+          "to": "  if (db_go && match(db_rest, /[ \\t]]][ \\t]/)) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-dbracket-cap",
+        "ab-pc-deny-dbracket-second",
+        "ab-pc-deny-dbracket-second-gh"
+      ]
+    },
+    {
+      "name": "403-ab-pc-dbracket-cap",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-",
+      "edits": [
+        {
+          "from": "    if (db_n >= dbracket_max) {",
+          "to": "    if (0) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-dbracket-cap"
+      ]
+    },
+    {
+      "name": "403-ab-pc-dbracket-overlap",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-",
+      "edits": [
+        {
+          "from": "      if (match(db_tail, /[;&|(){}`]|[ \\t]]][ \\t]/) > 0) {",
+          "to": "      if (match(db_tail, /[;&|(){}`]/) > 0) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-dbracket-disjoint",
+        "ab-pc-deny-dbracket-sed-cut",
+        "ab-pc-deny-dbracket-sed-inplace-cut",
+        "ab-pc-deny-dbracket-timing"
+      ]
+    },
+    {
+      "name": "403-ab-pc-dbracket-sed-noninplace",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-",
+      "edits": [
+        {
+          "from": "      } else if (cut_flag) {\n        print \"-cut-claude-write-\"\n      }",
+          "to": "      }"
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-dbracket-sed-cut"
+      ]
+    },
+    {
+      "name": "403-ab-pc-dbracket-sed-inplace",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-",
+      "edits": [
+        {
+          "from": "        if (!found_claude && cut_flag) print \"-cut-claude-write-\"\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-dbracket-sed-inplace-cut"
+      ]
+    },
+    {
+      "name": "403-ab-pc-empty-tok",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-",
+      "edits": [
+        {
+          "from": "    if (norm == \"\") { idx++; continue }\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-eval-lead-space"
+      ]
+    },
+    {
       "name": "398-pg-kw-vocab",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
       "filter": "push-kw-",
       "edits": [
         {
-          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc\"",
-          "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash\""
+          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat\"",
+          "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash eval trap noglob nocorrect - repeat\""
         }
       ],
       "expect_fail": [
@@ -520,6 +723,205 @@
       ],
       "expect_fail": [
         "push-kw-deny-upper-git"
+      ]
+    },
+    {
+      "name": "403-pg-pc-vocab",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-pc-",
+      "edits": [
+        {
+          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat\"",
+          "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc\""
+        }
+      ],
+      "expect_fail": [
+        "push-pc-deny-dash",
+        "push-pc-deny-eval",
+        "push-pc-deny-eval-lead-space",
+        "push-pc-deny-eval-quoted",
+        "push-pc-deny-eval-split",
+        "push-pc-deny-noglob",
+        "push-pc-deny-nocorrect",
+        "push-pc-deny-repeat",
+        "push-pc-deny-trap"
+      ]
+    },
+    {
+      "name": "403-pg-pc-repeat",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-pc-",
+      "edits": [
+        {
+          "from": "    if (norm in prefix_set) { saw_prefix = 1; idx += (norm == \"repeat\") ? 2 : 1; continue }",
+          "to": "    if (norm in prefix_set) { saw_prefix = 1; idx++; continue }"
+        }
+      ],
+      "expect_fail": [
+        "push-pc-deny-repeat"
+      ]
+    },
+    {
+      "name": "403-pg-pc-dbracket",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-pc-",
+      "edits": [
+        {
+          "from": "  db_rest = \" \" $0 \" \"",
+          "to": "  db_rest = \"\""
+        }
+      ],
+      "expect_fail": [
+        "push-pc-deny-dbracket-cap",
+        "push-pc-deny-dbracket-multiline",
+        "push-pc-deny-dbracket-second",
+        "push-pc-deny-dbracket-split-push",
+        "push-pc-deny-dbracket-split-subcmd",
+        "push-pc-deny-dbracket-tab",
+        "push-pc-deny-short-if"
+      ]
+    },
+    {
+      "name": "403-pg-pc-dbracket-truncate",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-pc-",
+      "edits": [
+        {
+          "from": "  line = $0\n  gsub(/[;&|(){}`]/, \"\\n\", line)",
+          "to": "  line = \" \" $0 \" \"\n  gsub(/[ \\t]]][ \\t]/, \" \\n \", line)\n  gsub(/[;&|(){}`]/, \"\\n\", line)"
+        }
+      ],
+      "expect_fail": [
+        "push-pc-deny-dbracket-all",
+        "push-pc-deny-dbracket-refspec"
+      ]
+    },
+    {
+      "name": "403-pg-pc-dbracket-nopad",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-pc-",
+      "edits": [
+        {
+          "from": "  db_rest = \" \" $0 \" \"",
+          "to": "  db_rest = $0"
+        }
+      ],
+      "expect_fail": [
+        "push-pc-deny-dbracket-cap",
+        "push-pc-deny-dbracket-multiline"
+      ]
+    },
+    {
+      "name": "403-pg-pc-dbracket-spaceonly",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-pc-",
+      "edits": [
+        {
+          "from": "  while (db_go && match(db_rest, /[ \\t]]][ \\t]/)) {",
+          "to": "  while (db_go && match(db_rest, /[ ]]][ ]/)) {"
+        }
+      ],
+      "expect_fail": [
+        "push-pc-deny-dbracket-tab"
+      ]
+    },
+    {
+      "name": "403-pg-pc-dbracket-once",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-pc-",
+      "edits": [
+        {
+          "from": "  while (db_go && match(db_rest, /[ \\t]]][ \\t]/)) {",
+          "to": "  if (db_go && match(db_rest, /[ \\t]]][ \\t]/)) {"
+        }
+      ],
+      "expect_fail": [
+        "push-pc-deny-dbracket-cap",
+        "push-pc-deny-dbracket-second"
+      ]
+    },
+    {
+      "name": "403-pg-pc-dbracket-cap",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-pc-",
+      "edits": [
+        {
+          "from": "    if (db_n >= dbracket_max) {",
+          "to": "    if (0) {"
+        }
+      ],
+      "expect_fail": [
+        "push-pc-deny-dbracket-cap"
+      ]
+    },
+    {
+      "name": "403-pg-pc-dbracket-overlap",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-pc-",
+      "edits": [
+        {
+          "from": "      if (match(db_tail, /[;&|(){}`]|[ \\t]]][ \\t]/) > 0) {",
+          "to": "      if (match(db_tail, /[;&|(){}`]/) > 0) {"
+        }
+      ],
+      "expect_fail": [
+        "push-pc-deny-dbracket-split-push",
+        "push-pc-deny-dbracket-split-subcmd",
+        "push-pc-deny-dbracket-timing"
+      ]
+    },
+    {
+      "name": "403-pg-pc-dbracket-subcmd-open",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-pc-",
+      "edits": [
+        {
+          "from": "  if (subcmd != \"push\") {\n    if (subcmd == \"\" && cut_flag) print \"-cut-push-\"\n    return\n  }",
+          "to": "  if (subcmd != \"push\") return"
+        }
+      ],
+      "expect_fail": [
+        "push-pc-deny-dbracket-split-subcmd"
+      ]
+    },
+    {
+      "name": "403-pg-pc-empty-tok",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-pc-",
+      "edits": [
+        {
+          "from": "    if (norm == \"\") { idx++; continue }\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-pc-deny-eval-lead-space"
+      ]
+    },
+    {
+      "name": "403-pg-pc-empty-sub",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-pc-",
+      "edits": [
+        {
+          "from": "    if (normalize(tok) == \"\") { j++; continue }\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-pc-deny-eval-split"
       ]
     },
     {
@@ -1241,6 +1643,39 @@
       ],
       "expect_fail": [
         "cdg-bash-deny-leading-redirect-in-dup"
+      ]
+    },
+    {
+      "name": "403-cdg-pc-vocab",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-pc-",
+      "edits": [
+        {
+          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat\"",
+          "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-pc-deny-dash-shim",
+        "cdg-pc-deny-eval-shim",
+        "cdg-pc-deny-noglob-shim",
+        "cdg-pc-deny-repeat-shim"
+      ]
+    },
+    {
+      "name": "403-cdg-pc-repeat",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-pc-",
+      "edits": [
+        {
+          "from": "        *\" $tok \"*) saw_prefix=1; [ \"$tok\" = repeat ] && i=$((i + 1)); i=$((i + 1)); continue ;;",
+          "to": "        *\" $tok \"*) saw_prefix=1; i=$((i + 1)); continue ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-pc-deny-repeat-shim"
       ]
     },
     {
