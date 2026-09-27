@@ -103,9 +103,10 @@ rule, and otherwise leaves it to the sandbox. `templates/codex.rules` has three 
   `governance-paths.sh` are read-only (or, for `codex-setup.sh`, run once from a normal terminal —
   ADVISORY Q4) and so are never gated. `codex-scheduled-run.sh` is the one exception to the
   "every `.sh` rule is either gated or ungated-and-read-only" split above: it writes under
-  `trail-blazer/` inside `.git` and launches `codex` (which itself calls `gh`), but it is
-  `forbidden` outright rather than gated — a scheduled run must never be launched from inside a
-  session, Claude Code or Codex (see "Scheduling unattended runs (macOS)" below).
+  `trail-blazer/` inside `.git`, calls `gh` itself for its own failure-tracking step (I3, #428 —
+  see "Scheduling unattended runs (macOS)" below), and launches `codex` (which itself also calls
+  `gh`), but it is `forbidden` outright rather than gated — a scheduled run must never be launched
+  from inside a session, Claude Code or Codex.
 
 ### Script reach
 
@@ -277,7 +278,8 @@ After a successful write, `codex-setup.sh` prints three reminders:
 launchd-driven wrapper that starts one unattended `codex exec` pass of `issue-cycle`. `codex exec`
 itself stays **Not supported** until the live gate (I4, #429) flips the support-matrix row above —
 this section states the wrapper's own contract, already implemented and fixture-covered
-(`dev/doctor-tests.sh`'s `codex-sched-*` cases), independent of that live gate.
+(`dev/doctor-tests.sh`'s `codex-sched-*` cases, plus the failure-tracking step's own `codex-track-*`
+cases — I3, #428, below), independent of that live gate.
 
 **Refuses under Claude Code.** If `CLAUDE_PID` is set (even to an empty string), the wrapper exits
 2 before doing anything else — a Claude Code session must never launch a Codex run. On Claude Code
@@ -368,14 +370,55 @@ does not imply a launch happened; check `reason=` to tell the two apart.
 `bin/harness-lock.sh` and `bin/harness-stop.sh` resolve the lock and the local stop file, so every
 worktree of one checkout shares it, and it is never inside the tracked tree or committed. It holds
 `record.txt` (first line `outcome=<token>`, then `reason=`, `started-at=`, `ended-at=`,
-`exit-status=`, `timeout-seconds=`, `harness-version=`), `argv.txt`, `preflight.log`,
-`last-message.md`, `events.jsonl`, `stderr.log`, and, on a timeout, `watchdog-fired`. Every exit
-past the point the run directory exists prints exactly `outcome=<token> reason=<slug>
-record=<run dir>` as its last stdout line. `record.txt`'s first line is the stable seam a future
-durable-tracking mechanism (I3, #428) reads — this wrapper itself makes no GitHub call. After each
-run, only the newest 100 run directories (by name) are kept; deletion is bounded (`rm -f` of the
-known filenames, then `rmdir` — never `rm -rf`), and an entry whose name doesn't match the
-stamp-and-pid shape is never touched.
+`exit-status=`, `timeout-seconds=`, `harness-version=`, then, once the failure-tracking step below
+has run, `tracking=<token>` and, when an issue was involved, `tracking-issue=<n>`), `argv.txt`,
+`preflight.log`, `last-message.md`, `events.jsonl`, `stderr.log`, and, on a timeout,
+`watchdog-fired`. Every exit past the point the run directory exists prints exactly
+`outcome=<token> reason=<slug> record=<run dir>` as its last stdout line. After each run, only the
+newest 100 run directories (by name) are kept; deletion is bounded (`rm -f` of the known filenames,
+then `rmdir` — never `rm -rf`), and an entry whose name doesn't match the stamp-and-pid shape is
+never touched.
+
+**Failure tracking on GitHub (I3, #428).** Once `record.txt`'s first 7 lines are written and old
+runs pruned, `finish` runs one failure-tracking step and appends its own `tracking=` line (see
+above). `gh` is resolved once, at the top of preflight, to a single absolute path and refused if it
+is relative or its directory (or any ancestor of it) is the same file, by IDENTITY (`-ef`, never a
+text compare), as the repo toplevel or the git common dir — so a `gh` a sandboxed Codex session
+could have planted in the workspace it controls is never the one this step executes, even when its
+path is spelled with a different case or reached through a macOS firmlink than `git
+rev-parse --show-toplevel` itself reports (bash 3.2's `pwd -P` does not canonicalise either).
+
+- `completed` does nothing unless local state (below) already says `streak=failing`, in which case
+  one `gh issue comment` posts a body starting `Recovered:` and the state moves to
+  `streak=recovered`. A `completed` run with no failing streak makes no GitHub call at all.
+- `preflight-failed`/`failed`/`died-mid-run`/`timed-out`: with no tracked issue (or one that can't
+  be read back), one `gh issue create --label needs-human --label no-plan` opens a new issue and
+  records its number with `streak=failing` (the labels themselves are never created here — see
+  `bin/setup-labels.sh`). With a tracked issue still `OPEN` and `streak=failing`, nothing new is
+  posted (de-duplication — the issue title is `Scheduled Codex runs are failing`). With a tracked
+  issue `OPEN` and `streak=recovered` (failing again after a recovery), one `gh issue comment`
+  posts on it and streak moves back to `failing`. With the tracked issue `CLOSED`, a new issue is
+  opened the same way as the no-state case.
+
+State lives at `<abs git-common-dir>/trail-blazer/scheduled-failure-issue`, written atomically, as
+exactly two lines, `issue=<n>` and `streak=failing|recovered` — never inside `runs/`, so
+`prune_runs` never touches it, and never tracked or committed. The issue body and every comment are
+built only from values the wrapper itself generated — the outcome token, the reason slug, the run
+id (the run directory's own basename), the started/ended UTC timestamps, the exit status, and the
+literal path `trail-blazer/runs/<run id>/record.txt` — never `stderr.log`'s or `last-message.md`'s
+own text, a hostname, or an absolute path; a `usage-limit` hint line is added only when
+`stderr.log` exists and contains that phrase (case-insensitive), never quoting the phrase itself.
+The only `gh` subcommands this step ever runs are `issue view`, `issue create` and `issue comment`,
+each with `< /dev/null` on stdin — never `gh pr`, `gh api`, `gh label`, `issue edit` or
+`issue close`, and no label is ever removed.
+
+If `gh` can't be resolved safely, or any `gh` call itself fails, the local record and state are
+left exactly as they were, `record.txt` gets `tracking=failed:<slug>`, a line naming the slug goes
+to this wrapper's own stderr, and the whole run exits 3 instead of its usual 0/1 (see "Exit codes"
+below) — never silently. The next run retries from the same state. One slug differs:
+`tracking=failed:state-write-failed` means GitHub *was* updated but the local state file could not
+be written — the stderr line and `record.txt`'s `tracking-issue=` still name the issue, and the
+next failure can open a duplicate.
 
 **Never touches the lock.** The wrapper never calls `harness-lock.sh acquire` or `release`, and
 never removes anything under `trail-blazer/lock` — a dead same-host holder (preflight step 5) is
@@ -390,8 +433,8 @@ the stored codex pid could land on a since-reused pid instead. The poll-before-K
 the same reason it does in the watchdog itself: killing codex outright, with no time for its own
 Node launcher to forward SIGTERM to the native binary, would orphan that native child. `finish`
 itself disables the TERM/INT trap as its own first action, so a second signal arriving while it is
-still writing `record.txt` or pruning can't re-enter and corrupt the outcome or exit code that
-#428 will read.
+still writing `record.txt`, pruning, or running the failure-tracking step (I3, #428) can't re-enter
+and corrupt the outcome or exit code being committed.
 
 **Env vars:** `TBF_CODEX_RUN_TIMEOUT` (seconds, default 14400) and `TBF_CODEX_RUN_KILL_GRACE`
 (seconds, default 30).
@@ -399,7 +442,9 @@ still writing `record.txt` or pruning can't re-enter and corrupt the outcome or 
 **Exit codes:** 0 for `completed`/`skipped-stop`/`skipped-busy`; 1 for
 `preflight-failed`/`failed`/`died-mid-run`/`timed-out`; 2 for a usage or environment error with no
 run record at all (`CLAUDE_PID` set, a bad argument, not inside a git checkout, git missing, or the
-run directory couldn't be created).
+run directory couldn't be created); 3 when the outcome above was recorded but the failure-tracking
+step (I3, #428) itself could not reach GitHub or persist its own state — see "Failure tracking on
+GitHub" above. 3 always overrides 0/1 for that run.
 
 **The LaunchAgent (maintainer action, not live-verified until I4's U8).** A plist naming the
 wrapper's absolute path, run on an interval. `PLUGIN_ROOT`, `REPO_TOPLEVEL`, `CODEX_DIR`, `GH_DIR`,
@@ -502,8 +547,30 @@ line, and a stale rules file gives `preflight-failed reason=codex-setup-drift` i
   respects `StandardInPath /dev/null` and the `StartInterval` — is not live-verified until I4's U8
   (#429).
 - `finish`'s own TERM/INT-disabling first action (see above) is not covered by a dedicated fixture:
-  hitting the exact window while `finish` is writing `record.txt` or pruning deterministically, from
-  outside the process, was not found to be practical to force in a fixture.
+  hitting the exact window while `finish` is writing `record.txt`, pruning, or tracking
+  deterministically, from outside the process, was not found to be practical to force in a fixture.
+- A duplicate tracking issue can appear if `gh issue create` (I3, #428) succeeds but the wrapper
+  can't parse the created issue number back out of `gh`'s own output, or if the wrapper is
+  SIGKILLed between the create and the local state write.
+- A deleted or transferred tracked issue makes every subsequent failing run's `gh issue view` fail,
+  giving `tracking=failed:view-failed` and exit 3 until the maintainer deletes
+  `trail-blazer/scheduled-failure-issue` by hand.
+- A recovery comment (I3, #428) can land on a tracked issue the maintainer has since closed by
+  hand — the wrapper never re-checks state before posting a recovery comment.
+- `launchctl bootout` of a run that is still IN PROGRESS is a TERM/INT to the wrapper (see "If the
+  wrapper itself is killed" above), classified `died-mid-run reason=wrapper-signal-<n>` — a tracked
+  failure like any other, so it opens or comments on a `needs-human` issue (I3, #428) the same as a
+  genuine failure would.
+- Neither `gh issue view`/`issue create`/`issue comment` (I3, #428) nor `harness-stop.sh`'s own
+  preflight `gh issue list` query is time-bounded. `finish`'s own `trap '' TERM INT` (see above) is
+  a signal disposition, and an ignored disposition is inherited across `exec` by every child
+  process — so `gh` itself also ignores TERM once tracking has started, the same as the wrapper
+  does. This is not merely "launchd will eventually time it out": `ExitTimeOut` only applies once
+  launchd is already trying to STOP a job (for example on a `bootout`), not to a job it is simply
+  waiting on to finish on its own — the ordinary case here. A hung `gh` during tracking therefore
+  keeps the wrapper (and that `gh` process) alive until a maintainer intervenes by hand (SIGKILL,
+  which cannot be ignored, or a reboot), and launchd never starts the next `StartInterval`. The
+  follow-up filed alongside this issue covers bounding these calls in time.
 
 ## Removing the Codex layer
 
@@ -894,10 +961,13 @@ below applies.
 
   followed by the rejected command and the rejection text, quoted verbatim.
   - **Honest limit.** When the rejected command is itself the escalation's own `gh issue
-    comment` / `gh issue edit`, or the lock's `release`, no durable record is possible — the final
-    message above is the only record. `bin/codex-scheduled-run.sh` (#427) classifies this as
-    `failed reason=unattended-stop-permission-denied` and records it locally (see "Scheduling
-    unattended runs (macOS)" below); a durable GitHub-facing surface (#428) is not yet built.
+    comment` / `gh issue edit`, or the lock's `release`, no durable record from INSIDE the session
+    is possible — the final message above is the only record the session itself leaves.
+    `bin/codex-scheduled-run.sh` (#427) classifies this as `failed
+    reason=unattended-stop-permission-denied` and records it locally (see "Scheduling unattended
+    runs (macOS)" below); that same wrapper's own failure-tracking step (I3, #428) then opens or
+    comments on a `needs-human` issue for it from OUTSIDE the sandbox, the same as any other
+    tracked failure outcome.
 
 **Unattended (Codex) block.** On an unattended run, prefix every dispatch with this block too,
 immediately after the canary block above (see "Dispatch" above), verbatim:

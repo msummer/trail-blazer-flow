@@ -115,7 +115,15 @@
 # failed, died-mid-run, timed-out, and the `Unattended stop: permission-denied` whole-line match),
 # and the run-record pruning (newest 100 kept, bounded deletion, non-matching entries untouched) —
 # plus the narrowed `codex-setup-rules-gated` case this addition requires (the gated allow-rule
-# names no longer include a `.sh` FORBIDDEN rule by coincidence).
+# names no longer include a `.sh` FORBIDDEN rule by coincidence), and (I3, #428) the wrapper's own
+# de-duplicated needs-human tracking issue: gh pinned to one absolute path outside the repo toplevel
+# and the git common dir (refused otherwise), the create/repeat/closed-reuse/recovery/
+# failing-after-recovery state transitions against a subcommand-aware stub `gh`
+# (build_stub_sched_gh's "ok" and "list-only" modes), that the issue body and every comment are
+# built only from wrapper-generated fields (never stderr text, a hostname, or an absolute path),
+# that a tracking failure appends `tracking=failed:<slug>` and exits 3 instead of the ordinary 0/1,
+# and that every gh call the tracking step makes is limited to `issue view`/`issue create`/
+# `issue comment`.
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -3468,7 +3476,10 @@ dead_pid_sched() {
 # Every mode first records $$ (DIR/codex.pid), $# (DIR/argc), each argument (DIR/arg.<i>), and the
 # full stdin it received (DIR/stdin.capture), then acts on MODE: complete (writes a run-id plus
 # summary line to the file named after "-o", echoes one JSON line, exit 0); fail (stderr line, exit
-# 1); nomsg (exit 0, never writes the -o file); denied (the -o file's only line is exactly
+# 1); fail-usage (I3, #428's redaction fixture: a fabricated "usage limit" stderr line carrying a
+# hostname sentinel, plus a second, separately-sentinelled stderr line, exit 1 — proves the
+# failure-tracking body never quotes either line verbatim); nomsg (exit 0, never writes the -o
+# file); denied (the -o file's only line is exactly
 # "Unattended stop: permission-denied"); denied-midline (the same phrase embedded mid-line); die
 # (kills itself with SIGKILL); hang/hang-noterm (exec the REAL sleep, resolved via `command -v` at
 # BUILD time in this process's own PATH, for 20s — hang-noterm first sets TERM's disposition to
@@ -3532,6 +3543,13 @@ case "$mode" in
     echo "stub: codex fail mode" >&2
     exit 1
     ;;
+  fail-usage)
+    {
+      printf 'stub: You'"'"'ve hit your usage limit. host=TRACK-SENTINEL-HOST path=%s\n' "$dir"
+      printf 'SECRET-STDERR-SENTINEL\n'
+    } >&2
+    exit 1
+    ;;
   nomsg)
     exit 0
     ;;
@@ -3566,9 +3584,40 @@ STUBEOF
   chmod +x "$dir/codex"
 }
 
-# build_stub_sched_gh DIR MODE — writes DIR/gh, logging "$*" to DIR/gh.log on every call. ok prints
-# "[]" (a valid empty JSON array — satisfies harness-stop.sh's own is_json_array shape check) and
-# exits 0; fail exits 1 (no output).
+# build_stub_sched_gh DIR MODE — writes DIR/gh. Every call appends "$*" to DIR/gh.log. Every
+# RECOGNISED "issue view"/"issue create"/"issue comment" call (never "issue list", and never an
+# unrecognised shape) ALSO captures its own stdin verbatim to DIR/gh.stdin.<n> (its own 1-based
+# sequence number among calls of that kind) BEFORE doing anything else with it — see
+# expect_track_stdin_empty below, which asserts every such capture is empty, proving the
+# failure-tracking step's own gh calls (I3, #428) all get `< /dev/null`. "issue list" is
+# DELIBERATELY never captured here: it is harness-stop.sh's own un-redirected preflight query, so
+# it legitimately inherits the wrapper's real stdin (the run_sched sentinel, fed from a FILE, whose
+# read position is shared across every process that inherits fd 0) — draining it here would
+# silently mask a later, genuinely mutated call's own leak on that same shared fd, since a file
+# (unlike a pipe) has only one read position for every reader that shares its underlying open file
+# description. Every call also appends, when it
+# matches a recognised shape, one summary line to DIR/gh.calls ("issue list", "issue view <n>",
+# "issue create labels=<comma-joined>", or "issue comment <n>", or "unexpected" for anything else)
+# — the failure-tracking step's own only allowed calls. Each issue create/comment also
+# writes its own --body value verbatim to DIR/gh.body.<seq> (seq from DIR/gh.body.count), so a case
+# can inspect exactly what the wrapper sent without re-deriving it from gh.log's shell-quoted form.
+#   ok — subcommand-aware, standing in for a real `gh`:
+#     issue list ... -> "[]" (a valid empty JSON array — satisfies harness-stop.sh's own
+#       is_json_array shape check), exit 0, any trailing args accepted (harness-stop.sh's own query
+#       carries several).
+#     issue view <digits> --json state --jq .state (exactly those 7 args) -> "CLOSED" if
+#       DIR/gh.closed.<n> exists, else "OPEN", exit 0.
+#     issue create, accepting only --title X / --body Y / --label L pairs in any order -> prints
+#       "https://example.invalid/o/r/issues/<n>" with <n> read from DIR/gh.next (default 101, then
+#       incremented there), exit 0.
+#     issue comment <digits> --body Y (exactly those 5 args) -> exit 0, no stdout.
+#     anything else -> logs "unexpected" to gh.calls, exit 1.
+#   fail — unchanged: exit 1, no output, gh.calls untouched (a case using this mode already means
+#     "gh is unusable", not "gh answered something the tracking step must reject").
+#   list-only — issue list still succeeds exactly as under ok; every other call prints
+#     "stub: gh tracking failure" to stderr and exits 1 (gh.calls untouched on that failing call) —
+#     for a fixture that means to let harness-stop.sh's own preflight query through while making the
+#     failure-tracking step's own gh calls fail.
 build_stub_sched_gh() {
   local dir="$1" mode="$2"
   mkdir -p "$dir"
@@ -3578,15 +3627,113 @@ build_stub_sched_gh() {
     printf 'mode=%q\n' "$mode"
     cat <<'STUBEOF'
 printf '%s\n' "$*" >> "$dir/gh.log"
+
+record_call() {
+  printf '%s\n' "$1" >> "$dir/gh.calls"
+}
+record_body() {
+  local f seq
+  f="$dir/gh.body.count"
+  seq="$(cat "$f" 2>/dev/null || true)"
+  case "$seq" in ''|*[!0-9]*) seq=0 ;; esac
+  seq=$((seq + 1))
+  printf '%s' "$seq" > "$f"
+  printf '%s' "$1" > "$dir/gh.body.$seq"
+}
+record_stdin() {
+  local f seq
+  f="$dir/gh.stdin-count"
+  seq="$(cat "$f" 2>/dev/null || true)"
+  case "$seq" in ''|*[!0-9]*) seq=0 ;; esac
+  seq=$((seq + 1))
+  printf '%s' "$seq" > "$f"
+  cat > "$dir/gh.stdin.$seq"
+}
+unexpected_call() {
+  record_call "unexpected"
+  exit 1
+}
+
 case "$mode" in
-  ok)
-    printf '%s\n' '[]'
-    exit 0
-    ;;
   fail)
     exit 1
     ;;
 esac
+
+sub1="${1:-}"
+sub2="${2:-}"
+
+if [ "$sub1" = issue ] && [ "$sub2" = list ]; then
+  record_call "issue list"
+  printf '%s\n' '[]'
+  exit 0
+fi
+
+case "$mode" in
+  list-only)
+    echo "stub: gh tracking failure" >&2
+    exit 1
+    ;;
+esac
+
+if [ "$sub1" = issue ] && [ "$sub2" = view ]; then
+  record_stdin
+  if [ "$#" -eq 7 ] && [ "$4" = "--json" ] && [ "$5" = state ] && [ "$6" = "--jq" ] && [ "$7" = ".state" ]; then
+    case "$3" in
+      ''|*[!0-9]*) unexpected_call ;;
+    esac
+    record_call "issue view $3"
+    if [ -f "$dir/gh.closed.$3" ]; then
+      printf '%s\n' CLOSED
+    else
+      printf '%s\n' OPEN
+    fi
+    exit 0
+  fi
+  unexpected_call
+fi
+
+if [ "$sub1" = issue ] && [ "$sub2" = comment ]; then
+  record_stdin
+  if [ "$#" -eq 5 ] && [ "$4" = "--body" ]; then
+    case "$3" in
+      ''|*[!0-9]*) unexpected_call ;;
+    esac
+    record_call "issue comment $3"
+    record_body "$5"
+    exit 0
+  fi
+  unexpected_call
+fi
+
+if [ "$sub1" = issue ] && [ "$sub2" = create ]; then
+  record_stdin
+  shift 2
+  title=""
+  body=""
+  labels=""
+  okargs=true
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --title) title="${2:-}"; shift 2 ;;
+      --body) body="${2:-}"; shift 2 ;;
+      --label) labels="${labels:+$labels,}${2:-}"; shift 2 ;;
+      *) okargs=false; break ;;
+    esac
+  done
+  if ! $okargs || [ -z "$title" ] || [ -z "$body" ]; then
+    unexpected_call
+  fi
+  record_call "issue create labels=$labels"
+  record_body "$body"
+  n="$(cat "$dir/gh.next" 2>/dev/null || true)"
+  case "$n" in ''|*[!0-9]*) n=101 ;; esac
+  echo $((n + 1)) > "$dir/gh.next"
+  printf 'https://example.invalid/o/r/issues/%s\n' "$n"
+  exit 0
+fi
+
+unexpected_call
 STUBEOF
   } > "$dir/gh"
   chmod +x "$dir/gh"
@@ -3692,6 +3839,80 @@ expect_record_line() {
   grep -qxF -- "$1" "$rec" || { __ok=0; __why="${__why}missing (record.txt, whole line): $1\n"; }
 }
 
+# sched_out_rd — prints the run directory straight off $sched_out's own summary line
+# (${sched_out##*record=}), rather than sched_run_dir's lexically-newest pick — needed by a
+# codex-track-* case that creates more than one run directory inside a single wall-clock second,
+# where lexical order alone can't tell which run just finished.
+sched_out_rd() {
+  printf '%s' "${sched_out##*record=}"
+}
+
+# seed_track_state N STREAK (I3, #428) — writes $sched_common/trail-blazer/scheduled-failure-issue
+# directly (bypassing the wrapper), so a case can start from a pre-existing tracked issue.
+seed_track_state() {
+  local n="$1" streak="$2"
+  mkdir -p "$sched_common/trail-blazer"
+  {
+    printf 'issue=%s\n' "$n"
+    printf 'streak=%s\n' "$streak"
+  } > "$sched_common/trail-blazer/scheduled-failure-issue"
+}
+
+# expect_track_calls_only_allowed [DIR] (I3, #428) — every line in DIR/gh.calls (default
+# $sched_stub) starts with "issue list", "issue view", "issue create" or "issue comment" — the
+# failure-tracking step's own only allowed gh subcommands. Missing DIR/gh.calls passes (a case
+# whose gh guard refuses before ever calling gh writes no gh.calls at all). Reads the file's
+# content into a variable first, then checks it via a here-string — never a pipe into grep.
+expect_track_calls_only_allowed() {
+  local dir="${1:-$sched_stub}" calls content bad
+  calls="$dir/gh.calls"
+  [ -f "$calls" ] || return 0
+  content="$(cat "$calls")"
+  bad="$(grep -vE '^(issue list|issue view|issue create|issue comment)' <<<"$content" || true)"
+  [ -z "$bad" ] || { __ok=0; __why="${__why}gh.calls has a disallowed call: $bad\n"; }
+}
+
+# expect_track_stdin_empty [DIR] (I3, #428) — every DIR/gh.stdin.<n> file is empty. Only a
+# recognised "issue view"/"issue create"/"issue comment" call is ever captured there at all (see
+# build_stub_sched_gh's own header for why "issue list" is deliberately never captured), so every
+# file this finds IS one of the failure-tracking step's own calls — proving each one gets
+# `< /dev/null`. Missing DIR/gh.stdin.1 passes (a case whose gh guard refuses before ever calling
+# gh has nothing to check).
+expect_track_stdin_empty() {
+  local dir="${1:-$sched_stub}" f content
+  for f in "$dir"/gh.stdin.*; do
+    [ -f "$f" ] || continue
+    content="$(cat "$f")"
+    [ -z "$content" ] || { __ok=0; __why="${__why}$f is non-empty — < /dev/null was not used on that call\n"; }
+  done
+}
+
+# expect_run_record_line RUNDIR LINE (I3, #428) — like expect_record_line, but scoped to an
+# explicit run directory rather than sched_run_dir's lexically-newest pick, needed by a multi-run
+# codex-track-* case where two runs can land in the same wall-clock second (see sched_out_rd above).
+expect_run_record_line() {
+  local rd="$1" needle="$2"
+  needle_required expect_run_record_line "$needle" || return 0
+  local rec="$rd/record.txt"
+  if [ -z "$rd" ] || [ ! -f "$rec" ]; then
+    __ok=0; __why="${__why}record.txt missing (run dir: '$rd')\n"
+    return
+  fi
+  grep -qxF -- "$needle" "$rec" || { __ok=0; __why="${__why}missing (record.txt, whole line): $needle\n"; }
+}
+
+# expect_track_state_line LINE (I3, #428) — a whole-line match against
+# $sched_common/trail-blazer/scheduled-failure-issue.
+expect_track_state_line() {
+  needle_required expect_track_state_line "$1" || return 0
+  local f="$sched_common/trail-blazer/scheduled-failure-issue"
+  if [ ! -f "$f" ]; then
+    __ok=0; __why="${__why}tracking state file missing\n"
+    return
+  fi
+  grep -qxF -- "$1" "$f" || { __ok=0; __why="${__why}missing (tracking state, whole line): $1\n"; }
+}
+
 # codex-sched-completed — a clean pass: exit 0, outcome=completed (both on stdout and as
 # record.txt's first line), the exact 9-element argv (exec --cd <toplevel> -s workspace-write
 # --json -o <run dir>/last-message.md <prompt>) captured by the stub, no forbidden flag or
@@ -3785,6 +4006,10 @@ case_codex_sched_completed() {
     *"state=free"*) : ;;
     *) __ok=0; __why="${__why}lock not free after the run: $lock_status\n" ;;
   esac
+
+  # I3, #428: a completed run with no failing streak makes no tracking state and no tracking call.
+  expect_no_file "$sched_common/trail-blazer/scheduled-failure-issue"
+  expect_record_line "tracking=none"
 }
 
 # codex-sched-claude-pid — CLAUDE_PID set, even to an empty string, refuses before any other side
@@ -3949,8 +4174,13 @@ case_codex_sched_lock_unreadable() {
 # codex-sched-preflight-tools — three sub-cases, each with exactly one tool absent from the
 # combined PATH: (a) a closed farm excluding jq, plus a stub dir with both codex and gh ->
 # missing-tool:jq; (b) a stub dir with only gh, plus a full closed farm (jq present, codex/gh never
-# in any farm) -> missing-tool:codex; (c) a stub dir with only codex, plus a full closed farm ->
-# missing-tool:gh. Each: preflight-failed, exit 1, no argc.
+# in any farm) -> missing-tool:codex; (c) a stub dir with only codex, plus a full closed farm (never
+# gh, per mk_farm's own tool list) -> missing-tool:gh. Each: preflight-failed, no argc; (a) and (b)
+# still exit 1 (gh IS on their own combined PATH, so I3/#428's failure-tracking step succeeds —
+# create or repeat, the three sub-cases share one fixture's tracking state — without changing the
+# exit code); (c) exits 3 instead, with record.txt's own tracking=failed:gh-not-found line — gh
+# itself being the absent tool means the tracking step's own gh guard refuses before ever calling
+# gh.
 case_codex_sched_preflight_tools() {
   mk_sched sched-preflight-tools
   build_stub_sched_codex "$sched_stub" complete
@@ -3976,14 +4206,17 @@ case_codex_sched_preflight_tools() {
   build_stub_sched_codex "$codex_only" complete
   farm="$(mk_farm "$tmpbase/sched-farm-full-2")"
   run_sched "$codex_only:$farm" --
-  expect_rc 1
+  expect_rc 3
   expect_sched_out "outcome=preflight-failed reason=missing-tool:gh"
+  expect_record_line "tracking=failed:gh-not-found"
 }
 
 # codex-sched-preflight-drift — a hand-edited .codex/agents/planner.toml (drift): preflight-failed
-# reason=codex-setup-drift, preflight.log names the exact drift= line, no argc, and no gh.log at
-# all — pinning that harness-stop.sh (which is what would call gh) is never reached once
-# codex-setup.sh --check has already failed.
+# reason=codex-setup-drift, preflight.log names the exact drift= line, no argc, and gh.calls holds
+# no "issue list" line at all — pinning that harness-stop.sh (the only caller of that gh subcommand)
+# is never reached once codex-setup.sh --check has already failed. (I3, #428: this outcome is a
+# tracked failure too, so gh.calls does get one "issue create" line now — expect_no_file on gh.log
+# itself would wrongly fail on that, hence the gh.calls-scoped check instead.)
 case_codex_sched_preflight_drift() {
   mk_sched sched-preflight-drift
   build_stub_sched_codex "$sched_stub" complete
@@ -3995,7 +4228,10 @@ case_codex_sched_preflight_drift() {
   expect_rc 1
   expect_sched_out "outcome=preflight-failed reason=codex-setup-drift"
   expect_no_file "$sched_stub/argc"
-  expect_no_file "$sched_stub/gh.log"
+  if [ -f "$sched_stub/gh.calls" ]; then
+    grep -qxF -- "issue list" "$sched_stub/gh.calls" \
+      && { __ok=0; __why="${__why}gh.calls has an issue list call — harness-stop.sh was reached\n"; }
+  fi
 
   local rd
   rd="$(sched_run_dir)"
@@ -4587,6 +4823,541 @@ ERR: $sched_err"
   doctor_out="OUT: $sched_out
 ERR: $sched_err"
   expect_rc 2
+}
+
+# --- codex scheduled run failure tracking (I3, #428) --------------------------------------------
+# bin/codex-scheduled-run.sh's own de-duplicated needs-human tracking issue: every case here uses
+# build_stub_sched_gh's subcommand-aware "ok"/"list-only" modes (never harness-stop.sh's own
+# "issue list" call as a stand-in for the failure-tracking step's own calls) and is named
+# codex-track-* — outside the codex-sched- substring the #427 mutant records filter on (plan
+# ADVISORY Q8), so those records' measured sets aren't widened by anything added here.
+
+# codex-track-first-failure — a first failure with no prior tracking state: exactly one
+# `issue create labels=needs-human,no-plan` and no `issue view`, tracking state issue=101/
+# streak=failing, record.txt's tracking=created/tracking-issue=101, and an issue body built only
+# from wrapper-generated fields (outcome, run id, record path, exit status) with no usage-limit
+# hint (the codex stub's own stderr never mentions one).
+# mutant:428-tracking-stdin-inherited — bin: track_create's own `issue create` call's trailing
+#   `< /dev/null` dropped. expect_track_stdin_empty catches the run_sched sentinel reaching any
+#   case's create call in this stub's "ok" mode; the "list-only" mode never captures stdin, since it
+#   fails every tracking call before the recognised-call handler.
+case_codex_track_first_failure() {
+  mk_sched track-first-failure
+  build_stub_sched_codex "$sched_stub" fail
+  build_stub_sched_gh "$sched_stub" ok
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  expect_sched_out "outcome=failed reason=exit-1"
+
+  local rd
+  rd="$(sched_out_rd)"
+  [ "$(head -1 "$rd/record.txt" 2>/dev/null)" = "outcome=failed" ] \
+    || { __ok=0; __why="${__why}record.txt's first line is not outcome=failed\n"; }
+  expect_run_record_line "$rd" "tracking=created"
+  expect_run_record_line "$rd" "tracking-issue=101"
+  expect_track_state_line "issue=101"
+  expect_track_state_line "streak=failing"
+  expect_track_calls_only_allowed
+  expect_track_stdin_empty
+
+  # gh.calls also carries one "issue list" line from harness-stop.sh's own preflight query, so the
+  # assertion below counts the tracking step's own "issue create" call by pattern, not by comparing
+  # the whole file.
+  [ "$(grep -Fxc 'issue create labels=needs-human,no-plan' "$sched_stub/gh.calls" 2>/dev/null)" = "1" ] \
+    || { __ok=0; __why="${__why}gh.calls expected exactly one issue create call: $(cat "$sched_stub/gh.calls" 2>/dev/null)\n"; }
+  [ "$(grep -Fc 'issue view' "$sched_stub/gh.calls" 2>/dev/null)" = "0" ] \
+    || { __ok=0; __why="${__why}gh.calls unexpectedly has an issue view call\n"; }
+
+  local id body
+  id="${rd##*/}"
+  body="$(cat "$sched_stub/gh.body.1" 2>/dev/null)"
+  case "$body" in
+    *'Outcome: `failed`'*) : ;;
+    *) __ok=0; __why="${__why}issue body missing Outcome: \`failed\`\n" ;;
+  esac
+  case "$body" in
+    *"Run id: \`$id\`"*) : ;;
+    *) __ok=0; __why="${__why}issue body missing the run id\n" ;;
+  esac
+  case "$body" in
+    *"trail-blazer/runs/$id/record.txt"*) : ;;
+    *) __ok=0; __why="${__why}issue body missing the record path\n" ;;
+  esac
+  case "$body" in
+    *'Exit status: `1`'*) : ;;
+    *) __ok=0; __why="${__why}issue body missing Exit status: \`1\`\n" ;;
+  esac
+  case "$body" in
+    *usage-limit*) __ok=0; __why="${__why}issue body unexpectedly carries a usage-limit hint\n" ;;
+  esac
+}
+
+# codex-track-repeat — a second failure while the tracked issue is still OPEN and streak=failing:
+# exactly one `issue view 101`, no second create or comment, tracking state byte-identical,
+# record.txt tracking=repeat — the de-duplication the issue title asks for.
+# mutant:428-transition-dropped (required) — bin: the transition
+#   `if [ "$st_streak" = failing ]; then` -> `if false; then`. Killed here: the repeat run wrongly
+#   posts a second comment instead of doing nothing.
+case_codex_track_repeat() {
+  mk_sched track-repeat
+  build_stub_sched_codex "$sched_stub" fail
+  build_stub_sched_gh "$sched_stub" ok
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  local rd1
+  rd1="$(sched_out_rd)"
+  expect_run_record_line "$rd1" "tracking=created"
+
+  local state_before
+  state_before="$(cat "$sched_common/trail-blazer/scheduled-failure-issue" 2>/dev/null)"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  local rd2
+  rd2="$(sched_out_rd)"
+  expect_run_record_line "$rd2" "tracking=repeat"
+
+  local state_after
+  state_after="$(cat "$sched_common/trail-blazer/scheduled-failure-issue" 2>/dev/null)"
+  [ "$state_before" = "$state_after" ] \
+    || { __ok=0; __why="${__why}tracking state changed on a repeat failure\n"; }
+
+  # gh.calls also carries one "issue list" line per run from harness-stop.sh's own preflight query
+  # — the assertions below count the tracking step's own calls by pattern, across both runs.
+  [ "$(grep -Fxc 'issue view 101' "$sched_stub/gh.calls" 2>/dev/null)" = "1" ] \
+    || { __ok=0; __why="${__why}gh.calls expected exactly one issue view 101 call: $(cat "$sched_stub/gh.calls" 2>/dev/null)\n"; }
+  [ "$(grep -Fc 'issue create' "$sched_stub/gh.calls" 2>/dev/null)" = "1" ] \
+    || { __ok=0; __why="${__why}gh.calls expected exactly one issue create call total (no second create on repeat)\n"; }
+  [ "$(grep -Fc 'issue comment' "$sched_stub/gh.calls" 2>/dev/null)" = "0" ] \
+    || { __ok=0; __why="${__why}gh.calls unexpectedly has an issue comment call\n"; }
+
+  expect_track_calls_only_allowed
+  expect_track_stdin_empty
+}
+
+# codex-track-closed — a failure whose tracked issue has since been closed: a new issue is created
+# (issue=102) instead of commenting on the closed one.
+# mutant:428-closed-reuse — bin: `OPEN)` -> `OPEN|CLOSED)`. Killed here: the run wrongly comments on
+#   the closed issue instead of creating a new one.
+case_codex_track_closed() {
+  mk_sched track-closed
+  build_stub_sched_codex "$sched_stub" fail
+  build_stub_sched_gh "$sched_stub" ok
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  expect_track_state_line "issue=101"
+
+  : > "$sched_stub/gh.closed.101"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  local rd2
+  rd2="$(sched_out_rd)"
+  expect_run_record_line "$rd2" "tracking=created"
+  expect_run_record_line "$rd2" "tracking-issue=102"
+  expect_track_state_line "issue=102"
+  expect_track_state_line "streak=failing"
+
+  expect_track_calls_only_allowed
+  expect_track_stdin_empty
+}
+
+# codex-track-recovery — fail (creates 101); complete (one issue comment 101 starting "Recovered:",
+# streak=recovered, tracking=recovered); complete again (no new gh call at all, tracking=none); fail
+# again (issue view then issue comment 101 carrying a "Failing again after a recovery." lead, no
+# create, streak=failing, tracking=commented).
+# mutant:428-recovery-state-kept — bin: the post-recovery `write_track_state "$st_issue" recovered`
+#   -> `:`. Killed here: the third run (complete, streak still "failing" in the on-disk state) wrongly
+#   posts another recovery comment instead of making no gh call.
+case_codex_track_recovery() {
+  mk_sched track-recovery
+
+  build_stub_sched_codex "$sched_stub" fail
+  build_stub_sched_gh "$sched_stub" ok
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  local rd1
+  rd1="$(sched_out_rd)"
+  expect_run_record_line "$rd1" "tracking=created"
+  expect_track_state_line "issue=101"
+  expect_track_state_line "streak=failing"
+
+  build_stub_sched_codex "$sched_stub" complete
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 0
+  local rd2
+  rd2="$(sched_out_rd)"
+  expect_run_record_line "$rd2" "tracking=recovered"
+  expect_track_state_line "issue=101"
+  expect_track_state_line "streak=recovered"
+  # gh.calls also carries one "issue list" line per run from harness-stop.sh's own preflight query
+  # — the assertions below count the tracking step's own calls by pattern, cumulative across runs.
+  [ "$(grep -Fxc 'issue comment 101' "$sched_stub/gh.calls" 2>/dev/null)" = "1" ] \
+    || { __ok=0; __why="${__why}gh.calls expected exactly one issue comment 101 call after recovery: $(cat "$sched_stub/gh.calls" 2>/dev/null)\n"; }
+  [ "$(grep -Fc 'issue view' "$sched_stub/gh.calls" 2>/dev/null)" = "0" ] \
+    || { __ok=0; __why="${__why}gh.calls unexpectedly has an issue view call after the first recovery\n"; }
+  local body2
+  body2="$(cat "$sched_stub/gh.body.2" 2>/dev/null)"
+  case "$body2" in
+    "Recovered:"*) : ;;
+    *) __ok=0; __why="${__why}recovery comment body does not start with Recovered:: $body2\n" ;;
+  esac
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 0
+  local rd3
+  rd3="$(sched_out_rd)"
+  expect_run_record_line "$rd3" "tracking=none"
+  [ "$(grep -Fxc 'issue comment 101' "$sched_stub/gh.calls" 2>/dev/null)" = "1" ] \
+    || { __ok=0; __why="${__why}a streak-free completed run made a new tracking gh call\n"; }
+
+  build_stub_sched_codex "$sched_stub" fail
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  local rd4
+  rd4="$(sched_out_rd)"
+  expect_run_record_line "$rd4" "tracking=commented"
+  expect_track_state_line "issue=101"
+  expect_track_state_line "streak=failing"
+  [ "$(grep -Fxc 'issue view 101' "$sched_stub/gh.calls" 2>/dev/null)" = "1" ] \
+    || { __ok=0; __why="${__why}gh.calls expected exactly one issue view 101 call: $(cat "$sched_stub/gh.calls" 2>/dev/null)\n"; }
+  [ "$(grep -Fxc 'issue comment 101' "$sched_stub/gh.calls" 2>/dev/null)" = "2" ] \
+    || { __ok=0; __why="${__why}gh.calls expected exactly 2 issue comment 101 calls total\n"; }
+  [ "$(grep -Fc 'issue create' "$sched_stub/gh.calls" 2>/dev/null)" = "1" ] \
+    || { __ok=0; __why="${__why}a second issue create happened after a recovery\n"; }
+  local body4
+  body4="$(cat "$sched_stub/gh.body.3" 2>/dev/null)"
+  case "$body4" in
+    *"Failing again after a recovery."*) : ;;
+    *) __ok=0; __why="${__why}post-recovery comment body missing the lead line\n" ;;
+  esac
+  case "$body4" in
+    *"Outcome:"*) : ;;
+    *) __ok=0; __why="${__why}post-recovery comment body missing Outcome:\n" ;;
+  esac
+
+  expect_track_calls_only_allowed
+  expect_track_stdin_empty
+}
+
+# codex-track-gh-fail — gh answers only "issue list" (the list-only stub); every failure-tracking
+# call itself fails: (a) a first failure's own `issue create` -> tracking=failed:create-failed, exit
+# 3, no state file, record.txt keeps outcome=failed first, a stderr line names the failure, and the
+# last stdout line is still the outcome=/reason=/record= summary; (b) a seeded failing streak plus a
+# completed run's own `issue comment` -> tracking=failed:comment-failed, exit 3, state byte-
+# identical; (c) a seeded failing streak plus a failure's own `issue view` -> tracking=
+# failed:view-failed, exit 3, no create call.
+# mutant:428-gh-fail-silent — bin: `case "$tracking" in failed:*) code=3 ;; esac` -> `:`, so a
+#   run whose tracking value is `failed:*` keeps its ordinary 0/1 exit code instead of 3.
+case_codex_track_gh_fail() {
+  mk_sched track-gh-fail-create
+  build_stub_sched_codex "$sched_stub" fail
+  build_stub_sched_gh "$sched_stub" list-only
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 3
+  local rd
+  rd="$(sched_out_rd)"
+  [ "$(head -1 "$rd/record.txt" 2>/dev/null)" = "outcome=failed" ] \
+    || { __ok=0; __why="${__why}record.txt's first line is not outcome=failed\n"; }
+  expect_run_record_line "$rd" "tracking=failed:create-failed"
+  expect "tracking failed"
+  local lastline
+  lastline="$(printf '%s\n' "$sched_out" | tail -1)"
+  case "$lastline" in
+    "outcome=failed reason="*" record="*) : ;;
+    *) __ok=0; __why="${__why}last stdout line is not the outcome/reason/record summary: $lastline\n" ;;
+  esac
+  expect_no_file "$sched_common/trail-blazer/scheduled-failure-issue"
+  expect_track_calls_only_allowed
+  expect_track_stdin_empty
+
+  mk_sched track-gh-fail-comment
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" list-only
+  seed_track_state 555 failing
+  local state_before state_after
+  state_before="$(cat "$sched_common/trail-blazer/scheduled-failure-issue")"
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 3
+  rd="$(sched_out_rd)"
+  expect_run_record_line "$rd" "tracking=failed:comment-failed"
+  state_after="$(cat "$sched_common/trail-blazer/scheduled-failure-issue")"
+  [ "$state_before" = "$state_after" ] \
+    || { __ok=0; __why="${__why}tracking state changed after a failed recovery comment\n"; }
+  expect_track_calls_only_allowed
+  expect_track_stdin_empty
+
+  mk_sched track-gh-fail-view
+  build_stub_sched_codex "$sched_stub" fail
+  build_stub_sched_gh "$sched_stub" list-only
+  seed_track_state 555 failing
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 3
+  rd="$(sched_out_rd)"
+  expect_run_record_line "$rd" "tracking=failed:view-failed"
+  if [ -f "$sched_stub/gh.calls" ]; then
+    case "$(cat "$sched_stub/gh.calls")" in
+      *"issue create"*) __ok=0; __why="${__why}a create call happened despite an existing tracked issue\n" ;;
+    esac
+  fi
+  expect_track_calls_only_allowed
+  expect_track_stdin_empty
+}
+
+# codex-track-redaction — the launched codex's own stderr carries a fabricated "usage limit" phrase
+# alongside a hostname sentinel and a second, unrelated secret sentinel: the tracking issue body
+# gets the usage-limit hint, but gh.log and every gh.body.* carry none of the sentinels, the raw
+# stderr phrase, or any of this fixture's own absolute paths.
+# mutant:428-body-stderr-excerpt — bin: the hint line's own condition/body replaced with
+#   a line that `cat`s stderr.log's content straight into the issue body. Killed here: the redacted
+#   sentinels leak into gh.body.1.
+case_codex_track_redaction() {
+  mk_sched track-redaction
+  build_stub_sched_codex "$sched_stub" fail-usage
+  build_stub_sched_gh "$sched_stub" ok
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+
+  local body
+  body="$(cat "$sched_stub/gh.body.1" 2>/dev/null)"
+  case "$body" in
+    *usage-limit*) : ;;
+    *) __ok=0; __why="${__why}issue body missing the usage-limit hint\n" ;;
+  esac
+
+  local f leaked content
+  leaked=""
+  for f in "$sched_stub/gh.log" "$sched_stub"/gh.body.*; do
+    [ -f "$f" ] || continue
+    content="$(cat "$f")"
+    case "$content" in
+      *TRACK-SENTINEL-HOST*|*SECRET-STDERR-SENTINEL*|*"stub: You've hit"*|*"$tmpbase"*|*"$sched_common"*|*"$sched_top"*)
+        leaked="${leaked}${leaked:+ }$f"
+        ;;
+    esac
+  done
+  [ -z "$leaked" ] || { __ok=0; __why="${__why}gh.log/gh.body leaked a redacted value in: $leaked\n"; }
+
+  expect_track_calls_only_allowed
+  expect_track_stdin_empty
+}
+
+# codex-track-skipped — a seeded failing streak plus the local stop file: skipped-stop makes no
+# failure-tracking gh call of its own — gh.calls holds only harness-stop.sh's own "issue list" —
+# tracking state byte-identical, record.txt tracking=none.
+case_codex_track_skipped() {
+  mk_sched track-skipped
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+  seed_track_state 777 failing
+  mkdir -p "$sched_common/trail-blazer"
+  touch "$sched_common/trail-blazer/stop"
+
+  local state_before
+  state_before="$(cat "$sched_common/trail-blazer/scheduled-failure-issue")"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=skipped-stop reason=stop"
+  expect_record_line "tracking=none"
+
+  local state_after
+  state_after="$(cat "$sched_common/trail-blazer/scheduled-failure-issue")"
+  [ "$state_before" = "$state_after" ] \
+    || { __ok=0; __why="${__why}tracking state changed on a skipped-stop run\n"; }
+
+  expect_track_calls_only_allowed
+  expect_track_stdin_empty
+  local calls
+  calls="$(cat "$sched_stub/gh.calls" 2>/dev/null)"
+  [ "$calls" = "issue list" ] \
+    || { __ok=0; __why="${__why}gh.calls expected to hold only issue list, got: $calls\n"; }
+}
+
+# codex-track-unsafe-gh — (a) gh resolved to a path inside the repo toplevel; (b) gh resolved via a
+# bare relative PATH entry; (c) gh resolved via a CASE-VARIANT spelling of that same in-toplevel
+# path (upper-cased) — only run when this fixture's own filesystem is actually case-insensitive
+# (the upper-cased path resolves, via `-ef`, to the very same directory), since a case-sensitive
+# filesystem (this suite's own CI job) would just see a nonexistent PATH entry; skipped with a
+# visible stderr note otherwise; (d) gh resolved via a plain symlink from OUTSIDE the toplevel
+# pointing AT the same in-toplevel directory — portable to both filesystems, so CI always exercises
+# gh_path_safe's own `-ef` ancestor walk at least once even when (c) is skipped. All four refuse to
+# execute the failure-tracking step at all (tracking=failed:gh-unsafe-path, exit 3), while
+# harness-stop.sh's own "issue list" call through that same gh still succeeds (proving the
+# wrapper's OWN gh pinning, not a broken gh, is what's under test). (c)/(d) exist because bash
+# 3.2's `pwd -P` does not canonicalise case on a case-insensitive-but-case-preserving filesystem
+# (macOS/APFS default) or a firmlink, so a plain string-prefix compare on its output can be
+# defeated by either — see gh_path_safe's own header comment.
+# mutant:428-gh-path-unchecked — bin: `gh_path_safe && gh_safe=true` -> `gh_safe=true`.
+#   Killed here: every sub-case wrongly executes `gh` from the unsafe path instead of refusing.
+case_codex_track_unsafe_gh() {
+  mk_sched track-unsafe-gh
+  mkdir -p "$sched_repo/tools"
+  build_stub_sched_gh "$sched_repo/tools" ok
+  build_stub_sched_codex "$sched_stub" fail
+
+  run_sched "$sched_repo/tools:$sched_stub:$PATH" --
+  expect_rc 3
+  local rd
+  rd="$(sched_out_rd)"
+  expect_run_record_line "$rd" "tracking=failed:gh-unsafe-path"
+  expect_track_calls_only_allowed "$sched_repo/tools"
+  expect_track_stdin_empty "$sched_repo/tools"
+  local calls
+  calls="$(cat "$sched_repo/tools/gh.calls" 2>/dev/null)"
+  [ "$calls" = "issue list" ] \
+    || { __ok=0; __why="${__why}tools/gh.calls expected to hold only issue list, got: $calls\n"; }
+
+  local upper_variant
+  upper_variant="$(printf '%s' "$sched_repo/tools" | tr 'a-z' 'A-Z')"
+  if [ "$upper_variant" != "$sched_repo/tools" ] && [ -d "$upper_variant" ] \
+      && [ "$upper_variant" -ef "$sched_repo/tools" ]; then
+    run_sched "$upper_variant:$sched_stub:$PATH" --
+    expect_rc 3
+    rd="$(sched_out_rd)"
+    expect_run_record_line "$rd" "tracking=failed:gh-unsafe-path"
+  else
+    echo "codex-track-unsafe-gh: case-variant sub-case (c) skipped — this filesystem is case-sensitive ($upper_variant is not the same file as $sched_repo/tools)" >&2
+  fi
+
+  local symlink_dir="$tmpbase/track-unsafe-gh-symlink"
+  ln -s "$sched_repo/tools" "$symlink_dir"
+  run_sched "$symlink_dir:$sched_stub:$PATH" --
+  expect_rc 3
+  rd="$(sched_out_rd)"
+  expect_run_record_line "$rd" "tracking=failed:gh-unsafe-path"
+
+  mk_sched track-unsafe-gh-relative
+  mkdir -p "$sched_repo/tools"
+  build_stub_sched_gh "$sched_repo/tools" ok
+  build_stub_sched_codex "$sched_stub" fail
+
+  run_sched "tools:$sched_stub:$PATH" --
+  expect_rc 3
+  rd="$(sched_out_rd)"
+  expect_run_record_line "$rd" "tracking=failed:gh-unsafe-path"
+  expect_track_calls_only_allowed "$sched_repo/tools"
+  expect_track_stdin_empty "$sched_repo/tools"
+}
+
+# codex-track-unsafe-gh-common-dir — the "or the git common dir" half of gh_path_safe, exercised
+# separately from codex-track-unsafe-gh's own repo-toplevel scenarios: a `git worktree add` sibling
+# shares the MAIN checkout's own git common dir but has its OWN, different toplevel, so a gh
+# planted under the main checkout's `.git` sits outside the worktree's toplevel yet inside the
+# shared common dir. Run from the worktree: refuses (tracking=failed:gh-unsafe-path, exit 3), and
+# that gh's own gh.calls holds only harness-stop.sh's "issue list" — the failure-tracking step
+# itself never executes it.
+# mutant:428-common-dir-unchecked — bin: `[ "$walk" -ef "$top_phys" ] || [ "$walk" -ef
+#   "$common_abs" ]` -> `[ "$walk" -ef "$top_phys" ]` (drops the common-dir half of the ancestor
+#   check). Killed here: this case's own gh sits outside the toplevel, so only the common-dir half
+#   would have caught it — the run wrongly executes gh instead of refusing.
+case_codex_track_unsafe_gh_common_dir() {
+  mk_sched track-unsafe-gh-cd
+  build_stub_sched_codex "$sched_stub" fail
+
+  local wt="$tmpbase/track-unsafe-gh-cd-wt"
+  ( cd "$sched_repo" && git worktree add -q -b track-unsafe-gh-cd-wt-branch "$wt" ) >/dev/null 2>&1
+  mkdir -p "$wt/home"
+  # codex-setup.sh's own compatibility-layer files are uncommitted working-tree writes (run_cx
+  # above wrote them only into $sched_repo's own working tree), so a freshly added worktree — a
+  # checkout of tracked content only — starts without them; install them here too, independently,
+  # so preflight step 3 (codex-setup.sh --check) sees "in sync" from the worktree exactly as it
+  # does from the main checkout.
+  run_cx "$sched_plugin" "$wt"
+
+  local gh_in_common="$sched_common/track-unsafe-gh-cd-tools"
+  build_stub_sched_gh "$gh_in_common" ok
+
+  local outfile errfile
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  (
+    cd "$wt" &&
+    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
+    env HOME="$wt/home" XDG_CONFIG_HOME="$wt/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+        PATH="$gh_in_common:$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=20 TBF_CODEX_RUN_KILL_GRACE=5 \
+        "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
+  ) < "$sched_sentinel" > "$outfile" 2> "$errfile"
+  doctor_rc=$?
+  sched_out="$(cat "$outfile")"
+  sched_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $sched_out
+ERR: $sched_err"
+
+  expect_rc 3
+  local rd
+  rd="$(sched_out_rd)"
+  expect_run_record_line "$rd" "tracking=failed:gh-unsafe-path"
+  expect_track_calls_only_allowed "$gh_in_common"
+  expect_track_stdin_empty "$gh_in_common"
+  local calls
+  calls="$(cat "$gh_in_common/gh.calls" 2>/dev/null)"
+  [ "$calls" = "issue list" ] \
+    || { __ok=0; __why="${__why}gh.calls expected to hold only issue list, got: $calls\n"; }
+}
+
+# codex-track-malformed-state — a tracking state file whose issue= value is non-digit (streak= is
+# otherwise well-formed): read_track_state treats the whole file as unreadable/absent, with a
+# stderr warning naming the state file, so the run creates a NEW issue exactly like the no-state
+# case.
+# mutant:428-malformed-state-narrowed — bin: read_track_state's own `''|*[!0-9]*) issue="" ;;` ->
+#   `'') issue="" ;;` (only a truly EMPTY issue= is now rejected, a non-digit one is not). Killed
+#   here: the run wrongly treats "issue=abc" as a valid tracked issue and calls
+#   `gh issue view abc ...` instead of creating a new one — this stub's own digit check on `issue
+#   view`'s third argument then makes that call itself fail as "unexpected", giving
+#   tracking=failed:view-failed instead of tracking=created.
+case_codex_track_malformed_state() {
+  mk_sched track-malformed-state
+  build_stub_sched_codex "$sched_stub" fail
+  build_stub_sched_gh "$sched_stub" ok
+
+  mkdir -p "$sched_common/trail-blazer"
+  printf 'issue=abc\nstreak=failing\n' > "$sched_common/trail-blazer/scheduled-failure-issue"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  local rd
+  rd="$(sched_out_rd)"
+  expect_run_record_line "$rd" "tracking=created"
+  expect "unreadable tracking state file"
+  expect_track_state_line "issue=101"
+  expect_track_state_line "streak=failing"
+  expect_track_calls_only_allowed
+  expect_track_stdin_empty
+}
+
+# codex-track-state-write-failed — gh issue create succeeds, but the local state write itself then
+# fails (trail-blazer/ made read-only after trail-blazer/runs/ already exists, so only
+# write_track_state's own create-then-rename directly inside trail-blazer/ is affected): the
+# created issue's number is still announced to this wrapper's own stderr and still lands in
+# record.txt's own tracking-issue= line, tracking=failed:state-write-failed, exit 3, and no state
+# file is ever written.
+case_codex_track_state_write_failed() {
+  mk_sched track-state-write-failed
+  build_stub_sched_codex "$sched_stub" fail
+  build_stub_sched_gh "$sched_stub" ok
+
+  mkdir -p "$sched_common/trail-blazer/runs"
+  chmod 555 "$sched_common/trail-blazer"
+
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 3
+  local rd
+  rd="$(sched_out_rd)"
+  expect_run_record_line "$rd" "tracking=failed:state-write-failed"
+  expect_run_record_line "$rd" "tracking-issue=101"
+  expect "created issue #101"
+  expect "GitHub WAS updated"
+  expect_no_file "$sched_common/trail-blazer/scheduled-failure-issue"
+  expect_track_calls_only_allowed
+  expect_track_stdin_empty
+
+  chmod 755 "$sched_common/trail-blazer"
 }
 
 # --- codex doctor (#410) ----------------------------------------------------------------------
@@ -5475,7 +6246,7 @@ cases=(
   "codex-doctor-jq-missing|case_codex_doctor_jq_missing|#410: no jq anywhere on a closed PATH -> the Codex-specific hooks/planner-guard.sh clause on the jq FAIL, hook trust could not check"
   "codex-doctor-git-missing|case_codex_doctor_git_missing|#410: no git anywhere on a closed PATH -> the Codex-only git precheck FAILs and exits before anything else runs"
   "codex-doctor-usage|case_codex_doctor_usage|#410: --provider bogus and an unrelated unknown flag exit 2; --help exits 0 naming --provider; --provider claude is unchanged (no codex version line)"
-  "codex-sched-completed|case_codex_sched_completed|#427: a clean pass: outcome=completed on stdout and as record.txt's first line, the exact 9-element argv with the marker prompt, stdin.capture empty, the repo tree untouched outside .git, gh.log holds only issue list, the lock stays free"
+  "codex-sched-completed|case_codex_sched_completed|#427: a clean pass: outcome=completed on stdout and as record.txt's first line, the exact 9-element argv with the marker prompt, stdin.capture empty, the repo tree untouched outside .git, gh.log holds only issue list, the lock stays free; (I3, #428) no tracking state file, record.txt shows tracking=none"
   "codex-sched-claude-pid|case_codex_sched_claude_pid|#427: CLAUDE_PID set (even to empty) refuses before any side effect: exit 2, stderr names CLAUDE_PID, no argc/gh.log/runs directory"
   "codex-sched-stop-local|case_codex_sched_stop_local|#427: the local stop file set, with the wrapper's own production TIMEOUT/GRACE defaults (no fixture override) -> skipped-stop reason=stop, exit 0, no argc, record.txt shows timeout-seconds=14400"
   "codex-sched-stop-unknown|case_codex_sched_stop_unknown|#427: gh fails both harness-stop.sh attempts -> skipped-stop reason=stop-unknown, exit 0, no argc"
@@ -5483,8 +6254,8 @@ cases=(
   "codex-sched-lock-stale|case_codex_sched_lock_stale|#427: a dead same-host lock holder -> completed (the launched session reclaims it), lock files byte-identical afterwards — the wrapper never touches the lock"
   "codex-sched-lock-other-host|case_codex_sched_lock_other_host|#427: a real lock whose host file is rewritten to a foreign hostname -> skipped-busy reason=other-host, exit 0, no argc"
   "codex-sched-lock-unreadable|case_codex_sched_lock_unreadable|#427: a real lock whose pid file is rewritten to a non-digit value -> skipped-busy reason=unreadable-holder, exit 0, no argc"
-  "codex-sched-preflight-tools|case_codex_sched_preflight_tools|#427: exactly one of codex/gh/jq missing on the combined PATH each gives preflight-failed reason=missing-tool:<name>, exit 1, no argc"
-  "codex-sched-preflight-drift|case_codex_sched_preflight_drift|#427: a hand-edited .codex/agents/planner.toml -> preflight-failed reason=codex-setup-drift, preflight.log names the drift, no argc, no gh.log (stop is never reached)"
+  "codex-sched-preflight-tools|case_codex_sched_preflight_tools|#427: exactly one of codex/gh/jq missing on the combined PATH each gives preflight-failed reason=missing-tool:<name>, no argc; missing-tool:jq/:codex still exit 1 (gh is present, so I3/#428's tracking step succeeds), missing-tool:gh exits 3 with tracking=failed:gh-not-found"
+  "codex-sched-preflight-drift|case_codex_sched_preflight_drift|#427: a hand-edited .codex/agents/planner.toml -> preflight-failed reason=codex-setup-drift, preflight.log names the drift, no argc, gh.calls has no issue list line (stop is never reached, even though I3/#428 now makes one issue create)"
   "codex-sched-setup-error|case_codex_sched_setup_error|#427: codex-setup.sh replaced with a stub exiting 3 -> preflight-failed reason=codex-setup-error, no argc"
   "codex-sched-stop-exit|case_codex_sched_stop_exit|#427: harness-stop.sh replaced with a stub exiting 2 -> preflight-failed reason=harness-stop-exit-2, no argc"
   "codex-sched-rundir-uncreatable|case_codex_sched_rundir_uncreatable|#427: trail-blazer/runs pre-created as a regular file -> mkdir -p fails, exit 2, no argc (the same failure shape a read-only .git under Codex produces)"
@@ -5500,6 +6271,17 @@ cases=(
   "codex-sched-prune|case_codex_sched_prune|#427: 101 pre-seeded run directories plus a non-matching file and two non-matching directories (wrong shape; right shape but non-digit suffix), all sorting before every stamp -> exactly 100 stamp-shaped dirs remain after one run, the two oldest stamp dirs gone, the new run's directory present, every non-matching entry untouched"
   "codex-sched-own-dir|case_codex_sched_own_dir|#427: a decoy directory first on PATH shadows every sibling script -> completed, the decoy's sentinel is never created — siblings resolve only from the wrapper's own directory"
   "codex-sched-usage|case_codex_sched_usage|#427: --help exits 0 naming usage:; --bogus exits 2; outside a repo or with no git on PATH exits 2, no trail-blazer directory created"
+  "codex-track-first-failure|case_codex_track_first_failure|I3, #428: a first failure with no prior state -> exactly one issue create labels=needs-human,no-plan and no issue view, state issue=101/streak=failing, record.txt tracking=created, and a redacted body naming the outcome/run id/record path/exit status with no usage-limit hint"
+  "codex-track-repeat|case_codex_track_repeat|I3, #428: a second failure with the tracked issue still OPEN and streak=failing -> exactly one issue view 101, no second create or comment, tracking state byte-identical, record.txt tracking=repeat"
+  "codex-track-closed|case_codex_track_closed|I3, #428: a failure whose tracked issue has since been closed -> a new issue is created and recorded (issue=102/streak=failing) instead of commenting on the closed one"
+  "codex-track-recovery|case_codex_track_recovery|I3, #428: fail (creates 101) -> complete (one issue comment 101 starting Recovered:, streak=recovered, tracking=recovered) -> complete again (no new gh call, tracking=none) -> fail again (issue view then issue comment 101 with a Failing again after a recovery. lead, no create, streak=failing, tracking=commented)"
+  "codex-track-gh-fail|case_codex_track_gh_fail|I3, #428: gh answers only issue list (list-only stub) -> a create failure, a recovery-comment failure, and a view failure each exit 3 with the matching tracking=failed:<slug> line, a stderr line naming it, and the run record kept"
+  "codex-track-redaction|case_codex_track_redaction|I3, #428: the launched codex's stderr carries a usage-limit phrase plus a hostname and a secret sentinel -> the tracking issue body gets the usage-limit hint, but gh.log and every gh.body.* carry none of the sentinels or any fixture absolute path"
+  "codex-track-skipped|case_codex_track_skipped|I3, #428: a seeded failing streak plus the local stop file -> skipped-stop makes no failure-tracking gh call of its own (gh.calls holds only harness-stop.sh's own issue list), tracking state byte-identical, record.txt tracking=none"
+  "codex-track-unsafe-gh|case_codex_track_unsafe_gh|I3, #428: gh resolved to a path inside the repo toplevel, then to a bare relative PATH entry, then (filesystem permitting) a case-variant spelling of the same in-toplevel path, then a symlink from outside the toplevel to it -> the failure-tracking step refuses to execute any of them (tracking=failed:gh-unsafe-path, exit 3), while harness-stop.sh's own issue list call through that same gh still succeeds"
+  "codex-track-unsafe-gh-common-dir|case_codex_track_unsafe_gh_common_dir|I3, #428: a git worktree add sibling shares the main checkout's git common dir but has its own toplevel; gh planted under the main checkout's .git sits outside the worktree's toplevel but inside the shared common dir -> the failure-tracking step refuses it too (tracking=failed:gh-unsafe-path, exit 3)"
+  "codex-track-malformed-state|case_codex_track_malformed_state|I3, #428: a tracking state file with a non-digit issue= value is treated as absent (with a stderr warning), so a new issue is created exactly like the no-state case"
+  "codex-track-state-write-failed|case_codex_track_state_write_failed|I3, #428: gh issue create succeeds but the local state write then fails (trail-blazer/ made read-only) -> the created issue number is still announced to stderr and recorded as record.txt's own tracking-issue=, tracking=failed:state-write-failed, exit 3, no state file written"
 )
 
 matched=0

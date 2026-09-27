@@ -38,7 +38,7 @@
 │   ├── harness-stop.sh            # read-only maintainer stop switch: GitHub label or local file (#310)
 │   ├── governance-paths.sh        # merge floor's governance-path classifier + doctor's --check validator (#331)
 │   ├── codex-setup.sh             # installs the Codex compatibility layer into a repo: agent TOMLs, rules, contract loading (#408)
-│   ├── codex-scheduled-run.sh     # launchd-driven codex exec wrapper: preflight, timeout, local run records (#427)
+│   ├── codex-scheduled-run.sh     # launchd-driven codex exec wrapper: preflight, timeout, local run records (#427), a deduplicated needs-human tracking issue on failure (#428)
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
 │   ├── hooks.json                 # registers the five PreToolUse hooks below

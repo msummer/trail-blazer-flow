@@ -22,6 +22,14 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
   non-PR ceiling to 35. The full mutant driver grew with this release's hook and scheduled-run
   records, and the macOS job hit its old ceiling after #427 merged. Pull-request ceilings are
   unchanged. No consumer step.
+- #428: `bin/codex-scheduled-run.sh`'s `finish` now runs one failure-tracking step after
+  `record.txt` is written: on `preflight-failed`/`failed`/`died-mid-run`/`timed-out` it opens or
+  comments on one de-duplicated `needs-human`/`no-plan` GitHub issue (state in
+  `<git-common-dir>/trail-blazer/scheduled-failure-issue`), and a `completed` run after a failing
+  streak posts a recovery comment. `gh` is pinned to one absolute path outside the repo toplevel and
+  the git common dir before the tracking step runs; a tracking failure appends
+  `record.txt`'s own `tracking=failed:<slug>` line and exits 3 instead of the run's usual 0/1. No
+  consumer step (`needs-human`/`no-plan` come from `bin/setup-labels.sh`).
 - #371 (follow-on): `dev/mutants/cleanup-tests.json`'s `376-reopened-gate` and
   `376-reopened-field` records list `reopened-write-failure-edit`, which #371 added and both
   mutants also fail, so the post-merge mutant driver is green again. No consumer step.
