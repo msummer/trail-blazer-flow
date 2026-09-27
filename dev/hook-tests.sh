@@ -42,6 +42,12 @@ trap cleanup EXIT
 neutral_home="$tmpbase/neutral-home"
 mkdir -p "$neutral_home"
 
+# #304/#305: a neutral, empty sysroot for every push-guard fixture (see run_push_guard below) —
+# created once, up front, so hooks/push-guard.sh's new TBF_PUSH_GUARD_SYSCONFIG_ROOT-prefixed
+# static system-config reads never see the host's own real /etc/gitconfig or similar.
+neutral_sysroot="$tmpbase/neutral-sysroot"
+mkdir -p "$neutral_sysroot"
+
 if ! command -v jq >/dev/null 2>&1; then
   echo "  FAIL  jq not installed — required to build fixture stdin JSON and to parse the guard's output"
   exit 1
@@ -1200,7 +1206,14 @@ mk_fixture_worktree() {
 # EVERY push fixture (a neutral, empty $HOME under $tmpbase by default), so no fixture in this
 # file can ever read the developer's or CI runner's real global git config; a fixture that wants a
 # GLOBAL route present sets $push_home_override/$push_xdg_home/$push_git_config_global immediately
-# before calling run_push_guard instead (see mk_fixture_global_config below).
+# before calling run_push_guard instead (see mk_fixture_global_config below). AMBIENT-SYSTEM
+# ANALOGUE (#304/#305): hooks/push-guard.sh now also reads $GIT_CONFIG_SYSTEM, three static
+# system paths, and the Apple CLT path, all governed by $GIT_CONFIG_NOSYSTEM — run_push_guard
+# below isolates all of this too (GIT_CONFIG_SYSTEM/GIT_CONFIG_NOSYSTEM unset, and the static
+# paths prefixed with a neutral, empty sysroot under $tmpbase by default), so no fixture in this
+# file can ever read the host's own real system git config; a fixture that wants a SYSTEM route
+# present sets $push_sysroot_override/$push_git_config_system/$push_git_config_nosystem
+# immediately before calling run_push_guard instead.
 mk_fixture_config() {
   local dir="$1" body="$2"
   mkdir -p "$dir/.git"
@@ -1222,31 +1235,48 @@ mk_fixture_global_config() {
 # $push_err (stderr, read back from a file under $tmpbase)/$push_rc set as globals. Same "call as
 # a plain statement, read the globals after" idiom as run_boundary above.
 #
-# #290: hooks/push-guard.sh now reads $HOME/$XDG_CONFIG_HOME/$GIT_CONFIG_GLOBAL, so this runner
-# ISOLATES all three for EVERY call: a neutral, empty fixture HOME under $tmpbase by default
-# (never the developer's or CI runner's real one), with XDG_CONFIG_HOME and GIT_CONFIG_GLOBAL
-# unset unless a fixture sets $push_home_override/$push_xdg_home/$push_git_config_global
-# immediately before calling run_push_guard (all three cleared again right after the call, so a
-# later fixture that asks for none of them never inherits a prior fixture's values). The
-# environment mutation happens inside the "$(...)" command substitution's own implicit subshell —
-# a portable, bash-3.2/Git-Bash-safe idiom (this file's own convention prefers it to `env -u`,
-# which is not obviously safe across Git-Bash) — so it can never leak into this harness's own
-# environment or any later call. run_hook and run_boundary above are deliberately UNCHANGED:
-# neither hooks/git-c-guard.sh nor hooks/agent-boundary.sh reads any of these three variables.
+# #290/#304/#305: hooks/push-guard.sh now reads $HOME/$XDG_CONFIG_HOME/$GIT_CONFIG_GLOBAL and
+# $GIT_CONFIG_SYSTEM/$GIT_CONFIG_NOSYSTEM/three static system paths/the Apple CLT path, so this
+# runner ISOLATES all of it for EVERY call: a neutral, empty fixture HOME under $tmpbase by
+# default (never the developer's or CI runner's real one), with XDG_CONFIG_HOME, GIT_CONFIG_GLOBAL,
+# GIT_CONFIG_SYSTEM and GIT_CONFIG_NOSYSTEM unset unless a fixture sets
+# $push_home_override/$push_xdg_home/$push_git_config_global/$push_git_config_system/
+# $push_git_config_nosystem immediately before calling run_push_guard, and
+# TBF_PUSH_GUARD_SYSCONFIG_ROOT exported to a neutral, empty per-run sysroot under $tmpbase unless
+# a fixture sets $push_sysroot_override (every one of these six cleared again right after the
+# call, so a later fixture that asks for none of them never inherits a prior fixture's values).
+# $push_home_empty (#304/#305) is a SEVENTH override: set to "1", it exports HOME as the
+# empty string for that one call instead of the neutral fixture HOME — the only way to fixture the
+# "~/… with HOME empty" residual, since $push_home_override always names a real directory. Cleared
+# after the call exactly like the other six. The environment mutation happens inside the "$(...)"
+# command substitution's own implicit
+# subshell — a portable, bash-3.2/Git-Bash-safe idiom (this file's own convention prefers it to
+# `env -u`, which is not obviously safe across Git-Bash) — so it can never leak into this
+# harness's own environment or any later call. run_hook and run_boundary above are deliberately
+# UNCHANGED: neither hooks/git-c-guard.sh nor hooks/agent-boundary.sh reads any of these variables.
 push_out=""
 push_err=""
 push_rc=0
 push_home_override=""
 push_xdg_home=""
 push_git_config_global=""
+push_sysroot_override=""
+push_git_config_system=""
+push_git_config_nosystem=""
+push_home_empty=""
 run_push_guard() {
   local json="$1" pathval="${2:-$PATH}" errfile="$tmpbase/push-guard-stderr"
   local home_val="${push_home_override:-$neutral_home}"
+  local sysroot_val="${push_sysroot_override:-$neutral_sysroot}"
+  [ "$push_home_empty" != "1" ] || home_val=""
   push_out="$(
-    unset XDG_CONFIG_HOME GIT_CONFIG_GLOBAL
+    unset XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM
     export HOME="$home_val"
+    export TBF_PUSH_GUARD_SYSCONFIG_ROOT="$sysroot_val"
     [ -z "$push_xdg_home" ] || export XDG_CONFIG_HOME="$push_xdg_home"
     [ -z "$push_git_config_global" ] || export GIT_CONFIG_GLOBAL="$push_git_config_global"
+    [ -z "$push_git_config_system" ] || export GIT_CONFIG_SYSTEM="$push_git_config_system"
+    [ -z "$push_git_config_nosystem" ] || export GIT_CONFIG_NOSYSTEM="$push_git_config_nosystem"
     printf '%s' "$json" | PATH="$pathval" "$bash_bin" "$push_guard" 2>"$errfile"
   )"
   push_rc=$?
@@ -1255,6 +1285,10 @@ run_push_guard() {
   push_home_override=""
   push_xdg_home=""
   push_git_config_global=""
+  push_sysroot_override=""
+  push_git_config_system=""
+  push_git_config_nosystem=""
+  push_home_empty=""
 }
 
 # expect_push_deny/expect_push_no_opinion — assert against $push_out/$push_err/$push_rc.
@@ -2604,6 +2638,774 @@ case_push_kw_noop_then_feature() {
   # destination behind a keyword still gets no opinion.
   run_push_guard "$(mk_push_cmd 'if true; then git push origin feature/x; fi')"
   expect_push_no_opinion
+}
+
+# --- #304/#305: system git config candidates and include/includeIf ----------------------------
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filters
+# "push-sysconf-" and "push-include-"), re-run by dev/mutant-driver.sh — the #359 registry idiom.
+# mutant:304-sys-env-var — drops the $GIT_CONFIG_SYSTEM record from the system candidate list.
+# mutant:304-sys-etc — removes "/etc/gitconfig" from PUSH_SYSTEM_CONFIG_PATHS.
+# mutant:304-sys-homebrew-arm — removes "/opt/homebrew/etc/gitconfig" from PUSH_SYSTEM_CONFIG_PATHS.
+# mutant:304-sys-homebrew-intel — removes "/usr/local/etc/gitconfig" from PUSH_SYSTEM_CONFIG_PATHS.
+# mutant:304-sys-clt — drops the Apple CLT record from the system candidate list.
+# mutant:304-nosystem-ignored — makes the GIT_CONFIG_NOSYSTEM truthy arm unmatchable, so no value
+#   ever disables the system read.
+# mutant:304-nosystem-word — narrows the truthy arm to "1" only, dropping true/yes/on.
+# mutant:304-nosystem-any-value — makes ANY non-empty GIT_CONFIG_NOSYSTEM value count as true
+#   (not just the canonical ones), so a non-canonical value like "0" wrongly disables the read.
+# mutant:304-nosystem-covers-clt — moves the Apple CLT record OUTSIDE the $nosys guard, so it is
+#   read even when GIT_CONFIG_NOSYSTEM holds a canonical true value (undoing the amendment that
+#   put it inside the guard after a live NOSYSTEM probe on this Mac).
+# mutant:304-sys-order — emits the system candidate records AFTER .git/config instead of before,
+#   so a repo-local/system conflict on the last-wins branch.<current>.merge scalar resolves
+#   backwards.
+# mutant:304-sys-label — mislabels the $GIT_CONFIG_SYSTEM record as "your global git config".
+# mutant:304-sys-clt-label — mislabels the Apple CLT record as "your global git config".
+# mutant:304-inc-section — makes the plain "[include]" section header unmatchable.
+# mutant:304-incif-section — makes the "[includeIf ...]" section header unmatchable.
+# mutant:304-inc-key-case — narrows the include "path" key match to the exact lower-case spelling.
+# mutant:304-inc-relative — the generic relative-path arm uses $cfg_val unjoined, instead of
+#   joining it onto the including file's own directory.
+# mutant:304-inc-tilde — removes the "~/" resolution arm.
+# mutant:304-inc-tilde-user — drops "\~*" from the skip arm, so "~user/…" falls through to the
+#   generic relative-path arm instead of being silently skipped.
+# mutant:304-inc-regular-file — widens cfg_parse_file()'s own "[ -f" guard to "[ -e", so a
+#   directory target is opened for reading instead of silently skipped.
+# mutant:304-inc-tilde-empty-home — drops the "[ -n "${HOME:-}" ]" guard on the "~/" arm, so it
+#   resolves against an empty $HOME instead of silently skipping.
+# mutant:304-inc-drive-letter — narrows the absolute-path arm from "/*|[A-Za-z]:/*" to "/*", so an
+#   "X:/…" value falls through to the generic relative-path (joined) arm instead of being used
+#   as-is.
+# mutant:304-inc-prefix-skip — removes the "%(prefix)/" skip arm, so it falls through to the
+#   generic relative-path arm instead of being silently skipped.
+# mutant:304-inc-depth-lo — lowers CFG_INCLUDE_MAX_DEPTH to 9.
+# mutant:304-inc-depth-hi — raises CFG_INCLUDE_MAX_DEPTH to 11.
+# mutant:304-inc-section-local — drops cfg_section/cfg_subsection from cfg_parse_file()'s own
+#   `local` declaration, so a nested include call clobbers the includer's own section state.
+# mutant:304-inc-label — drops the " (via include)" suffix entirely.
+# mutant:304-inc-seen-global — reverts cfg_parse_file()'s own $cfg_seen guard to a
+#   whole-resolve_repo()-call history (drops the save-on-entry/restore-on-return pair), so a path
+#   already read via one top-level candidate's own include is wrongly treated as "already seen" by
+#   a later, unrelated top-level candidate (or a sibling include) that names the identical path —
+#   under-blocking exactly the push-include-deny-repo-config-reincluded shape.
+# mutant:304-inc-follow-budget — drops the "$cfg_inc_budget -gt 0" check entirely, so every include
+#   is followed unconditionally regardless of how many have already run.
+# mutant:304-inc-follow-budget-off-by-one — narrows the budget boundary from "-gt 0" to "-ge 0", so
+#   one include past the budget is still followed.
+# mutant:304-inc-line-budget — drops the budget check itself (the "-gt 0" test and its "|| break"),
+#   so an included file is read to its own end regardless of how many lines have already been read.
+# mutant:304-inc-line-budget-off-by-one — narrows the line-budget boundary from "-gt 0" to "-ge 0",
+#   so one line past the budget is still read.
+# mutant:304-inc-line-budget-depth0 — drops the "depth >= 1" guard, so the line budget also applies
+#   to a depth-0 top-level candidate, which can then be truncated mid-file.
+# mutant:304-inc-line-chars — drops the CFG_INCLUDE_MAX_LINE_CHARS length check entirely, so a line
+#   of any length reaches comment-strip and trim regardless of how long it is.
+# mutant:304-inc-line-chars-off-by-one — narrows the length-cap boundary from "-le" to "-lt", so a
+#   line exactly at the cap is skipped one character too early.
+# mutant:304-inc-char-budget — drops the CFG_INCLUDE_MAX_CHARS check entirely, so a line is always
+#   processed regardless of how many characters have already been charged.
+# mutant:304-inc-char-budget-off-by-one — narrows the character-budget boundary from "-ge 0" to
+#   "-gt 0", so a line landing exactly on the budget's own last character is refused one character
+#   too early.
+# mutant:304-inc-follow-budget-reset — changes cfg_inc_budget's own reset from an unconditional
+#   assignment to a "set only if unset/empty" default (":=$"), so a SECOND resolve_repo() call in
+#   the same hook invocation (a resolved "-C" target) inherits the session's own already-decremented
+#   value instead of starting fresh.
+# mutant:304-inc-line-budget-reset — the same "set only if unset/empty" change to
+#   cfg_inc_line_budget's own reset.
+# mutant:304-inc-char-budget-reset — the same "set only if unset/empty" change to
+#   cfg_inc_char_budget's own reset.
+# mutant:304-inc-follow-gate — drops the new line-budget/char-budget conjuncts from the include
+#   arm's own follow condition, so a follow is gated on CFG_INCLUDE_MAX_FOLLOWS alone: once the
+#   line or character budget is exhausted but follows remain, each further include is still OPENED
+#   and its first line read in full before the per-line checks inside it can break.
+# mutant:304-inc-line-follow-gate — drops only the "$cfg_inc_line_budget -gt 0" conjunct from the
+#   include arm's own follow condition, leaving the character-budget conjunct in place: a follow
+#   is still correctly refused once characters run out, but NOT once only the line-count budget has
+#   -- with characters still to spare, a further include is still OPENED once the line budget alone
+#   is exhausted.
+# mutant:304-cfg-trim-tab — narrows cfg_trim()'s own trailing-trim class from every [:space:]
+#   character to a literal space only, so a trailing TAB in a config value is never stripped.
+case_push_cfg_deny_trailing_tab_default() {
+  # Pins that cfg_trim()'s fork-free rewrite still strips a trailing TAB (not just trailing
+  # spaces) from a config value -- [:space:] includes tab, and the mutant above narrows the
+  # trailing-trim class to spaces only, proving this fixture actually depends on that.
+  local dir="$tmpbase/repo-cfg-trailing-tab"
+  mk_fixture_repo "$dir" main feature/x
+  printf '[push]\n\tdefault = matching\t\n' > "$dir/.git/config"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_sysconf_deny_etc() {
+  local dir="$tmpbase/repo-sysconf-etc" sysroot="$tmpbase/sysroot-etc"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$sysroot/etc/gitconfig" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  push_sysroot_override="$sysroot"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_sysconf_deny_homebrew_arm() {
+  local dir="$tmpbase/repo-sysconf-homebrew-arm" sysroot="$tmpbase/sysroot-homebrew-arm"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  mk_fixture_global_config "$sysroot/opt/homebrew/etc/gitconfig" $'[push]\n\tdefault = upstream\n'
+  push_sysroot_override="$sysroot"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_sysconf_deny_homebrew_intel() {
+  local dir="$tmpbase/repo-sysconf-homebrew-intel" sysroot="$tmpbase/sysroot-homebrew-intel"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$sysroot/usr/local/etc/gitconfig" $'[push]\n\tdefault = matching\n'
+  push_sysroot_override="$sysroot"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_sysconf_deny_apple_clt() {
+  local dir="$tmpbase/repo-sysconf-apple-clt" sysroot="$tmpbase/sysroot-apple-clt"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config \
+    "$sysroot/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig" \
+    $'[push]\n\tdefault = matching\n'
+  push_sysroot_override="$sysroot"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"in your system git config"*) ;;
+    *) __ok=0; __why="${__why}stderr does not name the system source label 'in your system git config': '$push_err'\n" ;;
+  esac
+}
+case_push_sysconf_deny_env_var() {
+  local dir="$tmpbase/repo-sysconf-env-var" sysroot="$tmpbase/sysroot-env-var"
+  local gcs="$tmpbase/gcs-env-var/sysconfig"
+  mk_fixture_repo "$dir" main feature/x
+  mkdir -p "$sysroot"
+  mk_fixture_global_config "$gcs" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  push_sysroot_override="$sysroot"
+  push_git_config_system="$gcs"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"in your system git config"*) ;;
+    *) __ok=0; __why="${__why}stderr does not name the system source label 'in your system git config': '$push_err'\n" ;;
+  esac
+}
+case_push_sysconf_deny_env_var_union_not_replace() {
+  local dir="$tmpbase/repo-sysconf-union" sysroot="$tmpbase/sysroot-union"
+  local gcs="$tmpbase/gcs-union/sysconfig"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$gcs" $'[core]\n\teditor = vi\n'
+  mk_fixture_global_config "$sysroot/etc/gitconfig" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  push_sysroot_override="$sysroot"
+  push_git_config_system="$gcs"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_sysconf_noop_nosystem_one() {
+  local dir="$tmpbase/repo-sysconf-nosystem-one" sysroot="$tmpbase/sysroot-nosystem-one"
+  local gcs="$tmpbase/gcs-nosystem-one/sysconfig"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$gcs" $'[push]\n\tdefault = matching\n'
+  mk_fixture_global_config "$sysroot/etc/gitconfig" $'[push]\n\tdefault = matching\n'
+  push_sysroot_override="$sysroot"
+  push_git_config_system="$gcs"
+  push_git_config_nosystem="1"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_sysconf_noop_nosystem_word() {
+  local dir="$tmpbase/repo-sysconf-nosystem-word" sysroot="$tmpbase/sysroot-nosystem-word"
+  local gcs="$tmpbase/gcs-nosystem-word/sysconfig"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$gcs" $'[push]\n\tdefault = matching\n'
+  mk_fixture_global_config "$sysroot/etc/gitconfig" $'[push]\n\tdefault = matching\n'
+  push_sysroot_override="$sysroot"
+  push_git_config_system="$gcs"
+  push_git_config_nosystem="Yes"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_sysconf_deny_nosystem_false() {
+  local dir="$tmpbase/repo-sysconf-nosystem-false" sysroot="$tmpbase/sysroot-nosystem-false"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$sysroot/etc/gitconfig" $'[push]\n\tdefault = matching\n'
+  push_sysroot_override="$sysroot"
+  push_git_config_nosystem="0"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_sysconf_noop_clt_nosystem() {
+  # Amendment A1 (orchestrator-verified live on this Mac): GIT_CONFIG_NOSYSTEM=1 drops the CLT
+  # file's own scope from real git's own `--show-scope` output too, so it belongs INSIDE the
+  # $nosys guard, not outside it — the reverse of this fixture's pre-amendment name and verdict.
+  local dir="$tmpbase/repo-sysconf-clt-nosystem" sysroot="$tmpbase/sysroot-clt-nosystem"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config \
+    "$sysroot/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig" \
+    $'[push]\n\tdefault = matching\n'
+  push_sysroot_override="$sysroot"
+  push_git_config_nosystem="1"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_sysconf_deny_repo_merge_last() {
+  local dir="$tmpbase/repo-sysconf-merge-last" sysroot="$tmpbase/sysroot-merge-last"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  mk_fixture_global_config "$sysroot/etc/gitconfig" \
+    $'[push]\n\tdefault = upstream\n[branch "feature/x"]\n\tmerge = refs/heads/feature/x\n'
+  push_sysroot_override="$sysroot"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_sysconf_deny_c_target() {
+  local main="$tmpbase/repo-sysc" target="$tmpbase/target-s12-wt-1" sysroot="$tmpbase/sysroot-c-target"
+  mkdir -p "$main"
+  mk_fixture_repo "$target" trunk feature/y
+  mk_fixture_global_config "$sysroot/etc/gitconfig" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  push_sysroot_override="$sysroot"
+  run_push_guard "$(mk_push_cmd_cwd 'git -C ../target-s12-wt-1 push' "$main")"
+  expect_push_deny
+}
+case_push_sysconf_noop_explicit_refspec() {
+  local dir="$tmpbase/repo-sysconf-explicit-refspec" sysroot="$tmpbase/sysroot-explicit-refspec"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$sysroot/etc/gitconfig" \
+    $'[remote "origin"]\n\tpush = HEAD:main\n[push]\n\tdefault = matching\n'
+  push_sysroot_override="$sysroot"
+  run_push_guard "$(mk_push_cmd_cwd 'git push -u origin "claude/17-a"' "$dir")"
+  expect_push_no_opinion
+}
+case_push_sysconf_deny_never_executes() {
+  local dir="$tmpbase/repo-sysconf-never-executes" sysroot="$tmpbase/sysroot-never-executes"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$sysroot/etc/gitconfig" $'[push]\n\tdefault = matching\n'
+  local trapdir="$tmpbase/trapbin-sysconf-deny" sentinel="$tmpbase/sentinel-sysconf-deny"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  local before_repo after_repo before_sysroot after_sysroot
+  before_repo="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  before_sysroot="$(find "$sysroot" -type f -exec ls -la {} \; | sort)"
+  push_sysroot_override="$sysroot"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")" "$trapdir:$PATH"
+  after_repo="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  after_sysroot="$(find "$sysroot" -type f -exec ls -la {} \; | sort)"
+  expect_push_deny
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH while evaluating a system config route\n"; }
+  [ "$before_repo" = "$after_repo" ] || { __ok=0; __why="${__why}fixture repo's file listing changed — push-guard.sh wrote to or altered a file it should only read (system config route)\n"; }
+  [ "$before_sysroot" = "$after_sysroot" ] || { __ok=0; __why="${__why}fixture sysroot's file listing changed — push-guard.sh wrote to or altered a file it should only read (system config route)\n"; }
+}
+case_push_include_deny_relative_from_repo() {
+  local dir="$tmpbase/repo-include-relative"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = extra.inc\n'
+  printf '[remote "origin"]\n\tpush = HEAD:main\n' > "$dir/.git/extra.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"in .git/config (via include)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not name the include source label 'in .git/config (via include)': '$push_err'\n" ;;
+  esac
+}
+case_push_include_deny_absolute_from_global() {
+  local dir="$tmpbase/repo-include-absolute" home="$tmpbase/home-include-absolute"
+  local body
+  mk_fixture_repo "$dir" main feature/x
+  body="$(printf '[include]\n\tpath = %s/inc-abs/abs.inc\n' "$tmpbase")"
+  mk_fixture_global_config "$home/.gitconfig" "$body"
+  mk_fixture_global_config "$tmpbase/inc-abs/abs.inc" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_deny_tilde() {
+  local dir="$tmpbase/repo-include-tilde" home="$tmpbase/home-include-tilde"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$home/.gitconfig" $'[include]\n\tpath = ~/inc/push.inc\n'
+  mk_fixture_global_config "$home/inc/push.inc" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_deny_includeif_unmatched_condition() {
+  local dir="$tmpbase/repo-include-includeif"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[includeIf "gitdir:/nonexistent-304/"]\n\tpath = extra.inc\n'
+  printf '[remote "origin"]\n\tpush = HEAD:main\n' > "$dir/.git/extra.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_deny_mixed_case() {
+  local dir="$tmpbase/repo-include-mixed-case"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[Include]\n\tPATH = extra.inc\n'
+  printf '[remote "origin"]\n\tpush = HEAD:main\n' > "$dir/.git/extra.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_deny_nested_system_relative() {
+  local dir="$tmpbase/repo-include-nested-system" sysroot="$tmpbase/sysroot-include-nested"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$sysroot/etc/gitconfig" $'[include]\n\tpath = a.inc\n'
+  mk_fixture_global_config "$sysroot/etc/a.inc" $'[include]\n\tpath = b.inc\n'
+  mk_fixture_global_config "$sysroot/etc/b.inc" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  push_sysroot_override="$sysroot"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"your system git config (via include)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not name the nested include source label 'your system git config (via include)': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(via include) (via include)"*) __ok=0; __why="${__why}stderr doubles the include suffix: '$push_err'\n" ;;
+    *) ;;
+  esac
+}
+case_push_include_deny_at_depth_cap() {
+  local dir="$tmpbase/repo-include-depth-cap" i j
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = c1.inc\n'
+  for i in 1 2 3 4 5 6 7 8 9; do
+    j=$((i + 1))
+    printf '[include]\n\tpath = c%d.inc\n' "$j" > "$dir/.git/c${i}.inc"
+  done
+  printf '[remote "origin"]\n\tpush = HEAD:main\n' > "$dir/.git/c10.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_noop_beyond_depth_cap() {
+  local dir="$tmpbase/repo-include-beyond-depth-cap" i j
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = c1.inc\n'
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    j=$((i + 1))
+    printf '[include]\n\tpath = c%d.inc\n' "$j" > "$dir/.git/c${i}.inc"
+  done
+  printf '[remote "origin"]\n\tpush = HEAD:main\n' > "$dir/.git/c11.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_deny_second_path_after_return() {
+  local dir="$tmpbase/repo-include-second-path"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = a.inc\n\tpath = b.inc\n'
+  printf '[push]\n\tdefault = current\n' > "$dir/.git/a.inc"
+  printf '[remote "origin"]\n\tpush = HEAD:main\n' > "$dir/.git/b.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_deny_mutual_cycle() {
+  local dir="$tmpbase/repo-include-mutual-cycle"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = a.inc\n'
+  printf '[include]\n\tpath = config\n[push]\n\tdefault = matching\n' > "$dir/.git/a.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_noop_self_cycle() {
+  local dir="$tmpbase/repo-include-self-cycle"
+  mk_fixture_repo "$dir" main "claude/17-a"
+  mk_fixture_config "$dir" $'[include]\n\tpath = config\n\tpath = config\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_noop_missing_target() {
+  local dir="$tmpbase/repo-include-missing-target"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = missing.inc\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_noop_prefix_form() {
+  local dir="$tmpbase/repo-include-prefix-form"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = %(prefix)/etc/extra.inc\n'
+  mkdir -p "$dir/.git/%(prefix)/etc"
+  printf '[remote "origin"]\n\tpush = HEAD:main\n' > "$dir/.git/%(prefix)/etc/extra.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_deny_repo_config_reincluded() {
+  # Pins that the seen-list is ANCESTOR-ONLY, never a whole resolve_repo()-call history. Repo
+  # .git/config sets push.default=upstream and branch.merge=refs/heads/main; a GLOBAL candidate's
+  # own [include] pulls in an ABSOLUTE copy of that SAME .git/config path (setting the identical
+  # two values transiently), then the global file's own NEXT line overwrites merge to
+  # refs/heads/feature/x. Real git still reads the repo's own LOCAL scope, on its own, LAST — its
+  # merge=refs/heads/main value wins the race. A whole-call seen-list would wrongly treat the
+  # repo-local top-level candidate's own later, mandatory re-read of that identical absolute path
+  # as "already seen" (from the global include) and skip it, leaving branch.merge at "feature/x"
+  # (not a deny-set member) instead of "main" — an under-block: no opinion where real git denies.
+  local dir="$tmpbase/repo-include-reincluded" home="$tmpbase/home-include-reincluded"
+  local body
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[push]\n\tdefault = upstream\n[branch "feature/x"]\n\tmerge = refs/heads/main\n'
+  body="$(printf '[include]\n\tpath = %s/.git/config\n[branch "feature/x"]\n\tmerge = refs/heads/feature/x\n' "$dir")"
+  mk_fixture_global_config "$home/.gitconfig" "$body"
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_noop_tilde_user() {
+  # Unpinned clause: "~user/…" is never followed (falls to the bare "\~*" skip arm, tried before
+  # the generic relative-path fallback) — even when a file exists at that literal path.
+  local dir="$tmpbase/repo-include-tilde-user"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = ~user/x.inc\n'
+  mkdir -p "$dir/.git/~user"
+  printf '[remote "origin"]\n\tpush = HEAD:main\n' > "$dir/.git/~user/x.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_noop_directory_target() {
+  # Unpinned clause: a non-regular include target (a directory, never a FIFO — portable and never
+  # hangs) is never opened; expect_push_no_opinion's own empty-stderr check backstops this too.
+  local dir="$tmpbase/repo-include-directory-target"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = d.inc\n'
+  mkdir -p "$dir/.git/d.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_noop_tilde_empty_home() {
+  # Unpinned clause: "~/…" is never followed when $HOME is empty (set, but the empty string) —
+  # $push_home_empty exports HOME= for this one call; the denying target exists on disk at its own
+  # absolute path, proving the miss is the empty-HOME guard, not a missing file.
+  local dir="$tmpbase/repo-include-tilde-empty-home"
+  local target="$tmpbase/tilde-empty-home-target/deny.inc"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$target" $'[remote "origin"]\n\tpush = HEAD:main\n'
+  mk_fixture_config "$dir" "$(printf '[include]\n\tpath = ~%s\n' "$target")"
+  push_home_empty=1
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_noop_drive_letter() {
+  # Unpinned clause: an "X:/…" value is used AS-IS (never joined to the including file's own
+  # directory), so it resolves against the hook's own cwd, not $dir/.git — the denying file placed
+  # at $dir/.git/C:/x.inc is never the one checked, and stays missing from the hook's own cwd.
+  local dir="$tmpbase/repo-include-drive-letter"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = C:/x.inc\n'
+  mkdir -p "$dir/.git/C:"
+  printf '[remote "origin"]\n\tpush = HEAD:main\n' > "$dir/.git/C:/x.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_deny_fanout_toplevel_route() {
+  # A config tree that repeats the SAME include path K times per level fans out to about K^depth
+  # follow operations (the ancestor-only seen-list's own re-read-every-sibling stance, applied
+  # recursively). The deny route here lives in .git/config ITSELF, after the fan-out's own
+  # [include] block -- a depth-0 top-level read, never budgeted, with no line cap of its own -- so
+  # it must still be found once CFG_INCLUDE_MAX_FOLLOWS and CFG_INCLUDE_MAX_LINES together bound
+  # the fan-out's own recursion.
+  local dir="$tmpbase/repo-include-fanout-toplevel" k=3 depth=7 lvl next i
+  mk_fixture_repo "$dir" main feature/x
+  {
+    printf '[include]\n'
+    i=0
+    while [ "$i" -lt "$k" ]; do
+      printf '\tpath = l1.inc\n'
+      i=$((i + 1))
+    done
+    printf '[push]\n\tdefault = matching\n'
+  } > "$dir/.git/config"
+  lvl=1
+  while [ "$lvl" -lt "$depth" ]; do
+    next=$((lvl + 1))
+    {
+      printf '[include]\n'
+      i=0
+      while [ "$i" -lt "$k" ]; do
+        printf '\tpath = l%d.inc\n' "$next"
+        i=$((i + 1))
+      done
+    } > "$dir/.git/l${lvl}.inc"
+    lvl=$next
+  done
+  printf '[core]\n\teditor = vi\n' > "$dir/.git/l${depth}.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_noop_over_budget() {
+  # The follow-budget is DETERMINISTICALLY testable without relying on wall-clock timing. 65
+  # DISTINCT includes (never a repeated sibling, so this is not itself a fan-out) exhaust
+  # CFG_INCLUDE_MAX_FOLLOWS=64 on the first 64 (all benign); the 65th, and only denying, include is
+  # never followed -- proving the budget's own boundary is exact.
+  local dir="$tmpbase/repo-include-over-budget" i
+  mk_fixture_repo "$dir" main feature/x
+  printf '[include]\n' > "$dir/.git/config"
+  i=1
+  while [ "$i" -le 65 ]; do
+    printf '\tpath = i%02d.inc\n' "$i" >> "$dir/.git/config"
+    i=$((i + 1))
+  done
+  i=1
+  while [ "$i" -le 64 ]; do
+    printf '[core]\n\teditor = vi\n' > "$dir/.git/i$(printf '%02d' "$i").inc"
+    i=$((i + 1))
+  done
+  printf '[push]\n\tdefault = matching\n' > "$dir/.git/i65.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_noop_over_line_budget() {
+  # CFG_INCLUDE_MAX_LINES bounds total lines read from included files (depth >= 1), shared for the
+  # whole resolve_repo() call, never reset per file -- one included file's own [push] header (line
+  # 1) plus CFG_INCLUDE_MAX_LINES-1 harmless comment-only filler lines exhaust the budget exactly;
+  # its own denying key line, one line past the budget, is never read (the comment-strip already
+  # reduces each filler line to empty before the section/key dispatch ever sees it, so it changes
+  # no parser state of its own -- only the [push] section set on line 1 persists).
+  local dir="$tmpbase/repo-include-over-line-budget" n=2048 i
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = big.inc\n'
+  printf '[push]\n' > "$dir/.git/big.inc"
+  i=2
+  while [ "$i" -le "$n" ]; do
+    printf '; filler\n' >> "$dir/.git/big.inc"
+    i=$((i + 1))
+  done
+  printf '\tdefault = matching\n' >> "$dir/.git/big.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_deny_within_line_budget() {
+  # The exact same shape as push-include-noop-over-line-budget with ONE FEWER filler line, so the
+  # denying key line lands AT the budget boundary (still read) rather than one line past it.
+  local dir="$tmpbase/repo-include-within-line-budget" n=2048 i
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = big.inc\n'
+  printf '[push]\n' > "$dir/.git/big.inc"
+  i=2
+  while [ "$i" -le $((n - 1)) ]; do
+    printf '; filler\n' >> "$dir/.git/big.inc"
+    i=$((i + 1))
+  done
+  printf '\tdefault = matching\n' >> "$dir/.git/big.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_deny_longline_toplevel_route() {
+  # A single, very long included line (well past CFG_INCLUDE_MAX_LINE_CHARS) must be skipped
+  # cheaply -- checked with ${#cfgline} alone, never reaching cfg_trim's own pattern matching,
+  # whose cost is NOT linear in a long trailing whitespace run (see cfg_trim()'s own header
+  # comment) -- so the denying route in .git/config ITSELF, after the include, is still found, and
+  # found FAST.
+  local dir="$tmpbase/repo-include-longline-toplevel" astr spstr
+  mk_fixture_repo "$dir" main feature/x
+  astr="a"
+  while [ "${#astr}" -lt 10000 ]; do astr="$astr$astr"; done
+  astr="${astr:0:10000}"
+  spstr=" "
+  while [ "${#spstr}" -lt 10000 ]; do spstr="$spstr$spstr"; done
+  spstr="${spstr:0:10000}"
+  mk_fixture_config "$dir" $'[include]\n\tpath = big.inc\n'
+  printf '[core]\n\tx = %s%s\n' "$astr" "$spstr" > "$dir/.git/big.inc"
+  printf '[push]\n\tdefault = matching\n' >> "$dir/.git/config"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_noop_over_line_chars() {
+  # Boundary: a route line padded to CFG_INCLUDE_MAX_LINE_CHARS+1 characters is skipped for length
+  # before comment-strip or trim ever run -- the padding is a trailing comment (stripped before
+  # dispatch on a line that IS processed, but this line never reaches that step at all), so the
+  # padded length is exactly what decides the outcome, not the padding's own content.
+  local dir="$tmpbase/repo-include-over-line-chars" base pad line
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = big.inc\n'
+  base=$'\tdefault = matching ; '
+  pad="x"
+  while [ "${#pad}" -lt 600 ]; do pad="$pad$pad"; done
+  pad="${pad:0:$((513 - ${#base}))}"
+  line="${base}${pad}"
+  printf '[push]\n%s\n' "$line" > "$dir/.git/big.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_deny_within_line_chars() {
+  # The exact same shape as push-include-noop-over-line-chars, padded to exactly
+  # CFG_INCLUDE_MAX_LINE_CHARS characters (one fewer) instead of one past it -- still processed.
+  local dir="$tmpbase/repo-include-within-line-chars" base pad line
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = big.inc\n'
+  base=$'\tdefault = matching ; '
+  pad="x"
+  while [ "${#pad}" -lt 600 ]; do pad="$pad$pad"; done
+  pad="${pad:0:$((512 - ${#base}))}"
+  line="${base}${pad}"
+  printf '[push]\n%s\n' "$line" > "$dir/.git/big.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_noop_over_char_budget() {
+  # Boundary: CFG_INCLUDE_MAX_CHARS is charged "${#cfgline}+1" per depth>=1 line, BEFORE the
+  # line-length cap is even checked, and a line over-length is still charged before it is skipped
+  # for length -- so ONE oversized filler line can precisely exhaust the shared character budget. A
+  # [push] header (charge 7) plus one 65509-character filler line (charge 65510) leaves the budget
+  # at -1 by the time the final denying key line (charge 20) would need it -- never read.
+  local dir="$tmpbase/repo-include-over-char-budget" filler
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = big.inc\n'
+  filler="x"
+  while [ "${#filler}" -lt 65509 ]; do filler="$filler$filler"; done
+  filler="${filler:0:65509}"
+  {
+    printf '[push]\n'
+    printf '%s\n' "$filler"
+    printf '\tdefault = matching\n'
+  } > "$dir/.git/big.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_deny_within_char_budget() {
+  # The exact same shape as push-include-noop-over-char-budget with the filler line ONE FEWER
+  # character (65508, charge 65509), so the budget lands at exactly 0 -- not negative -- by the
+  # time the denying key line's own charge (20) is needed, and it is still read.
+  local dir="$tmpbase/repo-include-within-char-budget" filler
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = big.inc\n'
+  filler="x"
+  while [ "${#filler}" -lt 65508 ]; do filler="$filler$filler"; done
+  filler="${filler:0:65508}"
+  {
+    printf '[push]\n'
+    printf '%s\n' "$filler"
+    printf '\tdefault = matching\n'
+  } > "$dir/.git/big.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_deny_long_toplevel_route() {
+  # Depth-0 (top-level) candidates never consult the line budget: a .git/config file with far more
+  # than CFG_INCLUDE_MAX_LINES lines, with its own denying route at the very end, must still be
+  # found in full -- proving a long TOP-LEVEL file is never truncated the way an included file is.
+  local dir="$tmpbase/repo-include-long-toplevel" i
+  mk_fixture_repo "$dir" main feature/x
+  printf '[push]\n' > "$dir/.git/config"
+  i=1
+  while [ "$i" -le 2100 ]; do
+    printf '; filler\n' >> "$dir/.git/config"
+    i=$((i + 1))
+  done
+  printf '\tdefault = matching\n' >> "$dir/.git/config"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+}
+case_push_include_deny_c_target_fresh_budget() {
+  # All three include budgets (follow, line-count, character) reset per resolve_repo() call
+  # (session and "-C" alike): the SESSION's own config exhausts all three at the SAME time -- 64
+  # includes (using up every follow -- the follow-gate itself only refuses a follow still to come,
+  # so every one of the 64 must actually succeed for the follow budget to reach zero), each with
+  # exactly 32 UNIFORM comment-only lines of exactly 31 characters (a 32-character charge per line,
+  # and 64*32 lines == CFG_INCLUDE_MAX_LINES and 64*32*32 characters == CFG_INCLUDE_MAX_CHARS,
+  # both exactly), none of it denying (each line strips to empty and is skipped). The resolved "-C"
+  # target's only route lives behind ONE include of its own, which must still be followed under
+  # its own fresh budgets, independent of the session's own exhausted ones.
+  local main="$tmpbase/repo-include-fresh-budget" target="$tmpbase/target-fb-wt-1" i j body content31
+  mk_fixture_repo "$main" main feature/x
+  printf '[include]\n' > "$main/.git/config"
+  content31=";000000000000000000000000000000"
+  i=1
+  while [ "$i" -le 64 ]; do
+    printf '\tpath = s%02d.inc\n' "$i" >> "$main/.git/config"
+    body=""
+    j=1
+    while [ "$j" -le 32 ]; do
+      body="${body}${content31}"$'\n'
+      j=$((j + 1))
+    done
+    printf '%s' "$body" > "$main/.git/$(printf 's%02d' "$i").inc"
+    i=$((i + 1))
+  done
+  mk_fixture_repo "$target" trunk feature/y
+  mk_fixture_config "$target" $'[include]\n\tpath = t.inc\n'
+  printf '[remote "origin"]\n\tpush = HEAD:main\n' > "$target/.git/t.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git -C ../target-fb-wt-1 push' "$main")"
+  expect_push_deny
+}
+case_push_include_noop_budget_gates_follow() {
+  # The FIRST include (big.inc) exhausts CFG_INCLUDE_MAX_CHARS in one oversized line; the SECOND
+  # include names a real, existing, permission-denied (mode 000) file. The follow-gate (the include
+  # arm's own line-budget/char-budget conjuncts) must refuse to open the SECOND include at all --
+  # not even [ -f ] -- once budget is empty. Without the gate, bash's own failed redirect
+  # (permission denied on the read) leaks an OS-level error line onto stderr, which
+  # expect_push_no_opinion rejects; that stderr line is the only thing this proof observes. It
+  # assumes a non-root runner: root ignores the mode bits, opens the file, and the per-line budget
+  # checks stop before its first line is parsed, so with or without the gate the verdict is no
+  # opinion with empty stderr, and the proof is vacuous under root. The file's route
+  # (`push.default = matching`) is never reached either way.
+  local dir="$tmpbase/repo-include-budget-gates-follow" filler
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = big.inc\n\tpath = noperm.inc\n'
+  filler="x"
+  while [ "${#filler}" -lt 65600 ]; do filler="$filler$filler"; done
+  filler="${filler:0:65600}"
+  printf '%s\n' "$filler" > "$dir/.git/big.inc"
+  printf '[push]\n\tdefault = matching\n' > "$dir/.git/noperm.inc"
+  chmod 000 "$dir/.git/noperm.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_noop_line_budget_gates_follow() {
+  # The sibling of push-include-noop-budget-gates-follow, isolating the LINE-budget conjunct
+  # specifically: the FIRST include (manylines.inc) is exactly CFG_INCLUDE_MAX_LINES one-character
+  # lines, exhausting the line budget to precisely zero while charging only a small fraction of the
+  # character budget (each line is cheap) and only one of CFG_INCLUDE_MAX_FOLLOWS follows. The
+  # SECOND include names a real, existing, permission-denied (mode 000) file. With follows and
+  # characters both still comfortably positive, only the line-budget conjunct can be what refuses
+  # to open the SECOND include; as above, the proof observes only the non-root permission-denied
+  # stderr line, so it assumes a non-root runner and is vacuous under root.
+  local dir="$tmpbase/repo-include-line-budget-gates-follow" body j
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = manylines.inc\n\tpath = noperm2.inc\n'
+  body=""
+  j=1
+  while [ "$j" -le 2048 ]; do
+    body="${body};"$'\n'
+    j=$((j + 1))
+  done
+  printf '%s' "$body" > "$dir/.git/manylines.inc"
+  printf '[push]\n\tdefault = matching\n' > "$dir/.git/noperm2.inc"
+  chmod 000 "$dir/.git/noperm2.inc"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_no_opinion
+}
+case_push_include_deny_never_executes() {
+  local dir="$tmpbase/repo-include-never-executes" home="$tmpbase/home-include-never-executes"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[include]\n\tpath = extra.inc\n'
+  printf '[remote "origin"]\n\tpush = HEAD:main\n' > "$dir/.git/extra.inc"
+  mk_fixture_global_config "$home/.gitconfig" $'[include]\n\tpath = ~/x.inc\n'
+  mk_fixture_global_config "$home/x.inc" $'[core]\n\teditor = vi\n'
+  local trapdir="$tmpbase/trapbin-include-deny" sentinel="$tmpbase/sentinel-include-deny"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  local before_repo after_repo before_home after_home
+  before_repo="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  before_home="$(find "$home" -type f -exec ls -la {} \; | sort)"
+  push_home_override="$home"
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")" "$trapdir:$PATH"
+  after_repo="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  after_home="$(find "$home" -type f -exec ls -la {} \; | sort)"
+  expect_push_deny
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH while following an include\n"; }
+  [ "$before_repo" = "$after_repo" ] || { __ok=0; __why="${__why}fixture repo's file listing changed — push-guard.sh wrote to or altered a file it should only read (include route)\n"; }
+  [ "$before_home" = "$after_home" ] || { __ok=0; __why="${__why}fixture HOME's file listing changed — push-guard.sh wrote to or altered a file it should only read (include route)\n"; }
 }
 
 # --- #403: the eval/trap/zsh-precommand-modifier class ------------------------------------------
@@ -5265,6 +6067,55 @@ cases=(
   "push-kw-deny-bang|case_push_kw_deny_bang|shell-keyword deny: ! git push origin main -- mutation proof: dev/mutants/hook-tests.json (398-pg-kw-vocab)"
   "push-kw-deny-upper-git|case_push_kw_deny_upper_git|case-fold deny: GIT push origin main -- mutation proof: dev/mutants/hook-tests.json (398-pg-case-fold, 398-pg-fastpath-case)"
   "push-kw-noop-then-feature|case_push_kw_noop_then_feature|shell-keyword no opinion: if true; then git push origin feature/x; fi (control: the keyword skip must not widen the destination rule) -- control, not part of the mutation-proof registry"
+  # --- #304/#305: system git config candidates cases ------------------------------------------
+  "push-cfg-deny-trailing-tab-default|case_push_cfg_deny_trailing_tab_default|deny: [push] default = matching<TAB> in .git/config -- pins that cfg_trim's fork-free rewrite still strips a trailing TAB, not just trailing spaces -- mutation proof: dev/mutants/hook-tests.json (304-cfg-trim-tab)"
+  "push-sysconf-deny-etc|case_push_sysconf_deny_etc|deny: bare push, remote.origin.push=HEAD:main in \$sysroot/etc/gitconfig -- mutation proof: dev/mutants/hook-tests.json (304-sys-etc)"
+  "push-sysconf-deny-homebrew-arm|case_push_sysconf_deny_homebrew_arm|deny: bare push, push.default=upstream in \$sysroot/opt/homebrew/etc/gitconfig, resolved via a repo branch.merge -- mutation proof: dev/mutants/hook-tests.json (304-sys-homebrew-arm)"
+  "push-sysconf-deny-homebrew-intel|case_push_sysconf_deny_homebrew_intel|deny: bare push, push.default=matching in \$sysroot/usr/local/etc/gitconfig -- mutation proof: dev/mutants/hook-tests.json (304-sys-homebrew-intel)"
+  "push-sysconf-deny-apple-clt|case_push_sysconf_deny_apple_clt|deny: bare push, push.default=matching in the Apple CLT candidate, no NOSYSTEM set, plus an inline assert that stderr names 'in your system git config' -- mutation proof: dev/mutants/hook-tests.json (304-sys-clt, 304-sys-clt-label)"
+  "push-sysconf-deny-env-var|case_push_sysconf_deny_env_var|deny: bare push, \$GIT_CONFIG_SYSTEM pointed at a denying file outside the sysroot, plus an inline assert that stderr names 'in your system git config' -- mutation proof: dev/mutants/hook-tests.json (304-sys-env-var, 304-sys-label)"
+  "push-sysconf-deny-env-var-union-not-replace|case_push_sysconf_deny_env_var_union_not_replace|deny: a BENIGN \$GIT_CONFIG_SYSTEM file does not replace \$sysroot/etc/gitconfig, which still denies -- mutation proof: dev/mutants/hook-tests.json (304-sys-etc)"
+  "push-sysconf-noop-nosystem-one|case_push_sysconf_noop_nosystem_one|no opinion: GIT_CONFIG_NOSYSTEM=1 skips both \$GIT_CONFIG_SYSTEM and \$sysroot/etc/gitconfig, each independently denying -- mutation proof: dev/mutants/hook-tests.json (304-nosystem-ignored)"
+  "push-sysconf-noop-nosystem-word|case_push_sysconf_noop_nosystem_word|no opinion: GIT_CONFIG_NOSYSTEM=Yes (case-insensitive word form) skips the same two candidates -- mutation proof: dev/mutants/hook-tests.json (304-nosystem-ignored, 304-nosystem-word)"
+  "push-sysconf-deny-nosystem-false|case_push_sysconf_deny_nosystem_false|deny: GIT_CONFIG_NOSYSTEM=0 (a non-canonical/false-looking value) does NOT disable the system read -- mutation proof: dev/mutants/hook-tests.json (304-nosystem-any-value)"
+  "push-sysconf-noop-clt-nosystem|case_push_sysconf_noop_clt_nosystem|no opinion (amendment A1): GIT_CONFIG_NOSYSTEM=1 also skips the Apple CLT candidate, which sits INSIDE the same \$nosys guard as the three static paths -- mutation proof: dev/mutants/hook-tests.json (304-nosystem-ignored, 304-nosystem-covers-clt)"
+  "push-sysconf-deny-repo-merge-last|case_push_sysconf_deny_repo_merge_last|deny: system push.default=upstream plus a conflicting branch.merge in BOTH \$sysroot/etc/gitconfig and the repo -- the repo's own value, read LAST, wins -- mutation proof: dev/mutants/hook-tests.json (304-sys-etc, 304-sys-order)"
+  "push-sysconf-deny-c-target|case_push_sysconf_deny_c_target|deny: a resolved -C target sees the SAME system candidates the session would, independently re-derived -- mutation proof: dev/mutants/hook-tests.json (304-sys-etc)"
+  "push-sysconf-noop-explicit-refspec|case_push_sysconf_noop_explicit_refspec|no opinion: the harness's own explicit-refspec push -u origin \"claude/17-a\" never consults config, system or otherwise, even with denying system routes present -- control, not part of the mutation-proof registry"
+  "push-sysconf-deny-never-executes|case_push_sysconf_deny_never_executes|deny, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH while evaluating the system route, AND the fixture repo's and sysroot's own file listings stay byte-identical -- mutation proof: dev/mutants/hook-tests.json (304-sys-etc)"
+  # --- #304/#305: include/includeIf cases -------------------------------------------------------
+  "push-include-deny-relative-from-repo|case_push_include_deny_relative_from_repo|deny: repo config includes a relative extra.inc (resolved against .git/), plus an inline assert that stderr names 'in .git/config (via include)' -- mutation proof: dev/mutants/hook-tests.json (304-inc-section, 304-inc-relative, 304-inc-label)"
+  "push-include-deny-absolute-from-global|case_push_include_deny_absolute_from_global|deny: a global .gitconfig includes an ABSOLUTE path elsewhere under \$tmpbase -- mutation proof: dev/mutants/hook-tests.json (304-inc-section)"
+  "push-include-deny-tilde|case_push_include_deny_tilde|deny: a global .gitconfig includes '~/inc/push.inc', resolved against the fixture HOME -- mutation proof: dev/mutants/hook-tests.json (304-inc-section, 304-inc-tilde)"
+  "push-include-deny-includeif-unmatched-condition|case_push_include_deny_includeif_unmatched_condition|deny (the pinned over-block): an includeIf gitdir: condition that could never match this checkout is still followed unconditionally -- mutation proof: dev/mutants/hook-tests.json (304-incif-section, 304-inc-relative)"
+  "push-include-deny-mixed-case|case_push_include_deny_mixed_case|deny: repo config spells the section/key '[Include]'/'PATH' in mixed case -- mutation proof: dev/mutants/hook-tests.json (304-inc-section, 304-inc-key-case, 304-inc-relative)"
+  "push-include-deny-nested-system-relative|case_push_include_deny_nested_system_relative|deny: a system candidate includes a.inc, which includes b.inc, two levels of relative resolution; inline asserts that stderr names 'your system git config (via include)' exactly once, never doubled -- mutation proof: dev/mutants/hook-tests.json (304-inc-section, 304-inc-relative, 304-inc-label)"
+  "push-include-deny-at-depth-cap|case_push_include_deny_at_depth_cap|deny: a repo config include chain ten hops deep (c1..c10, top-level = depth 0), the denying route only in c10 -- mutation proof: dev/mutants/hook-tests.json (304-inc-section, 304-inc-relative, 304-inc-depth-lo)"
+  "push-include-noop-beyond-depth-cap|case_push_include_noop_beyond_depth_cap|no opinion: the same chain one hop longer, the denying route only in c11 (depth 11), never followed -- mutation proof: dev/mutants/hook-tests.json (304-inc-depth-hi)"
+  "push-include-deny-second-path-after-return|case_push_include_deny_second_path_after_return|deny: repo config's own [include] section carries TWO path keys (a.inc then b.inc); parsing must resume in the includer's own section after a.inc returns, to reach b.inc's own denying route -- mutation proof: dev/mutants/hook-tests.json (304-inc-section, 304-inc-relative, 304-inc-section-local)"
+  "push-include-deny-mutual-cycle|case_push_include_deny_mutual_cycle|deny, and it terminates: repo config includes a.inc, which includes the repo's OWN config right back -- mutation proof: dev/mutants/hook-tests.json (304-inc-section, 304-inc-relative)"
+  "push-include-noop-self-cycle|case_push_include_noop_self_cycle|no opinion, and it terminates: repo config includes its own 'config' path twice in a row -- control, not part of the mutation-proof registry"
+  "push-include-noop-missing-target|case_push_include_noop_missing_target|no opinion: repo config includes a target that does not exist on disk -- control, not part of the mutation-proof registry"
+  "push-include-noop-prefix-form|case_push_include_noop_prefix_form|no opinion: repo config includes a literal '%(prefix)/etc/extra.inc' path, even though a file exists at that literal on-disk location -- proves the value is never treated as relative -- mutation proof: dev/mutants/hook-tests.json (304-inc-prefix-skip)"
+  "push-include-deny-repo-config-reincluded|case_push_include_deny_repo_config_reincluded|deny: a GLOBAL include re-reads the repo's OWN .git/config by absolute path, then the global file overwrites branch.merge -- the repo-local top-level candidate's own later, mandatory re-read must still run and win last, proving the seen-list is ANCESTOR-ONLY, not a whole-resolve_repo()-call history -- mutation proof: dev/mutants/hook-tests.json (304-inc-seen-global)"
+  "push-include-noop-tilde-user|case_push_include_noop_tilde_user|no opinion: repo config includes '~user/x.inc', even though a file exists at that literal on-disk location -- mutation proof: dev/mutants/hook-tests.json (304-inc-tilde-user)"
+  "push-include-noop-directory-target|case_push_include_noop_directory_target|no opinion: repo config includes a target that is a DIRECTORY, not a regular file -- mutation proof: dev/mutants/hook-tests.json (304-inc-regular-file)"
+  "push-include-noop-tilde-empty-home|case_push_include_noop_tilde_empty_home|no opinion: repo config includes '~/<abs-path>' with HOME exported empty for this call, even though the denying target exists on disk at its own absolute path -- mutation proof: dev/mutants/hook-tests.json (304-inc-tilde-empty-home)"
+  "push-include-noop-drive-letter|case_push_include_noop_drive_letter|no opinion: repo config includes 'C:/x.inc' (used as-is, never joined to the including file's own directory), so it resolves against the hook's own cwd and stays missing -- mutation proof: dev/mutants/hook-tests.json (304-inc-drive-letter)"
+  "push-include-deny-fanout-toplevel-route|case_push_include_deny_fanout_toplevel_route|deny: a 3-way, depth-7 fan-out include tree, with the denying route in .git/config ITSELF (never budgeted) -- finishes fast once the follow-budget and line-budget together bound the fan-out's own recursion -- control, not part of the mutation-proof registry (see push-include-noop-over-budget and push-include-noop-over-line-budget for the deterministic budget-boundary proofs)"
+  "push-include-noop-over-budget|case_push_include_noop_over_budget|no opinion: 65 distinct includes exhaust CFG_INCLUDE_MAX_FOLLOWS=64 on the first 64 (benign); the 65th, and only denying, include is never followed -- mutation proof: dev/mutants/hook-tests.json (304-inc-follow-budget, 304-inc-follow-budget-off-by-one)"
+  "push-include-noop-over-line-budget|case_push_include_noop_over_line_budget|no opinion: an included file whose own denying key line sits exactly one line past CFG_INCLUDE_MAX_LINES -- mutation proof: dev/mutants/hook-tests.json (304-inc-line-budget, 304-inc-line-budget-off-by-one)"
+  "push-include-deny-within-line-budget|case_push_include_deny_within_line_budget|deny: the same shape with one fewer filler line, so the denying key line lands AT the CFG_INCLUDE_MAX_LINES boundary, still read -- mutation proof: dev/mutants/hook-tests.json (304-inc-section, 304-inc-relative, 304-inc-line-budget-off-by-one, 304-inc-line-budget-depth0)"
+  "push-include-deny-longline-toplevel-route|case_push_include_deny_longline_toplevel_route|deny: a single 20KB included line is skipped for length cheaply, so the top-level route after it is still found fast -- control, not part of the mutation-proof registry"
+  "push-include-noop-over-line-chars|case_push_include_noop_over_line_chars|no opinion: an included route line padded to CFG_INCLUDE_MAX_LINE_CHARS+1 characters is skipped for length before comment-strip or trim ever run -- mutation proof: dev/mutants/hook-tests.json (304-inc-line-chars)"
+  "push-include-deny-within-line-chars|case_push_include_deny_within_line_chars|deny: the same shape padded to exactly CFG_INCLUDE_MAX_LINE_CHARS characters, one fewer, still processed -- mutation proof: dev/mutants/hook-tests.json (304-inc-section, 304-inc-relative, 304-inc-line-chars-off-by-one)"
+  "push-include-noop-over-char-budget|case_push_include_noop_over_char_budget|no opinion: one oversized filler line's own charge leaves the shared character budget at exactly -1 by the time the denying key line is reached -- mutation proof: dev/mutants/hook-tests.json (304-inc-char-budget)"
+  "push-include-deny-within-char-budget|case_push_include_deny_within_char_budget|deny: the same shape with the filler line one character shorter, so the character budget lands at exactly 0 (not negative) and the denying key line is still read -- mutation proof: dev/mutants/hook-tests.json (304-inc-section, 304-inc-relative, 304-inc-char-budget-off-by-one, 304-inc-line-budget-depth0)"
+  "push-include-deny-long-toplevel-route|case_push_include_deny_long_toplevel_route|deny: a .git/config file far longer than CFG_INCLUDE_MAX_LINES, with its own route at the very end -- proves depth-0 top-level candidates never consult the line budget -- mutation proof: dev/mutants/hook-tests.json (304-inc-line-budget-depth0)"
+  "push-include-deny-c-target-fresh-budget|case_push_include_deny_c_target_fresh_budget|deny: the session's own config exhausts the follow, line-count and character budgets all at once; a resolved -C target's only route, behind one include, is still found under its own independently-reset budgets -- mutation proof: dev/mutants/hook-tests.json (304-inc-section, 304-inc-relative, 304-inc-follow-budget-reset, 304-inc-line-budget-reset, 304-inc-char-budget-reset)"
+  "push-include-noop-budget-gates-follow|case_push_include_noop_budget_gates_follow|no opinion: a SECOND include, of a real, permission-denied (mode 000) file that DOES carry its own deny route (push.default = matching), is never opened once the character budget is already exhausted by the first (observed via the permission-denied stderr line, so it assumes a non-root runner) -- deterministic, no timing involved -- mutation proof: dev/mutants/hook-tests.json (304-inc-follow-gate)"
+  "push-include-noop-line-budget-gates-follow|case_push_include_noop_line_budget_gates_follow|no opinion: the LINE-budget sibling of push-include-noop-budget-gates-follow -- CFG_INCLUDE_MAX_LINES one-character lines exhaust only the line budget, leaving follows and characters both still positive, and a SECOND include naming a real, permission-denied (mode 000) file carrying its own deny route is still never opened (assumes a non-root runner, as its sibling does) -- mutation proof: dev/mutants/hook-tests.json (304-inc-follow-gate, 304-inc-line-follow-gate)"
+  "push-include-deny-never-executes|case_push_include_deny_never_executes|deny, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH while following an include, AND the fixture repo's and HOME's own file listings stay byte-identical -- mutation proof: dev/mutants/hook-tests.json (304-inc-section, 304-inc-relative)"
   "push-pc-deny-eval|case_push_pc_deny_eval|eval deny: eval git push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
   "push-pc-deny-eval-quoted|case_push_pc_deny_eval_quoted|eval-quoted deny: eval 'git push origin main' -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
   "push-pc-deny-eval-lead-space|case_push_pc_deny_eval_lead_space|eval-quoted deny with a leading space: eval \" git push origin main\" -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab, 403-pg-pc-empty-tok)"

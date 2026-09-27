@@ -73,19 +73,63 @@
 # never the worktree pointer's own gitdir. Since #290, THREE global candidates are text-parsed the
 # same way and UNIONED with that repo-local config: `$GIT_CONFIG_GLOBAL` (when set and non-empty),
 # `$XDG_CONFIG_HOME/git/config` (or, when `$XDG_CONFIG_HOME` is unset or empty, `$HOME/.config/git/config`),
-# and `$HOME/.gitconfig` — every path taken from the ENVIRONMENT, never from the untrusted command
-# string, and read only when the checkout being resolved (session or a resolved `-C` target) has
-# actually resolved a gitdir (see `resolve_repo()`'s config-candidate loop for the exact order:
-# every global candidate first, this checkout's own repo-local config last, so a last-wins scalar
-# resolves to the repo's own value on any conflict). This closes only the REPO-LOCAL half of the
-# global/system config class named in every version of this file before #290 — see "Documented
-# under-blocking classes" below for what still stays unread (`/etc/gitconfig`,
-# `GIT_CONFIG_SYSTEM`/`GIT_CONFIG_NOSYSTEM`, `include`/`includeIf`, and the env-injected
-# `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>` forms). The config file(s) are read whole with no size
-# cap — a pathological file simply degrades to Claude Code's 10s hook timeout (silence, the same
-# fail-open every other resolution failure already has). Any failure at any step leaves both
-# branch values, and the config-derived variables, empty — never an error, never a non-zero exit
-# from this hook on that account alone.
+# and `$HOME/.gitconfig`. Since #304/#305, a SYSTEM class is unioned in too, read FIRST (before the
+# global candidates and this checkout's own repo-local config): `$GIT_CONFIG_SYSTEM` (when set and
+# non-empty), the three PUSH_SYSTEM_CONFIG_PATHS candidates below, and the Apple CLT candidate
+# (`PUSH_APPLE_CLT_CONFIG`) — all five skipped together when `$GIT_CONFIG_NOSYSTEM` holds a
+# canonical true value (see `resolve_repo()`'s candidate loop for the exact parse; verified live
+# that NOSYSTEM drops the CLT file's own scope too, so it sits INSIDE the same guard as the other
+# three, not outside it). Every one of these paths is taken from the ENVIRONMENT (or this file's
+# own fixed vocabulary), never from the untrusted command string, and read only when the checkout
+# being resolved (session or a resolved `-C` target) has actually resolved a gitdir (see
+# `resolve_repo()`'s config-candidate loop for the exact order: system candidates first, then
+# global, then this checkout's own repo-local config last, so a last-wins scalar resolves to the
+# repo's own value on any conflict). Since #304/#305, an `include`/`includeIf` directive found
+# inside ANY parsed file (system, global, repo-local, a resolved `-C` target's, or another
+# included file) is ALSO followed inline, at the point of the directive, in git's own order —
+# `includeIf`'s own condition is ignored, so every conditional include is unconditionally followed
+# (a union, over-blocking stance, like every other multi-file union this hook takes) — see
+# `cfg_parse_file()` below for the resolution rules, the depth cap, and the cycle guard. Together,
+# #268 (repo-local), #290 (global) and #304/#305 (system, plus includes inside all of them) close
+# the global/system config class named in every version of this file before #290 — see "Documented
+# under-blocking classes" below for what still stays unread (a system config at a path not on this
+# static list, an unresolvable include form, `config.worktree`, and the env-injected
+# `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>` forms). A depth-0 top-level candidate is read whole, with
+# no size, line-count, or line-length cap, never budgeted — a single pathological TOP-LEVEL file
+# (very many lines, or a single very long line or whitespace run — `cfg_trim()`'s own pattern
+# matching is not uniformly fast for the latter shape, see that function's header comment) simply
+# degrades to Claude Code's 10s hook timeout (silence, the same fail-open every other resolution
+# failure already has); this residual is unchanged and pre-existing, not introduced by this hook.
+# An INCLUDED file (depth >= 1) is bounded on four independent axes instead: `CFG_INCLUDE_MAX_FOLLOWS`
+# (below) caps how many times an include is ever followed across one whole `resolve_repo()` call;
+# `CFG_INCLUDE_MAX_LINES` (below) separately caps the TOTAL lines read across every followed file
+# combined, for that same whole call; `CFG_INCLUDE_MAX_LINE_CHARS` (below) caps a single line's own
+# length, checked BEFORE comment-strip or trim ever run on it — closing the same
+# long-line/whitespace-run cost `cfg_trim()`'s own header comment names, for included content
+# specifically; and `CFG_INCLUDE_MAX_CHARS` (below) caps the TOTAL characters charged across every
+# followed line combined, for that same whole call. Critically, the follow itself is gated on the
+# CURRENT state of the line-count and character budgets too, not just the follow-count one: once
+# EITHER runs out, no further include is ever OPENED at all — not even to attempt `[ -f ]` on it —
+# so an adversarial tree cannot keep spending real time by having each of many still-available
+# follows read just its own first line before its own per-line checks catch up. The one line this
+# cannot prevent is the SINGLE line, in whichever file happens to already be open, whose own read
+# is what drives the line-count or character budget past zero: that one line is read in full (the
+# read loop's own builtin redirect takes a whole line at a time) before the check that follows it
+# can break — grouped with the depth-0 top-level file's own long-line residual above as the same
+# class: at most one very long line, read once per `resolve_repo()` call, not further processed.
+# Every depth-0 top-level candidate is still always read in full, so none of these four axes can
+# ever mask a pre-#304/#305 route WITHIN ONE RESOLUTION. All four axes, and the uncapped depth-0
+# read itself, are bounded PER `resolve_repo()` call, never across the whole hook invocation: since
+# #269 (below), this hook calls `resolve_repo()` once for the SESSION checkout and once MORE for
+# every push segment whose own `-C` value resolves a checkout of its own, so a single command
+# naming enough such resolved `-C` targets — each supplying its own at-cap-but-legal include
+# content, or its own large top-level file — multiplies this same bounded work across resolutions
+# exactly as it already multiplies the uncapped depth-0 read, and can still cross Claude Code's own
+# hook timeout even though no single resolution ever exceeds its own caps: the same class of
+# residual as the depth-0 long-line case above, reached a different way, not fixed here. See
+# `cfg_parse_file()`'s own header comment for where every budget is spent. Any failure at
+# any step leaves both branch values, and the config-derived variables, empty — never an error,
+# never a non-zero exit from this hook on that account alone.
 #
 # Since #269, a push segment carrying exactly one DETACHED `-C <path>` token (not the attached
 # `-C<path>` form, and not a segment with a second `-C`) whose value satisfies the PATH_ERE
@@ -124,10 +168,13 @@
 # default branch, since the segment is judged against the worktree's own (non-default) current
 # branch instead; and a resolved segment no longer inherits the session's REPO-LOCAL `.git/config`
 # routes — since #290, this qualification is REPO-LOCAL only: the GLOBAL config candidates
-# (`$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config` or its default, `$HOME/.gitconfig`) are read
-# from the environment identically for every checkout resolved (session or a resolved `-C`
-# target), so a resolved segment still sees the SAME global routes the session would, independently
-# re-derived from its own `resolve_repo()` call rather than literally inherited.
+# (`$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config` or its default, `$HOME/.gitconfig`), and,
+# since #304/#305, the SYSTEM config candidates too (`$GIT_CONFIG_SYSTEM`, the three
+# PUSH_SYSTEM_CONFIG_PATHS paths, and the Apple CLT path, together governed by
+# `$GIT_CONFIG_NOSYSTEM`), are read from the environment identically for every checkout resolved
+# (session or a resolved `-C` target), so a resolved segment still sees the SAME global and system
+# routes the session would, independently re-derived from its own `resolve_repo()` call rather
+# than literally inherited.
 # The deny set for a segment whose `-C` value satisfies the predicate but resolves no gitdir of its
 # own is `PUSH_DEFAULT_BRANCH_FALLBACK` (below) UNION the session's resolved default branch, if any
 # — the fallback members are ALWAYS in force (even when a repo's real default branch resolves to
@@ -170,13 +217,34 @@
 # every OTHER filesystem path this hook derives from a resolved checkout (the two symref reads and
 # the repo-local `config` read) still comes solely from Claude Code's own `cwd`/`$PWD` or, for a
 # resolved `-C` segment, that same `-C <path>` value — never from any other part of the command
-# string. Since #290, this hook ALSO reads a THIRD class of path: the three global config
-# candidates (`$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config` or its default, `$HOME/.gitconfig`)
-# — every one of these comes from the ENVIRONMENT, never from `cwd`/`$PWD` and never from the
-# untrusted command string; an attacker who does not already control the session's environment
-# cannot influence which global files this hook reads, and this class must not be conflated with
-# the `-C`-derived containment argument above, which is specifically about paths taken from the
-# command string. The untrusted `-C` value itself is fed only to
+# string. Since #290, this hook ALSO reads a THIRD class of path: the global config candidates
+# (`$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config` or its default, `$HOME/.gitconfig`), and,
+# since #304/#305, the SYSTEM config candidates alongside them (`$GIT_CONFIG_SYSTEM`, the three
+# PUSH_SYSTEM_CONFIG_PATHS paths, the Apple CLT path, and the `TBF_PUSH_GUARD_SYSCONFIG_ROOT` test
+# prefix that a fixture, never a real run, sets to keep those static paths off the host's own real
+# system files) — every one of these comes from the ENVIRONMENT or this file's own fixed
+# vocabulary, never from `cwd`/`$PWD` and never from the untrusted command string; an attacker who
+# does not already control the session's environment cannot influence which global or system files
+# this hook reads, and this class must not be conflated with the `-C`-derived containment argument
+# above, which is specifically about paths taken from the command string. Since #304/#305, this
+# hook ALSO reads a FOURTH class of path: an `include`/`includeIf` target taken from the CONTENT of
+# a config file it already reads (system, global, repo-local, or another included file).
+# Containment for this class rests on three points: the value is resolved with parameter expansion
+# only (`~/` against `$HOME`, an absolute path as-is, anything else joined onto the including
+# file's own directory with `${path%/*}`) — never `dirname`, `cd`, `realpath`, or any external
+# command; the resolved value is only ever fed to a `[ -f ]`-guarded builtin redirect, the same way
+# every other config candidate is read, so it can only be opened for reading, never written, and a
+# FIFO or device is excluded exactly as elsewhere in this file; and content parsed out of an
+# included file can only ADD a deny route (see `config_deny()`'s union stance) — the one exception,
+# `branch.<current>.merge`, is a plain last-wins scalar across the WHOLE resolution, not just
+# within one file's own inline order: the identical path can legitimately be read more than once
+# in the same `resolve_repo()` call (a sibling include of the same target, or a later, unrelated
+# top-level candidate that happens to name a path some earlier candidate's own include already
+# pulled in — see `cfg_parse_file()`'s own header comment for why $cfg_seen does not, and must not,
+# treat either of those as a cycle), and each independent read's own `merge` value can overwrite
+# the last, in read order. That mirrors what git itself would do with the same files — the repo's
+# own scope is always read, on its own, last — so it is
+# not an evasion this hook introduces. The untrusted `-C` value itself is fed only to
 # `grep` (a here-string, never a piped writer — assertion 1.7) as data, and to shell builtin `[ -f
 # ]`/`[ -d ]` tests; resolving it caps its own upward walk at exactly one level (see
 # `resolve_repo()`'s `MAX_DEPTH` parameter below), so that value never reaches `dirname`'s argv —
@@ -256,6 +324,20 @@
 # `$HOME/.gitconfig` alone, still denies (rc 2) via the `-C` TARGET's own resolution. This is a
 # widening of WHICH checkouts see the three classes above, not a fourth class of its own — each
 # route it exposes on a resolved `-C` target is already counted above.
+#
+# Since #304/#305, FOUR more over-blocking classes: `$GIT_CONFIG_SYSTEM` is UNIONED with (never a
+# replacement for) the static PUSH_SYSTEM_CONFIG_PATHS candidates and the Apple CLT candidate —
+# the same stance #290 already took for `$GIT_CONFIG_GLOBAL`; the static system candidates are
+# read regardless of which git binary would actually run a given push, for example Homebrew's
+# `/opt/homebrew/etc/gitconfig` even when Apple's `/usr/bin/git` is first on `$PATH`; `includeIf`'s
+# own condition is ignored, so an include gated on a `gitdir:`/`onbranch:`/`hasconfig:` clause that
+# would never actually match this checkout is still followed unconditionally; and a non-canonical
+# true value such as `GIT_CONFIG_NOSYSTEM=2` does NOT disable the system read (only
+# `1`/`true`/`yes`/`on`, case-insensitively, do) — measured: `GIT_CONFIG_NOSYSTEM=2` plus a denying
+# `/etc/gitconfig` (under the test-only sysroot prefix) still denies (rc 2). None of these four is
+# widened again by also reaching a RESOLVED `-C` segment, for the same reason the three #290
+# classes above are not: the same system candidates are read identically for every checkout
+# resolved.
 #
 # `$GIT_CONFIG_GLOBAL` set to exactly `/dev/null` — git's own documented "disable the global
 # config" idiom — is excluded from this hook's own read naturally, not by any special-cased check:
@@ -371,15 +453,54 @@
 # attacker-arbitrary one, but they are not necessarily the facts of the directory the push
 # actually executes in (see the containment paragraph above for the qualification this
 # residual class requires). Since #268 closed the repo-local
-# `push.default`/`remote.<name>.push` class named here in every prior version of this file, and
-# #290 closed the GLOBAL half of that same class (`$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config`
-# or its default, `$HOME/.gitconfig`), the residual config surface left open is: a SYSTEM git
-# config (`/etc/gitconfig`, or a path named by `$GIT_CONFIG_SYSTEM`, unless `$GIT_CONFIG_NOSYSTEM`
-# is set) setting either key (filed as a follow-up alongside this change); the env-injected
-# `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` config form (never consulted);
-# `include`/`includeIf` directives and `config.worktree` (`extensions.worktreeConfig`) inside ANY
-# of the four files this hook DOES read (repo-local or global), neither followed (filed as a
-# second, separate follow-up); the legacy dotted `[remote.origin]` section spelling (only
+# `push.default`/`remote.<name>.push` class named here in every prior version of this file, #290
+# closed the GLOBAL half of that same class (`$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config`
+# or its default, `$HOME/.gitconfig`), and #304/#305 closed most of the SYSTEM half plus
+# `include`/`includeIf`, the residual config surface left open is: a system git config at a path
+# NOT on the static PUSH_SYSTEM_CONFIG_PATHS/PUSH_APPLE_CLT_CONFIG list — a git built under
+# another prefix, Xcode.app's `…/Contents/Developer/usr/share/git-core/gitconfig`, or a
+# Git-for-Windows install path not visible as `/etc/gitconfig` (none of these is verified against
+# a real install); an include form this hook cannot resolve — `%(prefix)/…`, `~user/…`, a path
+# more than CFG_INCLUDE_MAX_DEPTH hops deep, a path that is already its own ANCESTOR in the current
+# include chain (the seen-list dedupe — a termination guard for a self- or mutual-include cycle,
+# scoped to one inclusion chain, never a whole-`resolve_repo()`-call history: a sibling include of
+# the identical path, or a later, unrelated top-level candidate that happens to name a path some
+# earlier candidate's own include already pulled in, is still read again, independently, exactly
+# as real git would), an include tree needing more than `CFG_INCLUDE_MAX_FOLLOWS` follows, more
+# than `CFG_INCLUDE_MAX_LINES` total lines read across every followed file combined, a single
+# included line longer than `CFG_INCLUDE_MAX_LINE_CHARS` characters, or more than
+# `CFG_INCLUDE_MAX_CHARS` total characters charged across every followed line combined, across the
+# whole `resolve_repo()` call (all four: once any of these runs out, no FURTHER include is ever
+# opened at all, so the excess include CONTENT past that point is never even read, let alone
+# processed; the one exception is the single line, in whichever file already happens to be open,
+# whose own read is what drives the line-count or character budget past zero — that one line is
+# read in full before the check that follows it can break, the same "one very long line, read once"
+# residual the depth-0 top-level case below already has; every depth-0 top-level candidate is still
+# always read in full, with no such cap of its own, so none of the four can ever mask a
+# pre-#304/#305 route WITHIN ONE RESOLUTION — though all four axes, like the depth-0 read itself,
+# are bounded PER `resolve_repo()` call, never across the whole hook invocation (see the "Repo
+# resolution" paragraph above): a depth-0 TOP-LEVEL file with very many lines, or a single very long
+# line or whitespace run, can still exceed Claude Code's own hook timeout on its own, a pre-existing
+# residual this class of fix does not close; so can a single command naming enough resolved `-C`
+# push segments (#269 above), each supplying its own at-cap-but-legal include content or its own
+# large top-level file, since every one of them gets its own fresh set of these same caps and the
+# work each spends is not shared or capped across the whole command — the identical class of
+# residual, reached a different way, also not closed here),
+# or an
+# include value or `includeIf` condition containing an unquoted `#`/`;` (truncated by the same
+# comment-strip every other line goes through, or the header falls to the generic "other"
+# section) — every one of these fails OPEN (silently not followed), never denies;
+# `config.worktree` (`extensions.worktreeConfig`) inside any file this hook reads, still never
+# followed; the env-injected `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` config
+# form (never consulted); an inline environment assignment on the command itself, e.g.
+# `GIT_CONFIG_SYSTEM=… git push` or `GIT_CONFIG_GLOBAL=… git push` (never consulted — this hook
+# reads only its OWN process environment, never a value the untrusted command string would set for
+# git's own child process); a `-c push.default=…`/`-c remote.<name>.push=…` value, or a
+# `--config-env=<name>=<envvar>` indirection, on the push segment's own global options (the value
+# is skipped as an opaque pair while tokenizing — see GIT_GLOBAL_OPTS_WITH_VALUE above — and is
+# never separately read as a config route either) — both of these, plus the inline-assignment
+# residual just named, remain unread (a named residual); the legacy dotted `[remote.origin]` section
+# spelling (only
 # the quoted `[remote "origin"]` form is parsed); backslash-continued or backslash-escaped config
 # values; a key on the same line as its own section header, e.g. `[remote "origin"] push =
 # HEAD:main` (the parser reads only the section declaration on such a line, never any text after
@@ -433,6 +554,60 @@ PUSH_ALL_REFS_OPTS="--all --mirror"
 # full reasoning.
 DBRACKET_MAX="64"
 PUSH_DENY_STEM="trail-blazer-flow push guard:"
+# #304/#305: system config candidates governed by $GIT_CONFIG_NOSYSTEM — see the candidate loop in
+# resolve_repo() below for the exact NOSYSTEM parse and for the Apple CLT file's own place INSIDE
+# that same guard (verified live: GIT_CONFIG_NOSYSTEM=1 drops the CLT file's own scope from real
+# git's `--show-origin --show-scope` output, so it is not read unconditionally).
+PUSH_SYSTEM_CONFIG_PATHS="/etc/gitconfig /opt/homebrew/etc/gitconfig /usr/local/etc/gitconfig"
+PUSH_APPLE_CLT_CONFIG="/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig"
+# #304/#305: caps how many `include`/`includeIf` hops cfg_parse_file() below will follow from a
+# top-level candidate (itself depth 0) — a backstop alongside the seen-list cycle guard, not a
+# claim that real git enforces the same limit.
+CFG_INCLUDE_MAX_DEPTH=10
+# #304/#305: caps the TOTAL number of include FOLLOW operations across one whole resolve_repo()
+# call (session or "-C" alike) — never per ancestor chain, and never reset between sibling
+# branches. Depth alone does not bound how many times cfg_parse_file() recurses: since a sibling
+# include of the identical path is deliberately re-read every time (the ancestor-only seen-list's
+# whole point — see cfg_parse_file()'s own header comment), a file that names the SAME child K
+# times per level fans out to about K^depth follow operations, each one a re-open of that same
+# target. This budget bounds that COUNT — how many times an include is ever followed, whether or
+# not the target is a path already opened elsewhere. It says nothing, on its own, about how much of
+# any one followed file is actually read (CFG_INCLUDE_MAX_LINES/CFG_INCLUDE_MAX_CHARS below); the
+# include arm's own follow condition ANDs all three together, so a follow only happens while every
+# one of the three still has room, closing the gap a follow-count check alone would leave: without
+# it, a follow with budget still to spare would still OPEN its target and read its own first line
+# in full even after the line-count or character budget had already run out.
+CFG_INCLUDE_MAX_FOLLOWS=64
+# #304/#305: caps the TOTAL number of LINES read across every included file combined, for one
+# whole resolve_repo() call (depth >= 1 only, shared and never reset per file, the same way
+# CFG_INCLUDE_MAX_FOLLOWS is never reset per follow — a depth-0 top-level candidate is always read
+# in full, never budgeted). A follow-count budget alone does not bound total work: a handful of
+# follows of one large file (well within CFG_INCLUDE_MAX_FOLLOWS) can still cost as many lines of
+# parsing as the file is long. This caps that dimension: how many LINES of included content are
+# ever read in total, independent of how many files are followed. It says nothing about how LONG
+# any one of those lines is, or how many total CHARACTERS they cost — see CFG_INCLUDE_MAX_LINE_CHARS
+# and CFG_INCLUDE_MAX_CHARS below for those two. See cfg_parse_file()'s own header comment for where
+# every budget is spent.
+CFG_INCLUDE_MAX_LINES=2048
+# #304/#305: caps how many CHARACTERS a single included line (depth >= 1) may have before its
+# comment-strip and trim are skipped entirely for that line — it still spends the line and
+# character budgets, and parsing simply continues at the next line (fails open for that one line's
+# own content, the same stance this hook already takes for any other unresolvable or over-budget
+# construct). A line's own length is checked with `${#cfgline}` — a bash builtin, O(n) in the
+# line's own length, but cheap relative to comment-strip or trim, which are NOT: see cfg_trim()'s
+# own header comment for why a long whitespace run specifically must never reach either one.
+# `${#cfgline}` counts CHARACTERS, not bytes, in a UTF-8 locale, so this cap bounds character count,
+# never the (larger, for any multi-byte content) byte count of the line it is checking.
+CFG_INCLUDE_MAX_LINE_CHARS=512
+# #304/#305: caps the TOTAL number of CHARACTERS charged across every included line combined
+# (depth >= 1 only), for one whole resolve_repo() call — shared and never reset per file, exactly
+# like CFG_INCLUDE_MAX_FOLLOWS and CFG_INCLUDE_MAX_LINES. Charged once per line, `${#cfgline}+1`
+# (the line's own CHARACTER length plus one for its own newline — not its byte length, in a UTF-8
+# locale), BEFORE the length cap above is even checked, so a line skipped for being too long still
+# counts fully against this budget too. Bounds total work a different way than
+# CFG_INCLUDE_MAX_LINES: many lines just under CFG_INCLUDE_MAX_LINE_CHARS could otherwise still
+# exhaust real time well before CFG_INCLUDE_MAX_LINES lines are reached.
+CFG_INCLUDE_MAX_CHARS=65536
 # #292: a push segment naming either of these two classes always redirects which repository the
 # push actually runs in, and this hook does not resolve either one — GIT_REPO_OPTS is a global
 # option (detached "<opt> <value>" or attached "<opt>=<value>"), GIT_REPO_ENV_VARS is a leading
@@ -669,26 +844,36 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
 ')"
 
 # --- repo resolution (reads only, never executes) ---------------------------------------------
-# cfg_trim VALUE — strips leading/trailing [:space:] (bash 3.2-safe bracket-class case patterns;
-# no ${var,,}, no declare -A, no tr/sed). Used only by the #268 config parser below; defined here
-# (rather than alongside is_deny_member()/refspec_dest() further down) because it must exist
+# cfg_trim VALUE — strips leading/trailing [:space:], setting the plain global $cfg_trim_out (the
+# same "set a plain global, caller reads it after the call returns" idiom evaluate_segment() uses
+# for __deny_dest/__deny_kind, and resolve_repo() uses for gitdir/default_branch) — NEVER called
+# inside "$(…)": a config file can carry thousands of lines, each needing up to three trim calls
+# (the whole line, the key, the value), and every "$(…)" forks a full bash process image (a
+# fork(), not an exec() of a separate program — the forked child still runs the SAME bash script);
+# that per-call fork cost made an include chain a timing DoS in its own right, independent of the
+# file-count and line-count budgets below (which is why this rewrite exists — see
+# CFG_INCLUDE_MAX_LINES's own vocabulary comment). Pure parameter expansion only (bash 3.2-safe: no
+# ${var,,}, no declare -A, no tr/sed, no extglob) — a caller must read $cfg_trim_out on the very
+# next statement, before any other cfg_trim call or recursive cfg_parse_file call can overwrite it
+# (every call site below does exactly this). Byte-for-byte the same trimming behaviour as the
+# pre-rewrite char-by-char loop version: checked directly against it over a table of inputs
+# including embedded CR, tabs, newlines, mixed whitespace, and an all-whitespace or empty value,
+# and separately fuzz-checked over a large random-string corpus; every existing push-guard fixture
+# that touches config parsing still passes against this rewrite, unchanged. This pure-expansion
+# form is NOT, however, uniformly fast for every input shape: matching the bracket-class pattern
+# below against a long run of trailing (or leading) whitespace can cost far more than the input's
+# own length in bash's own glob engine — see CFG_INCLUDE_MAX_LINE_CHARS's own vocabulary comment
+# for the cap that keeps this function from ever seeing such an input for an included (depth >= 1)
+# line; a depth-0 top-level candidate has no such cap and remains a named residual (see this file's
+# header). Used only by the #268 config parser below; defined
+# here (rather than alongside is_deny_member()/refspec_dest() further down) because it must exist
 # before the config-parsing loop inside the "if [ -n "$gitdir" ]" block below runs — earlier in
 # this file's execution order than those two.
 cfg_trim() {
   local s="$1"
-  while :; do
-    case "$s" in
-      [[:space:]]*) s="${s#?}" ;;
-      *) break ;;
-    esac
-  done
-  while :; do
-    case "$s" in
-      *[[:space:]]) s="${s%?}" ;;
-      *) break ;;
-    esac
-  done
-  printf '%s' "$s"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  cfg_trim_out="$s"
 }
 
 resolve_cwd="${cwd:-$PWD}"
@@ -699,6 +884,253 @@ resolve_cwd="${cwd:-$PWD}"
 # resolve_repo() is now called once for the session checkout and, per resolved "-C" segment,
 # once more.
 cfg_tab="$(printf '\t')"
+# #304/#305: nl is the newline byte cfg_seen (below) uses as a delimiter around each already-parsed
+# path, so a bracketed substring match (`*"$nl$path$nl"*`) can never be fooled by one path being a
+# textual substring of another. File scope, like cfg_tab, since cfg_parse_file() is called both
+# from resolve_repo() and, recursively, from itself.
+nl=$'\n'
+# #304/#305: a SEPARATE carriage-return literal from $cr (declared above for the #270
+# command-string strip): the push mutation table's M23 mutant deletes both of $cr's declaration
+# and its use, and a config parser referencing $cr here would blow up under `set -u` instead of
+# producing that mutant's documented, measured result. File scope (not per candidate file), since
+# it is a fixed literal independent of which candidate is being parsed.
+cfg_cr=$'\r'
+
+# cfg_parse_file PATH LABEL DEPTH (#304/#305) — parses one config file inline, recursively
+# following `include`/`includeIf` directives found in its own content (conditions ignored — the
+# union stance every other multi-file read in this hook already takes). PATH is a candidate config
+# file (a system/global/repo-local candidate from resolve_repo()'s own list, or an include target
+# resolved by this function itself); LABEL is the free-text source label #268/#290 already use in
+# the deny message — a child include gets "LABEL (via include)", added exactly once no matter how
+# deep the nesting goes (see the `include)` key arm below); DEPTH is PATH's own include depth (0
+# for a candidate straight from resolve_repo()'s list). Guards, in order: PATH non-empty, PATH a
+# regular file (`[ -f ]`; excludes a FIFO or device — never opened any other way), and PATH not
+# already present in $cfg_seen, a newline-delimited membership string. $cfg_seen is ANCESTOR-ONLY,
+# not a whole-call history: this function saves it to a `local` on entry, appends PATH, and
+# restores the saved value right before it returns — so PATH is only ever "seen" while ITS OWN
+# call frame (and every descendant `include` it triggers) is still on the stack. This is exactly
+# enough to stop a self- or mutual-include cycle (an ancestor including itself back), without
+# relying on CFG_INCLUDE_MAX_DEPTH alone, while still letting two SIBLING includes of the identical
+# path — or a later, unrelated top-level candidate that happens to name a path some earlier
+# candidate's own include already pulled in — each be read independently, in git's own order (a
+# global, never-restored $cfg_seen under-blocked exactly this: an absolute-path include inside a
+# GLOBAL candidate that happens to point at the session's own repo-local `config` file would
+# permanently mark that path "seen", so the repo-local top-level candidate's own later, mandatory
+# re-read of that same file — which must always run, and always run LAST, for the repo's own
+# last-wins scalars to resolve correctly — was wrongly skipped; killed by the
+# push-include-deny-repo-config-reincluded fixture and the `304-inc-seen-global` mutant, which
+# reverts to a whole-call $cfg_seen to prove the fixture actually depends on the ancestor-only
+# scope). Re-reading every sibling of an identical path is exactly what makes an adversarial
+# config tree able to FAN OUT: a file naming the SAME child K times per level, K levels deep, costs
+# about K^depth follow operations. Four independent mechanisms bound the resulting work, checked in
+# the read loop below (depth >= 1 only): $cfg_inc_budget, a GLOBAL, monotonically decreasing
+# per-`resolve_repo()`-call counter (never saved/restored per ancestor frame the way $cfg_seen is —
+# see the vocabulary declaration for CFG_INCLUDE_MAX_FOLLOWS), caps the TOTAL number of follow
+# operations, regardless of fan-out shape; $cfg_inc_line_budget (see CFG_INCLUDE_MAX_LINES's own
+# vocabulary declaration), reset the same way and likewise never saved/restored per ancestor frame,
+# caps the TOTAL number of LINES read across every followed file combined for the whole call,
+# `break`ing out of the CURRENT frame's own read loop once exhausted — never `return`ing, so the
+# `cfg_seen` restore below still runs; a per-line length check against CFG_INCLUDE_MAX_LINE_CHARS,
+# using `${#cfgline}` — a bash builtin, O(n) in the line's own length but cheap relative to
+# comment-strip or trim — skips comment-strip and trim entirely for one over-length line
+# (`continue`, not `break` — the line and character budgets are still spent for it) — this is the
+# one of the four that exists for a DIFFERENT reason than fan-out: `cfg_trim()`'s own pattern
+# matching is not uniformly fast for a long line or whitespace run (see that function's header
+# comment), so this check keeps such a line from ever reaching it, independent of how many files or
+# lines are involved at all; and $cfg_inc_char_budget (see CFG_INCLUDE_MAX_CHARS's own vocabulary
+# declaration), reset and scoped the same way as the line-count budget, charges `${#cfgline}+1` per
+# line BEFORE the length check above even runs (so an over-length line still spends this budget
+# too, and note `${#cfgline}` counts CHARACTERS, not bytes, in a UTF-8 locale) and `break`s once it
+# goes negative, bounding a shape the line-count budget alone cannot: many lines each just under
+# CFG_INCLUDE_MAX_LINE_CHARS. The include arm's own follow condition (below) additionally requires
+# BOTH the line-count and character budgets to still be positive before a follow is even attempted
+# — once either reaches zero, no FURTHER include is ever opened at all, not even to try `[ -f ]` on
+# it, so a fan-out with follow-budget still to spare cannot keep costing real time one first-line
+# read at a time; the one line this cannot prevent is whichever SINGLE line, in whichever file is
+# already open, is what drives the line-count or character budget below zero — that line is read in
+# full (a read loop takes one whole line at a time) before the check that follows it can break. None
+# of these four checks ever applies to a depth-0 top-level candidate — those are always read in
+# full, unconditionally, exactly as they always were, so none of the four can ever mask a
+# pre-#304/#305 route WITHIN ONE RESOLUTION (see the "Repo resolution" paragraph above for how
+# multiple resolutions per hook invocation multiply this same bounded work instead). Declares every
+# per-file variable `local`, so a nested call (an include's
+# own include) never clobbers the includer's own section state — proven by the
+# push-include-deny-second-path-after-return fixture, which pins that parsing resumes, in the
+# includer's own section, right after an inline include returns. Reads only through `done < "$1"`,
+# a `[ -f ]`-guarded builtin redirect — never `cat`, `dirname`, `cd`, or any external command on
+# PATH or a value taken from its content; an include's own path is resolved with parameter
+# expansion only (see the `include)` key arm below), so no include-derived string ever reaches any
+# process's argv. Still appends to the plain (non-local) globals cfg_push_lines/cfg_push_defaults/
+# cfg_branch_merge, and reads the plain global current_branch, exactly as the pre-#304/#305 inline
+# loop did.
+cfg_parse_file() {
+  local path="$1" label="$2" depth="$3"
+  [ -n "$path" ] || return 0
+  [ -f "$path" ] || return 0
+  case "$cfg_seen" in
+    *"$nl$path$nl"*) return 0 ;;
+  esac
+  local saved_seen="$cfg_seen"
+  cfg_seen="${cfg_seen}${path}${nl}"
+
+  local cfg_section="" cfg_subsection="" cfgline cfg_h cfg_s cfg_key cfg_val
+  local inc_resolved inc_childlabel
+  while IFS= read -r cfgline || [ -n "$cfgline" ]; do
+    # Three depth->=1-only budgets, checked here, in this order, before comment-strip or trim ever
+    # runs -- CFG_INCLUDE_MAX_LINES bounds total LINE-reading work across every included file
+    # combined for this whole resolve_repo() call (shared, like $cfg_inc_budget -- never reset per
+    # file); CFG_INCLUDE_MAX_CHARS separately bounds total CHARACTERS charged the same way; and
+    # CFG_INCLUDE_MAX_LINE_CHARS caps any single line's own length, checked with the cheap (though
+    # O(n) in the line's own length) `${#cfgline}` -- never by running comment-strip or trim on it
+    # first (see cfg_trim()'s own header comment for why that specific ordering matters: a single
+    # line far past this cap could cost real seconds in trim's own pattern matching, independent of
+    # how many lines or files are involved at all). The include arm's own follow condition also
+    # requires the line and character budgets below to still be positive before opening a NEW
+    # include at all -- see that arm's own comment. None of these three per-line checks ever
+    # applies to a depth-0 top-level candidate (those are always read in full) -- see each
+    # vocabulary declaration's own comment.
+    if [ "$depth" -ge 1 ]; then
+      [ "$cfg_inc_line_budget" -gt 0 ] || break
+      cfg_inc_line_budget=$((cfg_inc_line_budget - 1))
+      cfg_inc_char_budget=$((cfg_inc_char_budget - ${#cfgline} - 1))
+      [ "$cfg_inc_char_budget" -ge 0 ] || break
+      [ "${#cfgline}" -le "$CFG_INCLUDE_MAX_LINE_CHARS" ] || continue
+    fi
+    cfgline="${cfgline//$cfg_cr/}"
+    # Strip a trailing comment: whichever of '#'/';' appears first, with no quote-tracking -- git
+    # ref names MAY legitimately contain '#' or ';' (e.g. refs/heads/feat#123 and
+    # refs/heads/feat;123 are both accepted by git itself), so this is a known, documented parsing
+    # gap, not a safe assumption. See this file's header "Documented over-blocking classes" (a
+    # destination value truncated at the marker) and "Documented under-blocking classes" (a
+    # remote/branch subsection name, or an include value/includeIf condition, truncated at the
+    # marker) for the behaviour classes this creates.
+    cfg_h="${cfgline%%#*}"
+    cfg_s="${cfgline%%;*}"
+    if [ "${#cfg_h}" -le "${#cfg_s}" ]; then cfgline="$cfg_h"; else cfgline="$cfg_s"; fi
+    cfg_trim "$cfgline"; cfgline="$cfg_trim_out"
+    [ -n "$cfgline" ] || continue
+    case "$cfgline" in
+      \[[Rr][Ee][Mm][Oo][Tt][Ee]\ \"*\"\]*)
+        cfg_section="remote"
+        cfg_subsection="${cfgline#*\"}"
+        cfg_subsection="${cfg_subsection%%\"*}"
+        continue
+        ;;
+      \[[Bb][Rr][Aa][Nn][Cc][Hh]\ \"*\"\]*)
+        cfg_section="branch"
+        cfg_subsection="${cfgline#*\"}"
+        cfg_subsection="${cfg_subsection%%\"*}"
+        continue
+        ;;
+      \[[Pp][Uu][Ss][Hh]\]*)
+        cfg_section="push"
+        cfg_subsection=""
+        continue
+        ;;
+      \[[Ii][Nn][Cc][Ll][Uu][Dd][Ee]\]*)
+        # #304/#305: a plain [include] section — the child path key is dispatched below.
+        cfg_section="include"
+        cfg_subsection=""
+        continue
+        ;;
+      \[[Ii][Nn][Cc][Ll][Uu][Dd][Ee][Ii][Ff]\ \"*\"\]*)
+        # #304/#305: an [includeIf "<condition>"] section — the condition itself is never
+        # evaluated (the union, over-blocking stance Open question 3 settles): every conditional
+        # include is followed exactly like an unconditional one.
+        cfg_section="include"
+        cfg_subsection=""
+        continue
+        ;;
+      \[*)
+        cfg_section="other"
+        cfg_subsection=""
+        continue
+        ;;
+    esac
+    case "$cfgline" in
+      *=*)
+        cfg_trim "${cfgline%%=*}"; cfg_key="$cfg_trim_out"
+        cfg_trim "${cfgline#*=}"; cfg_val="$cfg_trim_out"
+        ;;
+      *) continue ;;
+    esac
+    case "$cfg_val" in
+      \"*\") cfg_val="${cfg_val#\"}"; cfg_val="${cfg_val%\"}" ;;
+    esac
+    case "$cfg_section" in
+      remote)
+        case "$cfg_key" in
+          [Pp][Uu][Ss][Hh])
+            # #290 kickback finding F4: the source label goes FIRST (mirroring
+            # cfg_push_defaults' own "${label}${cfg_tab}${cfg_val}" shape below), with the
+            # configured value as the record's unbounded TAIL, never a bounded middle field — a
+            # `push =` value containing a literal TAB byte is unusual but not impossible (this
+            # config parser never rejects one), and a bounded middle field would let such a value
+            # truncate at the embedded TAB and leak its own remainder into config_deny()'s
+            # source-label field. cfg_subsection (the remote name) is read from a quoted section
+            # header, never a value that could itself carry a raw TAB in any fixture this file
+            # constructs.
+            cfg_push_lines="${cfg_push_lines}${label}${cfg_tab}${cfg_subsection}${cfg_tab}${cfg_val}"$'\n'
+            ;;
+        esac
+        ;;
+      push)
+        case "$cfg_key" in
+          [Dd][Ee][Ff][Aa][Uu][Ll][Tt])
+            cfg_push_defaults="${cfg_push_defaults}${label}${cfg_tab}${cfg_val}"$'\n'
+            ;;
+        esac
+        ;;
+      branch)
+        if [ "$cfg_subsection" = "$current_branch" ]; then
+          case "$cfg_key" in
+            [Mm][Ee][Rr][Gg][Ee]) cfg_branch_merge="$cfg_val" ;;
+          esac
+        fi
+        ;;
+      include)
+        case "$cfg_key" in
+          [Pp][Aa][Tt][Hh])
+            # #304/#305: resolve cfg_val with parameter expansion only — never dirname, cd,
+            # realpath, or any external command, so an include target never reaches any process's
+            # argv. Order matters: the empty/tilde-slash/absolute/prefix-or-bare-tilde arms must be
+            # tried before the generic relative-path fallback.
+            inc_resolved=""
+            case "$cfg_val" in
+              "") : ;;
+              \~/*)
+                [ -n "${HOME:-}" ] && inc_resolved="$HOME/${cfg_val#\~/}"
+                ;;
+              /*|[A-Za-z]:/*)
+                inc_resolved="$cfg_val"
+                ;;
+              %\(prefix\)/*|\~*)
+                : ;;
+              *)
+                inc_resolved="${path%/*}/$cfg_val"
+                ;;
+            esac
+            # The line-count and character budgets, not just the follow-count one, gate whether a
+            # follow happens AT ALL: without them, a follow with budget still to spare would still
+            # OPEN its target and read its own first line in full even after either budget had
+            # already run out elsewhere -- see CFG_INCLUDE_MAX_FOLLOWS's own vocabulary comment.
+            if [ -n "$inc_resolved" ] && [ "$((depth + 1))" -le "$CFG_INCLUDE_MAX_DEPTH" ] \
+              && [ "$cfg_inc_budget" -gt 0 ] \
+              && [ "$cfg_inc_line_budget" -gt 0 ] && [ "$cfg_inc_char_budget" -gt 0 ]; then
+              cfg_inc_budget=$((cfg_inc_budget - 1))
+              case "$label" in
+                *" (via include)") inc_childlabel="$label" ;;
+                *) inc_childlabel="$label (via include)" ;;
+              esac
+              cfg_parse_file "$inc_resolved" "$inc_childlabel" $((depth + 1))
+            fi
+            ;;
+        esac
+        ;;
+    esac
+  done < "$path"
+  cfg_seen="$saved_seen"
+}
 
 # resolve_repo START_DIR MAX_DEPTH (#269) — walks upward from START_DIR, at most MAX_DEPTH parent
 # directories, looking for START_DIR/.git; resets gitdir/default_branch/current_branch/cfg_* on
@@ -712,10 +1144,13 @@ cfg_tab="$(printf '\t')"
 # never walking upward the way git itself would from a real "-C" (a documented residual class,
 # see this file's header). The MAX_DEPTH guard below makes the untrusted "-C" path passed on that
 # second call unreachable by dirname's argv, and therefore by any process's argv at all. Since
-# #290, EVERY call (session and "-C") also unions in the GLOBAL config candidates below — the
-# environment is read identically regardless of MAX_DEPTH, so a resolved "-C" segment sees the
-# same global routes the session does (see "Cross-feature" in dev/hook-tests.sh's push mutation
-# table for the fixture pinning this).
+# #290, EVERY call (session and "-C") also unions in the GLOBAL config candidates below, and,
+# since #304/#305, the SYSTEM config candidates too, plus every `include`/`includeIf` target found
+# inside any of them (see cfg_parse_file() above) — the environment (and this file's own fixed
+# system-path vocabulary) is read identically regardless of MAX_DEPTH, so a resolved "-C" segment
+# sees the same global, system and include routes the session does (see "Cross-feature" in
+# dev/hook-tests.sh's push mutation table for the fixture pinning the #290 half of this, and the
+# push-sysconf-deny-c-target fixture for the #304/#305 half).
 resolve_repo() {
   dir="$1"
   gitdir=""
@@ -751,10 +1186,28 @@ resolve_repo() {
   # #268/#290: config-derived push routes, always initialized (even when $gitdir never resolves)
   # so config_deny() below can reference them unconditionally under this script's `set -uo
   # pipefail`. cfg_push_defaults (#290, was cfg_push_default) is a newline-separated LIST now,
-  # not a scalar — see the config-candidate loop below for why.
+  # not a scalar — see the config-candidate loop below for why. cfg_seen (#304/#305) is reset to a
+  # single newline on every resolve_repo() call (session and "-C" alike), so cfg_parse_file()'s
+  # own seen-list dedupe never leaks a prior call's state. cfg_inc_budget (#304/#305) is reset to
+  # CFG_INCLUDE_MAX_FOLLOWS on the same schedule — a single counter, GLOBAL for the whole call,
+  # never saved/restored per ancestor frame the way cfg_seen is: it must monotonically decrease
+  # across every follow, sibling branches included, or a fan-out shape could still give each
+  # sibling its own fresh allowance and reproduce the same unbounded blowup this budget exists to
+  # cap (see cfg_parse_file()'s own header comment and the vocabulary declaration above).
+  # cfg_inc_line_budget (#304/#305) is reset to CFG_INCLUDE_MAX_LINES the same way, for the same
+  # reason (a SINGLE shared counter, never per file), bounding the OTHER dimension: total lines
+  # read across every followed file combined, not how many files are followed.
+  # cfg_inc_char_budget (#304/#305) is reset to CFG_INCLUDE_MAX_CHARS the same way, bounding a
+  # THIRD dimension: total characters charged, since many lines just under
+  # CFG_INCLUDE_MAX_LINE_CHARS could otherwise still add up to real time before
+  # CFG_INCLUDE_MAX_LINES lines are reached.
   cfg_push_lines=""
   cfg_push_defaults=""
   cfg_branch_merge=""
+  cfg_seen="$nl"
+  cfg_inc_budget="$CFG_INCLUDE_MAX_FOLLOWS"
+  cfg_inc_line_budget="$CFG_INCLUDE_MAX_LINES"
+  cfg_inc_char_budget="$CFG_INCLUDE_MAX_CHARS"
   if [ -n "$gitdir" ]; then
     common="${gitdir%/worktrees/*}"
     ohf="$common/refs/remotes/origin/HEAD"
@@ -774,22 +1227,33 @@ resolve_repo() {
       esac
     fi
 
-    # #290: config CANDIDATES, global routes first, this checkout's own repo-local config LAST —
-    # never derived from the untrusted command string, only from the environment
-    # ($GIT_CONFIG_GLOBAL, $XDG_CONFIG_HOME, $HOME) and $common above (every reference
-    # ${VAR:-}-guarded under `set -uo pipefail`). Repo-local read last so a last-wins scalar
-    # (cfg_branch_merge) resolves to the repo's own value on any conflict with a global file,
-    # matching git's own unconditional deference to the repo config for that key; cfg_push_lines
-    # and cfg_push_defaults both ACCUMULATE across every candidate regardless of order — a route
-    # from any file can deny (the union stance #268 already took across remotes, now also across
-    # files) — so this order only decides which route's label is named first when more than one
-    # denies. $GIT_CONFIG_GLOBAL is UNIONED with (never a replacement for) the other two global
-    # paths: real git reads only $GIT_CONFIG_GLOBAL, when it is set, in place of $HOME/.gitconfig;
-    # this hook deliberately reads both, a documented over-block (see "Documented over-blocking
-    # classes" above). See this file's header "Repo resolution" paragraph for the full reasoning
-    # and "Documented under-blocking classes" for what stays unread ($GIT_CONFIG_SYSTEM/
-    # /etc/gitconfig, include/includeIf, and the env-injected GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n>
-    # forms — filed as follow-ups, not read here).
+    # #290/#304/#305: config CANDIDATES, system routes first, then global routes, this checkout's
+    # own repo-local config LAST — never derived from the untrusted command string, only from the
+    # environment ($GIT_CONFIG_SYSTEM, $GIT_CONFIG_NOSYSTEM, $TBF_PUSH_GUARD_SYSCONFIG_ROOT,
+    # $GIT_CONFIG_GLOBAL, $XDG_CONFIG_HOME, $HOME), this file's own fixed system-path vocabulary
+    # (PUSH_SYSTEM_CONFIG_PATHS, PUSH_APPLE_CLT_CONFIG), and $common above (every environment
+    # reference ${VAR:-}-guarded under `set -uo pipefail`). Repo-local read last so a last-wins
+    # scalar (cfg_branch_merge) resolves to the repo's own value on any conflict with a system or
+    # global file, matching git's own unconditional deference to the repo config for that key;
+    # cfg_push_lines and cfg_push_defaults both ACCUMULATE across every candidate (and every
+    # include followed from one — see cfg_parse_file() above) regardless of order — a route from
+    # any file can deny (the union stance #268 already took across remotes, now also across files
+    # and, since #304/#305, across an include chain) — so this order only decides which route's
+    # label is named first when more than one denies. $GIT_CONFIG_GLOBAL is UNIONED with (never a
+    # replacement for) the other two global paths, and $GIT_CONFIG_SYSTEM is likewise UNIONED with
+    # (never a replacement for) the static system paths: real git reads only the corresponding
+    # *_GLOBAL/*_SYSTEM env var, when set, in place of the matching default path; this hook
+    # deliberately reads both, a documented over-block (see "Documented over-blocking classes"
+    # above). $nosys below parses $GIT_CONFIG_NOSYSTEM for a canonical true value ONLY
+    # (`1`/`true`/`yes`/`on`, case-insensitively) — any other value, including a non-canonical
+    # truthy-looking one such as `2`, leaves the system candidates in force (fail-toward-deny, a
+    # documented over-block). Verified live that GIT_CONFIG_NOSYSTEM also drops the Apple CLT
+    # candidate's own scope from real git's `--show-scope` output, so PUSH_APPLE_CLT_CONFIG sits
+    # INSIDE the same $nosys guard as the three PUSH_SYSTEM_CONFIG_PATHS entries, not outside it.
+    # See this file's header "Repo resolution" paragraph for the full reasoning and "Documented
+    # under-blocking classes" for what stays unread (a system config at a path not on this static
+    # list, an include form this hook cannot resolve, config.worktree, an inline command-line env
+    # assignment, and the env-injected GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n> forms).
     xdg_cfg=""
     if [ -n "${XDG_CONFIG_HOME:-}" ]; then
       xdg_cfg="$XDG_CONFIG_HOME/git/config"
@@ -799,113 +1263,41 @@ resolve_repo() {
     home_cfg=""
     [ -n "${HOME:-}" ] && home_cfg="$HOME/.gitconfig"
 
-    # A SEPARATE carriage-return literal from $cr (declared above for the #270 command-string
-    # strip): the push mutation table's M23 mutant deletes both of $cr's declaration and its
-    # use, and a config parser referencing $cr here would blow up under `set -u` instead of
-    # producing that mutant's documented, measured result. Declared once here (not per candidate
-    # file below), since it is a fixed literal independent of which candidate is being parsed.
-    cfg_cr=$'\r'
-    while IFS= read -r cfgf; do
-      [ -n "$cfgf" ] || continue
-      [ -f "$cfgf" ] || continue
-      # #290: exactly two source literals for the deny message below — this checkout's own
-      # repo-local config is always named "$common/config" (never the resolved gitdir's own path,
-      # for a worktree — the same common-dir rule the origin-HEAD symref read above already uses);
-      # every OTHER candidate in the list below is a global path, named with one shared neutral
-      # label regardless of which of the three it is (the deny message never needs to distinguish
-      # among them).
-      case "$cfgf" in
-        "$common/config") cfg_src=".git/config" ;;
-        *) cfg_src="your global git config" ;;
-      esac
-      cfg_section=""
-      cfg_subsection=""
-      while IFS= read -r cfgline || [ -n "$cfgline" ]; do
-        cfgline="${cfgline//$cfg_cr/}"
-        # Strip a trailing comment: whichever of '#'/';' appears first, with no quote-tracking --
-        # git ref names MAY legitimately contain '#' or ';' (e.g. refs/heads/feat#123 and
-        # refs/heads/feat;123 are both accepted by git itself), so this is a known, documented
-        # parsing gap, not a safe assumption. See this file's header "Documented over-blocking
-        # classes" (a destination value truncated at the marker) and "Documented under-blocking
-        # classes" (a remote/branch subsection name truncated at the marker, losing its whole
-        # section) for the two behaviour classes this creates.
-        cfg_h="${cfgline%%#*}"
-        cfg_s="${cfgline%%;*}"
-        if [ "${#cfg_h}" -le "${#cfg_s}" ]; then cfgline="$cfg_h"; else cfgline="$cfg_s"; fi
-        cfgline="$(cfg_trim "$cfgline")"
-        [ -n "$cfgline" ] || continue
-        case "$cfgline" in
-          \[[Rr][Ee][Mm][Oo][Tt][Ee]\ \"*\"\]*)
-            cfg_section="remote"
-            cfg_subsection="${cfgline#*\"}"
-            cfg_subsection="${cfg_subsection%%\"*}"
-            continue
-            ;;
-          \[[Bb][Rr][Aa][Nn][Cc][Hh]\ \"*\"\]*)
-            cfg_section="branch"
-            cfg_subsection="${cfgline#*\"}"
-            cfg_subsection="${cfg_subsection%%\"*}"
-            continue
-            ;;
-          \[[Pp][Uu][Ss][Hh]\]*)
-            cfg_section="push"
-            cfg_subsection=""
-            continue
-            ;;
-          \[*)
-            cfg_section="other"
-            cfg_subsection=""
-            continue
-            ;;
-        esac
-        case "$cfgline" in
-          *=*)
-            cfg_key="$(cfg_trim "${cfgline%%=*}")"
-            cfg_val="$(cfg_trim "${cfgline#*=}")"
-            ;;
-          *) continue ;;
-        esac
-        case "$cfg_val" in
-          \"*\") cfg_val="${cfg_val#\"}"; cfg_val="${cfg_val%\"}" ;;
-        esac
-        case "$cfg_section" in
-          remote)
-            case "$cfg_key" in
-              [Pp][Uu][Ss][Hh])
-                # #290 kickback finding F4: the source label goes FIRST (mirroring
-                # cfg_push_defaults' own "${cfg_src}${cfg_tab}${cfg_val}" shape below), with the
-                # configured value as the record's unbounded TAIL, never a bounded middle field —
-                # a `push =` value containing a literal TAB byte is unusual but not impossible
-                # (this config parser never rejects one), and a bounded middle field would let
-                # such a value truncate at the embedded TAB and leak its own remainder into
-                # config_deny()'s source-label field. cfg_subsection (the remote name) is read
-                # from a quoted section header, never a value that could itself carry a raw TAB
-                # in any fixture this file constructs.
-                cfg_push_lines="${cfg_push_lines}${cfg_src}${cfg_tab}${cfg_subsection}${cfg_tab}${cfg_val}"$'\n'
-                ;;
-            esac
-            ;;
-          push)
-            case "$cfg_key" in
-              [Dd][Ee][Ff][Aa][Uu][Ll][Tt])
-                cfg_push_defaults="${cfg_push_defaults}${cfg_src}${cfg_tab}${cfg_val}"$'\n'
-                ;;
-            esac
-            ;;
-          branch)
-            if [ "$cfg_subsection" = "$current_branch" ]; then
-              case "$cfg_key" in
-                [Mm][Ee][Rr][Gg][Ee]) cfg_branch_merge="$cfg_val" ;;
-              esac
-            fi
-            ;;
-        esac
-      done < "$cfgf"
+    # #304/#305: $sysroot is a TEST-ONLY prefix (empty in every real run) applied solely to the
+    # static system paths below, never to $GIT_CONFIG_SYSTEM, any HOME/XDG path, or an include
+    # target — see dev/hook-tests.sh's run_push_guard for how the fixture harness sets it so this
+    # suite never touches the host's own real system config files.
+    sysroot="${TBF_PUSH_GUARD_SYSCONFIG_ROOT:-}"
+    case "${GIT_CONFIG_NOSYSTEM:-}" in
+      [Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|1) nosys=1 ;;
+      *) nosys=0 ;;
+    esac
+    sys_records=""
+    if [ "$nosys" -eq 0 ]; then
+      sys_records="your system git config${cfg_tab}${GIT_CONFIG_SYSTEM:-}"$'\n'
+      for syspath in $PUSH_SYSTEM_CONFIG_PATHS; do
+        sys_records="${sys_records}your system git config${cfg_tab}${sysroot}${syspath}"$'\n'
+      done
+      sys_records="${sys_records}your system git config${cfg_tab}${sysroot}${PUSH_APPLE_CLT_CONFIG}"
+    fi
+
+    # #304/#305: every candidate now travels as a "<label>${cfg_tab}<path>" record — the label no
+    # longer needs a path-based case switch keyed off $common/config (the pre-#304/#305 shape of
+    # this loop); each record already carries its own label. Split on the FIRST cfg_tab and hand
+    # both fields to cfg_parse_file() above, which does the actual per-file, include-following
+    # parse — see that function's own header comment for what it reads and how it resolves an
+    # include target.
+    while IFS= read -r cfgrec; do
+      [ -n "$cfgrec" ] || continue
+      cfg_reclabel="${cfgrec%%"$cfg_tab"*}"
+      cfg_recpath="${cfgrec#*"$cfg_tab"}"
+      cfg_parse_file "$cfg_recpath" "$cfg_reclabel" 0
     done <<CFGLIST
-${GIT_CONFIG_GLOBAL:-}
-$xdg_cfg
-$home_cfg
-$common/config
+$sys_records
+your global git config${cfg_tab}${GIT_CONFIG_GLOBAL:-}
+your global git config${cfg_tab}$xdg_cfg
+your global git config${cfg_tab}$home_cfg
+.git/config${cfg_tab}$common/config
 CFGLIST
   fi
 }
@@ -1038,11 +1430,14 @@ refspec_dest() {
   printf '%s' "$dest"
 }
 
-# config_deny SCOPE_REMOTE — evaluates the #268/#290 config-derived push routes
+# config_deny SCOPE_REMOTE — evaluates the #268/#290/#304/#305 config-derived push routes
 # (remote.<name>.push, push.default) captured by the repo-resolution parse above, from every
-# candidate file that was actually read (repo-local and global); on a deny, sets $__deny_dest/
-# $__deny_kind ("config" or "configall")/$__deny_via/$__deny_src (#290 — the two-literal source
-# label, ".git/config" or "your global git config") the same way evaluate_segment's other checks
+# candidate file that was actually read (repo-local, global, system, and any file reached via
+# `include`/`includeIf`); on a deny, sets $__deny_dest/
+# $__deny_kind ("config" or "configall")/$__deny_via/$__deny_src (the source label — one of
+# ".git/config", "your global git config" or "your system git config", each optionally suffixed
+# " (via include)" exactly once no matter how deep the include nesting goes — see
+# cfg_parse_file() above for how the suffix is built) the same way evaluate_segment's other checks
 # do (plain, non-"local" assignments, so they escape this function exactly like $__deny_dest/
 # $__deny_kind already do). SCOPE_REMOTE is the single non-option token at n==1, or empty at
 # n==0 (a bare push): at n==0 every remote.<name>.push record is considered regardless of remote

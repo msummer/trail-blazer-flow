@@ -60,6 +60,15 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
   there. New deliberate over-block: a line or segment starting `- git`/`- gh` (a markdown bullet)
   now resolves as a command. `dev/selfcheck.sh`'s gate 1.6 ("no `eval` in `hooks/*.sh`") now exempts
   the `PREFIX_WORDS` vocabulary line itself, since it contains the word "eval" only as data.
+- #304/#305: `hooks/push-guard.sh` also reads the system git config (`$GIT_CONFIG_SYSTEM`,
+  `/etc/gitconfig`, the two Homebrew paths, and the Apple CommandLineTools file, all governed by
+  `$GIT_CONFIG_NOSYSTEM`) and follows `include`/`includeIf` directives inside any config file it
+  reads. Following an include is bounded on four independent caps, shared across one resolution: a
+  follow count, a line count, a per-line length cap, and a total-characters cap — depth is a
+  separate limit. A follow only happens while the line-count and character budgets are both still
+  positive, not just the follow count, so an exhausted budget stops further includes from being
+  opened at all, not just from being fully read. Top-level files are always read in full, uncapped,
+  and config lines are trimmed without forking. No consumer step.
 - #415: `project-kickoff` and standalone `test-ratchet` gain a supervised Codex path
   (docs/reference/codex.md); not live-verified. In a new project directory, `git init` comes
   before `codex-setup.sh`.
