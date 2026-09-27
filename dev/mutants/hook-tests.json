@@ -1242,6 +1242,181 @@
       "expect_fail": [
         "cdg-bash-deny-leading-redirect-in-dup"
       ]
+    },
+    {
+      "name": "292-pg-c-nonwt",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-unres-",
+      "edits": [
+        {
+          "from": "  if [ -z \"$seg_unres\" ] && [ -n \"$seg_cpath\" ] && ! is_c_target_path \"$seg_cpath\" && ! is_session_checkout_path \"$seg_cpath\"; then\n    seg_unres=\"-C path outside the <name>-wt-<n> worktree shape\"\n  fi",
+          "to": "  if false; then\n    seg_unres=\"-C path outside the <name>-wt-<n> worktree shape\"\n  fi"
+        }
+      ],
+      "expect_fail": [
+        "push-unres-deny-c-nonsibling-path",
+        "push-unres-deny-codex-main-session",
+        "push-unres-deny-never-executes"
+      ]
+    },
+    {
+      "name": "292-pg-attached-c",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-unres-",
+      "edits": [
+        {
+          "from": "      if (unres == \"\" && substr(tok, 1, 2) == \"-C\" && tok != \"-C\") unres = \"attached -C<path>\"",
+          "to": "      if (0) unres = \"attached -C<path>\""
+        }
+      ],
+      "expect_fail": [
+        "push-unres-deny-c-attached-form"
+      ]
+    },
+    {
+      "name": "292-pg-multi-c",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-unres-",
+      "edits": [
+        {
+          "from": "  if (unres == \"\" && ccount >= 2) unres = \"more than one -C\"",
+          "to": "  if (0) unres = \"more than one -C\""
+        }
+      ],
+      "expect_fail": [
+        "push-unres-deny-c-double-c"
+      ]
+    },
+    {
+      "name": "292-pg-repo-opts-attached",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-unres-",
+      "edits": [
+        {
+          "from": "      } else {\n        for (ro = 1; ro <= nro; ro++) {\n          if (index(tok, roarr[ro] \"=\") == 1) { unres = roarr[ro]; break }\n        }\n      }",
+          "to": "      }"
+        }
+      ],
+      "expect_fail": [
+        "push-unres-deny-git-dir-attached",
+        "push-unres-deny-work-tree-attached"
+      ]
+    },
+    {
+      "name": "292-pg-repo-opts-detached",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-unres-",
+      "edits": [
+        {
+          "from": "      if (tok in repoopt_set) {\n        unres = tok\n      } else {",
+          "to": "      if (0) {\n        unres = tok\n      } else {"
+        }
+      ],
+      "expect_fail": [
+        "push-unres-deny-git-dir-detached",
+        "push-unres-deny-work-tree-detached"
+      ]
+    },
+    {
+      "name": "292-pg-repo-opts-vocab",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-unres-",
+      "edits": [
+        {
+          "from": "GIT_REPO_OPTS=\"--git-dir --work-tree\"",
+          "to": "GIT_REPO_OPTS=\"--git-dir\""
+        }
+      ],
+      "expect_fail": [
+        "push-unres-deny-work-tree-attached",
+        "push-unres-deny-work-tree-detached"
+      ]
+    },
+    {
+      "name": "292-pg-env-vocab",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-unres-",
+      "edits": [
+        {
+          "from": "GIT_REPO_ENV_VARS=\"GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR\"",
+          "to": "GIT_REPO_ENV_VARS=\"\""
+        }
+      ],
+      "expect_fail": [
+        "push-unres-deny-env-common-dir",
+        "push-unres-deny-env-git-dir",
+        "push-unres-deny-env-prefix-work-tree"
+      ]
+    },
+    {
+      "name": "292-pg-env-exact",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-unres-",
+      "edits": [
+        {
+          "from": "      if (unres == \"\" && (aname in envvar_set)) unres = aname \"=\"",
+          "to": "      if (unres == \"\" && aname ~ /^GIT_/) unres = aname \"=\""
+        }
+      ],
+      "expect_fail": [
+        "push-unres-noop-env-unrelated"
+      ]
+    },
+    {
+      "name": "292-pg-session-equiv",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-unres-",
+      "edits": [
+        {
+          "from": "is_session_checkout_path() {\n  local p=\"$1\" rc=\"$resolve_cwd\" sr=\"$session_root\"",
+          "to": "is_session_checkout_path() {\n  return 1\n  local p=\"$1\" rc=\"$resolve_cwd\" sr=\"$session_root\""
+        }
+      ],
+      "expect_fail": [
+        "push-unres-deny-c-dot-session-default",
+        "push-unres-noop-c-dot",
+        "push-unres-noop-c-session-cwd",
+        "push-unres-noop-c-session-root"
+      ]
+    },
+    {
+      "name": "292-pg-session-root",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-unres-",
+      "edits": [
+        {
+          "from": "  [ -n \"$sr\" ] && [ \"$p\" = \"$sr\" ] && return 0",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "push-unres-noop-c-session-root"
+      ]
+    },
+    {
+      "name": "292-pg-trailing-slash",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-unres-",
+      "edits": [
+        {
+          "from": "  [ \"$p\" = \"/\" ] || p=\"${p%/}\"",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "push-unres-noop-c-session-cwd"
+      ]
     }
   ]
 }

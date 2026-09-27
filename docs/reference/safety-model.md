@@ -262,13 +262,24 @@ RESOLVED checkout (since #290, the GLOBAL config candidates below are read ident
 checkout resolved, so a resolved segment still sees the same global routes the session would),
 while the default-branch deny member becomes the union of the fallback, the session's own
 default, and the resolved checkout's own default — never a pure replacement, so a target lacking its
-own `refs/remotes/origin/HEAD` cannot silently lose the guard. A `-C` value that does not match the
-predicate (including a plain `git -C ../other-checkout push` with no `-wt-<n>` suffix), the attached
-`-C<path>` form, two or more `-C` tokens, `--git-dir=<path>`/`--work-tree`, or a predicate-matching
+own `refs/remotes/origin/HEAD` cannot silently lose the guard. A predicate-matching
 directory holding no `.git` of its own (this resolution never walks upward the way git itself would
-from a real `-C`) all stay judged only against the session — see the hook's own header for the full,
-measured evasion/over-blocking inventory. It enforces only the
-"deny the default branch" half of this issue's Decision, not an allow-list of
+from a real `-C`) still stays judged only against the session, a documented residual. **Since #292,
+every OTHER way a push segment's repository redirect can evade resolution now fails closed
+(denies) instead:** a `-C` value that does not match the predicate (including a plain
+`git -C ../other-checkout push` with no `-wt-<n>` suffix), the attached `-C<path>` form, two or more
+`-C` tokens, `--git-dir`/`--work-tree` (detached or `=`-attached), and a `GIT_DIR=`/
+`GIT_WORK_TREE=`/`GIT_COMMON_DIR=` assignment preceding `git` (bare, or behind an `env` prefix
+word) are all denied outright — reading nothing new from the untrusted value to reach that verdict.
+The one exception: a `-C` value that is LEXICALLY the session checkout itself (`.`/`./`, the
+PreToolUse stdin `cwd`, or the session's own resolved root, each with or without one trailing `/`)
+is still judged against the session's own facts, exactly as before. A same-command `cd <path> &&
+git push` or `pushd`/`popd` pair, and an `export GIT_DIR=…; git push` in a separate segment, remain
+judged against the session's own `cwd` — this hook's tokenizer tracks no `cd`/`pushd`/`export`
+state across segments, a documented residual, not fixed here. See the hook's own header for the
+full, measured evasion/over-blocking inventory. It enforces the
+"deny the default branch" half of this issue's Decision, and (since #292) fails closed on an
+unresolvable target, but not an allow-list of
 `claude/<n>-<slug>` destinations — that would also deny a `release/vX.Y.Z` branch, an annotated
 tag push, or any ordinary `git push origin feature/x` a human runs in any plugin-enabled session,
 for no matching safety gain. Since #268, a push carrying no explicit refspec (a bare `git push` or

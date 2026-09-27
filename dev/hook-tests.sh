@@ -1239,15 +1239,21 @@ case_pd_c_other_repo_config_route() {
   # target's config was never consulted at all. This is the one fixture in this suite using the
   # absolute-path join branch ("$target" is already `$tmpbase/target-wt-1`, an absolute path) --
   # if $TMPDIR itself ever contained a character outside PATH_ERE's class, is_c_target_path would
-  # reject the whole absolute path and this case would FAIL LOUDLY (expect_push_deny would see rc
-  # 0, not silently pass for the wrong reason), since no other route in this fixture can produce a
-  # deny.
+  # reject the whole absolute path and the segment would deny as UNRESOLVED instead (a
+  # non-session-equivalent absolute path) -- expect_push_deny alone could not tell that apart from
+  # this fixture's OWN intended deny route; the inline assertion below (stderr contains "via
+  # remote.origin.push") is what catches that silently-wrong-reason case, FAILING LOUDLY instead of
+  # passing vacuously.
   local main="$tmpbase/repo-c-a4" target="$tmpbase/target-wt-1"
   mk_fixture_repo "$main" develop "claude/17-a"
   mk_fixture_repo "$target" main "feature/x"
   mk_fixture_config "$target" $'[remote "origin"]\n\tpush = HEAD:main\n'
   run_push_guard "$(mk_push_cmd_cwd "git -C $target push" "$main")"
   expect_push_deny
+  case "$push_err" in
+    *"via remote.origin.push"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'via remote.origin.push': '$push_err'\n" ;;
+  esac
 }
 case_pn_c_other_repo_ignores_session_config() {
   # A5 (documented narrowing): the SESSION's own config would deny (push=HEAD:main, HEAD
@@ -1259,38 +1265,6 @@ case_pn_c_other_repo_ignores_session_config() {
   mk_fixture_config "$main" $'[remote "origin"]\n\tpush = HEAD:main\n'
   mk_fixture_repo "$target" trunk "feature/y"
   run_push_guard "$(mk_push_cmd_cwd 'git -C ../target-a5-wt-1 push' "$main")"
-  expect_push_no_opinion
-}
-case_pn_c_nonsibling_path() {
-  # B1: the predicate's path-shape boundary -- no "-wt-<n>" suffix at all. Measured pre-#269
-  # (main's script): no opinion (rc 0) -- the "-C" value was never read either way, so this
-  # command's verdict is unchanged by #269 (the fixture's value is purely as the predicate
-  # boundary, not a Today-vs-After widening).
-  local main="$tmpbase/repo-c-b1" other="$tmpbase/other-checkout"
-  mk_fixture_repo "$main" main "claude/17-a"
-  mk_fixture_repo "$other" develop "feature/x"
-  run_push_guard "$(mk_push_cmd_cwd 'git -C ../other-checkout push origin develop' "$main")"
-  expect_push_no_opinion
-}
-case_pn_c_attached_form() {
-  # B2: the ATTACHED "-C<path>" form -- validate_segment's own t1=="-C" exact-match boundary,
-  # mirrored here: this hook's tokenizer only records a value for the detached, two-token form.
-  # Measured pre-#269 (main's script): no opinion (rc 0) -- same reason as B1, unchanged by #269.
-  local main="$tmpbase/repo-c-b2" other="$tmpbase/other-checkout-b2-wt-1"
-  mk_fixture_repo "$main" main "claude/17-a"
-  mk_fixture_repo "$other" develop "feature/x"
-  run_push_guard "$(mk_push_cmd_cwd 'git -C../other-checkout-b2-wt-1 push origin develop' "$main")"
-  expect_push_no_opinion
-}
-case_pn_c_double_c() {
-  # B3: TWO "-C" tokens in one segment -- the 0/1/2+ boundary (LESSON 2026-09-08d) on "-C"
-  # occurrences specifically; the tokenizer's ccount guard means neither is resolved. Measured
-  # pre-#269 (main's script): no opinion (rc 0) -- same reason as B1/B2, unchanged by #269.
-  local main="$tmpbase/repo-c-b3" benign="$tmpbase/benign-wt-1" other="$tmpbase/other-checkout-b3-wt-1"
-  mk_fixture_repo "$main" main "claude/17-a"
-  mk_fixture_repo "$benign" main "feature/w"
-  mk_fixture_repo "$other" develop "feature/x"
-  run_push_guard "$(mk_push_cmd_cwd 'git -C ../benign-wt-1 -C ../other-checkout-b3-wt-1 push origin develop' "$main")"
   expect_push_no_opinion
 }
 case_pd_c_unresolvable_degrades() {
@@ -1426,6 +1400,295 @@ case_pd_c_per_segment_session_reset() {
   mk_fixture_repo "$other" trunk "feature/y"
   run_push_guard "$(mk_push_cmd_cwd 'git -C ../other-d1-wt-1 push origin claude/99-z && git push' "$main")"
   expect_push_deny
+}
+
+# --- unresolvable push target: fail closed (#292) ---------------------------------------------
+# mutant:292-pg-c-nonwt -- drops the driver's own "-C path outside the worktree shape" reason
+#   assignment, so a non-PATH_ERE, non-session "-C" value silently falls through to
+#   apply_c_target's existing no-op (judged against the session) instead of denying.
+# mutant:292-pg-attached-c -- drops the tokenizer's attached "-C<path>" detection.
+# mutant:292-pg-multi-c -- drops the tokenizer's "ccount >= 2" ("more than one -C") reason.
+# mutant:292-pg-repo-opts-attached -- drops the "<member>=" prefix arm for GIT_REPO_OPTS, so an
+#   attached "--git-dir=<path>"/"--work-tree=<path>" is no longer flagged.
+# mutant:292-pg-repo-opts-detached -- drops the exact-token arm for GIT_REPO_OPTS, so a detached
+#   "--git-dir <path>"/"--work-tree <path>" is no longer flagged.
+# mutant:292-pg-repo-opts-vocab -- narrows GIT_REPO_OPTS to "--git-dir" only, so "--work-tree" in
+#   either form is no longer flagged.
+# mutant:292-pg-env-vocab -- empties GIT_REPO_ENV_VARS, so no environment-variable redirect is
+#   ever flagged.
+# mutant:292-pg-env-exact -- widens the env-assignment check from exact GIT_REPO_ENV_VARS
+#   membership to any "GIT_"-prefixed name, so an unrelated assignment like GIT_TRACE=1 is wrongly
+#   flagged too.
+# mutant:292-pg-session-equiv -- makes is_session_checkout_path() always return false, so a
+#   session-equivalent "-C" value (".", the session cwd, the session root) is wrongly denied as
+#   unresolved.
+# mutant:292-pg-session-root -- drops is_session_checkout_path()'s $session_root comparison, so a
+#   "-C" value naming the session's own root, checked from a SUBDIRECTORY cwd, is wrongly denied.
+# mutant:292-pg-trailing-slash -- drops is_session_checkout_path()'s trailing-"/" strip on its own
+#   PATH argument, so a "-C" value carrying one trailing "/" no longer matches the session cwd.
+#
+# B1/B2/B3's shapes (a non-wt "-C", the attached "-C<path>" form, and two "-C" tokens) each deny as
+# unresolved below, reusing the same fixture dirs and command lines B1/B2/B3 (deleted from the
+# #269 section above) once used for their own no-opinion verdict. Every fixture below passes an
+# explicit cwd built with mk_fixture_repo, except the two controls at the very end
+# (push-unres-noop-env-unrelated, push-unres-noop-global-opt-feature), whose destination
+# (feature/x) never depends on cwd resolution at all.
+case_pu_deny_c_nonsibling_path() {
+  # B1's shape: no "-wt-<n>" suffix at all, and not lexically the session checkout -- denies as
+  # unresolved.
+  local main="$tmpbase/repo-c-b1" other="$tmpbase/other-checkout"
+  mk_fixture_repo "$main" main "claude/17-a"
+  mk_fixture_repo "$other" develop "feature/x"
+  run_push_guard "$(mk_push_cmd_cwd 'git -C ../other-checkout push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(-C path outside the <name>-wt-<n> worktree shape)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(-C path outside the <name>-wt-<n> worktree shape)': '$push_err'\n" ;;
+  esac
+}
+case_pu_deny_c_attached_form() {
+  # B2's shape: the ATTACHED "-C<path>" form -- denies as unresolved.
+  local main="$tmpbase/repo-c-b2" other="$tmpbase/other-checkout-b2-wt-1"
+  mk_fixture_repo "$main" main "claude/17-a"
+  mk_fixture_repo "$other" develop "feature/x"
+  run_push_guard "$(mk_push_cmd_cwd 'git -C../other-checkout-b2-wt-1 push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(attached -C<path>)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(attached -C<path>)': '$push_err'\n" ;;
+  esac
+}
+case_pu_deny_c_double_c() {
+  # B3's shape: TWO "-C" tokens in one segment -- denies as unresolved.
+  local main="$tmpbase/repo-c-b3" benign="$tmpbase/benign-wt-1" other="$tmpbase/other-checkout-b3-wt-1"
+  mk_fixture_repo "$main" main "claude/17-a"
+  mk_fixture_repo "$benign" main "feature/w"
+  mk_fixture_repo "$other" develop "feature/x"
+  run_push_guard "$(mk_push_cmd_cwd 'git -C ../benign-wt-1 -C ../other-checkout-b3-wt-1 push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(more than one -C)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(more than one -C)': '$push_err'\n" ;;
+  esac
+}
+case_pu_deny_git_dir_attached() {
+  local main="$tmpbase/repo-pu-gd-attached"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'git --git-dir=../other-u4/.git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(--git-dir)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(--git-dir)': '$push_err'\n" ;;
+  esac
+}
+case_pu_deny_git_dir_detached() {
+  local main="$tmpbase/repo-pu-gd-detached"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'git --git-dir ../other-u5/.git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(--git-dir)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(--git-dir)': '$push_err'\n" ;;
+  esac
+}
+case_pu_deny_work_tree_attached() {
+  local main="$tmpbase/repo-pu-wt-attached"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'git --work-tree=../other-u6 push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(--work-tree)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(--work-tree)': '$push_err'\n" ;;
+  esac
+}
+case_pu_deny_work_tree_detached() {
+  local main="$tmpbase/repo-pu-wt-detached"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'git --work-tree ../other-u7 push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(--work-tree)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(--work-tree)': '$push_err'\n" ;;
+  esac
+}
+case_pu_deny_env_git_dir() {
+  local main="$tmpbase/repo-pu-env-gd"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'GIT_DIR=../other-u8/.git git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(GIT_DIR=)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(GIT_DIR=)': '$push_err'\n" ;;
+  esac
+}
+case_pu_deny_env_prefix_work_tree() {
+  local main="$tmpbase/repo-pu-env-wt"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'env GIT_WORK_TREE=../other-u9 git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(GIT_WORK_TREE=)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(GIT_WORK_TREE=)': '$push_err'\n" ;;
+  esac
+}
+case_pu_deny_env_common_dir() {
+  local main="$tmpbase/repo-pu-env-cd"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'GIT_COMMON_DIR=../other-u10/.git git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(GIT_COMMON_DIR=)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(GIT_COMMON_DIR=)': '$push_err'\n" ;;
+  esac
+}
+case_pu_deny_never_executes() {
+  # Safety property on the new unresolved-target route: shape of push-unres-deny-c-nonsibling-path,
+  # its own dirs, booby-trapped PATH (the C1/C2 idiom) -- deny, sentinel absent, and BOTH the
+  # session repo's and the other checkout's file listings byte-identical before/after.
+  local main="$tmpbase/repo-pu-never-executes" other="$tmpbase/other-pu-never-executes"
+  mk_fixture_repo "$main" main "claude/17-a"
+  mk_fixture_repo "$other" develop "feature/x"
+  local trapdir="$tmpbase/trapbin-pu-never-executes" sentinel="$tmpbase/sentinel-pu-never-executes"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  local before_main after_main before_other after_other
+  before_main="$(find "$main" -type f -exec ls -la {} \; | sort)"
+  before_other="$(find "$other" -type f -exec ls -la {} \; | sort)"
+  run_push_guard "$(mk_push_cmd_cwd 'git -C ../other-pu-never-executes push origin develop' "$main")" "$trapdir:$PATH"
+  after_main="$(find "$main" -type f -exec ls -la {} \; | sort)"
+  after_other="$(find "$other" -type f -exec ls -la {} \; | sort)"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(-C path outside the <name>-wt-<n> worktree shape)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(-C path outside the <name>-wt-<n> worktree shape)': '$push_err'\n" ;;
+  esac
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH while denying an unresolvable -C target\n"; }
+  [ "$before_main" = "$after_main" ] || { __ok=0; __why="${__why}session repo's file listing changed — push-guard.sh wrote to or altered a file it should only read\n"; }
+  [ "$before_other" = "$after_other" ] || { __ok=0; __why="${__why}other checkout's file listing changed — push-guard.sh wrote to or altered a file it should only read\n"; }
+}
+case_pu_deny_codex_main_session() {
+  # Documented Codex payload shape (mk_codex_shell, main session -- no agent_type/agent_id).
+  local main="$tmpbase/repo-pu-codex"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_codex_shell '' 'git -C ../other-checkout-u12 push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(-C path outside the <name>-wt-<n> worktree shape)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(-C path outside the <name>-wt-<n> worktree shape)': '$push_err'\n" ;;
+  esac
+}
+case_pu_deny_c_dot_session_default() {
+  # A session-equivalent "-C" value (".") is NOT judged as unresolved -- it still reaches the
+  # ordinary "resolves to the default branch" route, against the session's own default (develop).
+  local main="$tmpbase/repo-pu-dot-default"
+  mk_fixture_repo "$main" develop "feature/z"
+  run_push_guard "$(mk_push_cmd_cwd 'git -C . push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"resolves to the default branch: develop"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'resolves to the default branch: develop': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"cannot resolve which repository"*)
+      __ok=0; __why="${__why}stderr unexpectedly contains 'cannot resolve which repository' -- a session-equivalent -C value must not be judged as unresolved: '$push_err'\n"
+      ;;
+    *) ;;
+  esac
+}
+case_pu_noop_c_dot() {
+  local main="$tmpbase/repo-pu-noop-dot"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'git -C . push origin feature/x' "$main")"
+  expect_push_no_opinion
+}
+case_pu_noop_c_session_cwd() {
+  # "-C $main/" (one trailing slash) from cwd "$main" (none) -- pins is_session_checkout_path()'s
+  # own trailing-slash strip.
+  local main="$tmpbase/repo-pu-noop-session-cwd"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd "git -C $main/ push -u origin \"claude/17-a\"" "$main")"
+  expect_push_no_opinion
+}
+case_pu_noop_c_session_root() {
+  # cwd is a SUBDIRECTORY of the session checkout; "-C" names the session ROOT (not the cwd) --
+  # pins is_session_checkout_path()'s own $session_root comparison, distinct from $resolve_cwd.
+  local main="$tmpbase/repo-pu-noop-session-root"
+  mk_fixture_repo "$main" main "claude/17-a"
+  mkdir -p "$main/sub"
+  run_push_guard "$(mk_push_cmd_cwd "git -C $main push -u origin \"claude/17-a\"" "$main/sub")"
+  expect_push_no_opinion
+}
+case_pu_noop_c_nonpush_segment() {
+  # Only PUSH segments are affected: a non-wt "-C" on a non-push segment, followed by a benign
+  # push, must stay no opinion.
+  local main="$tmpbase/repo-pu-noop-nonpush"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'git -C ../other-checkout-u19 status && git push origin feature/x' "$main")"
+  expect_push_no_opinion
+}
+case_pu_noop_env_unrelated() {
+  run_push_guard "$(mk_push_cmd 'GIT_TRACE=1 git push origin feature/x')"
+  expect_push_no_opinion
+}
+case_pu_noop_global_opt_feature() {
+  run_push_guard "$(mk_push_cmd 'git -c core.pager=cat push origin feature/x')"
+  expect_push_no_opinion
 }
 
 # --- deny/no-opinion: #268 config-derived push routes (remote.<name>.push / push.default) -----
@@ -3903,43 +4166,17 @@ cases=(
   #       RE-MEASURED again for the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set:
   #       -> 108 pass, 8 fail — UNCHANGED failing set, +2 pass; neither new kickback fixture uses
   #       "-C" at all)
-  #   M47 the tokenizer's emitted "-C" field forced empty unconditionally (print "PUSH\t"         -> 89 pass,
-  #       (ccount == 1 ? cpath : "") "\t" rest -> print "PUSH\t" "" "\t" rest)                     7 fail
-  #       (kills the IDENTICAL seven-case set as M46 -- a different code site, the awk tokenizer
-  #       rather than the bash resolution function, with the same observable effect: apply_c_target()
-  #       never receives a real value to resolve. RE-MEASURED for the round-2 kickback: -> 91 pass,
-  #       7 fail — unchanged failing set, +2 pass, same reason as M46 above. CORRECTED (verifier
-  #       finding F3, identically to M46 above): RE-MEASURED against the #290 114-case push-* set:
-  #       -> 106 pass, 8 fail — the same seven cases plus push-deny-c-target-global-route, for the
-  #       identical reason M46 gains it (a different code site, the awk tokenizer's "-C" field,
-  #       with the same observable effect). RE-MEASURED again for the #290 ROUND-2 KICKBACK against
-  #       the CURRENT 116-case push-* set: -> 108 pass, 8 fail — UNCHANGED failing set, +2 pass;
-  #       neither new kickback fixture uses "-C" at all)
-  #   M48 the is_c_target_path() predicate call removed from apply_c_target() (every non-empty    -> 95 pass,
-  #       "-C" value is resolved, regardless of shape)                                            1 fail
-  #       (kills only push-noop-c-nonsibling-path -- its "../other-checkout" value has no
-  #       "-wt-<n>" suffix at all and would otherwise never be resolved; every other fixture's
-  #       "-C" value either already satisfies the predicate or is never emitted as a candidate.
-  #       RE-MEASURED for the round-2 kickback: -> 97 pass, 1 fail — unchanged failing set, +2 pass.
-  #       RE-MEASURED (per finding F3's directive to measure, not reason) against the #290 114-case
-  #       push-* set: -> 113 pass, 1 fail — UNCHANGED failing set, +16 pass. RE-MEASURED again for
-  #       the #290 ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail —
-  #       UNCHANGED failing set, +2 pass; neither new kickback fixture's "-C" value shape changes)
-  #   M49 the tokenizer's "-C" match widened to also capture the ATTACHED "-C<path>" form (a      -> 95 pass,
-  #       new branch inserted before the gopt_set check: substr(tok,1,2)=="-C" && tok!="-C")       1 fail
-  #       (kills only push-noop-c-attached-form. RE-MEASURED for the round-2 kickback: -> 97 pass,
-  #       1 fail — unchanged failing set, +2 pass. RE-MEASURED against the #290 114-case push-* set:
-  #       -> 113 pass, 1 fail — UNCHANGED failing set, +16 pass. RE-MEASURED again for the #290
-  #       ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail — UNCHANGED
-  #       failing set, +2 pass; neither new kickback fixture uses an attached "-C<path>" form)
-  #   M50 the tokenizer's exactly-one-"-C" guard widened to "one or more" (ccount == 1 ->         -> 95 pass,
-  #       ccount >= 1 in the emitted-field ternary -- the LAST "-C" token's value wins, since       1 fail
-  #       cpath is overwritten on each "-C" occurrence)
-  #       (kills only push-noop-c-double-c. RE-MEASURED for the round-2 kickback: -> 97 pass,
-  #       1 fail — unchanged failing set, +2 pass. RE-MEASURED against the #290 114-case push-* set:
-  #       -> 113 pass, 1 fail — UNCHANGED failing set, +16 pass. RE-MEASURED again for the #290
-  #       ROUND-2 KICKBACK against the CURRENT 116-case push-* set: -> 115 pass, 1 fail — UNCHANGED
-  #       failing set, +2 pass; neither new kickback fixture carries two "-C" tokens)
+  #   M47 the tokenizer's emitted "-C" field forced empty unconditionally -- a different code site
+  #       than M46 (the awk tokenizer rather than the bash resolution function), with the same
+  #       observable effect: apply_c_target() never receives a real value to resolve.
+  #   M48-M50 (the is_c_target_path() predicate call removed from apply_c_target(); the tokenizer's
+  #       "-C" match widened to also capture the ATTACHED "-C<path>" form; the tokenizer's
+  #       exactly-one-"-C" guard widened to "one or more") each killed a push-noop-c-* fixture that
+  #       #292 replaced with a DENY fixture of the same shape (push-noop-c-nonsibling-path/
+  #       -attached-form/-double-c -> push-unres-deny-c-nonsibling-path/-c-attached-form/-c-double-c);
+  #       their mechanism is now pinned instead by the dev/mutants/hook-tests.json
+  #       292-pg-c-nonwt/292-pg-attached-c/292-pg-multi-c records (run via dev/mutant-driver.sh, the
+  #       #359 registry idiom, not this prose table).
   #   M51 the resolved current branch not applied (current_branch="$resolved_current" ->          -> 93 pass,
   #       current_branch="$session_current_branch")                                                3 fail
   #       (kills push-deny-c-sibling-wt-bare-on-default (the n<=1 current-branch check reads the
@@ -4345,15 +4582,32 @@ cases=(
   "push-deny-c-sibling-wt-head-refspec|case_pd_c_sibling_wt_head_refspec|deny: as A1 but push origin HEAD (A3 -- isolates refspec_dest()'s HEAD substitution on the RESOLVED checkout's current branch) -- measured: M46, 89 pass 7 fail (also M47, 89 pass 7 fail; also M51, 93 pass 3 fail)"
   "push-deny-c-other-repo-config-route|case_pd_c_other_repo_config_route|deny: git -C <abs>/target-wt-1 push (absolute-path form), target's config denies via remote.origin.push=HEAD:main, SESSION has no config at all (A4) -- measured: M46, 89 pass 7 fail (also M47, 89 pass 7 fail; also M54, 94 pass 2 fail)"
   "push-noop-c-other-repo-ignores-session-config|case_pn_c_other_repo_ignores_session_config|no opinion: git -C ../target-a5-wt-1 push, SESSION config denies via push=HEAD:main but the resolved segment must ignore it (A5, documented narrowing -- measured pre-#269: deny) -- measured: M46, 89 pass 7 fail (also M47, 89 pass 7 fail; also M54, 94 pass 2 fail)"
-  "push-noop-c-nonsibling-path|case_pn_c_nonsibling_path|no opinion: git -C ../other-checkout push origin develop, no -wt-<n> suffix at all (B1, the predicate's path-shape boundary) -- measured: M48, 95 pass 1 fail"
-  "push-noop-c-attached-form|case_pn_c_attached_form|no opinion: git -C../other-checkout-b2-wt-1 push origin develop, the ATTACHED -C<path> form (B2) -- measured: M49, 95 pass 1 fail"
-  "push-noop-c-double-c|case_pn_c_double_c|no opinion: git -C ../benign-wt-1 -C ../other-checkout-b3-wt-1 push origin develop, TWO -C tokens (B3, the 0/1/2+ boundary -- LESSON 2026-09-08d) -- measured: M50, 95 pass 1 fail"
   "push-deny-c-unresolvable-degrades|case_pd_c_unresolvable_degrades|deny: git -C ../missing-wt-9 push (bare), path matches the shape but nothing exists there, session HEAD ON its own default (develop) -- degrades to the session's own facts, never clears them (B4, unchanged verdict) -- measured: M52, 95 pass 1 fail"
   "push-noop-c-sibling-wt-session-on-default|case_pn_c_sibling_wt_session_on_default|no opinion: git -C ../repo-c-b5-wt-1 push, session ITSELF on its own default (main), sibling worktree on claude/17-a (B5, documented narrowing, worktree-parallel mode's real shape -- measured pre-#269: deny) -- measured: M46, 89 pass 7 fail (also M47, 89 pass 7 fail; also M51, 93 pass 3 fail)"
   "push-deny-c-session-default-union|case_pd_c_session_default_union|deny: git -C ../target-b6-wt-1 push origin develop, session default develop, target's OWN default is trunk (B6 -- measured pre-#269: ALREADY denies via the session's own deny set alone; this fixture's value is as the M53 discriminator, not a Today-vs-After widening) -- measured: M53, 95 pass 1 fail"
   "push-deny-c-never-executes|case_pd_c_never_executes|deny via the -C resolution route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND BOTH the session repo's and the resolved -C target's file listings are byte-identical before/after (C1, A2's shape; \"dirname\" added to the trap in the #269 round-2 kickback, harmless here since this fixture's -C target resolves at depth 0 -- see M57 below and C2) -- measured: M46, 89 pass 7 fail (also M47, 89 pass 7 fail; also M55, 94 pass 2 fail); NOT flipped by M57 (measured: 97 pass 1 fail against the 98-case set, not re-measured for #290 -- this fixture's -C target resolves at depth 0 and never reaches the ascent guard M57 removes; see C2 below, which does)"
   "push-deny-c-unresolvable-never-executes|case_pd_c_unresolvable_never_executes|deny (degrades to the session's own facts, B4's shape) via the -C resolution route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH (C2, #269 round-2 kickback -- pins the depth-1 ascent guard resolve_repo() would otherwise call dirname past, unlike C1 whose target resolves at depth 0 and never reaches that code) -- measured: M57, 97 pass 1 fail (also M14, 89 pass 9 fail; M15, 88 pass 10 fail; M52, 96 pass 2 fail -- all four discriminate this fixture, mirroring B4's exact dependency on the session's own current_branch/default_branch after a failed -C resolution)"
   "push-deny-c-per-segment-session-reset|case_pd_c_per_segment_session_reset|deny: TWO push segments -- git -C ../other-d1-wt-1 push origin claude/99-z (resolves, no opinion on its own) && git push (bare, no -C) -- the SECOND segment must be judged by the SESSION's own config (push=HEAD:main), not by whatever the first segment's -C target left behind (D1, #269 round-2 kickback -- acceptance criterion 4's per-segment reset had no multi-segment fixture) -- measured: M56, 97 pass 1 fail (also M26, 80 pass 18 fail -- the SAME session-config mechanism push-deny-config-remote-push-bare uses, see M26's own table entry)"
+  # --- unresolvable push target (#292) -----------------------------------------------------------
+  "push-unres-deny-c-nonsibling-path|case_pu_deny_c_nonsibling_path|deny: git -C ../other-checkout push origin develop, no -wt-<n> suffix at all -- B1's shape, denied as unresolved -- mutation proof: dev/mutants/hook-tests.json (292-pg-c-nonwt)"
+  "push-unres-deny-c-attached-form|case_pu_deny_c_attached_form|deny: git -C../other-checkout-b2-wt-1 push origin develop, the ATTACHED -C<path> form -- B2's shape, denied as unresolved -- mutation proof: dev/mutants/hook-tests.json (292-pg-attached-c)"
+  "push-unres-deny-c-double-c|case_pu_deny_c_double_c|deny: git -C ../benign-wt-1 -C ../other-checkout-b3-wt-1 push origin develop, TWO -C tokens -- B3's shape, denied as unresolved -- mutation proof: dev/mutants/hook-tests.json (292-pg-multi-c)"
+  "push-unres-deny-git-dir-attached|case_pu_deny_git_dir_attached|deny: git --git-dir=../other-u4/.git push origin develop -- mutation proof: dev/mutants/hook-tests.json (292-pg-repo-opts-attached, 292-pg-repo-opts-vocab)"
+  "push-unres-deny-git-dir-detached|case_pu_deny_git_dir_detached|deny: git --git-dir ../other-u5/.git push origin develop -- mutation proof: dev/mutants/hook-tests.json (292-pg-repo-opts-detached, 292-pg-repo-opts-vocab)"
+  "push-unres-deny-work-tree-attached|case_pu_deny_work_tree_attached|deny: git --work-tree=../other-u6 push origin develop -- mutation proof: dev/mutants/hook-tests.json (292-pg-repo-opts-attached, 292-pg-repo-opts-vocab)"
+  "push-unres-deny-work-tree-detached|case_pu_deny_work_tree_detached|deny: git --work-tree ../other-u7 push origin develop -- mutation proof: dev/mutants/hook-tests.json (292-pg-repo-opts-detached, 292-pg-repo-opts-vocab)"
+  "push-unres-deny-env-git-dir|case_pu_deny_env_git_dir|deny: GIT_DIR=../other-u8/.git git push origin develop -- mutation proof: dev/mutants/hook-tests.json (292-pg-env-vocab)"
+  "push-unres-deny-env-prefix-work-tree|case_pu_deny_env_prefix_work_tree|deny: env GIT_WORK_TREE=../other-u9 git push origin develop -- mutation proof: dev/mutants/hook-tests.json (292-pg-env-vocab)"
+  "push-unres-deny-env-common-dir|case_pu_deny_env_common_dir|deny: GIT_COMMON_DIR=../other-u10/.git git push origin develop -- mutation proof: dev/mutants/hook-tests.json (292-pg-env-vocab)"
+  "push-unres-deny-never-executes|case_pu_deny_never_executes|deny via the unresolved-target route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND BOTH the session repo's and the other checkout's file listings are byte-identical before/after -- mutation proof: dev/mutants/hook-tests.json (292-pg-c-nonwt)"
+  "push-unres-deny-codex-main-session|case_pu_deny_codex_main_session|deny: a Codex-shaped main-session payload (mk_codex_shell '') with a non-wt -C push -- mutation proof: dev/mutants/hook-tests.json (292-pg-c-nonwt)"
+  "push-unres-deny-c-dot-session-default|case_pu_deny_c_dot_session_default|deny: git -C . push origin develop against a develop-default session -- a session-equivalent -C value still reaches the ordinary default-branch route, never the unresolved one -- mutation proof: dev/mutants/hook-tests.json (292-pg-session-equiv)"
+  "push-unres-noop-c-dot|case_pu_noop_c_dot|no opinion: git -C . push origin feature/x -- session-equivalent -C value control -- mutation proof: dev/mutants/hook-tests.json (292-pg-session-equiv)"
+  "push-unres-noop-c-session-cwd|case_pu_noop_c_session_cwd|no opinion: git -C \$main/ push -u origin \"claude/17-a\", cwd \$main (one trailing slash on the -C value only) -- mutation proof: dev/mutants/hook-tests.json (292-pg-session-equiv, 292-pg-trailing-slash)"
+  "push-unres-noop-c-session-root|case_pu_noop_c_session_root|no opinion: cwd a SUBDIRECTORY of the session checkout, -C names the session ROOT -- pins \$session_root, distinct from \$resolve_cwd -- mutation proof: dev/mutants/hook-tests.json (292-pg-session-equiv, 292-pg-session-root)"
+  "push-unres-noop-c-nonpush-segment|case_pu_noop_c_nonpush_segment|no opinion: git -C ../other-checkout-u19 status && git push origin feature/x -- only push segments are affected -- control, not part of the mutation-proof registry"
+  "push-unres-noop-env-unrelated|case_pu_noop_env_unrelated|no opinion: GIT_TRACE=1 git push origin feature/x -- an unrelated GIT_ env var is never flagged -- mutation proof: dev/mutants/hook-tests.json (292-pg-env-exact)"
+  "push-unres-noop-global-opt-feature|case_pu_noop_global_opt_feature|no opinion: git -c core.pager=cat push origin feature/x -- an ordinary global option with a value is unaffected -- control, not part of the mutation-proof registry"
   "push-deny-config-remote-push-bare|case_pd_config_remote_push_bare|deny: git push against a repo whose config carries [remote \"origin\"] push = HEAD:main (#268, the issue's own shape) -- measured: M26, 68 pass 12 fail"
   "push-deny-config-remote-push-named-remote|case_pd_config_remote_push_named_remote|deny: git push origin against the same config (n==1, the positive side of the exact-remote-scoping clause) -- measured: M26, 68 pass 12 fail (also M41, 79 pass 1 fail)"
   "push-deny-config-remote-push-second-line|case_pd_config_remote_push_second_line|deny: two push = lines under [remote \"origin\"], only the SECOND offending (0/1/2+ boundary) -- measured: M26, 68 pass 12 fail (also M33, 79 pass 1 fail)"

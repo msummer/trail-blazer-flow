@@ -43,7 +43,7 @@
 │   ├── hooks.json                 # registers the five PreToolUse hooks below
 │   ├── git-c-guard.sh             # approves only the exact git -C <worktree> <subcommand> forms worktree-parallel mode issues
 │   ├── agent-boundary.sh          # mechanically denies git/gh Bash commands, and a Bash write into .claude/, for the implementer/verifier subagents (#235, #340, #387)
-│   ├── push-guard.sh              # mechanically denies any git push whose destination is the default branch, every session (#260)
+│   ├── push-guard.sh              # mechanically denies any git push whose destination is the default branch, every session (#260), or whose target repository it can't resolve (#292)
 │   ├── claude-dir-guard.sh        # mechanically denies an implementer/verifier Edit, Write, apply_patch, or apply_patch-shaped Bash call into any .claude/.codex path (#327, #407)
 │   └── planner-guard.sh           # mechanically enforces the planner subagent's read-only boundary (allowlist; fails closed) (#407)
 ├── dev/
