@@ -204,17 +204,24 @@ fi
 # 1.9 — no unguarded 'gh issue comment|edit|close' at command position in bin/*.sh (#355): a bare
 # write aborts the whole script the moment gh fails (rate limit, auth, or network) under
 # 'set -euo pipefail' — see cleanup-after-merge.sh's own #355 history. Anchored on the line's
-# FIRST command word, same idiom as 1.5: bin/harness-stop.sh's `printf '  gh issue edit <n>
-# --add-label %s\n' ...` line and its jq expression containing `"\nclear=gh issue edit "` both
-# name the literal string "gh issue edit" at NON-command position (a printf format argument and a
-# jq string literal) and must NOT be flagged — a looser "line contains" pattern would falsely
-# flag both. Full-line comments are stripped first (1.4/1.5's idiom); a write is safe when it's
-# wrapped by a guard (cleanup-after-merge.sh's own try_write helper puts 'if'/'&&' at the start of
-# the line instead of 'gh') or carries a '||' fallback on the same line. The pattern's own
-# '!?' also flags a '! gh issue ...' line, even though 'set -e' ignores a '!'-negated command's
-# exit status — deliberate, conservative over-flagging rather than a blind spot. Known
-# limitation: a second write '&&'-chained later on the SAME physical line as a first,
-# already-guarded write is out of reach here — keep one write per line.
+# FIRST command word — unlike 1.5's del_pat, which matches anywhere on the line: bin/harness-
+# stop.sh's `printf '  gh issue edit <n> --add-label %s\n' ...` line and its jq expression
+# containing `"\nclear=gh issue edit "` both name the literal string "gh issue edit" at
+# NON-command position (a printf format argument and a jq string literal) and must NOT be
+# flagged — a looser "line contains" pattern would falsely flag both. Full-line comments are
+# stripped first (1.4/1.5's idiom); a write is safe when it's wrapped by a guard
+# (cleanup-after-merge.sh's own try_write helper puts 'if'/'&&' at the start of the line instead
+# of 'gh') or carries a '||' fallback on the same line. The pattern's own '!?' also flags a
+# '! gh issue ...' line, even though 'set -e' ignores a '!'-negated command's exit status —
+# deliberate, conservative over-flagging rather than a blind spot. Known limitations, both from
+# the same first-word anchor: a second write '&&'-chained later on the SAME physical line as a
+# first, already-guarded write, and a bare write on a continuation line whose first word is '&&'
+# — keep one write per line, and keep every write behind its own guard on its own line. Every
+# live write in bin/cleanup-after-merge.sh instead has a dev/cleanup-tests.sh write-failure
+# fixture that expects its WARN, so a write that loses its try_write guard in either shape fails
+# that fixture; the 371-* records in dev/mutants/cleanup-tests.json prove it for both shapes on
+# the close arm and for the reopened arm's and the no-plan-present follow-up branch's writes. A
+# NEW write site needs its own fixture (CLAUDE.md's Verification section).
 write_pat='^[0-9]+:[[:space:]]*!?[[:space:]]*gh[[:space:]]+issue[[:space:]]+(comment|edit|close)([[:space:]]|$)'
 bad_list=""
 for s in "$root"/bin/*.sh; do

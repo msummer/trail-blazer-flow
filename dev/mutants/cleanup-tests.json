@@ -73,6 +73,66 @@
       "expect_fail": [
         "reopened-then-ordinary-still-closes"
       ]
+    },
+    {
+      "name": "371-same-line-bare-edit",
+      "target": "bin/cleanup-after-merge.sh",
+      "suite": "dev/cleanup-tests.sh",
+      "filter": "write-failure-close",
+      "edits": [
+        {
+          "from": "gh issue close \"$n\" \\\n               && try_write \"$n\" \"$title\" \"removing the pr-open label\" gh issue edit \"$n\" --remove-label pr-open; then",
+          "to": "gh issue close \"$n\" && gh issue edit \"$n\" --remove-label pr-open >/dev/null; then"
+        }
+      ],
+      "expect_fail": [
+        "write-failure-close-edit"
+      ]
+    },
+    {
+      "name": "371-continuation-bare-close",
+      "target": "bin/cleanup-after-merge.sh",
+      "suite": "dev/cleanup-tests.sh",
+      "filter": "write-failure-close",
+      "edits": [
+        {
+          "from": "try_write \"$n\" \"$title\" \"closing the issue\" gh issue close \"$n\"",
+          "to": "gh issue close \"$n\" >/dev/null"
+        }
+      ],
+      "expect_fail": [
+        "write-failure-close-close"
+      ]
+    },
+    {
+      "name": "371-reopened-bare-edit",
+      "target": "bin/cleanup-after-merge.sh",
+      "suite": "dev/cleanup-tests.sh",
+      "filter": "reopened-write-failure",
+      "edits": [
+        {
+          "from": "                 && try_write \"$n\" \"$title\" \"removing the pr-open label\" gh issue edit \"$n\" --remove-label pr-open; then\n                echo \"        pr-open removed — reopened issue left open\"",
+          "to": "                 && gh issue edit \"$n\" --remove-label pr-open >/dev/null; then\n                echo \"        pr-open removed — reopened issue left open\""
+        }
+      ],
+      "expect_fail": [
+        "reopened-write-failure-edit"
+      ]
+    },
+    {
+      "name": "371-followup-noplan-bare-comment",
+      "target": "bin/cleanup-after-merge.sh",
+      "suite": "dev/cleanup-tests.sh",
+      "filter": "write-failure-followup",
+      "edits": [
+        {
+          "from": "              if try_write \"$n\" \"$title\" \"posting the orphan notice\" gh issue comment \"$n\" --body \"${AUDIT_MARKER}",
+          "to": "              if gh issue comment \"$n\" --body \"${AUDIT_MARKER}"
+        }
+      ],
+      "expect_fail": [
+        "write-failure-followup-noplan-comment"
+      ]
     }
   ]
 }
