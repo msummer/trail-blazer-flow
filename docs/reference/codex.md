@@ -278,8 +278,9 @@ After a successful write, `codex-setup.sh` prints three reminders:
 launchd-driven wrapper that starts one unattended `codex exec` pass of `issue-cycle`. `codex exec`
 itself stays **Not supported** until the live gate (I4, #429) flips the support-matrix row above —
 this section states the wrapper's own contract, already implemented and fixture-covered
-(`dev/doctor-tests.sh`'s `codex-sched-*` cases, plus the failure-tracking step's own `codex-track-*`
-cases — I3, #428, below), independent of that live gate.
+(`dev/doctor-tests.sh`'s `codex-sched-*` cases, the failure-tracking step's own `codex-track-*`
+cases — I3, #428, below — and the startup PATH scrub's own `codex-path-*` cases — #444, below),
+independent of that live gate.
 
 **Refuses under Claude Code.** If `CLAUDE_PID` is set (even to an empty string), the wrapper exits
 2 before doing anything else — a Claude Code session must never launch a Codex run. On Claude Code
@@ -299,18 +300,32 @@ invocation can't create its own run directory and exits 2 before ever launching 
 `codex-sched-rundir-uncreatable` case pins the same exit-2 shape (there, a plain file blocking
 `mkdir` instead of a read-only mount, but the failure path is identical).
 
+**PATH scrub (#444), before any of the above.** Right after the `CLAUDE_PID` guard, before argument
+parsing and before the first external command this script would otherwise run, it rebuilds `PATH`
+from only the entries that resolve to a physical path outside `/tmp`, `$TMPDIR`, the discovered
+work-tree root, and any git directory (identified by a `HEAD` file plus `objects/` and `refs/`
+directories — this catches the git common dir without ever running `git`). A relative or empty
+entry is refused outright; an entry that doesn't resolve (doesn't exist) is dropped silently; a
+surviving entry is kept in its **physical** form, never its original spelling — so a symlink an
+attacker re-points later can't redirect a later lookup. If nothing survives, the wrapper exits 2
+immediately (no run directory, no record); otherwise any refusal is remembered and reported by
+preflight step 1 below. Builtins only (`case`, parameter expansion, `cd`, `pwd -P`, `[ -ef ]`) — no
+external command runs before this.
+
 **Preflight** (no model turn, no quota spent), each failing step stopping the chain there:
 
-1. `TBF_CODEX_RUN_TIMEOUT` (default 14400 seconds) and `TBF_CODEX_RUN_KILL_GRACE` (default 30)
+1. The PATH scrub above already ran. If it refused any entry: `preflight-failed
+   reason=unsafe-path`.
+2. `TBF_CODEX_RUN_TIMEOUT` (default 14400 seconds) and `TBF_CODEX_RUN_KILL_GRACE` (default 30)
    must each be digits-only and greater than 0, or `preflight-failed reason=bad-timeout`.
-2. `codex`, `gh`, and `jq` must all be on `PATH` (launchd's own PATH is minimal, and the plugin's
+3. `codex`, `gh`, and `jq` must all be on `PATH` (launchd's own PATH is minimal, and the plugin's
    hooks fail open without `jq`), or `preflight-failed reason=missing-tool:<names>`.
-3. The sibling `codex-setup.sh --check`. Exit 1: `preflight-failed reason=codex-setup-drift`. Any
+4. The sibling `codex-setup.sh --check`. Exit 1: `preflight-failed reason=codex-setup-drift`. Any
    other non-zero exit: `preflight-failed reason=codex-setup-error`.
-4. The sibling `harness-stop.sh`. Exit 3: `skipped-stop reason=stop`. Exit 4: `skipped-stop
+5. The sibling `harness-stop.sh`. Exit 3: `skipped-stop reason=stop`. Exit 4: `skipped-stop
    reason=stop-unknown`. Exit 0: continue. Anything else: `preflight-failed
    reason=harness-stop-exit-<n>`.
-5. The sibling `harness-lock.sh status`. `state=free`: continue. `state=held`, with a host equal
+6. The sibling `harness-lock.sh status`. `state=free`: continue. `state=held`, with a host equal
    to `uname -n`, a digits-only pid, and that pid no longer alive: continue — the launched session
    reclaims the lock itself (see "Dying mid-run" honest limits, and ADR 0002's decision 4 re-entry
    paragraph). Any other `state=held`: `skipped-busy reason=` one of `live-holder`, `other-host`,
@@ -381,12 +396,10 @@ never touched.
 
 **Failure tracking on GitHub (I3, #428).** Once `record.txt`'s first 7 lines are written and old
 runs pruned, `finish` runs one failure-tracking step and appends its own `tracking=` line (see
-above). `gh` is resolved once, at the top of preflight, to a single absolute path and refused if it
-is relative or its directory (or any ancestor of it) is the same file, by IDENTITY (`-ef`, never a
-text compare), as the repo toplevel or the git common dir — so a `gh` a sandboxed Codex session
-could have planted in the workspace it controls is never the one this step executes, even when its
-path is spelled with a different case or reached through a macOS firmlink than `git
-rev-parse --show-toplevel` itself reports (bash 3.2's `pwd -P` does not canonicalise either).
+above). `gh` is resolved once, at preflight step 0, to a single absolute path, off the PATH already
+scrubbed at startup (#444, see above) — so a `gh` a sandboxed Codex session could have planted in
+the workspace it controls is never on that PATH to begin with, let alone the one this step
+executes.
 
 - `completed` does nothing unless local state (below) already says `streak=failing`, in which case
   one `gh issue comment` posts a body starting `Recovered:` and the state moves to
@@ -412,7 +425,7 @@ The only `gh` subcommands this step ever runs are `issue view`, `issue create` a
 each with `< /dev/null` on stdin — never `gh pr`, `gh api`, `gh label`, `issue edit` or
 `issue close`, and no label is ever removed.
 
-If `gh` can't be resolved safely, or any `gh` call itself fails, the local record and state are
+If `gh` isn't on PATH, or any `gh` call itself fails, the local record and state are
 left exactly as they were, `record.txt` gets `tracking=failed:<slug>`, a line naming the slug goes
 to this wrapper's own stderr, and the whole run exits 3 instead of its usual 0/1 (see "Exit codes"
 below) — never silently. The next run retries from the same state. One slug differs:
@@ -421,7 +434,7 @@ be written — the stderr line and `record.txt`'s `tracking-issue=` still name t
 next failure can open a duplicate.
 
 **Never touches the lock.** The wrapper never calls `harness-lock.sh acquire` or `release`, and
-never removes anything under `trail-blazer/lock` — a dead same-host holder (preflight step 5) is
+never removes anything under `trail-blazer/lock` — a dead same-host holder (preflight step 6) is
 left for the launched session itself to reclaim.
 
 **If the wrapper itself is killed** (TERM or INT — `launchctl bootout`, an operator, a logout): a
@@ -441,10 +454,11 @@ and corrupt the outcome or exit code being committed.
 
 **Exit codes:** 0 for `completed`/`skipped-stop`/`skipped-busy`; 1 for
 `preflight-failed`/`failed`/`died-mid-run`/`timed-out`; 2 for a usage or environment error with no
-run record at all (`CLAUDE_PID` set, a bad argument, not inside a git checkout, git missing, or the
-run directory couldn't be created); 3 when the outcome above was recorded but the failure-tracking
-step (I3, #428) itself could not reach GitHub or persist its own state — see "Failure tracking on
-GitHub" above. 3 always overrides 0/1 for that run.
+run record at all (`CLAUDE_PID` set, a bad argument, no safe PATH entry survived the startup scrub
+(#444), not inside a git checkout, git missing, or the run directory couldn't be created); 3 when
+the outcome above was recorded but the failure-tracking step (I3, #428) itself could not reach
+GitHub or persist its own state — see "Failure tracking on GitHub" above. 3 always overrides 0/1
+for that run.
 
 **The LaunchAgent (maintainer action, not live-verified until I4's U8).** A plist naming the
 wrapper's absolute path, run on an interval. `PLUGIN_ROOT`, `REPO_TOPLEVEL`, `CODEX_DIR`, `GH_DIR`,
@@ -469,6 +483,13 @@ before saving the file:
   is launched and fails at the shebang.
 - `HOME_DIR` — this account's home directory, for the log paths below.
 
+**PATH rules (#444).** The wrapper scrubs this `PATH` itself before using any of it (see "PATH
+scrub" above): only absolute entries survive; none may sit at or inside `REPO_TOPLEVEL`, a git
+directory, `/tmp`, or `$TMPDIR`; an entry that doesn't exist is dropped; every surviving entry is
+replaced by its physical path. An entry above that gets refused ends the run
+`preflight-failed reason=unsafe-path` instead of ever reaching `codex`/`gh`/`jq`, and no safe entry
+surviving at all is an exit 2 with no run record.
+
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -479,6 +500,7 @@ before saving the file:
   <string>org.trail-blazer-flow.codex-scheduled-run</string>
   <key>ProgramArguments</key>
   <array>
+    <string>/bin/bash</string>
     <string>PLUGIN_ROOT/bin/codex-scheduled-run.sh</string>
   </array>
   <key>WorkingDirectory</key>
@@ -499,6 +521,10 @@ before saving the file:
 </dict>
 </plist>
 ```
+
+`ProgramArguments` names `/bin/bash` explicitly, rather than running the script directly, because
+the script's own `#!/usr/bin/env bash` shebang would otherwise resolve `bash` through this same
+`PATH` before the script's own PATH scrub has ever run.
 
 The log paths deliberately sit under `~/Library/Logs/`, never under `REPO_TOPLEVEL` — a log file
 written inside the working tree would leave it dirty, and the next cycle's own dirty-tree preflight
@@ -571,6 +597,13 @@ line, and a stale rules file gives `preflight-failed reason=codex-setup-drift` i
   keeps the wrapper (and that `gh` process) alive until a maintainer intervenes by hand (SIGKILL,
   which cannot be ignored, or a reboot), and launchd never starts the next `StartInterval`. The
   follow-up filed alongside this issue covers bounding these calls in time.
+- The PATH scrub's (#444) work-tree root is found by default git discovery from the current
+  directory, so a plist `EnvironmentVariables` entry setting `GIT_DIR`/`GIT_WORK_TREE`/
+  `GIT_COMMON_DIR` is outside this check. Only `/tmp`, `$TMPDIR`, that work-tree root, and a git
+  directory are ever treated as protected — ADR 0002 ("Writable roots") notes `/tmp` and `$TMPDIR`
+  are writable roots by default, alongside the workspace, but any OTHER writable root in the
+  maintainer's own Codex config (for example an added `sandbox_workspace_write` root) must be kept
+  off the plist `PATH` by hand; the scrub has no way to discover it.
 
 ## Removing the Codex layer
 

@@ -86,9 +86,9 @@ twin alike — the generated agent TOMLs' byte-fidelity to `agents/*.md`, the in
 file's allow/forbidden/gated content, contract-loading into an `AGENTS.md` or a
 `.codex/config.toml`, and every `--check` drift token), and `bin/codex-scheduled-run.sh` directly
 against that same fake plugin install, a stub `codex`, and a stub `gh`: the `CLAUDE_PID` refusal,
-the preflight order (bad-timeout, missing-tool, `codex-setup.sh --check` drift, `harness-stop.sh`'s
-stop/stop-unknown, `harness-lock.sh status`'s free/live-holder/stale-reclaim/other-host/
-unreadable-holder), that every sibling
+the preflight order (unsafe-path, bad-timeout, missing-tool, `codex-setup.sh --check` drift,
+`harness-stop.sh`'s stop/stop-unknown, `harness-lock.sh status`'s free/live-holder/stale-reclaim/
+other-host/unreadable-holder), that every sibling
 resolves from the wrapper's own directory only, the exact launch argv and its `/dev/null` stdin,
 the watchdog's timeout/kill-grace with no orphan left behind, the outcome classification, and the
 run-record pruning. It runs in CI as the third command, but

@@ -106,24 +106,35 @@
 # wrapper for one unattended `codex exec` pass, run directly (never through PATH, and never the
 # real `codex`) against a fixture repo with the Codex compatibility layer installed via run_cx, a
 # stub `codex` (build_stub_sched_codex) and a stub `gh` (build_stub_sched_gh): the CLAUDE_PID
-# refusal (even set to empty) before any other side effect, the preflight order (bad timeout env
-# vars, missing tools, codex-setup.sh --check drift, harness-stop.sh's stop/stop-unknown, and
-# harness-lock.sh status's free/live-holder/stale-same-host-reclaim), that every sibling is
+# refusal (even set to empty) before any other side effect, the preflight order (unsafe-path, bad
+# timeout env vars, missing tools, codex-setup.sh --check drift, harness-stop.sh's stop/stop-unknown,
+# and harness-lock.sh status's free/live-holder/stale-same-host-reclaim), that every sibling is
 # resolved from the wrapper's own directory only (a decoy earlier on PATH is never run), the exact
 # launch argv and its `< /dev/null` stdin (a sentinel file proves it never reaches the child), the
 # watchdog's timeout/kill-grace and that it leaves no orphan, the outcome classification (completed,
 # failed, died-mid-run, timed-out, and the `Unattended stop: permission-denied` whole-line match),
 # and the run-record pruning (newest 100 kept, bounded deletion, non-matching entries untouched) —
 # plus the narrowed `codex-setup-rules-gated` case this addition requires (the gated allow-rule
-# names no longer include a `.sh` FORBIDDEN rule by coincidence), and (I3, #428) the wrapper's own
-# de-duplicated needs-human tracking issue: gh pinned to one absolute path outside the repo toplevel
-# and the git common dir (refused otherwise), the create/repeat/closed-reuse/recovery/
+# names no longer include a `.sh` FORBIDDEN rule by coincidence), (I3, #428) the wrapper's own
+# de-duplicated needs-human tracking issue: the create/repeat/closed-reuse/recovery/
 # failing-after-recovery state transitions against a subcommand-aware stub `gh`
 # (build_stub_sched_gh's "ok" and "list-only" modes), that the issue body and every comment are
 # built only from wrapper-generated fields (never stderr text, a hostname, or an absolute path),
 # that a tracking failure appends `tracking=failed:<slug>` and exits 3 instead of the ordinary 0/1,
 # and that every gh call the tracking step makes is limited to `issue view`/`issue create`/
-# `issue comment`.
+# `issue comment`, and (#444) the wrapper's own startup PATH scrub — `codex-path-*` — that a
+# relative, empty, or leading/trailing/doubled-colon PATH entry is refused (`codex-path-relative`),
+# that an entry at or under the repo toplevel is refused however it's reached (in-toplevel, a
+# case-variant spelling when the fixture's own filesystem is case-insensitive,
+# a symlink from outside pointing in, or the work-tree root discovered upward from a subdirectory —
+# `codex-path-repo`), that a `git worktree add` sibling's own gh planted under the shared common dir
+# is refused even though it sits outside that worktree's own toplevel (`codex-path-common-dir`),
+# that an entry under `/tmp` or `$TMPDIR` is refused however it's spelled — the real path, or a
+# symlink alias of it (`codex-path-tmp`) — and that a missing entry is dropped silently while a
+# surviving entry is kept in its PHYSICAL form, spelling included, never a symlink's own path
+# (`codex-path-safe`), against a per-fixture PATH-scrub seam (mk_sched's own rewrite of the
+# wrapper's `slash_tmp` line, plus a per-fixture TMPDIR) that keeps every fixture's own stub tree
+# out of the wrapper's own idea of "/tmp".
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -3443,12 +3454,25 @@ sched_top=""
 sched_common=""
 sched_stub=""
 sched_sentinel=""
+sched_tmpdir=""
+sched_slashtmp=""
+sched_slashtmp_real=""
+sched_cwd=""
 
 # mk_sched NAME — builds one #427 fixture: a fake Codex plugin-cache install (mk_cx_plugin, 3.0.0)
 # whose bin/ carries this checkout's own codex-scheduled-run.sh, a fresh repo with the Codex
 # compatibility layer installed for real (mk_cx_repo + run_cx, write mode — so codex-setup.sh
 # --check starts clean), a stub-tools directory, and a stdin sentinel file (so a case can prove the
-# wrapper's own stdin never reaches the launched codex). Sets the globals above.
+# wrapper's own stdin never reaches the launched codex). Sets the globals above, plus (#444) the
+# PATH-scrub fixture seam: sched_tmpdir (this fixture's own TMPDIR — run_sched passes it),
+# sched_slashtmp (a symlink to sched_slashtmp_real, modelling macOS's own /tmp -> /private/tmp
+# alias) and sched_cwd (empty by default — run_sched cd's to sched_repo unless a case sets this).
+# Every one of these still lives under $tmpbase (a real mktemp -d root) like every other fixture
+# write; the point is that the WRAPPER's OWN notion of "/tmp" (the seam rewrite below) and
+# "$TMPDIR" are private to this one fixture, so its own stub tree — itself necessarily created
+# under a real mktemp root — is never mistaken by the wrapper's own scrub for a writable root a
+# real sandboxed Codex session could reach. The real /tmp string is deliberately never exercised by
+# any fixture; see codex-path-tmp's own header for that honest limit.
 mk_sched() {
   local name="$1"
   sched_plugin="$(mk_cx_plugin "$name-plugin" 3.0.0)"
@@ -3460,6 +3484,39 @@ mk_sched() {
   mkdir -p "$sched_stub"
   sched_sentinel="$tmpbase/$name-sentinel"
   printf 'STDIN-SENTINEL' > "$sched_sentinel"
+
+  sched_tmpdir="$tmpbase/$name-tmpdir"
+  mkdir -p "$sched_tmpdir"
+  sched_slashtmp_real="$tmpbase/$name-slashtmp-real"
+  mkdir -p "$sched_slashtmp_real"
+  sched_slashtmp="$tmpbase/$name-slashtmp"
+  ln -s "$sched_slashtmp_real" "$sched_slashtmp"
+  sched_cwd=""
+
+  # Seam rewrite (#444): replace the wrapper's own EXACT `slash_tmp=/tmp` line, in THIS fixture's
+  # own copy only, with sched_slashtmp above — a `while read` rewrite (never `sed`), so the
+  # replacement path can be `%q`-quoted. Counted: a future edit to that exact line silently
+  # breaking this rewrite fails the fixture loudly (mk_sched's own diagnostic below) instead of
+  # quietly leaving the real /tmp in place, which would wrongly refuse this fixture's own stub tree.
+  local w="$sched_plugin/bin/codex-scheduled-run.sh" seam_hits=0 line
+  : > "$w.new"
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      'slash_tmp=/tmp')
+        printf 'slash_tmp=%q\n' "$sched_slashtmp" >> "$w.new"
+        seam_hits=$((seam_hits + 1))
+        ;;
+      *)
+        printf '%s\n' "$line" >> "$w.new"
+        ;;
+    esac
+  done < "$w"
+  mv "$w.new" "$w"
+  chmod +x "$w"
+  if [ "$seam_hits" -ne 1 ]; then
+    __ok=0
+    __why="${__why}mk_sched: slash_tmp=/tmp seam line not matched exactly once (matched $seam_hits)\n"
+  fi
 }
 
 # dead_pid_sched — a pid guaranteed dead and not yet recycled (dev/lock-tests.sh's own dead_pid):
@@ -3473,8 +3530,10 @@ dead_pid_sched() {
 }
 
 # build_stub_sched_codex DIR MODE — writes DIR/codex, a stub standing in for the real `codex` CLI.
-# Every mode first records $$ (DIR/codex.pid), $# (DIR/argc), each argument (DIR/arg.<i>), and the
-# full stdin it received (DIR/stdin.capture), then acts on MODE: complete (writes a run-id plus
+# Every mode first records $$ (DIR/codex.pid), $# (DIR/argc), each argument (DIR/arg.<i>), the PATH
+# it was actually launched with (DIR/path.capture — #444, so a case can confirm the wrapper's own
+# scrub rebuilt PATH from physical paths before ever exec'ing codex), and the full stdin it received
+# (DIR/stdin.capture), then acts on MODE: complete (writes a run-id plus
 # summary line to the file named after "-o", echoes one JSON line, exit 0); fail (stderr line, exit
 # 1); fail-usage (I3, #428's redaction fixture: a fabricated "usage limit" stderr line carrying a
 # hostname sentinel, plus a second, separately-sentinelled stderr line, exit 1 — proves the
@@ -3519,6 +3578,7 @@ for a in "$@"; do
   printf '%s' "$a" > "$dir/arg.$i"
   i=$((i + 1))
 done
+printf '%s' "$PATH" > "$dir/path.capture"
 cat > "$dir/stdin.capture"
 outfile=""
 prev=""
@@ -3746,11 +3806,15 @@ STUBEOF
 }
 
 # run_sched PATHVAL [NO_DEFAULT_TIMEOUT] [VAR=val…] -- [ARGS…] — runs THIS fixture's own
-# bin/codex-scheduled-run.sh (never $root's) with cwd = $sched_repo, HOME/XDG_CONFIG_HOME pointed
-# into $sched_repo, PATH = PATHVAL (no fallback to the real PATH unless a caller appends ":$PATH"
-# itself), CLAUDE_PID always unset (see the block header above), and stdin fed from
-# $sched_sentinel — files, never $(…), so no background child of the wrapper can ever hold a pipe
-# open. Unless a caller's own VAR=val list already names TBF_CODEX_RUN_TIMEOUT/
+# bin/codex-scheduled-run.sh (never $root's) with cwd = ${sched_cwd:-$sched_repo} (#444 — a case
+# sets sched_cwd to run from a subdirectory, proving the wrapper's PATH scrub discovers its
+# work-tree root upward rather than taking the working directory as-is), HOME/XDG_CONFIG_HOME
+# pointed into $sched_repo, PATH = PATHVAL (no fallback to the real PATH unless a caller appends
+# ":$PATH" itself), TMPDIR = $sched_tmpdir (#444 — this fixture's own private stand-in, so a
+# caller's own TMPDIR=val in VAR=val, which is placed AFTER this default in the env list, still
+# wins), CLAUDE_PID always unset (see the block header above), and stdin fed from $sched_sentinel —
+# files, never $(…), so no background child of the wrapper can ever hold a pipe open. Unless a
+# caller's own VAR=val list already names TBF_CODEX_RUN_TIMEOUT/
 # TBF_CODEX_RUN_KILL_GRACE, a bounded fixture-only default (20s/5s, deliberately NOT the wrapper's
 # own 14400s/30s production default) is injected instead, so a mutant that breaks the watchdog's
 # own timing bounds a stuck run to seconds on a developer's real machine, never hours. The literal
@@ -3790,10 +3854,10 @@ run_sched() {
   local outfile errfile
   outfile="$(mktemp)"; errfile="$(mktemp)"
   (
-    cd "$sched_repo" &&
+    cd "${sched_cwd:-$sched_repo}" &&
     unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
     env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
-        PATH="$pathval" ${envargs[@]+"${envargs[@]}"} \
+        PATH="$pathval" TMPDIR="$sched_tmpdir" ${envargs[@]+"${envargs[@]}"} \
         "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh" "$@"
   ) < "$sched_sentinel" > "$outfile" 2> "$errfile"
   doctor_rc=$?
@@ -4446,7 +4510,8 @@ case_codex_sched_wrapper_killed() {
     cd "$sched_repo" &&
     unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
     exec env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
-        PATH="$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=30 TBF_CODEX_RUN_KILL_GRACE=5 \
+        PATH="$sched_stub:$PATH" TMPDIR="$sched_tmpdir" TBF_CODEX_RUN_TIMEOUT=30 \
+        TBF_CODEX_RUN_KILL_GRACE=5 \
         "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
   ) < "$sched_sentinel" > "$outfile" 2> "$errfile" &
   local wrapper_pid=$!
@@ -4516,7 +4581,8 @@ case_codex_sched_wrapper_killed_forwards_term() {
     cd "$sched_repo" &&
     unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
     exec env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
-        PATH="$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=30 TBF_CODEX_RUN_KILL_GRACE=5 \
+        PATH="$sched_stub:$PATH" TMPDIR="$sched_tmpdir" TBF_CODEX_RUN_TIMEOUT=30 \
+        TBF_CODEX_RUN_KILL_GRACE=5 \
         "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
   ) < "$sched_sentinel" > "$outfile" 2> "$errfile" &
   local wrapper_pid=$!
@@ -4597,7 +4663,8 @@ case_codex_sched_wrapper_killed_noterm() {
     cd "$sched_repo" &&
     unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
     exec env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
-        PATH="$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=30 TBF_CODEX_RUN_KILL_GRACE=5 \
+        PATH="$sched_stub:$PATH" TMPDIR="$sched_tmpdir" TBF_CODEX_RUN_TIMEOUT=30 \
+        TBF_CODEX_RUN_KILL_GRACE=5 \
         "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
   ) < "$sched_sentinel" > "$outfile" 2> "$errfile" &
   local wrapper_pid=$!
@@ -4804,7 +4871,7 @@ case_codex_sched_usage() {
     cd "$nogit" &&
     unset CLAUDE_PID &&
     env HOME="$nogit/home" GIT_CEILING_DIRECTORIES="$tmpbase" PATH="$sched_stub:$PATH" \
-      "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
+      TMPDIR="$sched_tmpdir" "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
   ) >"$tmpbase/sched-nogit-out" 2>"$tmpbase/sched-nogit-err"
   doctor_rc=$?
   sched_out="$(cat "$tmpbase/sched-nogit-out")"
@@ -4821,7 +4888,7 @@ ERR: $sched_err"
   (
     cd "$nogit2" &&
     unset CLAUDE_PID &&
-    env HOME="$nogit2/home" PATH="$farm" "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
+    env HOME="$nogit2/home" PATH="$farm" TMPDIR="$sched_tmpdir" "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
   ) >"$tmpbase/sched-nogit2-out" 2>"$tmpbase/sched-nogit2-err"
   doctor_rc=$?
   sched_out="$(cat "$tmpbase/sched-nogit2-out")"
@@ -5185,128 +5252,6 @@ case_codex_track_skipped() {
     || { __ok=0; __why="${__why}gh.calls expected to hold only issue list, got: $calls\n"; }
 }
 
-# codex-track-unsafe-gh — (a) gh resolved to a path inside the repo toplevel; (b) gh resolved via a
-# bare relative PATH entry; (c) gh resolved via a CASE-VARIANT spelling of that same in-toplevel
-# path (upper-cased) — only run when this fixture's own filesystem is actually case-insensitive
-# (the upper-cased path resolves, via `-ef`, to the very same directory), since a case-sensitive
-# filesystem (this suite's own CI job) would just see a nonexistent PATH entry; skipped with a
-# visible stderr note otherwise; (d) gh resolved via a plain symlink from OUTSIDE the toplevel
-# pointing AT the same in-toplevel directory — portable to both filesystems, so CI always exercises
-# gh_path_safe's own `-ef` ancestor walk at least once even when (c) is skipped. All four refuse to
-# execute the failure-tracking step at all (tracking=failed:gh-unsafe-path, exit 3), while
-# harness-stop.sh's own "issue list" call through that same gh still succeeds (proving the
-# wrapper's OWN gh pinning, not a broken gh, is what's under test). (c)/(d) exist because bash
-# 3.2's `pwd -P` does not canonicalise case on a case-insensitive-but-case-preserving filesystem
-# (macOS/APFS default) or a firmlink, so a plain string-prefix compare on its output can be
-# defeated by either — see gh_path_safe's own header comment.
-# mutant:428-gh-path-unchecked — bin: `gh_path_safe && gh_safe=true` -> `gh_safe=true`.
-#   Killed here: every sub-case wrongly executes `gh` from the unsafe path instead of refusing.
-case_codex_track_unsafe_gh() {
-  mk_sched track-unsafe-gh
-  mkdir -p "$sched_repo/tools"
-  build_stub_sched_gh "$sched_repo/tools" ok
-  build_stub_sched_codex "$sched_stub" fail
-
-  run_sched "$sched_repo/tools:$sched_stub:$PATH" --
-  expect_rc 3
-  local rd
-  rd="$(sched_out_rd)"
-  expect_run_record_line "$rd" "tracking=failed:gh-unsafe-path"
-  expect_track_calls_only_allowed "$sched_repo/tools"
-  expect_track_stdin_empty "$sched_repo/tools"
-  local calls
-  calls="$(cat "$sched_repo/tools/gh.calls" 2>/dev/null)"
-  [ "$calls" = "issue list" ] \
-    || { __ok=0; __why="${__why}tools/gh.calls expected to hold only issue list, got: $calls\n"; }
-
-  local upper_variant
-  upper_variant="$(printf '%s' "$sched_repo/tools" | tr 'a-z' 'A-Z')"
-  if [ "$upper_variant" != "$sched_repo/tools" ] && [ -d "$upper_variant" ] \
-      && [ "$upper_variant" -ef "$sched_repo/tools" ]; then
-    run_sched "$upper_variant:$sched_stub:$PATH" --
-    expect_rc 3
-    rd="$(sched_out_rd)"
-    expect_run_record_line "$rd" "tracking=failed:gh-unsafe-path"
-  else
-    echo "codex-track-unsafe-gh: case-variant sub-case (c) skipped — this filesystem is case-sensitive ($upper_variant is not the same file as $sched_repo/tools)" >&2
-  fi
-
-  local symlink_dir="$tmpbase/track-unsafe-gh-symlink"
-  ln -s "$sched_repo/tools" "$symlink_dir"
-  run_sched "$symlink_dir:$sched_stub:$PATH" --
-  expect_rc 3
-  rd="$(sched_out_rd)"
-  expect_run_record_line "$rd" "tracking=failed:gh-unsafe-path"
-
-  mk_sched track-unsafe-gh-relative
-  mkdir -p "$sched_repo/tools"
-  build_stub_sched_gh "$sched_repo/tools" ok
-  build_stub_sched_codex "$sched_stub" fail
-
-  run_sched "tools:$sched_stub:$PATH" --
-  expect_rc 3
-  rd="$(sched_out_rd)"
-  expect_run_record_line "$rd" "tracking=failed:gh-unsafe-path"
-  expect_track_calls_only_allowed "$sched_repo/tools"
-  expect_track_stdin_empty "$sched_repo/tools"
-}
-
-# codex-track-unsafe-gh-common-dir — the "or the git common dir" half of gh_path_safe, exercised
-# separately from codex-track-unsafe-gh's own repo-toplevel scenarios: a `git worktree add` sibling
-# shares the MAIN checkout's own git common dir but has its OWN, different toplevel, so a gh
-# planted under the main checkout's `.git` sits outside the worktree's toplevel yet inside the
-# shared common dir. Run from the worktree: refuses (tracking=failed:gh-unsafe-path, exit 3), and
-# that gh's own gh.calls holds only harness-stop.sh's "issue list" — the failure-tracking step
-# itself never executes it.
-# mutant:428-common-dir-unchecked — bin: `[ "$walk" -ef "$top_phys" ] || [ "$walk" -ef
-#   "$common_abs" ]` -> `[ "$walk" -ef "$top_phys" ]` (drops the common-dir half of the ancestor
-#   check). Killed here: this case's own gh sits outside the toplevel, so only the common-dir half
-#   would have caught it — the run wrongly executes gh instead of refusing.
-case_codex_track_unsafe_gh_common_dir() {
-  mk_sched track-unsafe-gh-cd
-  build_stub_sched_codex "$sched_stub" fail
-
-  local wt="$tmpbase/track-unsafe-gh-cd-wt"
-  ( cd "$sched_repo" && git worktree add -q -b track-unsafe-gh-cd-wt-branch "$wt" ) >/dev/null 2>&1
-  mkdir -p "$wt/home"
-  # codex-setup.sh's own compatibility-layer files are uncommitted working-tree writes (run_cx
-  # above wrote them only into $sched_repo's own working tree), so a freshly added worktree — a
-  # checkout of tracked content only — starts without them; install them here too, independently,
-  # so preflight step 3 (codex-setup.sh --check) sees "in sync" from the worktree exactly as it
-  # does from the main checkout.
-  run_cx "$sched_plugin" "$wt"
-
-  local gh_in_common="$sched_common/track-unsafe-gh-cd-tools"
-  build_stub_sched_gh "$gh_in_common" ok
-
-  local outfile errfile
-  outfile="$(mktemp)"; errfile="$(mktemp)"
-  (
-    cd "$wt" &&
-    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
-    env HOME="$wt/home" XDG_CONFIG_HOME="$wt/home/.config" GIT_CONFIG_NOSYSTEM=1 \
-        PATH="$gh_in_common:$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=20 TBF_CODEX_RUN_KILL_GRACE=5 \
-        "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
-  ) < "$sched_sentinel" > "$outfile" 2> "$errfile"
-  doctor_rc=$?
-  sched_out="$(cat "$outfile")"
-  sched_err="$(cat "$errfile")"
-  rm -f "$outfile" "$errfile"
-  doctor_out="OUT: $sched_out
-ERR: $sched_err"
-
-  expect_rc 3
-  local rd
-  rd="$(sched_out_rd)"
-  expect_run_record_line "$rd" "tracking=failed:gh-unsafe-path"
-  expect_track_calls_only_allowed "$gh_in_common"
-  expect_track_stdin_empty "$gh_in_common"
-  local calls
-  calls="$(cat "$gh_in_common/gh.calls" 2>/dev/null)"
-  [ "$calls" = "issue list" ] \
-    || { __ok=0; __why="${__why}gh.calls expected to hold only issue list, got: $calls\n"; }
-}
-
 # codex-track-malformed-state — a tracking state file whose issue= value is non-digit (streak= is
 # otherwise well-formed): read_track_state treats the whole file as unreadable/absent, with a
 # stderr warning naming the state file, so the run creates a NEW issue exactly like the no-state
@@ -5364,6 +5309,295 @@ case_codex_track_state_write_failed() {
   expect_track_stdin_empty
 
   chmod 755 "$sched_common/trail-blazer"
+}
+
+# --- codex scheduled run PATH scrub (#444) --------------------------------------------------
+# bin/codex-scheduled-run.sh's own startup PATH scrub, run before any external command. Every case
+# here is named `codex-path-*` — deliberately outside the `codex-sched-`/`codex-track-` substrings
+# every #427/#428 mutant record filters on (the filter is a plain substring match, dev/mutant-
+# driver.sh's own name filter and this file's own `*"$filter"*` alike) — so none of those records'
+# measured sets widen.
+
+# plant_path_trap DIR SENTINEL (#444) — writes a trap executable, under DIR, for each external
+# command name the wrapper could plausibly reach through PATH before its own scrub runs (dirname,
+# git — the two the scrub itself must beat — plus gh, jq, codex, node, and every other external
+# command the rest of the script ever calls): each just touches SENTINEL (%q-quoted) and exits 0,
+# never doing the real command's own job. A case plants this in a directory it expects the scrub to
+# refuse or drop, then asserts SENTINEL is still absent afterward — proving the entry was never
+# consulted, not merely that its own answer didn't matter.
+plant_path_trap() {
+  local dir="$1" sentinel="$2" name
+  mkdir -p "$dir"
+  for name in dirname git gh jq codex node date mkdir mv rm rmdir sort grep sed head uname ps cat sleep; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf ': > %q\n' "$sentinel"
+      printf 'exit 0\n'
+    } > "$dir/$name"
+    chmod +x "$dir/$name"
+  done
+}
+
+# expect_path_standard SENTINEL (#444) — the four checks every refused codex-path-* run shares:
+# SENTINEL was never touched (the refused entry's own trap never ran), $sched_stub/argc was never
+# written (codex itself was never launched — preflight stops at step 1, well before "launch"),
+# stderr names the refusal, and the run's own outcome/exit code are exactly
+# `preflight-failed reason=unsafe-path` / 1.
+expect_path_standard() {
+  local sentinel="$1"
+  expect_no_file "$sentinel"
+  expect_no_file "$sched_stub/argc"
+  expect "refusing PATH entry"
+  expect_sched_out "outcome=preflight-failed reason=unsafe-path"
+  expect_rc 1
+}
+
+# codex-path-relative — (i) PATH=tools alone (no fallback, no `:`) refuses outright: no safe entry
+# survives the scrub at all, so the wrapper exits 2 before ever creating a run directory. (ii)
+# `../<name>-reltools`, a SIBLING of the fixture's own repo (so its resolved, physical location is
+# not otherwise protected — not under the repo, a git directory, /tmp, or $TMPDIR): only the
+# relative-spelling arm can refuse it, never the ancestor walk. (iii) a leading EMPTY PATH entry
+# (`:$sched_stub:$PATH`), with the trap planted in the repo itself (the wrapper's own cwd) — proving
+# an empty entry is refused outright as relative, never silently treated as "." the way an empty
+# PATH component conventionally resolves in a plain command lookup. (ii) also asserts that the
+# failure-tracking step still ran (`tracking=created`) through the scrubbed PATH's own gh. (iv) a
+# TRAILING empty entry and (v) a DOUBLED `::` are refused the same way — the trailing field goes
+# through the split loop's own last-field arm, not the `*:*` arm. (vi) a relative entry containing a
+# space, together with an invalid TBF_CODEX_RUN_TIMEOUT: the refusal line names the entry in its
+# `%q`-quoted spelling, and `reason=unsafe-path` still wins over bad-timeout (preflight step 1 runs
+# first).
+# mutant:444-trailing-empty-dropped — bin: the split loop's last-field arm stops at an empty final
+#   field instead of refusing it. Killed by sub-case (iv).
+# mutant:444-tracking-skipped — bin: finish skips the tracking step for reason=unsafe-path. Killed
+#   by sub-case (ii)'s `tracking=created` assertion.
+# mutant:444-step-order — bin: preflight step 1 moves after the bad-timeout checks. Killed by
+#   sub-case (vi), which would then report bad-timeout instead of unsafe-path.
+# mutant:444-refusal-unquoted — bin: the refusal line's `%q` becomes `%s`. Killed by sub-case (vi),
+#   whose expected refusal names the entry as `rel\ dir`.
+# mutant:444-relative-accepted — bin: the relative arm's own `path_refuse "$e"` call -> `:`. Killed
+#   here: sub-cases (ii)/(iii) each stop setting path_unsafe for their own relative entry, so the run
+#   never reports `reason=unsafe-path` and `expect "refusing PATH entry"` goes missing.
+# mutant:444-scrub-not-applied — bin: `PATH="$path_safe"` -> `: "$path_safe"`. Killed across every
+#   codex-path-* case (this one included): with the scrub's own result never applied, PATH stays
+#   exactly as the fixture handed it to the wrapper, so every planted trap this whole section relies
+#   on being unreachable would instead run.
+case_codex_path_relative() {
+  local name=path-relative
+  mk_sched "$name"
+
+  run_sched "tools" --
+  expect_rc 2
+  expect "no safe PATH entry"
+  [ -d "$sched_common/trail-blazer/runs" ] \
+    && { __ok=0; __why="${__why}a runs directory was created despite no safe PATH entry surviving\n"; }
+
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  local reltools="$tmpbase/$name-reltools" sentinel="$tmpbase/$name-reltools-sentinel"
+  plant_path_trap "$reltools" "$sentinel"
+  run_sched "../$name-reltools:$sched_stub:$PATH" --
+  expect_path_standard "$sentinel"
+  expect_run_record_line "$(sched_out_rd)" "tracking=created"
+
+  local leading_sentinel="$tmpbase/$name-leading-sentinel"
+  plant_path_trap "$sched_repo" "$leading_sentinel"
+  run_sched ":$sched_stub:$PATH" --
+  expect_path_standard "$leading_sentinel"
+
+  local trailing_sentinel="$tmpbase/$name-trailing-sentinel"
+  plant_path_trap "$sched_repo" "$trailing_sentinel"
+  run_sched "$sched_stub:$PATH:" --
+  expect_path_standard "$trailing_sentinel"
+
+  local doubled_sentinel="$tmpbase/$name-doubled-sentinel"
+  plant_path_trap "$sched_repo" "$doubled_sentinel"
+  run_sched "$sched_stub::$PATH" --
+  expect_path_standard "$doubled_sentinel"
+
+  run_sched "rel dir:$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=abc --
+  expect "refusing PATH entry rel\\ dir"
+  expect_sched_out "outcome=preflight-failed reason=unsafe-path"
+  expect_rc 1
+}
+
+# codex-path-repo (ported from the former codex-track-unsafe-gh) — an entry at or inside the repo
+# toplevel is refused however it's reached: (a) the plain in-toplevel path; (b) an upper-cased
+# spelling of that same path — only when this fixture's own filesystem is actually case-insensitive
+# (skipped, with a visible stderr note, on a case-sensitive one); (c) a symlink from OUTSIDE the
+# toplevel pointing AT it; (d) the same plain path, but run from a SUBDIRECTORY of the repo
+# (sched_cwd) — proving the work-tree root is discovered upward from the current directory, not
+# taken to BE the current directory. All four share one planted-trap directory and one sentinel,
+# since every spelling in this case names the very same physical location.
+# mutant:444-toplevel-unchecked — bin: drop ` "$path_top"` from path_dir_protected's own `for p in`
+#   list. Killed here: sub-cases (a)-(d) all name a location under the repo toplevel, so none would
+#   be refused any more.
+# mutant:444-toplevel-cwd-only — bin: `if [ -e "$path_walk/.git" ]; then path_top="$path_walk";
+#   break; fi` -> `break`. Killed by sub-case (d): path_top would stay pinned to the subdirectory
+#   itself (never walking up to find `.git`), so the repo-toplevel entry would no longer be an
+#   ancestor of it and would wrongly survive.
+# mutant:444-unsafe-step-dropped — bin: `$path_unsafe && finish preflight-failed unsafe-path` -> `:`.
+#   Killed here (and by codex-path-common-dir/codex-path-tmp): the scrub still refuses the entry and
+#   drops it from PATH, but preflight step 1 never reports it, so the run carries on past preflight
+#   (every tool is still on the scrubbed PATH here) and never prints `reason=unsafe-path`.
+case_codex_path_repo() {
+  local name=path-repo
+  mk_sched "$name"
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  local tools="$sched_repo/tools" sentinel="$tmpbase/$name-trap-sentinel"
+  plant_path_trap "$tools" "$sentinel"
+
+  run_sched "$tools:$sched_stub:$PATH" --
+  expect_path_standard "$sentinel"
+
+  local upper_variant
+  upper_variant="$(printf '%s' "$tools" | tr 'a-z' 'A-Z')"
+  if [ "$upper_variant" != "$tools" ] && [ -d "$upper_variant" ] && [ "$upper_variant" -ef "$tools" ]; then
+    run_sched "$upper_variant:$sched_stub:$PATH" --
+    expect_path_standard "$sentinel"
+  else
+    echo "codex-path-repo: case-variant sub-case (b) skipped — this filesystem is case-sensitive ($upper_variant is not the same file as $tools)" >&2
+  fi
+
+  local symlink_dir="$tmpbase/$name-symlink"
+  ln -s "$tools" "$symlink_dir"
+  run_sched "$symlink_dir:$sched_stub:$PATH" --
+  expect_path_standard "$sentinel"
+
+  mkdir -p "$sched_repo/sub"
+  sched_cwd="$sched_repo/sub"
+  run_sched "$tools:$sched_stub:$PATH" --
+  expect_path_standard "$sentinel"
+  sched_cwd=""
+}
+
+# codex-path-common-dir (ported from the former codex-track-unsafe-gh-common-dir) — a `git worktree
+# add` sibling shares the MAIN checkout's own git common dir but has its OWN, different toplevel, so
+# a trap planted under the main checkout's `.git` sits outside the worktree's own toplevel yet
+# inside the shared common dir; run from the worktree, it is refused anyway. The trap covers `git`
+# and `dirname` — the two external commands the wrapper would otherwise reach first — so this proves
+# the git-directory identity check (not the toplevel check, which can't see this location at all)
+# fires before either one's first call.
+# mutant:444-gitdir-unchecked — bin: `[ -f "$1/HEAD" ] && [ -d "$1/objects" ] && [ -d "$1/refs" ] &&
+#   return 0` -> `false && return 0`. Killed here: this case's own trap sits outside the worktree's
+#   toplevel, so only the git-directory identity check can catch it — with it gone, the entry
+#   wrongly survives the scrub.
+case_codex_path_common_dir() {
+  local name=path-common-dir
+  mk_sched "$name"
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  local wt="$tmpbase/$name-wt"
+  ( cd "$sched_repo" && git worktree add -q -b "$name-wt-branch" "$wt" ) >/dev/null 2>&1
+  mkdir -p "$wt/home"
+  # codex-setup.sh's own compatibility-layer files are uncommitted working-tree writes (run_cx
+  # above wrote them only into $sched_repo's own working tree), so a freshly added worktree — a
+  # checkout of tracked content only — starts without them; install them here too, independently,
+  # so preflight step 4 (codex-setup.sh --check) sees "in sync" from the worktree exactly as it does
+  # from the main checkout.
+  run_cx "$sched_plugin" "$wt"
+
+  local tools="$sched_common/$name-tools" sentinel="$tmpbase/$name-trap-sentinel"
+  plant_path_trap "$tools" "$sentinel"
+
+  local outfile errfile
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  (
+    cd "$wt" &&
+    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
+    env HOME="$wt/home" XDG_CONFIG_HOME="$wt/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+        PATH="$tools:$sched_stub:$PATH" TMPDIR="$sched_tmpdir" TBF_CODEX_RUN_TIMEOUT=20 \
+        TBF_CODEX_RUN_KILL_GRACE=5 \
+        "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
+  ) < "$sched_sentinel" > "$outfile" 2> "$errfile"
+  doctor_rc=$?
+  sched_out="$(cat "$outfile")"
+  sched_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $sched_out
+ERR: $sched_err"
+
+  expect_path_standard "$sentinel"
+}
+
+# codex-path-tmp — an entry under `/tmp` or `$TMPDIR` is refused however it's spelled: (a) this
+# fixture's own private stand-in for "/tmp" (sched_slashtmp_real), reached by its PHYSICAL path
+# while the protected name on file (sched_slashtmp, the mk_sched seam rewrite) is a symlink to it —
+# modelling macOS's own `/tmp` -> `/private/tmp` alias; (b) the very same directory, this time
+# spelled THROUGH that symlink; (c) an entry under this fixture's own $TMPDIR (sched_tmpdir),
+# checked independently of (a)/(b). The real, un-rewritten `/tmp` string is deliberately never
+# exercised by any fixture — dev/doctor-tests.sh's own header names this as an honest, reviewable
+# limit shared with every other sched fixture.
+# mutant:444-slash-tmp-unchecked — bin: drop `"$slash_tmp" ` from path_dir_protected's own `for p
+#   in` list. Killed by sub-cases (a)/(b): neither spelling of the fixture's own "/tmp" stand-in
+#   would be checked any more.
+# mutant:444-tmpdir-unchecked — bin: drop `"${TMPDIR:-}" ` from that same list. Killed by sub-case
+#   (c): an entry under $TMPDIR would no longer be checked at all.
+case_codex_path_tmp() {
+  local name=path-tmp
+  mk_sched "$name"
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  local real_bin="$sched_slashtmp_real/bin" sentinel_a="$tmpbase/$name-sentinel-a"
+  plant_path_trap "$real_bin" "$sentinel_a"
+  run_sched "$real_bin:$sched_stub:$PATH" --
+  expect_path_standard "$sentinel_a"
+
+  run_sched "$sched_slashtmp/bin:$sched_stub:$PATH" --
+  expect_path_standard "$sentinel_a"
+
+  local tmpdir_bin="$sched_tmpdir/bin" sentinel_c="$tmpbase/$name-sentinel-c"
+  plant_path_trap "$tmpdir_bin" "$sentinel_c"
+  run_sched "$tmpdir_bin:$sched_stub:$PATH" --
+  expect_path_standard "$sentinel_c"
+}
+
+# codex-path-safe — the non-vacuity control, plus the default for a missing entry: (a) a PATH entry
+# that doesn't resolve to anything is dropped SILENTLY (never flagged unsafe, never refused) — a run
+# with only $sched_stub and a nonexistent leading entry still completes normally; (b) a symlink
+# pointing AT $sched_stub, as the only stub entry, still lets the run complete, and the launched
+# codex's own captured PATH (path.capture, off build_stub_sched_codex) names $sched_stub's PHYSICAL
+# path, never the symlink's own spelling — proving a surviving entry is rewritten to its physical
+# form before codex ever sees it, so a symlink an attacker re-points later after this scrub can't
+# redirect a later lookup.
+# mutant:444-missing-entry-flagged — bin: `[ -n "$d" ] || continue` -> `[ -n "$d" ] || { path_refuse
+#   "$e"; continue; }` (adapted to the loop's own `last` handling). Killed by sub-case (a): the
+#   nonexistent leading entry would now be flagged unsafe, turning a clean `outcome=completed` run
+#   into `preflight-failed reason=unsafe-path`.
+# mutant:444-symlink-kept — bin: `path_safe="${path_safe:+$path_safe:}$d"` -> `...$e"` (keeps the
+#   original spelling instead of the resolved physical path). Killed by sub-case (b): path.capture
+#   would then carry the symlink's own name instead of $sched_stub's physical path.
+case_codex_path_safe() {
+  local name=path-safe
+  mk_sched "$name"
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  run_sched "$tmpbase/$name-missing:$sched_stub:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=completed"
+  expect_absent "refusing PATH entry"
+
+  local safelink="$tmpbase/$name-safe-link"
+  ln -s "$sched_stub" "$safelink"
+  run_sched "$safelink:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=completed"
+
+  local physical captured
+  physical="$(cd -P "$sched_stub" && pwd -P)"
+  captured="$(cat "$sched_stub/path.capture" 2>/dev/null)"
+  case "$captured" in
+    *"$physical"*) : ;;
+    *) __ok=0; __why="${__why}path.capture does not contain the stub's own physical path ($physical): $captured\n" ;;
+  esac
+  case "$captured" in
+    *"$name-safe-link"*) __ok=0; __why="${__why}path.capture still names the symlink spelling, not the physical path: $captured\n" ;;
+  esac
 }
 
 # --- codex doctor (#410) ----------------------------------------------------------------------
@@ -6284,10 +6518,13 @@ cases=(
   "codex-track-gh-fail|case_codex_track_gh_fail|I3, #428: gh answers only issue list (list-only stub) -> a create failure, a recovery-comment failure, and a view failure each exit 3 with the matching tracking=failed:<slug> line, a stderr line naming it, and the run record kept"
   "codex-track-redaction|case_codex_track_redaction|I3, #428: the launched codex's stderr carries a usage-limit phrase plus a hostname and a secret sentinel -> the tracking issue body gets the usage-limit hint, but gh.log and every gh.body.* carry none of the sentinels or any fixture absolute path"
   "codex-track-skipped|case_codex_track_skipped|I3, #428: a seeded failing streak plus the local stop file -> skipped-stop makes no failure-tracking gh call of its own (gh.calls holds only harness-stop.sh's own issue list), tracking state byte-identical, record.txt tracking=none"
-  "codex-track-unsafe-gh|case_codex_track_unsafe_gh|I3, #428: gh resolved to a path inside the repo toplevel, then to a bare relative PATH entry, then (filesystem permitting) a case-variant spelling of the same in-toplevel path, then a symlink from outside the toplevel to it -> the failure-tracking step refuses to execute any of them (tracking=failed:gh-unsafe-path, exit 3), while harness-stop.sh's own issue list call through that same gh still succeeds"
-  "codex-track-unsafe-gh-common-dir|case_codex_track_unsafe_gh_common_dir|I3, #428: a git worktree add sibling shares the main checkout's git common dir but has its own toplevel; gh planted under the main checkout's .git sits outside the worktree's toplevel but inside the shared common dir -> the failure-tracking step refuses it too (tracking=failed:gh-unsafe-path, exit 3)"
   "codex-track-malformed-state|case_codex_track_malformed_state|I3, #428: a tracking state file with a non-digit issue= value is treated as absent (with a stderr warning), so a new issue is created exactly like the no-state case"
   "codex-track-state-write-failed|case_codex_track_state_write_failed|I3, #428: gh issue create succeeds but the local state write then fails (trail-blazer/ made read-only) -> the created issue number is still announced to stderr and recorded as record.txt's own tracking-issue=, tracking=failed:state-write-failed, exit 3, no state file written"
+  "codex-path-relative|case_codex_path_relative|#444: PATH=tools alone leaves no safe entry -> exit 2, no runs directory; a sibling ../<name>-reltools entry is refused only by the relative-spelling arm; a leading empty PATH entry with a trap in the repo itself (the cwd) is refused outright rather than treated as \".\"; a trailing and a doubled empty entry are refused the same way; tracking still runs after the refusal; a relative entry with a space is named %q-quoted and unsafe-path wins over bad-timeout"
+  "codex-path-repo|case_codex_path_repo|#444: an entry at the repo toplevel, its case-variant spelling (filesystem permitting), a symlink from outside pointing at it, and the same path run from a subdirectory (proving the work-tree root is discovered upward) are all refused -> preflight-failed reason=unsafe-path, exit 1, codex never launched"
+  "codex-path-common-dir|case_codex_path_common_dir|#444: a git worktree add sibling shares the main checkout's git common dir but has its own toplevel; a trap planted under the main checkout's .git sits outside the worktree's toplevel but inside the shared common dir -> refused anyway (the git-directory identity check, not the toplevel check, catches it), preflight-failed reason=unsafe-path, exit 1"
+  "codex-path-tmp|case_codex_path_tmp|#444: an entry under this fixture's own /tmp stand-in (by its physical path, and via the symlink the mk_sched seam rewrite points at) and an entry under this fixture's own \$TMPDIR are both refused -> preflight-failed reason=unsafe-path, exit 1"
+  "codex-path-safe|case_codex_path_safe|#444: a PATH entry that doesn't resolve is dropped silently (no refusal, outcome=completed) and a symlink to the stub directory, as the only stub entry, still completes -> the launched codex's own captured PATH names the stub's physical path, never the symlink's spelling"
 )
 
 matched=0

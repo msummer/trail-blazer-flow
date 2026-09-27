@@ -13,6 +13,16 @@
 # Claude Code session must never launch a Codex run. This is the FIRST executable check, before
 # argument parsing and before any other side effect.
 #
+# PATH SCRUB (#444), SECOND — right after the CLAUDE_PID guard, before argument parsing and before
+# the first external command (dirname, a few lines below): rebuilds PATH from only the entries
+# that resolve to a physical path outside /tmp, $TMPDIR, the discovered work-tree root, and any git
+# directory. A relative or empty entry is refused outright; an entry that doesn't resolve (doesn't
+# exist) is dropped silently; a surviving entry is kept in its PHYSICAL form, never its original
+# spelling. If nothing survives, the wrapper exits 2 immediately (no run directory, no record);
+# otherwise any refusal is remembered and reported by preflight step 1 below. Builtins only (case,
+# parameter expansion, cd, pwd -P, [ -ef ]) — no external command runs before this. See "Honest
+# limits" below for what it does not cover.
+#
 # WHAT IT DOES, IN ORDER:
 #   1. Runs a no-model-turn preflight (below). Any failing step stops the chain there.
 #   2. Launches exactly:
@@ -32,18 +42,20 @@
 # session itself to reclaim (bin/harness-lock.sh's own reclaim rule).
 #
 # PREFLIGHT (no model turn, no quota spent), each failing step stopping the chain there:
-#   1. TBF_CODEX_RUN_TIMEOUT (default 14400) and TBF_CODEX_RUN_KILL_GRACE (default 30) — env vars,
+#   1. The PATH scrub above already ran, before any external command. If it refused any entry:
+#      preflight-failed, reason=unsafe-path.
+#   2. TBF_CODEX_RUN_TIMEOUT (default 14400) and TBF_CODEX_RUN_KILL_GRACE (default 30) — env vars,
 #      seconds — must each be digits-only and greater than 0. Otherwise: preflight-failed,
 #      reason=bad-timeout.
-#   2. `codex`, `gh`, and `jq` must all be on PATH (launchd's own PATH is minimal, and the
+#   3. `codex`, `gh`, and `jq` must all be on PATH (launchd's own PATH is minimal, and the
 #      plugin's hooks fail open without `jq`). Otherwise: preflight-failed,
 #      reason=missing-tool:<comma-separated names>.
-#   3. The sibling `codex-setup.sh --check`. Exit 1: preflight-failed reason=codex-setup-drift.
+#   4. The sibling `codex-setup.sh --check`. Exit 1: preflight-failed reason=codex-setup-drift.
 #      Any other non-zero exit: preflight-failed reason=codex-setup-error.
-#   4. The sibling `harness-stop.sh`. Exit 3: skipped-stop reason=stop. Exit 4: skipped-stop
+#   5. The sibling `harness-stop.sh`. Exit 3: skipped-stop reason=stop. Exit 4: skipped-stop
 #      reason=stop-unknown. Exit 0: continue. Anything else: preflight-failed
 #      reason=harness-stop-exit-<n>.
-#   5. The sibling `harness-lock.sh status`. state=free: continue. state=held, with host equal to
+#   6. The sibling `harness-lock.sh status`. state=free: continue. state=held, with host equal to
 #      `uname -n`, a digits-only pid, and that pid no longer alive: continue (the launched session
 #      reclaims the lock itself). Any other state=held: skipped-busy, reason one of
 #      live-holder, other-host, or unreadable-holder. A non-zero exit, or no state= line:
@@ -90,10 +102,10 @@
 #
 # FAILURE TRACKING (I3, #428): runs once inside `finish`, after record.txt's first 7 lines are
 # written and prune_runs has run — never on an exit-2 path, and never while a session is running.
-# `gh` is resolved once, at the top of preflight, to one absolute path (gh_bin), and refused
-# (gh_safe=false) if it is relative or its containing directory sits inside the repo toplevel or
-# the git common dir — so a `gh` a sandboxed Codex session could have planted in the workspace it
-# controls is never the one this step executes.
+# `gh` is resolved once, at preflight step 0, to one absolute path (gh_bin), off the PATH already
+# scrubbed at startup (#444, see "PATH SCRUB" above) — so a `gh` a sandboxed Codex session could
+# have planted in the workspace it controls is never on that PATH to begin with, let alone the one
+# this step executes.
 #   - completed: nothing happens unless the local state below already says streak=failing, in
 #     which case one `gh issue comment` posts a body starting "Recovered: ..." and the state moves
 #     to streak=recovered. A completed run with no failing streak makes no GitHub call at all.
@@ -118,7 +130,7 @@
 #   `issue comment`, each with `< /dev/null` on stdin and gh's own stderr going straight to this
 #   wrapper's own stderr (the local launchd log) — never `gh pr`, `gh api`, `gh label`,
 #   `issue edit` or `issue close`, and no label is ever removed.
-#   If `gh` can't be resolved safely, or any `gh` call itself fails, record.txt gets one more line,
+#   If `gh` isn't on PATH, or any `gh` call itself fails, record.txt gets one more line,
 #   `tracking=failed:<slug>`, and the whole run exits 3 instead of its usual 0/1 — never silently. A
 #   line to this wrapper's own stderr names the slug, worded per slug: `create-unparsed` and
 #   `state-write-failed` both say GitHub may already have been (or was) updated — a `gh issue
@@ -135,10 +147,10 @@
 #
 # EXIT CODES: 0 = completed/skipped-stop/skipped-busy; 1 = preflight-failed/failed/died-mid-run/
 # timed-out; 2 = usage or environment error with no record at all (CLAUDE_PID set, a bad argument,
-# not inside a git checkout or git missing, or the run directory couldn't be created); 3 = the
-# outcome above was recorded, but the failure-tracking step (I3, #428) itself could not reach
-# GitHub or persist its own state — see FAILURE TRACKING above. 3 always overrides 0/1 for that
-# run.
+# no safe PATH entry survived the startup scrub (#444), not inside a git checkout or git missing,
+# or the run directory couldn't be created); 3 = the outcome above was recorded, but the
+# failure-tracking step (I3, #428) itself could not reach GitHub or persist its own state — see
+# FAILURE TRACKING above. 3 always overrides 0/1 for that run.
 #
 # IF THE WRAPPER ITSELF IS KILLED (TERM or INT — e.g. `launchctl bootout`, an operator, a logout):
 # a top-level trap stops the watchdog and gives the launched codex process the same
@@ -167,6 +179,14 @@
 #   - Two wrapper instances against one checkout (a manual run beside a scheduled one) can both
 #     observe state=free; the session-level `acquire` then refuses one of them, after that
 #     model turn has already started.
+#   - PATH SCRUB (#444) limits: the work-tree root it protects is found by default git discovery
+#     from the current directory, so a plist setting GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR is
+#     outside this check. Only /tmp, $TMPDIR, that work-tree root, and a git directory are ever
+#     treated as protected — any OTHER writable root in the maintainer's own Codex config (for
+#     example an added sandbox_workspace_write root) must be kept off the plist PATH by hand. When
+#     the wrapper is launched through its shebang (`#!/usr/bin/env bash`), `bash` itself is found
+#     through the plist's own PATH before this scrub ever runs — see the plist recipe below for the
+#     `/bin/bash` `ProgramArguments` fix.
 #   - This script is `forbidden` under the installed Codex rules and denied under Claude Code's own
 #     settings (belt-and-braces with the CLAUDE_PID guard above) — see docs/reference/codex.md
 #     "Rules" for what each backstop does and does not cover.
@@ -175,6 +195,87 @@
 set -uo pipefail
 
 if [ -n "${CLAUDE_PID+set}" ]; then echo "codex-scheduled-run.sh: refusing: CLAUDE_PID is set — a Claude Code session must never launch a Codex run" >&2; exit 2; fi
+
+# --- PATH scrub (#444) -----------------------------------------------------------------------
+#
+# Runs before argument parsing and before the first external command this script would otherwise
+# run (dirname, below): rebuilds PATH from only the entries a sandboxed Codex session could not
+# have planted an executable into. Builtins only (case, parameter expansion, cd, pwd -P, [ -ef ]).
+
+# slash_tmp — the literal path this script treats as "the world-writable /tmp". A plain assignment
+# that never reads the environment, so no environment variable can widen or narrow what it
+# protects. dev/doctor-tests.sh rewrites this EXACT line, in its own copy of this script, to point
+# at a fixture-private stand-in instead of the real /tmp, so a fixture's own stub tree (itself
+# created under a real mktemp root) is not wrongly refused; that rewrite is the only thing that
+# ever changes this line's value.
+slash_tmp=/tmp
+
+# path_dir_protected DIR — true when DIR is, by IDENTITY (-ef, never a text compare — the same
+# case/firmlink reasoning the old gh_path_safe documented), $slash_tmp, $TMPDIR (when set and
+# non-empty), the discovered work-tree root ($path_top, below), or a git directory (a HEAD file
+# plus objects/ and refs/ directories — this catches the git common dir without ever running git).
+path_dir_protected() {
+  local p
+  for p in "$slash_tmp" "${TMPDIR:-}" "$path_top"; do [ -n "$p" ] || continue; [ "$1" -ef "$p" ] && return 0; done
+  [ -f "$1/HEAD" ] && [ -d "$1/objects" ] && [ -d "$1/refs" ] && return 0
+  return 1
+}
+
+# path_refuse ENTRY — records ENTRY as unsafe (path_unsafe, read by preflight step 1 below) and
+# names it, %q-quoted so a hostile entry can't inject control characters into the terminal, on
+# stderr.
+path_refuse() {
+  path_unsafe=true
+  printf 'codex-scheduled-run.sh: refusing PATH entry %q: relative, or at/inside the repo, a git directory, /tmp or $TMPDIR\n' "$1" >&2
+}
+
+# path_top — the work-tree root discovered upward from the CURRENT directory, without ever running
+# git (git's own first call is still a few lines below, after this whole scrub). Left empty only
+# when pwd -P itself fails. When no ancestor up to / holds a .git entry, path_top stays at its
+# initial value — the current directory itself — so a plist WorkingDirectory outside any git
+# checkout still protects itself (though nothing above it), rather than protecting nothing at all.
+path_top="$(pwd -P 2>/dev/null)"; path_walk="$path_top"
+while [ -n "$path_walk" ]; do
+  if [ -e "$path_walk/.git" ]; then path_top="$path_walk"; break; fi
+  [ "$path_walk" = / ] && break
+  path_walk="${path_walk%/*}"; [ -n "$path_walk" ] || path_walk=/
+done
+
+# The scrub loop. Split PATH explicitly rather than word-splitting on IFS/`for`, which would
+# silently drop a trailing empty field and glob an unquoted entry. `last` is checked at the TOP of
+# the loop (not right after handling each entry), so every `continue` below — including the
+# missing-entry drop, which never sets path_unsafe — is safe even on the final field: the next
+# pass around simply sees `last` already true and stops, rather than an empty path_rest being
+# mistaken for one more (bogus) entry.
+path_unsafe=false; path_safe=""; path_rest="${PATH-}"; last=false
+while :; do
+  $last && break
+  case "$path_rest" in
+    *:*) e="${path_rest%%:*}"; path_rest="${path_rest#*:}" ;;
+    *) e="$path_rest"; last=true ;;
+  esac
+  case "$e" in
+    /*) : ;;
+    *) path_refuse "$e"; continue ;;
+  esac
+  d="$(cd -P "$e" 2>/dev/null && pwd -P)"
+  [ -n "$d" ] || continue
+  walk="$d"
+  entry_unsafe=false
+  while :; do
+    path_dir_protected "$walk" && { entry_unsafe=true; break; }
+    [ "$walk" = / ] && break
+    walk="${walk%/*}"; [ -n "$walk" ] || walk=/
+  done
+  if $entry_unsafe; then
+    path_refuse "$e"
+  else
+    path_safe="${path_safe:+$path_safe:}$d"
+  fi
+done
+
+[ -n "$path_safe" ] || { echo "codex-scheduled-run.sh: refusing: no safe PATH entry survived the scrub — nothing left to run codex/gh/jq from" >&2; exit 2; }
+PATH="$path_safe"
 
 usage() {
   cat <<'EOF'
@@ -195,9 +296,9 @@ Outcome tokens (first line of the run record's record.txt, and this script's las
 
 Exit codes: 0 = completed/skipped-stop/skipped-busy, 1 = preflight-failed/failed/died-mid-run/
 timed-out, 2 = usage or environment error with no run record at all (CLAUDE_PID set, a bad
-argument, not inside a git checkout, git missing, or the run directory couldn't be created), 3 =
-the outcome was recorded but the GitHub failure-tracking step (I3, #428) itself failed; 3
-overrides 0/1.
+argument, no safe PATH entry survived the startup scrub, not inside a git checkout, git missing, or
+the run directory couldn't be created), 3 = the outcome was recorded but the GitHub
+failure-tracking step (I3, #428) itself failed; 3 overrides 0/1.
 EOF
 }
 
@@ -260,19 +361,18 @@ rc=""
 ended_at=""
 
 # Failure-tracking globals (I3, #428) — st_issue/st_streak are read_track_state's own output;
-# tracking/tracking_issue are track_outcome's own output, read back by finish. gh_bin/gh_safe are
-# pre-declared here, safe-by-default (empty/false), BEFORE the TERM/INT traps are installed below:
-# preflight step 0 is what actually resolves them, but a signal landing in the window between the
-# traps going live and step 0 running would otherwise reach track_outcome with gh_bin unbound under
-# `set -u`, killing the wrapper with rc 127 and no record/summary line at all instead of the
-# ordinary died-mid-run path.
+# tracking/tracking_issue are track_outcome's own output, read back by finish. gh_bin is
+# pre-declared here, empty, BEFORE the TERM/INT traps are installed below: preflight step 0 is what
+# actually resolves it, off the PATH already scrubbed at startup (#444), but a signal landing in
+# the window between the traps going live and step 0 running would otherwise reach track_outcome
+# with gh_bin unbound under `set -u`, killing the wrapper with rc 127 and no record/summary line at
+# all instead of the ordinary died-mid-run path.
 st_issue=""
 st_streak=""
 tracking=""
 tracking_issue=""
 TRACK_TITLE="Scheduled Codex runs are failing"
 gh_bin=""
-gh_safe=false
 
 version="unknown"
 if command -v jq >/dev/null 2>&1; then
@@ -420,42 +520,6 @@ trap 'on_wrapper_signal 2' INT
 # own stderr going straight to this wrapper's stderr — never captured into a value this script
 # then reuses.
 
-# gh_path_safe — true only when $gh_bin is a non-empty absolute path whose containing directory,
-# or any of ITS ancestors up to /, is not the same file as the repo toplevel or the git common dir:
-# a `gh` a sandboxed Codex session could have planted under either must never be the one this step
-# executes. Compares by IDENTITY (`-ef`, a bash 3.2 builtin test), never by text: bash 3.2's `pwd
-# -P` does not canonicalise case on a case-insensitive-but-case-preserving filesystem (macOS/APFS
-# default), and a firmlink (`/System/Volumes/Data/...` vs `/...`) is also two different path
-# strings for the same directory — either one would defeat a plain string-prefix compare, letting a
-# same-directory `gh` spelled with different case, or reached via the firmlink, slip through as
-# "safe" when it is not. `-ef` resolves both operands to their real
-# device+inode before comparing, so case and firmlink spelling are irrelevant. Builtins and
-# parameter expansion only otherwise — no dirname, readlink or realpath — so this stays
-# bash-3.2/BSD portable.
-gh_path_safe() {
-  case "$gh_bin" in
-    /*) : ;;
-    *) return 1 ;;
-  esac
-  local ghdir="${gh_bin%/*}"
-  [ -n "$ghdir" ] || ghdir="/"
-  local d
-  d="$(cd "$ghdir" 2>/dev/null && pwd -P)"
-  [ -n "$d" ] || return 1
-  [ -n "$top_phys" ] || return 1
-  [ -n "$common_abs" ] || return 1
-  local walk="$d"
-  while :; do
-    if [ "$walk" -ef "$top_phys" ] || [ "$walk" -ef "$common_abs" ]; then
-      return 1
-    fi
-    [ "$walk" = "/" ] && break
-    walk="${walk%/*}"
-    [ -n "$walk" ] || walk="/"
-  done
-  return 0
-}
-
 # read_track_state — sets the globals st_issue/st_streak from $state_file, both left empty when
 # the file is absent OR unreadable (a non-digit issue=, an unknown streak=, or a missing key). An
 # unreadable (but present) file also gets a stderr warning; a merely absent file does not, since
@@ -575,10 +639,10 @@ EOF
 
 # track_outcome OUTCOME REASON — the failure-tracking step itself (I3, #428). Sets the globals
 # $tracking and $tracking_issue, read back by `finish`. Every branch that can call `gh` checks the
-# gh guard (empty gh_bin, or gh_safe=false) first and returns without executing anything when it
-# fails — the OPEN)/transition-if/streak=recovered-write/exit-code lines below are each kept on
-# their own line, on purpose, so a mutant touching any one of them stays textually distinct from
-# the others.
+# gh guard (empty gh_bin — the startup PATH scrub, #444, means an unresolved `gh` is now the only
+# way this guard can fire) first and returns without executing anything when it fails — the
+# OPEN)/transition-if/streak=recovered-write/exit-code lines below are each kept on their own line,
+# on purpose, so a mutant touching any one of them stays textually distinct from the others.
 track_outcome() {
   local outcome="$1" reason="$2"
   tracking=none
@@ -594,10 +658,6 @@ track_outcome() {
       fi
       if [ -z "$gh_bin" ]; then
         tracking="failed:gh-not-found"
-        return
-      fi
-      if ! $gh_safe; then
-        tracking="failed:gh-unsafe-path"
         return
       fi
       local body gh_rc
@@ -627,10 +687,6 @@ track_outcome() {
 
   if [ -z "$gh_bin" ]; then
     tracking="failed:gh-not-found"
-    return
-  fi
-  if ! $gh_safe; then
-    tracking="failed:gh-unsafe-path"
     return
   fi
 
@@ -680,15 +736,16 @@ track_outcome() {
 
 # --- preflight -----------------------------------------------------------------------------
 
-# 0. Resolve and pin `gh` for the failure-tracking step (I3, #428), before any session exists —
-# the same PATH launchd's own minimal environment resolves at step 2 below. gh_safe stays false
-# (refusing the tracking step outright) unless gh_path_safe finds an absolute path outside both the
-# repo toplevel and the git common dir.
+# 0. Resolve `gh` for the failure-tracking step (I3, #428), before any session exists, off the PATH
+# already scrubbed at startup (#444) — a `gh` a sandboxed Codex session could have planted is never
+# on this PATH to begin with, so no further check is needed here.
 gh_bin="$(command -v gh 2>/dev/null || true)"
-top_phys="$(cd "$toplevel" 2>/dev/null && pwd -P)"
-gh_path_safe && gh_safe=true
 
-# 1. TBF_CODEX_RUN_TIMEOUT / TBF_CODEX_RUN_KILL_GRACE — digits-only and > 0.
+# 1. The PATH scrub above already ran, before any external command. Report it here if it refused
+# any entry.
+$path_unsafe && finish preflight-failed unsafe-path
+
+# 2. TBF_CODEX_RUN_TIMEOUT / TBF_CODEX_RUN_KILL_GRACE — digits-only and > 0.
 case "$timeout" in
   ''|*[!0-9]*) finish preflight-failed bad-timeout ;;
 esac
@@ -698,14 +755,14 @@ case "$grace" in
 esac
 [ "$grace" -gt 0 ] || finish preflight-failed bad-timeout
 
-# 2. codex, gh, jq must all be on PATH.
+# 3. codex, gh, jq must all be on PATH.
 missing=""
 for t in codex gh jq; do
   command -v "$t" >/dev/null 2>&1 || missing="${missing:+$missing,}$t"
 done
 [ -z "$missing" ] || finish preflight-failed "missing-tool:$missing"
 
-# 3. the sibling codex-setup.sh --check.
+# 4. the sibling codex-setup.sh --check.
 setup_out="$("$script_dir/codex-setup.sh" --check 2>&1)"
 setup_rc=$?
 printf '%s\n' "$setup_out" >> "$run_dir/preflight.log"
@@ -715,7 +772,7 @@ case "$setup_rc" in
   *) finish preflight-failed codex-setup-error ;;
 esac
 
-# 4. the sibling harness-stop.sh.
+# 5. the sibling harness-stop.sh.
 stop_out="$("$script_dir/harness-stop.sh" 2>&1)"
 stop_rc=$?
 printf '%s\n' "$stop_out" >> "$run_dir/preflight.log"
@@ -728,7 +785,7 @@ case "$stop_rc" in
   *) finish preflight-failed "harness-stop-exit-$stop_rc" ;;
 esac
 
-# 5. the sibling harness-lock.sh status.
+# 6. the sibling harness-lock.sh status.
 lock_out="$("$script_dir/harness-lock.sh" status 2>&1)"
 lock_rc=$?
 printf '%s\n' "$lock_out" >> "$run_dir/preflight.log"

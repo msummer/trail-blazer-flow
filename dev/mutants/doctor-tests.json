@@ -1632,25 +1632,7 @@
       ],
       "expect_fail": [
         "codex-track-gh-fail",
-        "codex-track-state-write-failed",
-        "codex-track-unsafe-gh",
-        "codex-track-unsafe-gh-common-dir"
-      ]
-    },
-    {
-      "name": "428-gh-path-unchecked",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-track-",
-      "edits": [
-        {
-          "from": "gh_path_safe && gh_safe=true",
-          "to": "gh_safe=true"
-        }
-      ],
-      "expect_fail": [
-        "codex-track-unsafe-gh",
-        "codex-track-unsafe-gh-common-dir"
+        "codex-track-state-write-failed"
       ]
     },
     {
@@ -1690,21 +1672,6 @@
       ]
     },
     {
-      "name": "428-common-dir-unchecked",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-track-",
-      "edits": [
-        {
-          "from": "if [ \"$walk\" -ef \"$top_phys\" ] || [ \"$walk\" -ef \"$common_abs\" ]; then",
-          "to": "if [ \"$walk\" -ef \"$top_phys\" ]; then"
-        }
-      ],
-      "expect_fail": [
-        "codex-track-unsafe-gh-common-dir"
-      ]
-    },
-    {
       "name": "428-malformed-state-narrowed",
       "target": "bin/codex-scheduled-run.sh",
       "suite": "dev/doctor-tests.sh",
@@ -1717,6 +1684,227 @@
       ],
       "expect_fail": [
         "codex-track-malformed-state"
+      ]
+    },
+    {
+      "name": "444-scrub-not-applied",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "PATH=\"$path_safe\"",
+          "to": ": \"$path_safe\""
+        }
+      ],
+      "expect_fail": [
+        "codex-path-common-dir",
+        "codex-path-relative",
+        "codex-path-repo",
+        "codex-path-safe",
+        "codex-path-tmp"
+      ]
+    },
+    {
+      "name": "444-slash-tmp-unchecked",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "for p in \"$slash_tmp\" \"${TMPDIR:-}\" \"$path_top\"; do",
+          "to": "for p in \"${TMPDIR:-}\" \"$path_top\"; do"
+        }
+      ],
+      "expect_fail": [
+        "codex-path-tmp"
+      ]
+    },
+    {
+      "name": "444-tmpdir-unchecked",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "for p in \"$slash_tmp\" \"${TMPDIR:-}\" \"$path_top\"; do",
+          "to": "for p in \"$slash_tmp\" \"$path_top\"; do"
+        }
+      ],
+      "expect_fail": [
+        "codex-path-tmp"
+      ]
+    },
+    {
+      "name": "444-toplevel-unchecked",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "for p in \"$slash_tmp\" \"${TMPDIR:-}\" \"$path_top\"; do",
+          "to": "for p in \"$slash_tmp\" \"${TMPDIR:-}\"; do"
+        }
+      ],
+      "expect_fail": [
+        "codex-path-repo"
+      ]
+    },
+    {
+      "name": "444-toplevel-cwd-only",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "if [ -e \"$path_walk/.git\" ]; then path_top=\"$path_walk\"; break; fi",
+          "to": "break"
+        }
+      ],
+      "expect_fail": [
+        "codex-path-repo"
+      ]
+    },
+    {
+      "name": "444-gitdir-unchecked",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "[ -f \"$1/HEAD\" ] && [ -d \"$1/objects\" ] && [ -d \"$1/refs\" ] && return 0",
+          "to": "false && return 0"
+        }
+      ],
+      "expect_fail": [
+        "codex-path-common-dir"
+      ]
+    },
+    {
+      "name": "444-relative-accepted",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "path_refuse \"$e\"; continue ;;",
+          "to": ": ; continue ;;"
+        }
+      ],
+      "expect_fail": [
+        "codex-path-relative"
+      ]
+    },
+    {
+      "name": "444-unsafe-step-dropped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "$path_unsafe && finish preflight-failed unsafe-path",
+          "to": ":"
+        }
+      ],
+      "expect_fail": [
+        "codex-path-common-dir",
+        "codex-path-relative",
+        "codex-path-repo",
+        "codex-path-tmp"
+      ]
+    },
+    {
+      "name": "444-missing-entry-flagged",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "[ -n \"$d\" ] || continue",
+          "to": "[ -n \"$d\" ] || { path_refuse \"$e\"; continue; }"
+        }
+      ],
+      "expect_fail": [
+        "codex-path-safe"
+      ]
+    },
+    {
+      "name": "444-symlink-kept",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "path_safe=\"${path_safe:+$path_safe:}$d\"",
+          "to": "path_safe=\"${path_safe:+$path_safe:}$e\""
+        }
+      ],
+      "expect_fail": [
+        "codex-path-safe"
+      ]
+    },
+    {
+      "name": "444-trailing-empty-dropped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "    *) e=\"$path_rest\"; last=true ;;",
+          "to": "    *) e=\"$path_rest\"; last=true; [ -n \"$e\" ] || break ;;"
+        }
+      ],
+      "expect_fail": [
+        "codex-path-relative"
+      ]
+    },
+    {
+      "name": "444-tracking-skipped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "  track_outcome \"$outcome\" \"$reason\"",
+          "to": "  [ \"$reason\" = unsafe-path ] || track_outcome \"$outcome\" \"$reason\""
+        }
+      ],
+      "expect_fail": [
+        "codex-path-relative"
+      ]
+    },
+    {
+      "name": "444-step-order",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "$path_unsafe && finish preflight-failed unsafe-path\n",
+          "to": ":\n"
+        },
+        {
+          "from": "[ \"$grace\" -gt 0 ] || finish preflight-failed bad-timeout\n",
+          "to": "[ \"$grace\" -gt 0 ] || finish preflight-failed bad-timeout\n$path_unsafe && finish preflight-failed unsafe-path\n"
+        }
+      ],
+      "expect_fail": [
+        "codex-path-relative"
+      ]
+    },
+    {
+      "name": "444-refusal-unquoted",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-path-",
+      "edits": [
+        {
+          "from": "refusing PATH entry %q:",
+          "to": "refusing PATH entry %s:"
+        }
+      ],
+      "expect_fail": [
+        "codex-path-relative"
       ]
     }
   ]

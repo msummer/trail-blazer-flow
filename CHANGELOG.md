@@ -18,6 +18,12 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #444: `bin/codex-scheduled-run.sh` now scrubs `PATH` to only physical, absolute entries outside
+  `/tmp`, `$TMPDIR`, the discovered work-tree root, and any git directory, before any external
+  command runs (right after the `CLAUDE_PID` guard); a refused entry reports
+  `preflight-failed reason=unsafe-path`, and no safe entry surviving at all exits 2. This makes
+  #428's `gh_path_safe`/`gh_safe` and the `gh-unsafe-path` tracking slug unreachable, so both are
+  removed; `dev/doctor-tests.sh` gains five `codex-path-*` cases in their place. No consumer step.
 - #439: `hooks/push-guard.sh` now denies a push segment carrying command-line git config — `git
   -c`, `--config-env`, or a `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`/
   `GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` assignment, bare or behind `env`
