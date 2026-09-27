@@ -27,14 +27,16 @@ required check on every pull request, and `selfcheck-macos` on `macos-latest`, w
 `/bin` to `PATH` so the same commands run under Apple's bash 3.2 instead of a newer bash, and
 which since #365 runs only post-merge on `main`, nightly, and on manual dispatch — never on a pull
 request, because the maintainer's own local run already happens under bash 3.2, so a BSD-only
-regression is caught on `main` within a day rather than holding every merge for the still-longer
-time that job now takes with `dev/mutant-driver.sh` appended (`timeout-minutes: 50`, sized to
-absorb the driver's own post-merge run). Each job runs ten commands, but the
-ninth, `bash dev/mutant-driver.sh` (#359), is
-gated `if: github.event_name != 'pull_request'`, so a pull request runs nine of them on `ubuntu`
-only (driver-tests still runs; the driver itself, and the whole `selfcheck-macos` job, run only
-post-merge/nightly/dispatch); a red check means one of the commands that ran failed — reproduce
-locally with `bash dev/selfcheck.sh`, `bash dev/selfcheck-tests.sh`, `bash dev/doctor-tests.sh`,
+regression is caught on `main` within a day rather than holding every merge for that job's run
+time. Each job runs ten commands, but the ninth, `bash dev/mutant-driver.sh` (#359), is gated:
+on `selfcheck` by `if: github.event_name != 'pull_request'`, and on `selfcheck-macos` by
+`if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'`, because the
+ubuntu job already runs the full driver after every merge (`selfcheck-macos`'s
+`timeout-minutes: 50` is sized for its nightly driver run). So a pull request runs nine of them on
+`ubuntu` only (driver-tests still runs; the driver itself, and the whole `selfcheck-macos` job,
+never run on a pull request), a merge to `main` runs all ten on `ubuntu` and nine on macOS, and
+the nightly and dispatch runs run all ten on both; a red check means one of the commands that ran
+failed — reproduce locally with `bash dev/selfcheck.sh`, `bash dev/selfcheck-tests.sh`, `bash dev/doctor-tests.sh`,
 `bash dev/hook-tests.sh`, `bash dev/cleanup-tests.sh`, `bash dev/planning-tests.sh`,
 `bash dev/lock-tests.sh`, `bash dev/stop-tests.sh`, `bash dev/mutant-driver.sh`, and
 `bash dev/mutant-driver-tests.sh` (on a
@@ -186,10 +188,12 @@ in bounded concurrent waves (the same idiom `dev/selfcheck-tests.sh` uses) and p
 declared order regardless of completion order, with its own `PASS <name> <total> <set>`/
 `FAIL <name> <total|-> <set|->` grammar and a `== summary: N pass, M fail ==` footer. Run it by
 hand before pushing any change to a registry `target`, a registry `suite`, or the registry itself
-— it runs in CI as the ninth command, but only post-merge on `main`, nightly, and on manual
-dispatch (never on a pull request, `if: github.event_name != 'pull_request'`), so a stale recorded
-set turns the post-merge/nightly run red within a day rather than blocking the pull request that
-introduced it.
+— it runs in CI as the ninth command: in the `selfcheck` (ubuntu) job post-merge on `main`,
+nightly, and on manual dispatch, and in `selfcheck-macos` nightly and on manual dispatch only;
+never on a pull request. So a stale recorded set turns the post-merge ubuntu run red rather than
+blocking the pull request that introduced it. Both jobs set `MUTANT_DRIVER_JOBS=8`, more jobs
+than either runner has cores, because the suites it runs spend most of their wall clock waiting
+rather than computing.
 
 `dev/mutant-driver-tests.sh` is the driver's own negative-test harness: over synthetic targets and
 suites built under `mktemp`, it pins the driver's registry validation (name/target/suite/edits/
