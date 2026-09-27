@@ -1886,6 +1886,12 @@ EOF
 # is why (M8) — reverting to the pre-#355 comment → remove-label → close order — kills this case
 # too (remove-label now runs, and succeeds, before the still-failing close call). Mutation proof:
 # (M3), (M7), (M8).
+#
+# mutant:371-continuation-bare-close — strips try_write from the close arm's continuation-line
+#   `&& … gh issue close`, a bare write on a continuation line whose first word is `&&`: a shape
+#   gate assertion 1.9 cannot see (1.9 anchors only on a line's first command word). The failed
+#   close short-circuits the `&&` condition list with no try_write wrapper, so the `if` is false
+#   and no WARN prints.
 case_write_failure_close_close() {
   local dir; dir="$(mk_repo write-failure-close-close)"
   cat > "$dir/prs.json" <<'EOF'
@@ -1912,6 +1918,12 @@ EOF
 # succeed, `remove-label` is attempted (logged) and fails — the one bounded residue this plan
 # documents (the issue ends up CLOSED but still carrying pr-open). No FIXED line (the arm never
 # reaches its success branch). Mutation proof: (M2), (M8).
+#
+# mutant:371-same-line-bare-edit — joins the close arm's remove-label write onto the close
+#   write's own line as a bare `&& gh issue edit`, a second write chained after an already-
+#   guarded write on the same physical line: a shape gate assertion 1.9 cannot see. The bare
+#   edit fails inside the `if` condition list with no try_write wrapper, so no WARN prints and
+#   this fixture's WARN expectation fails.
 case_write_failure_close_edit() {
   local dir; dir="$(mk_repo write-failure-close-edit)"
   cat > "$dir/prs.json" <<'EOF'
@@ -2085,6 +2097,37 @@ EOF
   expect_no_call "issue comment 50"
   expect_absent "FIXED #50"
   expect "WARN  #50 (Deferred later): adding the no-plan label failed"
+}
+
+# write-failure-followup-noplan-comment — the follow-up arm's other branch: no-plan is already
+# present, so the orphan notice is the only write, and `reject-comment` fails it — no FIXED line,
+# one WARN naming the failed write, rc 0.
+#
+# mutant:371-followup-noplan-bare-comment — strips try_write from that branch's `if gh issue
+#   comment …`: the failed comment only makes the `if` false, so no WARN prints and this
+#   fixture's WARN expectation fails.
+case_write_failure_followup_noplan_comment() {
+  local dir; dir="$(mk_repo write-failure-followup-noplan-comment)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"CLOSED","headRefName":"claude/50-x","body":""}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[]
+EOF
+  cat > "$dir/followups.json" <<'EOF'
+[{"number":50,"title":"Deferred later","body":"Deferring this.\n<!-- harness-follow-up: PR #12 -->\n","labels":[{"name":"no-plan"}]}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-comment"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect_call "issue comment 50"
+  expect_no_call "issue edit 50"
+  expect_absent "FIXED #50"
+  expect "WARN  #50 (Deferred later): posting the orphan notice failed"
 }
 
 # write-failure-continues-to-next-issue — the headline claim: two pr-open issues on the close
@@ -3652,6 +3695,36 @@ EOF
   expect "WARN    1 repair write(s) failed this run"
 }
 
+# reopened-write-failure-edit — the same reopened arm, `reject-edit`: the comment succeeds, the
+# continuation-line remove-label write is attempted and fails — one WARN naming it, no "pr-open
+# removed" sub-line, rc 0.
+#
+# mutant:371-reopened-bare-edit — strips try_write from the reopened arm's continuation-line
+#   `&& … gh issue edit … --remove-label pr-open`: the failed edit only makes the `if` false, so
+#   no WARN prints and this fixture's WARN expectation fails.
+case_reopened_write_failure_edit() {
+  local dir; dir="$(mk_repo reopened-write-failure-edit)"
+  cat > "$dir/prs.json" <<'EOF'
+[{"number":12,"state":"MERGED","headRefName":"claude/7-x","body":"Closes #7"}]
+EOF
+  cat > "$dir/issues.json" <<'EOF'
+[{"number":7,"title":"Reopened issue","labels":[],"stateReason":"REOPENED"}]
+EOF
+  cat > "$dir/comments.json" <<'EOF'
+{"comments":[]}
+EOF
+  build_stub_gh "$dir"
+  touch "$dir/reject-edit"
+  run_cleanup "$dir" --fix
+  expect_rc 0
+  expect "KEEP  #7 (Reopened issue): PR #12 merged, but the issue was reopened after being closed"
+  expect_call "issue comment 7"
+  expect_call "issue edit 7 --remove-label pr-open"
+  expect "WARN  #7 (Reopened issue): removing the pr-open label failed"
+  expect_absent "pr-open removed"
+  expect "WARN    1 repair write(s) failed this run"
+}
+
 # reopened-short-circuits-view-failure (#376) — with the view arm failing (VIEW_MODE fail), a
 # reopened issue still reaches the reopened arm, still removes pr-open under --fix, and prints no
 # "the multi-PR comment-marker lookup failed" WARN. The reopened decision arm also sits above the
@@ -3789,6 +3862,7 @@ cases=(
   "write-failure-requeue-edit|case_write_failure_requeue_edit|#355: requeue arm, reject-edit: comment logged, remove-label attempted and fails, no FIXED"
   "write-failure-followup-comment|case_write_failure_followup_comment|#355: follow-up arm, reject-comment: add-label no-plan attempted first (succeeds, the reorder), comment attempted and fails, no FIXED"
   "write-failure-followup-label|case_write_failure_followup_label|#355: follow-up arm, reject-edit: add-label attempted and fails, comment never runs (skip-the-rest and the reorder), no FIXED"
+  "write-failure-followup-noplan-comment|case_write_failure_followup_noplan_comment|#371: follow-up arm with no-plan already present, reject-comment: the only write fails, one WARN, no FIXED"
   "write-failure-continues-to-next-issue|case_write_failure_continues_to_next_issue|#355: the headline claim — a reject-comment-once failure on issue #7 still lets #8 and the follow-up #50 fully repair, reaches the follow-ups section, prints the Reminder and a summary counting 1"
   "write-failure-markers-inert-no-fix|case_write_failure_markers_inert_no_fix|#355: all three permanent reject markers present, no --fix: report-only performs no writes, so every marker is inert — no WARN, no summary line"
   "write-summary-absent-on-clean-run|case_write_summary_absent_on_clean_run|#355: control — a clean --fix run with no failed write never prints the summary line, FIXED still prints"
@@ -3808,6 +3882,7 @@ cases=(
   "reopened-not-reclosed|case_reopened_not_reclosed|#376: MERGED PR, Closes #7, but stateReason REOPENED: --fix never re-closes it, KEEP + comment + remove-label instead"
   "reopened-no-fix|case_reopened_no_fix|#376: the same reopened fixture without --fix: KEEP line still prints, zero gh mutation calls, no 'close manually' WARN"
   "reopened-write-failure-comment|case_reopened_write_failure_comment|#376: reject-comment on the reopened arm: KEEP line still prints, remove-label never attempted, no 'pr-open removed' line"
+  "reopened-write-failure-edit|case_reopened_write_failure_edit|#371: reject-edit on the reopened arm: comment succeeds, remove-label attempted and fails, one WARN, no 'pr-open removed' line"
   "reopened-short-circuits-view-failure|case_reopened_short_circuits_view_failure|#376: view arm failing: the reopened arm still wins, pr-open removed, no lookup-failure WARN"
   "reopened-trusted-marker-never-read|case_reopened_trusted_marker_never_read|#376: a reopened issue's comments are never read: a trusted harness-multi-pr marker cannot move it to the multi-PR KEEP arm"
   "reopened-then-ordinary-still-closes|case_reopened_then_ordinary_still_closes|#376: reopened is reset per issue: an ordinary issue after a reopened one in the same run is still closed"

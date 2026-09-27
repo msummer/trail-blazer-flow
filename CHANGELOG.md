@@ -18,6 +18,11 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #371: gate assertion 1.9 is not widened. Two new write-failure fixtures cover the two `gh issue`
+  writes in `bin/cleanup-after-merge.sh` that had none (the reopened arm's remove-label and the
+  no-plan-present orphan notice), and four `dev/mutants/cleanup-tests.json`
+  records prove a write that loses its guard fails a fixture; 1.9's comment names both blind spots
+  and where they're caught. No consumer step.
 - #415: `project-kickoff` and standalone `test-ratchet` gain a supervised Codex path
   (docs/reference/codex.md); not live-verified. In a new project directory, `git init` comes
   before `codex-setup.sh`.
