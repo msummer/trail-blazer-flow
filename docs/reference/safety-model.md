@@ -445,16 +445,30 @@ finds no `.claude`/`.codex` mention does the command fall through to: a genuine,
 fully-trimmed `*** Begin Patch` line (which triggers the same structured parse as the apply_patch
 tool route), or — command word present but no such line — a fail-closed "no inline patch text"
 deny (the hook cannot verify what it writes when the patch itself is invisible, e.g. `apply_patch
-< x.patch`). The command-word walk is quote-blind and backslash-blind, the same tripwire-not-
-sandbox trade-off every scan in this directory makes: a backslash-quoted spelling, a quoted or
-variable-built name, a PREFIX_WORDS option that itself takes a separate argument
-(`nice -n 5 apply_patch`), a quoted `eval`/`trap` argument (`eval "apply_patch < x.patch"`), zsh's
-short `if [[ cond ]] apply_patch` form (this hook's own copy of the shared vocabulary has no
-additive `]]` handling), a quoted `bash -c "apply_patch < x.patch"`, or an unrecognised
-launcher can all still evade both checks — while the SAME quote-blindness can also over-block: a
-commit message or `echo` that merely mentions `apply_patch`/`applypatch` between a matching pair
-of BACKTICKS, or right after a `;`, `(`, `|` or `&` (all segment-break characters of this walk)
-denies too, even inside an enclosing pair of ordinary quotes — `git commit -m "See
+< x.patch`). The command-word walk strips quote characters (`'`/`"`) from each token before
+matching or resolving it, rather than tracking which quote ENCLOSES which span, and stays
+backslash-blind — the same tripwire-not-sandbox trade-off every scan in this directory makes: a
+backslash-quoted spelling, a variable-built name (`p=apply_patch; $p < x.patch` — this walk never
+expands a variable reference), an ANSI-C-quoted spelling (`$'apply_patch'` — the leading `$`
+survives the quote strip and never matches), a PREFIX_WORDS option that itself takes a separate
+argument (`nice -n 5 apply_patch`), an INDIRECT `eval`/`trap` argument (`eval "$c"`, `eval
+"$(cmd)"` — quote-stripping never expands a variable or runs a command substitution), a `]]` token
+itself glued to a quote character (a literal `"]]"` token is not the bare `]]` the cut loop matches
+against), or an unrecognised launcher can all still evade both checks. Since #437 the walk also
+handles zsh's short `if [[ cond ]] apply_patch` form the same way `hooks/agent-boundary.sh`'s own
+tokenizer does: every standalone `]]` token splits its own segment into disjoint tails, so the text
+after each `]]` is also tried as a candidate command word; a segment carrying more than
+DBRACKET_MAX (64) standalone `]]` tokens — counted PER SEGMENT here, unlike agent-boundary's
+per-record count — denies unconditionally as soon as the excess one is seen (at most DBRACKET_MAX
+disjoint tails are ever walked first), and a `]]`-cut tail that
+consumes at least one skip token (a prefix word, a dash-option, a redirect/fd, or an assignment)
+without ever resolving a word also denies fail-closed, the same `env -u ]] -i apply_patch` shape
+`hooks/push-guard.sh`'s own cut-push rule closes — while this same lack of enclosing-quote tracking
+can also over-block: a commit message or `echo` that merely mentions `apply_patch`/`applypatch`
+between a matching pair of BACKTICKS, or right after a `;`, `(`, `|` or `&` (all segment-break
+characters of this walk), or a segment whose first word is a QUOTED `'apply_patch'`/`"apply_patch"`
+(now resolved as the shim) denies too, even inside an enclosing pair of ordinary quotes — `git
+commit -m "See
 \`apply_patch\` docs"` or `git commit -m "fix; apply_patch now works"` denies on Claude Code as
 readily as on Codex. A quoted mention that follows ordinary words (`git commit -m "the
 apply_patch shim"`) gets no opinion. `apply_patch`/`applypatch` appearing only as an ordinary argument
@@ -465,8 +479,8 @@ patch nor invokes the shim as its command word, or an ordinary absolute path out
 `.claude`/`.codex` segment — is "no opinion" (exit 0, empty stdout, empty stderr), including two
 release-blocker controls: the orchestrator's own main-session `.claude/LESSONS.md` append still
 works, and so does the verifier's own transient mutation-probe `Edit` of a tracked source file.
-Pinned by fixture cases in `dev/hook-tests.sh` (prefixes `cdg-`, `cdg-patch-`, `cdg-codexseg-`, and
-`cdg-bash-`): the same booby-trapped-`PATH` idiom (widened here to
+Pinned by fixture cases in `dev/hook-tests.sh` (prefixes `cdg-`, `cdg-patch-`, `cdg-codexseg-`,
+`cdg-bash-`, `cdg-pc-`, and `cdg-dbq-`): the same booby-trapped-`PATH` idiom (widened here to
 `git`/`gh`/`rm`/`dirname`/`tr`/`awk`/`grep`/`sed`, since this hook uses none of them) proves it
 executes none of them, and a byte-identical fixture-tree listing proves the `Edit`/`Write` route
 writes nothing to the filesystem — this hook also never *reads* the filesystem at all, true by
