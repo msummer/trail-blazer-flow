@@ -1574,8 +1574,8 @@
       "filter": "cdg-bash-",
       "edits": [
         {
-          "from": "        while [ \"$i\" -lt \"$n\" ] && { [ \"${toks[$i]}\" = \"$mark_in\" ] || [ \"${toks[$i]}\" = \"$mark_out\" ]; }; do\n",
-          "to": "        while false; do\n"
+          "from": "      while [ \"$i\" -lt \"$n\" ] && { [ \"${toks[$i]}\" = \"$mark_in\" ] || [ \"${toks[$i]}\" = \"$mark_out\" ]; }; do\n",
+          "to": "      while false; do\n"
         }
       ],
       "expect_fail": [
@@ -2338,12 +2338,209 @@
       "filter": "cdg-pc-",
       "edits": [
         {
-          "from": "        *\" $tok \"*) saw_prefix=1; [ \"$tok\" = repeat ] && i=$((i + 1)); i=$((i + 1)); continue ;;",
-          "to": "        *\" $tok \"*) saw_prefix=1; i=$((i + 1)); continue ;;"
+          "from": "      *\" $tok \"*) saw_prefix=1; [ \"$tok\" = repeat ] && i=$((i + 1)); i=$((i + 1)); continue ;;",
+          "to": "      *\" $tok \"*) saw_prefix=1; i=$((i + 1)); continue ;;"
         }
       ],
       "expect_fail": [
         "cdg-pc-deny-repeat-shim"
+      ]
+    },
+    {
+      "name": "437-cdg-dbq-tails",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-",
+      "edits": [
+        {
+          "from": "          if [ \"$t\" = \"]]\" ]; then\n",
+          "to": "          if [ \"$t\" = \"]]Z\" ]; then\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-deny-short-if",
+        "cdg-dbq-deny-short-if-multiline",
+        "cdg-dbq-deny-cut-shim",
+        "cdg-dbq-deny-cut-unresolved",
+        "cdg-dbq-deny-flood-cap",
+        "cdg-dbq-never-executes"
+      ]
+    },
+    {
+      "name": "437-cdg-dbq-last-tail",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-",
+      "edits": [
+        {
+          "from": "        if [ \"$prev\" -ge 0 ]; then\n          walk_window $((prev + 1)) \"$n\"\n          base=\"${ww_word##*/}\"\n          case \"$base\" in\n            apply_patch|applypatch) found=0 ;;\n          esac\n        fi\n",
+          "to": "        :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-deny-short-if",
+        "cdg-dbq-deny-short-if-multiline",
+        "cdg-dbq-never-executes"
+      ]
+    },
+    {
+      "name": "437-cdg-dbq-cut-shim",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-",
+      "edits": [
+        {
+          "from": "              base=\"${ww_word##*/}\"\n              case \"$base\" in\n                apply_patch|applypatch) found=0 ;;\n              esac\n",
+          "to": "              :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-deny-cut-shim"
+      ]
+    },
+    {
+      "name": "437-cdg-dbq-cut",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-",
+      "edits": [
+        {
+          "from": "              if [ -z \"$ww_word\" ] && [ \"$ww_skipped\" -eq 1 ]; then\n                set +f\n                IFS=\"$oldifs\"\n                deny_patch_unparseable \"command word split by ]] cannot be resolved\"\n              fi\n",
+          "to": "              :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-deny-cut-unresolved"
+      ]
+    },
+    {
+      "name": "437-cdg-dbq-cut-resolved",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-",
+      "edits": [
+        {
+          "from": "if [ -z \"$ww_word\" ] && [ \"$ww_skipped\" -eq 1 ]; then",
+          "to": "if [ \"$ww_skipped\" -eq 1 ]; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-noop-cut-resolved"
+      ]
+    },
+    {
+      "name": "437-cdg-dbq-overlap",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-",
+      "edits": [
+        {
+          "from": "              walk_window $((prev + 1)) \"$k\"\n",
+          "to": "              walk_window $((prev + 1)) \"$n\"\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-deny-cut-unresolved"
+      ]
+    },
+    {
+      "name": "437-cdg-dbq-cap",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-",
+      "edits": [
+        {
+          "from": "            if [ \"$db_n\" -gt \"$DBRACKET_MAX\" ]; then\n",
+          "to": "            if false; then\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-deny-flood-cap"
+      ]
+    },
+    {
+      "name": "437-cdg-dbq-cap-exact",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-",
+      "edits": [
+        {
+          "from": "            if [ \"$db_n\" -gt \"$DBRACKET_MAX\" ]; then\n",
+          "to": "            if [ \"$db_n\" -ge \"$DBRACKET_MAX\" ]; then\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-deny-timing",
+        "cdg-dbq-noop-flood-at-cap"
+      ]
+    },
+    {
+      "name": "437-cdg-dbq-cap-per-segment",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-",
+      "edits": [
+        {
+          "from": "  local db_n k prev t\n",
+          "to": "  local db_n=0 k prev t\n"
+        },
+        {
+          "from": "        db_n=0\n        prev=-1\n",
+          "to": "        prev=-1\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-noop-cap-per-segment"
+      ]
+    },
+    {
+      "name": "437-cdg-dbq-quote-sq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-",
+      "edits": [
+        {
+          "from": "    tok=\"${tok//$sq/}\"\n",
+          "to": "    :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-deny-eval-sq",
+        "cdg-dbq-deny-trap-sq",
+        "cdg-dbq-deny-quoted-prefix"
+      ]
+    },
+    {
+      "name": "437-cdg-dbq-quote-dq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-",
+      "edits": [
+        {
+          "from": "    tok=\"${tok//$dq/}\"\n",
+          "to": "    :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-deny-eval-dq",
+        "cdg-dbq-deny-eval-lead-space",
+        "cdg-dbq-deny-bash-c-dq",
+        "cdg-dbq-deny-quoted-name"
+      ]
+    },
+    {
+      "name": "437-cdg-dbq-empty-tok",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-",
+      "edits": [
+        {
+          "from": "    if [ -z \"$tok\" ]; then\n      i=$((i + 1))\n      continue\n    fi\n",
+          "to": "    :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-deny-eval-lead-space"
       ]
     },
     {

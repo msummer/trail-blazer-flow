@@ -18,6 +18,11 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #437: `hooks/claude-dir-guard.sh`'s Bash apply_patch-shim check now resolves zsh's short
+  `if [[ cond ]] apply_patch` form (disjoint tails after each standalone `]]`) and a quoted
+  `eval`/`trap`/`bash -c` argument or quoted shim name (quote characters stripped, an emptied token
+  skipped); a segment with more than DBRACKET_MAX (64) standalone `]]`, or a `]]`-cut tail whose
+  command word can't be resolved, now denies fail-closed. No consumer step.
 - #433: push-guard fails closed on a push whose Bash command also changes directory
   (`cd`/`pushd`/`popd`/`chdir`) or sets a `GIT_DIR`-family variable or one of #439's
   `GIT_CONFIG_*` names in another segment (`export`/`declare`/`typeset`/`local`/`readonly`, or a

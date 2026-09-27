@@ -5149,8 +5149,8 @@ case_cdg_bash_never_executes_no_inline_patch() {
 # Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "cdg-pc-"),
 # re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table. This hook's own
 # PREFIX_WORDS copy gains the same eval/trap/noglob/nocorrect/-/repeat vocabulary and the `repeat`
-# count skip, but NOT the `]]` segment break or quote stripping (documented residuals) — so only
-# the unquoted forms are exercised here.
+# count skip; the `]]` segment break and quote stripping #437 added are exercised separately by the
+# `cdg-dbq-*` fixtures right below — so only the unquoted, no-`]]` forms are exercised here.
 # mutant:403-cdg-pc-vocab — reverts this hook's PREFIX_WORDS copy to its pre-#403 (#398) value, so
 #   every fixture below no longer resolves past its own prefix word to "apply_patch".
 # mutant:403-cdg-pc-repeat — removes the `repeat`-count skip from is_apply_patch_word, so a
@@ -5186,6 +5186,236 @@ case_cdg_pc_deny_repeat_shim() {
     *"with no inline patch text"*) ;;
     *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
   esac
+}
+
+# --- hooks/claude-dir-guard.sh: the #437 ]]-cut / quote-stripping class -------------------------
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "cdg-dbq-"),
+# re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table. Ports #403's
+# agent-boundary.sh/push-guard.sh disjoint-`]]`-tail and quote-stripping techniques into this
+# hook's own pure-bash walk_window()/is_apply_patch_word() (no awk — this hook's own booby-trap
+# fixtures trap it).
+# mutant:437-cdg-dbq-tails — breaks the `]]`-token equality test, so no standalone `]]` is ever
+#   recognised and the whole additive pass never runs for any segment.
+# mutant:437-cdg-dbq-last-tail — deletes the post-loop walk of the LAST (uncut) tail, so a `]]`
+#   with nothing after it in the loop never resolves the command word that follows the final `]]`.
+# mutant:437-cdg-dbq-cut-shim — deletes the in-loop basename check for a CUT tail, so a cut tail
+#   that DOES resolve to the shim is never marked found.
+# mutant:437-cdg-dbq-cut — deletes the cut-tail fail-closed deny, so a cut tail that consumes a
+#   skip token without ever resolving a word is silently treated as no opinion instead.
+# mutant:437-cdg-dbq-cut-resolved — drops the cut deny's own "no word resolved" condition, so a cut
+#   tail that consumed a skip token but DID resolve a word (`env echo … ]]`) wrongly denies too.
+# mutant:437-cdg-dbq-overlap — widens the in-loop tail's own stop bound from the next `]]` to the
+#   segment's end, so tails overlap instead of staying disjoint, hiding the cut-tail deny behind an
+#   ordinary resolve on the far side of the next `]]`.
+# mutant:437-cdg-dbq-cap — disables the DBRACKET_MAX comparison outright, so a flood of standalone
+#   `]]` is analysed in full instead of failing closed.
+# mutant:437-cdg-dbq-cap-exact — loosens the cap comparison by one (`-gt` to `-ge`), so exactly
+#   DBRACKET_MAX standalone `]]` already denies instead of getting no opinion.
+# mutant:437-cdg-dbq-cap-per-segment — removes the per-segment db_n reset, so the count accumulates
+#   across every segment of one call instead of resetting per segment.
+# mutant:437-cdg-dbq-quote-sq — deletes the single-quote strip, so a single-quoted spelling of the
+#   shim's own name (or a single-quoted PREFIX_WORDS member) no longer resolves.
+# mutant:437-cdg-dbq-quote-dq — deletes the double-quote strip, so a double-quoted spelling no
+#   longer resolves.
+# mutant:437-cdg-dbq-empty-tok — deletes the empty-token-after-strip skip, so a lone quote
+#   character glued to nothing becomes the walk's own "resolved" word, hiding the real word right
+#   after it.
+case_cdg_dbq_deny_short_if() {
+  run_claude_guard "$(mk_codex_shell 'implementer' 'if [[ -n x ]] apply_patch < x.patch')"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_dbq_deny_short_if_multiline() {
+  # The "]]" that closes the `[[ ... ` test opens the SECOND physical line — this walk treats each
+  # real newline as its own segment boundary already, so the "]]" sits in a DIFFERENT segment from
+  # its own "[[", proving the additive pass does not depend on both ends sharing one segment.
+  run_claude_guard "$(mk_codex_shell 'implementer' "if [[ -n x${LF}]] apply_patch < x.patch")"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_dbq_deny_cut_shim() {
+  # The deciding tail is CUT by a later "]]" (not the last one) — proves the in-loop cut-tail
+  # basename check, not only the post-loop last-tail one, finds the shim.
+  run_claude_guard "$(mk_codex_shell 'implementer' 'if [[ -n x ]] apply_patch < x.patch ]] y')"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_dbq_deny_cut_unresolved() {
+  # The tail between the two "]]" ("env -u") consumes a PREFIX_WORDS token and a dash-option
+  # without ever resolving a word — fails closed on the CUT itself, distinct from the ordinary
+  # "no inline patch text" reason.
+  run_claude_guard "$(mk_codex_shell 'implementer' 'if [[ -n x ]] env -u ]] -i apply_patch < x.patch')"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"split by ]]"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'split by ]]': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_dbq_deny_flood_cap() {
+  # More than DBRACKET_MAX (64) standalone "]]" in one segment denies unconditionally, before any
+  # tail is ever walked.
+  local flood="" i
+  for i in $(seq 1 65); do flood="${flood} ]]"; done
+  run_claude_guard "$(mk_codex_shell 'implementer' "echo apply_patch${flood}")"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"too many standalone ]] tokens"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'too many standalone ]] tokens': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_dbq_deny_eval_sq() {
+  run_claude_guard "$(mk_codex_shell 'implementer' "eval 'apply_patch < x.patch'")"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_dbq_deny_eval_dq() {
+  run_claude_guard "$(mk_codex_shell 'implementer' 'eval "apply_patch < x.patch"')"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_dbq_deny_eval_lead_space() {
+  # A real space right after the opening double quote splits into its own lone-quote token — proves
+  # the empty-token-after-strip skip, not just the strip itself, is needed to reach "apply_patch".
+  run_claude_guard "$(mk_codex_shell 'implementer' 'eval " apply_patch < x.patch"')"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_dbq_deny_trap_sq() {
+  run_claude_guard "$(mk_codex_shell 'verifier' "trap 'apply_patch < x.patch' EXIT")"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_dbq_deny_bash_c_dq() {
+  run_claude_guard "$(mk_codex_shell 'implementer' 'bash -c "apply_patch < x.patch"')"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_dbq_deny_quoted_name() {
+  run_claude_guard "$(mk_codex_shell 'implementer' '"apply_patch" < x.patch')"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_dbq_deny_quoted_prefix() {
+  # The PREFIX_WORDS match itself uses the STRIPPED token: "'noglob" strips to "noglob", a genuine
+  # member, so the walk keeps going past it to "apply_patch".
+  run_claude_guard "$(mk_codex_shell 'implementer' "bash -c 'noglob apply_patch < x.patch'")"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_dbq_deny_timing() {
+  # Wall-clock proof: the filler goes BEFORE the 64 standalone "]]" so their own tail windows start
+  # at HIGH indices, exposing any per-index quadratic scan on bash 3.2 (measured via bash SECONDS,
+  # timing only the hook invocation itself, not payload construction). The command reaches jq on
+  # stdin (printf is a builtin), never as a --arg: this command is over 128KB, past the byte budget
+  # a single --arg value can carry.
+  local filler
+  filler="$(printf ' a%.0s' $(seq 1 100000))"
+  local flood="x${filler}" i
+  for i in $(seq 1 64); do flood="${flood} ]] true"; done
+  local payload
+  payload="$(printf '%s\napply_patch < x.patch' "$flood" \
+    | jq -Rs '{tool_name: "Bash", agent_type: "implementer", cwd: "/repo", tool_input: {command: .}}')"
+  local start=$SECONDS elapsed
+  run_claude_guard "$payload"
+  elapsed=$((SECONDS - start))
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+  [ "$elapsed" -lt 5 ] || { __ok=0; __why="${__why}took ${elapsed}s (SECONDS-granularity), expected under 5s\n"; }
+}
+case_cdg_dbq_noop_flood_at_cap() {
+  # Exactly DBRACKET_MAX (64) standalone "]]": the cap never trips, and "apply_patch" is never
+  # reached by any window (it sits as an ARGUMENT to "echo", the base walk's own resolved word,
+  # before the first "]]" even starts) — no opinion either way.
+  local flood="" i
+  for i in $(seq 1 64); do flood="${flood} ]]"; done
+  run_claude_guard "$(mk_codex_shell 'implementer' "echo apply_patch${flood}")"
+  expect_cdg_no_opinion
+}
+case_cdg_dbq_noop_cap_per_segment() {
+  # 65 lines, each carrying exactly ONE standalone "]]" ("&&" is itself a segment break, so each
+  # line becomes two segments) — proves DBRACKET_MAX is counted PER SEGMENT: 65 well-under-cap
+  # segments must not accumulate into a false cap deny.
+  local body="cat <<'EOF' > t.sh" i
+  for i in $(seq 1 65); do body="${body}${LF}[[ -n x ]] && echo apply_patch"; done
+  body="${body}${LF}EOF"
+  run_claude_guard "$(mk_codex_shell 'implementer' "$body")"
+  expect_cdg_no_opinion
+}
+case_cdg_dbq_noop_bash_dbracket() {
+  run_claude_guard "$(mk_codex_shell 'implementer' '[[ -n x ]] && echo apply_patch')"
+  expect_cdg_no_opinion
+}
+case_cdg_dbq_noop_cut_resolved() {
+  # A cut tail that consumes a skip word ("env") and then resolves ("echo") is not the cut-deny
+  # shape: only a cut tail that never resolves a word denies.
+  run_claude_guard "$(mk_codex_shell 'implementer' 'if [[ -n x ]] env echo apply_patch ]] y')"
+  expect_cdg_no_opinion
+}
+case_cdg_dbq_noop_short_if_other() {
+  # The tail after "]]" resolves to "echo", not "apply_patch" — "apply_patch" is merely echo's own
+  # argument, the same "resolved word stops the walk" rule the base walk already follows.
+  run_claude_guard "$(mk_codex_shell 'implementer' 'if [[ -n x ]] echo apply_patch')"
+  expect_cdg_no_opinion
+}
+case_cdg_dbq_noop_short_if_benign_heredoc() {
+  # The shim IS resolved as the command word via the additive pass, but the heredoc carries a
+  # genuine, benign "*** Begin Patch" block — the EXISTING structured-parse route (unchanged by
+  # #437) takes over and finds nothing to deny.
+  run_claude_guard "$(mk_codex_shell 'implementer' "if [[ -n x ]] apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF")"
+  expect_cdg_no_opinion
+}
+case_cdg_dbq_never_executes() {
+  local trapdir="$tmpbase/trapbin-cdg-dbq" sentinel="$tmpbase/sentinel-cdg-dbq"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname tr awk grep sed; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  run_claude_guard "$(mk_codex_shell 'implementer' 'if [[ -n x ]] apply_patch < x.patch')" "$trapdir:$PATH"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
 }
 
 # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
@@ -7030,6 +7260,26 @@ cases=(
   "cdg-pc-deny-noglob-shim|case_cdg_pc_deny_noglob_shim|zsh precommand modifier deny: implementer, noglob apply_patch < x.patch -- mutation proof: dev/mutants/hook-tests.json (403-cdg-pc-vocab)"
   "cdg-pc-deny-dash-shim|case_cdg_pc_deny_dash_shim|zsh precommand modifier deny: implementer, - apply_patch < x.patch -- mutation proof: dev/mutants/hook-tests.json (403-cdg-pc-vocab)"
   "cdg-pc-deny-repeat-shim|case_cdg_pc_deny_repeat_shim|zsh repeat deny: implementer, repeat 2 apply_patch < x.patch -- mutation proof: dev/mutants/hook-tests.json (403-cdg-pc-vocab, 403-cdg-pc-repeat)"
+  "cdg-dbq-deny-short-if|case_cdg_dbq_deny_short_if|unparseable deny (#437): if [[ -n x ]] apply_patch < x.patch -- zsh's short-if form, resolved via the last (uncut) ]]-tail -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-tails, 437-cdg-dbq-last-tail)"
+  "cdg-dbq-deny-short-if-multiline|case_cdg_dbq_deny_short_if_multiline|unparseable deny (#437): the closing ]] opens the SECOND physical line, a different segment from its own [[ -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-tails, 437-cdg-dbq-last-tail)"
+  "cdg-dbq-deny-cut-shim|case_cdg_dbq_deny_cut_shim|unparseable deny (#437): if [[ -n x ]] apply_patch < x.patch ]] y -- the deciding tail is CUT and is not the last one -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-cut-shim)"
+  "cdg-dbq-deny-cut-unresolved|case_cdg_dbq_deny_cut_unresolved|unparseable deny (#437): if [[ -n x ]] env -u ]] -i apply_patch < x.patch -- a cut tail that consumes skip tokens without ever resolving a word -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-cut, 437-cdg-dbq-overlap)"
+  "cdg-dbq-deny-flood-cap|case_cdg_dbq_deny_flood_cap|unparseable deny (#437): more than DBRACKET_MAX (64) standalone ]] in one segment denies unconditionally -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-tails, 437-cdg-dbq-cap)"
+  "cdg-dbq-deny-eval-sq|case_cdg_dbq_deny_eval_sq|unparseable deny (#437): eval 'apply_patch < x.patch' -- a single-quoted eval argument -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-sq)"
+  "cdg-dbq-deny-eval-dq|case_cdg_dbq_deny_eval_dq|unparseable deny (#437): eval \"apply_patch < x.patch\" -- a double-quoted eval argument -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-dq)"
+  "cdg-dbq-deny-eval-lead-space|case_cdg_dbq_deny_eval_lead_space|unparseable deny (#437): eval \" apply_patch < x.patch\" -- a lone quote token stripped to empty must be skipped, not resolved -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-dq, 437-cdg-dbq-empty-tok)"
+  "cdg-dbq-deny-trap-sq|case_cdg_dbq_deny_trap_sq|unparseable deny (#437): verifier, trap 'apply_patch < x.patch' EXIT -- a single-quoted trap argument -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-sq)"
+  "cdg-dbq-deny-bash-c-dq|case_cdg_dbq_deny_bash_c_dq|unparseable deny (#437): bash -c \"apply_patch < x.patch\" -- a double-quoted bash -c argument -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-dq)"
+  "cdg-dbq-deny-quoted-name|case_cdg_dbq_deny_quoted_name|unparseable deny (#437): \"apply_patch\" < x.patch -- a quoted shim spelling as the command word itself -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-dq)"
+  "cdg-dbq-deny-quoted-prefix|case_cdg_dbq_deny_quoted_prefix|unparseable deny (#437): bash -c 'noglob apply_patch < x.patch' -- the PREFIX_WORDS match itself uses the stripped token -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-sq)"
+  "cdg-dbq-deny-timing|case_cdg_dbq_deny_timing|wall-clock proof (#437): a >128KB command (x + 100000x' a' filler, then 64x' ]] true', then a newline, then apply_patch < x.patch) -- deny AND elapsed time under 5s -- no registry record (a timing regression guard, not a verdict mutant)"
+  "cdg-dbq-noop-flood-at-cap|case_cdg_dbq_noop_flood_at_cap|no opinion (#437): exactly DBRACKET_MAX (64) standalone ]] -- the cap never trips -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-cap-exact)"
+  "cdg-dbq-noop-cap-per-segment|case_cdg_dbq_noop_cap_per_segment|no opinion (#437): 65 heredoc lines, each with exactly one standalone ]] in its own segment -- DBRACKET_MAX resets per segment -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-cap-per-segment)"
+  "cdg-dbq-noop-bash-dbracket|case_cdg_dbq_noop_bash_dbracket|no opinion (#437): [[ -n x ]] && echo apply_patch -- an ordinary && conditional, not the short-if form"
+  "cdg-dbq-noop-cut-resolved|case_cdg_dbq_noop_cut_resolved|no opinion (#437): if [[ -n x ]] env echo apply_patch ]] y -- a cut tail that consumed a skip word but resolved one is not denied -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-cut-resolved)"
+  "cdg-dbq-noop-short-if-other|case_cdg_dbq_noop_short_if_other|no opinion (#437): if [[ -n x ]] echo apply_patch -- the tail resolves to echo, apply_patch is only its argument"
+  "cdg-dbq-noop-short-if-benign-heredoc|case_cdg_dbq_noop_short_if_benign_heredoc|no opinion (#437): if [[ -n x ]] apply_patch <<'EOF' carrying a benign src/a.txt patch -- the existing structured-parse route is unaffected by the additive ]] pass"
+  "cdg-dbq-never-executes|case_cdg_dbq_never_executes|deny via the short-if ]]-tail route specifically, AND it never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-tails, 437-cdg-dbq-last-tail)"
   # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
   "codex-gcg-main-status|case_codex_gcg_main_status|allow: git-c-guard.sh under a Codex-shaped main-session payload, git -C ../demo-wt-1 status --porcelain (pins the unchanged verdict -- Codex ignores this hook's if gate, but the script itself never reads it)"
   "codex-gcg-apply-patch|case_codex_gcg_apply_patch|silent: a Codex apply_patch payload (tool_name != Bash)"

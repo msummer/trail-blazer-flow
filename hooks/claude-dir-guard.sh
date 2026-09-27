@@ -23,9 +23,9 @@
 # other case — main session (no agent_type), any other agent, `permission_mode: "plan"`, a tool
 # other than Edit/Write/apply_patch/Bash, malformed stdin, an absent/empty file_path/command, an
 # ordinary Bash call that neither carries an inline patch nor invokes the shim as its command word
-# (`apply_patch`/`applypatch` appearing only as an ordinary argument gets no opinion; the walk is
-# quote-blind, so a quoted mention right after a segment-break character can still deny -- see
-# the documented over-blocks below), or
+# (`apply_patch`/`applypatch` appearing only as an ordinary argument gets no opinion; the walk
+# never tracks which quote ENCLOSES which span, so a quoted mention right after a segment-break
+# character can still deny -- see the documented over-blocks below), or
 # an ordinary absolute path outside any `.claude`/`.codex` segment — is "no opinion" (exit 0, empty
 # stdout, empty stderr), the same convention every sibling hook in this directory uses.
 #
@@ -156,6 +156,26 @@
 # Bash command that merely MENTIONS "apply_patch"/"applypatch" as its own command word inside a
 # heredoc BODY line (not the shell's own command word) is not distinguished from a genuine
 # invocation by is_apply_patch_word()'s segment walk -- fail-closed is the safer direction here too.
+# Since #437, ALSO: a segment carrying more than DBRACKET_MAX standalone `]]` tokens denies
+# unconditionally as soon as the excess one is seen (at most DBRACKET_MAX disjoint tails are ever
+# walked first) -- measured: "echo apply_patch" plus 65 standalone
+# `]]` -> rc 2 ("too many standalone ]] tokens to analyse"), where 64 gets no opinion; a cut
+# (non-final) tail, one ending at the next standalone `]]`, that consumes at least one skip token (a prefix word, a dash-option, a redirect/fd, or an
+# assignment) without ever resolving a word also denies -- measured: "if [[ -n x ]] env -u ]] -i
+# apply_patch < x.patch" -> rc 2 ("command word split by ]] cannot be resolved"), even though the
+# UNCUT text would have resolved "apply_patch" just past "-i"; a segment whose first word is a
+# QUOTED `'apply_patch'`/`"apply_patch"` now resolves as the shim (quote characters are stripped
+# before matching), and quoted PROSE containing a literal `]]` followed by `apply_patch` on its own
+# (`echo "x ]] apply_patch"`) now denies too, the same class hooks/agent-boundary.sh's own tokenizer
+# already documents for itself.
+#
+# (#437, found while planning, not fixed here -- see this repo's issue tracker for the filed
+# follow-up) A Bash call that both invokes the shim reading a patch FILE (`apply_patch <
+# evil.patch`) and separately carries an unrelated, exact `*** Begin Patch` block with only benign
+# headers (e.g., inside an unrelated `cat <<'EOF' >/dev/null` heredoc) lets the structured parse
+# below run and pass on the benign block while the shim itself reads the untrusted file -- the
+# "no inline patch" deny never runs because is_apply_patch_word AND has_exact_begin_patch_line both
+# see something to work with, just not the same file the shim actually reads.
 #
 # Documented under-blocking classes (evasions, named rather than hidden): a Bash-issued write
 # (`cat >>`, `tee`, `sed -i`) never reaches an Edit/Write/apply_patch hook by construction; since
@@ -173,23 +193,27 @@
 # (`./apply_patch`, `/usr/local/bin/apply_patch`) by basename, and skips a leading `NAME=value`
 # assignment or a hooks/agent-boundary.sh-vocabulary PREFIX_WORDS member (including
 # `bash`/`sh`/`env`/`sudo`/…, so `bash -c apply_patch` now resolves past `bash -c` to `apply_patch`
-# and denies) -- still quote-blind and backslash-blind like every other scan in this directory, so
-# deliberate obfuscation remains OUT OF SCOPE for this tripwire, not a sandbox: a backslash-quoted
-# spelling (`\apply_patch`, `a\pply_patch`, or a backslash-newline splitting the word across two
-# physical lines), a quoted or variable-built spelling of the shim's own name (`"apply_patch" <
-# x.patch`, `p=apply_patch; $p < x.patch`), a PREFIX_WORDS member's own OPTION that itself takes an
+# and denies) -- still backslash-blind like every other scan in this directory (since #437, quote
+# CHARACTERS are stripped from each token before matching/resolving it -- see walk_window()'s own
+# comment -- but the walk still never tracks which quote ENCLOSES which span, only strips the
+# characters themselves), so deliberate obfuscation remains OUT OF SCOPE for this tripwire, not a
+# sandbox: a backslash-quoted spelling (`\apply_patch`, `a\pply_patch`, or a backslash-newline
+# splitting the word across two physical lines), a variable-built spelling of the shim's own name
+# (`p=apply_patch; $p < x.patch` -- this walk never expands a variable reference, so `$p` never
+# becomes "apply_patch"), an ANSI-C-quoted spelling (`$'apply_patch' < x.patch` -- stripping the `'`
+# characters leaves the leading `$` glued to the word, which matches neither "apply_patch" nor
+# "applypatch", in full or by basename), a PREFIX_WORDS member's own OPTION that itself takes an
 # argument (`nice -n 5 apply_patch`, `sudo -u root apply_patch`, `xargs -a x apply_patch` — the walk
 # skips only a bare `-`-leading option after a prefix word, never one with a separate argument
 # token, so the argument itself can become the "resolved" word and hide `apply_patch` one position
-# further along), a QUOTED `eval`/`trap` argument (`eval "apply_patch < x.patch"`, `trap
-# 'apply_patch < x.patch' EXIT` -- the whole quoted string is one token to this walk, never split
-# into its own inner command), zsh's short `if [[ cond ]] apply_patch` form (this walk has no
-# additive `]]` handling, unlike hooks/agent-boundary.sh's and hooks/push-guard.sh's own tokenizers
-# -- a documented residual, not closed here), a launcher this walk does not recognise as a PREFIX_WORDS
-# member (`uv run apply_patch`,
-# `npx apply_patch`), a QUOTED `bash -c "apply_patch < x.patch"` (the whole quoted string is one
-# token, `"apply_patch` glued to the rest, never split into its own inner command by this walk),
-# or a genuinely different segment separator this walk does not parse (a literal newline INSIDE
+# further along), an INDIRECT `eval`/`trap` argument (`eval "$c"`, `eval "$(cmd)"` -- quote-stripping
+# removes only the enclosing quote characters, it never expands a variable or runs a command
+# substitution, so a variable- or substitution-built spelling of the shim's own name stays invisible
+# to this text-only scan the same way the assignment case above does), a launcher this walk does not
+# recognise as a PREFIX_WORDS member (`uv run apply_patch`, `npx apply_patch`), a `]]` token itself
+# glued to a quote character (a literal four-character `"]]"` token is not the bare `]]` the
+# `]]`-cut loop matches against, so it is never treated as a standalone-`]]` split point), or a
+# genuinely different segment separator this walk does not parse (a literal newline INSIDE
 # one already-broken-out segment, e.g. inside a nested subshell) can all still evade BOTH the
 # belt-and-braces `.claude`/`.codex` raw-text check and the "no inline patch" deny (neither ever
 # runs at all when is_apply_patch_word itself returns false) without evading the "carries an
@@ -200,9 +224,10 @@
 # treated as an ordinary content line instead; the belt-and-braces check's own raw-text scan
 # catches this residual too WHENEVER is_apply_patch_word succeeds (it does not depend on
 # recognising any header at all), so the two residuals above must BOTH apply together (a
-# command-word evasion AND a Unicode-hidden header) before this specific gap reopens. Quote-blind
-# over-blocking, the opposite direction, on Claude Code too (measured directly against this
-# script): a commit message or an `echo` whose own text places `apply_patch`/`applypatch` between
+# command-word evasion AND a Unicode-hidden header) before this specific gap reopens.
+# Enclosing-quote-blind over-blocking, the opposite direction, on Claude Code too (measured
+# directly against this script): a commit message or an `echo` whose own text places
+# `apply_patch`/`applypatch` between
 # a matching pair of BACKTICKS denies too, even though the backticks themselves sit inside an
 # ENCLOSING pair of ordinary quotes -- measured: `git commit -m "See \`apply_patch\` docs"` -> rc
 # 2. Backtick is one of this walk's own segment-break characters (the same set
@@ -244,13 +269,20 @@ CLAUDE_DIR_DENY_STEM="trail-blazer-flow claude-dir guard:"
 # PREFIX_WORDS (#407 kickback finding 2) -- copied byte-identically from hooks/agent-boundary.sh's
 # own declaration (kept in sync by hand; no gate pin added -- "reuse it" per the #407 kickback
 # approval; unlike this copy, hooks/push-guard.sh's own copy IS pinned against agent-boundary.sh's
-# by dev/selfcheck.sh's assertion 4.40 clause (c)). Used only by is_apply_patch_word() below to
-# skip a leading shell-keyword/interpreter-indirection word (and, once one is seen, a following
-# "-"-leading option, or, after a `repeat` prefix word, its own count token too) before resolving a
-# Bash segment's own command word -- see that function's own comment for why this hook needs the
-# identical vocabulary, and for the additive `]]` handling and quote-stripping this hook does NOT
-# copy.
+# by dev/selfcheck.sh's assertion 4.40 clause (c)). Used only by walk_window() (called from
+# is_apply_patch_word() below) to skip a leading shell-keyword/interpreter-indirection word (and,
+# once one is seen, a following "-"-leading option, or, after a `repeat` prefix word, its own count
+# token too) before resolving a Bash segment's own command word -- see that function's own comment
+# for why this hook needs the identical vocabulary, and (#437) for the additive `]]` handling and
+# quote-stripping this hook's own walk_window() now ALSO does, ported from #403's agent-boundary.sh/
+# push-guard.sh technique rather than copied byte-for-byte (this hook stays pure bash, no awk).
 PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat"
+# DBRACKET_MAX (#437) -- copied from hooks/agent-boundary.sh:207 by the same "by convention,
+# unpinned" idiom this hook's own PREFIX_WORDS copy and hooks/push-guard.sh's copy already use (no
+# gate assertion pins any of the three copies against each other). Counts standalone `]]` tokens
+# PER SEGMENT here (agent-boundary counts per record); see is_apply_patch_word()'s own comment for
+# why per-segment is the right granularity for this hook.
+DBRACKET_MAX="64"
 
 input="$(cat)"
 
@@ -325,6 +357,11 @@ pmode="$(printf '%s' "$input" | jq -r '.permission_mode? // empty' 2>/dev/null)"
 cr=$'\r'
 lf=$'\n'
 tab=$'\t'
+# sq/dq (#437) -- one single-quote and one double-quote character, used only by walk_window() below
+# to strip quote characters from a token before resolving it (#437's own quoted-argument technique;
+# see is_apply_patch_word()'s comment). Pure parameter expansion, same as cr/lf/tab above.
+sq="'"
+dq='"'
 
 # classify_path TOOL RAW_PATH -- the shared classifier both routes call, pure builtins, no
 # filesystem access at all. Order matters: the more specific ".claude"/".codex" message wins over
@@ -500,36 +537,146 @@ parse_patch_headers() {
   [ "$headers" -gt 0 ] || deny_patch_unparseable "no file header"
 }
 
-# is_apply_patch_word TEXT (#407 amendment A1; reworked #407 kickback rounds 2/3) -- true iff TEXT
-# (a whole tool_input.command, possibly multi-line) has a segment whose RESOLVED command word is
-# exactly "apply_patch"/"applypatch", OR a path-qualified spelling of either (`./apply_patch`,
-# `/usr/local/bin/apply_patch`) matched by BASENAME -- distinguishing the Bash COMMAND WORD from
-# the same text appearing only as an argument (`rg apply_patch hooks/`) or inside quotes
-# (`grep -n "apply_patch" x`), neither of which this walk ever treats as a leading token. Pure
-# builtins: parameter-expansion substitution splits segments and words, `[[ =~ ]]` matches an
-# assignment prefix or a bare-digits fd, no execve.
+# walk_window START STOP (#437) -- resolves ONE window `toks[START..STOP)` of the CALLER's own
+# `local -a toks` array, read through bash's own dynamic scope (this helper takes no `toks`
+# parameter; it must only ever be called from inside is_apply_patch_word, which always declares
+# `toks`, plus `mark_in`/`mark_out`/`assign_ere`/`digits_ere`, in its own scope first). Shared by
+# the base walk (the whole segment, START=0, STOP=token count) and each `]]` tail below
+# (START/STOP bracket the tokens strictly between two standalone `]]` -- a cut tail -- or between
+# the last `]]` and the segment's own end -- the final tail) -- the same per-token skip order either way. Sets two globals (not `local`, so
+# the caller reads them after this returns) and never prints or exits:
+#   - `ww_word`: the resolved token with quote characters stripped, or empty if the window is
+#     exhausted (or empty) before any word resolves.
+#   - `ww_skipped`: 1 when at least one token in the window was consumed by the redirect/fd skip,
+#     the assignment skip, a PREFIX_WORDS member (including its own `repeat` count token), or a
+#     "-"-leading option once a PREFIX_WORDS member has been seen; 0 otherwise. An empty token left
+#     behind by the quote strip is skipped too but does NOT set this flag (a lone quote character
+#     glued to nothing is not a meaningful skip). Only the in-loop cut-tail walk reads it (the base
+#     walk and the final tail never do), and only when `ww_word` is also empty, to tell "the window
+#     held nothing at all" (ww_skipped=0, benign) apart from "the window held only skip words and
+#     never reached a real one" (ww_skipped=1, a cut (non-final) tail is_apply_patch_word denies
+#     fail-closed rather than silently ignore).
+walk_window() {
+  local i n tok nxt saw_prefix
+  i="$1"
+  n="$2"
+  ww_word=""
+  ww_skipped=0
+  saw_prefix=0
+  while [ "$i" -lt "$n" ]; do
+    tok="${toks[$i]}"
+    if [ "$tok" = "$mark_in" ] || [ "$tok" = "$mark_out" ]; then
+      # A run of operators (`>>`, `<>`, `<<<`) is one redirect: skip every marker in the run, then
+      # the single target/source token after it (#407 kickback round 3).
+      i=$((i + 1))
+      while [ "$i" -lt "$n" ] && { [ "${toks[$i]}" = "$mark_in" ] || [ "${toks[$i]}" = "$mark_out" ]; }; do
+        i=$((i + 1))
+      done
+      i=$((i + 1))
+      ww_skipped=1
+      continue
+    fi
+    if [[ "$tok" =~ $digits_ere ]]; then
+      nxt="${toks[$((i + 1))]:-}"
+      if [ "$nxt" = "$mark_in" ] || [ "$nxt" = "$mark_out" ]; then
+        i=$((i + 1))
+        ww_skipped=1
+        continue
+      fi
+    fi
+    if [[ "$tok" =~ $assign_ere ]]; then
+      i=$((i + 1))
+      ww_skipped=1
+      continue
+    fi
+    # #437: strip quote characters (not backslashes -- see this hook's header residual list) from
+    # the token before matching it against PREFIX_WORDS or resolving it as the command word, so a
+    # quoted `eval`/`trap`/`bash -c` argument or a quoted shim spelling resolves the same as an
+    # unquoted one. A token that strips to nothing (a lone quote glued to nothing else) is skipped
+    # without setting ww_skipped.
+    tok="${tok//$sq/}"
+    tok="${tok//$dq/}"
+    if [ -z "$tok" ]; then
+      i=$((i + 1))
+      continue
+    fi
+    case " $PREFIX_WORDS " in
+      *" $tok "*) saw_prefix=1; [ "$tok" = repeat ] && i=$((i + 1)); i=$((i + 1)); continue ;;
+    esac
+    if [ "$saw_prefix" -eq 1 ]; then
+      case "$tok" in
+        -*) i=$((i + 1)); ww_skipped=1; continue ;;
+      esac
+    fi
+    ww_word="$tok"
+    break
+  done
+  [ "$saw_prefix" -eq 1 ] && ww_skipped=1
+}
+
+# is_apply_patch_word TEXT (#407 amendment A1; reworked #407 kickback rounds 2/3; reworked again
+# #437) -- true iff TEXT (a whole tool_input.command, possibly multi-line) has a segment whose
+# RESOLVED command word is exactly "apply_patch"/"applypatch", OR a path-qualified spelling of
+# either (`./apply_patch`, `/usr/local/bin/apply_patch`) matched by BASENAME -- distinguishing the
+# Bash COMMAND WORD from the same text appearing only as an argument (`rg apply_patch hooks/`) or
+# inside quotes (`grep -n "apply_patch" x`), neither of which this walk ever treats as a leading
+# token. Pure builtins: parameter-expansion substitution splits segments and words, `[[ =~ ]]`
+# matches an assignment prefix or a bare-digits fd, no execve.
 #
-# Segment breaks (reset the assignment/PREFIX_WORDS skip at the start of every new command
-# position, the same set hooks/agent-boundary.sh's own tokenizer treats as segment breaks): `;`
-# `&` `|` `(` `)` `{` `}` and a backtick. Word breaks WITHIN a segment: whitespace (via ordinary
-# word-splitting below) plus `<` and `>`, each replaced by a padded, near-uncollidable sentinel
-# word (not a bare space) so the walk below can still see WHERE a redirect operator was -- a
-# redirect never starts a new segment, but it DOES separate a command word from a glued redirect
-# target or source (`apply_patch<x.patch`), and (#407 kickback round 2, finding D) a LEADING
-# redirect must not let the token AFTER it (the redirect's own target/source) or a bare-digits fd
-# token immediately BEFORE it (`2>/dev/null apply_patch`) be mistaken for, or hide, the command
-# word: both the fd and the marker-plus-target are skipped as a unit. Within each segment, the walk
-# then skips a `NAME=value` assignment prefix, then a PREFIX_WORDS member (repeat-until-exhausted,
-# so `if true; then apply_patch < x.patch; fi` resolves past `then`; when the skipped member is
-# exactly `repeat`, its own count token right after it is skipped too), then — once a PREFIX_WORDS
-# member has been seen — a further "-"-leading option (an option to the prefix word itself, e.g.
-# `env -i apply_patch`); the first token surviving every skip is the segment's resolved command
-# word, compared both in full and by basename (finding E).
+# Segment breaks (reset the walk_window skip state at the start of every new command position, the
+# same set hooks/agent-boundary.sh's own tokenizer treats as segment breaks): `;` `&` `|` `(` `)`
+# `{` `}` and a backtick. Word breaks WITHIN a segment: whitespace (via ordinary word-splitting
+# below) plus `<` and `>`, each replaced by a padded, near-uncollidable sentinel word (not a bare
+# space) so walk_window can still see WHERE a redirect operator was -- a redirect never starts a
+# new segment, but it DOES separate a command word from a glued redirect target or source
+# (`apply_patch<x.patch`), and (#407 kickback round 2, finding D) a LEADING redirect must not let
+# the token AFTER it (the redirect's own target/source) or a bare-digits fd token immediately
+# BEFORE it (`2>/dev/null apply_patch`) be mistaken for, or hide, the command word: both the fd and
+# the marker-plus-target are skipped as a unit. Within each segment, walk_window skips a
+# `NAME=value` assignment prefix, then a PREFIX_WORDS member (repeat-until-exhausted, so `if true;
+# then apply_patch < x.patch; fi` resolves past `then`; when the skipped member is exactly
+# `repeat`, its own count token right after it is skipped too), then -- once a PREFIX_WORDS member
+# has been seen -- a further "-"-leading option (an option to the prefix word itself, e.g. `env -i
+# apply_patch`); the first token surviving every skip is the segment's resolved command word,
+# compared both in full and by basename (finding E). (#437) Every token is also stripped of `'`/`"`
+# quote characters before any of the above matching happens (see walk_window's own comment).
+#
+# (#437) Each segment whose raw text carries a literal `]]` is ALSO walked one additional way,
+# ported from #403's agent-boundary.sh/push-guard.sh technique but kept pure bash here (no awk --
+# this hook's own booby-trap fixtures trap it): every standalone `]]` token splits the segment into
+# disjoint tails, so `if [[ cond ]] apply_patch < x.patch` (zsh's short-`if` form, which this walk
+# cannot otherwise tell apart from a `[[ ... ]]` test whose OWN command word is `[[`) resolves the
+# text AFTER each `]]` as its own candidate command word too. Tails are disjoint (each one ends at
+# the NEXT standalone `]]`, or the segment's end for the last one) so their combined cost is bounded
+# by the segment's own token count, never quadratic. A segment carrying more than DBRACKET_MAX
+# (#437; counted per segment here, unlike agent-boundary's per-record count) standalone `]]` tokens
+# denies unconditionally, fail-closed, as soon as the (DBRACKET_MAX+1)-th one is seen -- at most
+# DBRACKET_MAX disjoint tails are ever walked first, each bounded by its own short window, so the
+# work done before that deny still stays linear in the tokens consumed so far. A CUT tail -- one
+# ending at the NEXT standalone `]]`, never the final tail that runs to the segment's own end (that
+# one is not cut: an unresolved final tail is simply not found) -- that consumes at least one skip
+# token without ever resolving a word (`walk_window`'s own `ww_skipped=1` with `ww_word` empty) also denies,
+# fail-closed, rather than silently treat the cut as "no command word here" -- this is the same
+# `env -u ]] -i apply_patch` shape push-guard.sh's own cut-push rule closes. A cut tail that DOES
+# resolve to the shim simply marks it found, with no unconditional deny: unlike push-guard's own
+# cut-push rule, the downstream checks in the Bash route below (the belt-and-braces raw-text scan,
+# the structured patch parse, and the "no inline patch" deny) all read the WHOLE command text, never
+# only the resolved tail, so cutting the command-word search here hides nothing those checks use.
+#
+# (#437) Memoised: both call sites in the Bash route below always pass the identical text, so the
+# global `iapw_memo` (declared just below, empty until the first call in this process) short-
+# circuits the second call rather than re-walking the whole command a second time.
+iapw_memo=""
 is_apply_patch_word() {
-  local text="$1" flat seg tok resolved base saw_prefix oldifs found=1
+  local text="$1" flat seg base oldifs found=1
   local mark_in=$'\x01LT\x01' mark_out=$'\x01GT\x01'
   local assign_ere='^[A-Za-z_][A-Za-z0-9_]*='
   local digits_ere='^[0-9]+$'
+  local db_n k prev t
+
+  if [ -n "$iapw_memo" ]; then
+    return "$iapw_memo"
+  fi
 
   # NOTE: a literal "{"/"}" inside a `${var//[...]/...}` bracket expression confuses bash's own
   # parser (it can misread the inner "}" as closing the "${" construct itself, corrupting both the
@@ -555,51 +702,59 @@ is_apply_patch_word() {
     IFS="$oldifs"
     local -a toks
     toks=($seg)
-    local n="${#toks[@]}" i=0 nxt
-    resolved=""
-    saw_prefix=0
-    while [ "$i" -lt "$n" ]; do
-      tok="${toks[$i]}"
-      if [ "$tok" = "$mark_in" ] || [ "$tok" = "$mark_out" ]; then
-        # A run of operators (`>>`, `<>`, `<<<`) is one redirect: skip every marker in the run, then
-        # the single target/source token after it (#407 kickback round 3).
-        i=$((i + 1))
-        while [ "$i" -lt "$n" ] && { [ "${toks[$i]}" = "$mark_in" ] || [ "${toks[$i]}" = "$mark_out" ]; }; do
-          i=$((i + 1))
-        done
-        i=$((i + 1))
-        continue
-      fi
-      if [[ "$tok" =~ $digits_ere ]]; then
-        nxt="${toks[$((i + 1))]:-}"
-        if [ "$nxt" = "$mark_in" ] || [ "$nxt" = "$mark_out" ]; then
-          i=$((i + 1))
-          continue
-        fi
-      fi
-      if [[ "$tok" =~ $assign_ere ]]; then
-        i=$((i + 1))
-        continue
-      fi
-      case " $PREFIX_WORDS " in
-        *" $tok "*) saw_prefix=1; [ "$tok" = repeat ] && i=$((i + 1)); i=$((i + 1)); continue ;;
-      esac
-      if [ "$saw_prefix" -eq 1 ]; then
-        case "$tok" in
-          -*) i=$((i + 1)); continue ;;
-        esac
-      fi
-      resolved="$tok"
-      break
-    done
-    base="${resolved##*/}"
+    local n="${#toks[@]}"
+
+    walk_window 0 "$n"
+    base="${ww_word##*/}"
     case "$base" in
       apply_patch|applypatch) found=0 ;;
+    esac
+
+    # (#437) The additive `]]`-cut pass, gated so a segment without a literal `]]` costs what it
+    # cost before this change (toks is walked once, by the base walk above, and never re-walked).
+    case "$seg" in
+      *']]'*)
+        db_n=0
+        prev=-1
+        k=0
+        for t in "${toks[@]}"; do
+          if [ "$t" = "]]" ]; then
+            db_n=$((db_n + 1))
+            if [ "$db_n" -gt "$DBRACKET_MAX" ]; then
+              set +f
+              IFS="$oldifs"
+              deny_patch_unparseable "too many standalone ]] tokens to analyse"
+            fi
+            if [ "$prev" -ge 0 ]; then
+              walk_window $((prev + 1)) "$k"
+              base="${ww_word##*/}"
+              case "$base" in
+                apply_patch|applypatch) found=0 ;;
+              esac
+              if [ -z "$ww_word" ] && [ "$ww_skipped" -eq 1 ]; then
+                set +f
+                IFS="$oldifs"
+                deny_patch_unparseable "command word split by ]] cannot be resolved"
+              fi
+            fi
+            prev="$k"
+          fi
+          k=$((k + 1))
+        done
+        if [ "$prev" -ge 0 ]; then
+          walk_window $((prev + 1)) "$n"
+          base="${ww_word##*/}"
+          case "$base" in
+            apply_patch|applypatch) found=0 ;;
+          esac
+        fi
+        ;;
     esac
     IFS="$lf"
   done
   set +f
   IFS="$oldifs"
+  iapw_memo="$found"
   return "$found"
 }
 
