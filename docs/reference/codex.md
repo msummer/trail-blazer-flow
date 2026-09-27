@@ -653,8 +653,11 @@ nothing but this repo's own files.
   the floor regardless of what the rules file allows. Since #292, `push-guard.sh` denies a push
   whose target repository it can't resolve (a non-worktree `-C`, `--git-dir`/`--work-tree`, or a
   `GIT_DIR`-family assignment) — this closes the gap an unattended Codex run would otherwise have
-  with no permission prompt as a backstop — but a same-command `cd <path> && git push` is still
-  judged against the session's own `cwd`.
+  with no permission prompt as a backstop. Since #433, the same denial also fires on a push in the
+  same command as a `cd`/`pushd`/`popd`/`chdir` or a `GIT_DIR`-family export/assignment in a
+  separate segment, whatever the order — a change inside a sourced file, a script, a function or
+  alias, or Codex's own shell `workdir` (ADR 0002 U9, absent from the hook payload) remain
+  documented residuals.
 - **Project rules load, verified live at the gate.** Codex loads the project-level
   `.codex/rules/*.rules` file the way its documented rules precedence implies, not only
   `$CODEX_HOME/rules/default.rules` (the ADR's own earlier probes had used only the latter) — see

@@ -193,9 +193,13 @@
 # LEXICALLY the session checkout itself (see `is_session_checkout_path()` below: exactly `.`/`./`,
 # the PreToolUse stdin `cwd`, or the session's own resolved root, each with or without one trailing
 # `/`); the attached `-C<path>` form; two or more `-C` tokens in the same segment; `--git-dir` or
-# `--work-tree` (detached or `=`-attached); and a `GIT_DIR=`, `GIT_WORK_TREE=`, or `GIT_COMMON_DIR=`
+# `--work-tree` (detached or `=`-attached); a `GIT_DIR=`, `GIT_WORK_TREE=`, or `GIT_COMMON_DIR=`
 # assignment preceding `git` in the segment (the bare-prefix form, or the same behind an `env`
-# prefix word). The deny reads nothing NEW from the untrusted value beyond what is already read
+# prefix word); and, since #433, a push segment in the SAME Bash command as any OTHER segment whose
+# resolved command word is `cd`/`pushd`/`popd`/`chdir`, or an `export`/`declare`/`typeset`/`local`/
+# `readonly` segment (or a bare assignment) naming a GIT_REPO_ENV_VARS member — whatever the order
+# of the two segments (see the "xseg" paragraph below for the mechanism). The deny reads nothing
+# NEW from the untrusted value beyond what is already read
 # above — GIT_REPO_OPTS/GIT_REPO_ENV_VARS membership, the PATH_ERE predicate, and the lexical
 # session-equivalence check are all string comparisons; no filesystem path is read to reach this
 # verdict. Over-blocking, deliberate: a `-C` into another checkout is denied whatever the push
@@ -204,11 +208,15 @@
 # checkout itself (this hook never reads the redirected path to find out); and a literal `-C ..` or
 # `-C "$PWD"` is denied (`..` is not lexically `.`, and a literal `$PWD` string token is not itself
 # lexically equal to the session's own resolved cwd, even when the session actually runs from
-# `$PWD`). Under-blocking, documented rather than fixed here (filed as a follow-up alongside this
-# change): `cd <path> && git push` or a `pushd`/`popd` pair in the SAME Bash command, and `export
-# GIT_DIR=…; git push` (or a bare `GIT_DIR=…;` segment) in a SEPARATE segment, are still judged
-# against the session's own `cwd` — this hook's tokenizer tracks no `cd`/`pushd`/`export` state
-# across segments. Whether git itself accepts an abbreviated long option (e.g. `--git-d <path>` for
+# `$PWD`). Fail-closed (#433): a push segment in the SAME Bash command as any OTHER segment whose
+# resolved command word is `cd`/`pushd`/`popd`/`chdir`, or an `export`/`declare`/`typeset`/`local`/
+# `readonly` segment (or a bare assignment) naming a GIT_REPO_ENV_VARS member or one of #439's
+# command-line-config names (GIT_CMDCFG_ENV_VARS, or a GIT_CMDCFG_ENV_PREFIXES-prefixed name), is
+# ALSO denied outright as unresolved, whatever the order of the two segments in the command — see
+# the "xseg"
+# paragraph below for the mechanism, and "Documented over-blocking classes"/"Documented
+# under-blocking classes" below for what this closes and what remains open. Whether git itself
+# accepts an abbreviated long option (e.g. `--git-d <path>` for
 # `--git-dir <path>`) is UNVERIFIED here; this hook does not recognise one, so such a form is judged
 # as a plain unlisted dash token (the same "Documented under-blocking classes" sibling class below).
 #
@@ -228,9 +236,7 @@
 # check already need — no filesystem path is read, and the matched key/value/env-var name is never
 # echoed in the deny message (a GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> match stores a boolean
 # only). Residuals this leaves, reasoned from the code but not run (see "Documented under-blocking
-# classes" below and this issue's own follow-ups): cross-segment `export GIT_CONFIG_*=…; git push`
-# or a bare `GIT_CONFIG_*=…;` segment (left to #433, which is expected to reuse these same three
-# vocabulary constants); a git alias that expands to `push` (e.g. `git -c alias.p=push p origin
+# classes" below and this issue's own follow-ups): a git alias that expands to `push` (e.g. `git -c alias.p=push p origin
 # main`); a quoted or escaped option spelling (`git "-c" k=v push`, which normalises the quoted
 # option into the subcommand slot); a quoted value containing a space (splits the same way an ordinary `-C`/`GIT_DIR=` value does);
 # and an inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself reads.
@@ -371,6 +377,26 @@
 # measured directly, `[ -f /dev/null ]` is false (a character device is not a regular file), so the
 # existing `[ -f ]` guard on every config candidate already skips it, the same way it skips any
 # other non-regular-file path.
+#
+# Since #433, FIVE more over-blocking classes, all from the new cross-segment ("xseg") fail-closed
+# rule above: any `cd`/`pushd`/`popd`/`chdir` ANYWHERE in a push command denies the whole command,
+# including one that comes AFTER the push, one inside a subshell whose own directory change never
+# reaches the push (`( cd ../x; true ); git push origin develop`), or one that changes into the
+# session checkout itself (session-equivalence is never checked for this rule, unlike the `-C`
+# rule above); a quote-blind or heredoc line whose FIRST word is one of those four builtins is
+# denied the same way, the same per-line, quote-blind class named above for a heredoc `git push`
+# line; an `export`/`declare`/`typeset`/`local`/`readonly` segment naming a GIT_REPO_ENV_VARS
+# member denies even when that builtin does not actually export the name (`declare GIT_DIR=x`
+# with no `-x`, `export -n GIT_DIR`, or `readonly`, none of which changes what `git` itself would
+# see) — this hook does not model export state, only vocabulary membership; a bare assignment
+# denies even when the named variable is never actually exported to `git`'s environment later in
+# the command; and a RESOLVABLE `-C <path>` push after an unrelated `cd` denies as unresolved when
+# nothing else denies it, even though the `-C` value alone would have resolved the push correctly.
+# The `-C` resolution and every other per-segment check still run first, in the driver loop, and any
+# deny they produce (a default-branch destination, including one resolved through `-C`, an all-refs
+# push, a config route, a cut push, or a #292 in-segment reason such as `--git-dir`) keeps
+# precedence; the xseg fallback runs only after the loop, and only turns what would otherwise be a
+# no-opinion push into an unresolved deny (`push-xseg-deny-inseg-precedence` pins one such case).
 #
 # Documented under-blocking classes (evasions, named rather than hidden): `$(which git) push`
 # (the literal `git` token is never in command position); `eval`/`trap` of a variable- or
@@ -541,8 +567,26 @@
 # residuals — every push segment carrying one is denied outright (see "Fail-closed: command-line
 # git config" above) whatever the key or destination. What remains residual there instead: an
 # inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself reads, the
-# quote-blind and alias-shaped forms that same paragraph names, and cross-segment `export
-# GIT_CONFIG_*` (left to #433). This is a tripwire, not a sandbox — branch protection on the
+# quote-blind and alias-shaped forms that same paragraph names. (A cross-segment `export
+# GIT_CONFIG_*=…` or bare `GIT_CONFIG_*=…;` segment is denied by #433's cross-segment rule.)
+#
+# Since #433, the new cross-segment ("xseg") rule above still leaves these residuals open: a
+# directory or `GIT_DIR`-family change made inside a SOURCED file (`.`/`source`) or a script FILE
+# invoked from the command, rather than inline in the command string itself; a function or alias
+# that itself runs `cd`/`pushd`/`popd`/`export`, defined outside the command being scanned; zsh
+# `AUTO_CD` (a bare directory name treated as an implicit `cd`, never itself a `cd`/`pushd`/`popd`/
+# `chdir` command word); a directory change whose command word is itself built from a variable
+# (`c="cd ../x"; eval "$c"`, or `d=cd; $d ../x`) — the same class the `eval`/`trap` bullet above
+# already names (a literal `cd` with a substituted ARGUMENT, e.g. `cd "$(dirname "$x")"`, is still
+# a `cd` command word and denies); other variable-setting
+# builtins this hook does not track, `read`/`printf -v` and `set -a` paired with a non-bare
+# assignment; `env --chdir=<dir> git push` (a dash-prefixed token immediately after the `env`
+# prefix word, skipped like any other) and `env -C <dir> git push` (`<dir>` itself becomes the
+# resolved command word, the same class as the `sudo -u foo` bullet above) — filed as a follow-up
+# alongside this change; and Codex's shell `workdir`, which never appears in this hook's payload at
+# all (ADR 0002 U9) and so cannot be tracked by any command-string mechanism.
+#
+# This is a tripwire, not a sandbox — branch protection on the
 # default branch remains the real backstop, exactly as hooks/git-c-guard.sh and
 # hooks/agent-boundary.sh already document for their own scopes.
 #
@@ -650,9 +694,20 @@ CFG_INCLUDE_MAX_CHARS=65536
 # shell assignment (a bare "VAR=<value> git ..." prefix or the same behind an "env" prefix word).
 # Consumed by the awk tokenizer below to flag the segment "unresolved" rather than to resolve
 # anything — see the driver loop's own "unresolvable push target" comment for the fail-closed
-# verdict this produces.
+# verdict this produces. Since #433, GIT_REPO_ENV_VARS is ALSO consumed by the cross-segment
+# ("xseg") check below: an export-family segment naming one of these (NAME=value or bare NAME), or
+# a segment consisting only of such an assignment, sets the xseg flag the same way a leading
+# in-segment shell assignment does above.
 GIT_REPO_OPTS="--git-dir --work-tree"
 GIT_REPO_ENV_VARS="GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR"
+# #433: a push segment in the same command as a segment resolving to one of these directory-change
+# builtins is denied as unresolved (the "xseg" check below) — this hook cannot tell whether the
+# change actually reaches the push segment's own cwd, so it fails closed instead.
+PUSH_DIR_CHANGE_WORDS="cd pushd popd chdir"
+# #433: an export-family builtin whose arguments name a GIT_REPO_ENV_VARS member also sets xseg,
+# the same fail-closed reasoning as PUSH_DIR_CHANGE_WORDS above (this hook does not model whether
+# the builtin actually exports the name).
+PUSH_EXPORT_WORDS="export declare typeset local readonly"
 # #439: a push segment carrying git config supplied ON THE COMMAND LINE — as an option before the
 # subcommand (GIT_CMDCFG_OPTS: detached "-c <k=v>"/"--config-env <k=V>", attached "-c<k=v>"/
 # "--config-env=<k=V>") or as a leading environment assignment, bare or behind "env"
@@ -734,13 +789,17 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
 # See this file's header for the full cross-reference to hooks/agent-boundary.sh's twin scan.
 # Emits one "PUSH<TAB><-C value, only when exactly one><TAB><#292 unresolved-reason, empty when
 # none><TAB><space-joined remaining tokens>" line per push segment found; nothing for any other
-# segment — except a push segment carrying command-line git config (#439), which emits the fixed
-# sentinel "-cmdline-config-" instead of a "PUSH…" line (see emit_segment()'s own cmdcfg handling
-# below). Neither the "-C" value, the reason, nor the remaining-tokens field can itself contain a
-# TAB, since every token comes from splitting on "[ \t]+". Processes $cmd one input line (awk
-# record) at a time — the same deliberate, documented false-positive class agent-boundary.sh's
-# header explains (a heredoc line that starts with "git push" is scanned as its own segment).
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" '
+# segment, EXCEPT: a push segment carrying command-line git config (#439), which emits the fixed
+# sentinel "-cmdline-config-" instead of a "PUSH…" line (see emit_segment()'s own cmdcfg
+# handling below); and (#433) one final "-xseg-<TAB><reason>" line, emitted by the END block
+# below, iff any segment anywhere in the whole command (a push segment or otherwise) resolved to a
+# directory-change builtin or an export/bare-assignment of a GIT_REPO_ENV_VARS member or of one of
+# #439's command-line-config names — see the "xseg" comment on emit_segment() below for the mechanism. Neither the "-C" value, the reason,
+# nor the remaining-tokens field can itself contain a TAB, since every token comes from splitting
+# on "[ \t]+". Processes $cmd one input line (awk record) at a time — the same deliberate,
+# documented false-positive class agent-boundary.sh's header explains (a heredoc line that starts
+# with "git push" is scanned as its own segment).
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" -v dirwords="$PUSH_DIR_CHANGE_WORDS" -v exportwords="$PUSH_EXPORT_WORDS" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
@@ -751,6 +810,15 @@ BEGIN {
   for (i = 1; i <= nro; i++) repoopt_set[roarr[i]] = 1
   nev = split(repoenv, evarr, " ")
   for (i = 1; i <= nev; i++) envvar_set[evarr[i]] = 1
+  ndw = split(dirwords, dwarr, " ")
+  for (i = 1; i <= ndw; i++) dir_set[dwarr[i]] = 1
+  nxw = split(exportwords, xwarr, " ")
+  for (i = 1; i <= nxw; i++) export_set[xwarr[i]] = 1
+  # #433: xseg is a per-COMMAND flag (never reset per record -- see the per-record block below),
+  # first-writer-wins, order-independent across the whole command including the additive "]]"
+  # pass: whichever segment sets it first, regardless of any push segment own position, decides
+  # the reason text; the END block below emits it once the whole scan is done.
+  xseg = ""
   # #439
   ncco = split(cmdcfgopts, ccoarr, " ")
   for (i = 1; i <= ncco; i++) ccopt_set[ccoarr[i]] = 1
@@ -773,7 +841,12 @@ function strip_quotes(tok,    t) {
   gsub(/\\/, "", t)
   return t
 }
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, ro, cmdcfg, co, cp) {
+function is_cmdcfg_name(n,    c) {
+  if (n in ccenv_set) return 1
+  for (c = 1; c <= nccp; c++) if (index(n, ccparr[c]) == 1) return 1
+  return 0
+}
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, ro, k, xname, cmdcfg, co, cp, cfgname) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
@@ -802,6 +875,23 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     cmdword = norm
     idx++
     break
+  }
+  # #433: cross-segment ("xseg") detection, order-independent -- first segment of any kind (a push
+  # segment or otherwise) to match one of these three shapes sets the flag for the WHOLE command;
+  # this push segment resolution below never reads xseg, only the driver post-loop fallback does
+  # (see the driver loop own "unresolvable push target" comment), so an in-segment reason on the
+  # push segment itself always keeps precedence.
+  if (xseg == "") {
+    if (cmdword in dir_set) xseg = "cd/pushd/popd earlier in this command"
+    else if (cmdword in export_set) { for (k = idx; k <= ntok; k++) { xname = strip_quotes(toks[k]); sub(/=.*/, "", xname); if (xname in envvar_set) { xseg = xname " set earlier in this command"; break } } }
+    else if (cmdword == "" && unres != "") xseg = substr(unres, 1, length(unres) - 1) " set earlier in this command"
+  }
+  # #433 + #439: the same cross-segment rule for the #439 command-line-config environment names
+  # (GIT_CMDCFG_ENV_VARS, or a GIT_CMDCFG_ENV_PREFIXES-prefixed name) exported, or bare-assigned, in
+  # another segment. The reason is fixed text: a prefix-matched name is input-derived, never echoed.
+  if (xseg == "") {
+    if (cmdword in export_set) { for (k = idx; k <= ntok; k++) { cfgname = strip_quotes(toks[k]); sub(/=.*/, "", cfgname); if (is_cmdcfg_name(cfgname)) { xseg = "GIT_CONFIG_* set earlier in this command"; break } } }
+    else if (cmdword == "" && cmdcfg) xseg = "GIT_CONFIG_* set earlier in this command"
   }
   if (cmdword != "git") return
   j = idx
@@ -919,6 +1009,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     }
   }
 }
+END { if (xseg != "") print "-xseg-\t" xseg }
 ')"
 
 # --- repo resolution (reads only, never executes) ---------------------------------------------
@@ -1675,6 +1766,10 @@ deny_dest=""
 deny_kind=""
 deny_via=""
 deny_src=""
+# #433: xseg_reason/saw_push back the post-loop cross-segment fallback below (after this `while`
+# exits with no other deny) — see that fallback's own comment for why it runs last.
+xseg_reason=""
+saw_push=0
 while IFS= read -r line; do
   case "$line" in
     "-too-many-dbrackets-")
@@ -1693,9 +1788,11 @@ while IFS= read -r line; do
       deny_kind="cmdcfg"
       break
       ;;
+    "-xseg-$TAB"*) xseg_reason="${line#-xseg-"$TAB"}"; continue ;;
     "PUSH$TAB"*) : ;;
     *) continue ;;
   esac
+  saw_push=1
   seg_body="${line#PUSH$TAB}"
   seg_cpath="${seg_body%%"$TAB"*}"
   seg_rest2="${seg_body#*"$TAB"}"
@@ -1730,6 +1827,20 @@ while IFS= read -r line; do
 done <<EOF
 $scan_out
 EOF
+
+# #433: cross-segment ("xseg") fallback — runs only after every push segment above already got a
+# chance to deny for its OWN reason (an in-segment reason always keeps precedence: guarded by
+# `[ -z "$deny_dest" ]`, though see dev/hook-tests.sh's own "xseg" section header for why no
+# fixture can independently exercise that one guard given this loop's own break-on-deny shape),
+# and only when this command actually contains a push segment at all (`[ "$saw_push" = 1 ]` — a
+# bare `cd`/`export` with no push must stay a no-opinion). Reuses the existing "unresolved" verdict
+# below unchanged; xseg_reason is always either a fixed phrase or "<NAME> set earlier in this
+# command" for a GIT_REPO_ENV_VARS member NAME (see emit_segment()'s "xseg" comment above), so this
+# echoes no input.
+if [ -z "$deny_dest" ] && [ "$saw_push" = 1 ] && [ -n "$xseg_reason" ]; then
+  deny_dest="$xseg_reason"
+  deny_kind="unresolved"
+fi
 
 if [ -n "$deny_dest" ]; then
   case "$deny_kind" in

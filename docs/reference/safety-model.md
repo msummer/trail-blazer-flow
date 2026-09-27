@@ -290,10 +290,13 @@ is still judged against the session's own facts, exactly as before. **Since #439
 carrying command-line git config (`git -c`, `--config-env`, or a `GIT_CONFIG_COUNT`/
 `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`/`GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_GLOBAL`/
 `GIT_CONFIG_SYSTEM` assignment, bare or behind `env`) is denied outright, whatever the key or
-destination — this hook never reads any of these forms. A same-command `cd <path> &&
-git push` or `pushd`/`popd` pair, and an `export GIT_DIR=…; git push` in a separate segment, remain
-judged against the session's own `cwd` — this hook's tokenizer tracks no `cd`/`pushd`/`export`
-state across segments, a documented residual, not fixed here. See the hook's own header for the
+destination — this hook never reads any of these forms. Since #433, a push segment in
+the same Bash command as any OTHER segment that changes directory (`cd`/`pushd`/`popd`/`chdir`) or
+sets a `GIT_DIR`-family variable or one of the command-line-config names above
+(`export`/`declare`/`typeset`/`local`/`readonly`, or a bare assignment) also denies as unresolved,
+whatever the order of the two segments — a directory or `GIT_DIR` change inside a sourced file, a
+script, a function/alias, or one whose command word is itself built from a variable remains a
+documented residual, not fixed here. See the hook's own header for the
 full, measured evasion/over-blocking inventory. It enforces the
 "deny the default branch" half of this issue's Decision, and (since #292) fails closed on an
 unresolvable target, but not an allow-list of

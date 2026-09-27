@@ -2242,6 +2242,385 @@ case_push_cmdcfg_deny_precedence() {
   esac
 }
 
+# --- cross-segment ("xseg"): a cd/pushd/popd/chdir or a GIT_DIR-family export/assignment in
+# another segment of the same push command denies as unresolved (#433) ------------------------
+# mutant:433-pg-dir-vocab -- empties PUSH_DIR_CHANGE_WORDS, so no cd/pushd/popd/chdir segment is
+#   ever flagged.
+# mutant:433-pg-export-vocab -- empties PUSH_EXPORT_WORDS, so no export-family segment is ever
+#   flagged.
+# mutant:433-pg-export-exact -- widens the export-arm's own membership check from exact
+#   GIT_REPO_ENV_VARS membership to any nonempty name, so an unrelated export like GIT_TRACE=1 is
+#   wrongly flagged too (and, since the arm now stops at the FIRST nonempty token, an option token
+#   like "-gx"/"-x" between the export word and the real assignment is wrongly captured instead).
+# mutant:433-pg-bare-assign -- disables the bare-assignment-only-segment arm, so a segment made
+#   only of a GIT_REPO_ENV_VARS assignment (e.g. "GIT_DIR=../x/.git;") is no longer flagged.
+# mutant:433-pg-per-record-reset -- resets xseg to "" at the head of every awk record, so a flag
+#   set on an earlier LINE of a multiline command is lost by the time the push line's own record
+#   runs.
+# mutant:433-pg-fallback-drop -- disables the driver's post-loop xseg fallback outright, so no
+#   cross-segment deny ever fires.
+# mutant:433-pg-saw-push -- drops the fallback's "a push segment was actually seen" guard, so a
+#   bare cd/export command with NO push segment at all wrongly denies too.
+# mutant:433-pg-export-quotes -- stops stripping quotes from the export arm's own tokens, so a
+#   quoted `export "GIT_DIR=…"` is no longer recognised as naming GIT_DIR.
+# mutant:433-pg-cfg-export -- disables the export arm for #439's GIT_CONFIG_* names, so an
+#   exported GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n> in another segment is no longer flagged.
+# mutant:433-pg-cfg-bare -- disables the bare-assignment arm for #439's GIT_CONFIG_* names.
+# mutant:433-pg-cfg-prefix -- drops the GIT_CONFIG_KEY_/GIT_CONFIG_VALUE_ prefix match, so only
+#   the exact GIT_CMDCFG_ENV_VARS names are recognised.
+# mutant:433-pg-cfg-exact -- widens the exact-name test to any GIT_CONFIG_-prefixed name, so an
+#   unrelated export like GIT_CONFIG_NOSYSTEM=1 is wrongly flagged.
+# mutant:433-pg-cfg-strip -- stops stripping "=value" from an exported token before the name test,
+#   so an exact-name export with a value (GIT_CONFIG_GLOBAL=…) is no longer recognised.
+# mutant:433-pg-cfg-bare-only -- drops the "bare segment only" limit of the GIT_CONFIG_* assignment
+#   arm, so a GIT_CONFIG_* assignment scoped to another command (GIT_CONFIG_COUNT=1 git log) wrongly
+#   flags a later push too.
+#
+# The fallback's own "$deny_dest already set" guard (an in-segment reason must keep precedence,
+# pinned by push-xseg-deny-inseg-precedence below) has no dedicated mutant record: the "-xseg-"
+# marker is always the LAST line of scan_out (awk's END runs only after every per-record print),
+# so by construction any earlier break out of the driver loop (an in-segment deny of any kind)
+# already happens before that line is ever read, leaving xseg_reason empty whenever deny_dest is
+# already set -- no edit to that one guard alone can ever change an observed verdict. It stays in
+# the driver as forward-proofing for any future deny_dest producer that runs outside this loop.
+#
+# Every deny fixture below builds its session with mk_fixture_repo (default branch "main", current
+# branch "claude/17-a") and passes an explicit cwd via mk_push_cmd_cwd; the destination is
+# "develop" (or a bare "git push"), which gets no opinion without this change.
+case_px_deny_cd_and() {
+  local main="$tmpbase/repo-px-1"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'cd ../other-x1 && git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_cd_bare_push() {
+  local main="$tmpbase/repo-px-2"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'cd ../other-x2; git push' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_pushd() {
+  local main="$tmpbase/repo-px-3"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'pushd ../other-x3 && git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_popd() {
+  local main="$tmpbase/repo-px-4"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'popd; git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_chdir() {
+  local main="$tmpbase/repo-px-5"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'chdir ../other-x5; git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_subshell() {
+  local main="$tmpbase/repo-px-6"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd '( cd ../other-x6; git push origin develop )' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_builtin_cd() {
+  local main="$tmpbase/repo-px-7"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'builtin cd ../other-x7 && git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_bash_c() {
+  local main="$tmpbase/repo-px-8"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd "bash -c 'cd ../other-x8 && git push origin develop'" "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_eval() {
+  local main="$tmpbase/repo-px-9"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd "eval 'cd ../other-x9; git push origin develop'" "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_multiline() {
+  # Carries the xseg flag across TWO awk records (the cd line, then the push line) -- pins the
+  # per-command, never-per-record, global flag design (mutant:433-pg-per-record-reset).
+  local main="$tmpbase/repo-px-10"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd "cd ../other-x10${LF}git push origin develop" "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_dbracket_tail() {
+  # The "cd" is seen only by the additive "]]" pass, AFTER the push line above it is already
+  # emitted -- pins the order-independent END-marker design (a follows-only check applied at
+  # emission time would miss exactly this zsh short "if [[ ... ]] cmd" tail).
+  local main="$tmpbase/repo-px-11"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'if [[ -d ../other-x11 ]] cd ../other-x11; git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_push_before_cd() {
+  # The push segment comes BEFORE the cd segment -- pins the chosen order-independence (the same
+  # END-marker mechanism the dbracket-tail fixture above pins from the other direction).
+  local main="$tmpbase/repo-px-12"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'git push origin develop && cd ..' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_export_git_dir() {
+  local main="$tmpbase/repo-px-13"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'export GIT_DIR=../other-x13/.git; git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(GIT_DIR set earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(GIT_DIR set earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_export_name_only() {
+  local main="$tmpbase/repo-px-14"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'export GIT_DIR && git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(GIT_DIR set earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(GIT_DIR set earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_export_quoted() {
+  local main="$tmpbase/repo-px-export-quoted"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'export "GIT_DIR=../other-xq/.git"; git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(GIT_DIR set earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(GIT_DIR set earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_export_git_config() {
+  local main="$tmpbase/repo-px-export-cfg"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=HEAD:main; git push' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(GIT_CONFIG_* set earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(GIT_CONFIG_* set earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_export_git_config_key() {
+  local main="$tmpbase/repo-px-export-cfg-key"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'export GIT_CONFIG_KEY_9zq=remote.origin.push; git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(GIT_CONFIG_* set earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(GIT_CONFIG_* set earlier in this command)': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *9zq*) __ok=0; __why="${__why}stderr echoes the input-derived name suffix: '$push_err'\n" ;;
+  esac
+}
+case_px_deny_export_git_config_exact() {
+  local main="$tmpbase/repo-px-export-cfg-exact"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'export GIT_CONFIG_GLOBAL=../other-xg/cfg; git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(GIT_CONFIG_* set earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(GIT_CONFIG_* set earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_noop_git_config_scoped() {
+  # A GIT_CONFIG_* assignment scoped to another command's own environment never reaches the push.
+  run_push_guard "$(mk_push_cmd 'GIT_CONFIG_COUNT=1 git log; git push origin feature/x')"
+  expect_push_no_opinion
+}
+case_px_deny_bare_git_config() {
+  local main="$tmpbase/repo-px-bare-cfg"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'GIT_CONFIG_COUNT=1; git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(GIT_CONFIG_* set earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(GIT_CONFIG_* set earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_noop_export_git_config_nosystem() {
+  # GIT_CONFIG_NOSYSTEM only removes a config source; it is not in #439's vocabulary.
+  run_push_guard "$(mk_push_cmd 'export GIT_CONFIG_NOSYSTEM=1; git push origin feature/x')"
+  expect_push_no_opinion
+}
+case_px_deny_declare_gx_work_tree() {
+  local main="$tmpbase/repo-px-15"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'declare -gx GIT_WORK_TREE=../other-x15; git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(GIT_WORK_TREE set earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(GIT_WORK_TREE set earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_typeset_common_dir() {
+  local main="$tmpbase/repo-px-16"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'typeset -x GIT_COMMON_DIR=../other-x16/.git; git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(GIT_COMMON_DIR set earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(GIT_COMMON_DIR set earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_bare_assign() {
+  # A segment made of ONLY a GIT_REPO_ENV_VARS assignment, no "git"/command word at all in that
+  # segment -- pins the third ("cmdword == \"\" && unres != \"\"") arm.
+  local main="$tmpbase/repo-px-17"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'GIT_DIR=../other-x17/.git; git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(GIT_DIR set earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(GIT_DIR set earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_inseg_precedence() {
+  # The push segment's OWN in-segment reason (#292's "--git-dir") keeps precedence over the
+  # cross-segment fallback below it -- see the section header above for why the driver's own
+  # "$deny_dest already set" guard has no dedicated mutant record of its own.
+  local main="$tmpbase/repo-px-18"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'cd ../other-x18 && git --git-dir=../other-x18/.git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(--git-dir)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(--git-dir)': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"cd/pushd/popd"*)
+      __ok=0; __why="${__why}stderr unexpectedly contains 'cd/pushd/popd' -- the push segment's own in-segment reason must keep precedence: '$push_err'\n"
+      ;;
+    *) ;;
+  esac
+}
+case_px_deny_codex_main_session() {
+  local main="$tmpbase/repo-px-19"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_codex_shell '' 'cd ../other-x19 && git push origin develop' "$main")"
+  expect_push_deny
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_px_deny_never_executes() {
+  # Safety property on the new cross-segment ("xseg") route: the cd-and shape, its own dirs, a
+  # booby-trapped PATH (the same C1/C2 idiom case_pu_deny_never_executes above uses) -- deny,
+  # sentinel absent, and BOTH the session repo's and the other checkout's file listings byte-
+  # identical before/after.
+  local main="$tmpbase/repo-px-never-executes" other="$tmpbase/other-px-never-executes"
+  mk_fixture_repo "$main" main "claude/17-a"
+  mk_fixture_repo "$other" develop "feature/x"
+  local trapdir="$tmpbase/trapbin-px-never-executes" sentinel="$tmpbase/sentinel-px-never-executes"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  local before_main after_main before_other after_other
+  before_main="$(find "$main" -type f -exec ls -la {} \; | sort)"
+  before_other="$(find "$other" -type f -exec ls -la {} \; | sort)"
+  run_push_guard "$(mk_push_cmd_cwd 'cd ../other-px-never-executes && git push origin develop' "$main")" "$trapdir:$PATH"
+  after_main="$(find "$main" -type f -exec ls -la {} \; | sort)"
+  after_other="$(find "$other" -type f -exec ls -la {} \; | sort)"
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"(cd/pushd/popd earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '(cd/pushd/popd earlier in this command)': '$push_err'\n" ;;
+  esac
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH while denying a cross-segment cd\n"; }
+  [ "$before_main" = "$after_main" ] || { __ok=0; __why="${__why}session repo's file listing changed — push-guard.sh wrote to or altered a file it should only read\n"; }
+  [ "$before_other" = "$after_other" ] || { __ok=0; __why="${__why}other checkout's file listing changed — push-guard.sh wrote to or altered a file it should only read\n"; }
+}
+case_px_noop_cd_no_push() {
+  # Contains "push" and "git" (passes both raw-stdin fast paths) but has no PUSH segment at all --
+  # pins the driver's "saw_push" guard (mutant:433-pg-saw-push).
+  local main="$tmpbase/repo-px-y1"
+  mk_fixture_repo "$main" main "claude/17-a"
+  run_push_guard "$(mk_push_cmd_cwd 'cd ../other-y1 && git log --grep=push' "$main")"
+  expect_push_no_opinion
+}
+case_px_noop_cd_as_argument() {
+  # "cd" here is an ARGUMENT to "echo", never a resolved command word -- the xseg vocabulary is
+  # only ever checked against $cmdword.
+  run_push_guard "$(mk_push_cmd 'echo cd && git push origin feature/x')"
+  expect_push_no_opinion
+}
+case_px_noop_export_unrelated() {
+  # An export naming a variable OUTSIDE GIT_REPO_ENV_VARS never sets xseg -- pins the export arm's
+  # exact-membership check (mutant:433-pg-export-exact).
+  run_push_guard "$(mk_push_cmd 'export GIT_TRACE=1; git push origin feature/x')"
+  expect_push_no_opinion
+}
+
 # --- deny/no-opinion: #268 config-derived push routes (remote.<name>.push / push.default) -----
 # Unless stated, the fixture repo has default branch main, current branch feature/x, and the
 # command is a bare "git push" against an explicit cwd (see mk_fixture_config's ambient-$PWD
@@ -6250,6 +6629,38 @@ cases=(
   "push-unres-noop-c-nonpush-segment|case_pu_noop_c_nonpush_segment|no opinion: git -C ../other-checkout-u19 status && git push origin feature/x -- only push segments are affected -- control, not part of the mutation-proof registry"
   "push-unres-noop-env-unrelated|case_pu_noop_env_unrelated|no opinion: GIT_TRACE=1 git push origin feature/x -- an unrelated GIT_ env var is never flagged -- mutation proof: dev/mutants/hook-tests.json (292-pg-env-exact)"
   "push-unres-noop-global-opt-feature|case_pu_noop_global_opt_feature|no opinion: git --namespace foo push origin feature/x -- an ordinary global option with a value is unaffected (#439 re-point: -c core.pager=cat now denies via the command-line-config route) -- control, not part of the mutation-proof registry"
+  # --- cross-segment ("xseg"): cd/pushd/popd/chdir or a GIT_DIR-family export/assignment in
+  # another segment of the same push command (#433) ---------------------------------------------
+  "push-xseg-deny-cd-and|case_px_deny_cd_and|deny: cd ../other-x1 && git push origin develop -- a cd in an earlier segment of the same command -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-cd-bare-push|case_px_deny_cd_bare_push|deny: cd ../other-x2; git push (bare push, no explicit destination) -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-pushd|case_px_deny_pushd|deny: pushd ../other-x3 && git push origin develop -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-popd|case_px_deny_popd|deny: popd; git push origin develop -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-chdir|case_px_deny_chdir|deny: chdir ../other-x5; git push origin develop -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-subshell|case_px_deny_subshell|deny: ( cd ../other-x6; git push origin develop ) -- a cd inside a subshell whose own directory change never actually reaches the push -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-builtin-cd|case_px_deny_builtin_cd|deny: builtin cd ../other-x7 && git push origin develop -- \"builtin\" is a PREFIX_WORDS member, so cd still resolves as the command word -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-bash-c|case_px_deny_bash_c|deny: bash -c 'cd ../other-x8 && git push origin develop' -- quote-blind: the inner && still segment-breaks the outer command string -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-eval|case_px_deny_eval|deny: eval 'cd ../other-x9; git push origin develop' -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-multiline|case_px_deny_multiline|deny: a cd on one line, the push on the next -- xseg is a per-command, never-per-record, global flag -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-per-record-reset, 433-pg-fallback-drop)"
+  "push-xseg-deny-dbracket-tail|case_px_deny_dbracket_tail|deny: if [[ -d ../other-x11 ]] cd ../other-x11; git push origin develop -- the cd is seen only by the additive ]] pass, AFTER the push line is emitted -- pins the order-independent END-marker design -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-push-before-cd|case_px_deny_push_before_cd|deny: git push origin develop && cd .. -- the push segment comes BEFORE the cd segment -- pins the chosen order-independence -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-export-git-dir|case_px_deny_export_git_dir|deny: export GIT_DIR=../other-x13/.git; git push origin develop -- mutation proof: dev/mutants/hook-tests.json (433-pg-export-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-export-name-only|case_px_deny_export_name_only|deny: export GIT_DIR && git push origin develop (bare name, no value) -- mutation proof: dev/mutants/hook-tests.json (433-pg-export-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-export-quoted|case_px_deny_export_quoted|deny: export \"GIT_DIR=../other-xq/.git\"; git push origin develop (a quoted export argument) -- mutation proof: dev/mutants/hook-tests.json (433-pg-export-vocab, 433-pg-fallback-drop, 433-pg-export-quotes)"
+  "push-xseg-deny-export-git-config|case_px_deny_export_git_config|deny: export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=HEAD:main; git push -- #439's command-line-config names exported in another segment -- mutation proof: dev/mutants/hook-tests.json (433-pg-export-vocab, 433-pg-export-exact, 433-pg-fallback-drop, 433-pg-cfg-export)"
+  "push-xseg-deny-export-git-config-key|case_px_deny_export_git_config_key|deny: export GIT_CONFIG_KEY_9zq=remote.origin.push; git push origin develop -- prefix-matched name, never echoed -- mutation proof: dev/mutants/hook-tests.json (433-pg-export-vocab, 433-pg-export-exact, 433-pg-fallback-drop, 433-pg-cfg-export, 433-pg-cfg-prefix)"
+  "push-xseg-deny-export-git-config-exact|case_px_deny_export_git_config_exact|deny: export GIT_CONFIG_GLOBAL=../other-xg/cfg; git push origin develop -- an exact #439 name exported WITH a value -- mutation proof: dev/mutants/hook-tests.json (433-pg-export-vocab, 433-pg-export-exact, 433-pg-fallback-drop, 433-pg-cfg-export, 433-pg-cfg-strip)"
+  "push-xseg-noop-git-config-scoped|case_px_noop_git_config_scoped|no opinion: GIT_CONFIG_COUNT=1 git log; git push origin feature/x -- an assignment scoped to another command -- mutation proof: dev/mutants/hook-tests.json (433-pg-cfg-bare-only)"
+  "push-xseg-deny-bare-git-config|case_px_deny_bare_git_config|deny: GIT_CONFIG_COUNT=1; git push origin develop -- a bare GIT_CONFIG_* assignment segment -- mutation proof: dev/mutants/hook-tests.json (433-pg-fallback-drop, 433-pg-cfg-bare)"
+  "push-xseg-noop-export-git-config-nosystem|case_px_noop_export_git_config_nosystem|no opinion: export GIT_CONFIG_NOSYSTEM=1; git push origin feature/x -- exact vocabulary -- mutation proof: dev/mutants/hook-tests.json (433-pg-export-exact, 433-pg-cfg-exact)"
+  "push-xseg-deny-declare-gx-work-tree|case_px_deny_declare_gx_work_tree|deny: declare -gx GIT_WORK_TREE=../other-x15; git push origin develop -- an option token (-gx) between the export-family word and the assignment is skipped -- mutation proof: dev/mutants/hook-tests.json (433-pg-export-vocab, 433-pg-export-exact, 433-pg-fallback-drop)"
+  "push-xseg-deny-typeset-common-dir|case_px_deny_typeset_common_dir|deny: typeset -x GIT_COMMON_DIR=../other-x16/.git; git push origin develop -- mutation proof: dev/mutants/hook-tests.json (433-pg-export-vocab, 433-pg-export-exact, 433-pg-fallback-drop)"
+  "push-xseg-deny-bare-assign|case_px_deny_bare_assign|deny: GIT_DIR=../other-x17/.git; git push origin develop -- a segment made of ONLY a GIT_REPO_ENV_VARS assignment, no git/command word at all in that segment -- mutation proof: dev/mutants/hook-tests.json (433-pg-bare-assign, 433-pg-fallback-drop)"
+  "push-xseg-deny-inseg-precedence|case_px_deny_inseg_precedence|deny: cd ../other-x18 && git --git-dir=../other-x18/.git push origin develop -- the push segment's OWN in-segment reason (#292's --git-dir) keeps precedence over the cross-segment fallback -- control, not part of the mutation-proof registry (see the section header above for why)"
+  "push-xseg-deny-codex-main-session|case_px_deny_codex_main_session|deny: a Codex-shaped main-session payload (mk_codex_shell '') with cd ../other-x19 && git push origin develop -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
+  "push-xseg-deny-never-executes|case_px_deny_never_executes|deny via the cross-segment route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND BOTH the session repo's and the other checkout's file listings are byte-identical before/after -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
+  "push-xseg-noop-cd-no-push|case_px_noop_cd_no_push|no opinion: cd ../other-y1 && git log --grep=push -- contains \"push\" and \"git\" but has no PUSH segment at all -- mutation proof: dev/mutants/hook-tests.json (433-pg-saw-push)"
+  "push-xseg-noop-cd-as-argument|case_px_noop_cd_as_argument|no opinion: echo cd && git push origin feature/x -- \"cd\" here is an argument, never the resolved command word -- control, not part of the mutation-proof registry"
+  "push-xseg-noop-export-unrelated|case_px_noop_export_unrelated|no opinion: export GIT_TRACE=1; git push origin feature/x -- an unrelated exported variable is never flagged -- mutation proof: dev/mutants/hook-tests.json (433-pg-export-exact)"
   "push-deny-config-remote-push-bare|case_pd_config_remote_push_bare|deny: git push against a repo whose config carries [remote \"origin\"] push = HEAD:main (#268, the issue's own shape) -- measured: M26, 68 pass 12 fail"
   "push-deny-config-remote-push-named-remote|case_pd_config_remote_push_named_remote|deny: git push origin against the same config (n==1, the positive side of the exact-remote-scoping clause) -- measured: M26, 68 pass 12 fail (also M41, 79 pass 1 fail)"
   "push-deny-config-remote-push-second-line|case_pd_config_remote_push_second_line|deny: two push = lines under [remote \"origin\"], only the SECOND offending (0/1/2+ boundary) -- measured: M26, 68 pass 12 fail (also M33, 79 pass 1 fail)"

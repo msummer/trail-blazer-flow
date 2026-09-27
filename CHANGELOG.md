@@ -18,6 +18,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #433: push-guard fails closed on a push whose Bash command also changes directory
+  (`cd`/`pushd`/`popd`/`chdir`) or sets a `GIT_DIR`-family variable or one of #439's
+  `GIT_CONFIG_*` names in another segment (`export`/`declare`/`typeset`/`local`/`readonly`, or a
+  bare assignment). No consumer step.
 - #444: `bin/codex-scheduled-run.sh` now scrubs `PATH` to only physical, absolute entries outside
   `/tmp`, `$TMPDIR`, the discovered work-tree root, and any git directory, before any external
   command runs (right after the `CLAUDE_PID` guard); a refused entry reports
