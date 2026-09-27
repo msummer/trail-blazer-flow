@@ -3,15 +3,18 @@
 # push-guard.sh — plugin-shipped PreToolUse hook (#260) that mechanically narrows every Bash
 # call's `git push` surface, main session included (unlike hooks/agent-boundary.sh, which only
 # governs the implementer/verifier subagents): it denies (exit 2, one stderr line, empty stdout)
-# any push whose resolved DESTINATION is the repo's default branch, and says nothing (exit 0,
-# empty stdout, empty stderr — "no opinion") about everything else, so the normal permission flow
-# — a prompt, or a matching deny rule in templates/repo-settings.json, which always wins over this
-# hook's decision — applies. This closes the gap #260 names: the settings deny entries
+# any push whose resolved DESTINATION is the repo's default branch, ALSO denies a push segment
+# whose target repository it cannot resolve at all (#292 — see "Fail-closed: an unresolvable push
+# target" below), and says nothing (exit 0, empty stdout, empty stderr — "no opinion") about
+# everything else, so the normal permission flow — a prompt, or a matching deny rule in
+# templates/repo-settings.json, which always wins over this hook's decision — applies. This closes
+# the gap #260 names: the settings deny entries
 # `Bash(git push origin main:*)` / `Bash(git -C * push origin main*)` are prefix-matched and are
 # bypassed by refspec spellings such as `HEAD:main`, `+HEAD:refs/heads/main`, or a remote other
 # than `origin` — this hook parses the refspec instead of pattern-matching the raw command text.
 #
-# Enforces only "deny a push whose destination is the default branch"; does NOT enforce an
+# Enforces "deny a push whose destination is the default branch" and "deny a push whose target
+# repository cannot be resolved at all" (#292); does NOT enforce an
 # allow-list of `claude/<n>-<slug>` destinations (the Decision's other clause) — that would deny
 # ordinary work (a `release/vX.Y.Z` branch, an annotated-tag push, any `git push origin
 # feature/x` a human runs in ANY Claude Code session in a plugin-enabled repo, since this hook is
@@ -85,10 +88,14 @@
 # `PUSH_DEFAULT_BRANCH_FALLBACK`, the SESSION checkout's own default branch, and the RESOLVED
 # checkout's own default branch (a deliberate fail-toward-deny: a second checkout that happens to
 # lack its own `refs/remotes/origin/HEAD`, which only `git clone` sets, must not silently lose
-# today's guard by replacing the session's default outright). A `-C` value that fails the
-# predicate, or that resolves to no gitdir of its own, leaves the segment judged exactly as every
-# segment was before #269 — solely against the session checkout (see "Under-blocking classes"
-# below for the residual `-C` shapes this never covers). The containment argument for reading a
+# today's guard by replacing the session's default outright). A `-C` value that satisfies the
+# predicate but resolves to no gitdir of its own leaves the segment judged exactly as every segment
+# was before #269 — solely against the session checkout (a documented residual, see "Under-blocking
+# classes" below). A `-C` value that FAILS the predicate is judged against the session only when it
+# is lexically the session checkout itself (#292) — see "Fail-closed: an unresolvable push target"
+# further down for that one exception and for the other classes (the attached `-C<path>` form, two
+# or more `-C` tokens, `--git-dir`/`--work-tree`, `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR`) this
+# hook also denies outright. The containment argument for reading a
 # path taken from the untrusted command string at all: a resolved target's facts are applied ONLY
 # to the segment that names it — ordinarily, only to a push actually executed inside that
 # directory (measured exceptions exist for a quoted `-C` value containing a space — see the
@@ -110,10 +117,38 @@
 # from the environment identically for every checkout resolved (session or a resolved `-C`
 # target), so a resolved segment still sees the SAME global routes the session would, independently
 # re-derived from its own `resolve_repo()` call rather than literally inherited.
-# The deny set for an UNRESOLVED segment is `PUSH_DEFAULT_BRANCH_FALLBACK` (below) UNION the
-# session's resolved default branch, if any — the fallback members are ALWAYS in force (even when
-# a repo's real default branch resolves to something else), which is what lets this hook work with
-# no `cwd`, no readable `.git`, or a `-C` value this hook does not resolve.
+# The deny set for a segment whose `-C` value satisfies the predicate but resolves no gitdir of its
+# own is `PUSH_DEFAULT_BRANCH_FALLBACK` (below) UNION the session's resolved default branch, if any
+# — the fallback members are ALWAYS in force (even when a repo's real default branch resolves to
+# something else), which is what lets this hook work with no `cwd`, no readable `.git`, or a
+# predicate-matching `-C` value this hook does not resolve to a gitdir (see "Fail-closed: an
+# unresolvable push target" below (#292) for every OTHER `-C`/`--git-dir`/`--work-tree`/`GIT_*`
+# shape, which denies outright instead of degrading to this fallback set).
+#
+# Fail-closed: an unresolvable push target (#292). Every OTHER form a push segment's repository
+# redirect can take — one this hook does not itself resolve to a checkout — is DENIED outright: a
+# `-C` value that fails PATH_ERE above, UNLESS it is
+# LEXICALLY the session checkout itself (see `is_session_checkout_path()` below: exactly `.`/`./`,
+# the PreToolUse stdin `cwd`, or the session's own resolved root, each with or without one trailing
+# `/`); the attached `-C<path>` form; two or more `-C` tokens in the same segment; `--git-dir` or
+# `--work-tree` (detached or `=`-attached); and a `GIT_DIR=`, `GIT_WORK_TREE=`, or `GIT_COMMON_DIR=`
+# assignment preceding `git` in the segment (the bare-prefix form, or the same behind an `env`
+# prefix word). The deny reads nothing NEW from the untrusted value beyond what is already read
+# above — GIT_REPO_OPTS/GIT_REPO_ENV_VARS membership, the PATH_ERE predicate, and the lexical
+# session-equivalence check are all string comparisons; no filesystem path is read to reach this
+# verdict. Over-blocking, deliberate: a `-C` into another checkout is denied whatever the push
+# DESTINATION is, even one that is not that checkout's own default branch either; any
+# `--git-dir`/`--work-tree`/`GIT_*` redirect is denied even when it points BACK at the session
+# checkout itself (this hook never reads the redirected path to find out); and a literal `-C ..` or
+# `-C "$PWD"` is denied (`..` is not lexically `.`, and a literal `$PWD` string token is not itself
+# lexically equal to the session's own resolved cwd, even when the session actually runs from
+# `$PWD`). Under-blocking, documented rather than fixed here (filed as a follow-up alongside this
+# change): `cd <path> && git push` or a `pushd`/`popd` pair in the SAME Bash command, and `export
+# GIT_DIR=…; git push` (or a bare `GIT_DIR=…;` segment) in a SEPARATE segment, are still judged
+# against the session's own `cwd` — this hook's tokenizer tracks no `cd`/`pushd`/`export` state
+# across segments. Whether git itself accepts an abbreviated long option (e.g. `--git-d <path>` for
+# `--git-dir <path>`) is UNVERIFIED here; this hook does not recognise one, so such a form is judged
+# as a plain unlisted dash token (the same "Documented under-blocking classes" sibling class below).
 #
 # Never invokes `git`, `gh`, or anything else derived from the untrusted command string; never
 # `eval`s; never writes a file. Since #269, this hook reads exactly one class of filesystem path
@@ -208,8 +243,9 @@
 # it is never reached — this hook opines "no opinion" on the whole segment, not a deny; an
 # ATTACHED `--opt=value` global option such as `--git-dir=<path>` does NOT evade this way: the
 # generic single-dash-token skip consumes it whole in one step and the subcommand still resolves
-# to `push` correctly — what `--git-dir=<path>` always evades, and what an UNRESOLVED `-C` value
-# also evades (see below), is WHICH repo gets resolved); a CR *inside* a raw-stdin fast-path
+# to `push` correctly — neither `--git-dir=<path>` nor an unresolved `-C` value evades WHICH repo
+# gets resolved by staying silent about it: both deny outright instead (#292 — see "Fail-closed: an
+# unresolvable push target" above); a CR *inside* a raw-stdin fast-path
 # literal, e.g. `git
 # pu<CR>sh origin main` (measured: rc 0) — a conforming JSON writer escapes an embedded `\r` as the
 # two characters `\`+`r`, so the raw stdin substring `push` never appears intact and fast path 1
@@ -222,20 +258,15 @@
 # below) stays exact, out of scope per this issue's decision, so an uppercase or mixed-case
 # subcommand is never recognised as a push and this hook opines "no opinion" on the whole segment;
 # whether a given git build would itself execute `PUSH` as `push` on a case-insensitive filesystem
-# is UNVERIFIED here. Since #269 narrowed this next class to its residuals (see the "Repo resolution"
-# paragraph above for what a `-C` value IS now resolved against), a `git -C <path> push` into a
-# repo whose default branch differs from the session's is STILL judged only against the session's
-# own facts in every one of these shapes — each measured directly, exact command -> rc, session on
-# `main` throughout: a `-C` value failing PATH_ERE, including the issue's own literal example,
-# `git -C ../other-checkout push origin develop` -> rc 0 (filed as a follow-up alongside this
-# change — the issue's own headline shape is outside the bound the maintainer's decision drew); the
-# attached form, `git -C../other-checkout-wt-1 push origin develop` -> rc 0 (same follow-up); two or
-# more `-C` tokens, `git -C ../a-wt-1 -C ../b-wt-1 push origin develop` -> rc 0; `--git-dir=<path>`/
-# `--work-tree=<path>`, neither ever resolved (same follow-up); a PATH_ERE-matching directory
-# holding no `.git` of its own — git itself walks upward from a real `-C`, this hook does not
-# (filed as a second, separate follow-up) — measured: `git -C ../plain-wt-1 push origin main`,
-# `../plain-wt-1` an ordinary, `.git`-less directory -> rc 2 (denies via the SESSION's own facts,
-# unaffected by the unresolvable target); and a `-C` value containing a space: this hook's plain
+# is UNVERIFIED here. Since #269 narrowed the next class to its residuals (see the "Repo resolution"
+# paragraph above for what a `-C` value IS resolved against); of those residuals, only the two named
+# just below remain open (#292 — see "Fail-closed: an unresolvable push target" above for the
+# mechanism that denies the rest outright and the deliberate over-blocking it creates): a
+# PATH_ERE-matching
+# directory holding no `.git` of its own — git itself walks upward from a real `-C`, this hook does
+# not (filed as a follow-up alongside this change) — measured: `git -C ../plain-wt-1 push origin
+# main`, `../plain-wt-1` an ordinary, `.git`-less directory -> rc 2 (denies via the SESSION's own
+# facts, unaffected by the unresolvable target); and a `-C` value containing a space: this hook's plain
 # whitespace tokenizer (unlike git-c-guard.sh's quote-aware lexer) splits the quoted value at
 # the interior space and captures only its first fragment as the `-C` path. Whether the rest of
 # the segment is then still recognised as a push is decided by ONE piece of code — the
@@ -260,15 +291,18 @@
 # — a directory OTHER than the one git would actually `-C` into (the literal, on-disk
 # `../a-wt-1 -x`): a mis-resolution, not a containment breach (see the containment paragraph
 # above). Controls: the same command with a non-matching first fragment (`../plain-dir -x`)
-# -> rc 0, and the session alone pushing to `trunk` with no `-C` -> rc 0, isolating that the
-# deny comes from the fragment's own resolution.
+# -> rc 2 (denied as unresolved: `../plain-dir` fails PATH_ERE and is not lexically the session
+# checkout either — see "Fail-closed: an unresolvable push target" above), and the session alone
+# pushing to `trunk` with no `-C` -> rc 0, isolating that row (a)'s own deny comes from the
+# fragment's own resolution, not from this control's separate unresolved-target route.
 # (b) `git -C "../a-wt-1 foo" push origin main` -> rc 0 — `foo"` normalises to `foo`, not
 # `push`: the segment is dropped as unrecognised, nothing is resolved, and a push whose
 # destination is literally the session's own default branch gets no opinion (control: the
 # session alone pushing to `main` -> rc 2).
 # (c) `git -C "../plain-dir -x" push origin main` -> rc 2 — recognised exactly as (a); the
-# captured fragment fails PATH_ERE so nothing is resolved, and the segment is judged against
-# the session's own facts (`main`).
+# captured fragment fails PATH_ERE and is not lexically the session checkout, so this denies as
+# UNRESOLVED (`-C path outside the <name>-wt-<n> worktree shape`) unconditionally, regardless of
+# what the destination is.
 # (d) `git -C "../repo with space-wt-1" push origin develop` -> rc 0 — `with` normalises to
 # `with`: hidden, the same way as (b).
 # (e) `git -C "../a-wt-1 push" push origin trunk` -> rc 2 — `push"` normalises to `push`, so
@@ -280,9 +314,8 @@
 # GIT_GLOBAL_OPTS_WITH_VALUE name, so it is consumed together with `foo"` and the real `push`
 # is the candidate; recognised and resolved via `../a-wt-1`.
 # (g) `git -C "../a-wt-1 -C ../b-wt-1" push origin main` -> rc 2 — the interior `-C` is
-# consumed together with `../b-wt-1"` and counts as a second `-C`, so the segment is
-# recognised but, by the exactly-one-`-C` rule, NOT resolved: judged against the session's
-# own `main`.
+# consumed together with `../b-wt-1"` and counts as a second `-C`, so the segment is recognised
+# but, by the exactly-one-`-C` rule, NOT resolved; denies as UNRESOLVED (`more than one -C`).
 # (h) `git -C "../a-wt-1 x/push" push origin main` -> rc 2 — `x/push"` normalises to its last
 # `/`-component, `push`: recognised and resolved via `../a-wt-1`.
 # (i) `git -C "../a-wt-1 -c" push origin main` -> rc 2 — `-c"` carries the glued closing quote,
@@ -326,8 +359,9 @@
 #
 # Contract: read the PreToolUse hook JSON on stdin; print nothing and exit 0 ("no opinion") unless
 # the call is a Bash `git push` whose resolved destination is the default branch (or the
-# unconditional `main`/`master` fallback), in which case print exactly one reason line to stderr
-# and exit 2 ("deny"); stdout is always empty. Wired in hooks/hooks.json via
+# unconditional `main`/`master` fallback), OR whose target repository this hook cannot resolve at
+# all (#292 — see "Fail-closed: an unresolvable push target" above), in which case print exactly
+# one reason line to stderr and exit 2 ("deny"); stdout is always empty. Wired in hooks/hooks.json via
 # `${CLAUDE_PLUGIN_ROOT}`, with no `if` gate — an `if` filter matches only `tool_input.command`
 # constituents after composite splitting and leading-assignment stripping, so it cannot see a
 # `git -C <wt> push …`, `env git push …`, or `bash -c "git push …"` form; any `if` here would
@@ -358,6 +392,15 @@ PATH_ERE='^([A-Za-z]:/|/|\.\./)([A-Za-z0-9._ +-]+/)*[A-Za-z0-9._+-]+-wt-[0-9]+/?
 PUSH_OPTS_WITH_VALUE="-o --push-option --repo --receive-pack --exec"
 PUSH_ALL_REFS_OPTS="--all --mirror"
 PUSH_DENY_STEM="trail-blazer-flow push guard:"
+# #292: a push segment naming either of these two classes always redirects which repository the
+# push actually runs in, and this hook does not resolve either one — GIT_REPO_OPTS is a global
+# option (detached "<opt> <value>" or attached "<opt>=<value>"), GIT_REPO_ENV_VARS is a leading
+# shell assignment (a bare "VAR=<value> git ..." prefix or the same behind an "env" prefix word).
+# Consumed by the awk tokenizer below to flag the segment "unresolved" rather than to resolve
+# anything — see the driver loop's own "unresolvable push target" comment for the fail-closed
+# verdict this produces.
+GIT_REPO_OPTS="--git-dir --work-tree"
+GIT_REPO_ENV_VARS="GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR"
 
 # is_c_target_path PATH (#269) — true iff PATH satisfies the shared PATH_ERE predicate above.
 # Here-string, not a `printf` writer piped into `grep`'s quiet mode (#255): that early-exit
@@ -424,17 +467,23 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
 
 # --- the tokenizer (POSIX awk, inlined) -------------------------------------------------------
 # See this file's header for the full cross-reference to hooks/agent-boundary.sh's twin scan.
-# Emits one "PUSH<TAB><space-joined remaining tokens>" line per push segment found; nothing for
-# any other segment. Processes $cmd one input line (awk record) at a time — the same deliberate,
-# documented false-positive class agent-boundary.sh's header explains (a heredoc line that starts
-# with "git push" is scanned as its own segment).
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" '
+# Emits one "PUSH<TAB><-C value, only when exactly one><TAB><#292 unresolved-reason, empty when
+# none><TAB><space-joined remaining tokens>" line per push segment found; nothing for any other
+# segment. Neither the "-C" value, the reason, nor the remaining-tokens field can itself contain a
+# TAB, since every token comes from splitting on "[ \t]+". Processes $cmd one input line (awk
+# record) at a time — the same deliberate, documented false-positive class agent-boundary.sh's
+# header explains (a heredoc line that starts with "git push" is scanned as its own segment).
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
   for (i = 1; i <= n; i++) prefix_set[pwarr[i]] = 1
   ng = split(gopts, goarr, " ")
   for (i = 1; i <= ng; i++) gopt_set[goarr[i]] = 1
+  nro = split(repoopts, roarr, " ")
+  for (i = 1; i <= nro; i++) repoopt_set[roarr[i]] = 1
+  nev = split(repoenv, evarr, " ")
+  for (i = 1; i <= nev; i++) envvar_set[evarr[i]] = 1
 }
 function normalize(tok,    t, parts, np) {
   t = tok
@@ -451,15 +500,21 @@ function strip_quotes(tok,    t) {
   gsub(/\\/, "", t)
   return t
 }
-function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount) {
+function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, ro) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
   cmdword = ""
+  unres = ""
   while (idx <= ntok) {
     tok = toks[idx]
     if (tok == "") { idx++; continue }
-    if (match(tok, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) { idx++; continue }
+    if (match(tok, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) {
+      aname = substr(tok, 1, index(tok, "=") - 1)
+      if (unres == "" && (aname in envvar_set)) unres = aname "="
+      idx++
+      continue
+    }
     norm = tolower(normalize(tok))
     if (norm in prefix_set) { saw_prefix = 1; idx++; continue }
     if (saw_prefix && substr(tok, 1, 1) == "-") { idx++; continue }
@@ -475,6 +530,16 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
   while (j <= ntok) {
     tok = toks[j]
     if (tok == "") { j++; continue }
+    if (unres == "") {
+      if (tok in repoopt_set) {
+        unres = tok
+      } else {
+        for (ro = 1; ro <= nro; ro++) {
+          if (index(tok, roarr[ro] "=") == 1) { unres = roarr[ro]; break }
+        }
+      }
+      if (unres == "" && substr(tok, 1, 2) == "-C" && tok != "-C") unres = "attached -C<path>"
+    }
     if (tok in gopt_set) {
       if (tok == "-C") { ccount++; cpath = strip_quotes(toks[j + 1]) }
       j += 2
@@ -486,6 +551,7 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
     break
   }
   if (subcmd != "push") return
+  if (unres == "" && ccount >= 2) unres = "more than one -C"
   rest = ""
   sep = ""
   while (j <= ntok) {
@@ -496,7 +562,7 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
     }
     j++
   }
-  print "PUSH\t" (ccount == 1 ? cpath : "") "\t" rest
+  print "PUSH\t" (ccount == 1 ? cpath : "") "\t" unres "\t" rest
 }
 {
   line = $0
@@ -750,18 +816,47 @@ CFGLIST
 }
 
 resolve_repo "$resolve_cwd" 64
+# #292: session_root is the directory $dir (a plain global left holding the .git-bearing directory
+# where resolve_repo()'s own upward walk broke, or unchanged from START_DIR when it never found
+# one) was left at by THIS session-scoped call specifically — captured here, before apply_c_target
+# below ever calls resolve_repo() again (which would overwrite $dir with a "-C" target's own
+# result), so a later comparison against it always reflects the SESSION, never a resolved segment.
+# Empty when the session itself never resolved a gitdir at all.
+session_root=""
+[ -n "$gitdir" ] && session_root="$dir"
 session_default_branch="$default_branch"
 session_current_branch="$current_branch"
 session_cfg_push_lines="$cfg_push_lines"
 session_cfg_push_defaults="$cfg_push_defaults"
 session_cfg_branch_merge="$cfg_branch_merge"
 
+# is_session_checkout_path PATH (#292) — true iff PATH is LEXICALLY the session checkout: exactly
+# "." (or "./", once its own trailing "/" is stripped below), $resolve_cwd (the PreToolUse stdin
+# "cwd", or $PWD when absent) with or without one trailing "/", or $session_root (captured just
+# above) with or without one trailing "/". Builtins only — no filesystem access, no process spawned
+# — consulted by the driver loop below only to decide whether an otherwise-unresolvable "-C" value
+# should still be treated as "this segment IS the session" rather than denied as unresolved (see
+# the driver loop's own "unresolvable push target" comment). Guards the "= /" case before stripping
+# a trailing slash so the root path itself is never turned into an empty string by "${p%/}".
+is_session_checkout_path() {
+  local p="$1" rc="$resolve_cwd" sr="$session_root"
+  [ "$p" = "/" ] || p="${p%/}"
+  [ "$rc" = "/" ] || rc="${rc%/}"
+  [ -z "$sr" ] || [ "$sr" = "/" ] || sr="${sr%/}"
+  [ "$p" = "." ] && return 0
+  [ "$p" = "$rc" ] && return 0
+  [ -n "$sr" ] && [ "$p" = "$sr" ] && return 0
+  return 1
+}
+
 # apply_session_repo (#269) — (re)applies the session checkout's own resolved facts (captured
 # above, right after the one and only session-scoped resolve_repo call) to
 # default_branch/current_branch/cfg_*, and rebuilds deny_set/default_display exactly as the
 # pre-#269 file-scope statements did. Called once per push segment (see the driver loop below),
 # before that segment's own "-C" value (if any) is considered — so a segment with no "-C", or one
-# whose "-C" value does not resolve, is judged exactly as every segment was before this issue.
+# whose "-C" value satisfies PATH_ERE but resolves no gitdir of its own, is judged by these session
+# facts alone. A "-C" value that fails PATH_ERE (and is not lexically the session checkout) never
+# reaches this function's facts at all: the driver loop below denies it outright first (#292).
 apply_session_repo() {
   default_branch="$session_default_branch"
   current_branch="$session_current_branch"
@@ -1018,8 +1113,26 @@ while IFS= read -r line; do
   esac
   seg_body="${line#PUSH$TAB}"
   seg_cpath="${seg_body%%"$TAB"*}"
-  seg_rest="${seg_body#*"$TAB"}"
+  seg_rest2="${seg_body#*"$TAB"}"
+  seg_unres="${seg_rest2%%"$TAB"*}"
+  seg_rest="${seg_rest2#*"$TAB"}"
   apply_session_repo
+  # #292: fail closed on an UNRESOLVABLE push target, before apply_c_target/evaluate_segment ever
+  # run for this segment — the first-offender rule applies here too. seg_unres already carries a
+  # reason when the tokenizer itself recognised an evasion (an attached "-C<path>", 2+ "-C" tokens,
+  # a GIT_REPO_OPTS global option, or a GIT_REPO_ENV_VARS assignment — see emit_segment() above).
+  # The remaining evasion, an ordinary detached "-C <path>" that fails is_c_target_path() (so it
+  # will never be resolved by apply_c_target below) and is not lexically the session checkout
+  # either (is_session_checkout_path(), above), is caught here instead, since it takes both
+  # $resolve_cwd and $session_root to decide — neither is available inside the awk tokenizer.
+  if [ -z "$seg_unres" ] && [ -n "$seg_cpath" ] && ! is_c_target_path "$seg_cpath" && ! is_session_checkout_path "$seg_cpath"; then
+    seg_unres="-C path outside the <name>-wt-<n> worktree shape"
+  fi
+  if [ -n "$seg_unres" ]; then
+    deny_dest="$seg_unres"
+    deny_kind="unresolved"
+    break
+  fi
   apply_c_target "$seg_cpath"
   evaluate_segment "$seg_rest"
   if [ -n "$__deny_dest" ]; then
@@ -1046,6 +1159,10 @@ if [ -n "$deny_dest" ]; then
     configall)
       printf '%s denies "%s" (pushes every matching branch, including the default branch: %s, via %s in %s) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
         "$PUSH_DENY_STEM" "$deny_dest" "$default_display" "$deny_via" "$deny_src" >&2
+      ;;
+    unresolved)
+      printf '%s denies this push: it cannot resolve which repository the push runs in (%s), so it cannot rule out that repository'"'"'s default branch — the harness never pushes this way; a human can run it from a terminal inside that checkout, or use a <repo>-wt-<n> worktree path; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" "$deny_dest" >&2
       ;;
     *)
       printf '%s denies pushing to "%s" (resolves to the default branch: %s) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \

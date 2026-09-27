@@ -303,7 +303,11 @@ nothing but this repo's own files.
   entries.** `git push origin --force`, `rm -fr`, `--force-with-lease=<ref>`, anything behind a
   redirection or a `bash -c` wrapper, and every `git -C <path> ...` form (which Codex's rules
   can't express at all) are not matched. The hooks (`agent-boundary.sh`, `push-guard.sh`) remain
-  the floor regardless of what the rules file allows.
+  the floor regardless of what the rules file allows. Since #292, `push-guard.sh` denies a push
+  whose target repository it can't resolve (a non-worktree `-C`, `--git-dir`/`--work-tree`, or a
+  `GIT_DIR`-family assignment) — this closes the gap an unattended Codex run would otherwise have
+  with no permission prompt as a backstop — but a same-command `cd <path> && git push` is still
+  judged against the session's own `cwd`.
 - **Project rules load, verified live at the gate.** Codex loads the project-level
   `.codex/rules/*.rules` file the way its documented rules precedence implies, not only
   `$CODEX_HOME/rules/default.rules` (the ADR's own earlier probes had used only the latter) — see

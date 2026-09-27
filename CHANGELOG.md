@@ -30,6 +30,11 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
   and where they're caught. No consumer step.
 - #422: ADR 0002 amended with the design for unattended Codex runs (a launchd-driven `codex exec`
   wrapper; merges stay human) and its implementation split. Docs only; no behaviour change.
+- #292: `hooks/push-guard.sh` now fails closed on a push segment whose target repository it can't
+  resolve — a non-worktree `-C`, the attached `-C<path>` form, two or more `-C` tokens,
+  `--git-dir`/`--work-tree`, or a `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR` assignment — instead of
+  judging it against the session checkout; a `-C` value that is lexically the session checkout
+  itself is unaffected. No consumer step.
 - #415: `project-kickoff` and standalone `test-ratchet` gain a supervised Codex path
   (docs/reference/codex.md); not live-verified. In a new project directory, `git init` comes
   before `codex-setup.sh`.
