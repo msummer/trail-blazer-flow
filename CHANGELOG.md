@@ -18,6 +18,14 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #435: `hooks/push-guard.sh` now enforces a 5-second analysis deadline, sampled from hook start and
+  checked at the top of every loop whose cost grows with the command or a config file it reads; once
+  spent, it denies with a fixed reason instead of silently risking Claude Code's own 10-second hook
+  timeout. A depth-0 (top-level) git config line over 2048 characters also now denies outright,
+  before ever reaching the slow trim a long whitespace run would otherwise cost. A test-only,
+  environment-only knob (`TBF_PUSH_GUARD_BUDGET_SECS`) can lower the budget for a fixture but never
+  raise it. `dev/hook-tests.sh`'s agent-boundary `]]` timing fixture doubles its filler so its
+  overlap mutant stays past the time bound under a fast awk too. No consumer step.
 - #437: `hooks/claude-dir-guard.sh`'s Bash apply_patch-shim check now resolves zsh's short
   `if [[ cond ]] apply_patch` form (disjoint tails after each standalone `]]`) and a quoted
   `eval`/`trap`/`bash -c` argument or quoted shim name (quote characters stripped, an emptied token

@@ -355,19 +355,34 @@ budget had already been exhausted elsewhere. The one line this cannot prevent is
 line, in whichever file already happens to be open, drives the line-count or character budget past
 zero: that one line is read in full (a read loop takes a whole line at a time) before the check
 that follows it can break. Every depth-0 top-level candidate is still always read in full, with
-none of these four caps of its own, so none of them can ever mask a pre-#304/#305 route WITHIN ONE
-RESOLUTION. Per `resolve_repo()` call, the residual this class of fix leaves is: a TOP-LEVEL
-(depth-0) file with very many lines, or a single very long line or whitespace run, and — grouped
-with it, the same class — a single INCLUDED line, read once per `resolve_repo()` call, whose own
-length is what crosses the line-count or character budget; both predate or survive #304/#305 rather
-than being closed by it. All four caps, and the uncapped depth-0 read, are bounded PER
-`resolve_repo()` call, never across the whole hook invocation: since #269, this hook resolves once
-for the session checkout and once more for every push segment whose own `-C` value resolves a
-checkout of its own, so a command naming enough resolved `-C` targets, each carrying its own
-at-cap-but-legal include content or its own large top-level file, multiplies this same bounded work
-across resolutions exactly as it already multiplies the uncapped depth-0 read, and can still cross
-Claude Code's own hook timeout — the identical class of residual, reached a different way, also not
-closed here. A
+none of these four INCLUDE-only caps of its own, so none of them can ever mask a pre-#304/#305
+route WITHIN ONE RESOLUTION. That single-line `read` residual — one line, in whichever file already
+happens to be open, read once per `resolve_repo()` call, whether it drives an included file's
+budget past zero (depth >= 1) or is simply a depth-0 file's own pathologically long line — is
+UNCHANGED by #435: the `read` itself always happens before any check on that line's own length can
+run (the read loop's own builtin redirect takes a whole line at a time), at any depth. Since #435,
+a depth-0 candidate's own single-line LENGTH is instead capped AFTER that read
+(`CFG_TOPLEVEL_MAX_LINE_CHARS`, checked before comment-strip or trim ever run on the line just
+read, the same reason the included-line length cap exists): a config line over that cap now denies
+outright (a new, fixed reason) instead of ever reaching the same slow TRIM pattern-matching an
+over-length INCLUDED line is already capped away from. So #435 removes only the depth-0 counterpart
+of that slow-trim cost, not the read-once cost, which remains a fixed, bounded residual at every
+depth; a depth-0 file's own LINE COUNT is still never capped either, and neither is the number of
+`resolve_repo()` calls one command can trigger (since #269, once for the session checkout and once
+more for every push segment whose own `-C` value resolves a checkout of its own, so a command
+naming enough resolved `-C` targets, each carrying its own at-cap-but-legal include content or its
+own large top-level file, multiplies this same bounded per-resolution work across resolutions).
+#435 closes THAT line-count residual a different way: a whole-hook analysis deadline
+(`PUSH_ANALYSIS_BUDGET_SECS`,
+5 whole seconds) sampled from the moment the hook starts, checked as the first statement of every
+loop whose trip count grows with the command or a config file's own content — including the
+per-line read loop that parses EVERY candidate, at every depth, across every `resolve_repo()` call
+in the whole invocation — so a many-line depth-0 file, or enough multiplied `-C` resolutions, now
+denies with a fixed reason well before it can cross Claude Code's own 10-second hook timeout,
+instead of silently degrading into it. See `hooks/push-guard.sh`'s own "Analysis deadline (#435)"
+header section for the exact sampling rule, the worst-case wall-clock bound, and the residual this
+deadline still cannot reach (the linear, unsampled pre-tokenizer prefix; one single config line's
+own `read`; and the Codex CLI's own hook timeout, which is UNVERIFIED here). A
 deny whose route came from a system file names the source `your system git config`; one from an
 included file appends ` (via include)` to whichever source label already applies, exactly once no
 matter how deep the nesting goes. The complete residual — a system config at a path not on this
@@ -400,6 +415,10 @@ standalone `]]` denies unconditionally, and a `git … push` tail cut short by a
 denies unconditionally too, even when the destination inside the cut segment would not itself
 deny — the same deny fires when the cut arrives mid-subcommand-search (e.g. while still consuming a
 `-C`/`--git-dir` value), since this hook cannot tell that case apart from a genuine, uncut push.
+Since #435, this hook also denies (a fixed reason, distinct from every deny above) a command whose
+own analysis cannot finish inside a 5-second budget sampled from hook start, or a push that reads a
+git config file with a depth-0 line too long to analyse safely — see the residual paragraph above
+for the mechanism and its own remaining limits.
 
 **The fourth hook, `hooks/claude-dir-guard.sh` (#327; apply_patch, `.codex`, and a Bash
 apply_patch-shim route added #407), denies an implementer or verifier subagent's `Edit`, `Write`,

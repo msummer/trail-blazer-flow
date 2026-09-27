@@ -1084,15 +1084,17 @@ case_ab_pc_deny_dbracket_disjoint() {
 case_ab_pc_deny_dbracket_timing() {
   # Wall-clock proof: an overlapping tail re-split()s almost the whole remaining record once per
   # earlier `]]`; disjoint tails bound each emit_segment() walk to its own cut segment instead, so
-  # this ~200KB, 64-`]]` shape resolves in well under the 5s bound below (measured via bash SECONDS,
-  # timing only the hook invocation itself, not payload construction). The command reaches jq on
+  # this large, 64-`]]` shape resolves well under the 5s bound below (timed via bash SECONDS, only
+  # the hook invocation itself, not payload construction). The filler is sized so the overlapping
+  # (quadratic) walk stays far past the bound even under a fast awk such as Linux's mawk, while
+  # the disjoint (linear) walk stays far under it. The command reaches jq on
   # stdin (printf is a builtin), never as a --arg: Linux refuses any single exec argument over its
   # per-argument limit, which this command exceeds, so mk_agent_cmd would build an empty payload
   # there and the hook would see no command at all.
   local flood="x" i
   for i in $(seq 1 64); do flood="${flood} ]] tee"; done
   local filler
-  filler="$(printf ' a%.0s' $(seq 1 100000))"
+  filler="$(printf ' a%.0s' $(seq 1 200000))"
   local payload
   payload="$(printf '%s\ngit push' "${flood}${filler}" \
     | jq -Rs '{tool_name: "Bash", agent_type: "implementer", tool_input: {command: .}}')"
@@ -1247,8 +1249,12 @@ mk_fixture_global_config() {
 # call, so a later fixture that asks for none of them never inherits a prior fixture's values).
 # $push_home_empty (#304/#305) is a SEVENTH override: set to "1", it exports HOME as the
 # empty string for that one call instead of the neutral fixture HOME — the only way to fixture the
-# "~/… with HOME empty" residual, since $push_home_override always names a real directory. Cleared
-# after the call exactly like the other six. The environment mutation happens inside the "$(...)"
+# "~/… with HOME empty" residual, since $push_home_override always names a real directory.
+# $push_budget_override (#435) is an EIGHTH override: hooks/push-guard.sh's own
+# TBF_PUSH_GUARD_BUDGET_SECS knob is unset for every call by default (so no fixture accidentally
+# inherits a lowered analysis budget from an earlier one), and exported only when a fixture sets
+# this global immediately before calling run_push_guard. Cleared after the call exactly like the
+# other seven. The environment mutation happens inside the "$(...)"
 # command substitution's own implicit
 # subshell — a portable, bash-3.2/Git-Bash-safe idiom (this file's own convention prefers it to
 # `env -u`, which is not obviously safe across Git-Bash) — so it can never leak into this
@@ -1264,19 +1270,21 @@ push_sysroot_override=""
 push_git_config_system=""
 push_git_config_nosystem=""
 push_home_empty=""
+push_budget_override=""
 run_push_guard() {
   local json="$1" pathval="${2:-$PATH}" errfile="$tmpbase/push-guard-stderr"
   local home_val="${push_home_override:-$neutral_home}"
   local sysroot_val="${push_sysroot_override:-$neutral_sysroot}"
   [ "$push_home_empty" != "1" ] || home_val=""
   push_out="$(
-    unset XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM
+    unset XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM TBF_PUSH_GUARD_BUDGET_SECS
     export HOME="$home_val"
     export TBF_PUSH_GUARD_SYSCONFIG_ROOT="$sysroot_val"
     [ -z "$push_xdg_home" ] || export XDG_CONFIG_HOME="$push_xdg_home"
     [ -z "$push_git_config_global" ] || export GIT_CONFIG_GLOBAL="$push_git_config_global"
     [ -z "$push_git_config_system" ] || export GIT_CONFIG_SYSTEM="$push_git_config_system"
     [ -z "$push_git_config_nosystem" ] || export GIT_CONFIG_NOSYSTEM="$push_git_config_nosystem"
+    [ -z "$push_budget_override" ] || export TBF_PUSH_GUARD_BUDGET_SECS="$push_budget_override"
     printf '%s' "$json" | PATH="$pathval" "$bash_bin" "$push_guard" 2>"$errfile"
   )"
   push_rc=$?
@@ -1289,6 +1297,7 @@ run_push_guard() {
   push_git_config_system=""
   push_git_config_nosystem=""
   push_home_empty=""
+  push_budget_override=""
 }
 
 # expect_push_deny/expect_push_no_opinion — assert against $push_out/$push_err/$push_rc.
@@ -1310,6 +1319,43 @@ expect_push_no_opinion() {
   [ -z "$push_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$push_out'\n"; }
   [ -z "$push_err" ] || { __ok=0; __why="${__why}expected empty stderr, got: '$push_err'\n"; }
 }
+
+# mk_push_cmd_big CMD CWD (#435) — like mk_push_cmd_cwd, but CMD reaches jq on stdin (never a
+# --arg): the flood payloads the push-dl-* cases below build can exceed the per-argument exec limit
+# an --arg would hit (see case_ab_pc_deny_dbracket_timing above for the identical reasoning and the
+# Linux limit it names). Only the short CWD goes as a jq --arg.
+mk_push_cmd_big() {
+  printf '%s' "$1" | jq -Rs --arg cwd "$2" '{tool_name: "Bash", tool_input: {command: .}, cwd: $cwd}'
+}
+
+# expect_push_deny_exact LINE (#435) — expect_push_deny, plus an exact-string assertion against the
+# WHOLE stderr line (never a substring), for the two hand-typed #435 deny texts
+# (DL_DEADLINE_LINE/DL_CONFIGLINE_LINE below), where the whole line is the contract, not just a
+# fragment of it. Refuses an empty LINE outright (CLAUDE.md's empty-needle convention): an empty
+# LINE here would only "match" a push-guard.sh that denied with a genuinely empty stderr line, which
+# is itself a bug expect_push_deny above already treats as a failure — accepting an empty LINE here
+# would silently turn that same bug into a false pass instead.
+expect_push_deny_exact() {
+  local want="$1"
+  if [ -z "$want" ]; then
+    __ok=0; __why="${__why}expect_push_deny_exact called with an empty LINE (needle_required)\n"
+    return
+  fi
+  expect_push_deny
+  [ "$push_err" = "$want" ] || { __ok=0; __why="${__why}stderr: expected exactly '$want', got '$push_err'\n"; }
+}
+
+# DL_DEADLINE_LINE/DL_CONFIGLINE_LINE (#435) — the two fixed deny lines hooks/push-guard.sh's
+# deny_too_large() prints, hand-typed here exactly as in that function (the same convention
+# PUSH_DENY_STEM's literal text above already uses), so a drift between the two is a visible test
+# diff, never a silent pass.
+DL_DEADLINE_LINE="trail-blazer-flow push guard: denies this command: too large to analyse before the hook's time limit (blocked: command too large to analyse) — split it into smaller Bash calls; see README.md's Safety model"
+DL_CONFIGLINE_LINE="trail-blazer-flow push guard: denies this push: a git config file it reads has a line too long to analyse (blocked: config line too long to analyse) — shorten that line, or run the push from a terminal; see README.md's Safety model"
+
+# DL_TOPLEVEL_MAX_LINE_CHARS (#435) — the same hand-typed-literal convention as the two lines
+# above, mirroring hooks/push-guard.sh's own CFG_TOPLEVEL_MAX_LINE_CHARS value, for the two
+# push-dl-deny-toplevel-{over,at}-cap boundary fixtures below.
+DL_TOPLEVEL_MAX_LINE_CHARS=2048
 
 # --- deny: plain command and refspec-parsing clauses, derived from the parser's boundaries
 # (LESSON 2026-09-04), not from happy paths -------------------------------------------------------
@@ -2259,8 +2305,6 @@ case_push_cmdcfg_deny_precedence() {
 #   runs.
 # mutant:433-pg-fallback-drop -- disables the driver's post-loop xseg fallback outright, so no
 #   cross-segment deny ever fires.
-# mutant:433-pg-saw-push -- drops the fallback's "a push segment was actually seen" guard, so a
-#   bare cd/export command with NO push segment at all wrongly denies too.
 # mutant:433-pg-export-quotes -- stops stripping quotes from the export arm's own tokens, so a
 #   quoted `export "GIT_DIR=…"` is no longer recognised as naming GIT_DIR.
 # mutant:433-pg-cfg-export -- disables the export arm for #439's GIT_CONFIG_* names, so an
@@ -2601,8 +2645,10 @@ case_px_deny_never_executes() {
   [ "$before_other" = "$after_other" ] || { __ok=0; __why="${__why}other checkout's file listing changed — push-guard.sh wrote to or altered a file it should only read\n"; }
 }
 case_px_noop_cd_no_push() {
-  # Contains "push" and "git" (passes both raw-stdin fast paths) but has no PUSH segment at all --
-  # pins the driver's "saw_push" guard (mutant:433-pg-saw-push).
+  # Contains "push" and "git" (passes both raw-stdin fast paths) but has no PUSH segment at all.
+  # Since #435 the pre-deadline early exit returns no opinion for a scan with no PUSH line or
+  # sentinel before the driver ever runs, so the driver's own "saw_push" guard is defense in depth
+  # that no fixture can reach independently; this control pins the combined verdict.
   local main="$tmpbase/repo-px-y1"
   mk_fixture_repo "$main" main "claude/17-a"
   run_push_guard "$(mk_push_cmd_cwd 'cd ../other-y1 && git log --grep=push' "$main")"
@@ -3711,7 +3757,8 @@ case_push_include_deny_fanout_toplevel_route() {
   # A config tree that repeats the SAME include path K times per level fans out to about K^depth
   # follow operations (the ancestor-only seen-list's own re-read-every-sibling stance, applied
   # recursively). The deny route here lives in .git/config ITSELF, after the fan-out's own
-  # [include] block -- a depth-0 top-level read, never budgeted, with no line cap of its own -- so
+  # [include] block -- a depth-0 top-level read, never budgeted by line count (since #435, its own
+  # single-line LENGTH is capped, but this short line is nowhere near that cap) -- so
   # it must still be found once CFG_INCLUDE_MAX_FOLLOWS and CFG_INCLUDE_MAX_LINES together bound
   # the fan-out's own recursion.
   local dir="$tmpbase/repo-include-fanout-toplevel" k=3 depth=7 lvl next i
@@ -4026,7 +4073,12 @@ case_push_include_deny_never_executes() {
 #   count token itself as the resolved command word instead of the real command.
 # mutant:403-pg-pc-dbracket — disables the additive `]]` pass entirely (db_rest set to empty), so a
 #   zsh short `if [[ cond ]] cmd` form never resumes command position at `cmd`, whether the `]]` is
-#   mid-line, opens a second physical line, or is tab-bounded.
+#   mid-line, opens a second physical line, or is tab-bounded. Since #435, this also flips
+#   push-pc-deny-dbracket-timing's own reason: with the additive pass disabled outright, that
+#   fixture's flood+filler record never produces the CUT-push verdict the baseline asserts (the
+#   record's own trailing "git push origin main" denies via the ordinary default-branch route
+#   instead, fast) -- caught as a second, independent way this mutant fails that case, alongside the
+#   dbracket-specific cases below.
 # mutant:403-pg-pc-dbracket-truncate — reverts the MAIN segment split to the pre-fix truncating
 #   form (turning `]]` into a newline on that same pass), so a push segment whose own refspec/option
 #   tokens have a literal `]]` token among them (e.g. `git push origin ]] main`, `git push ]] --all`)
@@ -4220,8 +4272,17 @@ case_push_pc_deny_dbracket_cap() {
 # mutant:403-pg-pc-dbracket-overlap — restores overlapping tails (drops the standalone-`]]`
 #   alternative from the disjoint cut regex), so `if [[ a ]] git push origin ]] main`'s tail runs
 #   past the second `]]` and resolves the ordinary default-branch reason directly instead of failing
-#   closed on the CUT tail (the new reason), and fails case_push_pc_deny_dbracket_timing below's 5s
-#   bound.
+#   closed on the CUT tail (the new reason). On case_push_pc_deny_dbracket_timing below's larger
+#   (~1.4KB) shape, the CORRECT (disjoint-tail) baseline itself denies via the CUT-push reason (the
+#   first standalone `]]`'s own cut tail is just "git push", which resolves and cuts closed before
+#   ever reaching the trailing "git push origin main" record) -- that case now asserts this reason.
+#   With the overlap mutant restored, each of the 64 tails re-scans almost the whole remaining
+#   record as its own PUSH line, whose own REST is that same near-full text; evaluate_segment()'s
+#   refspec loop then forks a real refspec_dest() subshell per remaining token, once per tail. Since
+#   #435, check_deadline() is sampled inside that very refspec loop, so it is this SAMPLED,
+#   per-token fork cost (not the tokenizer's own unsampled awk pass) that the next check_deadline()
+#   call catches once it crosses the budget, denying with the deadline's own fixed reason instead --
+#   either way the mutant is still caught by reason, not only by the 5s wall-clock bound.
 case_push_pc_deny_dbracket_split_push() {
   # Disjoint tails alone would lose this deny: the tail after the first `]]` is cut at the SECOND
   # `]]`, leaving "git push origin" with no destination -- resolved as a CUT push (see
@@ -4268,7 +4329,217 @@ git push origin main")"
   run_push_guard "$payload"
   elapsed=$((SECONDS - start))
   expect_push_deny
+  # #435: asserts the reason too, not only rc/timing -- the correct, disjoint-tail baseline denies
+  # via the CUT-push reason, the SAME one case_push_pc_deny_dbracket_split_push above asserts (the
+  # first standalone `]]`'s own cut tail resolves to a bare "git push" with no destination, cut
+  # closed before the driver loop ever reaches the trailing "git push origin main" record). With the
+  # 403-pg-pc-dbracket-overlap mutant restored (see that mutant's own comment above for the
+  # refspec_dest()-fork mechanism), the resulting real wall-clock cost is instead what the analysis
+  # deadline's own next check_deadline() call catches -- a DIFFERENT fixed reason -- so the mutant
+  # is still caught by this reason check even if a future, looser timing bound would otherwise let
+  # it slip through on wall clock alone.
+  case "$push_err" in
+    *"(cannot analyse a push split by ]])"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(cannot analyse a push split by ]])': '$push_err'\n" ;;
+  esac
   [ "$elapsed" -lt 5 ] || { __ok=0; __why="${__why}took ${elapsed}s (SECONDS-granularity), expected under 5s\n"; }
+}
+
+# --- hooks/push-guard.sh: analysis deadline (#435) --------------------------------------------
+# Cases pinning check_deadline()'s call sites, the early scan_out exit, and the depth-0
+# config-line-length cap. Every payload below is built with mk_push_cmd_big (jq on stdin, never
+# --arg), and every fixture passes an explicit cwd, the same AMBIENT-$PWD/AMBIENT-$HOME rules the
+# rest of this file's push fixtures already follow. Unless noted, the command's final segment is a
+# default-branch push, so a sample site that is REMOVED (rather than merely neutered) still lets
+# the flood run to completion and deny via that ordinary route instead -- most of these cases are
+# killed by REASON (DL_DEADLINE_LINE/DL_CONFIGLINE_LINE vs. an ordinary deny message), not by wall
+# clock alone.
+case_push_dl_deny_budget_zero() {
+  # mutant:435-dl-check-off -- neuters check_deadline()'s body to a no-op; with the knob at 0,
+  # push_deadline == push_t0, so the very first sample (right after the tokenizer, well before this
+  # non-default push would otherwise reach a "no opinion" verdict) must deny -- with check_deadline
+  # neutered, this ordinary feature/x push has no opinion instead.
+  local dir="$tmpbase/repo-dl-budget-zero"
+  mk_fixture_repo "$dir" main feature/x
+  push_budget_override="0"
+  run_push_guard "$(mk_push_cmd_big 'git push origin feature/x' "$dir")"
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+}
+case_push_dl_noop_budget_zero_no_push() {
+  # mutant:435-dl-scan-empty-exit -- deletes the pre-deadline early exit; a command with no push
+  # segment at all must stay "no opinion" even at knob 0 -- without the early exit, control falls
+  # straight into the very next statement, check_deadline itself, which denies immediately at
+  # budget 0.
+  push_budget_override="0"
+  run_push_guard "$(mk_push_cmd_big 'git log --grep=push' "$tmpbase")"
+  expect_push_no_opinion
+}
+case_push_dl_noop_budget_zero_xseg_no_push() {
+  # mutant:435-dl-xseg-early-exit -- makes the early exit fire only on an EMPTY scan again; a command
+  # with a cd (so #433's "-xseg-" marker line is emitted) but no push segment must still stay "no
+  # opinion" at knob 0, since that marker alone never denies.
+  push_budget_override="0"
+  run_push_guard "$(mk_push_cmd_big 'cd x && git log --grep=push' "$tmpbase")"
+  expect_push_no_opinion
+}
+case_push_dl_deny_production_budget() {
+  # mutant:435-dl-check-off; mutant:435-dl-knob-raise -- FLOOD + TIMING (route 1: a flood of push
+  # segments). Knob 99 is two ASCII digits but not less than the production budget (5s), so it must
+  # be IGNORED -- 10000 harmless "git push o a a a a a;" segments each cost five
+  # refspec_dest() forks in evaluate_segment()'s n>=2 loop but never deny (remote "o" is skipped,
+  # and a bare "a" refspec never resolves to a deny member), so only check_deadline (sampled once
+  # per driver-loop iteration, and again inside each of evaluate_segment()'s own loops) can stop
+  # this well before the flood ever reaches the final "git push origin main" segment. With
+  # check-off, or with knob-raise adopting the ignored 99s budget, the flood instead runs to
+  # completion and denies via that final segment's ordinary reason, taking far longer than the 9s
+  # bound below.
+  local dir="$tmpbase/repo-dl-production-budget"
+  mk_fixture_repo "$dir" main feature/x
+  push_budget_override="99"
+  local flood
+  flood="$(printf 'git push o a a a a a;%.0s' $(seq 1 10000))"
+  local start=$SECONDS elapsed
+  run_push_guard "$(mk_push_cmd_big "${flood}git push origin main" "$dir")"
+  elapsed=$((SECONDS - start))
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+  [ "$elapsed" -lt 9 ] || { __ok=0; __why="${__why}took ${elapsed}s (SECONDS-granularity), expected under 9s\n"; }
+}
+case_push_dl_deny_driver_site() {
+  # mutant:435-dl-check-off; mutant:435-dl-driver-site -- a bare `-C` push (n == 0) runs ZERO
+  # iterations of every evaluate_segment() loop (word-splitting an empty REST yields no tokens), and
+  # the resolved lane carries no config of its own, so cfg_parse_file()'s read loop never runs
+  # either: the driver loop's own check_deadline call, sampled once per PUSH line dequeued, is the
+  # ONLY sample reachable on this path. 3000 resolved "-C" targets (route 3: many resolved -C
+  # lanes), each a fresh resolve_repo() call, then a final bare session push -- without the
+  # driver-loop sample, the flood completes and the final push denies via the session's own current
+  # branch instead.
+  local main="$tmpbase/repo-dl-drv" wt="$tmpbase/dl-drv-wt-1"
+  mk_fixture_repo "$main" main main
+  mk_fixture_repo "$wt" trunk feature/x
+  push_budget_override="1"
+  local flood
+  flood="$(printf 'git -C ../dl-drv-wt-1 push;%.0s' $(seq 1 3000))"
+  run_push_guard "$(mk_push_cmd_big "${flood}git push" "$main")"
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+}
+case_push_dl_deny_evaluate_sites() {
+  # mutant:435-dl-check-off; mutant:435-dl-evaluate-sites -- ONE push segment whose own refspec list
+  # is huge (10000 harmless "a" tokens, then "main"): the driver loop samples check_deadline only
+  # ONCE for this single segment, so without evaluate_segment()'s own four internal samples, its
+  # refspec loop (idx 1..n-1) runs to completion in one shot and finds "main" as the last refspec,
+  # denying via that ordinary dest reason instead.
+  local dir="$tmpbase/repo-dl-evaluate-sites"
+  mkdir -p "$dir"
+  push_budget_override="1"
+  local filler
+  filler="$(printf ' a%.0s' $(seq 1 10000))"
+  run_push_guard "$(mk_push_cmd_big "git push origin${filler} main" "$dir")"
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+}
+case_push_dl_deny_config_lines() {
+  # mutant:435-dl-check-off; mutant:435-dl-cfgline-site -- a bare `-C` push (n == 0, so no
+  # evaluate_segment() loop ever iterates -- see case_push_dl_deny_driver_site above) resolves a
+  # lane whose depth-0 config is M harmless "[core]" lines, each safely UNDER the new
+  # CFG_TOPLEVEL_MAX_LINE_CHARS cap (so the length cap never fires): only cfg_parse_file()'s own
+  # read-loop sample can stop this mid-parse. Without it, the whole file is read and trimmed in
+  # full (M sized, per the approved sizing rule, so the check-off run comfortably clears the
+  # required multiple of the knob), then the lane's OWN current branch (main) gives an ordinary
+  # dest deny with no sampled loop ever having run.
+  local main="$tmpbase/repo-dl-cfg" wt="$tmpbase/dl-cfg-wt-1"
+  mk_fixture_repo "$main" trunk feature/x
+  mk_fixture_repo "$wt" main main
+  local sp line_lit body
+  sp="$(printf ' %.0s' $(seq 1 400))"
+  # $(...) strips printf's own trailing newline, so it is re-added outside the substitution; the
+  # printf '%.0s' idiom below (mirroring case_ab_pc_deny_dbracket_timing/mk_push_cmd_big's own
+  # flood builders) then repeats this one already-newline-terminated line 1500 times without ever
+  # building the whole body via O(n^2) bash string concatenation.
+  line_lit="$(printf '\tx = y%s' "$sp")"$'\n'
+  body="[core]"$'\n'"$(printf "${line_lit}%.0s" $(seq 1 1500))"
+  mk_fixture_config "$wt" "$body"
+  push_budget_override="1"
+  run_push_guard "$(mk_push_cmd_big 'git -C ../dl-cfg-wt-1 push' "$main")"
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+}
+case_push_dl_deny_c_lane_flood() {
+  # mutant:435-dl-check-off -- FLOOD (route 3: many resolved -C lanes). Many resolved "-C" targets,
+  # each with an [include] pointing at a 2000-line, all-comment big.inc (no route, cheap per line,
+  # but real per-line and per-resolution overhead across that many separate resolve_repo() calls
+  # adds up -- sized, per the approved sizing rule, so the check-off run comfortably clears the
+  # required multiple of the knob), then a final bare session push to "main" -- without
+  # check_deadline (sampled both in the driver loop, once per segment, and inside
+  # cfg_parse_file()'s own read loop, once per include line), the flood completes and the final
+  # segment denies via the ordinary fallback route instead.
+  local main="$tmpbase/repo-dl-inc" wt="$tmpbase/dl-inc-wt-1"
+  mk_fixture_repo "$main" trunk feature/y
+  mk_fixture_repo "$wt" trunk feature/z
+  mk_fixture_config "$wt" $'[include]\n\tpath = big.inc\n'
+  printf ';c\n%.0s' $(seq 1 2000) > "$wt/.git/big.inc"
+  push_budget_override="1"
+  local flood
+  flood="$(printf 'git -C ../dl-inc-wt-1 push origin feature/x;%.0s' $(seq 1 120))"
+  local start=$SECONDS elapsed
+  run_push_guard "$(mk_push_cmd_big "${flood}git push origin main" "$main")"
+  elapsed=$((SECONDS - start))
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+  [ "$elapsed" -lt 9 ] || { __ok=0; __why="${__why}took ${elapsed}s (SECONDS-granularity), expected under 9s\n"; }
+}
+case_push_dl_deny_toplevel_longline() {
+  # mutant:435-dl-toplevel-cap -- TIMING (route 2: one long whitespace-run line in a depth-0
+  # config). Production budget (no knob): the resolved lane's LAST (and only consequential) config
+  # line is "\tx = a" plus 20000 trailing spaces, well over the cap -- caught instantly by
+  # `${#cfgline}` before cfg_trim() ever runs on it. Without the cap, this single line's whole-line
+  # and value trims each cost real seconds against bash's own glob engine (see cfg_trim()'s own
+  # header comment), there is no LATER line left for the read-loop's check_deadline sample to catch
+  # (this is the last line in the file), and the lane's own current branch (main) then gives an
+  # ordinary dest deny -- taking far longer than the 9s bound below.
+  local main="$tmpbase/repo-dl-longline" wt="$tmpbase/dl-long-wt-1"
+  mk_fixture_repo "$main" trunk feature/x
+  mk_fixture_repo "$wt" main main
+  local sp
+  sp="$(printf ' %.0s' $(seq 1 20000))"
+  mk_fixture_config "$wt" "[core]"$'\n\tx = a'"${sp}"$'\n'
+  local start=$SECONDS elapsed
+  run_push_guard "$(mk_push_cmd_big 'git -C ../dl-long-wt-1 push' "$main")"
+  elapsed=$((SECONDS - start))
+  expect_push_deny_exact "$DL_CONFIGLINE_LINE"
+  [ "$elapsed" -lt 9 ] || { __ok=0; __why="${__why}took ${elapsed}s (SECONDS-granularity), expected under 9s\n"; }
+}
+case_push_dl_deny_toplevel_over_cap() {
+  # mutant:435-dl-toplevel-cap -- the session's OWN config carries a denying
+  # "remote.origin.push = HEAD:main" route, but padded with a trailing, unquoted ";"-comment of 'x'
+  # characters to exactly ONE character past CFG_TOPLEVEL_MAX_LINE_CHARS. The raw line's own length
+  # (checked BEFORE comment-strip) is what must deny here, with the DIFFERENT (configline) reason --
+  # not the ordinary remote.origin.push route the comment-stripped, short remainder would otherwise
+  # still reach. Without the cap, the trailing 'x' run is cheap (comment-strip removes it before
+  # cfg_trim ever sees it), so this denies via the ordinary route instead.
+  local dir="$tmpbase/repo-dl-over-cap"
+  mk_fixture_repo "$dir" trunk feature/x
+  local prefix pad
+  prefix=$'\tpush = HEAD:main ;'
+  pad="$(printf 'x%.0s' $(seq 1 $((DL_TOPLEVEL_MAX_LINE_CHARS + 1 - ${#prefix}))))"
+  mk_fixture_config "$dir" '[remote "origin"]'$'\n'"${prefix}${pad}"$'\n'
+  run_push_guard "$(mk_push_cmd_big 'git push' "$dir")"
+  expect_push_deny_exact "$DL_CONFIGLINE_LINE"
+}
+case_push_dl_deny_toplevel_at_cap() {
+  # mutant:435-dl-toplevel-cap-off-by-one -- the identical shape as
+  # case_push_dl_deny_toplevel_over_cap, padded to EXACTLY CFG_TOPLEVEL_MAX_LINE_CHARS: a line this
+  # long must still be parsed normally (Acceptance criteria), reaching the ordinary
+  # remote.origin.push route. An off-by-one cap (`-lt` instead of `-le`) instead denies this
+  # boundary-length line outright, with the wrong (configline) reason.
+  local dir="$tmpbase/repo-dl-at-cap"
+  mk_fixture_repo "$dir" trunk feature/x
+  local prefix pad
+  prefix=$'\tpush = HEAD:main ;'
+  pad="$(printf 'x%.0s' $(seq 1 $((DL_TOPLEVEL_MAX_LINE_CHARS - ${#prefix}))))"
+  mk_fixture_config "$dir" '[remote "origin"]'$'\n'"${prefix}${pad}"$'\n'
+  run_push_guard "$(mk_push_cmd_big 'git push' "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"via remote.origin.push in .git/config"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'via remote.origin.push in .git/config': '$push_err'\n" ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -4326,8 +4597,9 @@ run_claude_guard() {
 
 # expect_cdg_deny_claude/expect_cdg_deny_unclassifiable/expect_cdg_no_opinion — assert against
 # $cdg_out/$cdg_err/$cdg_rc. Each deny helper hand-types its own literal stem/phrase inline rather
-# than taking a needle parameter, keeping this file's documented property (CLAUDE.md: "its only
-# substring test hand-types the literal inline, never through a needle-taking helper").
+# than taking a needle parameter — this file's own substring tests do this throughout, with one
+# exception, `expect_push_deny_exact` (#435), which does take a needle and guards it against being
+# empty (see CLAUDE.md's empty-needle bullet).
 expect_cdg_deny_claude() {
   [ "$cdg_rc" -eq 2 ] || { __ok=0; __why="${__why}rc: expected 2, got $cdg_rc\n"; }
   [ -z "$cdg_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$cdg_out'\n"; }
@@ -6888,7 +7160,7 @@ cases=(
   "push-xseg-deny-inseg-precedence|case_px_deny_inseg_precedence|deny: cd ../other-x18 && git --git-dir=../other-x18/.git push origin develop -- the push segment's OWN in-segment reason (#292's --git-dir) keeps precedence over the cross-segment fallback -- control, not part of the mutation-proof registry (see the section header above for why)"
   "push-xseg-deny-codex-main-session|case_px_deny_codex_main_session|deny: a Codex-shaped main-session payload (mk_codex_shell '') with cd ../other-x19 && git push origin develop -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
   "push-xseg-deny-never-executes|case_px_deny_never_executes|deny via the cross-segment route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND BOTH the session repo's and the other checkout's file listings are byte-identical before/after -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
-  "push-xseg-noop-cd-no-push|case_px_noop_cd_no_push|no opinion: cd ../other-y1 && git log --grep=push -- contains \"push\" and \"git\" but has no PUSH segment at all -- mutation proof: dev/mutants/hook-tests.json (433-pg-saw-push)"
+  "push-xseg-noop-cd-no-push|case_px_noop_cd_no_push|no opinion: cd ../other-y1 && git log --grep=push -- contains \"push\" and \"git\" but has no PUSH segment at all -- control (the #435 early exit answers first; the driver's saw_push guard is defense in depth)"
   "push-xseg-noop-cd-as-argument|case_px_noop_cd_as_argument|no opinion: echo cd && git push origin feature/x -- \"cd\" here is an argument, never the resolved command word -- control, not part of the mutation-proof registry"
   "push-xseg-noop-export-unrelated|case_px_noop_export_unrelated|no opinion: export GIT_TRACE=1; git push origin feature/x -- an unrelated exported variable is never flagged -- mutation proof: dev/mutants/hook-tests.json (433-pg-export-exact)"
   "push-deny-config-remote-push-bare|case_pd_config_remote_push_bare|deny: git push against a repo whose config carries [remote \"origin\"] push = HEAD:main (#268, the issue's own shape) -- measured: M26, 68 pass 12 fail"
@@ -7025,6 +7297,18 @@ cases=(
   "push-cmdcfg-noop-nonpush-segment|case_push_cmdcfg_noop_nonpush_segment|no opinion: git -c core.pager=cat log && git push origin feature/x -- only push segments are judged, and the flag doesn't leak across segments -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-push-only, 439-pg-cmdcfg-leak)"
   "push-cmdcfg-noop-env-nosystem|case_push_cmdcfg_noop_env_nosystem|no opinion: GIT_CONFIG_NOSYSTEM=1 git push origin feature/x -- exact vocabulary, not every GIT_CONFIG_-prefixed name -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-env-exact)"
   "push-cmdcfg-deny-precedence|case_push_cmdcfg_deny_precedence|deny: GIT_DIR=x GIT_CONFIG_COUNT=1 git push origin feature/x -- the command-line-config reason wins over a #292 unresolved target in the same segment -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-env-arm, 439-pg-cmdcfg-env-vocab, 439-pg-cmdcfg-order)"
+  # --- hooks/push-guard.sh: analysis deadline (#435) cases ----------------------------------------
+  "push-dl-deny-budget-zero|case_push_dl_deny_budget_zero|knob 0 denies the very first sample even for an ordinary feature/x push -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off)"
+  "push-dl-noop-budget-zero-no-push|case_push_dl_noop_budget_zero_no_push|no push segment stays no-opinion even at knob 0, via the pre-deadline scan_out exit -- mutation proof: dev/mutants/hook-tests.json (435-dl-scan-empty-exit)"
+  "push-dl-noop-budget-zero-xseg-no-push|case_push_dl_noop_budget_zero_xseg_no_push|a cd with no push segment (only #433's marker line in the scan) stays no-opinion even at knob 0 -- mutation proof: dev/mutants/hook-tests.json (435-dl-scan-empty-exit, 435-dl-xseg-early-exit)"
+  "push-dl-deny-production-budget|case_push_dl_deny_production_budget|FLOOD+TIMING route 1: 10000x harmless push segments, knob 99 ignored (not less than the 5s production budget) -- deny AND elapsed under 9s -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-knob-raise)"
+  "push-dl-deny-driver-site|case_push_dl_deny_driver_site|FLOOD route 3: 3000x bare -C push (zero evaluate_segment loop iterations, no lane config), only the driver-loop sample can stop it -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-driver-site)"
+  "push-dl-deny-evaluate-sites|case_push_dl_deny_evaluate_sites|one push segment with a 10000-token refspec list -- only evaluate_segment()'s own internal samples can stop its refspec loop before it reaches the trailing main -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-evaluate-sites)"
+  "push-dl-deny-config-lines|case_push_dl_deny_config_lines|bare -C push resolving a lane with a many-line, under-cap depth-0 config -- only cfg_parse_file()'s read-loop sample can stop the parse mid-file -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-cfgline-site)"
+  "push-dl-deny-c-lane-flood|case_push_dl_deny_c_lane_flood|FLOOD route 3: 120x resolved -C lanes each including a 2000-line all-comment file -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off)"
+  "push-dl-deny-toplevel-longline|case_push_dl_deny_toplevel_longline|TIMING route 2: a depth-0 line padded with 20000 trailing spaces denies instantly via the length cap; without it, no later line exists for the read-loop sample to catch, so the quadratic trim runs to completion -- deny AND elapsed under 9s -- mutation proof: dev/mutants/hook-tests.json (435-dl-toplevel-cap)"
+  "push-dl-deny-toplevel-over-cap|case_push_dl_deny_toplevel_over_cap|a depth-0 line one character past the cap denies via the length check (checked before comment-strip), not the ordinary route its comment-stripped remainder would otherwise still reach -- mutation proof: dev/mutants/hook-tests.json (435-dl-toplevel-cap)"
+  "push-dl-deny-toplevel-at-cap|case_push_dl_deny_toplevel_at_cap|a depth-0 line at EXACTLY the cap is still parsed normally, reaching the ordinary remote.origin.push route -- mutation proof: dev/mutants/hook-tests.json (435-dl-toplevel-cap-off-by-one)"
   # --- hooks/claude-dir-guard.sh (#327) cases -----------------------------------------------------
   # Mutation-proof table (LESSON 2026-09-01/2026-09-07(b), one mutant per classifier clause,
   # applied in place with an immediately-refreshed backup and a full `diff` verify after every

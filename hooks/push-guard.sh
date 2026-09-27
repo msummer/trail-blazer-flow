@@ -6,8 +6,11 @@
 # any push whose resolved DESTINATION is the repo's default branch, ALSO denies a push segment
 # whose target repository it cannot resolve at all (#292 — see "Fail-closed: an unresolvable push
 # target" below), ALSO denies a push segment carrying git config supplied on the command line
-# (#439 — see "Fail-closed: command-line git config" below), and says nothing (exit 0, empty
-# stdout, empty stderr — "no opinion") about everything else, so the normal permission flow — a prompt, or a matching deny rule in
+# (#439 — see "Fail-closed: command-line git config" below), ALSO denies, since #435, a command
+# whose analysis cannot finish inside this hook's own time budget, or a push that reads a git config
+# file with a depth-0 line too long to analyse safely (see "Analysis deadline (#435)" below), and
+# says nothing (exit 0, empty stdout, empty stderr — "no opinion") about everything else, so the
+# normal permission flow — a prompt, or a matching deny rule in
 # templates/repo-settings.json, which always wins over this hook's decision — applies. This closes
 # the gap #260 names: the settings deny entries
 # `Bash(git push origin main:*)` / `Bash(git -C * push origin main*)` are prefix-matched and are
@@ -15,8 +18,9 @@
 # than `origin` — this hook parses the refspec instead of pattern-matching the raw command text.
 #
 # Enforces "deny a push whose destination is the default branch", "deny a push whose target
-# repository cannot be resolved at all" (#292), and "deny a push segment carrying command-line git
-# config" (#439); does NOT enforce an
+# repository cannot be resolved at all" (#292), "deny a push segment carrying command-line git
+# config" (#439), and, since #435, "deny a command (or a config line it reads) too large to analyse
+# safely inside this hook's own time budget"; does NOT enforce an
 # allow-list of `claude/<n>-<slug>` destinations (the Decision's other clause) — that would deny
 # ordinary work (a `release/vX.Y.Z` branch, an annotated-tag push, any `git push origin
 # feature/x` a human runs in ANY Claude Code session in a plugin-enabled repo, since this hook is
@@ -98,12 +102,18 @@
 # static list, an unresolvable include form, and `config.worktree`) — the env-injected
 # `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` forms are no longer among them:
 # since #439, a push segment carrying one of those is denied outright (see "Fail-closed:
-# command-line git config" below), never silently read as config. A depth-0 top-level candidate is read whole, with
-# no size, line-count, or line-length cap, never budgeted — a single pathological TOP-LEVEL file
-# (very many lines, or a single very long line or whitespace run — `cfg_trim()`'s own pattern
-# matching is not uniformly fast for the latter shape, see that function's header comment) simply
-# degrades to Claude Code's 10s hook timeout (silence, the same fail-open every other resolution
-# failure already has); this residual is unchanged and pre-existing, not introduced by this hook.
+# command-line git config" below), never silently read as config. A depth-0 top-level candidate is
+# read whole, with no size or line-count cap of its own — never budgeted the way an included file's
+# four axes below are. Since #435, a single line's own LENGTH is capped instead
+# (`CFG_TOPLEVEL_MAX_LINE_CHARS`, checked before comment-strip or trim ever run on it) and denies
+# outright rather than ever reaching `cfg_trim()`'s own pattern matching, which is not uniformly
+# fast for a long line or whitespace run (see that function's header comment); and
+# `check_deadline()` (see "Analysis deadline (#435)" below) samples this read loop on every line,
+# so a pathological many-line TOP-LEVEL file that keeps this hook running past its own analysis
+# budget now denies with a fixed reason instead of silently degrading all the way to Claude Code's
+# 10s hook timeout (silence, the same fail-open every other resolution failure already has). That
+# closes the many-line half of the residual this class used to name; the one full-line `read` of a
+# single config line remains a residual at every depth (see below).
 # An INCLUDED file (depth >= 1) is bounded on four independent axes instead: `CFG_INCLUDE_MAX_FOLLOWS`
 # (below) caps how many times an include is ever followed across one whole `resolve_repo()` call;
 # `CFG_INCLUDE_MAX_LINES` (below) separately caps the TOTAL lines read across every followed file
@@ -119,18 +129,25 @@
 # cannot prevent is the SINGLE line, in whichever file happens to already be open, whose own read
 # is what drives the line-count or character budget past zero: that one line is read in full (the
 # read loop's own builtin redirect takes a whole line at a time) before the check that follows it
-# can break — grouped with the depth-0 top-level file's own long-line residual above as the same
-# class: at most one very long line, read once per `resolve_repo()` call, not further processed.
-# Every depth-0 top-level candidate is still always read in full, so none of these four axes can
-# ever mask a pre-#304/#305 route WITHIN ONE RESOLUTION. All four axes, and the uncapped depth-0
-# read itself, are bounded PER `resolve_repo()` call, never across the whole hook invocation: since
-# #269 (below), this hook calls `resolve_repo()` once for the SESSION checkout and once MORE for
-# every push segment whose own `-C` value resolves a checkout of its own, so a single command
-# naming enough such resolved `-C` targets — each supplying its own at-cap-but-legal include
-# content, or its own large top-level file — multiplies this same bounded work across resolutions
-# exactly as it already multiplies the uncapped depth-0 read, and can still cross Claude Code's own
-# hook timeout even though no single resolution ever exceeds its own caps: the same class of
-# residual as the depth-0 long-line case above, reached a different way, not fixed here. See
+# can break — at most one very long line, read once per `resolve_repo()` call, not further
+# processed (the same one-line `read` cost applies to a depth-0 line too — the length cap is
+# checked only AFTER that `read` already has the whole line, so it does not avoid the read itself;
+# since #435, though, once read, an over-cap depth-0 line is denied outright before it can ever
+# reach the SLOW TRIM this residual is really about — see above and `cfg_trim()`'s own header
+# comment). Every depth-0 top-level candidate is
+# still always read in full, so none of these four axes can ever mask a pre-#304/#305 route WITHIN
+# ONE RESOLUTION. All four axes, and the uncapped depth-0 read itself, are bounded PER
+# `resolve_repo()` call, never across the whole hook invocation: since #269 (below), this hook calls
+# `resolve_repo()` once for the SESSION checkout and once MORE for every push segment whose own `-C`
+# value resolves a checkout of its own, so a single command naming enough such resolved `-C`
+# targets — each supplying its own at-cap-but-legal include content, or its own large top-level
+# file — multiplies this same bounded work across resolutions exactly as it already multiplies the
+# uncapped depth-0 read; since #435, though, `check_deadline()` (see "Analysis deadline (#435)"
+# below) is sampled inside `cfg_parse_file()`'s own read loop on every line, for every
+# `resolve_repo()` call across the WHOLE hook invocation, against one deadline computed once at hook
+# start — so this accumulated, per-resolution-uncapped work now denies with the fixed deadline
+# reason well before it can cross Claude Code's own hook timeout, closing this residual rather than
+# leaving it open. See
 # `cfg_parse_file()`'s own header comment for where every budget is spent. Any failure at
 # any step leaves both branch values, and the config-derived variables, empty — never an error,
 # never a non-zero exit from this hook on that account alone.
@@ -535,17 +552,19 @@
 # processed; the one exception is the single line, in whichever file already happens to be open,
 # whose own read is what drives the line-count or character budget past zero — that one line is
 # read in full before the check that follows it can break, the same "one very long line, read once"
-# residual the depth-0 top-level case below already has; every depth-0 top-level candidate is still
-# always read in full, with no such cap of its own, so none of the four can ever mask a
-# pre-#304/#305 route WITHIN ONE RESOLUTION — though all four axes, like the depth-0 read itself,
-# are bounded PER `resolve_repo()` call, never across the whole hook invocation (see the "Repo
-# resolution" paragraph above): a depth-0 TOP-LEVEL file with very many lines, or a single very long
-# line or whitespace run, can still exceed Claude Code's own hook timeout on its own, a pre-existing
-# residual this class of fix does not close; so can a single command naming enough resolved `-C`
-# push segments (#269 above), each supplying its own at-cap-but-legal include content or its own
-# large top-level file, since every one of them gets its own fresh set of these same caps and the
-# work each spends is not shared or capped across the whole command — the identical class of
-# residual, reached a different way, also not closed here),
+# residual the depth-0 top-level case below already has too (that one `read` cost is unchanged by
+# #435; since #435, though, once read, a depth-0 line over the cap denies outright before the same
+# SLOW TRIM this residual is about ever runs on it — see above); every depth-0 top-level
+# candidate is still always read in full, with no LINE-COUNT cap of its own, so none of the four can
+# ever mask a pre-#304/#305 route WITHIN ONE RESOLUTION — though all four axes, like the depth-0
+# read itself, are bounded PER `resolve_repo()` call, never across the whole hook invocation (see
+# the "Repo resolution" paragraph above): since #435, `check_deadline()` samples this same read loop
+# on every line, for every `resolve_repo()` call across the WHOLE hook invocation, against one
+# deadline set once at hook start — so a depth-0 TOP-LEVEL file with very many lines, and a single
+# command naming enough resolved `-C` push segments (#269 above) each supplying its own
+# at-cap-but-legal include content or its own large top-level file, both now deny with the fixed
+# deadline reason well before either can cross Claude Code's own hook timeout, closing this residual
+# rather than leaving it open),
 # or an
 # include value or `includeIf` condition containing an unquoted `#`/`;` (truncated by the same
 # comment-strip every other line goes through, or the header falls to the generic "other"
@@ -595,17 +614,82 @@
 # unconditional `main`/`master` fallback), OR whose target repository this hook cannot resolve at
 # all (#292 — see "Fail-closed: an unresolvable push target" above), OR whose push segment carries
 # git config supplied on the command line (#439 — see "Fail-closed: command-line git config"
-# above), in which case print exactly
-# one reason line to stderr and exit 2 ("deny"); stdout is always empty. Wired in hooks/hooks.json via
+# above), OR, since #435, whose analysis cannot finish inside this hook's own time budget, or that
+# reads a git config file with a depth-0 line too long to analyse safely (see "Analysis deadline
+# (#435)" below), in which case print exactly one reason line to stderr and exit 2 ("deny"); stdout
+# is always empty. Wired in hooks/hooks.json via
 # `${CLAUDE_PLUGIN_ROOT}`, with no `if` gate — an `if` filter matches only `tool_input.command`
 # constituents after composite splitting and leading-assignment stripping, so it cannot see a
 # `git -C <wt> push …`, `env git push …`, or `bash -c "git push …"` form; any `if` here would
 # silence this hook for exactly the commands it exists to catch (same reasoning as
 # hooks/agent-boundary.sh's own registration — see hooks/hooks.json's `.description`).
+#
+# Analysis deadline (#435). This hook's own analysis (everything from the tokenizer onward) is
+# bounded by a whole-second wall-clock budget, `PUSH_ANALYSIS_BUDGET_SECS` below (5s in
+# production), sampled from `$SECONDS` as an elapsed difference from `push_t0` (captured at the very
+# top of this script, right after `set -f`): `check_deadline()` denies with a fixed reason
+# (`deny_too_large deadline`) the first time `$SECONDS` reaches `push_deadline` (`push_t0 +
+# push_budget`) — never by resetting `$SECONDS` itself. The sampling rule this binds on every future
+# addition to this file — #439 has already landed entirely inside the awk tokenizer (its own
+# "-cmdline-config-" sentinel, covered by `T_prefix` below, the linear pre-tokenizer cost this
+# deadline cannot sample around at all), and #433 has landed in the awk tokenizer plus one
+# constant-cost post-loop fallback: call `check_deadline` as the FIRST statement of every loop whose trip
+# count grows with the command string or a config file's own content — never partway through a loop
+# body, and never only once at the top of a function that itself contains such a loop. The early
+# exit right after the tokenizer, before the deadline is ever sampled, continues only when the scan
+# holds a "PUSH" line or a `-too-many-dbrackets-`/`-cut-push-`/`-cmdline-config-` sentinel — a scan
+# that is empty, or holds nothing but #433's own `-xseg-` marker line, exits with no opinion — so a
+# command with no push segment is never denied merely for being large: this is the identical verdict
+# the driver loop below would reach anyway (nothing it would deny on), just reached without spending
+# any of the budget getting there. The one step this deadline's sampling cannot reach MID-step is a single depth-0 (top-level)
+# config line's own read and trim: `cfg_trim()`'s own pattern matching is not uniformly fast for a
+# long whitespace run (see that function's header comment), so instead of merely sampling around it,
+# `CFG_TOPLEVEL_MAX_LINE_CHARS` below caps that line's own length outright, checked with the cheap
+# `${#cfgline}` before comment-strip or trim ever run on it, and denies (`deny_too_large configline`)
+# rather than ever letting an over-cap line reach either one — fail-closed, not silently skipped, so
+# a route on the far side of that line is never missed the way an over-budget include's excess
+# content already is. A test-only knob, `TBF_PUSH_GUARD_BUDGET_SECS`, is read from the ENVIRONMENT
+# only (never from the untrusted command string) and can only LOWER `push_budget` below
+# `PUSH_ANALYSIS_BUDGET_SECS` — adopted only when it is exactly one or two ASCII digits and strictly
+# less than the production budget; any other value (empty, non-numeric, three-plus digits, or a
+# value that is not strictly less) is ignored outright, so this knob can make a fixture deny sooner
+# against a small, fast payload, but can never raise the budget or reopen a fail-open path in
+# production. Worst-case wall clock for the whole hook, stated here for review: at most
+# `max(push_budget, T_prefix(L)) + U_max`, where `T_prefix` is the LINEAR (in the command's own
+# length L) pre-tokenizer prefix this deadline cannot sample around at all — `cat`, the two
+# fast-path glob checks, four `jq` invocations, the CR strip, and the awk tokenizer itself, whose own
+# additive `]]` pass costs at most `DBRACKET_MAX` times one record's length — counted by the wall
+# clock even though unsampled, so the very next `check_deadline()` call denies at once if that prefix
+# alone already spent the whole budget; and `U_max` is the largest single step this deadline cannot
+# interrupt mid-step: one session upward walk (at most 64 levels, each an `[ -f ]`-guarded probe,
+# plus up to 63 `dirname` subshell+exec forks — one per level that finds no `.git`, via
+# `resolve_repo()`'s own `parent="$(dirname "$dir" …)"` — when no `.git` is ever found before the
+# depth cap), one config line's comment-strip plus up to three `cfg_trim()` calls (at most
+# `CFG_TOPLEVEL_MAX_LINE_CHARS`/`CFG_INCLUDE_MAX_LINE_CHARS` characters, quadratic only in that
+# capped length), one include open, up to two `grep` processes plus a depth-1 resolve's file stats,
+# one `refspec_dest()` subshell, one word-split of a segment's remaining tokens, or the `read` of a
+# single config line (linear in that line's own length). Residuals this deadline does NOT close: the
+# `T_prefix` work above is linear and unsampled, though still bounded by the wall clock rather than
+# by the deadline's own sampling; the single config-line `read` inside `U_max` is spent before
+# `check_deadline` can run again; and the Codex CLI's own hook timeout, if any, is UNVERIFIED here —
+# this deadline is sized against Claude Code's own documented 10s PreToolUse timeout only
+# (`hooks/hooks.json`'s `"timeout": 10`), not against an unknown Codex figure. Two new over-blocking
+# classes follow directly from this: a legitimately huge, but entirely benign, Bash command now
+# denies as "too large to analyse" once its own analysis crosses the budget, with no way to widen
+# the budget from the command itself; and any push in ANY Claude Code session now denies when a git
+# config file it resolves (system, global, or repo-local, at depth 0) has a single line over
+# `CFG_TOPLEVEL_MAX_LINE_CHARS` characters — since a single `$HOME/.gitconfig` or system file is
+# shared across every repo a session might resolve, one such line denies every push segment that
+# reads it, in every repo, until that line is shortened.
 set -uo pipefail
 set -f  # noglob: untrusted refspec tokens are word-split unquoted below (e.g. in evaluate_segment
         # and the token-array builders); a token shaped like "*:main" must never glob-expand
         # against files in $PWD or a resolved repo directory.
+
+# #435: sampled once, at hook start; every check_deadline() call below (see "Analysis deadline
+# (#435)" in this file's header) measures elapsed time as the difference from this value, never by
+# resetting $SECONDS itself.
+push_t0=$SECONDS
 
 # --- vocabulary ----------------------------------------------------------------------------
 # Grep-extractable single-line KEY="value" declarations (the 2.5/4.36-4.39 idiom) — kept on their
@@ -661,7 +745,9 @@ CFG_INCLUDE_MAX_FOLLOWS=64
 # #304/#305: caps the TOTAL number of LINES read across every included file combined, for one
 # whole resolve_repo() call (depth >= 1 only, shared and never reset per file, the same way
 # CFG_INCLUDE_MAX_FOLLOWS is never reset per follow — a depth-0 top-level candidate is always read
-# in full, never budgeted). A follow-count budget alone does not bound total work: a handful of
+# in full: never budgeted by line count or character count, though since #435 its own single-line
+# LENGTH is capped separately, see CFG_TOPLEVEL_MAX_LINE_CHARS below). A follow-count budget alone
+# does not bound total work: a handful of
 # follows of one large file (well within CFG_INCLUDE_MAX_FOLLOWS) can still cost as many lines of
 # parsing as the file is long. This caps that dimension: how many LINES of included content are
 # ever read in total, independent of how many files are followed. It says nothing about how LONG
@@ -688,6 +774,14 @@ CFG_INCLUDE_MAX_LINE_CHARS=512
 # CFG_INCLUDE_MAX_LINES: many lines just under CFG_INCLUDE_MAX_LINE_CHARS could otherwise still
 # exhaust real time well before CFG_INCLUDE_MAX_LINES lines are reached.
 CFG_INCLUDE_MAX_CHARS=65536
+# #435: whole-second budget (SECONDS granularity) this hook's own analysis may spend, sampled by
+# check_deadline() below, before it denies as too large to analyse rather than risk running past
+# Claude Code's 10s PreToolUse hook timeout — see "Analysis deadline (#435)" in this file's header.
+PUSH_ANALYSIS_BUDGET_SECS=5
+# #435: a depth-0 (top-level) config line longer than this many characters denies outright, checked
+# BEFORE comment-strip or trim ever run on it, instead of reaching cfg_trim() — see that function's
+# own header comment for why a long line or whitespace run there is not uniformly fast.
+CFG_TOPLEVEL_MAX_LINE_CHARS=2048
 # #292: a push segment naming either of these two classes always redirects which repository the
 # push actually runs in, and this hook does not resolve either one — GIT_REPO_OPTS is a global
 # option (detached "<opt> <value>" or attached "<opt>=<value>"), GIT_REPO_ENV_VARS is a leading
@@ -729,6 +823,40 @@ GIT_CMDCFG_ENV_PREFIXES="GIT_CONFIG_KEY_ GIT_CONFIG_VALUE_"
 # here-string has no writer process, so no SIGPIPE is possible (hooks/git-c-guard.sh's own
 # validate_segment() use of PATH_ERE is the precedent this copies).
 is_c_target_path() { grep -qE "$PATH_ERE" <<<"$1"; }
+
+# #435: push_budget defaults to PUSH_ANALYSIS_BUDGET_SECS; TBF_PUSH_GUARD_BUDGET_SECS is a
+# test-only, environment-only knob (never read from the untrusted command string) that can only
+# LOWER it — adopted only when it is exactly one or two ASCII digits and strictly less than
+# push_budget, so it can never raise the production budget or reopen a fail-open path.
+push_budget="$PUSH_ANALYSIS_BUDGET_SECS"
+case "${TBF_PUSH_GUARD_BUDGET_SECS:-}" in
+  [0-9]|[0-9][0-9]) [ "$TBF_PUSH_GUARD_BUDGET_SECS" -lt "$push_budget" ] && push_budget="$TBF_PUSH_GUARD_BUDGET_SECS" ;;
+esac
+push_deadline=$((push_t0 + push_budget))
+
+# deny_too_large KIND (#435) — KIND is "configline" (the depth-0 line-length cap in
+# cfg_parse_file() below) or anything else (the deadline case, reached only via check_deadline()
+# below); prints exactly one fixed stderr line, echoing no input from the command or config it
+# denies, then exits 2.
+deny_too_large() {
+  case "$1" in
+    configline)
+      printf '%s denies this push: a git config file it reads has a line too long to analyse (blocked: config line too long to analyse) — shorten that line, or run the push from a terminal; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" >&2
+      ;;
+    *)
+      printf '%s denies this command: too large to analyse before the hook'"'"'s time limit (blocked: command too large to analyse) — split it into smaller Bash calls; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" >&2
+      ;;
+  esac
+  exit 2
+}
+
+# check_deadline (#435) — called as the first statement of every loop whose trip count grows with
+# the command or a config file's content (see "Analysis deadline (#435)" in this file's header for
+# the full call-site list and the sampling rule this binds on every future addition). Kept on one
+# line so a mutant that neuters its body has a single, unique `from` to target.
+check_deadline() { [ "$SECONDS" -lt "$push_deadline" ] || deny_too_large deadline; }
 
 input="$(cat)"
 
@@ -1012,6 +1140,19 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
 END { if (xseg != "") print "-xseg-\t" xseg }
 ')"
 
+# #435: no push segment (no "PUSH" line, and no dbracket/cut-push/command-line-config sentinel)
+# anywhere in the scan — the driver loop below would find nothing to deny and exit 0 anyway, so this
+# is equivalent to today's verdict, not a behaviour change; it just gets there before ever sampling
+# the deadline, so a command with no push segment at all is never denied merely for being large.
+# #433's own "-xseg-" marker line alone does not count: its fallback below denies only when a push
+# segment was also seen, so a scan holding nothing but that marker exits here too. (None of the four
+# patterns can occur in the marker line: its reason is a fixed phrase or a GIT_REPO_ENV_VARS name.)
+case "$scan_out" in
+  *PUSH*|*-too-many-dbrackets-*|*-cut-push-*|*-cmdline-config-*) ;;
+  *) exit 0 ;;
+esac
+check_deadline
+
 # --- repo resolution (reads only, never executes) ---------------------------------------------
 # cfg_trim VALUE — strips leading/trailing [:space:], setting the plain global $cfg_trim_out (the
 # same "set a plain global, caller reads it after the call returns" idiom evaluate_segment() uses
@@ -1033,8 +1174,10 @@ END { if (xseg != "") print "-xseg-\t" xseg }
 # below against a long run of trailing (or leading) whitespace can cost far more than the input's
 # own length in bash's own glob engine — see CFG_INCLUDE_MAX_LINE_CHARS's own vocabulary comment
 # for the cap that keeps this function from ever seeing such an input for an included (depth >= 1)
-# line; a depth-0 top-level candidate has no such cap and remains a named residual (see this file's
-# header). Used only by the #268 config parser below; defined
+# line; since #435, a depth-0 top-level candidate has its own cap of the same kind
+# (CFG_TOPLEVEL_MAX_LINE_CHARS, checked in cfg_parse_file() before this function is ever called),
+# so this function no longer sees an unbounded-length top-level line either — see "Analysis
+# deadline (#435)" in this file's header. Used only by the #268 config parser below; defined
 # here (rather than alongside is_deny_member()/refspec_dest() further down) because it must exist
 # before the config-parsing loop inside the "if [ -n "$gitdir" ]" block below runs — earlier in
 # this file's execution order than those two.
@@ -1118,10 +1261,14 @@ cfg_cr=$'\r'
 # read at a time; the one line this cannot prevent is whichever SINGLE line, in whichever file is
 # already open, is what drives the line-count or character budget below zero — that line is read in
 # full (a read loop takes one whole line at a time) before the check that follows it can break. None
-# of these four checks ever applies to a depth-0 top-level candidate — those are always read in
-# full, unconditionally, exactly as they always were, so none of the four can ever mask a
+# of these four checks ever applies to a depth-0 top-level candidate — those are still always read
+# in full, with no line-count or character budget of their own, so none of the four can ever mask a
 # pre-#304/#305 route WITHIN ONE RESOLUTION (see the "Repo resolution" paragraph above for how
-# multiple resolutions per hook invocation multiply this same bounded work instead). Declares every
+# multiple resolutions per hook invocation multiply this same bounded work instead). Since #435, a
+# depth-0 candidate's own line LENGTH — never its line count or total characters — is capped
+# separately (CFG_TOPLEVEL_MAX_LINE_CHARS, checked below before comment-strip or trim), the same
+# reason cfg_trim() is capped for an included line; that new cap is not one of these four axes.
+# Declares every
 # per-file variable `local`, so a nested call (an include's
 # own include) never clobbers the includer's own section state — proven by the
 # push-include-deny-second-path-after-return fixture, which pins that parsing resumes, in the
@@ -1145,6 +1292,7 @@ cfg_parse_file() {
   local cfg_section="" cfg_subsection="" cfgline cfg_h cfg_s cfg_key cfg_val
   local inc_resolved inc_childlabel
   while IFS= read -r cfgline || [ -n "$cfgline" ]; do
+    check_deadline
     # Three depth->=1-only budgets, checked here, in this order, before comment-strip or trim ever
     # runs -- CFG_INCLUDE_MAX_LINES bounds total LINE-reading work across every included file
     # combined for this whole resolve_repo() call (shared, like $cfg_inc_budget -- never reset per
@@ -1156,8 +1304,10 @@ cfg_parse_file() {
     # how many lines or files are involved at all). The include arm's own follow condition also
     # requires the line and character budgets below to still be positive before opening a NEW
     # include at all -- see that arm's own comment. None of these three per-line checks ever
-    # applies to a depth-0 top-level candidate (those are always read in full) -- see each
-    # vocabulary declaration's own comment.
+    # applies to a depth-0 top-level candidate (those are always read in full, with no line-count
+    # or character budget) -- see each vocabulary declaration's own comment. Since #435, a depth-0
+    # candidate's own line LENGTH is still capped separately, just below this loop's depth>=1 block
+    # -- see CFG_TOPLEVEL_MAX_LINE_CHARS's own vocabulary comment.
     if [ "$depth" -ge 1 ]; then
       [ "$cfg_inc_line_budget" -gt 0 ] || break
       cfg_inc_line_budget=$((cfg_inc_line_budget - 1))
@@ -1165,6 +1315,12 @@ cfg_parse_file() {
       [ "$cfg_inc_char_budget" -ge 0 ] || break
       [ "${#cfgline}" -le "$CFG_INCLUDE_MAX_LINE_CHARS" ] || continue
     fi
+    # #435: the depth-0 (top-level) counterpart to the depth>=1 length check just above — a
+    # top-level candidate is still always read in full, never budgeted (CFG_INCLUDE_MAX_FOLLOWS/
+    # _LINES/_LINE_CHARS/_CHARS above apply to an INCLUDED file only), but an over-cap line here now
+    # fails closed instead of ever reaching cfg_trim(), for the same reason as the depth>=1 check:
+    # cfg_trim()'s own pattern matching is not uniformly fast for a long line or whitespace run.
+    [ "$depth" -ge 1 ] || [ "${#cfgline}" -le "$CFG_TOPLEVEL_MAX_LINE_CHARS" ] || deny_too_large configline
     cfgline="${cfgline//$cfg_cr/}"
     # Strip a trailing comment: whichever of '#'/';' appears first, with no quote-tracking -- git
     # ref names MAY legitimately contain '#' or ';' (e.g. refs/heads/feat#123 and
@@ -1630,6 +1786,7 @@ config_deny() {
   local pdrec pdsrc pdval
   if [ -n "$cfg_push_lines" ]; then
     while IFS= read -r rec; do
+      check_deadline
       [ -n "$rec" ] || continue
       # #290 kickback finding F4: src is the BOUNDED first field (never a value that could
       # itself carry a raw TAB — see the record-building comment above); refspec is the
@@ -1659,6 +1816,7 @@ CFGEOF
   fi
   if [ -n "$cfg_push_defaults" ]; then
     while IFS= read -r pdrec; do
+      check_deadline
       [ -n "$pdrec" ] || continue
       pdsrc="${pdrec%%"$cfg_tab"*}"
       pdval="${pdrec#*"$cfg_tab"}"
@@ -1697,11 +1855,12 @@ evaluate_segment() {
   local toks
   toks=()
   local t
-  for t in $rest; do toks+=("$t"); done
+  for t in $rest; do check_deadline; toks+=("$t"); done
   local ntok="${#toks[@]}"
   local idx=0
 
   while [ "$idx" -lt "$ntok" ]; do
+    check_deadline
     t="${toks[$idx]}"
     case " $PUSH_ALL_REFS_OPTS " in
       *" $t "*) __deny_dest="$t"; __deny_kind="allrefs"; return ;;
@@ -1713,6 +1872,7 @@ evaluate_segment() {
   nonopt=()
   idx=0
   while [ "$idx" -lt "$ntok" ]; do
+    check_deadline
     t="${toks[$idx]}"
     case " $PUSH_OPTS_WITH_VALUE " in
       *" $t "*) idx=$((idx + 2)); continue ;;
@@ -1750,6 +1910,7 @@ evaluate_segment() {
   # containing a colon, e.g. git@github.com:o/r.git); evaluate nonopt[1..] as refspecs.
   idx=1
   while [ "$idx" -lt "$n" ]; do
+    check_deadline
     local d
     d="$(refspec_dest "${nonopt[$idx]}")"
     if [ -n "$d" ] && is_deny_member "$d"; then
@@ -1771,6 +1932,7 @@ deny_src=""
 xseg_reason=""
 saw_push=0
 while IFS= read -r line; do
+  check_deadline
   case "$line" in
     "-too-many-dbrackets-")
       deny_dest="too many ]] tokens to analyse"
@@ -1833,7 +1995,8 @@ EOF
 # `[ -z "$deny_dest" ]`, though see dev/hook-tests.sh's own "xseg" section header for why no
 # fixture can independently exercise that one guard given this loop's own break-on-deny shape),
 # and only when this command actually contains a push segment at all (`[ "$saw_push" = 1 ]` — a
-# bare `cd`/`export` with no push must stay a no-opinion). Reuses the existing "unresolved" verdict
+# bare `cd`/`export` with no push must stay a no-opinion; the #435 early exit above already returns
+# for a scan with no PUSH line, so this guard is defense in depth). Reuses the existing "unresolved" verdict
 # below unchanged; xseg_reason is always either a fixed phrase or "<NAME> set earlier in this
 # command" for a GIT_REPO_ENV_VARS member NAME (see emit_segment()'s "xseg" comment above), so this
 # echoes no input.

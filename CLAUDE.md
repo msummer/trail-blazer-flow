@@ -264,8 +264,9 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   always pass and `expect_absent ""` always fail regardless of what was captured (#262).
   `dev/doctor-tests.sh`, `dev/cleanup-tests.sh`, `dev/lock-tests.sh`, `dev/planning-tests.sh`, and
   `dev/stop-tests.sh` each guard every needle-taking helper with a `needle_required` check that fails the case
-  instead; `dev/hook-tests.sh` needs no guard (its only substring test hand-types the literal
-  inline, never through a needle-taking helper).
+  instead; `dev/hook-tests.sh`'s own substring tests hand-type the literal inline, never through a
+  needle-taking helper, except `expect_push_deny_exact` (#435), which takes an exact-match LINE
+  needle and refuses an empty one the same way.
 - The README and `docs/reference/` are part of "done": every factual claim they make about this
   repo's behavior must be checkable against the code (the verifier's Documentation changes check
   applies to docs). The README stays a user guide — short recipes that link to `docs/reference/`

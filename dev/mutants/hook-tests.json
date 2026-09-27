@@ -781,6 +781,7 @@
         "push-pc-deny-dbracket-split-push",
         "push-pc-deny-dbracket-split-subcmd",
         "push-pc-deny-dbracket-tab",
+        "push-pc-deny-dbracket-timing",
         "push-pc-deny-short-if"
       ]
     },
@@ -2932,6 +2933,160 @@
       ]
     },
     {
+      "name": "435-dl-check-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-dl-",
+      "edits": [
+        {
+          "from": "check_deadline() { [ \"$SECONDS\" -lt \"$push_deadline\" ] || deny_too_large deadline; }",
+          "to": "check_deadline() { :; }"
+        }
+      ],
+      "expect_fail": [
+        "push-dl-deny-budget-zero",
+        "push-dl-deny-production-budget",
+        "push-dl-deny-driver-site",
+        "push-dl-deny-evaluate-sites",
+        "push-dl-deny-config-lines",
+        "push-dl-deny-c-lane-flood"
+      ]
+    },
+    {
+      "name": "435-dl-driver-site",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-dl-",
+      "edits": [
+        {
+          "from": "while IFS= read -r line; do\n  check_deadline\n  case \"$line\" in",
+          "to": "while IFS= read -r line; do\n  case \"$line\" in"
+        }
+      ],
+      "expect_fail": [
+        "push-dl-deny-driver-site"
+      ]
+    },
+    {
+      "name": "435-dl-evaluate-sites",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-dl-",
+      "edits": [
+        {
+          "from": "for t in $rest; do check_deadline; toks+=(\"$t\"); done",
+          "to": "for t in $rest; do toks+=(\"$t\"); done"
+        },
+        {
+          "from": "while [ \"$idx\" -lt \"$ntok\" ]; do\n    check_deadline\n    t=\"${toks[$idx]}\"\n    case \" $PUSH_ALL_REFS_OPTS \" in",
+          "to": "while [ \"$idx\" -lt \"$ntok\" ]; do\n    t=\"${toks[$idx]}\"\n    case \" $PUSH_ALL_REFS_OPTS \" in"
+        },
+        {
+          "from": "while [ \"$idx\" -lt \"$ntok\" ]; do\n    check_deadline\n    t=\"${toks[$idx]}\"\n    case \" $PUSH_OPTS_WITH_VALUE \" in",
+          "to": "while [ \"$idx\" -lt \"$ntok\" ]; do\n    t=\"${toks[$idx]}\"\n    case \" $PUSH_OPTS_WITH_VALUE \" in"
+        },
+        {
+          "from": "while [ \"$idx\" -lt \"$n\" ]; do\n    check_deadline\n    local d\n    d=\"$(refspec_dest \"${nonopt[$idx]}\")\"",
+          "to": "while [ \"$idx\" -lt \"$n\" ]; do\n    local d\n    d=\"$(refspec_dest \"${nonopt[$idx]}\")\""
+        }
+      ],
+      "expect_fail": [
+        "push-dl-deny-evaluate-sites"
+      ]
+    },
+    {
+      "name": "435-dl-cfgline-site",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-dl-",
+      "edits": [
+        {
+          "from": "while IFS= read -r cfgline || [ -n \"$cfgline\" ]; do\n    check_deadline\n    # Three depth->=1-only budgets, checked here, in this order, before comment-strip or trim ever",
+          "to": "while IFS= read -r cfgline || [ -n \"$cfgline\" ]; do\n    # Three depth->=1-only budgets, checked here, in this order, before comment-strip or trim ever"
+        }
+      ],
+      "expect_fail": [
+        "push-dl-deny-config-lines"
+      ]
+    },
+    {
+      "name": "435-dl-toplevel-cap",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-dl-",
+      "edits": [
+        {
+          "from": "    [ \"$depth\" -ge 1 ] || [ \"${#cfgline}\" -le \"$CFG_TOPLEVEL_MAX_LINE_CHARS\" ] || deny_too_large configline\n    cfgline=\"${cfgline//$cfg_cr/}\"",
+          "to": "    cfgline=\"${cfgline//$cfg_cr/}\""
+        }
+      ],
+      "expect_fail": [
+        "push-dl-deny-toplevel-longline",
+        "push-dl-deny-toplevel-over-cap"
+      ]
+    },
+    {
+      "name": "435-dl-toplevel-cap-off-by-one",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-dl-",
+      "edits": [
+        {
+          "from": "[ \"${#cfgline}\" -le \"$CFG_TOPLEVEL_MAX_LINE_CHARS\" ] || deny_too_large configline",
+          "to": "[ \"${#cfgline}\" -lt \"$CFG_TOPLEVEL_MAX_LINE_CHARS\" ] || deny_too_large configline"
+        }
+      ],
+      "expect_fail": [
+        "push-dl-deny-toplevel-at-cap"
+      ]
+    },
+    {
+      "name": "435-dl-scan-empty-exit",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-dl-",
+      "edits": [
+        {
+          "from": "case \"$scan_out\" in\n  *PUSH*|*-too-many-dbrackets-*|*-cut-push-*|*-cmdline-config-*) ;;\n  *) exit 0 ;;\nesac\ncheck_deadline",
+          "to": "check_deadline"
+        }
+      ],
+      "expect_fail": [
+        "push-dl-noop-budget-zero-no-push",
+        "push-dl-noop-budget-zero-xseg-no-push"
+      ]
+    },
+    {
+      "name": "435-dl-xseg-early-exit",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-dl-",
+      "edits": [
+        {
+          "from": "  *) exit 0 ;;\nesac\ncheck_deadline",
+          "to": "  *) [ -n \"$scan_out\" ] || exit 0 ;;\nesac\ncheck_deadline"
+        }
+      ],
+      "expect_fail": [
+        "push-dl-noop-budget-zero-xseg-no-push"
+      ]
+    },
+    {
+      "name": "435-dl-knob-raise",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-dl-",
+      "edits": [
+        {
+          "from": "case \"${TBF_PUSH_GUARD_BUDGET_SECS:-}\" in\n  [0-9]|[0-9][0-9]) [ \"$TBF_PUSH_GUARD_BUDGET_SECS\" -lt \"$push_budget\" ] && push_budget=\"$TBF_PUSH_GUARD_BUDGET_SECS\" ;;",
+          "to": "case \"${TBF_PUSH_GUARD_BUDGET_SECS:-}\" in\n  [0-9]|[0-9][0-9]) push_budget=\"$TBF_PUSH_GUARD_BUDGET_SECS\" ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-dl-deny-production-budget"
+      ]
+    },
+    {
       "name": "433-pg-dir-vocab",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -3068,21 +3223,6 @@
         "push-xseg-deny-pushd",
         "push-xseg-deny-subshell",
         "push-xseg-deny-typeset-common-dir"
-      ]
-    },
-    {
-      "name": "433-pg-saw-push",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-xseg-",
-      "edits": [
-        {
-          "from": "if [ -z \"$deny_dest\" ] && [ \"$saw_push\" = 1 ] && [ -n \"$xseg_reason\" ]; then",
-          "to": "if [ -z \"$deny_dest\" ] && [ -n \"$xseg_reason\" ]; then"
-        }
-      ],
-      "expect_fail": [
-        "push-xseg-noop-cd-no-push"
       ]
     },
     {
