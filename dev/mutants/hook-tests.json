@@ -2707,8 +2707,8 @@
       "filter": "push-cmdcfg-",
       "edits": [
         {
-          "from": "function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, ro, cmdcfg, co, cp) {",
-          "to": "function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, ro, co, cp) {"
+          "from": "ro, k, xname, cmdcfg, co, cp, cfgname) {",
+          "to": "ro, k, xname, co, cp, cfgname) {"
         },
         {
           "from": "  cmdcfg = 0",
@@ -2732,6 +2732,267 @@
       ],
       "expect_fail": [
         "push-cmdcfg-deny-precedence"
+      ]
+    },
+    {
+      "name": "433-pg-dir-vocab",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "PUSH_DIR_CHANGE_WORDS=\"cd pushd popd chdir\"",
+          "to": "PUSH_DIR_CHANGE_WORDS=\"\""
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-deny-cd-and",
+        "push-xseg-deny-cd-bare-push",
+        "push-xseg-deny-pushd",
+        "push-xseg-deny-popd",
+        "push-xseg-deny-chdir",
+        "push-xseg-deny-subshell",
+        "push-xseg-deny-builtin-cd",
+        "push-xseg-deny-bash-c",
+        "push-xseg-deny-eval",
+        "push-xseg-deny-multiline",
+        "push-xseg-deny-dbracket-tail",
+        "push-xseg-deny-push-before-cd",
+        "push-xseg-deny-codex-main-session",
+        "push-xseg-deny-never-executes"
+      ]
+    },
+    {
+      "name": "433-pg-export-vocab",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "PUSH_EXPORT_WORDS=\"export declare typeset local readonly\"",
+          "to": "PUSH_EXPORT_WORDS=\"\""
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-deny-declare-gx-work-tree",
+        "push-xseg-deny-export-git-config",
+        "push-xseg-deny-export-git-config-exact",
+        "push-xseg-deny-export-git-config-key",
+        "push-xseg-deny-export-git-dir",
+        "push-xseg-deny-export-name-only",
+        "push-xseg-deny-export-quoted",
+        "push-xseg-deny-typeset-common-dir"
+      ]
+    },
+    {
+      "name": "433-pg-export-exact",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "if (xname in envvar_set) { xseg = xname \" set earlier in this command\"; break } } }",
+          "to": "if (xname != \"\") { xseg = xname \" set earlier in this command\"; break } } }"
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-deny-declare-gx-work-tree",
+        "push-xseg-deny-export-git-config",
+        "push-xseg-deny-export-git-config-exact",
+        "push-xseg-deny-export-git-config-key",
+        "push-xseg-deny-typeset-common-dir",
+        "push-xseg-noop-export-git-config-nosystem",
+        "push-xseg-noop-export-unrelated"
+      ]
+    },
+    {
+      "name": "433-pg-bare-assign",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "else if (cmdword == \"\" && unres != \"\") xseg = substr(unres, 1, length(unres) - 1) \" set earlier in this command\"",
+          "to": "else if (cmdword == \"\" && 0) xseg = substr(unres, 1, length(unres) - 1) \" set earlier in this command\""
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-deny-bare-assign"
+      ]
+    },
+    {
+      "name": "433-pg-per-record-reset",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "{\n  line = $0",
+          "to": "{\n  xseg = \"\"\n  line = $0"
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-deny-multiline"
+      ]
+    },
+    {
+      "name": "433-pg-fallback-drop",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "if [ -z \"$deny_dest\" ] && [ \"$saw_push\" = 1 ] && [ -n \"$xseg_reason\" ]; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-deny-bare-assign",
+        "push-xseg-deny-bare-git-config",
+        "push-xseg-deny-bash-c",
+        "push-xseg-deny-builtin-cd",
+        "push-xseg-deny-cd-and",
+        "push-xseg-deny-cd-bare-push",
+        "push-xseg-deny-chdir",
+        "push-xseg-deny-codex-main-session",
+        "push-xseg-deny-dbracket-tail",
+        "push-xseg-deny-declare-gx-work-tree",
+        "push-xseg-deny-eval",
+        "push-xseg-deny-export-git-config",
+        "push-xseg-deny-export-git-config-exact",
+        "push-xseg-deny-export-git-config-key",
+        "push-xseg-deny-export-git-dir",
+        "push-xseg-deny-export-name-only",
+        "push-xseg-deny-export-quoted",
+        "push-xseg-deny-multiline",
+        "push-xseg-deny-never-executes",
+        "push-xseg-deny-popd",
+        "push-xseg-deny-push-before-cd",
+        "push-xseg-deny-pushd",
+        "push-xseg-deny-subshell",
+        "push-xseg-deny-typeset-common-dir"
+      ]
+    },
+    {
+      "name": "433-pg-saw-push",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "if [ -z \"$deny_dest\" ] && [ \"$saw_push\" = 1 ] && [ -n \"$xseg_reason\" ]; then",
+          "to": "if [ -z \"$deny_dest\" ] && [ -n \"$xseg_reason\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-noop-cd-no-push"
+      ]
+    },
+    {
+      "name": "433-pg-export-quotes",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "xname = strip_quotes(toks[k]);",
+          "to": "xname = toks[k];"
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-deny-export-quoted"
+      ]
+    },
+    {
+      "name": "433-pg-cfg-export",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "if (is_cmdcfg_name(cfgname))",
+          "to": "if (0)"
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-deny-export-git-config",
+        "push-xseg-deny-export-git-config-exact",
+        "push-xseg-deny-export-git-config-key"
+      ]
+    },
+    {
+      "name": "433-pg-cfg-bare",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "else if (cmdword == \"\" && cmdcfg) xseg",
+          "to": "else if (0) xseg"
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-deny-bare-git-config"
+      ]
+    },
+    {
+      "name": "433-pg-cfg-prefix",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "  for (c = 1; c <= nccp; c++) if (index(n, ccparr[c]) == 1) return 1\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-deny-export-git-config-key"
+      ]
+    },
+    {
+      "name": "433-pg-cfg-exact",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "  if (n in ccenv_set) return 1",
+          "to": "  if (n ~ /^GIT_CONFIG_/) return 1"
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-noop-export-git-config-nosystem"
+      ]
+    },
+    {
+      "name": "433-pg-cfg-strip",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "sub(/=.*/, \"\", cfgname); ",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-deny-export-git-config-exact"
+      ]
+    },
+    {
+      "name": "433-pg-cfg-bare-only",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-xseg-",
+      "edits": [
+        {
+          "from": "else if (cmdword == \"\" && cmdcfg) xseg",
+          "to": "else if (cmdcfg) xseg"
+        }
+      ],
+      "expect_fail": [
+        "push-xseg-noop-git-config-scoped"
       ]
     }
   ]
