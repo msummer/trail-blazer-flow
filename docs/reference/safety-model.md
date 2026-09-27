@@ -286,7 +286,11 @@ every OTHER way a push segment's repository redirect can evade resolution now fa
 word) are all denied outright — reading nothing new from the untrusted value to reach that verdict.
 The one exception: a `-C` value that is LEXICALLY the session checkout itself (`.`/`./`, the
 PreToolUse stdin `cwd`, or the session's own resolved root, each with or without one trailing `/`)
-is still judged against the session's own facts, exactly as before. A same-command `cd <path> &&
+is still judged against the session's own facts, exactly as before. **Since #439**, a push segment
+carrying command-line git config (`git -c`, `--config-env`, or a `GIT_CONFIG_COUNT`/
+`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`/`GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_GLOBAL`/
+`GIT_CONFIG_SYSTEM` assignment, bare or behind `env`) is denied outright, whatever the key or
+destination — this hook never reads any of these forms. A same-command `cd <path> &&
 git push` or `pushd`/`popd` pair, and an `export GIT_DIR=…; git push` in a separate segment, remain
 judged against the session's own `cwd` — this hook's tokenizer tracks no `cd`/`pushd`/`export`
 state across segments, a documented residual, not fixed here. See the hook's own header for the
@@ -366,9 +370,12 @@ included file appends ` (via include)` to whichever source label already applies
 matter how deep the nesting goes. The complete residual — a system config at a path not on this
 static list (another git build's prefix, Xcode.app's own copy, a Git-for-Windows path), an include
 form this hook cannot resolve (`%(prefix)/…`, `~user/…`, beyond the depth cap, a path already
-parsed, or beyond any of the four follow/line/character/length caps above), `config.worktree`, an
-inline command-line environment assignment, and the env-injected `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`
-form — lives in the hook's own header, not here. The union is deliberately
+parsed, or beyond any of the four follow/line/character/length caps above), `config.worktree`, and
+an inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config — lives in the hook's own
+header, not here (since #439, a command-line `-c`/`--config-env` option and the env-injected
+`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`/`GIT_CONFIG_PARAMETERS`/
+`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` forms are no longer residual — see the sentence above). The
+union is deliberately
 over-broad rather than modelling git's own remote-selection precedence: a bare push checks EVERY
 configured remote's push
 route (not only the one git would actually pick) union the `push.default` route, and

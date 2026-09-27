@@ -18,6 +18,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #439: `hooks/push-guard.sh` now denies a push segment carrying command-line git config — `git
+  -c`, `--config-env`, or a `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`/
+  `GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` assignment, bare or behind `env`
+  — whatever the key or destination, since the hook never reads that config. No consumer step.
 - CI: `selfcheck-macos` no longer runs `dev/mutant-driver.sh` after each merge, only nightly and
   on manual dispatch; the ubuntu job still runs it post-merge. Both jobs now run the driver with
   `MUTANT_DRIVER_JOBS=8`, since its suites are mostly waiting rather than computing. The
