@@ -1268,6 +1268,311 @@
       "expect_fail": [
         "protection-ruleset-update-only"
       ]
+    },
+    {
+      "name": "427-claude-pid-guard",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "if [ -n \"${CLAUDE_PID+set}\" ]; then echo \"codex-scheduled-run.sh: refusing: CLAUDE_PID is set — a Claude Code session must never launch a Codex run\" >&2; exit 2; fi",
+          "to": "if false; then echo \"codex-scheduled-run.sh: refusing: CLAUDE_PID is set — a Claude Code session must never launch a Codex run\" >&2; exit 2; fi"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-claude-pid"
+      ]
+    },
+    {
+      "name": "427-marker-midline",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "Run the trail-blazer-flow:issue-cycle skill for one bounded pass, then stop.\nHarness mode: unattended (codex exec)\n",
+          "to": "Run the trail-blazer-flow:issue-cycle skill for one bounded pass, then stop. Harness mode: unattended (codex exec)\n"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-completed"
+      ]
+    },
+    {
+      "name": "427-stop-inverted",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "  0) : ;;\n  3|4) finish skipped-stop \"$stop_reason\" ;;",
+          "to": "  0) finish skipped-stop \"$stop_reason\" ;;\n  3|4) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-completed",
+        "codex-sched-died",
+        "codex-sched-failed",
+        "codex-sched-lock-live",
+        "codex-sched-lock-other-host",
+        "codex-sched-lock-stale",
+        "codex-sched-lock-unreadable",
+        "codex-sched-own-dir",
+        "codex-sched-prune",
+        "codex-sched-stop-local",
+        "codex-sched-stop-unknown",
+        "codex-sched-timeout",
+        "codex-sched-timeout-kill",
+        "codex-sched-unattended-stop",
+        "codex-sched-wrapper-killed",
+        "codex-sched-wrapper-killed-forwards-term",
+        "codex-sched-wrapper-killed-noterm"
+      ]
+    },
+    {
+      "name": "427-watchdog-ignores-elapsed",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-timeout",
+      "edits": [
+        {
+          "from": "  local deadline=$((SECONDS + timeout))\n  while [ \"$SECONDS\" -lt \"$deadline\" ] && kill -0 \"$codex_pid\" 2>/dev/null; do",
+          "to": "  local deadline=$((SECONDS + timeout))\n  while [ 0 -lt 1 ] && kill -0 \"$codex_pid\" 2>/dev/null; do"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-timeout",
+        "codex-sched-timeout-kill"
+      ]
+    },
+    {
+      "name": "427-watchdog-kill-skipped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-timeout-kill",
+      "edits": [
+        {
+          "from": "kill -0 \"$codex_pid\" 2>/dev/null && kill -KILL \"$codex_pid\" 2>/dev/null  # watchdog's own post-grace escalation",
+          "to": "kill -0 \"$codex_pid\" 2>/dev/null && :  # watchdog's own post-grace escalation"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-timeout-kill"
+      ]
+    },
+    {
+      "name": "427-wrapper-kill-skipped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "kill -0 \"$codex_pid\" 2>/dev/null && kill -KILL \"$codex_pid\" 2>/dev/null  # on_wrapper_signal's own post-grace escalation",
+          "to": "kill -0 \"$codex_pid\" 2>/dev/null && :  # on_wrapper_signal's own post-grace escalation"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-wrapper-killed-noterm"
+      ]
+    },
+    {
+      "name": "427-wrapper-grace-ignored",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "local deadline=$((SECONDS + grace))",
+          "to": "local deadline=$((SECONDS + 100000))"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-wrapper-killed-noterm"
+      ]
+    },
+    {
+      "name": "427-prune-filter",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "    case \"$name\" in\n      [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z-*)\n        suffix=\"${name##*-}\"\n        case \"$suffix\" in\n          ''|*[!0-9]*) continue ;;\n        esac\n        runs+=(\"$name\")\n        ;;\n    esac",
+          "to": "    case \"$name\" in\n      *)\n        runs+=(\"$name\")\n        ;;\n    esac"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-prune"
+      ]
+    },
+    {
+      "name": "427-lock-other-host",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "    if [ \"$held_host\" != \"$this_host\" ]; then",
+          "to": "    if false; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-lock-other-host"
+      ]
+    },
+    {
+      "name": "427-lock-unreadable",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "        ''|*[!0-9]*) lock_reason=unreadable-holder ;;",
+          "to": "        ''|*[!0-9]*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-lock-unreadable"
+      ]
+    },
+    {
+      "name": "427-timeout-default",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "timeout=\"${TBF_CODEX_RUN_TIMEOUT:-14400}\"",
+          "to": "timeout=\"${TBF_CODEX_RUN_TIMEOUT:-0}\""
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-stop-local"
+      ]
+    },
+    {
+      "name": "427-grace-default",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "grace=\"${TBF_CODEX_RUN_KILL_GRACE:-30}\"",
+          "to": "grace=\"${TBF_CODEX_RUN_KILL_GRACE:-0}\""
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-stop-local"
+      ]
+    },
+    {
+      "name": "427-wrapper-signal-trap",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "trap 'on_wrapper_signal 15' TERM\ntrap 'on_wrapper_signal 2' INT\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-wrapper-killed",
+        "codex-sched-wrapper-killed-forwards-term",
+        "codex-sched-wrapper-killed-noterm"
+      ]
+    },
+    {
+      "name": "427-wrapper-kill-immediate",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "    kill -TERM \"$codex_pid\" 2>/dev/null\n    local deadline=$((SECONDS + grace))\n    while [ \"$SECONDS\" -lt \"$deadline\" ] && kill -0 \"$codex_pid\" 2>/dev/null; do\n      sleep 1\n    done\n    kill -0 \"$codex_pid\" 2>/dev/null && kill -KILL \"$codex_pid\" 2>/dev/null  # on_wrapper_signal's own post-grace escalation",
+          "to": "    kill -TERM \"$codex_pid\" 2>/dev/null\n    kill -KILL \"$codex_pid\" 2>/dev/null"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-wrapper-killed-forwards-term"
+      ]
+    },
+    {
+      "name": "427-stdin-inherited",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "codex exec --cd \"$toplevel\" -s workspace-write --json -o \"$run_dir/last-message.md\" \"$PROMPT\" < /dev/null > \"$run_dir/events.jsonl\" 2> \"$run_dir/stderr.log\" &",
+          "to": "codex exec --cd \"$toplevel\" -s workspace-write --json -o \"$run_dir/last-message.md\" \"$PROMPT\" <&0 > \"$run_dir/events.jsonl\" 2> \"$run_dir/stderr.log\" &"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-completed"
+      ]
+    },
+    {
+      "name": "427-lock-live-ignored",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "          if pid_alive \"$held_pid\"; then",
+          "to": "          if false; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-lock-live"
+      ]
+    },
+    {
+      "name": "427-timeout-marker",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "  : > \"$run_dir/watchdog-fired\"\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-timeout",
+        "codex-sched-timeout-kill"
+      ]
+    },
+    {
+      "name": "427-unattended-stop-ignored",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "if grep -qxF -- 'Unattended stop: permission-denied' \"$run_dir/last-message.md\"; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-unattended-stop"
+      ]
+    },
+    {
+      "name": "427-cx-forbidden-dropped",
+      "target": "templates/codex.rules",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "prefix_rule(pattern = [\"codex-scheduled-run.sh\"], decision = \"forbidden\", justification = \"a scheduled Codex run is launched by launchd, never from inside a session\")\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-rules-content"
+      ]
     }
   ]
 }

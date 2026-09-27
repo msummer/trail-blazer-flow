@@ -38,6 +38,7 @@
 │   ├── harness-stop.sh            # read-only maintainer stop switch: GitHub label or local file (#310)
 │   ├── governance-paths.sh        # merge floor's governance-path classifier + doctor's --check validator (#331)
 │   ├── codex-setup.sh             # installs the Codex compatibility layer into a repo: agent TOMLs, rules, contract loading (#408)
+│   ├── codex-scheduled-run.sh     # launchd-driven codex exec wrapper: preflight, timeout, local run records (#427)
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
 ├── hooks/                        # plugin-shipped Claude Code hooks — never on the Bash PATH, never invoked by the model
 │   ├── hooks.json                 # registers the five PreToolUse hooks below
@@ -49,7 +50,7 @@
 ├── dev/
 │   ├── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
 │   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
-│   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh, bin/governance-paths.sh, AND bin/codex-setup.sh (not run by the gate)
+│   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh, bin/governance-paths.sh, bin/codex-setup.sh, AND bin/codex-scheduled-run.sh (not run by the gate)
 │   ├── hook-tests.sh             # fixture-based negative-test harness for all five hooks/*.sh scripts, including Codex-shaped payload fixtures (#407) (not run by the gate)
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 │   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
@@ -74,7 +75,9 @@ language ("plan issue 14"). On Claude Code, the `bin/` scripts are plain command
 session's PATH — that is why the per-repo permission entries are portable bare names
 (`Bash(check-harness.sh:*)`) rather than machine-specific plugin-cache paths. Codex has no such
 PATH (#408, ADR 0002 P5): `bin/codex-setup.sh` gates each script that calls `gh` (directly, or
-through `harness-status.sh`) or writes `.git` by its absolute install path instead — see
+through `harness-status.sh`) or writes `.git` by its absolute install path instead — except
+`bin/codex-scheduled-run.sh` (#427), which the installed rules file `forbidden`s outright rather
+than gating: a scheduled Codex run must never be launched from inside a session — see
 `docs/reference/codex.md`.
 
 ## The model tiering (deliberate design)

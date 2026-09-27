@@ -28,7 +28,7 @@ Verified live at the v3.0.0 release gate (#411; ADR 0002 amendment (3), Codex CL
 |---|---|---|
 | Codex CLI 0.156.1+ on macOS, interactive `codex --no-daemon`, supervised | **Supported** | Install, trust, `harness-setup`, planning, implementation, verification, the stop switch, and the lock's refusal of a concurrent holder all held live at the gate (the daemon refusal is fixture-covered by `dev/lock-tests.sh`) |
 | The default Codex TUI's managed `app-server` daemon | **Not supported** | `harness-lock.sh acquire` refuses an owner whose command line names `app-server` — that daemon outlives every session it serves, so a lock recorded against it would never be reclaimed |
-| `codex exec` and unattended or scheduled runs | **Not supported** | In-session rules implemented (see "Unattended runs (`codex exec`)" below); the scheduled-run wrapper (#427) and the live gate (I4, #429) are pending |
+| `codex exec` and unattended or scheduled runs | **Not supported** | In-session rules and the launch wrapper (`bin/codex-scheduled-run.sh`, see "Scheduling unattended runs (macOS)" below) are implemented; the live gate (I4, #429) is pending |
 | Worktree-parallel mode | **Not supported** | A worktree's gitdir is read-only in the sandbox, and `git-c-guard`'s allow is ignored under Codex's own rules — see "Worktree mode" below |
 | The merge pass and merge autonomy | **Not supported** | Every merge on Codex is by hand; `gh pr merge` is additionally `forbidden` by the installed rules, verified live at the gate |
 | Autonomy mode | **Not supported** | Read as absent on Codex: no implied auto-approval, no `--carry-over`, no serial train |
@@ -90,17 +90,22 @@ rule, and otherwise leaves it to the sandbox. `templates/codex.rules` has three 
 - **Forbidden** — a port of `templates/repo-settings.json`'s bare deny entries (the ones with no
   `git -C` prefix, which Codex's rules can't express at all): `gh pr merge`, `git push --force`
   (and `-f`, `--force-with-lease`), `git reset --hard`, `git clean`, `rm -rf`, `git branch -D
-  main`, `git push origin main`.
+  main`, `git push origin main`, and `codex-scheduled-run.sh` — a scheduled Codex run is launched
+  by launchd, never from inside a session (see "Scheduling unattended runs (macOS)" below).
 - **Gated** — the ten harness scripts that call `gh` (directly, or through `harness-status.sh`)
   or write inside `.git` (`check-decision-record.sh`, `check-harness.sh`, `cleanup-after-merge.sh`,
   `find-implementation-work.sh`, `find-planning-work.sh`, `harness-lock.sh`, `harness-status.sh`,
   `harness-stop.sh`, `reconcile-ledger.sh`, `setup-labels.sh`) each get an `allow` rule on their
   bare name **plus** a `host_executable` pin to this install's own absolute `bin/` path. The pin
   matters: an ungated bare-name rule matches *any* file with that basename, anywhere — including
-  one a subagent writes into the workspace — so every `.sh` allow rule in the installed file is
+  one a subagent writes into the workspace — so every `.sh` ALLOW rule in the installed file is
   `host_executable`-gated, with no exception. `codex-setup.sh`, `harness-version.sh`, and
   `governance-paths.sh` are read-only (or, for `codex-setup.sh`, run once from a normal terminal —
-  ADVISORY Q4) and so are never gated.
+  ADVISORY Q4) and so are never gated. `codex-scheduled-run.sh` is the one exception to the
+  "every `.sh` rule is either gated or ungated-and-read-only" split above: it writes under
+  `trail-blazer/` inside `.git` and launches `codex` (which itself calls `gh`), but it is
+  `forbidden` outright rather than gated — a scheduled run must never be launched from inside a
+  session, Claude Code or Codex (see "Scheduling unattended runs (macOS)" below).
 
 ### Script reach
 
@@ -266,7 +271,249 @@ After a successful write, `codex-setup.sh` prints three reminders:
    (ADR 0002 amendment 2026-09-26, P5); trusting them needs the same review as any other hook.
 3. **Run harness sessions with `codex --no-daemon`** — see "Lock owner on Codex" above.
 
+## Scheduling unattended runs (macOS)
+
+`bin/codex-scheduled-run.sh` (I2, #427; ADR 0002 amendment 2026-09-27 (4), decisions 2-4) is the
+launchd-driven wrapper that starts one unattended `codex exec` pass of `issue-cycle`. `codex exec`
+itself stays **Not supported** until the live gate (I4, #429) flips the support-matrix row above —
+this section states the wrapper's own contract, already implemented and fixture-covered
+(`dev/doctor-tests.sh`'s `codex-sched-*` cases), independent of that live gate.
+
+**Refuses under Claude Code.** If `CLAUDE_PID` is set (even to an empty string), the wrapper exits
+2 before doing anything else — a Claude Code session must never launch a Codex run. On Claude Code
+this is belt-and-braces with the permission side below: a Claude Code deny entry also blocks it
+(see "Rules" above), but a deny rule is prefix-matched, so the in-script `CLAUDE_PID` guard is what
+actually stops an absolute-path or renamed-copy invocation there. **On Codex**, `CLAUDE_PID` is
+never set, so this guard has no effect at all — the installed `forbidden` rule (basename-matched,
+same limits as every other rule here — see "Honest limits" below) is the only in-session backstop.
+A bare-name rule matches any file with that basename, anywhere (ADR 0002, "Matching a rule"; see
+"Rules" above) — so a same-basename copy elsewhere is still caught. The real gaps are the same ones
+that limit every other rule here: a `bash <path>` wrapper (the program is `bash`, not the script),
+a renamed copy (a different basename matches nothing), or a path containing a space (ADR 0002,
+"Spaces break it"). The real backstop on Codex is architectural, not a permission check: under
+`workspace-write`, `.git` is read-only (ADR 0002, "The sandbox protects `.git`"), so a sandboxed
+invocation can't create its own run directory and exits 2 before ever launching `codex` — see
+"Preflight" below and the run-record paragraph; `dev/doctor-tests.sh`'s
+`codex-sched-rundir-uncreatable` case pins the same exit-2 shape (there, a plain file blocking
+`mkdir` instead of a read-only mount, but the failure path is identical).
+
+**Preflight** (no model turn, no quota spent), each failing step stopping the chain there:
+
+1. `TBF_CODEX_RUN_TIMEOUT` (default 14400 seconds) and `TBF_CODEX_RUN_KILL_GRACE` (default 30)
+   must each be digits-only and greater than 0, or `preflight-failed reason=bad-timeout`.
+2. `codex`, `gh`, and `jq` must all be on `PATH` (launchd's own PATH is minimal, and the plugin's
+   hooks fail open without `jq`), or `preflight-failed reason=missing-tool:<names>`.
+3. The sibling `codex-setup.sh --check`. Exit 1: `preflight-failed reason=codex-setup-drift`. Any
+   other non-zero exit: `preflight-failed reason=codex-setup-error`.
+4. The sibling `harness-stop.sh`. Exit 3: `skipped-stop reason=stop`. Exit 4: `skipped-stop
+   reason=stop-unknown`. Exit 0: continue. Anything else: `preflight-failed
+   reason=harness-stop-exit-<n>`.
+5. The sibling `harness-lock.sh status`. `state=free`: continue. `state=held`, with a host equal
+   to `uname -n`, a digits-only pid, and that pid no longer alive: continue — the launched session
+   reclaims the lock itself (see "Dying mid-run" honest limits, and ADR 0002's decision 4 re-entry
+   paragraph). Any other `state=held`: `skipped-busy reason=` one of `live-holder`, `other-host`,
+   or `unreadable-holder`. A non-zero exit, or no `state=` line: `preflight-failed
+   reason=lock-status-unreadable`.
+
+Every sibling call's combined output is appended to `preflight.log` in the run directory. Siblings
+are resolved only as `<own dir>/<name>.sh` — never off `PATH` — so a same-named script earlier on
+launchd's minimal PATH is never run; this deliberately differs from `bin/harness-status.sh` and
+`bin/reconcile-ledger.sh`, which try `PATH` first (#408).
+
+**Launch.** Exactly:
+
+```
+codex exec --cd <repo toplevel> -s workspace-write --json -o <run dir>/last-message.md
+  "<fixed prompt>" < /dev/null > <run dir>/events.jsonl 2> <run dir>/stderr.log
+```
+
+run in the background under a wall-clock watchdog (plain bash — macOS has no `timeout`/`gtimeout`
+binary). Nothing else is on the argv: never `--dangerously-bypass-approvals-and-sandbox`,
+`--dangerously-bypass-hook-trust`, `--approve-for-me`, `-s danger-full-access`, `--ignore-rules`,
+`--ignore-user-config`, `--ephemeral`, or `exec resume`/`exec fork` (ADR 0002's amendment
+2026-09-27 (4), decision 2). The fixed prompt names `trail-blazer-flow:issue-cycle`, states the run
+is unattended, and carries — on a line of its own — exactly `Harness mode: unattended (codex
+exec)`, the marker "Unattended runs (`codex exec`)" above reads for in-session behaviour. The exact
+argv is written to `argv.txt` before launch. The watchdog polls codex's own liveness in 1-second
+slices rather than blocking in one long sleep — timeout granularity is 1 second. After
+`TBF_CODEX_RUN_TIMEOUT` seconds without codex exiting on its own, it creates
+`<run dir>/watchdog-fired` and sends TERM; it then polls (still 1-second slices) for up to
+`TBF_CODEX_RUN_KILL_GRACE` more seconds before sending KILL — the real `codex` CLI is a Node
+launcher that spawns the native binary and forwards SIGTERM to it from a JS handler, so polling
+rather than killing immediately gives that handler time to run before an unresponsive process is
+forced. If codex exits first, the watchdog notices on its next poll and stops; at worst, one
+already-started 1-second poll outlives it briefly and ends on its own.
+
+**Outcomes**, classified in order once the launched process exits:
+
+1. `watchdog-fired` exists → `timed-out`, `reason=after-<n>s`.
+2. Exit status greater than 128 → `died-mid-run`, `reason=signal-<status-128>`.
+3. Any other non-zero exit → `failed`, `reason=exit-<n>`.
+4. Exit 0 but `last-message.md` missing or empty → `failed`, `reason=no-final-message`.
+5. Exit 0 and `last-message.md` has a line that is EXACTLY `Unattended stop: permission-denied`
+   (a whole-line match on the file, no pipe) → `failed`,
+   `reason=unattended-stop-permission-denied` — see "Unattended runs (`codex exec`)" above for
+   when a run's own final message carries that line.
+6. Otherwise → `completed`, with `reason=` left empty (`completed` is the only token with no
+   populated reason — record.txt's own `reason=` line is present but blank).
+
+The seven outcome tokens in full: `completed`, `skipped-stop`, `skipped-busy`, `preflight-failed`,
+`failed`, `died-mid-run`, `timed-out`. A TERM/INT to the wrapper itself, at any point, short-circuits
+all of the above to `died-mid-run reason=wrapper-signal-<n>` instead (see "If the wrapper itself is
+killed" below) — including during preflight, before codex is ever launched, so `died-mid-run` alone
+does not imply a launch happened; check `reason=` to tell the two apart.
+
+**Records and pruning.** Each run gets its own directory at
+`<abs git-common-dir>/trail-blazer/runs/<YYYYMMDDTHHMMSSZ>-<wrapper pid>/` — resolved the same way
+`bin/harness-lock.sh` and `bin/harness-stop.sh` resolve the lock and the local stop file, so every
+worktree of one checkout shares it, and it is never inside the tracked tree or committed. It holds
+`record.txt` (first line `outcome=<token>`, then `reason=`, `started-at=`, `ended-at=`,
+`exit-status=`, `timeout-seconds=`, `harness-version=`), `argv.txt`, `preflight.log`,
+`last-message.md`, `events.jsonl`, `stderr.log`, and, on a timeout, `watchdog-fired`. Every exit
+past the point the run directory exists prints exactly `outcome=<token> reason=<slug>
+record=<run dir>` as its last stdout line. `record.txt`'s first line is the stable seam a future
+durable-tracking mechanism (I3, #428) reads — this wrapper itself makes no GitHub call. After each
+run, only the newest 100 run directories (by name) are kept; deletion is bounded (`rm -f` of the
+known filenames, then `rmdir` — never `rm -rf`), and an entry whose name doesn't match the
+stamp-and-pid shape is never touched.
+
+**Never touches the lock.** The wrapper never calls `harness-lock.sh acquire` or `release`, and
+never removes anything under `trail-blazer/lock` — a dead same-host holder (preflight step 5) is
+left for the launched session itself to reclaim.
+
+**If the wrapper itself is killed** (TERM or INT — `launchctl bootout`, an operator, a logout): a
+top-level trap stops the watchdog and gives the launched codex process the same
+TERM-then-poll-then-KILL treatment described above, then reports `died-mid-run` through the same
+single `finish` exit path as every other outcome, whether or not a launch had happened yet. Without
+this, codex and the watchdog would both survive the wrapper, and the watchdog's own later kill of
+the stored codex pid could land on a since-reused pid instead. The poll-before-KILL matters here for
+the same reason it does in the watchdog itself: killing codex outright, with no time for its own
+Node launcher to forward SIGTERM to the native binary, would orphan that native child. `finish`
+itself disables the TERM/INT trap as its own first action, so a second signal arriving while it is
+still writing `record.txt` or pruning can't re-enter and corrupt the outcome or exit code that
+#428 will read.
+
+**Env vars:** `TBF_CODEX_RUN_TIMEOUT` (seconds, default 14400) and `TBF_CODEX_RUN_KILL_GRACE`
+(seconds, default 30).
+
+**Exit codes:** 0 for `completed`/`skipped-stop`/`skipped-busy`; 1 for
+`preflight-failed`/`failed`/`died-mid-run`/`timed-out`; 2 for a usage or environment error with no
+run record at all (`CLAUDE_PID` set, a bad argument, not inside a git checkout, git missing, or the
+run directory couldn't be created).
+
+**The LaunchAgent (maintainer action, not live-verified until I4's U8).** A plist naming the
+wrapper's absolute path, run on an interval. `PLUGIN_ROOT`, `REPO_TOPLEVEL`, `CODEX_DIR`, `GH_DIR`,
+`JQ_DIR`, and `HOME_DIR` below are placeholder TOKENS, not literal angle-bracket text — a real
+`<...>` placeholder inside a plist's `<string>` would itself be invalid XML. Fill each one in
+before saving the file:
+
+- `PLUGIN_ROOT` — this install's plugin root (the same absolute path `codex-setup.sh`'s own
+  `host_executable` pins use).
+- `REPO_TOPLEVEL` — the repo's git toplevel.
+- `CODEX_DIR`, `GH_DIR`, `JQ_DIR` — the directories holding `codex`, `gh`, and `jq` on this
+  machine. launchd jobs get a minimal `PATH`, so `/usr/bin:/bin:/usr/sbin:/sbin` alone is not
+  enough for a normal Homebrew install (`codex`/`gh`/`jq` typically live under
+  `/opt/homebrew/bin` or `/usr/local/bin`, neither of which launchd's default PATH includes) —
+  every preflight run would otherwise end `preflight-failed reason=missing-tool:…` immediately. Run
+  `command -v codex gh jq` in a normal terminal and use each result's directory (if two share a
+  directory, that token repeats). `codex` itself is a `#!/usr/bin/env node` script, so `node`'s own
+  directory must be on this PATH too — it's usually the same Homebrew directory as `codex` (as
+  above), but if `node` lives somewhere else, add it as its own entry. When it's missing, the
+  preflight tool check still passes (it only checks `codex`/`gh`/`jq` are on `PATH`, not that
+  `codex` itself can actually run) and the run instead ends `failed reason=exit-127` once `codex`
+  is launched and fails at the shebang.
+- `HOME_DIR` — this account's home directory, for the log paths below.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.trail-blazer-flow.codex-scheduled-run</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>PLUGIN_ROOT/bin/codex-scheduled-run.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>REPO_TOPLEVEL</string>
+  <key>StartInterval</key>
+  <integer>1800</integer>
+  <key>StandardInPath</key>
+  <string>/dev/null</string>
+  <key>StandardOutPath</key>
+  <string>HOME_DIR/Library/Logs/trail-blazer-flow/codex-scheduled-run.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>HOME_DIR/Library/Logs/trail-blazer-flow/codex-scheduled-run.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>CODEX_DIR:GH_DIR:JQ_DIR:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>
+```
+
+The log paths deliberately sit under `~/Library/Logs/`, never under `REPO_TOPLEVEL` — a log file
+written inside the working tree would leave it dirty, and the next cycle's own dirty-tree preflight
+would then STOP for an unrelated reason. Create the log directory once, before the first run:
+
+```
+mkdir -p ~/Library/Logs/trail-blazer-flow
+```
+
+Install with (both maintainer actions, from a normal terminal, never in-session):
+
+```
+launchctl bootstrap gui/<uid> <path to the plist>
+```
+
+Remove with:
+
+```
+launchctl bootout gui/<uid>/org.trail-blazer-flow.codex-scheduled-run
+```
+
+then delete the plist file. Re-point `ProgramArguments`' path (and re-run `bootout`/`bootstrap`)
+after every plugin upgrade — the path is version-specific; a stale one fails with a launchd log
+line, and a stale rules file gives `preflight-failed reason=codex-setup-drift` instead
+(`stale-plugin-path`, from `codex-setup.sh --check`).
+
+**Honest limits:**
+
+- SIGKILL to the wrapper itself (see "If the wrapper itself is killed" above) leaves codex and the
+  watchdog running with no `record.txt` — no Unix process can trap SIGKILL, so TERM/INT are the
+  only signals this script can react to at all. Whether a real launchd, on an ordinary `bootout`,
+  sends TERM before ever escalating to KILL is not verified here (I4, #429); if it does not wait, or
+  if the launched codex is itself SIGKILLed some other way, launchd's own default process-group
+  reaping (active whenever a LaunchAgent does not set `AbandonProcessGroup`) is the backstop that
+  would still clean up the process group's other members — also unverified until #429.
+- Two small windows are not closed: between starting codex and recording its pid, and between
+  starting the watchdog and recording its pid. A TERM/INT landing in either leaves that one variable
+  unset, so the signal handler has nothing to target for that one process.
+- Whether time spent with the machine asleep counts toward the timeout is not verified.
+- Two wrapper instances against one checkout (a manual run beside a scheduled one) can both
+  observe `state=free`; the session-level `acquire` then refuses one of them, after that model
+  turn has already started.
+- The plist names a version-specific plugin path, so it must be re-pointed after each upgrade (see
+  above).
+- The launchd recipe itself — the plist, `bootstrap`/`bootout`, and whether a real launchd actually
+  respects `StandardInPath /dev/null` and the `StartInterval` — is not live-verified until I4's U8
+  (#429).
+- `finish`'s own TERM/INT-disabling first action (see above) is not covered by a dedicated fixture:
+  hitting the exact window while `finish` is writing `record.txt` or pruning deterministically, from
+  outside the process, was not found to be practical to force in a fixture.
+
 ## Removing the Codex layer
+
+If a LaunchAgent is installed (see "Scheduling unattended runs (macOS)" above), remove it first:
+
+```
+launchctl bootout gui/<uid>/org.trail-blazer-flow.codex-scheduled-run
+```
+
+then delete the plist file.
 
 Delete the files `codex-setup.sh` wrote (see "What `codex-setup.sh` writes" above):
 
@@ -379,6 +626,8 @@ Report the resolved root once, in the run summary.
 - **Ungated** (run sandboxed): `harness-version.sh`, `governance-paths.sh`, and
   `codex-setup.sh`, whose write mode runs once from a normal terminal, never in-session, while its
   read-only `--check` runs in-session.
+- **Forbidden**: `codex-scheduled-run.sh` — never run this from inside a session, in-sandbox or
+  otherwise; it is launchd's own job (see "Scheduling unattended runs (macOS)" below).
 
 ### Preamble (read-only, before step 0's lock)
 
@@ -591,8 +840,9 @@ applies.
 This section is the in-session half of decision 1 ("Silent denials") of
 [ADR 0002](../adr/0002-codex-compatibility.md)'s amendment 2026-09-27 (4), the design for
 unattended `codex exec` runs. `codex exec` itself stays **Not supported** (see "Support matrix"
-above): these are the guardrails a run follows once the launch wrapper (I2, #427) exists and the
-live gate (I4, #429) has flipped the support-matrix row above.
+above): these are the guardrails a run follows once the live gate (I4, #429) has flipped the
+support-matrix row above. The launch wrapper itself, `bin/codex-scheduled-run.sh`, already exists —
+see "Scheduling unattended runs (macOS)" below for its own contract.
 
 **Marker.** An unattended run is one whose session-opening prompt contains, on a line of its own,
 exactly:
@@ -645,8 +895,9 @@ below applies.
   followed by the rejected command and the rejection text, quoted verbatim.
   - **Honest limit.** When the rejected command is itself the escalation's own `gh issue
     comment` / `gh issue edit`, or the lock's `release`, no durable record is possible — the final
-    message above is the only record. The scheduled-run wrapper (#427/#428) is designed to
-    surface it.
+    message above is the only record. `bin/codex-scheduled-run.sh` (#427) classifies this as
+    `failed reason=unattended-stop-permission-denied` and records it locally (see "Scheduling
+    unattended runs (macOS)" below); a durable GitHub-facing surface (#428) is not yet built.
 
 **Unattended (Codex) block.** On an unattended run, prefix every dispatch with this block too,
 immediately after the canary block above (see "Dispatch" above), verbatim:

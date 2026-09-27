@@ -10,6 +10,9 @@ scripts (bare names — `bin/` is on the PATH), the `gh`/`git` commands the orch
 Edit/Write, the build/test runners, and carries the deny-list (no merge, no force-push, no
 `reset --hard`). The `gh pr merge` deny is the merge-autonomy off-switch: it ships on, and
 lifting it is a human edit reserved for repos that define a CLAUDE.md merge autonomy policy.
+`Bash(codex-scheduled-run.sh:*)` (#427) sits in both lists: the allow entry exists only for the
+`bin/` bijection, and the deny, which takes precedence (see "Safety model"), keeps any Claude Code
+session from launching a scheduled Codex run.
 `Bash(gh pr edit:*)` lets the orchestrator refresh a PR body it already opened — writing in filed
 follow-up issue numbers, and replacing the verifier status line and mutation-probe line with a
 fresh verdict's after a CI-fix round; `gh pr comment` is deliberately **not** granted — the
