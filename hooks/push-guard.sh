@@ -5,16 +5,18 @@
 # governs the implementer/verifier subagents): it denies (exit 2, one stderr line, empty stdout)
 # any push whose resolved DESTINATION is the repo's default branch, ALSO denies a push segment
 # whose target repository it cannot resolve at all (#292 — see "Fail-closed: an unresolvable push
-# target" below), and says nothing (exit 0, empty stdout, empty stderr — "no opinion") about
-# everything else, so the normal permission flow — a prompt, or a matching deny rule in
+# target" below), ALSO denies a push segment carrying git config supplied on the command line
+# (#439 — see "Fail-closed: command-line git config" below), and says nothing (exit 0, empty
+# stdout, empty stderr — "no opinion") about everything else, so the normal permission flow — a prompt, or a matching deny rule in
 # templates/repo-settings.json, which always wins over this hook's decision — applies. This closes
 # the gap #260 names: the settings deny entries
 # `Bash(git push origin main:*)` / `Bash(git -C * push origin main*)` are prefix-matched and are
 # bypassed by refspec spellings such as `HEAD:main`, `+HEAD:refs/heads/main`, or a remote other
 # than `origin` — this hook parses the refspec instead of pattern-matching the raw command text.
 #
-# Enforces "deny a push whose destination is the default branch" and "deny a push whose target
-# repository cannot be resolved at all" (#292); does NOT enforce an
+# Enforces "deny a push whose destination is the default branch", "deny a push whose target
+# repository cannot be resolved at all" (#292), and "deny a push segment carrying command-line git
+# config" (#439); does NOT enforce an
 # allow-list of `claude/<n>-<slug>` destinations (the Decision's other clause) — that would deny
 # ordinary work (a `release/vX.Y.Z` branch, an annotated-tag push, any `git push origin
 # feature/x` a human runs in ANY Claude Code session in a plugin-enabled repo, since this hook is
@@ -93,8 +95,10 @@
 # #268 (repo-local), #290 (global) and #304/#305 (system, plus includes inside all of them) close
 # the global/system config class named in every version of this file before #290 — see "Documented
 # under-blocking classes" below for what still stays unread (a system config at a path not on this
-# static list, an unresolvable include form, `config.worktree`, and the env-injected
-# `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>` forms). A depth-0 top-level candidate is read whole, with
+# static list, an unresolvable include form, and `config.worktree`) — the env-injected
+# `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` forms are no longer among them:
+# since #439, a push segment carrying one of those is denied outright (see "Fail-closed:
+# command-line git config" below), never silently read as config. A depth-0 top-level candidate is read whole, with
 # no size, line-count, or line-length cap, never budgeted — a single pathological TOP-LEVEL file
 # (very many lines, or a single very long line or whitespace run — `cfg_trim()`'s own pattern
 # matching is not uniformly fast for the latter shape, see that function's header comment) simply
@@ -207,6 +211,29 @@
 # across segments. Whether git itself accepts an abbreviated long option (e.g. `--git-d <path>` for
 # `--git-dir <path>`) is UNVERIFIED here; this hook does not recognise one, so such a form is judged
 # as a plain unlisted dash token (the same "Documented under-blocking classes" sibling class below).
+#
+# Fail-closed: command-line git config (#439). A push segment carrying git config supplied ON THE
+# COMMAND LINE — as an option before the subcommand (`-c <k=v>`/`-c<k=v>`, `--config-env <k=V>`/
+# `--config-env=<k=V>`) or as a leading environment assignment, bare or behind `env`
+# (`GIT_CONFIG_COUNT=`, `GIT_CONFIG_KEY_<n>=`, `GIT_CONFIG_VALUE_<n>=`, `GIT_CONFIG_PARAMETERS=`,
+# `GIT_CONFIG_GLOBAL=`, or `GIT_CONFIG_SYSTEM=`) — is DENIED outright, whatever the key or the
+# destination, e.g. `git -c core.pager=cat push origin feature/x` or `GIT_CONFIG_GLOBAL=/dev/null
+# git push` deny exactly like `git -c remote.origin.push=HEAD:main push`: this hook never reads any
+# of these forms (see the residual list below, before this change, and "Repo resolution" above for
+# what it DOES read), so it cannot rule out that they redirect the push to the default branch.
+# Detached `--config-env <arg>` and attached `-c<k=v>` are denied whether or not git itself accepts
+# that exact spelling (UNVERIFIED here) — the same stance #292 already takes for attached
+# `-C<path>`. The deny reads nothing from the untrusted value beyond what GIT_CMDCFG_OPTS/
+# GIT_CMDCFG_ENV_VARS/GIT_CMDCFG_ENV_PREFIXES membership and a fixed-prefix `index()`/`substr()`
+# check already need — no filesystem path is read, and the matched key/value/env-var name is never
+# echoed in the deny message (a GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> match stores a boolean
+# only). Residuals this leaves, reasoned from the code but not run (see "Documented under-blocking
+# classes" below and this issue's own follow-ups): cross-segment `export GIT_CONFIG_*=…; git push`
+# or a bare `GIT_CONFIG_*=…;` segment (left to #433, which is expected to reuse these same three
+# vocabulary constants); a git alias that expands to `push` (e.g. `git -c alias.p=push p origin
+# main`); a quoted or escaped option spelling (`git "-c" k=v push`, which normalises the quoted
+# option into the subcommand slot); a quoted value containing a space (splits the same way an ordinary `-C`/`GIT_DIR=` value does);
+# and an inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself reads.
 #
 # Never invokes `git`, `gh`, or anything else derived from the untrusted command string; never
 # `eval`s; never writes a file. Since #269, this hook reads exactly one class of filesystem path
@@ -399,7 +426,8 @@
 # script (session default `main` on `claude/17-a`; `../a-wt-1` and `../b-wt-1`, sibling repos
 # whose own defaults are `trunk` and `release`; `../plain-dir`, an ordinary, `.git`-less
 # directory with no `-wt-<n>` suffix); each row's outcome follows from that one rule, and no
-# rule beyond it is claimed for shapes not listed here:
+# rule beyond it is claimed for shapes not listed here — except rows (f) and (i), where the #439
+# command-line-config check (added after these rows were measured) also applies, and wins:
 #
 # (a) `git -C "../a-wt-1 -x" push origin trunk` -> rc 2 — `-x"` begins with `-` and is skipped,
 # the real `push` is the candidate, the segment is recognised; the captured fragment
@@ -428,7 +456,9 @@
 # `../a-wt-1` as in (a). Control: `git -C "../a-wt-1 push" push origin main` -> rc 2.
 # (f) `git -C "../a-wt-1 -c foo" push origin main` -> rc 2 — `-c` exactly matches a
 # GIT_GLOBAL_OPTS_WITH_VALUE name, so it is consumed together with `foo"` and the real `push`
-# is the candidate; recognised and resolved via `../a-wt-1`.
+# is the candidate; recognised, but since #439 that same exact-`-c` token ALSO trips the
+# command-line-config check first — this denies via #439 (command-line git config) BEFORE `-C`
+# is ever resolved, never via `../a-wt-1`'s own facts.
 # (g) `git -C "../a-wt-1 -C ../b-wt-1" push origin main` -> rc 2 — the interior `-C` is
 # consumed together with `../b-wt-1"` and counts as a second `-C`, so the segment is recognised
 # but, by the exactly-one-`-C` rule, NOT resolved; denies as UNRESOLVED (`more than one -C`).
@@ -436,7 +466,9 @@
 # `/`-component, `push`: recognised and resolved via `../a-wt-1`.
 # (i) `git -C "../a-wt-1 -c" push origin main` -> rc 2 — `-c"` carries the glued closing quote,
 # so it does NOT match the GIT_GLOBAL_OPTS_WITH_VALUE name and is merely skipped as a
-# dash-prefixed fragment; the real `push` is the candidate; recognised and resolved.
+# dash-prefixed fragment; the real `push` is the candidate; recognised, but since #439 the same
+# `-c"` fragment starts with `-c` and trips the attached-`-c` command-line-config check — this
+# denies via #439 (command-line git config) BEFORE `-C` is ever resolved, same as (f).
 # (j) four more: `git -C "../a-wt-1 push -x" push origin trunk` -> rc 2 (as (e)); `git -C
 # "../a-wt-1 pull" push origin main` -> rc 0 (as (b)); `git -C "../a-wt-1 push origin main"`
 # with nothing after the closing quote -> rc 2 (as (e)); `git -C "../a-wt-1 --foo=bar baz"
@@ -446,13 +478,15 @@
 # PRE-DATES #269 (the plain whitespace split that produces it is older than this issue and
 # independent of whether `-C` resolution exists at all): a quoted `-C` value containing a
 # space can hide the whole segment from this hook, including a push whose destination is
-# literally the session's own default branch. Rows (a), (e), (f), (h), (i) and the two rc-2
+# literally the session's own default branch. Rows (a), (e), (h) and the two rc-2
 # shapes in (j) share the one resolve-a-different-directory outcome that is new to this
 # change, and it is a mis-resolution, not a containment breach: the facts applied still belong
 # to a directory this hook itself derived and read under the same predicate, never an
 # attacker-arbitrary one, but they are not necessarily the facts of the directory the push
 # actually executes in (see the containment paragraph above for the qualification this
-# residual class requires). Since #268 closed the repo-local
+# residual class requires). Rows (f) and (i) no longer belong to that group: since #439, both
+# deny via the command-line-config check before `-C` is ever resolved (see each row's own text
+# above), so neither one reaches — or depends on — `../a-wt-1`'s own facts at all. Since #268 closed the repo-local
 # `push.default`/`remote.<name>.push` class named here in every prior version of this file, #290
 # closed the GLOBAL half of that same class (`$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config`
 # or its default, `$HOME/.gitconfig`), and #304/#305 closed most of the SYSTEM half plus
@@ -491,15 +525,7 @@
 # comment-strip every other line goes through, or the header falls to the generic "other"
 # section) — every one of these fails OPEN (silently not followed), never denies;
 # `config.worktree` (`extensions.worktreeConfig`) inside any file this hook reads, still never
-# followed; the env-injected `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` config
-# form (never consulted); an inline environment assignment on the command itself, e.g.
-# `GIT_CONFIG_SYSTEM=… git push` or `GIT_CONFIG_GLOBAL=… git push` (never consulted — this hook
-# reads only its OWN process environment, never a value the untrusted command string would set for
-# git's own child process); a `-c push.default=…`/`-c remote.<name>.push=…` value, or a
-# `--config-env=<name>=<envvar>` indirection, on the push segment's own global options (the value
-# is skipped as an opaque pair while tokenizing — see GIT_GLOBAL_OPTS_WITH_VALUE above — and is
-# never separately read as a config route either) — both of these, plus the inline-assignment
-# residual just named, remain unread (a named residual); the legacy dotted `[remote.origin]` section
+# followed; the legacy dotted `[remote.origin]` section
 # spelling (only
 # the quoted `[remote "origin"]` form is parsed); backslash-continued or backslash-escaped config
 # values; a key on the same line as its own section header, e.g. `[remote "origin"] push =
@@ -508,14 +534,24 @@
 # (e.g. `[remote "back#up"]`) loses its whole section — the header line is truncated before its
 # own closing `"]`, so it matches none of the three named section patterns, falls through to the
 # generic "other" section, and every key inside it (including a denying `push =` line) is silently
-# never captured — measured: rc 0. This is a tripwire, not a sandbox — branch protection on the
+# never captured — measured: rc 0. Since #439, a command-line `-c`/`--config-env` option (any key,
+# including `-c push.default=…`/`-c remote.<name>.push=…`) and an inline `GIT_CONFIG_COUNT`/
+# `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`/`GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_GLOBAL`/
+# `GIT_CONFIG_SYSTEM` environment assignment, bare or behind `env`, are no longer read-and-ignored
+# residuals — every push segment carrying one is denied outright (see "Fail-closed: command-line
+# git config" above) whatever the key or destination. What remains residual there instead: an
+# inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself reads, the
+# quote-blind and alias-shaped forms that same paragraph names, and cross-segment `export
+# GIT_CONFIG_*` (left to #433). This is a tripwire, not a sandbox — branch protection on the
 # default branch remains the real backstop, exactly as hooks/git-c-guard.sh and
 # hooks/agent-boundary.sh already document for their own scopes.
 #
 # Contract: read the PreToolUse hook JSON on stdin; print nothing and exit 0 ("no opinion") unless
 # the call is a Bash `git push` whose resolved destination is the default branch (or the
 # unconditional `main`/`master` fallback), OR whose target repository this hook cannot resolve at
-# all (#292 — see "Fail-closed: an unresolvable push target" above), in which case print exactly
+# all (#292 — see "Fail-closed: an unresolvable push target" above), OR whose push segment carries
+# git config supplied on the command line (#439 — see "Fail-closed: command-line git config"
+# above), in which case print exactly
 # one reason line to stderr and exit 2 ("deny"); stdout is always empty. Wired in hooks/hooks.json via
 # `${CLAUDE_PLUGIN_ROOT}`, with no `if` gate — an `if` filter matches only `tool_input.command`
 # constituents after composite splitting and leading-assignment stripping, so it cannot see a
@@ -617,6 +653,19 @@ CFG_INCLUDE_MAX_CHARS=65536
 # verdict this produces.
 GIT_REPO_OPTS="--git-dir --work-tree"
 GIT_REPO_ENV_VARS="GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR"
+# #439: a push segment carrying git config supplied ON THE COMMAND LINE — as an option before the
+# subcommand (GIT_CMDCFG_OPTS: detached "-c <k=v>"/"--config-env <k=V>", attached "-c<k=v>"/
+# "--config-env=<k=V>") or as a leading environment assignment, bare or behind "env"
+# (GIT_CMDCFG_ENV_VARS: an exact-name assignment; GIT_CMDCFG_ENV_PREFIXES: an assignment whose name
+# STARTS WITH one of these, for the "_<n>"-suffixed GIT_CONFIG_KEY_/GIT_CONFIG_VALUE_ pair) — adds
+# config on top of the files this hook reads above, and this hook never reads it, so (like #292) it
+# fails closed: any push segment carrying one of these is denied outright, whatever the key or the
+# destination. These three constants are push-guard-only, consumed only by this file's own awk
+# tokenizer below — unlike GIT_REPO_OPTS/GIT_REPO_ENV_VARS they have no shared twin in
+# hooks/agent-boundary.sh, the same way GIT_REPO_ENV_VARS itself has none.
+GIT_CMDCFG_OPTS="-c --config-env"
+GIT_CMDCFG_ENV_VARS="GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM"
+GIT_CMDCFG_ENV_PREFIXES="GIT_CONFIG_KEY_ GIT_CONFIG_VALUE_"
 
 # is_c_target_path PATH (#269) — true iff PATH satisfies the shared PATH_ERE predicate above.
 # Here-string, not a `printf` writer piped into `grep`'s quiet mode (#255): that early-exit
@@ -685,11 +734,13 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
 # See this file's header for the full cross-reference to hooks/agent-boundary.sh's twin scan.
 # Emits one "PUSH<TAB><-C value, only when exactly one><TAB><#292 unresolved-reason, empty when
 # none><TAB><space-joined remaining tokens>" line per push segment found; nothing for any other
-# segment. Neither the "-C" value, the reason, nor the remaining-tokens field can itself contain a
+# segment — except a push segment carrying command-line git config (#439), which emits the fixed
+# sentinel "-cmdline-config-" instead of a "PUSH…" line (see emit_segment()'s own cmdcfg handling
+# below). Neither the "-C" value, the reason, nor the remaining-tokens field can itself contain a
 # TAB, since every token comes from splitting on "[ \t]+". Processes $cmd one input line (awk
 # record) at a time — the same deliberate, documented false-positive class agent-boundary.sh's
 # header explains (a heredoc line that starts with "git push" is scanned as its own segment).
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" '
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
@@ -700,6 +751,12 @@ BEGIN {
   for (i = 1; i <= nro; i++) repoopt_set[roarr[i]] = 1
   nev = split(repoenv, evarr, " ")
   for (i = 1; i <= nev; i++) envvar_set[evarr[i]] = 1
+  # #439
+  ncco = split(cmdcfgopts, ccoarr, " ")
+  for (i = 1; i <= ncco; i++) ccopt_set[ccoarr[i]] = 1
+  nce = split(cmdcfgenv, cearr, " ")
+  for (i = 1; i <= nce; i++) ccenv_set[cearr[i]] = 1
+  nccp = split(cmdcfgpfx, ccparr, " ")
 }
 function normalize(tok,    t, parts, np) {
   t = tok
@@ -716,18 +773,25 @@ function strip_quotes(tok,    t) {
   gsub(/\\/, "", t)
   return t
 }
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, ro) {
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, ro, cmdcfg, co, cp) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
   cmdword = ""
   unres = ""
+  cmdcfg = 0
   while (idx <= ntok) {
     tok = toks[idx]
     if (tok == "") { idx++; continue }
     if (match(tok, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) {
       aname = substr(tok, 1, index(tok, "=") - 1)
       if (unres == "" && (aname in envvar_set)) unres = aname "="
+      # #439: a leading GIT_CONFIG_* assignment (bare or behind "env") adds command-line config —
+      # store a boolean only, never $aname, so a GIT_CONFIG_KEY_<suffix> name is never echoed.
+      if (!cmdcfg) {
+        if (aname in ccenv_set) cmdcfg = 1
+        else for (cp = 1; cp <= nccp; cp++) if (index(aname, ccparr[cp]) == 1) { cmdcfg = 1; break }
+      }
       idx++
       continue
     }
@@ -757,6 +821,17 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
       }
       if (unres == "" && substr(tok, 1, 2) == "-C" && tok != "-C") unres = "attached -C<path>"
     }
+    # #439: a "-c"/"--config-env" option before the subcommand. A detached "-c"/"--config-env" is
+    # an exact ccopt_set member; an attached "-c<k=v>" is caught by the middle substr() arm (which
+    # also matches a detached "-c"); an attached "--config-env=<k=V>" by the final index() loop.
+    # awk comparison is case-sensitive, so "-C" (the repo-redirect option) never matches here. This
+    # only sets a flag; it does not change how gopt_set below still consumes "-c"/"--config-env"
+    # together with their own value token.
+    if (!cmdcfg) {
+      if (tok in ccopt_set) cmdcfg = 1
+      else if (substr(tok, 1, 2) == "-c") cmdcfg = 1
+      else for (co = 1; co <= ncco; co++) if (index(tok, ccoarr[co] "=") == 1) { cmdcfg = 1; break }
+    }
     if (tok in gopt_set) {
       if (tok == "-C") { ccount++; cpath = strip_quotes(toks[j + 1]) }
       j += 2
@@ -773,6 +848,9 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     return
   }
   if (cut_flag) { print "-cut-push-"; return }
+  # #439: a real push segment carrying command-line git config denies outright, ahead of the #292
+  # unresolved-target reason (Q5) — either way the segment denies.
+  if (cmdcfg) { print "-cmdline-config-"; return }
   if (unres == "" && ccount >= 2) unres = "more than one -C"
   rest = ""
   sep = ""
@@ -1252,8 +1330,9 @@ resolve_repo() {
     # INSIDE the same $nosys guard as the three PUSH_SYSTEM_CONFIG_PATHS entries, not outside it.
     # See this file's header "Repo resolution" paragraph for the full reasoning and "Documented
     # under-blocking classes" for what stays unread (a system config at a path not on this static
-    # list, an include form this hook cannot resolve, config.worktree, an inline command-line env
-    # assignment, and the env-injected GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n> forms).
+    # list, an include form this hook cannot resolve, config.worktree, and an inline HOME=/
+    # XDG_CONFIG_HOME= relocation) — since #439 a command-line "-c"/"--config-env" option or a
+    # GIT_CONFIG_* environment assignment denies the push outright instead of being read as config.
     xdg_cfg=""
     if [ -n "${XDG_CONFIG_HOME:-}" ]; then
       xdg_cfg="$XDG_CONFIG_HOME/git/config"
@@ -1608,6 +1687,12 @@ while IFS= read -r line; do
       deny_kind="cutpush"
       break
       ;;
+    "-cmdline-config-")
+      # #439: fixed reason, no input — see the cmdcfg) message arm below.
+      deny_dest="command-line git config"
+      deny_kind="cmdcfg"
+      break
+      ;;
     "PUSH$TAB"*) : ;;
     *) continue ;;
   esac
@@ -1671,6 +1756,12 @@ if [ -n "$deny_dest" ]; then
     unresolved)
       printf '%s denies this push: it cannot resolve which repository the push runs in (%s), so it cannot rule out that repository'"'"'s default branch — the harness never pushes this way; a human can run it from a terminal inside that checkout, or use a <repo>-wt-<n> worktree path; see README.md'"'"'s Safety model\n' \
         "$PUSH_DENY_STEM" "$deny_dest" >&2
+      ;;
+    cmdcfg)
+      # #439: fixed message, no %s for input — never echoes the -c key/value or a matched
+      # GIT_CONFIG_KEY_<suffix>/GIT_CONFIG_VALUE_<suffix> name.
+      printf '%s denies this push: it carries git config supplied on the command line (git -c, --config-env, or a GIT_CONFIG_* environment assignment), which this hook does not read, so it cannot rule out the default branch — the harness never pushes this way; drop the command-line config, or a human can run it from a terminal; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" >&2
       ;;
     *)
       printf '%s denies pushing to "%s" (resolves to the default branch: %s) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \

@@ -2009,8 +2009,237 @@ case_pu_noop_env_unrelated() {
   expect_push_no_opinion
 }
 case_pu_noop_global_opt_feature() {
-  run_push_guard "$(mk_push_cmd 'git -c core.pager=cat push origin feature/x')"
+  # #439 re-point: "-c core.pager=cat" now denies via the command-line-config route (see the
+  # push-cmdcfg- section below), so this control moved to "--namespace", a
+  # GIT_GLOBAL_OPTS_WITH_VALUE member that is neither a repo option (GIT_REPO_OPTS) nor a
+  # command-line-config option (GIT_CMDCFG_OPTS) -- an ordinary global option with a value stays
+  # unaffected.
+  run_push_guard "$(mk_push_cmd 'git --namespace foo push origin feature/x')"
   expect_push_no_opinion
+}
+
+# --- command-line git config (#439) -------------------------------------------------------------
+# mutant:439-pg-cmdcfg-sentinel — drops the "-cmdline-config-" sentinel print entirely, so a real
+#   push segment carrying command-line config is never denied on this route.
+# mutant:439-pg-cmdcfg-env-arm — drops the whole leading-assignment cmdcfg check, so no
+#   GIT_CONFIG_* environment assignment is ever flagged.
+# mutant:439-pg-cmdcfg-env-vocab — empties GIT_CMDCFG_ENV_VARS, so no exact-name env assignment
+#   (GIT_CONFIG_COUNT/GIT_CONFIG_PARAMETERS/GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM) is ever flagged.
+# mutant:439-pg-cmdcfg-env-prefixes — empties GIT_CMDCFG_ENV_PREFIXES, so no
+#   GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> assignment is ever flagged.
+# mutant:439-pg-cmdcfg-env-exact — widens the env membership test from exact GIT_CMDCFG_ENV_VARS
+#   membership to any "GIT_CONFIG_"-prefixed name, so an unrelated assignment like
+#   GIT_CONFIG_NOSYSTEM=1 is wrongly flagged too.
+# mutant:439-pg-cmdcfg-opt-exact — disables the detached-option exact-membership check, so a
+#   detached "--config-env <k=V>" is no longer flagged (a bare "-c" is still caught by the
+#   attached-"-c" arm below it).
+# mutant:439-pg-cmdcfg-opt-attached — drops the attached-option "=" prefix-match loop, so an
+#   attached "--config-env=<k=V>" is no longer flagged.
+# mutant:439-pg-cmdcfg-c-attached — drops the attached "-c<k=v>" substr check, so that one form is
+#   no longer flagged (a detached "-c" is still caught by the exact-membership arm above it).
+# mutant:439-pg-cmdcfg-opts-vocab — narrows GIT_CMDCFG_OPTS to "-c" only, so neither
+#   "--config-env" spelling is ever flagged.
+# mutant:439-pg-cmdcfg-push-only — moves the sentinel print ahead of the "subcmd != push" check,
+#   so a NON-push segment carrying command-line config is wrongly denied too.
+# mutant:439-pg-cmdcfg-leak — removes "cmdcfg" from emit_segment()'s own local-variable list (and
+#   its own reset), turning it into an awk global that leaks across segments/calls instead of
+#   starting fresh for each one.
+# mutant:439-pg-cmdcfg-order — lets a #292 unresolved-target reason in the same segment win over
+#   the command-line-config reason (the sentinel only fires when nothing else is unresolved).
+#
+# Every deny fixture below also asserts that stderr contains the fixed substring "git config
+# supplied on the command line", and never an input-derived value (the -c key/value text, or a
+# matched GIT_CONFIG_KEY_<suffix>/GIT_CONFIG_VALUE_<suffix> name) -- see the cmdcfg) message arm in
+# hooks/push-guard.sh, which prints PUSH_DENY_STEM alone with no %s for input.
+case_push_cmdcfg_deny_c_remote_push() {
+  local dir="$tmpbase/repo-cmdcfg-c-remote-push"
+  mk_fixture_repo "$dir" main feature/x
+  run_push_guard "$(mk_push_cmd_cwd 'git -c remote.origin.push=HEAD:main push' "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"remote.origin.push"*) __ok=0; __why="${__why}stderr echoes the -c key 'remote.origin.push': '$push_err'\n" ;;
+    *) ;;
+  esac
+  case "$push_err" in
+    *"HEAD:main"*) __ok=0; __why="${__why}stderr echoes the -c value 'HEAD:main': '$push_err'\n" ;;
+    *) ;;
+  esac
+}
+case_push_cmdcfg_deny_c_benign_key() {
+  # The deny doesn't depend on the key or the destination (a non-default branch, benign key).
+  run_push_guard "$(mk_push_cmd 'git -c core.pager=cat push origin feature/x')"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_push_cmdcfg_deny_c_attached() {
+  run_push_guard "$(mk_push_cmd 'git -cremote.origin.push=HEAD:main push origin feature/x')"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_push_cmdcfg_deny_config_env_attached() {
+  local dir="$tmpbase/repo-cmdcfg-config-env-attached"
+  mk_fixture_repo "$dir" main feature/x
+  run_push_guard "$(mk_push_cmd_cwd 'git --config-env=remote.origin.push=VAR push' "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_push_cmdcfg_deny_config_env_detached() {
+  run_push_guard "$(mk_push_cmd 'git --config-env remote.origin.push=VAR push origin feature/x')"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_push_cmdcfg_deny_env_count() {
+  run_push_guard "$(mk_push_cmd 'GIT_CONFIG_COUNT=1 git push origin feature/x')"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_push_cmdcfg_deny_env_key() {
+  # A prefix-matched name is stored as a boolean only, never echoed.
+  run_push_guard "$(mk_push_cmd 'GIT_CONFIG_KEY_7zq=remote.origin.push git push origin feature/x')"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"7zq"*) __ok=0; __why="${__why}stderr echoes the matched name suffix '7zq': '$push_err'\n" ;;
+    *) ;;
+  esac
+}
+case_push_cmdcfg_deny_env_value() {
+  run_push_guard "$(mk_push_cmd 'GIT_CONFIG_VALUE_0=HEAD:main git push origin feature/x')"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_push_cmdcfg_deny_env_count_triple() {
+  # The issue's own row-2 shape, verbatim.
+  local dir="$tmpbase/repo-cmdcfg-env-count-triple"
+  mk_fixture_repo "$dir" main feature/x
+  run_push_guard "$(mk_push_cmd_cwd 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=HEAD:main git push' "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_push_cmdcfg_deny_env_parameters() {
+  local dir="$tmpbase/repo-cmdcfg-env-parameters"
+  mk_fixture_repo "$dir" main feature/x
+  # Double-quoted bash string so the inner single quotes (git's own GIT_CONFIG_PARAMETERS
+  # quoting) survive verbatim into mk_push_cmd_cwd's jq --arg.
+  run_push_guard "$(mk_push_cmd_cwd "GIT_CONFIG_PARAMETERS=\"'remote.origin.push'='HEAD:main'\" git push" "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_push_cmdcfg_deny_env_prefix() {
+  # The same triple assignment, behind an "env" prefix word.
+  run_push_guard "$(mk_push_cmd 'env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=HEAD:main git push origin feature/x')"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_push_cmdcfg_deny_env_global() {
+  run_push_guard "$(mk_push_cmd 'GIT_CONFIG_GLOBAL=/nonexistent/x git push origin feature/x')"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_push_cmdcfg_deny_env_system() {
+  run_push_guard "$(mk_push_cmd 'GIT_CONFIG_SYSTEM=/nonexistent/x git push origin feature/x')"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_push_cmdcfg_deny_never_executes() {
+  # Safety property on the new command-line-config route, the same C1/C2 booby-trapped-PATH idiom
+  # as case_pu_deny_never_executes: deny, sentinel absent, and the fixture repo's file listing
+  # byte-identical before/after.
+  local dir="$tmpbase/repo-cmdcfg-never-executes"
+  mk_fixture_repo "$dir" main feature/x
+  local trapdir="$tmpbase/trapbin-cmdcfg-never-executes" sentinel="$tmpbase/sentinel-cmdcfg-never-executes"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  local before after
+  before="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  run_push_guard "$(mk_push_cmd_cwd 'git -c remote.origin.push=HEAD:main push' "$dir")" "$trapdir:$PATH"
+  after="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH while denying command-line config\n"; }
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}fixture repo's file listing changed — push-guard.sh wrote to or altered a file it should only read\n"; }
+}
+case_push_cmdcfg_deny_codex_main_session() {
+  # Documented Codex payload shape (mk_codex_shell, main session -- no agent_type/agent_id).
+  local dir="$tmpbase/repo-cmdcfg-codex"
+  mk_fixture_repo "$dir" main feature/x
+  run_push_guard "$(mk_codex_shell '' 'git -c remote.origin.push=HEAD:main push' "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_push_cmdcfg_noop_nonpush_segment() {
+  # Only push segments are judged, and the flag doesn't leak across segments.
+  run_push_guard "$(mk_push_cmd 'git -c core.pager=cat log && git push origin feature/x')"
+  expect_push_no_opinion
+}
+case_push_cmdcfg_noop_env_nosystem() {
+  # Exact vocabulary, not every "GIT_CONFIG_"-prefixed name.
+  run_push_guard "$(mk_push_cmd 'GIT_CONFIG_NOSYSTEM=1 git push origin feature/x')"
+  expect_push_no_opinion
+}
+case_push_cmdcfg_deny_precedence() {
+  # One segment carrying both a #292 unresolved-target assignment (GIT_DIR=) and command-line
+  # config: the command-line-config reason is the one reported (ADVISORY Q5).
+  run_push_guard "$(mk_push_cmd 'GIT_DIR=x GIT_CONFIG_COUNT=1 git push origin feature/x')"
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
 }
 
 # --- deny/no-opinion: #268 config-derived push routes (remote.<name>.push / push.default) -----
@@ -6020,7 +6249,7 @@ cases=(
   "push-unres-noop-c-session-root|case_pu_noop_c_session_root|no opinion: cwd a SUBDIRECTORY of the session checkout, -C names the session ROOT -- pins \$session_root, distinct from \$resolve_cwd -- mutation proof: dev/mutants/hook-tests.json (292-pg-session-equiv, 292-pg-session-root)"
   "push-unres-noop-c-nonpush-segment|case_pu_noop_c_nonpush_segment|no opinion: git -C ../other-checkout-u19 status && git push origin feature/x -- only push segments are affected -- control, not part of the mutation-proof registry"
   "push-unres-noop-env-unrelated|case_pu_noop_env_unrelated|no opinion: GIT_TRACE=1 git push origin feature/x -- an unrelated GIT_ env var is never flagged -- mutation proof: dev/mutants/hook-tests.json (292-pg-env-exact)"
-  "push-unres-noop-global-opt-feature|case_pu_noop_global_opt_feature|no opinion: git -c core.pager=cat push origin feature/x -- an ordinary global option with a value is unaffected -- control, not part of the mutation-proof registry"
+  "push-unres-noop-global-opt-feature|case_pu_noop_global_opt_feature|no opinion: git --namespace foo push origin feature/x -- an ordinary global option with a value is unaffected (#439 re-point: -c core.pager=cat now denies via the command-line-config route) -- control, not part of the mutation-proof registry"
   "push-deny-config-remote-push-bare|case_pd_config_remote_push_bare|deny: git push against a repo whose config carries [remote \"origin\"] push = HEAD:main (#268, the issue's own shape) -- measured: M26, 68 pass 12 fail"
   "push-deny-config-remote-push-named-remote|case_pd_config_remote_push_named_remote|deny: git push origin against the same config (n==1, the positive side of the exact-remote-scoping clause) -- measured: M26, 68 pass 12 fail (also M41, 79 pass 1 fail)"
   "push-deny-config-remote-push-second-line|case_pd_config_remote_push_second_line|deny: two push = lines under [remote \"origin\"], only the SECOND offending (0/1/2+ boundary) -- measured: M26, 68 pass 12 fail (also M33, 79 pass 1 fail)"
@@ -6137,6 +6366,24 @@ cases=(
   "push-pc-deny-dbracket-split-push|case_push_pc_deny_dbracket_split_push|disjoint-tail proof: if [[ a ]] git push origin ]] main -- a push cut short by the SECOND ]] fails closed on its own distinct reason -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-dbracket-overlap)"
   "push-pc-deny-dbracket-split-subcmd|case_push_pc_deny_dbracket_split_subcmd|disjoint-tail proof: if [[ a ]] git -C ]] push origin main -- a subcommand search cut mid-value fails closed instead of silently resolving no opinion -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-dbracket-subcmd-open)"
   "push-pc-deny-dbracket-timing|case_push_pc_deny_dbracket_timing|wall-clock proof: a ~1.4KB (x + ]] git push x64 + a x300, newline, git push origin main) shape -- deny AND elapsed time under 5s -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-dbracket-overlap)"
+  "push-cmdcfg-deny-c-remote-push|case_push_cmdcfg_deny_c_remote_push|deny: git -c remote.origin.push=HEAD:main push (the issue's own row-1 shape) -- stderr echoes neither the key nor the value -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel)"
+  "push-cmdcfg-deny-c-benign-key|case_push_cmdcfg_deny_c_benign_key|deny: git -c core.pager=cat push origin feature/x -- the deny doesn't depend on the key or the destination -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel)"
+  "push-cmdcfg-deny-c-attached|case_push_cmdcfg_deny_c_attached|deny: git -cremote.origin.push=HEAD:main push origin feature/x (attached -c<k=v>) -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-c-attached)"
+  "push-cmdcfg-deny-config-env-attached|case_push_cmdcfg_deny_config_env_attached|deny: git --config-env=remote.origin.push=VAR push (attached --config-env=<k=V>) -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-opt-attached, 439-pg-cmdcfg-opts-vocab)"
+  "push-cmdcfg-deny-config-env-detached|case_push_cmdcfg_deny_config_env_detached|deny: git --config-env remote.origin.push=VAR push origin feature/x (detached --config-env <k=V>) -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-opt-exact, 439-pg-cmdcfg-opts-vocab)"
+  "push-cmdcfg-deny-env-count|case_push_cmdcfg_deny_env_count|deny: GIT_CONFIG_COUNT=1 git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-env-arm, 439-pg-cmdcfg-env-vocab)"
+  "push-cmdcfg-deny-env-key|case_push_cmdcfg_deny_env_key|deny: GIT_CONFIG_KEY_7zq=remote.origin.push git push origin feature/x -- stderr never echoes the matched name suffix -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-env-arm, 439-pg-cmdcfg-env-prefixes)"
+  "push-cmdcfg-deny-env-value|case_push_cmdcfg_deny_env_value|deny: GIT_CONFIG_VALUE_0=HEAD:main git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-env-arm, 439-pg-cmdcfg-env-prefixes)"
+  "push-cmdcfg-deny-env-count-triple|case_push_cmdcfg_deny_env_count_triple|deny: the issue's own row-2 shape verbatim (GIT_CONFIG_COUNT/KEY_0/VALUE_0, bare push) -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-env-arm)"
+  "push-cmdcfg-deny-env-parameters|case_push_cmdcfg_deny_env_parameters|deny: GIT_CONFIG_PARAMETERS=\"'remote.origin.push'='HEAD:main'\" git push (the issue's own row-3 shape) -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-env-arm, 439-pg-cmdcfg-env-vocab)"
+  "push-cmdcfg-deny-env-prefix|case_push_cmdcfg_deny_env_prefix|deny: the same GIT_CONFIG_COUNT/KEY_0/VALUE_0 triple behind an \"env\" prefix word -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-env-arm)"
+  "push-cmdcfg-deny-env-global|case_push_cmdcfg_deny_env_global|deny: GIT_CONFIG_GLOBAL=/nonexistent/x git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-env-arm, 439-pg-cmdcfg-env-vocab)"
+  "push-cmdcfg-deny-env-system|case_push_cmdcfg_deny_env_system|deny: GIT_CONFIG_SYSTEM=/nonexistent/x git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-env-arm, 439-pg-cmdcfg-env-vocab)"
+  "push-cmdcfg-deny-never-executes|case_push_cmdcfg_deny_never_executes|deny via the command-line-config route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND the fixture repo's file listing is byte-identical before/after -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel)"
+  "push-cmdcfg-deny-codex-main-session|case_push_cmdcfg_deny_codex_main_session|deny: a Codex-shaped main-session payload (mk_codex_shell '') with git -c remote.origin.push=HEAD:main push -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel)"
+  "push-cmdcfg-noop-nonpush-segment|case_push_cmdcfg_noop_nonpush_segment|no opinion: git -c core.pager=cat log && git push origin feature/x -- only push segments are judged, and the flag doesn't leak across segments -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-push-only, 439-pg-cmdcfg-leak)"
+  "push-cmdcfg-noop-env-nosystem|case_push_cmdcfg_noop_env_nosystem|no opinion: GIT_CONFIG_NOSYSTEM=1 git push origin feature/x -- exact vocabulary, not every GIT_CONFIG_-prefixed name -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-env-exact)"
+  "push-cmdcfg-deny-precedence|case_push_cmdcfg_deny_precedence|deny: GIT_DIR=x GIT_CONFIG_COUNT=1 git push origin feature/x -- the command-line-config reason wins over a #292 unresolved target in the same segment -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-env-arm, 439-pg-cmdcfg-env-vocab, 439-pg-cmdcfg-order)"
   # --- hooks/claude-dir-guard.sh (#327) cases -----------------------------------------------------
   # Mutation-proof table (LESSON 2026-09-01/2026-09-07(b), one mutant per classifier clause,
   # applied in place with an immediately-refreshed backup and a full `diff` verify after every

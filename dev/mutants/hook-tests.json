@@ -2520,6 +2520,219 @@
       "expect_fail": [
         "push-unres-noop-c-session-cwd"
       ]
+    },
+    {
+      "name": "439-pg-cmdcfg-sentinel",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcfg-",
+      "edits": [
+        {
+          "from": "  if (cmdcfg) { print \"-cmdline-config-\"; return }",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcfg-deny-c-attached",
+        "push-cmdcfg-deny-c-benign-key",
+        "push-cmdcfg-deny-c-remote-push",
+        "push-cmdcfg-deny-codex-main-session",
+        "push-cmdcfg-deny-config-env-attached",
+        "push-cmdcfg-deny-config-env-detached",
+        "push-cmdcfg-deny-env-count",
+        "push-cmdcfg-deny-env-count-triple",
+        "push-cmdcfg-deny-env-global",
+        "push-cmdcfg-deny-env-key",
+        "push-cmdcfg-deny-env-parameters",
+        "push-cmdcfg-deny-env-prefix",
+        "push-cmdcfg-deny-env-system",
+        "push-cmdcfg-deny-env-value",
+        "push-cmdcfg-deny-never-executes",
+        "push-cmdcfg-deny-precedence"
+      ]
+    },
+    {
+      "name": "439-pg-cmdcfg-env-arm",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcfg-",
+      "edits": [
+        {
+          "from": "      # #439: a leading GIT_CONFIG_* assignment (bare or behind \"env\") adds command-line config —\n      # store a boolean only, never $aname, so a GIT_CONFIG_KEY_<suffix> name is never echoed.\n      if (!cmdcfg) {\n        if (aname in ccenv_set) cmdcfg = 1\n        else for (cp = 1; cp <= nccp; cp++) if (index(aname, ccparr[cp]) == 1) { cmdcfg = 1; break }\n      }",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcfg-deny-env-count",
+        "push-cmdcfg-deny-env-count-triple",
+        "push-cmdcfg-deny-env-global",
+        "push-cmdcfg-deny-env-key",
+        "push-cmdcfg-deny-env-parameters",
+        "push-cmdcfg-deny-env-prefix",
+        "push-cmdcfg-deny-env-system",
+        "push-cmdcfg-deny-env-value",
+        "push-cmdcfg-deny-precedence"
+      ]
+    },
+    {
+      "name": "439-pg-cmdcfg-env-vocab",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcfg-",
+      "edits": [
+        {
+          "from": "GIT_CMDCFG_ENV_VARS=\"GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM\"",
+          "to": "GIT_CMDCFG_ENV_VARS=\"\""
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcfg-deny-env-count",
+        "push-cmdcfg-deny-env-global",
+        "push-cmdcfg-deny-env-parameters",
+        "push-cmdcfg-deny-env-system",
+        "push-cmdcfg-deny-precedence"
+      ]
+    },
+    {
+      "name": "439-pg-cmdcfg-env-prefixes",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcfg-",
+      "edits": [
+        {
+          "from": "GIT_CMDCFG_ENV_PREFIXES=\"GIT_CONFIG_KEY_ GIT_CONFIG_VALUE_\"",
+          "to": "GIT_CMDCFG_ENV_PREFIXES=\"\""
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcfg-deny-env-key",
+        "push-cmdcfg-deny-env-value"
+      ]
+    },
+    {
+      "name": "439-pg-cmdcfg-env-exact",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcfg-",
+      "edits": [
+        {
+          "from": "        if (aname in ccenv_set) cmdcfg = 1",
+          "to": "        if (aname ~ /^GIT_CONFIG_/) cmdcfg = 1"
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcfg-noop-env-nosystem"
+      ]
+    },
+    {
+      "name": "439-pg-cmdcfg-opt-exact",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcfg-",
+      "edits": [
+        {
+          "from": "if (tok in ccopt_set)",
+          "to": "if (0)"
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcfg-deny-config-env-detached"
+      ]
+    },
+    {
+      "name": "439-pg-cmdcfg-opt-attached",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcfg-",
+      "edits": [
+        {
+          "from": "      else for (co = 1; co <= ncco; co++) if (index(tok, ccoarr[co] \"=\") == 1) { cmdcfg = 1; break }",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcfg-deny-config-env-attached"
+      ]
+    },
+    {
+      "name": "439-pg-cmdcfg-c-attached",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcfg-",
+      "edits": [
+        {
+          "from": "      else if (substr(tok, 1, 2) == \"-c\") cmdcfg = 1",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcfg-deny-c-attached"
+      ]
+    },
+    {
+      "name": "439-pg-cmdcfg-opts-vocab",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcfg-",
+      "edits": [
+        {
+          "from": "GIT_CMDCFG_OPTS=\"-c --config-env\"",
+          "to": "GIT_CMDCFG_OPTS=\"-c\""
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcfg-deny-config-env-attached",
+        "push-cmdcfg-deny-config-env-detached"
+      ]
+    },
+    {
+      "name": "439-pg-cmdcfg-push-only",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcfg-",
+      "edits": [
+        {
+          "from": "  if (subcmd != \"push\") {\n    if (subcmd == \"\" && cut_flag) print \"-cut-push-\"\n    return\n  }\n  if (cut_flag) { print \"-cut-push-\"; return }\n  # #439: a real push segment carrying command-line git config denies outright, ahead of the #292\n  # unresolved-target reason (Q5) — either way the segment denies.\n  if (cmdcfg) { print \"-cmdline-config-\"; return }",
+          "to": "  if (cmdcfg) { print \"-cmdline-config-\"; return }\n  if (subcmd != \"push\") {\n    if (subcmd == \"\" && cut_flag) print \"-cut-push-\"\n    return\n  }\n  if (cut_flag) { print \"-cut-push-\"; return }"
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcfg-noop-nonpush-segment"
+      ]
+    },
+    {
+      "name": "439-pg-cmdcfg-leak",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcfg-",
+      "edits": [
+        {
+          "from": "function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, ro, cmdcfg, co, cp) {",
+          "to": "function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, ro, co, cp) {"
+        },
+        {
+          "from": "  cmdcfg = 0",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcfg-noop-nonpush-segment"
+      ]
+    },
+    {
+      "name": "439-pg-cmdcfg-order",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcfg-",
+      "edits": [
+        {
+          "from": "  if (cmdcfg) { print \"-cmdline-config-\"; return }",
+          "to": "  if (cmdcfg && unres == \"\" && ccount < 2) { print \"-cmdline-config-\"; return }"
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcfg-deny-precedence"
+      ]
     }
   ]
 }
