@@ -28,8 +28,8 @@ required check on every pull request, and `selfcheck-macos` on `macos-latest`, w
 which since #365 runs only post-merge on `main`, nightly, and on manual dispatch — never on a pull
 request, because the maintainer's own local run already happens under bash 3.2, so a BSD-only
 regression is caught on `main` within a day rather than holding every merge for the still-longer
-time that job now takes with `dev/mutant-driver.sh` appended (`timeout-minutes: 35`, since #359,
-raised from 20 to absorb the driver's own post-merge run). Each job runs ten commands, but the
+time that job now takes with `dev/mutant-driver.sh` appended (`timeout-minutes: 50`, sized to
+absorb the driver's own post-merge run). Each job runs ten commands, but the
 ninth, `bash dev/mutant-driver.sh` (#359), is
 gated `if: github.event_name != 'pull_request'`, so a pull request runs nine of them on `ubuntu`
 only (driver-tests still runs; the driver itself, and the whole `selfcheck-macos` job, run only

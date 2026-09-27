@@ -18,6 +18,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- CI: the post-merge/nightly job ceilings rise, `selfcheck-macos` to 50 minutes and `selfcheck`'s
+  non-PR ceiling to 35. The full mutant driver grew with this release's hook and scheduled-run
+  records, and the macOS job hit its old ceiling after #427 merged. Pull-request ceilings are
+  unchanged. No consumer step.
 - #371 (follow-on): `dev/mutants/cleanup-tests.json`'s `376-reopened-gate` and
   `376-reopened-field` records list `reopened-write-failure-edit`, which #371 added and both
   mutants also fail, so the post-merge mutant driver is green again. No consumer step.
