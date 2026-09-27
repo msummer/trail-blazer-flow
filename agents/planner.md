@@ -90,7 +90,9 @@ act on. You return a plan as text.
 # Output template
 
 Return exactly this structure (Markdown), and nothing before or after it (on Codex, except the
-one `Canary:` line a hook-canary block asks for, which comes first). The closing status
+one `Canary:` line a hook-canary block asks for, which comes first, and the `## Denied commands`
+section an "Unattended (Codex)" block asks for, which comes immediately before the closing status
+line). The closing status
 line's `issue` and `retries` values come from the orchestrator's prompt (the issue number, and
 `Dispatch attempt: <k>` if present — echo `retries=<k-1>`, or `retries=0` if the prompt states no
 attempt number); `harness` comes from the prompt's `Harness version: <version>` line — echo

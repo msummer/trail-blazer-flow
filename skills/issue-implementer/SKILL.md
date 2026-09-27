@@ -218,11 +218,14 @@ gh issue edit <number> --add-label needs-human
 3. **Continue with the next issue (step 2g)** — never wait on an answer.
 
 **Vocabulary (closed, shared with `issue-planner` step 7).** `<stage>`: `2a`, `2b`, `2c`, `2e`
-(this skill), or `plan-initial` / `plan-revision` (planner step 7, from the discovery bucket).
-`<reason>`: `plan-contradicted` (2a); `branch-has-committed-work` or `branch-has-open-pr` (2b);
-`blocking-question-unanswered` (2c); `ci-red-after-fix`, `ci-red-unrelated`, `permission-denied`
-(2e); `stalled-dispatch`, `stalled-post`, `stalled-unknown` (planner step 7); `hook-canary-failed`
-(2c, 2e, plan-initial, plan-revision — Codex only, the dispatch canary, see
+(this skill), or `plan-initial` / `plan-revision` (planner step 7, from the discovery bucket); also
+`2d` / `2f` (Codex-unattended `permission-denied` only — see `docs/reference/codex.md`'s
+"Unattended runs (`codex exec`)"). `<reason>`: `plan-contradicted` (2a); `branch-has-committed-work`
+or `branch-has-open-pr` (2b); `blocking-question-unanswered` (2c); `ci-red-after-fix`,
+`ci-red-unrelated` (2e); `permission-denied` (2e; on a Codex unattended run, any stage — `2a`–`2f`,
+`plan-initial`, `plan-revision` — see `docs/reference/codex.md`'s "Unattended runs (`codex
+exec`)"); `stalled-dispatch`, `stalled-post`, `stalled-unknown` (planner step 7);
+`hook-canary-failed` (2c, 2e, plan-initial, plan-revision — Codex only, the dispatch canary, see
 `docs/reference/codex.md`) — no site in either skill ever posts a slug outside this list.
 
 **Label rules.** No other label changes: `plan-approved` is not removed, `impl-blocked` is not
@@ -239,7 +242,9 @@ deliberate: this mechanism has no comment-level de-dup guard (unlike the hold ke
 
 **Permission-denied.** A tool call denied because nobody can answer a permission prompt (e.g. an
 unattended `claude -p --permission-prompts none` session) is escalated the same way, never routed
-around — cited at step 2e's `gh pr edit` denial, reason `permission-denied`. Two other
+around — cited at step 2e's `gh pr edit` denial, reason `permission-denied`. On a Codex unattended
+run, every orchestrator-side rejection is escalated this way, at any stage — see
+`docs/reference/codex.md`'s "Unattended runs (`codex exec`)" for the full rule. Two other
 permission-denied shapes keep their pre-existing behaviour, deliberately NOT this mechanism: the
 retry ladder's `sleep`-denied fallback (one immediate retry, then report "backoff unavailable"
 into the run report — see "Retry ladder" above) and step 2e's collapse skip (no `git

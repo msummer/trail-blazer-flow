@@ -18,6 +18,11 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #426: Codex unattended-run rules (`docs/reference/codex.md`'s "Unattended runs (`codex exec`)"):
+  a session-opening marker line, an orchestrator-side `permission-denied` escalation at any stage
+  (stopping the run, never re-issuing the rejected command in another form), and a `## Denied
+  commands` report section for subagents; `codex exec` stays Not supported until I4. Codex
+  consumers: re-run `bin/codex-setup.sh` (the agent files changed).
 - #371: gate assertion 1.9 is not widened. Two new write-failure fixtures cover the two `gh issue`
   writes in `bin/cleanup-after-merge.sh` that had none (the reopened arm's remove-label and the
   no-plan-present orphan notice), and four `dev/mutants/cleanup-tests.json`
