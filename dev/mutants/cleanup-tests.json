@@ -17,7 +17,8 @@
         "reopened-write-failure-comment",
         "reopened-short-circuits-view-failure",
         "reopened-trusted-marker-never-read",
-        "reopened-then-ordinary-still-closes"
+        "reopened-then-ordinary-still-closes",
+        "reopened-write-failure-edit"
       ]
     },
     {
@@ -37,7 +38,8 @@
         "reopened-write-failure-comment",
         "reopened-short-circuits-view-failure",
         "reopened-trusted-marker-never-read",
-        "reopened-then-ordinary-still-closes"
+        "reopened-then-ordinary-still-closes",
+        "reopened-write-failure-edit"
       ]
     },
     {

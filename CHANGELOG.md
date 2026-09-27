@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #371 (follow-on): `dev/mutants/cleanup-tests.json`'s `376-reopened-gate` and
+  `376-reopened-field` records list `reopened-write-failure-edit`, which #371 added and both
+  mutants also fail, so the post-merge mutant driver is green again. No consumer step.
 - #426: Codex unattended-run rules (`docs/reference/codex.md`'s "Unattended runs (`codex exec`)"):
   a session-opening marker line, an orchestrator-side `permission-denied` escalation at any stage
   (stopping the run, never re-issuing the rejected command in another form), and a `## Denied
