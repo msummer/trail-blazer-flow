@@ -181,8 +181,12 @@
 # argument (`nice -n 5 apply_patch`, `sudo -u root apply_patch`, `xargs -a x apply_patch` — the walk
 # skips only a bare `-`-leading option after a prefix word, never one with a separate argument
 # token, so the argument itself can become the "resolved" word and hide `apply_patch` one position
-# further along), the `eval` builtin (`eval apply_patch < x.patch`, not itself a PREFIX_WORDS
-# member), a launcher this walk does not recognise as a PREFIX_WORDS member (`uv run apply_patch`,
+# further along), a QUOTED `eval`/`trap` argument (`eval "apply_patch < x.patch"`, `trap
+# 'apply_patch < x.patch' EXIT` -- the whole quoted string is one token to this walk, never split
+# into its own inner command), zsh's short `if [[ cond ]] apply_patch` form (this walk has no
+# additive `]]` handling, unlike hooks/agent-boundary.sh's and hooks/push-guard.sh's own tokenizers
+# -- a documented residual, not closed here), a launcher this walk does not recognise as a PREFIX_WORDS
+# member (`uv run apply_patch`,
 # `npx apply_patch`), a QUOTED `bash -c "apply_patch < x.patch"` (the whole quoted string is one
 # token, `"apply_patch` glued to the rest, never split into its own inner command by this walk),
 # or a genuinely different segment separator this walk does not parse (a literal newline INSIDE
@@ -237,13 +241,16 @@ BASH_TOOLS="Bash"
 GUARDED_SEGMENT=".claude"
 GUARDED_SEGMENT_CODEX=".codex"
 CLAUDE_DIR_DENY_STEM="trail-blazer-flow claude-dir guard:"
-# PREFIX_WORDS (#407 kickback finding 2) -- copied byte-identically from
-# hooks/agent-boundary.sh:148 (no gate pin added; "reuse it" per the #407 kickback approval, the
-# same choice hooks/push-guard.sh's own copy already makes without a pin either). Used only by
-# is_apply_patch_word() below to skip a leading shell-keyword/interpreter-indirection word (and,
-# once one is seen, a following "-"-leading option) before resolving a Bash segment's own command
-# word -- see that function's own comment for why this hook needs the identical vocabulary.
-PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc"
+# PREFIX_WORDS (#407 kickback finding 2) -- copied byte-identically from hooks/agent-boundary.sh's
+# own declaration (kept in sync by hand; no gate pin added -- "reuse it" per the #407 kickback
+# approval; unlike this copy, hooks/push-guard.sh's own copy IS pinned against agent-boundary.sh's
+# by dev/selfcheck.sh's assertion 4.40 clause (c)). Used only by is_apply_patch_word() below to
+# skip a leading shell-keyword/interpreter-indirection word (and, once one is seen, a following
+# "-"-leading option, or, after a `repeat` prefix word, its own count token too) before resolving a
+# Bash segment's own command word -- see that function's own comment for why this hook needs the
+# identical vocabulary, and for the additive `]]` handling and quote-stripping this hook does NOT
+# copy.
+PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat"
 
 input="$(cat)"
 
@@ -513,7 +520,8 @@ parse_patch_headers() {
 # token immediately BEFORE it (`2>/dev/null apply_patch`) be mistaken for, or hide, the command
 # word: both the fd and the marker-plus-target are skipped as a unit. Within each segment, the walk
 # then skips a `NAME=value` assignment prefix, then a PREFIX_WORDS member (repeat-until-exhausted,
-# so `if true; then apply_patch < x.patch; fi` resolves past `then`), then — once a PREFIX_WORDS
+# so `if true; then apply_patch < x.patch; fi` resolves past `then`; when the skipped member is
+# exactly `repeat`, its own count token right after it is skipped too), then — once a PREFIX_WORDS
 # member has been seen — a further "-"-leading option (an option to the prefix word itself, e.g.
 # `env -i apply_patch`); the first token surviving every skip is the segment's resolved command
 # word, compared both in full and by basename (finding E).
@@ -574,7 +582,7 @@ is_apply_patch_word() {
         continue
       fi
       case " $PREFIX_WORDS " in
-        *" $tok "*) saw_prefix=1; i=$((i + 1)); continue ;;
+        *" $tok "*) saw_prefix=1; [ "$tok" = repeat ] && i=$((i + 1)); i=$((i + 1)); continue ;;
       esac
       if [ "$saw_prefix" -eq 1 ]; then
         case "$tok" in

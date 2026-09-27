@@ -5,7 +5,12 @@
 # (README's Safety model, before this issue). Reads the hook's stdin JSON; for a Bash tool call
 # issued by the implementer subagent, denies (exit 2, one stderr line, empty stdout) any command
 # whose parsed command-position word resolves, case-insensitively and after skipping a leading
-# shell keyword such as `if`/`then`/`!` (since #398 — see PREFIX_WORDS below), to `git` or `gh`;
+# shell keyword such as `if`/`then`/`!`, an `eval`/`trap` string argument, or a zsh precommand
+# modifier (`noglob`/`nocorrect`/`-`/`repeat N`) — see PREFIX_WORDS below — or, for a zsh short
+# `if [[ cond ]] cmd` form, an ADDITIVE pass (never truncating an existing segment) that also
+# resumes command position at the word right after the closing `]]`, to `git` or `gh`; a command
+# carrying more than DBRACKET_MAX standalone `]]` (below) also denies unconditionally, a fail-closed
+# response to a record this hook can no longer afford to finish analysing safely;
 # for the verifier subagent, denies
 # `gh` outright and denies `git` unless the resolved subcommand is on VERIFIER_GIT_READONLY below
 # (fail closed: an unlisted subcommand, a global option before the subcommand, and a bare `git`
@@ -36,12 +41,14 @@
 # matching) for its own, different emitter, and, since #270, the same bash-native carriage-return
 # strip of $cmd applied immediately after the jq extraction and before this script's own
 # `[ -n "$cmd" ]` guard (see that same point in each file). A future fix to the shared behaviour
-# (segment breaking, normalize(), the prefix-word skip, the command-word case fold, the CR strip)
-# must be applied to BOTH files — dev/selfcheck.sh's assertion 4.40 clause (c) mechanically pins
+# (segment breaking; the additive standalone `]]` handling; normalize(); the prefix-word skip,
+# including the `repeat`-count skip; the empty-normalised-token skip; the command-word case fold;
+# the CR strip) must be applied to BOTH files — dev/selfcheck.sh's assertion 4.40 clause (c) mechanically pins
 # the two scripts' PREFIX_WORDS vocabulary stays byte-identical; since #398, PREFIX_WORDS also
 # includes shell reserved words (`if`/`then`/`elif`/`else`/`do`/`while`/`until`/`!`/`coproc`) that
 # can directly precede a command in the same segment, alongside the pre-existing interpreter-
-# indirection words.
+# indirection words, and now also the `eval`/`trap` builtins and zsh's `noglob`/`nocorrect`/`-`/
+# `repeat` precommand modifiers (see PREFIX_WORDS' own declaration below for the full reasoning).
 #
 # Live-probe record, #259 (maintainer-measured 2026-09-08 against Claude Code 2.1.263, plugin
 # 2.7.0 from the marketplace cache -- one Claude Code version, one platform (macOS), one install
@@ -110,6 +117,26 @@
 # `THEN git push`, which would fail in a real shell anyway. The remedy is the same as the existing
 # heredoc remedy above: use the Write/Edit tools.
 #
+# Newly denied by the extended PREFIX_WORDS vocabulary and the additive standalone `]]` handling
+# (also new over-block classes, all new denies): a line or quote-blind segment starting with a
+# markdown-style bullet, `- git …`/`- gh …`/`- Git …` (e.g. a heredoc body writing a PR description
+# or commit message with a bullet list) — `-` is itself a zsh precommand modifier and a
+# PREFIX_WORDS member here, so the bullet's dash resolves the word after it as the command; a line
+# starting `eval`/`trap`/`noglob`/`nocorrect`/`repeat N` followed by `git`/`gh` (the same
+# heredoc-line class the paragraph above already documents, now reachable through the extended
+# vocabulary too); a quoted-prose `]]` followed by a word (`echo "x ]] git push"`) — the
+# additive `]]` handling is quote-blind, so it cannot tell a real zsh short-`if` close from the same
+# two characters inside an ordinary quoted string; and a command carrying more than DBRACKET_MAX
+# standalone `]]` denies UNCONDITIONALLY, even when every one of them is genuinely benign (a data
+# file's own contents echoed into a heredoc, a generated script full of `[[ ... ]]` tests) and no
+# git/gh command is anywhere in the record — the fail-closed cost of the cap that keeps this pass
+# from doing unbounded work; an additive `]]` tail whose command word is a CLAUDE_PATH_ARG_COMMANDS
+# member or `sed`, but that was cut short by a FOLLOWING standalone `]]` before any `.claude` segment
+# was found among its own (available) tokens, denies UNCONDITIONALLY too, even when the text on the
+# far side of that `]]` (never read) carries no `.claude` path at all — the fail-closed cost of never
+# reconnecting a write split across disjoint tails. The remedy is the same one this header already
+# gives: use the Write/Edit tools for file content.
+#
 # Still possible (under-blocking, not closed): a writer outside CLAUDE_CMDLINE_WRITE_COMMANDS
 # (`sort -o`, `split`, `unzip -d`, `scp`, `cpio`, `vim -es`, `sed`'s `w` command); a launcher that
 # becomes the resolved command word instead of the vocabulary member (`uv run python`, `npx`,
@@ -119,11 +146,12 @@
 # spelling split by quote or backslash at the command-text level (`.cl"au"de`, `.cl\aude`), or built
 # from variables, globs, or string concatenation
 # (`d=.cla; python3 -c "open(f'{d}ude/L.md','a')"`); a symlink made earlier via `ln` whose own name
-# has no `.claude` segment; a quoted redirect target containing a space (`> "a b/.claude/c"`). Since
-# #398: a `!` glued to the following word (`!git push`) — not a reserved word in that glued form, so
-# a non-interactive shell treats it as a command literally named `!git`, which does not exist; zsh's
-# precommand modifiers `noglob`/`nocorrect`/`repeat N`; and the `eval` builtin (`eval git push`). A
-# case-variant git subcommand (`git STATUS`) is NOT an evasion: the subcommand is never case-folded
+# has no `.claude` segment; a quoted redirect target containing a space (`> "a b/.claude/c"`). A `!`
+# glued to the following word (`!git push`) — not a reserved word in that glued form, so a
+# non-interactive shell treats it as a command literally named `!git`, which does not exist;
+# `eval`/`trap` of a variable- or substitution-built payload (`eval "$c"`, `eval "$(printf …)"`),
+# the same class as `$(which git) push`; and a `repeat` count containing whitespace (`repeat "1 + 1"
+# git push`). A case-variant git subcommand (`git STATUS`) is NOT an evasion: the subcommand is never case-folded
 # (see the scan's emit_segment() comment below), so the verifier's VERIFIER_GIT_READONLY match stays
 # exact and fails closed (denies). Like the rest of this hook, this is a tripwire against an
 # off-script subagent, not a sandbox.
@@ -137,15 +165,24 @@ AGENT_TYPES_IMPLEMENTER="implementer trail-blazer-flow:implementer"
 AGENT_TYPES_VERIFIER="verifier trail-blazer-flow:verifier"
 VERIFIER_GIT_READONLY="status diff log show rev-parse ls-files merge-base blame grep restore"
 BLOCKED_COMMANDS="git gh"
-# Since #398, the trailing words above `dash` are shell reserved words that can directly precede a
-# command in the same segment (`if true; then git push; fi`, `! gh issue close 5`, `while … do git
-# push; done`) — `time`, itself a bash reserved word, was already here for the identical reason.
-# `{`/`}`/`(`/`)` need no entry: gsub() already turns them into segment breaks (see "the scan"
-# below), never a prefix word. `for`/`select`/`case`/`function`/`in`/`fi`/`done`/`esac`/`[[` are
-# deliberately omitted: none of them runs the NEXT word as a command in the same segment. Keywords
+# The trailing words above `dash` are shell reserved words that can directly precede a command in
+# the same segment (`if true; then git push; fi`, `! gh issue close 5`, `while … do git push;
+# done`) — `time`, itself a bash reserved word, was already here for the identical reason — plus two
+# more classes of word that also run the NEXT word(s) as a command in the same segment: the
+# `eval`/`trap` builtins (each runs its own STRING argument as a command; the quote-blind tokenizer
+# below already reads a quoted argument's words as the command's own words, the same way it reads
+# `bash -c "git push"`, so no special case is needed for a quoted `eval "gh issue close 5"`), and
+# zsh's precommand modifiers `noglob`/`nocorrect`/`-`/`repeat N` (`repeat` also consumes the COUNT
+# token right after it — see emit_segment()'s prefix-word skip below). `{`/`}`/`(`/`)` need no
+# entry: gsub() already turns them into segment breaks (see "the scan" below), never a prefix word.
+# `for`/`select`/`case`/`function`/`in`/`fi`/`done`/`esac`/`[[` are deliberately omitted: none of
+# them runs the NEXT word as a command in the same segment — `[[` in particular stays out because
+# zsh's short `if [[ cond ]] cmd` form runs `cmd` starting at the CLOSING `]]`, which the scan
+# resolves with a separate, additive pass instead (see the per-line block below), not as a prefix
+# word. Keywords
 # share the ordinary prefix-word skip below, including its dash-token skip after a prefix word —
 # harmless here because no valid keyword is ever followed by a `-`-leading command.
-PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc"
+PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat"
 # CLAUDE_PATH_ARG_COMMANDS (#340) — command words whose FIRST argument carrying a `.claude` path
 # segment is a one-step write: `tee` (named in the issue), `cp`/`mv` (the other one-step ways to
 # land text at a path), and `cd`/`pushd` (stops `cd .claude && cat >> LESSONS.md` from defeating
@@ -162,6 +199,12 @@ CLAUDE_PATH_ARG_COMMANDS="tee cp mv cd pushd"
 # `perl5.34` all match `python`/`perl`. tee/cp/mv/cd/pushd/sed stay in the per-segment rules above —
 # not repeated here.
 CLAUDE_CMDLINE_WRITE_COMMANDS="python perl ruby node nodejs deno bun php lua awk gawk ed ex dd install ln touch truncate rsync tar patch curl wget"
+# DBRACKET_MAX — the most standalone `]]` matches the scan's additive pass
+# (further down) will analyse per input record before failing closed; bounds that pass's own work
+# to about DBRACKET_MAX times the record's length, keeping it linear rather than quadratic in the
+# number of `]]` tokens a record carries. Byte-identical to hooks/push-guard.sh's own copy (by
+# convention, unpinned — same choice hooks/claude-dir-guard.sh's PREFIX_WORDS copy already makes).
+DBRACKET_MAX="64"
 DENY_STEM="trail-blazer-flow agent boundary:"
 
 input="$(cat)"
@@ -289,17 +332,41 @@ cmd="${cmd//$cr/}"
 # THEN, exactly as before #340: every one of `; & | ( ) { } `` (the eight segment-break characters)
 # starts a new segment; `<`/`>` are ordinary token separators for THIS pass (not segment breaks) —
 # a Bash redirection never starts a new command — the redirect pass above already read `>` targets
-# before this gsub blanks them out. Within each segment, tokens are walked from the start:
+# before this gsub blanks them out. This is the WHOLE and ONLY segment computation used for a
+# command word that sits BEFORE a `]]`, or that has no `]]` in its segment at all — unchanged from
+# before this issue, so a base deny whose command word happens to have a literal `]]` token
+# somewhere AFTER it in the same segment (e.g. `tee ]] .claude/LESSONS.md`) still resolves exactly
+# as it always did, since `]]` is just an ordinary, non-matching token to the walk below. SEPARATELY
+# and ADDITIVELY — never replacing or truncating any segment above — for every unquoted,
+# whitespace-bounded `]]` found in a space-padded copy of the record (so a `]]` at the very start or
+# end of the record, e.g. its own physical line right after a multi-line `if [[ cond`, is still
+# bounded on both sides), only the FIRST segment of the text AFTER that `]]` (up to the next
+# segment-break character, or end of record) is walked the same way below — this is what resumes
+# command position at the word right after a zsh short `if [[ cond ]] cmd` form's closing `]]`. A
+# LATER segment of that same tail is never walked here: the MAIN split above, or a LATER `]]` in
+# this same record, already covers it, so walking it again on EVERY earlier `]]` would be pure
+# duplicate work — the quadratic blowup a flood of N standalone `]]` produced before this rule was
+# added (base and every later `]]`'s own tail walked the whole remaining record once per earlier
+# `]]`, O(N) times). At most DBRACKET_MAX standalone `]]` are handled this way per record; a record
+# carrying more is denied unconditionally instead of walked further, the fail-closed response to a
+# record too large to keep analysing at this bounded cost. Within each segment (from either pass),
+# tokens are walked from the start:
 #   - a token matching ^[A-Za-z_][A-Za-z0-9_]*= (an assignment prefix, e.g. FOO=1) is skipped;
 #   - a token whose normalised, lower-cased form (quote/backslash characters stripped; basename
-#     taken after the last '/'; case-folded, since #398) is a member of PREFIX_WORDS is skipped,
-#     and a "saw prefix" flag is set — PREFIX_WORDS itself now also includes the shell reserved
-#     words listed at its declaration above (`if`/`then`/`elif`/`else`/`do`/`while`/`until`/`!`/
-#     `coproc`), so a keyword directly preceding a command in the same segment is skipped exactly
-#     like an interpreter-indirection word;
+#     taken after the last '/'; case-folded, since #398) is EMPTY — e.g. a lone `"` token left
+#     behind by a leading space inside a quoted `eval` argument (`eval " gh issue close 5"`) — is
+#     skipped outright, rather than ending the walk with an empty command word;
+#   - a token whose normalised, lower-cased form is a member of PREFIX_WORDS is skipped, and a "saw
+#     prefix" flag is set — PREFIX_WORDS itself now also includes the shell reserved words listed at
+#     its declaration above (`if`/`then`/`elif`/`else`/`do`/`while`/`until`/`!`/`coproc`), so a
+#     keyword directly preceding a command in the same segment is skipped exactly like an
+#     interpreter-indirection word, and likewise the `eval`/`trap`/`noglob`/`nocorrect`/`-`/`repeat`
+#     precommand-indirection words listed there too — when the skipped word is exactly `repeat`, the
+#     ONE token right after it (the repeat count) is ALSO skipped, since a bare digit there is never
+#     itself a command word;
 #   - once that flag is set, a further token starting with '-' is also skipped (an option to the
 #     prefix word, e.g. `bash -c`, `xargs -I{}`);
-#   - the first token that survives all three skips is the segment's command word, emitted in its
+#   - the first token that survives all four skips is the segment's command word, emitted in its
 #     normalised, lower-cased form (since #398 — only the command word and prefix-word matching are
 #     case-folded; the git subcommand below, redirect targets, and other arguments are not). If it
 #     is exactly "git" (already case-folded), the token(s) after it are walked once more to
@@ -336,7 +403,7 @@ cmd="${cmd//$cr/}"
 # emits the same "-claude-write- <target>" sentinel the redirect/arg-vocab/in-place-sed passes above
 # already use, joining both captures, whenever BOTH cw_word and cw_tok are non-empty — so the
 # existing role-policy `"-claude-write- "*)` arm and deny printf need no #387-specific change.
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" '
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v dbracket_max="$DBRACKET_MAX" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
@@ -379,7 +446,7 @@ function claude_seg_in_text(s,    v) {
   v = tolower(" " s " ")
   return match(v, /[^a-z0-9_.-]\.claude[^a-z0-9_.-]/) > 0
 }
-function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, gitsub, inplace, lw) {
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, gitsub, inplace, lw, found_claude) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
@@ -389,7 +456,8 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
     if (tok == "") { idx++; continue }
     if (match(tok, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) { idx++; continue }
     norm = tolower(normalize(tok))
-    if (norm in prefix_set) { saw_prefix = 1; idx++; continue }
+    if (norm == "") { idx++; continue }
+    if (norm in prefix_set) { saw_prefix = 1; idx += (norm == "repeat") ? 2 : 1; continue }
     if (saw_prefix && substr(tok, 1, 1) == "-") { idx++; continue }
     cmdword = norm
     idx++
@@ -415,9 +483,11 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
     sub(/[0-9.]+$/, "", lw)
     if ((lw in cw_set) && cw_word == "") cw_word = cmdword
     if (cmdword in arg_set) {
+      found_claude = 0
       for (j = idx; j <= ntok; j++) {
-        if (has_claude_seg(toks[j])) { print "-claude-write- " toks[j]; break }
+        if (has_claude_seg(toks[j])) { print "-claude-write- " toks[j]; found_claude = 1; break }
       }
+      if (!found_claude && cut_flag) print "-cut-claude-write-"
     } else if (cmdword == "sed") {
       inplace = 0
       for (j = idx; j <= ntok; j++) {
@@ -425,9 +495,13 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
         if (match(toks[j], /^--in-place/) == 1) { inplace = 1; break }
       }
       if (inplace) {
+        found_claude = 0
         for (j = idx; j <= ntok; j++) {
-          if (has_claude_seg(toks[j])) { print "-claude-write- " toks[j]; break }
+          if (has_claude_seg(toks[j])) { print "-claude-write- " toks[j]; found_claude = 1; break }
         }
+        if (!found_claude && cut_flag) print "-cut-claude-write-"
+      } else if (cut_flag) {
+        print "-cut-claude-write-"
       }
     }
   }
@@ -445,6 +519,66 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
   gsub(/[<>]/, " ", line)
   nseg = split(line, segs, /\n/)
   for (s = 1; s <= nseg; s++) emit_segment(segs[s])
+  # Additive standalone-`]]` handling: the segments above are computed EXACTLY as before this
+  # issue (no truncation), so every base deny keeps its full token list intact. Separately, for
+  # every unquoted, whitespace-bounded `]]` found in a space-padded copy of this record (so a `]]`
+  # sitting at the very start or end of the record -- e.g. its own physical line right after a
+  # multi-line `if [[ cond` -- still counts as bounded on both sides), ONLY the FIRST segment of the
+  # text AFTER that `]]` is emitted through the identical emit_segment() path -- this is what resumes
+  # command position at the word right after the closing `]]` of a zsh short `if [[ cond ]] cmd`
+  # form, without ever truncating the segment(s) the split above already produced.
+  #
+  # DISJOINT tails: that first segment ends at whichever comes FIRST, a real segment-break character
+  # OR the NEXT standalone `]]` -- never running past a later `]]` into text that the later `]]` own
+  # first segment, or the main split above, already covers. This bounds the walk that resolves a
+  # command word, a git subcommand, or a `.claude` write to the short cut segment alone, regardless of
+  # how much of the record remains beyond it -- emit_segment() own per-tail work never scales with the
+  # remaining record. Only the substr()/match() that finds each cutoff still scans however much of the
+  # record a `]]` sits within, up to DBRACKET_MAX times (the same order the cap below bounds). A
+  # segment ending at a `]]` (rather than a real break or record end) is passed to emit_segment() as
+  # CUT -- see that function own arg_set/sed handling below, and the PUSH class in
+  # hooks/push-guard.sh, for why a cut tail can still need a conservative, fail-closed verdict rather
+  # than silently under-blocking whatever text the cut left on the far side of that `]]`.
+  #
+  # At most DBRACKET_MAX matches are handled per record (see that constant declaration above); above
+  # the cap, this loop stops and prints a fixed "-too-many-dbrackets-" sentinel instead of continuing
+  # to scan -- the role policy below denies unconditionally on it, the fail-closed response to a
+  # record this hook can no longer afford to finish analysing.
+  db_rest = " " $0 " "
+  db_n = 0
+  db_go = 1
+  while (db_go && match(db_rest, /[ \t]]][ \t]/)) {
+    if (db_n >= dbracket_max) {
+      print "-too-many-dbrackets-"
+      db_go = 0
+    } else {
+      db_n++
+      # db_next is captured IMMEDIATELY after this match() and used for both db_tail and the
+      # db_rest update below: the INNER match() two lines down (finding where db_seg itself ends),
+      # and emit_segment() (called via this block, itself calling match() one or more times: the
+      # assignment-prefix check, the sed in-place-flag check), would otherwise clobber the
+      # RSTART/RLENGTH globals this loop still needs to advance past the JUST-matched "]]"
+      # occurrence -- reading RSTART/RLENGTH again after either call is what hung this loop before
+      # this capture was added. It stops ONE character short of where this match ends
+      # (RLENGTH - 1, not RLENGTH), deliberately leaving the matched trailing whitespace byte in
+      # db_rest: two standalone `]]` separated by exactly one space or tab share that one byte as
+      # boundary for BOTH of them, and consuming it here would leave the very next `]]` with no
+      # leading whitespace of its own to match against, silently skipping every other occurrence in
+      # a tightly packed run.
+      db_next = RSTART + RLENGTH - 1
+      db_tail = substr(db_rest, db_next)
+      db_cut = 0
+      if (match(db_tail, /[;&|(){}`]|[ \t]]][ \t]/) > 0) {
+        db_seg = substr(db_tail, 1, RSTART - 1)
+        if (RLENGTH == 4) db_cut = 1
+      } else {
+        db_seg = db_tail
+      }
+      gsub(/[<>]/, " ", db_seg)
+      emit_segment(db_seg, db_cut)
+      db_rest = substr(db_rest, db_next)
+    }
+  }
   if (cw_tok == "" && claude_seg_in_text($0)) {
     cw_ntok = split($0, cw_toks, /[ \t]+/)
     for (cw_j = 1; cw_j <= cw_ntok; cw_j++) {
@@ -473,6 +607,16 @@ deny_kind="git"
 while IFS= read -r line; do
   [ -n "$line" ] || continue
   case "$line" in
+    "-too-many-dbrackets-")
+      deny_kind="dbracket"
+      deny_cmd="too many ]] tokens to analyse"
+      break
+      ;;
+    "-cut-claude-write-")
+      deny_kind="cutclaude"
+      deny_cmd="split by ]]"
+      break
+      ;;
     "-claude-write- "*)
       deny_kind="claude"
       deny_cmd="${line#-claude-write- }"
@@ -499,7 +643,13 @@ $scan_out
 EOF
 
 if [ -n "$deny_cmd" ]; then
-  if [ "$deny_kind" = "claude" ]; then
+  if [ "$deny_kind" = "dbracket" ]; then
+    printf '%s %s role: command has too many standalone ]] tokens to analyse safely (blocked: %s) — see agents/%s.md\n' \
+      "$DENY_STEM" "$role" "$deny_cmd" "$role" >&2
+  elif [ "$deny_kind" = "cutclaude" ]; then
+    printf '%s %s role: cannot verify whether this write reaches a .claude segment (blocked: %s) — see agents/%s.md\n' \
+      "$DENY_STEM" "$role" "$deny_cmd" "$role" >&2
+  elif [ "$deny_kind" = "claude" ]; then
     printf '%s %s role may not write a path under a .claude segment from Bash (blocked: %s) — record it in your report'"'"'s Reviewer notes instead; see agents/%s.md\n' \
       "$DENY_STEM" "$role" "$deny_cmd" "$role" >&2
   elif [ "$role" = "implementer" ]; then

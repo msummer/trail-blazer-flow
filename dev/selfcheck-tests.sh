@@ -264,6 +264,17 @@ p_1_6()                { printf 'eval "$x"\n' | append "$1/hooks/git-c-guard.sh"
 p_1_6_comment() {
   printf '# mentions eval here only, in a comment\n' | append "$1/hooks/git-c-guard.sh"
 }
+# p_1_6_prefix_words_subst/p_1_6_prefix_words_tail (#403 amendment A1) -- pin how narrow 1.6's new
+# PREFIX_WORDS exemption is: a command substitution inside the quotes, and a same-line tail after
+# the closing quote, are each still flagged, because the exempt shape
+# (^PREFIX_WORDS="[^"$`]*"$) excludes '$'/backtick from the character class and anchors the line's
+# own end at the closing quote.
+p_1_6_prefix_words_subst() {
+  printf 'PREFIX_WORDS="$(eval x)"\n' | append "$1/hooks/git-c-guard.sh"
+}
+p_1_6_prefix_words_tail() {
+  printf 'PREFIX_WORDS="a"; eval "$x"\n' | append "$1/hooks/git-c-guard.sh"
+}
 # p_1_7/p_1_7_dev inject a live printf writer piped into grep's quiet mode (#255's banned shape)
 # into a throwaway target file. The injected text is built from a format string whose OWN literal source
 # (right here, in this file) never carries the pipe character immediately next to the word
@@ -802,6 +813,8 @@ cases=(
   "1.1-hooks|1.1|p_1_1_hooks|append a stray 'if [' to hooks/git-c-guard.sh (proves the glob extension)"
   "1.6|1.6|p_1_6|append a bare 'eval \"\$x\"' line to hooks/git-c-guard.sh"
   "1.6-comment||p_1_6_comment|control: a single #-comment naming eval is not flagged"
+  "1.6-prefix-words-subst|1.6|p_1_6_prefix_words_subst|append PREFIX_WORDS=\"\$(eval x)\" to hooks/git-c-guard.sh -- the exempt shape excludes '\$', so a command substitution inside the quotes still fails"
+  "1.6-prefix-words-tail|1.6|p_1_6_prefix_words_tail|append PREFIX_WORDS=\"a\"; eval \"\$x\" to hooks/git-c-guard.sh -- a same-line tail after the closing quote still fails, since the exempt shape's \$ anchor requires nothing after it"
   "1.7|1.7|p_1_7|append a live printf writer piped into grep's quiet mode to bin/harness-status.sh (#255's banned shape)"
   # 1.7-dev is not a twin of 1.7: it is the only case that proves 1.7's loop still scans the
   # dev/*.sh glob, unlike 1.4/1.5/1.6 which are bin/hooks-only by design.

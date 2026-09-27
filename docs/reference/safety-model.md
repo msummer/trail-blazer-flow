@@ -166,9 +166,21 @@ namespaced form is the live spelling, confirmed by the live-probe record below; 
 retained as insurance against a future de-namespacing). For the implementer role it denies
 (exit 2, one stderr line, empty stdout) any Bash command whose parsed command-position word
 resolves, case-insensitively and after skipping a leading shell reserved word (`if`/`then`/`elif`/
-`else`/`do`/`while`/`until`/`!`/`coproc`, since #398 — see "Known evasions" below for the
-remaining residuals), to `git` or `gh`, regardless of `git`
-subcommand — the implementer needs neither. For the verifier role it denies `gh` outright and
+`else`/`do`/`while`/`until`/`!`/`coproc`), an `eval`/`trap` string argument, or a zsh precommand
+modifier (`noglob`/`nocorrect`/`-`/`repeat N`) — and, for a zsh short `if [[ cond ]] cmd` form, an
+ADDITIVE pass (never truncating an existing segment; each tail is DISJOINT from every other, ending
+at whichever comes first, a real segment-break character or the next standalone `]]`, so resolving a
+command word, a git subcommand, or a `.claude` write no longer scales with how much of the record
+remains beyond that cutoff, only with the short cut segment itself; and handling at most DBRACKET_MAX
+standalone `]]` per record — a record carrying more denies unconditionally instead, the fail-closed
+response to a record too large to keep analysing at bounded cost) that ALSO resumes command position
+at the word right after the closing `]]` (see "Known evasions" below for the remaining residuals),
+to `git` or `gh`, regardless of `git` subcommand — the implementer needs neither. A tail cut short by
+a FOLLOWING `]]` also denies unconditionally when its command word is `tee`/`cp`/`mv`/`cd`/`pushd`,
+or any `sed` (in place or not), and no `.claude` segment appears among its own available tokens —
+since the text on the far side of that `]]` was deliberately never read, this hook cannot rule out a
+`.claude` path it did not see; a cut tail that DOES show a `.claude` segment among its own tokens
+denies through the ordinary route instead. For the verifier role it denies `gh` outright and
 denies `git` unless the resolved subcommand is one of `status diff log show rev-parse ls-files
 merge-base blame grep restore`; an unlisted subcommand, a global option before the subcommand, and
 a bare `git` all deny too — fail-closed, not an enumerated allow-list of "safe" subcommands. Only
@@ -222,12 +234,13 @@ evasions, documented rather than hidden: `$(which git) push` (the literal `git` 
 command position), `sudo -u foo git push` (the argument to `-u` becomes the resolved command word
 instead of `git`), interpreter indirection outside the recognised prefix words (`env`, `command`,
 `builtin`, `exec`, `sudo`, `nohup`, `time`, `nice`, `stdbuf`, `xargs`, `bash`, `sh`, `zsh`, `ksh`,
-`dash`, and, since #398, the shell reserved words `if`, `then`, `elif`, `else`, `do`, `while`,
-`until`, `!`, `coproc`); a `!` glued directly to the following word (`!git push` — not a reserved
+`dash`, the shell reserved words `if`, `then`, `elif`, `else`, `do`, `while`,
+`until`, `!`, `coproc`, the `eval`/`trap` builtins, and zsh's precommand modifiers `noglob`,
+`nocorrect`, `-`, `repeat`); a `!` glued directly to the following word (`!git push` — not a reserved
 word in that glued form, so a non-interactive shell treats it as a command literally named `!git`,
-which does not exist); zsh's precommand modifiers `noglob`/`nocorrect`/`repeat N`; and the `eval`
-builtin (`eval git push`) — all three residuals are out of scope for #398 and documented rather
-than closed; and, for the `.claude`-write class specifically, a writer outside
+which does not exist); `eval`/`trap` of a variable- or substitution-built payload (`eval "$c"`,
+`eval "$(printf …)"`), the same class as `$(which git) push`; and a `repeat` count containing
+whitespace (`repeat "1 + 1" git push`); and, for the `.claude`-write class specifically, a writer outside
 `CLAUDE_CMDLINE_WRITE_COMMANDS` (`sort -o`, `split`, `unzip -d`, `scp`, `cpio`, `vim -es`, `sed`'s
 `w` command), a launcher that becomes the resolved command word instead of a vocabulary member
 (`uv run python`, `npx`, `poetry run`, `sudo -u x python3`), a script file whose own CONTENTS name
@@ -313,7 +326,13 @@ byte-identical-file-listing fixture proving this hook only reads the filesystem,
 it — extended to the config-read route specifically. Composition with the deny-outranks-allow mechanism
 `hooks/agent-boundary.sh`'s live-probe record establishes below was **not** separately
 re-measured for this third hook — it uses the identical mechanism, but only two hooks were ever
-replayed together live.
+replayed together live. This hook shares `hooks/agent-boundary.sh`'s own additive `]]` pass, cap, and
+disjoint-tail cutting described above, and this applies in the main session too: any record that
+reaches the hook's full scan (it mentions both `git` and `push`) carrying more than DBRACKET_MAX
+standalone `]]` denies unconditionally, and a `git … push` tail cut short by a following `]]`
+denies unconditionally too, even when the destination inside the cut segment would not itself
+deny — the same deny fires when the cut arrives mid-subcommand-search (e.g. while still consuming a
+`-C`/`--git-dir` value), since this hook cannot tell that case apart from a genuine, uncut push.
 
 **The fourth hook, `hooks/claude-dir-guard.sh` (#327; apply_patch, `.codex`, and a Bash
 apply_patch-shim route added #407), denies an implementer or verifier subagent's `Edit`, `Write`,
@@ -362,7 +381,9 @@ deny (the hook cannot verify what it writes when the patch itself is invisible, 
 < x.patch`). The command-word walk is quote-blind and backslash-blind, the same tripwire-not-
 sandbox trade-off every scan in this directory makes: a backslash-quoted spelling, a quoted or
 variable-built name, a PREFIX_WORDS option that itself takes a separate argument
-(`nice -n 5 apply_patch`), `eval`, a quoted `bash -c "apply_patch < x.patch"`, or an unrecognised
+(`nice -n 5 apply_patch`), a quoted `eval`/`trap` argument (`eval "apply_patch < x.patch"`), zsh's
+short `if [[ cond ]] apply_patch` form (this hook's own copy of the shared vocabulary has no
+additive `]]` handling), a quoted `bash -c "apply_patch < x.patch"`, or an unrecognised
 launcher can all still evade both checks — while the SAME quote-blindness can also over-block: a
 commit message or `echo` that merely mentions `apply_patch`/`applypatch` between a matching pair
 of BACKTICKS, or right after a `;`, `(`, `|` or `&` (all segment-break characters of this walk)

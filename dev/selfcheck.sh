@@ -109,15 +109,25 @@ else
 fi
 
 # 1.6 — no 'eval' in hooks/*.sh: the guard hook must never eval anything derived from an
-# untrusted Bash command string. Same comment-stripping idiom as 1.4/1.5.
+# untrusted Bash command string. Same comment-stripping idiom as 1.4/1.5. Exempts exactly one line
+# shape, ^PREFIX_WORDS="[^"$`]*"$ — hooks/agent-boundary.sh's, hooks/push-guard.sh's, and
+# hooks/claude-dir-guard.sh's PREFIX_WORDS vocabulary constant, which also contains
+# the word "eval" as data: this line is never executed, only read as data — passed to awk via
+# `-v prefix_words=…` or matched in a `case " $PREFIX_WORDS " in` pattern — and the
+# agent-boundary/push-guard copies are pinned byte-identical by assertion 4.40(c) below. The
+# exempt shape is deliberately narrow: leaving `$` and a backtick out of the character class means
+# a command substitution (`PREFIX_WORDS="$(eval x)"`) is not exempt, and the trailing `$` anchor
+# means a same-line tail after the closing quote (`PREFIX_WORDS="a"; eval "$x"`) is not exempt
+# either — both still fail this assertion. Every other non-comment line in hooks/*.sh is still
+# scanned exactly as before.
 bad_list=""
 for s in "$root"/hooks/*.sh; do
   [ -f "$s" ] || continue
-  hits="$(grep -vnE '^[[:space:]]*#' "$s" | grep -E '(^|[^A-Za-z0-9_])eval([^A-Za-z0-9_]|$)')"
+  hits="$(grep -vnE '^[[:space:]]*#' "$s" | grep -vE '^[0-9]+:PREFIX_WORDS="[^"$`]*"$' | grep -E '(^|[^A-Za-z0-9_])eval([^A-Za-z0-9_]|$)')"
   [ -z "$hits" ] || bad_list="$bad_list $s: $(printf '%s' "$hits" | tr '\n' ' ');"
 done
 if [ -z "$bad_list" ]; then
-  ok "1.6 no 'eval' in hooks/*.sh"
+  ok "1.6 no 'eval' in hooks/*.sh (except the PREFIX_WORDS vocabulary line)"
 else
   bad "1.6 'eval' found in hooks/*.sh —$bad_list"
 fi

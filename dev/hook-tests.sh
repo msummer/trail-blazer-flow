@@ -722,9 +722,10 @@ case_ab_cwrite_noop_main_session() {
 # --- hooks/agent-boundary.sh: the #398 shell-keyword / case-fold class -------------------------
 # Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "ab-kw-"),
 # re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
-# mutant:398-ab-kw-vocab — reverts PREFIX_WORDS to its pre-#398 value (drops the shell-keyword
-#   words), so every fixture below whose command relies on skipping a leading keyword no longer
-#   resolves git/gh as the command word.
+# mutant:398-ab-kw-vocab — drops only the shell-keyword words (if/then/elif/else/do/while/until/!/
+#   coproc) from PREFIX_WORDS, leaving the #403 eval/trap/zsh-modifier words in place, so every
+#   fixture below whose command relies on skipping a leading keyword no longer resolves git/gh as
+#   the command word.
 # mutant:398-ab-case-fold — removes emit_segment()'s tolower() around normalize(tok), so an
 #   upper/mixed-case command word no longer resolves to "git"/"gh"/a vocabulary member.
 # mutant:398-ab-fastpath-case — narrows fast path 2's widened `*[Gg][Ii][Tt]*|*[Gg][Hh]*`
@@ -844,6 +845,287 @@ case_ab_kw_noop_verifier_if_diff() {
   expect_no_opinion
 }
 
+# --- hooks/agent-boundary.sh: the #403 eval/trap/zsh-precommand-modifier class -------------------
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "ab-pc-"),
+# re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
+# mutant:403-ab-pc-vocab — reverts PREFIX_WORDS to its pre-#403 (#398) value (drops eval/trap/
+#   noglob/nocorrect/-/repeat), so every fixture below whose command relies on skipping one of
+#   those words no longer resolves git/gh as the command word.
+# mutant:403-ab-pc-repeat — removes the `repeat`-count skip, so a `repeat N` prefix leaves the
+#   count token itself as the resolved command word instead of the real command.
+# mutant:403-ab-pc-dbracket — disables the additive `]]` pass entirely (db_rest set to empty), so a
+#   zsh short `if [[ cond ]] cmd` form never resumes command position at `cmd`, whether the `]]` is
+#   mid-line, opens a second physical line, or is tab-bounded.
+# mutant:403-ab-pc-dbracket-truncate — reverts the MAIN segment split to the pre-fix truncating
+#   form (turning `]]` into a newline on that same pass), so a base command word with a literal `]]`
+#   token AFTER it in the same segment (e.g. `tee ]] .claude/LESSONS.md`) loses everything past the
+#   `]]` from ITS OWN segment, even though the separate additive pass still resumes `]]`'s own short
+#   -if handling correctly.
+# mutant:403-ab-pc-dbracket-nopad — removes the space-padding around the additive pass's own copy of
+#   the record, so a `]]` sitting at the very start of a physical line (nothing of its own before
+#   it, e.g. the second line of a multi-line command) is no longer bounded and never resolved.
+# mutant:403-ab-pc-dbracket-spaceonly — narrows the additive pass's boundary character class from
+#   `[ \t]` to `[ ]` (space only), so a `]]` bounded by a TAB rather than a space is no longer
+#   recognised.
+# mutant:403-ab-pc-empty-tok — deletes the empty-normalised-token skip, so a token that normalises
+#   to empty (e.g. a lone `"` left by a leading space inside a quoted `eval` argument) ends the
+#   walk with an empty command word instead of being skipped.
+case_ab_pc_deny_eval_git() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'eval git push')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: git push)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: git push)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_eval_quoted_gh() {
+  # The issue's own headline shape: eval reading a quoted string as the command.
+  run_boundary "$(mk_agent_cmd 'trail-blazer-flow:implementer' 'eval "gh issue close 5"')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: gh)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: gh)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_eval_lead_space() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'eval " gh issue close 5"')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: gh)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: gh)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_trap_gh() {
+  run_boundary "$(mk_agent_cmd 'implementer' "trap 'gh issue close 5' EXIT")"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: gh)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: gh)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_noglob() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'noglob git push')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: git push)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: git push)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_nocorrect() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'nocorrect gh pr merge 5')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: gh)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: gh)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_dash() {
+  run_boundary "$(mk_agent_cmd 'implementer' '- git push')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: git push)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: git push)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_repeat() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'repeat 3 git push')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: git push)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: git push)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_short_if() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'if [[ 1 ]] git push')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: git push)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: git push)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_short_if_and() {
+  # Pins that '&&' inside the [[ ]] condition cannot hide the tail: '&' is itself a segment-break
+  # character, but the real command still resolves in its own segment after the closing ']]'.
+  run_boundary "$(mk_agent_cmd 'implementer' 'if [[ -n a && -n b ]] gh issue close 5')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: gh)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: gh)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_verifier_eval() {
+  run_boundary "$(mk_agent_cmd 'verifier' 'eval git push')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: git push)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: git push)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_noop_verifier_eval_status() {
+  # Release-blocker control: the new eval/trap/zsh-modifier skip must not narrow the verifier's
+  # read-only git allowance.
+  run_boundary "$(mk_agent_cmd 'verifier' 'eval git status')"
+  expect_no_opinion
+}
+case_ab_pc_noop_bash_dbracket() {
+  # Ordinary bash '[[ ]] &&' (not zsh's short-if form) is not over-blocked: '[[' resolves as its
+  # own (non-git/gh) command word in its own segment, and the '&&'-joined 'echo git' segment's own
+  # command word is 'echo', not 'git'.
+  run_boundary "$(mk_agent_cmd 'implementer' '[[ -n x ]] && echo git')"
+  expect_no_opinion
+}
+# --- hooks/agent-boundary.sh: the additive `]]` handling must never truncate an existing deny ------
+# A base (pre-#403) deny whose command word sits BEFORE a later, literal `]]` token in the same
+# segment (e.g. `tee`'s own CLAUDE_PATH_ARG_COMMANDS argument walk finding `.claude/LESSONS.md`
+# past a `]]` token) must still fire: the segments the main split produces are untouched by the
+# additive `]]` pass, which only ADDS further segments, never truncates existing ones.
+case_ab_pc_deny_dbracket_tee_claude() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'tee ]] .claude/LESSONS.md')"
+  expect_ab_deny_claude
+}
+# Boundary variants of the additive `]]` handling itself: a `]]` at the very start of a physical
+# line (a multi-line command, `]]` opening the SECOND line with nothing of its own before it) and a
+# `]]` bounded by a TAB rather than a space must both still resume command position.
+case_ab_pc_deny_dbracket_multiline() {
+  run_boundary "$(mk_agent_cmd 'implementer' "if [[ -n a${LF}]] git push")"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: git push)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: git push)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_dbracket_tab() {
+  run_boundary "$(mk_agent_cmd 'implementer' "if [[ 1 ]]${DBTAB}git push")"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: git push)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: git push)': '$boundary_err'\n" ;;
+  esac
+}
+# --- hooks/agent-boundary.sh: bounded, disjoint additive `]]` work ---------------------------------
+# mutant:403-ab-pc-dbracket-once — changes the additive loop's `while` to `if`, so only the FIRST
+#   standalone `]]` in a record is ever handled; a later `]]` whose own tail carries the deciding
+#   git/gh command is never reached.
+# mutant:403-ab-pc-dbracket-cap — removes the `db_n >= dbracket_max` check, so a record with more
+#   standalone `]]` than DBRACKET_MAX is analysed in full instead of failing closed.
+case_ab_pc_deny_dbracket_second() {
+  # The deciding `]]` is the SECOND one in the record, not the first -- proves the additive loop
+  # keeps advancing past a `]]` whose own tail resolves to nothing (`true`).
+  run_boundary "$(mk_agent_cmd 'implementer' 'if [[ 1 ]] true; if [[ 1 ]] git push')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: git push)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: git push)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_dbracket_second_gh() {
+  run_boundary "$(mk_agent_cmd 'implementer' 'if [[ 1 ]] true; if [[ 1 ]] gh issue close 5')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: gh)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: gh)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_dbracket_flood() {
+  # A flood of standalone `]]` (more than DBRACKET_MAX) followed by a REAL `;`-separated `git push`
+  # segment: the deny comes from the untouched MAIN split, unaffected by the additive cap or by how
+  # the additive tails are cut. This case checks only the VERDICT; it does not measure elapsed time
+  # -- see case_ab_pc_deny_dbracket_timing below for the dedicated wall-clock proof that the additive
+  # loop stays bounded rather than growing with how many `]]` a record carries.
+  local flood="" i
+  for i in $(seq 1 70); do flood="${flood} ]]"; done
+  run_boundary "$(mk_agent_cmd 'implementer' "echo${flood}; git push")"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: git push)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: git push)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_dbracket_cap() {
+  # Exactly DBRACKET_MAX + 1 standalone `]]`, no git/gh in COMMAND position anywhere: the main pass
+  # never denies (its own command word is `echo`), and none of the 65 additive tails ever resolves
+  # to git/gh either -- only the cap's own fail-closed sentinel can deny this record at all. The
+  # literal "git" after "echo" is a harmless ARGUMENT (never a resolved command word in any
+  # segment); it exists only so the raw-stdin fast path lets this record reach the scan at all.
+  local flood="" i
+  for i in $(seq 1 65); do flood="${flood} ]]"; done
+  run_boundary "$(mk_agent_cmd 'implementer' "echo git${flood}")"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: too many ]] tokens to analyse)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: too many ]] tokens to analyse)': '$boundary_err'\n" ;;
+  esac
+}
+# mutant:403-ab-pc-dbracket-overlap — restores overlapping tails (drops the standalone-`]]`
+#   alternative from the disjoint cut regex), so a tail that should have been cut at the NEXT `]]`
+#   instead runs to the next real break, re-finding a `.claude` target on the far side of that `]]`
+#   directly (the ordinary reason) instead of failing closed on the CUT tail (the new reason), and
+#   fails case_ab_pc_deny_dbracket_timing below's 5s bound.
+case_ab_pc_deny_dbracket_disjoint() {
+  # Disjoint tails alone would lose this deny: an overlapping tail after the first `]]` runs all the
+  # way to `.claude/LESSONS.md` and finds it directly (the ordinary ".claude segment" reason). Under
+  # disjoint tails, that same tail is cut at the SECOND `]]`, leaving only `tee` with nothing after it
+  # -- resolved as CUT (see emit_segment()'s own arg_set handling), which fails closed with its own
+  # distinct reason instead. Pins that the cut-claude-write fail-closed rule, not an accidental full
+  # scan, is what still denies this.
+  run_boundary "$(mk_agent_cmd 'implementer' 'if [[ 1 ]] tee ]] .claude/LESSONS.md')"
+  expect_deny
+  case "$boundary_err" in
+    *"cannot verify whether this write reaches a .claude segment"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'cannot verify whether this write reaches a .claude segment': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_pc_deny_dbracket_timing() {
+  # Wall-clock proof: an overlapping tail re-split()s almost the whole remaining record once per
+  # earlier `]]`; disjoint tails bound each emit_segment() walk to its own cut segment instead, so
+  # this ~200KB, 64-`]]` shape resolves in well under the 5s bound below (measured via bash SECONDS,
+  # timing only the hook invocation itself, not payload construction).
+  local flood="x" i
+  for i in $(seq 1 64); do flood="${flood} ]] tee"; done
+  local filler
+  filler="$(printf ' a%.0s' $(seq 1 100000))"
+  local payload
+  payload="$(mk_agent_cmd 'implementer' "${flood}${filler}
+git push")"
+  local start=$SECONDS elapsed
+  run_boundary "$payload"
+  elapsed=$((SECONDS - start))
+  expect_deny
+  [ "$elapsed" -lt 5 ] || { __ok=0; __why="${__why}took ${elapsed}s (SECONDS-granularity), expected under 5s\n"; }
+}
+# mutant:403-ab-pc-dbracket-sed-noninplace — deletes the `else if (cut_flag) { print
+#   "-cut-claude-write-" }` arm for a NON-in-place `sed`, so a `sed` tail with no in-place flag among
+#   its own available tokens, cut short by a following `]]`, silently resolves no opinion instead of
+#   failing closed.
+case_ab_pc_deny_dbracket_sed_cut() {
+  # `sed s/a/b/` (no `-i` visible) cut short by the SECOND `]]`: this hook cannot rule out an `-i`
+  # flag and a `.claude` target on the far side of that `]]`, so it fails closed even though nothing
+  # in the available tokens looks in-place. `git diff` alone is verifier-read-only, so any deny here
+  # must come from the cut-sed arm, not from the main pass.
+  run_boundary "$(mk_agent_cmd 'verifier' 'x ]] sed s/a/b/ ]] y; git diff')"
+  expect_deny
+  case "$boundary_err" in
+    *"cannot verify whether this write reaches a .claude segment"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'cannot verify whether this write reaches a .claude segment': '$boundary_err'\n" ;;
+  esac
+}
+# mutant:403-ab-pc-dbracket-sed-inplace — deletes the in-place `if (!found_claude && cut_flag) print
+#   "-cut-claude-write-"` arm, so an in-place `sed` tail with no `.claude` target among its own
+#   available tokens, cut short by a following `]]`, silently resolves no opinion instead of failing
+#   closed.
+case_ab_pc_deny_dbracket_sed_inplace_cut() {
+  # `sed -i s/a/b/` cut short by the SECOND `]]`: the in-place flag IS visible, but no `.claude`
+  # target is among the available tokens -- this hook cannot rule one out on the far side of that
+  # `]]`, so it fails closed. `git diff` alone is verifier-read-only, so any deny here must come from
+  # the cut-sed arm, not from the main pass.
+  run_boundary "$(mk_agent_cmd 'verifier' 'x ]] sed -i s/a/b/ ]] y; git diff')"
+  expect_deny
+  case "$boundary_err" in
+    *"cannot verify whether this write reaches a .claude segment"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'cannot verify whether this write reaches a .claude segment': '$boundary_err'\n" ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------------------------
 # hooks/push-guard.sh (#260) fixture builders, runner, and assertions.
 
@@ -864,6 +1146,9 @@ CR=$'\r'   # one literal carriage return — the #270 CRLF fixtures below (jq --
 LF=$'\n'   # one literal line feed — the #327 round-1 kickback's embedded-LF claude-dir-guard.sh
            # fixtures below (jq --arg escapes it into the JSON as \n, so no raw LF byte ever passes
            # through command substitution).
+
+DBTAB=$'\t'   # one literal tab — the #403 tab-bounded "]]" fixtures below (jq --arg escapes it into
+              # the JSON as \t, so no raw tab byte ever passes through command substitution).
 
 # mk_fixture_repo DIR DEFAULT_BRANCH CURRENT — builds an ordinary (non-worktree) .git directory
 # under DIR: refs/remotes/origin/HEAD names DEFAULT_BRANCH; HEAD names CURRENT, unless CURRENT is
@@ -2288,9 +2573,10 @@ case_push_reads_only() {
 # --- #398: the shell-keyword / case-fold class -------------------------------------------------
 # Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter
 # "push-kw-"), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
-# mutant:398-pg-kw-vocab — reverts PREFIX_WORDS to its pre-#398 value (drops the shell-keyword
-#   words), so a fixture below whose command relies on skipping a leading keyword no longer
-#   resolves git as the command word.
+# mutant:398-pg-kw-vocab — drops only the shell-keyword words (if/then/elif/else/do/while/until/!/
+#   coproc) from PREFIX_WORDS, leaving the #403 eval/trap/zsh-modifier words in place, so a fixture
+#   below whose command relies on skipping a leading keyword no longer resolves git as the command
+#   word.
 # mutant:398-pg-case-fold — removes emit_segment()'s tolower() around normalize(tok), so an
 #   upper-case command word no longer resolves to "git".
 # mutant:398-pg-fastpath-case — narrows the widened `*[Gg][Ii][Tt]*` fast path back to the plain
@@ -2315,6 +2601,261 @@ case_push_kw_noop_then_feature() {
   # destination behind a keyword still gets no opinion.
   run_push_guard "$(mk_push_cmd 'if true; then git push origin feature/x; fi')"
   expect_push_no_opinion
+}
+
+# --- #403: the eval/trap/zsh-precommand-modifier class ------------------------------------------
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter
+# "push-pc-"), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
+# mutant:403-pg-pc-vocab — reverts PREFIX_WORDS to its pre-#403 (#398) value (drops eval/trap/
+#   noglob/nocorrect/-/repeat), so every fixture below whose command relies on skipping one of
+#   those words no longer resolves git as the command word.
+# mutant:403-pg-pc-repeat — removes the `repeat`-count skip, so a `repeat N` prefix leaves the
+#   count token itself as the resolved command word instead of the real command.
+# mutant:403-pg-pc-dbracket — disables the additive `]]` pass entirely (db_rest set to empty), so a
+#   zsh short `if [[ cond ]] cmd` form never resumes command position at `cmd`, whether the `]]` is
+#   mid-line, opens a second physical line, or is tab-bounded.
+# mutant:403-pg-pc-dbracket-truncate — reverts the MAIN segment split to the pre-fix truncating
+#   form (turning `]]` into a newline on that same pass), so a push segment whose own refspec/option
+#   tokens have a literal `]]` token among them (e.g. `git push origin ]] main`, `git push ]] --all`)
+#   loses the tokens past the `]]` from ITS OWN "PUSH" token list, even though the separate additive
+#   pass still resumes `]]`'s own short-if handling correctly.
+# mutant:403-pg-pc-dbracket-nopad — removes the space-padding around the additive pass's own copy of
+#   the record, so a `]]` sitting at the very start of a physical line (nothing of its own before
+#   it, e.g. the second line of a multi-line command) is no longer bounded and never resolved.
+# mutant:403-pg-pc-dbracket-spaceonly — narrows the additive pass's boundary character class from
+#   `[ \t]` to `[ ]` (space only), so a `]]` bounded by a TAB rather than a space is no longer
+#   recognised.
+# mutant:403-pg-pc-empty-tok — deletes the empty-normalised-token skip in the command-word walk,
+#   so a token that normalises to empty ends the walk with an empty command word instead of being
+#   skipped.
+# mutant:403-pg-pc-empty-sub — deletes the empty-normalised-token skip in the subcommand search, so
+#   a lone leftover quote token there is mistaken for the subcommand instead of being skipped past.
+# No `cwd` is passed for any fixture below: each carries n >= 2 refspec tokens, so the
+# unconditional PUSH_DEFAULT_BRANCH_FALLBACK ("main"/"master") decides without needing a resolved
+# repo.
+case_push_pc_deny_eval() {
+  run_push_guard "$(mk_push_cmd 'eval git push origin main')"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_eval_quoted() {
+  run_push_guard "$(mk_push_cmd "eval 'git push origin main'")"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_eval_lead_space() {
+  run_push_guard "$(mk_push_cmd 'eval " git push origin main"')"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_eval_split() {
+  # The quoted string splits "git" from "push" across two tokens; the leftover closing-quote
+  # token in between must be skipped, not mistaken for the subcommand.
+  run_push_guard "$(mk_push_cmd 'eval "git " push origin main')"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_trap() {
+  run_push_guard "$(mk_push_cmd "trap 'git push origin main' EXIT")"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_noglob() {
+  run_push_guard "$(mk_push_cmd 'noglob git push origin main')"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_nocorrect() {
+  run_push_guard "$(mk_push_cmd 'nocorrect git push origin main')"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_dash() {
+  run_push_guard "$(mk_push_cmd '- git push origin main')"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_repeat() {
+  run_push_guard "$(mk_push_cmd 'repeat 2 git push origin main')"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_short_if() {
+  run_push_guard "$(mk_push_cmd 'if [[ 1 ]] git push origin main')"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_noop_eval_feature() {
+  run_push_guard "$(mk_push_cmd 'eval git push origin feature/x')"
+  expect_push_no_opinion
+}
+# --- hooks/push-guard.sh: the additive `]]` handling must never truncate an existing deny ----------
+# A base (pre-#403) push-guard deny whose own refspec-evaluation loop finds a denying destination
+# AFTER a literal `]]` token among the push's other tokens must still fire: the segment (and its
+# full "PUSH\t...\trest" token list) the main split produces is untouched by the additive `]]`
+# pass, which only ADDS further segments, never truncates existing ones.
+case_push_pc_deny_dbracket_refspec() {
+  run_push_guard "$(mk_push_cmd 'git push origin ]] main')"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_dbracket_all() {
+  run_push_guard "$(mk_push_cmd 'git push ]] --all')"
+  expect_push_deny
+  case "$push_err" in
+    *'denies "--all"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies \"--all\"': '$push_err'\n" ;;
+  esac
+}
+# Boundary variants of the additive `]]` handling itself (see the identical agent-boundary.sh
+# fixtures above): a `]]` opening a second physical line with nothing of its own before it, and a
+# `]]` bounded by a TAB rather than a space, must both still resume command position.
+case_push_pc_deny_dbracket_multiline() {
+  run_push_guard "$(mk_push_cmd "if [[ 1${LF}]] git push origin main")"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_dbracket_tab() {
+  run_push_guard "$(mk_push_cmd "if [[ 1 ]]${DBTAB}git push origin main")"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+# --- hooks/push-guard.sh: bounded, disjoint additive `]]` work --------------------------------------
+# mutant:403-pg-pc-dbracket-once — changes the additive loop's `while` to `if`, so only the FIRST
+#   standalone `]]` in a record is ever handled; a later `]]` whose own tail carries the deciding
+#   push is never reached.
+# mutant:403-pg-pc-dbracket-cap — removes the `db_n >= dbracket_max` check, so a record with more
+#   standalone `]]` than DBRACKET_MAX is analysed in full instead of failing closed.
+case_push_pc_deny_dbracket_second() {
+  # The deciding `]]` is the SECOND one in the record, not the first.
+  run_push_guard "$(mk_push_cmd 'if [[ 1 ]] true; if [[ 1 ]] git push origin main')"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_dbracket_flood() {
+  # A flood of standalone `]]` (more than DBRACKET_MAX) followed by a REAL `;`-separated
+  # `git push origin main` segment: the deny comes from the untouched MAIN split, unaffected by the
+  # additive cap or by how the additive tails are cut. This case checks only the VERDICT; it does
+  # not measure elapsed time -- see case_push_pc_deny_dbracket_timing below for the dedicated
+  # wall-clock proof that the additive loop stays bounded rather than growing with how many `]]` a
+  # record carries.
+  local flood="" i
+  for i in $(seq 1 70); do flood="${flood} ]]"; done
+  run_push_guard "$(mk_push_cmd "${flood}; git push origin main")"
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_dbracket_cap() {
+  # Exactly DBRACKET_MAX + 1 standalone `]]`, then a push to a NON-default branch: without the cap,
+  # the additive loop would eventually reach this "git push origin feature/x" tail and correctly
+  # find no opinion (not a deny destination) -- WITH the cap, the loop fails closed before ever
+  # reaching that tail, so only the cap's own sentinel can deny this record at all.
+  local flood="" i
+  for i in $(seq 1 65); do flood="${flood}]] "; done
+  run_push_guard "$(mk_push_cmd "${flood}git push origin feature/x")"
+  expect_push_deny
+  case "$push_err" in
+    *"(blocked: too many ]] tokens to analyse)"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(blocked: too many ]] tokens to analyse)': '$push_err'\n" ;;
+  esac
+}
+# mutant:403-pg-pc-dbracket-overlap — restores overlapping tails (drops the standalone-`]]`
+#   alternative from the disjoint cut regex), so `if [[ a ]] git push origin ]] main`'s tail runs
+#   past the second `]]` and resolves the ordinary default-branch reason directly instead of failing
+#   closed on the CUT tail (the new reason), and fails case_push_pc_deny_dbracket_timing below's 5s
+#   bound.
+case_push_pc_deny_dbracket_split_push() {
+  # Disjoint tails alone would lose this deny: the tail after the first `]]` is cut at the SECOND
+  # `]]`, leaving "git push origin" with no destination -- resolved as a CUT push (see
+  # emit_segment()'s own subcmd handling), which fails closed with its own distinct reason instead of
+  # the default-branch one evaluate_segment() never gets a chance to compute. Pins that the cut-push
+  # fail-closed rule, not an accidental full scan, is what still denies this.
+  run_push_guard "$(mk_push_cmd 'if [[ a ]] git push origin ]] main')"
+  expect_push_deny
+  case "$push_err" in
+    *"(cannot analyse a push split by ]])"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(cannot analyse a push split by ]])': '$push_err'\n" ;;
+  esac
+}
+# mutant:403-pg-pc-dbracket-subcmd-open — drops the subcommand-still-open fail-closed check (reverts
+#   to a bare `if (subcmd != "push") return`), so a cut tail whose subcommand search never concludes
+#   (stopped mid-value, consuming a global option with no value token left in the cut segment) is
+#   silently treated as no opinion instead of failing closed.
+case_push_pc_deny_dbracket_split_subcmd() {
+  # The tail after the first `]]` is cut at the SECOND `]]`, leaving "git -C" -- the subcommand
+  # search then tries to consume "-C"'s own value token, finds none within this cut segment, and
+  # never resolves an actual subcommand. Without the subcommand-still-open check, this silently
+  # returns no opinion instead of failing closed.
+  run_push_guard "$(mk_push_cmd 'if [[ a ]] git -C ]] push origin main')"
+  expect_push_deny
+  case "$push_err" in
+    *"(cannot analyse a push split by ]])"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain '(cannot analyse a push split by ]])': '$push_err'\n" ;;
+  esac
+}
+case_push_pc_deny_dbracket_timing() {
+  # Wall-clock proof: an overlapping tail forks a refspec_dest subshell per refspec on EVERY tail,
+  # over almost the whole remaining record each time; disjoint tails bound each emit_segment() walk
+  # to its own cut segment instead, so this ~1.4KB shape (`x` + ` ]] git push`x64 + ` a`x300, a real
+  # newline, then `git push origin main`) resolves in well under the 5s bound below (measured via
+  # bash SECONDS, timing only the hook invocation itself, not payload construction).
+  local flood="x" i
+  for i in $(seq 1 64); do flood="${flood} ]] git push"; done
+  local filler
+  filler="$(printf ' a%.0s' $(seq 1 300))"
+  local payload
+  payload="$(mk_push_cmd "${flood}${filler}
+git push origin main")"
+  local start=$SECONDS elapsed
+  run_push_guard "$payload"
+  elapsed=$((SECONDS - start))
+  expect_push_deny
+  [ "$elapsed" -lt 5 ] || { __ok=0; __why="${__why}took ${elapsed}s (SECONDS-granularity), expected under 5s\n"; }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -3191,6 +3732,49 @@ case_cdg_bash_never_executes_no_inline_patch() {
   [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
 }
 
+# --- hooks/claude-dir-guard.sh: the #403 eval/noglob/dash/repeat prefix-word class ---------------
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "cdg-pc-"),
+# re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table. This hook's own
+# PREFIX_WORDS copy gains the same eval/trap/noglob/nocorrect/-/repeat vocabulary and the `repeat`
+# count skip, but NOT the `]]` segment break or quote stripping (documented residuals) — so only
+# the unquoted forms are exercised here.
+# mutant:403-cdg-pc-vocab — reverts this hook's PREFIX_WORDS copy to its pre-#403 (#398) value, so
+#   every fixture below no longer resolves past its own prefix word to "apply_patch".
+# mutant:403-cdg-pc-repeat — removes the `repeat`-count skip from is_apply_patch_word, so a
+#   `repeat N` prefix leaves the count token itself as the resolved word instead of "apply_patch".
+case_cdg_pc_deny_eval_shim() {
+  run_claude_guard "$(mk_codex_shell 'implementer' 'eval apply_patch < x.patch')"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_pc_deny_noglob_shim() {
+  run_claude_guard "$(mk_codex_shell 'implementer' 'noglob apply_patch < x.patch')"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_pc_deny_dash_shim() {
+  run_claude_guard "$(mk_codex_shell 'implementer' '- apply_patch < x.patch')"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_pc_deny_repeat_shim() {
+  run_claude_guard "$(mk_codex_shell 'implementer' 'repeat 2 apply_patch < x.patch')"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+}
+
 # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
 # These exercise EXISTING logic under a new payload shape (the full documented Codex key set --
 # session_id, turn_id, cwd, hook_event_name, model, permission_mode, tool_name, tool_use_id,
@@ -3541,6 +4125,30 @@ cases=(
   "ab-kw-deny-verifier-upper-sub|case_ab_kw_deny_verifier_upper_sub|case-variant git subcommand: verifier, git STATUS denies (subcommand never case-folded) -- mutation proof: dev/mutants/hook-tests.json (398-ab-gitsub-exact)"
   "ab-kw-noop-keyword-arg|case_ab_kw_noop_keyword_arg|shell-keyword no opinion: implementer, echo then git push (the skip applies only in command position; the raw stdin still contains \"git\") -- control, not part of the mutation-proof registry"
   "ab-kw-noop-verifier-if-diff|case_ab_kw_noop_verifier_if_diff|shell-keyword no opinion: verifier, if git diff --quiet; then echo same; fi (release-blocker control: the keyword skip must not widen the verifier's read-only git allowance) -- control, not part of the mutation-proof registry"
+  "ab-pc-deny-eval-git|case_ab_pc_deny_eval_git|eval deny: implementer, eval git push -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
+  "ab-pc-deny-eval-quoted-gh|case_ab_pc_deny_eval_quoted_gh|eval-quoted deny: trail-blazer-flow:implementer, eval \"gh issue close 5\" (the issue's own shape) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
+  "ab-pc-deny-eval-lead-space|case_ab_pc_deny_eval_lead_space|eval-quoted deny with a leading space: implementer, eval \" gh issue close 5\" -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab, 403-ab-pc-empty-tok)"
+  "ab-pc-deny-trap-gh|case_ab_pc_deny_trap_gh|trap deny: implementer, trap 'gh issue close 5' EXIT -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
+  "ab-pc-deny-noglob|case_ab_pc_deny_noglob|zsh precommand modifier deny: implementer, noglob git push -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
+  "ab-pc-deny-nocorrect|case_ab_pc_deny_nocorrect|zsh precommand modifier deny: implementer, nocorrect gh pr merge 5 -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
+  "ab-pc-deny-dash|case_ab_pc_deny_dash|zsh precommand modifier deny: implementer, - git push -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
+  "ab-pc-deny-repeat|case_ab_pc_deny_repeat|zsh repeat deny: implementer, repeat 3 git push -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab, 403-ab-pc-repeat)"
+  "ab-pc-deny-short-if|case_ab_pc_deny_short_if|zsh short-if deny: implementer, if [[ 1 ]] git push -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket)"
+  "ab-pc-deny-short-if-and|case_ab_pc_deny_short_if_and|zsh short-if deny with an && condition: implementer, if [[ -n a && -n b ]] gh issue close 5 (the && inside the condition cannot hide the tail) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket)"
+  "ab-pc-deny-verifier-eval|case_ab_pc_deny_verifier_eval|eval deny: verifier, eval git push -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
+  "ab-pc-noop-verifier-eval-status|case_ab_pc_noop_verifier_eval_status|eval no opinion: verifier, eval git status (release-blocker control: the new skip must not narrow the verifier's read-only git) -- control, not part of the mutation-proof registry"
+  "ab-pc-noop-bash-dbracket|case_ab_pc_noop_bash_dbracket|ordinary bash no opinion: implementer, [[ -n x ]] && echo git (not zsh's short-if form) -- control, not part of the mutation-proof registry"
+  "ab-pc-deny-dbracket-tee-claude|case_ab_pc_deny_dbracket_tee_claude|additive-]] regression proof: implementer, tee ]] .claude/LESSONS.md -- the pre-existing arg-vocab deny must survive the ]] pass -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-truncate)"
+  "ab-pc-deny-dbracket-multiline|case_ab_pc_deny_dbracket_multiline|additive-]] boundary: implementer, if [[ -n a<LF>]] git push (]] opens the second physical line) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket, 403-ab-pc-dbracket-nopad)"
+  "ab-pc-deny-dbracket-tab|case_ab_pc_deny_dbracket_tab|additive-]] boundary: implementer, if [[ 1 ]]<TAB>git push (]] bounded by a tab, not a space) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket, 403-ab-pc-dbracket-spaceonly)"
+  "ab-pc-deny-dbracket-second|case_ab_pc_deny_dbracket_second|additive-]] second-match proof: implementer, if [[ 1 ]] true; if [[ 1 ]] git push (the deciding ]] is the second one) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-once)"
+  "ab-pc-deny-dbracket-second-gh|case_ab_pc_deny_dbracket_second_gh|additive-]] second-match proof: implementer, if [[ 1 ]] true; if [[ 1 ]] gh issue close 5 -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-once)"
+  "ab-pc-deny-dbracket-flood|case_ab_pc_deny_dbracket_flood|verdict-only proof: implementer, echo + 70x ]] + ; git push (deny via the untouched main split, unaffected by the cap or by tail-cutting) -- control, not part of the mutation-proof registry"
+  "ab-pc-deny-dbracket-cap|case_ab_pc_deny_dbracket_cap|additive-]] cap proof: implementer, echo + 65x ]] with no git/gh at all -- only the DBRACKET_MAX fail-closed sentinel can deny this record -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-cap)"
+  "ab-pc-deny-dbracket-disjoint|case_ab_pc_deny_dbracket_disjoint|disjoint-tail proof: implementer, if [[ 1 ]] tee ]] .claude/LESSONS.md -- a tee cut short by the SECOND ]] fails closed on its own distinct reason -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap)"
+  "ab-pc-deny-dbracket-timing|case_ab_pc_deny_dbracket_timing|wall-clock proof: implementer, a ~200KB tee/]] flood -- deny AND elapsed time under 5s -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap)"
+  "ab-pc-deny-dbracket-sed-cut|case_ab_pc_deny_dbracket_sed_cut|cut-sed proof: verifier, x ]] sed s/a/b/ ]] y; git diff -- a non-in-place sed cut short by the SECOND ]] fails closed -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-sed-noninplace)"
+  "ab-pc-deny-dbracket-sed-inplace-cut|case_ab_pc_deny_dbracket_sed_inplace_cut|cut-sed proof: verifier, x ]] sed -i s/a/b/ ]] y; git diff -- an in-place sed cut short by the SECOND ]] fails closed -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-sed-inplace)"
   # --- hooks/push-guard.sh (#260) cases -----------------------------------------------------------
   # Mutation-proof table (LESSON 2026-09-01, LESSON 2026-09-07(b)): each row below cites one of
   # the mutants actually applied to hooks/push-guard.sh via a Python literal-string replace
@@ -4654,6 +5262,27 @@ cases=(
   "push-kw-deny-bang|case_push_kw_deny_bang|shell-keyword deny: ! git push origin main -- mutation proof: dev/mutants/hook-tests.json (398-pg-kw-vocab)"
   "push-kw-deny-upper-git|case_push_kw_deny_upper_git|case-fold deny: GIT push origin main -- mutation proof: dev/mutants/hook-tests.json (398-pg-case-fold, 398-pg-fastpath-case)"
   "push-kw-noop-then-feature|case_push_kw_noop_then_feature|shell-keyword no opinion: if true; then git push origin feature/x; fi (control: the keyword skip must not widen the destination rule) -- control, not part of the mutation-proof registry"
+  "push-pc-deny-eval|case_push_pc_deny_eval|eval deny: eval git push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
+  "push-pc-deny-eval-quoted|case_push_pc_deny_eval_quoted|eval-quoted deny: eval 'git push origin main' -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
+  "push-pc-deny-eval-lead-space|case_push_pc_deny_eval_lead_space|eval-quoted deny with a leading space: eval \" git push origin main\" -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab, 403-pg-pc-empty-tok)"
+  "push-pc-deny-eval-split|case_push_pc_deny_eval_split|eval-quoted deny split across tokens: eval \"git \" push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab, 403-pg-pc-empty-sub)"
+  "push-pc-deny-trap|case_push_pc_deny_trap|trap deny: trap 'git push origin main' EXIT -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
+  "push-pc-deny-noglob|case_push_pc_deny_noglob|zsh precommand modifier deny: noglob git push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
+  "push-pc-deny-nocorrect|case_push_pc_deny_nocorrect|zsh precommand modifier deny: nocorrect git push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
+  "push-pc-deny-dash|case_push_pc_deny_dash|zsh precommand modifier deny: - git push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
+  "push-pc-deny-repeat|case_push_pc_deny_repeat|zsh repeat deny: repeat 2 git push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab, 403-pg-pc-repeat)"
+  "push-pc-deny-short-if|case_push_pc_deny_short_if|zsh short-if deny: if [[ 1 ]] git push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-dbracket)"
+  "push-pc-noop-eval-feature|case_push_pc_noop_eval_feature|eval no opinion: eval git push origin feature/x (control: a non-default-branch destination behind eval still gets no opinion) -- control, not part of the mutation-proof registry"
+  "push-pc-deny-dbracket-refspec|case_push_pc_deny_dbracket_refspec|additive-]] regression proof: git push origin ]] main -- the pre-existing refspec-loop deny must survive the ]] pass -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-dbracket-truncate)"
+  "push-pc-deny-dbracket-all|case_push_pc_deny_dbracket_all|additive-]] regression proof: git push ]] --all -- the pre-existing --all deny must survive the ]] pass -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-dbracket-truncate)"
+  "push-pc-deny-dbracket-multiline|case_push_pc_deny_dbracket_multiline|additive-]] boundary: if [[ 1<LF>]] git push origin main (]] opens the second physical line) -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-dbracket, 403-pg-pc-dbracket-nopad)"
+  "push-pc-deny-dbracket-tab|case_push_pc_deny_dbracket_tab|additive-]] boundary: if [[ 1 ]]<TAB>git push origin main (]] bounded by a tab, not a space) -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-dbracket, 403-pg-pc-dbracket-spaceonly)"
+  "push-pc-deny-dbracket-second|case_push_pc_deny_dbracket_second|additive-]] second-match proof: if [[ 1 ]] true; if [[ 1 ]] git push origin main (the deciding ]] is the second one) -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-dbracket-once)"
+  "push-pc-deny-dbracket-flood|case_push_pc_deny_dbracket_flood|verdict-only proof: 70x ]] + ; git push origin main (deny via the untouched main split, unaffected by the cap or by tail-cutting) -- control, not part of the mutation-proof registry"
+  "push-pc-deny-dbracket-cap|case_push_pc_deny_dbracket_cap|additive-]] cap proof: 65x ]] then git push origin feature/x (a non-default branch) -- without the cap this would correctly resolve to no opinion, so only the DBRACKET_MAX fail-closed sentinel can deny this record -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-dbracket-cap)"
+  "push-pc-deny-dbracket-split-push|case_push_pc_deny_dbracket_split_push|disjoint-tail proof: if [[ a ]] git push origin ]] main -- a push cut short by the SECOND ]] fails closed on its own distinct reason -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-dbracket-overlap)"
+  "push-pc-deny-dbracket-split-subcmd|case_push_pc_deny_dbracket_split_subcmd|disjoint-tail proof: if [[ a ]] git -C ]] push origin main -- a subcommand search cut mid-value fails closed instead of silently resolving no opinion -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-dbracket-subcmd-open)"
+  "push-pc-deny-dbracket-timing|case_push_pc_deny_dbracket_timing|wall-clock proof: a ~1.4KB (x + ]] git push x64 + a x300, newline, git push origin main) shape -- deny AND elapsed time under 5s -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-dbracket-overlap)"
   # --- hooks/claude-dir-guard.sh (#327) cases -----------------------------------------------------
   # Mutation-proof table (LESSON 2026-09-01/2026-09-07(b), one mutant per classifier clause,
   # applied in place with an immediately-refreshed backup and a full `diff` verify after every
@@ -4885,6 +5514,10 @@ cases=(
   "cdg-bash-noop-ab-fixture-reuse|case_cdg_bash_noop_ab_fixture_reuse|no opinion: an existing hooks/agent-boundary.sh deny fixture's own command (git push origin main) replayed against THIS hook -- the new Bash route must not deny a command that carries no apply_patch-shaped patch"
   "cdg-bash-never-executes|case_cdg_bash_never_executes|deny, AND the Bash route never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent"
   "cdg-bash-never-executes-no-inline-patch|case_cdg_bash_never_executes_no_inline_patch|deny via the is_apply_patch_word \"no inline patch\" route specifically, AND it never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent"
+  "cdg-pc-deny-eval-shim|case_cdg_pc_deny_eval_shim|eval deny: implementer, eval apply_patch < x.patch -- mutation proof: dev/mutants/hook-tests.json (403-cdg-pc-vocab)"
+  "cdg-pc-deny-noglob-shim|case_cdg_pc_deny_noglob_shim|zsh precommand modifier deny: implementer, noglob apply_patch < x.patch -- mutation proof: dev/mutants/hook-tests.json (403-cdg-pc-vocab)"
+  "cdg-pc-deny-dash-shim|case_cdg_pc_deny_dash_shim|zsh precommand modifier deny: implementer, - apply_patch < x.patch -- mutation proof: dev/mutants/hook-tests.json (403-cdg-pc-vocab)"
+  "cdg-pc-deny-repeat-shim|case_cdg_pc_deny_repeat_shim|zsh repeat deny: implementer, repeat 2 apply_patch < x.patch -- mutation proof: dev/mutants/hook-tests.json (403-cdg-pc-vocab, 403-cdg-pc-repeat)"
   # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
   "codex-gcg-main-status|case_codex_gcg_main_status|allow: git-c-guard.sh under a Codex-shaped main-session payload, git -C ../demo-wt-1 status --porcelain (pins the unchanged verdict -- Codex ignores this hook's if gate, but the script itself never reads it)"
   "codex-gcg-apply-patch|case_codex_gcg_apply_patch|silent: a Codex apply_patch payload (tool_name != Bash)"

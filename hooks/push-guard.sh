@@ -24,10 +24,20 @@
 # harness's own convention, not mechanically required.
 #
 # Tokenizer: the POSIX-awk segment/token walker below is a near-twin of hooks/agent-boundary.sh's
-# (see that script's "the scan" section, lines 143-236) — same segment-break characters, same
-# normalize() (quote/backslash strip + basename), same repeat-until-exhausted PREFIX_WORDS skip
-# (never once-only — a once-only skip is the M23 regression class agent-boundary.sh's own
-# dev/hook-tests.sh table documents), since #398 the same tolower() fold applied to the command word
+# (see that script's "the scan" section) — same segment-break characters, same ADDITIVE standalone
+# `]]` handling (an extra pass emitting only the FIRST segment of the text after each `]]`, DISJOINT
+# from every other tail: that segment ends at whichever comes first, a real segment-break character
+# OR the next standalone `]]`, up to DBRACKET_MAX matches per record, never a truncation of the
+# segments the main split already produced, and never more than DBRACKET_MAX times the record length
+# of work — a record carrying more `]]` than that denies unconditionally instead. A segment cut at a
+# `]]` is passed to emit_segment() marked CUT, since the text on the far side of that `]]` was
+# deliberately never read — see this file's own PUSH-class handling of a cut push for why), same
+# normalize() (quote/backslash strip + basename), same empty-normalised-token
+# skip in the command-word walk (and, in this file's own subcommand search below, the same
+# empty-normalised-token skip there too), same repeat-until-exhausted PREFIX_WORDS skip (never
+# once-only — a once-only skip is the M23 regression class agent-boundary.sh's own
+# dev/hook-tests.sh table documents), same `repeat`-count skip, since #398 the same tolower() fold
+# applied to the command word
 # and to prefix-word matching (so `if true; then git push origin main; fi`, `! git push origin
 # main`, and `GIT push origin main` all still resolve `git` as the command word — see PREFIX_WORDS'
 # own declaration above for the added shell-keyword vocabulary), and, since #270, the same
@@ -35,9 +45,10 @@
 # of $cmd applied immediately after the jq extraction and before this script's own `[ -n "$cmd" ]`
 # guard (see that same point in each file — a CRLF-carrying transport can otherwise deliver a
 # command whose tokens carry a trailing `\r`, which every exact-match comparison below would miss).
-# A future fix to either tokenizer's shared behaviour (segment breaking, normalize(), the
-# prefix-word skip, the command-word case fold, the CR strip) must be applied to BOTH files — see
-# this repo's
+# A future fix to either tokenizer's shared behaviour (segment breaking; the additive standalone
+# `]]` handling; normalize(); the prefix-word skip, including the `repeat`-count skip; the
+# empty-normalised-token skip; the command-word case fold; the CR strip) must be applied to BOTH
+# files — see this repo's
 # CLAUDE.md and dev/selfcheck.sh's assertion 4.40 clause (c), which mechanically pins the two
 # scripts' PREFIX_WORDS vocabulary stays byte-identical. Differences from agent-boundary.sh's
 # tokenizer: after resolving a segment's command word as `git`, this script walks forward again
@@ -182,7 +193,25 @@
 # — write file content with the Write/Edit tools, never a Bash heredoc); since #398, that same
 # per-line class also denies a heredoc body line whose first word is a shell keyword followed by
 # `git push origin main` (e.g. `  then git push origin main`) or whose first word case-folds to
-# `git` (e.g. `Git push origin main`) — the same remedy; a remote literally named
+# `git` (e.g. `Git push origin main`) — the same remedy; since the extended PREFIX_WORDS vocabulary
+# also treats `-` and `repeat N` as prefix words and adds an `eval`/`trap`/`noglob`/`nocorrect`
+# skip, a line or quote-blind segment starting `- git push origin main` (a markdown bullet in a
+# heredoc body, a PR body, or a commit message — this applies in the MAIN session too, not only the
+# implementer/verifier subagents, since this hook governs every session) or starting
+# `eval`/`trap`/`noglob`/`nocorrect`/`repeat N` followed by `git push origin main` now also denies —
+# the same Write/Edit-tools remedy; a command carrying more than DBRACKET_MAX standalone `]]`
+# denies UNCONDITIONALLY, even when every one of them is genuinely benign and no `git push` is
+# anywhere in the record — the fail-closed cost of the cap that keeps the additive `]]` pass from
+# doing unbounded work; an additive `]]` tail that resolves to `git … push` but was cut short by a
+# FOLLOWING standalone `]]` (not by a real break or the end of the record) denies UNCONDITIONALLY
+# too, even when the destination on the far side of that `]]` (never read) would not itself have
+# denied — the fail-closed cost of never reconnecting a push split across disjoint tails, which is
+# what still catches `if [[ a ]] git push origin ]] main` without the additive pass re-reading the
+# whole remaining record on every `]]` it finds. The identical cut-push deny also fires when a `git`
+# tail is cut mid-subcommand-search (e.g. `git -C ]] push origin main`, where the search is still
+# consuming `-C`'s own value token when the cut arrives): the subcommand is never resolved either
+# way, and this hook cannot tell that unresolved case apart from a genuine, uncut `push` whose
+# destination it simply has not reached yet; a remote literally named
 # `main`/`master` (`git push main` is evaluated defensively as if `main` might be a branch, not
 # only a remote name — see evaluate_segment()'s "n == 1" handling below); `--all`/`--mirror` deny
 # unconditionally, since both push every local branch, including the default one; a repo whose
@@ -235,7 +264,12 @@
 # other non-regular-file path.
 #
 # Documented under-blocking classes (evasions, named rather than hidden): `$(which git) push`
-# (the literal `git` token is never in command position); `sudo -u foo git push` (the argument to
+# (the literal `git` token is never in command position); `eval`/`trap` of a variable- or
+# substitution-built payload (`eval "$c"`, `eval "$(printf …)"`) — the same class, since the literal
+# `git`/`push` text is never in the string this tokenizer reads; a `repeat` count containing
+# whitespace (`repeat "1 + 1" git push origin main` — the tokenizer skips exactly ONE token after
+# `repeat`, so a quoted multi-word count is not fully consumed and its own remaining word, not
+# `git`, is mistaken for the resolved command word); `sudo -u foo git push` (the argument to
 # `-u` becomes the resolved command word, not `git`); interpreter indirection outside
 # PREFIX_WORDS; a two-token global option NOT in GIT_GLOBAL_OPTS_WITH_VALUE that itself takes a
 # separate value, e.g. `git --foo bar push origin main` (the unlisted `--foo` is skipped alone,
@@ -377,11 +411,13 @@ set -f  # noglob: untrusted refspec tokens are word-split unquoted below (e.g. i
 # own lines with this exact shape so dev/selfcheck.sh's assertion 4.40 can extract them
 # mechanically.
 PUSH_DEFAULT_BRANCH_FALLBACK="main master"
-# Since #398, byte-identical to hooks/agent-boundary.sh's own PREFIX_WORDS (see that file's
-# vocabulary comment for the full reasoning): the trailing words above `dash` are shell reserved
-# words that can directly precede a command in the same segment (`if true; then git push origin
-# main; fi`, `! git push origin main`), sharing the ordinary prefix-word skip below.
-PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc"
+# Byte-identical to hooks/agent-boundary.sh's own PREFIX_WORDS (see that file's vocabulary comment
+# for the full reasoning): the trailing words above `dash` are shell reserved words that can
+# directly precede a command in the same segment (`if true; then git push origin main; fi`, `!
+# git push origin main`), plus `eval`/`trap` (each runs its own string argument as a command) and
+# zsh's precommand modifiers `noglob`/`nocorrect`/`-`/`repeat N` (`repeat` also consumes its count
+# token — see the command-word walk below), sharing the ordinary prefix-word skip below.
+PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat"
 GIT_GLOBAL_OPTS_WITH_VALUE="-c -C --git-dir --work-tree --namespace --config-env --exec-path"
 # #269: byte-identical to hooks/git-c-guard.sh's own PATH_ERE (that script's twin declaration,
 # a few lines above its own GIT_C_SUBCOMMANDS) — dev/selfcheck.sh's assertion 4.42 extracts both
@@ -391,6 +427,11 @@ GIT_GLOBAL_OPTS_WITH_VALUE="-c -C --git-dir --work-tree --namespace --config-env
 PATH_ERE='^([A-Za-z]:/|/|\.\./)([A-Za-z0-9._ +-]+/)*[A-Za-z0-9._+-]+-wt-[0-9]+/?$'
 PUSH_OPTS_WITH_VALUE="-o --push-option --repo --receive-pack --exec"
 PUSH_ALL_REFS_OPTS="--all --mirror"
+# DBRACKET_MAX — byte-identical to hooks/agent-boundary.sh's own copy (by
+# convention, unpinned): the most standalone `]]` matches the scan's additive pass (further down)
+# will analyse per input record before failing closed; see that file's own declaration for the
+# full reasoning.
+DBRACKET_MAX="64"
 PUSH_DENY_STEM="trail-blazer-flow push guard:"
 # #292: a push segment naming either of these two classes always redirects which repository the
 # push actually runs in, and this hook does not resolve either one — GIT_REPO_OPTS is a global
@@ -473,7 +514,7 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
 # TAB, since every token comes from splitting on "[ \t]+". Processes $cmd one input line (awk
 # record) at a time — the same deliberate, documented false-positive class agent-boundary.sh's
 # header explains (a heredoc line that starts with "git push" is scanned as its own segment).
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" '
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
@@ -500,7 +541,7 @@ function strip_quotes(tok,    t) {
   gsub(/\\/, "", t)
   return t
 }
-function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, ro) {
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, ro) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
@@ -516,7 +557,8 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
       continue
     }
     norm = tolower(normalize(tok))
-    if (norm in prefix_set) { saw_prefix = 1; idx++; continue }
+    if (norm == "") { idx++; continue }
+    if (norm in prefix_set) { saw_prefix = 1; idx += (norm == "repeat") ? 2 : 1; continue }
     if (saw_prefix && substr(tok, 1, 1) == "-") { idx++; continue }
     cmdword = norm
     idx++
@@ -546,11 +588,16 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
       continue
     }
     if (substr(tok, 1, 1) == "-") { j++; continue }
+    if (normalize(tok) == "") { j++; continue }
     subcmd = normalize(tok)
     j++
     break
   }
-  if (subcmd != "push") return
+  if (subcmd != "push") {
+    if (subcmd == "" && cut_flag) print "-cut-push-"
+    return
+  }
+  if (cut_flag) { print "-cut-push-"; return }
   if (unres == "" && ccount >= 2) unres = "more than one -C"
   rest = ""
   sep = ""
@@ -570,6 +617,54 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
   gsub(/[<>]/, " ", line)
   nseg = split(line, segs, /\n/)
   for (s = 1; s <= nseg; s++) emit_segment(segs[s])
+  # Additive standalone-`]]` handling (see the identical mechanism and comment in
+  # hooks/agent-boundary.sh): the segments above are computed EXACTLY as before this issue, so a
+  # push segment whose own refspec tokens happen to have a literal `]]` token among them (e.g.
+  # `git push origin ]] main`) is still fully resolved by the walk above, unchanged. Separately, for
+  # every unquoted, whitespace-bounded `]]` found in a space-padded copy of this record, ONLY the
+  # FIRST segment of the text AFTER that `]]` is walked the same way, resuming command position at
+  # the word right after the closing `]]` of a zsh short `if [[ cond ]] cmd` form. DISJOINT tails:
+  # that first segment ends at whichever comes FIRST, a real segment-break character OR the NEXT
+  # standalone `]]` -- never running past a later `]]` into text that the later `]]` own first
+  # segment, or the main split above, already covers, so the walk that resolves a git subcommand or a
+  # push destination never scales with the remaining record, only with the short cut segment. At most
+  # DBRACKET_MAX matches are handled per record, above which this loop fails closed with a fixed
+  # sentinel instead of continuing -- see hooks/agent-boundary.sh own copy of this comment for the
+  # full reasoning.
+  db_rest = " " $0 " "
+  db_n = 0
+  db_go = 1
+  while (db_go && match(db_rest, /[ \t]]][ \t]/)) {
+    if (db_n >= dbracket_max) {
+      print "-too-many-dbrackets-"
+      db_go = 0
+    } else {
+      db_n++
+      # db_next is captured IMMEDIATELY after this match() and used for both db_tail and the
+      # db_rest update below: the INNER match() two lines down (finding where db_seg itself ends),
+      # and emit_segment() (called via this block, itself calling match(), the assignment-prefix
+      # check), would otherwise clobber the RSTART/RLENGTH globals this loop still needs to advance
+      # past the JUST-matched "]]" occurrence -- reading RSTART/RLENGTH again after either call is
+      # what hung this loop before this capture was added. It stops ONE character short of where
+      # this match ends (RLENGTH - 1, not RLENGTH), deliberately leaving the matched trailing
+      # whitespace byte in db_rest: two standalone `]]` separated by exactly one space or tab share
+      # that one byte as boundary for BOTH of them, and consuming it here would leave the very next
+      # `]]` with no leading whitespace of its own to match against, silently skipping every other
+      # occurrence in a tightly packed run.
+      db_next = RSTART + RLENGTH - 1
+      db_tail = substr(db_rest, db_next)
+      db_cut = 0
+      if (match(db_tail, /[;&|(){}`]|[ \t]]][ \t]/) > 0) {
+        db_seg = substr(db_tail, 1, RSTART - 1)
+        if (RLENGTH == 4) db_cut = 1
+      } else {
+        db_seg = db_tail
+      }
+      gsub(/[<>]/, " ", db_seg)
+      emit_segment(db_seg, db_cut)
+      db_rest = substr(db_rest, db_next)
+    }
+  }
 }
 ')"
 
@@ -1108,6 +1203,16 @@ deny_via=""
 deny_src=""
 while IFS= read -r line; do
   case "$line" in
+    "-too-many-dbrackets-")
+      deny_dest="too many ]] tokens to analyse"
+      deny_kind="dbracket"
+      break
+      ;;
+    "-cut-push-")
+      deny_dest="split by ]]"
+      deny_kind="cutpush"
+      break
+      ;;
     "PUSH$TAB"*) : ;;
     *) continue ;;
   esac
@@ -1148,6 +1253,14 @@ EOF
 
 if [ -n "$deny_dest" ]; then
   case "$deny_kind" in
+    dbracket)
+      printf '%s denies this command: too many standalone ]] tokens to analyse safely (blocked: too many ]] tokens to analyse) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" >&2
+      ;;
+    cutpush)
+      printf '%s denies this command (cannot analyse a push split by ]]) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" >&2
+      ;;
     allrefs)
       printf '%s denies "%s" (pushes every ref, including the default branch: %s) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
         "$PUSH_DENY_STEM" "$deny_dest" "$default_display" >&2
