@@ -1573,6 +1573,151 @@
       "expect_fail": [
         "codex-setup-rules-content"
       ]
+    },
+    {
+      "name": "428-transition-dropped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-track-",
+      "edits": [
+        {
+          "from": "if [ \"$st_streak\" = failing ]; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-track-repeat"
+      ]
+    },
+    {
+      "name": "428-closed-reuse",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-track-",
+      "edits": [
+        {
+          "from": "    OPEN)",
+          "to": "    OPEN|CLOSED)"
+        }
+      ],
+      "expect_fail": [
+        "codex-track-closed"
+      ]
+    },
+    {
+      "name": "428-recovery-state-kept",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-track-",
+      "edits": [
+        {
+          "from": "write_track_state \"$st_issue\" recovered",
+          "to": ":"
+        }
+      ],
+      "expect_fail": [
+        "codex-track-recovery"
+      ]
+    },
+    {
+      "name": "428-gh-fail-silent",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-track-",
+      "edits": [
+        {
+          "from": "  case \"$tracking\" in\n    failed:*) code=3 ;;\n  esac",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "codex-track-gh-fail",
+        "codex-track-state-write-failed",
+        "codex-track-unsafe-gh",
+        "codex-track-unsafe-gh-common-dir"
+      ]
+    },
+    {
+      "name": "428-gh-path-unchecked",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-track-",
+      "edits": [
+        {
+          "from": "gh_path_safe && gh_safe=true",
+          "to": "gh_safe=true"
+        }
+      ],
+      "expect_fail": [
+        "codex-track-unsafe-gh",
+        "codex-track-unsafe-gh-common-dir"
+      ]
+    },
+    {
+      "name": "428-body-stderr-excerpt",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-track-",
+      "edits": [
+        {
+          "from": "  if [ -f \"$run_dir/stderr.log\" ] && grep -qiF -- 'usage limit' \"$run_dir/stderr.log\"; then\n    printf '\\nHint: `usage-limit` — the run'\"'\"'s stderr mentions a usage limit; check the Codex quota and sign-in.\\n'\n  fi",
+          "to": "  if [ -f \"$run_dir/stderr.log\" ]; then\n    cat \"$run_dir/stderr.log\"\n  fi"
+        }
+      ],
+      "expect_fail": [
+        "codex-track-redaction"
+      ]
+    },
+    {
+      "name": "428-tracking-stdin-inherited",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-track-",
+      "edits": [
+        {
+          "from": "      --label needs-human --label no-plan < /dev/null)\"",
+          "to": "      --label needs-human --label no-plan)\""
+        }
+      ],
+      "expect_fail": [
+        "codex-track-closed",
+        "codex-track-first-failure",
+        "codex-track-malformed-state",
+        "codex-track-recovery",
+        "codex-track-redaction",
+        "codex-track-repeat",
+        "codex-track-state-write-failed"
+      ]
+    },
+    {
+      "name": "428-common-dir-unchecked",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-track-",
+      "edits": [
+        {
+          "from": "if [ \"$walk\" -ef \"$top_phys\" ] || [ \"$walk\" -ef \"$common_abs\" ]; then",
+          "to": "if [ \"$walk\" -ef \"$top_phys\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-track-unsafe-gh-common-dir"
+      ]
+    },
+    {
+      "name": "428-malformed-state-narrowed",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-track-",
+      "edits": [
+        {
+          "from": "''|*[!0-9]*) issue=\"\" ;;",
+          "to": "'') issue=\"\" ;;"
+        }
+      ],
+      "expect_fail": [
+        "codex-track-malformed-state"
+      ]
     }
   ]
 }

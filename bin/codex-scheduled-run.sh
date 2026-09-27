@@ -80,12 +80,53 @@
 # bin/harness-stop.sh use — a sandboxed codex invocation can't create this itself, because .git is
 # read-only under workspace-write). Every exit past that point goes through one `finish` function,
 # which writes record.txt (outcome=<token> first, then reason=, started-at=, ended-at=,
-# exit-status=, timeout-seconds=, harness-version=), prunes old records, prints exactly
-# "outcome=<token> reason=<slug> record=<run dir>" as its last stdout line, and exits — 0 for
-# completed/skipped-stop/skipped-busy, 1 for preflight-failed/failed/died-mid-run/timed-out. A run
-# directory that can't be created exits 2 directly, with no record and no launch. record.txt's
-# first line is the stable seam a durable tracking mechanism reads (I3, #428) — this script itself
-# makes no GitHub call.
+# exit-status=, timeout-seconds=, harness-version=), prunes old records, runs the failure-tracking
+# step below and appends its own tracking=<token> line (plus tracking-issue=<n> when one is
+# involved), prints exactly "outcome=<token> reason=<slug> record=<run dir>" as its last stdout
+# line, and exits — 0 for completed/skipped-stop/skipped-busy, 1 for
+# preflight-failed/failed/died-mid-run/timed-out, 3 when the tracking step itself failed (see
+# below, and it overrides 0/1). A run directory that can't be created exits 2 directly, with no
+# record and no launch.
+#
+# FAILURE TRACKING (I3, #428): runs once inside `finish`, after record.txt's first 7 lines are
+# written and prune_runs has run — never on an exit-2 path, and never while a session is running.
+# `gh` is resolved once, at the top of preflight, to one absolute path (gh_bin), and refused
+# (gh_safe=false) if it is relative or its containing directory sits inside the repo toplevel or
+# the git common dir — so a `gh` a sandboxed Codex session could have planted in the workspace it
+# controls is never the one this step executes.
+#   - completed: nothing happens unless the local state below already says streak=failing, in
+#     which case one `gh issue comment` posts a body starting "Recovered: ..." and the state moves
+#     to streak=recovered. A completed run with no failing streak makes no GitHub call at all.
+#   - preflight-failed / failed / died-mid-run / timed-out: with no tracked issue (or one that
+#     can't be read back), one `gh issue create --label needs-human --label no-plan` opens a new
+#     issue and records its number with streak=failing (the labels themselves are never created
+#     here — see bin/setup-labels.sh). With a tracked issue still OPEN and streak=failing, nothing
+#     new is posted (tracking=repeat) — the de-duplication the issue title asks for. With a tracked
+#     issue OPEN and streak=recovered (failing again after a recovery), one `gh issue comment`
+#     posts on it and streak moves back to failing. With the tracked issue CLOSED, a new issue is
+#     opened the same way as the no-state case.
+#   State lives at <abs git-common-dir>/trail-blazer/scheduled-failure-issue, written atomically,
+#   as exactly two lines, `issue=<n>` and `streak=failing|recovered`. It is never inside runs/, so
+#   prune_runs never touches it, and it is never tracked or committed.
+#   The issue body and every comment are built only from values this wrapper itself generated —
+#   the outcome token, the reason slug, the run id (the run directory's own basename), the
+#   started-at/ended-at UTC timestamps, the exit status, and the literal record path
+#   trail-blazer/runs/<run id>/record.txt — never stderr.log's or last-message.md's own text, a
+#   hostname, or an absolute path. A `usage-limit` hint line is added only when stderr.log exists
+#   and contains that phrase (case-insensitive); the phrase itself is never quoted into the body.
+#   The only `gh` subcommands this step ever runs are `issue view`, `issue create` and
+#   `issue comment`, each with `< /dev/null` on stdin and gh's own stderr going straight to this
+#   wrapper's own stderr (the local launchd log) — never `gh pr`, `gh api`, `gh label`,
+#   `issue edit` or `issue close`, and no label is ever removed.
+#   If `gh` can't be resolved safely, or any `gh` call itself fails, record.txt gets one more line,
+#   `tracking=failed:<slug>`, and the whole run exits 3 instead of its usual 0/1 — never silently. A
+#   line to this wrapper's own stderr names the slug, worded per slug: `create-unparsed` and
+#   `state-write-failed` both say GitHub may already have been (or was) updated — a `gh issue
+#   create` that succeeds but can't be locally recorded still gets `tracking-issue=<n>` in
+#   record.txt when the number was parsed, even though the local state file itself is left
+#   untouched (its own atomic write either fully replaces it or leaves it exactly as it was, never
+#   partially); every other slug says GitHub was not updated. The next run retries from whatever
+#   state was actually persisted.
 #
 # PRUNING: only entries directly under runs/ whose name matches <8 digits>T<6 digits>Z-<digits>
 # count; anything else is never touched. After each run, only the newest 100 (lexical order) are
@@ -94,7 +135,10 @@
 #
 # EXIT CODES: 0 = completed/skipped-stop/skipped-busy; 1 = preflight-failed/failed/died-mid-run/
 # timed-out; 2 = usage or environment error with no record at all (CLAUDE_PID set, a bad argument,
-# not inside a git checkout or git missing, or the run directory couldn't be created).
+# not inside a git checkout or git missing, or the run directory couldn't be created); 3 = the
+# outcome above was recorded, but the failure-tracking step (I3, #428) itself could not reach
+# GitHub or persist its own state — see FAILURE TRACKING above. 3 always overrides 0/1 for that
+# run.
 #
 # IF THE WRAPPER ITSELF IS KILLED (TERM or INT — e.g. `launchctl bootout`, an operator, a logout):
 # a top-level trap stops the watchdog and gives the launched codex process the same
@@ -151,7 +195,9 @@ Outcome tokens (first line of the run record's record.txt, and this script's las
 
 Exit codes: 0 = completed/skipped-stop/skipped-busy, 1 = preflight-failed/failed/died-mid-run/
 timed-out, 2 = usage or environment error with no run record at all (CLAUDE_PID set, a bad
-argument, not inside a git checkout, git missing, or the run directory couldn't be created).
+argument, not inside a git checkout, git missing, or the run directory couldn't be created), 3 =
+the outcome was recorded but the GitHub failure-tracking step (I3, #428) itself failed; 3
+overrides 0/1.
 EOF
 }
 
@@ -190,6 +236,11 @@ if [ -z "$common_abs" ]; then
 fi
 cd "$toplevel" || { echo "codex-scheduled-run.sh: could not cd to $toplevel" >&2; exit 2; }
 
+# state_file — the failure-tracking step's own local state (I3, #428): exactly two lines,
+# issue=<n> and streak=failing|recovered. Sits beside runs/ and lock/, never inside runs/ (so
+# prune_runs never sees it), and is never tracked or committed.
+state_file="$common_abs/trail-blazer/scheduled-failure-issue"
+
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 runs_root="$common_abs/trail-blazer/runs"
 if ! mkdir -p "$runs_root" 2>/dev/null; then
@@ -206,6 +257,22 @@ started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 timeout="${TBF_CODEX_RUN_TIMEOUT:-14400}"
 grace="${TBF_CODEX_RUN_KILL_GRACE:-30}"
 rc=""
+ended_at=""
+
+# Failure-tracking globals (I3, #428) — st_issue/st_streak are read_track_state's own output;
+# tracking/tracking_issue are track_outcome's own output, read back by finish. gh_bin/gh_safe are
+# pre-declared here, safe-by-default (empty/false), BEFORE the TERM/INT traps are installed below:
+# preflight step 0 is what actually resolves them, but a signal landing in the window between the
+# traps going live and step 0 running would otherwise reach track_outcome with gh_bin unbound under
+# `set -u`, killing the wrapper with rc 127 and no record/summary line at all instead of the
+# ordinary died-mid-run path.
+st_issue=""
+st_streak=""
+tracking=""
+tracking_issue=""
+TRACK_TITLE="Scheduled Codex runs are failing"
+gh_bin=""
+gh_safe=false
 
 version="unknown"
 if command -v jq >/dev/null 2>&1; then
@@ -268,29 +335,50 @@ EOF
 }
 
 # finish OUTCOME REASON — the SINGLE exit path once the run directory exists: writes record.txt
-# (outcome first), prunes old records, prints the one-line summary, and exits with the outcome's
-# mapped code. Never call `exit` directly past this point. Disables the TERM/INT trap as its own
-# first action: #428 reads record.txt's first line, so a second signal arriving while finish is
-# still writing it or pruning must not re-enter on_wrapper_signal and overwrite the outcome or the
-# exit code with a signal-death — this run's own outcome is already decided by the time finish is
-# called, and this bracket protects committing it, not the decision itself.
+# (outcome first), prunes old records, runs the failure-tracking step (I3, #428) and appends its
+# own tracking=<token> line, prints the one-line summary, and exits with the outcome's mapped code
+# (3 when tracking itself failed, overriding 0/1). Never call `exit` directly past this point.
+# Disables the TERM/INT trap as its own first action: this run's own outcome is already decided by
+# the time finish is called, so a second signal arriving while finish is still writing record.txt,
+# pruning, or tracking must not re-enter on_wrapper_signal and overwrite the outcome or the exit
+# code with a signal-death — this bracket protects committing the decision, not the decision
+# itself.
 finish() {
   trap '' TERM INT
-  local outcome="$1" reason="$2" ended code
-  ended="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local outcome="$1" reason="$2" code
+  ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   {
     printf 'outcome=%s\n' "$outcome"
     printf 'reason=%s\n' "$reason"
     printf 'started-at=%s\n' "$started_at"
-    printf 'ended-at=%s\n' "$ended"
+    printf 'ended-at=%s\n' "$ended_at"
     printf 'exit-status=%s\n' "${rc:-}"
     printf 'timeout-seconds=%s\n' "${timeout:-}"
     printf 'harness-version=%s\n' "$version"
   } > "$run_dir/record.txt"
   prune_runs
+  track_outcome "$outcome" "$reason"
+  {
+    printf 'tracking=%s\n' "$tracking"
+    [ -n "$tracking_issue" ] && printf 'tracking-issue=%s\n' "$tracking_issue"
+  } >> "$run_dir/record.txt"
   case "$outcome" in
     completed|skipped-stop|skipped-busy) code=0 ;;
     *) code=1 ;;
+  esac
+  case "$tracking" in
+    failed:*) code=3 ;;
+  esac
+  case "$tracking" in
+    failed:state-write-failed)
+      echo "codex-scheduled-run.sh: tracking failed (state-write-failed): GitHub WAS updated, but the local tracking state could not be saved; the run record is kept at $run_dir" >&2
+      ;;
+    failed:create-unparsed)
+      echo "codex-scheduled-run.sh: tracking failed (create-unparsed): an issue may already have been created on GitHub, but its number could not be parsed; the run record is kept at $run_dir" >&2
+      ;;
+    failed:*)
+      echo "codex-scheduled-run.sh: tracking failed (${tracking#failed:}): GitHub was not updated; the run record is kept at $run_dir" >&2
+      ;;
   esac
   echo "outcome=$outcome reason=$reason record=$run_dir"
   exit "$code"
@@ -325,7 +413,280 @@ on_wrapper_signal() {
 trap 'on_wrapper_signal 15' TERM
 trap 'on_wrapper_signal 2' INT
 
+# --- failure tracking on GitHub (I3, #428) --------------------------------------------------
+#
+# Everything below is called only from `finish`, after record.txt already has its outcome
+# committed to disk. Every `gh` call is a bare `"$gh_bin" ... < /dev/null`, never piped, with gh's
+# own stderr going straight to this wrapper's stderr — never captured into a value this script
+# then reuses.
+
+# gh_path_safe — true only when $gh_bin is a non-empty absolute path whose containing directory,
+# or any of ITS ancestors up to /, is not the same file as the repo toplevel or the git common dir:
+# a `gh` a sandboxed Codex session could have planted under either must never be the one this step
+# executes. Compares by IDENTITY (`-ef`, a bash 3.2 builtin test), never by text: bash 3.2's `pwd
+# -P` does not canonicalise case on a case-insensitive-but-case-preserving filesystem (macOS/APFS
+# default), and a firmlink (`/System/Volumes/Data/...` vs `/...`) is also two different path
+# strings for the same directory — either one would defeat a plain string-prefix compare, letting a
+# same-directory `gh` spelled with different case, or reached via the firmlink, slip through as
+# "safe" when it is not. `-ef` resolves both operands to their real
+# device+inode before comparing, so case and firmlink spelling are irrelevant. Builtins and
+# parameter expansion only otherwise — no dirname, readlink or realpath — so this stays
+# bash-3.2/BSD portable.
+gh_path_safe() {
+  case "$gh_bin" in
+    /*) : ;;
+    *) return 1 ;;
+  esac
+  local ghdir="${gh_bin%/*}"
+  [ -n "$ghdir" ] || ghdir="/"
+  local d
+  d="$(cd "$ghdir" 2>/dev/null && pwd -P)"
+  [ -n "$d" ] || return 1
+  [ -n "$top_phys" ] || return 1
+  [ -n "$common_abs" ] || return 1
+  local walk="$d"
+  while :; do
+    if [ "$walk" -ef "$top_phys" ] || [ "$walk" -ef "$common_abs" ]; then
+      return 1
+    fi
+    [ "$walk" = "/" ] && break
+    walk="${walk%/*}"
+    [ -n "$walk" ] || walk="/"
+  done
+  return 0
+}
+
+# read_track_state — sets the globals st_issue/st_streak from $state_file, both left empty when
+# the file is absent OR unreadable (a non-digit issue=, an unknown streak=, or a missing key). An
+# unreadable (but present) file also gets a stderr warning; a merely absent file does not, since
+# "no tracked issue yet" is the ordinary first-failure case, not a problem.
+read_track_state() {
+  st_issue=""
+  st_streak=""
+  [ -f "$state_file" ] || return 0
+  local line issue="" streak=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      issue=*)
+        issue="${line#issue=}"
+        case "$issue" in
+          ''|*[!0-9]*) issue="" ;;
+        esac
+        ;;
+      streak=*)
+        streak="${line#streak=}"
+        case "$streak" in
+          failing|recovered) : ;;
+          *) streak="" ;;
+        esac
+        ;;
+    esac
+  done < "$state_file"
+  if [ -n "$issue" ] && [ -n "$streak" ]; then
+    st_issue="$issue"
+    st_streak="$streak"
+  else
+    echo "codex-scheduled-run.sh: warning: unreadable tracking state file $state_file — treating as absent" >&2
+  fi
+}
+
+# write_track_state N STREAK — writes $state_file atomically (a per-process temp file, then `mv
+# -f`), returning 1 on any failure so the caller can report tracking=failed:state-write-failed
+# rather than silently leaving the on-disk state stale.
+write_track_state() {
+  local n="$1" streak="$2" tmp
+  mkdir -p "$common_abs/trail-blazer" 2>/dev/null
+  tmp="$state_file.tmp.$$"
+  if { printf 'issue=%s\n' "$n"; printf 'streak=%s\n' "$streak"; } > "$tmp" 2>/dev/null \
+      && mv -f "$tmp" "$state_file" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null
+  return 1
+}
+
+# track_body OUTCOME REASON [LEAD] — prints the issue/comment body, built only from values this
+# wrapper itself generated: $outcome, $reason, the run id (${run_dir##*/}, never the full
+# $run_dir), $started_at, $ended_at, ${rc:-none}, and the literal path
+# trail-blazer/runs/<run id>/record.txt. Never reads stderr.log's or last-message.md's own text
+# into the body (only a boolean grep on stderr.log, below), never calls uname, and never
+# interpolates $run_dir/$toplevel/$common_abs themselves.
+track_body() {
+  local outcome="$1" reason="$2" lead="${3:-}" id
+  id="${run_dir##*/}"
+  [ -n "$lead" ] && printf '%s\n\n' "$lead"
+  printf 'A scheduled `codex exec` run (bin/codex-scheduled-run.sh) did not complete.\n\n'
+  printf -- '- Outcome: `%s`\n' "$outcome"
+  printf -- '- Reason: `%s`\n' "$reason"
+  printf -- '- Run id: `%s`\n' "$id"
+  printf -- '- Started (UTC): %s\n' "$started_at"
+  printf -- '- Ended (UTC): %s\n' "$ended_at"
+  printf -- '- Exit status: `%s`\n' "${rc:-none}"
+  printf -- '- Record: `trail-blazer/runs/%s/record.txt` under `git rev-parse --git-common-dir` on the machine that ran it.\n' "$id"
+  if [ -f "$run_dir/stderr.log" ] && grep -qiF -- 'usage limit' "$run_dir/stderr.log"; then
+    printf '\nHint: `usage-limit` — the run'"'"'s stderr mentions a usage limit; check the Codex quota and sign-in.\n'
+  fi
+  printf '\nClose this issue once handled; the next failure after a success opens or reuses one.\n'
+}
+
+# track_create OUTCOME REASON — opens a new tracking issue and records it with streak=failing.
+# Parses the created issue's number off the LAST stdout line matching */issues/<digits> (a `while
+# read` plus `case`, no pipe into anything). A create that succeeds but can't be parsed, or a
+# failed state write after it, is reported distinctly so the maintainer isn't left thinking no
+# issue exists when one may already have been created.
+track_create() {
+  local outcome="$1" reason="$2" out gh_rc n line
+  out="$("$gh_bin" issue create --title "$TRACK_TITLE" --body "$(track_body "$outcome" "$reason")" \
+      --label needs-human --label no-plan < /dev/null)"
+  gh_rc=$?
+  if [ "$gh_rc" -ne 0 ]; then
+    tracking="failed:create-failed"
+    echo "codex-scheduled-run.sh: tracking: gh issue create failed — check that the needs-human/no-plan labels exist (bin/setup-labels.sh)" >&2
+    return
+  fi
+  n=""
+  while IFS= read -r line; do
+    case "$line" in
+      */issues/*[0-9])
+        n="${line##*/issues/}"
+        case "$n" in
+          ''|*[!0-9]*) n="" ;;
+        esac
+        ;;
+    esac
+  done <<EOF
+$out
+EOF
+  if [ -z "$n" ]; then
+    tracking="failed:create-unparsed"
+    echo "codex-scheduled-run.sh: tracking: could not parse the created issue number from gh's own output — an issue may already have been created" >&2
+    return
+  fi
+  echo "codex-scheduled-run.sh: tracking: created issue #$n (needs-human)" >&2
+  if write_track_state "$n" failing; then
+    tracking="created"
+    tracking_issue="$n"
+  else
+    tracking="failed:state-write-failed"
+    tracking_issue="$n"
+    echo "codex-scheduled-run.sh: tracking: issue #$n was created on GitHub, but the local tracking state could not be saved — the next run will not know about it and may create another" >&2
+  fi
+}
+
+# track_outcome OUTCOME REASON — the failure-tracking step itself (I3, #428). Sets the globals
+# $tracking and $tracking_issue, read back by `finish`. Every branch that can call `gh` checks the
+# gh guard (empty gh_bin, or gh_safe=false) first and returns without executing anything when it
+# fails — the OPEN)/transition-if/streak=recovered-write/exit-code lines below are each kept on
+# their own line, on purpose, so a mutant touching any one of them stays textually distinct from
+# the others.
+track_outcome() {
+  local outcome="$1" reason="$2"
+  tracking=none
+  tracking_issue=""
+  case "$outcome" in
+    skipped-stop|skipped-busy)
+      return
+      ;;
+    completed)
+      read_track_state
+      if [ "$st_streak" != failing ]; then
+        return
+      fi
+      if [ -z "$gh_bin" ]; then
+        tracking="failed:gh-not-found"
+        return
+      fi
+      if ! $gh_safe; then
+        tracking="failed:gh-unsafe-path"
+        return
+      fi
+      local body gh_rc
+      body="Recovered: scheduled Codex run \`${run_dir##*/}\` completed (started $started_at, ended $ended_at UTC); record \`trail-blazer/runs/${run_dir##*/}/record.txt\`."
+      "$gh_bin" issue comment "$st_issue" --body "$body" >/dev/null < /dev/null
+      gh_rc=$?
+      if [ "$gh_rc" -ne 0 ]; then
+        tracking="failed:comment-failed"
+        return
+      fi
+      if write_track_state "$st_issue" recovered; then
+        tracking="recovered"
+        tracking_issue="$st_issue"
+      else
+        tracking="failed:state-write-failed"
+        tracking_issue="$st_issue"
+        echo "codex-scheduled-run.sh: tracking: the recovery comment was posted on issue #$st_issue, but the local tracking state could not be saved" >&2
+      fi
+      return
+      ;;
+    preflight-failed|failed|died-mid-run|timed-out)
+      : ;;
+    *)
+      return
+      ;;
+  esac
+
+  if [ -z "$gh_bin" ]; then
+    tracking="failed:gh-not-found"
+    return
+  fi
+  if ! $gh_safe; then
+    tracking="failed:gh-unsafe-path"
+    return
+  fi
+
+  read_track_state
+  if [ -z "$st_issue" ] || [ -z "$st_streak" ]; then
+    track_create "$outcome" "$reason"
+    return
+  fi
+
+  local st gh_rc
+  st="$("$gh_bin" issue view "$st_issue" --json state --jq .state < /dev/null)"
+  gh_rc=$?
+  if [ "$gh_rc" -ne 0 ]; then
+    tracking="failed:view-failed"
+    return
+  fi
+  case "$st" in
+    OPEN)
+      if [ "$st_streak" = failing ]; then
+        tracking="repeat"
+        return
+      fi
+      local gh_rc2
+      "$gh_bin" issue comment "$st_issue" --body "$(track_body "$outcome" "$reason" 'Failing again after a recovery.')" >/dev/null < /dev/null
+      gh_rc2=$?
+      if [ "$gh_rc2" -ne 0 ]; then
+        tracking="failed:comment-failed"
+        return
+      fi
+      if write_track_state "$st_issue" failing; then
+        tracking="commented"
+        tracking_issue="$st_issue"
+      else
+        tracking="failed:state-write-failed"
+        tracking_issue="$st_issue"
+        echo "codex-scheduled-run.sh: tracking: the comment was posted on issue #$st_issue, but the local tracking state could not be saved" >&2
+      fi
+      ;;
+    CLOSED)
+      track_create "$outcome" "$reason"
+      ;;
+    *)
+      tracking="failed:view-unexpected"
+      ;;
+  esac
+}
+
 # --- preflight -----------------------------------------------------------------------------
+
+# 0. Resolve and pin `gh` for the failure-tracking step (I3, #428), before any session exists —
+# the same PATH launchd's own minimal environment resolves at step 2 below. gh_safe stays false
+# (refusing the tracking step outright) unless gh_path_safe finds an absolute path outside both the
+# repo toplevel and the git common dir.
+gh_bin="$(command -v gh 2>/dev/null || true)"
+top_phys="$(cd "$toplevel" 2>/dev/null && pwd -P)"
+gh_path_safe && gh_safe=true
 
 # 1. TBF_CODEX_RUN_TIMEOUT / TBF_CODEX_RUN_KILL_GRACE — digits-only and > 0.
 case "$timeout" in
