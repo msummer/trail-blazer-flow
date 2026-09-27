@@ -34,14 +34,18 @@ jobs:
       - run: bash dev/stop-tests.sh
       - run: bash dev/mutant-driver.sh
         if: github.event_name != 'pull_request'
+        # The driver's suites spend most of their wall clock waiting, not computing, so it runs
+        # more jobs than the runner has cores.
+        env:
+          MUTANT_DRIVER_JOBS: 8
       - run: bash dev/mutant-driver-tests.sh
 
   selfcheck-macos:
     # Post-merge and nightly only (#365) — never a pull_request check. Keep this job LAST in the
     # file: dev/selfcheck-tests.sh's 4.9-uneven-jobs case deletes the workflow's final line, which
     # must therefore stay a `- run:` step line — see the mutant-driver step pair below, whose `if:`
-    # sibling key on the step BEFORE the last is why the last step itself must be the plain
-    # `dev/mutant-driver-tests.sh` run, not the gated `dev/mutant-driver.sh` one.
+    # and `env:` sibling keys on the step BEFORE the last are why the last step itself must be the
+    # plain `dev/mutant-driver-tests.sh` run, not the gated `dev/mutant-driver.sh` one.
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 50
@@ -66,6 +70,10 @@ jobs:
       - run: bash dev/planning-tests.sh
       - run: bash dev/lock-tests.sh
       - run: bash dev/stop-tests.sh
+      # Nightly and manual dispatch only, not post-merge: the ubuntu job already runs the full
+      # driver after every merge, and the registry's recorded sets are the same on both shells.
       - run: bash dev/mutant-driver.sh
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          MUTANT_DRIVER_JOBS: 8
       - run: bash dev/mutant-driver-tests.sh
