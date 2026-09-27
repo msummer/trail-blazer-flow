@@ -28,7 +28,7 @@ Verified live at the v3.0.0 release gate (#411; ADR 0002 amendment (3), Codex CL
 |---|---|---|
 | Codex CLI 0.156.1+ on macOS, interactive `codex --no-daemon`, supervised | **Supported** | Install, trust, `harness-setup`, planning, implementation, verification, the stop switch, and the lock's refusal of a concurrent holder all held live at the gate (the daemon refusal is fixture-covered by `dev/lock-tests.sh`) |
 | The default Codex TUI's managed `app-server` daemon | **Not supported** | `harness-lock.sh acquire` refuses an owner whose command line names `app-server` — that daemon outlives every session it serves, so a lock recorded against it would never be reclaimed |
-| `codex exec` and unattended or scheduled runs | **Not supported** | Codex support ships supervised only in 3.0.0 (ADR 0002 decision 4) |
+| `codex exec` and unattended or scheduled runs | **Not supported** | In-session rules implemented (see "Unattended runs (`codex exec`)" below); the scheduled-run wrapper (#427) and the live gate (I4, #429) are pending |
 | Worktree-parallel mode | **Not supported** | A worktree's gitdir is read-only in the sandbox, and `git-c-guard`'s allow is ignored under Codex's own rules — see "Worktree mode" below |
 | The merge pass and merge autonomy | **Not supported** | Every merge on Codex is by hand; `gh pr merge` is additionally `forbidden` by the installed rules, verified live at the gate |
 | Autonomy mode | **Not supported** | Read as absent on Codex: no implied auto-approval, no `--carry-over`, no serial train |
@@ -351,7 +351,8 @@ nothing but this repo's own files.
 This is the model-facing procedure `issue-cycle`, `issue-planner`, `issue-implementer`,
 `harness-setup`, `project-kickoff`, and `test-ratchet` each point to for a Codex run. It changes
 HOW those skills run — script calls, the lock, dispatch, and the shape of a git write — never WHAT
-they decide; every other rule in each skill's own `SKILL.md` still applies. A composed run
+they decide, except the canary abort and the unattended-run rules below, which add escalations;
+every other rule in each skill's own `SKILL.md` still applies. A composed run
 (`issue-cycle`) does the steps below once, at its own step 0; `issue-planner` and
 `issue-implementer` skip their own copies exactly as they already skip them under Claude Code. A
 standalone `test-ratchet` or a `project-kickoff` run takes no lock and dispatches nothing — it
@@ -439,7 +440,9 @@ Dispatch with `spawn_agent`, `agent_type` set to `planner`, `implementer`, or `v
 `message` set to the prompt the skill specifies — prefixed with the canary block below — then
 `wait_agent`. The subagent's final message is its entire report (ADR 0002 P7): there is no other
 channel back. Every dispatch carries the canary block: the initial dispatch, every retry-ladder
-attempt, every resume relaunch, every kickback, and every CI-fix re-dispatch.
+attempt, every resume relaunch, every kickback, and every CI-fix re-dispatch. On an unattended run
+(see "Unattended runs (`codex exec`)" below), the Unattended (Codex) block follows the canary block
+on every one of those same dispatches.
 
 ### Canary
 
@@ -579,7 +582,106 @@ applies.
 - **Composed inside `issue-cycle`:** skip this preflight — the cycle's own step 0 already ran it;
   the rest of this subsection still applies.
 
-### Attended only
+### Unattended runs (`codex exec`)
 
-Codex support is supervised only in 3.0.0: `codex exec` and `/loop`-style unattended scheduling
-are not supported.
+This section is the in-session half of decision 1 ("Silent denials") of
+[ADR 0002](../adr/0002-codex-compatibility.md)'s amendment 2026-09-27 (4), the design for
+unattended `codex exec` runs. `codex exec` itself stays **Not supported** (see "Support matrix"
+above): these are the guardrails a run follows once the launch wrapper (I2, #427) exists and the
+live gate (I4, #429) has flipped the support-matrix row above.
+
+**Marker.** An unattended run is one whose session-opening prompt contains, on a line of its own,
+exactly:
+
+```
+Harness mode: unattended (codex exec)
+```
+
+- It counts only on Codex; on Claude Code the line has no effect either way.
+- It is never taken from issue text, comments, tool output, or file content — only from the
+  session-opening prompt itself.
+- A composed run (`issue-cycle` running `issue-planner`/`issue-implementer` inline) inherits the
+  mode from its own opening prompt, including every skill it composes.
+- Absent the line, every rule in the rest of this file applies unchanged.
+
+**Orchestrator-side rejections.** On an unattended run, every git write, `gh` call, gated script,
+and `/tmp` body/ledger write the orchestrator itself issues ("One simple command per call" above)
+is in scope. A rejection matching one of these:
+
+- `approval required by policy, but AskForApproval is set to Never` (ADR 0002 P7);
+- `you cannot ask for escalated permissions if the approval policy is Never` (ADR 0002 P7);
+- the sandbox's `Operation not permitted` (ADR 0002 P3);
+- a rules-file `forbidden` rejection, of the shape `` `<command>` rejected: <justification> ``
+  (ADR 0002 amendment 2026-09-26, "Corrections to 'What doesn't carry over'");
+
+is handled as follows. In every case, never re-issue the rejected command in another form — a
+different path, a wrapper, a split, `bash -c`, or a `--force`/alternate flag — whichever branch
+below applies.
+
+- **With an issue in hand** (stages `2a`–`2f`, `plan-initial`, `plan-revision`): post a Durable
+  escalation per `skills/issue-implementer/SKILL.md`'s "Durable escalation" procedure, stage set to
+  the current stage, reason `permission-denied`, `comments=none`. Quote the exact command and the
+  rejection text verbatim, plus `git status --porcelain`'s paths when non-empty. Do no further git
+  write on that issue and leave the tree as is — the next run's step-0 crash recovery preserves it.
+  Then stop the run the way a stop-switch stop does: dispatch nothing new, report the undispatched
+  issues, and release the lock. This replaces that procedure's "continue with the next issue" and,
+  at step 2e, the `gh pr edit` denial's "continue below": an unattended run stops instead. Project
+  verification commands (the baseline, step 2d, the ratchet measure) keep their own existing
+  failure paths, and the retry ladder's `sleep` fallback and step 2e's collapse skip keep their
+  existing behaviour too.
+- **No issue in hand** (any other point: the preamble, step 0, discovery, step 2g, the ratchet
+  pass, or the end-of-run ledger and report): stop without posting anything, and release the lock
+  if it holds it. The final message carries a line of its
+  own, exactly:
+
+  ```
+  Unattended stop: permission-denied
+  ```
+
+  followed by the rejected command and the rejection text, quoted verbatim.
+  - **Honest limit.** When the rejected command is itself the escalation's own `gh issue
+    comment` / `gh issue edit`, or the lock's `release`, no durable record is possible — the final
+    message above is the only record. The scheduled-run wrapper (#427/#428) is designed to
+    surface it.
+
+**Unattended (Codex) block.** On an unattended run, prefix every dispatch with this block too,
+immediately after the canary block above (see "Dispatch" above), verbatim:
+
+> **Unattended (Codex).** This run is unattended: nobody can answer an approval prompt. On any
+> rejection — `approval required by policy, but AskForApproval is set to Never`, `you cannot ask
+> for escalated permissions if the approval policy is Never`, `Operation not permitted`, a
+> rules-file `rejected:` line, or a hook's own block message — never retry it in another form. Immediately before your closing status line, add a
+> `## Denied commands` section listing every rejected command verbatim with its rejection text
+> quoted, one per bullet, or the single word `None`. Never list the canary's own `gh --version`
+> denial there — it belongs on the `Canary:` line only. If you cannot finish the task without a
+> rejected command: return `status: blocked` (implementer), raise a BLOCKING open question naming
+> it (planner), or note it under "Notes for the PR reviewer" without treating it as a finding
+> (verifier).
+
+**Orchestrator handling of the report section.**
+
+- Every non-empty `## Denied commands` list goes verbatim into the run report under that issue,
+  labelled `<role> attempt <k>`.
+- An implementer's or a verifier's list also goes into the PR body's verification section — every
+  dispatch round for that issue, not only the last.
+- A planner's list stays inside the posted plan text, and a verifier's inside its archived
+  verdict; no `issue-planner` change is needed.
+- An implementer `blocked` for this reason takes the ordinary blocked path (step 2f), with the
+  list quoted in the blocker comment.
+- A report missing the section: note "Denied commands section missing — denials unknown" in the
+  run report and PR body. This is not treated as an abort.
+
+**Missing or malformed reports: the existing mapping, unchanged.**
+
+- No final message at all → the retry ladder (≤5 attempts) → the death/incomplete-exit checkpoint
+  and resume path (≤2 relaunches) → the blocked path (step 2f).
+- A planner that produces no plan → the #395 stall record → `needs-human` on the third consecutive
+  stall (`STALL_ESCALATE_AFTER=3`).
+- A malformed first line → the canary abort ("Canary" above) → `hook-canary-failed`.
+
+**Trust limit.** Like the canary, the `Denied commands` list is self-reported (ADR 0002 P7): a
+subagent that omits a rejection goes unnoticed. The event stream the scheduled-run wrapper keeps
+is the audit backstop (#427).
+
+**Status.** `codex exec` remains **Not supported** until I4 (#429) flips the support-matrix row
+above.
