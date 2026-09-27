@@ -3506,6 +3506,12 @@ build_stub_sched_codex() {
     printf 'mode=%q\n' "$mode"
     printf 'real_sleep=%q\n' "$real_sleep"
     cat <<'STUBEOF'
+# The TERM-ignoring modes set that disposition BEFORE codex.pid exists: a case sends its TERM as
+# soon as codex.pid appears, and a TERM landing before the trap would end the stub without the
+# wrapper's own KILL ever being needed.
+case "$mode" in
+  hang-noterm|hang-noterm-long) trap '' TERM ;;
+esac
 printf '%s' "$$" > "$dir/codex.pid"
 printf '%s' "$#" > "$dir/argc"
 i=1
@@ -3534,8 +3540,10 @@ case "$mode" in
   forwarder)
     "$real_sleep" 300 &
     fchild=$!
-    printf '%s' "$fchild" > "$dir/forwarder-child.pid"
+    # The trap goes in BEFORE forwarder-child.pid exists, for the same reason as the TERM-ignoring
+    # modes above: a case sends its TERM as soon as that file appears.
     trap 'kill "$fchild" 2>/dev/null; exit 0' TERM
+    printf '%s' "$fchild" > "$dir/forwarder-child.pid"
     wait "$fchild"
     exit 0
     ;;
@@ -3571,11 +3579,9 @@ case "$mode" in
     exec "$real_sleep" 300
     ;;
   hang-noterm)
-    trap '' TERM
     exec "$real_sleep" 20
     ;;
   hang-noterm-long)
-    trap '' TERM
     exec "$real_sleep" 300
     ;;
 esac

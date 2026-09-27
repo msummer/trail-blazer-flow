@@ -20,8 +20,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 - CI: `selfcheck-macos` no longer runs `dev/mutant-driver.sh` after each merge, only nightly and
   on manual dispatch; the ubuntu job still runs it post-merge. Both jobs now run the driver with
-  `MUTANT_DRIVER_JOBS=8`, since its suites are mostly waiting rather than computing. No consumer
-  step.
+  `MUTANT_DRIVER_JOBS=8`, since its suites are mostly waiting rather than computing. The
+  scheduled-run codex stub in `dev/doctor-tests.sh` now sets its TERM handling before writing the
+  pid file a case waits on, closing a race that let a slow runner end the stub with TERM alone.
+  No consumer step.
 - CI: the post-merge/nightly job ceilings rise, `selfcheck-macos` to 50 minutes and `selfcheck`'s
   non-PR ceiling to 35. The full mutant driver grew with this release's hook and scheduled-run
   records, and the macOS job hit its old ceiling after #427 merged. Pull-request ceilings are
