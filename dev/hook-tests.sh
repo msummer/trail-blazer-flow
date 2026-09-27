@@ -1079,14 +1079,17 @@ case_ab_pc_deny_dbracket_timing() {
   # Wall-clock proof: an overlapping tail re-split()s almost the whole remaining record once per
   # earlier `]]`; disjoint tails bound each emit_segment() walk to its own cut segment instead, so
   # this ~200KB, 64-`]]` shape resolves in well under the 5s bound below (measured via bash SECONDS,
-  # timing only the hook invocation itself, not payload construction).
+  # timing only the hook invocation itself, not payload construction). The command reaches jq on
+  # stdin (printf is a builtin), never as a --arg: Linux refuses any single exec argument over its
+  # per-argument limit, which this command exceeds, so mk_agent_cmd would build an empty payload
+  # there and the hook would see no command at all.
   local flood="x" i
   for i in $(seq 1 64); do flood="${flood} ]] tee"; done
   local filler
   filler="$(printf ' a%.0s' $(seq 1 100000))"
   local payload
-  payload="$(mk_agent_cmd 'implementer' "${flood}${filler}
-git push")"
+  payload="$(printf '%s\ngit push' "${flood}${filler}" \
+    | jq -Rs '{tool_name: "Bash", agent_type: "implementer", tool_input: {command: .}}')"
   local start=$SECONDS elapsed
   run_boundary "$payload"
   elapsed=$((SECONDS - start))
