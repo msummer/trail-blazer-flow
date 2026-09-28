@@ -7,7 +7,7 @@ description: >
   pass, then returns a structured report. Use when an approved plan needs to be turned into
   working code on an already-prepared branch.
 tools: Read, Write, Edit, Grep, Glob, Bash
-model: claude-sonnet-5
+model: claude-sonnet-5-5
 ---
 
 # Role

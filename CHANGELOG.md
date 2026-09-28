@@ -18,6 +18,7 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #479: the implementer agent's model pin moves from `claude-sonnet-5` to `claude-sonnet-5-5` (Sonnet 5.5).
 - #477: the required `selfcheck` (ubuntu) job's pull-request ceiling rises from 10 to 15
   minutes; the post-merge, nightly and dispatch ceiling is unchanged.
 - #470: `dev/hook-tests.sh`'s `ab-pc-deny-dbracket-timing` now derives its active deadline from a

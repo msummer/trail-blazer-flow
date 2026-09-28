@@ -51,7 +51,7 @@ work and hands focused jobs to three subagents:
 | Agent | Model | Job |
 |---|---|---|
 | **planner** | Opus 5.5 | Reads the codebase (read-only) and writes a plan for one issue: acceptance criteria, steps, risks, open questions |
-| **implementer** | Sonnet 5 | Writes the code and tests for an approved plan. It cannot run `git` or `gh` (a hook enforces this) |
+| **implementer** | Sonnet 5.5 | Writes the code and tests for an approved plan. It cannot run `git` or `gh` (a hook enforces this) |
 | **verifier** | Opus 5.5 | Reviews the diff against the plan with fresh context, including a small mutation test of the new tests. Nothing is pushed until it passes |
 
 **You have two gates: approving the plan and merging the PR.** By default both are yours. Each one
@@ -77,7 +77,9 @@ Anything specific to your project lives in your repo:
 ## Prerequisites
 
 - **Claude Code 2.1.85 or newer**, on a Pro or Max subscription. Your account needs access to the
-  models the agents pin: `claude-opus-5-5` and `claude-sonnet-5`.
+  models the agents pin: `claude-opus-5-5` and `claude-sonnet-5-5`. A Claude Code release older
+  than 2.1.284 doesn't recognise `claude-sonnet-5-5`: it logs an `unrecognized_model` notice and
+  still sends the ID to the API as-is.
 - **`gh`** (GitHub CLI), authenticated (`gh auth status`).
 - **`jq`** and **`bash`**. macOS and Linux work out of the box. On Windows, run Claude Code under
   Git Bash or WSL (see [Windows](#windows)).
