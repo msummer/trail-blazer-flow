@@ -18,6 +18,8 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #477: the required `selfcheck` (ubuntu) job's pull-request ceiling rises from 10 to 15
+  minutes; the post-merge, nightly and dispatch ceiling is unchanged.
 - #470: `dev/hook-tests.sh`'s `ab-pc-deny-dbracket-timing` now derives its active deadline from a
   same-run, same-length, single-`]]` control measurement (a floor, else a multiple of the control)
   instead of a fixed 15s, so driver load no longer flakes the unmutated walk past a bound sized for
