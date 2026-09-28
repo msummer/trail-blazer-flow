@@ -1657,8 +1657,8 @@
       "filter": "codex-track-",
       "edits": [
         {
-          "from": "      --label needs-human --label no-plan < /dev/null)\"",
-          "to": "      --label needs-human --label no-plan)\""
+          "from": "\"$@\" < /dev/null > \"$file\" &",
+          "to": "\"$@\" <&0 > \"$file\" &"
         }
       ],
       "expect_fail": [
@@ -1905,6 +1905,268 @@
       ],
       "expect_fail": [
         "codex-path-relative"
+      ]
+    },
+    {
+      "name": "443-bound-deadline-ignored",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "  local gh_deadline=$((SECONDS + gh_timeout))\n  while [ \"$SECONDS\" -lt \"$gh_deadline\" ] && kill -0 \"$bounded_pid\" 2>/dev/null; do",
+          "to": "  local gh_deadline=$((SECONDS + gh_timeout))\n  while [ 0 -lt 1 ] && kill -0 \"$bounded_pid\" 2>/dev/null; do"
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-stop-hang",
+        "codex-ghbound-track-create",
+        "codex-ghbound-track-view",
+        "codex-ghbound-track-comment"
+      ]
+    },
+    {
+      "name": "443-bound-waits-full",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "  while [ \"$SECONDS\" -lt \"$gh_deadline\" ] && kill -0 \"$bounded_pid\" 2>/dev/null; do",
+          "to": "  while [ \"$SECONDS\" -lt \"$gh_deadline\" ]; do"
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-env",
+        "codex-ghbound-wrapper-killed"
+      ]
+    },
+    {
+      "name": "443-bound-kill-skipped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "    kill -0 \"$bounded_pid\" 2>/dev/null && kill -KILL \"$bounded_pid\" 2>/dev/null  # bounded_run's own post-grace escalation",
+          "to": "    kill -0 \"$bounded_pid\" 2>/dev/null && :  # bounded_run's own post-grace escalation"
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-track-create",
+        "codex-ghbound-track-view",
+        "codex-ghbound-track-comment"
+      ]
+    },
+    {
+      "name": "443-stop-timeout-unmapped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "  stop_rc=4\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-stop-hang"
+      ]
+    },
+    {
+      "name": "443-create-timeout-unmapped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "  if $bounded_timed_out; then\n    tracking=\"failed:create-timeout\"",
+          "to": "  if false; then\n    tracking=\"failed:create-timeout\""
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-track-create"
+      ]
+    },
+    {
+      "name": "443-view-timeout-unmapped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "  if $bounded_timed_out; then\n    tracking=\"failed:view-timeout\"",
+          "to": "  if false; then\n    tracking=\"failed:view-timeout\""
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-track-view"
+      ]
+    },
+    {
+      "name": "443-comment-timeout-unmapped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "      bounded_run capture \"$run_dir/gh.out\" \"$gh_bin\" issue comment \"$st_issue\" --body \"$body\"\n      if $bounded_timed_out; then",
+          "to": "      bounded_run capture \"$run_dir/gh.out\" \"$gh_bin\" issue comment \"$st_issue\" --body \"$body\"\n      if false; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-track-comment"
+      ]
+    },
+    {
+      "name": "443-refail-comment-timeout-unmapped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "      bounded_run capture \"$run_dir/gh.out\" \"$gh_bin\" issue comment \"$st_issue\" \\\n          --body \"$(track_body \"$outcome\" \"$reason\" 'Failing again after a recovery.')\"\n      if $bounded_timed_out; then",
+          "to": "      bounded_run capture \"$run_dir/gh.out\" \"$gh_bin\" issue comment \"$st_issue\" \\\n          --body \"$(track_body \"$outcome\" \"$reason\" 'Failing again after a recovery.')\"\n      if false; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-track-comment"
+      ]
+    },
+    {
+      "name": "443-wrapper-bounded-orphaned",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "  [ -n \"${bounded_pid:-}\" ] && kill -KILL \"$bounded_pid\" 2>/dev/null  # on_wrapper_signal's own bounded-child kill\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-wrapper-killed"
+      ]
+    },
+    {
+      "name": "443-gh-timeout-default",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "gh_timeout_raw=\"${TBF_CODEX_GH_TIMEOUT:-120}\"",
+          "to": "gh_timeout_raw=\"${TBF_CODEX_GH_TIMEOUT:-0}\""
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-env"
+      ]
+    },
+    {
+      "name": "443-gh-timeout-fallback",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "gh_timeout=120\n",
+          "to": "gh_timeout=\"$gh_timeout_raw\"\n"
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-env"
+      ]
+    },
+    {
+      "name": "443-gh-timeout-leading-zero-accepted",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "case \"$gh_timeout_raw\" in\n  0?*) finish preflight-failed bad-timeout ;;\nesac\ncase \"$gh_timeout_raw\" in\n  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;\nesac",
+          "to": "case \"$gh_timeout_raw\" in\n  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;\nesac"
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-env"
+      ]
+    },
+    {
+      "name": "443-comment-timeout-wording-lost",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "failed:create-timeout|failed:comment-timeout)",
+          "to": "failed:create-timeout)"
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-track-comment"
+      ]
+    },
+    {
+      "name": "443-gh-out-kept",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-ghbound-",
+      "edits": [
+        {
+          "from": "    bounded_out=\"$(cat \"$file\" 2>/dev/null)\"\n    rm -f \"$file\"",
+          "to": "    bounded_out=\"$(cat \"$file\" 2>/dev/null)\"\n    :"
+        }
+      ],
+      "expect_fail": [
+        "codex-ghbound-env",
+        "codex-ghbound-track-create"
+      ]
+    },
+    {
+      "name": "443-prune-gh-out-kept",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-prune",
+      "edits": [
+        {
+          "from": "          \"$runs_root/$old/stderr.log\" \"$runs_root/$old/watchdog-fired\" \"$runs_root/$old/gh.out\"",
+          "to": "          \"$runs_root/$old/stderr.log\" \"$runs_root/$old/watchdog-fired\""
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-prune"
+      ]
+    },
+    {
+      "name": "443-capture-stderr-dropped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-track-gh-fail",
+      "edits": [
+        {
+          "from": "    capture) \"$@\" < /dev/null > \"$file\" & ;;",
+          "to": "    capture) \"$@\" < /dev/null > \"$file\" 2>/dev/null & ;;"
+        }
+      ],
+      "expect_fail": [
+        "codex-track-gh-fail"
+      ]
+    },
+    {
+      "name": "443-append-stderr-dropped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-stop-exit",
+      "edits": [
+        {
+          "from": "    append) \"$@\" < /dev/null >> \"$file\" 2>&1 & ;;",
+          "to": "    append) \"$@\" < /dev/null >> \"$file\" 2>/dev/null & ;;"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-stop-exit"
       ]
     }
   ]

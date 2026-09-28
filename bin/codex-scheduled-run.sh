@@ -44,17 +44,21 @@
 # PREFLIGHT (no model turn, no quota spent), each failing step stopping the chain there:
 #   1. The PATH scrub above already ran, before any external command. If it refused any entry:
 #      preflight-failed, reason=unsafe-path.
-#   2. TBF_CODEX_RUN_TIMEOUT (default 14400) and TBF_CODEX_RUN_KILL_GRACE (default 30) — env vars,
-#      seconds — must each be digits-only and greater than 0. Otherwise: preflight-failed,
-#      reason=bad-timeout.
+#   2. TBF_CODEX_RUN_TIMEOUT (default 14400), TBF_CODEX_RUN_KILL_GRACE (default 30) and
+#      TBF_CODEX_GH_TIMEOUT (default 120, #443) — env vars, seconds — must each be digits-only and
+#      greater than 0. TBF_CODEX_GH_TIMEOUT also rejects a leading zero (e.g. "08"): unlike the
+#      other two, its value feeds bash arithmetic before codex is ever launched (inside
+#      bounded_run, below), where a leading-zero value aborts with "value too great for base"
+#      instead of failing this validation cleanly. Otherwise: preflight-failed, reason=bad-timeout.
 #   3. `codex`, `gh`, and `jq` must all be on PATH (launchd's own PATH is minimal, and the
 #      plugin's hooks fail open without `jq`). Otherwise: preflight-failed,
 #      reason=missing-tool:<comma-separated names>.
 #   4. The sibling `codex-setup.sh --check`. Exit 1: preflight-failed reason=codex-setup-drift.
 #      Any other non-zero exit: preflight-failed reason=codex-setup-error.
-#   5. The sibling `harness-stop.sh`. Exit 3: skipped-stop reason=stop. Exit 4: skipped-stop
-#      reason=stop-unknown. Exit 0: continue. Anything else: preflight-failed
-#      reason=harness-stop-exit-<n>.
+#   5. The sibling `harness-stop.sh`, bounded by TBF_CODEX_GH_TIMEOUT (#443). Exit 3: skipped-stop
+#      reason=stop. Exit 4: skipped-stop reason=stop-unknown. Exit 0: continue. A timeout is
+#      treated the same as exit 4 (skipped-stop reason=stop-unknown), with a line naming the bound
+#      appended to preflight.log. Anything else: preflight-failed reason=harness-stop-exit-<n>.
 #   6. The sibling `harness-lock.sh status`. state=free: continue. state=held, with host equal to
 #      `uname -n`, a digits-only pid, and that pid no longer alive: continue (the launched session
 #      reclaims the lock itself). Any other state=held: skipped-busy, reason one of
@@ -74,6 +78,17 @@
 # TBF_CODEX_RUN_KILL_GRACE more seconds (still polled) it sends KILL. Timeout granularity is 1
 # second. If codex exits first, the watchdog notices on its next poll and returns; at worst, one
 # already-started 1-second poll outlives it briefly and ends on its own.
+#
+# GH BOUND (#443): every `gh` call this wrapper makes — the harness-stop.sh preflight query at
+# step 5 above, and each of the four failure-tracking calls below — runs through one runner,
+# `bounded_run`, bounded by TBF_CODEX_GH_TIMEOUT seconds (default 120). It polls in the same
+# 1-second-slice style as the watchdog above: at the bound it sends TERM, then polls for up to a
+# fixed 5-second grace, then sends KILL. The KILL step is not optional here: `finish` (below)
+# disables TERM/INT before running the tracking calls, and an ignored signal disposition is
+# inherited across exec, so only KILL can end a `gh` launched from inside it. A harness-stop.sh
+# timeout is folded into its existing exit-4 handling (skipped-stop reason=stop-unknown); a
+# tracking-call timeout records tracking=failed:<call>-timeout (create, view, or comment) and
+# exits 3, the same as any other tracking failure.
 #
 # CLASSIFICATION, in order:
 #   1. watchdog-fired exists            -> timed-out,     reason=after-<n>s
@@ -127,18 +142,23 @@
 #   hostname, or an absolute path. A `usage-limit` hint line is added only when stderr.log exists
 #   and contains that phrase (case-insensitive); the phrase itself is never quoted into the body.
 #   The only `gh` subcommands this step ever runs are `issue view`, `issue create` and
-#   `issue comment`, each with `< /dev/null` on stdin and gh's own stderr going straight to this
-#   wrapper's own stderr (the local launchd log) — never `gh pr`, `gh api`, `gh label`,
-#   `issue edit` or `issue close`, and no label is ever removed.
-#   If `gh` isn't on PATH, or any `gh` call itself fails, record.txt gets one more line,
-#   `tracking=failed:<slug>`, and the whole run exits 3 instead of its usual 0/1 — never silently. A
-#   line to this wrapper's own stderr names the slug, worded per slug: `create-unparsed` and
-#   `state-write-failed` both say GitHub may already have been (or was) updated — a `gh issue
-#   create` that succeeds but can't be locally recorded still gets `tracking-issue=<n>` in
-#   record.txt when the number was parsed, even though the local state file itself is left
-#   untouched (its own atomic write either fully replaces it or leaves it exactly as it was, never
-#   partially); every other slug says GitHub was not updated. The next run retries from whatever
-#   state was actually persisted.
+#   `issue comment`, each run through `bounded_run` (bounded by TBF_CODEX_GH_TIMEOUT, #443), with
+#   `< /dev/null` on stdin and gh's own stderr going straight to this wrapper's own stderr (the
+#   local launchd log) — never `gh pr`, `gh api`, `gh label`, `issue edit` or `issue close`, and no
+#   label is ever removed.
+#   If `gh` isn't on PATH, any `gh` call itself fails, or a `gh` call does not finish within
+#   TBF_CODEX_GH_TIMEOUT (#443), record.txt gets one more line, `tracking=failed:<slug>`, and the
+#   whole run exits 3 instead of its usual 0/1 — never silently. (A harness-stop.sh preflight-query
+#   timeout is a different path — see "GH BOUND" above — folded into the existing exit-4 handling,
+#   never a tracking=failed:<slug> line.) A line to this wrapper's own stderr names the slug, worded
+#   per slug:
+#   `create-unparsed`, `state-write-failed`, `create-timeout` and `comment-timeout` all say
+#   GitHub may already have been (or was) updated — a `gh issue create` that succeeds but can't be
+#   locally recorded still gets `tracking-issue=<n>` in record.txt when the number was parsed, even
+#   though the local state file itself is left untouched (its own atomic write either fully
+#   replaces it or leaves it exactly as it was, never partially); every other slug, including
+#   `view-timeout`, says GitHub was not updated. The next run retries from whatever state was
+#   actually persisted.
 #
 # PRUNING: only entries directly under runs/ whose name matches <8 digits>T<6 digits>Z-<digits>
 # count; anything else is never touched. After each run, only the newest 100 (lexical order) are
@@ -172,9 +192,19 @@
 #     `AbandonProcessGroup`) is the backstop that would still clean up the process group's other
 #     members — also unverified until #429.
 #   - Two small windows are not closed: between starting codex and recording `codex_pid=$!`, and
-#     between starting the watchdog and recording `wd_pid=$!`. A TERM/INT landing in either leaves
-#     that one variable unset, so on_wrapper_signal has nothing to target for that one process — a
-#     narrow gap this script does not close.
+#     between starting the watchdog and recording `wd_pid=$!` — and, the same shape, between
+#     `bounded_run` (#443) launching a bounded child and recording `bounded_pid=$!`. A TERM/INT
+#     landing in any of the three leaves that one variable unset, so on_wrapper_signal has nothing
+#     to target for that one process — a narrow gap this script does not close.
+#   - A timed-out `harness-stop.sh` (TBF_CODEX_GH_TIMEOUT, #443) is itself killed, but its own `gh`
+#     grandchild is not — this wrapper only ever signals its own direct child. The orphaned `gh` no
+#     longer blocks the wrapper (its output goes to a file this wrapper isn't waiting to read, not
+#     a pipe), but whether launchd's own process-group reaping cleans it up is unverified until
+#     #429.
+#   - A `gh issue create` or `gh issue comment` that hits TBF_CODEX_GH_TIMEOUT may already have
+#     been accepted by GitHub before this wrapper killed it; `create-timeout` in particular can
+#     leave a tracking issue on GitHub that the next run's own state file does not know about, so
+#     the next failure opens a duplicate for it.
 #   - Whether time spent with the machine asleep counts toward the timeout is not verified.
 #   - Two wrapper instances against one checkout (a manual run beside a scheduled one) can both
 #     observe state=free; the session-level `acquire` then refuses one of them, after that
@@ -290,6 +320,8 @@ is `forbidden`/denied under both hosts' own installed rules. See docs/reference/
 Env vars:
   TBF_CODEX_RUN_TIMEOUT      Wall-clock seconds before the watchdog sends TERM (default 14400).
   TBF_CODEX_RUN_KILL_GRACE   Seconds after TERM before the watchdog sends KILL (default 30).
+  TBF_CODEX_GH_TIMEOUT       Wall-clock seconds before a gh call (or the harness-stop.sh preflight
+                             query) is sent TERM, then KILL after a fixed 5s grace (default 120).
 
 Outcome tokens (first line of the run record's record.txt, and this script's last stdout line):
   completed  skipped-stop  skipped-busy  preflight-failed  failed  died-mid-run  timed-out
@@ -357,22 +389,30 @@ fi
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 timeout="${TBF_CODEX_RUN_TIMEOUT:-14400}"
 grace="${TBF_CODEX_RUN_KILL_GRACE:-30}"
+gh_timeout_raw="${TBF_CODEX_GH_TIMEOUT:-120}"
+gh_timeout=120
+GH_KILL_GRACE=5
 rc=""
 ended_at=""
 
 # Failure-tracking globals (I3, #428) — st_issue/st_streak are read_track_state's own output;
-# tracking/tracking_issue are track_outcome's own output, read back by finish. gh_bin is
-# pre-declared here, empty, BEFORE the TERM/INT traps are installed below: preflight step 0 is what
-# actually resolves it, off the PATH already scrubbed at startup (#444), but a signal landing in
-# the window between the traps going live and step 0 running would otherwise reach track_outcome
-# with gh_bin unbound under `set -u`, killing the wrapper with rc 127 and no record/summary line at
-# all instead of the ordinary died-mid-run path.
+# tracking/tracking_issue are track_outcome's own output, read back by finish. gh_bin and the
+# bounded_run globals below (#443) are pre-declared here, safe-by-default (empty/false), BEFORE
+# the TERM/INT traps are installed below: preflight step 0 is what actually resolves gh_bin, off
+# the PATH already scrubbed at startup (#444), but a signal landing in the window between the
+# traps going live and step 0 running would otherwise reach track_outcome with gh_bin unbound
+# under `set -u`, killing the wrapper with rc 127 and no record/summary line at all instead of the
+# ordinary died-mid-run path.
 st_issue=""
 st_streak=""
 tracking=""
 tracking_issue=""
 TRACK_TITLE="Scheduled Codex runs are failing"
 gh_bin=""
+bounded_pid=""
+bounded_rc=""
+bounded_timed_out=false
+bounded_out=""
 
 version="unknown"
 if command -v jq >/dev/null 2>&1; then
@@ -424,7 +464,7 @@ prune_runs() {
     [ "$old" = "$current" ] && continue
     rm -f "$runs_root/$old/record.txt" "$runs_root/$old/argv.txt" "$runs_root/$old/preflight.log" \
           "$runs_root/$old/last-message.md" "$runs_root/$old/events.jsonl" \
-          "$runs_root/$old/stderr.log" "$runs_root/$old/watchdog-fired"
+          "$runs_root/$old/stderr.log" "$runs_root/$old/watchdog-fired" "$runs_root/$old/gh.out"
     if ! rmdir "$runs_root/$old" 2>/dev/null; then
       echo "codex-scheduled-run.sh: warning: rmdir $runs_root/$old failed — an unexpected file may remain inside it" >&2
     fi
@@ -432,6 +472,54 @@ prune_runs() {
   done <<EOF
 $(printf '%s\n' "${runs[@]}" | sort)
 EOF
+}
+
+# bounded_run MODE FILE CMD [ARG…] (#443) — runs CMD under a wall-clock bound of $gh_timeout
+# seconds, used for every `gh` call this wrapper makes: the harness-stop.sh preflight query
+# (append mode) and each of the four failure-tracking calls (capture mode). MODE is `append`
+# (CMD's stdout+stderr are appended to FILE) or `capture` (CMD's stdout goes to FILE, is read back
+# into $bounded_out, and FILE is then removed; CMD's stderr goes straight to this wrapper's own
+# stderr). The child always gets `< /dev/null`. Output goes to a file, never a `$(...)` pipe: an
+# orphaned grandchild still holding a command-substitution pipe open would block this function
+# forever even after its own direct child is gone. Polls the deadline against $SECONDS, in 1-second
+# slices, the same idiom the watchdog above uses — this relies on bash reaping the backgrounded
+# child once it exits, so that `kill -0` on it goes false (codex-ghbound-env's own case (a) proves
+# this holds under both bash 3.2 and a modern bash; see the plan's own ADVISORY on this). On a
+# timeout it sends TERM, then polls for up to $GH_KILL_GRACE more seconds, then KILL if the child
+# is still alive. KILL is mandatory here, not just a backstop: `finish` (below) runs
+# `trap '' TERM INT` before ever calling this function, and an ignored signal disposition is
+# inherited across exec, so TERM alone is a no-op against a child launched from inside `finish` —
+# only KILL can end it. Sets bounded_rc, bounded_timed_out (true/false) and, in capture mode,
+# bounded_out; clears bounded_pid once `wait` has reaped the child.
+bounded_run() {
+  local mode="$1" file="$2"
+  shift 2
+  case "$mode" in
+    append) "$@" < /dev/null >> "$file" 2>&1 & ;;
+    capture) "$@" < /dev/null > "$file" & ;;
+  esac
+  bounded_pid=$!
+  bounded_timed_out=false
+  local gh_deadline=$((SECONDS + gh_timeout))
+  while [ "$SECONDS" -lt "$gh_deadline" ] && kill -0 "$bounded_pid" 2>/dev/null; do
+    sleep 1
+  done
+  if kill -0 "$bounded_pid" 2>/dev/null; then
+    bounded_timed_out=true
+    kill -TERM "$bounded_pid" 2>/dev/null
+    local gh_kill_deadline=$((SECONDS + GH_KILL_GRACE))
+    while [ "$SECONDS" -lt "$gh_kill_deadline" ] && kill -0 "$bounded_pid" 2>/dev/null; do
+      sleep 1
+    done
+    kill -0 "$bounded_pid" 2>/dev/null && kill -KILL "$bounded_pid" 2>/dev/null  # bounded_run's own post-grace escalation
+  fi
+  wait "$bounded_pid" 2>/dev/null
+  bounded_rc=$?
+  bounded_pid=""
+  if [ "$mode" = capture ]; then
+    bounded_out="$(cat "$file" 2>/dev/null)"
+    rm -f "$file"
+  fi
 }
 
 # finish OUTCOME REASON — the SINGLE exit path once the run directory exists: writes record.txt
@@ -476,6 +564,9 @@ finish() {
     failed:create-unparsed)
       echo "codex-scheduled-run.sh: tracking failed (create-unparsed): an issue may already have been created on GitHub, but its number could not be parsed; the run record is kept at $run_dir" >&2
       ;;
+    failed:create-timeout|failed:comment-timeout)
+      echo "codex-scheduled-run.sh: tracking failed (${tracking#failed:}): GitHub may already have been updated — the call may have completed after TBF_CODEX_GH_TIMEOUT fired; the run record is kept at $run_dir" >&2
+      ;;
     failed:*)
       echo "codex-scheduled-run.sh: tracking failed (${tracking#failed:}): GitHub was not updated; the run record is kept at $run_dir" >&2
       ;;
@@ -486,8 +577,11 @@ finish() {
 
 # on_wrapper_signal SIGNUM — installed for TERM and INT: if something kills this wrapper process
 # itself (launchd unloading the job, an operator, a logout), its own children would otherwise
-# survive it — the watchdog and the launched codex process — and the watchdog's own later kill of
-# $codex_pid could then land on a since-reused pid. Stops the watchdog, then gives codex the same
+# survive it — the watchdog, a bounded harness-stop.sh/gh child (#443), and the launched codex
+# process — and the watchdog's own later kill of $codex_pid could then land on a since-reused pid.
+# KILLs a live bounded_pid outright (no grace poll — see bounded_run above and the "GH BOUND"
+# header paragraph for why: it can only be harness-stop.sh, a read-only query with no forwarder
+# child of its own to protect), stops the watchdog, then gives codex the same
 # TERM-then-poll-then-KILL treatment the watchdog itself uses: the real `codex` CLI is a Node
 # launcher that spawns the native binary and forwards SIGTERM to it from a JS handler, so a KILL
 # arriving immediately after TERM can kill the launcher before it forwards, orphaning the native
@@ -499,6 +593,7 @@ finish() {
 on_wrapper_signal() {
   local signum="$1"
   [ -n "${wd_pid:-}" ] && kill -TERM "$wd_pid" 2>/dev/null
+  [ -n "${bounded_pid:-}" ] && kill -KILL "$bounded_pid" 2>/dev/null  # on_wrapper_signal's own bounded-child kill
   if [ -n "${codex_pid:-}" ]; then
     kill -TERM "$codex_pid" 2>/dev/null
     local deadline=$((SECONDS + grace))
@@ -516,9 +611,10 @@ trap 'on_wrapper_signal 2' INT
 # --- failure tracking on GitHub (I3, #428) --------------------------------------------------
 #
 # Everything below is called only from `finish`, after record.txt already has its outcome
-# committed to disk. Every `gh` call is a bare `"$gh_bin" ... < /dev/null`, never piped, with gh's
-# own stderr going straight to this wrapper's stderr — never captured into a value this script
-# then reuses.
+# committed to disk. Every `gh` call runs through `bounded_run capture` (#443, above), bounded by
+# TBF_CODEX_GH_TIMEOUT: the child always gets `< /dev/null` on stdin, its stdout is read back into
+# $bounded_out for the calls that need it (create, view), and gh's own stderr goes straight to
+# this wrapper's own stderr, exactly as before.
 
 # read_track_state — sets the globals st_issue/st_streak from $state_file, both left empty when
 # the file is absent OR unreadable (a non-digit issue=, an unknown streak=, or a missing key). An
@@ -600,9 +696,15 @@ track_body() {
 # issue exists when one may already have been created.
 track_create() {
   local outcome="$1" reason="$2" out gh_rc n line
-  out="$("$gh_bin" issue create --title "$TRACK_TITLE" --body "$(track_body "$outcome" "$reason")" \
-      --label needs-human --label no-plan < /dev/null)"
-  gh_rc=$?
+  bounded_run capture "$run_dir/gh.out" "$gh_bin" issue create --title "$TRACK_TITLE" \
+      --body "$(track_body "$outcome" "$reason")" --label needs-human --label no-plan
+  if $bounded_timed_out; then
+    tracking="failed:create-timeout"
+    echo "codex-scheduled-run.sh: tracking: gh issue create did not finish within ${gh_timeout}s — an issue may already have been created on GitHub" >&2
+    return
+  fi
+  gh_rc=$bounded_rc
+  out="$bounded_out"
   if [ "$gh_rc" -ne 0 ]; then
     tracking="failed:create-failed"
     echo "codex-scheduled-run.sh: tracking: gh issue create failed — check that the needs-human/no-plan labels exist (bin/setup-labels.sh)" >&2
@@ -662,8 +764,13 @@ track_outcome() {
       fi
       local body gh_rc
       body="Recovered: scheduled Codex run \`${run_dir##*/}\` completed (started $started_at, ended $ended_at UTC); record \`trail-blazer/runs/${run_dir##*/}/record.txt\`."
-      "$gh_bin" issue comment "$st_issue" --body "$body" >/dev/null < /dev/null
-      gh_rc=$?
+      bounded_run capture "$run_dir/gh.out" "$gh_bin" issue comment "$st_issue" --body "$body"
+      if $bounded_timed_out; then
+        tracking="failed:comment-timeout"
+        echo "codex-scheduled-run.sh: tracking: the recovery comment on issue #$st_issue did not finish within ${gh_timeout}s — it may already have been posted" >&2
+        return
+      fi
+      gh_rc=$bounded_rc
       if [ "$gh_rc" -ne 0 ]; then
         tracking="failed:comment-failed"
         return
@@ -697,8 +804,14 @@ track_outcome() {
   fi
 
   local st gh_rc
-  st="$("$gh_bin" issue view "$st_issue" --json state --jq .state < /dev/null)"
-  gh_rc=$?
+  bounded_run capture "$run_dir/gh.out" "$gh_bin" issue view "$st_issue" --json state --jq .state
+  if $bounded_timed_out; then
+    tracking="failed:view-timeout"
+    echo "codex-scheduled-run.sh: tracking: gh issue view #$st_issue did not finish within ${gh_timeout}s" >&2
+    return
+  fi
+  gh_rc=$bounded_rc
+  st="$bounded_out"
   if [ "$gh_rc" -ne 0 ]; then
     tracking="failed:view-failed"
     return
@@ -710,8 +823,14 @@ track_outcome() {
         return
       fi
       local gh_rc2
-      "$gh_bin" issue comment "$st_issue" --body "$(track_body "$outcome" "$reason" 'Failing again after a recovery.')" >/dev/null < /dev/null
-      gh_rc2=$?
+      bounded_run capture "$run_dir/gh.out" "$gh_bin" issue comment "$st_issue" \
+          --body "$(track_body "$outcome" "$reason" 'Failing again after a recovery.')"
+      if $bounded_timed_out; then
+        tracking="failed:comment-timeout"
+        echo "codex-scheduled-run.sh: tracking: the failing-again comment on issue #$st_issue did not finish within ${gh_timeout}s — it may already have been posted" >&2
+        return
+      fi
+      gh_rc2=$bounded_rc
       if [ "$gh_rc2" -ne 0 ]; then
         tracking="failed:comment-failed"
         return
@@ -745,7 +864,7 @@ gh_bin="$(command -v gh 2>/dev/null || true)"
 # any entry.
 $path_unsafe && finish preflight-failed unsafe-path
 
-# 2. TBF_CODEX_RUN_TIMEOUT / TBF_CODEX_RUN_KILL_GRACE — digits-only and > 0.
+# 2. TBF_CODEX_RUN_TIMEOUT / TBF_CODEX_RUN_KILL_GRACE / TBF_CODEX_GH_TIMEOUT — digits-only and > 0.
 case "$timeout" in
   ''|*[!0-9]*) finish preflight-failed bad-timeout ;;
 esac
@@ -754,6 +873,21 @@ case "$grace" in
   ''|*[!0-9]*) finish preflight-failed bad-timeout ;;
 esac
 [ "$grace" -gt 0 ] || finish preflight-failed bad-timeout
+# TBF_CODEX_GH_TIMEOUT additionally rejects a leading zero (e.g. "08"), unlike TBF_CODEX_RUN_TIMEOUT/
+# TBF_CODEX_RUN_KILL_GRACE above: this value is the operand of bash arithmetic inside bounded_run
+# (below) BEFORE codex is ever launched, and bash treats a leading-zero numeral as octal there — "08"
+# has no valid octal digit and aborts the whole call stack up to this script's top level with "value
+# too great for base" (a bug, not a feature: it silently bypasses the harness-stop.sh preflight check
+# and can still launch codex). This arm must run before the digits-only check below, since "08" would
+# otherwise pass it.
+case "$gh_timeout_raw" in
+  0?*) finish preflight-failed bad-timeout ;;
+esac
+case "$gh_timeout_raw" in
+  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;
+esac
+[ "$gh_timeout_raw" -gt 0 ] || finish preflight-failed bad-timeout
+gh_timeout="$gh_timeout_raw"
 
 # 3. codex, gh, jq must all be on PATH.
 missing=""
@@ -772,10 +906,15 @@ case "$setup_rc" in
   *) finish preflight-failed codex-setup-error ;;
 esac
 
-# 5. the sibling harness-stop.sh.
-stop_out="$("$script_dir/harness-stop.sh" 2>&1)"
-stop_rc=$?
-printf '%s\n' "$stop_out" >> "$run_dir/preflight.log"
+# 5. the sibling harness-stop.sh, bounded by TBF_CODEX_GH_TIMEOUT (#443): a hung `gh` inside
+# harness-stop.sh's own preflight query must not keep this wrapper (and so the launchd job) alive
+# indefinitely.
+bounded_run append "$run_dir/preflight.log" "$script_dir/harness-stop.sh"
+stop_rc=$bounded_rc
+if $bounded_timed_out; then
+  printf 'codex-scheduled-run.sh: harness-stop.sh did not finish within %ss\n' "$gh_timeout" >> "$run_dir/preflight.log"
+  stop_rc=4
+fi
 stop_reason=""
 [ "$stop_rc" -eq 3 ] && stop_reason=stop
 [ "$stop_rc" -eq 4 ] && stop_reason=stop-unknown
