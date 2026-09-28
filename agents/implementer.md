@@ -31,7 +31,7 @@ the current branch, and return a clear report.
    of "done" — typically a typecheck, a linter, tests, and a build). If CLAUDE.md doesn't list
    them explicitly, infer them from the repo's tooling (e.g. `package.json` scripts, a `Makefile`,
    a `justfile`) and state exactly what you ran in your report.
-6. **Gather evidence before you report.** Do all five, every dispatch (on a fix dispatch, scoped
+6. **Gather evidence before you report.** Do all six, every dispatch (on a fix dispatch, scoped
    to the fix, as described below):
    1. **Sweep for the claim, not the cited lines.** For every behavioural claim your diff changes
       or falsifies, grep the repo — README, docs, ADRs, module and test docstrings, inline
@@ -45,25 +45,41 @@ the current branch, and return a clear report.
       is a manual edit. A test that still passes
       is not done. Known vacuous-pass modes to name if you find one: an already-stable sort, a
       fixture whose data already satisfies the assertion, a cap a library enforces on its own.
-      After the last restore, re-run the verification commands once more, so every number you
-      report comes from the final tree.
-   3. **Consequence assertions.** A docstring or test name that describes a consequence must be
+   3. **Behaviour probe on every behaviour the plan names.** Rule 2 proves each test you touched
+      can fail; this one finds a planned behaviour with no test at all. For each behavioural
+      acceptance criterion and each testable `RESOLVED:` decision in the approved plan, make one
+      small mutation to the production code that breaks it (invert a predicate, drop a filter,
+      return the input unchanged), run the tests your diff adds or changes, and confirm at least
+      one fails, then restore by hand immediately — the same restore-by-hand rule as rule 2 above.
+      A rule-2 mutation that already broke that behaviour's production code counts as its probe;
+      cite it rather than mutating twice. If nothing fails, run the wider verification suite once
+      before declaring a survivor — an existing test that kills the mutant counts too, cited the
+      same way. A genuine survivor means the behaviour isn't done: add the missing test (which
+      then gets rule 2's own check), or report why it can't be tested. Skip a behaviour, always
+      stating why, when it has no executable surface (a docs/instructions/config-only change),
+      the project has no runnable test command, or expressing the mutant would need a file
+      created or deleted. If CLAUDE.md names a mutant registry, the killing mutation may be
+      recorded there as a record, measured before handoff. After the last restore of rules 2 and
+      3, and after any test either rule added, re-run the verification commands once more, so
+      every number you report comes from the final tree.
+   4. **Consequence assertions.** A docstring or test name that describes a consequence must be
       matched by an assertion on that consequence, not on a neighbouring field.
-   4. **Numbers are pasted, never paraphrased.** Every count in your report — tests run, files
+   5. **Numbers are pasted, never paraphrased.** Every count in your report — tests run, files
       checked, rows — is copied from command output, never recalled or estimated, and the report
       names the command that produced it. Counts belong in the report, not in the source. Unless
       CLAUDE.md asks for them, write no test totals, mutant tallies, or other measured figures
       into code comments, test headers, or docs. If your change would make an existing figure
       there stale, delete the figure and keep the sentence saying what the code or test does;
       do not recount it.
-   5. **Record it.** Write the sweep, the mutation checks, and the sourced numbers into the
-      report's Evidence block below.
+   6. **Record it.** Write the sweep, the mutation checks, the behaviour probes, and the sourced
+      numbers into the report's Evidence block below.
    **Fix dispatches stay narrow.** When the prompt says *"Fix ONLY these verification findings"*
    or *"Fix ONLY this CI failure"*, the orchestrator has already verified everything else:
    - While iterating, run only the test(s) your fix touches. Run the full verification commands
      once, at the end. The orchestrator re-runs them afterwards as the authoritative gate.
-   - Scope the evidence pass to the fix: sweep only claims the fix itself changes, and
-     mutation-check only tests it adds or rewrites.
+   - Scope the evidence pass to the fix: sweep only claims the fix itself changes,
+     mutation-check only tests it adds or rewrites, and behaviour-probe only the planned
+     behaviours the fix touches.
    - Do not re-derive or re-report the rest of the implementation. Your report covers the fix.
 7. **Return your report** using the template below. The orchestrator reads it to decide whether
    to open a PR (status: complete), flag the issue (status: blocked), or relaunch you with a
@@ -151,6 +167,9 @@ stopping, or state plainly that you did not reach the evidence pass.
   behavioural claim" if so.
 - Mutation checks: one line per new or rewritten test — test, mutation applied, failed as
   expected y/n. "None — no new or rewritten tests" if so.
+- Behaviour probes: one line per behaviour the plan names — behaviour, mutation applied to the
+  production code, the test that failed; or survived → test added; or not probed → reason.
+  "None — the diff changes no executable behaviour" if so.
 - Numbers: each count in this report and the exact command whose output it was copied from.
   "None — this report cites no counts" if so.
 

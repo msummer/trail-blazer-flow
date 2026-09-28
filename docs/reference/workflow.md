@@ -156,7 +156,8 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection) and move on to the
    next issue.
    Before reporting, the subagent runs a mandatory evidence pass — sweeping the repo for every
-   claim its diff falsifies, mutation-checking each new or rewritten test, pasting every number
+   claim its diff falsifies, mutation-checking each new or rewritten test, probing each behaviour
+   the plan names with a production-code mutation that a test must kill, pasting every number
    from command output — and records it in its report's Evidence block.
 3. On completion: **independently re-runs the verification commands** (the mechanical gate — the
    subagent may be wrong, and this re-run stays the authoritative gate), comparing against the
@@ -219,8 +220,8 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    pasted verbatim** — never one the orchestrator composes on its behalf — the re-validated
    `binding_line` pasted verbatim too, a `Mutation probe:`
    line carrying the verdict's mutation-probe result, the implementer's Evidence block condensed
-   to its Claims-swept and Mutation-checks lines, schema notes, verifier notes), labels
-   `pr-open`. The PR still ends up as one clean commit, exactly as before.
+   to its Claims-swept, Mutation-checks, and Behaviour-probes lines, schema notes, verifier
+   notes), labels `pr-open`. The PR still ends up as one clean commit, exactly as before.
 6. **Files the plan's "Follow-ups to file"** as new issues referencing the PR — each entry whose
    justification names a concrete failure a user of this software would experience, filed with
    `no-plan` (machine-authored — held out of planning entirely until a human triages the issue
