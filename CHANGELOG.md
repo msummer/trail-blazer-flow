@@ -22,6 +22,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
   barrier waves — a new case starts whenever a running one finishes — and gains a
   `harness-pool-refill` self-test and a `SELFCHECK_TESTS_FAULT=refill:<waiter>:<starter>` fault
   form. Output, the CLI, and every case's verdict are unchanged.
+- #471: the macOS mutant driver runs in its own parallel `selfcheck-macos-driver` job (nightly
+  and dispatch only); gate 4.9 now requires every dev/*.sh script exactly once per job group,
+  with a declared split-job list.
 - #463: `dev/doctor-tests.sh` and `dev/hook-tests.sh` fixtures that launch a hung stub or a slow
   path now run under an active, killed-on-overrun deadline (`wait_deadline`/`kill_tree`) instead of
   running to completion and only afterward comparing elapsed time to a passive bound. No `bin/` or
