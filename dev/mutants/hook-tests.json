@@ -3361,6 +3361,36 @@
       "expect_fail": [
         "deadline-kill-tree"
       ]
+    },
+    {
+      "name": "463-hook-boundary-override-leaks",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-deny-dbracket-timing",
+      "edits": [
+        {
+          "from": "  boundary_deadline_override=\"\"",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-dbracket-timing"
+      ]
+    },
+    {
+      "name": "463-hook-push-override-leaks",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-dl-deny-production-budget",
+      "edits": [
+        {
+          "from": "  push_deadline_override=\"\"",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "push-dl-deny-production-budget"
+      ]
     }
   ]
 }

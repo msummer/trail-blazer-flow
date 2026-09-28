@@ -1272,30 +1272,35 @@ case_ab_pc_deny_dbracket_disjoint() {
 }
 case_ab_pc_deny_dbracket_timing() {
   # Wall-clock proof: an overlapping tail re-split()s almost the whole remaining record once per
-  # earlier `]]`; disjoint tails bound each emit_segment() walk to its own cut segment instead, so
-  # this large, 64-`]]` shape resolves under the 15s active deadline below (#463 —
-  # boundary_deadline_override, not a passive post-hoc measurement), well before the overlapping
-  # (quadratic) walk's own natural runtime. The filler is sized so the overlapping walk stays far
-  # past the bound even under a fast awk such as Linux's mawk, while the disjoint (linear) walk
-  # stays far under it. The deadline is 15s rather than push-dl's 9s/ab-pc's original 5s: this
-  # suite's own other flood cases (dbracket-cap/-flood/-disjoint/-sed-cut/-sed-inplace-cut) are ALSO
-  # CPU-bound awk work, so a mutant-driver wave running many concurrent full `ab-pc-` suites can
-  # genuinely saturate the host's cores — measured live via `bash dev/mutant-driver.sh 403-ab-pc` at
-  # this repo's own default concurrency, where a 5s deadline occasionally tripped on an otherwise
-  # untouched (disjoint-preserving) mutant purely from that contention, not from the mutation itself;
-  # 15s was re-measured clean. The command reaches jq on stdin (printf is a builtin), never as a
-  # --arg: Linux refuses any single exec argument over its per-argument limit, which this command
-  # exceeds, so mk_agent_cmd would build an empty payload there and the hook would see no command at
-  # all.
+  # earlier `]]`, so the mutated (overlap-restored) walk's cost grows roughly with the SQUARE of the
+  # filler length (each of the flood's fixed 64 `]]` occurrences re-scans nearly the whole remaining
+  # record); disjoint tails bound each emit_segment() walk to its own cut segment instead, so this
+  # large, 64-`]]` shape resolves well under the 15s active deadline below (#463 —
+  # boundary_deadline_override, not a passive post-hoc measurement). 15s (rather than push-dl's 9s or
+  # this case's own original 5s) leaves headroom for contention: this suite's own other flood cases
+  # (dbracket-cap/-flood/-disjoint/-sed-cut/-sed-inplace-cut) are ALSO CPU-bound awk work, so a
+  # mutant-driver wave running many concurrent full `ab-pc-` suites can genuinely contend for the
+  # host's cores. The filler is `seq 1 350000`, the prior `seq 1 200000` scaled by roughly sqrt(3):
+  # because the mutated walk's cost is quadratic in filler length, scaling filler by sqrt(3) scales
+  # its runtime by the same 3x the deadline itself grew (5s -> 15s), holding the mutated walk's
+  # margin over the bound steady rather than letting a faster awk narrow it. The command reaches jq
+  # on stdin (printf is a builtin), never as a --arg: Linux refuses any single exec argument over its
+  # per-argument limit, which this command exceeds, so mk_agent_cmd would build an empty payload
+  # there and the hook would see no command at all.
   local flood="x" i
   for i in $(seq 1 64); do flood="${flood} ]] tee"; done
   local filler
-  filler="$(printf ' a%.0s' $(seq 1 200000))"
+  filler="$(printf ' a%.0s' $(seq 1 350000))"
   local payload
   payload="$(printf '%s\ngit push' "${flood}${filler}" \
     | jq -Rs '{tool_name: "Bash", agent_type: "implementer", tool_input: {command: .}}')"
   boundary_deadline_override=15
   run_boundary "$payload"
+  # mutant:463-hook-boundary-override-leaks — run_boundary's own trailing
+  #   `boundary_deadline_override=""` reset deleted: this assertion is the only thing that would
+  #   catch the override surviving into the NEXT case, since a leaked value here still happens to
+  #   equal what this case itself just set.
+  [ -z "$boundary_deadline_override" ] || { __ok=0; __why="${__why}boundary_deadline_override not cleared after run_boundary: '$boundary_deadline_override'\n"; }
   expect_deny
 }
 # mutant:403-ab-pc-dbracket-sed-noninplace — deletes the `else if (cut_flag) { print
@@ -1426,15 +1431,16 @@ mk_fixture_global_config() {
   printf '%s' "$body" > "$path"
 }
 
-# push_guard_exec PATHVAL (#463) — the env block every run_push_guard call execs into: the six
-# unsets/exports (#290/#304/#305/#435) that isolate HOME/XDG_CONFIG_HOME/GIT_CONFIG_GLOBAL/
-# GIT_CONFIG_SYSTEM/GIT_CONFIG_NOSYSTEM/TBF_PUSH_GUARD_BUDGET_SECS, reading run_push_guard's own
-# home_val/sysroot_val locals (visible here because this is always called from inside an explicit
-# "( … )" subshell forked while run_push_guard is still executing, so its own still-in-scope locals
-# come along with the fork — never as a bare command substitution the harness's own shell could fall
-# through to), then PATH=PATHVAL and `exec "$bash_bin" "$push_guard"`. MUST be called only inside an
-# explicit "( … )": run in the harness's own shell it would leak every one of these exports and
-# PATH, and its own `exec` would replace the harness process itself.
+# push_guard_exec PATHVAL (#463) — the env block every run_push_guard call execs into: unsets
+# XDG_CONFIG_HOME/GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM/GIT_CONFIG_NOSYSTEM/TBF_PUSH_GUARD_BUDGET_SECS
+# (#290/#304/#305/#435), then exports HOME and TBF_PUSH_GUARD_SYSCONFIG_ROOT unconditionally and
+# re-exports whichever of the five unset names a fixture asked for, reading run_push_guard's own
+# home_val/sysroot_val locals — visible here under bash's own dynamic scoping of function locals (a
+# function sees its caller's still-in-scope locals regardless of a subshell fork, never lexical
+# scoping), never as a bare command substitution the harness's own shell could fall through to —
+# then PATH=PATHVAL and `exec "$bash_bin" "$push_guard"`. MUST be called only inside an explicit
+# "( … )": run in the harness's own shell it would leak every one of these exports and PATH, and its
+# own `exec` would replace the harness process itself.
 push_guard_exec() {
   local pathval="$1"
   unset XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM TBF_PUSH_GUARD_BUDGET_SECS
@@ -4623,6 +4629,11 @@ case_push_dl_deny_production_budget() {
   flood="$(printf 'git push o a a a a a;%.0s' $(seq 1 10000))"
   push_deadline_override=9
   run_push_guard "$(mk_push_cmd_big "${flood}git push origin main" "$dir")"
+  # mutant:463-hook-push-override-leaks — run_push_guard's own trailing
+  #   `push_deadline_override=""` reset deleted: this assertion is the only thing that would catch
+  #   the override surviving into the NEXT case, since a leaked value here still happens to equal
+  #   what this case itself just set.
+  [ -z "$push_deadline_override" ] || { __ok=0; __why="${__why}push_deadline_override not cleared after run_push_guard: '$push_deadline_override'\n"; }
   expect_push_deny_exact "$DL_DEADLINE_LINE"
 }
 case_push_dl_deny_driver_site() {
@@ -6282,7 +6293,7 @@ cases=(
   "ab-pc-deny-dbracket-flood|case_ab_pc_deny_dbracket_flood|verdict-only proof: implementer, echo + 70x ]] + ; git push (deny via the untouched main split, unaffected by the cap or by tail-cutting) -- control, not part of the mutation-proof registry"
   "ab-pc-deny-dbracket-cap|case_ab_pc_deny_dbracket_cap|additive-]] cap proof: implementer, echo + 65x ]] with no git/gh at all -- only the DBRACKET_MAX fail-closed sentinel can deny this record -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-cap)"
   "ab-pc-deny-dbracket-disjoint|case_ab_pc_deny_dbracket_disjoint|disjoint-tail proof: implementer, if [[ 1 ]] tee ]] .claude/LESSONS.md -- a tee cut short by the SECOND ]] fails closed on its own distinct reason -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap)"
-  "ab-pc-deny-dbracket-timing|case_ab_pc_deny_dbracket_timing|wall-clock proof: implementer, a ~200KB tee/]] flood -- deny under a 15s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap)"
+  "ab-pc-deny-dbracket-timing|case_ab_pc_deny_dbracket_timing|wall-clock proof: implementer, a ~350KB tee/]] flood -- deny under a 15s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap)"
   "ab-pc-deny-dbracket-sed-cut|case_ab_pc_deny_dbracket_sed_cut|cut-sed proof: verifier, x ]] sed s/a/b/ ]] y; git diff -- a non-in-place sed cut short by the SECOND ]] fails closed -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-sed-noninplace)"
   "ab-pc-deny-dbracket-sed-inplace-cut|case_ab_pc_deny_dbracket_sed_inplace_cut|cut-sed proof: verifier, x ]] sed -i s/a/b/ ]] y; git diff -- an in-place sed cut short by the SECOND ]] fails closed -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-sed-inplace)"
   # --- hooks/push-guard.sh (#260) cases -----------------------------------------------------------
