@@ -3391,6 +3391,21 @@
       "expect_fail": [
         "push-dl-deny-production-budget"
       ]
+    },
+    {
+      "name": "463-hook-cdg-override-leaks",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-deny-timing",
+      "edits": [
+        {
+          "from": "  cdg_deadline_override=\"\"",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-deny-timing"
+      ]
     }
   ]
 }

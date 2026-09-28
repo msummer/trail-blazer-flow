@@ -1270,6 +1270,26 @@ case_ab_pc_deny_dbracket_disjoint() {
     *) __ok=0; __why="${__why}stderr does not contain 'cannot verify whether this write reaches a .claude segment': '$boundary_err'\n" ;;
   esac
 }
+# ab_pc_dbracket_timing_filler (#463) — case_ab_pc_deny_dbracket_timing's own filler count depends
+# on which awk hooks/agent-boundary.sh's `awk` call actually spawns: this harness runs the hook
+# with no PATH override for this case, so it resolves the same `awk` this probe does. A BSD/
+# one-true-awk `split()` pays a per-token cost that grows with the standalone-`]]` count under the
+# 403-ab-pc-dbracket-overlap mutation (each of the flood's `]]` occurrences re-splits nearly the
+# whole remaining record), measurably worse than a linear-split awk (gawk, mawk) at the same
+# filler size, so it needs a far smaller filler to keep the unmutated baseline well clear of the
+# shared deadline while the mutant still overruns it with margin. Detected from `awk --version`'s
+# own banner via a builtin-safe capture-then-case (never a writer piped into grep -q, per
+# CLAUDE.md); stdin is redirected from /dev/null so an awk that doesn't recognise the flag can
+# never block reading it. An awk whose banner doesn't match is treated as linear-cost (the
+# conservative, larger-filler choice).
+ab_pc_dbracket_timing_filler() {
+  local v
+  v="$(awk --version </dev/null 2>&1)"
+  case "$v" in
+    "awk version"*) printf '%s' 160000; return ;;
+  esac
+  printf '%s' 350000
+}
 case_ab_pc_deny_dbracket_timing() {
   # Wall-clock proof: an overlapping tail re-split()s almost the whole remaining record once per
   # earlier `]]`, so the mutated (overlap-restored) walk's cost grows roughly with the SQUARE of the
@@ -1280,17 +1300,19 @@ case_ab_pc_deny_dbracket_timing() {
   # this case's own original 5s) leaves headroom for contention: this suite's own other flood cases
   # (dbracket-cap/-flood/-disjoint/-sed-cut/-sed-inplace-cut) are ALSO CPU-bound awk work, so a
   # mutant-driver wave running many concurrent full `ab-pc-` suites can genuinely contend for the
-  # host's cores. The filler is `seq 1 350000`, the prior `seq 1 200000` scaled by roughly sqrt(3):
-  # because the mutated walk's cost is quadratic in filler length, scaling filler by sqrt(3) scales
-  # its runtime by the same 3x the deadline itself grew (5s -> 15s), holding the mutated walk's
-  # margin over the bound steady rather than letting a faster awk narrow it. The command reaches jq
+  # host's cores. The filler count comes from ab_pc_dbracket_timing_filler above, sized per-awk
+  # (#463) rather than fixed: because the mutated walk's cost is superlinear in filler length under
+  # a BSD/one-true-awk split(), holding one filler constant across every awk either let a fast
+  # linear-split awk's unmutated run crowd the deadline under load, or let a slow superlinear awk's
+  # unmutated run threaten it outright — sizing per-awk keeps the unmutated run's margin under the
+  # deadline, and the mutated run's margin over it, wide on either awk. The command reaches jq
   # on stdin (printf is a builtin), never as a --arg: Linux refuses any single exec argument over its
   # per-argument limit, which this command exceeds, so mk_agent_cmd would build an empty payload
   # there and the hook would see no command at all.
   local flood="x" i
   for i in $(seq 1 64); do flood="${flood} ]] tee"; done
   local filler
-  filler="$(printf ' a%.0s' $(seq 1 350000))"
+  filler="$(printf ' a%.0s' $(seq 1 "$(ab_pc_dbracket_timing_filler)"))"
   local payload
   payload="$(printf '%s\ngit push' "${flood}${filler}" \
     | jq -Rs '{tool_name: "Bash", agent_type: "implementer", tool_input: {command: .}}')"
@@ -4814,16 +4836,34 @@ mk_cdg_main_session() { jq -n --arg tool "$1" --arg fp "$2" '{tool_name: $tool, 
 # stdin, with PATH set to PATHVAL (defaults to this process's own PATH), leaving $cdg_out
 # (stdout)/$cdg_err (stderr, read back from a file under $tmpbase)/$cdg_rc set as globals. Same
 # separate-stdout/stderr-capture idiom as run_boundary/run_push_guard above (LESSON 2026-09-08b) —
-# a merged capture cannot pin "exactly one line on stderr, nothing on stdout".
+# a merged capture cannot pin "exactly one line on stderr, nothing on stdout". $cdg_deadline_override
+# (#463) is an opt-in override, the same shape as run_boundary's own: unset by default (the
+# foreground path below, unchanged in shape from before), and when a case sets it immediately
+# before calling run_claude_guard, this runner instead runs the script backgrounded under
+# wait_deadline at that many seconds, killing its whole process tree on overrun instead of letting
+# the case block on it. Cleared after every call either way.
 cdg_out=""
 cdg_err=""
 cdg_rc=0
+cdg_deadline_override=""
 run_claude_guard() {
   local json="$1" pathval="${2:-$PATH}" errfile="$tmpbase/cdg-stderr"
-  cdg_out="$(printf '%s' "$json" | PATH="$pathval" "$bash_bin" "$claude_dir_guard" 2>"$errfile")"
-  cdg_rc=$?
+  if [ -n "$cdg_deadline_override" ]; then
+    local stdin_file="$tmpbase/cdg-stdin" out_file="$tmpbase/cdg-out" cpid
+    printf '%s' "$json" > "$stdin_file"
+    ( export PATH="$pathval"; exec "$bash_bin" "$claude_dir_guard" ) < "$stdin_file" > "$out_file" 2> "$errfile" &
+    cpid=$!
+    wait_deadline "$cpid" "$cdg_deadline_override"
+    cdg_rc=$deadline_rc
+    cdg_out="$(cat "$out_file" 2>/dev/null)"
+    rm -f "$out_file" "$stdin_file"
+  else
+    cdg_out="$(printf '%s' "$json" | PATH="$pathval" "$bash_bin" "$claude_dir_guard" 2>"$errfile")"
+    cdg_rc=$?
+  fi
   cdg_err="$(cat "$errfile" 2>/dev/null)"
   rm -f "$errfile"
+  cdg_deadline_override=""
 }
 
 # expect_cdg_deny_claude/expect_cdg_deny_unclassifiable/expect_cdg_no_opinion — assert against
@@ -5837,10 +5877,13 @@ case_cdg_dbq_deny_quoted_prefix() {
 }
 case_cdg_dbq_deny_timing() {
   # Wall-clock proof: the filler goes BEFORE the 64 standalone "]]" so their own tail windows start
-  # at HIGH indices, exposing any per-index quadratic scan on bash 3.2 (measured via bash SECONDS,
-  # timing only the hook invocation itself, not payload construction). The command reaches jq on
-  # stdin (printf is a builtin), never as a --arg: this command is over 128KB, past the byte budget
-  # a single --arg value can carry.
+  # at HIGH indices, exposing any per-index quadratic scan on bash 3.2. Runs under a 15s active
+  # deadline (#463 -- cdg_deadline_override, not a passive post-hoc SECONDS comparison): claude-dir-
+  # guard.sh is pure bash (no awk), and this case's own real cost stays well under a second even on
+  # bash 3.2, so 15s leaves wide headroom for a driver wave's own contention without ever
+  # mistaking scheduling delay for a hang. The command reaches jq on stdin (printf is a builtin),
+  # never as a --arg: this command is over 128KB, past the byte budget a single --arg value can
+  # carry.
   local filler
   filler="$(printf ' a%.0s' $(seq 1 100000))"
   local flood="x${filler}" i
@@ -5848,15 +5891,18 @@ case_cdg_dbq_deny_timing() {
   local payload
   payload="$(printf '%s\napply_patch < x.patch' "$flood" \
     | jq -Rs '{tool_name: "Bash", agent_type: "implementer", cwd: "/repo", tool_input: {command: .}}')"
-  local start=$SECONDS elapsed
+  cdg_deadline_override=15
   run_claude_guard "$payload"
-  elapsed=$((SECONDS - start))
+  # mutant:463-hook-cdg-override-leaks — run_claude_guard's own trailing
+  #   `cdg_deadline_override=""` reset deleted: this assertion is the only thing that would catch
+  #   the override surviving into the NEXT case, since a leaked value here still happens to equal
+  #   what this case itself just set.
+  [ -z "$cdg_deadline_override" ] || { __ok=0; __why="${__why}cdg_deadline_override not cleared after run_claude_guard: '$cdg_deadline_override'\n"; }
   expect_cdg_deny_unparseable
   case "$cdg_err" in
     *"with no inline patch text"*) ;;
     *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
   esac
-  [ "$elapsed" -lt 5 ] || { __ok=0; __why="${__why}took ${elapsed}s (SECONDS-granularity), expected under 5s\n"; }
 }
 case_cdg_dbq_noop_flood_at_cap() {
   # Exactly DBRACKET_MAX (64) standalone "]]": the cap never trips, and "apply_patch" is never
@@ -6293,7 +6339,7 @@ cases=(
   "ab-pc-deny-dbracket-flood|case_ab_pc_deny_dbracket_flood|verdict-only proof: implementer, echo + 70x ]] + ; git push (deny via the untouched main split, unaffected by the cap or by tail-cutting) -- control, not part of the mutation-proof registry"
   "ab-pc-deny-dbracket-cap|case_ab_pc_deny_dbracket_cap|additive-]] cap proof: implementer, echo + 65x ]] with no git/gh at all -- only the DBRACKET_MAX fail-closed sentinel can deny this record -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-cap)"
   "ab-pc-deny-dbracket-disjoint|case_ab_pc_deny_dbracket_disjoint|disjoint-tail proof: implementer, if [[ 1 ]] tee ]] .claude/LESSONS.md -- a tee cut short by the SECOND ]] fails closed on its own distinct reason -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap)"
-  "ab-pc-deny-dbracket-timing|case_ab_pc_deny_dbracket_timing|wall-clock proof: implementer, a ~350KB tee/]] flood -- deny under a 15s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap)"
+  "ab-pc-deny-dbracket-timing|case_ab_pc_deny_dbracket_timing|wall-clock proof: implementer, a tee/]] flood sized per-awk by ab_pc_dbracket_timing_filler -- deny under a 15s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap, 463-hook-boundary-override-leaks)"
   "ab-pc-deny-dbracket-sed-cut|case_ab_pc_deny_dbracket_sed_cut|cut-sed proof: verifier, x ]] sed s/a/b/ ]] y; git diff -- a non-in-place sed cut short by the SECOND ]] fails closed -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-sed-noninplace)"
   "ab-pc-deny-dbracket-sed-inplace-cut|case_ab_pc_deny_dbracket_sed_inplace_cut|cut-sed proof: verifier, x ]] sed -i s/a/b/ ]] y; git diff -- an in-place sed cut short by the SECOND ]] fails closed -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-sed-inplace)"
   # --- hooks/push-guard.sh (#260) cases -----------------------------------------------------------
@@ -7788,7 +7834,7 @@ cases=(
   "cdg-dbq-deny-bash-c-dq|case_cdg_dbq_deny_bash_c_dq|unparseable deny (#437): bash -c \"apply_patch < x.patch\" -- a double-quoted bash -c argument -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-dq)"
   "cdg-dbq-deny-quoted-name|case_cdg_dbq_deny_quoted_name|unparseable deny (#437): \"apply_patch\" < x.patch -- a quoted shim spelling as the command word itself -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-dq)"
   "cdg-dbq-deny-quoted-prefix|case_cdg_dbq_deny_quoted_prefix|unparseable deny (#437): bash -c 'noglob apply_patch < x.patch' -- the PREFIX_WORDS match itself uses the stripped token -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-sq)"
-  "cdg-dbq-deny-timing|case_cdg_dbq_deny_timing|wall-clock proof (#437): a >128KB command (x + 100000x' a' filler, then 64x' ]] true', then a newline, then apply_patch < x.patch) -- deny AND elapsed time under 5s -- no registry record (a timing regression guard, not a verdict mutant)"
+  "cdg-dbq-deny-timing|case_cdg_dbq_deny_timing|wall-clock proof (#437): a >128KB command (x + 100000x' a' filler, then 64x' ]] true', then a newline, then apply_patch < x.patch) -- deny under a 15s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-cap-exact, 463-hook-cdg-override-leaks)"
   "cdg-dbq-noop-flood-at-cap|case_cdg_dbq_noop_flood_at_cap|no opinion (#437): exactly DBRACKET_MAX (64) standalone ]] -- the cap never trips -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-cap-exact)"
   "cdg-dbq-noop-cap-per-segment|case_cdg_dbq_noop_cap_per_segment|no opinion (#437): 65 heredoc lines, each with exactly one standalone ]] in its own segment -- DBRACKET_MAX resets per segment -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-cap-per-segment)"
   "cdg-dbq-noop-bash-dbracket|case_cdg_dbq_noop_bash_dbracket|no opinion (#437): [[ -n x ]] && echo apply_patch -- an ordinary && conditional, not the short-if form"
