@@ -18,6 +18,8 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #462: the mutant driver keeps every job slot busy (a rolling pool instead of barrier waves);
+  output, CLI and verdicts are unchanged.
 - #465: the implementer's evidence pass now probes each behaviour the approved plan names with a
   production-code mutation a test must kill, recorded on a new "Behaviour probes" Evidence line
   carried into the PR body. No consumer step: the agent file ships with the plugin, and Codex

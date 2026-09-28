@@ -43,7 +43,9 @@
         "total-mismatch",
         "jobs-line",
         "footer-format",
-        "unsorted-set-order"
+        "unsorted-set-order",
+        "baseline-gates-dependents",
+        "pool-refill"
       ]
     },
     {
@@ -53,15 +55,16 @@
       "filter": "",
       "edits": [
         {
-          "from": "  local k=0 idx v out\n  while [ \"$k\" -lt \"$wave_n\" ]; do\n    idx=\"${wave_idx[$k]}\"",
-          "to": "  local k=0 idx v out\n  local order_list; order_list=\"$(ls -tr \"$resdir\"/*.verdict 2>/dev/null | sed -E 's#.*/([0-9]+)\\.verdict$#\\1#')\"\n  for idx in $order_list; do"
+          "from": "        job_state[$idx]=done",
+          "to": "        job_state[$idx]=done; collect_job \"$idx\""
+        },
+        {
+          "from": "    collect_job \"$next_print\"",
+          "to": "    :"
         }
       ],
       "expect_fail": [
-        "pass-exact",
-        "child-dies",
-        "declared-order",
-        "footer-format"
+        "declared-order"
       ]
     },
     {
@@ -71,12 +74,13 @@
       "filter": "",
       "edits": [
         {
-          "from": "      *)\n        fail=$((fail+1))\n        echo \"FAIL ${job_name[$idx]} - -\"\n        echo \"    reason no-verdict\"\n        ;;",
-          "to": "      *)\n        pass=$((pass+1))\n        ;;"
+          "from": "    *)\n      fail=$((fail+1))\n      echo \"FAIL ${job_name[$idx]} - -\"\n      echo \"    reason no-verdict\"\n      ;;",
+          "to": "    *) pass=$((pass+1)) ;;"
         }
       ],
       "expect_fail": [
-        "child-dies"
+        "child-dies",
+        "baseline-dies"
       ]
     },
     {
@@ -347,6 +351,54 @@
       ],
       "expect_fail": [
         "unknown-case-prefix"
+      ]
+    },
+    {
+      "name": "drv-barrier",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "fill_slots() {",
+          "to": "fill_slots() {\n  [ \"$running\" -gt 0 ] && return 0"
+        }
+      ],
+      "expect_fail": [
+        "pool-refill"
+      ]
+    },
+    {
+      "name": "drv-nodep",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "  [ \"${job_state[$dep]}\" = \"done\" ]",
+          "to": "  true"
+        }
+      ],
+      "expect_fail": [
+        "baseline-gates-dependents",
+        "declared-order",
+        "jobs-line",
+        "pool-refill"
+      ]
+    },
+    {
+      "name": "drv-basefallback",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "",
+      "edits": [
+        {
+          "from": "      cat \"$resdir/${base_idx[$bk]}.basestatus\" 2>/dev/null || echo \"red\"",
+          "to": "      cat \"$resdir/${base_idx[$bk]}.basestatus\" 2>/dev/null || echo \"clean\""
+        }
+      ],
+      "expect_fail": [
+        "baseline-dies"
       ]
     }
   ]

@@ -184,7 +184,8 @@ tracked tree — then runs the record's own `suite`, name-filtered by its own `f
 that copy, and compares the observed failing-case set against the record's `expect_fail`. A
 baseline run (no edits) proves each distinct `(suite, filter)` pair is clean before any dependent
 mutant is trusted; a red baseline short-circuits every mutant that depends on it. It runs mutants
-in bounded concurrent waves (the same idiom `dev/selfcheck-tests.sh` uses) and prints results in
+through a rolling pool of concurrent jobs — a new job starts whenever a running one finishes, and
+no mutant starts before its own baseline has finished — and prints results in
 declared order regardless of completion order, with its own `PASS <name> <total> <set>`/
 `FAIL <name> <total|-> <set|->` grammar and a `== summary: N pass, M fail ==` footer. Run it by
 hand before pushing any change to a registry `target`, a registry `suite`, or the registry itself
