@@ -1417,7 +1417,7 @@ case_ab_pc_deny_dbracket_timing() {
   # (#470 — boundary_deadline_override, not a passive post-hoc measurement, and no longer one fixed
   # constant: see the control payload and calibrated_deadline call below). This suite's own other
   # flood cases (dbracket-cap/-flood/-disjoint/-sed-cut/-sed-inplace-cut) are ALSO CPU-bound awk
-  # work, so a mutant-driver wave running many concurrent full `ab-pc-` suites can genuinely contend
+  # work, so a mutant-driver run with many concurrent full `ab-pc-` suites can genuinely contend
   # for the host's cores — which is exactly the load a same-run calibrated deadline, rather than a
   # fixed one, absorbs. The filler count comes from ab_pc_dbracket_timing_filler above, sized
   # per-awk rather than fixed: a BSD/one-true-awk split() is superlinear in record length while a
@@ -6030,7 +6030,7 @@ case_cdg_dbq_deny_timing() {
   # at HIGH indices, exposing any per-index quadratic scan on bash 3.2. Runs under a 15s active
   # deadline (#463 -- cdg_deadline_override, not a passive post-hoc SECONDS comparison): claude-dir-
   # guard.sh is pure bash (no awk), and this case's own real cost stays well under a second even on
-  # bash 3.2, so 15s leaves wide headroom for a driver wave's own contention without ever
+  # bash 3.2, so 15s leaves wide headroom for a driver run's own contention without ever
   # mistaking scheduling delay for a hang. The command reaches jq on stdin (printf is a builtin),
   # never as a --arg: this command is over 128KB, past the byte budget a single --arg value can
   # carry.

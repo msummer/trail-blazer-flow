@@ -16,7 +16,14 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v3.2.0
+
+This release moves the implementer agent to Sonnet 5.5 and makes the harness's own CI faster and
+steadier. The implementer now probes every planned behaviour for a killing test before handoff.
+The mutant driver and `dev/selfcheck-tests.sh` keep every job slot busy, and the post-merge
+driver run covers only the records a push can affect. Time-bound fixtures fail at an active
+deadline instead of waiting out a hang, and the macOS driver has its own parallel CI job.
+Precondition: your account must have access to `claude-sonnet-5-5`.
 
 - #479: the implementer agent's model pin moves from `claude-sonnet-5` to `claude-sonnet-5-5` (Sonnet 5.5).
 - #477: the required `selfcheck` (ubuntu) job's pull-request ceiling rises from 10 to 15

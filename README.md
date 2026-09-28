@@ -597,7 +597,7 @@ check-harness.sh
 It lists what the new version needs that your repo is missing. Fix what it flags and you're done.
 
 <details>
-<summary>Per-version migration notes (v1.9.0 → v3.0.0)</summary>
+<summary>Per-version migration notes (v1.9.0 → v3.2.0)</summary>
 
 For older history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration notes, v1.9.0
 to v2.7.7" subsection).
@@ -675,6 +675,10 @@ hooks, reopened-issue fixes, and quiet retry of a stalled planner dispatch.
 **v3.0.0 → v3.1.0** — re-copy the permissions block from `templates/repo-settings.json`, or add
 `"Bash(codex-scheduled-run.sh:*)"` by hand to both `permissions.allow` and `permissions.deny`. On
 Codex, also re-run `bin/codex-setup.sh`.
+
+**v3.1.0 → v3.2.0** — Precondition: your account must have access to `claude-sonnet-5-5`, the
+implementer's new model (#479); otherwise stay on v3.1.0. On Codex, also re-run
+`bin/codex-setup.sh`.
 
 </details>
 

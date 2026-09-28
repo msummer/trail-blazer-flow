@@ -94,7 +94,9 @@ the preflight order (unsafe-path, bad-timeout, missing-tool, `codex-setup.sh --c
 other-host/unreadable-holder), that every sibling
 resolves from the wrapper's own directory only, the exact launch argv and its `/dev/null` stdin,
 the watchdog's timeout/kill-grace with no orphan left behind, the outcome classification, and the
-run-record pruning. It runs in CI as the third command, but
+run-record pruning. Its time-bound fixtures (the wrapper runs that exercise a hang path) run under
+an active deadline (`wait_deadline`/`kill_tree`, #463): an overrun kills the run's whole process
+tree and fails the case at once, instead of waiting the hang out. It runs in CI as the third command, but
 it is not part of `dev/selfcheck.sh` itself; run it by hand whenever `bin/check-harness.sh`,
 `bin/check-decision-record.sh`, `bin/governance-paths.sh`, `bin/codex-setup.sh`, or
 `bin/codex-scheduled-run.sh` changes.
@@ -120,7 +122,9 @@ separate tree-listing comparison of their own. `hooks/planner-guard.sh`
 traps `git`/`gh`/`rm`/`touch` with sentinel-absence only, the same as its first two siblings (its
 own lexer legitimately uses `awk`, so that isn't in its trap set). `run_push_guard` isolates
 `HOME`, `XDG_CONFIG_HOME`, and `GIT_CONFIG_GLOBAL` for every push-guard fixture, so no fixture can
-read the developer's or CI runner's real global `git` config. It runs in CI as the fourth command,
+read the developer's or CI runner's real global `git` config. Its time-bound cases use the same
+active-deadline helpers as `dev/doctor-tests.sh`, and `ab-pc-deny-dbracket-timing` sizes its
+deadline from a same-run control measurement (#470). It runs in CI as the fourth command,
 but it is not part of `dev/selfcheck.sh` itself; run it by hand whenever any of the five
 `hooks/*.sh` scripts changes.
 
@@ -215,12 +219,14 @@ expect_fail shape, each violation exiting 2 before any suite ever runs), the exa
 match, multi-edit sequencing, multi-line edits, the preserved executable bit, that the tracked
 fixture tree is never touched, that a same-named decoy earlier on `PATH` is never invoked, the
 `MUTANT_DRIVER_FAULT=die:<name>`/`slow:<name>` self-tests (mirroring
-`dev/selfcheck-tests.sh`'s own), and the CLI (`-j <n>`/`--serial`/`MUTANT_DRIVER_JOBS`/an unknown
-filter). It runs in CI as the last command in both the `selfcheck` and `selfcheck-macos` jobs
+`dev/selfcheck-tests.sh`'s own), the rolling pool's refill and baseline gating, change-based
+selection (`--changed-from`, `MUTANT_DRIVER_SINCE`, `dev/mutants/suite-deps.txt` validation and
+matching, and each full-run fallback), and the CLI (`-j <n>`/`--serial`/`MUTANT_DRIVER_JOBS`/an
+unknown filter). It runs in CI as the last command in both the `selfcheck` and `selfcheck-macos` jobs
 (`selfcheck-macos-driver` does not run it) — but since #365's job-level `if:` already keeps
 `selfcheck-macos` off pull requests entirely, a pull request runs it only via the `selfcheck`
-(ubuntu) job; both jobs run it post-merge, nightly, and on manual dispatch. It is not part of `dev/selfcheck.sh` itself — run it by hand whenever
-`dev/mutant-driver.sh` changes.
+(ubuntu) job; both jobs run it post-merge, nightly, and on manual dispatch. It is not part of
+`dev/selfcheck.sh` itself — run it by hand whenever `dev/mutant-driver.sh` changes.
 
 Per-PR history of what each suite pins — the "Since #N, X gains…" narrative — lives in
 `CHANGELOG.md`'s archive, not here; each suite's own header comment and fixture/case comments
