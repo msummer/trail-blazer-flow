@@ -28,7 +28,7 @@
 # own banners nor blank — surfacing a shell-level diagnostic (e.g. a SIGPIPE broken-pipe message)
 # that the FAIL-line dump alone would otherwise discard.
 #
-# Concurrency (#336; a rolling pool since #472): cases run through a pool of up to $jobs
+# Concurrency (#336, #472): cases run through a pool of up to $jobs
 # concurrent children — a new case starts as soon as a running one finishes, never waiting for the
 # rest of a batch to drain. The main loop (below the case table) only enqueues: it fills the
 # parallel indexed arrays job_name/job_expected/job_perturb/job_desc/job_state (1-based, keyed by
@@ -53,7 +53,7 @@
 # sibling still writing under it. With `jobs=1` there is one slot, so `--serial` runs the identical
 # launch/reap/print code path, one case at a time. No per-case timeout exists (BSD has no portable
 # `timeout`): a hung gate run still keeps the whole suite from finishing — print_ready cannot cross
-# a not-yet-done case — but, unlike the barrier-wave scheduler this pool replaced, the OTHER slots
+# a not-yet-done case — but the OTHER slots
 # keep launching and finishing cases around it while it hangs. The three self-tests below, driven
 # by an env-var-injected SELFCHECK_TESTS_FAULT (harness-internal, never a case-table perturbation),
 # prove exactly three properties mechanically — a `die:<case>` fault (a dead case is counted as a
@@ -1104,7 +1104,7 @@ dispatch_case() {
 # "pending" -> "running" -> "done". next_launch is the lowest not-yet-launched index; next_print is
 # the lowest not-yet-printed index. slot_idx/slot_pid track which case (if any) occupies each of
 # the $jobs slots. n_jobs is set once, after the case table's enqueue loop below finishes, to the
-# highest case_no enqueued (0 for a filter that matches only self-tests, e.g. "harness-").
+# highest case_no enqueued (0 for a filter that matches only self-tests, e.g. "harness-dead").
 case_no=0
 n_jobs=0
 next_launch=1
@@ -1212,8 +1212,9 @@ print_ready() {
   done
 }
 
-# run_pool — drives the pool until every case has been printed. With n_jobs=0 (e.g. a
-# "harness-"-only filter, which enqueues nothing) the loop body never runs.
+# run_pool — drives the pool until every case has been printed. With n_jobs=0 (e.g. the
+# "harness-dead" filter, which matches only a self-test and enqueues nothing) the loop body never
+# runs.
 run_pool() {
   while [ "$next_print" -le "$n_jobs" ]; do
     fill_slots
@@ -1238,7 +1239,7 @@ run_pool() {
 # .verdict file that a slot is recognized as finished): no registry record exercises it, because
 # removing only that clause makes a dead child's slot never reap and this self-test's own nested
 # run hang instead of failing fast — the only symptom of that regression is a CI job timeout, the
-# same limit dev/mutant-driver-tests.sh accepts for the driver's own reap_slots.
+# same gap as the driver's own reap_slots, whose kill -0 half no drv-* record mutates either.
 run_deadcase_selftest() {
   local out rc bad
   out="$(SELFCHECK_TESTS_JOBS=2 SELFCHECK_TESTS_FAULT="die:1.1-hooks" bash "$root/dev/selfcheck-tests.sh" 1.1-hooks 2>&1)"
