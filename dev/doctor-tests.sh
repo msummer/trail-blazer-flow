@@ -122,19 +122,23 @@
 # built only from wrapper-generated fields (never stderr text, a hostname, or an absolute path),
 # that a tracking failure appends `tracking=failed:<slug>` and exits 3 instead of the ordinary 0/1,
 # and that every gh call the tracking step makes is limited to `issue view`/`issue create`/
-# `issue comment`, and (#444) the wrapper's own startup PATH scrub — `codex-path-*` — that a
-# relative, empty, or leading/trailing/doubled-colon PATH entry is refused (`codex-path-relative`),
-# that an entry at or under the repo toplevel is refused however it's reached (in-toplevel, a
-# case-variant spelling when the fixture's own filesystem is case-insensitive,
-# a symlink from outside pointing in, or the work-tree root discovered upward from a subdirectory —
-# `codex-path-repo`), that a `git worktree add` sibling's own gh planted under the shared common dir
-# is refused even though it sits outside that worktree's own toplevel (`codex-path-common-dir`),
-# that an entry under `/tmp` or `$TMPDIR` is refused however it's spelled — the real path, or a
-# symlink alias of it (`codex-path-tmp`) — and that a missing entry is dropped silently while a
-# surviving entry is kept in its PHYSICAL form, spelling included, never a symlink's own path
-# (`codex-path-safe`), against a per-fixture PATH-scrub seam (mk_sched's own rewrite of the
-# wrapper's `slash_tmp` line, plus a per-fixture TMPDIR) that keeps every fixture's own stub tree
-# out of the wrapper's own idea of "/tmp".
+# `issue comment`, and (#443) that every one of those gh calls, and harness-stop.sh's own preflight
+# query, is bounded by TBF_CODEX_GH_TIMEOUT: a hung stub `gh` is TERM'd then KILL'd (KILL being the
+# only signal that can end a call launched from inside `finish`, which ignores TERM/INT), a
+# harness-stop.sh timeout folds into its existing exit-4 path, and a tracking-call timeout records
+# the matching `failed:<call>-timeout` slug and exits 3, and (#444) the wrapper's own startup PATH
+# scrub — `codex-path-*` — that a relative, empty, or leading/trailing/doubled-colon PATH entry is
+# refused (`codex-path-relative`), that an entry at or under the repo toplevel is refused however
+# it's reached (in-toplevel, a case-variant spelling when the fixture's own filesystem is
+# case-insensitive, a symlink from outside pointing in, or the work-tree root discovered upward
+# from a subdirectory — `codex-path-repo`), that a `git worktree add` sibling's own gh planted
+# under the shared common dir is refused even though it sits outside that worktree's own toplevel
+# (`codex-path-common-dir`), that an entry under `/tmp` or `$TMPDIR` is refused however it's
+# spelled — the real path, or a symlink alias of it (`codex-path-tmp`) — and that a missing entry
+# is dropped silently while a surviving entry is kept in its PHYSICAL form, spelling included,
+# never a symlink's own path (`codex-path-safe`), against a per-fixture PATH-scrub seam (mk_sched's
+# own rewrite of the wrapper's `slash_tmp` line, plus a per-fixture TMPDIR) that keeps every
+# fixture's own stub tree out of the wrapper's own idea of "/tmp".
 #
 # Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
 # dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
@@ -3656,12 +3660,11 @@ STUBEOF
 # sequence number among calls of that kind) BEFORE doing anything else with it — see
 # expect_track_stdin_empty below, which asserts every such capture is empty, proving the
 # failure-tracking step's own gh calls (I3, #428) all get `< /dev/null`. "issue list" is
-# DELIBERATELY never captured here: it is harness-stop.sh's own un-redirected preflight query, so
-# it legitimately inherits the wrapper's real stdin (the run_sched sentinel, fed from a FILE, whose
-# read position is shared across every process that inherits fd 0) — draining it here would
-# silently mask a later, genuinely mutated call's own leak on that same shared fd, since a file
-# (unlike a pipe) has only one read position for every reader that shares its underlying open file
-# description. Every call also appends, when it
+# DELIBERATELY never captured here: it is harness-stop.sh's own preflight query, run through
+# bounded_run (#443) rather than directly by the failure-tracking step, so it is never one of the
+# three recognised calls this capture is pinning `< /dev/null` for — since #443, harness-stop.sh
+# (and so its own "issue list" call) gets `< /dev/null` too, from bounded_run's own child redirect,
+# never the wrapper's real stdin (the run_sched sentinel). Every call also appends, when it
 # matches a recognised shape, one summary line to DIR/gh.calls ("issue list", "issue view <n>",
 # "issue create labels=<comma-joined>", or "issue comment <n>", or "unexpected" for anything else)
 # — the failure-tracking step's own only allowed calls. Each issue create/comment also
@@ -3684,15 +3687,40 @@ STUBEOF
 #     "stub: gh tracking failure" to stderr and exits 1 (gh.calls untouched on that failing call) —
 #     for a fixture that means to let harness-stop.sh's own preflight query through while making the
 #     failure-tracking step's own gh calls fail.
+#   hang-list/hang-view/hang-create/hang-comment (#443) — the one call named by the mode's own
+#     suffix (issue list/view/create/comment respectively) writes its own pid to DIR/gh.hang.pid,
+#     then execs the REAL `sleep` (resolved via `command -v` at BUILD time, the
+#     build_stub_sched_codex idiom) for 60s, standing in for a `gh` that never answers — this
+#     happens right after the gh.log append, before any record_stdin/record_call, so a hung call is
+#     never counted as a recognised one. Every OTHER call behaves exactly as under `ok` (in
+#     particular, harness-stop.sh's own "issue list" still succeeds under hang-view/-create/
+#     -comment, so preflight reaches the failure-tracking step). The stub sets no TERM disposition
+#     of its own: a tracking call's own hang inherits `finish`'s own ignored TERM (#443's own
+#     bounded_run relies on this), while harness-stop.sh's preflight query dies to TERM directly,
+#     since it runs before `finish` ever installs that trap.
 build_stub_sched_gh() {
-  local dir="$1" mode="$2"
+  local dir="$1" mode="$2" real_sleep
+  real_sleep="$(command -v sleep)"
   mkdir -p "$dir"
   {
     printf '#!%s\n' "$bash_bin"
     printf 'dir=%q\n' "$dir"
     printf 'mode=%q\n' "$mode"
+    printf 'real_sleep=%q\n' "$real_sleep"
     cat <<'STUBEOF'
 printf '%s\n' "$*" >> "$dir/gh.log"
+
+hang_target=""
+case "$mode" in
+  hang-list) hang_target=list ;;
+  hang-view) hang_target=view ;;
+  hang-create) hang_target=create ;;
+  hang-comment) hang_target=comment ;;
+esac
+if [ "${1:-}" = issue ] && [ -n "$hang_target" ] && [ "${2:-}" = "$hang_target" ]; then
+  printf '%s' "$$" > "$dir/gh.hang.pid"
+  exec "$real_sleep" 60
+fi
 
 record_call() {
   printf '%s\n' "$1" >> "$dir/gh.calls"
@@ -3813,8 +3841,10 @@ STUBEOF
 # ":$PATH" itself), TMPDIR = $sched_tmpdir (#444 — this fixture's own private stand-in, so a
 # caller's own TMPDIR=val in VAR=val, which is placed AFTER this default in the env list, still
 # wins), CLAUDE_PID always unset (see the block header above), and stdin fed from $sched_sentinel —
-# files, never $(…), so no background child of the wrapper can ever hold a pipe open. Unless a
-# caller's own VAR=val list already names TBF_CODEX_RUN_TIMEOUT/
+# files, never $(…), so no background child of the wrapper can ever hold a pipe open. Also unsets
+# TBF_CODEX_GH_TIMEOUT (#443) before building the env, so a developer's own exported value never
+# leaks into a fixture — a case that means to exercise the gh bound sets it explicitly in its own
+# VAR=val list. Unless a caller's own VAR=val list already names TBF_CODEX_RUN_TIMEOUT/
 # TBF_CODEX_RUN_KILL_GRACE, a bounded fixture-only default (20s/5s, deliberately NOT the wrapper's
 # own 14400s/30s production default) is injected instead, so a mutant that breaks the watchdog's
 # own timing bounds a stuck run to seconds on a developer's real machine, never hours. The literal
@@ -3855,7 +3885,7 @@ run_sched() {
   outfile="$(mktemp)"; errfile="$(mktemp)"
   (
     cd "${sched_cwd:-$sched_repo}" &&
-    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
+    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE TBF_CODEX_GH_TIMEOUT &&
     env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
         PATH="$pathval" TMPDIR="$sched_tmpdir" ${envargs[@]+"${envargs[@]}"} \
         "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh" "$@"
@@ -4333,7 +4363,11 @@ case_codex_sched_setup_error() {
 }
 
 # codex-sched-stop-exit — the fake plugin's own harness-stop.sh replaced with a stub that exits 2
-# (neither 0, 3, nor 4): preflight-failed reason=harness-stop-exit-2, exit 1, no argc.
+# (neither 0, 3, nor 4): preflight-failed reason=harness-stop-exit-2, exit 1, no argc. The stub also
+# writes one line of its own to stderr (#443), which must land in preflight.log: bounded_run's own
+# append-mode launch is what puts it there (harness-stop.sh's combined stdout+stderr, appended).
+# mutant:443-append-stderr-dropped — bin: bounded_run's own append-mode launch gains a
+#   `2>/dev/null`: the stub's own stderr line no longer reaches preflight.log.
 case_codex_sched_stop_exit() {
   mk_sched sched-stop-exit
   build_stub_sched_codex "$sched_stub" complete
@@ -4341,6 +4375,7 @@ case_codex_sched_stop_exit() {
 
   {
     printf '#!%s\n' "$bash_bin"
+    printf 'echo "stub: harness-stop stderr line" >&2\n'
     printf 'exit 2\n'
   } > "$sched_plugin/bin/harness-stop.sh"
   chmod +x "$sched_plugin/bin/harness-stop.sh"
@@ -4349,6 +4384,13 @@ case_codex_sched_stop_exit() {
   expect_rc 1
   expect_sched_out "outcome=preflight-failed reason=harness-stop-exit-2"
   expect_no_file "$sched_stub/argc"
+
+  local rd
+  rd="$(sched_out_rd)"
+  case "$(cat "$rd/preflight.log" 2>/dev/null)" in
+    *"stub: harness-stop stderr line"*) : ;;
+    *) __ok=0; __why="${__why}preflight.log missing the harness-stop.sh stub's own stderr line\n" ;;
+  esac
 }
 
 # codex-sched-rundir-uncreatable — trail-blazer/runs pre-created as a plain FILE (not a directory):
@@ -4769,6 +4811,9 @@ case_codex_sched_timeout_invalid() {
 # mutant:427-prune-filter — bin: the whole two-stage name filter in prune_runs collapses to
 #   `*)` (every directory counts as a run, no digits-only-suffix check). Killed here: both
 #   non-matching decoys — sorting before every real stamp — are wrongly swept away as "the oldest".
+# mutant:443-prune-gh-out-kept — bin: prune_runs' own rm -f list drops
+#   "$runs_root/$old/gh.out": the oldest fake dir's own leftover gh.out (seeded below, #443) then
+#   blocks its rmdir, so that directory survives pruning instead of being swept away.
 case_codex_sched_prune() {
   mk_sched sched-prune
   build_stub_sched_codex "$sched_stub" complete
@@ -4783,6 +4828,10 @@ case_codex_sched_prune() {
     printf 'outcome=completed\n' > "$sched_common/trail-blazer/runs/$stamp/record.txt"
     i=$((i + 1))
   done
+  # #443: the oldest fake run dir also carries a leftover gh.out, the same shape a timed-out
+  # tracking call can leave behind — prune_runs must remove it too, or rmdir on this directory
+  # fails and it survives pruning it should not.
+  : > "$sched_common/trail-blazer/runs/20000101T000001Z-1/gh.out"
   printf 'not a run dir\n' > "$sched_common/trail-blazer/runs/notes.txt"
   mkdir -p "$sched_common/trail-blazer/runs/0-manual"
   mkdir -p "$sched_common/trail-blazer/runs/19990101T000000Z-abc"
@@ -4910,10 +4959,13 @@ ERR: $sched_err"
 # streak=failing, record.txt's tracking=created/tracking-issue=101, and an issue body built only
 # from wrapper-generated fields (outcome, run id, record path, exit status) with no usage-limit
 # hint (the codex stub's own stderr never mentions one).
-# mutant:428-tracking-stdin-inherited — bin: track_create's own `issue create` call's trailing
-#   `< /dev/null` dropped. expect_track_stdin_empty catches the run_sched sentinel reaching any
-#   case's create call in this stub's "ok" mode; the "list-only" mode never captures stdin, since it
-#   fails every tracking call before the recognised-call handler.
+# mutant:428-tracking-stdin-inherited — bin: bounded_run's own capture-mode launch line's trailing
+#   `< /dev/null` becomes `<&0` (#443 — bounded_run now runs every tracking gh call, so the mutant
+#   moves from track_create's own former inline redirect to this one shared site). The explicit
+#   `<&0` form is needed because a dropped redirect is invisible on an async command in
+#   non-interactive bash (#427 Q1). expect_track_stdin_empty catches the run_sched sentinel
+#   reaching any recognised call this stub's "ok" mode captures; the "list-only" mode never
+#   captures stdin, since it fails every tracking call before the recognised-call handler.
 case_codex_track_first_failure() {
   mk_sched track-first-failure
   build_stub_sched_codex "$sched_stub" fail
@@ -5125,6 +5177,9 @@ case_codex_track_recovery() {
 # failed:view-failed, exit 3, no create call.
 # mutant:428-gh-fail-silent — bin: `case "$tracking" in failed:*) code=3 ;; esac` -> `:`, so a
 #   run whose tracking value is `failed:*` keeps its ordinary 0/1 exit code instead of 3.
+# mutant:443-capture-stderr-dropped — bin: bounded_run's own capture-mode launch gains a
+#   `2>/dev/null`: the list-only stub's own "stub: gh tracking failure" stderr line no longer
+#   reaches this wrapper's own stderr.
 case_codex_track_gh_fail() {
   mk_sched track-gh-fail-create
   build_stub_sched_codex "$sched_stub" fail
@@ -5138,6 +5193,7 @@ case_codex_track_gh_fail() {
     || { __ok=0; __why="${__why}record.txt's first line is not outcome=failed\n"; }
   expect_run_record_line "$rd" "tracking=failed:create-failed"
   expect "tracking failed"
+  expect "stub: gh tracking failure"
   local lastline
   lastline="$(printf '%s\n' "$sched_out" | tail -1)"
   case "$lastline" in
@@ -5309,6 +5365,388 @@ case_codex_track_state_write_failed() {
   expect_track_stdin_empty
 
   chmod 755 "$sched_common/trail-blazer"
+}
+
+# --- codex scheduled run gh time bound (#443) ----------------------------------------------------
+# bin/codex-scheduled-run.sh's own bounded_run: every `gh` call this wrapper makes (harness-stop.sh's
+# preflight query, and each of the four failure-tracking calls) is bounded by TBF_CODEX_GH_TIMEOUT
+# (default 120s), never left to hang the launchd job forever. Named codex-ghbound-*, deliberately
+# outside the codex-sched-/codex-track- substrings those two mutant families filter on (plan
+# ADVISORY Q8's own precedent), so those records' measured sets aren't widened by anything added
+# here. Every hang case passes TBF_CODEX_GH_TIMEOUT=2 and asserts the run finishes well under the
+# stub's own 60s natural lifetime, then kills the orphaned gh.hang.pid process itself.
+
+# codex-ghbound-stop-hang — harness-stop.sh's own "gh issue list" preflight query hangs forever;
+# TBF_CODEX_GH_TIMEOUT=2 bounds the whole harness-stop.sh invocation. harness-stop.sh has no signal
+# trap of its own, so the wrapper's TERM ends it well inside the bound; the timeout folds into the
+# existing exit-4 path (skipped-stop reason=stop-unknown) and codex is never launched.
+# mutant:443-bound-deadline-ignored — bounded_run's own first poll loop's deadline check becomes an
+#   always-true condition, so it never times out — this case (and every track-* hang case below)
+#   then waits out real time instead of the 2s bound.
+# mutant:443-stop-timeout-unmapped — a bounded harness-stop.sh timeout no longer maps to stop_rc=4:
+#   its own TERM-killed exit status falls through to preflight-failed harness-stop-exit-<n> instead.
+case_codex_ghbound_stop_hang() {
+  mk_sched ghbound-stop-hang
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" hang-list
+
+  local t0=$SECONDS
+  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=2 --
+  local elapsed=$((SECONDS - t0))
+  expect_rc 0
+  expect_sched_out "outcome=skipped-stop reason=stop-unknown"
+  expect_no_file "$sched_stub/argc"
+  expect_record_line "tracking=none"
+
+  local rd pf
+  rd="$(sched_run_dir)"
+  pf="$rd/preflight.log"
+  case "$(cat "$pf" 2>/dev/null)" in
+    *"did not finish within 2s"*) : ;;
+    *) __ok=0; __why="${__why}preflight.log missing the timeout line: $(cat "$pf" 2>/dev/null)\n" ;;
+  esac
+  if [ "$elapsed" -ge 25 ]; then
+    __ok=0; __why="${__why}run took ${elapsed}s, not well under the 2s gh bound\n"
+  fi
+
+  if [ -s "$sched_stub/gh.hang.pid" ]; then
+    kill -9 "$(cat "$sched_stub/gh.hang.pid")" 2>/dev/null
+  fi
+}
+
+# codex-ghbound-track-create — a first failure with no prior tracking state whose own `gh issue
+# create` hangs forever: tracking=failed:create-timeout, exit 3 (overriding the ordinary 1), no
+# state file ever written, and a stderr line saying GitHub may already have been updated. The hang
+# stub is dead afterwards — proving KILL ran, since TERM alone is inherited-ignored inside `finish`.
+# mutant:443-bound-kill-skipped — bounded_run's own post-grace KILL becomes a no-op: this case (and
+#   the other two track-* cases below) never actually ends the hang stub, so it survives well past
+#   the bound.
+# mutant:443-create-timeout-unmapped — track_create's own `if $bounded_timed_out; then` becomes
+#   `if false; then`: the timeout falls through to the ordinary `gh_rc`/`create-failed` handling
+#   instead of the create-timeout slug.
+# mutant:443-gh-out-kept — bounded_run's own capture-mode `rm -f "$file"` becomes `:`: the run
+#   directory's own gh.out survives this timed-out call (see codex-ghbound-env for the non-hung
+#   half of this same mutant's proof).
+case_codex_ghbound_track_create() {
+  mk_sched ghbound-track-create
+  build_stub_sched_codex "$sched_stub" fail
+  build_stub_sched_gh "$sched_stub" hang-create
+
+  local t0=$SECONDS
+  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=2 --
+  local elapsed=$((SECONDS - t0))
+  expect_rc 3
+  local rd
+  rd="$(sched_out_rd)"
+  [ "$(head -1 "$rd/record.txt" 2>/dev/null)" = "outcome=failed" ] \
+    || { __ok=0; __why="${__why}record.txt's first line is not outcome=failed\n"; }
+  expect_run_record_line "$rd" "tracking=failed:create-timeout"
+  local lastline
+  lastline="$(printf '%s\n' "$sched_out" | tail -1)"
+  case "$lastline" in
+    "outcome=failed reason="*" record="*) : ;;
+    *) __ok=0; __why="${__why}last stdout line is not the outcome/reason/record summary: $lastline\n" ;;
+  esac
+  expect "may already have been updated"
+  expect_no_file "$sched_common/trail-blazer/scheduled-failure-issue"
+  expect_no_file "$rd/gh.out"
+  if [ "$elapsed" -ge 25 ]; then
+    __ok=0; __why="${__why}run took ${elapsed}s, not well under the 2s gh bound\n"
+  fi
+
+  local hpid
+  hpid="$(cat "$sched_stub/gh.hang.pid" 2>/dev/null)"
+  if [ -z "$hpid" ]; then
+    __ok=0; __why="${__why}gh.hang.pid was never written — the create call never reached the hang stub\n"
+  elif kill -0 "$hpid" 2>/dev/null; then
+    __ok=0; __why="${__why}gh hang pid $hpid still alive after the create-timeout — only KILL should end it\n"
+    kill -9 "$hpid" 2>/dev/null
+  fi
+}
+
+# codex-ghbound-track-view — a seeded failing streak whose own `gh issue view` hangs forever:
+# tracking=failed:view-timeout, exit 3, no issue create call, tracking state byte-identical, and
+# the generic "GitHub was not updated" stderr wording (view-timeout is not one of the
+# may-already-have-been-updated slugs, since a read can't itself have mutated anything).
+# mutant:443-view-timeout-unmapped — the view site's own `if $bounded_timed_out; then` becomes
+#   `if false; then`: the timeout falls through to the ordinary `gh_rc`/`view-failed` handling.
+case_codex_ghbound_track_view() {
+  mk_sched ghbound-track-view
+  build_stub_sched_codex "$sched_stub" fail
+  build_stub_sched_gh "$sched_stub" hang-view
+  seed_track_state 555 failing
+
+  local state_before
+  state_before="$(cat "$sched_common/trail-blazer/scheduled-failure-issue" 2>/dev/null)"
+
+  local t0=$SECONDS
+  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=2 --
+  local elapsed=$((SECONDS - t0))
+  expect_rc 3
+  local rd
+  rd="$(sched_out_rd)"
+  expect_run_record_line "$rd" "tracking=failed:view-timeout"
+  if [ -f "$sched_stub/gh.calls" ]; then
+    case "$(cat "$sched_stub/gh.calls")" in
+      *"issue create"*) __ok=0; __why="${__why}a create call happened despite a view timeout\n" ;;
+    esac
+  fi
+  local state_after
+  state_after="$(cat "$sched_common/trail-blazer/scheduled-failure-issue" 2>/dev/null)"
+  [ "$state_before" = "$state_after" ] \
+    || { __ok=0; __why="${__why}tracking state changed after a view timeout\n"; }
+  expect "GitHub was not updated"
+  if [ "$elapsed" -ge 25 ]; then
+    __ok=0; __why="${__why}run took ${elapsed}s, not well under the 2s gh bound\n"
+  fi
+
+  local hpid
+  hpid="$(cat "$sched_stub/gh.hang.pid" 2>/dev/null)"
+  if [ -z "$hpid" ]; then
+    __ok=0; __why="${__why}gh.hang.pid was never written — the view call never reached the hang stub\n"
+  elif kill -0 "$hpid" 2>/dev/null; then
+    __ok=0; __why="${__why}gh hang pid $hpid still alive after the view-timeout\n"
+    kill -9 "$hpid" 2>/dev/null
+  fi
+}
+
+# codex-ghbound-track-comment — two sub-runs, both against a hanging `gh issue comment`: (a) a
+# seeded failing streak plus a completed run hangs on the RECOVERY comment site; (b) a fresh
+# fixture with a seeded recovered streak plus a failure hangs on the FAILING-AGAIN comment site
+# (its own preceding `gh issue view` still succeeds — OPEN — under hang-comment, since only the
+# comment sub-command is intercepted). Both give tracking=failed:comment-timeout, exit 3
+# (overriding 0 in (a)), tracking state byte-identical, and the hang stub dead afterwards.
+# mutant:443-comment-timeout-unmapped — the RECOVERY comment site's own `if $bounded_timed_out;
+#   then` becomes `if false; then` (its own preceding `bounded_run` call line included in the edit
+#   to stay textually distinct from the failing-again site below): sub-run (a) falls through to the
+#   ordinary `gh_rc`/`comment-failed` handling instead.
+# mutant:443-refail-comment-timeout-unmapped — the FAILING-AGAIN comment site's own
+#   `if $bounded_timed_out; then` becomes `if false; then`: sub-run (b) falls through the same way.
+# mutant:443-comment-timeout-wording-lost — `finish`'s own stderr case arm,
+#   `failed:create-timeout|failed:comment-timeout)`, drops `failed:comment-timeout` from the
+#   pattern: both sub-runs still get the right tracking=/exit-code slug, but the stderr wording
+#   falls through to the generic "GitHub was not updated" line instead of "may already have been
+#   updated" — only an assertion on the wording itself catches this.
+case_codex_ghbound_track_comment() {
+  mk_sched ghbound-track-comment-a
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" hang-comment
+  seed_track_state 555 failing
+
+  local state_before_a
+  state_before_a="$(cat "$sched_common/trail-blazer/scheduled-failure-issue" 2>/dev/null)"
+
+  local t0=$SECONDS
+  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=2 --
+  local elapsed=$((SECONDS - t0))
+  expect_rc 3
+  local rd
+  rd="$(sched_out_rd)"
+  expect_run_record_line "$rd" "tracking=failed:comment-timeout"
+  expect "may already have been updated"
+  local state_after_a
+  state_after_a="$(cat "$sched_common/trail-blazer/scheduled-failure-issue" 2>/dev/null)"
+  [ "$state_before_a" = "$state_after_a" ] \
+    || { __ok=0; __why="${__why}(a) tracking state changed after a comment timeout\n"; }
+  if [ "$elapsed" -ge 25 ]; then
+    __ok=0; __why="${__why}(a) run took ${elapsed}s, not well under the 2s gh bound\n"
+  fi
+  local hpid_a
+  hpid_a="$(cat "$sched_stub/gh.hang.pid" 2>/dev/null)"
+  if [ -z "$hpid_a" ]; then
+    __ok=0; __why="${__why}(a) gh.hang.pid was never written — the comment call never reached the hang stub\n"
+  elif kill -0 "$hpid_a" 2>/dev/null; then
+    __ok=0; __why="${__why}(a) gh hang pid $hpid_a still alive after the comment-timeout\n"
+    kill -9 "$hpid_a" 2>/dev/null
+  fi
+
+  mk_sched ghbound-track-comment-b
+  build_stub_sched_codex "$sched_stub" fail
+  build_stub_sched_gh "$sched_stub" hang-comment
+  seed_track_state 555 recovered
+
+  local state_before_b
+  state_before_b="$(cat "$sched_common/trail-blazer/scheduled-failure-issue" 2>/dev/null)"
+
+  t0=$SECONDS
+  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=2 --
+  elapsed=$((SECONDS - t0))
+  expect_rc 3
+  rd="$(sched_out_rd)"
+  expect_run_record_line "$rd" "tracking=failed:comment-timeout"
+  expect "may already have been updated"
+  local state_after_b
+  state_after_b="$(cat "$sched_common/trail-blazer/scheduled-failure-issue" 2>/dev/null)"
+  [ "$state_before_b" = "$state_after_b" ] \
+    || { __ok=0; __why="${__why}(b) tracking state changed after a comment timeout\n"; }
+  if [ "$elapsed" -ge 25 ]; then
+    __ok=0; __why="${__why}(b) run took ${elapsed}s, not well under the 2s gh bound\n"
+  fi
+  local hpid_b
+  hpid_b="$(cat "$sched_stub/gh.hang.pid" 2>/dev/null)"
+  if [ -z "$hpid_b" ]; then
+    __ok=0; __why="${__why}(b) gh.hang.pid was never written — the comment call never reached the hang stub\n"
+  elif kill -0 "$hpid_b" 2>/dev/null; then
+    __ok=0; __why="${__why}(b) gh hang pid $hpid_b still alive after the comment-timeout\n"
+    kill -9 "$hpid_b" 2>/dev/null
+  fi
+}
+
+# codex-ghbound-wrapper-killed — harness-stop.sh itself replaced with a stub that hangs (the
+# codex-sched-stop-exit replaced-sibling idiom, combined with a real background hang, TBF_CODEX_GH_
+# TIMEOUT=60 so the bound itself never fires): the wrapper process is sent TERM while its own
+# bounded harness-stop.sh child is still running. on_wrapper_signal's own immediate KILL of
+# $bounded_pid ends it well inside the wrapper's own kill grace — codex is never launched.
+# mutant:443-wrapper-bounded-orphaned — on_wrapper_signal's own bounded-child KILL line deleted:
+#   the harness-stop.sh stub survives the wrapper being killed.
+case_codex_ghbound_wrapper_killed() {
+  mk_sched ghbound-wrapper-killed
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  {
+    printf '#!%s\n' "$bash_bin"
+    printf 'dir=%q\n' "$sched_stub"
+    printf 'real_sleep=%q\n' "$(command -v sleep)"
+    cat <<'STUBEOF'
+printf '%s' "$$" > "$dir/stop.pid"
+exec "$real_sleep" 60
+STUBEOF
+  } > "$sched_plugin/bin/harness-stop.sh"
+  chmod +x "$sched_plugin/bin/harness-stop.sh"
+
+  local outfile errfile
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  (
+    cd "$sched_repo" &&
+    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE TBF_CODEX_GH_TIMEOUT &&
+    exec env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+        PATH="$sched_stub:$PATH" TMPDIR="$sched_tmpdir" TBF_CODEX_RUN_TIMEOUT=30 \
+        TBF_CODEX_RUN_KILL_GRACE=5 TBF_CODEX_GH_TIMEOUT=60 \
+        "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
+  ) < "$sched_sentinel" > "$outfile" 2> "$errfile" &
+  local wrapper_pid=$!
+
+  local waited=0
+  while [ ! -s "$sched_stub/stop.pid" ] && [ "$waited" -lt 10000 ]; do
+    sleep 0.05
+    waited=$((waited + 50))
+  done
+  if [ ! -s "$sched_stub/stop.pid" ]; then
+    __ok=0; __why="${__why}the harness-stop.sh stub never started — can't exercise a mid-preflight kill\n"
+    kill -9 "$wrapper_pid" 2>/dev/null
+    rm -f "$outfile" "$errfile"
+    return
+  fi
+  local stop_stub_pid
+  stop_stub_pid="$(cat "$sched_stub/stop.pid")"
+
+  kill -TERM "$wrapper_pid" 2>/dev/null
+
+  local wrapper_waited=0
+  while kill -0 "$wrapper_pid" 2>/dev/null && [ "$wrapper_waited" -lt 20000 ]; do
+    sleep 0.1
+    wrapper_waited=$((wrapper_waited + 100))
+  done
+  if kill -0 "$wrapper_pid" 2>/dev/null; then
+    __ok=0; __why="${__why}the wrapper was still running well past its own kill grace — on_wrapper_signal did not escalate the bounded harness-stop.sh child\n"
+    kill -9 "$wrapper_pid" "$stop_stub_pid" 2>/dev/null
+    wait "$wrapper_pid" 2>/dev/null
+    rm -f "$outfile" "$errfile"
+    return
+  fi
+  wait "$wrapper_pid" 2>/dev/null
+  doctor_rc=$?
+  sched_out="$(cat "$outfile")"
+  sched_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $sched_out
+ERR: $sched_err"
+
+  expect_rc 1
+  expect_sched_out "outcome=died-mid-run reason=wrapper-signal-15"
+  expect_no_file "$sched_stub/argc"
+
+  local stop_alive="" waited2=0
+  while [ "$waited2" -lt 10000 ]; do
+    stop_alive=""
+    kill -0 "$stop_stub_pid" 2>/dev/null && stop_alive="$stop_stub_pid"
+    [ -z "$stop_alive" ] && break
+    sleep 0.1
+    waited2=$((waited2 + 100))
+  done
+  if [ -n "$stop_alive" ]; then
+    __ok=0; __why="${__why}harness-stop.sh stub pid $stop_stub_pid still alive after the wrapper was killed\n"
+    kill -9 "$stop_stub_pid" 2>/dev/null
+  fi
+}
+
+# codex-ghbound-env — a local stop file set, four sequential runs against ONE fixture: (a) no
+# TBF_CODEX_GH_TIMEOUT override -> skipped-stop reason=stop, exit 0, well under 60s — proving the
+# 120s default validates AND that bounded_run returns as soon as harness-stop.sh itself exits,
+# rather than waiting out the bound (the reaping assumption bounded_run's own header names); (b)
+# TBF_CODEX_GH_TIMEOUT=abc -> preflight-failed reason=bad-timeout, exit 1, tracking=created — the
+# tracking step still runs to completion, proving the 120 fallback (gh_timeout stays the literal
+# 120 default until step 1 accepts an override) is what bounds it, not the invalid raw value, and
+# its own gh.out is cleaned up after that ordinary (non-hung) capture call; (c) TBF_CODEX_GH_TIMEOUT=0
+# -> the same bad-timeout, tracking=repeat (against the state (b) just created) — the same 120
+# fallback bounds this call too; (d) TBF_CODEX_GH_TIMEOUT=08 -> the same bad-timeout, and codex is
+# never launched (no argc) — a leading zero is rejected outright, before it can ever reach the
+# digits-only/`-gt 0` checks or bash's own arithmetic inside bounded_run.
+# mutant:443-gh-timeout-default — `${TBF_CODEX_GH_TIMEOUT:-120}` becomes `:-0`: sub-run (a) now
+#   fails preflight validation instead of reaching skipped-stop.
+# mutant:443-gh-timeout-fallback — the literal `gh_timeout=120` global becomes
+#   `gh_timeout="$gh_timeout_raw"`, losing the safe fallback while validation is still pending: (b)
+#   aborts before ever reaching its own outcome line, and the state (b) would have written for (c)
+#   to build on is never written.
+# mutant:443-bound-waits-full — bounded_run's own first poll loop drops its `kill -0` check, so it
+#   waits out the full bound even after its child has already exited: sub-run (a) then takes about
+#   120s instead of returning promptly. codex-ghbound-wrapper-killed also fails under this same
+#   mutant: once on_wrapper_signal KILLs the bounded harness-stop.sh stub, `finish`'s own
+#   tracking-issue creation opens a fresh bounded_run call for `gh issue create` (an "ok" stub that
+#   exits almost instantly), but this mutant stalls that call for the full 60s bound too, so the
+#   wrapper process itself outlives that case's own 20s wait for it to exit.
+# mutant:443-gh-timeout-leading-zero-accepted — the leading-zero rejection arm (`0?*) finish
+#   preflight-failed bad-timeout ;;`) deleted: sub-run (d)'s "08" now passes preflight step 2 and
+#   reaches bounded_run's own arithmetic, which aborts (see the bin's own preflight step 2 comment)
+#   instead of ending in a clean bad-timeout.
+# mutant:443-gh-out-kept — bounded_run's own capture-mode `rm -f "$file"` becomes `:`: sub-run (b)'s
+#   own gh.out (an ordinary, non-hung capture call) survives (see codex-ghbound-track-create for
+#   this same mutant's timed-out half).
+case_codex_ghbound_env() {
+  mk_sched ghbound-env
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+  mkdir -p "$sched_common/trail-blazer"
+  touch "$sched_common/trail-blazer/stop"
+
+  local t0=$SECONDS
+  run_sched "$sched_stub:$PATH" --
+  local elapsed=$((SECONDS - t0))
+  expect_rc 0
+  expect_sched_out "outcome=skipped-stop reason=stop"
+  if [ "$elapsed" -ge 60 ]; then
+    __ok=0; __why="${__why}(a) run took ${elapsed}s — should return once harness-stop.sh exits, not wait out the gh bound\n"
+  fi
+
+  local rd
+  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=abc --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=bad-timeout"
+  rd="$(sched_out_rd)"
+  expect_run_record_line "$rd" "tracking=created"
+  expect_no_file "$rd/gh.out"
+
+  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=0 --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=bad-timeout"
+  rd="$(sched_out_rd)"
+  expect_run_record_line "$rd" "tracking=repeat"
+
+  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=08 --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=bad-timeout"
+  expect_no_file "$sched_stub/argc"
 }
 
 # --- codex scheduled run PATH scrub (#444) --------------------------------------------------
@@ -6497,7 +6935,7 @@ cases=(
   "codex-sched-preflight-tools|case_codex_sched_preflight_tools|#427: exactly one of codex/gh/jq missing on the combined PATH each gives preflight-failed reason=missing-tool:<name>, no argc; missing-tool:jq/:codex still exit 1 (gh is present, so I3/#428's tracking step succeeds), missing-tool:gh exits 3 with tracking=failed:gh-not-found"
   "codex-sched-preflight-drift|case_codex_sched_preflight_drift|#427: a hand-edited .codex/agents/planner.toml -> preflight-failed reason=codex-setup-drift, preflight.log names the drift, no argc, gh.calls has no issue list line (stop is never reached, even though I3/#428 now makes one issue create)"
   "codex-sched-setup-error|case_codex_sched_setup_error|#427: codex-setup.sh replaced with a stub exiting 3 -> preflight-failed reason=codex-setup-error, no argc"
-  "codex-sched-stop-exit|case_codex_sched_stop_exit|#427: harness-stop.sh replaced with a stub exiting 2 -> preflight-failed reason=harness-stop-exit-2, no argc"
+  "codex-sched-stop-exit|case_codex_sched_stop_exit|#427: harness-stop.sh replaced with a stub exiting 2 -> preflight-failed reason=harness-stop-exit-2, no argc; the stub's own stderr line lands in preflight.log (#443, bounded_run's own append-mode redirect)"
   "codex-sched-rundir-uncreatable|case_codex_sched_rundir_uncreatable|#427: trail-blazer/runs pre-created as a regular file -> mkdir -p fails, exit 2, no argc (the same failure shape a read-only .git under Codex produces)"
   "codex-sched-failed|case_codex_sched_failed|#427: the launched codex exits 1 -> failed reason=exit-1, stderr.log non-empty; a no-final-message run -> failed reason=no-final-message"
   "codex-sched-unattended-stop|case_codex_sched_unattended_stop|#427: last-message.md's only line is exactly \"Unattended stop: permission-denied\" -> failed reason=unattended-stop-permission-denied; the same phrase embedded mid-line -> completed"
@@ -6508,18 +6946,24 @@ cases=(
   "codex-sched-wrapper-killed-forwards-term|case_codex_sched_wrapper_killed_forwards_term|#427: the codex stub forwards TERM to its own child (models the real Node launcher) -> the wrapper's TERM-then-poll-then-KILL gives it time to react, so neither the stub nor its child survives"
   "codex-sched-wrapper-killed-noterm|case_codex_sched_wrapper_killed_noterm|#427: the codex stub ignores TERM outright -> on_wrapper_signal's own post-grace KILL is the only thing that can end it, and does, well inside the bounded poll"
   "codex-sched-timeout-invalid|case_codex_sched_timeout_invalid|#427: TBF_CODEX_RUN_TIMEOUT=abc/=0 and TBF_CODEX_RUN_KILL_GRACE=abc/=0 -> all four preflight-failed reason=bad-timeout, no argc"
-  "codex-sched-prune|case_codex_sched_prune|#427: 101 pre-seeded run directories plus a non-matching file and two non-matching directories (wrong shape; right shape but non-digit suffix), all sorting before every stamp -> exactly 100 stamp-shaped dirs remain after one run, the two oldest stamp dirs gone, the new run's directory present, every non-matching entry untouched"
+  "codex-sched-prune|case_codex_sched_prune|#427: 101 pre-seeded run directories (the oldest carrying a leftover gh.out, #443) plus a non-matching file and two non-matching directories (wrong shape; right shape but non-digit suffix), all sorting before every stamp -> exactly 100 stamp-shaped dirs remain after one run, the two oldest stamp dirs (and their gh.out) gone, the new run's directory present, every non-matching entry untouched"
   "codex-sched-own-dir|case_codex_sched_own_dir|#427: a decoy directory first on PATH shadows every sibling script -> completed, the decoy's sentinel is never created — siblings resolve only from the wrapper's own directory"
   "codex-sched-usage|case_codex_sched_usage|#427: --help exits 0 naming usage:; --bogus exits 2; outside a repo or with no git on PATH exits 2, no trail-blazer directory created"
   "codex-track-first-failure|case_codex_track_first_failure|I3, #428: a first failure with no prior state -> exactly one issue create labels=needs-human,no-plan and no issue view, state issue=101/streak=failing, record.txt tracking=created, and a redacted body naming the outcome/run id/record path/exit status with no usage-limit hint"
   "codex-track-repeat|case_codex_track_repeat|I3, #428: a second failure with the tracked issue still OPEN and streak=failing -> exactly one issue view 101, no second create or comment, tracking state byte-identical, record.txt tracking=repeat"
   "codex-track-closed|case_codex_track_closed|I3, #428: a failure whose tracked issue has since been closed -> a new issue is created and recorded (issue=102/streak=failing) instead of commenting on the closed one"
   "codex-track-recovery|case_codex_track_recovery|I3, #428: fail (creates 101) -> complete (one issue comment 101 starting Recovered:, streak=recovered, tracking=recovered) -> complete again (no new gh call, tracking=none) -> fail again (issue view then issue comment 101 with a Failing again after a recovery. lead, no create, streak=failing, tracking=commented)"
-  "codex-track-gh-fail|case_codex_track_gh_fail|I3, #428: gh answers only issue list (list-only stub) -> a create failure, a recovery-comment failure, and a view failure each exit 3 with the matching tracking=failed:<slug> line, a stderr line naming it, and the run record kept"
+  "codex-track-gh-fail|case_codex_track_gh_fail|I3, #428: gh answers only issue list (list-only stub) -> a create failure, a recovery-comment failure, and a view failure each exit 3 with the matching tracking=failed:<slug> line, a stderr line naming it, the run record kept, and the failing gh call's own stderr text reaching this wrapper's own stderr (#443)"
   "codex-track-redaction|case_codex_track_redaction|I3, #428: the launched codex's stderr carries a usage-limit phrase plus a hostname and a secret sentinel -> the tracking issue body gets the usage-limit hint, but gh.log and every gh.body.* carry none of the sentinels or any fixture absolute path"
   "codex-track-skipped|case_codex_track_skipped|I3, #428: a seeded failing streak plus the local stop file -> skipped-stop makes no failure-tracking gh call of its own (gh.calls holds only harness-stop.sh's own issue list), tracking state byte-identical, record.txt tracking=none"
   "codex-track-malformed-state|case_codex_track_malformed_state|I3, #428: a tracking state file with a non-digit issue= value is treated as absent (with a stderr warning), so a new issue is created exactly like the no-state case"
   "codex-track-state-write-failed|case_codex_track_state_write_failed|I3, #428: gh issue create succeeds but the local state write then fails (trail-blazer/ made read-only) -> the created issue number is still announced to stderr and recorded as record.txt's own tracking-issue=, tracking=failed:state-write-failed, exit 3, no state file written"
+  "codex-ghbound-stop-hang|case_codex_ghbound_stop_hang|#443: harness-stop.sh's own gh issue list preflight query hangs -> TBF_CODEX_GH_TIMEOUT=2 bounds the whole call, skipped-stop reason=stop-unknown, exit 0, no argc, preflight.log names the 2s bound, tracking=none, well under the bound"
+  "codex-ghbound-track-create|case_codex_ghbound_track_create|#443: a first failure's own gh issue create hangs -> tracking=failed:create-timeout, exit 3, no state file, stderr says GitHub may already have been updated, gh.out removed despite the timeout, the hang stub is dead afterwards (KILL, since TERM is inherited-ignored inside finish)"
+  "codex-ghbound-track-view|case_codex_ghbound_track_view|#443: a seeded failing streak's own gh issue view hangs -> tracking=failed:view-timeout, exit 3, no create call, state byte-identical, stderr says GitHub was not updated"
+  "codex-ghbound-track-comment|case_codex_ghbound_track_comment|#443: (a) a seeded failing streak plus a completed run hangs on the recovery comment; (b) a seeded recovered streak plus a failure hangs on the failing-again comment (its own preceding issue view still succeeds) -> both give tracking=failed:comment-timeout, exit 3, state byte-identical, stderr says GitHub may already have been updated"
+  "codex-ghbound-wrapper-killed|case_codex_ghbound_wrapper_killed|#443: harness-stop.sh replaced with a stub that hangs, TBF_CODEX_GH_TIMEOUT=60 (never fires) -> the wrapper itself sent TERM mid-preflight gives died-mid-run reason=wrapper-signal-15, exit 1, no argc, and on_wrapper_signal's own immediate KILL of the bounded child ends the hung harness-stop.sh stub"
+  "codex-ghbound-env|case_codex_ghbound_env|#443: a local stop file set; (a) no TBF_CODEX_GH_TIMEOUT override -> skipped-stop reason=stop, well under 60s, proving the 120s default validates and bounded_run returns once its child exits; (b) =abc -> preflight-failed bad-timeout, tracking=created under the 120 fallback, gh.out removed after that ordinary capture call; (c) =0 -> the same bad-timeout, tracking=repeat against (b)'s own state; (d) =08 -> the same bad-timeout, no argc — a leading zero is rejected before it can reach bash's own arithmetic"
   "codex-path-relative|case_codex_path_relative|#444: PATH=tools alone leaves no safe entry -> exit 2, no runs directory; a sibling ../<name>-reltools entry is refused only by the relative-spelling arm; a leading empty PATH entry with a trap in the repo itself (the cwd) is refused outright rather than treated as \".\"; a trailing and a doubled empty entry are refused the same way; tracking still runs after the refusal; a relative entry with a space is named %q-quoted and unsafe-path wins over bad-timeout"
   "codex-path-repo|case_codex_path_repo|#444: an entry at the repo toplevel, its case-variant spelling (filesystem permitting), a symlink from outside pointing at it, and the same path run from a subdirectory (proving the work-tree root is discovered upward) are all refused -> preflight-failed reason=unsafe-path, exit 1, codex never launched"
   "codex-path-common-dir|case_codex_path_common_dir|#444: a git worktree add sibling shares the main checkout's git common dir but has its own toplevel; a trap planted under the main checkout's .git sits outside the worktree's toplevel but inside the shared common dir -> refused anyway (the git-directory identity check, not the toplevel check, catches it), preflight-failed reason=unsafe-path, exit 1"

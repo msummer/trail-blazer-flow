@@ -18,6 +18,14 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #443: `bin/codex-scheduled-run.sh`'s `harness-stop.sh` preflight query and its four
+  failure-tracking `gh` calls now run through one bounded runner (`bounded_run`), gated by
+  `TBF_CODEX_GH_TIMEOUT` (default 120s): a hung call is sent TERM, then KILL after a fixed 5s
+  grace. A `harness-stop.sh` timeout folds into the existing `skipped-stop reason=stop-unknown`
+  path; a tracking-call timeout records `tracking=failed:<call>-timeout` and exits 3.
+  `TBF_CODEX_GH_TIMEOUT` also rejects a leading zero (e.g. `08`), which bash would otherwise parse
+  as octal arithmetic inside `bounded_run` and abort, silently bypassing the stop check. No
+  consumer step.
 - #435: `hooks/push-guard.sh` now enforces a 5-second analysis deadline, sampled from hook start and
   checked at the top of every loop whose cost grows with the command or a config file it reads; once
   spent, it denies with a fixed reason instead of silently risking Claude Code's own 10-second hook

@@ -316,15 +316,20 @@ external command runs before this.
 
 1. The PATH scrub above already ran. If it refused any entry: `preflight-failed
    reason=unsafe-path`.
-2. `TBF_CODEX_RUN_TIMEOUT` (default 14400 seconds) and `TBF_CODEX_RUN_KILL_GRACE` (default 30)
-   must each be digits-only and greater than 0, or `preflight-failed reason=bad-timeout`.
+2. `TBF_CODEX_RUN_TIMEOUT` (default 14400 seconds), `TBF_CODEX_RUN_KILL_GRACE` (default 30) and
+   `TBF_CODEX_GH_TIMEOUT` (default 120, #443) must each be digits-only and greater than 0, or
+   `preflight-failed reason=bad-timeout`. `TBF_CODEX_GH_TIMEOUT` additionally rejects a leading
+   zero (e.g. `08`): its value feeds bash arithmetic before codex is ever launched, where a
+   leading-zero numeral is octal and a value like `08` aborts that arithmetic outright.
 3. `codex`, `gh`, and `jq` must all be on `PATH` (launchd's own PATH is minimal, and the plugin's
    hooks fail open without `jq`), or `preflight-failed reason=missing-tool:<names>`.
 4. The sibling `codex-setup.sh --check`. Exit 1: `preflight-failed reason=codex-setup-drift`. Any
    other non-zero exit: `preflight-failed reason=codex-setup-error`.
-5. The sibling `harness-stop.sh`. Exit 3: `skipped-stop reason=stop`. Exit 4: `skipped-stop
-   reason=stop-unknown`. Exit 0: continue. Anything else: `preflight-failed
-   reason=harness-stop-exit-<n>`.
+5. The sibling `harness-stop.sh`, bounded by `TBF_CODEX_GH_TIMEOUT` (#443 — see "GH time bound"
+   below). Exit 3: `skipped-stop reason=stop`. Exit 4: `skipped-stop reason=stop-unknown`. Exit 0:
+   continue. A timeout is folded into the same exit-4 handling (`skipped-stop
+   reason=stop-unknown`), with a line naming the bound appended to `preflight.log`. Anything else:
+   `preflight-failed reason=harness-stop-exit-<n>`.
 6. The sibling `harness-lock.sh status`. `state=free`: continue. `state=held`, with a host equal
    to `uname -n`, a digits-only pid, and that pid no longer alive: continue — the launched session
    reclaims the lock itself (see "Dying mid-run" honest limits, and ADR 0002's decision 4 re-entry
@@ -360,6 +365,16 @@ launcher that spawns the native binary and forwards SIGTERM to it from a JS hand
 rather than killing immediately gives that handler time to run before an unresponsive process is
 forced. If codex exits first, the watchdog notices on its next poll and stops; at worst, one
 already-started 1-second poll outlives it briefly and ends on its own.
+
+**GH time bound (#443).** Every `gh` call this wrapper makes — the `harness-stop.sh` preflight
+query (step 5 above) and each of the four failure-tracking calls below — runs through one runner,
+bounded by `TBF_CODEX_GH_TIMEOUT` seconds (default 120). It polls in the same 1-second-slice style
+as the watchdog above: at the bound it sends TERM, then polls for up to a fixed 5-second grace,
+then sends KILL. KILL is not optional here: `finish` (below) disables TERM/INT before running the
+tracking calls, and an ignored signal disposition is inherited across exec, so only KILL can end a
+`gh` launched from inside it. A `harness-stop.sh` timeout folds into its existing exit-4 handling;
+a tracking-call timeout records `tracking=failed:<call>-timeout` (`create`, `view`, or `comment`)
+and exits 3, the same as any other tracking failure — see "Failure tracking on GitHub" below.
 
 **Outcomes**, classified in order once the launched process exits:
 
@@ -422,23 +437,34 @@ literal path `trail-blazer/runs/<run id>/record.txt` — never `stderr.log`'s or
 own text, a hostname, or an absolute path; a `usage-limit` hint line is added only when
 `stderr.log` exists and contains that phrase (case-insensitive), never quoting the phrase itself.
 The only `gh` subcommands this step ever runs are `issue view`, `issue create` and `issue comment`,
-each with `< /dev/null` on stdin — never `gh pr`, `gh api`, `gh label`, `issue edit` or
-`issue close`, and no label is ever removed.
+each run through the same bounded runner "GH time bound" above uses (`TBF_CODEX_GH_TIMEOUT`, #443),
+with `< /dev/null` on stdin — never `gh pr`, `gh api`, `gh label`, `issue edit` or `issue close`,
+and no label is ever removed.
 
-If `gh` isn't on PATH, or any `gh` call itself fails, the local record and state are
-left exactly as they were, `record.txt` gets `tracking=failed:<slug>`, a line naming the slug goes
-to this wrapper's own stderr, and the whole run exits 3 instead of its usual 0/1 (see "Exit codes"
-below) — never silently. The next run retries from the same state. One slug differs:
+If `gh` isn't on PATH, any `gh` call itself fails, or a `gh` call does not finish within
+`TBF_CODEX_GH_TIMEOUT` (#443), the local record and state are left exactly as they were,
+`record.txt` gets `tracking=failed:<slug>`, a line naming the slug goes to this wrapper's own
+stderr, and the whole run exits 3 instead of its usual 0/1 (see "Exit codes" below) — never
+silently. (A `harness-stop.sh` preflight-query timeout is a different path — see "GH time bound"
+above — folded into the existing exit-4 handling, `skipped-stop reason=stop-unknown`, never a
+`tracking=failed:<slug>` line.) The next run retries from the same state. Three slugs differ:
 `tracking=failed:state-write-failed` means GitHub *was* updated but the local state file could not
 be written — the stderr line and `record.txt`'s `tracking-issue=` still name the issue, and the
-next failure can open a duplicate.
+next failure can open a duplicate; `tracking=failed:create-timeout` and
+`tracking=failed:comment-timeout` mean the call may already have been accepted by GitHub before the
+timeout fired — a `create-timeout` in particular can leave a tracking issue on GitHub that the
+local state file never learns about, so the next failure opens a duplicate for it.
+`tracking=failed:view-timeout` is not one of these: a read can't itself have mutated anything, so
+it says GitHub was not updated, the same as every other slug.
 
 **Never touches the lock.** The wrapper never calls `harness-lock.sh acquire` or `release`, and
 never removes anything under `trail-blazer/lock` — a dead same-host holder (preflight step 6) is
 left for the launched session itself to reclaim.
 
 **If the wrapper itself is killed** (TERM or INT — `launchctl bootout`, an operator, a logout): a
-top-level trap stops the watchdog and gives the launched codex process the same
+top-level trap immediately KILLs any bounded `gh`/`harness-stop.sh` child still running (#443, "GH
+time bound" above — a TERM/INT landing during the bounded preflight stop query leaves no orphaned
+`harness-stop.sh`), stops the watchdog, and gives the launched codex process the same
 TERM-then-poll-then-KILL treatment described above, then reports `died-mid-run` through the same
 single `finish` exit path as every other outcome, whether or not a launch had happened yet. Without
 this, codex and the watchdog would both survive the wrapper, and the watchdog's own later kill of
@@ -449,8 +475,9 @@ itself disables the TERM/INT trap as its own first action, so a second signal ar
 still writing `record.txt`, pruning, or running the failure-tracking step (I3, #428) can't re-enter
 and corrupt the outcome or exit code being committed.
 
-**Env vars:** `TBF_CODEX_RUN_TIMEOUT` (seconds, default 14400) and `TBF_CODEX_RUN_KILL_GRACE`
-(seconds, default 30).
+**Env vars:** `TBF_CODEX_RUN_TIMEOUT` (seconds, default 14400), `TBF_CODEX_RUN_KILL_GRACE`
+(seconds, default 30), and `TBF_CODEX_GH_TIMEOUT` (seconds, default 120, #443 — see "GH time
+bound" above).
 
 **Exit codes:** 0 for `completed`/`skipped-stop`/`skipped-busy`; 1 for
 `preflight-failed`/`failed`/`died-mid-run`/`timed-out`; 2 for a usage or environment error with no
@@ -560,9 +587,11 @@ line, and a stale rules file gives `preflight-failed reason=codex-setup-drift` i
   if the launched codex is itself SIGKILLed some other way, launchd's own default process-group
   reaping (active whenever a LaunchAgent does not set `AbandonProcessGroup`) is the backstop that
   would still clean up the process group's other members — also unverified until #429.
-- Two small windows are not closed: between starting codex and recording its pid, and between
-  starting the watchdog and recording its pid. A TERM/INT landing in either leaves that one variable
-  unset, so the signal handler has nothing to target for that one process.
+- Three small windows are not closed: between starting codex and recording its pid, between
+  starting the watchdog and recording its pid, and — the same shape (#443) — between a bounded
+  `gh`/`harness-stop.sh` child starting and its own pid being recorded. A TERM/INT landing in any of
+  the three leaves that one variable unset, so the signal handler has nothing to target for that one
+  process.
 - Whether time spent with the machine asleep counts toward the timeout is not verified.
 - Two wrapper instances against one checkout (a manual run beside a scheduled one) can both
   observe `state=free`; the session-level `acquire` then refuses one of them, after that model
@@ -576,8 +605,9 @@ line, and a stale rules file gives `preflight-failed reason=codex-setup-drift` i
   hitting the exact window while `finish` is writing `record.txt`, pruning, or tracking
   deterministically, from outside the process, was not found to be practical to force in a fixture.
 - A duplicate tracking issue can appear if `gh issue create` (I3, #428) succeeds but the wrapper
-  can't parse the created issue number back out of `gh`'s own output, or if the wrapper is
-  SIGKILLed between the create and the local state write.
+  can't parse the created issue number back out of `gh`'s own output, if the wrapper is SIGKILLed
+  between the create and the local state write, or if `gh issue create` timed out
+  (`TBF_CODEX_GH_TIMEOUT`, #443) after GitHub had already accepted it.
 - A deleted or transferred tracked issue makes every subsequent failing run's `gh issue view` fail,
   giving `tracking=failed:view-failed` and exit 3 until the maintainer deletes
   `trail-blazer/scheduled-failure-issue` by hand.
@@ -587,16 +617,19 @@ line, and a stale rules file gives `preflight-failed reason=codex-setup-drift` i
   wrapper itself is killed" above), classified `died-mid-run reason=wrapper-signal-<n>` — a tracked
   failure like any other, so it opens or comments on a `needs-human` issue (I3, #428) the same as a
   genuine failure would.
-- Neither `gh issue view`/`issue create`/`issue comment` (I3, #428) nor `harness-stop.sh`'s own
-  preflight `gh issue list` query is time-bounded. `finish`'s own `trap '' TERM INT` (see above) is
-  a signal disposition, and an ignored disposition is inherited across `exec` by every child
-  process — so `gh` itself also ignores TERM once tracking has started, the same as the wrapper
-  does. This is not merely "launchd will eventually time it out": `ExitTimeOut` only applies once
-  launchd is already trying to STOP a job (for example on a `bootout`), not to a job it is simply
-  waiting on to finish on its own — the ordinary case here. A hung `gh` during tracking therefore
-  keeps the wrapper (and that `gh` process) alive until a maintainer intervenes by hand (SIGKILL,
-  which cannot be ignored, or a reboot), and launchd never starts the next `StartInterval`. The
-  follow-up filed alongside this issue covers bounding these calls in time.
+- A timed-out `harness-stop.sh` (`TBF_CODEX_GH_TIMEOUT`, #443) is itself killed, but its own `gh`
+  grandchild is not — the wrapper only ever signals its own direct child. The orphaned `gh` no
+  longer blocks the wrapper (its output goes to a file the wrapper isn't waiting to read, never a
+  pipe), but whether launchd's own process-group reaping cleans it up is unverified until #429.
+- A `gh issue create` or `gh issue comment` that hits `TBF_CODEX_GH_TIMEOUT` may already have been
+  accepted by GitHub before the wrapper killed it; `create-timeout` in particular can leave a
+  tracking issue on GitHub that the local state file never learns about, so the next failure opens
+  a duplicate for it (see "Failure tracking on GitHub" above).
+- A persistent GitHub stall (either route) now ends every affected run promptly instead of hanging
+  the wrapper: the `harness-stop.sh` route gives `skipped-stop reason=stop-unknown` every interval
+  (with `preflight.log` naming the bound), and a tracking-call route gives
+  `tracking=failed:<call>-timeout` and exits 3 — a visibly skipping queue rather than one that hangs
+  forever, but still no tracking issue is opened while GitHub itself stays unreachable.
 - The PATH scrub's (#444) work-tree root is found by default git discovery from the current
   directory, so a plist `EnvironmentVariables` entry setting `GIT_DIR`/`GIT_WORK_TREE`/
   `GIT_COMMON_DIR` is outside this check. Only `/tmp`, `$TMPDIR`, that work-tree root, and a git
