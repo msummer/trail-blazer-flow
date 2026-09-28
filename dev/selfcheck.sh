@@ -681,11 +681,18 @@ else
 fi
 
 # 4.9 — bijection: dev/*.sh basenames <-> '- run: bash dev/<name>.sh' steps in
-# .github/workflows/selfcheck.yml, PLUS a per-job coverage count: every dev/*.sh script's
-# run-step line count must equal the workflow's job count, so a script wired into only one of
-# several jobs — satisfying the set-based bijection while quietly losing coverage in the others
-# (see #58) — still fails. Report all three failure modes separately, like 2.4 (closes #63).
-# A legitimate exception needs an explicit exclusion here, not a silent gap.
+# .github/workflows/selfcheck.yml, PLUS a per-job-GROUP exactly-once check: every dev/*.sh
+# script's run-step count must be exactly one within every coverage group, so a script wired into
+# only one of several jobs in the same group — satisfying the set-based bijection while quietly
+# losing coverage elsewhere (see #58) — still fails, and a script MOVED from one group's job into
+# another group's job also fails (a total-count check alone would miss that). split_jobs is the
+# one declared exception: a job that carries only PART of a sibling job's former coverage (a
+# driver-only job split out of a suites job, #471) is folded into that sibling's group instead of
+# forming its own — a legitimate exception needs an explicit entry here, not a silent gap. A
+# parsed-job-count cross-check against the `runs-on:` line count keeps the job-key parser itself
+# from passing vacuously (a re-indented `jobs:` block that yields zero parsed jobs must still
+# fail, not silently produce zero empty groups). Report all failure modes separately, like 2.4
+# (closes #63).
 wf="$root/.github/workflows/selfcheck.yml"
 if [ ! -f "$wf" ]; then
   bad "4.9 .github/workflows/selfcheck.yml not found"
@@ -695,19 +702,62 @@ else
   scripts_without_step="$(comm -13 <(_lines "$wf_steps") <(_lines "$dev_list"))"
   steps_without_script="$(comm -23 <(_lines "$wf_steps") <(_lines "$dev_list"))"
   job_count="$(grep -cE '^[[:space:]]+runs-on:' "$wf")"
+  # split_jobs — space-separated "<job>=<partner>" pairs. <job>'s steps are folded into
+  # <partner>'s coverage group instead of forming a group of their own. selfcheck-macos-driver
+  # (#471) carries only the driver step split out of selfcheck-macos, so the two together must
+  # still cover every dev/*.sh script exactly once.
+  split_jobs="selfcheck-macos-driver=selfcheck-macos"
+  wf9_pairs="$(awk -v decl="$split_jobs" '
+    BEGIN {
+      npairs = split(decl, pairlist, " ")
+      for (i = 1; i <= npairs; i++) {
+        eq = index(pairlist[i], "=")
+        if (eq > 0) {
+          job = substr(pairlist[i], 1, eq - 1)
+          partner = substr(pairlist[i], eq + 1)
+          grp[job] = partner
+        }
+      }
+      injobs = 0
+      curgroup = ""
+    }
+    /^jobs:[[:space:]]*$/ { injobs = 1; next }
+    /^[^[:space:]#]/ { injobs = 0 }
+    injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*(#.*)?$/ {
+      name = $0
+      sub(/^  /, "", name)
+      sub(/:.*/, "", name)
+      g = (name in grp) ? grp[name] : name
+      curgroup = g
+      print "J " g
+      next
+    }
+    injobs && curgroup != "" && /^[[:space:]]*-[[:space:]]*run:[[:space:]]*bash[[:space:]]+dev\/[A-Za-z0-9._-]+\.sh[[:space:]]*$/ {
+      script = $0
+      sub(/^[[:space:]]*-[[:space:]]*run:[[:space:]]*bash[[:space:]]+dev\//, "", script)
+      sub(/[[:space:]]*$/, "", script)
+      print "R " curgroup " " script
+    }
+  ' "$wf")"
+  parsed_jobs="$(grep -c '^J ' <<<"$wf9_pairs")"
+  jobs_mismatch=""
+  [ "$parsed_jobs" -eq "$job_count" ] || jobs_mismatch="$parsed_jobs job key(s) under jobs: vs $job_count runs-on line(s)"
+  groups="$(sed -nE 's/^J //p' <<<"$wf9_pairs" | sort -u)"
   uneven=""
-  for s in $dev_list; do
-    s_esc="${s//./\\.}"
-    n="$(grep -cE "^[[:space:]]*-[[:space:]]*run:[[:space:]]*bash[[:space:]]+dev/${s_esc}[[:space:]]*\$" "$wf")"
-    [ "$n" -eq "$job_count" ] || uneven="$uneven $s($n/$job_count)"
+  for g in $groups; do
+    for s in $dev_list; do
+      n="$(grep -cxF "R $g $s" <<<"$wf9_pairs")"
+      [ "$n" -eq 1 ] || uneven="$uneven $s@$g($n)"
+    done
   done
-  if [ -z "$scripts_without_step" ] && [ -z "$steps_without_script" ] && [ -z "$uneven" ]; then
-    ok "4.9 dev/*.sh <-> .github/workflows/selfcheck.yml run-step bijection holds"
+  if [ -z "$scripts_without_step" ] && [ -z "$steps_without_script" ] && [ -z "$uneven" ] && [ -z "$jobs_mismatch" ]; then
+    ok "4.9 dev/*.sh <-> .github/workflows/selfcheck.yml run-step bijection holds, per job group"
   else
     msg="4.9 bijection broken:"
     [ -n "$scripts_without_step" ] && msg="$msg dev/ script(s) with no CI run step: $(printf '%s' "$scripts_without_step" | tr '\n' ' ');"
     [ -n "$steps_without_script" ] && msg="$msg CI run step(s) naming a nonexistent dev/ script: $(printf '%s' "$steps_without_script" | tr '\n' ' ');"
-    [ -n "$uneven" ] && msg="$msg dev/ script(s) not run in every job (script(run-steps/jobs)):$uneven;"
+    [ -n "$uneven" ] && msg="$msg dev/ script(s) not run exactly once per job group (script@group(run-steps)):$uneven;"
+    [ -n "$jobs_mismatch" ] && msg="$msg job parse mismatch: $jobs_mismatch;"
     bad "$msg"
   fi
 fi
