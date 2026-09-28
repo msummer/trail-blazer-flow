@@ -24,6 +24,12 @@ jobs:
     timeout-minutes: ${{ github.event_name == 'pull_request' && 10 || 35 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Full history (#464): the driver step below diffs github.event.before..HEAD to select
+        # which registry records a push can affect. A shallow checkout would make that diff fail
+        # against the missing base — safe, since the driver falls back to a full run, but this
+        # keeps that fallback for a genuinely unusable base only, not every push.
+        with:
+          fetch-depth: 0
       - run: bash dev/selfcheck.sh
       - run: bash dev/selfcheck-tests.sh
       - run: bash dev/doctor-tests.sh
@@ -35,9 +41,12 @@ jobs:
       - run: bash dev/mutant-driver.sh
         if: github.event_name != 'pull_request'
         # The driver's suites spend most of their wall clock waiting, not computing, so it runs
-        # more jobs than the runner has cores.
+        # more jobs than the runner has cores. MUTANT_DRIVER_SINCE (#464) selects, on a push, only
+        # the registry records the pushed range can affect; schedule/dispatch runs pass it empty,
+        # so every record runs. Passed only through env:, never interpolated into shell text.
         env:
           MUTANT_DRIVER_JOBS: 8
+          MUTANT_DRIVER_SINCE: ${{ github.event_name == 'push' && github.event.before || '' }}
       - run: bash dev/mutant-driver-tests.sh
 
   selfcheck-macos:
@@ -70,8 +79,9 @@ jobs:
       - run: bash dev/planning-tests.sh
       - run: bash dev/lock-tests.sh
       - run: bash dev/stop-tests.sh
-      # Nightly and manual dispatch only, not post-merge: the ubuntu job already runs the full
-      # driver after every merge, and the registry's recorded sets are the same on both shells.
+      # Nightly and manual dispatch only, not post-merge: the ubuntu job already runs the driver
+      # after every merge (#464: only the records the pushed range can affect, not necessarily
+      # every record), and the registry's recorded sets are the same on both shells.
       - run: bash dev/mutant-driver.sh
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         env:

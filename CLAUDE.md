@@ -31,8 +31,9 @@ regression is caught on `main` within a day rather than holding every merge for 
 time. Each job runs ten commands, but the ninth, `bash dev/mutant-driver.sh` (#359), is gated:
 on `selfcheck` by `if: github.event_name != 'pull_request'`, and on `selfcheck-macos` by
 `if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'`, because the
-ubuntu job already runs the full driver after every merge (`selfcheck-macos`'s
-`timeout-minutes: 50` is sized for its nightly driver run). So a pull request runs nine of them on
+ubuntu job already runs the driver after every merge — on a push, only the records the pushed
+range can affect (#464) — (`selfcheck-macos`'s
+`timeout-minutes: 50` is sized for its nightly *full* driver run). So a pull request runs nine of them on
 `ubuntu` only (driver-tests still runs; the driver itself, and the whole `selfcheck-macos` job,
 never run on a pull request), a merge to `main` runs all ten on `ubuntu` and nine on macOS, and
 the nightly and dispatch runs run all ten on both; a red check means one of the commands that ran
@@ -178,8 +179,8 @@ the eighth command, but it is not part of `dev/selfcheck.sh` itself; run it by h
 whenever `bin/harness-stop.sh` changes.
 
 `dev/mutant-driver.sh` (#359) is a checked-in mutant driver: it reads every `dev/mutants/*.json`
-registry file, and for each record applies the recorded exact-text `{from,to}` edits (each
-required to match exactly once) to a scratch copy of the record's `target` file — never the
+registry file, and for each selected record applies the recorded exact-text `{from,to}` edits
+(each required to match exactly once) to a scratch copy of the record's `target` file — never the
 tracked tree — then runs the record's own `suite`, name-filtered by its own `filter`, from inside
 that copy, and compares the observed failing-case set against the record's `expect_fail`. A
 baseline run (no edits) proves each distinct `(suite, filter)` pair is clean before any dependent
@@ -191,10 +192,19 @@ declared order regardless of completion order, with its own `PASS <name> <total>
 hand before pushing any change to a registry `target`, a registry `suite`, or the registry itself
 — it runs in CI as the ninth command: in the `selfcheck` (ubuntu) job post-merge on `main`,
 nightly, and on manual dispatch, and in `selfcheck-macos` nightly and on manual dispatch only;
-never on a pull request. So a stale recorded set turns the post-merge ubuntu run red rather than
-blocking the pull request that introduced it. Both jobs set `MUTANT_DRIVER_JOBS=8`, more jobs
-than either runner has cores, because the suites it runs spend most of their wall clock waiting
-rather than computing.
+never on a pull request. Change-based selection (#464): a post-merge ubuntu run passes
+`MUTANT_DRIVER_SINCE=<the pushed range's base>` (a `--changed-from <file>` flag, reading
+repo-relative changed paths from a file, is also accepted and wins over the env var), and the
+driver then runs only the records whose `target`, `suite`, or registry file a changed path names,
+or that a `dev/mutants/suite-deps.txt` pattern claims for that record's own suite (an unmapped
+suite matches any change); a changed path under `bin/`, `hooks/`, `templates/`, `agents/`,
+`skills/` or `dev/` that nothing claims, a change to the driver itself, or an unusable base (a
+leading `-`, an all-zero or unknown commit, or any other git-diff failure) instead forces a full
+run. Nightly and manual-dispatch runs pass no base, so they always run every record. So a stale
+recorded set turns the post-merge ubuntu run red only once some push selects the affected record,
+turning it red at the latest by the following nightly run — never silently skipped forever. Both jobs set
+`MUTANT_DRIVER_JOBS=8`, more jobs than either runner has cores, because the suites it runs spend
+most of their wall clock waiting rather than computing.
 
 `dev/mutant-driver-tests.sh` is the driver's own negative-test harness: over synthetic targets and
 suites built under `mktemp`, it pins the driver's registry validation (name/target/suite/edits/

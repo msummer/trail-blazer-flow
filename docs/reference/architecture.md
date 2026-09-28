@@ -58,7 +58,7 @@
 │   ├── stop-tests.sh             # fixture-based negative-test harness for bin/harness-stop.sh (not run by the gate)
 │   ├── mutant-driver.sh          # checked-in mutant driver: applies dev/mutants/*.json's recorded edits to a scratch copy and re-runs each record's suite (#359)
 │   ├── mutant-driver-tests.sh    # the driver's own negative-test harness, over synthetic targets/suites (not run by the gate)
-│   └── mutants/                  # machine-readable mutant registries the driver reads — {name,target,suite,filter,edits,expect_fail} per record
+│   └── mutants/                  # machine-readable mutant registries the driver reads — {name,target,suite,filter,edits,expect_fail} per record, plus suite-deps.txt, the change-based selection dependency map (#464)
 ├── docs/
 │   ├── reference/                # the detailed spec: workflow, CLAUDE.md contract, settings, safety model
 │   └── adr/                      # architecture decision records: direction the spec doesn't cover yet
