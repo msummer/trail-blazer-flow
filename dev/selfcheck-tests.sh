@@ -614,6 +614,19 @@ p_4_9_cross_job_move() {
 # vs runs-on: cross-check can catch this: with zero groups, the per-group loop finds nothing to
 # report and would otherwise pass vacuously.
 p_4_9_job_extraction() { edit "$1/.github/workflows/selfcheck.yml" 's/^  \([A-Za-z0-9_-]*\):$/    \1:/'; }
+# p_4_9_duplicate_in_group — adds a second dev/mutant-driver-tests.sh run step inside
+# selfcheck-macos-driver, so that script runs twice in the selfcheck-macos group while every group
+# still runs every script at least once and the set bijection holds. Only the exactly-once upper
+# bound catches this; it is what keeps a widened split_jobs entry (folding two full jobs into one
+# group) from passing.
+p_4_9_duplicate_in_group() {
+  local f="$1/.github/workflows/selfcheck.yml"
+  awk '
+    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $0; sub(/^  /, "", job); sub(/:.*/, "", job) }
+    job == "selfcheck-macos-driver" && /run: bash dev\/mutant-driver\.sh/ { print "      - run: bash dev/mutant-driver-tests.sh" }
+    { print }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
 p_4_11_local()         { printf 'sed -n "1p" "$settings_local" >/dev/null\n' | append "$1/bin/check-harness.sh"; }
 p_4_11_comment() {
   printf '  # note: grep "$settings" here is prose in a comment, never executed\n' \
@@ -873,6 +886,7 @@ cases=(
   "4.9-split-job-dropped|4.9|p_4_9_split_job_dropped|drop dev/mutant-driver.sh's run step from the selfcheck-macos-driver job only, leaving it uncovered in that job's group"
   "4.9-cross-job-move|4.9|p_4_9_cross_job_move|move the doctor-tests.sh run step from the ubuntu job into selfcheck-macos-driver: total count unchanged, per-group coverage broken"
   "4.9-job-extraction|4.9|p_4_9_job_extraction|re-indent every job key so the gate parses zero jobs under jobs: (runs-on cross-check)"
+  "4.9-duplicate-in-group|4.9|p_4_9_duplicate_in_group|run dev/mutant-driver-tests.sh twice in the selfcheck-macos group (a second step inside selfcheck-macos-driver): every group still covers every script at least once"
   "4.11-local|4.11|p_4_11_local|reintroduce a raw sed of \"\$settings_local\" in bin/check-harness.sh"
   "4.11-comment||p_4_11_comment|control: an indented comment mentioning grep and quoting \"\$settings\" is not flagged"
   "4.13-script|4.13|p_4_13_script|add a 'docs' stage to reconcile-ledger.sh's STAGES= list only"
