@@ -1,0 +1,68 @@
+{
+  "mutants": [
+    {
+      "name": "472-sct-barrier",
+      "target": "dev/selfcheck-tests.sh",
+      "suite": "dev/selfcheck-tests.sh",
+      "filter": "harness-",
+      "edits": [
+        {
+          "from": "fill_slots() {",
+          "to": "fill_slots() {\n  [ \"$running\" -gt 0 ] && return 0"
+        }
+      ],
+      "expect_fail": [
+        "harness-pool-refill"
+      ]
+    },
+    {
+      "name": "472-sct-blocking-reap",
+      "target": "dev/selfcheck-tests.sh",
+      "suite": "dev/selfcheck-tests.sh",
+      "filter": "harness-",
+      "edits": [
+        {
+          "from": "      if [ -e \"$resdir/$idx.verdict\" ] || ! kill -0 \"$pid\" 2>/dev/null; then",
+          "to": "      if true; then"
+        }
+      ],
+      "expect_fail": [
+        "harness-pool-refill"
+      ]
+    },
+    {
+      "name": "472-sct-order",
+      "target": "dev/selfcheck-tests.sh",
+      "suite": "dev/selfcheck-tests.sh",
+      "filter": "harness-",
+      "edits": [
+        {
+          "from": "        job_state[$idx]=done",
+          "to": "        job_state[$idx]=done; collect_case \"$idx\""
+        },
+        {
+          "from": "    collect_case \"$next_print\"",
+          "to": "    :"
+        }
+      ],
+      "expect_fail": [
+        "harness-order"
+      ]
+    },
+    {
+      "name": "472-sct-noverdict",
+      "target": "dev/selfcheck-tests.sh",
+      "suite": "dev/selfcheck-tests.sh",
+      "filter": "harness-",
+      "edits": [
+        {
+          "from": "    *)\n      fail=$((fail+1))\n      echo \"  FAIL  ${job_name[$idx]} — ${job_desc[$idx]}\"\n      echo \"    this case produced no verdict — it died before reporting and is counted as a failure\"\n      [ -n \"$out\" ] && printf '%s\\n' \"$out\" | sed -n '1,40p'\n      [ -n \"$err\" ] && printf '%s\\n' \"$err\" | sed -n '1,40p' 1>&2\n      ;;",
+          "to": "    *) pass=$((pass+1)) ;;"
+        }
+      ],
+      "expect_fail": [
+        "harness-dead-case"
+      ]
+    }
+  ]
+}
