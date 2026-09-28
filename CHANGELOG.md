@@ -16,7 +16,28 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v3.1.0
+
+This release hardens the mechanical safety hooks and adds the launchd wrapper for scheduled Codex
+runs. Scheduled and unattended Codex runs stay **not supported** until their live gate (#429)
+passes.
+- push-guard now also denies:
+  - a push that carries command-line git config (#439);
+  - a push beside a `cd` or a `GIT_DIR`/`GIT_CONFIG_*` export (#433);
+  - config reached through the system file or an include (#304);
+  - a push target it cannot resolve (#292);
+  - a command it cannot finish analysing within 5 seconds, instead of timing out and allowing it
+    (#435). One consequence: a top-level git config line over 2048 characters now blocks pushes.
+- claude-dir-guard and agent-boundary now see zsh short-if, `eval` and precommand forms (#403,
+  #437).
+- The scheduled wrapper scrubs unsafe `PATH` entries (#444) and puts a time limit on every `gh`
+  call (#443).
+- The doctor recognises repository rulesets (#418).
+- project-kickoff and test-ratchet gain a Codex path (#415).
+
+Consumer steps:
+- Re-copy the permissions block. It adds `Bash(codex-scheduled-run.sh:*)` to both allow and deny.
+- On Codex, re-run `bin/codex-setup.sh`.
 
 - #443: `bin/codex-scheduled-run.sh`'s `harness-stop.sh` preflight query and its four
   failure-tracking `gh` calls now run through one bounded runner (`bounded_run`), gated by

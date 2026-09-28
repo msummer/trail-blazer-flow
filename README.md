@@ -670,6 +670,10 @@ hooks, reopened-issue fixes, and quiet retry of a stalled planner dispatch.
 **v2.9.0 → v3.0.0** — re-copy the permissions block from `templates/repo-settings.json` or add
 `"Bash(codex-setup.sh:*)"` by hand.
 
+**v3.0.0 → v3.1.0** — re-copy the permissions block from `templates/repo-settings.json`, or add
+`"Bash(codex-scheduled-run.sh:*)"` by hand to both `permissions.allow` and `permissions.deny`. On
+Codex, also re-run `bin/codex-setup.sh`.
+
 </details>
 
 **Rolling back.** The published `vX.Y.Z` tags are the known-good points (`git show
