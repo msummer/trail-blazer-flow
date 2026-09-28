@@ -22,6 +22,13 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
   path now run under an active, killed-on-overrun deadline (`wait_deadline`/`kill_tree`) instead of
   running to completion and only afterward comparing elapsed time to a passive bound. No `bin/` or
   `hooks/` product code changed.
+- #462: the mutant driver keeps every job slot busy (a rolling pool instead of barrier waves);
+  output, CLI and verdicts are unchanged.
+- #465: the implementer's evidence pass now probes each behaviour the approved plan names with a
+  production-code mutation a test must kill, recorded on a new "Behaviour probes" Evidence line
+  carried into the PR body. No consumer step: the agent file ships with the plugin, and Codex
+  users pick it up on their next `codex-setup.sh` run, which the existing `--check` drift mode
+  already reports.
 
 ## v3.1.0
 

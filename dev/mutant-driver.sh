@@ -25,9 +25,12 @@
 # EXACTLY ONCE — zero or multiple matches is a FAIL naming the edit index and the observed count,
 # never a silent no-op or an ambiguous rewrite.
 #
-# Concurrency (the #336 idiom dev/selfcheck-tests.sh established): mutants run in bounded waves of
-# up to $jobs children, each a background job that writes its own <idx>.out/<idx>.verdict files
-# under one shared mktemp -d root (removed via an EXIT trap), collected back in DECLARED order
+# Concurrency: a rolling pool of up to $jobs background children, each a background job that
+# writes its own <idx>.out/<idx>.verdict files under one shared mktemp -d root (removed via an EXIT
+# trap). A new job starts whenever any running one finishes, and a mutant is never started before
+# its own (suite, filter) baseline job has finished — other baselines may still be running; there
+# is no global baseline barrier. Completion is polled in short slices (a verdict file, or a dead
+# pid via kill -0; bash 3.2 has no wait -n). Results are collected back in DECLARED order
 # regardless of completion order. A child that dies before writing its verdict is reported as a
 # FAIL naming the record and "no-verdict", never silently dropped from the totals. A test-only
 # MUTANT_DRIVER_FAULT=die:<name>|slow:<name> hook (harness-internal, read by dispatch()) mirrors
@@ -394,50 +397,184 @@ run_suite_and_parse() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# Wave scheduler (the #336 idiom): case_no/job_name are global and grow across BOTH phases below;
-# wave_idx is reset each wave. flush_wave reads each wave's result files back in the WAVE's
-# declared order, never completion order.
+# Rolling-pool scheduler. case_no/job_name are global and grow across BOTH phases below. Every job
+# (baseline or mutant) is enqueued into the job_* arrays first (indexed 1..n_jobs, in declared
+# order); run_pool then launches and reaps them through a pool of at most $jobs concurrent
+# children, printing results back in DECLARED order via next_print regardless of completion order.
+#
+# job_kind[idx]   "baseline" or "mutant"
+# job_a[idx]      baseline: suite path        mutant: index into rec_*[] (ridx)
+# job_b[idx]      baseline: filter            mutant: "" (unused)
+# job_dep[idx]    mutant: the case_no of its own (suite, filter) baseline job; "" for a baseline
+#                 (a baseline has no dependency: it is always ready)
+# job_state[idx]  "pending" -> "running" -> "done"
 case_no=0
 job_name=()
-wave_n=0
-wave_idx=()
+job_kind=()
+job_a=()
+job_b=()
+job_dep=()
+job_state=()
 
-flush_wave() {
-  wait
-  local k=0 idx v out
-  while [ "$k" -lt "$wave_n" ]; do
-    idx="${wave_idx[$k]}"
-    # (dev/mutants/mutant-driver-tests.json's drv-order self-mutant rewrites the loop head above
-    # to iterate by completion order instead — see dev/mutant-driver-tests.sh's own
-    # case_declared_order comment.)
-    v="$(cat "$resdir/$idx.verdict" 2>/dev/null)"
-    out="$(cat "$resdir/$idx.out" 2>/dev/null)"
-    case "$v" in
-      pass)
-        pass=$((pass+1))
-        [ -n "$out" ] && printf '%s\n' "$out"
-        ;;
-      fail)
-        fail=$((fail+1))
-        [ -n "$out" ] && printf '%s\n' "$out"
-        ;;
-      # (dev/mutants/mutant-driver-tests.json's drv-noverdict self-mutant rewrites this arm to
-      # count a missing verdict as a silent pass — see dev/mutant-driver-tests.sh's own
-      # case_child_dies comment.)
-      *)
-        fail=$((fail+1))
-        echo "FAIL ${job_name[$idx]} - -"
-        echo "    reason no-verdict"
-        ;;
-    esac
-    k=$((k+1))
+n_jobs=0
+next_scan=1
+next_print=1
+running=0
+reaped=0
+slot_idx=()
+slot_pid=()
+
+# collect_job IDX — prints IDX's PASS/FAIL line (and reads its .out for any reason/expected lines),
+# and tallies it into $pass/$fail. Called only from print_ready, and only once IDX's job_state is
+# "done" — i.e. only after reap_slots has already wait'ed on its child, so its .verdict file (the
+# child's LAST write, see dispatch()) is always complete by the time this reads it, never seen
+# mid-write.
+collect_job() {
+  local idx="$1" v out
+  v="$(cat "$resdir/$idx.verdict" 2>/dev/null)"
+  out="$(cat "$resdir/$idx.out" 2>/dev/null)"
+  case "$v" in
+    pass)
+      pass=$((pass+1))
+      [ -n "$out" ] && printf '%s\n' "$out"
+      ;;
+    fail)
+      fail=$((fail+1))
+      [ -n "$out" ] && printf '%s\n' "$out"
+      ;;
+    # (dev/mutants/mutant-driver-tests.json's drv-noverdict self-mutant rewrites this arm to
+    # count a missing verdict as a silent pass — see dev/mutant-driver-tests.sh's own
+    # case_child_dies comment.)
+    *)
+      fail=$((fail+1))
+      echo "FAIL ${job_name[$idx]} - -"
+      echo "    reason no-verdict"
+      ;;
+  esac
+}
+
+# job_ready IDX — true (rc 0) iff IDX has no dependency, or its dependency's own job_state is
+# "done". A baseline's job_dep is always "", so a baseline is always ready; a mutant is ready only
+# once its own baseline job has finished (its baseline may have passed or failed — a red baseline
+# is handled by run_mutant_job's own baseline-red short-circuit, not by readiness).
+job_ready() {
+  local idx="$1" dep="${job_dep[$1]}"
+  [ -n "$dep" ] || return 0
+  # (dev/mutants/mutant-driver-tests.json's drv-nodep self-mutant replaces this test with an
+  # unconditional true — see dev/mutant-driver-tests.sh's own case_baseline_gates_dependents
+  # comment.)
+  [ "${job_state[$dep]}" = "done" ]
+}
+
+# launch_job IDX SLOT — sets case_no="$IDX" before forking, so run_baseline_job/run_mutant_job
+# (which both read the global $case_no for their own scratch-copy name and .basestatus path) name
+# their files after this job's own index, not whatever case_no last happened to be. A mutant's own
+# baseline status is computed here, at launch time, from basestatus_for (below) — never cached at
+# enqueue time, so it always reflects the baseline's actual outcome.
+launch_job() {
+  local idx="$1" slot="$2" bstatus
+  case_no="$idx"
+  if [ "${job_kind[$idx]}" = "baseline" ]; then
+    dispatch baseline "$idx" "${job_name[$idx]}" "${job_a[$idx]}" "${job_b[$idx]}" &
+  else
+    bstatus="$(basestatus_for "${rec_suite[${job_a[$idx]}]}" "${rec_filter[${job_a[$idx]}]}")"
+    dispatch mutant "$idx" "${job_name[$idx]}" "${job_a[$idx]}" "$bstatus" &
+  fi
+  slot_pid[$slot]="$!"
+  slot_idx[$slot]="$idx"
+  job_state[$idx]="running"
+  running=$((running+1))
+}
+
+# fill_slots — for each free slot, advances next_scan past every no-longer-pending job (it never
+# needs revisiting), then scans forward from next_scan for the first job that is both pending and
+# job_ready, and launches it into that slot. Leaves a slot free when no job is ready yet (a later
+# pass may find one once a dependency finishes).
+# (dev/mutants/mutant-driver-tests.json's drv-barrier self-mutant inserts a guard right after the
+# opening brace below that refuses to launch anything while any job is still running — that is
+# barrier-wave behavior — see dev/mutant-driver-tests.sh's own case_pool_refill comment.)
+fill_slots() {
+  local s idx found
+  s=0
+  while [ "$s" -lt "$jobs" ]; do
+    if [ -z "${slot_idx[$s]:-}" ]; then
+      while [ "$next_scan" -le "$n_jobs" ] && [ "${job_state[$next_scan]}" != "pending" ]; do
+        next_scan=$((next_scan+1))
+      done
+      found=""
+      idx="$next_scan"
+      while [ "$idx" -le "$n_jobs" ]; do
+        if [ "${job_state[$idx]}" = "pending" ] && job_ready "$idx"; then
+          found="$idx"
+          break
+        fi
+        idx=$((idx+1))
+      done
+      [ -n "$found" ] && launch_job "$found" "$s"
+    fi
+    s=$((s+1))
   done
-  wave_n=0
+}
+
+# reap_slots — a busy slot is finished once its .verdict file exists (the child's last write) or
+# its pid is no longer alive (kill -0 fails — a dead child with no verdict). Either way, wait reaps
+# it (returns at once; the process has already exited or is about to), the slot frees up, and
+# job_state flips to "done" so fill_slots and print_ready can both see it. Sets $reaped so run_pool
+# knows whether this pass made progress.
+reap_slots() {
+  local s idx pid
+  reaped=0
+  s=0
+  while [ "$s" -lt "$jobs" ]; do
+    idx="${slot_idx[$s]:-}"
+    if [ -n "$idx" ]; then
+      pid="${slot_pid[$s]}"
+      if [ -e "$resdir/$idx.verdict" ] || ! kill -0 "$pid" 2>/dev/null; then
+        wait "$pid" 2>/dev/null
+        # (dev/mutants/mutant-driver-tests.json's drv-order self-mutant appends a call to
+        # collect_job right here, printing each job as soon as IT is reaped — completion order —
+        # instead of leaving printing to print_ready's own declared-order walk below. See
+        # dev/mutant-driver-tests.sh's own case_declared_order comment.)
+        job_state[$idx]=done
+        slot_idx[$s]=""
+        slot_pid[$s]=""
+        running=$((running-1))
+        reaped=1
+      fi
+    fi
+    s=$((s+1))
+  done
+}
+
+# print_ready — collects and prints every already-done job starting at next_print, in declared
+# order, stopping at the first index that isn't done yet (or past the end).
+print_ready() {
+  while [ "$next_print" -le "$n_jobs" ] && [ "${job_state[$next_print]}" = "done" ]; do
+    # (dev/mutants/mutant-driver-tests.json's drv-order self-mutant replaces this call with a
+    # no-op, paired with the reap_slots edit above, so printing happens once, at reap time, in
+    # completion order.)
+    collect_job "$next_print"
+    next_print=$((next_print+1))
+  done
+}
+
+# run_pool — drives the pool until every job has been printed. No explicit deadlock guard is
+# needed: a baseline is always ready and every baseline is declared before its own dependents (see
+# the Phase 1/Phase 2 enqueue order below), so every dependency a job could ever wait on is always
+# already enqueued and eligible to be picked up by fill_slots.
+run_pool() {
+  while [ "$next_print" -le "$n_jobs" ]; do
+    fill_slots
+    reap_slots
+    print_ready
+    [ "$reaped" -eq 0 ] && sleep 0.1
+  done
 }
 
 # run_baseline_job SUITE FILTER — prints the baseline's PASS/FAIL line (and an optional reason
-# line) to stdout, writes "clean"/"red" to $resdir/$2.basestatus (idx passed via $BASE_IDX, set by
-# the caller), and returns 0 (pass) or 1 (fail).
+# line) to stdout, writes "clean"/"red" to $resdir/$case_no.basestatus (case_no is set to this
+# job's own index by launch_job, above, before it forks — run_mutant_job below reads the same
+# global the same way), and returns 0 (pass) or 1 (fail).
 run_baseline_job() {
   local suite="$1" filt="$2" copy
   local name="baseline:$suite:$filt"
@@ -586,7 +723,7 @@ pass=0; fail=0
 
 # ---------------------------------------------------------------------------------------------
 # Phase 1: one baseline per distinct (suite, filter) pair among the selected records, in order of
-# first appearance. Fully flushed before any mutant runs (see the header's own ordering note).
+# first appearance.
 base_suite=(); base_filter=(); base_idx=()
 for ridx in "${sel[@]}"; do
   s="${rec_suite[$ridx]}"; ft="${rec_filter[$ridx]}"
@@ -603,18 +740,18 @@ for ridx in "${sel[@]}"; do
   fi
 done
 
+# Enqueue one baseline job per distinct pair above, in the same first-appearance order. Nothing is
+# dispatched here — run_pool (below basestatus_for) does all the actual scheduling.
 for bk in "${!base_suite[@]}"; do
   case_no=$((case_no+1))
   job_name[$case_no]="baseline:${base_suite[$bk]}:${base_filter[$bk]}"
   base_idx+=("$case_no")
-  wave_idx[$wave_n]="$case_no"
-  dispatch baseline "$case_no" "${job_name[$case_no]}" "${base_suite[$bk]}" "${base_filter[$bk]}" &
-  wave_n=$((wave_n+1))
-  if [ "$wave_n" -ge "$jobs" ]; then
-    flush_wave
-  fi
+  job_kind[$case_no]="baseline"
+  job_a[$case_no]="${base_suite[$bk]}"
+  job_b[$case_no]="${base_filter[$bk]}"
+  job_dep[$case_no]=""
+  job_state[$case_no]="pending"
 done
-flush_wave
 
 # basestatus_for SUITE FILTER — prints "clean"/"red" for the matching baseline, "red" if somehow
 # absent (fail closed).
@@ -622,6 +759,8 @@ basestatus_for() {
   local s="$1" ft="$2" bk
   for bk in "${!base_suite[@]}"; do
     if [ "${base_suite[$bk]}" = "$s" ] && [ "${base_filter[$bk]}" = "$ft" ]; then
+      # (dev/mutants/mutant-driver-tests.json's drv-basefallback self-mutant changes this fallback
+      # to "clean" instead — see dev/mutant-driver-tests.sh's own case_baseline_dies comment.)
       cat "$resdir/${base_idx[$bk]}.basestatus" 2>/dev/null || echo "red"
       return
     fi
@@ -630,19 +769,28 @@ basestatus_for() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# Phase 2: every selected mutant, in registry-declared order.
+# Phase 2: enqueue every selected mutant, in registry-declared order, recording each one's own
+# baseline job (found by the same (suite, filter) lookup basestatus_for uses above) as its
+# job_dep — the pool never starts a mutant before that job_dep's own job_state is "done". Nothing
+# is dispatched here either; run_pool (below) does all the actual scheduling.
 for ridx in "${sel[@]}"; do
   case_no=$((case_no+1))
   job_name[$case_no]="${rec_name[$ridx]}"
-  bstatus="$(basestatus_for "${rec_suite[$ridx]}" "${rec_filter[$ridx]}")"
-  wave_idx[$wave_n]="$case_no"
-  dispatch mutant "$case_no" "${job_name[$case_no]}" "$ridx" "$bstatus" &
-  wave_n=$((wave_n+1))
-  if [ "$wave_n" -ge "$jobs" ]; then
-    flush_wave
-  fi
+  job_kind[$case_no]="mutant"
+  job_a[$case_no]="$ridx"
+  job_b[$case_no]=""
+  job_dep[$case_no]=""
+  for bk in "${!base_suite[@]}"; do
+    if [ "${base_suite[$bk]}" = "${rec_suite[$ridx]}" ] && [ "${base_filter[$bk]}" = "${rec_filter[$ridx]}" ]; then
+      job_dep[$case_no]="${base_idx[$bk]}"
+      break
+    fi
+  done
+  job_state[$case_no]="pending"
 done
-flush_wave
+
+n_jobs="$case_no"
+run_pool
 
 echo
 echo "== summary: $pass pass, $fail fail =="
