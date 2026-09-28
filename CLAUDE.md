@@ -60,8 +60,9 @@ id(s). It runs in CI as the second command; run it by hand whenever `dev/selfche
 and add a case for any assertion that parses structure out of a file, compares two extracted
 sets, or exercises script behavior — a fixed-string or numeric-threshold assertion may ship
 without one, listed in the harness's exempt comment with a one-line reason each. Cases run
-concurrently by default, in bounded waves sized from the host's core count (clamped at 16,
-falling back to 2 when no probe answers), overridable with `SELFCHECK_TESTS_JOBS=<n>` or
+concurrently by default, through a rolling pool sized from the host's core count (clamped at 16,
+falling back to 2 when no probe answers) — a new case starts whenever a running one finishes,
+never waiting for the rest of a batch to drain — overridable with `SELFCHECK_TESTS_JOBS=<n>` or
 `-j <n>`, with `--serial` (`-j 1`) restoring one case at a time; the PASS/FAIL line sequence, the
 totals, and the exit status always follow the cases' declared order regardless of completion
 order, and a case whose child dies before reporting a verdict is counted as a FAIL naming the

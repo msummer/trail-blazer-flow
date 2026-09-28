@@ -22,19 +22,26 @@
 # <id> " lines is present verbatim, and that the exit code is 1 (0 for the declared control
 # cases, whose expected set is empty and which exist to prove a perturbation is NOT falsely
 # flagged). Same output contract as the gate: one PASS/FAIL line per case, in DECLARED case
-# order regardless of which case's child finishes first (see the wave scheduler below), a
+# order regardless of which case's child finishes first (see the pool scheduler below), a
 # `== summary: N pass, M fail ==` footer, exit 0 iff nothing failed. A failing case ALSO prints
 # (bounded, #255) any captured gate line that is neither a PASS/FAIL line nor one of the gate's
 # own banners nor blank — surfacing a shell-level diagnostic (e.g. a SIGPIPE broken-pipe message)
 # that the FAIL-line dump alone would otherwise discard.
 #
-# Concurrency (#336): cases run in bounded waves of up to $jobs children, each a background
-# `dispatch_case ... &` that runs run_case in its own subshell, writes run_case's captured
-# stdout/stderr to $resdir/<idx>.out / <idx>.err, and writes "pass" or "fail" to
-# $resdir/<idx>.verdict as its LAST action. flush_wave (plain `wait`, no `wait -n`; must run as a
-# statement in the parent shell — see run_gate's own comment below for the same reason) then reads
-# each wave's result files back IN THE WAVE'S DECLARED ORDER, never completion order, so output
-# order and the totals never depend on scheduling. A child that dies before writing its verdict —
+# Concurrency (#336; a rolling pool since #472): cases run through a pool of up to $jobs
+# concurrent children — a new case starts as soon as a running one finishes, never waiting for the
+# rest of a batch to drain. The main loop (below the case table) only enqueues: it fills the
+# parallel indexed arrays job_name/job_expected/job_perturb/job_desc/job_state (1-based, keyed by
+# case_no) and then calls run_pool once, as a plain statement in the parent shell — never inside
+# `$( )` or a pipeline, the same reason run_gate's own comment below gives. run_pool loops calling
+# fill_slots (launches `dispatch_case ... &` into any free slot — each child runs run_case in its
+# own subshell, writes run_case's captured stdout/stderr to $resdir/<idx>.out / <idx>.err, and
+# writes "pass" or "fail" to $resdir/<idx>.verdict as its LAST action), reap_slots (a slot is
+# finished once its .verdict file exists or its pid is no longer alive per `kill -0`; bash 3.2 has
+# no `wait -n`, so completion is polled in short `sleep 0.1` slices, and a finished slot's `wait`
+# reaps it at once), and print_ready (collects and prints every already-done case starting at
+# next_print, IN DECLARED ORDER, stopping at the first case that isn't done yet — so output order
+# and the totals never depend on completion order). A child that dies before writing its verdict —
 # the .verdict file is simply absent, no file test needed to tell — is reported as a FAIL naming
 # the case and stating it produced no verdict, and is counted as a failure, never silently omitted
 # (proven by the harness-dead-case self-test below). Every dispatch_case child's FIRST statement
@@ -43,15 +50,18 @@
 # this line is not required for that measured behaviour, but it is kept anyway as insurance: it
 # costs nothing, and it closes off any future or platform-specific drift in trap-inheritance
 # semantics that would otherwise let a child race cleanup()'s `rm -rf "$tmpbase"` against a
-# sibling still writing under it. With `jobs=1` the wave size is 1, so `--serial` runs the
-# identical dispatch/flush code path, one case at a time. No per-case timeout exists (BSD has no
-# portable `timeout`): a hung gate run still blocks the whole suite, exactly as it did serially
-# before this change. The two self-tests below, driven by an env-var-injected
-# SELFCHECK_TESTS_FAULT (harness-internal, never a case-table perturbation), prove exactly two
-# properties mechanically — a `die:<case>` fault (a dead case is counted as a FAIL) and a
-# `slow:<case>` fault (declared order survives an out-of-order finish) — and prove nothing beyond
-# those two: not every real death mode, not scheduling behaviour under an externally loaded
-# runner, and not cross-run reproducibility of wall-clock timings.
+# sibling still writing under it. With `jobs=1` there is one slot, so `--serial` runs the identical
+# launch/reap/print code path, one case at a time. No per-case timeout exists (BSD has no portable
+# `timeout`): a hung gate run still keeps the whole suite from finishing — print_ready cannot cross
+# a not-yet-done case — but, unlike the barrier-wave scheduler this pool replaced, the OTHER slots
+# keep launching and finishing cases around it while it hangs. The three self-tests below, driven
+# by an env-var-injected SELFCHECK_TESTS_FAULT (harness-internal, never a case-table perturbation),
+# prove exactly three properties mechanically — a `die:<case>` fault (a dead case is counted as a
+# FAIL), a `slow:<case>` fault (declared order survives an out-of-order finish), and a
+# `refill:<waiter>:<starter>` fault (a freed slot is refilled by a later-declared case rather than
+# waiting for the whole batch to drain) — and prove nothing beyond those three: not every real
+# death mode, not scheduling behaviour under an externally loaded runner, and not cross-run
+# reproducibility of wall-clock timings.
 #
 # This is one of several dev/*.sh scripts that write files — dev/doctor-tests.sh,
 # dev/hook-tests.sh, dev/cleanup-tests.sh, dev/planning-tests.sh, dev/lock-tests.sh, and
@@ -220,7 +230,7 @@ append() {
 # Since #336, run_case (which calls this) itself runs inside dispatch_case's own backgrounded
 # child — a separate process per case, so these two globals are each child's own private copy,
 # never shared across concurrent cases — and the verdict crosses back out to the PARENT shell only
-# through the per-case result files flush_wave reads (see the concurrency comment in the file
+# through the per-case result files print_ready reads (see the concurrency comment in the file
 # header), never through these variables, which do not survive past the child that set them.
 gate_out=""
 gate_rc=0
@@ -977,7 +987,8 @@ cases=(
 # result, not a counter side effect. case_ok/case_bad still print their own PASS/FAIL line and
 # still increment the $pass/$fail globals, but since #336 those increments happen inside
 # dispatch_case's own backgrounded child and are therefore inert there — the parent's $pass/$fail
-# are instead advanced by flush_wave, which reads each case's verdict file back (see below).
+# are instead advanced by collect_case (called from print_ready), which reads each case's verdict
+# file back (see below).
 run_case() {
   local name="$1" expected="$2" perturb="$3" desc="$4"
   local dir out observed exp_norm obs_norm literal_ok eid diag
@@ -1041,14 +1052,20 @@ run_case() {
 }
 
 # dispatch_case IDX NAME EXPECTED PERTURB DESC — runs one case as a background child (always
-# invoked as `dispatch_case ... &`, even at jobs=1 — see the wave scheduler below). FIRST
-# statement: `trap - EXIT`, unconditionally (see the file header's concurrency comment for why
-# this insurance line stays even though sheet B1 measured it isn't required for correctness).
-# Then a harness-internal fault hook, read from SELFCHECK_TESTS_FAULT (self-tests only; no
-# case-table perturbation ever sets this): "die:<name>" exits before any work at all, so this
-# case writes neither an .out/.err file nor a .verdict; "slow:<name>" sleeps 2 seconds before
-# running the case, inverting completion order without changing the case's own outcome.
-# run_case's stdout and stderr are captured to SEPARATE files (never `2>&1` — a merged stream
+# invoked as `dispatch_case ... &`, even at jobs=1 — see the pool scheduler below, launched from
+# launch_case). FIRST statement: `trap - EXIT`, unconditionally (see the file header's concurrency
+# comment for why this insurance line stays even though sheet B1 measured it isn't required for
+# correctness). Then a harness-internal fault hook, read from SELFCHECK_TESTS_FAULT (self-tests
+# only; no case-table perturbation ever sets this): "die:<name>" exits before any work at all, so
+# this case writes neither an .out/.err file nor a .verdict; "slow:<name>" sleeps 2 seconds before
+# running the case, inverting completion order without changing the case's own outcome;
+# "refill:<waiter>:<starter>" is a third, test-only form for harness-pool-refill (below): when NAME
+# is <waiter>, this case polls for $resdir/refill-started in bounded `sleep 0.1` slices (exiting 9,
+# leaving no verdict, if it never appears within the bound) before running its case normally; when
+# NAME is <starter>, this case writes that one marker file — always under this script's single
+# `mktemp -d` root, alongside every other per-case result file — then runs its case normally. No
+# case name contains ':', so the two colon-delimited fault forms never collide with a case's own
+# name. run_case's stdout and stderr are captured to SEPARATE files (never `2>&1` — a merged stream
 # could never prove a stream-specific claim like "usage on stderr" — LESSON 2026-09-08b), and the
 # verdict ("pass"/"fail") is written to $IDX.verdict as the LAST action, so a child that dies
 # mid-run leaves that file absent rather than half-written.
@@ -1056,9 +1073,21 @@ dispatch_case() {
   trap - EXIT
   local idx="$1" name="$2" expected="$3" perturb="$4" desc="$5"
   local fault="${SELFCHECK_TESTS_FAULT:-}"
+  local waited
   case "$fault" in
     "die:$name") exit 9 ;;
     "slow:$name") sleep 2 ;;
+    "refill:$name:"*)
+      waited=0
+      while [ ! -e "$resdir/refill-started" ]; do
+        [ "$waited" -lt 600 ] || exit 9
+        sleep 0.1
+        waited=$((waited+1))
+      done
+      ;;
+    "refill:"*":$name")
+      : > "$resdir/refill-started"
+      ;;
   esac
   run_case "$name" "$expected" "$perturb" "$desc" > "$resdir/$idx.out" 2> "$resdir/$idx.err"
   local rc=$?
@@ -1069,65 +1098,147 @@ dispatch_case() {
   fi
 }
 
-# Wave scheduler state: plain indexed arrays (no declare -A), reset each wave. case_no is the
-# running case index (also each case's result-file stem); wave_n is the current wave's size.
+# Pool scheduler state (#472): plain indexed arrays (no declare -A), one entry per enqueued case,
+# 1-based and keyed by case_no (also each case's result-file stem). job_name/job_expected/
+# job_perturb/job_desc hold each case's own dispatch_case arguments; job_state[idx] moves
+# "pending" -> "running" -> "done". next_launch is the lowest not-yet-launched index; next_print is
+# the lowest not-yet-printed index. slot_idx/slot_pid track which case (if any) occupies each of
+# the $jobs slots. n_jobs is set once, after the case table's enqueue loop below finishes, to the
+# highest case_no enqueued (0 for a filter that matches only self-tests, e.g. "harness-").
 case_no=0
-wave_n=0
-wave_idx=()
-wave_name=()
-wave_desc=()
+n_jobs=0
+next_launch=1
+next_print=1
+running=0
+reaped=0
+slot_idx=()
+slot_pid=()
+job_name=()
+job_expected=()
+job_perturb=()
+job_desc=()
+job_state=()
 
-# flush_wave — waits for every child dispatched in the current wave (plain `wait`, no `wait -n`),
-# then collects results IN THE WAVE'S DECLARED ORDER, never completion order, so output order and
-# the totals never depend on scheduling. Must run as a plain statement in the PARENT shell — never
-# inside a pipeline or $( ) — same reason run_gate's own comment documents: a subshell's variable
-# writes (here, $pass/$fail) never reach back out. No file test on a result path — a missing file
-# yields the empty string from `cat`, and that empty string alone is what routes a dead case to
-# the no-verdict branch below.
-flush_wave() {
-  wait
-  local k idx v out err
-  k=0
-  while [ "$k" -lt "$wave_n" ]; do
-    idx="${wave_idx[$k]}"
-    v="$(cat "$resdir/$idx.verdict" 2>/dev/null)"
-    out="$(cat "$resdir/$idx.out" 2>/dev/null)"
-    err="$(cat "$resdir/$idx.err" 2>/dev/null)"
-    case "$v" in
-      pass)
-        pass=$((pass+1))
-        [ -n "$out" ] && printf '%s\n' "$out"
-        [ -n "$err" ] && printf '%s\n' "$err" 1>&2
-        ;;
-      fail)
-        fail=$((fail+1))
-        [ -n "$out" ] && printf '%s\n' "$out"
-        [ -n "$err" ] && printf '%s\n' "$err" 1>&2
-        ;;
-      *)
-        fail=$((fail+1))
-        echo "  FAIL  ${wave_name[$k]} — ${wave_desc[$k]}"
-        echo "    this case produced no verdict — it died before reporting and is counted as a failure"
-        [ -n "$out" ] && printf '%s\n' "$out" | sed -n '1,40p'
-        [ -n "$err" ] && printf '%s\n' "$err" | sed -n '1,40p' 1>&2
-        ;;
-    esac
-    k=$((k+1))
-  done
-  wave_n=0
+# launch_case IDX SLOT — forks dispatch_case for job IDX into slot SLOT, records its pid, and
+# marks the job running.
+launch_case() {
+  local idx="$1" slot="$2"
+  dispatch_case "$idx" "${job_name[$idx]}" "${job_expected[$idx]}" "${job_perturb[$idx]}" "${job_desc[$idx]}" &
+  slot_pid[$slot]="$!"
+  slot_idx[$slot]="$idx"
+  job_state[$idx]=running
+  running=$((running+1))
 }
 
+# fill_slots — for each free slot, launches the next not-yet-launched case (in declared order) if
+# one remains. A slot stays free once every case has already been launched.
+fill_slots() {
+  local s
+  s=0
+  while [ "$s" -lt "$jobs" ]; do
+    if [ -z "${slot_idx[$s]:-}" ] && [ "$next_launch" -le "$n_jobs" ]; then
+      launch_case "$next_launch" "$s"
+      next_launch=$((next_launch+1))
+    fi
+    s=$((s+1))
+  done
+}
+
+# reap_slots — a busy slot is finished once its .verdict file exists (the child's last write) or
+# its pid is no longer alive (kill -0 fails — a dead child with no verdict). Either way, wait reaps
+# it (returns at once; the process has already exited or is about to), the slot frees up, and
+# job_state flips to "done" so fill_slots and print_ready can both see it. Sets $reaped so run_pool
+# knows whether this pass made progress.
+reap_slots() {
+  local s idx pid
+  reaped=0
+  s=0
+  while [ "$s" -lt "$jobs" ]; do
+    idx="${slot_idx[$s]:-}"
+    if [ -n "$idx" ]; then
+      pid="${slot_pid[$s]}"
+      if [ -e "$resdir/$idx.verdict" ] || ! kill -0 "$pid" 2>/dev/null; then
+        wait "$pid" 2>/dev/null
+        job_state[$idx]=done
+        slot_idx[$s]=""
+        slot_pid[$s]=""
+        running=$((running-1))
+        reaped=1
+      fi
+    fi
+    s=$((s+1))
+  done
+}
+
+# collect_case IDX — reads IDX's result files and either tallies a pass/fail and replays its
+# captured stdout/stderr, or, when no verdict file exists, counts and reports it as a dead case.
+# Called only from print_ready, and only once IDX's job_state is "done" — i.e. only after
+# reap_slots has already wait'ed on its child, so its .verdict file (the child's LAST write, see
+# dispatch_case's own comment) is always complete by the time this reads it, never seen mid-write.
+# No file test on a result path — a missing file yields the empty string from `cat`, and that
+# empty string alone is what routes a dead case to the no-verdict branch below.
+collect_case() {
+  local idx="$1" v out err
+  v="$(cat "$resdir/$idx.verdict" 2>/dev/null)"
+  out="$(cat "$resdir/$idx.out" 2>/dev/null)"
+  err="$(cat "$resdir/$idx.err" 2>/dev/null)"
+  case "$v" in
+    pass)
+      pass=$((pass+1))
+      [ -n "$out" ] && printf '%s\n' "$out"
+      [ -n "$err" ] && printf '%s\n' "$err" 1>&2
+      ;;
+    fail)
+      fail=$((fail+1))
+      [ -n "$out" ] && printf '%s\n' "$out"
+      [ -n "$err" ] && printf '%s\n' "$err" 1>&2
+      ;;
+    *)
+      fail=$((fail+1))
+      echo "  FAIL  ${job_name[$idx]} — ${job_desc[$idx]}"
+      echo "    this case produced no verdict — it died before reporting and is counted as a failure"
+      [ -n "$out" ] && printf '%s\n' "$out" | sed -n '1,40p'
+      [ -n "$err" ] && printf '%s\n' "$err" | sed -n '1,40p' 1>&2
+      ;;
+  esac
+}
+
+# print_ready — collects and prints every already-done case starting at next_print, in declared
+# order, stopping at the first index that isn't done yet (or past the end).
+print_ready() {
+  while [ "$next_print" -le "$n_jobs" ] && [ "${job_state[$next_print]}" = "done" ]; do
+    collect_case "$next_print"
+    next_print=$((next_print+1))
+  done
+}
+
+# run_pool — drives the pool until every case has been printed. With n_jobs=0 (e.g. a
+# "harness-"-only filter, which enqueues nothing) the loop body never runs.
+run_pool() {
+  while [ "$next_print" -le "$n_jobs" ]; do
+    fill_slots
+    reap_slots
+    print_ready
+    [ "$reaped" -eq 0 ] && sleep 0.1
+  done
+}
+
+# mutant:472-sct-noverdict — collapsing collect_case's no-verdict arm to an unconditional pass
+# makes a dead child counted as a silent pass instead of a reported FAIL; harness-dead-case is the
+# only self-test this trips (harness-accounting stays clean, since the mutation misclassifies a
+# verdict rather than dropping one from the pass+fail total).
 # harness-dead-case (#336) — proves a child that dies without writing a verdict is reported as a
 # FAIL naming the case and the missing-verdict wording, never silently omitted from the totals.
 # Runs a real, nested invocation of THIS SAME script (SELFCHECK_TESTS_JOBS=2, a die: fault on
 # exactly one matched case — "1.1-hooks" matches exactly one case row and neither self-test) and
 # pins its stdout+rc. The die fault exits before any gate ever runs, so this nested run costs
 # essentially nothing. See the file header's "what these self-tests do NOT prove" note: this
-# covers one injected death mode only, never every real death mode. Mutation proof (measured): a
-# missing/unknown verdict counted as `pass` instead of `fail` in flush_wave's no-verdict branch
-# makes harness-dead-case fail alone against the full 139-case suite (138 pass, 1 fail) —
-# harness-accounting does NOT also fire, since this mutation misclassifies a verdict rather than
-# dropping one from the pass+fail total.
+# covers one injected death mode only, never every real death mode. This self-test is also the
+# ONLY thing pinning reap_slots' own `! kill -0` half (a dead pid, the other way besides a
+# .verdict file that a slot is recognized as finished): no registry record exercises it, because
+# removing only that clause makes a dead child's slot never reap and this self-test's own nested
+# run hang instead of failing fast — the only symptom of that regression is a CI job timeout, the
+# same limit dev/mutant-driver-tests.sh accepts for the driver's own reap_slots.
 run_deadcase_selftest() {
   local out rc bad
   out="$(SELFCHECK_TESTS_JOBS=2 SELFCHECK_TESTS_FAULT="die:1.1-hooks" bash "$root/dev/selfcheck-tests.sh" 1.1-hooks 2>&1)"
@@ -1146,15 +1257,16 @@ run_deadcase_selftest() {
   fi
 }
 
+# mutant:472-sct-order — moving the print call from print_ready into reap_slots (and turning
+# print_ready's own call into a no-op) makes cases print at reap time, in completion order, instead
+# of declared order; harness-order is the only self-test this trips.
 # harness-order (#336) — proves declared order, not completion order, decides the PASS/FAIL line
 # sequence and the totals. Runs a nested invocation (SELFCHECK_TESTS_JOBS=2, a slow: fault on the
 # FIRST of exactly three cases the "1.7" filter matches, in declared order 1.7 / 1.7-dev /
 # 1.7-comment) and extracts the case-name sequence from the "  PASS  "/"  FAIL  " lines, requiring
-# it to equal the declared order even though the delayed case finishes last inside its own
-# two-case first wave. Covers one injected inversion only — see the file header's "what these
-# self-tests do NOT prove" note. Mutation proof (measured): reversing flush_wave's own wave_idx
-# lookup (`${wave_idx[$k]}` -> `${wave_idx[$((wave_n-1-k))]}`, an order-destroying collector) makes
-# harness-order fail alone against the full 139-case suite (138 pass, 1 fail).
+# it to equal the declared order even though the delayed case finishes last among its own pool
+# slot-mates. Covers one injected inversion only — see the file header's "what these self-tests do
+# NOT prove" note.
 run_order_selftest() {
   local out rc seq expected_seq bad
   out="$(SELFCHECK_TESTS_JOBS=2 SELFCHECK_TESTS_FAULT="slow:1.7" bash "$root/dev/selfcheck-tests.sh" 1.7 2>&1)"
@@ -1166,9 +1278,46 @@ run_order_selftest() {
   [ "$seq" = "$expected_seq" ] || bad="$bad case-name sequence: expected '$expected_seq', got '$seq';"
   grep -qF -- "== summary: 3 pass, 0 fail ==" <<<"$out" || bad="$bad missing footer '== summary: 3 pass, 0 fail ==';"
   if [ -z "$bad" ]; then
-    case_ok "harness-order" "declared order, not completion order, decides the PASS/FAIL line sequence and the totals (SELFCHECK_TESTS_FAULT=slow:<case> delays the first-declared case past its wave-mate)"
+    case_ok "harness-order" "declared order, not completion order, decides the PASS/FAIL line sequence and the totals (SELFCHECK_TESTS_FAULT=slow:<case> delays the first-declared case past its pool-mate)"
   else
-    case_bad "harness-order" "declared order, not completion order, decides the PASS/FAIL line sequence and the totals (SELFCHECK_TESTS_FAULT=slow:<case> delays the first-declared case past its wave-mate)"
+    case_bad "harness-order" "declared order, not completion order, decides the PASS/FAIL line sequence and the totals (SELFCHECK_TESTS_FAULT=slow:<case> delays the first-declared case past its pool-mate)"
+    echo "    $bad"
+    printf '%s\n' "$out" | sed -n '1,40p' | sed 's/^/    | /'
+  fi
+}
+
+# mutant:472-sct-barrier — adding a guard at the top of fill_slots that refuses to launch anything
+# while any slot is still running restores barrier-wave behaviour; harness-pool-refill's waiter
+# times out with no verdict, since the slot 1.7-dev frees is never refilled while 1.7 is still
+# polling.
+# mutant:472-sct-blocking-reap — replacing reap_slots' own verdict/kill-0 test with an
+# unconditional true makes it `wait` on whichever pid currently occupies a slot regardless of
+# whether that child has actually finished, so the reap blocks on the still-waiting 1.7 and the
+# slot 1.7-dev frees never gets refilled either; same harness-pool-refill failure.
+# harness-pool-refill (#472) — proves a freed slot is refilled by a later-declared case rather than
+# waiting for the whole batch to drain, using a marker file, not a clock. Runs a nested invocation
+# (SELFCHECK_TESTS_JOBS=2, filter "1.7", matching exactly the three cases 1.7 / 1.7-dev /
+# 1.7-comment) with SELFCHECK_TESTS_FAULT="refill:1.7:1.7-comment": 1.7 (the waiter) and 1.7-dev
+# fill both slots; 1.7-dev finishes at once and frees a slot. Under a pool, 1.7-comment starts in
+# that freed slot and writes the marker while 1.7 is still polling for it, so 1.7 sees the marker
+# and finishes normally. Under barrier waves, 1.7-comment could not start until 1.7's own wave
+# ended, so 1.7 would time out with no verdict instead — the pass path therefore has no wall-clock
+# threshold of its own; only the waiter's bounded poll (600 slices of sleep 0.1, comfortably above
+# one gate run even under a loaded runner) ends the regression path. This self-test deliberately
+# does not check the PASS/FAIL line sequence — harness-order already owns that — which keeps each
+# record's own failing set crisp.
+run_refill_selftest() {
+  local out rc bad
+  out="$(SELFCHECK_TESTS_JOBS=2 SELFCHECK_TESTS_FAULT="refill:1.7:1.7-comment" bash "$root/dev/selfcheck-tests.sh" 1.7 2>&1)"
+  rc=$?
+  bad=""
+  [ "$rc" -eq 0 ] || bad="$bad rc: expected 0, got $rc;"
+  grep -qF -- "== summary: 3 pass, 0 fail ==" <<<"$out" || bad="$bad missing footer '== summary: 3 pass, 0 fail ==';"
+  grep -qF -- "produced no verdict" <<<"$out" && bad="$bad output contains 'produced no verdict' — the waiter's freed slot was not refilled in time;"
+  if [ -z "$bad" ]; then
+    case_ok "harness-pool-refill" "a freed slot is refilled by a later-declared case rather than waiting for the whole batch to drain (SELFCHECK_TESTS_FAULT=refill:<waiter>:<starter>)"
+  else
+    case_bad "harness-pool-refill" "a freed slot is refilled by a later-declared case rather than waiting for the whole batch to drain (SELFCHECK_TESTS_FAULT=refill:<waiter>:<starter>)"
     echo "    $bad"
     printf '%s\n' "$out" | sed -n '1,40p' | sed 's/^/    | /'
   fi
@@ -1190,22 +1339,23 @@ for row in "${cases[@]}"; do
   perturb="${rest%%|*}"
   desc="${rest#*|}"
   case_no=$((case_no+1))
-  wave_idx[$wave_n]="$case_no"
-  wave_name[$wave_n]="$name"
-  wave_desc[$wave_n]="$desc"
-  dispatch_case "$case_no" "$name" "$expected" "$perturb" "$desc" &
-  wave_n=$((wave_n+1))
-  if [ "$wave_n" -ge "$jobs" ]; then
-    flush_wave
-  fi
+  job_name[$case_no]="$name"
+  job_expected[$case_no]="$expected"
+  job_perturb[$case_no]="$perturb"
+  job_desc[$case_no]="$desc"
+  job_state[$case_no]=pending
 done
-flush_wave
+n_jobs=$case_no
+run_pool
 
 case "harness-dead-case" in
   *"$filter"*) matched=$((matched+1)); run_deadcase_selftest ;;
 esac
 case "harness-order" in
   *"$filter"*) matched=$((matched+1)); run_order_selftest ;;
+esac
+case "harness-pool-refill" in
+  *"$filter"*) matched=$((matched+1)); run_refill_selftest ;;
 esac
 
 if [ "$matched" -eq 0 ]; then

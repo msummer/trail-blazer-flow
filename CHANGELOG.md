@@ -18,6 +18,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #472: `dev/selfcheck-tests.sh` keeps every job slot busy through a rolling pool instead of
+  barrier waves — a new case starts whenever a running one finishes — and gains a
+  `harness-pool-refill` self-test and a `SELFCHECK_TESTS_FAULT=refill:<waiter>:<starter>` fault
+  form. Output, the CLI, and every case's verdict are unchanged.
 - #463: `dev/doctor-tests.sh` and `dev/hook-tests.sh` fixtures that launch a hung stub or a slow
   path now run under an active, killed-on-overrun deadline (`wait_deadline`/`kill_tree`) instead of
   running to completion and only afterward comparing elapsed time to a passive bound. No `bin/` or
