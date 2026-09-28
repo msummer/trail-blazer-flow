@@ -16,6 +16,13 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #463: `dev/doctor-tests.sh` and `dev/hook-tests.sh` fixtures that launch a hung stub or a slow
+  path now run under an active, killed-on-overrun deadline (`wait_deadline`/`kill_tree`) instead of
+  running to completion and only afterward comparing elapsed time to a passive bound. No `bin/` or
+  `hooks/` product code changed.
+
 ## v3.1.0
 
 This release hardens the mechanical safety hooks and adds the launchd wrapper for scheduled Codex

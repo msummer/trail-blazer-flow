@@ -67,6 +67,177 @@ mk_cmd() { jq -n --arg cmd "$1" '{tool_name: "Bash", tool_input: {command: $cmd}
 mk_cmd_mode() { jq -n --arg cmd "$1" --arg mode "$2" '{tool_name: "Bash", tool_input: {command: $cmd}, permission_mode: $mode}'; }
 mk_tool() { jq -n --arg tool "$1" --arg cmd "$2" '{tool_name: $tool, tool_input: {command: $cmd}}'; }
 
+# _kt_descendants ROOT SNAPSHOT (#463) — prints every pid in SNAPSHOT (the "pid ppid" lines a
+# `ps -A -o pid= -o ppid=` call produced) descended from ROOT, space-delimited and space-flanked, by
+# repeatedly scanning SNAPSHOT until a full pass adds nothing new (a child can precede its own
+# parent in `ps`'s own unordered output). No associative arrays, no pipe into grep: membership is
+# tested with `case " $root$set" in *" $ppid "*` (bash-3.2-safe, the same shape
+# dev/doctor-tests.sh's own copy uses — no shared dev library exists).
+_kt_descendants() {
+  local root="$1" snapshot="$2" set=" " pid ppid found
+  found=true
+  while $found; do
+    found=false
+    while read -r pid ppid; do
+      [ -z "${pid:-}" ] && continue
+      case "$set" in *" $pid "*) continue ;; esac
+      # mutant:463-hook-deadline-root-only — this arm (the only place a found descendant is ever
+      #   added to $set) becomes a no-op: every call returns nothing, so kill_tree below only ever
+      #   signals ROOT itself, and case_deadline_kill_tree's own TERM-ignoring child survives it.
+      case " $root$set" in
+        *" $ppid "*) set="$set$pid "; found=true ;;
+      esac
+    done <<EOF
+$snapshot
+EOF
+  done
+  printf '%s' "$set"
+}
+
+# kill_tree ROOT (#463) — TERM then KILL the whole process tree rooted at ROOT (ROOT itself plus
+# every live descendant _kt_descendants finds), by walking a single `ps -A -o pid= -o ppid=`
+# snapshot rather than /proc, so it stays portable to BSD/macOS and procps Linux alike. TERMs the
+# collected set, polls in 0.1s slices for up to 2s for every pid to die, then — only if ROOT is
+# STILL alive — re-snapshots and re-collects (a TERM-ignoring descendant may have spawned a further
+# child during the grace poll) before KILLing every pid still alive from either walk. If `ps` itself
+# fails, falls back to signalling ROOT alone.
+kill_tree() {
+  local root="$1" snapshot desc1 desc2 p deadline alive
+  if ! snapshot="$(ps -A -o pid= -o ppid= 2>/dev/null)"; then
+    kill -TERM "$root" 2>/dev/null
+    sleep 0.2
+    kill -KILL "$root" 2>/dev/null
+    return
+  fi
+  desc1="$(_kt_descendants "$root" "$snapshot")"
+  for p in "$root" $desc1; do
+    kill -TERM "$p" 2>/dev/null
+  done
+  deadline=$((SECONDS + 2))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    alive=false
+    for p in "$root" $desc1; do
+      kill -0 "$p" 2>/dev/null && alive=true
+    done
+    $alive || break
+    sleep 0.1
+  done
+  desc2=""
+  if kill -0 "$root" 2>/dev/null; then
+    snapshot="$(ps -A -o pid= -o ppid= 2>/dev/null)"
+    [ -n "$snapshot" ] && desc2="$(_kt_descendants "$root" "$snapshot")"
+  fi
+  for p in "$root" $desc1 $desc2; do
+    kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null
+  done
+}
+
+# wait_deadline PID SECS (#463) — the active-poll deadline every deadline-carrying hook-tests.sh
+# fixture launch goes through, replacing the old pattern of running a fixture to completion and only
+# THEN comparing elapsed time to a limit: polls PID (a background job of THIS shell) in 0.1s slices
+# against a $SECONDS deadline SECS seconds out. If PID is still alive once the deadline passes, fails
+# the enclosing case ($__ok=0, $__why names the overrun) and kills PID's whole process tree via
+# kill_tree, instead of letting the case block on PID's own natural lifetime. Always reaps PID with
+# a plain `wait` before returning either way, leaving $deadline_rc set to its exit status and
+# $deadline_overran set to true/false for the caller to branch on.
+# mutant:463-hook-deadline-no-kill — the `kill_tree "$pid"` call below becomes `:`: an overrun is
+#   still detected and the case still fails, but nothing is ever killed, so the reap that follows
+#   waits out case_deadline_kill_tree's own 15s child instead of returning in under 8s.
+deadline_overran=false
+deadline_rc=0
+wait_deadline() {
+  local pid="$1" secs="$2" deadline
+  deadline_overran=false
+  deadline=$((SECONDS + secs))
+  while kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+    sleep 0.1
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    deadline_overran=true
+    __ok=0
+    __why="${__why}run overran its ${secs}s deadline — killed its process tree\n"
+    kill_tree "$pid"
+  fi
+  wait "$pid" 2>/dev/null
+  deadline_rc=$?
+}
+
+# case_deadline_kill_tree (#463) — pins the shared wait_deadline/kill_tree mechanism directly,
+# independent of any hook fixture: builds a synthetic TERM-ignoring process tree (a root script plus
+# one real "sleep 15" child), runs it through wait_deadline with a 2s deadline, and asserts the
+# overrun was detected, the case was failed and told why, the call returned quickly rather than
+# waiting out the child's own 15s lifetime, and both pids are actually dead afterwards — not merely
+# that the case's own bookkeeping says so.
+case_deadline_kill_tree() {
+  local dir="$tmpbase/deadline-kill-tree" real_sleep script
+  mkdir -p "$dir"
+  real_sleep="$(command -v sleep)"
+  script="$dir/tree.sh"
+  {
+    printf '#!%s\n' "$bash_bin"
+    printf 'dir=%q\n' "$dir"
+    printf 'real_sleep=%q\n' "$real_sleep"
+    cat <<'TREEEOF'
+trap '' TERM
+"$real_sleep" 15 &
+printf '%s' "$!" > "$dir/child.pid"
+wait
+TREEEOF
+  } > "$script"
+  chmod +x "$script"
+
+  "$bash_bin" "$script" < /dev/null > "$dir/out" 2> "$dir/err" &
+  local root_pid=$!
+
+  local waited=0
+  while [ ! -s "$dir/child.pid" ] && [ "$waited" -lt 5000 ] && kill -0 "$root_pid" 2>/dev/null; do
+    sleep 0.05
+    waited=$((waited + 50))
+  done
+  local child_pid
+  child_pid="$(cat "$dir/child.pid" 2>/dev/null)"
+  if [ -z "$child_pid" ]; then
+    __ok=0; __why="${__why}the synthetic tree's own child never started — can't exercise kill_tree\n"
+    kill -9 "$root_pid" 2>/dev/null
+    return
+  fi
+
+  local saved_ok="$__ok" saved_why="$__why"
+  __ok=1; __why=""
+  local t0=$SECONDS
+  wait_deadline "$root_pid" 2
+  local elapsed=$((SECONDS - t0)) sub_overran="$deadline_overran" sub_ok="$__ok" sub_why="$__why"
+  __ok="$saved_ok"; __why="$saved_why"
+
+  if [ "$sub_overran" != true ]; then
+    __ok=0; __why="${__why}wait_deadline did not detect the 2s overrun (deadline_overran=$sub_overran)\n"
+  fi
+  if [ "$sub_ok" -ne 0 ]; then
+    __ok=0; __why="${__why}wait_deadline did not fail the case over the overrun (sub __ok=$sub_ok)\n"
+  fi
+  case "$sub_why" in
+    *"deadline"*) : ;;
+    *) __ok=0; __why="${__why}wait_deadline's own __why did not name the deadline: '$sub_why'\n" ;;
+  esac
+  if [ "$elapsed" -ge 8 ]; then
+    __ok=0; __why="${__why}wait_deadline took ${elapsed}s to return — should kill and return well under the child's own 15s lifetime\n"
+  fi
+
+  local survive_waited=0 root_alive="" child_alive=""
+  while [ "$survive_waited" -lt 2000 ]; do
+    root_alive=""; child_alive=""
+    kill -0 "$root_pid" 2>/dev/null && root_alive="$root_pid"
+    kill -0 "$child_pid" 2>/dev/null && child_alive="$child_pid"
+    [ -z "$root_alive" ] && [ -z "$child_alive" ] && break
+    sleep 0.1
+    survive_waited=$((survive_waited + 100))
+  done
+  if [ -n "$root_alive" ] || [ -n "$child_alive" ]; then
+    __ok=0; __why="${__why}still alive after wait_deadline: root=$root_alive child=$child_alive\n"
+    kill -9 "$root_pid" "$child_pid" 2>/dev/null
+  fi
+}
+
 # run_hook JSON [PATHVAL] — runs the real guard script against JSON on stdin, with PATH set to
 # PATHVAL (defaults to this process's own PATH), leaving $hook_out (stdout only)/$hook_rc set as
 # globals. Deliberately NOT invoked via command substitution itself (same idiom as
@@ -119,15 +290,33 @@ mk_agent_id_only() { jq -n --arg id "$1" --arg cmd "$2" '{tool_name: "Bash", age
 # "call as a plain statement, read the globals after" idiom as run_hook above — the existing
 # run_hook discards stderr entirely (2>/dev/null), which cannot pin a "reason on stderr"
 # criterion (LESSON 2026-09-08b), hence this separate runner with its own stderr capture file.
+# $boundary_deadline_override (#463) is an opt-in override, the same shape as run_push_guard's own
+# ninth override below (push_deadline_override): unset by default (the foreground path this runner
+# has always used), and when a case sets it immediately before calling run_boundary, the script
+# instead runs backgrounded under wait_deadline at that many seconds, killing its whole process tree
+# on overrun instead of letting the case block on it. Cleared after every call either way.
 boundary_out=""
 boundary_err=""
 boundary_rc=0
+boundary_deadline_override=""
 run_boundary() {
   local json="$1" pathval="${2:-$PATH}" errfile="$tmpbase/boundary-stderr"
-  boundary_out="$(printf '%s' "$json" | PATH="$pathval" "$bash_bin" "$boundary" 2>"$errfile")"
-  boundary_rc=$?
+  if [ -n "$boundary_deadline_override" ]; then
+    local stdin_file="$tmpbase/boundary-stdin" out_file="$tmpbase/boundary-out" bpid
+    printf '%s' "$json" > "$stdin_file"
+    ( export PATH="$pathval"; exec "$bash_bin" "$boundary" ) < "$stdin_file" > "$out_file" 2> "$errfile" &
+    bpid=$!
+    wait_deadline "$bpid" "$boundary_deadline_override"
+    boundary_rc=$deadline_rc
+    boundary_out="$(cat "$out_file" 2>/dev/null)"
+    rm -f "$out_file" "$stdin_file"
+  else
+    boundary_out="$(printf '%s' "$json" | PATH="$pathval" "$bash_bin" "$boundary" 2>"$errfile")"
+    boundary_rc=$?
+  fi
   boundary_err="$(cat "$errfile" 2>/dev/null)"
   rm -f "$errfile"
+  boundary_deadline_override=""
 }
 
 # expect_deny/expect_no_opinion — assert against $boundary_out/$boundary_err/$boundary_rc.
@@ -1066,7 +1255,7 @@ case_ab_pc_deny_dbracket_cap() {
 #   alternative from the disjoint cut regex), so a tail that should have been cut at the NEXT `]]`
 #   instead runs to the next real break, re-finding a `.claude` target on the far side of that `]]`
 #   directly (the ordinary reason) instead of failing closed on the CUT tail (the new reason), and
-#   fails case_ab_pc_deny_dbracket_timing below's 5s bound.
+#   fails case_ab_pc_deny_dbracket_timing below's 15s bound.
 case_ab_pc_deny_dbracket_disjoint() {
   # Disjoint tails alone would lose this deny: an overlapping tail after the first `]]` runs all the
   # way to `.claude/LESSONS.md` and finds it directly (the ordinary ".claude segment" reason). Under
@@ -1084,13 +1273,20 @@ case_ab_pc_deny_dbracket_disjoint() {
 case_ab_pc_deny_dbracket_timing() {
   # Wall-clock proof: an overlapping tail re-split()s almost the whole remaining record once per
   # earlier `]]`; disjoint tails bound each emit_segment() walk to its own cut segment instead, so
-  # this large, 64-`]]` shape resolves well under the 5s bound below (timed via bash SECONDS, only
-  # the hook invocation itself, not payload construction). The filler is sized so the overlapping
-  # (quadratic) walk stays far past the bound even under a fast awk such as Linux's mawk, while
-  # the disjoint (linear) walk stays far under it. The command reaches jq on
-  # stdin (printf is a builtin), never as a --arg: Linux refuses any single exec argument over its
-  # per-argument limit, which this command exceeds, so mk_agent_cmd would build an empty payload
-  # there and the hook would see no command at all.
+  # this large, 64-`]]` shape resolves under the 15s active deadline below (#463 —
+  # boundary_deadline_override, not a passive post-hoc measurement), well before the overlapping
+  # (quadratic) walk's own natural runtime. The filler is sized so the overlapping walk stays far
+  # past the bound even under a fast awk such as Linux's mawk, while the disjoint (linear) walk
+  # stays far under it. The deadline is 15s rather than push-dl's 9s/ab-pc's original 5s: this
+  # suite's own other flood cases (dbracket-cap/-flood/-disjoint/-sed-cut/-sed-inplace-cut) are ALSO
+  # CPU-bound awk work, so a mutant-driver wave running many concurrent full `ab-pc-` suites can
+  # genuinely saturate the host's cores — measured live via `bash dev/mutant-driver.sh 403-ab-pc` at
+  # this repo's own default concurrency, where a 5s deadline occasionally tripped on an otherwise
+  # untouched (disjoint-preserving) mutant purely from that contention, not from the mutation itself;
+  # 15s was re-measured clean. The command reaches jq on stdin (printf is a builtin), never as a
+  # --arg: Linux refuses any single exec argument over its per-argument limit, which this command
+  # exceeds, so mk_agent_cmd would build an empty payload there and the hook would see no command at
+  # all.
   local flood="x" i
   for i in $(seq 1 64); do flood="${flood} ]] tee"; done
   local filler
@@ -1098,11 +1294,9 @@ case_ab_pc_deny_dbracket_timing() {
   local payload
   payload="$(printf '%s\ngit push' "${flood}${filler}" \
     | jq -Rs '{tool_name: "Bash", agent_type: "implementer", tool_input: {command: .}}')"
-  local start=$SECONDS elapsed
+  boundary_deadline_override=15
   run_boundary "$payload"
-  elapsed=$((SECONDS - start))
   expect_deny
-  [ "$elapsed" -lt 5 ] || { __ok=0; __why="${__why}took ${elapsed}s (SECONDS-granularity), expected under 5s\n"; }
 }
 # mutant:403-ab-pc-dbracket-sed-noninplace — deletes the `else if (cut_flag) { print
 #   "-cut-claude-write-" }` arm for a NON-in-place `sed`, so a `sed` tail with no in-place flag among
@@ -1232,6 +1426,29 @@ mk_fixture_global_config() {
   printf '%s' "$body" > "$path"
 }
 
+# push_guard_exec PATHVAL (#463) — the env block every run_push_guard call execs into: the six
+# unsets/exports (#290/#304/#305/#435) that isolate HOME/XDG_CONFIG_HOME/GIT_CONFIG_GLOBAL/
+# GIT_CONFIG_SYSTEM/GIT_CONFIG_NOSYSTEM/TBF_PUSH_GUARD_BUDGET_SECS, reading run_push_guard's own
+# home_val/sysroot_val locals (visible here because this is always called from inside an explicit
+# "( … )" subshell forked while run_push_guard is still executing, so its own still-in-scope locals
+# come along with the fork — never as a bare command substitution the harness's own shell could fall
+# through to), then PATH=PATHVAL and `exec "$bash_bin" "$push_guard"`. MUST be called only inside an
+# explicit "( … )": run in the harness's own shell it would leak every one of these exports and
+# PATH, and its own `exec` would replace the harness process itself.
+push_guard_exec() {
+  local pathval="$1"
+  unset XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM TBF_PUSH_GUARD_BUDGET_SECS
+  export HOME="$home_val"
+  export TBF_PUSH_GUARD_SYSCONFIG_ROOT="$sysroot_val"
+  [ -z "$push_xdg_home" ] || export XDG_CONFIG_HOME="$push_xdg_home"
+  [ -z "$push_git_config_global" ] || export GIT_CONFIG_GLOBAL="$push_git_config_global"
+  [ -z "$push_git_config_system" ] || export GIT_CONFIG_SYSTEM="$push_git_config_system"
+  [ -z "$push_git_config_nosystem" ] || export GIT_CONFIG_NOSYSTEM="$push_git_config_nosystem"
+  [ -z "$push_budget_override" ] || export TBF_PUSH_GUARD_BUDGET_SECS="$push_budget_override"
+  export PATH="$pathval"
+  exec "$bash_bin" "$push_guard"
+}
+
 # run_push_guard JSON [PATHVAL] — runs the real push-guard script against JSON on stdin, with
 # PATH set to PATHVAL (defaults to this process's own PATH), leaving $push_out (stdout)/
 # $push_err (stderr, read back from a file under $tmpbase)/$push_rc set as globals. Same "call as
@@ -1253,13 +1470,16 @@ mk_fixture_global_config() {
 # $push_budget_override (#435) is an EIGHTH override: hooks/push-guard.sh's own
 # TBF_PUSH_GUARD_BUDGET_SECS knob is unset for every call by default (so no fixture accidentally
 # inherits a lowered analysis budget from an earlier one), and exported only when a fixture sets
-# this global immediately before calling run_push_guard. Cleared after the call exactly like the
-# other seven. The environment mutation happens inside the "$(...)"
-# command substitution's own implicit
-# subshell — a portable, bash-3.2/Git-Bash-safe idiom (this file's own convention prefers it to
-# `env -u`, which is not obviously safe across Git-Bash) — so it can never leak into this
-# harness's own environment or any later call. run_hook and run_boundary above are deliberately
-# UNCHANGED: neither hooks/git-c-guard.sh nor hooks/agent-boundary.sh reads any of these variables.
+# this global immediately before calling run_push_guard. $push_deadline_override (#463) is a NINTH
+# override: unset by default (the foreground path below, unchanged in shape from before), and when a
+# case sets it immediately before calling run_push_guard, push_guard_exec instead runs backgrounded
+# under wait_deadline at that many seconds, killing its whole process tree on overrun instead of
+# letting the case block on it. Every one of these nine is cleared again right after the call. The
+# environment mutation always happens inside an explicit "( push_guard_exec … )" subshell — a
+# portable, bash-3.2/Git-Bash-safe idiom (this file's own convention prefers it to `env -u`, which is
+# not obviously safe across Git-Bash) — so it can never leak into this harness's own environment or
+# any later call. run_hook above is deliberately UNCHANGED: hooks/git-c-guard.sh reads none of these
+# variables.
 push_out=""
 push_err=""
 push_rc=0
@@ -1271,23 +1491,25 @@ push_git_config_system=""
 push_git_config_nosystem=""
 push_home_empty=""
 push_budget_override=""
+push_deadline_override=""
 run_push_guard() {
   local json="$1" pathval="${2:-$PATH}" errfile="$tmpbase/push-guard-stderr"
   local home_val="${push_home_override:-$neutral_home}"
   local sysroot_val="${push_sysroot_override:-$neutral_sysroot}"
   [ "$push_home_empty" != "1" ] || home_val=""
-  push_out="$(
-    unset XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM TBF_PUSH_GUARD_BUDGET_SECS
-    export HOME="$home_val"
-    export TBF_PUSH_GUARD_SYSCONFIG_ROOT="$sysroot_val"
-    [ -z "$push_xdg_home" ] || export XDG_CONFIG_HOME="$push_xdg_home"
-    [ -z "$push_git_config_global" ] || export GIT_CONFIG_GLOBAL="$push_git_config_global"
-    [ -z "$push_git_config_system" ] || export GIT_CONFIG_SYSTEM="$push_git_config_system"
-    [ -z "$push_git_config_nosystem" ] || export GIT_CONFIG_NOSYSTEM="$push_git_config_nosystem"
-    [ -z "$push_budget_override" ] || export TBF_PUSH_GUARD_BUDGET_SECS="$push_budget_override"
-    printf '%s' "$json" | PATH="$pathval" "$bash_bin" "$push_guard" 2>"$errfile"
-  )"
-  push_rc=$?
+  if [ -n "$push_deadline_override" ]; then
+    local stdin_file="$tmpbase/push-guard-stdin" out_file="$tmpbase/push-guard-out" pgpid
+    printf '%s' "$json" > "$stdin_file"
+    ( push_guard_exec "$pathval" ) < "$stdin_file" > "$out_file" 2> "$errfile" &
+    pgpid=$!
+    wait_deadline "$pgpid" "$push_deadline_override"
+    push_rc=$deadline_rc
+    push_out="$(cat "$out_file" 2>/dev/null)"
+    rm -f "$out_file" "$stdin_file"
+  else
+    push_out="$( printf '%s' "$json" | ( push_guard_exec "$pathval" ) 2>"$errfile" )"
+    push_rc=$?
+  fi
   push_err="$(cat "$errfile" 2>/dev/null)"
   rm -f "$errfile"
   push_home_override=""
@@ -1298,6 +1520,7 @@ run_push_guard() {
   push_git_config_nosystem=""
   push_home_empty=""
   push_budget_override=""
+  push_deadline_override=""
 }
 
 # expect_push_deny/expect_push_no_opinion — assert against $push_out/$push_err/$push_rc.
@@ -4390,19 +4613,17 @@ case_push_dl_deny_production_budget() {
   # and a bare "a" refspec never resolves to a deny member), so only check_deadline (sampled once
   # per driver-loop iteration, and again inside each of evaluate_segment()'s own loops) can stop
   # this well before the flood ever reaches the final "git push origin main" segment. With
-  # check-off, or with knob-raise adopting the ignored 99s budget, the flood instead runs to
-  # completion and denies via that final segment's ordinary reason, taking far longer than the 9s
-  # bound below.
+  # check-off, or with knob-raise adopting the ignored 99s budget, the flood instead runs past the
+  # 9s active deadline below (#463) and this case's own kill_tree ends it, instead of denying via
+  # that final segment's ordinary reason.
   local dir="$tmpbase/repo-dl-production-budget"
   mk_fixture_repo "$dir" main feature/x
   push_budget_override="99"
   local flood
   flood="$(printf 'git push o a a a a a;%.0s' $(seq 1 10000))"
-  local start=$SECONDS elapsed
+  push_deadline_override=9
   run_push_guard "$(mk_push_cmd_big "${flood}git push origin main" "$dir")"
-  elapsed=$((SECONDS - start))
   expect_push_deny_exact "$DL_DEADLINE_LINE"
-  [ "$elapsed" -lt 9 ] || { __ok=0; __why="${__why}took ${elapsed}s (SECONDS-granularity), expected under 9s\n"; }
 }
 case_push_dl_deny_driver_site() {
   # mutant:435-dl-check-off; mutant:435-dl-driver-site -- a bare `-C` push (n == 0) runs ZERO
@@ -4417,6 +4638,7 @@ case_push_dl_deny_driver_site() {
   mk_fixture_repo "$main" main main
   mk_fixture_repo "$wt" trunk feature/x
   push_budget_override="1"
+  push_deadline_override=9
   local flood
   flood="$(printf 'git -C ../dl-drv-wt-1 push;%.0s' $(seq 1 3000))"
   run_push_guard "$(mk_push_cmd_big "${flood}git push" "$main")"
@@ -4431,6 +4653,7 @@ case_push_dl_deny_evaluate_sites() {
   local dir="$tmpbase/repo-dl-evaluate-sites"
   mkdir -p "$dir"
   push_budget_override="1"
+  push_deadline_override=9
   local filler
   filler="$(printf ' a%.0s' $(seq 1 10000))"
   run_push_guard "$(mk_push_cmd_big "git push origin${filler} main" "$dir")"
@@ -4458,6 +4681,7 @@ case_push_dl_deny_config_lines() {
   body="[core]"$'\n'"$(printf "${line_lit}%.0s" $(seq 1 1500))"
   mk_fixture_config "$wt" "$body"
   push_budget_override="1"
+  push_deadline_override=9
   run_push_guard "$(mk_push_cmd_big 'git -C ../dl-cfg-wt-1 push' "$main")"
   expect_push_deny_exact "$DL_DEADLINE_LINE"
 }
@@ -4476,13 +4700,11 @@ case_push_dl_deny_c_lane_flood() {
   mk_fixture_config "$wt" $'[include]\n\tpath = big.inc\n'
   printf ';c\n%.0s' $(seq 1 2000) > "$wt/.git/big.inc"
   push_budget_override="1"
+  push_deadline_override=9
   local flood
   flood="$(printf 'git -C ../dl-inc-wt-1 push origin feature/x;%.0s' $(seq 1 120))"
-  local start=$SECONDS elapsed
   run_push_guard "$(mk_push_cmd_big "${flood}git push origin main" "$main")"
-  elapsed=$((SECONDS - start))
   expect_push_deny_exact "$DL_DEADLINE_LINE"
-  [ "$elapsed" -lt 9 ] || { __ok=0; __why="${__why}took ${elapsed}s (SECONDS-granularity), expected under 9s\n"; }
 }
 case_push_dl_deny_toplevel_longline() {
   # mutant:435-dl-toplevel-cap -- TIMING (route 2: one long whitespace-run line in a depth-0
@@ -4492,18 +4714,16 @@ case_push_dl_deny_toplevel_longline() {
   # and value trims each cost real seconds against bash's own glob engine (see cfg_trim()'s own
   # header comment), there is no LATER line left for the read-loop's check_deadline sample to catch
   # (this is the last line in the file), and the lane's own current branch (main) then gives an
-  # ordinary dest deny -- taking far longer than the 9s bound below.
+  # ordinary dest deny -- running past the 9s active deadline below (#463) instead.
   local main="$tmpbase/repo-dl-longline" wt="$tmpbase/dl-long-wt-1"
   mk_fixture_repo "$main" trunk feature/x
   mk_fixture_repo "$wt" main main
   local sp
   sp="$(printf ' %.0s' $(seq 1 20000))"
   mk_fixture_config "$wt" "[core]"$'\n\tx = a'"${sp}"$'\n'
-  local start=$SECONDS elapsed
+  push_deadline_override=9
   run_push_guard "$(mk_push_cmd_big 'git -C ../dl-long-wt-1 push' "$main")"
-  elapsed=$((SECONDS - start))
   expect_push_deny_exact "$DL_CONFIGLINE_LINE"
-  [ "$elapsed" -lt 9 ] || { __ok=0; __why="${__why}took ${elapsed}s (SECONDS-granularity), expected under 9s\n"; }
 }
 case_push_dl_deny_toplevel_over_cap() {
   # mutant:435-dl-toplevel-cap -- the session's OWN config carries a denying
@@ -5778,6 +5998,7 @@ case_canary_main_session() {
 cases=(
   "status-rel|case_status_rel|allow: relative sibling path, status"
   "status-abs|case_status_abs|allow: absolute path, status"
+  "deadline-kill-tree|case_deadline_kill_tree|#463: wait_deadline/kill_tree's shared mechanism against a synthetic TERM-ignoring root+child tree -> overrun detected, case failed and told why, returns in under 8s (not the child's own 15s lifetime), both pids dead afterwards"
   "status-quoted|case_status_quoted|allow: double-quoted path, status"
   "path-windows|case_path_windows|allow: Windows drive-letter path, diff"
   "path-trailing-slash|case_path_trailing_slash|allow: trailing slash on the worktree path, rev-parse"
@@ -6061,7 +6282,7 @@ cases=(
   "ab-pc-deny-dbracket-flood|case_ab_pc_deny_dbracket_flood|verdict-only proof: implementer, echo + 70x ]] + ; git push (deny via the untouched main split, unaffected by the cap or by tail-cutting) -- control, not part of the mutation-proof registry"
   "ab-pc-deny-dbracket-cap|case_ab_pc_deny_dbracket_cap|additive-]] cap proof: implementer, echo + 65x ]] with no git/gh at all -- only the DBRACKET_MAX fail-closed sentinel can deny this record -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-cap)"
   "ab-pc-deny-dbracket-disjoint|case_ab_pc_deny_dbracket_disjoint|disjoint-tail proof: implementer, if [[ 1 ]] tee ]] .claude/LESSONS.md -- a tee cut short by the SECOND ]] fails closed on its own distinct reason -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap)"
-  "ab-pc-deny-dbracket-timing|case_ab_pc_deny_dbracket_timing|wall-clock proof: implementer, a ~200KB tee/]] flood -- deny AND elapsed time under 5s -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap)"
+  "ab-pc-deny-dbracket-timing|case_ab_pc_deny_dbracket_timing|wall-clock proof: implementer, a ~200KB tee/]] flood -- deny under a 15s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap)"
   "ab-pc-deny-dbracket-sed-cut|case_ab_pc_deny_dbracket_sed_cut|cut-sed proof: verifier, x ]] sed s/a/b/ ]] y; git diff -- a non-in-place sed cut short by the SECOND ]] fails closed -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-sed-noninplace)"
   "ab-pc-deny-dbracket-sed-inplace-cut|case_ab_pc_deny_dbracket_sed_inplace_cut|cut-sed proof: verifier, x ]] sed -i s/a/b/ ]] y; git diff -- an in-place sed cut short by the SECOND ]] fails closed -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-sed-inplace)"
   # --- hooks/push-guard.sh (#260) cases -----------------------------------------------------------
@@ -7301,12 +7522,12 @@ cases=(
   "push-dl-deny-budget-zero|case_push_dl_deny_budget_zero|knob 0 denies the very first sample even for an ordinary feature/x push -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off)"
   "push-dl-noop-budget-zero-no-push|case_push_dl_noop_budget_zero_no_push|no push segment stays no-opinion even at knob 0, via the pre-deadline scan_out exit -- mutation proof: dev/mutants/hook-tests.json (435-dl-scan-empty-exit)"
   "push-dl-noop-budget-zero-xseg-no-push|case_push_dl_noop_budget_zero_xseg_no_push|a cd with no push segment (only #433's marker line in the scan) stays no-opinion even at knob 0 -- mutation proof: dev/mutants/hook-tests.json (435-dl-scan-empty-exit, 435-dl-xseg-early-exit)"
-  "push-dl-deny-production-budget|case_push_dl_deny_production_budget|FLOOD+TIMING route 1: 10000x harmless push segments, knob 99 ignored (not less than the 5s production budget) -- deny AND elapsed under 9s -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-knob-raise)"
+  "push-dl-deny-production-budget|case_push_dl_deny_production_budget|FLOOD+TIMING route 1: 10000x harmless push segments, knob 99 ignored (not less than the 5s production budget) -- deny under a 9s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-knob-raise)"
   "push-dl-deny-driver-site|case_push_dl_deny_driver_site|FLOOD route 3: 3000x bare -C push (zero evaluate_segment loop iterations, no lane config), only the driver-loop sample can stop it -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-driver-site)"
   "push-dl-deny-evaluate-sites|case_push_dl_deny_evaluate_sites|one push segment with a 10000-token refspec list -- only evaluate_segment()'s own internal samples can stop its refspec loop before it reaches the trailing main -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-evaluate-sites)"
   "push-dl-deny-config-lines|case_push_dl_deny_config_lines|bare -C push resolving a lane with a many-line, under-cap depth-0 config -- only cfg_parse_file()'s read-loop sample can stop the parse mid-file -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-cfgline-site)"
   "push-dl-deny-c-lane-flood|case_push_dl_deny_c_lane_flood|FLOOD route 3: 120x resolved -C lanes each including a 2000-line all-comment file -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off)"
-  "push-dl-deny-toplevel-longline|case_push_dl_deny_toplevel_longline|TIMING route 2: a depth-0 line padded with 20000 trailing spaces denies instantly via the length cap; without it, no later line exists for the read-loop sample to catch, so the quadratic trim runs to completion -- deny AND elapsed under 9s -- mutation proof: dev/mutants/hook-tests.json (435-dl-toplevel-cap)"
+  "push-dl-deny-toplevel-longline|case_push_dl_deny_toplevel_longline|TIMING route 2: a depth-0 line padded with 20000 trailing spaces denies instantly via the length cap; without it, no later line exists for the read-loop sample to catch, so the quadratic trim runs past a 9s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (435-dl-toplevel-cap)"
   "push-dl-deny-toplevel-over-cap|case_push_dl_deny_toplevel_over_cap|a depth-0 line one character past the cap denies via the length check (checked before comment-strip), not the ordinary route its comment-stripped remainder would otherwise still reach -- mutation proof: dev/mutants/hook-tests.json (435-dl-toplevel-cap)"
   "push-dl-deny-toplevel-at-cap|case_push_dl_deny_toplevel_at_cap|a depth-0 line at EXACTLY the cap is still parsed normally, reaching the ordinary remote.origin.push route -- mutation proof: dev/mutants/hook-tests.json (435-dl-toplevel-cap-off-by-one)"
   # --- hooks/claude-dir-guard.sh (#327) cases -----------------------------------------------------

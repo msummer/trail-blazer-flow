@@ -3331,6 +3331,36 @@
       "expect_fail": [
         "push-xseg-noop-git-config-scoped"
       ]
+    },
+    {
+      "name": "463-hook-deadline-no-kill",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "deadline-kill-tree",
+      "edits": [
+        {
+          "from": "    kill_tree \"$pid\"",
+          "to": "    :"
+        }
+      ],
+      "expect_fail": [
+        "deadline-kill-tree"
+      ]
+    },
+    {
+      "name": "463-hook-deadline-root-only",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "deadline-kill-tree",
+      "edits": [
+        {
+          "from": "        *\" $ppid \"*) set=\"$set$pid \"; found=true ;;",
+          "to": "        *\" $ppid \"*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "deadline-kill-tree"
+      ]
     }
   ]
 }

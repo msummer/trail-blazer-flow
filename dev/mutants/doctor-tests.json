@@ -2168,6 +2168,36 @@
       "expect_fail": [
         "codex-sched-stop-exit"
       ]
+    },
+    {
+      "name": "463-doctor-deadline-no-kill",
+      "target": "dev/doctor-tests.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "deadline-kill-tree",
+      "edits": [
+        {
+          "from": "    kill_tree \"$pid\"",
+          "to": "    :"
+        }
+      ],
+      "expect_fail": [
+        "deadline-kill-tree"
+      ]
+    },
+    {
+      "name": "463-doctor-deadline-root-only",
+      "target": "dev/doctor-tests.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "deadline-kill-tree",
+      "edits": [
+        {
+          "from": "        *\" $ppid \"*) set=\"$set$pid \"; found=true ;;",
+          "to": "        *\" $ppid \"*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "deadline-kill-tree"
+      ]
     }
   ]
 }
