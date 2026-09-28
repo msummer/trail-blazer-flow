@@ -1273,11 +1273,10 @@ case_ab_pc_deny_dbracket_disjoint() {
 # ab_pc_dbracket_timing_filler (#463) — case_ab_pc_deny_dbracket_timing's own filler count depends
 # on which awk hooks/agent-boundary.sh's `awk` call actually spawns: this harness runs the hook
 # with no PATH override for this case, so it resolves the same `awk` this probe does. A BSD/
-# one-true-awk `split()` pays a per-token cost that grows with the standalone-`]]` count under the
-# 403-ab-pc-dbracket-overlap mutation (each of the flood's `]]` occurrences re-splits nearly the
-# whole remaining record), measurably worse than a linear-split awk (gawk, mawk) at the same
-# filler size, so it needs a far smaller filler to keep the unmutated baseline well clear of the
-# shared deadline while the mutant still overruns it with margin. Detected from `awk --version`'s
+# one-true-awk regex `split()` costs superlinearly in record length, where a gawk/mawk split is
+# linear, so on BSD awk even the unmutated walk grows faster than linearly with the filler; it
+# needs a far smaller filler to keep the unmutated run well clear of the shared deadline, while the
+# 403-ab-pc-dbracket-overlap mutant's repeated re-splits still overrun it. Detected from `awk --version`'s
 # own banner via a builtin-safe capture-then-case (never a writer piped into grep -q, per
 # CLAUDE.md); stdin is redirected from /dev/null so an awk that doesn't recognise the flag can
 # never block reading it. An awk whose banner doesn't match is treated as linear-cost (the
@@ -1292,20 +1291,20 @@ ab_pc_dbracket_timing_filler() {
 }
 case_ab_pc_deny_dbracket_timing() {
   # Wall-clock proof: an overlapping tail re-split()s almost the whole remaining record once per
-  # earlier `]]`, so the mutated (overlap-restored) walk's cost grows roughly with the SQUARE of the
-  # filler length (each of the flood's fixed 64 `]]` occurrences re-scans nearly the whole remaining
-  # record); disjoint tails bound each emit_segment() walk to its own cut segment instead, so this
+  # earlier `]]`, so the mutated (overlap-restored) walk pays one near-whole-record split per each of
+  # the flood's fixed 64 `]]` occurrences, where disjoint tails bound each emit_segment() walk to its
+  # own cut segment; so this
   # large, 64-`]]` shape resolves well under the 15s active deadline below (#463 —
   # boundary_deadline_override, not a passive post-hoc measurement). 15s (rather than push-dl's 9s or
   # this case's own original 5s) leaves headroom for contention: this suite's own other flood cases
   # (dbracket-cap/-flood/-disjoint/-sed-cut/-sed-inplace-cut) are ALSO CPU-bound awk work, so a
   # mutant-driver wave running many concurrent full `ab-pc-` suites can genuinely contend for the
   # host's cores. The filler count comes from ab_pc_dbracket_timing_filler above, sized per-awk
-  # (#463) rather than fixed: because the mutated walk's cost is superlinear in filler length under
-  # a BSD/one-true-awk split(), holding one filler constant across every awk either let a fast
-  # linear-split awk's unmutated run crowd the deadline under load, or let a slow superlinear awk's
-  # unmutated run threaten it outright — sizing per-awk keeps the unmutated run's margin under the
-  # deadline, and the mutated run's margin over it, wide on either awk. The command reaches jq
+  # (#463) rather than fixed: a BSD/one-true-awk split() is superlinear in record length while a
+  # gawk/mawk split is linear, so one filler size for every awk either leaves a linear awk's mutated
+  # run too close under the deadline or pushes a BSD awk's unmutated run over it under load —
+  # sizing per-awk keeps the unmutated run's margin under the deadline, and the mutated run's
+  # margin over it, wide on either awk. The command reaches jq
   # on stdin (printf is a builtin), never as a --arg: Linux refuses any single exec argument over its
   # per-argument limit, which this command exceeds, so mk_agent_cmd would build an empty payload
   # there and the hook would see no command at all.
