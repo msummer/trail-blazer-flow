@@ -1,0 +1,63 @@
+# suite-deps.txt (#464) — per-suite dependency map for dev/mutant-driver.sh's change-based
+# selection mode.
+#
+# Format: two whitespace-separated fields per non-blank, non-'#' line:
+#   <suite>  <pattern>
+# <suite> is a dev/*-tests.sh path exactly as it appears in a registry record's own "suite" field.
+# <pattern> is a shell `case` glob matched against a repo-relative changed path; `*` also matches
+# `/`, so a single trailing `*` claims an entire directory subtree.
+#
+# Semantics:
+#   - A suite with NO line here is treated as unmapped: any changed path selects its records
+#     (the fail-safe default — see the driver's own header).
+#   - A bare `*` pattern SELECTS its suite's records on any change, but never CLAIMS a path: it
+#     does not stop the unclaimed-watched-path full-run fallback from firing for that path.
+#   - A glob-free pattern (no `*`, `?` or `[`) must name a file that exists under this checkout's
+#     root, or the driver's registry validation rejects it (a stale literal fails loudly instead of
+#     silently going dark).
+#
+# When a suite starts reading or executing another repo file, add a line here for it. Editing this
+# file itself claims nothing, so a change to it forces a full run on merge (dev/ is a watched
+# prefix, and no record or pattern here claims this file itself).
+
+# hook-tests.sh runs the five hooks/*.sh scripts directly against fixture stdin; it reads nothing else.
+dev/hook-tests.sh           hooks/*.sh
+
+# doctor-tests.sh builds fixture repos and copies/reads bin/*, agents/*, templates/*,
+# hooks/hooks.json and .claude-plugin/plugin.json.
+dev/doctor-tests.sh         bin/*
+dev/doctor-tests.sh         agents/*
+dev/doctor-tests.sh         templates/*
+dev/doctor-tests.sh         hooks/hooks.json
+dev/doctor-tests.sh         .claude-plugin/plugin.json
+
+# planning-tests.sh's run_status runs bin/harness-status.sh (which resolves find-*, harness-stop
+# and reconcile-ledger as siblings) directly.
+dev/planning-tests.sh       bin/find-planning-work.sh
+dev/planning-tests.sh       bin/find-implementation-work.sh
+dev/planning-tests.sh       bin/harness-status.sh
+dev/planning-tests.sh       bin/harness-stop.sh
+dev/planning-tests.sh       bin/reconcile-ledger.sh
+
+# cleanup-tests.sh runs bin/cleanup-after-merge.sh only.
+dev/cleanup-tests.sh        bin/cleanup-after-merge.sh
+
+# lock-tests.sh runs bin/harness-lock.sh, which itself reads .claude-plugin/plugin.json; the
+# test also reads plugin.json directly.
+dev/lock-tests.sh           bin/harness-lock.sh
+dev/lock-tests.sh           .claude-plugin/plugin.json
+
+# stop-tests.sh runs bin/harness-stop.sh only.
+dev/stop-tests.sh           bin/harness-stop.sh
+
+# mutant-driver-tests.sh runs dev/mutant-driver.sh itself — belt-and-suspenders alongside
+# the driver's own target/registry-file claim rules, which already select this suite's records on
+# a dev/mutant-driver.sh change.
+dev/mutant-driver-tests.sh  dev/mutant-driver.sh
+
+# selfcheck-tests.sh copies the WHOLE tree and runs dev/selfcheck.sh, which itself
+# reads nearly every tracked file, including skills/*/SKILL.md. A bare `*` selects it
+# on any non-empty change without claiming any single path.
+dev/selfcheck-tests.sh      *
+dev/selfcheck-tests.sh      dev/selfcheck.sh
+dev/selfcheck-tests.sh      skills/*

@@ -18,6 +18,12 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #464: the post-merge ubuntu `selfcheck` job's `dev/mutant-driver.sh` step now selects, from the
+  pushed commit range, only the registry records a changed path can affect (by target, suite,
+  registry file, or a new `dev/mutants/suite-deps.txt` dependency map), falling back to a full run
+  on a driver change, an unclaimed watched path, or an unusable `MUTANT_DRIVER_SINCE` base.
+  Nightly and manual-dispatch runs, on both `selfcheck` and `selfcheck-macos`, are unaffected and
+  still run every record.
 - #462: the mutant driver keeps every job slot busy (a rolling pool instead of barrier waves);
   output, CLI and verdicts are unchanged.
 - #465: the implementer's evidence pass now probes each behaviour the approved plan names with a

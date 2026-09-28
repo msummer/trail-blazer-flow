@@ -27,25 +27,39 @@
         }
       ],
       "expect_fail": [
-        "pass-exact",
+        "baseline-gates-dependents",
+        "byte-exact-multiline",
+        "declared-order",
+        "exec-bit-preserved",
         "fail-extra-joiner",
         "fail-missing-member",
         "fail-swapped-member",
+        "footer-format",
+        "jobs-line",
         "multi-edit-sequential",
-        "byte-exact-multiline",
-        "exec-bit-preserved",
-        "tracked-tree-untouched",
+        "pass-exact",
+        "pool-refill",
+        "sel-changed-from-crlf",
+        "sel-dependency",
+        "sel-driver",
+        "sel-filtered-count",
+        "sel-full-unchanged",
+        "sel-registry",
+        "sel-since-range",
+        "sel-since-unusable",
+        "sel-star-no-claim",
+        "sel-suite",
+        "sel-target",
+        "sel-unclaimed",
+        "sel-unmapped-suite",
+        "sel-watched-claim",
+        "suite-no-summary",
         "suite-runs-from-copy",
-        "declared-order",
+        "total-mismatch",
+        "tracked-tree-untouched",
         "unknown-case",
         "unknown-case-prefix",
-        "suite-no-summary",
-        "total-mismatch",
-        "jobs-line",
-        "footer-format",
-        "unsorted-set-order",
-        "baseline-gates-dependents",
-        "pool-refill"
+        "unsorted-set-order"
       ]
     },
     {
@@ -399,6 +413,316 @@
       ],
       "expect_fail": [
         "baseline-dies"
+      ]
+    },
+    {
+      "name": "drv-sel-target",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "    if [ \"$p\" = \"$rs_target\" ] || [ \"$p\" = \"$rs_suite\" ] || [ \"$p\" = \"$rs_regfile\" ]; then",
+          "to": "    if [ \"$p\" = \"$rs_suite\" ] || [ \"$p\" = \"$rs_regfile\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "sel-changed-from-crlf",
+        "sel-filtered-count",
+        "sel-since-range",
+        "sel-target"
+      ]
+    },
+    {
+      "name": "drv-sel-suite",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "    if [ \"$p\" = \"$rs_target\" ] || [ \"$p\" = \"$rs_suite\" ] || [ \"$p\" = \"$rs_regfile\" ]; then",
+          "to": "    if [ \"$p\" = \"$rs_target\" ] || [ \"$p\" = \"$rs_regfile\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "sel-suite"
+      ]
+    },
+    {
+      "name": "drv-sel-registry",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "    if [ \"$p\" = \"$rs_target\" ] || [ \"$p\" = \"$rs_suite\" ] || [ \"$p\" = \"$rs_regfile\" ]; then",
+          "to": "    if [ \"$p\" = \"$rs_target\" ] || [ \"$p\" = \"$rs_suite\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "sel-registry"
+      ]
+    },
+    {
+      "name": "drv-sel-deps",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "        ${dep_pat[$dp_idx]}) return 0 ;;",
+          "to": "        __never_matches_anything__) return 0 ;;"
+        }
+      ],
+      "expect_fail": [
+        "sel-dependency",
+        "sel-watched-claim"
+      ]
+    },
+    {
+      "name": "drv-sel-zero",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "    if [ \"${#new_sel[@]}\" -eq 0 ]; then\n      echo\n      echo \"== summary: 0 pass, 0 fail ==\"\n      exit 0\n    fi",
+          "to": "    if [ \"${#new_sel[@]}\" -eq 0 ]; then\n      echo\n      echo \"== summary: 0 pass, 0 fail ==\"\n      exit 1\n    fi"
+        }
+      ],
+      "expect_fail": [
+        "sel-changed-from-blank",
+        "sel-none",
+        "sel-unmapped-empty"
+      ]
+    },
+    {
+      "name": "drv-sel-unclaimed",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "        bin/*|hooks/*|templates/*|agents/*|skills/*|dev/*)",
+          "to": "        __never_matches_anything__*)"
+        }
+      ],
+      "expect_fail": [
+        "sel-unclaimed",
+        "sel-star-no-claim"
+      ]
+    },
+    {
+      "name": "drv-sel-driver",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "      if [ \"$p\" = \"dev/mutant-driver.sh\" ]; then\n        full_reason=\"driver changed\"\n        break\n      fi\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "sel-driver"
+      ]
+    },
+    {
+      "name": "drv-sel-unmapped",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "  if [ \"$rs_has_map\" -eq 0 ] && [ \"${#changed[@]}\" -gt 0 ]; then\n    return 0\n  fi",
+          "to": "  if [ \"$rs_has_map\" -eq 0 ] && [ \"${#changed[@]}\" -gt 0 ]; then\n    return 1\n  fi"
+        }
+      ],
+      "expect_fail": [
+        "sel-unmapped-suite"
+      ]
+    },
+    {
+      "name": "drv-sel-starclaim",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "    dp=\"${dep_pat[$dp_idx]}\"\n    [ \"$dp\" = \"*\" ] && continue\n    case \"$p\" in",
+          "to": "    dp=\"${dep_pat[$dp_idx]}\"\n    case \"$p\" in"
+        }
+      ],
+      "expect_fail": [
+        "sel-star-no-claim"
+      ]
+    },
+    {
+      "name": "drv-sel-default",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "sel_mode=0\nchanged=()",
+          "to": "sel_mode=1\nchanged=()"
+        }
+      ],
+      "expect_fail": [
+        "sel-full-unchanged",
+        "sel-since-unusable"
+      ]
+    },
+    {
+      "name": "drv-since-diff",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "if since_diff=\"$(git -C \"$root\" diff --no-renames --name-only \"$since\" HEAD -- 2>/dev/null)\"; then",
+          "to": "if since_diff=\"$(git -C \"$root\" diff --no-renames --name-only HEAD HEAD -- 2>/dev/null)\"; then"
+        }
+      ],
+      "expect_fail": [
+        "sel-since-range",
+        "sel-since-unusable"
+      ]
+    },
+    {
+      "name": "drv-since-fallback",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "      else\n        echo \"== mutant-driver: full run (reason: unusable base $since) ==\"\n      fi",
+          "to": "      else\n        sel_mode=1\n      fi"
+        }
+      ],
+      "expect_fail": [
+        "sel-since-unusable"
+      ]
+    },
+    {
+      "name": "drv-since-dash",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "  case \"$since\" in\n    -*)\n      # A leading '-' never reaches git's argv as an option (e.g. \"--output=...\") — this value is\n      # simply unusable, full stop.\n      echo \"== mutant-driver: full run (reason: unusable base $since) ==\"\n      ;;\n    *)",
+          "to": "  case \"$since\" in\n    *)"
+        }
+      ],
+      "expect_fail": [
+        "sel-since-unusable"
+      ]
+    },
+    {
+      "name": "drv-sel-crlf",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "    cf_line=\"${cf_line%$'\\r'}\"\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "sel-changed-from-crlf"
+      ]
+    },
+    {
+      "name": "drv-sel-blank",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "    [ -n \"$cf_line\" ] && changed+=(\"$cf_line\")",
+          "to": "    changed+=(\"$cf_line\")"
+        }
+      ],
+      "expect_fail": [
+        "sel-changed-from-blank"
+      ]
+    },
+    {
+      "name": "drv-sel-emptychange",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "  if [ \"$rs_has_map\" -eq 0 ] && [ \"${#changed[@]}\" -gt 0 ]; then\n    return 0\n  fi",
+          "to": "  if [ \"$rs_has_map\" -eq 0 ]; then\n    return 0\n  fi"
+        }
+      ],
+      "expect_fail": [
+        "sel-changed-from-blank",
+        "sel-unmapped-empty"
+      ]
+    },
+    {
+      "name": "drv-sel-watchclaim",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "      $dp) return 0 ;;",
+          "to": "      $dp-never-claims-mutant) return 0 ;;"
+        }
+      ],
+      "expect_fail": [
+        "sel-watched-claim"
+      ]
+    },
+    {
+      "name": "drv-sel-filtercount",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "sel-",
+      "edits": [
+        {
+          "from": "    echo \"== mutant-driver: selected ${#new_sel[@]} of ${#sel[@]} records ==\"",
+          "to": "    echo \"== mutant-driver: selected ${#new_sel[@]} of ${#rec_name[@]} records ==\""
+        }
+      ],
+      "expect_fail": [
+        "sel-filtered-count"
+      ]
+    },
+    {
+      "name": "drv-deps-malformed",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "reg-deps-",
+      "edits": [
+        {
+          "from": "    if [ -z \"$d_pat\" ] || [ -n \"$d_rest\" ]; then",
+          "to": "    if false; then"
+        }
+      ],
+      "expect_fail": [
+        "reg-deps-malformed"
+      ]
+    },
+    {
+      "name": "drv-deps-literal",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "reg-deps-",
+      "edits": [
+        {
+          "from": "    if [ \"$has_glob\" -eq 0 ] && [ ! -e \"$root/$d_pat\" ]; then",
+          "to": "    if false; then"
+        }
+      ],
+      "expect_fail": [
+        "reg-deps-missing-literal"
       ]
     }
   ]
