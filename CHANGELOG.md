@@ -16,6 +16,14 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #465: the implementer's evidence pass now probes each behaviour the approved plan names with a
+  production-code mutation a test must kill, recorded on a new "Behaviour probes" Evidence line
+  carried into the PR body. No consumer step: the agent file ships with the plugin, and Codex
+  users pick it up on their next `codex-setup.sh` run, which the existing `--check` drift mode
+  already reports.
+
 ## v3.1.0
 
 This release hardens the mechanical safety hooks and adds the launchd wrapper for scheduled Codex

@@ -716,10 +716,11 @@ gh issue edit <number> --add-label pr-open
      what they want* (omit this item entirely when that diff was empty); a `Mutation probe:` line
      carrying that same verdict's
      `## Mutation probe` content (the `k/n killed; survivors: …` form, or its skip reason); the
-     implementer's Evidence block condensed to its **Claims swept** and **Mutation checks**
-     lines, copied from the report; any schema changes needing application; and the reviewer
-     notes from the subagent's report. **Exception — a PR that delivers only part of an issue**
-     (a deliberately multi-PR split): write `Part of #<number>` (plus `PR <k> of <m>` when the
+     implementer's Evidence block condensed to its **Claims swept**, **Mutation checks**, and
+     **Behaviour probes** lines, copied from the report; any schema changes needing application;
+     and the reviewer notes from the subagent's report. **Exception — a PR that delivers only
+     part of an issue** (a deliberately multi-PR split): write `Part of #<number>` (plus `PR <k>
+     of <m>` when the
      total is known) instead of a closing keyword, so `cleanup-after-merge.sh` leaves the issue
      open after this slice merges; only the PR that finishes the issue carries `Closes
      #<number>`. A human who plans the split up front applies the `multi-pr` label — or posts
