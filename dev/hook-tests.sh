@@ -162,6 +162,64 @@ wait_deadline() {
   deadline_rc=$?
 }
 
+# _ms_from_timeformat STR (#470) — pure parser for one bash `time`-keyword TIMEFORMAT=%3R report
+# line (e.g. "0.089", "12.000", or a comma-locale "0,089"): accepts only the shape
+# <digits><.|,><exactly 3 digits> via a `case` pattern, splits on the separator, then evaluates the
+# joined digits under a `10#` base-10 prefix so a leading zero in the sub-second half is never
+# misread as octal ($((0089)) errors in plain bash arithmetic). The evaluation runs inside a
+# command substitution specifically so that a malformed base-10 value (e.g. under the mutant below,
+# which drops the `10#` prefix) fails as a contained, empty result in THIS function alone, instead
+# of a fatal arithmetic-expansion error unwinding bash's own jump_to_top_level all the way out of
+# the case dispatch loop that calls this — verified directly against this exact shape (#470). Sets
+# $parsed_ms, or "" when STR doesn't match the shape or the arithmetic itself failed. Builtins
+# only — no grep, no pipe into a reader.
+# mutant:470-hook-ms-octal — the `10#` prefix dropped from the arithmetic: a leading-zero
+#   sub-second value like "0.089" then evaluates as invalid octal instead of decimal 89, caught by
+#   case_deadline_calibrate's own 0.089 assertion.
+parsed_ms=""
+_ms_from_timeformat() {
+  local str="$1" whole sub
+  case "$str" in
+    [0-9]*.[0-9][0-9][0-9]) whole="${str%.*}"; sub="${str##*.}" ;;
+    [0-9]*,[0-9][0-9][0-9]) whole="${str%,*}"; sub="${str##*,}" ;;
+    *) parsed_ms=""; return ;;
+  esac
+  parsed_ms="$(echo $((10#${whole}${sub})) 2>/dev/null)"
+}
+
+# measure_ms CMD [ARGS...] (#470) — runs CMD in the CURRENT shell (never a subshell or command
+# substitution, so a called bash function can still set caller-visible globals, e.g. run_boundary's
+# own $boundary_out) timed by bash's own `time` keyword under a local TIMEFORMAT=%3R, capturing the
+# report to a file under $tmpbase (never /tmp) rather than parsing it off a pipe. Reads the file's
+# last non-empty line, hands it to _ms_from_timeformat, and sets $measured_ms to the parsed value or
+# "" when the report couldn't be parsed. Always removes the report file before returning.
+measured_ms=""
+measure_ms() {
+  local file="$tmpbase/measure-ms" line last=""
+  local TIMEFORMAT='%3R'
+  { time "$@" ; } 2>"$file"
+  while IFS= read -r line; do
+    [ -n "$line" ] && last="$line"
+  done < "$file"
+  rm -f "$file"
+  _ms_from_timeformat "$last"
+  measured_ms="$parsed_ms"
+}
+
+# calibrated_deadline FLOOR K MS (#470) — sets $calibrated_secs to max(FLOOR, ceil(K * MS / 1000)),
+# integer arithmetic only (bash 3.2 has no floating point): the ceiling is computed as
+# (K*MS + 999) / 1000 via truncating integer division, then raised to FLOOR if that came out lower.
+calibrated_secs=0
+calibrated_deadline() {
+  local floor="$1" k="$2" ms="$3" secs
+  secs=$(( (k * ms + 999) / 1000 ))
+  if [ "$secs" -lt "$floor" ]; then
+    calibrated_secs="$floor"
+  else
+    calibrated_secs="$secs"
+  fi
+}
+
 # case_deadline_kill_tree (#463) — pins the shared wait_deadline/kill_tree mechanism directly,
 # independent of any hook fixture: builds a synthetic TERM-ignoring process tree (a root script plus
 # one real "sleep 15" child), runs it through wait_deadline with a 2s deadline, and asserts the
@@ -235,6 +293,59 @@ TREEEOF
   if [ -n "$root_alive" ] || [ -n "$child_alive" ]; then
     __ok=0; __why="${__why}still alive after wait_deadline: root=$root_alive child=$child_alive\n"
     kill -9 "$root_pid" "$child_pid" 2>/dev/null
+  fi
+}
+
+# case_deadline_calibrate (#470) — pins calibrated_deadline's own floor/scale/round-up arithmetic
+# and _ms_from_timeformat's own shape parsing without touching a live clock, except one bounded
+# check of measure_ms itself with a lower bound only, so host load can never flip it:
+#   - calibrated_deadline: the floor wins below it, K*ms wins above it, and a non-integer result
+#     rounds up rather than truncates.
+#   - _ms_from_timeformat: a leading-zero sub-second value and a comma decimal separator parse the
+#     same as a dot; unparseable input yields "" rather than a stale or garbage value.
+#   - measure_ms: `sleep 0.3` reports at least 250ms (real elapsed always exceeds the requested
+#     sleep by some scheduling overhead) — never an upper bound, so load can't make this flaky.
+# mutant:470-hook-calib-floor-only — calibrated_deadline's scale-up branch deleted, so it always
+#   returns FLOOR: caught by the 4000ms assertion below (K*ms=24 > floor=15, so the mutant wrongly
+#   returns 15 instead of 24).
+# mutant:470-hook-calib-no-ceil — the "+999" round-up term dropped from the ceiling arithmetic:
+#   caught by the 2501ms assertion below (16.005s truncates to 15 instead of rounding up to 16).
+case_deadline_calibrate() {
+  calibrated_deadline 15 6 1000
+  [ "$calibrated_secs" -eq 15 ] || { __ok=0; __why="${__why}calibrated_deadline 15 6 1000: expected 15 (floor), got $calibrated_secs\n"; }
+
+  calibrated_deadline 15 6 4000
+  [ "$calibrated_secs" -eq 24 ] || { __ok=0; __why="${__why}calibrated_deadline 15 6 4000: expected 24 (K*ms), got $calibrated_secs\n"; }
+
+  calibrated_deadline 15 6 2501
+  [ "$calibrated_secs" -eq 16 ] || { __ok=0; __why="${__why}calibrated_deadline 15 6 2501: expected 16 (rounds up), got $calibrated_secs\n"; }
+
+  calibrated_deadline 15 6 2500
+  [ "$calibrated_secs" -eq 15 ] || { __ok=0; __why="${__why}calibrated_deadline 15 6 2500: expected 15 (exact), got $calibrated_secs\n"; }
+
+  _ms_from_timeformat "0.089"
+  [ "$parsed_ms" -eq 89 ] 2>/dev/null || { __ok=0; __why="${__why}_ms_from_timeformat '0.089': expected 89, got '$parsed_ms'\n"; }
+
+  _ms_from_timeformat "1.234"
+  [ "$parsed_ms" -eq 1234 ] 2>/dev/null || { __ok=0; __why="${__why}_ms_from_timeformat '1.234': expected 1234, got '$parsed_ms'\n"; }
+
+  _ms_from_timeformat "12.000"
+  [ "$parsed_ms" -eq 12000 ] 2>/dev/null || { __ok=0; __why="${__why}_ms_from_timeformat '12.000': expected 12000, got '$parsed_ms'\n"; }
+
+  _ms_from_timeformat "0,089"
+  [ "$parsed_ms" -eq 89 ] 2>/dev/null || { __ok=0; __why="${__why}_ms_from_timeformat '0,089': expected 89, got '$parsed_ms'\n"; }
+
+  _ms_from_timeformat "garbage"
+  [ -z "$parsed_ms" ] || { __ok=0; __why="${__why}_ms_from_timeformat 'garbage': expected empty, got '$parsed_ms'\n"; }
+
+  _ms_from_timeformat ""
+  [ -z "$parsed_ms" ] || { __ok=0; __why="${__why}_ms_from_timeformat '': expected empty, got '$parsed_ms'\n"; }
+
+  measure_ms sleep 0.3
+  if [ -z "$measured_ms" ]; then
+    __ok=0; __why="${__why}measure_ms sleep 0.3: could not parse a timing report\n"
+  elif [ "$measured_ms" -lt 250 ]; then
+    __ok=0; __why="${__why}measure_ms sleep 0.3: expected >=250ms, got ${measured_ms}ms\n"
   fi
 }
 
@@ -1255,7 +1366,7 @@ case_ab_pc_deny_dbracket_cap() {
 #   alternative from the disjoint cut regex), so a tail that should have been cut at the NEXT `]]`
 #   instead runs to the next real break, re-finding a `.claude` target on the far side of that `]]`
 #   directly (the ordinary reason) instead of failing closed on the CUT tail (the new reason), and
-#   fails case_ab_pc_deny_dbracket_timing below's 15s bound.
+#   overruns case_ab_pc_deny_dbracket_timing below's own calibrated deadline.
 case_ab_pc_deny_dbracket_disjoint() {
   # Disjoint tails alone would lose this deny: an overlapping tail after the first `]]` runs all the
   # way to `.claude/LESSONS.md` and finds it directly (the ordinary ".claude segment" reason). Under
@@ -1275,8 +1386,8 @@ case_ab_pc_deny_dbracket_disjoint() {
 # with no PATH override for this case, so it resolves the same `awk` this probe does. A BSD/
 # one-true-awk regex `split()` costs superlinearly in record length, where a gawk/mawk split is
 # linear, so on BSD awk even the unmutated walk grows faster than linearly with the filler; it
-# needs a far smaller filler to keep the unmutated run well clear of the shared deadline, while the
-# 403-ab-pc-dbracket-overlap mutant's repeated re-splits still overrun it. Detected from `awk --version`'s
+# needs a far smaller filler to keep the unmutated walk's own calibrated margin wide (#470), while
+# the 403-ab-pc-dbracket-overlap mutant's repeated re-splits still overrun it. Detected from `awk --version`'s
 # own banner via a builtin-safe capture-then-case (never a writer piped into grep -q, per
 # CLAUDE.md); stdin is redirected from /dev/null so an awk that doesn't recognise the flag can
 # never block reading it. An awk whose banner doesn't match is treated as linear-cost (the
@@ -1293,18 +1404,17 @@ case_ab_pc_deny_dbracket_timing() {
   # Wall-clock proof: an overlapping tail re-split()s almost the whole remaining record once per
   # earlier `]]`, so the mutated (overlap-restored) walk pays one near-whole-record split per each of
   # the flood's fixed 64 `]]` occurrences, where disjoint tails bound each emit_segment() walk to its
-  # own cut segment; so this
-  # large, 64-`]]` shape resolves well under the 15s active deadline below (#463 —
-  # boundary_deadline_override, not a passive post-hoc measurement). 15s (rather than push-dl's 9s or
-  # this case's own original 5s) leaves headroom for contention: this suite's own other flood cases
-  # (dbracket-cap/-flood/-disjoint/-sed-cut/-sed-inplace-cut) are ALSO CPU-bound awk work, so a
-  # mutant-driver wave running many concurrent full `ab-pc-` suites can genuinely contend for the
-  # host's cores. The filler count comes from ab_pc_dbracket_timing_filler above, sized per-awk
-  # (#463) rather than fixed: a BSD/one-true-awk split() is superlinear in record length while a
-  # gawk/mawk split is linear, so one filler size for every awk either leaves a linear awk's mutated
-  # run too close under the deadline or pushes a BSD awk's unmutated run over it under load —
-  # sizing per-awk keeps the unmutated run's margin under the deadline, and the mutated run's
-  # margin over it, wide on either awk. The command reaches jq
+  # own cut segment; so this large, 64-`]]` shape resolves well under the deadline calibrated below
+  # (#470 — boundary_deadline_override, not a passive post-hoc measurement, and no longer one fixed
+  # constant: see the control payload and calibrated_deadline call below). This suite's own other
+  # flood cases (dbracket-cap/-flood/-disjoint/-sed-cut/-sed-inplace-cut) are ALSO CPU-bound awk
+  # work, so a mutant-driver wave running many concurrent full `ab-pc-` suites can genuinely contend
+  # for the host's cores — which is exactly the load a same-run calibrated deadline, rather than a
+  # fixed one, absorbs. The filler count comes from ab_pc_dbracket_timing_filler above, sized
+  # per-awk rather than fixed: a BSD/one-true-awk split() is superlinear in record length while a
+  # gawk/mawk split is linear, so one filler size for every awk either leaves a linear awk's
+  # mutated run too close to its own calibrated margin or pushes a BSD awk's unmutated run too
+  # close to its own — sizing per-awk keeps both margins wide on either awk. The command reaches jq
   # on stdin (printf is a builtin), never as a --arg: Linux refuses any single exec argument over its
   # per-argument limit, which this command exceeds, so mk_agent_cmd would build an empty payload
   # there and the hook would see no command at all.
@@ -1315,13 +1425,45 @@ case_ab_pc_deny_dbracket_timing() {
   local payload
   payload="$(printf '%s\ngit push' "${flood}${filler}" \
     | jq -Rs '{tool_name: "Bash", agent_type: "implementer", tool_input: {command: .}}')"
-  boundary_deadline_override=15
+
+  # Control payload (#470): same byte length as the timed payload above, but only the FIRST
+  # ` ]] tee` segment keeps its `]]`; the other 63 become same-length, breaker-free text with no
+  # `]]` (` zz tee`), so exactly one standalone `]]` remains and no second one exists for an
+  # overlapping tail to re-split from. That makes this control invariant under
+  # 403-ab-pc-dbracket-overlap: its own cost tracks the UNMUTATED walk's cost as load scales, never
+  # the mutated walk's, which is what lets it calibrate a same-run deadline below rather than a
+  # fixed constant.
+  local ctl_flood="x" ctl_i
+  for ctl_i in $(seq 1 64); do
+    if [ "$ctl_i" -eq 1 ]; then ctl_flood="${ctl_flood} ]] tee"; else ctl_flood="${ctl_flood} zz tee"; fi
+  done
+  local ctl_payload
+  ctl_payload="$(printf '%s\ngit push' "${ctl_flood}${filler}" \
+    | jq -Rs '{tool_name: "Bash", agent_type: "implementer", tool_input: {command: .}}')"
+  measure_ms run_boundary "$ctl_payload"
+  if [ -z "$measured_ms" ]; then
+    __ok=0; __why="${__why}control run's own timing report could not be parsed — can't calibrate a deadline\n"
+    return
+  fi
+
+  # FLOOR/K (#470; calibrated_deadline's own arithmetic is pinned by case_deadline_calibrate, not
+  # here, so these two figures stay in code, never a measured ratio): K sits strictly between the
+  # unmutated/control cost ratio and the mutated/control cost ratio, with at least a 2x margin on
+  # each side, so a transient load swing between the control run just above and the timed run just
+  # below can't flip the verdict either way; FLOOR keeps today's idle-host behaviour, where the
+  # control itself is too fast for K*control alone to leave headroom.
+  local floor=15 k=6
+  calibrated_deadline "$floor" "$k" "$measured_ms"
+  boundary_deadline_override="$calibrated_secs"
   run_boundary "$payload"
   # mutant:463-hook-boundary-override-leaks — run_boundary's own trailing
   #   `boundary_deadline_override=""` reset deleted: this assertion is the only thing that would
   #   catch the override surviving into the NEXT case, since a leaked value here still happens to
   #   equal what this case itself just set.
   [ -z "$boundary_deadline_override" ] || { __ok=0; __why="${__why}boundary_deadline_override not cleared after run_boundary: '$boundary_deadline_override'\n"; }
+  if [ "$deadline_overran" = true ]; then
+    __why="${__why}control ${measured_ms}ms -> deadline ${calibrated_secs}s\n"
+  fi
   expect_deny
 }
 # mutant:403-ab-pc-dbracket-sed-noninplace — deletes the `else if (cut_flag) { print
@@ -6055,6 +6197,7 @@ cases=(
   "status-rel|case_status_rel|allow: relative sibling path, status"
   "status-abs|case_status_abs|allow: absolute path, status"
   "deadline-kill-tree|case_deadline_kill_tree|#463: wait_deadline/kill_tree's shared mechanism against a synthetic TERM-ignoring root+child tree -> overrun detected, case failed and told why, returns in under 8s (not the child's own 15s lifetime), both pids dead afterwards"
+  "deadline-calibrate|case_deadline_calibrate|#470: calibrated_deadline's floor/scale/round-up arithmetic and _ms_from_timeformat's shape parsing (leading-zero sub-second digits, comma decimal separator, unparseable input) -- plus a real sleep 0.3 through measure_ms, lower bound only"
   "status-quoted|case_status_quoted|allow: double-quoted path, status"
   "path-windows|case_path_windows|allow: Windows drive-letter path, diff"
   "path-trailing-slash|case_path_trailing_slash|allow: trailing slash on the worktree path, rev-parse"
@@ -6338,7 +6481,7 @@ cases=(
   "ab-pc-deny-dbracket-flood|case_ab_pc_deny_dbracket_flood|verdict-only proof: implementer, echo + 70x ]] + ; git push (deny via the untouched main split, unaffected by the cap or by tail-cutting) -- control, not part of the mutation-proof registry"
   "ab-pc-deny-dbracket-cap|case_ab_pc_deny_dbracket_cap|additive-]] cap proof: implementer, echo + 65x ]] with no git/gh at all -- only the DBRACKET_MAX fail-closed sentinel can deny this record -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-cap)"
   "ab-pc-deny-dbracket-disjoint|case_ab_pc_deny_dbracket_disjoint|disjoint-tail proof: implementer, if [[ 1 ]] tee ]] .claude/LESSONS.md -- a tee cut short by the SECOND ]] fails closed on its own distinct reason -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap)"
-  "ab-pc-deny-dbracket-timing|case_ab_pc_deny_dbracket_timing|wall-clock proof: implementer, a tee/]] flood sized per-awk by ab_pc_dbracket_timing_filler -- deny under a 15s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap, 463-hook-boundary-override-leaks)"
+  "ab-pc-deny-dbracket-timing|case_ab_pc_deny_dbracket_timing|wall-clock proof: implementer, a tee/]] flood sized per-awk by ab_pc_dbracket_timing_filler -- deny under a deadline calibrated (#470) from a same-run, same-length, single-]] control measurement (a floor, else a multiple of the control) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap, 463-hook-boundary-override-leaks)"
   "ab-pc-deny-dbracket-sed-cut|case_ab_pc_deny_dbracket_sed_cut|cut-sed proof: verifier, x ]] sed s/a/b/ ]] y; git diff -- a non-in-place sed cut short by the SECOND ]] fails closed -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-sed-noninplace)"
   "ab-pc-deny-dbracket-sed-inplace-cut|case_ab_pc_deny_dbracket_sed_inplace_cut|cut-sed proof: verifier, x ]] sed -i s/a/b/ ]] y; git diff -- an in-place sed cut short by the SECOND ]] fails closed -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-sed-inplace)"
   # --- hooks/push-guard.sh (#260) cases -----------------------------------------------------------
