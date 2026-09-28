@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
   schedule:
-    # Nightly (UTC). The macOS job is not a per-PR check since #365: the maintainer's local run
+    # Nightly (UTC). The macOS jobs are not per-PR checks since #365: the maintainer's local run
     # already happens under Apple's bash 3.2, so this catches a BSD-only regression on main
     # within a day instead of holding every merge for ~12 minutes.
     - cron: '17 6 * * *'
@@ -49,15 +49,45 @@ jobs:
           MUTANT_DRIVER_SINCE: ${{ github.event_name == 'push' && github.event.before || '' }}
       - run: bash dev/mutant-driver-tests.sh
 
+  selfcheck-macos-driver:
+    # The mutant driver's own bash-3.2 run, split out of selfcheck-macos (#471) so the two macOS
+    # jobs run in parallel instead of one runner absorbing both. Post-merge, the ubuntu job above
+    # already runs the driver (#464: only the records the pushed range can affect), so this job is
+    # nightly and manual dispatch only — same trigger as the driver step it replaced. Declared
+    # against its partner in dev/selfcheck.sh 4.9's split_jobs, so together with selfcheck-macos it
+    # must still run every dev/*.sh exactly once. Must NOT be the file's last job — see
+    # selfcheck-macos's own comment below for why that job stays last.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Same PATH pin as selfcheck-macos below — see that job's comment for why /bin comes first.
+      - run: echo /bin >> "$GITHUB_PATH"
+      - name: pin check — fail loudly if this is not the bash 3.2 userland
+        run: |
+          command -v bash
+          bash --version | head -1
+          /bin/bash --version | head -1
+          bash --version | head -1 | grep -q 'version 3\.2' || {
+            echo "PATH bash is not 3.2 — this job would not be testing the BSD/3.2 userland"; exit 1; }
+      # Nightly and manual dispatch only, not post-merge: the ubuntu job already runs the driver
+      # after every merge (#464: only the records the pushed range can affect, not necessarily
+      # every record), and the registry's recorded sets are the same on both shells. The suites'
+      # own wall clock no longer gates this job, so the full ceiling below belongs to the driver
+      # alone.
+      - run: bash dev/mutant-driver.sh
+        env:
+          MUTANT_DRIVER_JOBS: 8
+
   selfcheck-macos:
     # Post-merge and nightly only (#365) — never a pull_request check. Keep this job LAST in the
     # file: dev/selfcheck-tests.sh's 4.9-uneven-jobs case deletes the workflow's final line, which
-    # must therefore stay a `- run:` step line — see the mutant-driver step pair below, whose `if:`
-    # and `env:` sibling keys on the step BEFORE the last are why the last step itself must be the
-    # plain `dev/mutant-driver-tests.sh` run, not the gated `dev/mutant-driver.sh` one.
+    # must therefore stay a `- run:` step line — the plain `dev/mutant-driver-tests.sh` run below,
+    # not the driver, which runs in the selfcheck-macos-driver job above (#471).
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
-    timeout-minutes: 50
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Apple's /bin/bash is 3.2.57 (last GPLv2 bash). Put /bin first so bare `bash` — including
@@ -79,11 +109,4 @@ jobs:
       - run: bash dev/planning-tests.sh
       - run: bash dev/lock-tests.sh
       - run: bash dev/stop-tests.sh
-      # Nightly and manual dispatch only, not post-merge: the ubuntu job already runs the driver
-      # after every merge (#464: only the records the pushed range can affect, not necessarily
-      # every record), and the registry's recorded sets are the same on both shells.
-      - run: bash dev/mutant-driver.sh
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        env:
-          MUTANT_DRIVER_JOBS: 8
       - run: bash dev/mutant-driver-tests.sh
