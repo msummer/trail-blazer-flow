@@ -2,16 +2,32 @@
 #
 # mutant-driver.sh — checked-in mutant driver for this repo's own dev/*.sh test suites (#359).
 #
-# Usage: dev/mutant-driver.sh [-j <n>|--serial] [name-filter]
+# Usage: dev/mutant-driver.sh [-j <n>|--serial] [--changed-from <file>] [name-filter]
 #   -j <n>       run <n> mutants concurrently (a positive integer; an invalid value prints usage
 #                on stderr and exits 2).
 #   --serial     equivalent to -j 1 — one mutant at a time, in declared order.
+#   --changed-from <file>
+#                select only the registry records a change can affect, from a file of
+#                repo-relative changed paths (one per line; blank lines ignored; a trailing \r is
+#                stripped). Wins over MUTANT_DRIVER_SINCE. A file that doesn't exist, or a missing
+#                argument, exits 2 with usage on stderr before any suite runs.
 #   name-filter  run only the registry records whose "name" contains this substring (a non-zero
 #                exit if the filter matches no record).
 #   With no -j/--serial, the job count comes from MUTANT_DRIVER_JOBS if set (env var), else from
 #   detect_jobs (the host's core count, clamped to at most 16, falling back to 2 if none answers —
 #   the identical probe dev/selfcheck-tests.sh's own detect_jobs uses). A command-line -j/--serial
 #   always wins over MUTANT_DRIVER_JOBS.
+#
+#   Change-based selection (#464): with neither --changed-from nor a non-empty
+#   MUTANT_DRIVER_SINCE, every registry record runs (after any name-filter) and this script's
+#   output is byte-identical to before #464. Set MUTANT_DRIVER_SINCE=<rev> to select instead, by
+#   `git -C <root> diff --no-renames --name-only <rev> HEAD --`: a record is selected iff a
+#   changed path equals its target, its suite, or its registry file, or matches a
+#   dev/mutants/suite-deps.txt pattern its suite declares — a suite with no map line matches any
+#   change. A changed path under bin/, hooks/, templates/, agents/, skills/ or dev/ that no record
+#   or map pattern (other than a bare "*") claims, or any change to this script itself, forces a
+#   full run instead — so does an unusable MUTANT_DRIVER_SINCE (a leading "-", an all-zero or
+#   unknown commit, or any other git-diff failure).
 #
 # What this does: reads every dev/mutants/*.json registry file (or the directory named by
 # MUTANT_DRIVER_REGISTRY_DIR, default dev/mutants — the override a fixture harness uses to point
@@ -39,6 +55,8 @@
 # Output grammar (this script's own — distinct from the "  PASS  <name> — <desc>" grammar the
 # dev/*.sh suites it RUNS use):
 #   == mutant-driver: <N> jobs ==                   (first line; N is concurrency, not job count)
+#   == mutant-driver: selected <N> of <M> records ==  (change-based selection only; #464)
+#   == mutant-driver: full run (reason: <text>) ==    (change-based selection fell back; #464)
 #   PASS baseline:<suite>:<filter> <total> -        (or FAIL ... <total> <set>, red baseline)
 #   PASS <name> <total> <set>                       (<set> is "-" when empty)
 #   FAIL <name> <total|-> <set|->
@@ -46,13 +64,18 @@
 #       reason <text>                               (only on a structural/skip failure)
 #   == summary: <N> pass, <M> fail ==
 # Exit 0 iff every baseline and mutant passed; 1 if any FAILed; 2 on a usage or registry error
-# (before any suite ever runs).
+# (before any suite ever runs). With neither --changed-from nor a non-empty MUTANT_DRIVER_SINCE,
+# neither selection line ever prints and every registry record runs — byte-identical to before
+# #464. Zero records selected is itself a PASS: the "selected 0 of <M>" line, then the summary
+# footer, exit 0, no suite ever runs.
 #
 # Writes only under its own single mktemp -d root (an EXIT trap removes it); the tracked tree is
 # never touched — every edit lands on a fresh_copy scratch copy, and the copy's own root (never a
 # bare name resolved off $PATH) is what gets invoked, so a same-named decoy elsewhere on $PATH is
-# never reached. Reads: registry JSON under dev/mutants/ (or $MUTANT_DRIVER_REGISTRY_DIR), and the
-# repo tree it copies from. No network, no gh, no git.
+# never reached. Reads: registry JSON under dev/mutants/ (or $MUTANT_DRIVER_REGISTRY_DIR), that
+# directory's own suite-deps.txt dependency map, the repo tree it copies from, and (when given) the
+# --changed-from file. No network, no gh; git only when MUTANT_DRIVER_SINCE is set, and then only
+# `git diff --no-renames --name-only` to list changed paths.
 #
 # Run this locally before pushing any change to a registry "target", a registry "suite", or the
 # registry itself — see CLAUDE.md's Verification section for the CI placement (this script runs
@@ -90,24 +113,34 @@ detect_jobs() {
 }
 
 usage_die() {
-  echo "usage: dev/mutant-driver.sh [-j <n>|--serial] [name-filter] -- $1" >&2
+  echo "usage: dev/mutant-driver.sh [-j <n>|--serial] [--changed-from <file>] [name-filter] -- $1" >&2
   exit 2
 }
 
 jobs_flag=""
+changed_from=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help)
       cat <<'EOF'
-usage: dev/mutant-driver.sh [-j <n>|--serial] [name-filter]
+usage: dev/mutant-driver.sh [-j <n>|--serial] [--changed-from <file>] [name-filter]
 
-  -j <n>       run <n> mutants concurrently (a positive integer)
-  --serial     equivalent to -j 1 -- one mutant at a time, in declared order
-  name-filter  run only the registry records whose name contains this substring
+  -j <n>            run <n> mutants concurrently (a positive integer)
+  --serial          equivalent to -j 1 -- one mutant at a time, in declared order
+  --changed-from <file>
+                    select only the registry records a change can affect, from a file of
+                    repo-relative changed paths (one per line; blank lines ignored; a trailing
+                    \r is stripped). Wins over MUTANT_DRIVER_SINCE.
+  name-filter       run only the registry records whose name contains this substring
 
-With no name-filter, runs every registry record. MUTANT_DRIVER_JOBS overrides the detected
-default when neither -j nor --serial is given. MUTANT_DRIVER_REGISTRY_DIR overrides the registry
-directory (default: dev/mutants under this checkout).
+With no name-filter, runs every selected registry record (every record, when selection isn't in
+effect). MUTANT_DRIVER_JOBS overrides the detected default when neither -j nor --serial is given.
+MUTANT_DRIVER_REGISTRY_DIR overrides the registry directory (default: dev/mutants under this
+checkout). With neither --changed-from nor a non-empty MUTANT_DRIVER_SINCE, every registry record
+runs -- unchanged from before change-based selection landed. MUTANT_DRIVER_SINCE=<rev> selects
+instead by `git diff --no-renames --name-only <rev> HEAD` against this checkout and
+dev/mutants/suite-deps.txt; an unusable base (a leading "-", an all-zero or unknown commit, or any
+other git-diff failure) forces a full run instead.
 EOF
       exit 0
       ;;
@@ -123,6 +156,12 @@ EOF
       jobs_flag=1
       shift
       ;;
+    --changed-from)
+      shift
+      changed_from="${1:-}"
+      [ -n "$changed_from" ] || usage_die "--changed-from requires a file argument"
+      shift
+      ;;
     -*)
       usage_die "unknown option: $1"
       ;;
@@ -132,6 +171,10 @@ EOF
   esac
 done
 filter="${1:-}"
+
+if [ -n "$changed_from" ] && [ ! -f "$changed_from" ]; then
+  usage_die "--changed-from file '$changed_from' does not exist"
+fi
 
 if [ -n "$jobs_flag" ]; then
   jobs="$jobs_flag"
@@ -267,6 +310,42 @@ if [ "${#reg_files[@]}" -gt 0 ]; then
   done
 fi
 
+# ---------------------------------------------------------------------------------------------
+# Change-based selection's dependency map (#464): dev/mutants/suite-deps.txt, an optional
+# plain-text "<suite> <pattern>" list — see that file's own header for the format and semantics.
+# A missing map file is not an error: every suite is then unmapped (matches any change). Folded
+# into reg_errors so a malformed map is reported, and blocks every suite run, exactly like a
+# malformed registry record.
+dep_suite=(); dep_pat=()
+deps_file="$registry_dir/suite-deps.txt"
+if [ -f "$deps_file" ]; then
+  dep_lineno=0
+  while IFS= read -r dep_line || [ -n "$dep_line" ]; do
+    dep_lineno=$((dep_lineno+1))
+    dep_line="${dep_line%$'\r'}"
+    dep_trimmed="$(printf '%s' "$dep_line" | sed -E 's/^[[:space:]]+//')"
+    case "$dep_trimmed" in
+      ''|'#'*) continue ;;
+    esac
+    d_suite=""; d_pat=""; d_rest=""
+    read -r d_suite d_pat d_rest <<<"$dep_line"
+    if [ -z "$d_pat" ] || [ -n "$d_rest" ]; then
+      add_err "$deps_file:$dep_lineno: expected '<suite> <pattern>'"
+      continue
+    fi
+    case "$d_pat" in
+      *'*'*|*'?'*|*'['*) has_glob=1 ;;
+      *) has_glob=0 ;;
+    esac
+    if [ "$has_glob" -eq 0 ] && [ ! -e "$root/$d_pat" ]; then
+      add_err "$deps_file:$dep_lineno: pattern '$d_pat' names no existing file"
+      continue
+    fi
+    dep_suite+=("$d_suite")
+    dep_pat+=("$d_pat")
+  done < "$deps_file"
+fi
+
 if [ "${#reg_errors[@]}" -gt 0 ]; then
   echo "mutant-driver: registry validation failed:" >&2
   for e in "${reg_errors[@]}"; do
@@ -286,6 +365,125 @@ done
 if [ "${#sel[@]}" -eq 0 ]; then
   echo "no mutant name contains '$filter'"
   exit 1
+fi
+
+# ---------------------------------------------------------------------------------------------
+# Change-based selection (#464). With neither --changed-from nor a non-empty
+# MUTANT_DRIVER_SINCE, sel_mode never leaves 0 and this whole block is a no-op — $sel, and this
+# script's output, stay exactly what they were before #464.
+sel_mode=0
+changed=()
+
+if [ -n "$changed_from" ]; then
+  sel_mode=1
+  while IFS= read -r cf_line || [ -n "$cf_line" ]; do
+    cf_line="${cf_line%$'\r'}"
+    [ -n "$cf_line" ] && changed+=("$cf_line")
+  done < "$changed_from"
+elif [ -n "${MUTANT_DRIVER_SINCE:-}" ]; then
+  since="$MUTANT_DRIVER_SINCE"
+  case "$since" in
+    -*)
+      # A leading '-' never reaches git's argv as an option (e.g. "--output=...") — this value is
+      # simply unusable, full stop.
+      echo "== mutant-driver: full run (reason: unusable base $since) =="
+      ;;
+    *)
+      if since_diff="$(git -C "$root" diff --no-renames --name-only "$since" HEAD -- 2>/dev/null)"; then
+        sel_mode=1
+        while IFS= read -r sd_line; do
+          [ -n "$sd_line" ] && changed+=("$sd_line")
+        done <<<"$since_diff"
+      else
+        echo "== mutant-driver: full run (reason: unusable base $since) =="
+      fi
+      ;;
+  esac
+fi
+
+# path_claimed PATH — true (rc 0) iff PATH equals some record's own target, suite, or relative
+# registry file, or matches (unquoted `case`) a dep_pat that isn't a bare "*" — a bare "*" selects
+# its suite but never claims a path (dev/mutants/suite-deps.txt's own header).
+path_claimed() {
+  local p="$1" pc_idx dp_idx dp
+  for pc_idx in "${!rec_name[@]}"; do
+    if [ "$p" = "${rec_target[$pc_idx]}" ] || [ "$p" = "${rec_suite[$pc_idx]}" ] \
+      || [ "$p" = "${rec_file[$pc_idx]#"$root"/}" ]; then
+      return 0
+    fi
+  done
+  for dp_idx in "${!dep_pat[@]}"; do
+    dp="${dep_pat[$dp_idx]}"
+    [ "$dp" = "*" ] && continue
+    case "$p" in
+      $dp) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# record_selected RIDX — true (rc 0) iff some changed[] path equals RIDX's own target, suite, or
+# relative registry file; or, when RIDX's suite has one or more suite-deps.txt lines, some changed
+# path matches one of them; or, when it has none (unmapped), changed[] is non-empty — the
+# fail-safe default: an unmapped suite matches any change.
+record_selected() {
+  local ridx="$1" rs_target rs_suite rs_regfile rs_has_map=0 c_idx p dp_idx
+  rs_target="${rec_target[$ridx]}"
+  rs_suite="${rec_suite[$ridx]}"
+  rs_regfile="${rec_file[$ridx]#"$root"/}"
+  for c_idx in "${!changed[@]}"; do
+    p="${changed[$c_idx]}"
+    if [ "$p" = "$rs_target" ] || [ "$p" = "$rs_suite" ] || [ "$p" = "$rs_regfile" ]; then
+      return 0
+    fi
+  done
+  for dp_idx in "${!dep_suite[@]}"; do
+    [ "${dep_suite[$dp_idx]}" = "$rs_suite" ] || continue
+    rs_has_map=1
+    for c_idx in "${!changed[@]}"; do
+      p="${changed[$c_idx]}"
+      case "$p" in
+        ${dep_pat[$dp_idx]}) return 0 ;;
+      esac
+    done
+  done
+  if [ "$rs_has_map" -eq 0 ] && [ "${#changed[@]}" -gt 0 ]; then
+    return 0
+  fi
+  return 1
+}
+
+if [ "$sel_mode" -eq 1 ]; then
+  full_reason=""
+  if [ "${#changed[@]}" -gt 0 ]; then
+    for chk_idx in "${!changed[@]}"; do
+      p="${changed[$chk_idx]}"
+      if [ "$p" = "dev/mutant-driver.sh" ]; then
+        full_reason="driver changed"
+        break
+      fi
+      case "$p" in
+        bin/*|hooks/*|templates/*|agents/*|skills/*|dev/*)
+          path_claimed "$p" || { full_reason="unclaimed path $p"; break; }
+          ;;
+      esac
+    done
+  fi
+  if [ -n "$full_reason" ]; then
+    echo "== mutant-driver: full run (reason: $full_reason) =="
+  else
+    new_sel=()
+    for ridx in "${sel[@]}"; do
+      record_selected "$ridx" && new_sel+=("$ridx")
+    done
+    echo "== mutant-driver: selected ${#new_sel[@]} of ${#sel[@]} records =="
+    if [ "${#new_sel[@]}" -eq 0 ]; then
+      echo
+      echo "== summary: 0 pass, 0 fail =="
+      exit 0
+    fi
+    sel=("${new_sel[@]}")
+  fi
 fi
 
 # ---------------------------------------------------------------------------------------------

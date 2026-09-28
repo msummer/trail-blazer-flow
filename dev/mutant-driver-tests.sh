@@ -19,6 +19,11 @@
 # failed.
 set -uo pipefail
 
+# A CI step env (MUTANT_DRIVER_SINCE, #464) inherited through the OUTER driver run that runs this
+# very file as a suite would otherwise leak into every nested driver invocation this file makes
+# below, silently switching every plain run_driver call into (fallback) selection mode.
+unset MUTANT_DRIVER_SINCE
+
 root="$(cd "$(dirname "$0")/.." && pwd)"
 filter="${1:-}"
 
@@ -395,6 +400,83 @@ write_registry() {
   local dir="$1"
   mkdir -p "$dir/mutants"
   cat > "$dir/mutants/reg.json"
+}
+
+# write_named_registry DIR FILE — like write_registry, but writes to $dir/mutants/FILE (stdin).
+# Selection cases (#464) need more than one registry file, so a case can select exactly one file's
+# own record via its registry-file path.
+write_named_registry() {
+  local dir="$1" file="$2"
+  mkdir -p "$dir/mutants"
+  cat > "$dir/mutants/$file"
+}
+
+# write_selection_fixture DIR (#464) — two independent mutants, each in its own registry file, each
+# suite mapped in dev/mutants/suite-deps.txt to a dependency file distinct from its own
+# target/suite/registry file, so a selection case can discriminate "matched via the map" from
+# "matched via target/suite/registry-file equality":
+#   mutants/a.json: m-beta (lib.sh / dev/fixture-suite.sh, TAG_BETA on->off, expect case-beta)
+#   mutants/b.json: m-step (step.sh / dev/step-suite.sh, STEP zero->one, expect case-step)
+#   mutants/suite-deps.txt: dev/fixture-suite.sh -> fixture-data.txt; dev/step-suite.sh ->
+#     step-data.txt
+write_selection_fixture() {
+  local dir="$1"
+  write_generic_fixture "$dir"
+  write_multiedit_fixture "$dir"
+  printf 'fixture data\n' > "$dir/fixture-data.txt"
+  printf 'step data\n' > "$dir/step-data.txt"
+  write_named_registry "$dir" "a.json" <<'EOF'
+{"mutants":[
+  {"name":"m-beta","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TAG_BETA=\"on\"","to":"TAG_BETA=\"off\""}],
+   "expect_fail":["case-beta"]}
+]}
+EOF
+  write_named_registry "$dir" "b.json" <<'EOF'
+{"mutants":[
+  {"name":"m-step","target":"step.sh","suite":"dev/step-suite.sh","filter":"",
+   "edits":[{"from":"STEP=\"zero\"","to":"STEP=\"one\""}],
+   "expect_fail":["case-step"]}
+]}
+EOF
+  cat > "$dir/mutants/suite-deps.txt" <<'EOF'
+dev/fixture-suite.sh fixture-data.txt
+dev/step-suite.sh    step-data.txt
+EOF
+}
+
+# git_fixture_home — one throwaway HOME/XDG_CONFIG_HOME for every git-backed selection fixture
+# below (#464), so a fixture's own `git init`/commit never reads the developer's or CI runner's
+# real global git config (the same isolation dev/hook-tests.sh's own run_push_guard uses).
+git_fixture_home="$tmpbase/git-fixture-home"
+mkdir -p "$git_fixture_home"
+
+# run_fixture_git DIR ARGS... — runs `git ARGS...` inside DIR with HOME/XDG_CONFIG_HOME isolated
+# under $git_fixture_home and GIT_CONFIG_NOSYSTEM=1; stdout/stderr discarded. rc is the git
+# invocation's own.
+run_fixture_git() {
+  local dir="$1"
+  shift
+  (cd "$dir" && HOME="$git_fixture_home" XDG_CONFIG_HOME="$git_fixture_home/.config" \
+    GIT_CONFIG_NOSYSTEM=1 git "$@" >/dev/null 2>&1)
+}
+
+# fixture_git_out DIR ARGS... — like run_fixture_git, but prints stdout (stderr discarded).
+fixture_git_out() {
+  local dir="$1"
+  shift
+  (cd "$dir" && HOME="$git_fixture_home" XDG_CONFIG_HOME="$git_fixture_home/.config" \
+    GIT_CONFIG_NOSYSTEM=1 git "$@" 2>/dev/null)
+}
+
+# git_fixture_commit DIR MSG — `git add -A` then `git commit -qm MSG` inside DIR, with the identity
+# and signing passed on the command line (never read from any config file).
+git_fixture_commit() {
+  local dir="$1" msg="$2"
+  run_fixture_git "$dir" -c user.name=fixture -c user.email=fixture@example.invalid \
+    -c commit.gpgsign=false add -A
+  run_fixture_git "$dir" -c user.name=fixture -c user.email=fixture@example.invalid \
+    -c commit.gpgsign=false commit -qm "$msg"
 }
 
 # run_driver DIR [ARGS...] — invokes DIR's own copy of the driver (never this checkout's), with
@@ -1260,6 +1342,362 @@ EOF
 }
 
 # ---------------------------------------------------------------------------------------------
+# Change-based selection (#464): one case per selection/fail-safe/validation rule in
+# dev/mutant-driver.sh's new change-based selection block and its suite-deps.txt loader.
+
+# mutant:drv-sel-target — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Deletes the driver's own record_selected target-equality clause,
+# so a changed path equal to a record's OWN target would no longer select it.
+case_sel_target() {
+  local dir; dir="$(fresh_driver_root sel-target)"
+  write_selection_fixture "$dir"
+  printf 'lib.sh\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt"
+  expect_rc 0
+  expect_out "selected 1 of 2 records"
+  expect_out "PASS m-beta 3 case-beta"
+  expect_not_out "m-step"
+}
+
+# mutant:drv-sel-suite — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Deletes the driver's own record_selected suite-equality clause,
+# so a changed path equal to a record's OWN suite would no longer select it.
+case_sel_suite() {
+  local dir; dir="$(fresh_driver_root sel-suite)"
+  write_selection_fixture "$dir"
+  printf 'dev/step-suite.sh\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt"
+  expect_rc 0
+  expect_out "selected 1 of 2 records"
+  expect_out "PASS m-step 1 case-step"
+  expect_not_out "m-beta"
+}
+
+# mutant:drv-sel-registry — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Deletes the driver's own record_selected registry-file-equality
+# clause, so a changed path equal to a record's OWN registry file would no longer select it.
+case_sel_registry() {
+  local dir; dir="$(fresh_driver_root sel-registry)"
+  write_selection_fixture "$dir"
+  printf 'mutants/b.json\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt"
+  expect_rc 0
+  expect_out "selected 1 of 2 records"
+  expect_out "PASS m-step 1 case-step"
+  expect_not_out "m-beta"
+}
+
+# mutant:drv-sel-deps — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Deletes the driver's own record_selected map-pattern clause, so a
+# changed path matching only a suite-deps.txt pattern (never the target/suite/registry file itself)
+# no longer selects that pattern's suite.
+case_sel_dependency() {
+  local dir; dir="$(fresh_driver_root sel-dependency)"
+  write_selection_fixture "$dir"
+  printf 'step-data.txt\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt"
+  expect_rc 0
+  expect_out "selected 1 of 2 records"
+  expect_out "PASS m-step 1 case-step"
+  expect_not_out "m-beta"
+}
+
+# mutant:drv-sel-zero — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Rewrites the driver's own zero-selected branch to exit 1 instead
+# of printing the summary footer and exiting 0, so this clean no-op selection would wrongly FAIL.
+case_sel_none() {
+  local dir; dir="$(fresh_driver_root sel-none)"
+  write_selection_fixture "$dir"
+  printf 'README.md\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt"
+  expect_rc 0
+  expect_out "selected 0 of 2 records"
+  expect_out "== summary: 0 pass, 0 fail =="
+  expect_not_out "baseline:"
+}
+
+# mutant:drv-sel-unclaimed — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Widens the driver's own watched-prefix case pattern
+# (bin/*|hooks/*|templates/*|agents/*|skills/*|dev/*) so it never matches, so an unclaimed path
+# under one of those prefixes would no longer force a full run.
+case_sel_unclaimed() {
+  local dir; dir="$(fresh_driver_root sel-unclaimed)"
+  write_selection_fixture "$dir"
+  printf 'dev/helper-lib.sh\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt"
+  expect_rc 0
+  expect_out "full run (reason: unclaimed path dev/helper-lib.sh)"
+  expect_out "PASS m-beta"
+  expect_out "PASS m-step"
+  expect_out "== summary: 4 pass, 0 fail =="
+}
+
+# mutant:drv-sel-driver — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Deletes the driver's own driver-changed trigger, so a change to
+# dev/mutant-driver.sh itself would fall through to the (also-firing) unclaimed-path fallback
+# instead of naming its own distinct reason — this fixture's dev/mutant-driver.sh is itself
+# unclaimed, so only asserting the EXACT reason text tells the two fallbacks apart.
+case_sel_driver() {
+  local dir; dir="$(fresh_driver_root sel-driver)"
+  write_selection_fixture "$dir"
+  printf 'dev/mutant-driver.sh\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt"
+  expect_rc 0
+  expect_out "full run (reason: driver changed)"
+}
+
+# mutant:drv-sel-unmapped — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Rewrites the driver's own record_selected fail-safe so an
+# unmapped suite (no suite-deps.txt lines) is treated as matching nothing instead of any change.
+case_sel_unmapped_suite() {
+  local dir; dir="$(fresh_driver_root sel-unmapped-suite)"
+  write_selection_fixture "$dir"
+  printf 'dev/fixture-suite.sh fixture-data.txt\n' > "$dir/mutants/suite-deps.txt"
+  printf 'README.md\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt"
+  expect_rc 0
+  expect_out "selected 1 of 2 records"
+  expect_out "PASS m-step 1 case-step"
+  expect_not_out "m-beta"
+}
+
+# mutant:drv-sel-starclaim — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Drops the driver's own bare-"*" exclusion from path_claimed, so a
+# suite-deps.txt line of a bare "*" would wrongly CLAIM every path instead of only selecting.
+case_sel_star_no_claim() {
+  local dir; dir="$(fresh_driver_root sel-star-no-claim)"
+  write_selection_fixture "$dir"
+  printf 'dev/fixture-suite.sh fixture-data.txt\ndev/step-suite.sh *\n' > "$dir/mutants/suite-deps.txt"
+  printf 'dev/helper-lib.sh\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt"
+  expect_rc 0
+  expect_out "full run (reason: unclaimed path dev/helper-lib.sh)"
+  expect_not_out "selected"
+}
+
+# mutant:drv-sel-default — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Flips the driver's own sel_mode=0 initializer to 1, so a plain run
+# with no --changed-from and no MUTANT_DRIVER_SINCE would wrongly enter selection mode with an
+# empty change list instead of running every record unchanged.
+case_sel_full_unchanged() {
+  local dir; dir="$(fresh_driver_root sel-full-unchanged)"
+  write_selection_fixture "$dir"
+  run_driver "$dir" --serial
+  expect_rc 0
+  expect_not_out "selected"
+  expect_not_out "full run"
+  expect_out "== summary: 4 pass, 0 fail =="
+
+  driver_out="$(MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" MUTANT_DRIVER_SINCE= bash "$dir/dev/mutant-driver.sh" --serial 2>&1)"
+  driver_rc=$?
+  expect_rc 0
+  expect_not_out "selected"
+  expect_not_out "full run"
+  expect_out "== summary: 4 pass, 0 fail =="
+}
+
+case_sel_changed_from_missing() {
+  local dir; dir="$(fresh_driver_root sel-changed-from-missing)"
+  write_selection_fixture "$dir"
+  run_driver "$dir" --serial --changed-from "$dir/nope.txt"
+  expect_rc 2
+  expect_out "usage: dev/mutant-driver.sh"
+  expect_not_out "PASS"
+
+  # --changed-from as the LAST argv, with no value following it: the same usage-and-exit-2
+  # contract as a missing file, never a silent empty changed_from.
+  run_driver "$dir" --serial --changed-from
+  expect_rc 2
+  expect_out "usage: dev/mutant-driver.sh"
+  expect_not_out "PASS"
+}
+
+# mutant:drv-since-diff — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Diffs HEAD against HEAD instead of "$since" against HEAD, so a
+# real change since the recorded base would no longer show up as a changed path.
+case_sel_since_range() {
+  local dir; dir="$(fresh_driver_root sel-since-range)"
+  write_selection_fixture "$dir"
+  run_fixture_git "$dir" init -q
+  git_fixture_commit "$dir" "base"
+  local base_sha; base_sha="$(fixture_git_out "$dir" rev-parse HEAD)"
+  printf '# touched\n' >> "$dir/lib.sh"
+  git_fixture_commit "$dir" "second"
+  driver_out="$(MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" MUTANT_DRIVER_SINCE="$base_sha" bash "$dir/dev/mutant-driver.sh" --serial 2>&1)"
+  driver_rc=$?
+  expect_rc 0
+  expect_out "selected 1 of 2 records"
+  expect_out "PASS m-beta 3 case-beta"
+  expect_not_out "m-step"
+}
+
+# mutant:drv-since-fallback — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Rewrites the driver's own git-diff-failed fallback to enter
+# selection mode with an empty change list instead of printing the unusable-base line and leaving
+# $sel untouched, so an unusable base would wrongly select zero records instead of forcing a full
+# run.
+#
+# mutant:drv-since-dash — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Deletes the driver's own leading-"-" guard, so a
+# MUTANT_DRIVER_SINCE value shaped like a git option (e.g. "--output=...") would reach git's own
+# argv instead of being rejected before git ever runs.
+case_sel_since_unusable() {
+  local dir; dir="$(fresh_driver_root sel-since-unusable)"
+  write_selection_fixture "$dir"
+  run_fixture_git "$dir" init -q
+  git_fixture_commit "$dir" "base"
+
+  driver_out="$(MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" MUTANT_DRIVER_SINCE="0000000000000000000000000000000000000000" bash "$dir/dev/mutant-driver.sh" --serial 2>&1)"
+  driver_rc=$?
+  expect_rc 0
+  expect_out "full run (reason: unusable base 0000000000000000000000000000000000000000)"
+  expect_out "PASS m-beta"
+  expect_out "PASS m-step"
+
+  driver_out="$(MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" MUTANT_DRIVER_SINCE="1111111111111111111111111111111111111111" bash "$dir/dev/mutant-driver.sh" --serial 2>&1)"
+  driver_rc=$?
+  expect_rc 0
+  expect_out "full run (reason: unusable base 1111111111111111111111111111111111111111)"
+
+  local leak="$tmpbase/since-leak"
+  rm -f "$leak"
+  driver_out="$(MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" MUTANT_DRIVER_SINCE="--output=$leak" bash "$dir/dev/mutant-driver.sh" --serial 2>&1)"
+  driver_rc=$?
+  expect_rc 0
+  expect_out "full run (reason: unusable base --output=$leak)"
+  if [ -e "$leak" ]; then
+    __ok=0
+    __why="${__why}the leading-'-' MUTANT_DRIVER_SINCE value reached git's argv -- $leak was created\n"
+  fi
+}
+
+# mutant:drv-sel-crlf — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Deletes the driver's own trailing-\r strip on each --changed-from
+# line, so a CRLF-terminated changed path would carry a trailing \r and no longer equal the
+# record's own target/suite/registry-file string.
+case_sel_changed_from_crlf() {
+  local dir; dir="$(fresh_driver_root sel-changed-from-crlf)"
+  write_selection_fixture "$dir"
+  printf 'lib.sh\r\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt"
+  expect_rc 0
+  expect_out "selected 1 of 2 records"
+  expect_out "PASS m-beta 3 case-beta"
+  expect_not_out "m-step"
+}
+
+# mutant:drv-sel-blank — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Makes the driver's own changed+=() append unconditional, so a
+# blank --changed-from line would add an empty-string "change", wrongly making changed[] non-empty
+# and selecting an unmapped suite that no real changed path touches.
+case_sel_changed_from_blank() {
+  local dir; dir="$(fresh_driver_root sel-changed-from-blank)"
+  write_selection_fixture "$dir"
+  printf 'dev/fixture-suite.sh fixture-data.txt\n' > "$dir/mutants/suite-deps.txt"
+  printf '\n\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt"
+  expect_rc 0
+  expect_out "selected 0 of 2 records"
+  expect_out "== summary: 0 pass, 0 fail =="
+}
+
+# mutant:drv-sel-emptychange — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Drops the driver's own "changed[] is non-empty" guard from
+# record_selected's unmapped-suite fail-safe, so an unmapped suite would be selected even when the
+# change list is genuinely empty.
+case_sel_unmapped_empty() {
+  local dir; dir="$(fresh_driver_root sel-unmapped-empty)"
+  write_selection_fixture "$dir"
+  printf 'dev/fixture-suite.sh fixture-data.txt\n' > "$dir/mutants/suite-deps.txt"
+  : > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt"
+  expect_rc 0
+  expect_out "selected 0 of 2 records"
+  expect_out "== summary: 0 pass, 0 fail =="
+}
+
+# mutant:drv-sel-watchclaim — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Makes path_claimed's own pattern-match loop never match, so a
+# watched-prefix path a real (non-"*") suite-deps.txt pattern claims would wrongly be treated as
+# unclaimed and force a full run.
+case_sel_watched_claim() {
+  local dir; dir="$(fresh_driver_root sel-watched-claim)"
+  write_selection_fixture "$dir"
+  printf 'dev/fixture-suite.sh fixture-data.txt\ndev/step-suite.sh dev/step-*.txt\n' > "$dir/mutants/suite-deps.txt"
+  printf 'x\n' > "$dir/dev/step-data.txt"
+  printf 'dev/step-data.txt\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt"
+  expect_rc 0
+  expect_out "selected 1 of 2 records"
+  expect_out "PASS m-step 1 case-step"
+  expect_not_out "m-beta"
+  expect_not_out "full run"
+}
+
+# mutant:drv-sel-filtercount — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh sel-. Replaces the driver's own "of ${#sel[@]} records" denominator
+# with the total record count, so M would count every registry record instead of only the ones
+# left after the name-filter.
+case_sel_filtered_count() {
+  local dir; dir="$(fresh_driver_root sel-filtered-count)"
+  write_selection_fixture "$dir"
+  printf 'lib.sh\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt" m-beta
+  expect_rc 0
+  expect_out "selected 1 of 1 records"
+  expect_out "PASS m-beta 3 case-beta"
+}
+
+# mutant:drv-deps-malformed — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh reg-deps-. Widens the driver's own suite-deps.txt two-field guard to
+# "if false" so it never trips, so a map line missing its pattern field would wrongly pass
+# validation instead of FAILing with "expected '<suite> <pattern>'".
+case_reg_deps_malformed() {
+  local dir; dir="$(fresh_driver_root reg-deps-malformed)"
+  local sentinel="$tmpbase/sentinel-deps-malformed"
+  rm -f "$sentinel"
+  write_sentinel_fixture "$dir" "$sentinel"
+  write_registry "$dir" <<'EOF'
+{"mutants":[
+  {"name":"m-beta","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TAG_BETA=\"on\"","to":"TAG_BETA=\"off\""}],
+   "expect_fail":["case-beta"]}
+]}
+EOF
+  cat > "$dir/mutants/suite-deps.txt" <<'EOF'
+dev/fixture-suite.sh
+EOF
+  run_driver "$dir" --serial
+  assert_registry_rejected "$sentinel"
+  expect_out "expected '<suite> <pattern>'"
+}
+
+# mutant:drv-deps-literal — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh reg-deps-. Widens the driver's own glob-free-literal-exists guard to
+# "if false" so it never trips, so a map pattern naming no real file would wrongly pass validation
+# instead of FAILing with "names no existing file".
+case_reg_deps_missing_literal() {
+  local dir; dir="$(fresh_driver_root reg-deps-missing-literal)"
+  local sentinel="$tmpbase/sentinel-deps-missing-literal"
+  rm -f "$sentinel"
+  write_sentinel_fixture "$dir" "$sentinel"
+  write_registry "$dir" <<'EOF'
+{"mutants":[
+  {"name":"m-beta","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TAG_BETA=\"on\"","to":"TAG_BETA=\"off\""}],
+   "expect_fail":["case-beta"]}
+]}
+EOF
+  cat > "$dir/mutants/suite-deps.txt" <<'EOF'
+dev/fixture-suite.sh no-such-file.txt
+EOF
+  run_driver "$dir" --serial
+  assert_registry_rejected "$sentinel"
+  expect_out "names no existing file"
+  expect_not_out "expected '<suite>"
+}
+
+# ---------------------------------------------------------------------------------------------
 
 case_filter_no_match() {
   local dir; dir="$(fresh_driver_root filter-no-match)"
@@ -1422,6 +1860,26 @@ cases=(
   "reg-bad-filter-type|case_reg_bad_filter_type|a numeric filter: exit 2, no suite ever ran (kills drv-filtertype)"
   "reg-empty-from|case_reg_empty_from|an edit with an empty 'from': exit 2, no suite ever ran (kills drv-fromtype)"
   "reg-from-equals-to|case_reg_from_equals_to|an edit whose 'from' equals its 'to': exit 2, no suite ever ran (kills drv-fromto)"
+  "sel-target|case_sel_target|a changed path equal to a record's own target selects it (kills drv-sel-target)"
+  "sel-suite|case_sel_suite|a changed path equal to a record's own suite selects it (kills drv-sel-suite)"
+  "sel-registry|case_sel_registry|a changed path equal to a record's own registry file selects it (kills drv-sel-registry)"
+  "sel-dependency|case_sel_dependency|a changed path matching only a suite-deps.txt pattern selects that pattern's suite (kills drv-sel-deps)"
+  "sel-none|case_sel_none|a changed path matching no record: selected 0 of <M>, summary 0 pass 0 fail, no baseline ever runs (kills drv-sel-zero)"
+  "sel-unclaimed|case_sel_unclaimed|an unclaimed changed path under a watched prefix forces a full run (kills drv-sel-unclaimed)"
+  "sel-driver|case_sel_driver|a changed dev/mutant-driver.sh forces a full run naming its own reason, not the also-firing unclaimed fallback (kills drv-sel-driver)"
+  "sel-unmapped-suite|case_sel_unmapped_suite|an unmapped suite matches any change (kills drv-sel-unmapped)"
+  "sel-star-no-claim|case_sel_star_no_claim|a bare '*' map line selects its suite but never claims a path (kills drv-sel-starclaim)"
+  "sel-full-unchanged|case_sel_full_unchanged|no --changed-from and no (or empty) MUTANT_DRIVER_SINCE: no selected/full-run line, output unchanged (kills drv-sel-default)"
+  "sel-changed-from-missing|case_sel_changed_from_missing|a --changed-from file that doesn't exist: usage + exit 2, no suite ever ran"
+  "sel-since-range|case_sel_since_range|MUTANT_DRIVER_SINCE=<ancestor> selects by git diff --name-only against that ancestor (kills drv-since-diff)"
+  "sel-since-unusable|case_sel_since_unusable|an all-zero, unknown, or option-shaped MUTANT_DRIVER_SINCE forces a full run and never reaches git's argv as an option (kills drv-since-fallback, drv-since-dash)"
+  "sel-changed-from-crlf|case_sel_changed_from_crlf|a CRLF-terminated --changed-from line still selects, the trailing \\r stripped (kills drv-sel-crlf)"
+  "sel-changed-from-blank|case_sel_changed_from_blank|a --changed-from file of only blank lines leaves an unmapped suite unselected (kills drv-sel-blank)"
+  "sel-unmapped-empty|case_sel_unmapped_empty|a genuinely empty --changed-from file leaves an unmapped suite unselected (kills drv-sel-emptychange)"
+  "sel-watched-claim|case_sel_watched_claim|a watched-prefix path matching a real (non-'*') suite-deps.txt pattern is claimed: selected, no full run (kills drv-sel-watchclaim)"
+  "sel-filtered-count|case_sel_filtered_count|selection combined with a name-filter: M counts only the filtered records (kills drv-sel-filtercount)"
+  "reg-deps-malformed|case_reg_deps_malformed|a suite-deps.txt line with no pattern field: exit 2, no suite ever ran (kills drv-deps-malformed)"
+  "reg-deps-missing-literal|case_reg_deps_missing_literal|a glob-free suite-deps.txt pattern naming no real file: exit 2, no suite ever ran (kills drv-deps-literal)"
   "filter-no-match|case_filter_no_match|a name-filter matching no registry record: message + exit 1"
   "jobs-line|case_jobs_line|the first stdout line's job count: -j 3, --serial, MUTANT_DRIVER_JOBS=4, MUTANT_DRIVER_JOBS with -j/--serial together (-j/--serial wins), and an invalid -j value (exit 2)"
   "footer-format|case_footer_format|the exact '== summary: N pass, M fail ==' footer wording"

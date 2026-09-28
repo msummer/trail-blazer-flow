@@ -787,9 +787,9 @@ and its eight negative-test harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tes
 `dev/hook-tests.sh`, `dev/cleanup-tests.sh`, `dev/planning-tests.sh`, `dev/lock-tests.sh`,
 `dev/stop-tests.sh`, and `dev/mutant-driver-tests.sh`) all run in CI on every pull request on
 ubuntu, and again under Apple's bash 3.2 on macOS after each merge to `main` and nightly.
-`dev/mutant-driver.sh`, which re-runs every `dev/mutants/*.json` record, runs post-merge on `main`
-on ubuntu only, and on both runners nightly and on manual dispatch. This repo's `CLAUDE.md` "Verification" section lists the
-exact commands and jobs.
+`dev/mutant-driver.sh` re-runs the records a merge can affect post-merge on `main` on ubuntu only,
+and every `dev/mutants/*.json` record on both runners nightly and on manual dispatch. This repo's
+`CLAUDE.md` "Verification" section lists the exact commands and jobs.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh`, the *consumer* doctor.
 Onboarding it here would mean checking in a `.claude/settings.json` that registers this repo's own
