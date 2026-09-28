@@ -18,6 +18,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #463: `dev/doctor-tests.sh` and `dev/hook-tests.sh` fixtures that launch a hung stub or a slow
+  path now run under an active, killed-on-overrun deadline (`wait_deadline`/`kill_tree`) instead of
+  running to completion and only afterward comparing elapsed time to a passive bound. No `bin/` or
+  `hooks/` product code changed.
 - #464: the post-merge ubuntu `selfcheck` job's `dev/mutant-driver.sh` step now selects, from the
   pushed commit range, only the registry records a changed path can affect (by target, suite,
   registry file, or a new `dev/mutants/suite-deps.txt` dependency map), falling back to a full run

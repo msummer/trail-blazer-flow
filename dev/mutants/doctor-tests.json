@@ -2168,6 +2168,81 @@
       "expect_fail": [
         "codex-sched-stop-exit"
       ]
+    },
+    {
+      "name": "463-doctor-deadline-no-kill",
+      "target": "dev/doctor-tests.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "deadline-kill-tree",
+      "edits": [
+        {
+          "from": "    kill_tree \"$pid\"",
+          "to": "    :"
+        }
+      ],
+      "expect_fail": [
+        "deadline-kill-tree"
+      ]
+    },
+    {
+      "name": "463-doctor-deadline-root-only",
+      "target": "dev/doctor-tests.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "deadline-kill-tree",
+      "edits": [
+        {
+          "from": "        *\" $ppid \"*) set=\"$set$pid \"; found=true ;;",
+          "to": "        *\" $ppid \"*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "deadline-kill-tree"
+      ]
+    },
+    {
+      "name": "463-doctor-sched-deadline-leaks",
+      "target": "dev/doctor-tests.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-timeout",
+      "edits": [
+        {
+          "from": "      SCHED_DEADLINE=*)\n        sched_deadline=\"${1#SCHED_DEADLINE=}\"\n        shift\n        continue\n        ;;",
+          "to": "      SCHED_DEADLINE=*)\n        sched_deadline=\"${1#SCHED_DEADLINE=}\"\n        ;;"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-timeout"
+      ]
+    },
+    {
+      "name": "463-doctor-sched-await-no-shortcircuit",
+      "target": "dev/doctor-tests.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-await-short-circuit",
+      "edits": [
+        {
+          "from": "  while [ ! -s \"$file\" ] && [ \"$SECONDS\" -lt \"$deadline\" ] && kill -0 \"$sched_pid\" 2>/dev/null; do",
+          "to": "  while [ ! -s \"$file\" ] && [ \"$SECONDS\" -lt \"$deadline\" ]; do"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-await-short-circuit"
+      ]
+    },
+    {
+      "name": "463-doctor-sched-overran-no-skip",
+      "target": "dev/doctor-tests.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-overran-skip",
+      "edits": [
+        {
+          "from": "  if $sched_overran; then",
+          "to": "  if false; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-overran-skip"
+      ]
     }
   ]
 }

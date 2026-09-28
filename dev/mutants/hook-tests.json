@@ -3331,6 +3331,81 @@
       "expect_fail": [
         "push-xseg-noop-git-config-scoped"
       ]
+    },
+    {
+      "name": "463-hook-deadline-no-kill",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "deadline-kill-tree",
+      "edits": [
+        {
+          "from": "    kill_tree \"$pid\"",
+          "to": "    :"
+        }
+      ],
+      "expect_fail": [
+        "deadline-kill-tree"
+      ]
+    },
+    {
+      "name": "463-hook-deadline-root-only",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "deadline-kill-tree",
+      "edits": [
+        {
+          "from": "        *\" $ppid \"*) set=\"$set$pid \"; found=true ;;",
+          "to": "        *\" $ppid \"*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "deadline-kill-tree"
+      ]
+    },
+    {
+      "name": "463-hook-boundary-override-leaks",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-pc-deny-dbracket-timing",
+      "edits": [
+        {
+          "from": "  boundary_deadline_override=\"\"",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "ab-pc-deny-dbracket-timing"
+      ]
+    },
+    {
+      "name": "463-hook-push-override-leaks",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-dl-deny-production-budget",
+      "edits": [
+        {
+          "from": "  push_deadline_override=\"\"",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "push-dl-deny-production-budget"
+      ]
+    },
+    {
+      "name": "463-hook-cdg-override-leaks",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-deny-timing",
+      "edits": [
+        {
+          "from": "  cdg_deadline_override=\"\"",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-deny-timing"
+      ]
     }
   ]
 }

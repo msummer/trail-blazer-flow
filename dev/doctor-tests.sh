@@ -2851,6 +2851,106 @@ case_empty_needle_guard() {
   esac
 }
 
+# case_deadline_kill_tree (#463) — pins the shared wait_deadline/kill_tree mechanism (defined in the
+# #427 section below, next to run_sched) directly, independent of any codex-scheduled-run.sh
+# fixture: builds a synthetic TERM-ignoring process tree (a root script plus one real "sleep 15"
+# child), runs it through wait_deadline with a 2s deadline, and asserts the overrun was detected,
+# the case was failed and told why, the call returned quickly rather than waiting out the child's
+# own 15s lifetime, and both pids are actually dead afterwards — not merely that the case's own
+# bookkeeping says so.
+case_deadline_kill_tree() {
+  local dir="$tmpbase/deadline-kill-tree" real_sleep script
+  mkdir -p "$dir"
+  real_sleep="$(command -v sleep)"
+  script="$dir/tree.sh"
+  {
+    printf '#!%s\n' "$bash_bin"
+    printf 'dir=%q\n' "$dir"
+    printf 'real_sleep=%q\n' "$real_sleep"
+    cat <<'TREEEOF'
+trap '' TERM
+"$real_sleep" 15 &
+printf '%s' "$!" > "$dir/child.pid"
+wait
+TREEEOF
+  } > "$script"
+  chmod +x "$script"
+
+  "$bash_bin" "$script" < /dev/null > "$dir/out" 2> "$dir/err" &
+  local root_pid=$!
+
+  local waited=0
+  while [ ! -s "$dir/child.pid" ] && [ "$waited" -lt 5000 ] && kill -0 "$root_pid" 2>/dev/null; do
+    sleep 0.05
+    waited=$((waited + 50))
+  done
+  local child_pid
+  child_pid="$(cat "$dir/child.pid" 2>/dev/null)"
+  if [ -z "$child_pid" ]; then
+    __ok=0; __why="${__why}the synthetic tree's own child never started — can't exercise kill_tree\n"
+    kill -9 "$root_pid" 2>/dev/null
+    return
+  fi
+
+  local saved_ok="$__ok" saved_why="$__why"
+  __ok=1; __why=""
+  local t0=$SECONDS
+  wait_deadline "$root_pid" 2
+  local elapsed=$((SECONDS - t0)) sub_overran="$deadline_overran" sub_ok="$__ok" sub_why="$__why"
+  __ok="$saved_ok"; __why="$saved_why"
+
+  if [ "$sub_overran" != true ]; then
+    __ok=0; __why="${__why}wait_deadline did not detect the 2s overrun (deadline_overran=$sub_overran)\n"
+  fi
+  if [ "$sub_ok" -ne 0 ]; then
+    __ok=0; __why="${__why}wait_deadline did not fail the case over the overrun (sub __ok=$sub_ok)\n"
+  fi
+  case "$sub_why" in
+    *"deadline"*) : ;;
+    *) __ok=0; __why="${__why}wait_deadline's own __why did not name the deadline: '$sub_why'\n" ;;
+  esac
+  if [ "$elapsed" -ge 8 ]; then
+    __ok=0; __why="${__why}wait_deadline took ${elapsed}s to return — should kill and return well under the child's own 15s lifetime\n"
+  fi
+
+  local survivors
+  survivors="$(sched_await_dead 2 "$root_pid" "$child_pid")"
+  if [ -n "$survivors" ]; then
+    __ok=0; __why="${__why}still alive after wait_deadline: $survivors\n"
+    kill -9 $survivors 2>/dev/null
+  fi
+}
+
+# case_codex_sched_overran_skip (#463) — pins sched_launch's own "an earlier run in this case
+# already overran its deadline" short-circuit directly, independent of any real overrun: forces
+# $sched_overran true (saved and restored, the same suite-state idiom case_deadline_kill_tree above
+# uses), calls sched_launch against a fixture whose codex stub would complete almost instantly, and
+# asserts no process was ever actually started ($sched_pid empty) and no trail-blazer/runs directory
+# ever appears — not merely that the case's own bookkeeping believes so. Uses the "complete" codex
+# stub deliberately (fast success) so an unskipped launch leaves clear evidence behind rather than
+# merely hanging.
+# mutant:463-doctor-sched-overran-no-skip — sched_launch's own `if $sched_overran; then` skip guard
+#   becomes `if false; then`: an earlier overrun no longer stops a later sched_launch in the same
+#   case from actually starting a real run.
+case_codex_sched_overran_skip() {
+  mk_sched sched-overran-skip
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  local saved_overran="$sched_overran"
+  sched_overran=true
+  sched_launch "$sched_stub:$PATH" --
+  local leaked_pid="$sched_pid"
+  sched_overran="$saved_overran"
+
+  if [ -n "$leaked_pid" ]; then
+    __ok=0; __why="${__why}sched_launch started a real run (pid $leaked_pid) despite sched_overran=true\n"
+    kill_tree "$leaked_pid"
+    wait "$leaked_pid" 2>/dev/null
+  fi
+  expect_no_file "$sched_common/trail-blazer/runs"
+}
+
 # --- codex setup (#408) -------------------------------------------------------------------------
 # bin/codex-setup.sh — the Codex compatibility installer. Its own --check drift mode is this
 # script's own companion (#410 consumes it), so it lives here rather than in a new suite.
@@ -3536,7 +3636,9 @@ dead_pid_sched() {
 # build_stub_sched_codex DIR MODE — writes DIR/codex, a stub standing in for the real `codex` CLI.
 # Every mode first records $$ (DIR/codex.pid), $# (DIR/argc), each argument (DIR/arg.<i>), the PATH
 # it was actually launched with (DIR/path.capture — #444, so a case can confirm the wrapper's own
-# scrub rebuilt PATH from physical paths before ever exec'ing codex), and the full stdin it received
+# scrub rebuilt PATH from physical paths before ever exec'ing codex), whether SCHED_DEADLINE (#463's
+# fixture-only keyword, stripped by sched_launch before it builds the wrapper's own env) leaked into
+# that env (DIR/sched-deadline.capture, "unset" iff it didn't), and the full stdin it received
 # (DIR/stdin.capture), then acts on MODE: complete (writes a run-id plus
 # summary line to the file named after "-o", echoes one JSON line, exit 0); fail (stderr line, exit
 # 1); fail-usage (I3, #428's redaction fixture: a fabricated "usage limit" stderr line carrying a
@@ -3548,12 +3650,12 @@ dead_pid_sched() {
 # BUILD time in this process's own PATH, for 20s — hang-noterm first sets TERM's disposition to
 # ignore, which persists across exec, so only SIGKILL ends it; both replace the process image via
 # exec rather than forking a child, so no orphan can outlive the stub's own pid; kept short because
-# a case relying on the WRAPPER's own watchdog to end it, with no external fallback kill of its own,
-# bounds its own worst-case runtime by this stub's duration); hang-long/hang-noterm-long (the same
-# two, but with a much longer sleep, for a case that instead polls externally for the pid's own
-# death and force-kills it once its own bound is reached — the long duration then only sets a
-# large, load-tolerant margin between "actually killed" and "outlived the case's own poll and ran
-# out its own sleep," and is never actually waited out); forwarder (models
+# sched_collect's own active deadline (#463) now externally kills any run that outlives it, including
+# one meant to end via the wrapper's own watchdog); hang-long/hang-noterm-long (the same two, but
+# with a longer sleep — 60s, longer than every bounded wrapper-exit poll below — for a case that
+# instead polls externally for the pid's own death and force-kills it via kill_tree once its own
+# bound is reached, so bumping into the stub's own natural exit is never mistaken for an actual
+# kill); forwarder (models
 # the real `codex` CLI's own shape — a Node launcher that spawns the native binary as a child and
 # forwards SIGTERM to it from a JS handler: backgrounds a real long-sleeping child (same
 # load-tolerant-margin reasoning as hang-noterm-long above), records that child's pid to
@@ -3583,6 +3685,7 @@ for a in "$@"; do
   i=$((i + 1))
 done
 printf '%s' "$PATH" > "$dir/path.capture"
+printf '%s' "${SCHED_DEADLINE-unset}" > "$dir/sched-deadline.capture"
 cat > "$dir/stdin.capture"
 outfile=""
 prev=""
@@ -3602,7 +3705,7 @@ case "$mode" in
     exit 0
     ;;
   forwarder)
-    "$real_sleep" 300 &
+    "$real_sleep" 60 &
     fchild=$!
     # The trap goes in BEFORE forwarder-child.pid exists, for the same reason as the TERM-ignoring
     # modes above: a case sends its TERM as soon as that file appears.
@@ -3640,13 +3743,13 @@ case "$mode" in
     exec "$real_sleep" 20
     ;;
   hang-long)
-    exec "$real_sleep" 300
+    exec "$real_sleep" 60
     ;;
   hang-noterm)
     exec "$real_sleep" 20
     ;;
   hang-noterm-long)
-    exec "$real_sleep" 300
+    exec "$real_sleep" 60
     ;;
 esac
 STUBEOF
@@ -3690,7 +3793,9 @@ STUBEOF
 #   hang-list/hang-view/hang-create/hang-comment (#443) — the one call named by the mode's own
 #     suffix (issue list/view/create/comment respectively) writes its own pid to DIR/gh.hang.pid,
 #     then execs the REAL `sleep` (resolved via `command -v` at BUILD time, the
-#     build_stub_sched_codex idiom) for 60s, standing in for a `gh` that never answers — this
+#     build_stub_sched_codex idiom) for 30s — longer than every case's own 15s SCHED_DEADLINE
+#     (#463), so a case that means to end this hang via an external kill_tree never instead
+#     observes the stub's own natural exit — standing in for a `gh` that never answers — this
 #     happens right after the gh.log append, before any record_stdin/record_call, so a hung call is
 #     never counted as a recognised one. Every OTHER call behaves exactly as under `ok` (in
 #     particular, harness-stop.sh's own "issue list" still succeeds under hang-view/-create/
@@ -3719,7 +3824,7 @@ case "$mode" in
 esac
 if [ "${1:-}" = issue ] && [ -n "$hang_target" ] && [ "${2:-}" = "$hang_target" ]; then
   printf '%s' "$$" > "$dir/gh.hang.pid"
-  exec "$real_sleep" 60
+  exec "$real_sleep" 30
 fi
 
 record_call() {
@@ -3833,40 +3938,153 @@ STUBEOF
   chmod +x "$dir/gh"
 }
 
-# run_sched PATHVAL [NO_DEFAULT_TIMEOUT] [VAR=val…] -- [ARGS…] — runs THIS fixture's own
+# _kt_descendants ROOT SNAPSHOT (#463) — prints every pid in SNAPSHOT (the "pid ppid" lines a
+# `ps -A -o pid= -o ppid=` call produced) descended from ROOT, space-delimited and space-flanked, by
+# repeatedly scanning SNAPSHOT until a full pass adds nothing new (a child can precede its own
+# parent in `ps`'s own unordered output). No associative arrays, no pipe into grep: membership is
+# tested with `case " $root$set" in *" $ppid "*` (bash-3.2-safe, this file's existing style).
+_kt_descendants() {
+  local root="$1" snapshot="$2" set=" " pid ppid found
+  found=true
+  while $found; do
+    found=false
+    while read -r pid ppid; do
+      [ -z "${pid:-}" ] && continue
+      case "$set" in *" $pid "*) continue ;; esac
+      # mutant:463-doctor-deadline-root-only — this arm (the only place a found descendant is ever
+      #   added to $set) becomes a no-op: every call returns nothing, so kill_tree below only ever
+      #   signals ROOT itself, and case_deadline_kill_tree's own TERM-ignoring child survives it.
+      case " $root$set" in
+        *" $ppid "*) set="$set$pid "; found=true ;;
+      esac
+    done <<EOF
+$snapshot
+EOF
+  done
+  printf '%s' "$set"
+}
+
+# kill_tree ROOT (#463) — TERM then KILL the whole process tree rooted at ROOT (ROOT itself plus
+# every live descendant _kt_descendants finds), by walking a single `ps -A -o pid= -o ppid=`
+# snapshot rather than /proc, so it stays portable to BSD/macOS and procps Linux alike. TERMs the
+# collected set, polls in 0.1s slices for up to 2s for every pid to die, then — only if ROOT is
+# STILL alive — re-snapshots and re-collects (a TERM-ignoring descendant may have spawned a further
+# child during the grace poll) before KILLing every pid still alive from either walk. If `ps` itself
+# fails, falls back to signalling ROOT alone.
+kill_tree() {
+  local root="$1" snapshot desc1 desc2 p deadline alive
+  if ! snapshot="$(ps -A -o pid= -o ppid= 2>/dev/null)"; then
+    kill -TERM "$root" 2>/dev/null
+    sleep 0.2
+    kill -KILL "$root" 2>/dev/null
+    return
+  fi
+  desc1="$(_kt_descendants "$root" "$snapshot")"
+  for p in "$root" $desc1; do
+    kill -TERM "$p" 2>/dev/null
+  done
+  deadline=$((SECONDS + 2))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    alive=false
+    for p in "$root" $desc1; do
+      kill -0 "$p" 2>/dev/null && alive=true
+    done
+    $alive || break
+    sleep 0.1
+  done
+  desc2=""
+  if kill -0 "$root" 2>/dev/null; then
+    snapshot="$(ps -A -o pid= -o ppid= 2>/dev/null)"
+    [ -n "$snapshot" ] && desc2="$(_kt_descendants "$root" "$snapshot")"
+  fi
+  for p in "$root" $desc1 $desc2; do
+    kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null
+  done
+}
+
+# wait_deadline PID SECS (#463) — the active-poll deadline every #427/#428/#443 fixture launch now
+# goes through, replacing the old pattern of running a fixture to completion and only THEN comparing
+# elapsed time to a limit: polls PID (a background job of THIS shell) in 0.1s slices against a
+# $SECONDS deadline SECS seconds out. If PID is still alive once the deadline passes, fails the
+# enclosing case ($__ok=0, $__why names the overrun) and kills PID's whole process tree via
+# kill_tree, instead of letting the case block on PID's own natural lifetime. Always reaps PID with
+# a plain `wait` before returning either way, leaving $deadline_rc set to its exit status and
+# $deadline_overran set to true/false for the caller to branch on.
+# mutant:463-doctor-deadline-no-kill — the `kill_tree "$pid"` call below becomes `:`: an overrun is
+#   still detected and the case still fails, but nothing is ever killed, so the reap that follows
+#   waits out case_deadline_kill_tree's own 15s child instead of returning in under 8s.
+deadline_overran=false
+deadline_rc=0
+wait_deadline() {
+  local pid="$1" secs="$2" deadline
+  deadline_overran=false
+  deadline=$((SECONDS + secs))
+  while kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+    sleep 0.1
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    deadline_overran=true
+    __ok=0
+    __why="${__why}run overran its ${secs}s deadline — killed its process tree\n"
+    kill_tree "$pid"
+  fi
+  wait "$pid" 2>/dev/null
+  deadline_rc=$?
+}
+
+# sched_launch PATHVAL [NO_DEFAULT_TIMEOUT] [SCHED_DEADLINE=<n>] [VAR=val…] -- [ARGS…] (#463) — the
+# one shared launcher behind every #427/#428/#443 fixture run (run_sched below, plus the four
+# wrapper-signal cases that used to build their own inline launch block): runs THIS fixture's own
 # bin/codex-scheduled-run.sh (never $root's) with cwd = ${sched_cwd:-$sched_repo} (#444 — a case
 # sets sched_cwd to run from a subdirectory, proving the wrapper's PATH scrub discovers its
 # work-tree root upward rather than taking the working directory as-is), HOME/XDG_CONFIG_HOME
 # pointed into $sched_repo, PATH = PATHVAL (no fallback to the real PATH unless a caller appends
 # ":$PATH" itself), TMPDIR = $sched_tmpdir (#444 — this fixture's own private stand-in, so a
 # caller's own TMPDIR=val in VAR=val, which is placed AFTER this default in the env list, still
-# wins), CLAUDE_PID always unset (see the block header above), and stdin fed from $sched_sentinel —
-# files, never $(…), so no background child of the wrapper can ever hold a pipe open. Also unsets
-# TBF_CODEX_GH_TIMEOUT (#443) before building the env, so a developer's own exported value never
-# leaks into a fixture — a case that means to exercise the gh bound sets it explicitly in its own
-# VAR=val list. Unless a caller's own VAR=val list already names TBF_CODEX_RUN_TIMEOUT/
-# TBF_CODEX_RUN_KILL_GRACE, a bounded fixture-only default (20s/5s, deliberately NOT the wrapper's
-# own 14400s/30s production default) is injected instead, so a mutant that breaks the watchdog's
-# own timing bounds a stuck run to seconds on a developer's real machine, never hours. The literal
-# keyword NO_DEFAULT_TIMEOUT (anywhere before --, stripped before building the env, never itself a
-# VAR=val) opts a case OUT of that injection entirely, for a case that means to exercise the wrapper's own
-# production defaults — safe only for a case that never reaches the watchdog (stops at or before
-# the lock-status preflight step), since an opted-out case that DOES launch would start a real
-# 14400s timer. Leaves $sched_out/$sched_err/$doctor_rc set, plus $doctor_out (merged) for the
-# generic expect/expect_absent/expect_rc/expect_no_file helpers and the runner loop's own
-# diagnostics dump.
-sched_out=""
-sched_err=""
-run_sched() {
+# wins), CLAUDE_PID and TBF_CODEX_GH_TIMEOUT always unset (a developer's own exported value must
+# never leak into a fixture — a case that means to exercise the gh bound sets it explicitly in its
+# own VAR=val list), and stdin fed from $sched_sentinel — a file, never $(…), so no background child
+# of the wrapper can ever hold a pipe open. `exec env …` (not a bare `env …`), so the backgrounded
+# subshell's own pid IS the wrapper script's pid: $sched_pid below names the actual process a case
+# can signal, wait on, or fold into kill_tree, never an intermediate shell. Unless a caller's own
+# VAR=val list already names TBF_CODEX_RUN_TIMEOUT/TBF_CODEX_RUN_KILL_GRACE, a bounded fixture-only
+# default (20s/5s, deliberately NOT the wrapper's own 14400s/30s production default) is injected
+# instead, so a mutant that breaks the watchdog's own timing bounds a stuck run to seconds on a
+# developer's real machine, never hours. The literal keyword NO_DEFAULT_TIMEOUT (anywhere before --,
+# stripped before building the env, never itself a VAR=val) opts a case OUT of that injection
+# entirely, for a case that means to exercise the wrapper's own production defaults — safe only for
+# a case that never reaches the watchdog (stops at or before the lock-status preflight step), since
+# an opted-out case that DOES launch would start a real 14400s timer. The literal keyword
+# SCHED_DEADLINE=<n> (also stripped before building the env) sets the deadline sched_collect uses
+# for THIS launch, read back from $sched_deadline; a caller that omits it gets run_sched's own 30s
+# default. If an earlier sched_launch/sched_collect pair in the SAME case already overran its own
+# deadline ($sched_overran), this launch is skipped outright — no process started, $sched_pid
+# cleared, a one-line note left in $doctor_out — rather than piling a second hung run onto a case
+# that has already failed. Leaves $sched_pid set to the backgrounded wrapper's own pid (or empty, if
+# skipped) for sched_collect, sched_await_file, and sched_await_dead to use.
+sched_pid=""
+sched_outfile=""
+sched_errfile=""
+sched_deadline=""
+sched_overran=false
+sched_launch() {
   local pathval="$1"
   shift
   local envargs=() has_timeout=false has_grace=false skip_defaults=false
+  sched_deadline=""
   while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
     if [ "$1" = "NO_DEFAULT_TIMEOUT" ]; then
       skip_defaults=true
       shift
       continue
     fi
+    case "$1" in
+      SCHED_DEADLINE=*)
+        sched_deadline="${1#SCHED_DEADLINE=}"
+        shift
+        continue
+        ;;
+    esac
     envargs+=("$1")
     case "$1" in
       TBF_CODEX_RUN_TIMEOUT=*) has_timeout=true ;;
@@ -3881,21 +4099,93 @@ run_sched() {
     $has_timeout || envargs+=("TBF_CODEX_RUN_TIMEOUT=20")
     $has_grace || envargs+=("TBF_CODEX_RUN_KILL_GRACE=5")
   fi
-  local outfile errfile
-  outfile="$(mktemp)"; errfile="$(mktemp)"
+  if $sched_overran; then
+    sched_pid=""
+    sched_out=""
+    sched_err=""
+    doctor_out="skipped — an earlier run in this case overran its deadline"
+    return
+  fi
+  sched_outfile="$(mktemp)"; sched_errfile="$(mktemp)"
   (
     cd "${sched_cwd:-$sched_repo}" &&
     unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE TBF_CODEX_GH_TIMEOUT &&
-    env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+    exec env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
         PATH="$pathval" TMPDIR="$sched_tmpdir" ${envargs[@]+"${envargs[@]}"} \
         "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh" "$@"
-  ) < "$sched_sentinel" > "$outfile" 2> "$errfile"
-  doctor_rc=$?
-  sched_out="$(cat "$outfile")"
-  sched_err="$(cat "$errfile")"
-  rm -f "$outfile" "$errfile"
+  ) < "$sched_sentinel" > "$sched_outfile" 2> "$sched_errfile" &
+  sched_pid=$!
+}
+
+# sched_collect SECS (#463) — the bounded second half of every sched_launch: waits up to SECS
+# seconds (via wait_deadline) for $sched_pid to exit, killing its whole tree and failing the case on
+# overrun (setting $sched_overran so a later sched_launch in the same case skips outright), then sets
+# $doctor_rc/$sched_out/$sched_err/$doctor_out exactly as a foreground run would have, and removes
+# the launch's own temp files. A no-op if $sched_pid is empty (the launch was itself skipped).
+sched_out=""
+sched_err=""
+sched_collect() {
+  local secs="$1"
+  if [ -z "$sched_pid" ]; then
+    return
+  fi
+  wait_deadline "$sched_pid" "$secs"
+  doctor_rc=$deadline_rc
+  $deadline_overran && sched_overran=true
+  sched_out="$(cat "$sched_outfile" 2>/dev/null)"
+  sched_err="$(cat "$sched_errfile" 2>/dev/null)"
+  rm -f "$sched_outfile" "$sched_errfile"
   doctor_out="OUT: $sched_out
 ERR: $sched_err"
+  sched_pid=""
+}
+
+# run_sched PATHVAL [NO_DEFAULT_TIMEOUT] [SCHED_DEADLINE=<n>] [VAR=val…] -- [ARGS…] (#463) —
+# sched_launch followed by sched_collect at that launch's own deadline (30s unless SCHED_DEADLINE=
+# overrides it): the ordinary call every case that doesn't itself need to signal the wrapper mid-run
+# uses. See sched_launch's own header for the full argument and environment contract. Leaves
+# $sched_out/$sched_err/$doctor_rc set, plus $doctor_out (merged) for the generic
+# expect/expect_absent/expect_rc/expect_no_file helpers and the runner loop's own diagnostics dump.
+run_sched() {
+  sched_launch "$@"
+  sched_collect "${sched_deadline:-30}"
+}
+
+# sched_await_file FILE SECS (#463) — the bounded pid-file wait the four wrapper-signal cases use
+# right after sched_launch: polls FILE in 0.05s slices against a $SECONDS deadline SECS seconds out,
+# OR until $sched_pid has already exited on its own — whichever comes first, so a case never waits
+# out its own deadline once the wrapper is already gone. Returns 0 iff FILE ended up non-empty.
+sched_await_file() {
+  local file="$1" secs="$2" deadline
+  deadline=$((SECONDS + secs))
+  while [ ! -s "$file" ] && [ "$SECONDS" -lt "$deadline" ] && kill -0 "$sched_pid" 2>/dev/null; do
+    sleep 0.05
+  done
+  [ -s "$file" ]
+}
+
+# sched_await_dead SECS PID… (#463) — the bounded survivor poll the four wrapper-signal cases use
+# after signalling the wrapper: waits up to SECS seconds (0.1s slices) for every listed pid to die,
+# then prints whichever ones are still alive, space-separated (empty output — the common case —
+# means none survived), for the caller to fail the case over and `kill -9` as cleanup.
+sched_await_dead() {
+  local secs="$1"
+  shift
+  local deadline any p alive
+  deadline=$((SECONDS + secs))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    any=false
+    for p in "$@"; do
+      kill -0 "$p" 2>/dev/null && any=true
+    done
+    $any || break
+    sleep 0.1
+  done
+  alive=""
+  for p in "$@"; do
+    kill -0 "$p" 2>/dev/null && alive="$alive $p"
+  done
+  printf '%s' "${alive# }"
 }
 
 # sched_run_dir — prints the single newest run directory under
@@ -4464,31 +4754,38 @@ case_codex_sched_died() {
   expect_sched_out "outcome=died-mid-run reason=signal-9"
 }
 
-# codex-sched-timeout — a 1s timeout against a stub that hangs 20s and takes the default TERM
-# action: timed-out, exit 1, watchdog-fired present, and the stub's own pid no longer alive
-# (kill -0 fails).
+# codex-sched-timeout — a 15s active deadline (#463) against a stub that hangs 20s and takes the
+# default TERM action: timed-out, exit 1, watchdog-fired present, and the stub's own pid no longer
+# alive (kill -0 fails).
 # mutant:427-timeout-marker — bin: delete the `: > "$run_dir/watchdog-fired"` line. Killed here and
 #   by codex-sched-timeout-kill: both become died-mid-run (rc still 1, but the wrong reason and the
 #   wrong outcome token — the classifier's first rule never gets to fire).
 # mutant:427-watchdog-ignores-elapsed — bin: the watchdog's own first poll loop's deadline check
 #   (`while [ "$SECONDS" -lt "$deadline" ] && kill -0 ...`) becomes an always-true condition,
 #   ignoring the timeout entirely. Killed here and by codex-sched-timeout-kill: the watchdog never
-#   fires; the stub's own 20s hang ends the run instead (whatever outcome that stub's own mode
-#   reaches on its own), never timed-out.
+#   fires, so this case's own 15s SCHED_DEADLINE (#463) ends the run instead, as an overrun, never
+#   timed-out.
+# mutant:463-doctor-sched-deadline-leaks — sched_launch's own `SCHED_DEADLINE=*)` arm loses its
+#   `shift; continue`: the keyword token falls through into envargs and reaches the wrapper's own
+#   env, where this case's own sched-deadline.capture assertion below is the only thing that would
+#   catch it (the wrapper ignores an env var it never reads, so every other assertion still passes).
 case_codex_sched_timeout() {
   mk_sched sched-timeout
   build_stub_sched_codex "$sched_stub" hang
   build_stub_sched_gh "$sched_stub" ok
-  run_sched "$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=1 TBF_CODEX_RUN_KILL_GRACE=1 --
+  run_sched "$sched_stub:$PATH" SCHED_DEADLINE=15 TBF_CODEX_RUN_TIMEOUT=1 TBF_CODEX_RUN_KILL_GRACE=1 --
   expect_rc 1
   expect_sched_out "outcome=timed-out"
-  local rd cpid
+  local rd cpid sched_deadline_leak
   rd="$(sched_run_dir)"
   [ -f "$rd/watchdog-fired" ] || { __ok=0; __why="${__why}watchdog-fired missing\n"; }
   cpid="$(cat "$sched_stub/codex.pid" 2>/dev/null)"
   if [ -n "$cpid" ] && kill -0 "$cpid" 2>/dev/null; then
     __ok=0; __why="${__why}stub codex pid $cpid still alive after timeout\n"
   fi
+  sched_deadline_leak="$(cat "$sched_stub/sched-deadline.capture" 2>/dev/null)"
+  [ "$sched_deadline_leak" = "unset" ] \
+    || { __ok=0; __why="${__why}SCHED_DEADLINE leaked into the wrapper's own env: '$sched_deadline_leak'\n"; }
 }
 
 # codex-sched-timeout-kill — a stub that ignores TERM (its own disposition set to ignore, inherited
@@ -4496,26 +4793,21 @@ case_codex_sched_timeout() {
 # watchdog's kill-grace KILL is what actually ends it. timed-out, and the stub pid is dead. Also
 # pins that the KILL actually ran, rather than the stub merely outliving the wrapper on its own:
 # exit-status=137 (128+9) can only come from the stub itself dying to SIGKILL, never from its own
-# unhindered 20s sleep completing (which would exit 0), and the whole run is bounded to well under
-# that stub's own natural lifetime — a skipped KILL would otherwise let the case still pass, just
-# by taking as long as the stub's own hang.
+# unhindered 20s sleep completing (which would exit 0) — a skipped KILL would otherwise let this
+# case's own 15s SCHED_DEADLINE (#463) end the run as an overrun instead, which exit-status=137
+# alone rules out.
 # mutant:427-watchdog-kill-skipped — bin: the watchdog's own post-grace `kill -KILL "$codex_pid"`
-#   becomes a no-op. Killed here: the TERM-ignoring stub is never actually killed, so it survives on
-#   its own until its own hang ends naturally, well past this case's wall-clock bound, and its exit
-#   status is 0 rather than 137.
+#   becomes a no-op. Killed here: the TERM-ignoring stub is never actually killed, so it survives
+#   until this case's own 15s SCHED_DEADLINE (#463) kills it instead, and its exit status is 137
+#   from THAT kill, never the wrapper's own timeout classification's exit-status line.
 case_codex_sched_timeout_kill() {
   mk_sched sched-timeout-kill
   build_stub_sched_codex "$sched_stub" hang-noterm
   build_stub_sched_gh "$sched_stub" ok
-  local t0=$SECONDS
-  run_sched "$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=1 TBF_CODEX_RUN_KILL_GRACE=1 --
-  local elapsed=$((SECONDS - t0))
+  run_sched "$sched_stub:$PATH" SCHED_DEADLINE=15 TBF_CODEX_RUN_TIMEOUT=1 TBF_CODEX_RUN_KILL_GRACE=1 --
   expect_rc 1
   expect_sched_out "outcome=timed-out"
   expect_record_line "exit-status=137"
-  if [ "$elapsed" -ge 15 ]; then
-    __ok=0; __why="${__why}run took ${elapsed}s, not well under the stub's own 20s natural hang — the post-grace KILL may not have run\n"
-  fi
   local cpid
   cpid="$(cat "$sched_stub/codex.pid" 2>/dev/null)"
   if [ -n "$cpid" ] && kill -0 "$cpid" 2>/dev/null; then
@@ -4529,11 +4821,14 @@ case_codex_sched_timeout_kill() {
 # the hang-long codex stub (a real window to signal the WRAPPER's own pid while codex is still
 # running, and a natural exit far past this case's own bounded poll — see build_stub_sched_codex's
 # own header for why — so the mutant below can't be masked by the stub simply outliving the
-# wrapper and running out its own sleep). Does not check the watchdog's own poll sleep: a `sleep 1`
-# slice outliving the watchdog by up to a second is the accepted, self-ending behaviour the
-# watchdog's own design now has, not a leak this case means to catch (see
-# codex-sched-wrapper-killed-forwards-term for the codex-side kill sequence this case doesn't
-# itself probe).
+# wrapper and running out its own sleep). Launched via sched_launch (#463) rather than run_sched, so
+# this case keeps control of when the wrapper is signalled; sched_await_file/sched_collect/
+# sched_await_dead give the pid-file wait, the wrapper-exit wait, and the survivor poll each their
+# own active deadline instead of the old bare `wait`/ad hoc slice-counted loops. Does not check the
+# watchdog's own poll sleep: a `sleep 1` slice outliving the watchdog by up to a second is the
+# accepted, self-ending behaviour the watchdog's own design now has, not a leak this case means to
+# catch (see codex-sched-wrapper-killed-forwards-term for the codex-side kill sequence this case
+# doesn't itself probe).
 # mutant:427-wrapper-signal-trap — bin: delete both `trap '...' TERM`/`trap '...' INT` lines
 #   installing on_wrapper_signal. Killed here: with no trap, the default TERM disposition kills the
 #   wrapper outright, leaving the codex stub alive.
@@ -4542,64 +4837,29 @@ case_codex_sched_wrapper_killed() {
   build_stub_sched_codex "$sched_stub" hang-long
   build_stub_sched_gh "$sched_stub" ok
 
-  local outfile errfile
-  outfile="$(mktemp)"; errfile="$(mktemp)"
-  # exec (not a bare `env ...`) so this subshell's own pid becomes the wrapper script's pid: `env`
-  # itself execs its target rather than forking a child to run it — it is this outer `(...)`
-  # subshell that would otherwise fork a child to run `env` in, leaving $! naming that subshell
-  # rather than the wrapper this case means to signal.
-  (
-    cd "$sched_repo" &&
-    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
-    exec env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
-        PATH="$sched_stub:$PATH" TMPDIR="$sched_tmpdir" TBF_CODEX_RUN_TIMEOUT=30 \
-        TBF_CODEX_RUN_KILL_GRACE=5 \
-        "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
-  ) < "$sched_sentinel" > "$outfile" 2> "$errfile" &
-  local wrapper_pid=$!
+  sched_launch "$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=30 TBF_CODEX_RUN_KILL_GRACE=3 --
 
-  local waited=0
-  while [ ! -s "$sched_stub/codex.pid" ] && [ "$waited" -lt 10000 ]; do
-    sleep 0.05
-    waited=$((waited + 50))
-  done
-  if [ ! -s "$sched_stub/codex.pid" ]; then
+  if ! sched_await_file "$sched_stub/codex.pid" 10; then
     __ok=0; __why="${__why}the codex stub never started — can't exercise a mid-run kill\n"
-    kill -9 "$wrapper_pid" 2>/dev/null
-    rm -f "$outfile" "$errfile"
+    kill_tree "$sched_pid"
+    wait "$sched_pid" 2>/dev/null
     return
   fi
   local codex_stub_pid
   codex_stub_pid="$(cat "$sched_stub/codex.pid")"
 
-  kill -TERM "$wrapper_pid" 2>/dev/null
-  wait "$wrapper_pid" 2>/dev/null
-  doctor_rc=$?
-  sched_out="$(cat "$outfile")"
-  sched_err="$(cat "$errfile")"
-  rm -f "$outfile" "$errfile"
-  doctor_out="OUT: $sched_out
-ERR: $sched_err"
+  kill -TERM "$sched_pid" 2>/dev/null
+  sched_collect 12
+  $deadline_overran && return
 
   expect_rc 1
   expect_sched_out "outcome=died-mid-run"
 
-  # The wrapper's own TERM handler signals codex_pid and then, per the new poll design, may take up
-  # to $grace seconds before escalating to KILL — poll for up to a generous multiple of that window
-  # (wide enough to absorb scheduling delay under heavy concurrent load without flaking) before
-  # declaring a survivor.
-  local codex_alive="" waited=0
-  while [ "$waited" -lt 10000 ]; do
-    codex_alive=""
-    kill -0 "$codex_stub_pid" 2>/dev/null && codex_alive="$codex_stub_pid"
-    [ -z "$codex_alive" ] && break
-    sleep 0.1
-    waited=$((waited + 100))
-  done
-
-  if [ -n "$codex_alive" ]; then
+  local survivors
+  survivors="$(sched_await_dead 5 "$codex_stub_pid")"
+  if [ -n "$survivors" ]; then
     __ok=0; __why="${__why}codex stub pid $codex_stub_pid still alive after the wrapper was killed\n"
-    kill -9 "$codex_stub_pid" 2>/dev/null
+    kill -9 $survivors 2>/dev/null
   fi
 }
 
@@ -4608,7 +4868,8 @@ ERR: $sched_err"
 # itself is sent TERM mid-run; on_wrapper_signal must TERM codex_pid and then POLL for it to exit
 # (up to $grace) before ever sending KILL, so the forwarder gets a real chance to run its own trap
 # and kill its own child — the actual point of this case. Both the forwarder stub itself and its
-# child must be gone.
+# child must be gone. Same sched_launch/sched_await_file/sched_collect/sched_await_dead shape as
+# codex-sched-wrapper-killed above.
 # mutant:427-wrapper-kill-immediate — bin: on_wrapper_signal's TERM-then-poll-then-KILL sequence
 #   collapses back to an immediate TERM followed by an immediate KILL. Killed here: the forwarder is
 #   killed before it can run its own trap, so its child (the simulated native binary) survives.
@@ -4617,65 +4878,36 @@ case_codex_sched_wrapper_killed_forwards_term() {
   build_stub_sched_codex "$sched_stub" forwarder
   build_stub_sched_gh "$sched_stub" ok
 
-  local outfile errfile
-  outfile="$(mktemp)"; errfile="$(mktemp)"
-  (
-    cd "$sched_repo" &&
-    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
-    exec env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
-        PATH="$sched_stub:$PATH" TMPDIR="$sched_tmpdir" TBF_CODEX_RUN_TIMEOUT=30 \
-        TBF_CODEX_RUN_KILL_GRACE=5 \
-        "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
-  ) < "$sched_sentinel" > "$outfile" 2> "$errfile" &
-  local wrapper_pid=$!
+  sched_launch "$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=30 TBF_CODEX_RUN_KILL_GRACE=3 --
 
-  local waited=0
-  while [ ! -s "$sched_stub/forwarder-child.pid" ] && [ "$waited" -lt 10000 ]; do
-    sleep 0.05
-    waited=$((waited + 50))
-  done
-  if [ ! -s "$sched_stub/codex.pid" ] || [ ! -s "$sched_stub/forwarder-child.pid" ]; then
+  if ! sched_await_file "$sched_stub/forwarder-child.pid" 10; then
     __ok=0; __why="${__why}the forwarder stub never started its own child — can't exercise this\n"
-    kill -9 "$wrapper_pid" 2>/dev/null
-    rm -f "$outfile" "$errfile"
+    kill_tree "$sched_pid"
+    wait "$sched_pid" 2>/dev/null
     return
   fi
   local codex_stub_pid child_pid
   codex_stub_pid="$(cat "$sched_stub/codex.pid")"
   child_pid="$(cat "$sched_stub/forwarder-child.pid")"
 
-  kill -TERM "$wrapper_pid" 2>/dev/null
-  wait "$wrapper_pid" 2>/dev/null
-  doctor_rc=$?
-  sched_out="$(cat "$outfile")"
-  sched_err="$(cat "$errfile")"
-  rm -f "$outfile" "$errfile"
-  doctor_out="OUT: $sched_out
-ERR: $sched_err"
+  kill -TERM "$sched_pid" 2>/dev/null
+  sched_collect 12
+  $deadline_overran && return
 
   expect_rc 1
   expect_sched_out "outcome=died-mid-run"
 
-  # Poll for a generous multiple of $grace, wide enough to absorb scheduling delay under heavy
-  # concurrent load without flaking.
-  local codex_alive="" child_alive="" waited=0
-  while [ "$waited" -lt 10000 ]; do
-    codex_alive=""; child_alive=""
-    kill -0 "$codex_stub_pid" 2>/dev/null && codex_alive="$codex_stub_pid"
-    kill -0 "$child_pid" 2>/dev/null && child_alive="$child_pid"
-    [ -z "$codex_alive" ] && [ -z "$child_alive" ] && break
-    sleep 0.1
-    waited=$((waited + 100))
-  done
-
-  if [ -n "$codex_alive" ]; then
-    __ok=0; __why="${__why}forwarder stub pid $codex_stub_pid still alive after the wrapper was killed\n"
-    kill -9 "$codex_stub_pid" 2>/dev/null
-  fi
-  if [ -n "$child_alive" ]; then
-    __ok=0; __why="${__why}forwarder's own child pid $child_pid still alive after the wrapper was killed\n"
-    kill -9 "$child_pid" 2>/dev/null
-  fi
+  local survivors
+  survivors="$(sched_await_dead 5 "$codex_stub_pid" "$child_pid")"
+  case " $survivors " in
+    *" $codex_stub_pid "*)
+      __ok=0; __why="${__why}forwarder stub pid $codex_stub_pid still alive after the wrapper was killed\n" ;;
+  esac
+  case " $survivors " in
+    *" $child_pid "*)
+      __ok=0; __why="${__why}forwarder's own child pid $child_pid still alive after the wrapper was killed\n" ;;
+  esac
+  [ -n "$survivors" ] && kill -9 $survivors 2>/dev/null
 }
 
 # codex-sched-wrapper-killed-noterm — the codex stub ignores TERM outright (its own disposition set
@@ -4683,92 +4915,46 @@ ERR: $sched_err"
 # (which dies to TERM alone), only on_wrapper_signal's own post-grace KILL can end it — the actual
 # point of this case: codex-sched-wrapper-killed and codex-sched-wrapper-killed-forwards-term both
 # use stubs that already die to TERM, so neither one actually exercises this KILL line. Uses the
-# hang-noterm-long stub (a much longer natural hang than the plain hang-noterm mode) precisely so a
-# bounded wall-clock margin below "actually killed" and "survived, outliving the wrapper" stays
-# large and load-tolerant rather than bumping into the stub's own eventual natural exit — the
-# wrapper itself is sent TERM mid-run; the stub must die within that bounded window, not merely by
-# outliving the wrapper and running out its own sleep.
+# hang-noterm-long stub (60s, longer than the bounded wrapper-exit wait below) so bumping into the
+# stub's own natural exit is never mistaken for an actual kill. Same sched_launch/sched_await_file/
+# sched_collect/sched_await_dead shape as the two cases above; sched_collect's own 12s deadline is
+# what now catches a handler that never escalates to KILL, replacing the old ad hoc 20s slice-counted
+# wait.
 # mutant:427-wrapper-kill-skipped — bin: on_wrapper_signal's own post-grace
 #   `kill -KILL "$codex_pid"` becomes a no-op. Killed here: the TERM-ignoring stub is never actually
-#   killed, so it survives well past this case's bounded poll.
+#   killed, so it survives past this case's bounded survivor poll.
 # mutant:427-wrapper-grace-ignored — bin: on_wrapper_signal's grace deadline is pushed far past the
 #   stub's own natural hang, so the handler never reaches its KILL. Killed here: the wrapper is still
-#   running past this case's bounded wait on it.
+#   running past sched_collect's own 12s deadline, so this case ends via that overrun instead of
+#   reaching its own assertions.
 case_codex_sched_wrapper_killed_noterm() {
   mk_sched sched-wrapper-noterm
   build_stub_sched_codex "$sched_stub" hang-noterm-long
   build_stub_sched_gh "$sched_stub" ok
 
-  local outfile errfile
-  outfile="$(mktemp)"; errfile="$(mktemp)"
-  (
-    cd "$sched_repo" &&
-    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE &&
-    exec env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
-        PATH="$sched_stub:$PATH" TMPDIR="$sched_tmpdir" TBF_CODEX_RUN_TIMEOUT=30 \
-        TBF_CODEX_RUN_KILL_GRACE=5 \
-        "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
-  ) < "$sched_sentinel" > "$outfile" 2> "$errfile" &
-  local wrapper_pid=$!
+  sched_launch "$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=30 TBF_CODEX_RUN_KILL_GRACE=3 --
 
-  local waited=0
-  while [ ! -s "$sched_stub/codex.pid" ] && [ "$waited" -lt 10000 ]; do
-    sleep 0.05
-    waited=$((waited + 50))
-  done
-  if [ ! -s "$sched_stub/codex.pid" ]; then
+  if ! sched_await_file "$sched_stub/codex.pid" 10; then
     __ok=0; __why="${__why}the codex stub never started — can't exercise a mid-run kill\n"
-    kill -9 "$wrapper_pid" 2>/dev/null
-    rm -f "$outfile" "$errfile"
+    kill_tree "$sched_pid"
+    wait "$sched_pid" 2>/dev/null
     return
   fi
   local codex_stub_pid
   codex_stub_pid="$(cat "$sched_stub/codex.pid")"
 
-  # The wrapper must itself exit within its grace window plus a margin, never by waiting out the
-  # stub's own long natural hang: a bare `wait` here would let a handler that ignores its grace
-  # deadline pass after the stub's own sleep ends. Past the bound, both processes are killed and the
-  # case fails fast.
-  kill -TERM "$wrapper_pid" 2>/dev/null
-  local wrapper_waited=0
-  while kill -0 "$wrapper_pid" 2>/dev/null && [ "$wrapper_waited" -lt 20000 ]; do
-    sleep 0.1
-    wrapper_waited=$((wrapper_waited + 100))
-  done
-  if kill -0 "$wrapper_pid" 2>/dev/null; then
-    __ok=0; __why="${__why}the wrapper was still running well past its kill grace — on_wrapper_signal did not escalate within its own deadline\n"
-    kill -9 "$wrapper_pid" "$codex_stub_pid" 2>/dev/null
-    wait "$wrapper_pid" 2>/dev/null
-    rm -f "$outfile" "$errfile"
-    return
-  fi
-  wait "$wrapper_pid" 2>/dev/null
-  doctor_rc=$?
-  sched_out="$(cat "$outfile")"
-  sched_err="$(cat "$errfile")"
-  rm -f "$outfile" "$errfile"
-  doctor_out="OUT: $sched_out
-ERR: $sched_err"
+  kill -TERM "$sched_pid" 2>/dev/null
+  sched_collect 12
+  $deadline_overran && return
 
   expect_rc 1
   expect_sched_out "outcome=died-mid-run"
 
-  # Bounded well short of the stub's own long natural hang: a real KILL should end it within a
-  # couple of seconds of the $grace=5s window; a generous multiple of that window still leaves
-  # ample margin against the stub's own eventual natural exit, so this distinguishes "actually
-  # killed" from "outlived the wrapper and hung until its own sleep ended" even under heavy load.
-  local codex_alive="" waited=0
-  while [ "$waited" -lt 12000 ]; do
-    codex_alive=""
-    kill -0 "$codex_stub_pid" 2>/dev/null && codex_alive="$codex_stub_pid"
-    [ -z "$codex_alive" ] && break
-    sleep 0.1
-    waited=$((waited + 100))
-  done
-
-  if [ -n "$codex_alive" ]; then
+  local survivors
+  survivors="$(sched_await_dead 5 "$codex_stub_pid")"
+  if [ -n "$survivors" ]; then
     __ok=0; __why="${__why}TERM-ignoring codex stub pid $codex_stub_pid still alive after the wrapper was killed — post-grace KILL did not run\n"
-    kill -9 "$codex_stub_pid" 2>/dev/null
+    kill -9 $survivors 2>/dev/null
   fi
 }
 
@@ -4799,6 +4985,39 @@ case_codex_sched_timeout_invalid() {
   expect_rc 1
   expect_sched_out "outcome=preflight-failed reason=bad-timeout"
   expect_no_file "$sched_stub/argc"
+}
+
+# codex-sched-await-short-circuit — pins sched_await_file's own "OR until $sched_pid has already
+# exited" short circuit directly: launches a wrapper that fails preflight validation and exits
+# almost immediately (TBF_CODEX_RUN_TIMEOUT=abc, the same shape as codex-sched-timeout-invalid
+# above), then calls sched_await_file on a file this run never writes, with a full 10s budget, and
+# asserts it returns false well before that budget elapses — not merely that it eventually returns
+# false once the deadline itself is reached.
+# mutant:463-doctor-sched-await-no-shortcircuit — sched_await_file's own `&& kill -0 "$sched_pid"`
+#   clause dropped from its poll condition: the loop can no longer notice the wrapper has already
+#   exited, so it waits out its own full SECS budget regardless.
+case_codex_sched_await_file_short_circuit() {
+  mk_sched sched-await-short-circuit
+  build_stub_sched_codex "$sched_stub" complete
+  build_stub_sched_gh "$sched_stub" ok
+
+  sched_launch "$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=abc --
+  local t0=$SECONDS found
+  if sched_await_file "$sched_stub/never-appears" 10; then
+    found=true
+  else
+    found=false
+  fi
+  local elapsed=$((SECONDS - t0))
+  sched_collect 5
+  $deadline_overran && return
+
+  if [ "$found" != false ]; then
+    __ok=0; __why="${__why}sched_await_file reported the file present when it was never written\n"
+  fi
+  if [ "$elapsed" -ge 8 ]; then
+    __ok=0; __why="${__why}sched_await_file took ${elapsed}s to return -- should have noticed the wrapper had already exited well before its own 10s budget\n"
+  fi
 }
 
 # codex-sched-prune — 101 pre-created stamp-shaped run directories, one non-matching FILE
@@ -5373,8 +5592,10 @@ case_codex_track_state_write_failed() {
 # (default 120s), never left to hang the launchd job forever. Named codex-ghbound-*, deliberately
 # outside the codex-sched-/codex-track- substrings those two mutant families filter on (plan
 # ADVISORY Q8's own precedent), so those records' measured sets aren't widened by anything added
-# here. Every hang case passes TBF_CODEX_GH_TIMEOUT=2 and asserts the run finishes well under the
-# stub's own 60s natural lifetime, then kills the orphaned gh.hang.pid process itself.
+# here. Every hang case passes TBF_CODEX_GH_TIMEOUT=2 under a 15s SCHED_DEADLINE (#463), which now
+# ends the run directly on overrun rather than merely arriving well before the gh stub's own 30s
+# natural lifetime; each case still kills the orphaned gh.hang.pid process itself, since gh's own
+# hang stub is a child the wrapper's own bounded_run reaches via the bound, not by outliving it.
 
 # codex-ghbound-stop-hang — harness-stop.sh's own "gh issue list" preflight query hangs forever;
 # TBF_CODEX_GH_TIMEOUT=2 bounds the whole harness-stop.sh invocation. harness-stop.sh has no signal
@@ -5382,7 +5603,8 @@ case_codex_track_state_write_failed() {
 # existing exit-4 path (skipped-stop reason=stop-unknown) and codex is never launched.
 # mutant:443-bound-deadline-ignored — bounded_run's own first poll loop's deadline check becomes an
 #   always-true condition, so it never times out — this case (and every track-* hang case below)
-#   then waits out real time instead of the 2s bound.
+#   never reaches the 2s bound's own clean timeout, so this case's own 15s SCHED_DEADLINE (#463)
+#   kills the whole run as an overrun instead.
 # mutant:443-stop-timeout-unmapped — a bounded harness-stop.sh timeout no longer maps to stop_rc=4:
 #   its own TERM-killed exit status falls through to preflight-failed harness-stop-exit-<n> instead.
 case_codex_ghbound_stop_hang() {
@@ -5390,9 +5612,7 @@ case_codex_ghbound_stop_hang() {
   build_stub_sched_codex "$sched_stub" complete
   build_stub_sched_gh "$sched_stub" hang-list
 
-  local t0=$SECONDS
-  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=2 --
-  local elapsed=$((SECONDS - t0))
+  run_sched "$sched_stub:$PATH" SCHED_DEADLINE=15 TBF_CODEX_GH_TIMEOUT=2 --
   expect_rc 0
   expect_sched_out "outcome=skipped-stop reason=stop-unknown"
   expect_no_file "$sched_stub/argc"
@@ -5405,9 +5625,6 @@ case_codex_ghbound_stop_hang() {
     *"did not finish within 2s"*) : ;;
     *) __ok=0; __why="${__why}preflight.log missing the timeout line: $(cat "$pf" 2>/dev/null)\n" ;;
   esac
-  if [ "$elapsed" -ge 25 ]; then
-    __ok=0; __why="${__why}run took ${elapsed}s, not well under the 2s gh bound\n"
-  fi
 
   if [ -s "$sched_stub/gh.hang.pid" ]; then
     kill -9 "$(cat "$sched_stub/gh.hang.pid")" 2>/dev/null
@@ -5419,8 +5636,8 @@ case_codex_ghbound_stop_hang() {
 # state file ever written, and a stderr line saying GitHub may already have been updated. The hang
 # stub is dead afterwards — proving KILL ran, since TERM alone is inherited-ignored inside `finish`.
 # mutant:443-bound-kill-skipped — bounded_run's own post-grace KILL becomes a no-op: this case (and
-#   the other two track-* cases below) never actually ends the hang stub, so it survives well past
-#   the bound.
+#   the other two track-* cases below) never actually ends the hang stub, so it survives until this
+#   case's own 15s SCHED_DEADLINE (#463) ends the whole run instead of the bound's own KILL.
 # mutant:443-create-timeout-unmapped — track_create's own `if $bounded_timed_out; then` becomes
 #   `if false; then`: the timeout falls through to the ordinary `gh_rc`/`create-failed` handling
 #   instead of the create-timeout slug.
@@ -5432,9 +5649,7 @@ case_codex_ghbound_track_create() {
   build_stub_sched_codex "$sched_stub" fail
   build_stub_sched_gh "$sched_stub" hang-create
 
-  local t0=$SECONDS
-  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=2 --
-  local elapsed=$((SECONDS - t0))
+  run_sched "$sched_stub:$PATH" SCHED_DEADLINE=15 TBF_CODEX_GH_TIMEOUT=2 --
   expect_rc 3
   local rd
   rd="$(sched_out_rd)"
@@ -5450,9 +5665,6 @@ case_codex_ghbound_track_create() {
   expect "may already have been updated"
   expect_no_file "$sched_common/trail-blazer/scheduled-failure-issue"
   expect_no_file "$rd/gh.out"
-  if [ "$elapsed" -ge 25 ]; then
-    __ok=0; __why="${__why}run took ${elapsed}s, not well under the 2s gh bound\n"
-  fi
 
   local hpid
   hpid="$(cat "$sched_stub/gh.hang.pid" 2>/dev/null)"
@@ -5479,9 +5691,7 @@ case_codex_ghbound_track_view() {
   local state_before
   state_before="$(cat "$sched_common/trail-blazer/scheduled-failure-issue" 2>/dev/null)"
 
-  local t0=$SECONDS
-  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=2 --
-  local elapsed=$((SECONDS - t0))
+  run_sched "$sched_stub:$PATH" SCHED_DEADLINE=15 TBF_CODEX_GH_TIMEOUT=2 --
   expect_rc 3
   local rd
   rd="$(sched_out_rd)"
@@ -5496,9 +5706,6 @@ case_codex_ghbound_track_view() {
   [ "$state_before" = "$state_after" ] \
     || { __ok=0; __why="${__why}tracking state changed after a view timeout\n"; }
   expect "GitHub was not updated"
-  if [ "$elapsed" -ge 25 ]; then
-    __ok=0; __why="${__why}run took ${elapsed}s, not well under the 2s gh bound\n"
-  fi
 
   local hpid
   hpid="$(cat "$sched_stub/gh.hang.pid" 2>/dev/null)"
@@ -5536,9 +5743,7 @@ case_codex_ghbound_track_comment() {
   local state_before_a
   state_before_a="$(cat "$sched_common/trail-blazer/scheduled-failure-issue" 2>/dev/null)"
 
-  local t0=$SECONDS
-  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=2 --
-  local elapsed=$((SECONDS - t0))
+  run_sched "$sched_stub:$PATH" SCHED_DEADLINE=15 TBF_CODEX_GH_TIMEOUT=2 --
   expect_rc 3
   local rd
   rd="$(sched_out_rd)"
@@ -5548,9 +5753,6 @@ case_codex_ghbound_track_comment() {
   state_after_a="$(cat "$sched_common/trail-blazer/scheduled-failure-issue" 2>/dev/null)"
   [ "$state_before_a" = "$state_after_a" ] \
     || { __ok=0; __why="${__why}(a) tracking state changed after a comment timeout\n"; }
-  if [ "$elapsed" -ge 25 ]; then
-    __ok=0; __why="${__why}(a) run took ${elapsed}s, not well under the 2s gh bound\n"
-  fi
   local hpid_a
   hpid_a="$(cat "$sched_stub/gh.hang.pid" 2>/dev/null)"
   if [ -z "$hpid_a" ]; then
@@ -5568,9 +5770,7 @@ case_codex_ghbound_track_comment() {
   local state_before_b
   state_before_b="$(cat "$sched_common/trail-blazer/scheduled-failure-issue" 2>/dev/null)"
 
-  t0=$SECONDS
-  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=2 --
-  elapsed=$((SECONDS - t0))
+  run_sched "$sched_stub:$PATH" SCHED_DEADLINE=15 TBF_CODEX_GH_TIMEOUT=2 --
   expect_rc 3
   rd="$(sched_out_rd)"
   expect_run_record_line "$rd" "tracking=failed:comment-timeout"
@@ -5579,9 +5779,6 @@ case_codex_ghbound_track_comment() {
   state_after_b="$(cat "$sched_common/trail-blazer/scheduled-failure-issue" 2>/dev/null)"
   [ "$state_before_b" = "$state_after_b" ] \
     || { __ok=0; __why="${__why}(b) tracking state changed after a comment timeout\n"; }
-  if [ "$elapsed" -ge 25 ]; then
-    __ok=0; __why="${__why}(b) run took ${elapsed}s, not well under the 2s gh bound\n"
-  fi
   local hpid_b
   hpid_b="$(cat "$sched_stub/gh.hang.pid" 2>/dev/null)"
   if [ -z "$hpid_b" ]; then
@@ -5596,7 +5793,9 @@ case_codex_ghbound_track_comment() {
 # codex-sched-stop-exit replaced-sibling idiom, combined with a real background hang, TBF_CODEX_GH_
 # TIMEOUT=60 so the bound itself never fires): the wrapper process is sent TERM while its own
 # bounded harness-stop.sh child is still running. on_wrapper_signal's own immediate KILL of
-# $bounded_pid ends it well inside the wrapper's own kill grace — codex is never launched.
+# $bounded_pid ends it well inside the wrapper's own kill grace — codex is never launched. Uses
+# sched_launch/sched_await_file/sched_collect/sched_await_dead (#463), the same shared shape the
+# codex-sched-wrapper-killed* family uses, with a 10s wrapper-exit bound (sched_collect 10).
 # mutant:443-wrapper-bounded-orphaned — on_wrapper_signal's own bounded-child KILL line deleted:
 #   the harness-stop.sh stub survives the wrapper being killed.
 case_codex_ghbound_wrapper_killed() {
@@ -5610,89 +5809,54 @@ case_codex_ghbound_wrapper_killed() {
     printf 'real_sleep=%q\n' "$(command -v sleep)"
     cat <<'STUBEOF'
 printf '%s' "$$" > "$dir/stop.pid"
-exec "$real_sleep" 60
+# 30s: longer than this case's own pid-file wait (10s) + wrapper-exit wait (10s) + survivor poll
+# (5s) combined (25s), so a skipped kill leaves this stub still alive when the survivor check runs,
+# rather than its own natural exit being mistaken for the kill this case means to prove.
+exec "$real_sleep" 30
 STUBEOF
   } > "$sched_plugin/bin/harness-stop.sh"
   chmod +x "$sched_plugin/bin/harness-stop.sh"
 
-  local outfile errfile
-  outfile="$(mktemp)"; errfile="$(mktemp)"
-  (
-    cd "$sched_repo" &&
-    unset CLAUDE_PID TBF_CODEX_RUN_TIMEOUT TBF_CODEX_RUN_KILL_GRACE TBF_CODEX_GH_TIMEOUT &&
-    exec env HOME="$sched_repo/home" XDG_CONFIG_HOME="$sched_repo/home/.config" GIT_CONFIG_NOSYSTEM=1 \
-        PATH="$sched_stub:$PATH" TMPDIR="$sched_tmpdir" TBF_CODEX_RUN_TIMEOUT=30 \
-        TBF_CODEX_RUN_KILL_GRACE=5 TBF_CODEX_GH_TIMEOUT=60 \
-        "$bash_bin" "$sched_plugin/bin/codex-scheduled-run.sh"
-  ) < "$sched_sentinel" > "$outfile" 2> "$errfile" &
-  local wrapper_pid=$!
+  sched_launch "$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=30 TBF_CODEX_RUN_KILL_GRACE=5 TBF_CODEX_GH_TIMEOUT=60 --
 
-  local waited=0
-  while [ ! -s "$sched_stub/stop.pid" ] && [ "$waited" -lt 10000 ]; do
-    sleep 0.05
-    waited=$((waited + 50))
-  done
-  if [ ! -s "$sched_stub/stop.pid" ]; then
+  if ! sched_await_file "$sched_stub/stop.pid" 10; then
     __ok=0; __why="${__why}the harness-stop.sh stub never started — can't exercise a mid-preflight kill\n"
-    kill -9 "$wrapper_pid" 2>/dev/null
-    rm -f "$outfile" "$errfile"
+    kill_tree "$sched_pid"
+    wait "$sched_pid" 2>/dev/null
     return
   fi
   local stop_stub_pid
   stop_stub_pid="$(cat "$sched_stub/stop.pid")"
 
-  kill -TERM "$wrapper_pid" 2>/dev/null
-
-  local wrapper_waited=0
-  while kill -0 "$wrapper_pid" 2>/dev/null && [ "$wrapper_waited" -lt 20000 ]; do
-    sleep 0.1
-    wrapper_waited=$((wrapper_waited + 100))
-  done
-  if kill -0 "$wrapper_pid" 2>/dev/null; then
-    __ok=0; __why="${__why}the wrapper was still running well past its own kill grace — on_wrapper_signal did not escalate the bounded harness-stop.sh child\n"
-    kill -9 "$wrapper_pid" "$stop_stub_pid" 2>/dev/null
-    wait "$wrapper_pid" 2>/dev/null
-    rm -f "$outfile" "$errfile"
-    return
-  fi
-  wait "$wrapper_pid" 2>/dev/null
-  doctor_rc=$?
-  sched_out="$(cat "$outfile")"
-  sched_err="$(cat "$errfile")"
-  rm -f "$outfile" "$errfile"
-  doctor_out="OUT: $sched_out
-ERR: $sched_err"
+  kill -TERM "$sched_pid" 2>/dev/null
+  sched_collect 10
+  $deadline_overran && return
 
   expect_rc 1
   expect_sched_out "outcome=died-mid-run reason=wrapper-signal-15"
   expect_no_file "$sched_stub/argc"
 
-  local stop_alive="" waited2=0
-  while [ "$waited2" -lt 10000 ]; do
-    stop_alive=""
-    kill -0 "$stop_stub_pid" 2>/dev/null && stop_alive="$stop_stub_pid"
-    [ -z "$stop_alive" ] && break
-    sleep 0.1
-    waited2=$((waited2 + 100))
-  done
-  if [ -n "$stop_alive" ]; then
+  local survivors
+  survivors="$(sched_await_dead 5 "$stop_stub_pid")"
+  if [ -n "$survivors" ]; then
     __ok=0; __why="${__why}harness-stop.sh stub pid $stop_stub_pid still alive after the wrapper was killed\n"
-    kill -9 "$stop_stub_pid" 2>/dev/null
+    kill -9 $survivors 2>/dev/null
   fi
 }
 
-# codex-ghbound-env — a local stop file set, four sequential runs against ONE fixture: (a) no
-# TBF_CODEX_GH_TIMEOUT override -> skipped-stop reason=stop, exit 0, well under 60s — proving the
-# 120s default validates AND that bounded_run returns as soon as harness-stop.sh itself exits,
-# rather than waiting out the bound (the reaping assumption bounded_run's own header names); (b)
-# TBF_CODEX_GH_TIMEOUT=abc -> preflight-failed reason=bad-timeout, exit 1, tracking=created — the
-# tracking step still runs to completion, proving the 120 fallback (gh_timeout stays the literal
-# 120 default until step 1 accepts an override) is what bounds it, not the invalid raw value, and
-# its own gh.out is cleaned up after that ordinary (non-hung) capture call; (c) TBF_CODEX_GH_TIMEOUT=0
-# -> the same bad-timeout, tracking=repeat (against the state (b) just created) — the same 120
-# fallback bounds this call too; (d) TBF_CODEX_GH_TIMEOUT=08 -> the same bad-timeout, and codex is
-# never launched (no argc) — a leading zero is rejected outright, before it can ever reach the
-# digits-only/`-gt 0` checks or bash's own arithmetic inside bounded_run.
+# codex-ghbound-env — a local stop file set, four sequential runs against ONE fixture, each held to
+# its own 15s SCHED_DEADLINE (#463): (a) no TBF_CODEX_GH_TIMEOUT override -> skipped-stop
+# reason=stop, exit 0 — proving the 120s default validates AND that bounded_run returns as soon as
+# harness-stop.sh itself exits, rather than waiting out the bound (the reaping assumption
+# bounded_run's own header names) or this case's own deadline; (b) TBF_CODEX_GH_TIMEOUT=abc ->
+# preflight-failed reason=bad-timeout, exit 1, tracking=created — the tracking step still runs to
+# completion, proving the 120 fallback (gh_timeout stays the literal 120 default until step 1
+# accepts an override) is what bounds it, not the invalid raw value, and its own gh.out is cleaned
+# up after that ordinary (non-hung) capture call; (c) TBF_CODEX_GH_TIMEOUT=0 -> the same bad-timeout,
+# tracking=repeat (against the state (b) just created) — the same 120 fallback bounds this call too;
+# (d) TBF_CODEX_GH_TIMEOUT=08 -> the same bad-timeout, and codex is never launched (no argc) — a
+# leading zero is rejected outright, before it can ever reach the digits-only/`-gt 0` checks or
+# bash's own arithmetic inside bounded_run.
 # mutant:443-gh-timeout-default — `${TBF_CODEX_GH_TIMEOUT:-120}` becomes `:-0`: sub-run (a) now
 #   fails preflight validation instead of reaching skipped-stop.
 # mutant:443-gh-timeout-fallback — the literal `gh_timeout=120` global becomes
@@ -5700,12 +5864,13 @@ ERR: $sched_err"
 #   aborts before ever reaching its own outcome line, and the state (b) would have written for (c)
 #   to build on is never written.
 # mutant:443-bound-waits-full — bounded_run's own first poll loop drops its `kill -0` check, so it
-#   waits out the full bound even after its child has already exited: sub-run (a) then takes about
-#   120s instead of returning promptly. codex-ghbound-wrapper-killed also fails under this same
-#   mutant: once on_wrapper_signal KILLs the bounded harness-stop.sh stub, `finish`'s own
-#   tracking-issue creation opens a fresh bounded_run call for `gh issue create` (an "ok" stub that
-#   exits almost instantly), but this mutant stalls that call for the full 60s bound too, so the
-#   wrapper process itself outlives that case's own 20s wait for it to exit.
+#   waits out the full bound even after its child has already exited: sub-run (a) then overruns its
+#   own 15s SCHED_DEADLINE (#463) instead of returning promptly. codex-ghbound-wrapper-killed also
+#   fails under this same mutant: once on_wrapper_signal KILLs the bounded harness-stop.sh stub,
+#   `finish`'s own tracking-issue creation opens a fresh bounded_run call for `gh issue create` (an
+#   "ok" stub that exits almost instantly), but this mutant stalls that call for the full 60s bound
+#   too, so the wrapper process itself overruns that case's own 10s sched_collect wait for it to
+#   exit.
 # mutant:443-gh-timeout-leading-zero-accepted — the leading-zero rejection arm (`0?*) finish
 #   preflight-failed bad-timeout ;;`) deleted: sub-run (d)'s "08" now passes preflight step 2 and
 #   reaches bounded_run's own arithmetic, which aborts (see the bin's own preflight step 2 comment)
@@ -5720,30 +5885,25 @@ case_codex_ghbound_env() {
   mkdir -p "$sched_common/trail-blazer"
   touch "$sched_common/trail-blazer/stop"
 
-  local t0=$SECONDS
-  run_sched "$sched_stub:$PATH" --
-  local elapsed=$((SECONDS - t0))
+  run_sched "$sched_stub:$PATH" SCHED_DEADLINE=15 --
   expect_rc 0
   expect_sched_out "outcome=skipped-stop reason=stop"
-  if [ "$elapsed" -ge 60 ]; then
-    __ok=0; __why="${__why}(a) run took ${elapsed}s — should return once harness-stop.sh exits, not wait out the gh bound\n"
-  fi
 
   local rd
-  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=abc --
+  run_sched "$sched_stub:$PATH" SCHED_DEADLINE=15 TBF_CODEX_GH_TIMEOUT=abc --
   expect_rc 1
   expect_sched_out "outcome=preflight-failed reason=bad-timeout"
   rd="$(sched_out_rd)"
   expect_run_record_line "$rd" "tracking=created"
   expect_no_file "$rd/gh.out"
 
-  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=0 --
+  run_sched "$sched_stub:$PATH" SCHED_DEADLINE=15 TBF_CODEX_GH_TIMEOUT=0 --
   expect_rc 1
   expect_sched_out "outcome=preflight-failed reason=bad-timeout"
   rd="$(sched_out_rd)"
   expect_run_record_line "$rd" "tracking=repeat"
 
-  run_sched "$sched_stub:$PATH" TBF_CODEX_GH_TIMEOUT=08 --
+  run_sched "$sched_stub:$PATH" SCHED_DEADLINE=15 TBF_CODEX_GH_TIMEOUT=08 --
   expect_rc 1
   expect_sched_out "outcome=preflight-failed reason=bad-timeout"
   expect_no_file "$sched_stub/argc"
@@ -6852,6 +7012,8 @@ cases=(
   "autonomy-mode-budget-out-of-range|case_autonomy_mode_budget_out_of_range|autonomy mode (#311): kickback-budget: 9 -> WARN naming the bad value, default budget 2 applies"
   "autonomy-mode-default-mode|case_autonomy_mode_default_mode|autonomy mode (#311): permissions.defaultMode reported per settings file, sanitised to a bare word or '(unset)'/'(unrecognised value)'"
   "empty-needle-guard|case_empty_needle_guard|#262: expect/expect_absent both refuse an empty needle rather than degenerating into an unconditional match/never-match"
+  "deadline-kill-tree|case_deadline_kill_tree|#463: wait_deadline/kill_tree's shared mechanism against a synthetic TERM-ignoring root+child tree -> overrun detected, case failed and told why, returns in under 8s (not the child's own 15s lifetime), both pids dead afterwards"
+  "codex-sched-overran-skip|case_codex_sched_overran_skip|#463: sched_launch's own already-overran short-circuit, forced directly via sched_overran=true -> no process started (sched_pid empty), no trail-blazer/runs directory ever appears"
   "gov-none|case_gov_none|governance-paths.sh floor mode: no governance path changed -> verdict=none, empty stderr"
   "gov-builtin-rules|case_gov_builtin_rules|governance-paths.sh floor mode: every built-in alternative fires, three near-misses stay changed: -> verdict=hold"
   "gov-github-renamed|case_gov_github_renamed|governance-paths.sh floor mode: --no-renames prints both the old and new path of a rename regardless of diff.renames"
@@ -6946,6 +7108,7 @@ cases=(
   "codex-sched-wrapper-killed-forwards-term|case_codex_sched_wrapper_killed_forwards_term|#427: the codex stub forwards TERM to its own child (models the real Node launcher) -> the wrapper's TERM-then-poll-then-KILL gives it time to react, so neither the stub nor its child survives"
   "codex-sched-wrapper-killed-noterm|case_codex_sched_wrapper_killed_noterm|#427: the codex stub ignores TERM outright -> on_wrapper_signal's own post-grace KILL is the only thing that can end it, and does, well inside the bounded poll"
   "codex-sched-timeout-invalid|case_codex_sched_timeout_invalid|#427: TBF_CODEX_RUN_TIMEOUT=abc/=0 and TBF_CODEX_RUN_KILL_GRACE=abc/=0 -> all four preflight-failed reason=bad-timeout, no argc"
+  "codex-sched-await-short-circuit|case_codex_sched_await_file_short_circuit|#463: sched_await_file's own already-exited short-circuit, against a wrapper that fails preflight almost instantly -> returns false well before its own 10s budget elapses"
   "codex-sched-prune|case_codex_sched_prune|#427: 101 pre-seeded run directories (the oldest carrying a leftover gh.out, #443) plus a non-matching file and two non-matching directories (wrong shape; right shape but non-digit suffix), all sorting before every stamp -> exactly 100 stamp-shaped dirs remain after one run, the two oldest stamp dirs (and their gh.out) gone, the new run's directory present, every non-matching entry untouched"
   "codex-sched-own-dir|case_codex_sched_own_dir|#427: a decoy directory first on PATH shadows every sibling script -> completed, the decoy's sentinel is never created — siblings resolve only from the wrapper's own directory"
   "codex-sched-usage|case_codex_sched_usage|#427: --help exits 0 naming usage:; --bogus exits 2; outside a repo or with no git on PATH exits 2, no trail-blazer directory created"
@@ -6958,12 +7121,12 @@ cases=(
   "codex-track-skipped|case_codex_track_skipped|I3, #428: a seeded failing streak plus the local stop file -> skipped-stop makes no failure-tracking gh call of its own (gh.calls holds only harness-stop.sh's own issue list), tracking state byte-identical, record.txt tracking=none"
   "codex-track-malformed-state|case_codex_track_malformed_state|I3, #428: a tracking state file with a non-digit issue= value is treated as absent (with a stderr warning), so a new issue is created exactly like the no-state case"
   "codex-track-state-write-failed|case_codex_track_state_write_failed|I3, #428: gh issue create succeeds but the local state write then fails (trail-blazer/ made read-only) -> the created issue number is still announced to stderr and recorded as record.txt's own tracking-issue=, tracking=failed:state-write-failed, exit 3, no state file written"
-  "codex-ghbound-stop-hang|case_codex_ghbound_stop_hang|#443: harness-stop.sh's own gh issue list preflight query hangs -> TBF_CODEX_GH_TIMEOUT=2 bounds the whole call, skipped-stop reason=stop-unknown, exit 0, no argc, preflight.log names the 2s bound, tracking=none, well under the bound"
+  "codex-ghbound-stop-hang|case_codex_ghbound_stop_hang|#443: harness-stop.sh's own gh issue list preflight query hangs -> TBF_CODEX_GH_TIMEOUT=2 bounds the whole call, skipped-stop reason=stop-unknown, exit 0, no argc, preflight.log names the 2s bound, tracking=none, the whole run held to a 15s SCHED_DEADLINE (#463)"
   "codex-ghbound-track-create|case_codex_ghbound_track_create|#443: a first failure's own gh issue create hangs -> tracking=failed:create-timeout, exit 3, no state file, stderr says GitHub may already have been updated, gh.out removed despite the timeout, the hang stub is dead afterwards (KILL, since TERM is inherited-ignored inside finish)"
   "codex-ghbound-track-view|case_codex_ghbound_track_view|#443: a seeded failing streak's own gh issue view hangs -> tracking=failed:view-timeout, exit 3, no create call, state byte-identical, stderr says GitHub was not updated"
   "codex-ghbound-track-comment|case_codex_ghbound_track_comment|#443: (a) a seeded failing streak plus a completed run hangs on the recovery comment; (b) a seeded recovered streak plus a failure hangs on the failing-again comment (its own preceding issue view still succeeds) -> both give tracking=failed:comment-timeout, exit 3, state byte-identical, stderr says GitHub may already have been updated"
   "codex-ghbound-wrapper-killed|case_codex_ghbound_wrapper_killed|#443: harness-stop.sh replaced with a stub that hangs, TBF_CODEX_GH_TIMEOUT=60 (never fires) -> the wrapper itself sent TERM mid-preflight gives died-mid-run reason=wrapper-signal-15, exit 1, no argc, and on_wrapper_signal's own immediate KILL of the bounded child ends the hung harness-stop.sh stub"
-  "codex-ghbound-env|case_codex_ghbound_env|#443: a local stop file set; (a) no TBF_CODEX_GH_TIMEOUT override -> skipped-stop reason=stop, well under 60s, proving the 120s default validates and bounded_run returns once its child exits; (b) =abc -> preflight-failed bad-timeout, tracking=created under the 120 fallback, gh.out removed after that ordinary capture call; (c) =0 -> the same bad-timeout, tracking=repeat against (b)'s own state; (d) =08 -> the same bad-timeout, no argc — a leading zero is rejected before it can reach bash's own arithmetic"
+  "codex-ghbound-env|case_codex_ghbound_env|#443: a local stop file set; (a) no TBF_CODEX_GH_TIMEOUT override -> skipped-stop reason=stop, proving the 120s default validates and bounded_run returns once its child exits, never waiting out the default under a 15s SCHED_DEADLINE (#463); (b) =abc -> preflight-failed bad-timeout, tracking=created under the 120 fallback, gh.out removed after that ordinary capture call; (c) =0 -> the same bad-timeout, tracking=repeat against (b)'s own state; (d) =08 -> the same bad-timeout, no argc — a leading zero is rejected before it can reach bash's own arithmetic"
   "codex-path-relative|case_codex_path_relative|#444: PATH=tools alone leaves no safe entry -> exit 2, no runs directory; a sibling ../<name>-reltools entry is refused only by the relative-spelling arm; a leading empty PATH entry with a trap in the repo itself (the cwd) is refused outright rather than treated as \".\"; a trailing and a doubled empty entry are refused the same way; tracking still runs after the refusal; a relative entry with a space is named %q-quoted and unsafe-path wins over bad-timeout"
   "codex-path-repo|case_codex_path_repo|#444: an entry at the repo toplevel, its case-variant spelling (filesystem permitting), a symlink from outside pointing at it, and the same path run from a subdirectory (proving the work-tree root is discovered upward) are all refused -> preflight-failed reason=unsafe-path, exit 1, codex never launched"
   "codex-path-common-dir|case_codex_path_common_dir|#444: a git worktree add sibling shares the main checkout's git common dir but has its own toplevel; a trap planted under the main checkout's .git sits outside the worktree's toplevel but inside the shared common dir -> refused anyway (the git-directory identity check, not the toplevel check, catches it), preflight-failed reason=unsafe-path, exit 1"
@@ -6983,6 +7146,7 @@ for row in "${cases[@]}"; do
   fn="${rest%%|*}"
   desc="${rest#*|}"
   __ok=1; __why=""
+  sched_overran=false
   # mutant:383-fn-doctor — renames a cases=() row's target function in a scratch copy of this
   #   suite; this declare -F guard must report that row FAIL naming the missing function, instead
   #   of a silent PASS the row would otherwise get by falling through with $__ok unchanged.
