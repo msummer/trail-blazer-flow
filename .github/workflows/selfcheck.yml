@@ -17,11 +17,11 @@ permissions:
 jobs:
   selfcheck:
     runs-on: ubuntu-latest
-    # ADVISORY Q1 (#359): the driver step below is gated off pull requests (see that step's own
-    # `if:`), so the per-PR ceiling stays exactly 10; only the post-merge/nightly/dispatch ceiling
-    # rises, to hold the full registry's driver run on top of the other commands, with headroom for
-    # the registry to keep growing.
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 10 || 35 }}
+    # The driver step below is gated off pull requests (see that step's own `if:`), so the per-PR
+    # ceiling (15, #477) covers only the other nine commands; the post-merge/nightly/dispatch
+    # ceiling also holds the full registry's driver run on top of them, with headroom for the
+    # registry to keep growing (#359).
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 15 || 35 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Full history (#464): the driver step below diffs github.event.before..HEAD to select
