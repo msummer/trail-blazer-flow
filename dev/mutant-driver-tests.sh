@@ -300,6 +300,95 @@ EOF
   chmod +x "$dir/dev/flaky-suite.sh"
 }
 
+# write_pool_fixture DIR MARKDIR — a target (lib.sh, executable) with three independent tags and a
+# suite (dev/pool-suite.sh) whose three cases prove the rolling pool refills a freed slot instead of
+# waiting for every running job to finish:
+#   case-a:    passes iff TAG_A reads "on".
+#   case-b:    if TAG_B reads "mark", touches MARKDIR/b-started and FAILs; if it reads "on", PASSes.
+#   case-slow: if TAG_SLOW reads "on", PASSes at once. If it reads "wait", polls for
+#              MARKDIR/b-started in 0.1s slices for about 15s: FAILs if the marker appears (proving
+#              case-b's mutant ran concurrently, while this case was still waiting), PASSes on
+#              timeout (the barrier-wave regression path — see case_pool_refill).
+# MARKDIR is an absolute path baked into the suite text at write time (the same unquoted-heredoc
+# idiom case_suite_runs_from_copy's own decoy uses for its sentinel path); every other "$" the suite
+# itself needs is backslash-escaped so it survives to be the SUITE's own variable, not expanded now.
+write_pool_fixture() {
+  local dir="$1" markdir="$2"
+  cat > "$dir/lib.sh" <<'EOF'
+#!/usr/bin/env bash
+TAG_SLOW="on"
+TAG_A="on"
+TAG_B="on"
+EOF
+  chmod +x "$dir/lib.sh"
+  mkdir -p "$dir/dev"
+  cat > "$dir/dev/pool-suite.sh" <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+froot="\$(cd "\$(dirname "\$0")/.." && pwd)"
+filter="\${1:-}"
+markdir="$markdir"
+pass=0; fail=0
+case_ok()  { echo "  PASS  \$1 — \$2"; pass=\$((pass+1)); }
+case_bad() { echo "  FAIL  \$1 — \$2"; fail=\$((fail+1)); }
+
+case "case-a" in
+  *"\$filter"*)
+    if grep -qF -- 'TAG_A="on"' "\$froot/lib.sh"; then
+      case_ok "case-a" "TAG_A reads on"
+    else
+      case_bad "case-a" "TAG_A does not read on"
+    fi
+    ;;
+esac
+
+case "case-b" in
+  *"\$filter"*)
+    if grep -qF -- 'TAG_B="mark"' "\$froot/lib.sh"; then
+      touch "\$markdir/b-started"
+      case_bad "case-b" "TAG_B is mark"
+    elif grep -qF -- 'TAG_B="on"' "\$froot/lib.sh"; then
+      case_ok "case-b" "TAG_B reads on"
+    else
+      case_bad "case-b" "TAG_B is neither on nor mark"
+    fi
+    ;;
+esac
+
+case "case-slow" in
+  *"\$filter"*)
+    if grep -qF -- 'TAG_SLOW="on"' "\$froot/lib.sh"; then
+      case_ok "case-slow" "TAG_SLOW reads on"
+    elif grep -qF -- 'TAG_SLOW="wait"' "\$froot/lib.sh"; then
+      waited=0
+      bstarted=0
+      while [ "\$waited" -lt 150 ]; do
+        if [ -e "\$markdir/b-started" ]; then
+          bstarted=1
+          break
+        fi
+        sleep 0.1
+        waited=\$((waited+1))
+      done
+      if [ "\$bstarted" -eq 1 ]; then
+        case_bad "case-slow" "b started while slow still running"
+      else
+        case_ok "case-slow" "b never started while slow was waiting"
+      fi
+    else
+      case_bad "case-slow" "TAG_SLOW is neither on nor wait"
+    fi
+    ;;
+esac
+
+echo
+echo "== summary: \$pass pass, \$fail fail =="
+if [ "\$fail" -gt 0 ]; then exit 1; fi
+exit 0
+EOF
+  chmod +x "$dir/dev/pool-suite.sh"
+}
+
 # write_registry DIR JSON — writes JSON (via stdin) as the fixture's one registry file, pointed at
 # by MUTANT_DRIVER_REGISTRY_DIR in run_driver below.
 write_registry() {
@@ -601,9 +690,9 @@ EOF
 }
 
 # mutant:drv-order — recorded in dev/mutants/mutant-driver-tests.json; run
-# bash dev/mutant-driver.sh. Rewrites the driver's own flush_wave to collect results by completion
-# (mtime) order instead of declared order, so a slow: FAULT-delayed first-declared mutant would
-# print out of sequence.
+# bash dev/mutant-driver.sh. Makes the driver's own reap_slots print each job (via collect_job) the
+# moment IT is reaped — completion order — instead of leaving printing to print_ready's own
+# declared-order walk, so a slow: FAULT-delayed first-declared mutant would print out of sequence.
 case_declared_order() {
   local dir; dir="$(fresh_driver_root declared-order)"
   write_generic_fixture "$dir"
@@ -627,6 +716,82 @@ EOF
     __ok=0
     __why="${__why}declared-order sequence: expected '$expected_seq', got '$seq'\n"
   fi
+}
+
+# mutant:drv-barrier — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh. Inserts a guard as fill_slots' own first statement that refuses to
+# launch anything while any job is still running — barrier-wave behavior — so a slot freed by a
+# finished job sits idle instead of being refilled right away.
+case_pool_refill() {
+  local dir; dir="$(fresh_driver_root pool-refill)"
+  local markdir; markdir="$(mktemp -d "$tmpbase/pool-mark-XXXXXX")"
+  write_pool_fixture "$dir" "$markdir"
+  write_registry "$dir" <<'EOF'
+{"mutants":[
+  {"name":"m-slow","target":"lib.sh","suite":"dev/pool-suite.sh","filter":"",
+   "edits":[{"from":"TAG_SLOW=\"on\"","to":"TAG_SLOW=\"wait\""}],
+   "expect_fail":["case-slow"]},
+  {"name":"m-a","target":"lib.sh","suite":"dev/pool-suite.sh","filter":"",
+   "edits":[{"from":"TAG_A=\"on\"","to":"TAG_A=\"off\""}],
+   "expect_fail":["case-a"]},
+  {"name":"m-b","target":"lib.sh","suite":"dev/pool-suite.sh","filter":"",
+   "edits":[{"from":"TAG_B=\"on\"","to":"TAG_B=\"mark\""}],
+   "expect_fail":["case-b"]}
+]}
+EOF
+  run_driver "$dir" -j 2
+  expect_rc 0
+  expect_out "PASS m-slow 3 case-slow"
+  expect_out "PASS m-a 3 case-a"
+  expect_out "PASS m-b 3 case-b"
+}
+
+# mutant:drv-nodep — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh. Replaces the driver's own job_ready dependency-state test with an
+# unconditional true, so a mutant could launch — and read its own .basestatus — before its own
+# baseline job has actually finished.
+case_baseline_gates_dependents() {
+  local dir; dir="$(fresh_driver_root baseline-gates-dependents)"
+  write_generic_fixture "$dir"
+  write_registry "$dir" <<'EOF'
+{"mutants":[
+  {"name":"m-beta","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TAG_BETA=\"on\"","to":"TAG_BETA=\"off\""}],
+   "expect_fail":["case-beta"]}
+]}
+EOF
+  driver_out="$(MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" MUTANT_DRIVER_FAULT="slow:baseline:dev/fixture-suite.sh:" bash "$dir/dev/mutant-driver.sh" -j 2 2>&1)"
+  driver_rc=$?
+  expect_rc 0
+  expect_out "PASS baseline:dev/fixture-suite.sh: 3 -"
+  expect_out "PASS m-beta 3 case-beta"
+  expect_not_out "reason baseline-red"
+}
+
+# mutant:drv-basefallback — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh. Changes the driver's own basestatus_for fail-closed fallback from "red"
+# to "clean", so a baseline that died before ever writing its own .basestatus would let its
+# dependent mutant run as though the baseline had been proven clean. (Also killed by drv-noverdict:
+# with a dead baseline counted as a silent pass, its own FAIL/no-verdict line disappears from this
+# case's expected output too.)
+case_baseline_dies() {
+  local dir; dir="$(fresh_driver_root baseline-dies)"
+  write_generic_fixture "$dir"
+  write_registry "$dir" <<'EOF'
+{"mutants":[
+  {"name":"m-beta","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TAG_BETA=\"on\"","to":"TAG_BETA=\"off\""}],
+   "expect_fail":["case-beta"]}
+]}
+EOF
+  driver_out="$(MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" MUTANT_DRIVER_FAULT="die:baseline:dev/fixture-suite.sh:" bash "$dir/dev/mutant-driver.sh" -j 2 2>&1)"
+  driver_rc=$?
+  expect_rc 1
+  expect_out "FAIL baseline:dev/fixture-suite.sh: - -"
+  expect_out "    reason no-verdict"
+  expect_out "FAIL m-beta - -"
+  expect_out "    reason baseline-red"
+  expect_out "== summary: 0 pass, 2 fail =="
 }
 
 case_baseline_red() {
@@ -1232,7 +1397,10 @@ cases=(
   "tracked-tree-untouched|case_tracked_tree_untouched|a byte-identical find listing of the fixture tree before and after a driver run"
   "suite-runs-from-copy|case_suite_runs_from_copy|a same-named decoy earlier on PATH is never invoked; the copy's own suite runs by full path"
   "child-dies|case_child_dies|MUTANT_DRIVER_FAULT=die:<name>: a dead child is reported as FAIL ... reason no-verdict (kills drv-noverdict)"
-  "declared-order|case_declared_order|MUTANT_DRIVER_FAULT=slow:<name> delays the first-declared mutant past its wave-mate: output order is unaffected (kills drv-order)"
+  "declared-order|case_declared_order|MUTANT_DRIVER_FAULT=slow:<name> delays the first-declared mutant past a later-declared mutant running beside it: output order is unaffected (kills drv-order)"
+  "pool-refill|case_pool_refill|a slow job's freed slot is refilled by a later-declared job instead of waiting for the whole batch to drain, proven by a marker-file overlap, not a clock (kills drv-barrier)"
+  "baseline-gates-dependents|case_baseline_gates_dependents|a mutant never reads its own .basestatus before its baseline job has finished, even while other baselines/mutants keep running (kills drv-nodep)"
+  "baseline-dies|case_baseline_dies|a dead baseline reports FAIL ... reason no-verdict, and its dependent mutant fails closed with reason baseline-red, with no deadlock (kills drv-basefallback)"
   "baseline-red|case_baseline_red|a suite with an unconditionally failing case makes its own baseline red, and short-circuits its dependent mutant to reason baseline-red"
   "unknown-case|case_unknown_case|an expect_fail name the suite never ran: FAIL reason unknown-case:<name>"
   "unknown-case-prefix|case_unknown_case_prefix|an expect_fail name that is a strict prefix of a real case name: FAIL reason unknown-case:<name>, not a set mismatch (kills drv-unknownexact)"
