@@ -15,7 +15,7 @@
 │   └── marketplace.json          # this repo doubles as its own marketplace
 ├── agents/
 │   ├── planner.md                # read-only planning subagent (Opus 5.5)
-│   ├── implementer.md            # code-writing subagent (Sonnet 5); no git/gh, mechanically enforced (hooks/agent-boundary.sh)
+│   ├── implementer.md            # code-writing subagent (Sonnet 5.5); no git/gh, mechanically enforced (hooks/agent-boundary.sh)
 │   └── verifier.md               # plan-conformance reviewer (Opus 5.5); fresh context; restores anything it mutates; read-only git only, no gh, mechanically enforced
 ├── skills/
 │   ├── project-kickoff/SKILL.md  # greenfield on-ramp: interview → brief + CLAUDE.md + repo + backlog
@@ -88,7 +88,7 @@ Three capability tiers, each placed where it pays:
 |------|-------|-----|
 | **Orchestrator** (the main session) | most capable available | judgment calls: proposing answers to open questions, verifying premises with measurements, reconciling staged files vs. reports, deciding when something is a blocker |
 | **planner** subagent | Opus 5.5 | codebase research and design; one dispatch per issue, read-only |
-| **implementer** subagent | Sonnet 5 | execution of a fully-resolved plan; cheap enough to run often (and in parallel) |
+| **implementer** subagent | Sonnet 5.5 | execution of a fully-resolved plan; cheap enough to run often (and in parallel) |
 | **verifier** subagent | Opus 5.5 | adversarial plan-conformance review of the diff with fresh context — the generator/critic split; judgment-heavy, so it gets the stronger model |
 
 Two consequences are baked into the skills:
@@ -105,7 +105,7 @@ Two consequences are baked into the skills:
 
 This repo **is the plugin and its own marketplace** (`.claude-plugin/plugin.json` +
 `marketplace.json`): skills + agents versioned together, installable per-project, with the
-agent model pins (`planner: claude-opus-5-5`, `implementer: claude-sonnet-5`, `verifier: claude-opus-5-5`) travelling with
+agent model pins (`planner: claude-opus-5-5`, `implementer: claude-sonnet-5-5`, `verifier: claude-opus-5-5`) travelling with
 the plugin. Install/update flow is in the README's [Getting started](../../README.md#getting-started)
 and [Updating](../../README.md#updating).
 
