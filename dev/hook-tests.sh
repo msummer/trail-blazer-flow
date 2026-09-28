@@ -164,18 +164,23 @@ wait_deadline() {
 
 # _ms_from_timeformat STR (#470) — pure parser for one bash `time`-keyword TIMEFORMAT=%3R report
 # line (e.g. "0.089", "12.000", or a comma-locale "0,089"): accepts only the shape
-# <digits><.|,><exactly 3 digits> via a `case` pattern, splits on the separator, then evaluates the
-# joined digits under a `10#` base-10 prefix so a leading zero in the sub-second half is never
+# <digits><.|,><exactly 3 digits> — a `case` pattern pins the separator and the three sub-second
+# digits, and a second `case` rejects a whole-seconds half that is empty or holds any non-digit —
+# splits on the separator, then evaluates the joined digits under a `10#` base-10 prefix so a leading zero in the sub-second half is never
 # misread as octal ($((0089)) errors in plain bash arithmetic). The evaluation runs inside a
 # command substitution specifically so that a malformed base-10 value (e.g. under the mutant below,
 # which drops the `10#` prefix) fails as a contained, empty result in THIS function alone, instead
 # of a fatal arithmetic-expansion error unwinding bash's own jump_to_top_level all the way out of
 # the case dispatch loop that calls this — verified directly against this exact shape (#470). Sets
-# $parsed_ms, or "" when STR doesn't match the shape or the arithmetic itself failed. Builtins
+# $parsed_ms, or "" when STR doesn't match the shape or the arithmetic itself failed (the group's
+# own 2>/dev/null keeps that failure's diagnostic off the suite's stderr). Builtins
 # only — no grep, no pipe into a reader.
 # mutant:470-hook-ms-octal — the `10#` prefix dropped from the arithmetic: a leading-zero
 #   sub-second value like "0.089" then evaluates as invalid octal instead of decimal 89, caught by
 #   case_deadline_calibrate's own 0.089 assertion.
+# mutant:470-hook-ms-shape — the whole-seconds digit check deleted: a report like "1+2.345" then
+#   evaluates as arithmetic instead of coming back empty, caught by case_deadline_calibrate's own
+#   1+2.345 assertion.
 parsed_ms=""
 _ms_from_timeformat() {
   local str="$1" whole sub
@@ -184,7 +189,8 @@ _ms_from_timeformat() {
     [0-9]*,[0-9][0-9][0-9]) whole="${str%,*}"; sub="${str##*,}" ;;
     *) parsed_ms=""; return ;;
   esac
-  parsed_ms="$(echo $((10#${whole}${sub})) 2>/dev/null)"
+  case "$whole" in ''|*[!0-9]*) parsed_ms=""; return ;; esac
+  parsed_ms="$({ echo $((10#${whole}${sub})); } 2>/dev/null)"
 }
 
 # measure_ms CMD [ARGS...] (#470) — runs CMD in the CURRENT shell (never a subshell or command
@@ -340,6 +346,9 @@ case_deadline_calibrate() {
 
   _ms_from_timeformat ""
   [ -z "$parsed_ms" ] || { __ok=0; __why="${__why}_ms_from_timeformat '': expected empty, got '$parsed_ms'\n"; }
+
+  _ms_from_timeformat "1+2.345"
+  [ -z "$parsed_ms" ] || { __ok=0; __why="${__why}_ms_from_timeformat '1+2.345': expected empty, got '$parsed_ms'\n"; }
 
   measure_ms sleep 0.3
   if [ -z "$measured_ms" ]; then

@@ -3429,8 +3429,8 @@
       "filter": "deadline-calibrate",
       "edits": [
         {
-          "from": "  parsed_ms=\"$(echo $((10#${whole}${sub})) 2>/dev/null)\"",
-          "to": "  parsed_ms=\"$(echo $((${whole}${sub})) 2>/dev/null)\""
+          "from": "  parsed_ms=\"$({ echo $((10#${whole}${sub})); } 2>/dev/null)\"",
+          "to": "  parsed_ms=\"$({ echo $((${whole}${sub})); } 2>/dev/null)\""
         }
       ],
       "expect_fail": [
@@ -3446,6 +3446,21 @@
         {
           "from": "  secs=$(( (k * ms + 999) / 1000 ))",
           "to": "  secs=$(( (k * ms) / 1000 ))"
+        }
+      ],
+      "expect_fail": [
+        "deadline-calibrate"
+      ]
+    },
+    {
+      "name": "470-hook-ms-shape",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "deadline-calibrate",
+      "edits": [
+        {
+          "from": "  case \"$whole\" in ''|*[!0-9]*) parsed_ms=\"\"; return ;; esac\n",
+          "to": ""
         }
       ],
       "expect_fail": [
