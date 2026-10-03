@@ -804,6 +804,12 @@ working tree being edited.
 
 ### Releasing a new version
 
+Each release is planned as a GitHub milestone named after its version (`vX.Y.Z`). Assigning an
+issue to the milestone schedules it for that release. The milestone's description records the
+order and the triage decision. Before tagging, every issue in the milestone must be closed or
+moved to a later milestone. The harness's own skills select work by label, never by milestone,
+so a milestone is a planning record for the maintainer, not a work queue.
+
 The plugin uses semantic versioning (the `version` field in `.claude-plugin/plugin.json`):
 
 ```bash
@@ -813,7 +819,13 @@ git commit -am "Release vX.Y.Z: <summary>"
 git tag -a vX.Y.Z -m "trail-blazer-flow vX.Y.Z"   # match the version field exactly
 git push origin main
 git push origin vX.Y.Z
+# 3. close the release's milestone (<number> is the last segment of its URL)
+gh api -X PATCH 'repos/{owner}/{repo}/milestones/<number>' -f state=closed
 ```
+
+Publishing a GitHub Release from the tag is optional. To publish one, run
+`gh release create vX.Y.Z --verify-tag --notes-file <file>`, with the CHANGELOG section as the
+notes.
 
 `hooks/push-guard.sh` denies the `git push origin main` step from inside a Claude Code session with
 the plugin enabled. Run the ritual from a plain terminal, or ship the release through a

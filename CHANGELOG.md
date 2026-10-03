@@ -16,6 +16,11 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #487: releases are planned as `vX.Y.Z` GitHub milestones instead of `rel-XYZ` labels; the
+  release ritual closes the milestone after the tag push. Maintainer-only; no consumer step.
+
 ## v3.2.0
 
 This release moves the implementer agent to Sonnet 5.5 and makes the harness's own CI faster and
