@@ -317,9 +317,10 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   is present and declares an uncommented `package-ecosystem: "github-actions"` update with an
   `interval:` line — not that Dependabot actually opens a PR, and not that a bump rewrites the
   trailing tag comment.
-- Release ritual: bump `version` in `.claude-plugin/plugin.json`, create the matching `vX.Y.Z`
-  annotated tag, and retitle `CHANGELOG.md`'s `## Unreleased` heading to `## vX.Y.Z`, all in the
-  same commit — see the README's "Releasing a new version".
+- Release ritual: a release is planned as a `vX.Y.Z` GitHub milestone, not a label. At release
+  time, bump `version` in `.claude-plugin/plugin.json`, create the matching `vX.Y.Z` annotated
+  tag, and retitle `CHANGELOG.md`'s `## Unreleased` heading to `## vX.Y.Z`, all in the same
+  commit. Then close the milestone — see the README's "Releasing a new version".
 - **Fixture comment urls in `dev/planning-tests.sh` use GitHub's real shape**,
   `https://example.invalid/<issue>#issuecomment-<id>`, never the invented `...#c<n>` form —
   a future URL-parsing change could otherwise pass the whole fixture suite against a shape no
