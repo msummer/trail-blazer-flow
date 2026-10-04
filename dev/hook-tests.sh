@@ -3068,6 +3068,370 @@ case_px_noop_export_unrelated() {
   expect_push_no_opinion
 }
 
+# --- Codex shell workdir (#494): a push run through a Codex shell tool's own `workdir` ----------
+# A Codex PreToolUse payload never carries the shell tool's `workdir` (ADR 0002 U9), so a Codex-
+# shaped payload (non-empty turn_id) whose push would otherwise get no opinion is judged against
+# EVERY model tool-call record in the last PUSH_TRANSCRIPT_TAIL_BYTES of the rollout file its
+# transcript_path names, completed or not (a code-mode cell can yield its output record and keep
+# running): every occurrence of a workdir key must be a plain string literal lexically equal to the
+# session checkout, or null; anything else, a line in the window that does not parse but mentions a
+# key, an unparseable first line of at least half the window, an unreadable transcript, or a
+# window with no call record at all, denies. Rollout records are built by the wd_rec_* helpers below
+# (the real Codex 0.156.1 shapes: a response_item whose payload is a custom_tool_call carrying
+# code-mode JS in `input`, a function_call carrying a JSON string in `arguments`, or a
+# local_shell_call carrying an `action`; each usually followed by a *_output record bearing the same
+# call_id, which proves nothing about whether the call is still running). Mutation proof lives in
+# dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "push-wd-" unless noted).
+# mutant:494-pg-wd-gate — the Codex gate (a non-empty turn_id) never fires, so no Codex push is
+#   ever judged against its transcript.
+# mutant:494-pg-wd-gate-claude — the gate always fires, so a Claude-shaped payload (no turn_id) is
+#   judged against a transcript too.
+# mutant:494-pg-wd-missing — a missing transcript leaves no deny reason.
+# mutant:494-pg-wd-not-regular — drops the regular-file test, so a directory named as the transcript
+#   is read like a file and denies with the wrong reason.
+# mutant:494-pg-wd-unreadable — drops the readable-file test, so an unreadable transcript denies
+#   with the wrong reason.
+# mutant:494-pg-wd-no-call — a window holding no tool-call record leaves no deny reason.
+# mutant:494-pg-wd-no-pending-filter — re-introduces the completed-call filter, so a call whose
+#   *_output record exists is no longer scanned (a yielded cell's workdir is then never seen).
+# mutant:494-pg-wd-literal-tail — drops the requirement that a string literal be followed by a
+#   comma or closing brace, so a literal continued by a concatenation reads as a plain literal.
+# mutant:494-pg-wd-null-terminator — drops the comma-or-brace requirement after `null`, so an
+#   identifier that merely starts with null reads as no workdir.
+# mutant:494-pg-wd-session-compare — skips the lexical session-equivalence test, so every plain
+#   literal is allowed.
+# mutant:494-pg-wd-null-arm — removes the null arm, so an explicit null workdir is not recognised
+#   as no workdir.
+# mutant:494-pg-wd-undefined-bad — accepts `undefined` as no workdir, though JS lets that identifier
+#   be shadowed.
+# mutant:494-pg-wd-working-directory — removes working_directory from the key list, so a
+#   local_shell_call action's working_directory is never scanned.
+# mutant:494-pg-wd-bad-allow — a line the classifier marked BAD no longer sets a deny reason.
+# mutant:494-pg-wd-every-occurrence — scans only the first occurrence of a workdir key in a call's
+#   text, so a second, foreign occurrence is never seen.
+# mutant:494-pg-wd-fragment-key-bad — an unparseable line that mentions a workdir key no longer
+#   counts as a non-literal workdir.
+# mutant:494-pg-wd-edge — the unparseable-first-line limit never fires, so a record larger than the
+#   window is silently dropped.
+# mutant:494-pg-wd-edge-fraction — the unparseable-first-line limit drops to zero, so any
+#   unparseable first line denies.
+# mutant:494-pg-wd-flatten — stops flattening a newline inside the text after a workdir key, so
+#   a literal followed by a newline reads as a stray extra line.
+# mutant:494-pg-wd-precedence — lets the workdir block run even after an earlier reason was set,
+#   so it overwrites that reason (filter -deny-codex-main-session).
+
+# wd_rec_custom ID INPUT -- one rollout line: a code-mode custom_tool_call record (the U9 shape).
+# An empty ID omits call_id entirely.
+wd_rec_custom() {
+  jq -nc --arg id "$1" --arg input "$2" '
+    {timestamp: "2026-10-04T16:25:05.861Z", type: "response_item",
+     payload: ({type: "custom_tool_call", status: "completed", name: "exec", input: $input}
+               + (if $id != "" then {call_id: $id} else {} end))}'
+}
+# wd_rec_custom_file ID FILE -- the same record with its `input` read from FILE (an input too large
+# for an argv word, which a Linux kernel caps per argument).
+wd_rec_custom_file() {
+  jq -nc --arg id "$1" --rawfile input "$2" '
+    {timestamp: "2026-10-04T16:25:05.861Z", type: "response_item",
+     payload: ({type: "custom_tool_call", status: "completed", name: "exec", input: $input}
+               + (if $id != "" then {call_id: $id} else {} end))}'
+}
+# wd_rec_function ID ARGS [NAME] -- a function_call record whose `arguments` is a JSON string.
+wd_rec_function() {
+  jq -nc --arg id "$1" --arg args "$2" --arg name "${3:-exec_command}" '
+    {timestamp: "2026-10-04T16:25:05.861Z", type: "response_item",
+     payload: ({type: "function_call", name: $name, arguments: $args}
+               + (if $id != "" then {call_id: $id} else {} end))}'
+}
+# wd_rec_local_shell ID WD -- a local_shell_call record whose action carries working_directory WD.
+wd_rec_local_shell() {
+  jq -nc --arg id "$1" --arg wd "$2" '
+    {timestamp: "2026-10-04T16:25:05.861Z", type: "response_item",
+     payload: ({type: "local_shell_call", status: "completed",
+                action: {type: "exec", command: ["git", "push"], working_directory: $wd}}
+               + (if $id != "" then {call_id: $id} else {} end))}'
+}
+# wd_rec_output TYPE ID [TEXT] -- the answering *_output record; an empty ID omits call_id entirely.
+wd_rec_output() {
+  jq -nc --arg type "$1" --arg id "$2" --arg text "${3:-done}" '
+    {timestamp: "2026-10-04T16:25:06.024Z", type: "response_item",
+     payload: ({type: $type, output: [{type: "input_text", text: $text}]}
+               + (if $id != "" then {call_id: $id} else {} end))}'
+}
+wd_rec_noise() { printf '%s\n' '{"timestamp":"2026-10-04T16:25:06.025Z","type":"event_msg","payload":{"type":"token_count"}}'; }
+# mk_wd_rollout FILE LINE... -- writes one JSONL line per argument.
+mk_wd_rollout() { local f="$1"; shift; printf '%s\n' "$@" > "$f"; }
+# wd_js FRAG -- code-mode JS for one exec_command call; FRAG (empty, or a leading-comma property
+# such as ,workdir:"/x") is spliced in after cmd. The closing brace sits on its own line, so a
+# literal is followed by a newline before its brace.
+wd_js() { printf 'const r = await tools.exec_command({\n  cmd:"git push origin claude/17-a"%s\n}); text(r.output);\n' "$1"; }
+# wd_setup NAME -- builds the session repo (default main, current claude/17-a) and the other
+# repo (default trunk), and names the rollout; sets wd_s, wd_o, wd_r.
+wd_setup() {
+  wd_s="$tmpbase/repo-wd-$1"
+  wd_o="$tmpbase/other-wd-$1"
+  wd_r="$tmpbase/rollout-wd-$1.jsonl"
+  mk_fixture_repo "$wd_s" main "claude/17-a"
+  mk_fixture_repo "$wd_o" trunk "feature/x"
+}
+# wd_run [CMD] -- runs the hook on a Codex-shaped payload against the session repo and rollout.
+wd_run() { run_push_guard "$(mk_codex_shell '' "${1:-git push origin claude/17-a}" "$wd_s" "$wd_r")" "${2:-$PATH}"; }
+# expect_wd_deny REASON -- the standard deny plus the family phrase and the exact fixed reason.
+expect_wd_deny() {
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'cannot resolve which repository': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"($1)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing reason '($1)': '$push_err'\n" ;;
+  esac
+}
+
+case_wd_allow_no_workdir() {
+  wd_setup allow-none
+  mk_wd_rollout "$wd_r" "$(wd_rec_custom c1 "$(wd_js '')")"
+  wd_run
+  expect_push_no_opinion
+}
+case_wd_allow_literal_session() {
+  wd_setup allow-lit
+  mk_wd_rollout "$wd_r" \
+    "$(wd_rec_custom c1 "$(wd_js ",workdir:\"$wd_s\"")")"
+  wd_run
+  expect_push_no_opinion
+}
+case_wd_allow_literal_dot() {
+  wd_setup allow-dot
+  mk_wd_rollout "$wd_r" "$(wd_rec_custom c1 "$(wd_js ',workdir:"."')")"
+  wd_run
+  expect_push_no_opinion
+}
+case_wd_allow_function_call_dot() {
+  wd_setup allow-fn-dot
+  mk_wd_rollout "$wd_r" "$(wd_rec_function c1 '{"cmd":"git push origin claude/17-a","workdir":"."}')"
+  wd_run
+  expect_push_no_opinion
+}
+case_wd_allow_function_call_null() {
+  wd_setup allow-fn-null
+  mk_wd_rollout "$wd_r" "$(wd_rec_function c1 '{"cmd":"git push origin claude/17-a","workdir":null}')"
+  wd_run
+  expect_push_no_opinion
+}
+case_wd_allow_short_fragment() {
+  # Control for the window-edge limit: an unparseable first line that mentions no workdir key and is
+  # far shorter than half the window (a record cut by the window start, in practice) is skipped.
+  wd_setup allow-short-frag
+  mk_wd_rollout "$wd_r" \
+    'ol_call","status":"completed","name":"exec"}}' \
+    "$(wd_rec_custom c1 "$(wd_js '')")"
+  wd_run
+  expect_push_no_opinion
+}
+case_wd_deny_completed_foreign() {
+  # A call whose *_output record exists is still scanned (a code-mode cell can yield its output and
+  # keep running): the earlier call names another checkout, the later one carries no workdir.
+  wd_setup deny-done
+  mk_wd_rollout "$wd_r" \
+    "$(wd_rec_custom c1 "$(wd_js ",workdir:\"$wd_o\"")")" \
+    "$(wd_rec_output custom_tool_call_output c1)" \
+    "$(wd_rec_noise)" \
+    "$(wd_rec_custom c2 "$(wd_js '')")"
+  wd_run
+  expect_wd_deny "Codex shell workdir names another directory"
+}
+case_wd_deny_yielded_cell() {
+  # The yielded-cell shape: an exec cell whose output record says it is still running, carrying the
+  # U9 push with a foreign workdir, then a pending `wait` call with no workdir at all.
+  wd_setup deny-yield
+  local wait_args='{"cell_id":"42","yield_time_ms":10000}'
+  mk_wd_rollout "$wd_r" \
+    "$(wd_rec_custom c1 "$(wd_js ",workdir:\"$wd_o\"")")" \
+    "$(wd_rec_output custom_tool_call_output c1 'Script running with cell ID 42')" \
+    "$(wd_rec_function c2 "$wait_args" wait)"
+  wd_run 'git push origin HEAD:trunk'
+  expect_wd_deny "Codex shell workdir names another directory"
+}
+case_wd_deny_other_checkout() {
+  # The U9 reproduction: command HEAD:trunk (trunk is not the session's own default branch, so
+  # nothing earlier in the hook denies), the code-mode call names another checkout.
+  wd_setup deny-other
+  mk_wd_rollout "$wd_r" \
+    "$(wd_rec_custom c1 "$(wd_js '')")" \
+    "$(wd_rec_output custom_tool_call_output c1)" \
+    "$(wd_rec_noise)" \
+    "$(wd_rec_custom c2 "$(wd_js ",workdir:\"$wd_o\"")")"
+  wd_run 'git push origin HEAD:trunk'
+  expect_wd_deny "Codex shell workdir names another directory"
+}
+case_wd_deny_computed() {
+  wd_setup deny-computed
+  mk_wd_rollout "$wd_r" "$(wd_rec_custom c1 "const d = \"$wd_s\"; $(wd_js ',workdir: d')")"
+  wd_run
+  expect_wd_deny "Codex shell workdir is not a plain string literal"
+}
+case_wd_deny_null_ident() {
+  # An identifier that merely starts with null is not the null literal.
+  wd_setup deny-nullident
+  mk_wd_rollout "$wd_r" "$(wd_rec_custom c1 "const nullDir = \"$wd_o\"; $(wd_js ',workdir: nullDir')")"
+  wd_run
+  expect_wd_deny "Codex shell workdir is not a plain string literal"
+}
+case_wd_deny_undefined() {
+  # `undefined` is not accepted as no workdir: JS lets that identifier be shadowed.
+  wd_setup deny-undef
+  mk_wd_rollout "$wd_r" "$(wd_rec_custom c1 "$(wd_js ',workdir: undefined')")"
+  wd_run
+  expect_wd_deny "Codex shell workdir is not a plain string literal"
+}
+case_wd_deny_undefined_shadowed() {
+  wd_setup deny-undef-shadow
+  mk_wd_rollout "$wd_r" "$(wd_rec_custom c1 "const undefined = \"$wd_o\"; $(wd_js ',workdir: undefined')")"
+  wd_run 'git push origin HEAD:trunk'
+  expect_wd_deny "Codex shell workdir is not a plain string literal"
+}
+case_wd_deny_concat() {
+  wd_setup deny-concat
+  mk_wd_rollout "$wd_r" "$(wd_rec_custom c1 "$(wd_js ",workdir:\"$wd_s\" + \"/sub\"")")"
+  wd_run
+  expect_wd_deny "Codex shell workdir is not a plain string literal"
+}
+case_wd_deny_duplicate_key() {
+  # Every occurrence is judged, not only the first: the first names the session, the second another
+  # checkout.
+  wd_setup deny-dupkey
+  mk_wd_rollout "$wd_r" "$(wd_rec_custom c1 "$(wd_js ",workdir:\"$wd_s\",workdir:\"$wd_o\"")")"
+  wd_run
+  expect_wd_deny "Codex shell workdir names another directory"
+}
+case_wd_deny_function_call_other() {
+  wd_setup deny-fn-other
+  # The JSON arguments go through a variable: bash 3.2 brace-expands a `{a,b}` word written inside
+  # a nested double-quoted command substitution.
+  local args="{\"cmd\":\"git push origin claude/17-a\",\"workdir\":\"$wd_o\"}"
+  mk_wd_rollout "$wd_r" "$(wd_rec_function c1 "$args")"
+  wd_run
+  expect_wd_deny "Codex shell workdir names another directory"
+}
+case_wd_deny_local_shell_other() {
+  wd_setup deny-ls-other
+  mk_wd_rollout "$wd_r" "$(wd_rec_local_shell c1 "$wd_o")"
+  wd_run
+  expect_wd_deny "Codex shell workdir names another directory"
+}
+case_wd_deny_fragment_key() {
+  # A record cut by the window start leaves an unparseable first line; if it still mentions a
+  # workdir key it counts as a non-literal workdir, even with a clean call after it.
+  wd_setup deny-fragkey
+  local line
+  line="$(wd_rec_custom c1 "$(wd_js ",workdir:\"$wd_o\"")")"
+  mk_wd_rollout "$wd_r" "${line:140}" "$(wd_rec_custom c2 "$(wd_js '')")"
+  wd_run
+  expect_wd_deny "Codex shell workdir is not a plain string literal"
+}
+case_wd_deny_straddle() {
+  # A push record larger than the whole window (workdir at its start, then padding), followed by a
+  # small call with no workdir: the window holds only an unparseable fragment of the push record,
+  # at least half the window long, which must deny rather than be dropped.
+  wd_setup deny-straddle
+  local big="$tmpbase/wd-straddle-input.txt" bigrec="$tmpbase/wd-straddle-rec.jsonl"
+  {
+    wd_js ",workdir:\"$wd_o\""
+    printf '// '
+    head -c 1100000 /dev/zero | tr '\0' 'x'
+    printf '\n'
+  } > "$big"
+  wd_rec_custom_file c1 "$big" > "$bigrec"
+  { cat "$bigrec"; wd_rec_custom c2 "$(wd_js '')"; } > "$wd_r"
+  wd_run 'git push origin HEAD:trunk'
+  expect_wd_deny "Codex transcript record exceeds the hook's read window"
+}
+case_wd_deny_missing_transcript() {
+  # mk_codex_shell's default transcript_path names a file that is never created.
+  wd_setup deny-missing
+  run_push_guard "$(mk_codex_shell '' 'git push origin claude/17-a' "$wd_s")"
+  expect_wd_deny "Codex transcript missing or unreadable"
+}
+case_wd_deny_empty_transcript_path() {
+  wd_setup deny-emptypath
+  run_push_guard "$(mk_codex_shell '' 'git push origin claude/17-a' "$wd_s" | jq -c '.transcript_path = ""')"
+  expect_wd_deny "Codex transcript missing or unreadable"
+}
+case_wd_deny_transcript_directory() {
+  # A directory is not a regular file: it must deny as unreadable, not be read as an empty file.
+  wd_setup deny-dir
+  mkdir -p "$wd_r"
+  wd_run
+  expect_wd_deny "Codex transcript missing or unreadable"
+}
+case_wd_deny_transcript_unreadable() {
+  # A mode-000 rollout; under root it stays readable, so (like the include-permission fixtures
+  # above) the proof assumes a non-root runner and the assertions are skipped there.
+  wd_setup deny-noperm
+  mk_wd_rollout "$wd_r" "$(wd_rec_custom c1 "$(wd_js '')")"
+  chmod 000 "$wd_r"
+  wd_run
+  if [ ! -r "$wd_r" ]; then
+    expect_wd_deny "Codex transcript missing or unreadable"
+  fi
+  chmod 600 "$wd_r"
+}
+case_wd_deny_no_call() {
+  # No call record at all in the window: only an output record, a garbage line (no workdir key) and
+  # noise.
+  wd_setup deny-nocall
+  mk_wd_rollout "$wd_r" \
+    "$(wd_rec_output custom_tool_call_output c1)" \
+    'not json' \
+    "$(wd_rec_noise)"
+  wd_run
+  expect_wd_deny "no Codex tool call in its transcript"
+}
+case_wd_deny_never_executes() {
+  # Safety property on the new route: the U9-shape deny with a booby-trapped PATH -- sentinel
+  # absent, and the session repo, the other checkout and the rollout file all byte-identical
+  # before/after (the hook only reads them).
+  wd_setup never-exec
+  mk_wd_rollout "$wd_r" "$(wd_rec_custom c1 "$(wd_js ",workdir:\"$wd_o\"")")"
+  local trapdir="$tmpbase/trapbin-wd-never-exec" sentinel="$tmpbase/sentinel-wd-never-exec"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  local before_s after_s before_o after_o before_r after_r
+  before_s="$(find "$wd_s" -type f -exec ls -la {} \; | sort)"
+  before_o="$(find "$wd_o" -type f -exec ls -la {} \; | sort)"
+  before_r="$(ls -la "$wd_r"; cat "$wd_r")"
+  wd_run 'git push origin HEAD:trunk' "$trapdir:$PATH"
+  after_s="$(find "$wd_s" -type f -exec ls -la {} \; | sort)"
+  after_o="$(find "$wd_o" -type f -exec ls -la {} \; | sort)"
+  after_r="$(ls -la "$wd_r"; cat "$wd_r")"
+  expect_wd_deny "Codex shell workdir names another directory"
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH while denying a Codex workdir push\n"; }
+  [ "$before_s" = "$after_s" ] || { __ok=0; __why="${__why}session repo's file listing changed — push-guard.sh wrote to or altered a file it should only read\n"; }
+  [ "$before_o" = "$after_o" ] || { __ok=0; __why="${__why}other checkout's file listing changed — push-guard.sh wrote to or altered a file it should only read\n"; }
+  [ "$before_r" = "$after_r" ] || { __ok=0; __why="${__why}rollout file changed — push-guard.sh wrote to or altered a file it should only read\n"; }
+  case "$push_err" in
+    *"$wd_o"*|*"$wd_r"*|*claude/17-a*) __ok=0; __why="${__why}deny message echoed transcript or command content: '$push_err'\n" ;;
+  esac
+}
+case_wd_claude_unchanged() {
+  # A Claude-shaped payload has no turn_id, so a transcript_path naming a missing file changes
+  # nothing: the allowed push stays a no-opinion.
+  wd_setup claude
+  run_push_guard "$(jq -n --arg cwd "$wd_s" --arg tp "$tmpbase/claude-transcript-absent.jsonl" \
+    '{tool_name: "Bash", tool_input: {command: "git push origin claude/17-a"}, cwd: $cwd, transcript_path: $tp}')"
+  expect_push_no_opinion
+}
+
 # --- deny/no-opinion: #268 config-derived push routes (remote.<name>.push / push.default) -----
 # Unless stated, the fixture repo has default branch main, current branch feature/x, and the
 # command is a bare "git push" against an explicit cwd (see mk_fixture_config's ambient-$PWD
@@ -5207,15 +5571,18 @@ case_cdg_writes_nothing() {
 # agent_id for a subagent, neither for the main session (the same M1 shape every Claude-shaped
 # fixture above already exercises for its own hook).
 
-# mk_codex_shell AGENT CMD [CWD] -- a Codex Bash payload. CWD defaults to "/repo". AGENT ""
-# omits agent_type/agent_id entirely (the main-session shape); non-empty adds both.
+# mk_codex_shell AGENT CMD [CWD] [TRANSCRIPT] -- a Codex Bash payload. CWD defaults to "/repo".
+# AGENT "" omits agent_type/agent_id entirely (the main-session shape); non-empty adds both.
+# TRANSCRIPT is the transcript_path; it defaults to a file under $tmpbase that is never created
+# (since #494 push-guard reads the rollout a Codex payload names, so a fixture that wants the push
+# judged against a real rollout passes one, and every other fixture gets a path that is absent).
 mk_codex_shell() {
-  local agent="$1" cmd="$2" cwd="${3:-/repo}"
-  jq -n --arg agent "$agent" --arg cmd "$cmd" --arg cwd "$cwd" '
+  local agent="$1" cmd="$2" cwd="${3:-/repo}" transcript="${4:-$tmpbase/codex-transcript-absent.jsonl}"
+  jq -n --arg agent "$agent" --arg cmd "$cmd" --arg cwd "$cwd" --arg tp "$transcript" '
     {
       session_id: "codex-sess-1", turn_id: "codex-turn-1", cwd: $cwd,
       hook_event_name: "PreToolUse", model: "codex-x", permission_mode: "bypassPermissions",
-      tool_name: "Bash", tool_use_id: "codex-tu-1", transcript_path: "/tmp/codex-transcript",
+      tool_name: "Bash", tool_use_id: "codex-tu-1", transcript_path: $tp,
       tool_input: {command: $cmd}
     } + (if $agent != "" then {agent_type: $agent, agent_id: "codex-agent-1"} else {} end)'
 }
@@ -6121,7 +6488,8 @@ case_cdg_dbq_never_executes() {
 # These exercise EXISTING logic under a new payload shape (the full documented Codex key set --
 # session_id, turn_id, cwd, hook_event_name, model, permission_mode, tool_name, tool_use_id,
 # transcript_path -- plus agent_type/agent_id for a subagent), pinning shape-compatibility: no new
-# code path, so no new mutant record is needed for these (the plan's own Testing approach note).
+# code path of their own, except codex-pg-impl-push-claude, which since #494 also exercises the
+# Codex workdir route (its mutation proof is the push-wd-* section's, not a record of its own).
 
 case_codex_gcg_main_status() { run_hook "$(mk_codex_shell '' 'git -C ../demo-wt-1 status --porcelain')"; expect_rc 0; expect_allow; }
 case_codex_gcg_apply_patch() {
@@ -6157,7 +6525,14 @@ case_codex_pg_main_push_main() {
   run_push_guard "$(mk_codex_shell '' 'git push origin main' "$badcwd")"
   expect_push_deny
 }
-case_codex_pg_impl_push_claude() { run_push_guard "$(mk_codex_shell 'implementer' 'git push -u origin "claude/17-a"')"; expect_push_no_opinion; }
+case_codex_pg_impl_push_claude() {
+  # Since #494 a Codex-shaped push is judged against its rollout: one code-mode call, no
+  # workdir.
+  local rollout="$tmpbase/rollout-codex-pg-impl.jsonl"
+  mk_wd_rollout "$rollout" "$(wd_rec_custom c1 'const r = await tools.exec_command({cmd:"git push -u origin \"claude/17-a\""}); text(r.output);')"
+  run_push_guard "$(mk_codex_shell 'implementer' 'git push -u origin "claude/17-a"' '/repo' "$rollout")"
+  expect_push_no_opinion
+}
 case_codex_pg_apply_patch() {
   local errfile="$tmpbase/codex-pg-apply-patch-stderr"
   push_out="$(printf '%s' "$(mk_codex_patch 'implementer' '*** Begin Patch
@@ -7592,6 +7967,32 @@ cases=(
   "push-xseg-noop-cd-no-push|case_px_noop_cd_no_push|no opinion: cd ../other-y1 && git log --grep=push -- contains \"push\" and \"git\" but has no PUSH segment at all -- control (the #435 early exit answers first; the driver's saw_push guard is defense in depth)"
   "push-xseg-noop-cd-as-argument|case_px_noop_cd_as_argument|no opinion: echo cd && git push origin feature/x -- \"cd\" here is an argument, never the resolved command word -- control, not part of the mutation-proof registry"
   "push-xseg-noop-export-unrelated|case_px_noop_export_unrelated|no opinion: export GIT_TRACE=1; git push origin feature/x -- an unrelated exported variable is never flagged -- mutation proof: dev/mutants/hook-tests.json (433-pg-export-exact)"
+  "push-wd-allow-no-workdir|case_wd_allow_no_workdir|no opinion: a Codex payload whose code-mode call carries no workdir -- control, not part of the mutation-proof registry"
+  "push-wd-allow-literal-session|case_wd_allow_literal_session|no opinion: the call's workdir is a plain string literal equal to the session cwd, followed by a newline before the closing brace -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-flatten)"
+  "push-wd-allow-literal-dot|case_wd_allow_literal_dot|no opinion: the call's workdir is the plain literal \".\" -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-flatten)"
+  "push-wd-allow-function-call-dot|case_wd_allow_function_call_dot|no opinion: a function_call record with \"workdir\":\".\" in its JSON arguments -- control, not part of the mutation-proof registry"
+  "push-wd-allow-function-call-null|case_wd_allow_function_call_null|no opinion: a function_call record with \"workdir\":null -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-null-arm)"
+  "push-wd-allow-short-fragment|case_wd_allow_short_fragment|no opinion: an unparseable first line with no workdir key, far shorter than half the window, then a call with none -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-edge-fraction)"
+  "push-wd-deny-completed-foreign|case_wd_deny_completed_foreign|deny: a call whose output record exists, with a foreign workdir, then a later call with none (every call record is scanned, completed or not) -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-no-pending-filter)"
+  "push-wd-deny-yielded-cell|case_wd_deny_yielded_cell|deny: an exec cell whose output says Script running with cell ID and whose push names another checkout, then a pending wait call with no workdir -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-no-pending-filter)"
+  "push-wd-deny-other-checkout|case_wd_deny_other_checkout|deny: the U9 shape -- git push origin HEAD:trunk, the code-mode call names another checkout -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-gate, 494-pg-wd-session-compare)"
+  "push-wd-deny-computed|case_wd_deny_computed|deny: the call's workdir is an identifier, not a plain string literal -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-bad-allow)"
+  "push-wd-deny-null-ident|case_wd_deny_null_ident|deny: the call's workdir is an identifier that merely starts with null -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-null-terminator)"
+  "push-wd-deny-undefined|case_wd_deny_undefined|deny: the call's workdir is the identifier undefined, which is not accepted as no workdir -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-undefined-bad)"
+  "push-wd-deny-undefined-shadowed|case_wd_deny_undefined_shadowed|deny: undefined shadowed by a const naming another checkout, used as the workdir -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-undefined-bad)"
+  "push-wd-deny-concat|case_wd_deny_concat|deny: the call's workdir literal is followed by a concatenation -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-literal-tail, 494-pg-wd-bad-allow)"
+  "push-wd-deny-duplicate-key|case_wd_deny_duplicate_key|deny: the same call names the session checkout and then another checkout (every occurrence of the key is judged) -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-every-occurrence)"
+  "push-wd-deny-function-call-other|case_wd_deny_function_call_other|deny: a function_call record whose JSON arguments name another checkout -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-gate)"
+  "push-wd-deny-local-shell-other|case_wd_deny_local_shell_other|deny: a local_shell_call record whose action.working_directory names another checkout -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-working-directory)"
+  "push-wd-deny-fragment-key|case_wd_deny_fragment_key|deny: an unparseable first line (a cut record) that still mentions a workdir key, then a clean call -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-fragment-key-bad)"
+  "push-wd-deny-straddle|case_wd_deny_straddle|deny: a push record larger than the whole window, then a small call with no workdir; the window holds only an unparseable fragment of at least half its size -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-edge)"
+  "push-wd-deny-missing-transcript|case_wd_deny_missing_transcript|deny: the payload's transcript_path names a file that does not exist -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-missing)"
+  "push-wd-deny-empty-transcript-path|case_wd_deny_empty_transcript_path|deny: the payload's transcript_path is the empty string -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-missing)"
+  "push-wd-deny-transcript-directory|case_wd_deny_transcript_directory|deny: the payload's transcript_path names a directory, not a regular file -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-not-regular)"
+  "push-wd-deny-transcript-unreadable|case_wd_deny_transcript_unreadable|deny: the payload's transcript_path names a mode-000 file (assertions skipped under root) -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-unreadable)"
+  "push-wd-deny-no-call|case_wd_deny_no_call|deny: the rollout holds no call record at all, only an output record, a garbage line and noise -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-no-call)"
+  "push-wd-deny-never-executes|case_wd_deny_never_executes|deny via the Codex workdir route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND the session repo, the other checkout and the rollout are byte-identical before/after, AND the message echoes none of their content -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-gate)"
+  "push-wd-claude-unchanged|case_wd_claude_unchanged|no opinion: a Claude-shaped payload (no turn_id) whose transcript_path names a missing file -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-gate-claude)"
   "push-deny-config-remote-push-bare|case_pd_config_remote_push_bare|deny: git push against a repo whose config carries [remote \"origin\"] push = HEAD:main (#268, the issue's own shape) -- measured: M26, 68 pass 12 fail"
   "push-deny-config-remote-push-named-remote|case_pd_config_remote_push_named_remote|deny: git push origin against the same config (n==1, the positive side of the exact-remote-scoping clause) -- measured: M26, 68 pass 12 fail (also M41, 79 pass 1 fail)"
   "push-deny-config-remote-push-second-line|case_pd_config_remote_push_second_line|deny: two push = lines under [remote \"origin\"], only the SECOND offending (0/1/2+ boundary) -- measured: M26, 68 pass 12 fail (also M33, 79 pass 1 fail)"

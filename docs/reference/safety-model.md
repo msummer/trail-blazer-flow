@@ -296,8 +296,15 @@ sets a `GIT_DIR`-family variable or one of the command-line-config names above
 (`export`/`declare`/`typeset`/`local`/`readonly`, or a bare assignment) also denies as unresolved,
 whatever the order of the two segments — a directory or `GIT_DIR` change inside a sourced file, a
 script, a function/alias, or one whose command word is itself built from a variable remains a
-documented residual, not fixed here. See the hook's own header for the
-full, measured evasion/over-blocking inventory. It enforces the
+documented residual, not fixed here. Since #494, on a Codex-shaped payload a push that would
+otherwise be allowed is also checked against every tool-call record, finished or not, in the last
+1 MiB of the rollout file the payload's `transcript_path` names: it denies when any call there sets
+a Codex shell `workdir` that is anything but the session directory as a plain string literal (or
+`null`), when that rollout is unreadable, when the window holds no tool call, or when its first
+line is an unparseable record of at least half the window — Claude Code is unaffected. A call
+record outside the window — wholly before it, or cut by it with its `workdir` before the cut —
+is not seen while another call is in view (a documented residual). See the hook's own
+header for the full, measured evasion/over-blocking inventory. It enforces the
 "deny the default branch" half of this issue's Decision, and (since #292) fails closed on an
 unresolvable target, but not an allow-list of
 `claude/<n>-<slug>` destinations — that would also deny a `release/vX.Y.Z` branch, an annotated
@@ -590,7 +597,9 @@ rule).
 **On Codex (ADR 0002 amendment).** `hooks/git-c-guard.sh`'s `if` gate is dropped entirely under
 Codex, leaving that hook inert there — worktree-parallel mode is off on Codex regardless.
 `hooks/agent-boundary.sh` and `hooks/push-guard.sh` work as written: neither relies on an `if` gate,
-and both read only the same documented stdin fields a Codex payload also carries. Codex's
+and both read the same documented stdin fields a Codex payload also carries (on Codex,
+`hooks/push-guard.sh` additionally reads the tail of the rollout file the payload's
+`transcript_path` names, since #494 — see its entry above). Codex's
 `apply_patch` tool call (and the shell-issued heredoc/shim form it can also take) is covered by
 `hooks/claude-dir-guard.sh`'s own routes above; for the planner role specifically, it is ALSO
 covered by `hooks/planner-guard.sh`'s own denial of every non-allowlisted `Bash` command (a

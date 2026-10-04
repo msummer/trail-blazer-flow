@@ -3466,6 +3466,348 @@
       "expect_fail": [
         "deadline-calibrate"
       ]
+    },
+    {
+      "name": "494-pg-wd-gate",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "  if [ -n \"$codex_turn\" ]; then",
+          "to": "  if false; then"
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-completed-foreign",
+        "push-wd-deny-computed",
+        "push-wd-deny-concat",
+        "push-wd-deny-duplicate-key",
+        "push-wd-deny-empty-transcript-path",
+        "push-wd-deny-fragment-key",
+        "push-wd-deny-function-call-other",
+        "push-wd-deny-local-shell-other",
+        "push-wd-deny-missing-transcript",
+        "push-wd-deny-never-executes",
+        "push-wd-deny-no-call",
+        "push-wd-deny-null-ident",
+        "push-wd-deny-other-checkout",
+        "push-wd-deny-straddle",
+        "push-wd-deny-transcript-directory",
+        "push-wd-deny-transcript-unreadable",
+        "push-wd-deny-undefined",
+        "push-wd-deny-undefined-shadowed",
+        "push-wd-deny-yielded-cell"
+      ]
+    },
+    {
+      "name": "494-pg-wd-gate-claude",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "  if [ -n \"$codex_turn\" ]; then",
+          "to": "  if true; then"
+        }
+      ],
+      "expect_fail": [
+        "push-wd-claude-unchanged"
+      ]
+    },
+    {
+      "name": "494-pg-wd-missing",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "wd_reason=\"Codex transcript missing or unreadable\"",
+          "to": "wd_reason=\"\""
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-empty-transcript-path",
+        "push-wd-deny-missing-transcript",
+        "push-wd-deny-transcript-directory",
+        "push-wd-deny-transcript-unreadable"
+      ]
+    },
+    {
+      "name": "494-pg-wd-not-regular",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "[ ! -f \"$wd_tp\" ] || ",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-transcript-directory"
+      ]
+    },
+    {
+      "name": "494-pg-wd-unreadable",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": " || [ ! -r \"$wd_tp\" ]",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-transcript-unreadable"
+      ]
+    },
+    {
+      "name": "494-pg-wd-no-call",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "wd_reason=\"no Codex tool call in its transcript\"",
+          "to": "wd_reason=\"\""
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-no-call"
+      ]
+    },
+    {
+      "name": "494-pg-wd-no-pending-filter",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "| select(.type == \"custom_tool_call\" or .type == \"function_call\" or .type == \"local_shell_call\")] as $calls",
+          "to": "| select(.type == \"custom_tool_call\" or .type == \"function_call\" or .type == \"local_shell_call\") | select(((.call_id | type) == \"string\" and (.call_id as $c | any($parsed[] | select(. != null) | .[0] | select(type == \"object\") | .payload | select(type == \"object\") | select((.type | type) == \"string\" and (.type | endswith(\"_output\"))); .call_id == $c))) | not)] as $calls"
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-completed-foreign",
+        "push-wd-deny-yielded-cell"
+      ]
+    },
+    {
+      "name": "494-pg-wd-literal-tail",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "              if (after !~ /^[ \\t]*[,}]/) { print \"BAD\"; next }\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-concat"
+      ]
+    },
+    {
+      "name": "494-pg-wd-null-terminator",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "if (rest ~ /^null[ \\t]*[,}]/) next",
+          "to": "if (rest ~ /^null/) next"
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-null-ident"
+      ]
+    },
+    {
+      "name": "494-pg-wd-session-compare",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "if ! is_session_checkout_path \"${wd_line#LIT\"$TAB\"}\"; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-completed-foreign",
+        "push-wd-deny-duplicate-key",
+        "push-wd-deny-function-call-other",
+        "push-wd-deny-local-shell-other",
+        "push-wd-deny-never-executes",
+        "push-wd-deny-other-checkout",
+        "push-wd-deny-yielded-cell"
+      ]
+    },
+    {
+      "name": "494-pg-wd-null-arm",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "              if (rest ~ /^null[ \\t]*[,}]/) next\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-wd-allow-function-call-null"
+      ]
+    },
+    {
+      "name": "494-pg-wd-undefined-bad",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "if (rest ~ /^null[ \\t]*[,}]/) next",
+          "to": "if (rest ~ /^(null|undefined)[ \\t]*[,}]/) next"
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-undefined",
+        "push-wd-deny-undefined-shadowed"
+      ]
+    },
+    {
+      "name": "494-pg-wd-working-directory",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "PUSH_WORKDIR_KEYS=\"workdir working_directory\"",
+          "to": "PUSH_WORKDIR_KEYS=\"workdir\""
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-local-shell-other"
+      ]
+    },
+    {
+      "name": "494-pg-wd-bad-allow",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "wd_reason=\"Codex shell workdir is not a plain string literal\"",
+          "to": "wd_reason=\"\""
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-computed",
+        "push-wd-deny-concat",
+        "push-wd-deny-fragment-key",
+        "push-wd-deny-null-ident",
+        "push-wd-deny-undefined",
+        "push-wd-deny-undefined-shadowed"
+      ]
+    },
+    {
+      "name": "494-pg-wd-every-occurrence",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "| $txt | split($k) | .[1:][]",
+          "to": "| $txt | split($k) | .[1:2][]"
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-duplicate-key"
+      ]
+    },
+    {
+      "name": "494-pg-wd-fragment-key-bad",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "select(any($ks[]; . as $k | ($l | split($k) | length) > 1))",
+          "to": "select(false)"
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-fragment-key"
+      ]
+    },
+    {
+      "name": "494-pg-wd-edge",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "if ($lines | length) > 0 and $parsed[0] == null",
+          "to": "if false and $parsed[0] == null"
+        }
+      ],
+      "expect_fail": [
+        "push-wd-deny-straddle"
+      ]
+    },
+    {
+      "name": "494-pg-wd-edge-fraction",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "add // 0) >= $half)",
+          "to": "add // 0) >= 0)"
+        }
+      ],
+      "expect_fail": [
+        "push-wd-allow-short-fragment",
+        "push-wd-deny-fragment-key"
+      ]
+    },
+    {
+      "name": "494-pg-wd-flatten",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-wd-",
+      "edits": [
+        {
+          "from": "| split(\"\\n\") | join(\" \") | split(\"\\r\")",
+          "to": "| split(\"\\r\")"
+        }
+      ],
+      "expect_fail": [
+        "push-wd-allow-literal-dot",
+        "push-wd-allow-literal-session",
+        "push-wd-deny-completed-foreign",
+        "push-wd-deny-duplicate-key",
+        "push-wd-deny-never-executes",
+        "push-wd-deny-other-checkout",
+        "push-wd-deny-yielded-cell"
+      ]
+    },
+    {
+      "name": "494-pg-wd-precedence",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "-deny-codex-main-session",
+      "edits": [
+        {
+          "from": "if [ -z \"$deny_dest\" ] && [ \"$saw_push\" = 1 ]; then\n  codex_turn=",
+          "to": "if [ \"$saw_push\" = 1 ]; then\n  codex_turn="
+        }
+      ],
+      "expect_fail": [
+        "push-unres-deny-codex-main-session",
+        "push-xseg-deny-codex-main-session"
+      ]
     }
   ]
 }
