@@ -601,7 +601,7 @@ check-harness.sh
 It lists what the new version needs that your repo is missing. Fix what it flags and you're done.
 
 <details>
-<summary>Per-version migration notes (v1.9.0 → v3.2.0)</summary>
+<summary>Per-version migration notes (v1.9.0 → v3.3.0)</summary>
 
 For older history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration notes, v1.9.0
 to v2.7.7" subsection).
@@ -683,6 +683,13 @@ Codex, also re-run `bin/codex-setup.sh`.
 **v3.1.0 → v3.2.0** — Precondition: your account must have access to `claude-sonnet-5-5`, the
 implementer's new model (#479); otherwise stay on v3.1.0. On Codex, also re-run
 `bin/codex-setup.sh`.
+
+**v3.2.0 → v3.3.0** — On Codex only: re-run `bin/codex-setup.sh` (and re-point an existing
+LaunchAgent plist's plugin path). To use scheduled unattended runs, the checkout's `origin` must
+authenticate with no prompt (SSH, or a credential helper that works outside a terminal). If
+`codex-setup.sh --check` now reports `fallback-conflict`, keep exactly one top-level
+`project_doc_fallback_filenames` line, unindented and listing `"CLAUDE.md"` on that line, in
+`.codex/config.toml` (#484).
 
 </details>
 
