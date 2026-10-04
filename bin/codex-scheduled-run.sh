@@ -188,12 +188,13 @@
 #
 # HONEST LIMITS:
 #   - SIGKILL (a Unix process can never trap it) still leaves codex and the watchdog running with no
-#     record.txt — TERM/INT are the only signals this script can react to at all. Whether a real
-#     launchd, on an ordinary `bootout`, sends TERM before ever escalating to KILL is not verified
-#     here (I4, #429); if it does not wait, or if the launched codex is itself SIGKILLed some other
-#     way, launchd's own default process-group reaping (active whenever a LaunchAgent does not set
-#     `AbandonProcessGroup`) is the backstop that would still clean up the process group's other
-#     members — also unverified until #429.
+#     record.txt — TERM/INT are the only signals this script can react to at all. launchd reports
+#     this job's `exit timeout` as 5 seconds (observed at the #429 gate), so a `bootout` escalates
+#     TERM to KILL after 5 seconds, less than TBF_CODEX_RUN_KILL_GRACE's default — the TERM-then-poll
+#     of codex may be cut short (a `bootout` mid-run was not exercised). If the wrapper is KILLed
+#     that way, or the launched codex is itself SIGKILLed some other way, launchd's own default
+#     process-group reaping (active whenever a LaunchAgent does not set `AbandonProcessGroup`) is
+#     the backstop for the process group's other members — not live-verified.
 #   - Two small windows are not closed: between starting codex and recording `codex_pid=$!`, and
 #     between starting the watchdog and recording `wd_pid=$!` — and, the same shape, between
 #     `bounded_run` (#443) launching a bounded child and recording `bounded_pid=$!`. A TERM/INT
@@ -202,8 +203,8 @@
 #   - A timed-out `harness-stop.sh` (TBF_CODEX_GH_TIMEOUT, #443) is itself killed, but its own `gh`
 #     grandchild is not — this wrapper only ever signals its own direct child. The orphaned `gh` no
 #     longer blocks the wrapper (its output goes to a file this wrapper isn't waiting to read, not
-#     a pipe), but whether launchd's own process-group reaping cleans it up is unverified until
-#     #429.
+#     a pipe), but whether launchd's own process-group reaping cleans it up is not live-verified
+#     (no stop-query timeout occurred at the #429 gate).
 #   - A `gh issue create` or `gh issue comment` that hits TBF_CODEX_GH_TIMEOUT may already have
 #     been accepted by GitHub before this wrapper killed it; `create-timeout` in particular can
 #     leave a tracking issue on GitHub that the next run's own state file does not know about, so
@@ -223,8 +224,9 @@
 #   - This script is `forbidden` under the installed Codex rules and denied under Claude Code's own
 #     settings (belt-and-braces with the CLAUDE_PID guard above) — see docs/reference/codex.md
 #     "Rules" for what each backstop does and does not cover.
-#   - `codex exec` and this wrapper's live launchd behaviour are Not supported until the live gate
-#     (I4, #429) flips docs/reference/codex.md's support-matrix row.
+#   - A launched session that stops at its own preflight (for example a `git fetch` that can't
+#     authenticate) exits 0 with an ordinary final message, so it is recorded `completed` and opens
+#     no tracking issue (#496).
 set -uo pipefail
 
 if [ -n "${CLAUDE_PID+set}" ]; then echo "codex-scheduled-run.sh: refusing: CLAUDE_PID is set — a Claude Code session must never launch a Codex run" >&2; exit 2; fi

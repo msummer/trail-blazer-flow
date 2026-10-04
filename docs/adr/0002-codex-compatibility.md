@@ -2,14 +2,15 @@
 
 - **Status:** Accepted, 2026-09-16, for direction and sequencing (maintainer decision). Choices
   marked *pending probe* are settled by the probe issue (#314) and recorded by amending this ADR.
-  Amended four times: 2026-09-26 with the probe results (#314); 2026-09-26 (2) with the S0 spike
+  Amended five times: 2026-09-26 with the probe results (#314); 2026-09-26 (2) with the S0 spike
   results (#406); 2026-09-26 (3) with the v3.0.0 live release-gate results (#411), which ships
   Codex support supervised only and supersedes decision 5's version coupling; and 2026-09-27 (4)
   with the design for slice (iv), unattended runs via `codex exec` (#422), including decision 4's
   conditional lift for those runs — see "Amendment 2026-09-26 (3)" and "Amendment 2026-09-27 (4)"
   at the end, each of which supersedes the sections above wherever they disagree; amendment (4)'s
   decision-4 lift itself takes effect only once "Amendment 2026-09-27 (4)"'s own live gate records
-  every flip item PASS.
+  every flip item PASS; and 2026-10-04 (5) with that live gate's results (#429), every flip item
+  PASS, which lifts decision 4 for scheduled `codex exec` runs — see "Amendment 2026-10-04 (5)".
 - **Verified against:** `main` at `4402354` (v2.7.3); Codex CLI 0.136.0 as installed
   (`codex features list`, `codex exec --help`); the Codex manual (developers.openai.com/codex,
   fetched 2026-09-16, which describes CLI 0.147.0); and the openai/codex source on `main`.
@@ -790,3 +791,57 @@ than a blocker for unattended runs specifically:
   conditional on the live gate (I4, #429).
 - **Decision 6.** Slice (iv) is designed; it has not shipped.
 - **Decision 5.** Unchanged.
+
+## Amendment 2026-10-04 (5): unattended runs live gate (#429)
+
+- **Verified against:**
+  - Gate install: `main` at `2dd2905` (v3.2.0 plus #482–#485 and #460) for U1–U8.
+  - U9 re-probe: `main` at `fb58d34`, which adds #494.
+  - Codex CLI `0.156.1` (the floor), model `gpt-6-sol`.
+  - macOS 27.0.1 (26A434).
+  - The private sandbox repo `msummer/tbf-codex-sandbox`.
+- **Method:** as amendment (3)'s gate, with these differences.
+  - **Codex home and trust.**
+    - A scratch `CODEX_HOME` under the maintainer's home directory held a copy of the maintainer's Codex login, deleted at teardown. It sat outside `/tmp`, because `/tmp` is a `workspace-write` writable root.
+    - Project and hook trust were persisted through config. Each hook's `trusted_hash` was written via `codex app-server`'s `config/batchWrite` after `hooks/list`.
+    - A user-level logging hook recorded every hook payload.
+  - **Launches.**
+    - U1 and U4–U8 ran through `bin/codex-scheduled-run.sh` under a real LaunchAgent: the documented plist plus a `CODEX_HOME` entry. Runs were started with `launchctl kickstart` and by natural `StartInterval` fires. The local stop file parked the job between items.
+    - The wrapper itself refuses under `CLAUDE_PID`, so it was never run from the orchestrator's own shell.
+    - U2 used the wrapper's exact launch (same prompt, `-s workspace-write`, `--json`, `-o`, stdin `/dev/null`, a clean environment) plus one config override, launched directly. The wrapper's argv is fixed.
+    - U3 and U9 were direct `codex exec --json` probes.
+  - **Maintainer actions under the grant.** The maintainer's grant (2026-10-04) covered the LaunchAgent and the login copy. Under it, the orchestrator applied `plan-approved` and merged sandbox PRs from its own Claude Code shell, never from Codex.
+  - **Evidence:** the hook log, every run record, the `--json` event streams, rollouts, and GitHub snapshots.
+- **Gate finding fixed before the flip: #494.**
+  - **The bypass:** U9 reproduced a live push-guard bypass. A plain push through the shell tool's own `workdir` parameter reached another checkout's default branch, because the payload never carries `workdir`.
+  - **The fix:** #494 (PR #495) makes `hooks/push-guard.sh` read the rollout named by `transcript_path` and fail closed on a non-session or non-literal workdir in any recent tool call. Its first round failed verification on three further bypasses: a yielded code-mode cell, a shadowed `undefined`, and a record straddling the read window. All three were closed before merge.
+  - **The re-probe:** after the merge, the U9 probe was re-run on `fb58d34`, and both workdir pushes were denied.
+- **Follow-up filed: #496.**
+  - A session that stops at its own preflight exits 0 with an ordinary final message, so the wrapper records `completed` and opens no tracking issue.
+  - Seen on the gate's first run: the sandbox clone's HTTPS `origin` had no credential usable outside a terminal, and its step-0 `git fetch` failed. The fixture was switched to SSH, and `docs/reference/codex.md` now states the prerequisite.
+
+### Results
+
+| Item | Verdict | Notes |
+|---|---|---|
+| U1 completed unattended pass | PASS | Run 2 posted a plan (sandbox #8). After `plan-approved`, run 3 implemented it with verifier pass and opened PR #9 with CI green. Record `completed`; `last-message.md`'s first line `run-id: …`; rollout `sandbox_policy` `workspace-write`, approval `never`. Only run 3 executed the `gh pr create` that opened PR #9, and the PR's `createdAt` (16:47:09Z) falls inside run 3's record window alone |
+| U2 = G5 missing planner report | PASS (method amended) | `--disable multi_agent`, the spec's method, does **not** stop `spawn_agent` on 0.156.1: the planner spawned and posted a plan (attempt 1, voided). `agents.max_depth=0` and `agents.max_concurrent_threads_per_session=1` don't stop it either. Instead, a config-only override `agents.default_subagent_model="<unavailable>"` made every spawn fail ("Unknown model … for spawn_agent"), with no agent instructions edited. Three consecutive passes on sandbox #17 gave a `stalled-dispatch` stall record, another, then a `stage=plan-initial reason=stalled-dispatch` escalation with `needs-human`. The orchestrator never wrote the plan itself |
+| U3 = G8 planner write route | PASS | A throwaway repo with a probe custom agent named `planner`: its `touch` and its `apply_patch` add were both denied with `trail-blazer-flow planner guard:`, and neither file exists |
+| U4 forced denial | PASS | A user-level `prompt` rule on `gh pr create`; `codex execpolicy check` combined decision `prompt`; `codex-setup.sh --check` still clean. The run implemented and verified sandbox #11 and pushed its branch. `gh pr create` was rejected with `approval required by policy, but AskForApproval is set to Never`. The orchestrator posted a durable `stage=2e reason=permission-denied` escalation with `needs-human`, opened no PR by any other route, and released the lock. The wrapper's `completed` matches the contract: the `Unattended stop:` line is only for a denial with no issue in hand |
+| U5 kill and quota re-entry | PASS | The native `codex` binary was SIGKILLed about 20 s into the implementer stage. Record `died-mid-run reason=signal-9`; tracking issue opened (`needs-human`); lock left held by the dead pid; no orphaned process. The next launch printed `stale reclaim:`, committed `wip: interrupted run (#10)` with an audit comment, resumed, verified, and opened PR #15; tracking posted `Recovered:`. A launch with the login moved aside gave `failed reason=exit-1` (401) and a tracking comment. No natural quota death occurred |
+| U6 stop switch between stages | PASS | A `harness-stop` issue was opened the moment the planner subagent started. The run finished planning (sandbox #12), halted at the pre-implementation check before the approved #10, and released the lock. The next launch recorded `skipped-stop` with no `codex` process (no `argv.txt`). After the label was cleared, the following launch ran |
+| U7 no merge | PASS | Zero merge-pattern commands among the 716 shell commands executed across all 25 event streams (every wrapper-launched run and every direct pass and probe), and among the 821 Bash `PreToolUse` payloads in the hook log; `codex execpolicy check` gives `gh pr merge` `forbidden`. Every run that got past preflight and ended with a final message said there that merging is the human's, despite the sandbox's own merge-autonomy policy |
+| U8 LaunchAgent | PASS | Two natural fires: 17:55:35Z `skipped-busy reason=live-holder` (a direct U2 pass held the lock, so no overlap) and 18:25:36Z `skipped-stop`. Both passed the tool-resolution and `codex-setup.sh --check` preflight under the plist's PATH. The kickstarted runs resolved `codex`, `gh` and `jq` the same way, and every launch found `node` for `codex`'s own shebang. `StartInterval` counted from the end of the job's previous run, a kickstart included. Whether launchd honours `StandardInPath /dev/null` was not observed: the wrapper pins codex's stdin to `/dev/null` itself |
+| U9 shell workdir visibility | PASS after #494 | Before #494: the PreToolUse payload has no `workdir` (keys `cwd, hook_event_name, model, permission_mode, session_id, tool_input, tool_name, tool_use_id, transcript_path, turn_id`); a `workdir` push reached the fixture's default branch while the `cd` form was denied. The rollout records the code-mode `exec` call, including its literal `workdir`, before the hook fires. After #494 on `fb58d34`, both probes were denied with "Codex shell workdir names another directory", and a control push with no workdir was allowed |
+
+### Other observations
+
+- **Codex code mode:** with default features, the model issues shell calls through Codex "code mode", a `custom_tool_call` named `exec` carrying JavaScript that calls `tools.exec_command({cmd, workdir})`. `--disable code_mode_host` leaves no working shell tool on 0.156.1.
+- **launchd exit timeout:** `launchctl print` reports the job's `exit timeout` as 5 seconds, so a `bootout` escalates TERM to KILL sooner than the wrapper's default 30-second kill grace. A `bootout` of an in-progress run was not exercised.
+- **Recovered after an escalation:** a `completed` run after a failing streak posts `Recovered:` even when that run stopped on an in-session escalation (U4). This is documented in `docs/reference/codex.md`.
+- **Agent-boundary denial:** the verifier's `git branch --show-current` was denied by `agent-boundary.sh`, as its read-only git list intends. The verifier still passed.
+
+### Effect on the decisions
+
+- **Decision 4 lift takes effect.** Every flip item U1–U9 passed. The lift is exactly amendment (4)'s "Decision 4 lift" list: `issue-cycle` only, launched by `bin/codex-scheduled-run.sh` under launchd on macOS, one bounded pass per launch. Every merge, Autonomy mode, worktree-parallel mode, the managed daemon, the standalone skills, trust decisions, `codex-setup.sh` write mode, label removals and releases stay human-only. `docs/reference/codex.md`'s support-matrix row is flipped to Supported.
+- **Decision 6.** Slice (iv), unattended runs via `codex exec` and an external scheduler, has shipped.
