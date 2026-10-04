@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #482: harness-lock.sh serializes a stale-lock reclaim behind a second atomic mkdir and re-checks
+  the holder under it, so two concurrent reclaims can no longer both succeed; a marker left by an
+  interrupted reclaim refuses until release --force. No consumer step.
 - #484: `codex-setup.sh` no longer duplicates `project_doc_fallback_filenames` in a
   `.codex/config.toml` with no final newline. An indented key line or more than one key line is now
   refused as `fallback-conflict` (write mode exit 2, `--check` drift) instead of being reported `ok`.

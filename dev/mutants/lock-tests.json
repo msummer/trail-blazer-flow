@@ -63,6 +63,89 @@
       "expect_fail": [
         "owner-daemon-refused"
       ]
+    },
+    {
+      "name": "482-lock-reread-skipped",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "reclaim-",
+      "edits": [
+        {
+          "from": "  if [ \"$now_ident\" != \"$obs_ident\" ]; then",
+          "to": "  if false; then"
+        },
+        {
+          "from": "  if pid_alive \"$now_pid\"; then",
+          "to": "  if false; then"
+        }
+      ],
+      "expect_fail": [
+        "reclaim-race-replaced",
+        "reclaim-race-serial"
+      ]
+    },
+    {
+      "name": "482-lock-ident-unchecked",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "reclaim-",
+      "edits": [
+        {
+          "from": "  if [ \"$now_ident\" != \"$obs_ident\" ]; then",
+          "to": "  if false; then"
+        }
+      ],
+      "expect_fail": [
+        "reclaim-race-replaced"
+      ]
+    },
+    {
+      "name": "482-lock-arbiter-bypassed",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "reclaim-",
+      "edits": [
+        {
+          "from": "if ! mkdir \"$reclaimdir\" 2>/dev/null; then",
+          "to": "if ! mkdir -p \"$reclaimdir\" 2>/dev/null; then"
+        }
+      ],
+      "expect_fail": [
+        "reclaim-marker-dead",
+        "reclaim-race-concurrent"
+      ]
+    },
+    {
+      "name": "482-lock-marker-leaked",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "reclaim-",
+      "edits": [
+        {
+          "from": "rc=$?\n  remove_reclaim\n  exit \"$rc\"",
+          "to": "rc=$?\n  exit \"$rc\""
+        }
+      ],
+      "expect_fail": [
+        "reclaim-race-concurrent",
+        "reclaim-race-replaced",
+        "reclaim-race-serial"
+      ]
+    },
+    {
+      "name": "482-lock-force-keeps-marker",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "reclaim-",
+      "edits": [
+        {
+          "from": "\n    remove_reclaim\n  fi\n\n  if [ ! -d \"$lockdir\" ]; then",
+          "to": "\n  fi\n\n  if [ ! -d \"$lockdir\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "reclaim-marker-dead"
+      ]
     }
   ]
 }
