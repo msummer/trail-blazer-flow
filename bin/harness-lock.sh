@@ -15,16 +15,31 @@
 #
 # EXIT CODES: 0 = success (acquired, released, or a status query in either state); 2 = usage or
 # environment error (bad/missing arguments, not inside a git repository, a malformed owner pid, an
-# owner that is a Codex app-server daemon); 3 = conflict (the lock is held by someone else, or a
-# release's run-id doesn't match the current holder).
+# owner that is a Codex app-server daemon); 3 = conflict (the lock is held by someone else, a
+# release's run-id doesn't match the current holder, or a stale-lock reclaim is already in
+# progress or was interrupted — the reclaim marker below).
 #
 # RECLAIM RULE — applied only when `acquire` finds the lock already held:
 #   - the stored record is unreadable (pid or host file missing/empty, or pid is not
 #     digits-only)  -> REFUSE (never reclaim an unreadable record; remedy: release --force)
 #   - stored host != `uname -n`                                    -> REFUSE (different host)
 #   - stored host == `uname -n` and the stored pid is still alive  -> REFUSE (live holder)
-#   - stored host == `uname -n` and the stored pid is NOT alive    -> RECLAIM (prints one audit
-#     line quoting the stale record, then acquires normally)
+#   - stored host == `uname -n` and the stored pid is NOT alive    -> RECLAIM, but only while
+#     holding the reclaim marker (below): prints one audit line quoting the stale record, then
+#     acquires normally
+#
+# RECLAIM MARKER (#482): two contenders can both judge one holder stale, so a reclaim is
+# serialized behind a second atomic `mkdir` of the sibling directory
+# <git-common-dir>/trail-blazer/reclaim (never inside lock/, so remove_lock's rmdir is never
+# blocked by it). Only the process that creates it may delete the stale record. Under the marker
+# the holder's run-id and pid are re-read and compared with what the stale check saw; a changed
+# record, or a pid that is alive again, releases the marker and REFUSES (exit 3), deleting
+# nothing. An `acquire` that finds the marker already present REFUSES at once (exit 3, naming the
+# marker and `release --force`) — it never waits on the marker and never clears it by itself, so
+# a marker is only ever removed by the process that took it, or by `release --force`. The marker
+# is removed after the critical section on every non-crash path. `status` reports a present
+# marker as `reclaim=held` / `reclaim-pid=<pid>` after the other lines; `release --force` clears
+# it and prints `reclaim=cleared` / `reclaim-pid=<pid>`.
 #
 # RECORDED-PID RULE (RESOLVED, measured live 2026-09-08; extended #408): the recorded pid's
 # precedence is `--owner-pid <pid>` (highest) > `TBF_OWNER_PID` > `${CLAUDE_PID:-$PPID}` (lowest,
@@ -73,6 +88,12 @@
 # pid (the session) outlives the interrupted run. The daemon refusal above fails OPEN, not closed,
 # when `ps` can't answer: a daemon owner that slips through only ever produces a
 # never-reclaimed lock, with the same `release --force` remedy as any other unreclaimable lock.
+# A reclaim marker left behind by an `acquire` killed mid-reclaim (SIGKILL, power loss, Ctrl-C)
+# blocks every later stale reclaim — a fresh acquire of a free lock is unaffected — until
+# `release --force`; there is deliberately no trap and no auto-clearing. `release --force` run
+# while a reclaim is live is a human override and can let a second reclaimer in. A fresh
+# `mkdir` of the lock directory does not consult the marker: one that lands between a reclaimer's
+# remove_lock and its own mkdir wins the lock, and the reclaimer then refuses ("lost the race").
 #
 # Read-only except its own lock directory: never touches the tracked working tree, makes no
 # network call. #233 landed bin/harness-version.sh; this file's own direct `jq .version` read
@@ -102,16 +123,22 @@ directory holds six plain files: run-id, pid, host, started-at, harness-version,
   acquire          Create the lock. Prints `run-id=<id>` as the LAST stdout line on success
                     (exit 0). If already held: refuses (exit 3, prints the holder record) unless
                     the holder is on this same host and its pid is no longer alive, in which case
-                    it reclaims (exit 0, one audit line first, then a new run-id). Refuses (exit 2,
-                    before creating anything) when the resolved owner pid is a Codex app-server
-                    daemon — run Codex sessions with `codex --no-daemon` instead.
+                    it reclaims (exit 0, one audit line first, then a new run-id) while holding
+                    the `reclaim/` marker, and refuses (exit 3) if the record changed under it or
+                    the marker is already present (a reclaim in progress, or one interrupted —
+                    remedy: `release --force`). Refuses (exit 2, before creating anything) when
+                    the resolved owner pid is a Codex app-server daemon — run Codex sessions
+                    with `codex --no-daemon` instead.
   release <run-id>  Remove the lock only if its stored run-id matches (exit 0); a mismatch
                     refuses (exit 3, prints the holder record); no lock present -> `released=none`
                     (exit 0).
   release --force   Remove whatever lock is present regardless of owner, printing what was
-                    removed (exit 0); no lock present -> `released=none` (exit 0).
+                    removed (exit 0); no lock present -> `released=none` (exit 0). Also removes a
+                    `reclaim/` marker if one exists, printing `reclaim=cleared` and
+                    `reclaim-pid=<pid>` first.
   status            Always exits 0. Prints `state=free` or `state=held` plus `lock-path=<path>`,
-                    and the holder record when held.
+                    and the holder record when held; then, only when a reclaim marker exists,
+                    `reclaim=held` and `reclaim-pid=<pid>`.
   -h, --help        This text (exit 0).
 
 Recorded pid precedence: `--owner-pid <pid>` > `TBF_OWNER_PID` > `${CLAUDE_PID:-$PPID}`. Under
@@ -125,7 +152,7 @@ silently ignored. On Codex, pass the session's own pid explicitly: `harness-lock
 --owner-pid "$PPID"`.
 
 Exit codes: 0 = success, 2 = usage/environment error (including a malformed owner pid or a
-Codex app-server daemon owner), 3 = conflict (held, or release mismatch).
+Codex app-server daemon owner), 3 = conflict (held, release mismatch, or a reclaim marker).
 EOF
 }
 
@@ -169,6 +196,16 @@ remove_lock() {
   fi
 }
 
+# remove_reclaim — bounded deletion of the reclaim marker (#482): rm -f the one known file, then
+# rmdir (never rm -rf, and never anywhere outside $reclaimdir). An rmdir failure is reported, not
+# forced.
+remove_reclaim() {
+  rm -f "$reclaimdir/pid"
+  if ! rmdir "$reclaimdir" 2>/dev/null; then
+    echo "harness-lock.sh: warning: rmdir $reclaimdir failed — an unexpected file may remain inside it" >&2
+  fi
+}
+
 # write_record PID — writes all six files for a newly (re)acquired lock, using PID as the
 # recorded pid.
 write_record() {
@@ -194,6 +231,43 @@ resolved_pid() {
       ;;
     *) printf '%s' "$raw" ;;
   esac
+}
+
+# reclaim_stale OBS_IDENT OWNER_PID — the critical section of a stale-lock reclaim (#482). The
+# caller already holds the reclaim marker (it created $reclaimdir) and releases it afterwards, on
+# every path. OBS_IDENT is "<run-id>:<pid>" as the stale check saw it. Returns 0 (acquired, the
+# new run-id printed) or 3 (refused); never calls `exit`, and runs in the main shell, never inside
+# a `$(…)`. Nothing is deleted unless the holder record is still exactly the one the stale check
+# judged stale.
+reclaim_stale() {
+  local obs_ident="$1" owner="$2" now_pid now_ident
+  now_pid="$(cat "$lockdir/pid" 2>/dev/null || true)"
+  now_ident="$(cat "$lockdir/run-id" 2>/dev/null || true):$now_pid"
+  if [ "$now_ident" != "$obs_ident" ]; then
+    echo "harness-lock.sh: lock record changed since the stale check — refusing" >&2
+    print_holder >&2
+    echo "remedy: harness-lock.sh release --force" >&2
+    return 3
+  fi
+  # Guards only the pid-reuse window (the identical record, its pid alive again); no fixture can
+  # construct that, so this re-check is deliberately unpinned by dev/lock-tests.sh.
+  if pid_alive "$now_pid"; then
+    echo "harness-lock.sh: lock held by a live process (pid $now_pid) on this host — refusing" >&2
+    print_holder >&2
+    echo "remedy: harness-lock.sh release --force" >&2
+    return 3
+  fi
+  # Same host, pid not alive -> stale. Print exactly one audit line quoting the stale record,
+  # then reclaim.
+  echo "stale reclaim: run-id=$(cat "$lockdir/run-id" 2>/dev/null) pid=$now_pid host=$(cat "$lockdir/host" 2>/dev/null) started-at=$(cat "$lockdir/started-at" 2>/dev/null) harness-version=$(cat "$lockdir/harness-version" 2>/dev/null) checkout-path=$(cat "$lockdir/checkout-path" 2>/dev/null)"
+  remove_lock
+  if ! mkdir "$lockdir" 2>/dev/null; then
+    echo "harness-lock.sh: lost the race reclaiming the lock — refusing" >&2
+    return 3
+  fi
+  write_record "$owner"
+  echo "run-id=$(cat "$lockdir/run-id")"
+  return 0
 }
 
 # --- subcommands ---------------------------------------------------------------------------
@@ -277,7 +351,8 @@ cmd_acquire() {
   fi
 
   # Lock already held — apply the reclaim rule.
-  local held_pid held_host this_host bad_record
+  local held_pid held_host held_runid this_host bad_record
+  held_runid="$(cat "$lockdir/run-id" 2>/dev/null || true)"
   held_pid="$(cat "$lockdir/pid" 2>/dev/null || true)"
   held_host="$(cat "$lockdir/host" 2>/dev/null || true)"
   this_host="$(uname -n)"
@@ -308,17 +383,21 @@ cmd_acquire() {
     exit 3
   fi
 
-  # Same host, pid not alive -> stale. Print exactly one audit line quoting the stale record,
-  # then reclaim.
-  echo "stale reclaim: run-id=$(cat "$lockdir/run-id" 2>/dev/null) pid=$held_pid host=$held_host started-at=$(cat "$lockdir/started-at" 2>/dev/null) harness-version=$(cat "$lockdir/harness-version" 2>/dev/null) checkout-path=$(cat "$lockdir/checkout-path" 2>/dev/null)"
-  remove_lock
-  if ! mkdir "$lockdir" 2>/dev/null; then
-    echo "harness-lock.sh: lost the race reclaiming the lock — refusing" >&2
+  # Same host, pid not alive -> stale. Two contenders can both reach this point for one holder, so
+  # the reclaim is serialized behind a second atomic mkdir (the marker, see the header's RECLAIM
+  # MARKER). A marker already present means a reclaim is in progress or was interrupted: refuse
+  # at once — never wait on it, never clear it here.
+  if ! mkdir "$reclaimdir" 2>/dev/null; then
+    echo "harness-lock.sh: a stale-lock reclaim is already in progress or was interrupted (marker $reclaimdir, pid $(cat "$reclaimdir/pid" 2>/dev/null)) — refusing" >&2
+    print_holder >&2
+    echo "remedy: harness-lock.sh release --force" >&2
     exit 3
   fi
-  write_record "$used_pid"
-  echo "run-id=$(cat "$lockdir/run-id")"
-  exit 0
+  printf '%s' "$$" > "$reclaimdir/pid"
+  local rc
+  reclaim_stale "$held_runid:$held_pid" "$used_pid"; rc=$?
+  remove_reclaim
+  exit "$rc"
 }
 
 cmd_release() {
@@ -327,6 +406,14 @@ cmd_release() {
   if [ "$arg" != "--force" ] && [ -z "$arg" ]; then
     usage >&2
     exit 2
+  fi
+
+  # --force also clears a reclaim marker (#482), whether or not the lock directory exists;
+  # `release <run-id>` never touches it.
+  if [ "$arg" = "--force" ] && [ -d "$reclaimdir" ]; then
+    echo "reclaim=cleared"
+    echo "reclaim-pid=$(cat "$reclaimdir/pid" 2>/dev/null)"
+    remove_reclaim
   fi
 
   if [ ! -d "$lockdir" ]; then
@@ -362,6 +449,12 @@ cmd_status() {
     echo "state=free"
     echo "lock-path=$lockdir"
   fi
+  # After the holder record, and never starting with pid=/host=/state= (bin/codex-scheduled-run.sh
+  # parses those with `sed -n 's/^pid=//p' | head -1`).
+  if [ -d "$reclaimdir" ]; then
+    echo "reclaim=held"
+    echo "reclaim-pid=$(cat "$reclaimdir/pid" 2>/dev/null)"
+  fi
   exit 0
 }
 
@@ -389,6 +482,7 @@ if [ -z "$common_abs" ]; then
 fi
 lockroot="$common_abs/trail-blazer"
 lockdir="$lockroot/lock"
+reclaimdir="$lockroot/reclaim"
 
 version="unknown"
 if command -v jq >/dev/null 2>&1; then

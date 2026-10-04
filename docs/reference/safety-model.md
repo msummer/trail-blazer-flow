@@ -1009,13 +1009,20 @@ where `$PPID` is the session's own `codex` process under `codex exec`/`codex --n
 owner never dies, so a lock recorded against it could never be reclaimed; see
 `docs/reference/codex.md`. **Reclaim rule:** a lock held by a live process on the SAME host, or by ANY process on a
 DIFFERENT host, refuses; a same-host holder whose pid is no longer alive is reclaimed
-automatically (one audit line quoting the stale record); a record with a missing or non-digits
+automatically (one audit line quoting the stale record), but only while holding a second atomic
+`mkdir` marker, `<git-common-dir>/trail-blazer/reclaim` (#482): under it `acquire` re-reads the
+holder's run-id and pid and refuses (exit 3) if they changed since the stale check, so two
+contenders that both judged one holder stale cannot both succeed; an `acquire` that finds the
+marker already present refuses at once (exit 3), never waiting on it or clearing it, and `status`
+reports it as `reclaim=held`; a record with a missing or non-digits
 `pid`/`host` file always refuses rather than reclaiming — the remedy is always
-`harness-lock.sh release --force`. **Honest limits:** this is an advisory lock, not a kernel
+`harness-lock.sh release --force`, which also clears the marker. **Honest limits:** this is an advisory lock, not a kernel
 mutex — `mkdir` atomicity holds on a local filesystem only, not a synced/shared network volume;
 liveness is same-host only, so a lock held on a different machine is never inspected, only
 refused; a dead pid recycled by an unrelated process before the next check fails CLOSED (refuses,
-never silently reclaims); and a run interrupted (Ctrl-C, crash) inside a still-live Claude Code
+never silently reclaims); a marker left by an `acquire` killed mid-reclaim blocks every later
+stale reclaim (not a fresh acquire of a free lock) until `release --force`, and `release --force`
+during a live reclaim can let a second reclaimer in; and a run interrupted (Ctrl-C, crash) inside a still-live Claude Code
 session leaves its lock held until that session exits or a human runs `release --force`, since
 the recorded pid is the session, not the interrupted run. `dev/lock-tests.sh` pins the script's
 own behavior above — the acquire/reclaim/release/status semantics, the shared-worktree lock path,
