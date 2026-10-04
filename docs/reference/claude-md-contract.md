@@ -68,7 +68,11 @@ subagents need:
    otherwise held with "PR is behind `<default>` at `<short-sha>` — update the branch and let CI
    re-run" (#234, review F4 — because merges are sequential, every PR queued behind the first one
    in a pass holds this way by construction, expected rather than an error, outside the serial
-   merge train — item 9's "Autonomy mode" runs the update-branch fallback there instead) — never
+   merge train — item 9's "Autonomy mode" runs the update-branch fallback there instead) — each
+   merge pinned to the head OID that rail compared (`gh pr merge --match-head-commit`, also in
+   the hand-off command printed for a denied merge), so a commit pushed after evaluation makes
+   GitHub refuse the merge and the PR is held as "head moved" until the next cycle re-evaluates
+   it — never
    the governance surface, read mechanically per PR by
    `governance-paths.sh` (item 10 below) — CLAUDE.md, `.claude/`, policy/ADR docs, CI config, and
    any path this repo's own CLAUDE.md declares (harness PRs get
@@ -323,7 +327,8 @@ subagents need:
      dispatches no further issue. For a PR whose only hold is the up-to-date rail ("behind"),
      the train tries `gh pr update-branch <pr>` once (merge-from-base, never `--rebase`, skipped
      when the repo's merge method is rebase), waits a bounded time for CI, then re-evaluates the
-     whole merge floor from the top on the new head; a conflict or a further failure leaves the
+     whole merge floor from the top on the new head (pinning the merge to the head that re-run
+     compared); a conflict or a further failure leaves the
      PR held, named, with the old → new head recorded in the report. Activation (1) does not
      require the `gh pr merge` deny to be lifted, so until a merge is confirmed in a run the train
      applies at most one update-branch (and its CI wait) — with the deny still in place, guard
