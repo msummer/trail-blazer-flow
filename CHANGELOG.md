@@ -23,6 +23,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
   for `TBF_CODEX_GH_TIMEOUT`. Previously a leading-zero run timeout killed the background watchdog and
   let codex run with no time limit, and a leading-zero kill grace broke the KILL escalation after
   TERM. No consumer step.
+- #485: `codex-setup.sh` refuses (exit 2) a destination that exists but isn't a regular file, and
+  `--check` reports it as `reason=not-a-file`; a failed `mkdir -p`/`mv` now stops with a
+  partial-install report on stderr and exit 3 instead of printing `wrote=` and exiting 0. No
+  consumer step.
 - #482: harness-lock.sh serializes a stale-lock reclaim behind a second atomic mkdir and re-checks
   the holder under it, so two concurrent reclaims can no longer both succeed; a marker left by an
   interrupted reclaim refuses until release --force. No consumer step.

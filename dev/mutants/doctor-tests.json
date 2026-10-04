@@ -729,8 +729,13 @@
         "codex-setup-config-not-key",
         "codex-setup-config-refusals",
         "codex-setup-contract-agents-md",
+        "codex-setup-dest-not-a-file",
+        "codex-setup-first-file-failure",
         "codex-setup-fresh",
         "codex-setup-idempotent",
+        "codex-setup-mkdir-failure",
+        "codex-setup-mv-failure",
+        "codex-setup-mv-noop",
         "codex-setup-rules-content",
         "codex-setup-rules-gated"
       ]
@@ -825,7 +830,12 @@
       "expect_fail": [
         "codex-setup-agents-md-malformed",
         "codex-setup-config-conflict",
-        "codex-setup-config-refusals"
+        "codex-setup-config-refusals",
+        "codex-setup-dest-not-a-file",
+        "codex-setup-first-file-failure",
+        "codex-setup-mkdir-failure",
+        "codex-setup-mv-failure",
+        "codex-setup-mv-noop"
       ]
     },
     {
@@ -2368,6 +2378,150 @@
       ],
       "expect_fail": [
         "codex-sched-timeout-invalid"
+      ]
+    },
+    {
+      "name": "485-cx-preinstall-off",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "    if [ -e \"$pre_dest\" ] && [ ! -f \"$pre_dest\" ]; then",
+          "to": "    if false; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-dest-not-a-file"
+      ]
+    },
+    {
+      "name": "485-cx-not-a-file-reason",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "echo \"drift=$rel reason=not-a-file\"",
+          "to": "echo \"drift=$rel reason=missing\""
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-dest-not-a-file"
+      ]
+    },
+    {
+      "name": "485-cx-mkdir-unchecked",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": " || install_failed \"$rel\" \"mkdir -p failed\"",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-mkdir-failure"
+      ]
+    },
+    {
+      "name": "485-cx-mv-unchecked",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": " || install_failed \"$rel\" \"mv failed\"",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-first-file-failure",
+        "codex-setup-mv-failure"
+      ]
+    },
+    {
+      "name": "485-cx-postmove-off",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "  [ -f \"$dest\" ] || install_failed \"$rel\" \"not a regular file after mv\"",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-mv-noop"
+      ]
+    },
+    {
+      "name": "485-cx-written-list",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "  written_rels=\"${written_rels:+$written_rels }$rel\"",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-mkdir-failure",
+        "codex-setup-mv-failure",
+        "codex-setup-mv-noop"
+      ]
+    },
+    {
+      "name": "485-cx-wrote-early",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "  mkdir -p \"$(dirname \"$dest\")\" || install_failed \"$rel\" \"mkdir -p failed\"",
+          "to": "  echo \"wrote=$rel\"\n  mkdir -p \"$(dirname \"$dest\")\" || install_failed \"$rel\" \"mkdir -p failed\""
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-first-file-failure",
+        "codex-setup-mkdir-failure",
+        "codex-setup-mv-failure",
+        "codex-setup-mv-noop"
+      ]
+    },
+    {
+      "name": "485-cx-fail-exit-zero",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "  exit 3",
+          "to": "  exit 0"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-first-file-failure",
+        "codex-setup-mkdir-failure",
+        "codex-setup-mv-failure",
+        "codex-setup-mv-noop"
+      ]
+    },
+    {
+      "name": "485-cx-none-default",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "written this run: ${written_rels:-none}\"",
+          "to": "written this run: ${written_rels}\""
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-first-file-failure"
       ]
     }
   ]

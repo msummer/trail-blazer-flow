@@ -46,7 +46,7 @@ bash <plugin root>/bin/codex-setup.sh
 ```
 
 It writes or updates the files below, printing one `wrote=<relpath>` or `unchanged=<relpath>`
-line per file, then — only if it wrote at least one file — three `next:` lines naming the
+line per file it installs, then — only if it wrote at least one file — three `next:` lines naming the
 remaining trust steps (see "Trust steps"). Run it again after every plugin upgrade: the
 installed rules file's paths carry the version.
 
@@ -71,6 +71,16 @@ A repo path or plugin install path containing whitespace is unsupported: write m
 (exit 2, nothing written); `--check` reports it and exits 1. A plugin install path containing a
 character outside `[A-Za-z0-9._/@+:-]` is unsupported the same way — this keeps the rules
 template's `sed` substitution and the generated Starlark string both safe.
+
+A destination that already exists but isn't a regular file (a directory at
+`.codex/agents/planner.toml`, say) is refused the same way: write mode exits 2 before moving
+anything, with one stderr line naming the path; `--check` reports
+`drift=<relpath> reason=not-a-file`. If a `mkdir -p` or `mv` fails mid-install (a read-only
+`.codex/`, for example), write mode stops at that file. It prints no `wrote=` line for it and no
+`next:` lines, and prints one stderr line
+`codex-setup.sh: install failed for <relpath> (<step>) — partial install; written this run: <relpaths, or none>`,
+where `<step>` is `mkdir -p failed`, `mv failed`, or `not a regular file after mv`. It then exits
+3. Files already written stay written; fix the cause and re-run.
 
 ## Rules
 
@@ -162,8 +172,9 @@ shapes per file:
 - `ok=<relpath>` — already current.
 - `drift=<relpath> reason=<token>` — one of `missing`, `differs`, `stale-plugin-path` (the rules
   file's own content differs AND at least one installed `host_executable` path's directory isn't
-  this install's `bin/`), `missing-fallback`, `fallback-conflict`, `missing-pointer`, or
-  `malformed-pointer`.
+  this install's `bin/`), `missing-fallback`, `fallback-conflict`, `missing-pointer`,
+  `malformed-pointer`, or `not-a-file` (something other than a regular file — a directory, say —
+  sits at the path; write mode refuses it).
 
 An unsupported path instead prints `unsupported=<plugin-root|repo-path>
 reason=<whitespace|unsupported-character> path=<p>`. `--check` exits 0 when everything is
