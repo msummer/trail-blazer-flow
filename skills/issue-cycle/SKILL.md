@@ -152,9 +152,9 @@ on top and is not configurable**:
   read, the *Archived verdict* archive read and match needle, the *Plan-binding provenance*
   discovery run and binding-line walk needle, `gh pr checks`, the up-to-date rail's `git fetch
   origin` and its `gh pr view`, guard (a)'s `baseRefName` and `defaultBranchRef` reads, and guard
-  (d)'s `state` read (a re-read only, never a second merge). A transient failure is the command
-  rejected or erroring rather than answering, or printing anything but the shape its own
-  sub-bullet expects — and, for the discovery run, an **unknown** `covers_plan` verdict; `gh pr
+  (d)'s `state`/`headRefOid` read (a re-read only, never a second merge). A transient failure is
+  the command rejected or erroring rather than answering, or printing anything but the shape its
+  own sub-bullet expects — and, for the discovery run, an **unknown** `covers_plan` verdict; `gh pr
   checks` answers whenever it prints per-check results in any state — pending (exit 8) and
   failing included — or reports no checks; `git fetch origin` answers by exiting 0 — its output
   is not read — so any non-zero exit is the transient failure. A determinate answer (those, a
@@ -372,19 +372,28 @@ since production is unverified and whether to merge onto it is the human's call.
     already does, not a hardcoded `main`). A mismatch **aborts that merge and escalates** — the
     harness never merges a PR whose base is a feature branch, even if every other guard passes.
 
-(b) **Attempt the merge**, matching the repo's existing merge method as today.
+(b) **Attempt the merge, pinned to the evaluated head**: one `gh pr merge` call with the repo's
+    merge-method flag plus `--match-head-commit <paste the head OID here>` — the OID this PR's most
+    recent up-to-date rail printed (after an update-branch, the re-run rail's, never the pre-update
+    head). Never merge without the pin.
 
 (c) **Permission-denied escalates loudly.** If the policy section exists but `gh pr merge` comes
     back permission-denied (the human hasn't lifted the deny on this machine), the stage fails
     loudly: report the issue as **`verified, merge blocked`** (never `done`), and print the
     **exact command** for the human in the run summary, including the PR number and the repo's
-    merge method, e.g. `gh pr merge <n> --squash` (adjust the flag to match). Never route around
-    the denial — no API calls, no web merges, no asking the user mid-cycle.
+    merge method, e.g. `gh pr merge <n> --squash --match-head-commit <head OID>` (adjust the flag
+    to match; the OID is guard (b)'s pin, so GitHub refuses it if the head has moved). Never
+    route around the denial — no API calls, no web merges, no asking the user mid-cycle.
 
 (d) **Merge-landed confirmation.** After the merge command returns, confirm it actually landed
-    before reporting it merged (`gh pr view <n> --json state --jq .state | tr -d '\r'` must
-    return `MERGED`). If it doesn't, the state is **`merge attempted, unconfirmed`** and the
-    merge pass stops for that PR — don't proceed to the next merge assuming success.
+    before reporting it merged (`gh pr view <n> --json state,headRefOid --jq '.state, .headRefOid'
+    | tr -d '\r'` prints the state, then the head OID; the state must be `MERGED`). If the merge
+    command exited non-zero and the printed OID differs from the pinned one, the state is **`head
+    moved`**: not merged, a per-PR hold recorded as `outcome=not-eligible` with the reason `head
+    moved since evaluation: <pinned> → <current> — re-evaluated next cycle` (first 12 characters
+    of each) — never retried or merged against the new head this pass; move to the next PR.
+    Never recognised from gh's error text. Any other non-`MERGED` result is **`merge attempted,
+    unconfirmed`** and the merge pass stops for that PR — don't proceed assuming success.
 
     **Carve-out audit comment.** Once this guard confirms `MERGED` for a PR the *Lesson-append
     carve-out* released, write a temp file and post it with `gh issue comment <n> --body-file
