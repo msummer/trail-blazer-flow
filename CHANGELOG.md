@@ -20,6 +20,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 - #487: releases are planned as `vX.Y.Z` GitHub milestones instead of `rel-XYZ` labels; the
   release ritual closes the milestone after the tag push. Maintainer-only; no consumer step.
+- #484: `codex-setup.sh` no longer duplicates `project_doc_fallback_filenames` in a
+  `.codex/config.toml` with no final newline. An indented key line or more than one key line is now
+  refused as `fallback-conflict` (write mode exit 2, `--check` drift) instead of being reported `ok`.
 
 ## v3.2.0
 

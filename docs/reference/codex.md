@@ -140,9 +140,13 @@ Codex loads `CLAUDE.md` as the project contract one of two ways, and the two don
   pointer block and is rewritten as one. `.codex/config.toml`'s fallback key is never touched in this branch.
 - **No `AGENTS.md`.** `codex-setup.sh` writes
   `project_doc_fallback_filenames = ["CLAUDE.md"]` into the repo's `.codex/config.toml` (inserted
-  before the first `[table]` header if the file already exists without the key). A pre-existing
-  top-level value that doesn't name `CLAUDE.md` is a conflict: write mode refuses (exit 2, file
-  untouched); `--check` reports `reason=fallback-conflict`.
+  before the first `[table]` header if the file already exists without the key). Only lines before
+  the first unindented `[table]` header are read, and a `#` comment line never counts as the key.
+  The key counts as already set only when exactly one unindented key line carries `"CLAUDE.md"` in
+  double quotes; a missing final newline doesn't matter. Anything else is a conflict: a key line
+  that doesn't itself carry `"CLAUDE.md"` (so a multi-line array or a single-quoted `'CLAUDE.md'`
+  counts), an indented key line, or more than one key line. On a conflict, write mode refuses
+  (exit 2, file untouched) and `--check` reports `reason=fallback-conflict`.
 
 `codex-setup.sh` never creates a new `AGENTS.md` — doing so would suppress the fallback it just
 configured. Only a repo-root `AGENTS.md` is recognised; `AGENTS.override.md` and any nested
