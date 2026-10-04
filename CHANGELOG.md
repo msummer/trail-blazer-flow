@@ -18,6 +18,11 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #460: `codex-scheduled-run.sh` now refuses a leading-zero `TBF_CODEX_RUN_TIMEOUT` or
+  `TBF_CODEX_RUN_KILL_GRACE` (e.g. `08`) as `preflight-failed reason=bad-timeout`, as it already did
+  for `TBF_CODEX_GH_TIMEOUT`. Previously a leading-zero run timeout killed the background watchdog and
+  let codex run with no time limit, and a leading-zero kill grace broke the KILL escalation after
+  TERM. No consumer step.
 - #485: `codex-setup.sh` refuses (exit 2) a destination that exists but isn't a regular file, and
   `--check` reports it as `reason=not-a-file`; a failed `mkdir -p`/`mv` now stops with a
   partial-install report on stderr and exit 3 instead of printing `wrote=` and exiting 0. No

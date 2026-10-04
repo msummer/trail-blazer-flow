@@ -2351,6 +2351,36 @@
       ]
     },
     {
+      "name": "460-run-timeout-leading-zero-accepted",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "case \"$timeout\" in\n  0?*) finish preflight-failed bad-timeout ;;\nesac\ncase \"$timeout\" in\n  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;\nesac",
+          "to": "case \"$timeout\" in\n  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;\nesac"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-timeout-invalid"
+      ]
+    },
+    {
+      "name": "460-grace-leading-zero-accepted",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-",
+      "edits": [
+        {
+          "from": "case \"$grace\" in\n  0?*) finish preflight-failed bad-timeout ;;\nesac\ncase \"$grace\" in\n  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;\nesac",
+          "to": "case \"$grace\" in\n  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;\nesac"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-timeout-invalid"
+      ]
+    },
+    {
       "name": "485-cx-preinstall-off",
       "target": "bin/codex-setup.sh",
       "suite": "dev/doctor-tests.sh",

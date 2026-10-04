@@ -46,10 +46,13 @@
 #      preflight-failed, reason=unsafe-path.
 #   2. TBF_CODEX_RUN_TIMEOUT (default 14400), TBF_CODEX_RUN_KILL_GRACE (default 30) and
 #      TBF_CODEX_GH_TIMEOUT (default 120, #443) — env vars, seconds — must each be digits-only and
-#      greater than 0. TBF_CODEX_GH_TIMEOUT also rejects a leading zero (e.g. "08"): unlike the
-#      other two, its value feeds bash arithmetic before codex is ever launched (inside
-#      bounded_run, below), where a leading-zero value aborts with "value too great for base"
-#      instead of failing this validation cleanly. Otherwise: preflight-failed, reason=bad-timeout.
+#      greater than 0, and free of a leading zero (e.g. "08"): each value feeds bash arithmetic,
+#      where a leading-zero numeral is octal and "08" aborts with "value too great for base"
+#      instead of failing this validation cleanly. TBF_CODEX_GH_TIMEOUT does so in bounded_run,
+#      before codex is ever launched; TBF_CODEX_RUN_TIMEOUT does so in the watchdog, a background
+#      subshell whose death would leave codex with no time limit; TBF_CODEX_RUN_KILL_GRACE does so
+#      in the watchdog's post-TERM poll and in on_wrapper_signal, breaking the KILL escalation
+#      after TERM. Otherwise: preflight-failed, reason=bad-timeout.
 #   3. `codex`, `gh`, and `jq` must all be on PATH (launchd's own PATH is minimal, and the
 #      plugin's hooks fail open without `jq`). Otherwise: preflight-failed,
 #      reason=missing-tool:<comma-separated names>.
@@ -864,22 +867,33 @@ gh_bin="$(command -v gh 2>/dev/null || true)"
 # any entry.
 $path_unsafe && finish preflight-failed unsafe-path
 
-# 2. TBF_CODEX_RUN_TIMEOUT / TBF_CODEX_RUN_KILL_GRACE / TBF_CODEX_GH_TIMEOUT — digits-only and > 0.
+# 2. TBF_CODEX_RUN_TIMEOUT / TBF_CODEX_RUN_KILL_GRACE / TBF_CODEX_GH_TIMEOUT — digits-only, > 0, and
+# no leading zero.
+#
+# All three also reject a leading zero (e.g. "08"): each value is an operand of bash arithmetic, where
+# bash treats a leading-zero numeral as octal, and "08"/"09" have no valid octal digit, so the
+# arithmetic aborts with "value too great for base" instead of failing this validation cleanly (a bug,
+# not a feature). TBF_CODEX_GH_TIMEOUT feeds bounded_run, BEFORE codex is ever launched, and aborting
+# there silently bypasses the harness-stop.sh preflight check and can still launch codex.
+# TBF_CODEX_RUN_TIMEOUT feeds watchdog, a background subshell that would die silently and leave codex
+# running with no time limit at all. TBF_CODEX_RUN_KILL_GRACE feeds watchdog's post-TERM poll and
+# on_wrapper_signal, which would break the KILL escalation. Each leading-zero arm must run before its
+# digits-only check, since "08" would otherwise pass it; a bare "0" does not match "0?*" (it needs a
+# second character) and is still refused by the "-gt 0" check.
+case "$timeout" in
+  0?*) finish preflight-failed bad-timeout ;;
+esac
 case "$timeout" in
   ''|*[!0-9]*) finish preflight-failed bad-timeout ;;
 esac
 [ "$timeout" -gt 0 ] || finish preflight-failed bad-timeout
 case "$grace" in
+  0?*) finish preflight-failed bad-timeout ;;
+esac
+case "$grace" in
   ''|*[!0-9]*) finish preflight-failed bad-timeout ;;
 esac
 [ "$grace" -gt 0 ] || finish preflight-failed bad-timeout
-# TBF_CODEX_GH_TIMEOUT additionally rejects a leading zero (e.g. "08"), unlike TBF_CODEX_RUN_TIMEOUT/
-# TBF_CODEX_RUN_KILL_GRACE above: this value is the operand of bash arithmetic inside bounded_run
-# (below) BEFORE codex is ever launched, and bash treats a leading-zero numeral as octal there — "08"
-# has no valid octal digit and aborts the whole call stack up to this script's top level with "value
-# too great for base" (a bug, not a feature: it silently bypasses the harness-stop.sh preflight check
-# and can still launch codex). This arm must run before the digits-only check below, since "08" would
-# otherwise pass it.
 case "$gh_timeout_raw" in
   0?*) finish preflight-failed bad-timeout ;;
 esac
