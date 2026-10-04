@@ -53,17 +53,24 @@ pointer block in an existing AGENTS.md or a project_doc_fallback_filenames entry
   (no flags)   Write mode. Prints one `wrote=<relpath>` or `unchanged=<relpath>` line per file,
                then, only if at least one file was written, three `next:` lines naming the
                project-trust, plugin-hook-trust and `codex --no-daemon` steps.
+               A destination that exists but is not a regular file is refused (exit 2)
+               before anything is written. A failed mkdir -p or mv stops at that file:
+               no wrote= for it, no next: lines, one stderr line `codex-setup.sh: install
+               failed for <relpath> (<step>) — partial install; written this run:
+               <relpaths|none>`, exit 3 (earlier files are not rolled back).
   --check      Read-only: never writes, never creates .codex/. Prints `ok=<relpath>` when a file
                is already current, or `drift=<relpath> reason=<token>` otherwise (token one of
                missing, differs, stale-plugin-path, missing-fallback, fallback-conflict,
-               missing-pointer, malformed-pointer), or `unsupported=<plugin-root|repo-path>
+               missing-pointer, malformed-pointer, not-a-file), or `unsupported=<plugin-root|repo-path>
                reason=<whitespace|unsupported-character> path=<p>` for an unsupported path. Exits
                0 when everything is current, 1 when anything drifted or a path is unsupported.
   -h, --help   This text (exit 0).
 
 Exit codes: 0 = success/clean, 1 = drift found (--check only), 2 = usage or environment error
 (not inside a git repository, a whitespace/unsupported-character path in write mode, a malformed
-agents/*.md, a malformed contract-pointer marker, or a .codex/config.toml fallback conflict).
+agents/*.md, a malformed contract-pointer marker, a .codex/config.toml fallback conflict, or a
+destination that exists but is not a regular file — each refused before anything is written),
+3 = write mode only: a mkdir -p or mv failed mid-install (partial install, reported on stderr).
 EOF
 }
 
@@ -133,6 +140,7 @@ trap cleanup EXIT
 
 any_drift=false
 any_written=false
+written_rels=""
 
 # install_rel/install_tmpfile/install_reason (#408 kickback finding 1) — every generator below
 # calls queue_install instead of installing straight away, so a later role's or a later step's
@@ -150,10 +158,13 @@ queue_install() {
 }
 
 # emit_result REL TMPFILE [DIFFERS_REASON] — REL is relative to $repo_top. Compares TMPFILE
-# against the existing $repo_top/REL (if any). Write mode: mkdir -p + mv on missing/differs,
-# printing wrote=/unchanged=. --check mode: NEVER creates a directory or file — only compares and
-# prints ok=/drift=, leaving TMPFILE for the trap to clean up. Called only from the drain loop
-# below, never directly from a generator.
+# against the existing $repo_top/REL (if any). Write mode: on missing/differs, mkdir -p, mv and a
+# post-move [ -f ] are each checked, and wrote= is printed only after all three pass; the first
+# failure calls install_failed (exit 3, partial-install report). A destination that already exists
+# as a non-regular file never reaches here in write mode: the pre-install check below refuses it
+# first. --check mode: NEVER creates a directory or file — only compares and prints ok=/drift=
+# (a non-regular-file path reports reason=not-a-file), leaving TMPFILE for the trap to clean up.
+# Called only from the drain loop below, never directly from a generator.
 emit_result() {
   local rel="$1" tmpfile="$2" differs_reason="${3:-differs}"
   local dest="$repo_top/$rel"
@@ -164,16 +175,30 @@ emit_result() {
   if $check_mode; then
     if [ -f "$dest" ]; then
       echo "drift=$rel reason=$differs_reason"
+    elif [ -e "$dest" ]; then
+      echo "drift=$rel reason=not-a-file"
     else
       echo "drift=$rel reason=missing"
     fi
     any_drift=true
     return
   fi
-  mkdir -p "$(dirname "$dest")"
-  mv "$tmpfile" "$dest"
+  mkdir -p "$(dirname "$dest")" || install_failed "$rel" "mkdir -p failed"
+  mv "$tmpfile" "$dest" || install_failed "$rel" "mv failed"
+  [ -f "$dest" ] || install_failed "$rel" "not a regular file after mv"
   echo "wrote=$rel"
+  written_rels="${written_rels:+$written_rels }$rel"
   any_written=true
+}
+
+# install_failed REL STEP (#485) — a write-mode mkdir -p/mv step failed for REL. Prints one stderr
+# line naming REL, the failed STEP and every file already written this run, then exits 3 (never 2:
+# exit 2 means the repo is untouched, and earlier files here already landed). No rollback, and the
+# next: lines never print. Called from emit_result in the main shell's drain loop, so this exit
+# ends the script and the EXIT trap still runs cleanup.
+install_failed() {
+  echo "codex-setup.sh: install failed for $1 ($2) — partial install; written this run: ${written_rels:-none}" >&2
+  exit 3
 }
 
 # --- agent TOMLs ---------------------------------------------------------------------------------
@@ -410,6 +435,24 @@ fi
 # Every output above was generated into $scratch_dir and merely queued — nothing above this point
 # ever touched $repo_top. Only now, after every validation step that can `exit 2` has already run
 # to completion, do we compare and (write mode only) move files into place.
+#
+# Pre-install check (#485), write mode only: every queued destination (the three agent TOMLs, the
+# rules file, config.toml, AGENTS.md) that exists but is not a regular file is refused with exit 2
+# before the first move, so nothing is written. AGENTS.md is queued only when it is already a
+# regular file, so in practice it never trips. Parent components are not validated: a regular file
+# standing where a directory is needed surfaces as a mkdir -p failure (exit 3) instead.
+if ! $check_mode; then
+  pre_i=0
+  while [ "$pre_i" -lt "${#install_rel[@]}" ]; do
+    pre_dest="$repo_top/${install_rel[$pre_i]}"
+    if [ -e "$pre_dest" ] && [ ! -f "$pre_dest" ]; then
+      echo "codex-setup.sh: ${install_rel[$pre_i]} exists but is not a regular file — refusing to install over it (nothing written)" >&2
+      exit 2
+    fi
+    pre_i=$((pre_i + 1))
+  done
+fi
+
 i=0
 while [ "$i" -lt "${#install_rel[@]}" ]; do
   emit_result "${install_rel[$i]}" "${install_tmpfile[$i]}" "${install_reason[$i]}"
