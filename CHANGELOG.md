@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #483: the merge pass pins each autonomous merge, and guard (c)'s printed hand-off command, to
+  the head OID the up-to-date rail evaluated (`gh pr merge --match-head-commit`); a head that
+  moved since is held as `head moved`, never merged or retried that pass. No consumer step.
 - #487: releases are planned as `vX.Y.Z` GitHub milestones instead of `rel-XYZ` labels; the
   release ritual closes the milestone after the tag push. Maintainer-only; no consumer step.
 - #484: `codex-setup.sh` no longer duplicates `project_doc_fallback_filenames` in a

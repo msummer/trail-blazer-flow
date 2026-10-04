@@ -830,7 +830,7 @@ human, per issue, and the harness never applies it, so an uncitable answer still
 use is audited (issue comment; cycle report). With only auto-approval enabled, a bad
 auto-approval costs a wasted PR, not a bad merge. With merge
 autonomy also enabled, the backstop is the merge pass's hard floor (standard-flow PRs only,
-green CI on a head that mechanically contains the default branch's current tip (#234) — a
+green CI on a head that mechanically contains the default branch's current tip (#234), the merge itself pinned to that same evaluated head — a
 `git fetch origin` still failing after one retry holds rather than comparing a stale tip (#319)
 — protected governance surface, read mechanically from the PR's own diff (#324) — audited
 exception: a harness PR whose only governance-surface change is a

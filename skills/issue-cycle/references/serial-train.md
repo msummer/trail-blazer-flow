@@ -71,7 +71,8 @@ Three classes:
 
 - **Per-PR hold** (any floor "not eligible", including red CI after the implementer's fix
   attempt, a governance or `governance-paths.sh` hold, uncovered post-approval comments, a
-  provenance mismatch, a transient pre-merge read still failing, a base-mismatch escalation, or a blocked
+  provenance mismatch, a transient pre-merge read still failing, a base-mismatch escalation, a
+  guard (d) `head moved` refusal (not re-evaluated or updated again this pass), or a blocked
   issue with no PR): **continue with the next issue.** The held PR stays open with its one-line
   reason; the next pass's drain re-evaluates it.
 - **Merge-halting**, for the rest of the run: guard (c) denial; guard (d) `merge attempted,
@@ -119,7 +120,9 @@ Then:
    held, "CI still pending on updated head `<sha>`".
 4. Re-evaluate the whole floor for this PR from the top: the per-PR stop check, verdict
    provenance onward, the rail and `governance-paths.sh` re-run on the new head. A rail failing
-   again ⇒ held, with no second update this pass.
+   again ⇒ held, with no second update this pass. Guard (b)'s `--match-head-commit` pin and
+   guard (c)'s hand-off then use the head OID this re-run rail printed, never the pre-update head
+   and never step 2's read.
 5. Record "update-branch: `<old head>` → `<new head>`" in the PR's cycle-report row, held or
    merged alike, and in the merge's audit evidence when it merges.
 
