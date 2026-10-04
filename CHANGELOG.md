@@ -16,7 +16,16 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v3.3.0
+
+This release makes scheduled unattended Codex runs a supported surface: `codex exec` passes of
+`issue-cycle`, launched by a macOS LaunchAgent through `bin/codex-scheduled-run.sh`, after the live
+gate (#429) passed every item. Merges stay by hand. The gate's finding, a push-guard bypass through
+Codex's shell `workdir`, is fixed (#494). Also in this release: harness-lock serializes stale-lock
+reclaims, the merge pass pins each merge to the evaluated head, `codex-setup.sh` refuses ambiguous
+or unsafe destinations, the run wrapper refuses leading-zero timeouts, and releases are planned as
+milestones. Consumer steps, on Codex only: re-run `bin/codex-setup.sh`, and for scheduled runs the
+checkout's `origin` must authenticate with no prompt.
 
 - #429: scheduled unattended `codex exec` runs (macOS LaunchAgent) are Supported after the live gate
   passed U1–U9 (ADR 0002 amendment (5)); merges stay by hand. Consumer step: the checkout's `origin`
