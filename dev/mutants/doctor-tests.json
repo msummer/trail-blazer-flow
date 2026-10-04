@@ -725,6 +725,9 @@
         "codex-setup-check-stale-version",
         "codex-setup-config-conflict",
         "codex-setup-config-merge",
+        "codex-setup-config-no-newline",
+        "codex-setup-config-not-key",
+        "codex-setup-config-refusals",
         "codex-setup-contract-agents-md",
         "codex-setup-fresh",
         "codex-setup-idempotent",
@@ -774,7 +777,8 @@
         }
       ],
       "expect_fail": [
-        "codex-setup-config-merge"
+        "codex-setup-config-merge",
+        "codex-setup-config-not-key"
       ]
     },
     {
@@ -820,7 +824,8 @@
       ],
       "expect_fail": [
         "codex-setup-agents-md-malformed",
-        "codex-setup-config-conflict"
+        "codex-setup-config-conflict",
+        "codex-setup-config-refusals"
       ]
     },
     {
@@ -836,6 +841,97 @@
       ],
       "expect_fail": [
         "codex-setup-agents-md-malformed"
+      ]
+    },
+    {
+      "name": "484-cx-key-col0",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "/^[ \\t]*project_doc_fallback_filenames[ \\t]*=/",
+          "to": "/^project_doc_fallback_filenames[ \\t]*=/"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-config-refusals"
+      ]
+    },
+    {
+      "name": "484-cx-indent-ok",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "if ($0 ~ /^[ \\t]/) { indented++ }",
+          "to": "if (0) { indented++ }"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-config-refusals"
+      ]
+    },
+    {
+      "name": "484-cx-dup-off",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "[ \"$cfg_keys\" -gt 1 ]",
+          "to": "[ \"$cfg_keys\" -gt 99 ]"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-config-refusals"
+      ]
+    },
+    {
+      "name": "484-cx-foreign-ok",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "index($0, \"\\\"CLAUDE.md\\\"\") == 0",
+          "to": "0"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-config-conflict",
+        "codex-setup-config-refusals"
+      ]
+    },
+    {
+      "name": "484-cx-key-unanchored",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "/^[ \\t]*project_doc_fallback_filenames[ \\t]*=/",
+          "to": "/project_doc_fallback_filenames[ \\t]*=/"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-config-not-key"
+      ]
+    },
+    {
+      "name": "484-cx-table-scope",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "/^\\[/ { intable = 1 }",
+          "to": "/^\\[/ { intable = 0 }"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-config-not-key"
       ]
     },
     {

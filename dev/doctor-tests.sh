@@ -3395,6 +3395,8 @@ case_codex_setup_config_merge() {
 # is installed); --check reports reason=fallback-conflict (rc 1).
 # mutant:408-cx-rules-preflight — installing the rules file directly instead of queueing it for the
 #   post-validation drain leaves .codex/rules behind when a later step refuses.
+# mutant:484-cx-foreign-ok — switching off bin/codex-setup.sh's foreign-value test accepts a
+#   column-zero key line that does not carry "CLAUDE.md", so write mode no longer refuses.
 case_codex_setup_config_conflict() {
   local plugin repo before
   plugin="$(mk_cx_plugin cx-config-conflict-plugin 2.9.0)"
@@ -3411,6 +3413,133 @@ case_codex_setup_config_conflict() {
   run_cx "$plugin" "$repo" --check
   expect_rc 1
   expect_cx_out "drift=.codex/config.toml reason=fallback-conflict"
+}
+
+# codex-setup-config-no-newline (#484) — a .codex/config.toml whose only content is the exact
+# fallback key line with NO final newline, and no AGENTS.md: the key is seen (one awk pass reads
+# an unterminated last record), so --check reports ok and write mode reports unchanged with the
+# file byte-identical (cmp against a saved copy, never a $(cat) compare, which would strip the very
+# newline this case pins) and still exactly one key line; a second --check is rc 0 with ok. The
+# missing-final-newline half has no decision point of its own in bin/codex-setup.sh, so no
+# registry mutant represents it: a line-counting scan (wc -l) is its pre-fix shape.
+case_codex_setup_config_no_newline() {
+  local plugin repo count
+  plugin="$(mk_cx_plugin cx-no-newline-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-no-newline-repo)"
+  mkdir -p "$repo/.codex"
+  printf 'project_doc_fallback_filenames = ["CLAUDE.md"]' > "$repo/.codex/config.toml"
+  cp "$repo/.codex/config.toml" "$tmpbase/cx-no-newline-before"
+  run_cx "$plugin" "$repo" --check
+  expect_cx_out "ok=.codex/config.toml"
+  expect_cx_out_absent "drift=.codex/config.toml"
+  run_cx "$plugin" "$repo"
+  expect_rc 0
+  expect_cx_out "unchanged=.codex/config.toml"
+  cmp -s "$tmpbase/cx-no-newline-before" "$repo/.codex/config.toml" \
+    || { __ok=0; __why="${__why}config.toml was modified although it already carried the key\n"; }
+  count="$(grep -c 'project_doc_fallback_filenames' "$repo/.codex/config.toml")"
+  [ "$count" = "1" ] \
+    || { __ok=0; __why="${__why}expected exactly one key line, found $count\n"; }
+  run_cx "$plugin" "$repo" --check
+  expect_rc 0
+  expect_cx_out "ok=.codex/config.toml"
+}
+
+# codex-setup-config-refusals (#484) — config.toml shapes bin/codex-setup.sh refuses rather than
+# edits: a space-indented key line, a tab-indented key line (both naming CLAUDE.md), the exact
+# duplicated file the pre-fix script produced (comment line plus two key lines, no final newline),
+# a multi-line array whose first line has no "CLAUDE.md", and a single-quoted value. Each: write
+# mode rc 2 with the file byte-identical (cmp against a saved copy), no .codex/agents and no
+# .codex/rules (the conflict is caught before anything is installed), and the stderr text naming
+# the cause; --check then reports rc 1 with reason=fallback-conflict, never ok.
+# mutant:484-cx-key-col0 — restoring the column-zero anchor on the key regex makes an indented key
+#   line read as no key, so write mode prepends a second key instead of refusing.
+# mutant:484-cx-indent-ok — switching off the indented-key counter accepts an indented key line
+#   that names CLAUDE.md.
+# mutant:484-cx-dup-off — raising the more-than-one-key threshold reads an already-duplicated
+#   file as current.
+case_codex_setup_config_refusals() {
+  local plugin repo variant needle
+  plugin="$(mk_cx_plugin cx-refusals-plugin 2.9.0)"
+  for variant in indented tab-indented duplicated multiline-array single-quoted; do
+    repo="$(mk_cx_repo "cx-refusals-repo-$variant")"
+    mkdir -p "$repo/.codex"
+    needle='without "CLAUDE.md"'
+    case "$variant" in
+      indented)
+        printf '  project_doc_fallback_filenames = ["CLAUDE.md"]\n' > "$repo/.codex/config.toml"
+        needle='on an indented line'
+        ;;
+      tab-indented)
+        printf '\tproject_doc_fallback_filenames = ["CLAUDE.md"]\n' > "$repo/.codex/config.toml"
+        needle='on an indented line'
+        ;;
+      duplicated)
+        printf '%s\nproject_doc_fallback_filenames = ["CLAUDE.md"]\nproject_doc_fallback_filenames = ["CLAUDE.md"]' \
+          "# trail-blazer-flow: load CLAUDE.md as Codex's project doc when AGENTS.md is absent (#408)." > "$repo/.codex/config.toml"
+        needle='on more than one line'
+        ;;
+      multiline-array)
+        printf 'project_doc_fallback_filenames = [\n  "CLAUDE.md",\n]\n' > "$repo/.codex/config.toml"
+        ;;
+      single-quoted)
+        printf "project_doc_fallback_filenames = ['CLAUDE.md']\n" > "$repo/.codex/config.toml"
+        ;;
+    esac
+    cp "$repo/.codex/config.toml" "$tmpbase/cx-refusals-before-$variant"
+    run_cx "$plugin" "$repo"
+    expect_rc 2
+    cmp -s "$tmpbase/cx-refusals-before-$variant" "$repo/.codex/config.toml" \
+      || { __ok=0; __why="${__why}$variant: config.toml was modified despite the conflict\n"; }
+    expect_no_file "$repo/.codex/agents"
+    expect_no_file "$repo/.codex/rules"
+    expect_cx_err "$needle"
+    run_cx "$plugin" "$repo" --check
+    expect_rc 1
+    expect_cx_out "drift=.codex/config.toml reason=fallback-conflict"
+  done
+}
+
+# codex-setup-config-not-key (#484) — text that looks like the fallback key but is not the
+# top-level key: a # comment line carrying the exact key text, and the key inside a [profiles.x]
+# table with a different value. Each: --check reports reason=missing-fallback; write mode rc 0
+# prints wrote=, keeps the original line, and leaves exactly one key line above the first table
+# header; a later --check is rc 0 with ok.
+# mutant:484-cx-key-unanchored — dropping the leading-whitespace-only prefix from the key regex
+#   lets the comment line count as the key, so --check reports ok instead of missing-fallback.
+# mutant:484-cx-table-scope — setting the in-table flag to 0 on a table header counts the
+#   table-scoped key as top-level, so it is refused as a foreign value instead of added to.
+case_codex_setup_config_not_key() {
+  local plugin repo variant keep count
+  plugin="$(mk_cx_plugin cx-not-key-plugin 2.9.0)"
+  for variant in comment table-key; do
+    repo="$(mk_cx_repo "cx-not-key-repo-$variant")"
+    mkdir -p "$repo/.codex"
+    case "$variant" in
+      comment)
+        keep='# project_doc_fallback_filenames = ["CLAUDE.md"]'
+        printf '%s\nother_key = 1\n' "$keep" > "$repo/.codex/config.toml"
+        ;;
+      table-key)
+        keep='project_doc_fallback_filenames = ["README.md"]'
+        printf 'other_key = 1\n\n[profiles.x]\n%s\n' "$keep" > "$repo/.codex/config.toml"
+        ;;
+    esac
+    run_cx "$plugin" "$repo" --check
+    expect_rc 1
+    expect_cx_out "drift=.codex/config.toml reason=missing-fallback"
+    run_cx "$plugin" "$repo"
+    expect_rc 0
+    expect_cx_out "wrote=.codex/config.toml"
+    grep -qF -- "$keep" "$repo/.codex/config.toml" \
+      || { __ok=0; __why="${__why}$variant: the original line was lost\n"; }
+    count="$(awk '/^\[/ { exit } /^project_doc_fallback_filenames/ { n++ } END { print n + 0 }' "$repo/.codex/config.toml")"
+    [ "$count" = "1" ] \
+      || { __ok=0; __why="${__why}$variant: expected one key line above the first table, found $count\n"; }
+    run_cx "$plugin" "$repo" --check
+    expect_rc 0
+    expect_cx_out "ok=.codex/config.toml"
+  done
 }
 
 # codex-setup-check-drift — --check on a fresh repo: rc 1, reason=missing for every file, and no
@@ -7049,6 +7178,9 @@ cases=(
   "codex-setup-agents-md-malformed|case_codex_setup_agents_md_malformed|#408 kickback: non-exact or unpaired marker shapes (trailing text or CR on either or both markers, a prose mention of either marker, an unpaired begin) refuse (rc 2, byte-identical, tail content preserved, no .codex) and --check reports reason=malformed-pointer"
   "codex-setup-config-merge|case_codex_setup_config_merge|#408: a pre-existing config.toml with a top-level key plus a [profiles.x] table: the fallback key is inserted above the first table, both originals survive; --check before it pins reason=missing-fallback"
   "codex-setup-config-conflict|case_codex_setup_config_conflict|#408: a top-level project_doc_fallback_filenames not naming CLAUDE.md: write refuses (rc 2, unchanged, .codex/agents and .codex/rules absent); --check reports reason=fallback-conflict"
+  "codex-setup-config-no-newline|case_codex_setup_config_no_newline|#484: a config.toml holding only the exact fallback key line with no final newline: --check ok, write unchanged and byte-identical with one key line, a later --check ok"
+  "codex-setup-config-refusals|case_codex_setup_config_refusals|#484: space-indented, tab-indented, duplicated, multi-line-array and single-quoted key shapes: write refuses (rc 2, byte-identical, .codex/agents and .codex/rules absent, stderr names the cause); --check reports reason=fallback-conflict"
+  "codex-setup-config-not-key|case_codex_setup_config_not_key|#484: a # comment carrying the key text and a key inside a [profiles.x] table are not the top-level key: --check reports missing-fallback, write adds one key above the first table, a later --check is ok"
   "codex-setup-check-drift|case_codex_setup_check_drift|#408: --check on a fresh repo: rc 1, reason=missing per file, no .codex created; after setup, a hand-edited agent TOML gives reason=differs for exactly that file"
   "codex-setup-check-stale-version|case_codex_setup_check_stale_version|#408: rules generated from 2.9.0, then --checked from a 3.0.0 copy: reason=stale-plugin-path, proven to write nothing via a find-listing plus checksums; a write from 3.0.0 then --check is rc 0"
   "codex-setup-whitespace-plugin-root|case_codex_setup_whitespace_plugin_root|#408: a plugin root containing a space: write rc 2 nothing written; --check rc 1 unsupported=plugin-root reason=whitespace"

@@ -347,19 +347,34 @@ if [ -f "$agents_md" ]; then
 else
   config_dest="$repo_top/.codex/config.toml"
   config_reason=""
+  config_conflict_detail=""
   if [ -f "$config_dest" ]; then
-    first_table_line="$(grep -n '^\[' "$config_dest" | head -1 | cut -d: -f1)"
-    if [ -z "$first_table_line" ]; then
-      first_table_line=$(($(wc -l < "$config_dest") + 1))
-    fi
-    existing_key_line="$(awk -v lim="$first_table_line" 'NR < lim && /^project_doc_fallback_filenames[ \t]*=/ { print; exit }' "$config_dest")"
-    if [ -n "$existing_key_line" ]; then
-      case "$existing_key_line" in
-        *'"CLAUDE.md"'*) config_reason="" ;;
-        *) config_reason="fallback-conflict" ;;
-      esac
-    else
+    # One awk pass over the file, so a missing final newline is still a scanned record. Only
+    # lines before the first column-zero [table] header count: a key inside a table is a
+    # different key. Key lines are counted at any indentation, so an indented key line or a
+    # second key line is refused rather than duplicated. A comment line never matches.
+    cfg_scan="$(awk '
+      /^\[/ { intable = 1 }
+      intable { next }
+      /^[ \t]*project_doc_fallback_filenames[ \t]*=/ {
+        keys++
+        if ($0 ~ /^[ \t]/) { indented++ }
+        else if (index($0, "\"CLAUDE.md\"") == 0) { foreign++ }
+      }
+      END { printf "%d %d %d\n", keys, indented, foreign }
+    ' "$config_dest")"
+    read -r cfg_keys cfg_indented cfg_foreign <<<"$cfg_scan"
+    if [ "$cfg_keys" -eq 0 ]; then
       config_reason="missing-fallback"
+    elif [ "$cfg_keys" -gt 1 ]; then
+      config_reason="fallback-conflict"
+      config_conflict_detail="sets project_doc_fallback_filenames on more than one line"
+    elif [ "$cfg_indented" -gt 0 ]; then
+      config_reason="fallback-conflict"
+      config_conflict_detail="sets project_doc_fallback_filenames on an indented line"
+    elif [ "$cfg_foreign" -gt 0 ]; then
+      config_reason="fallback-conflict"
+      config_conflict_detail="already sets project_doc_fallback_filenames without \"CLAUDE.md\""
     fi
   fi
 
@@ -368,7 +383,7 @@ else
       echo "drift=.codex/config.toml reason=fallback-conflict"
       any_drift=true
     else
-      echo "codex-setup.sh: .codex/config.toml already sets project_doc_fallback_filenames without \"CLAUDE.md\" — refusing to override it" >&2
+      echo "codex-setup.sh: .codex/config.toml $config_conflict_detail — refusing to override it" >&2
       exit 2
     fi
   else
