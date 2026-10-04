@@ -12,7 +12,7 @@ code. Read the README first; come here when you need the exact rule.
 | [settings.md](settings.md) | The per-repo `.claude/settings.json`: every grant and deny, and what the doctor checks |
 | [safety-model.md](safety-model.md) | The permission model, the five `PreToolUse` hooks, verdict and approval provenance, trust gates on comments and issue authors, and the single-flight lock |
 | [architecture.md](architecture.md) | Repository layout, the model tiering, and the plugin/consumer boundary |
-| [codex.md](codex.md) | Installing and running this plugin on the Codex CLI: `codex-setup.sh`, the rules file, contract loading, `--check` drift, the lock's Codex owner contract, how the skills run on Codex (scripts, the lock, dispatch, the hook canary, git writes), the support matrix, scheduling unattended runs (`bin/codex-scheduled-run.sh`, macOS), removing the Codex layer, and the honest limits (per the v3.0.0 release gate, ADR 0002 amendment (3)) |
+| [codex.md](codex.md) | Installing and running this plugin on the Codex CLI: `codex-setup.sh`, the rules file, contract loading, `--check` drift, the lock's Codex owner contract, how the skills run on Codex (scripts, the lock, dispatch, the hook canary, git writes), the support matrix, scheduling unattended runs (`bin/codex-scheduled-run.sh`, macOS), removing the Codex layer, and the honest limits (per the v3.0.0 release gate and the unattended-runs live gate, ADR 0002 amendments (3) and (5)) |
 
 Decisions about where the harness is heading, rather than how it behaves today, are recorded as
 ADRs in [`docs/adr/`](../adr/README.md). Per-PR history lives in [`CHANGELOG.md`](../../CHANGELOG.md).

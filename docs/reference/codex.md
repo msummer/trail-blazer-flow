@@ -1,20 +1,22 @@
 # Codex compatibility
 
 > Part of the [reference documentation](README.md). See [`docs/adr/0002-codex-compatibility.md`](../adr/0002-codex-compatibility.md)
-> for the direction, the probe results this reference draws on, and amendment (3)'s v3.0.0
+> for the direction, the probe results this reference draws on, amendment (3)'s v3.0.0
 > release-gate results, which settle the decisions the earlier amendments left pending a live
-> check.
+> check, and amendment (5)'s live-gate results for unattended runs (#429).
 
 This plugin installs unchanged on the Codex CLI (`codex plugin add trail-blazer-flow@trail-blazer-flow`,
 or from a local clone / a public GitHub repo). Its skills and hooks load; `bin/codex-setup.sh`
 adds the pieces Codex needs that a Claude Code consumer gets for free: custom agent files, an
 unsandboxed-command rules file, and a way to load `CLAUDE.md` as the project contract. Codex
-support ships **supervised only**, on Codex CLI **0.156.1 or newer**, on **macOS** — see "Support
-matrix" below for exactly what that covers, and "Honest limits" for what remains unverified.
+support ships **without merge autonomy**, on Codex CLI **0.156.1 or newer**, on **macOS**:
+supervised interactive sessions and, since the #429 live gate, scheduled unattended `codex exec`
+runs — see "Support matrix" below for exactly what that covers, and "Honest limits" for what
+remains unverified.
 
 See also: the README's ["Running on Codex"](../../README.md#running-on-codex) for the day-to-day
 recipe; [ADR 0002](../adr/0002-codex-compatibility.md)'s amendment (3) for the v3.0.0 release-gate
-method and results; "The doctor on Codex" and "Running the skills on Codex" below for how the
+method and results, and amendment (5) for the unattended-runs live gate (#429); "The doctor on Codex" and "Running the skills on Codex" below for how the
 doctor and the skills each behave; and [safety-model.md](safety-model.md)'s "Hook canary"
 paragraph for why every Codex dispatch opens with one.
 
@@ -23,12 +25,14 @@ paragraph for why every Codex dispatch opens with one.
 Verified live at the v3.0.0 release gate (#411; ADR 0002 amendment (3), Codex CLI `codex-cli
 0.156.1`, macOS 27.0). **Minimum supported Codex CLI version: 0.156.1** — the doctor's own floor
 (`CODEX_MIN_VERSION` in `bin/check-harness.sh`), and the version the gate itself ran on.
+`codex exec` and scheduled unattended runs were verified live at the #429 gate (ADR 0002
+amendment (5), the same Codex CLI version, macOS).
 
 | Surface | Status | Why |
 |---|---|---|
 | Codex CLI 0.156.1+ on macOS, interactive `codex --no-daemon`, supervised | **Supported** | Install, trust, `harness-setup`, planning, implementation, verification, the stop switch, and the lock's refusal of a concurrent holder all held live at the gate (the daemon refusal is fixture-covered by `dev/lock-tests.sh`) |
 | The default Codex TUI's managed `app-server` daemon | **Not supported** | `harness-lock.sh acquire` refuses an owner whose command line names `app-server` — that daemon outlives every session it serves, so a lock recorded against it would never be reclaimed |
-| `codex exec` and unattended or scheduled runs | **Not supported** | In-session rules and the launch wrapper (`bin/codex-scheduled-run.sh`, see "Scheduling unattended runs (macOS)" below) are implemented; the live gate (I4, #429) is pending |
+| `codex exec` and scheduled unattended runs (a macOS LaunchAgent running `bin/codex-scheduled-run.sh`) | **Supported** | Held live at the #429 gate (ADR 0002 amendment (5)): a full plan, implement, verify and PR pass; stall escalation of a missing planner report; a forced-denial escalation; kill and signed-out re-entry; the stop switch between stages; no merge call; natural LaunchAgent fires with no overlap. Every merge stays by hand — see "Scheduling unattended runs (macOS)" and "Unattended runs (`codex exec`)" below |
 | Worktree-parallel mode | **Not supported** | A worktree's gitdir is read-only in the sandbox, and `git-c-guard`'s allow is ignored under Codex's own rules — see "Worktree mode" below |
 | The merge pass and merge autonomy | **Not supported** | Every merge on Codex is by hand; `gh pr merge` is additionally `forbidden` by the installed rules, verified live at the gate |
 | Autonomy mode | **Not supported** | Read as absent on Codex: no implied auto-approval, no `--carry-over`, no serial train |
@@ -291,11 +295,18 @@ After a successful write, `codex-setup.sh` prints three reminders:
 
 `bin/codex-scheduled-run.sh` (I2, #427; ADR 0002 amendment 2026-09-27 (4), decisions 2-4) is the
 launchd-driven wrapper that starts one unattended `codex exec` pass of `issue-cycle`. `codex exec`
-itself stays **Not supported** until the live gate (I4, #429) flips the support-matrix row above —
-this section states the wrapper's own contract, already implemented and fixture-covered
-(`dev/doctor-tests.sh`'s `codex-sched-*` cases, the failure-tracking step's own `codex-track-*`
-cases — I3, #428, below — and the startup PATH scrub's own `codex-path-*` cases — #444, below),
-independent of that live gate.
+is **Supported** since the live gate (I4, #429; ADR 0002 amendment (5)). This section states the
+wrapper's own contract, fixture-covered (`dev/doctor-tests.sh`'s `codex-sched-*` cases, the
+failure-tracking step's own `codex-track-*` cases — I3, #428, below — and the startup PATH scrub's
+own `codex-path-*` cases — #444, below) and exercised live at that gate. Only this wrapper's
+`issue-cycle` pass is supported unattended; launching `issue-planner`, `issue-implementer`,
+`test-ratchet`, `project-kickoff` or `harness-setup` unattended on its own stays unsupported (ADR
+0002 amendment (4), "Decision 4 lift").
+
+**Prerequisite: the checkout's `origin` must authenticate with no prompt** — an SSH key, or a
+credential helper that works outside a terminal. At the #429 gate, an HTTPS remote with no
+stored credential made the session's own step-0 `git fetch` fail; the run stopped having done
+nothing and was still recorded `completed`, so no tracking issue was opened (#496).
 
 **Refuses under Claude Code.** If `CLAUDE_PID` is set (even to an empty string), the wrapper exits
 2 before doing anything else — a Claude Code session must never launch a Codex run. On Claude Code
@@ -505,7 +516,7 @@ the outcome above was recorded but the failure-tracking step (I3, #428) itself c
 GitHub or persist its own state — see "Failure tracking on GitHub" above. 3 always overrides 0/1
 for that run.
 
-**The LaunchAgent (maintainer action, not live-verified until I4's U8).** A plist naming the
+**The LaunchAgent (maintainer action, live-verified at I4's U8, #429).** A plist naming the
 wrapper's absolute path, run on an interval. `PLUGIN_ROOT`, `REPO_TOPLEVEL`, `CODEX_DIR`, `GH_DIR`,
 `JQ_DIR`, and `HOME_DIR` below are placeholder TOKENS, not literal angle-bracket text — a real
 `<...>` placeholder inside a plist's `<string>` would itself be invalid XML. Fill each one in
@@ -600,11 +611,14 @@ line, and a stale rules file gives `preflight-failed reason=codex-setup-drift` i
 
 - SIGKILL to the wrapper itself (see "If the wrapper itself is killed" above) leaves codex and the
   watchdog running with no `record.txt` — no Unix process can trap SIGKILL, so TERM/INT are the
-  only signals this script can react to at all. Whether a real launchd, on an ordinary `bootout`,
-  sends TERM before ever escalating to KILL is not verified here (I4, #429); if it does not wait, or
-  if the launched codex is itself SIGKILLed some other way, launchd's own default process-group
-  reaping (active whenever a LaunchAgent does not set `AbandonProcessGroup`) is the backstop that
-  would still clean up the process group's other members — also unverified until #429.
+  only signals this script can react to at all. `launchctl print` reports this job's
+  `exit timeout` as 5 seconds (observed at the #429 gate): on a `bootout` launchd sends TERM and
+  escalates to KILL 5 seconds later — less than `TBF_CODEX_RUN_KILL_GRACE`'s default 30 — so the
+  wrapper's own TERM-then-poll of codex may be cut short. A `bootout` of an in-progress run was not
+  exercised at the gate. If the wrapper is KILLed that way, or the launched codex is itself
+  SIGKILLed some other way, launchd's own default process-group reaping (active whenever a
+  LaunchAgent does not set `AbandonProcessGroup`) is the backstop for the process group's other
+  members — not live-verified.
 - Three small windows are not closed: between starting codex and recording its pid, between
   starting the watchdog and recording its pid, and — the same shape (#443) — between a bounded
   `gh`/`harness-stop.sh` child starting and its own pid being recorded. A TERM/INT landing in any of
@@ -616,9 +630,11 @@ line, and a stale rules file gives `preflight-failed reason=codex-setup-drift` i
   turn has already started.
 - The plist names a version-specific plugin path, so it must be re-pointed after each upgrade (see
   above).
-- The launchd recipe itself — the plist, `bootstrap`/`bootout`, and whether a real launchd actually
-  respects `StandardInPath /dev/null` and the `StartInterval` — is not live-verified until I4's U8
-  (#429).
+- The launchd recipe itself — the plist, `bootstrap`, `bootout` of an idle job, and
+  `StartInterval` — held live at I4's U8 (#429). There, `StartInterval` counted from the end of the
+  job's previous run (a `launchctl kickstart` included), not from when the job was loaded. Whether
+  launchd honours `StandardInPath /dev/null` was not observed: the wrapper launches codex with
+  `< /dev/null` itself.
 - `finish`'s own TERM/INT-disabling first action (see above) is not covered by a dedicated fixture:
   hitting the exact window while `finish` is writing `record.txt`, pruning, or tracking
   deterministically, from outside the process, was not found to be practical to force in a fixture.
@@ -638,7 +654,12 @@ line, and a stale rules file gives `preflight-failed reason=codex-setup-drift` i
 - A timed-out `harness-stop.sh` (`TBF_CODEX_GH_TIMEOUT`, #443) is itself killed, but its own `gh`
   grandchild is not — the wrapper only ever signals its own direct child. The orphaned `gh` no
   longer blocks the wrapper (its output goes to a file the wrapper isn't waiting to read, never a
-  pipe), but whether launchd's own process-group reaping cleans it up is unverified until #429.
+  pipe), but whether launchd's own process-group reaping cleans it up is not live-verified (no
+  stop-query timeout occurred at the #429 gate).
+- A `completed` run after a failing streak posts `Recovered:` on the tracking issue even when that
+  run itself stopped on a durable in-session escalation — for example a stage-2e
+  `permission-denied` (seen at the #429 gate's U4). That escalation, on the work issue with
+  `needs-human`, is the run's own record.
 - A `gh issue create` or `gh issue comment` that hits `TBF_CODEX_GH_TIMEOUT` may already have been
   accepted by GitHub before the wrapper killed it; `create-timeout` in particular can leave a
   tracking issue on GitHub that the local state file never learns about, so the next failure opens
@@ -692,11 +713,13 @@ nothing but this repo's own files.
 
 ## Honest limits
 
-- **Supervised only.** Per [ADR 0002](../adr/0002-codex-compatibility.md) decision 4, Codex
-  support ships without merge autonomy or autonomous mode until a live trial has exercised the
-  hook layer that is Codex's entire enforcement floor (the sandbox adds nothing for a subagent —
-  it can't be made read-only, and an allow rule that lets the orchestrator's `git`/`gh` through
-  lets every agent's through, ADR 0002 amendment 2026-09-26, P2/P3).
+- **No merge autonomy.** Per [ADR 0002](../adr/0002-codex-compatibility.md) decision 4, Codex
+  support ships without merge autonomy or Autonomy mode: interactive sessions are supervised, and
+  scheduled unattended `codex exec` runs (since the #429 gate) plan, implement, verify and open
+  PRs, but never merge. The hook layer is Codex's entire enforcement floor (the sandbox adds
+  nothing for a subagent — it can't be made read-only, and an allow rule that lets the
+  orchestrator's `git`/`gh` through lets every agent's through, ADR 0002 amendment 2026-09-26,
+  P2/P3).
 - **Forbidden rules match by prefix, the same coarse shape as the Claude template's bare deny
   entries.** `git push origin --force`, `rm -fr`, `--force-with-lease=<ref>`, anything behind a
   redirection or a `bash -c` wrapper, and every `git -C <path> ...` form (which Codex's rules
@@ -730,17 +753,14 @@ nothing but this repo's own files.
   Codex caller to do — so that form was never exercised live. If a caller used it anyway and it
   didn't match, the command would run sandboxed and fail loudly (a permission error), which is
   safe — just noisy — rather than unsafe.
-- **Malformed planner output, and the planner's own write route through `apply_patch`/`touch`,
-  are not live-verified — by maintainer decision.** The gate's method for producing
-  malformed output (a temporary override appended to the installed `agents/planner.md`) was
-  refused by the orchestrator's own safety classifier as instruction poisoning, and the maintainer
-  chose not to run it; the stall-record handling it would have exercised is covered by
-  `dev/planning-tests.sh`'s stall fixtures, and the retry ladder itself is skill text unchanged from
-  Claude Code, with no fixture (amendment (3), G5). Separately, the planner refused its own
-  `apply_patch`/`touch` write probes on its own
-  role instructions before either probe ever reached `planner-guard.sh`, so that hook's
-  deny-on-write path for the planner also stayed unverified live; it too is covered by
-  `dev/hook-tests.sh`'s fixtures (amendment (3), G8).
+- **A missing planner report and the planner's own write route, live-verified at the #429
+  gate.** With subagent spawns made to fail through config alone (an `agents.default_subagent_model`
+  override naming an unavailable model — `--disable multi_agent` does not stop `spawn_agent` on
+  0.156.1), three consecutive unattended passes posted two `stalled-dispatch` stall records and then
+  a `needs-human` escalation, and the orchestrator never wrote the plan itself (U2). A probe custom
+  agent named `planner` had both its `touch` and its `apply_patch` add denied by
+  `planner-guard.sh` (U3). A malformed, rather than missing, planner first line is still covered
+  only by the canary-abort path (amendment (3), G6) and `dev/planning-tests.sh`'s stall fixtures.
 - **The hook canary relies on the subagent's own report.** "Running the skills on Codex" below
   opens every dispatch with a `gh --version` canary so the orchestrator can tell, per run, that
   the plugin's hooks are trusted and actually running before it trusts anything else that
@@ -1004,10 +1024,10 @@ applies.
 
 This section is the in-session half of decision 1 ("Silent denials") of
 [ADR 0002](../adr/0002-codex-compatibility.md)'s amendment 2026-09-27 (4), the design for
-unattended `codex exec` runs. `codex exec` itself stays **Not supported** (see "Support matrix"
-above): these are the guardrails a run follows once the live gate (I4, #429) has flipped the
-support-matrix row above. The launch wrapper itself, `bin/codex-scheduled-run.sh`, already exists —
-see "Scheduling unattended runs (macOS)" below for its own contract.
+unattended `codex exec` runs. `codex exec` is **Supported** since the live gate (I4, #429; ADR
+0002 amendment (5); see "Support matrix" above): these are the guardrails every unattended run
+follows. The launch wrapper, `bin/codex-scheduled-run.sh`, is covered in "Scheduling unattended
+runs (macOS)" below.
 
 **Marker.** An unattended run is one whose session-opening prompt contains, on a line of its own,
 exactly:
@@ -1106,5 +1126,4 @@ immediately after the canary block above (see "Dispatch" above), verbatim:
 subagent that omits a rejection goes unnoticed. The event stream the scheduled-run wrapper keeps
 is the audit backstop (#427).
 
-**Status.** `codex exec` remains **Not supported** until I4 (#429) flips the support-matrix row
-above.
+**Status.** **Supported** since I4 (#429) — see "Support matrix" above.

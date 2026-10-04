@@ -5,7 +5,7 @@ issue; the harness plans it, you approve the plan, it writes the code, an indepe
 checks the work, and a PR shows up for you to merge. Once you trust it, you can let it approve
 low-risk plans and merge its own PRs as well.
 
-Everything runs locally, on your Claude Code subscription or (supervised only, see
+Everything runs locally, on your Claude Code subscription or (without merge autonomy, see
 [Running on Codex](#running-on-codex)) your Codex CLI login. You don't need API keys, OAuth
 tokens, or GitHub Actions.
 
@@ -529,10 +529,10 @@ The short version (full detail in
 
 ## Running on Codex
 
-**Status: Codex CLI 0.156.1 or newer, macOS, supervised only.** Verified live at the v3.0.0
-release gate (#411) — full detail in
-[docs/reference/codex.md](docs/reference/codex.md) and
-[ADR 0002](docs/adr/0002-codex-compatibility.md)'s amendment (3).
+**Status: Codex CLI 0.156.1 or newer, macOS, no merge autonomy.** Interactive sessions were
+verified live at the v3.0.0 release gate (#411), and scheduled unattended `codex exec` runs at the
+#429 gate — full detail in [docs/reference/codex.md](docs/reference/codex.md) and
+[ADR 0002](docs/adr/0002-codex-compatibility.md)'s amendments (3) and (5).
 
 The recipe, in the same order the gate used:
 
@@ -554,16 +554,20 @@ The recipe, in the same order the gate used:
 - No merge autonomy and no Autonomy mode: every PR merge is by hand, and `gh pr merge` is
   additionally `forbidden` by the installed rules.
 - No worktree-parallel mode: sessions stay sequential.
-- No `codex exec` and no unattended or scheduled runs: only the interactive `codex --no-daemon`
-  session is supported.
+- Unattended runs are scheduled, not autonomous: a macOS LaunchAgent runs
+  `bin/codex-scheduled-run.sh` on an interval, and each run plans, implements, verifies and opens
+  PRs but never merges. The checkout's `origin` must authenticate with no prompt (an SSH key, or a
+  credential helper that works outside a terminal). Setup, the plist, and its limits are in
+  [docs/reference/codex.md](docs/reference/codex.md#scheduling-unattended-runs-macos).
 
 **Supported / not supported / not verified**, in short (full matrix, with reasons, in
 [docs/reference/codex.md](docs/reference/codex.md#support-matrix)):
 
 - **Supported:** Codex CLI 0.156.1+ on macOS, interactive `codex --no-daemon`, supervised;
-  `project-kickoff` and standalone `test-ratchet` (not live-verified).
-- **Not supported:** the default TUI's managed daemon, `codex exec` and unattended runs,
-  worktree-parallel mode, the merge pass and merge autonomy, and Autonomy mode.
+  `codex exec` and scheduled unattended runs through the LaunchAgent; `project-kickoff` and
+  standalone `test-ratchet` (not live-verified).
+- **Not supported:** the default TUI's managed daemon, worktree-parallel mode, the merge pass and
+  merge autonomy, and Autonomy mode.
 - **Not verified:** Linux, Windows, and the Codex desktop app.
 
 ---
@@ -840,9 +844,9 @@ bypass. Force-pushes and branch deletion are blocked for everyone.)
 - **Decided direction** lives in [`docs/adr/`](docs/adr/README.md).
   [ADR 0001 (Autonomy mode)](docs/adr/0001-autonomy-mode.md) is fully shipped as of v2.8.0 (#307–#313).
   [ADR 0002 (Codex compatibility)](docs/adr/0002-codex-compatibility.md), running the harness under
-  OpenAI Codex, ships supervised only in v3.0.0, on the Codex CLI on macOS (see
-  [Running on Codex](#running-on-codex)); unattended runs (slice iv) and the provider-neutral
-  rename remain future work.
+  OpenAI Codex, ships on the Codex CLI on macOS without merge autonomy: supervised interactive
+  sessions since v3.0.0, and scheduled unattended runs (slice iv) since the #429 gate (see
+  [Running on Codex](#running-on-codex)); the provider-neutral rename remains future work.
 - **Parallel-mode ergonomics:** worktree-parallel mode (up to 4 implementers at once on issues
   whose files don't overlap) is currently gated on comparing Affected areas by hand. A small script
   that diffs two plans' file lists could make the eligibility check mechanical. The final batching

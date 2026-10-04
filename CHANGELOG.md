@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #429: scheduled unattended `codex exec` runs (macOS LaunchAgent) are Supported after the live gate
+  passed U1–U9 (ADR 0002 amendment (5)); merges stay by hand. Consumer step: the checkout's `origin`
+  must authenticate with no prompt (SSH or a non-interactive credential helper).
 - #494: on Codex, `push-guard.sh` denies a `git push` while any tool call in the rollout's last
   1 MiB sets a shell `workdir` other than the session directory as a plain literal, or when that
   rollout can't be read; previously such a push got no opinion. Claude Code is unaffected.
