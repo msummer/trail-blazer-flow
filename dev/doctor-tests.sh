@@ -84,8 +84,10 @@
 # file's allow/forbidden/gated content against templates/repo-settings.json and bin/ themselves,
 # contract loading into either an AGENTS.md pointer block or a .codex/config.toml fallback key,
 # every `--check` drift token (missing/differs/stale-plugin-path/missing-fallback/
-# fallback-conflict/missing-pointer/malformed-pointer), and the whitespace/unsupported-character
-# path refusals — plus the never-writes guarantee `--check` makes, and (#410)
+# fallback-conflict/missing-pointer/malformed-pointer/not-a-file), the whitespace/unsupported-
+# character path refusals, the not-a-regular-file destination refusal, and the partial-install
+# report on an injected (PATH-shimmed) mkdir -p or mv failure — plus the never-writes guarantee
+# `--check` makes, and (#410)
 # `bin/check-harness.sh --provider codex` — a separate check set from the Claude branch above,
 # run against fixtures built by mk_cx_doctor (a copy of THIS checkout's own hooks/hooks.json
 # alongside a fake Codex plugin-cache install, plus a repo with the Codex compatibility layer
@@ -3183,6 +3185,212 @@ case_codex_setup_agents_triple_quote_verifier() {
   expect_no_file "$repo/.codex"
   expect_no_file "$repo/.codex/agents/planner.toml"
   expect_no_file "$repo/.codex/agents/implementer.toml"
+}
+
+# codex-setup destination refusal and partial-install report (#485).
+#
+# mk_cx_shim DIR TOOL PATTERN MODE — writes an executable /bin/sh wrapper DIR/TOOL that stands in
+# for the real TOOL (mkdir or mv) on PATH. The wrapper looks at its LAST argument: when that
+# matches the glob PATTERN it appends "TOOL <last>" to DIR/hits (the proof the injection fired),
+# then in mode "fail" prints "TOOL: injected failure" to stderr and exits 1, and in mode "noop"
+# exits 0 having done nothing. Any other call, and every call whose last argument does not match,
+# exec's the real TOOL (resolved here, in the harness's own PATH, which never carries a shim).
+mk_cx_shim() {
+  local dir="$1" tool="$2" pattern="$3" mode="$4" real
+  real="$(command -v "$tool")"
+  mkdir -p "$dir"
+  : > "$dir/hits"
+  printf '%s\n' \
+    '#!/bin/sh' \
+    "real='$real'" \
+    "tool='$tool'" \
+    "pattern='$pattern'" \
+    "mode='$mode'" \
+    "hits='$dir/hits'" \
+    'last=""' \
+    'for a in "$@"; do last=$a; done' \
+    'case "$last" in' \
+    '  $pattern)' \
+    '    printf "%s %s\n" "$tool" "$last" >> "$hits"' \
+    '    if [ "$mode" = fail ]; then echo "$tool: injected failure" >&2; exit 1; fi' \
+    '    exit 0 ;;' \
+    'esac' \
+    'exec "$real" "$@"' > "$dir/$tool"
+  chmod +x "$dir/$tool"
+}
+
+# run_cx_shim SHIM PLUGIN REPO ARGS… — run_cx with SHIM (a directory from mk_cx_shim) prepended to
+# PATH on the codex-setup.sh child process only, so the harness's own tools never see the shim.
+# Sets the same $cx_out/$cx_err/$cx_rc and merged $doctor_out/$doctor_rc as run_cx.
+run_cx_shim() {
+  local shim="$1" plugin="$2" repo="$3" outfile errfile
+  shift 3
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  (cd "$repo" && PATH="$shim:$PATH" HOME="$repo/home" XDG_CONFIG_HOME="$repo/home/.config" GIT_CONFIG_NOSYSTEM=1 "$bash_bin" "$plugin/bin/codex-setup.sh" "$@") >"$outfile" 2>"$errfile"
+  cx_rc=$?
+  cx_out="$(cat "$outfile")"
+  cx_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $cx_out
+ERR: $cx_err"
+  doctor_rc=$cx_rc
+}
+
+# expect_cx_hit SHIM NEEDLE — asserts the shim's hits file records NEEDLE (needle_required-guarded),
+# so a shim fixture cannot pass vacuously when the injection never fired.
+expect_cx_hit() {
+  needle_required expect_cx_hit "$2" || return 0
+  grep -qF -- "$2" "$1/hits" || { __ok=0; __why="${__why}shim never fired (hits lacks): $2\n"; }
+}
+
+# codex-setup-dest-not-a-file — a DIRECTORY at an agent-TOML destination (verifier.toml, the LAST
+# agent in the queue), at the rules file, and at .codex/config.toml: write mode exits 2 with the
+# refusal line on stderr, prints no wrote=/next:, creates no other destination and leaves the
+# directory empty; --check reports drift=<rel> reason=not-a-file, exits 1 and changes nothing.
+# mutant:485-cx-preinstall-off — turning the pre-install destination check's predicate into `false`
+#   lets write mode drain the queue: the verifier.toml variant moves planner and implementer into
+#   place and then fails mid-install (exit 3), not the exit-2 refusal this case pins.
+# mutant:485-cx-not-a-file-reason — emitting reason=missing for a non-regular-file path in --check
+#   mode drops the not-a-file token this case pins.
+case_codex_setup_dest_not_a_file() {
+  local plugin repo variant rel other
+  plugin="$(mk_cx_plugin cx-notfile-plugin 2.9.0)"
+  for variant in verifier-toml rules config-toml; do
+    case "$variant" in
+      verifier-toml) rel=".codex/agents/verifier.toml" ;;
+      rules)         rel=".codex/rules/trail-blazer-flow.rules" ;;
+      config-toml)   rel=".codex/config.toml" ;;
+    esac
+    repo="$(mk_cx_repo "cx-notfile-repo-$variant")"
+    mkdir -p "$repo/$rel"
+    run_cx "$plugin" "$repo"
+    expect_rc 2
+    expect_cx_err "$rel exists but is not a regular file"
+    expect_cx_out_absent "wrote="
+    expect_cx_out_absent "next:"
+    for other in .codex/agents/planner.toml .codex/agents/implementer.toml .codex/agents/verifier.toml .codex/rules/trail-blazer-flow.rules .codex/config.toml; do
+      [ "$other" = "$rel" ] && continue
+      expect_no_file "$repo/$other"
+    done
+    expect_no_file "$repo/AGENTS.md"
+    [ -d "$repo/$rel" ] && [ -z "$(ls -A "$repo/$rel")" ] || { __ok=0; __why="${__why}$variant: $rel is not an empty directory after the refusal\n"; }
+    run_cx "$plugin" "$repo" --check
+    expect_rc 1
+    expect_cx_out "drift=$rel reason=not-a-file"
+    [ -d "$repo/$rel" ] && [ -z "$(ls -A "$repo/$rel")" ] || { __ok=0; __why="${__why}$variant: $rel is not an empty directory after --check\n"; }
+    expect_no_file "$repo/AGENTS.md"
+  done
+}
+
+# codex-setup-mv-failure — a PATH-shimmed mv that fails on the RULES file (the 4th queued file, so
+# the three agent TOMLs are really written first): rc 3, wrote= for exactly the three agent TOMLs,
+# no wrote= for the rules file or anything after it (config.toml is never attempted), no next:
+# lines, and one stderr report naming the rules file, the step "mv failed" and the three files
+# already written. The hits file proves the injection fired.
+# mutant:485-cx-mv-unchecked — dropping the `|| install_failed` after mv lets the post-move
+#   regular-file check fire instead, so the report names "not a regular file after mv" and not
+#   this case's "mv failed".
+# mutant:485-cx-written-list — never accumulating written_rels leaves the report's "written this
+#   run" list as "none" instead of the three agent TOMLs, for every shim case.
+# mutant:485-cx-wrote-early — printing wrote= before the mkdir/mv steps puts a wrote= line for the
+#   file that never landed on stdout.
+# mutant:485-cx-fail-exit-zero — install_failed exiting 0 instead of 3 turns the partial install
+#   into a reported success.
+case_codex_setup_mv_failure() {
+  local plugin repo shim
+  plugin="$(mk_cx_plugin cx-mvfail-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-mvfail-repo)"
+  shim="$tmpbase/cx-mvfail-shim"
+  mk_cx_shim "$shim" mv '*/.codex/rules/trail-blazer-flow.rules' fail
+  run_cx_shim "$shim" "$plugin" "$repo"
+  expect_rc 3
+  expect_cx_out "wrote=.codex/agents/planner.toml"
+  expect_cx_out "wrote=.codex/agents/implementer.toml"
+  expect_cx_out "wrote=.codex/agents/verifier.toml"
+  expect_cx_out_absent "wrote=.codex/rules/trail-blazer-flow.rules"
+  expect_cx_out_absent "wrote=.codex/config.toml"
+  expect_cx_out_absent "next:"
+  expect_cx_err "install failed for .codex/rules/trail-blazer-flow.rules (mv failed)"
+  expect_cx_err "written this run: .codex/agents/planner.toml .codex/agents/implementer.toml .codex/agents/verifier.toml"
+  expect_no_file "$repo/.codex/rules/trail-blazer-flow.rules"
+  expect_no_file "$repo/.codex/config.toml"
+  expect_cx_hit "$shim" ".codex/rules/trail-blazer-flow.rules"
+}
+
+# codex-setup-mv-noop — the same shape, but the shimmed mv exits 0 having moved nothing: the
+# post-move regular-file check catches it, so the report's step is "not a regular file after mv"
+# and the rules file never prints wrote=.
+# mutant:485-cx-postmove-off — replacing the post-move `[ -f "$dest" ]` check with a no-op lets a
+#   mv that exits 0 but moves nothing print wrote= and exit 0.
+case_codex_setup_mv_noop() {
+  local plugin repo shim
+  plugin="$(mk_cx_plugin cx-mvnoop-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-mvnoop-repo)"
+  shim="$tmpbase/cx-mvnoop-shim"
+  mk_cx_shim "$shim" mv '*/.codex/rules/trail-blazer-flow.rules' noop
+  run_cx_shim "$shim" "$plugin" "$repo"
+  expect_rc 3
+  expect_cx_out "wrote=.codex/agents/planner.toml"
+  expect_cx_out "wrote=.codex/agents/implementer.toml"
+  expect_cx_out "wrote=.codex/agents/verifier.toml"
+  expect_cx_out_absent "wrote=.codex/rules/trail-blazer-flow.rules"
+  expect_cx_out_absent "wrote=.codex/config.toml"
+  expect_cx_out_absent "next:"
+  expect_cx_err "install failed for .codex/rules/trail-blazer-flow.rules (not a regular file after mv)"
+  expect_cx_err "written this run: .codex/agents/planner.toml .codex/agents/implementer.toml .codex/agents/verifier.toml"
+  expect_no_file "$repo/.codex/rules/trail-blazer-flow.rules"
+  expect_no_file "$repo/.codex/config.toml"
+  expect_cx_hit "$shim" ".codex/rules/trail-blazer-flow.rules"
+}
+
+# codex-setup-mkdir-failure — a PATH-shimmed mkdir -p that fails on the rules directory (the
+# first file whose parent directory does not exist yet is the rules file: .codex/agents already
+# exists by then): rc 3, the same three wrote= lines and written list, step "mkdir -p failed", and
+# no .codex/rules directory.
+# mutant:485-cx-mkdir-unchecked — dropping the `|| install_failed` after mkdir -p lets the real mv
+#   run into the missing directory and fail instead, so the report names "mv failed" and not this
+#   case's "mkdir -p failed".
+case_codex_setup_mkdir_failure() {
+  local plugin repo shim
+  plugin="$(mk_cx_plugin cx-mkdirfail-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-mkdirfail-repo)"
+  shim="$tmpbase/cx-mkdirfail-shim"
+  mk_cx_shim "$shim" mkdir '*/.codex/rules' fail
+  run_cx_shim "$shim" "$plugin" "$repo"
+  expect_rc 3
+  expect_cx_out "wrote=.codex/agents/planner.toml"
+  expect_cx_out "wrote=.codex/agents/implementer.toml"
+  expect_cx_out "wrote=.codex/agents/verifier.toml"
+  expect_cx_out_absent "wrote=.codex/rules/trail-blazer-flow.rules"
+  expect_cx_out_absent "wrote=.codex/config.toml"
+  expect_cx_out_absent "next:"
+  expect_cx_err "install failed for .codex/rules/trail-blazer-flow.rules (mkdir -p failed)"
+  expect_cx_err "written this run: .codex/agents/planner.toml .codex/agents/implementer.toml .codex/agents/verifier.toml"
+  expect_no_file "$repo/.codex/rules"
+  expect_no_file "$repo/.codex/config.toml"
+  expect_cx_hit "$shim" ".codex/rules"
+}
+
+# codex-setup-first-file-failure — a PATH-shimmed mv that fails on the FIRST queued file
+# (.codex/agents/planner.toml), so nothing has been written yet: rc 3, no wrote= line at all, no
+# next: lines, step "mv failed", and the report's empty-list form "written this run: none".
+# mutant:485-cx-none-default — dropping the `:-none` default from install_failed's written list
+#   prints "written this run: " with nothing after it, which this case's "none" needle catches.
+case_codex_setup_first_file_failure() {
+  local plugin repo shim
+  plugin="$(mk_cx_plugin cx-firstfail-plugin 2.9.0)"
+  repo="$(mk_cx_repo cx-firstfail-repo)"
+  shim="$tmpbase/cx-firstfail-shim"
+  mk_cx_shim "$shim" mv '*/.codex/agents/planner.toml' fail
+  run_cx_shim "$shim" "$plugin" "$repo"
+  expect_rc 3
+  expect_cx_out_absent "wrote="
+  expect_cx_out_absent "next:"
+  expect_cx_err "install failed for .codex/agents/planner.toml (mv failed)"
+  expect_cx_err "written this run: none"
+  expect_no_file "$repo/.codex/agents/planner.toml"
+  expect_no_file "$repo/.codex/rules/trail-blazer-flow.rules"
+  expect_cx_hit "$shim" ".codex/agents/planner.toml"
 }
 
 # codex-setup-rules-content — every ADVISORY-Q1 allow line is present; the forbidden token-list
@@ -7172,6 +7380,11 @@ cases=(
   "codex-setup-agents-roundtrip|case_codex_setup_agents_roundtrip|#408: each agent TOML's name/description/developer_instructions round-trips against agents/*.md, byte-identical body, no tools/model lines"
   "codex-setup-agents-triple-quote-refused|case_codex_setup_agents_triple_quote_refused|#408: a ''' in planner.md's body: rc 2 naming planner.md, no .codex created"
   "codex-setup-agents-triple-quote-verifier|case_codex_setup_agents_triple_quote_verifier|#408 kickback: a ''' in verifier.md (the LAST role): rc 2 naming verifier.md, no .codex created — proves planner/implementer's already-generated TOMLs are never installed"
+  "codex-setup-dest-not-a-file|case_codex_setup_dest_not_a_file|#485: a directory at verifier.toml, at the rules file, or at config.toml: write rc 2 naming it, nothing else created, directory still empty; --check rc 1 reason=not-a-file"
+  "codex-setup-mv-failure|case_codex_setup_mv_failure|#485: a PATH-shimmed mv fails on the rules file: rc 3, wrote= only for the three agent TOMLs, no next:, stderr report names the rules file and the written list"
+  "codex-setup-mv-noop|case_codex_setup_mv_noop|#485: a PATH-shimmed mv that exits 0 but moves nothing: rc 3, no wrote= for the rules file, report step is not a regular file after mv"
+  "codex-setup-mkdir-failure|case_codex_setup_mkdir_failure|#485: a PATH-shimmed mkdir -p fails on .codex/rules: rc 3, wrote= only for the three agent TOMLs, report step is mkdir -p failed"
+  "codex-setup-first-file-failure|case_codex_setup_first_file_failure|#485: a PATH-shimmed mv fails on the first queued file: rc 3, no wrote= at all, report says written this run: none"
   "codex-setup-rules-content|case_codex_setup_rules_content|#408: every ADVISORY-Q1 allow line present; forbidden token-list set == templates/repo-settings.json's bare deny entries (jq-derived); no @PLUGIN_BIN@ literal remains"
   "codex-setup-rules-gated|case_codex_setup_rules_gated|#408: the allow-rule .sh names and host_executable names both equal the ten listed scripts, each path <plugin>/bin/<s>, each name exists under bin/; codex-setup.sh/harness-version.sh/governance-paths.sh/codex-scheduled-run.sh absent from both"
   "codex-setup-contract-agents-md|case_codex_setup_contract_agents_md|#408: a pre-existing AGENTS.md keeps its content, gains exactly one begin marker naming CLAUDE.md, no fallback key in config.toml, still one marker after a second run; --check before it pins reason=missing-pointer"
