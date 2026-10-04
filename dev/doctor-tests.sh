@@ -5088,8 +5088,17 @@ case_codex_sched_wrapper_killed_noterm() {
 }
 
 # codex-sched-timeout-invalid — TBF_CODEX_RUN_TIMEOUT=abc, then =0, then TBF_CODEX_RUN_KILL_GRACE
-# =abc, then =0: all four give preflight-failed reason=bad-timeout, exit 1, no argc (codex never
-# runs in any of the four).
+# =abc, then =0, then TBF_CODEX_RUN_TIMEOUT=08, then TBF_CODEX_RUN_KILL_GRACE=08: all six give
+# preflight-failed reason=bad-timeout, exit 1, no argc (codex never runs in any of the six). The two
+# "08" sub-runs come last on purpose: "08" passes the digits-only and "-gt 0" checks, but bash
+# arithmetic reads it as octal, so the watchdog (RUN_TIMEOUT) and its post-TERM poll /
+# on_wrapper_signal (KILL_GRACE) would abort and leave codex unbounded; under a mutant a launched
+# codex stub writes argc, so keeping them last keeps the earlier sub-runs' no-argc checks readable.
+# mutant:460-run-timeout-leading-zero-accepted — the leading-zero rejection arm for $timeout (`0?*)
+#   finish preflight-failed bad-timeout ;;`) deleted: the TBF_CODEX_RUN_TIMEOUT=08 sub-run now passes
+#   preflight step 2, so the run no longer ends preflight-failed reason=bad-timeout with exit 1.
+# mutant:460-grace-leading-zero-accepted — the same arm for $grace deleted: the
+#   TBF_CODEX_RUN_KILL_GRACE=08 sub-run reaches launch the same way.
 case_codex_sched_timeout_invalid() {
   mk_sched sched-timeout-invalid
   build_stub_sched_codex "$sched_stub" complete
@@ -5111,6 +5120,16 @@ case_codex_sched_timeout_invalid() {
   expect_no_file "$sched_stub/argc"
 
   run_sched "$sched_stub:$PATH" TBF_CODEX_RUN_KILL_GRACE=0 --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=bad-timeout"
+  expect_no_file "$sched_stub/argc"
+
+  run_sched "$sched_stub:$PATH" TBF_CODEX_RUN_TIMEOUT=08 --
+  expect_rc 1
+  expect_sched_out "outcome=preflight-failed reason=bad-timeout"
+  expect_no_file "$sched_stub/argc"
+
+  run_sched "$sched_stub:$PATH" TBF_CODEX_RUN_KILL_GRACE=08 --
   expect_rc 1
   expect_sched_out "outcome=preflight-failed reason=bad-timeout"
   expect_no_file "$sched_stub/argc"
@@ -7239,7 +7258,7 @@ cases=(
   "codex-sched-wrapper-killed|case_codex_sched_wrapper_killed|#427: the wrapper process itself is sent TERM mid-run (codex hung) -> outcome=died-mid-run, exit 1, and the launched codex stub does not survive it"
   "codex-sched-wrapper-killed-forwards-term|case_codex_sched_wrapper_killed_forwards_term|#427: the codex stub forwards TERM to its own child (models the real Node launcher) -> the wrapper's TERM-then-poll-then-KILL gives it time to react, so neither the stub nor its child survives"
   "codex-sched-wrapper-killed-noterm|case_codex_sched_wrapper_killed_noterm|#427: the codex stub ignores TERM outright -> on_wrapper_signal's own post-grace KILL is the only thing that can end it, and does, well inside the bounded poll"
-  "codex-sched-timeout-invalid|case_codex_sched_timeout_invalid|#427: TBF_CODEX_RUN_TIMEOUT=abc/=0 and TBF_CODEX_RUN_KILL_GRACE=abc/=0 -> all four preflight-failed reason=bad-timeout, no argc"
+  "codex-sched-timeout-invalid|case_codex_sched_timeout_invalid|#427/#460: TBF_CODEX_RUN_TIMEOUT=abc/=0/=08 and TBF_CODEX_RUN_KILL_GRACE=abc/=0/=08 -> all six preflight-failed reason=bad-timeout, no argc"
   "codex-sched-await-short-circuit|case_codex_sched_await_file_short_circuit|#463: sched_await_file's own already-exited short-circuit, against a wrapper that fails preflight almost instantly -> returns false well before its own 10s budget elapses"
   "codex-sched-prune|case_codex_sched_prune|#427: 101 pre-seeded run directories (the oldest carrying a leftover gh.out, #443) plus a non-matching file and two non-matching directories (wrong shape; right shape but non-digit suffix), all sorting before every stamp -> exactly 100 stamp-shaped dirs remain after one run, the two oldest stamp dirs (and their gh.out) gone, the new run's directory present, every non-matching entry untouched"
   "codex-sched-own-dir|case_codex_sched_own_dir|#427: a decoy directory first on PATH shadows every sibling script -> completed, the decoy's sentinel is never created — siblings resolve only from the wrapper's own directory"

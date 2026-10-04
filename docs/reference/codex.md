@@ -322,9 +322,12 @@ external command runs before this.
    reason=unsafe-path`.
 2. `TBF_CODEX_RUN_TIMEOUT` (default 14400 seconds), `TBF_CODEX_RUN_KILL_GRACE` (default 30) and
    `TBF_CODEX_GH_TIMEOUT` (default 120, #443) must each be digits-only and greater than 0, or
-   `preflight-failed reason=bad-timeout`. `TBF_CODEX_GH_TIMEOUT` additionally rejects a leading
-   zero (e.g. `08`): its value feeds bash arithmetic before codex is ever launched, where a
-   leading-zero numeral is octal and a value like `08` aborts that arithmetic outright.
+   `preflight-failed reason=bad-timeout`. All three also reject a leading zero (e.g. `08`): each
+   value feeds bash arithmetic, where a leading-zero numeral is octal and a value like `08` aborts
+   that arithmetic outright. For `TBF_CODEX_GH_TIMEOUT` that happens before codex is ever
+   launched; for the run timeout it would happen inside the background watchdog, which would die
+   and leave codex with no time limit; for the kill grace it would break the KILL escalation
+   after TERM (in the watchdog and in the wrapper's own signal handler).
 3. `codex`, `gh`, and `jq` must all be on `PATH` (launchd's own PATH is minimal, and the plugin's
    hooks fail open without `jq`), or `preflight-failed reason=missing-tool:<names>`.
 4. The sibling `codex-setup.sh --check`. Exit 1: `preflight-failed reason=codex-setup-drift`. Any
