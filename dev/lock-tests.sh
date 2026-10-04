@@ -26,8 +26,11 @@
 # $$) — so wrapping the invocation in a subshell would fork an extra process whose pid becomes
 # bin/harness-lock.sh's own $PPID, which would never equal this file's own top-level $$, breaking
 # cases 19/20's fallback-pid assertion (case 19's own comment below records the measured proof).
-# Avoiding subshells everywhere (not just for 19/20) keeps one runner for every case in this file
-# instead of a second, parallel helper.
+# Avoiding subshells everywhere (not just for 19/20) keeps one runner for every case that drives
+# the script synchronously. The one exception is the reclaim-race cases (#482): they need two
+# real `acquire` processes alive at once, held at barriers, so start_contender launches those as
+# backgrounded processes instead (see RECLAIM RACE HARNESS below); reclaim-marker-dead stays on
+# run_lock.
 #
 # CLAUDE_PID PER FIXTURE (RESOLVED): every case passes an explicit CLAUDE_PID value to run_lock —
 # live-holder fixtures pass "$$" (this harness's own pid, alive for the whole run), stale
@@ -37,7 +40,9 @@
 # 19 passes the sentinel "UNSET", routing run_lock through
 # `bash -c 'unset CLAUDE_PID; exec "$@"' _ bash harness-lock.sh acquire` (exec keeps the same
 # pid, so bin/harness-lock.sh's own $PPID is this file's $$); 20 passes the literal garbage value
-# "not-a-pid" through the normal direct-invocation branch.
+# "not-a-pid" through the normal direct-invocation branch. The reclaim-race contenders (#482) are
+# the other exception: each is launched with its own live owner pid, passed both as CLAUDE_PID and
+# as --owner-pid, never this harness's $$.
 #
 # LIVE PROBE (mandatory per the plan, LESSON 2026-09-01): measured 2026-09-08 in this real
 # checkout, from two separate Bash tool invocations. Call 1 printed CLAUDE_PID=99359 (that call's
@@ -71,6 +76,11 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 bash_bin="$(command -v bash)"
+# Absolute paths of the real binaries the reclaim-race shims forward to, captured before any
+# PATH change so a shim can never find itself.
+real_mkdir="$(command -v mkdir)"
+real_rm="$(command -v rm)"
+real_sleep="$(command -v sleep)"
 
 pass=0; fail=0
 case_ok()  { echo "  PASS  $1 — $2"; pass=$((pass+1)); }
@@ -128,6 +138,7 @@ write_lock() {
 }
 
 lockdir_of() { printf '%s/.git/trail-blazer/lock' "$1"; }
+reclaimdir_of() { printf '%s/.git/trail-blazer/reclaim' "$1"; }
 
 # ---------------------------------------------------------------------------------------------
 # Runner + assertion helpers.
@@ -275,6 +286,215 @@ expect_last_line_prefix() {
 run_id_from_out() { printf '%s\n' "$lock_stdout" | sed -n 's/^run-id=//p' | tail -1; }
 
 # ---------------------------------------------------------------------------------------------
+# RECLAIM RACE HARNESS (#482). Two real `acquire` processes are held at barriers inside
+# bin/harness-lock.sh's stale-reclaim path, so the interleaving is decided by files, never by
+# sleeps. A barrier is a PATH shim for `mkdir` or `rm` that, only for the one command the
+# script's reclaim path issues (mkdir of .../trail-blazer/reclaim; rm of .../trail-blazer/lock/
+# run-id, remove_lock's first argument), writes `arrived-<cmd>-<id>` into $dir/.barrier, then
+# waits for `go-<cmd>-<id>` and finally `exec`s the real binary with its argv unchanged. The
+# shim only ever delays: every other mkdir/rm call (and a gated one, once released) is the real
+# binary. `arrived-mkdir-a` AND `arrived-mkdir-b` both existing proves both contenders passed the
+# stale check before either took the marker. Every wait polls in 1s slices against a $SECONDS
+# deadline; a timeout fails the case, releases every barrier and reaps every contender and owner.
+
+# mk_barrier_shims DIR — writes DIR/.shims/{mkdir,rm} and DIR/.barrier. Built with printf lines;
+# the real binaries' absolute paths are substituted in at build time.
+mk_barrier_shims() {
+  local dir="$1" cmd real key f
+  mkdir -p "$dir/.shims" "$dir/.barrier"
+  for cmd in mkdir rm; do
+    if [ "$cmd" = mkdir ]; then
+      real="$real_mkdir"; key='*/trail-blazer/reclaim'
+    else
+      real="$real_rm"; key='*/trail-blazer/lock/run-id'
+    fi
+    f="$dir/.shims/$cmd"
+    {
+      printf '%s\n' "#!$bash_bin"
+      printf '%s\n' 'point="${0##*/}"'
+      printf '%s\n' 'gate=0'
+      printf '%s\n' 'case " ${LOCK_BARRIER_POINTS:-} " in'
+      printf '%s\n' '  *" $point "*)'
+      printf '%s\n' '    for a in "$@"; do'
+      printf '%s\n' "      case \"\$a\" in $key) gate=1 ;; esac"
+      printf '%s\n' '    done ;;'
+      printf '%s\n' 'esac'
+      printf '%s\n' 'if [ "$gate" -eq 1 ]; then'
+      printf '%s\n' '  : > "$LOCK_BARRIER_DIR/arrived-$point-$LOCK_BARRIER_ID"'
+      printf '%s\n' '  deadline=$((SECONDS+60))'
+      printf '%s\n' '  while [ ! -e "$LOCK_BARRIER_DIR/go-$point-$LOCK_BARRIER_ID" ] && [ "$SECONDS" -lt "$deadline" ]; do'
+      printf '%s\n' "    \"$real_sleep\" 1"
+      printf '%s\n' '  done'
+      printf '%s\n' 'fi'
+      printf '%s\n' "exec \"$real\" \"\$@\""
+    } > "$f"
+    chmod +x "$f"
+  done
+}
+
+# start_contender DIR ID OWNER POINTS — backgrounds one `acquire --owner-pid OWNER` in DIR behind
+# the shims, with LOCK_BARRIER_POINTS naming the barrier commands it stops at. `exec` makes the
+# recorded $! the script's own pid. Sets $contender_pid. stdout/stderr go to DIR/.out-ID/.err-ID.
+contender_pid=""
+start_contender() {
+  local dir="$1" id="$2" owner="$3" points="$4"
+  ( cd "$dir" && exec env PATH="$dir/.shims:$PATH" HOME="$dir/home" XDG_CONFIG_HOME="$dir/xdgcfg" \
+      CLAUDE_PID="$owner" TBF_OWNER_PID="" LOCK_BARRIER_DIR="$dir/.barrier" LOCK_BARRIER_ID="$id" \
+      LOCK_BARRIER_POINTS="$points" \
+      "$bash_bin" "$root/bin/harness-lock.sh" acquire --owner-pid "$owner" \
+      > "$dir/.out-$id" 2> "$dir/.err-$id" ) &
+  contender_pid=$!
+}
+
+# release_all_barriers DIR — lets every possible barrier through.
+release_all_barriers() {
+  local dir="$1" c i
+  for c in mkdir rm; do
+    for i in a b; do
+      : > "$dir/.barrier/go-$c-$i"
+    done
+  done
+}
+
+# await_file PATH SECS — polls in 1s slices against a $SECONDS deadline; 1 on timeout.
+await_file() {
+  local path="$1" deadline=$((SECONDS+$2))
+  while [ ! -e "$path" ]; do
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 1
+  done
+  return 0
+}
+
+# await_exit PID SECS DIR — polls `kill -0` in 1s slices against a $SECONDS deadline, then reaps
+# PID and leaves its exit status in $await_rc. On a timeout it fails the case, releases every
+# barrier and terminates PID first.
+await_rc=0
+await_exit() {
+  local pid="$1" deadline=$((SECONDS+$2)) dir="$3"
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      __ok=0; __why="${__why}contender pid $pid did not exit within $2s\n"
+      release_all_barriers "$dir"
+      kill -TERM "$pid" 2>/dev/null
+      break
+    fi
+    sleep 1
+  done
+  wait "$pid" 2>/dev/null
+  await_rc=$?
+}
+
+# load_capture DIR ID — loads one contender's captured streams into the lock_* globals, so the
+# usual expect_* helpers can assert on it.
+load_capture() {
+  lock_stdout="$(cat "$1/.out-$2" 2>/dev/null)"
+  lock_stderr="$(cat "$1/.err-$2" 2>/dev/null)"
+  lock_out="$(cat "$1/.out-$2" "$1/.err-$2" 2>/dev/null)"
+}
+
+# race_cleanup DIR PA PB OA OB — every path out of a race case: release the barriers, terminate
+# and reap any contender still running, then kill and reap the owners. A pid argument is "" once
+# it has already been reaped, so a recycled pid is never signalled.
+race_cleanup() {
+  local dir="$1" p
+  release_all_barriers "$dir"
+  for p in "$2" "$3"; do
+    if [ -n "$p" ]; then
+      kill -TERM "$p" 2>/dev/null
+      wait "$p" 2>/dev/null
+    fi
+  done
+  for p in "$4" "$5"; do
+    if [ -n "$p" ]; then
+      kill "$p" 2>/dev/null
+      wait "$p" 2>/dev/null
+    fi
+  done
+}
+
+# reclaim_race MODE — the shared body of the three reclaim-race cases. MODE is serial, replaced or
+# concurrent (see each case). A stale lock (dead holder, this host) is contended by A and B, each
+# with its own live owner process; both are held at the reclaim-marker mkdir.
+reclaim_race() {
+  local mode="$1" dir host dead oa ob pa pb rca=0 rcb=0 ld rid f pts_a rd
+  dir="$(mk_repo "reclaim-race-$mode")"
+  ld="$(lockdir_of "$dir")"
+  rd="$(reclaimdir_of "$dir")"
+  host="$(uname -n)"
+  dead="$(dead_pid)"
+  write_lock "$dir" "run-old-$dead" "$dead" "$host" "2020-01-01T00:00:00Z" "0.0.0" "/nowhere"
+  mk_barrier_shims "$dir"
+  sleep 60 &
+  oa=$!
+  sleep 60 &
+  ob=$!
+  pts_a="mkdir"
+  [ "$mode" = concurrent ] && pts_a="mkdir rm"
+  start_contender "$dir" a "$oa" "$pts_a"
+  pa="$contender_pid"
+  start_contender "$dir" b "$ob" mkdir
+  pb="$contender_pid"
+  local oa_pid="$oa"
+
+  if ! await_file "$dir/.barrier/arrived-mkdir-a" 20 || ! await_file "$dir/.barrier/arrived-mkdir-b" 20; then
+    __ok=0; __why="${__why}a contender never reached the reclaim-marker barrier\n"
+    race_cleanup "$dir" "$pa" "$pb" "$oa" "$ob"
+    return
+  fi
+
+  case "$mode" in
+    serial|replaced)
+      : > "$dir/.barrier/go-mkdir-a"
+      await_exit "$pa" 20 "$dir"; rca=$await_rc; pa=""
+      if [ "$mode" = replaced ]; then
+        kill "$oa" 2>/dev/null
+        wait "$oa" 2>/dev/null
+        oa=""
+      fi
+      : > "$dir/.barrier/go-mkdir-b"
+      await_exit "$pb" 20 "$dir"; rcb=$await_rc; pb=""
+      ;;
+    concurrent)
+      : > "$dir/.barrier/go-mkdir-a"
+      if ! await_file "$dir/.barrier/arrived-rm-a" 20; then
+        __ok=0; __why="${__why}contender a never reached the remove_lock barrier\n"
+        race_cleanup "$dir" "$pa" "$pb" "$oa" "$ob"
+        return
+      fi
+      : > "$dir/.barrier/go-mkdir-b"
+      await_exit "$pb" 20 "$dir"; rcb=$await_rc; pb=""
+      [ "$(cat "$rd/pid" 2>/dev/null)" = "$pa" ] \
+        || { __ok=0; __why="${__why}marker not still held by contender a (pid $pa) after b's refusal: '$(cat "$rd/pid" 2>/dev/null)'\n"; }
+      : > "$dir/.barrier/go-rm-a"
+      await_exit "$pa" 20 "$dir"; rca=$await_rc; pa=""
+      ;;
+  esac
+  race_cleanup "$dir" "$pa" "$pb" "$oa" "$ob"
+
+  [ "$rca" -eq 0 ] || { __ok=0; __why="${__why}contender a rc: expected 0, got $rca\n"; }
+  [ "$rcb" -eq 3 ] || { __ok=0; __why="${__why}contender b rc: expected 3, got $rcb\n"; }
+  for f in run-id pid host started-at harness-version checkout-path; do
+    [ -s "$ld/$f" ] || { __ok=0; __why="${__why}missing/empty record file: $f\n"; }
+  done
+  [ "$(cat "$ld/pid" 2>/dev/null)" = "$oa_pid" ] \
+    || { __ok=0; __why="${__why}recorded pid: expected a's owner $oa_pid, got '$(cat "$ld/pid" 2>/dev/null)'\n"; }
+  rid="$(cat "$ld/run-id" 2>/dev/null)"
+  case "$rid" in
+    *"-$oa_pid") : ;;
+    *) __ok=0; __why="${__why}run-id does not end with -$oa_pid: '$rid'\n" ;;
+  esac
+  [ -e "$rd" ] && { __ok=0; __why="${__why}reclaim marker still present: $rd\n"; }
+  load_capture "$dir" a
+  expect_last_line_prefix "run-id=$rid"
+  load_capture "$dir" b
+  expect_absent_out "run-id="
+  if [ "$mode" = concurrent ]; then
+    expect_err "release --force"
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
 # The cases. Each is run by the plain-statement runner in run_lock() above (no `$(…)` command
 # substitution around the script invocation itself — see the "RUNNER SHAPE" header note; case 19
 # below pins that this is load-bearing, not just style). Each case's own comment records a
@@ -283,10 +503,9 @@ run_id_from_out() { printf '%s\n' "$lock_stdout" | sed -n 's/^run-id=//p' | tail
 # and the exact set of cases that failed — measured 2026-09-08 in this checkout, one mutant at a
 # time: fresh `cp` backup immediately before the edit, `diff`/md5 confirming a byte-identical
 # restore immediately after recording the result before moving to the next mutant. Several
-# clauses are shared by more than one case (the mkdir-failure branch gates all seven
-# already-held-lock cases; pid_alive gates three; remove_lock's rmdir gates three) — each such
-# case's comment states the full measured failing set, not just itself, per the plan's own
-# instruction to "record the measured set honestly" when a mutant fails several cases.
+# clauses are shared by more than one case, so a mutant can fail more than its own case; a mutant
+# migrated into dev/mutants/lock-tests.json carries its measured failing set there, as an
+# `expect_fail` list, instead of in prose.
 
 # 1. acquire-fresh (control). Mutant: write_record — drop the `pid` file (delete
 # `printf '%s' "$p" > "$lockdir/pid"`), so the recorded pid is never written to disk at all.
@@ -322,10 +541,8 @@ case_acquire_fresh() {
 # 2. acquire-twice-refused. Mutant: drop the mkdir-failure (else) branch in cmd_acquire —
 # `mkdir "$lockdir"` -> `mkdir -p "$lockdir"`, which never fails on an already-existing lock dir,
 # so the entire already-held branch (reclaim rule, refuse-foreign-host, refuse-live-pid,
-# refuse-incomplete-record, refuse-unparseable-pid) never runs. Fails
-# acquire-twice-refused (this case), reclaim-stale-same-host, refuse-foreign-host,
-# refuse-live-pid-same-host, refuse-incomplete-record, refuse-unparseable-pid,
-# worktree-shares-lock (all seven already-held-lock cases).
+# refuse-incomplete-record, refuse-unparseable-pid) never runs. Fails this case, and every other
+# case that pre-writes or acquires a lock and expects the already-held branch.
 case_acquire_twice_refused() {
   local dir; dir="$(mk_repo acquire-twice-refused)"
   local ld; ld="$(lockdir_of "$dir")"
@@ -340,7 +557,7 @@ case_acquire_twice_refused() {
 }
 
 # 3. reclaim-stale-same-host. Mutant: delete the `stale reclaim: run-id=…` audit-line echo in
-# cmd_acquire's reclaim branch. Fails exactly: THIS case.
+# reclaim_stale. Fails exactly: THIS case (no other case asserts the audit line).
 case_reclaim_stale_same_host() {
   local dir; dir="$(mk_repo reclaim-stale-same-host)"
   local dead host
@@ -417,9 +634,8 @@ case_refuse_unparseable_pid() {
 
 # 8. release-own-run-id. Mutant: remove_lock — drop the `rmdir "$lockdir"` call (and its warning
 # branch), so the lock dir's six files are removed but the now-empty directory itself is left
-# behind. Fails reclaim-stale-same-host (its second `mkdir "$lockdir"` after
-# remove_lock now loses the race against the leftover empty dir), release-own-run-id (this case),
-# release-force (same leftover-dir check as this case).
+# behind. A reclaim's own `mkdir "$lockdir"` after remove_lock then loses to the leftover empty
+# dir, so every case that reclaims fails too, alongside this case and release-force.
 case_release_own_run_id() {
   local dir; dir="$(mk_repo release-own-run-id)"
   run_lock "$dir" "$$" acquire
@@ -446,9 +662,7 @@ case_release_wrong_run_id() {
   [ "$now" = "$rid" ] || { __ok=0; __why="${__why}run-id changed on mismatch\n"; }
 }
 
-# 10. release-force. Same mutant as case 8 (remove_lock's `rmdir` dropped). Fails
-# reclaim-stale-same-host, release-own-run-id, release-force (this case) — see case 8's
-# comment; recorded once there in full, not restated per-run here.
+# 10. release-force. Same mutant as case 8 (remove_lock's `rmdir` dropped).
 case_release_force() {
   local dir; dir="$(mk_repo release-force)"
   run_lock "$dir" "$$" acquire
@@ -756,6 +970,97 @@ case_owner_unknown_flag() {
   [ -e "$dir/.git/trail-blazer" ] && { __ok=0; __why="${__why}lock dir created for an unknown flag\n"; }
 }
 
+# 29. reclaim-race-serial (#482) — the issue's acceptance scenario. Two contenders, each with its
+# own live owner, both judged the same stale holder stale (both are stopped at the marker mkdir,
+# which comes after the stale check). A is released and runs to completion, then B. A must win
+# (rc 0, the record names A's owner) and B must refuse (rc 3, no `run-id=` on its stdout) instead
+# of deleting A's live record; no marker remains.
+# mutant:482-lock-reread-skipped — neutralises both the record re-read comparison and the liveness
+#   re-check in reclaim_stale, so B deletes A's live record and takes the lock itself.
+# mutant:482-lock-marker-leaked — drops the remove_reclaim call after reclaim_stale in
+#   cmd_acquire, so a finished reclaim leaves the marker behind (the marker-absent assertion).
+case_reclaim_race_serial() {
+  reclaim_race serial
+}
+
+# 30. reclaim-race-replaced (#482) — as reclaim-race-serial, but A's owner is killed and reaped
+# before B is released, so under the marker B finds a dead pid in a record that is no longer the
+# one it judged stale: only the run-id/pid re-read stops it (the liveness re-check alone would
+# let B through).
+# mutant:482-lock-ident-unchecked — neutralises only the record re-read comparison in
+#   reclaim_stale; with A's owner dead, B then reclaims A's record.
+case_reclaim_race_replaced() {
+  reclaim_race replaced
+}
+
+# 31. reclaim-race-concurrent (#482) — A holds the marker, paused at remove_lock's rm; B is
+# released meanwhile. B must refuse at once (rc 3, stderr names `release --force`) without
+# touching the marker or the lock; A then finishes (rc 0) and its record stands.
+# mutant:482-lock-arbiter-bypassed — turns the marker's `mkdir` into `mkdir -p`, which succeeds on
+#   an existing directory, so B enters the critical section beside A.
+case_reclaim_race_concurrent() {
+  reclaim_race concurrent
+}
+
+# 32. reclaim-marker-dead (#482) — a stale lock plus a reclaim marker whose pid is dead (an
+# acquire killed mid-reclaim): acquire refuses (rc 3, names `release --force`) and changes
+# neither; status reports the marker; `release --force` clears lock and marker and prints what it
+# cleared; the next acquire succeeds. A marker with no lock directory is cleared by
+# `release --force` too.
+# mutant:482-lock-force-keeps-marker — drops the marker's remove_reclaim call from cmd_release's
+#   --force branch, so `release --force` reports the marker cleared but leaves it behind.
+case_reclaim_marker_dead() {
+  local dir; dir="$(mk_repo reclaim-marker-dead)"
+  local dead dead2 host ld rd
+  dead="$(dead_pid)"
+  dead2="$(dead_pid)"
+  host="$(uname -n)"
+  ld="$(lockdir_of "$dir")"
+  rd="$(reclaimdir_of "$dir")"
+  write_lock "$dir" "run-old-$dead" "$dead" "$host" "2020-01-01T00:00:00Z" "0.0.0" "/nowhere"
+  mkdir -p "$rd"
+  printf '%s' "$dead2" > "$rd/pid"
+
+  run_lock "$dir" "$$" acquire
+  expect_rc 3
+  expect_err "release --force"
+  expect_err "reclaim"
+  expect_absent_out "run-id=run-"
+  [ "$(cat "$ld/run-id" 2>/dev/null)" = "run-old-$dead" ] || { __ok=0; __why="${__why}lock run-id changed\n"; }
+  [ "$(cat "$rd/pid" 2>/dev/null)" = "$dead2" ] || { __ok=0; __why="${__why}marker pid changed\n"; }
+
+  run_lock "$dir" "$$" status
+  expect_rc 0
+  expect_out "reclaim=held"
+  expect_out "reclaim-pid=$dead2"
+
+  run_lock "$dir" "$$" release --force
+  expect_rc 0
+  expect_out "reclaim=cleared"
+  expect_out "reclaim-pid=$dead2"
+  [ -d "$ld" ] && { __ok=0; __why="${__why}lock dir still present after --force\n"; }
+  [ -d "$rd" ] && { __ok=0; __why="${__why}marker still present after --force\n"; }
+
+  run_lock "$dir" "$$" status
+  expect_rc 0
+  expect_absent "reclaim="
+
+  run_lock "$dir" "$$" acquire
+  expect_rc 0
+  expect_out "run-id="
+
+  # A marker with no lock directory at all.
+  run_lock "$dir" "$$" release --force
+  expect_rc 0
+  mkdir -p "$rd"
+  printf '%s' "$dead2" > "$rd/pid"
+  run_lock "$dir" "$$" release --force
+  expect_rc 0
+  expect_out "reclaim=cleared"
+  expect_out "released=none"
+  [ -d "$rd" ] && { __ok=0; __why="${__why}marker-only fixture: marker still present after --force\n"; }
+}
+
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
@@ -787,6 +1092,10 @@ cases=(
   "owner-pid-env-nondigits|case_owner_pid_env_nondigits|#408: TBF_OWNER_PID=abc: rc 2, no lock dir created"
   "owner-daemon-refused|case_owner_daemon_refused|#408: --owner-pid names a process whose command line contains app-server: rc 2, stderr names codex --no-daemon, no lock dir created"
   "owner-unknown-flag|case_owner_unknown_flag|#408: acquire --bogus: rc 2, usage on stderr, no lock created"
+  "reclaim-race-serial|case_reclaim_race_serial|#482: two contenders both judged one holder stale; A reclaims, then B is released: A rc 0, B rc 3 with no run-id= on stdout, record names A's owner, no marker left"
+  "reclaim-race-replaced|case_reclaim_race_replaced|#482: as serial, but A's owner dies before B is released: B still rc 3 (only the record re-read stops it), record still A's"
+  "reclaim-race-concurrent|case_reclaim_race_concurrent|#482: B is released while A holds the marker paused inside remove_lock: B rc 3 naming release --force, marker untouched, then A rc 0"
+  "reclaim-marker-dead|case_reclaim_marker_dead|#482: stale lock plus a marker with a dead pid: acquire rc 3, status shows reclaim=held, release --force clears both, next acquire rc 0; a marker-only fixture is cleared too"
 )
 
 matched=0
