@@ -706,9 +706,17 @@ nothing but this repo's own files.
   `GIT_DIR`-family assignment) — this closes the gap an unattended Codex run would otherwise have
   with no permission prompt as a backstop. Since #433, the same denial also fires on a push in the
   same command as a `cd`/`pushd`/`popd`/`chdir` or a `GIT_DIR`-family export/assignment in a
-  separate segment, whatever the order — a change inside a sourced file, a script, a function or
-  alias, or Codex's own shell `workdir` (ADR 0002 U9, absent from the hook payload) remain
-  documented residuals.
+  separate segment, whatever the order — a change inside a sourced file, a script, or a function
+  or alias remains a documented residual. Since #494, a push on Codex is also denied when any tool
+  call in the last 1 MiB of the rollout named by the payload's `transcript_path` sets a shell
+  `workdir` (ADR 0002 U9, absent from the hook payload) that isn't the session directory as a plain
+  string literal (or `null`), whether or not that call has finished — a code-mode cell can yield
+  its output and keep running — so an earlier call's workdir keeps denying every later push until
+  it leaves that window. It also denies when the rollout can't be read, holds no tool call, or
+  starts with an unparseable record of at least half the window. Remaining residuals: a workdir
+  key built at runtime or written with escapes, and a call record outside the window while another
+  call is still in it — one wholly before the window, or one cut by the window whose `workdir` lies
+  before the cut.
 - **Project rules load, verified live at the gate.** Codex loads the project-level
   `.codex/rules/*.rules` file the way its documented rules precedence implies, not only
   `$CODEX_HOME/rules/default.rules` (the ADR's own earlier probes had used only the latter) — see
@@ -818,7 +826,10 @@ Every git write, `gh` call, and gated script is its own simple command: no pipe,
 redirection, heredoc, command substitution, or variable (see "Script reach" above). Read-only git
 (`status`, `log`, `diff`, `rev-parse`, `merge-base`, `worktree list`) needs no rule and runs
 exactly as the skill already writes it. Never run `bash <path>`, and never fold a variable or
-`..` into a gated command. The Codex form of each composite the skills use elsewhere:
+`..` into a gated command. Issue every `git push` with no shell `workdir` (or the session
+directory itself as a plain string) — `hooks/push-guard.sh` denies any other, and keeps denying
+while an earlier call with one is still in the transcript's last 1 MiB (#494). The Codex
+form of each composite the skills use elsewhere:
 
 - **`git add -A && git commit -m "…"`** — two calls: `git add -A`, then `git commit -m "…"`.
 - **The blocked path's `if git diff --cached --quiet; then … else … fi`** (issue-implementer step

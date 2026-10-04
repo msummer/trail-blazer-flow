@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #494: on Codex, `push-guard.sh` denies a `git push` while any tool call in the rollout's last
+  1 MiB sets a shell `workdir` other than the session directory as a plain literal, or when that
+  rollout can't be read; previously such a push got no opinion. Claude Code is unaffected.
 - #460: `codex-scheduled-run.sh` now refuses a leading-zero `TBF_CODEX_RUN_TIMEOUT` or
   `TBF_CODEX_RUN_KILL_GRACE` (e.g. `08`) as `preflight-failed reason=bad-timeout`, as it already did
   for `TBF_CODEX_GH_TIMEOUT`. Previously a leading-zero run timeout killed the background watchdog and

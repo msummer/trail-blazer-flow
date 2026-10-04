@@ -8,7 +8,9 @@
 # target" below), ALSO denies a push segment carrying git config supplied on the command line
 # (#439 — see "Fail-closed: command-line git config" below), ALSO denies, since #435, a command
 # whose analysis cannot finish inside this hook's own time budget, or a push that reads a git config
-# file with a depth-0 line too long to analyse safely (see "Analysis deadline (#435)" below), and
+# file with a depth-0 line too long to analyse safely (see "Analysis deadline (#435)" below), ALSO
+# denies, since #494, a Codex push whose shell `workdir` is not provably the session checkout (see
+# "Fail-closed: Codex shell workdir (#494)" below), and
 # says nothing (exit 0, empty stdout, empty stderr — "no opinion") about everything else, so the
 # normal permission flow — a prompt, or a matching deny rule in
 # templates/repo-settings.json, which always wins over this hook's decision — applies. This closes
@@ -20,7 +22,8 @@
 # Enforces "deny a push whose destination is the default branch", "deny a push whose target
 # repository cannot be resolved at all" (#292), "deny a push segment carrying command-line git
 # config" (#439), and, since #435, "deny a command (or a config line it reads) too large to analyse
-# safely inside this hook's own time budget"; does NOT enforce an
+# safely inside this hook's own time budget", and, since #494, "deny a Codex push whose shell
+# `workdir` is not the session checkout as a plain string literal"; does NOT enforce an
 # allow-list of `claude/<n>-<slug>` destinations (the Decision's other clause) — that would deny
 # ordinary work (a `release/vX.Y.Z` branch, an annotated-tag push, any `git push origin
 # feature/x` a human runs in ANY Claude Code session in a plugin-enabled repo, since this hook is
@@ -258,6 +261,57 @@
 # option into the subcommand slot); a quoted value containing a space (splits the same way an ordinary `-C`/`GIT_DIR=` value does);
 # and an inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself reads.
 #
+# Fail-closed: Codex shell workdir (#494). Codex's shell tool takes its own `workdir` parameter,
+# which is NOT part of the PreToolUse payload (ADR 0002 U9, confirmed live on Codex 0.156.1: the
+# payload carries only `tool_input.command` and the session `cwd`), so a push run through it
+# executes in a checkout the command-string analysis above never sees. For a Codex-shaped payload
+# (a non-empty `turn_id`; a Claude Code payload has none and never reaches this code) whose push
+# would otherwise get no opinion, this hook therefore reads the tail (at most
+# PUSH_TRANSCRIPT_TAIL_BYTES) of the rollout file the payload's `transcript_path` names and scans
+# EVERY model tool-call record in that window — a `response_item` of type `custom_tool_call`,
+# `function_call` or `local_shell_call` — whether or not an `*_output` record answers it: a code-mode
+# `exec` cell can yield (its output record written) and keep running, so its inner push can fire
+# long after its output exists, and completion therefore proves nothing. The live evidence this
+# relies on: Codex 0.156.1 appends the call record to the rollout BEFORE PreToolUse fires for the
+# inner command, and the payload carries no key that joins the hook call to its record, hence
+# "every record", not "the newest". Each record's call text (code-mode JS `input`, `arguments`, or
+# `action`, JSON-serialised when not a string) is scanned for EVERY occurrence of a
+# PUSH_WORKDIR_KEYS name. The push is allowed only when every occurrence is `null` (never
+# `undefined`: JS lets that identifier be shadowed) or a plain `"…"`/`'…'` string literal (no
+# backslash, closed, then a comma or brace) that is LEXICALLY the session checkout
+# (`is_session_checkout_path()`, the same test #292 applies to `-C`). Window edge: a line in the
+# window that does not parse as JSON but contains a workdir key (a record cut by the window start,
+# or garbage) is treated as a non-literal workdir; and when the window's first line does not parse
+# and is at least half of PUSH_TRANSCRIPT_TAIL_BYTES long (UTF-8 bytes), the hook denies outright —
+# a record cut that deep may have hidden its workdir. Otherwise it denies with one of five FIXED
+# reasons: the workdir names another directory, the workdir is not a plain string literal (a
+# variable, a concatenation, an escaped or shorthand form, `undefined`), the transcript is missing
+# or unreadable, a transcript record exceeds the hook's read window, or the window holds no tool
+# call at all (also the verdict for a jq failure or an empty pipeline output — nothing ever fails
+# open past this point). An earlier deny of any class keeps precedence; the block only ever ADDS a
+# deny. Containment: the transcript path is host-provided (never taken from the command string) and
+# is used only as a `[ -f ]`/`[ -r ]`-guarded redirect into `tail -c` (never in any process's argv);
+# its content is partly model-written and so untrusted, and is parsed as DATA by jq and awk, compared
+# by string equality only, never `eval`ed, executed, or opened as a path, and never echoed — the
+# deny messages are fixed strings. Over-blocking, deliberate: a workdir passed as a variable, or as
+# `undefined`; a subdirectory or a symlinked spelling of the session path; ANY foreign or non-literal
+# workdir in ANY call record still inside the window — an earlier, completed, unrelated call, or a
+# non-push call, included — which keeps denying every later Codex push until it leaves the window;
+# any non-literal mention of `workdir` anywhere in a code-mode program, even on a call that is not
+# the push; an unparseable line in the window that mentions a workdir key; a window whose first
+# line is an unparseable record of at least half the window; a window holding no tool call, as when
+# very large inner-call output pushed every call record out of it; and a Codex session that writes
+# no rollout at all (an interactive `--ephemeral` run, UNVERIFIED here), which denies every push. The
+# remedy is the same each time: issue the push with no `workdir`, from a session started in that
+# checkout, once the offending record has left the window. Under-blocking, documented residuals: a
+# call record that lies wholly before the window, or is cut at the window start with its workdir
+# before the cut and less than half a window of it left in view, while the window still holds
+# another tool call (more than half a window of later records has pushed it out of view); a workdir
+# key built at runtime or written with JS identifier or string escapes; a cwd-like parameter under
+# any other name; a Codex that writes the call record only after the hook runs
+# (every push would then deny, loud and fail-closed, not a bypass); and the existing `jq`-absent
+# fail-open below.
+#
 # Never invokes `git`, `gh`, or anything else derived from the untrusted command string; never
 # `eval`s; never writes a file. Since #269, this hook reads exactly one class of filesystem path
 # taken from the untrusted command string — a push segment's own `-C <path>` value, and ONLY when
@@ -294,15 +348,21 @@
 # treat either of those as a cycle), and each independent read's own `merge` value can overwrite
 # the last, in read order. That mirrors what git itself would do with the same files — the repo's
 # own scope is always read, on its own, last — so it is
-# not an evasion this hook introduces. The untrusted `-C` value itself is fed only to
+# not an evasion this hook introduces. Since #494, this hook ALSO reads a FIFTH class of path, on a
+# Codex-shaped payload only: the rollout file named by the host-provided `transcript_path` (see
+# "Fail-closed: Codex shell workdir (#494)" above), read through a `[ -f ]`/`[ -r ]`-guarded
+# redirect into `tail -c`, parsed as data only, and never used as a path to anything else. The
+# untrusted `-C` value itself is fed only to
 # `grep` (a here-string, never a piped writer — assertion 1.7) as data, and to shell builtin `[ -f
 # ]`/`[ -d ]` tests; resolving it caps its own upward walk at exactly one level (see
 # `resolve_repo()`'s `MAX_DEPTH` parameter below), so that value never reaches `dirname`'s argv —
 # or any other process's argv — is never `eval`ed, and is never opened for writing. bash + POSIX
-# awk only — no jq is actually needed by this hook (unlike its two siblings) since it parses
-# `tool_input.command` with awk, not a JSON library, but the raw-stdin fast paths below still gate
+# awk only — jq is not needed to PARSE the command (unlike its two siblings this hook parses
+# `tool_input.command` with awk, not a JSON library), but the raw-stdin fast paths below still gate
 # on `jq`'s presence for the few scalar field reads (`tool_name`, `permission_mode`,
-# `tool_input.command`, `cwd`) this hook does need — no python, no perl, no GNU-only flags (this
+# `tool_input.command`, `cwd`, and, since #494, `turn_id` and `transcript_path`) this hook does
+# need, and, since #494, a Codex push also runs one jq pass over the rollout tail (jq 1.5
+# builtins only, no regex) — no python, no perl, no GNU-only flags (this
 # repo's CLAUDE.md portability convention); exercised under Apple's bash 3.2 by the
 # selfcheck-macos CI job, same as bin/*.sh, hooks/git-c-guard.sh, and hooks/agent-boundary.sh.
 #
@@ -602,8 +662,11 @@
 # assignment; `env --chdir=<dir> git push` (a dash-prefixed token immediately after the `env`
 # prefix word, skipped like any other) and `env -C <dir> git push` (`<dir>` itself becomes the
 # resolved command word, the same class as the `sudo -u foo` bullet above) — filed as a follow-up
-# alongside this change; and Codex's shell `workdir`, which never appears in this hook's payload at
-# all (ADR 0002 U9) and so cannot be tracked by any command-string mechanism.
+# alongside this change. (Codex's shell `workdir`, which never appears in this hook's payload at
+# all (ADR 0002 U9) and so cannot be tracked by any command-string mechanism, is closed since #494
+# by reading the rollout instead — see "Fail-closed: Codex shell workdir (#494)" above for what that
+# still leaves open: a workdir key built at runtime or written with escapes, a cwd-like parameter
+# under another key name, and a call record outside the 1 MiB window while another call is in it.)
 #
 # This is a tripwire, not a sandbox — branch protection on the
 # default branch remains the real backstop, exactly as hooks/git-c-guard.sh and
@@ -616,7 +679,10 @@
 # git config supplied on the command line (#439 — see "Fail-closed: command-line git config"
 # above), OR, since #435, whose analysis cannot finish inside this hook's own time budget, or that
 # reads a git config file with a depth-0 line too long to analyse safely (see "Analysis deadline
-# (#435)" below), in which case print exactly one reason line to stderr and exit 2 ("deny"); stdout
+# (#435)" below), OR, since #494, a Codex-shaped payload whose shell `workdir` is not provably the
+# session checkout, whose transcript cannot be read, whose transcript window holds no tool call, or
+# whose window starts with an unparseable record of at least half its size (see "Fail-closed: Codex shell workdir (#494)" above), in which case print exactly one reason line
+# to stderr and exit 2 ("deny"); stdout
 # is always empty. Wired in hooks/hooks.json via
 # `${CLAUDE_PLUGIN_ROOT}`, with no `if` gate — an `if` filter matches only `tool_input.command`
 # constituents after composite splitting and leading-assignment stripping, so it cannot see a
@@ -667,8 +733,10 @@
 # depth cap), one config line's comment-strip plus up to three `cfg_trim()` calls (at most
 # `CFG_TOPLEVEL_MAX_LINE_CHARS`/`CFG_INCLUDE_MAX_LINE_CHARS` characters, quadratic only in that
 # capped length), one include open, up to two `grep` processes plus a depth-1 resolve's file stats,
-# one `refspec_dest()` subshell, one word-split of a segment's remaining tokens, or the `read` of a
-# single config line (linear in that line's own length). Residuals this deadline does NOT close: the
+# one `refspec_dest()` subshell, one word-split of a segment's remaining tokens, the `read` of a
+# single config line (linear in that line's own length), or (#494, Codex push only) the one
+# `tail -c` + jq + awk pass over the rollout tail, bounded by `PUSH_TRANSCRIPT_TAIL_BYTES`.
+# Residuals this deadline does NOT close: the
 # `T_prefix` work above is linear and unsampled, though still bounded by the wall clock rather than
 # by the deadline's own sampling; the single config-line `read` inside `U_max` is spent before
 # `check_deadline` can run again; and the Codex CLI's own hook timeout, if any, is UNVERIFIED here —
@@ -815,6 +883,17 @@ PUSH_EXPORT_WORDS="export declare typeset local readonly"
 GIT_CMDCFG_OPTS="-c --config-env"
 GIT_CMDCFG_ENV_VARS="GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM"
 GIT_CMDCFG_ENV_PREFIXES="GIT_CONFIG_KEY_ GIT_CONFIG_VALUE_"
+# #494: the most bytes read from the END of the Codex rollout file named by the payload's
+# `transcript_path` when scanning the tool-call records (see the post-loop "#494" block and the
+# header's "Fail-closed: Codex shell workdir (#494)" paragraph). A record pushed out of this window
+# is not seen — the header's documented window residual — and a window holding no call record at
+# all denies as "no Codex tool call"; half of this size is also the unparseable-first-line limit.
+PUSH_TRANSCRIPT_TAIL_BYTES="1048576"
+# #494: the JSON/JS property names the hook treats as a Codex shell tool's working-directory
+# parameter when scanning a tool-call record's text (`workdir` for the exec_command tool,
+# `working_directory` for a local_shell_call action). Consumed only by the jq stage of the post-loop
+# "#494" block; a cwd-like parameter under any OTHER name is a documented under-blocking class.
+PUSH_WORKDIR_KEYS="workdir working_directory"
 
 # is_c_target_path PATH (#269) — true iff PATH satisfies the shared PATH_ERE predicate above.
 # Here-string, not a `printf` writer piped into `grep`'s quiet mode (#255): that early-exit
@@ -2005,6 +2084,107 @@ if [ -z "$deny_dest" ] && [ "$saw_push" = 1 ] && [ -n "$xseg_reason" ]; then
   deny_kind="unresolved"
 fi
 
+# #494: Codex shell `workdir` fail-closed fallback — see this file's header "Fail-closed: Codex
+# shell workdir (#494)" paragraph for the full rule and its containment argument. Runs LAST, after
+# every other verdict above had its chance (an existing reason always keeps precedence: guarded by
+# `[ -z "$deny_dest" ]`), only for a push this hook would otherwise let through, and only for a
+# Codex-shaped payload (a non-empty `turn_id`) — a Claude Code payload never reaches the body.
+# Every failure mode below denies, with one of five FIXED reason strings; the transcript is parsed
+# as data by jq and awk, compared by string equality only, never executed, never opened as a path,
+# and never echoed. An empty or garbled pipeline output is "no tool call", which also denies.
+if [ -z "$deny_dest" ] && [ "$saw_push" = 1 ]; then
+  codex_turn="$(printf '%s' "$input" | jq -r '.turn_id? // empty' 2>/dev/null)"
+  if [ -n "$codex_turn" ]; then
+    check_deadline
+    wd_reason=""
+    wd_tp="$(printf '%s' "$input" | jq -r '.transcript_path? // empty' 2>/dev/null)"
+    if [ -z "$wd_tp" ] || [ ! -f "$wd_tp" ] || [ ! -r "$wd_tp" ]; then
+      wd_reason="Codex transcript missing or unreadable"
+    else
+      # jq stage: every model tool-call record in the window, completed or not (a code-mode cell can
+      # yield its output record and keep running, so completion proves nothing), then every
+      # occurrence of a workdir key in its call text, each printed as one `T<TAB><the text after the
+      # key>` line (newlines flattened, 1024 chars). Window edge: a line that does not parse as JSON
+      # but contains a workdir key prints BAD, and an unparseable FIRST line of at least half the
+      # window (its UTF-8 bytes, summed from `explode`) prints EDGE alone. No regex builtin (jq 1.5
+      # without Oniguruma) and no `IN`; the first line is EDGE, CALLS or NONE.
+      # awk stage: classifies each T line as no workdir (null: no output), a plain string literal
+      # (`LIT<TAB><body>`), or anything else (`BAD`).
+      wd_out="$(tail -c "$PUSH_TRANSCRIPT_TAIL_BYTES" 2>/dev/null < "$wd_tp" \
+        | jq -R -n -r --arg keys "$PUSH_WORKDIR_KEYS" --argjson half "$((PUSH_TRANSCRIPT_TAIL_BYTES / 2))" '
+            [inputs] as $lines
+            | ($keys | split(" ")) as $ks
+            | [$lines[] | . as $l | ([try ($l | fromjson | [.]) catch null] | .[0])] as $parsed
+            | [$parsed[] | select(. != null) | .[0]
+                | select(type == "object" and .type == "response_item") | .payload | select(type == "object")
+                | select(.type == "custom_tool_call" or .type == "function_call" or .type == "local_shell_call")] as $calls
+            | if ($lines | length) > 0 and $parsed[0] == null
+                 and (($lines[0] | explode | map(if . < 128 then 1 elif . < 2048 then 2 elif . < 65536 then 3 else 4 end) | add // 0) >= $half)
+              then "EDGE"
+              elif ($calls | length) == 0 then "NONE"
+              else "CALLS",
+                (range(0; $lines | length) as $i | select($parsed[$i] == null)
+                  | $lines[$i] as $l | select(any($ks[]; . as $k | ($l | split($k) | length) > 1)) | "BAD"),
+                ($calls[] | [.input, .arguments, .action] | map(select(. != null) | if type == "string" then . else tojson end) | .[] as $txt
+                  | $ks[] as $k
+                  | $txt | split($k) | .[1:][]
+                  | split("\n") | join(" ") | split("\r") | join(" ") | "T\t" + .[0:1024])
+              end' 2>/dev/null \
+        | awk '
+            BEGIN {
+              sq = sprintf("%c", 39)
+              dq = sprintf("%c", 34)
+              pre = "^[ \t]*[" dq sq "]?[ \t]*:[ \t]*"
+            }
+            $0 == "EDGE" || $0 == "CALLS" || $0 == "NONE" || $0 == "BAD" { print; next }
+            substr($0, 1, 2) != "T\t" { print "BAD"; next }
+            {
+              t = substr($0, 3)
+              if (!match(t, pre)) { print "BAD"; next }
+              rest = substr(t, RLENGTH + 1)
+              if (rest ~ /^null[ \t]*[,}]/) next
+              q = substr(rest, 1, 1)
+              if (q != dq && q != sq) { print "BAD"; next }
+              lit = substr(rest, 2)
+              p = index(lit, q)
+              if (p == 0) { print "BAD"; next }
+              body = substr(lit, 1, p - 1)
+              after = substr(lit, p + 1)
+              if (index(body, "\\") > 0) { print "BAD"; next }
+              if (after !~ /^[ \t]*[,}]/) { print "BAD"; next }
+              print "LIT\t" body
+            }' 2>/dev/null)"
+      wd_first="${wd_out%%"$nl"*}"
+      if [ "$wd_first" = "EDGE" ]; then
+        wd_reason="Codex transcript record exceeds the hook's read window"
+      elif [ "$wd_first" != "CALLS" ]; then
+        wd_reason="no Codex tool call in its transcript"
+      else
+        while IFS= read -r wd_line; do
+          check_deadline
+          case "$wd_line" in
+            CALLS) continue ;;
+            "LIT$TAB"*)
+              if ! is_session_checkout_path "${wd_line#LIT"$TAB"}"; then
+                wd_reason="Codex shell workdir names another directory"
+                break
+              fi
+              ;;
+            *)
+              wd_reason="Codex shell workdir is not a plain string literal"
+              break
+              ;;
+          esac
+        done <<<"$wd_out"
+      fi
+    fi
+    if [ -n "$wd_reason" ]; then
+      deny_dest="$wd_reason"
+      deny_kind="workdir"
+    fi
+  fi
+fi
+
 if [ -n "$deny_dest" ]; then
   case "$deny_kind" in
     dbracket)
@@ -2029,6 +2209,12 @@ if [ -n "$deny_dest" ]; then
       ;;
     unresolved)
       printf '%s denies this push: it cannot resolve which repository the push runs in (%s), so it cannot rule out that repository'"'"'s default branch — the harness never pushes this way; a human can run it from a terminal inside that checkout, or use a <repo>-wt-<n> worktree path; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" "$deny_dest" >&2
+      ;;
+    workdir)
+      # #494: deny_dest is always one of the FIXED reason strings set by the Codex workdir block
+      # above — never any transcript or command text.
+      printf '%s denies this push: it cannot resolve which repository the push runs in (%s) — a Codex shell workdir is not in the hook payload, and any recent tool call in the session transcript whose workdir is not the session directory as a plain string literal keeps this denying; issue the push with no workdir from a session started in that checkout, or a human can run it from a terminal; see README.md'"'"'s Safety model\n' \
         "$PUSH_DENY_STEM" "$deny_dest" >&2
       ;;
     cmdcfg)
