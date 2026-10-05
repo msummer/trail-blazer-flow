@@ -3657,7 +3657,9 @@ case_codex_setup_config_no_newline() {
 # codex-setup-config-refusals (#484) — config.toml shapes bin/codex-setup.sh refuses rather than
 # edits: a space-indented key line, a tab-indented key line (both naming CLAUDE.md), the exact
 # duplicated file the pre-fix script produced (comment line plus two key lines, no final newline),
-# a multi-line array whose first line has no "CLAUDE.md", and a single-quoted value. Each: write
+# a multi-line array whose first line has no "CLAUDE.md", a single-quoted value, a double- or
+# single-quoted key name (also tab-indented with no space around =), and the file the quoted-key
+# bug produced (bare key line followed by a quoted key line). Each: write
 # mode rc 2 with the file byte-identical (cmp against a saved copy), no .codex/agents and no
 # .codex/rules (the conflict is caught before anything is installed), and the stderr text naming
 # the cause; --check then reports rc 1 with reason=fallback-conflict, never ok.
@@ -3667,10 +3669,17 @@ case_codex_setup_config_no_newline() {
 #   that names CLAUDE.md.
 # mutant:484-cx-dup-off — raising the more-than-one-key threshold reads an already-duplicated
 #   file as current.
+# mutant:490-cx-quoted-off — disabling the quoted-key rule reads a quoted key as no key, so write
+#   mode prepends a bare duplicate instead of refusing.
+# mutant:490-cx-apostrophe-off — skipping the apostrophe-to-double-quote rewrite misses a
+#   single-quoted key name.
+# mutant:490-cx-quoted-branch-off — raising the quoted-key threshold accepts a lone quoted key
+#   naming CLAUDE.md as current.
 case_codex_setup_config_refusals() {
   local plugin repo variant needle
   plugin="$(mk_cx_plugin cx-refusals-plugin 2.9.0)"
-  for variant in indented tab-indented duplicated multiline-array single-quoted; do
+  for variant in indented tab-indented duplicated multiline-array single-quoted \
+    double-quoted-key single-quoted-key quoted-indented-nospace quoted-after-bare; do
     repo="$(mk_cx_repo "cx-refusals-repo-$variant")"
     mkdir -p "$repo/.codex"
     needle='without "CLAUDE.md"'
@@ -3694,6 +3703,23 @@ case_codex_setup_config_refusals() {
       single-quoted)
         printf "project_doc_fallback_filenames = ['CLAUDE.md']\n" > "$repo/.codex/config.toml"
         ;;
+      double-quoted-key)
+        printf '"project_doc_fallback_filenames" = ["CLAUDE.md"]\n' > "$repo/.codex/config.toml"
+        needle='with a quoted key name'
+        ;;
+      single-quoted-key)
+        printf "'project_doc_fallback_filenames' = [\"CLAUDE.md\"]\n" > "$repo/.codex/config.toml"
+        needle='with a quoted key name'
+        ;;
+      quoted-indented-nospace)
+        printf "\t'project_doc_fallback_filenames'=[\"CLAUDE.md\"]\n" > "$repo/.codex/config.toml"
+        needle='with a quoted key name'
+        ;;
+      quoted-after-bare)
+        printf '%s\nproject_doc_fallback_filenames = ["CLAUDE.md"]\n"project_doc_fallback_filenames" = ["CLAUDE.md"]\n' \
+          "# trail-blazer-flow: load CLAUDE.md as Codex's project doc when AGENTS.md is absent (#408)." > "$repo/.codex/config.toml"
+        needle='on more than one line'
+        ;;
     esac
     cp "$repo/.codex/config.toml" "$tmpbase/cx-refusals-before-$variant"
     run_cx "$plugin" "$repo"
@@ -3713,15 +3739,19 @@ case_codex_setup_config_refusals() {
 # top-level key: a # comment line carrying the exact key text, and the key inside a [profiles.x]
 # table with a different value. Each: --check reports reason=missing-fallback; write mode rc 0
 # prints wrote=, keeps the original line, and leaves exactly one key line above the first table
-# header; a later --check is rc 0 with ok.
+# header; a later --check is rc 0 with ok. The same two shapes with a quoted key name (a # comment
+# line, and a single-quoted key inside a table) are not the key either.
 # mutant:484-cx-key-unanchored — dropping the leading-whitespace-only prefix from the key regex
 #   lets the comment line count as the key, so --check reports ok instead of missing-fallback.
 # mutant:484-cx-table-scope — setting the in-table flag to 0 on a table header counts the
 #   table-scoped key as top-level, so it is refused as a foreign value instead of added to.
+# mutant:490-cx-quoted-unanchored — dropping the leading-whitespace-only prefix from the quoted-key
+#   regex lets a commented quoted key count as the key, so --check reports fallback-conflict
+#   instead of missing-fallback.
 case_codex_setup_config_not_key() {
   local plugin repo variant keep count
   plugin="$(mk_cx_plugin cx-not-key-plugin 2.9.0)"
-  for variant in comment table-key; do
+  for variant in comment table-key quoted-comment quoted-table-key; do
     repo="$(mk_cx_repo "cx-not-key-repo-$variant")"
     mkdir -p "$repo/.codex"
     case "$variant" in
@@ -3731,6 +3761,14 @@ case_codex_setup_config_not_key() {
         ;;
       table-key)
         keep='project_doc_fallback_filenames = ["README.md"]'
+        printf 'other_key = 1\n\n[profiles.x]\n%s\n' "$keep" > "$repo/.codex/config.toml"
+        ;;
+      quoted-comment)
+        keep='# "project_doc_fallback_filenames" = ["README.md"]'
+        printf '%s\nother_key = 1\n' "$keep" > "$repo/.codex/config.toml"
+        ;;
+      quoted-table-key)
+        keep="'project_doc_fallback_filenames' = [\"README.md\"]"
         printf 'other_key = 1\n\n[profiles.x]\n%s\n' "$keep" > "$repo/.codex/config.toml"
         ;;
     esac
@@ -7463,8 +7501,8 @@ cases=(
   "codex-setup-config-merge|case_codex_setup_config_merge|#408: a pre-existing config.toml with a top-level key plus a [profiles.x] table: the fallback key is inserted above the first table, both originals survive; --check before it pins reason=missing-fallback"
   "codex-setup-config-conflict|case_codex_setup_config_conflict|#408: a top-level project_doc_fallback_filenames not naming CLAUDE.md: write refuses (rc 2, unchanged, .codex/agents and .codex/rules absent); --check reports reason=fallback-conflict"
   "codex-setup-config-no-newline|case_codex_setup_config_no_newline|#484: a config.toml holding only the exact fallback key line with no final newline: --check ok, write unchanged and byte-identical with one key line, a later --check ok"
-  "codex-setup-config-refusals|case_codex_setup_config_refusals|#484: space-indented, tab-indented, duplicated, multi-line-array and single-quoted key shapes: write refuses (rc 2, byte-identical, .codex/agents and .codex/rules absent, stderr names the cause); --check reports reason=fallback-conflict"
-  "codex-setup-config-not-key|case_codex_setup_config_not_key|#484: a # comment carrying the key text and a key inside a [profiles.x] table are not the top-level key: --check reports missing-fallback, write adds one key above the first table, a later --check is ok"
+  "codex-setup-config-refusals|case_codex_setup_config_refusals|#484: space-indented, tab-indented, duplicated, multi-line-array, single-quoted value, quoted key name and quoted-after-bare key shapes: write refuses (rc 2, byte-identical, .codex/agents and .codex/rules absent, stderr names the cause); --check reports reason=fallback-conflict"
+  "codex-setup-config-not-key|case_codex_setup_config_not_key|#484: a # comment carrying the key text (bare or quoted) and a key inside a [profiles.x] table (bare or quoted) are not the top-level key: --check reports missing-fallback, write adds one key above the first table, a later --check is ok"
   "codex-setup-check-drift|case_codex_setup_check_drift|#408: --check on a fresh repo: rc 1, reason=missing per file, no .codex created; after setup, a hand-edited agent TOML gives reason=differs for exactly that file"
   "codex-setup-check-stale-version|case_codex_setup_check_stale_version|#408: rules generated from 2.9.0, then --checked from a 3.0.0 copy: reason=stale-plugin-path, proven to write nothing via a find-listing plus checksums; a write from 3.0.0 then --check is rc 0"
   "codex-setup-whitespace-plugin-root|case_codex_setup_whitespace_plugin_root|#408: a plugin root containing a space: write rc 2 nothing written; --check rc 1 unsupported=plugin-root reason=whitespace"

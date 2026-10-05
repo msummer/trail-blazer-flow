@@ -945,6 +945,66 @@
       ]
     },
     {
+      "name": "490-cx-quoted-off",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "keyview ~ /^[ \\t]*\"project_doc_fallback_filenames\"[ \\t]*=/ {",
+          "to": "0 {"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-config-refusals"
+      ]
+    },
+    {
+      "name": "490-cx-apostrophe-off",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "gsub(q, \"\\\"\", keyview)",
+          "to": "gsub(q, q, keyview)"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-config-refusals"
+      ]
+    },
+    {
+      "name": "490-cx-quoted-branch-off",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "[ \"$cfg_quoted\" -gt 0 ]",
+          "to": "[ \"$cfg_quoted\" -gt 99 ]"
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-config-refusals"
+      ]
+    },
+    {
+      "name": "490-cx-quoted-unanchored",
+      "target": "bin/codex-setup.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-setup-",
+      "edits": [
+        {
+          "from": "keyview ~ /^[ \\t]*\"project_doc_fallback_filenames\"",
+          "to": "keyview ~ /\"project_doc_fallback_filenames\""
+        }
+      ],
+      "expect_fail": [
+        "codex-setup-config-not-key"
+      ]
+    },
+    {
       "name": "410-provider-wrapper",
       "target": "bin/check-harness.sh",
       "suite": "dev/doctor-tests.sh",

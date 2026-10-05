@@ -159,7 +159,8 @@ Codex loads `CLAUDE.md` as the project contract one of two ways, and the two don
   The key counts as already set only when exactly one unindented key line carries `"CLAUDE.md"` in
   double quotes; a missing final newline doesn't matter. Anything else is a conflict: a key line
   that doesn't itself carry `"CLAUDE.md"` (so a multi-line array or a single-quoted `'CLAUDE.md'`
-  counts), an indented key line, or more than one key line. On a conflict, write mode refuses
+  counts), an indented key line, a quoted key name (`"project_doc_fallback_filenames"` or
+  `'project_doc_fallback_filenames'`, even one listing `"CLAUDE.md"`), or more than one key line. On a conflict, write mode refuses
   (exit 2, file untouched) and `--check` reports `reason=fallback-conflict`.
 
 `codex-setup.sh` never creates a new `AGENTS.md` — doing so would suppress the fallback it just

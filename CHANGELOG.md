@@ -19,6 +19,7 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 ## Unreleased
 
 - #496: an unattended Codex run that stops at its own preflight prints `Unattended stop: preflight`; the scheduled-run wrapper records it `failed reason=unattended-stop-preflight`, so failure tracking opens the `needs-human` issue.
+- #490: codex-setup.sh refuses a quoted project_doc_fallback_filenames key name ("..." or '...') in .codex/config.toml as fallback-conflict instead of prepending a duplicate bare key. Consumer step (Codex): if --check now reports fallback-conflict, write the key bare.
 
 ## v3.3.0
 
