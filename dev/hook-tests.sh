@@ -2725,6 +2725,9 @@ case_push_cmdcfg_deny_precedence() {
 #   emit_lost().
 # mutant:449-pg-lost-gopt-skip — drops the global-option value skip in lost_push(), so the value
 #   of -C is read as a word that disarms the walk before push.
+# mutant:449-pg-lost-gopt-skip-armed1 — limits that value skip to the prefix triggers' unarmed
+#   scan (armed 0), so the quoted-option trigger's armed-1 scan reads the -C value as a word,
+#   disarms, and a quoted git option followed by -C <dir> push gets no opinion.
 # mutant:449-pg-env-arm-prefix-guard — keeps the env arm from seeing an option whose basename is a
 #   prefix word (--chdir=../env, a lone -).
 # mutant:449-pg-quote-bearing-sq — drops the single-quote arm of quote_bearing().
@@ -2990,6 +2993,11 @@ case_pp_deny_prefix_gopt_value() {
   # The armed walk must skip a git global option VALUE (-C ../other), or push is never reached.
   pp_run 'X="a b" git -C ../other push origin feature/x'
   pp_expect_unres "$PP_R_PFX"
+}
+case_pp_deny_quoted_opt_gopt_value() {
+  # The quoted-option trigger's armed scan must also skip a git global option VALUE (-C ../other).
+  pp_run 'git "--no-pager" -C ../other push origin feature/x'
+  pp_expect_unres "$PP_R_OPT"
 }
 case_pp_deny_env_chdir_prefix_basename() {
   # The option value basename is a PREFIX_WORDS member; the env arm must still see the option.
@@ -8505,6 +8513,7 @@ cases=(
   "push-parse-noop-c-space-value|case_pp_noop_c_space_value|no opinion: git -C \"../demo wt-1\" push origin feature/x (the approved quoted -C residual) -- mutation proof: dev/mutants/hook-tests.json (449-pg-gopt-c-exempt)"
   "push-parse-deny-squote-c|case_pp_deny_squote_c|deny: git '-c' remote.origin.push=HEAD:main push (single-quoted option) -- mutation proof: dev/mutants/hook-tests.json (449-pg-obscured-off, 449-pg-quote-bearing-sq)"
   "push-parse-deny-prefix-gopt-value|case_pp_deny_prefix_gopt_value|deny: X=\"a b\" git -C ../other push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-off, 449-pg-unbalanced-dq, 449-pg-lost-gopt-skip)"
+  "push-parse-deny-quoted-opt-gopt-value|case_pp_deny_quoted_opt_gopt_value|deny: git \"--no-pager\" -C ../other push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-obscured-off, 449-pg-lost-gopt-skip, 449-pg-lost-gopt-skip-armed1)"
   "push-parse-deny-env-chdir-prefix-basename|case_pp_deny_env_chdir_prefix_basename|deny: env --chdir=../env git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off, 449-pg-env-arm-prefix-guard)"
   "push-parse-deny-env-lone-dash|case_pp_deny_env_lone_dash|deny: env - git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off, 449-pg-env-arm-prefix-guard)"
   "push-parse-deny-env-u-git-dir|case_pp_deny_env_u_git_dir|deny: env -u FOO GIT_DIR=../x/.git git push origin feature/x (-u value consumed, GIT_DIR= reason) -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-u-consume)"

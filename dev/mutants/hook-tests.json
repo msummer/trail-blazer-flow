@@ -3827,6 +3827,7 @@
         "push-parse-deny-never-executes",
         "push-parse-deny-quoted-c",
         "push-parse-deny-quoted-git-dir",
+        "push-parse-deny-quoted-opt-gopt-value",
         "push-parse-deny-squote-c"
       ]
     },
@@ -4147,7 +4148,23 @@
         }
       ],
       "expect_fail": [
-        "push-parse-deny-prefix-gopt-value"
+        "push-parse-deny-prefix-gopt-value",
+        "push-parse-deny-quoted-opt-gopt-value"
+      ]
+    },
+    {
+      "name": "449-pg-lost-gopt-skip-armed1",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-parse-",
+      "edits": [
+        {
+          "from": "if (armed != 2 && (s in gopt_set)) skip = 1; continue }",
+          "to": "if (armed == 0 && (s in gopt_set)) skip = 1; continue }"
+        }
+      ],
+      "expect_fail": [
+        "push-parse-deny-quoted-opt-gopt-value"
       ]
     },
     {
