@@ -2730,6 +2730,8 @@ case_push_cmdcfg_deny_precedence() {
 # mutant:449-pg-quote-bearing-sq — drops the single-quote arm of quote_bearing().
 # mutant:449-pg-gopt-value-off — drops the unbalanced-value check for a global option other than -C.
 # mutant:449-pg-gopt-attached-off — drops the unbalanced attached-option check in the subcommand walk.
+# mutant:449-pg-lost-mode2-skip — restores the option-value skip in the split-value walk, so a
+#   split value last fragment that looks like an option (-c") swallows the real push.
 # mutant:449-pg-lost-mode2 — makes the split-value walk disarm on a non-option word like the others.
 # mutant:449-pg-gopt-c-exempt — removes the -C exemption from the value check.
 # mutant:449-pg-scan-once — removes both per-segment memos, so lost_push() re-scans the segment
@@ -2948,6 +2950,20 @@ case_pp_deny_gopt_value_namespace() {
   pp_run 'git --namespace "a b" push origin feature/x'
   pp_expect_unres "$PP_R_OPT"
 }
+case_pp_deny_gopt_value_trailing_option() {
+  # The split value last fragment (-c") looks like an option; the split-value walk must not apply
+  # the option-value skip to it, or it swallows the real push.
+  pp_run 'git -c "user.name=A b -c" push origin main'
+  expect_push_deny
+}
+case_pp_deny_gopt_value_attached_trailing_option() {
+  pp_run 'git -c k="a b -c" push origin main'
+  expect_push_deny
+}
+case_pp_deny_gopt_value_trailing_namespace() {
+  pp_run 'git --namespace "a X --exec-path" push origin main'
+  pp_expect_unres "$PP_R_OPT"
+}
 case_pp_deny_gopt_attached_value() {
   pp_run 'git --exec-path="a b" push origin feature/x'
   pp_expect_unres "$PP_R_OPT"
@@ -2984,19 +3000,20 @@ case_pp_deny_env_lone_dash() {
   pp_run 'env - git push origin feature/x'
   pp_expect_unres "$PP_R_ENV"
 }
-# pp_flood_cmd N — the five-record flood shape at N tokens per record: one record per trigger, then
+# pp_flood_cmd N — the six-record flood shape at N tokens per record: one record per trigger, then
 # a real push so the hook reaches check_deadline after the tokenizer.
 pp_flood_cmd() {
-  local n="$1" r1 r2 r3 r4
+  local n="$1" r1 r2 r3 r4 r5
   r1="$(printf ' X="a%.0s' $(seq 1 "$n"))"
   r2="git$(printf ' -"x"%.0s' $(seq 1 "$n")) status"
   r3="env$(printf ' -Z%.0s' $(seq 1 "$n")) true"
   r4="env$(printf ' -u X%.0s' $(seq 1 "$n"))$(printf ' Y="b"%.0s' $(seq 1 "$n")) true"
-  printf '%s\n%s\n%s\n%s\ngit push origin feature/x' "$r1" "$r2" "$r3" "$r4"
+  r5="git$(printf ' -c "a%.0s' $(seq 1 "$n")) status"
+  printf '%s\n%s\n%s\n%s\n%s\ngit push origin feature/x' "$r1" "$r2" "$r3" "$r4" "$r5"
 }
 case_pp_noop_flood() {
   # FLOOD + TIMING, calibrated by cost RATIO (#470 helpers), never by absolute speed: the same
-  # five-record shape at a tenth of the size is timed first as a same-run control, and the flood's
+  # flood shape at a tenth of the size is timed first as a same-run control, and the flood's
   # active deadline is a multiple of that control. The memoised lost_push() keeps the tokenizer
   # linear, so the flood scales linearly from the control and finishes well inside the deadline;
   # without the memos each trigger token re-scans the rest of its segment, the flood scales
@@ -8479,6 +8496,9 @@ cases=(
   "push-parse-deny-gopt-value-c|case_pp_deny_gopt_value_c|deny: git -c \"user.name=A B\" push origin feature/x -- the quoted -c value splits -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-lost-precedence, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
   "push-parse-deny-gopt-value-sshcommand|case_pp_deny_gopt_value_sshcommand|deny: git -c \"core.sshCommand=ssh -i k\" push origin main -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
   "push-parse-deny-gopt-value-namespace|case_pp_deny_gopt_value_namespace|deny: git --namespace \"a b\" push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
+  "push-parse-deny-gopt-value-trailing-option|case_pp_deny_gopt_value_trailing_option|deny: git -c \"user.name=A b -c\" push origin main -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-lost-mode2-skip, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
+  "push-parse-deny-gopt-value-attached-trailing-option|case_pp_deny_gopt_value_attached_trailing_option|deny: git -c k=\"a b -c\" push origin main -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-lost-mode2-skip, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
+  "push-parse-deny-gopt-value-trailing-namespace|case_pp_deny_gopt_value_trailing_namespace|deny: git --namespace \"a X --exec-path\" push origin main -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-lost-mode2-skip, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
   "push-parse-deny-gopt-attached-value|case_pp_deny_gopt_attached_value|deny: git --exec-path=\"a b\" push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-gopt-attached-off, 449-pg-lost-mode2)"
   "push-parse-deny-quoted-c-split-value|case_pp_deny_quoted_c_split_value|deny: git \"-c\" \"a b\" push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
   "push-parse-noop-gopt-value-nonpush|case_pp_noop_gopt_value_nonpush|no opinion: git -c \"user.name=A B\" commit -m x, then a feature push -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated)"
@@ -8499,7 +8519,7 @@ cases=(
   "push-parse-deny-never-executes|case_pp_deny_never_executes|deny via the new route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND the fixture repo's file listing is byte-identical -- mutation proof: dev/mutants/hook-tests.json (449-pg-obscured-off)"
   "push-parse-deny-codex-main-session|case_pp_deny_codex_main_session|deny: a Codex-shaped main-session payload with env -C ../other git push origin main -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off, 494-pg-wd-precedence)"
   "push-parse-noop-c-quoted-value|case_pp_noop_c_quoted_value|no opinion: git -C \"../demo-wt-1\" push -u origin \"claude/17-a\" (the harness's own worktree shape) -- control, not part of the mutation-proof registry"
-  "push-parse-noop-flood|case_pp_noop_flood|FLOOD+TIMING: five large records, one per trigger, then a feature push -- no opinion under an active deadline calibrated from a same-run control (#470) -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated, 449-pg-scan-once)"
+  "push-parse-noop-flood|case_pp_noop_flood|FLOOD+TIMING: large records, one per trigger, then a feature push -- no opinion under an active deadline calibrated from a same-run control (#470) -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated, 449-pg-scan-once)"
   # --- hooks/push-guard.sh: analysis deadline (#435) cases ----------------------------------------
   "push-dl-deny-budget-zero|case_push_dl_deny_budget_zero|knob 0 denies the very first sample even for an ordinary feature/x push -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off)"
   "push-dl-noop-budget-zero-no-push|case_push_dl_noop_budget_zero_no_push|no push segment stays no-opinion even at knob 0, via the pre-deadline scan_out exit -- mutation proof: dev/mutants/hook-tests.json (435-dl-scan-empty-exit)"

@@ -263,9 +263,9 @@
 # only). Residuals this leaves, reasoned from the code but not run (see "Documented under-blocking
 # classes" below and this issue's own follow-ups): a git alias that expands to `push` (e.g. `git -c alias.p=push p origin
 # main`); and an inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself
-# reads. (The simple quoted or escaped option spelling, `git "-c" k=v push`, and a quoted `-c` value
-# containing a space are caught since #449; the forms that stay open are listed in "Fail-closed: a
-# segment the tokenizer cannot follow (#449)" below.)
+# reads. (The simple quoted or escaped option spelling, `git "-c" k=v push`, and a `-c` value whose
+# quoted text holds a space and an odd count of one quote character are caught since #449; the forms
+# that stay open are listed in "Fail-closed: a segment the tokenizer cannot follow (#449)" below.)
 #
 # Fail-closed: a segment the tokenizer cannot follow (#449, absorbing #451). This hook splits a
 # segment on whitespace and strips quotes only to resolve a command word, so a quoted or escaped
@@ -297,7 +297,11 @@
 # push — one token naming both git and push, or a token naming git followed only by option words
 # (and the values of git global options) and then a token naming push — so `X="a b" git status`,
 # `GIT_AUTHOR_NAME="A B" git commit -m "fix push"`, `git "--no-pager" log --grep push` and `env -C
-# <dir> git status` keep no opinion; when it says no, the walk behaves exactly as before. A cut
+# <dir> git status` keep no opinion. The two split-value triggers (a global option VALUE or attached
+# option cut by the whitespace split) use a looser gate, armed == 2: the fragments after the cut are
+# junk, so the walk never disarms on a non-option word and never applies the option-value skip (a
+# fragment such as the -c" of `-c "k=a b -c" push` could otherwise swallow the real push), and ANY
+# later token naming push counts. When the gate says no, the walk behaves exactly as before. A cut
 # push keeps its `-cut-push-` sentinel, command-line git config (#439) keeps its own message, and
 # an earlier #292 reason (`GIT_DIR=`) keeps precedence over the new reason; all three still deny.
 # Every rule only adds denies, with one exception: `env -u git push origin main` and `env --unset
@@ -306,7 +310,9 @@
 # Deliberate over-blocking, each measured rc 2: `X="a b" git -C ../x push-docs`, `sh -c 'FOO=1 git
 # push origin feature/x'`, `HOME="/a b" git push origin feature/x`, `sudo "-u" root git push
 # origin main`, `env -C . git push origin feature/x`, `env -iu X git push ...`, `env --ignor git
-# push ...`, a lone `env - git push ...`, `git "--no-pager" push origin feature/x`, and a heredoc or
+# push ...`, a lone `env - git push ...`, `git "--no-pager" push origin feature/x`, the looser
+# split-value gate's `git -c "user.name=A B" commit -m "fix push"` and `git --namespace "a b" log
+# --grep push`, and a heredoc or
 # prose line led by a markdown bullet (`- env -C ../other git push origin x`, scanned as its own
 # segment, where `-` is a PREFIX_WORDS member so the command-word exemption does not apply; write
 # such text with an editor tool and `git commit -F <file>` instead). The
@@ -314,9 +320,12 @@
 # consumes the quoted `-C` value with its option. Residuals this leaves, each measured rc 0: a
 # quote or escape split that keeps an EVEN count of the same quote character, which the odd-count
 # test cannot see (`X="a'"'b c' git push origin main`, `X="\" x" git push origin main`,
-# `X="a\" b" git push origin main`, `env -u "a'"'b c' git push origin main`); ANSI-C quoting
+# `X="a\" b" git push origin main`, `env -u "a'"'b c' git push origin main`, an option value `git -c
+# "k=a'"'b c' push origin main`); ANSI-C quoting
 # (`git $'-c' remote.origin.push=HEAD:main push`); a quoted `-C` value containing a space (`git -C
-# "../a b" push origin main`, and rows (b), (d) and (j) below, unchanged); an
+# "../a b" push origin main`, rows (b), (d) and (j) below, unchanged), which also hides any later
+# option such as a `-c` after it (`git -C "../a b" -c "k=x y" push origin main`, and `git "-C"
+# "../a b" push origin main`, are both rc 0); an
 # assignment whose quoted value contains `;`, `&`, `|`, `(`, `)`, `{`, `}`, a backtick or a newline
 # (`X="a;b" git push origin main` — the split-off segment starts with the closing-quote word, which
 # as a command-word candidate is never checked); a `repeat` count containing a space (`repeat "2 3"
@@ -764,8 +773,8 @@
 # push_budget`) — never by resetting `$SECONDS` itself. The sampling rule this binds on every future
 # addition to this file — #439 has already landed entirely inside the awk tokenizer (its own
 # "-cmdline-config-" sentinel, covered by `T_prefix` below, the linear pre-tokenizer cost this
-# deadline cannot sample around at all), #449 likewise (its per-token shape checks and at most two
-# lost_push() scans per segment, memoised per segment, all inside that tokenizer and so inside
+# deadline cannot sample around at all), #449 likewise (its per-token shape checks and at most three
+# lost_push() scans per segment, one memoised scan for each of three trigger families, all inside that tokenizer and so inside
 # `T_prefix`), and #433 has landed in the awk tokenizer plus one
 # constant-cost post-loop fallback: call `check_deadline` as the FIRST statement of every loop whose trip
 # count grows with the command string or a config file's own content — never partway through a loop
@@ -1158,7 +1167,9 @@ function quote_unbalanced(tok,    t, n) {
 # rest of the segment could still be a push -- a single token naming both git and push, or a token
 # naming git followed only by option words (and the values of git global options) and then a token
 # naming push. armed starts the walk as if a git word had just been seen; armed == 2 additionally
-# never disarms on a non-option word (the fragments a split quoted value leaves behind). Never consulted for a
+# never disarms on a non-option word and never applies the option-value skip (the fragments a split
+# quoted value leaves behind may themselves look like an option, e.g. the -c" of "k=a b -c", so any
+# later token naming push counts). Never consulted for a
 # segment that cannot be a push, so a non-push command keeps its old no-opinion verdict.
 function lost_push(toks, from, ntok, armed,    i, tok, s, lo, skip, arm) {
   arm = armed
@@ -1171,7 +1182,7 @@ function lost_push(toks, from, ntok, armed,    i, tok, s, lo, skip, arm) {
     if (index(lo, "git") > 0 && index(s, "push") > 0) return 1
     if (arm) {
       if (skip) { skip = 0; continue }
-      if (substr(s, 1, 1) == "-") { if (s in gopt_set) skip = 1; continue }
+      if (substr(s, 1, 1) == "-") { if (armed != 2 && (s in gopt_set)) skip = 1; continue }
       if (index(s, "push") > 0) return 1
       if (armed != 2) arm = 0
     }

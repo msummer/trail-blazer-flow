@@ -3882,9 +3882,12 @@
         "push-parse-deny-env-u-quoted-value",
         "push-parse-deny-git-dir-space",
         "push-parse-deny-gopt-attached-value",
+        "push-parse-deny-gopt-value-attached-trailing-option",
         "push-parse-deny-gopt-value-c",
         "push-parse-deny-gopt-value-namespace",
         "push-parse-deny-gopt-value-sshcommand",
+        "push-parse-deny-gopt-value-trailing-namespace",
+        "push-parse-deny-gopt-value-trailing-option",
         "push-parse-deny-lost-cmdcfg",
         "push-parse-deny-prefix-gopt-value",
         "push-parse-deny-quoted-c-split-value"
@@ -4139,12 +4142,29 @@
       "filter": "push-parse-",
       "edits": [
         {
-          "from": "if (substr(s, 1, 1) == \"-\") { if (s in gopt_set) skip = 1; continue }",
-          "to": "if (substr(s, 1, 1) == \"-\") { continue }"
+          "from": "if (armed != 2 && (s in gopt_set)) skip = 1; continue }",
+          "to": "continue }"
         }
       ],
       "expect_fail": [
         "push-parse-deny-prefix-gopt-value"
+      ]
+    },
+    {
+      "name": "449-pg-lost-mode2-skip",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-parse-",
+      "edits": [
+        {
+          "from": "if (armed != 2 && (s in gopt_set)) skip = 1;",
+          "to": "if (s in gopt_set) skip = 1;"
+        }
+      ],
+      "expect_fail": [
+        "push-parse-deny-gopt-value-attached-trailing-option",
+        "push-parse-deny-gopt-value-trailing-namespace",
+        "push-parse-deny-gopt-value-trailing-option"
       ]
     },
     {
@@ -4190,9 +4210,12 @@
         }
       ],
       "expect_fail": [
+        "push-parse-deny-gopt-value-attached-trailing-option",
         "push-parse-deny-gopt-value-c",
         "push-parse-deny-gopt-value-namespace",
         "push-parse-deny-gopt-value-sshcommand",
+        "push-parse-deny-gopt-value-trailing-namespace",
+        "push-parse-deny-gopt-value-trailing-option",
         "push-parse-deny-quoted-c-split-value"
       ]
     },
@@ -4224,9 +4247,12 @@
       ],
       "expect_fail": [
         "push-parse-deny-gopt-attached-value",
+        "push-parse-deny-gopt-value-attached-trailing-option",
         "push-parse-deny-gopt-value-c",
         "push-parse-deny-gopt-value-namespace",
         "push-parse-deny-gopt-value-sshcommand",
+        "push-parse-deny-gopt-value-trailing-namespace",
+        "push-parse-deny-gopt-value-trailing-option",
         "push-parse-deny-quoted-c-split-value"
       ]
     },
@@ -4257,7 +4283,7 @@
         },
         {
           "from": "  while (j <= ntok) {\n    tok = toks[j]\n    if (tok == \"\") { j++; continue }\n    if (unres == \"\") {",
-          "to": "  while (j <= ntok) {\n    m1 = -1\n    tok = toks[j]\n    if (tok == \"\") { j++; continue }\n    if (unres == \"\") {"
+          "to": "  while (j <= ntok) {\n    m1 = -1\n    m2 = -1\n    tok = toks[j]\n    if (tok == \"\") { j++; continue }\n    if (unres == \"\") {"
         }
       ],
       "expect_fail": [
