@@ -3826,7 +3826,8 @@
         "push-parse-deny-glued-quote-c",
         "push-parse-deny-never-executes",
         "push-parse-deny-quoted-c",
-        "push-parse-deny-quoted-git-dir"
+        "push-parse-deny-quoted-git-dir",
+        "push-parse-deny-squote-c"
       ]
     },
     {
@@ -3860,7 +3861,8 @@
         "push-parse-deny-assign-dquote-space",
         "push-parse-deny-assign-squote-space",
         "push-parse-deny-git-dir-space",
-        "push-parse-deny-lost-cmdcfg"
+        "push-parse-deny-lost-cmdcfg",
+        "push-parse-deny-prefix-gopt-value"
       ]
     },
     {
@@ -3879,7 +3881,13 @@
         "push-parse-deny-env-u-attached-unbalanced",
         "push-parse-deny-env-u-quoted-value",
         "push-parse-deny-git-dir-space",
-        "push-parse-deny-lost-cmdcfg"
+        "push-parse-deny-gopt-attached-value",
+        "push-parse-deny-gopt-value-c",
+        "push-parse-deny-gopt-value-namespace",
+        "push-parse-deny-gopt-value-sshcommand",
+        "push-parse-deny-lost-cmdcfg",
+        "push-parse-deny-prefix-gopt-value",
+        "push-parse-deny-quoted-c-split-value"
       ]
     },
     {
@@ -4005,6 +4013,8 @@
         "push-parse-deny-codex-main-session",
         "push-parse-deny-env-c",
         "push-parse-deny-env-chdir",
+        "push-parse-deny-env-chdir-prefix-basename",
+        "push-parse-deny-env-lone-dash",
         "push-parse-deny-env-s",
         "push-parse-deny-env-s-attached"
       ]
@@ -4055,6 +4065,7 @@
         "push-parse-noop-assign-space-nonpush",
         "push-parse-noop-env-c-nonpush",
         "push-parse-noop-flood",
+        "push-parse-noop-gopt-value-nonpush",
         "push-parse-noop-quoted-opt-nonpush",
         "push-parse-noop-quoted-opt-push-word"
       ]
@@ -4117,7 +4128,121 @@
         }
       ],
       "expect_fail": [
+        "push-parse-deny-gopt-value-c",
         "push-parse-deny-lost-cmdcfg"
+      ]
+    },
+    {
+      "name": "449-pg-lost-gopt-skip",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-parse-",
+      "edits": [
+        {
+          "from": "if (substr(s, 1, 1) == \"-\") { if (s in gopt_set) skip = 1; continue }",
+          "to": "if (substr(s, 1, 1) == \"-\") { continue }"
+        }
+      ],
+      "expect_fail": [
+        "push-parse-deny-prefix-gopt-value"
+      ]
+    },
+    {
+      "name": "449-pg-env-arm-prefix-guard",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-parse-",
+      "edits": [
+        {
+          "from": "    if (in_env && substr(tok, 1, 1) == \"-\") {",
+          "to": "    if (in_env && substr(tok, 1, 1) == \"-\" && !(norm in prefix_set)) {"
+        }
+      ],
+      "expect_fail": [
+        "push-parse-deny-env-chdir-prefix-basename",
+        "push-parse-deny-env-lone-dash"
+      ]
+    },
+    {
+      "name": "449-pg-quote-bearing-sq",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-parse-",
+      "edits": [
+        {
+          "from": "index(tok, \"\\\"\") > 0 || index(tok, sq) > 0 || ",
+          "to": "index(tok, \"\\\"\") > 0 || "
+        }
+      ],
+      "expect_fail": [
+        "push-parse-deny-squote-c"
+      ]
+    },
+    {
+      "name": "449-pg-gopt-value-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-parse-",
+      "edits": [
+        {
+          "from": "if ((s0 in gopt_set) && s0 != \"-C\" && quote_unbalanced(toks[j + 1])) {",
+          "to": "if (0 && (s0 in gopt_set) && s0 != \"-C\" && quote_unbalanced(toks[j + 1])) {"
+        }
+      ],
+      "expect_fail": [
+        "push-parse-deny-gopt-value-c",
+        "push-parse-deny-gopt-value-namespace",
+        "push-parse-deny-gopt-value-sshcommand",
+        "push-parse-deny-quoted-c-split-value"
+      ]
+    },
+    {
+      "name": "449-pg-gopt-attached-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-parse-",
+      "edits": [
+        {
+          "from": "    if (quote_unbalanced(tok) && substr(strip_quotes(tok), 1, 1) == \"-\") {",
+          "to": "    if (0 && quote_unbalanced(tok) && substr(strip_quotes(tok), 1, 1) == \"-\") {"
+        }
+      ],
+      "expect_fail": [
+        "push-parse-deny-gopt-attached-value"
+      ]
+    },
+    {
+      "name": "449-pg-lost-mode2",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-parse-",
+      "edits": [
+        {
+          "from": "if (armed != 2) arm = 0",
+          "to": "arm = 0"
+        }
+      ],
+      "expect_fail": [
+        "push-parse-deny-gopt-attached-value",
+        "push-parse-deny-gopt-value-c",
+        "push-parse-deny-gopt-value-namespace",
+        "push-parse-deny-gopt-value-sshcommand",
+        "push-parse-deny-quoted-c-split-value"
+      ]
+    },
+    {
+      "name": "449-pg-gopt-c-exempt",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-parse-",
+      "edits": [
+        {
+          "from": "if ((s0 in gopt_set) && s0 != \"-C\" && quote_unbalanced(toks[j + 1])) {",
+          "to": "if ((s0 in gopt_set) && quote_unbalanced(toks[j + 1])) {"
+        }
+      ],
+      "expect_fail": [
+        "push-parse-noop-c-space-value"
       ]
     },
     {

@@ -263,8 +263,8 @@
 # only). Residuals this leaves, reasoned from the code but not run (see "Documented under-blocking
 # classes" below and this issue's own follow-ups): a git alias that expands to `push` (e.g. `git -c alias.p=push p origin
 # main`); and an inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself
-# reads. (A quoted or escaped option spelling, `git "-c" k=v push`, and an assignment whose quoted
-# value contains a space no longer belong here: since #449 both fail closed, see "Fail-closed: a
+# reads. (The simple quoted or escaped option spelling, `git "-c" k=v push`, and a quoted `-c` value
+# containing a space are caught since #449; the forms that stay open are listed in "Fail-closed: a
 # segment the tokenizer cannot follow (#449)" below.)
 #
 # Fail-closed: a segment the tokenizer cannot follow (#449, absorbing #451). This hook splits a
@@ -274,8 +274,14 @@
 # each through the #292 "unresolved" deny with one FIXED reason (never command text): (a) in git's
 # option slot, a token carrying a quote or backslash whose unquoted form starts with `-` —
 # `git "-c" k=v push`, `git \-c k=v push`, `git "--git-dir=../other/.git" push origin develop`,
-# `git -"c" k=v push` — reason `quoted or escaped git option`, tested with strip_quotes() (not
-# normalize(), which keeps only the last path component); (b) in the command prefix, an
+# `git -"c" k=v push`, `git '-c' k=v push` — reason `quoted or escaped git option`, tested with
+# strip_quotes() (not normalize(), which keeps only the last path component); the same reason also
+# covers the VALUE of a global option other than -C that the whitespace split cut in two (`git -c
+# "user.name=A B" push origin feature/x`, `git "-c" "a b" push ...`, `git --namespace "a b" push
+# ...`) and an attached option whose value was cut (`git --exec-path="a b" push ...`), where the
+# leftover fragments would otherwise become the subcommand and drop the segment — the -C value is
+# deliberately exempt, because failing closed there would deny the harness's own `git -C "<path with
+# a space>" push`; (b) in the command prefix, an
 # assignment (or an `env -u` value, or an attached `-uNAME`) with an odd count of `"`, an odd count
 # of `'`, or a trailing backslash — the whitespace split cut a quoted or escaped value in two
 # (`X="a b" git push origin main`, `X='a b' ...`, `X=a\ b ...`) — or, after a prefix word, a
@@ -294,20 +300,28 @@
 # <dir> git status` keep no opinion; when it says no, the walk behaves exactly as before. A cut
 # push keeps its `-cut-push-` sentinel, command-line git config (#439) keeps its own message, and
 # an earlier #292 reason (`GIT_DIR=`) keeps precedence over the new reason; all three still deny.
-# Every rule only adds denies, with one exception: `env -u git push origin main` no longer denies,
-# because `-u` now consumes `git` as its value and the command real `env` runs is `push`.
+# Every rule only adds denies, with one exception: `env -u git push origin main` and `env --unset
+# git push origin main` no longer deny, because `-u`/`--unset` now consume `git` as their value and
+# the command real `env` runs is `push`.
 # Deliberate over-blocking, each measured rc 2: `X="a b" git -C ../x push-docs`, `sh -c 'FOO=1 git
 # push origin feature/x'`, `HOME="/a b" git push origin feature/x`, `sudo "-u" root git push
 # origin main`, `env -C . git push origin feature/x`, `env -iu X git push ...`, `env --ignor git
-# push ...`, a lone `env - git push ...`, and `git "--no-pager" push origin feature/x`. The
+# push ...`, a lone `env - git push ...`, `git "--no-pager" push origin feature/x`, and a heredoc or
+# prose line led by a markdown bullet (`- env -C ../other git push origin x`, scanned as its own
+# segment, where `-` is a PREFIX_WORDS member so the command-word exemption does not apply; write
+# such text with an editor tool and `git commit -F <file>` instead). The
 # harness's own shapes are unaffected: `git -C "<worktree>" push -u origin "claude/<n>-<slug>"`
-# consumes the quoted `-C` value with its option. Residuals this leaves, each measured rc 0: an
+# consumes the quoted `-C` value with its option. Residuals this leaves, each measured rc 0: a
+# quote or escape split that keeps an EVEN count of the same quote character, which the odd-count
+# test cannot see (`X="a'"'b c' git push origin main`, `X="\" x" git push origin main`,
+# `X="a\" b" git push origin main`, `env -u "a'"'b c' git push origin main`); ANSI-C quoting
+# (`git $'-c' remote.origin.push=HEAD:main push`); a quoted `-C` value containing a space (`git -C
+# "../a b" push origin main`, and rows (b), (d) and (j) below, unchanged); an
 # assignment whose quoted value contains `;`, `&`, `|`, `(`, `)`, `{`, `}`, a backtick or a newline
 # (`X="a;b" git push origin main` — the split-off segment starts with the closing-quote word, which
 # as a command-word candidate is never checked); a `repeat` count containing a space (`repeat "2 3"
 # git push origin main`); a lost segment that changes directory (`X="a b" cd ../x && git push
-# origin trunk` — not added to the cross-segment rule above); a quoted `-C` value containing a
-# space (rows (b), (d) and (j) below, unchanged); and the git-alias form and inline
+# origin trunk` — not added to the cross-segment rule above); and the git-alias form and inline
 # `HOME=`/`XDG_CONFIG_HOME=` relocation of #448. hooks/agent-boundary.sh has the same gaps and is
 # left for a follow-up, so a fix here is not mirrored there.
 #
@@ -697,8 +711,8 @@
 # residuals — every push segment carrying one is denied outright (see "Fail-closed: command-line
 # git config" above) whatever the key or destination. What remains residual there instead: an
 # inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself reads, and
-# the alias-shaped forms that same paragraph names (the quoted-option and quoted-value forms are
-# closed since #449). (A cross-segment `export
+# the alias-shaped forms that same paragraph names (#449 catches only the simple quoted-option and
+# odd-quote-count forms, and leaves others open: see its own paragraph). (A cross-segment `export
 # GIT_CONFIG_*=…` or bare `GIT_CONFIG_*=…;` segment is denied by #433's cross-segment rule.)
 #
 # Since #433, the new cross-segment ("xseg") rule above still leaves these residuals open: a
@@ -1143,7 +1157,8 @@ function quote_unbalanced(tok,    t, n) {
 # lost_push(toks, from, ntok, armed): one left-to-right pass over toks[from..ntok], true iff the
 # rest of the segment could still be a push -- a single token naming both git and push, or a token
 # naming git followed only by option words (and the values of git global options) and then a token
-# naming push. armed starts the walk as if a git word had just been seen. Never consulted for a
+# naming push. armed starts the walk as if a git word had just been seen; armed == 2 additionally
+# never disarms on a non-option word (the fragments a split quoted value leaves behind). Never consulted for a
 # segment that cannot be a push, so a non-push command keeps its old no-opinion verdict.
 function lost_push(toks, from, ntok, armed,    i, tok, s, lo, skip, arm) {
   arm = armed
@@ -1158,7 +1173,7 @@ function lost_push(toks, from, ntok, armed,    i, tok, s, lo, skip, arm) {
       if (skip) { skip = 0; continue }
       if (substr(s, 1, 1) == "-") { if (s in gopt_set) skip = 1; continue }
       if (index(s, "push") > 0) return 1
-      arm = 0
+      if (armed != 2) arm = 0
     }
     if (index(lo, "git") > 0) { arm = 1; skip = 0 }
   }
@@ -1172,7 +1187,7 @@ function emit_lost(reason, unres, cc, cut) {
   else if (cc) print "-cmdline-config-"
   else print "PUSH\t\t" (unres != "" ? unres : reason) "\t"
 }
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, s0, ro, k, xname, cmdcfg, co, cp, cfgname) {
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, m2, s0, ro, k, xname, cmdcfg, co, cp, cfgname) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
@@ -1183,6 +1198,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   in_env = 0
   m0 = -1
   m1 = -1
+  m2 = -1
   while (idx <= ntok) {
     tok = toks[idx]
     if (tok == "") { idx++; continue }
@@ -1298,6 +1314,19 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     # applied by git but never read here -- it would otherwise normalise into the subcommand slot
     # or be skipped unread. Fail closed when a push can still follow. strip_quotes, not normalize:
     # normalize keeps only the last path component and would turn "--git-dir=../x/.git" into .git.
+    # An attached option whose own quoted value was split by the whitespace tokenizer
+    # (--git-dir="a b", -c"k=a b"), or the detached VALUE token of a global option other than -C that
+    # is itself unbalanced (-c "k=a b"): the leftover fragments would become the subcommand and drop
+    # the segment. The -C value stays exempt (the harness own worktree paths may hold a space).
+    if (quote_unbalanced(tok) && substr(strip_quotes(tok), 1, 1) == "-") {
+      if (m2 < 0) m2 = lost_push(toks, j + 1, ntok, 2)
+      if (m2) { emit_lost("quoted or escaped git option", unres, cmdcfg, cut_flag); return }
+    }
+    s0 = strip_quotes(tok)
+    if ((s0 in gopt_set) && s0 != "-C" && quote_unbalanced(toks[j + 1])) {
+      if (m2 < 0) m2 = lost_push(toks, j + 2, ntok, 2)
+      if (m2) { emit_lost("quoted or escaped git option", unres, cmdcfg, cut_flag); return }
+    }
     if (quote_bearing(tok) && substr(strip_quotes(tok), 1, 1) == "-") {
       if (m1 < 0) m1 = lost_push(toks, j, ntok, 1)
       if (m1) { emit_lost("quoted or escaped git option", unres, cmdcfg, cut_flag); return }

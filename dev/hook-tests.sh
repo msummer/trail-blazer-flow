@@ -2723,6 +2723,15 @@ case_push_cmdcfg_deny_precedence() {
 #   (GIT_DIR=) in emit_lost().
 # mutant:449-pg-lost-precedence — lets the new reason win over command-line git config in
 #   emit_lost().
+# mutant:449-pg-lost-gopt-skip — drops the global-option value skip in lost_push(), so the value
+#   of -C is read as a word that disarms the walk before push.
+# mutant:449-pg-env-arm-prefix-guard — keeps the env arm from seeing an option whose basename is a
+#   prefix word (--chdir=../env, a lone -).
+# mutant:449-pg-quote-bearing-sq — drops the single-quote arm of quote_bearing().
+# mutant:449-pg-gopt-value-off — drops the unbalanced-value check for a global option other than -C.
+# mutant:449-pg-gopt-attached-off — drops the unbalanced attached-option check in the subcommand walk.
+# mutant:449-pg-lost-mode2 — makes the split-value walk disarm on a non-option word like the others.
+# mutant:449-pg-gopt-c-exempt — removes the -C exemption from the value check.
 # mutant:449-pg-scan-once — removes both per-segment memos, so lost_push() re-scans the segment
 #   once per trigger token and a long segment goes quadratic.
 pp_run() {
@@ -2921,6 +2930,59 @@ case_pp_noop_c_quoted_value() {
   mk_fixture_repo "$dir" main feature/x
   run_push_guard "$(mk_push_cmd_cwd 'git -C "../demo-wt-1" push -u origin "claude/17-a"' "$dir")"
   expect_push_no_opinion
+}
+case_pp_deny_gopt_value_c() {
+  # The quoted VALUE of -c splits at its space and a later fragment would become the subcommand.
+  pp_run 'git -c "user.name=A B" push origin feature/x'
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_pp_deny_gopt_value_sshcommand() {
+  pp_run 'git -c "core.sshCommand=ssh -i k" push origin main'
+  expect_push_deny
+}
+case_pp_deny_gopt_value_namespace() {
+  pp_run 'git --namespace "a b" push origin feature/x'
+  pp_expect_unres "$PP_R_OPT"
+}
+case_pp_deny_gopt_attached_value() {
+  pp_run 'git --exec-path="a b" push origin feature/x'
+  pp_expect_unres "$PP_R_OPT"
+}
+case_pp_deny_quoted_c_split_value() {
+  pp_run 'git "-c" "a b" push origin feature/x'
+  pp_expect_unres "$PP_R_OPT"
+}
+case_pp_noop_gopt_value_nonpush() {
+  pp_run 'git -c "user.name=A B" commit -m x && git push origin feature/x'
+  expect_push_no_opinion
+}
+case_pp_noop_c_space_value() {
+  # The approved -C residual: a quoted -C value containing a space is exempt from the new value
+  # check, because the harness own worktree paths may hold a space.
+  pp_run 'git -C "../demo wt-1" push origin feature/x'
+  expect_push_no_opinion
+}
+case_pp_deny_squote_c() {
+  pp_run "git '-c' remote.origin.push=HEAD:main push"
+  pp_expect_unres "$PP_R_OPT"
+}
+case_pp_deny_prefix_gopt_value() {
+  # The armed walk must skip a git global option VALUE (-C ../other), or push is never reached.
+  pp_run 'X="a b" git -C ../other push origin feature/x'
+  pp_expect_unres "$PP_R_PFX"
+}
+case_pp_deny_env_chdir_prefix_basename() {
+  # The option value basename is a PREFIX_WORDS member; the env arm must still see the option.
+  pp_run 'env --chdir=../env git push origin feature/x'
+  pp_expect_unres "$PP_R_ENV"
+}
+case_pp_deny_env_lone_dash() {
+  pp_run 'env - git push origin feature/x'
+  pp_expect_unres "$PP_R_ENV"
 }
 # pp_flood_cmd N — the five-record flood shape at N tokens per record: one record per trigger, then
 # a real push so the hook reaches check_deadline after the tokenizer.
@@ -8414,6 +8476,17 @@ cases=(
   "push-parse-noop-env-u-feature|case_pp_noop_env_u_feature|no opinion: env -u FOO git push origin feature/x -- control, not part of the mutation-proof registry"
   "push-parse-noop-env-unset-attached|case_pp_noop_env_unset_attached|no opinion: env --unset=FOO -uBAR git push origin feature/x (attached forms) -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-u-attached)"
   "push-parse-deny-env-u-attached-unbalanced|case_pp_deny_env_u_attached_unbalanced|deny: env -u\"A B\" git push origin feature/x (unbalanced attached -u value) -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-env-u-attached, 449-pg-env-u-attached-quote)"
+  "push-parse-deny-gopt-value-c|case_pp_deny_gopt_value_c|deny: git -c \"user.name=A B\" push origin feature/x -- the quoted -c value splits -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-lost-precedence, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
+  "push-parse-deny-gopt-value-sshcommand|case_pp_deny_gopt_value_sshcommand|deny: git -c \"core.sshCommand=ssh -i k\" push origin main -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
+  "push-parse-deny-gopt-value-namespace|case_pp_deny_gopt_value_namespace|deny: git --namespace \"a b\" push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
+  "push-parse-deny-gopt-attached-value|case_pp_deny_gopt_attached_value|deny: git --exec-path=\"a b\" push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-gopt-attached-off, 449-pg-lost-mode2)"
+  "push-parse-deny-quoted-c-split-value|case_pp_deny_quoted_c_split_value|deny: git \"-c\" \"a b\" push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
+  "push-parse-noop-gopt-value-nonpush|case_pp_noop_gopt_value_nonpush|no opinion: git -c \"user.name=A B\" commit -m x, then a feature push -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated)"
+  "push-parse-noop-c-space-value|case_pp_noop_c_space_value|no opinion: git -C \"../demo wt-1\" push origin feature/x (the approved quoted -C residual) -- mutation proof: dev/mutants/hook-tests.json (449-pg-gopt-c-exempt)"
+  "push-parse-deny-squote-c|case_pp_deny_squote_c|deny: git '-c' remote.origin.push=HEAD:main push (single-quoted option) -- mutation proof: dev/mutants/hook-tests.json (449-pg-obscured-off, 449-pg-quote-bearing-sq)"
+  "push-parse-deny-prefix-gopt-value|case_pp_deny_prefix_gopt_value|deny: X=\"a b\" git -C ../other push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-off, 449-pg-unbalanced-dq, 449-pg-lost-gopt-skip)"
+  "push-parse-deny-env-chdir-prefix-basename|case_pp_deny_env_chdir_prefix_basename|deny: env --chdir=../env git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off, 449-pg-env-arm-prefix-guard)"
+  "push-parse-deny-env-lone-dash|case_pp_deny_env_lone_dash|deny: env - git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off, 449-pg-env-arm-prefix-guard)"
   "push-parse-deny-env-u-git-dir|case_pp_deny_env_u_git_dir|deny: env -u FOO GIT_DIR=../x/.git git push origin feature/x (-u value consumed, GIT_DIR= reason) -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-u-consume)"
   "push-parse-deny-env-c|case_pp_deny_env_c|deny: env -C ../other git push origin main as an unsupported env option -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off)"
   "push-parse-deny-env-chdir|case_pp_deny_env_chdir|deny: env --chdir=../other git push origin feature/x as an unsupported env option -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off)"

@@ -19,8 +19,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 ## Unreleased
 
 - #449: `push-guard.sh` now denies, as an unresolved push target, a push segment it loses track of
-  and that could still be a push: a quoted or escaped git option (`git "-c" k=v push`), a quoted or
-  escaped assignment value containing a space (`X="a b" git push ...`), or an `env` option outside a
+  and that could still be a push: a quoted or escaped git option (`git "-c" k=v push`), a quoted
+  git option value containing a space (`git -c "core.sshCommand=ssh -i k" push ...`; a `-C` value
+  stays exempt), a quoted or escaped assignment value containing a space
+  (`X="a b" git push ...`), or an `env` option outside a
   short allowlist (`env -C <dir>`, `--chdir=`, `-S`; absorbs #451). `env -u NAME` now consumes its
   value, so `env -u git push origin main` is no longer denied. No consumer step.
 

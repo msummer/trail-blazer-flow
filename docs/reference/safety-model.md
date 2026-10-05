@@ -295,9 +295,11 @@ tokenizer loses track of also denies, as an unresolved target, whenever the rest
 could still be a push: a quoted or escaped git option (`git "-c" k=v push`), a quoted assignment
 value containing a space (`X="a b" git push origin main`), a quote-bearing option or assignment
 after a prefix word (`env "-C" <dir> git push`), or an `env` option outside a short allowlist
-(`env -C <dir>`, `--chdir=`, `-S`); `env -u NAME` consumes its value, which stops `env -u git push
-origin main` from denying. The push-guard header lists the over-blocking this fail-closed rule
-creates and the residuals it leaves. Since #433, a push segment in
+(`env -C <dir>`, `--chdir=`, `-S`), or a quoted value of a global option other than `-C` that
+splits at a space (`git -c "k=a b" push`); `env -u NAME` consumes its value, which stops `env -u git
+push origin main` from denying. Mixed-quote or even-count splits, ANSI-C quoting (`$'-c'`) and a
+quoted `-C` value containing a space still get no opinion. The push-guard header lists the
+over-blocking this fail-closed rule creates and the residuals it leaves. Since #433, a push segment in
 the same Bash command as any OTHER segment that changes directory (`cd`/`pushd`/`popd`/`chdir`) or
 sets a `GIT_DIR`-family variable or one of the command-line-config names above
 (`export`/`declare`/`typeset`/`local`/`readonly`, or a bare assignment) also denies as unresolved,
