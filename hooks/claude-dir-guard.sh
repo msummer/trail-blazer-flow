@@ -187,9 +187,14 @@
 # plus `apply_patch < evil.patch` -> rc 2 ("not from an inline heredoc"). Documented over-blocks
 # (fail-closed, measured directly against this script): a heredoc patch whose body line begins with
 # a code span of the shim name (the name between backticks) -> rc 2, since that line is its own
-# walk segment with no heredoc; a context line such as " Codex's apply_patch shim" -> rc 2
-# (unbalanced quote, below); `cd "$HOME/x" && apply_patch <<EOF ...` with an unquoted delimiter ->
-# rc 2. Remedies: Codex's native apply_patch tool call, a quoted delimiter, or Edit/Write.
+# walk segment with no heredoc; `cd "$HOME/x" && apply_patch <<EOF ...` with an unquoted delimiter
+# -> rc 2. The unbalanced-quote rule below over-blocks more broadly: ANY line of a multi-line Bash
+# string (a commit body, echo/printf text, a `cat <<'EOF' > file` body, a patch context line such
+# as " Codex's apply_patch shim") whose leading word carries an unbalanced quote and which mentions
+# apply_patch/applypatch denies for implementer/verifier calls, with no patch and no shim
+# invocation involved -- measured: `printf '%s' "one<newline>Don't call apply_patch here"` -> rc 2
+# (rc 0 before, and rc 0 for the main session). Remedies: Codex's native apply_patch tool call, a
+# quoted-delimiter heredoc file or Edit/Write for such text, or avoid the shim name on that line.
 #
 # (#455, absorbing #456) In a segment whose text mentions `apply_patch`/`applypatch` and carries a
 # quote or a backslash, any token from a walk window's start through its resolved non-shim command

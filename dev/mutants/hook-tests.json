@@ -4129,6 +4129,7 @@
         }
       ],
       "expect_fail": [
+        "cdg-qa-deny-applypatch",
         "cdg-qa-deny-body-possessive",
         "cdg-qa-deny-cut-tail",
         "cdg-qa-deny-dq-many-spaces",
@@ -4155,6 +4156,7 @@
         }
       ],
       "expect_fail": [
+        "cdg-qa-deny-applypatch",
         "cdg-qa-deny-body-possessive",
         "cdg-qa-deny-cut-tail",
         "cdg-qa-deny-env-assign",
@@ -4260,6 +4262,21 @@
       ],
       "expect_fail": [
         "cdg-qa-noop-other-segment"
+      ]
+    },
+    {
+      "name": "455-cdg-qa-scope-applypatch",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-qa-",
+      "edits": [
+        {
+          "from": "      *apply_patch*|*applypatch*)\n",
+          "to": "      *apply_patch*)\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-qa-deny-applypatch"
       ]
     },
     {

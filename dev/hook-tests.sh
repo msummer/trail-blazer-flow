@@ -6633,8 +6633,9 @@ case_cdg_dec_never_executes() {
 case_cdg_dec_deny_flood_timing() {
   # A long run of safe output redirects before an unsafe argument: the scan must walk the whole
   # run and still deny. Under a 15s active deadline (#463); the command reaches jq on stdin, as in
-  # cdg-dbq-deny-timing. The run length is bounded because the base walk's own per-token array
-  # indexing is already superlinear on a very long redirect run (#457's deadline concern).
+  # cdg-dbq-deny-timing (killed by 455-cdg-dec-arg: the scan reaches the trailing argument). The
+  # run length is bounded because this shape's cost is superlinear in pre-existing code outside
+  # this change (main overruns the deadline at larger sizes; the cause is not isolated here).
   local flood payload
   flood="$(printf ' >o%.0s' $(seq 1 1500))"
   payload="$(printf '%s' "apply_patch${flood} <<'EOF' x${LF}${CDG_P}${LF}EOF" \
@@ -6661,6 +6662,8 @@ case_cdg_dec_deny_flood_timing() {
 # mutant:455-cdg-qa-range-end — the check runs through the window's end, past the resolved word.
 # mutant:455-cdg-qa-resolved-inclusive — the check stops one token short of the resolved word.
 # mutant:455-cdg-qa-scope — the check runs in every segment, not only those mentioning the shim.
+# mutant:455-cdg-qa-scope-applypatch — the segment scope drops the `applypatch` spelling, so a
+#   quoted-assignment prefix before `applypatch` is never checked.
 # mutant:455-cdg-qa-shim-exempt — the check also runs when the resolved word IS the shim (filter
 #   "cdg-dbq-").
 expect_cdg_qa_deny() {
@@ -6671,6 +6674,7 @@ expect_cdg_qa_deny() {
   esac
 }
 case_cdg_qa_deny_sq_space() { cdg_dec_run "X='a b' apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_applypatch() { cdg_dec_run "X='a b' applypatch < x.patch"; expect_cdg_qa_deny; }
 case_cdg_qa_deny_dq_space() { cdg_dec_run "X=\"a b\" apply_patch < x.patch"; expect_cdg_qa_deny; }
 case_cdg_qa_deny_sq_many_spaces() { cdg_dec_run "X='a b c d' apply_patch < x.patch"; expect_cdg_qa_deny; }
 case_cdg_qa_deny_dq_many_spaces() { cdg_dec_run "X=\"a b  c\" apply_patch < x.patch"; expect_cdg_qa_deny; }
@@ -8649,6 +8653,7 @@ cases=(
   "cdg-dec-never-executes|case_cdg_dec_never_executes|deny, sentinel absent on a booby-trapped PATH: decoy / shim input (#455), never-executes"
   "cdg-dec-deny-flood-timing|case_cdg_dec_deny_flood_timing|wall-clock proof under a 15s active deadline: decoy / shim input (#455), deny-flood-timing"
   "cdg-qa-deny-sq-space|case_cdg_qa_deny_sq_space|deny: quoted assignment (#455, absorbing #456), deny-sq-space"
+  "cdg-qa-deny-applypatch|case_cdg_qa_deny_applypatch|deny: quoted assignment before the applypatch spelling (#455, absorbing #456)"
   "cdg-qa-deny-dq-space|case_cdg_qa_deny_dq_space|deny: quoted assignment (#455, absorbing #456), deny-dq-space"
   "cdg-qa-deny-sq-many-spaces|case_cdg_qa_deny_sq_many_spaces|deny: quoted assignment (#455, absorbing #456), deny-sq-many-spaces"
   "cdg-qa-deny-dq-many-spaces|case_cdg_qa_deny_dq_many_spaces|deny: quoted assignment (#455, absorbing #456), deny-dq-many-spaces"

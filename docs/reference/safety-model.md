@@ -480,10 +480,15 @@ shell expands the body first) makes the shim's patch something the hook never pa
 exact `*** Begin Patch` line is also present (a decoy, such as a benign heredoc fed to `cat`) the
 call denies ("not from an inline heredoc") instead of letting the structured parse vouch for the
 decoy. Measured over-blocks, all fail-closed: a heredoc patch whose body line begins with a code
-span of the shim name (`` `apply_patch` ``) denies (rc 2), as does a context line such as ` Codex's
-apply_patch shim` (an odd quote, below), and `cd "$HOME/x" && apply_patch <<EOF …` with an
-unquoted delimiter (rc 2); the remedies are Codex's native `apply_patch` tool call (a separate
-route), a quoted delimiter, or `Edit`/`Write`. The command-word walk also fails closed (#455,
+span of the shim name (`` `apply_patch` ``) denies (rc 2), as does `cd "$HOME/x" && apply_patch
+<<EOF …` with an unquoted delimiter (rc 2). The unbalanced-quote rule below over-blocks more
+broadly: any line of a multi-line Bash string (a commit body, `echo`/`printf` text, a `cat <<'EOF'
+> file` body, a patch context line such as ` Codex's apply_patch shim`) whose leading word carries
+an unbalanced quote and which mentions `apply_patch`/`applypatch` denies for implementer and
+verifier calls, with no patch and no shim invocation involved — measured: `printf '%s' "one⏎Don't
+call apply_patch here"` is rc 2 (rc 0 before, and rc 0 for the main session). Remedies: Codex's
+native `apply_patch` tool call (a separate route), a quoted-delimiter heredoc file or
+`Edit`/`Write` for such text, or avoiding the shim name on that line. The command-word walk also fails closed (#455,
 absorbing #456, "unbalanced quote") when, in a segment that mentions `apply_patch`/`applypatch`,
 any token from a walk window's start through its resolved non-shim command word carries an odd
 count of `'` or of `"`, or ends in a backslash — the whitespace split happens before quotes are
@@ -522,8 +527,8 @@ apply_patch shim"`) gets no opinion. `apply_patch`/`applypatch` appearing only a
 (`rg apply_patch hooks/`) still gets no opinion. Every other case — the main session (no `agent_type`), another
 agent, `permission_mode: "plan"`, a tool other than `Edit`/`Write`/`apply_patch`/`Bash`, malformed
 stdin, an absent or empty `file_path`/command, an ordinary Bash call that neither carries an inline
-patch nor invokes the shim as its command word (with no unbalanced quote or trailing backslash
-before it, above), or an ordinary absolute path outside any
+patch nor invokes the shim as its command word and has no line with an unbalanced quote or
+trailing backslash that also mentions the shim (the #455 rules above), or an ordinary absolute path outside any
 `.claude`/`.codex` segment — is "no opinion" (exit 0, empty stdout, empty stderr), including two
 release-blocker controls: the orchestrator's own main-session `.claude/LESSONS.md` append still
 works, and so does the verifier's own transient mutation-probe `Edit` of a tracked source file.
