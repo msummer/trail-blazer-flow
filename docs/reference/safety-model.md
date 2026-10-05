@@ -290,7 +290,14 @@ is still judged against the session's own facts, exactly as before. **Since #439
 carrying command-line git config (`git -c`, `--config-env`, or a `GIT_CONFIG_COUNT`/
 `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`/`GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_GLOBAL`/
 `GIT_CONFIG_SYSTEM` assignment, bare or behind `env`) is denied outright, whatever the key or
-destination — this hook never reads any of these forms. Since #433, a push segment in
+destination — this hook never reads any of these forms. **Since #449**, a push segment the
+tokenizer loses track of also denies, as an unresolved target, whenever the rest of the segment
+could still be a push: a quoted or escaped git option (`git "-c" k=v push`), a quoted assignment
+value containing a space (`X="a b" git push origin main`), a quote-bearing option or assignment
+after a prefix word (`env "-C" <dir> git push`), or an `env` option outside a short allowlist
+(`env -C <dir>`, `--chdir=`, `-S`); `env -u NAME` consumes its value, which stops `env -u git push
+origin main` from denying. The push-guard header lists the over-blocking this fail-closed rule
+creates and the residuals it leaves. Since #433, a push segment in
 the same Bash command as any OTHER segment that changes directory (`cd`/`pushd`/`popd`/`chdir`) or
 sets a `GIT_DIR`-family variable or one of the command-line-config names above
 (`export`/`declare`/`typeset`/`local`/`readonly`, or a bare assignment) also denies as unresolved,

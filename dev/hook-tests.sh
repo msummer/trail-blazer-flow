@@ -2689,6 +2689,273 @@ case_push_cmdcfg_deny_precedence() {
   esac
 }
 
+# --- a push segment the tokenizer cannot follow: a quoted or escaped git option, a quote or escape
+# in the command prefix, or an env option it cannot read (#449, absorbing #451) ---------------------
+# Every deny fixture builds the same fixture checkout (default branch main, current branch
+# feature/x) and asserts the ONE fixed #292 "unresolved" line naming the fixed reason; every
+# no-opinion fixture also passes that checkout as cwd (the AMBIENT-$PWD rule) and its raw payload
+# holds both "push" and "git", so neither raw-stdin fast path can pass it vacuously. Every reason is
+# a fixed string -- no deny line echoes command text.
+# mutant:449-pg-obscured-off — drops the quoted-or-escaped-git-option trigger in the subcommand
+#   walk, so the option is judged as before (normalised into the subcommand slot, segment dropped).
+# mutant:449-pg-obscured-normalize — tests normalize(tok) instead of strip_quotes(tok) in that
+#   trigger, so "--git-dir=../other/.git" (basename .git) no longer reads as an option.
+# mutant:449-pg-unbalanced-off — drops the assignment-branch unbalanced-quote trigger.
+# mutant:449-pg-unbalanced-dq — drops the double-quote parity arm of quote_unbalanced().
+# mutant:449-pg-unbalanced-sq — drops the single-quote parity arm of quote_unbalanced().
+# mutant:449-pg-unbalanced-bs — drops the trailing-backslash arm of quote_unbalanced().
+# mutant:449-pg-prefix-quoted-shape — drops the trigger for a quote-bearing option or assignment
+#   after a prefix word.
+# mutant:449-pg-env-u-consume — makes -u/--unset skip only themselves, not their value token.
+# mutant:449-pg-env-u-value-check — drops the unbalanced-value check on the token consumed by a
+#   detached -u/--unset.
+# mutant:449-pg-env-u-attached-quote — drops the unbalanced check on an attached -uNAME /
+#   --unset=NAME token.
+# mutant:449-pg-env-u-attached — drops the attached -uNAME / --unset=NAME arm.
+# mutant:449-pg-env-lost-off — drops the unsupported-env-option trigger.
+# mutant:449-pg-env-novalue-vocab — empties PUSH_ENV_NOVALUE_OPTS, so -i is an unsupported option.
+# mutant:449-pg-env-context — sets the env-context flag for any prefix word, not only env.
+# mutant:449-pg-lost-ungated — makes lost_push() always true, so a segment that cannot be a push
+#   denies too.
+# mutant:449-pg-lost-unarmed — makes any later push substring count, not only one after a git word.
+# mutant:449-pg-lost-same-token — drops the single-token git-and-push check in lost_push().
+# mutant:449-pg-lost-unres-precedence — lets the new reason win over an earlier #292 reason
+#   (GIT_DIR=) in emit_lost().
+# mutant:449-pg-lost-precedence — lets the new reason win over command-line git config in
+#   emit_lost().
+# mutant:449-pg-scan-once — removes both per-segment memos, so lost_push() re-scans the segment
+#   once per trigger token and a long segment goes quadratic.
+pp_run() {
+  local dir="$tmpbase/repo-pp"
+  mk_fixture_repo "$dir" main feature/x
+  run_push_guard "$(mk_push_cmd_cwd "$1" "$dir")"
+}
+# pp_expect_unres REASON — the #292 unresolved line, naming the fixed REASON in parentheses.
+pp_expect_unres() {
+  if [ -z "$1" ]; then __ok=0; __why="${__why}pp_expect_unres called with an empty REASON (needle_required)\n"; return; fi
+  expect_push_deny
+  case "$push_err" in
+    *"cannot resolve which repository"*"($1)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing the unresolved line naming '($1)': '$push_err'\n" ;;
+  esac
+}
+PP_R_OPT="quoted or escaped git option"
+PP_R_PFX="quote or escape in the command prefix"
+PP_R_ENV="unsupported env option"
+case_pp_deny_quoted_c() {
+  pp_run 'git "-c" remote.origin.push=HEAD:main push'
+  pp_expect_unres "$PP_R_OPT"
+}
+case_pp_deny_escaped_c() {
+  pp_run 'git \-c remote.origin.push=HEAD:main push'
+  pp_expect_unres "$PP_R_OPT"
+}
+case_pp_deny_quoted_git_dir() {
+  # Destination develop, so only the new rule can deny it.
+  pp_run 'git "--git-dir=../other/.git" push origin develop'
+  pp_expect_unres "$PP_R_OPT"
+}
+case_pp_deny_glued_quote_c() {
+  pp_run 'git -"c" remote.origin.push=HEAD:main push'
+  pp_expect_unres "$PP_R_OPT"
+}
+case_pp_noop_quoted_opt_nonpush() {
+  pp_run 'git "-c" core.pager=cat log && git push origin feature/x'
+  expect_push_no_opinion
+}
+case_pp_noop_quoted_opt_push_word() {
+  # A "push" word that is the --grep value of a non-push git command must not count.
+  pp_run 'git "--no-pager" log --grep push && git push origin feature/x'
+  expect_push_no_opinion
+}
+case_pp_deny_assign_dquote_space() {
+  # Destination main: the deny must be the new reason, not the ordinary default-branch route.
+  pp_run 'X="a b" git push origin main'
+  pp_expect_unres "$PP_R_PFX"
+  case "$push_err" in
+    *"resolves to the default branch"*) __ok=0; __why="${__why}denied via the default-branch route, not the prefix rule: '$push_err'\n" ;;
+  esac
+}
+case_pp_deny_assign_squote_space() {
+  pp_run "X='a b' git push origin feature/x"
+  pp_expect_unres "$PP_R_PFX"
+}
+case_pp_deny_assign_backslash_space() {
+  pp_run 'X=a\ b git push origin feature/x'
+  pp_expect_unres "$PP_R_PFX"
+}
+case_pp_deny_git_dir_space() {
+  # An earlier #292 reason keeps precedence over the new one.
+  pp_run 'GIT_DIR="../a b/.git" git push origin feature/x'
+  pp_expect_unres "GIT_DIR="
+}
+case_pp_deny_env_quoted_assign() {
+  pp_run 'env "X=a" git push origin feature/x'
+  pp_expect_unres "$PP_R_PFX"
+}
+case_pp_deny_env_quoted_opt() {
+  pp_run 'env "-C" ../other git push origin feature/x'
+  pp_expect_unres "$PP_R_PFX"
+}
+case_pp_deny_env_u_quoted_value() {
+  pp_run 'env -u "A B" git push origin feature/x'
+  pp_expect_unres "$PP_R_PFX"
+}
+case_pp_noop_assign_space_nonpush() {
+  pp_run 'X="a b" git status && git push origin feature/x'
+  expect_push_no_opinion
+}
+case_pp_noop_assign_space_commit() {
+  # "push" inside a commit message after a git word must not count: git is followed by commit, which
+  # disarms the walk.
+  pp_run 'GIT_AUTHOR_NAME="A B" git commit -m "fix push" && git push origin feature/x'
+  expect_push_no_opinion
+}
+case_pp_noop_heredoc_apostrophe() {
+  # The command-word candidate is never a trigger: a heredoc prose line starting Don't is scanned as
+  # its own segment and must stay silent.
+  pp_run "git commit -F - <<EOF${LF}Don't let git push skip the guard${LF}EOF${LF}git push -u origin \"claude/17-a\""
+  expect_push_no_opinion
+}
+case_pp_deny_env_u_main() {
+  # -u consumes FOO, so git is the command word and the ordinary default-branch route denies.
+  pp_run 'env -u FOO git push origin main'
+  expect_push_deny
+  case "$push_err" in
+    *"resolves to the default branch"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'resolves to the default branch': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"cannot resolve"*) __ok=0; __why="${__why}denied as unresolved, not via the default-branch route: '$push_err'\n" ;;
+  esac
+}
+case_pp_noop_env_u_feature() {
+  pp_run 'env -u FOO git push origin feature/x'
+  expect_push_no_opinion
+}
+case_pp_noop_env_unset_attached() {
+  pp_run 'env --unset=FOO -uBAR git push origin feature/x'
+  expect_push_no_opinion
+}
+case_pp_deny_env_u_attached_unbalanced() {
+  pp_run 'env -u"A B" git push origin feature/x'
+  pp_expect_unres "$PP_R_PFX"
+}
+case_pp_deny_env_u_git_dir() {
+  pp_run 'env -u FOO GIT_DIR=../x/.git git push origin feature/x'
+  pp_expect_unres "GIT_DIR="
+}
+case_pp_deny_env_c() {
+  pp_run 'env -C ../other git push origin main'
+  pp_expect_unres "$PP_R_ENV"
+}
+case_pp_deny_env_chdir() {
+  pp_run 'env --chdir=../other git push origin feature/x'
+  pp_expect_unres "$PP_R_ENV"
+}
+case_pp_deny_env_s() {
+  pp_run "env -S 'git push origin feature/x'"
+  pp_expect_unres "$PP_R_ENV"
+}
+case_pp_deny_env_s_attached() {
+  # Literal backslash-t inside the attached -S body.
+  pp_run 'env -S"git\tpush origin feature/x"'
+  pp_expect_unres "$PP_R_ENV"
+}
+case_pp_noop_env_c_nonpush() {
+  pp_run 'env -C ../other git status && git push origin feature/x'
+  expect_push_no_opinion
+}
+case_pp_noop_env_i_feature() {
+  pp_run 'env -i git push origin feature/x'
+  expect_push_no_opinion
+}
+case_pp_noop_sudo_opt_feature() {
+  # A dash option after a non-env prefix word is still skipped alone.
+  pp_run 'sudo -E git push origin feature/x'
+  expect_push_no_opinion
+}
+case_pp_deny_lost_cmdcfg() {
+  # Command-line git config keeps its own message over the new reason.
+  pp_run 'GIT_CONFIG_COUNT=1 X="a b" git push origin feature/x'
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_pp_deny_never_executes() {
+  # Safety property on the new route: deny, sentinel absent, and the fixture repo listing
+  # byte-identical (the case_push_cmdcfg_deny_never_executes idiom).
+  local dir="$tmpbase/repo-pp-never-executes"
+  mk_fixture_repo "$dir" main feature/x
+  local trapdir="$tmpbase/trapbin-pp-never-executes" sentinel="$tmpbase/sentinel-pp-never-executes"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  local before after
+  before="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  run_push_guard "$(mk_push_cmd_cwd 'git "-c" remote.origin.push=HEAD:main push' "$dir")" "$trapdir:$PATH"
+  after="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  pp_expect_unres "$PP_R_OPT"
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH while denying a lost push segment\n"; }
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}fixture repo's file listing changed — push-guard.sh wrote to or altered a file it should only read\n"; }
+}
+case_pp_deny_codex_main_session() {
+  local dir="$tmpbase/repo-pp-codex"
+  mk_fixture_repo "$dir" main feature/x
+  run_push_guard "$(mk_codex_shell '' 'env -C ../other git push origin main' "$dir")"
+  pp_expect_unres "$PP_R_ENV"
+}
+case_pp_noop_c_quoted_value() {
+  # The harness own worktree shape: a quoted -C VALUE is consumed with its option and is never an
+  # option-slot token, so it stays no-opinion (mirrors push-noop-c-upstream-claude).
+  local dir="$tmpbase/repo-pp-c-quoted"
+  mk_fixture_repo "$dir" main feature/x
+  run_push_guard "$(mk_push_cmd_cwd 'git -C "../demo-wt-1" push -u origin "claude/17-a"' "$dir")"
+  expect_push_no_opinion
+}
+# pp_flood_cmd N — the five-record flood shape at N tokens per record: one record per trigger, then
+# a real push so the hook reaches check_deadline after the tokenizer.
+pp_flood_cmd() {
+  local n="$1" r1 r2 r3 r4
+  r1="$(printf ' X="a%.0s' $(seq 1 "$n"))"
+  r2="git$(printf ' -"x"%.0s' $(seq 1 "$n")) status"
+  r3="env$(printf ' -Z%.0s' $(seq 1 "$n")) true"
+  r4="env$(printf ' -u X%.0s' $(seq 1 "$n"))$(printf ' Y="b"%.0s' $(seq 1 "$n")) true"
+  printf '%s\n%s\n%s\n%s\ngit push origin feature/x' "$r1" "$r2" "$r3" "$r4"
+}
+case_pp_noop_flood() {
+  # FLOOD + TIMING, calibrated by cost RATIO (#470 helpers), never by absolute speed: the same
+  # five-record shape at a tenth of the size is timed first as a same-run control, and the flood's
+  # active deadline is a multiple of that control. The memoised lost_push() keeps the tokenizer
+  # linear, so the flood scales linearly from the control and finishes well inside the deadline;
+  # without the memos each trigger token re-scans the rest of its segment, the flood scales
+  # quadratically from the control, and it overruns the deadline. FLOOR keeps the production budget
+  # headroom on an idle host, where the control alone is too fast for K*control to leave any.
+  local dir="$tmpbase/repo-pp-flood" cmd
+  mk_fixture_repo "$dir" main feature/x
+  measure_ms run_push_guard "$(mk_push_cmd_big "$(pp_flood_cmd 1000)" "$dir")"
+  if [ -z "$measured_ms" ]; then
+    __ok=0; __why="${__why}control run's own timing report could not be parsed — can't calibrate a deadline\n"
+    return
+  fi
+  cmd="$(pp_flood_cmd 10000)"
+  [ "${#cmd}" -gt 131072 ] || { __ok=0; __why="${__why}flood payload is only ${#cmd} bytes, expected more than 131072\n"; }
+  calibrated_deadline 9 40 "$measured_ms"
+  push_deadline_override="$calibrated_secs"
+  run_push_guard "$(mk_push_cmd_big "$cmd" "$dir")"
+  expect_push_no_opinion
+  if [ "$push_rc" -ne 0 ]; then __why="${__why}control ${measured_ms}ms -> deadline ${calibrated_secs}s\n"; fi
+}
+
 # --- cross-segment ("xseg"): a cd/pushd/popd/chdir or a GIT_DIR-family export/assignment in
 # another segment of the same push command denies as unresolved (#433) ------------------------
 # mutant:433-pg-dir-vocab -- empties PUSH_DIR_CHANGE_WORDS, so no cd/pushd/popd/chdir segment is
@@ -8127,6 +8394,39 @@ cases=(
   "push-cmdcfg-noop-nonpush-segment|case_push_cmdcfg_noop_nonpush_segment|no opinion: git -c core.pager=cat log && git push origin feature/x -- only push segments are judged, and the flag doesn't leak across segments -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-push-only, 439-pg-cmdcfg-leak)"
   "push-cmdcfg-noop-env-nosystem|case_push_cmdcfg_noop_env_nosystem|no opinion: GIT_CONFIG_NOSYSTEM=1 git push origin feature/x -- exact vocabulary, not every GIT_CONFIG_-prefixed name -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-env-exact)"
   "push-cmdcfg-deny-precedence|case_push_cmdcfg_deny_precedence|deny: GIT_DIR=x GIT_CONFIG_COUNT=1 git push origin feature/x -- the command-line-config reason wins over a #292 unresolved target in the same segment -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel, 439-pg-cmdcfg-env-arm, 439-pg-cmdcfg-env-vocab, 439-pg-cmdcfg-order)"
+  "push-parse-deny-quoted-c|case_pp_deny_quoted_c|deny: git \"-c\" remote.origin.push=HEAD:main push (quoted option in the option slot) -- mutation proof: dev/mutants/hook-tests.json (449-pg-obscured-off)"
+  "push-parse-deny-escaped-c|case_pp_deny_escaped_c|deny: git \\-c remote.origin.push=HEAD:main push (backslash-escaped option) -- mutation proof: dev/mutants/hook-tests.json (449-pg-obscured-off)"
+  "push-parse-deny-quoted-git-dir|case_pp_deny_quoted_git_dir|deny: git \"--git-dir=../other/.git\" push origin develop (only the new rule can deny it) -- mutation proof: dev/mutants/hook-tests.json (449-pg-obscured-off, 449-pg-obscured-normalize)"
+  "push-parse-deny-glued-quote-c|case_pp_deny_glued_quote_c|deny: git -\"c\" remote.origin.push=HEAD:main push (quote glued inside the option) -- mutation proof: dev/mutants/hook-tests.json (449-pg-obscured-off)"
+  "push-parse-noop-quoted-opt-nonpush|case_pp_noop_quoted_opt_nonpush|no opinion: a quoted option on a non-push git command, then a feature push -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated)"
+  "push-parse-noop-quoted-opt-push-word|case_pp_noop_quoted_opt_push_word|no opinion: git \"--no-pager\" log --grep push, then a feature push -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated, 449-pg-lost-unarmed)"
+  "push-parse-deny-assign-dquote-space|case_pp_deny_assign_dquote_space|deny: X=\"a b\" git push origin main as an unresolved target, not via the default-branch route -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-off, 449-pg-unbalanced-dq)"
+  "push-parse-deny-assign-squote-space|case_pp_deny_assign_squote_space|deny: X='a b' git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-off, 449-pg-unbalanced-sq)"
+  "push-parse-deny-assign-backslash-space|case_pp_deny_assign_backslash_space|deny: X=a\\ b git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-off, 449-pg-unbalanced-bs)"
+  "push-parse-deny-git-dir-space|case_pp_deny_git_dir_space|deny: GIT_DIR=\"../a b/.git\" git push origin feature/x keeps the earlier #292 reason GIT_DIR= -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-off, 449-pg-unbalanced-dq, 449-pg-lost-unres-precedence)"
+  "push-parse-deny-env-quoted-assign|case_pp_deny_env_quoted_assign|deny: env \"X=a\" git push origin feature/x (quoted assignment after a prefix word) -- mutation proof: dev/mutants/hook-tests.json (449-pg-prefix-quoted-shape)"
+  "push-parse-deny-env-quoted-opt|case_pp_deny_env_quoted_opt|deny: env \"-C\" ../other git push origin feature/x (quoted option after a prefix word) -- mutation proof: dev/mutants/hook-tests.json (449-pg-prefix-quoted-shape)"
+  "push-parse-deny-env-u-quoted-value|case_pp_deny_env_u_quoted_value|deny: env -u \"A B\" git push origin feature/x (unbalanced value of -u) -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-env-u-value-check)"
+  "push-parse-noop-assign-space-nonpush|case_pp_noop_assign_space_nonpush|no opinion: X=\"a b\" git status, then a feature push -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated)"
+  "push-parse-noop-assign-space-commit|case_pp_noop_assign_space_commit|no opinion: GIT_AUTHOR_NAME=\"A B\" git commit -m \"fix push\", then a feature push -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated, 449-pg-lost-unarmed)"
+  "push-parse-noop-heredoc-apostrophe|case_pp_noop_heredoc_apostrophe|no opinion: a heredoc commit whose body line starts Don't, then the harness's own push -- control, not part of the mutation-proof registry"
+  "push-parse-deny-env-u-main|case_pp_deny_env_u_main|deny: env -u FOO git push origin main via the default-branch route (-u consumes FOO) -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-u-consume)"
+  "push-parse-noop-env-u-feature|case_pp_noop_env_u_feature|no opinion: env -u FOO git push origin feature/x -- control, not part of the mutation-proof registry"
+  "push-parse-noop-env-unset-attached|case_pp_noop_env_unset_attached|no opinion: env --unset=FOO -uBAR git push origin feature/x (attached forms) -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-u-attached)"
+  "push-parse-deny-env-u-attached-unbalanced|case_pp_deny_env_u_attached_unbalanced|deny: env -u\"A B\" git push origin feature/x (unbalanced attached -u value) -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-env-u-attached, 449-pg-env-u-attached-quote)"
+  "push-parse-deny-env-u-git-dir|case_pp_deny_env_u_git_dir|deny: env -u FOO GIT_DIR=../x/.git git push origin feature/x (-u value consumed, GIT_DIR= reason) -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-u-consume)"
+  "push-parse-deny-env-c|case_pp_deny_env_c|deny: env -C ../other git push origin main as an unsupported env option -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off)"
+  "push-parse-deny-env-chdir|case_pp_deny_env_chdir|deny: env --chdir=../other git push origin feature/x as an unsupported env option -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off)"
+  "push-parse-deny-env-s|case_pp_deny_env_s|deny: env -S 'git push origin feature/x' as an unsupported env option -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off)"
+  "push-parse-deny-env-s-attached|case_pp_deny_env_s_attached|deny: env -S\"git\\tpush origin feature/x\" (attached body, literal backslash-t) as an unsupported env option -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off, 449-pg-lost-same-token)"
+  "push-parse-noop-env-c-nonpush|case_pp_noop_env_c_nonpush|no opinion: env -C ../other git status, then a feature push -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated)"
+  "push-parse-noop-env-i-feature|case_pp_noop_env_i_feature|no opinion: env -i git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-novalue-vocab)"
+  "push-parse-noop-sudo-opt-feature|case_pp_noop_sudo_opt_feature|no opinion: sudo -E git push origin feature/x (a dash option after a non-env prefix word) -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-context)"
+  "push-parse-deny-lost-cmdcfg|case_pp_deny_lost_cmdcfg|deny: GIT_CONFIG_COUNT=1 X=\"a b\" git push origin feature/x with the command-line-config message -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-off, 449-pg-unbalanced-dq, 449-pg-lost-precedence)"
+  "push-parse-deny-never-executes|case_pp_deny_never_executes|deny via the new route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND the fixture repo's file listing is byte-identical -- mutation proof: dev/mutants/hook-tests.json (449-pg-obscured-off)"
+  "push-parse-deny-codex-main-session|case_pp_deny_codex_main_session|deny: a Codex-shaped main-session payload with env -C ../other git push origin main -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off, 494-pg-wd-precedence)"
+  "push-parse-noop-c-quoted-value|case_pp_noop_c_quoted_value|no opinion: git -C \"../demo-wt-1\" push -u origin \"claude/17-a\" (the harness's own worktree shape) -- control, not part of the mutation-proof registry"
+  "push-parse-noop-flood|case_pp_noop_flood|FLOOD+TIMING: five large records, one per trigger, then a feature push -- no opinion under an active deadline calibrated from a same-run control (#470) -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated, 449-pg-scan-once)"
   # --- hooks/push-guard.sh: analysis deadline (#435) cases ----------------------------------------
   "push-dl-deny-budget-zero|case_push_dl_deny_budget_zero|knob 0 denies the very first sample even for an ordinary feature/x push -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off)"
   "push-dl-noop-budget-zero-no-push|case_push_dl_noop_budget_zero_no_push|no push segment stays no-opinion even at knob 0, via the pre-deadline scan_out exit -- mutation proof: dev/mutants/hook-tests.json (435-dl-scan-empty-exit)"

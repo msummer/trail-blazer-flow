@@ -16,6 +16,14 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #449: `push-guard.sh` now denies, as an unresolved push target, a push segment it loses track of
+  and that could still be a push: a quoted or escaped git option (`git "-c" k=v push`), a quoted or
+  escaped assignment value containing a space (`X="a b" git push ...`), or an `env` option outside a
+  short allowlist (`env -C <dir>`, `--chdir=`, `-S`; absorbs #451). `env -u NAME` now consumes its
+  value, so `env -u git push origin main` is no longer denied. No consumer step.
+
 ## v3.3.0
 
 This release makes scheduled unattended Codex runs a supported surface: `codex exec` passes of
