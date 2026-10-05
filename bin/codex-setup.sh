@@ -377,18 +377,23 @@ else
     # One awk pass over the file, so a missing final newline is still a scanned record. Only
     # lines before the first column-zero [table] header count: a key inside a table is a
     # different key. Key lines are counted at any indentation, so an indented key line or a
-    # second key line is refused rather than duplicated. A comment line never matches.
-    cfg_scan="$(awk '
+    # second key line is refused rather than duplicated. A comment line never matches. A quoted
+    # key name (either quote style) also counts as a key line and is always refused: the quotes
+    # are normalised on a scratch copy only, and the single quote enters through -v so the awk
+    # program text stays apostrophe-free.
+    cfg_scan="$(awk -v q="'" '
       /^\[/ { intable = 1 }
       intable { next }
+      { keyview = $0; gsub(q, "\"", keyview) }
+      keyview ~ /^[ \t]*"project_doc_fallback_filenames"[ \t]*=/ { keys++; quoted++; next }
       /^[ \t]*project_doc_fallback_filenames[ \t]*=/ {
         keys++
         if ($0 ~ /^[ \t]/) { indented++ }
         else if (index($0, "\"CLAUDE.md\"") == 0) { foreign++ }
       }
-      END { printf "%d %d %d\n", keys, indented, foreign }
+      END { printf "%d %d %d %d\n", keys, indented, foreign, quoted }
     ' "$config_dest")"
-    read -r cfg_keys cfg_indented cfg_foreign <<<"$cfg_scan"
+    read -r cfg_keys cfg_indented cfg_foreign cfg_quoted <<<"$cfg_scan"
     if [ "$cfg_keys" -eq 0 ]; then
       config_reason="missing-fallback"
     elif [ "$cfg_keys" -gt 1 ]; then
@@ -397,6 +402,9 @@ else
     elif [ "$cfg_indented" -gt 0 ]; then
       config_reason="fallback-conflict"
       config_conflict_detail="sets project_doc_fallback_filenames on an indented line"
+    elif [ "$cfg_quoted" -gt 0 ]; then
+      config_reason="fallback-conflict"
+      config_conflict_detail="sets project_doc_fallback_filenames with a quoted key name"
     elif [ "$cfg_foreign" -gt 0 ]; then
       config_reason="fallback-conflict"
       config_conflict_detail="already sets project_doc_fallback_filenames without \"CLAUDE.md\""
