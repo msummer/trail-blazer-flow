@@ -100,7 +100,10 @@
 #   4. exit 0 but last-message.md missing or empty -> failed, reason=no-final-message
 #   5. exit 0, last-message.md has a line that is EXACTLY "Unattended stop: permission-denied"
 #      (a whole-line match on the file, no pipe) -> failed, reason=unattended-stop-permission-denied
-#   6. otherwise                        -> completed
+#   6. exit 0, last-message.md has a line that is EXACTLY "Unattended stop: preflight"
+#      (a whole-line match on the file, no pipe) -> failed, reason=unattended-stop-preflight
+#      (checked after rule 5, so rule 5 wins if both lines are present)
+#   7. otherwise                        -> completed
 #   (a TERM/INT to the wrapper itself, at ANY point, short-circuits all of the above to
 #   died-mid-run reason=wrapper-signal-<n> instead — see below. That includes during preflight,
 #   before codex is ever launched; died-mid-run there does not imply a launch happened.)
@@ -225,8 +228,10 @@
 #     settings (belt-and-braces with the CLAUDE_PID guard above) — see docs/reference/codex.md
 #     "Rules" for what each backstop does and does not cover.
 #   - A launched session that stops at its own preflight (for example a `git fetch` that can't
-#     authenticate) exits 0 with an ordinary final message, so it is recorded `completed` and opens
-#     no tracking issue (#496).
+#     authenticate) is classified failed (CLASSIFICATION rule 6) only when its final message
+#     carries the "Unattended stop: preflight" line, which the session reports itself. A session
+#     that stops without printing that line exits 0 with an ordinary final message and is still
+#     recorded `completed`, opening no tracking issue.
 set -uo pipefail
 
 if [ -n "${CLAUDE_PID+set}" ]; then echo "codex-scheduled-run.sh: refusing: CLAUDE_PID is set — a Claude Code session must never launch a Codex run" >&2; exit 2; fi
@@ -1045,5 +1050,8 @@ if [ ! -s "$run_dir/last-message.md" ]; then
 fi
 if grep -qxF -- 'Unattended stop: permission-denied' "$run_dir/last-message.md"; then
   finish failed unattended-stop-permission-denied
+fi
+if grep -qxF -- 'Unattended stop: preflight' "$run_dir/last-message.md"; then
+  finish failed unattended-stop-preflight
 fi
 finish completed ""
