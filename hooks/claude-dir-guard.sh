@@ -190,11 +190,15 @@
 # walk segment with no heredoc; `cd "$HOME/x" && apply_patch <<EOF ...` with an unquoted delimiter
 # -> rc 2. The unbalanced-quote rule below over-blocks more broadly: ANY line of a multi-line Bash
 # string (a commit body, echo/printf text, a `cat <<'EOF' > file` body, a patch context line such
-# as " Codex's apply_patch shim") whose leading word carries an unbalanced quote and which mentions
-# apply_patch/applypatch denies for implementer/verifier calls, with no patch and no shim
-# invocation involved -- measured: `printf '%s' "one<newline>Don't call apply_patch here"` -> rc 2
-# (rc 0 before, and rc 0 for the main session). Remedies: Codex's native apply_patch tool call, a
-# quoted-delimiter heredoc file or Edit/Write for such text, or avoid the shim name on that line.
+# as " Codex's apply_patch shim") that mentions apply_patch/applypatch and whose words up to its
+# command word (any leading skipped assignment or prefix word included) carry an unbalanced quote
+# or a trailing backslash denies for implementer/verifier calls, with no patch and no shim
+# invocation involved -- measured: `printf '%s' "one<newline>Don't call apply_patch here"` -> rc 2,
+# and so does the same line as a `cat > f <<'EOF'` body, since every heredoc body line is its own
+# walk segment whatever the delimiter's quoting (rc 0 before, and rc 0 for the main session).
+# Remedies: write such text with Edit/Write (then, e.g., `git commit -F <file>`), use Codex's
+# native apply_patch tool call for a patch, or avoid the shim name on that line. A quoted heredoc
+# delimiter does NOT help here (it is the remedy only for the unquoted-<<EOF over-block above).
 #
 # (#455, absorbing #456) In a segment whose text mentions `apply_patch`/`applypatch` and carries a
 # quote or a backslash, any token from a walk window's start through its resolved non-shim command

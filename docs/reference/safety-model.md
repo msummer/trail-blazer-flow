@@ -483,12 +483,16 @@ decoy. Measured over-blocks, all fail-closed: a heredoc patch whose body line be
 span of the shim name (`` `apply_patch` ``) denies (rc 2), as does `cd "$HOME/x" && apply_patch
 <<EOF …` with an unquoted delimiter (rc 2). The unbalanced-quote rule below over-blocks more
 broadly: any line of a multi-line Bash string (a commit body, `echo`/`printf` text, a `cat <<'EOF'
-> file` body, a patch context line such as ` Codex's apply_patch shim`) whose leading word carries
-an unbalanced quote and which mentions `apply_patch`/`applypatch` denies for implementer and
+> file` body, a patch context line such as ` Codex's apply_patch shim`) that mentions
+`apply_patch`/`applypatch` and whose words up to its command word (leading assignments and prefix
+words included) carry an unbalanced quote or a trailing backslash denies for implementer and
 verifier calls, with no patch and no shim invocation involved — measured: `printf '%s' "one⏎Don't
-call apply_patch here"` is rc 2 (rc 0 before, and rc 0 for the main session). Remedies: Codex's
-native `apply_patch` tool call (a separate route), a quoted-delimiter heredoc file or
-`Edit`/`Write` for such text, or avoiding the shim name on that line. The command-word walk also fails closed (#455,
+call apply_patch here"` is rc 2, and so is the same line as a `cat > f <<'EOF'` body, because every
+heredoc body line is its own walk segment whatever the delimiter's quoting (rc 0 before, and rc 0
+for the main session). Remedies: write such text with `Edit`/`Write` (then, for example, `git
+commit -F <file>`), use Codex's native `apply_patch` tool call (a separate route) for a patch, or
+avoid the shim name on that line; a quoted heredoc delimiter does not help here (it is the remedy
+only for the unquoted-`<<EOF` over-block above). The command-word walk also fails closed (#455,
 absorbing #456, "unbalanced quote") when, in a segment that mentions `apply_patch`/`applypatch`,
 any token from a walk window's start through its resolved non-shim command word carries an odd
 count of `'` or of `"`, or ends in a backslash — the whitespace split happens before quotes are
