@@ -159,7 +159,8 @@ Codex loads `CLAUDE.md` as the project contract one of two ways, and the two don
   The key counts as already set only when exactly one unindented key line carries `"CLAUDE.md"` in
   double quotes; a missing final newline doesn't matter. Anything else is a conflict: a key line
   that doesn't itself carry `"CLAUDE.md"` (so a multi-line array or a single-quoted `'CLAUDE.md'`
-  counts), an indented key line, or more than one key line. On a conflict, write mode refuses
+  counts), an indented key line, a quoted key name (`"project_doc_fallback_filenames"` or
+  `'project_doc_fallback_filenames'`, even one listing `"CLAUDE.md"`), or more than one key line. On a conflict, write mode refuses
   (exit 2, file untouched) and `--check` reports `reason=fallback-conflict`.
 
 `codex-setup.sh` never creates a new `AGENTS.md` — doing so would suppress the fallback it just
@@ -305,8 +306,9 @@ own `codex-path-*` cases — #444, below) and exercised live at that gate. Only 
 
 **Prerequisite: the checkout's `origin` must authenticate with no prompt** — an SSH key, or a
 credential helper that works outside a terminal. At the #429 gate, an HTTPS remote with no
-stored credential made the session's own step-0 `git fetch` fail; the run stopped having done
-nothing and was still recorded `completed`, so no tracking issue was opened (#496).
+stored credential made the session's own step-0 `git fetch` fail. When the session prints the
+preflight-stop marker, such a stop ends the run `failed reason=unattended-stop-preflight` and
+opens the tracking issue (#496; see "Unattended runs (`codex exec`)").
 
 **Refuses under Claude Code.** If `CLAUDE_PID` is set (even to an empty string), the wrapper exits
 2 before doing anything else — a Claude Code session must never launch a Codex run. On Claude Code
@@ -415,7 +417,11 @@ and exits 3, the same as any other tracking failure — see "Failure tracking on
    (a whole-line match on the file, no pipe) → `failed`,
    `reason=unattended-stop-permission-denied` — see "Unattended runs (`codex exec`)" above for
    when a run's own final message carries that line.
-6. Otherwise → `completed`, with `reason=` left empty (`completed` is the only token with no
+6. Exit 0 and `last-message.md` has a line that is EXACTLY `Unattended stop: preflight` (a
+   whole-line match on the file, no pipe), checked after item 5 → `failed`,
+   `reason=unattended-stop-preflight` — see "Unattended runs (`codex exec`)" above for when a
+   run's own final message carries that line.
+7. Otherwise → `completed`, with `reason=` left empty (`completed` is the only token with no
    populated reason — record.txt's own `reason=` line is present but blank).
 
 The seven outcome tokens in full: `completed`, `skipped-stop`, `skipped-busy`, `preflight-failed`,
@@ -1086,6 +1092,31 @@ below applies.
     runs (macOS)" below); that same wrapper's own failure-tracking step (I3, #428) then opens or
     comments on a `needs-human` issue for it from OUTSIDE the sandbox, the same as any other
     tracked failure outcome.
+
+**Preflight stops (#496).** A STOP the run takes at its own preflight (the Codex preamble, the
+lock, or step 0, before the dispatch ledger is seeded) posts nothing, since no issue is in hand,
+and releases the lock if it holds it. The final message carries a line of its own, exactly:
+
+```
+Unattended stop: preflight
+```
+
+followed by the failing command (or the check that stopped the run) and its output, quoted
+verbatim. Emit it on at least: a non-zero `codex-setup.sh --check` in the preamble, `harness-lock.sh
+acquire` exit 2, a failed `gh auth status`, `git fetch origin`, or default-branch read, a dirty
+tree off a `claude/<n>-*` branch, a red baseline, a failed dependency install, and a step-0 stop
+switch that exits with an undocumented status (mirroring the wrapper's own tracked
+`preflight-failed reason=harness-stop-exit-<n>`). Print no marker (the run stays `completed`) for
+the step-0 stop switch reading `stop=true` or `stop=unknown` (mirroring the wrapper's own
+`skipped-stop`), for `acquire` exit 3, a live
+holder (mirroring `skipped-busy`), and for a run with nothing to do. A step-0 crash recovery on a
+`claude/<n>-*` branch, a missing `.claude/BASELINE.md`, and a degraded discovery
+(`*_query_unavailable`) are not stops and need no marker. A rejection listed under
+"Orchestrator-side rejections" keeps `Unattended stop: permission-denied` instead.
+`bin/codex-scheduled-run.sh` classifies the preflight line `failed
+reason=unattended-stop-preflight`, so its failure tracking opens or comments on the `needs-human`
+issue. Like the `Denied commands` list, the line is self-reported: a session that stops without it
+is still recorded `completed`.
 
 **Unattended (Codex) block.** On an unattended run, prefix every dispatch with this block too,
 immediately after the canary block above (see "Dispatch" above), verbatim:

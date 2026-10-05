@@ -226,6 +226,40 @@ calibrated_deadline() {
   fi
 }
 
+# calibrated_site_budget MS MAX (#476) — sets $site_budget_secs, the whole-second analysis-budget
+# knob a site-proving push-dl fixture runs its timed payload under, from MS, the wall time of the
+# same payload's knob-0 control. The hook compares a whole-second $SECONDS against its deadline, so
+# a budget of B guarantees only about B-1 seconds before its first sample can fire: a site-proving
+# budget is therefore never 1. B is 1 plus calibrated_deadline's own ceil(4 * MS / 1000) (floored at
+# 1, so B is at least 2; K=4 absorbs a load swing between two back-to-back runs), clamped to MAX,
+# the largest knob the hook adopts, which keeps every site case invariant under 435-dl-knob-raise
+# and its timed deny well inside the harness deadline.
+# mutant:476-hook-site-budget-window — drops the whole-second window, so a fast control yields
+#   budget 1 again (the #476 flake shape); caught by case_deadline_site_budget's own 0ms assertion.
+# mutant:476-hook-site-budget-cap — deletes the MAX clamp, so a slow control yields a knob the hook
+#   ignores (and 435-dl-knob-raise would adopt); caught by case_deadline_site_budget's own 751ms and
+#   5000ms assertions.
+site_budget_secs=0
+calibrated_site_budget() {
+  local ms="$1" max="$2"
+  calibrated_deadline 1 4 "$ms"
+  site_budget_secs=$((calibrated_secs + 1))
+  [ "$site_budget_secs" -le "$max" ] || site_budget_secs="$max"
+}
+
+# case_deadline_site_budget (#476) — pins calibrated_site_budget's whole-second window, K-scaling
+# and MAX clamp arithmetic with MAX=4, without a live clock: 0ms and 250ms give 2 (the window keeps
+# a fast control off budget 1), 251ms gives 3, 750ms and 751ms give 4 (751ms is the first value the
+# clamp has to cut), and 5000ms stays at 4.
+case_deadline_site_budget() {
+  local pair ms want
+  for pair in 0:2 250:2 251:3 750:4 751:4 5000:4; do
+    ms="${pair%%:*}"; want="${pair##*:}"
+    calibrated_site_budget "$ms" 4
+    [ "$site_budget_secs" -eq "$want" ] || { __ok=0; __why="${__why}calibrated_site_budget ${ms} 4: expected ${want}, got ${site_budget_secs}\n"; }
+  done
+}
+
 # case_deadline_kill_tree (#463) — pins the shared wait_deadline/kill_tree mechanism directly,
 # independent of any hook fixture: builds a synthetic TERM-ignoring process tree (a root script plus
 # one real "sleep 15" child), runs it through wait_deadline with a 2s deadline, and asserts the
@@ -1757,6 +1791,44 @@ DL_CONFIGLINE_LINE="trail-blazer-flow push guard: denies this push: a git config
 # above, mirroring hooks/push-guard.sh's own CFG_TOPLEVEL_MAX_LINE_CHARS value, for the two
 # push-dl-deny-toplevel-{over,at}-cap boundary fixtures below.
 DL_TOPLEVEL_MAX_LINE_CHARS=2048
+
+# DL_KNOB_MAX (#476) — the largest analysis-budget knob hooks/push-guard.sh adopts: the knob is
+# honoured only when strictly less than its PUSH_ANALYSIS_BUDGET_SECS (5), hand-typed here as that
+# value minus one, the same mirror convention as the constant above.
+DL_KNOB_MAX=4
+
+# dl_site_run PAYLOAD (#476) — runs one site-proving push-dl payload twice. First a control: the
+# identical payload at knob 0, which denies at the hook's very first deadline sample (right after
+# the tokenizer), so its measured wall time is exactly the unsampled prefix (process start, cat, jq,
+# the awk tokenizer) that races the deadline in the timed run. No site mutant touches anything up
+# to that first sample, so the control is invariant under each of them; wait_deadline's 0.1s polling
+# can only over-measure it, which moves the budget in the safe direction. Then the timed run, at the
+# budget calibrated_site_budget derives from that measurement. A control that cannot be timed, or
+# that does not deny with the deadline reason, fails the case and returns without the timed run,
+# which keeps the check-off mutant (no deadline deny at all) bounded.
+dl_site_run() {
+  local payload="$1"
+  push_budget_override="0"
+  push_deadline_override=9
+  measure_ms run_push_guard "$payload"
+  if [ -z "$measured_ms" ]; then
+    __ok=0; __why="${__why}knob-0 control's timing report could not be parsed -- can't calibrate a budget\n"
+    return
+  fi
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+  if [ "$__ok" -eq 0 ]; then
+    __why="${__why}knob-0 control did not deny at the first sample\n"
+    return
+  fi
+  calibrated_site_budget "$measured_ms" "$DL_KNOB_MAX"
+  push_budget_override="$site_budget_secs"
+  push_deadline_override=9
+  run_push_guard "$payload"
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+  if [ "$__ok" -eq 0 ]; then
+    __why="${__why}control ${measured_ms}ms -> budget ${site_budget_secs}s\n"
+  fi
+}
 
 # --- deny: plain command and refspec-parsing clauses, derived from the parser's boundaries
 # (LESSON 2026-09-04), not from happy paths -------------------------------------------------------
@@ -4118,7 +4190,11 @@ case_push_kw_noop_then_feature() {
 # mutant:304-inc-line-budget-depth0 — drops the "depth >= 1" guard, so the line budget also applies
 #   to a depth-0 top-level candidate, which can then be truncated mid-file.
 # mutant:304-inc-line-chars — drops the CFG_INCLUDE_MAX_LINE_CHARS length check entirely, so a line
-#   of any length reaches comment-strip and trim regardless of how long it is.
+#   of any length reaches comment-strip and trim regardless of how long it is. Its registry filter
+#   names push-include-noop-over-line-chars alone (#476): with the check gone, the oversized filler
+#   line in push-include-noop-over-char-budget is also parsed, and whether that parse finishes inside
+#   the hook's analysis budget depends on host speed, so that case's verdict under this mutant is
+#   load-dependent and must not be part of the recorded set.
 # mutant:304-inc-line-chars-off-by-one — narrows the length-cap boundary from "-le" to "-lt", so a
 #   line exactly at the cap is skipped one character too early.
 # mutant:304-inc-char-budget — drops the CFG_INCLUDE_MAX_CHARS check entirely, so a line is always
@@ -5155,16 +5231,41 @@ case_push_dl_deny_production_budget() {
   # and a bare "a" refspec never resolves to a deny member), so only check_deadline (sampled once
   # per driver-loop iteration, and again inside each of evaluate_segment()'s own loops) can stop
   # this well before the flood ever reaches the final "git push origin main" segment. With
-  # check-off, or with knob-raise adopting the ignored 99s budget, the flood instead runs past the
-  # 9s active deadline below (#463) and this case's own kill_tree ends it, instead of denying via
-  # that final segment's ordinary reason.
+  # check-off, the knob-0 control below can never print the deadline line, so the case fails there
+  # and returns before the timed run. With knob-raise adopting the ignored 99s budget, the timed
+  # flood instead runs past the calibrated active deadline below (#463) and this case's own
+  # kill_tree ends it, or completes and denies via that final segment's ordinary reason.
   local dir="$tmpbase/repo-dl-production-budget"
   mk_fixture_repo "$dir" main feature/x
   push_budget_override="99"
   local flood
   flood="$(printf 'git push o a a a a a;%.0s' $(seq 1 10000))"
-  push_deadline_override=9
-  run_push_guard "$(mk_push_cmd_big "${flood}git push origin main" "$dir")"
+  local payload
+  payload="$(mk_push_cmd_big "${flood}git push origin main" "$dir")"
+  # Same-run control (#476's design rule): the identical payload at knob 0 denies at the hook's
+  # first sample, so its wall time is the unsampled prefix (jq over the large payload plus the awk
+  # tokenizer over every segment) that eats into the production budget. The active deadline for the
+  # timed run is the production budget (hand-typed 5, the hook's PUSH_ANALYSIS_BUDGET_SECS) plus one
+  # whole-second sample window plus a K-scaled multiple of that prefix, capped well below the time
+  # the unsampled flood needs, so the knob-raise mutant's timed flood still runs past it.
+  push_budget_override="0"
+  push_deadline_override=15
+  measure_ms run_push_guard "$payload"
+  if [ -z "$measured_ms" ]; then
+    __ok=0; __why="${__why}knob-0 control's timing report could not be parsed -- can't calibrate a deadline\n"
+    return
+  fi
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+  if [ "$__ok" -eq 0 ]; then
+    __why="${__why}knob-0 control did not deny at the first sample\n"
+    return
+  fi
+  calibrated_deadline 3 4 "$measured_ms"
+  local active_deadline=$((5 + 1 + calibrated_secs))
+  [ "$active_deadline" -le 20 ] || active_deadline=20
+  push_budget_override="99"
+  push_deadline_override="$active_deadline"
+  run_push_guard "$payload"
   # mutant:463-hook-push-override-leaks — run_push_guard's own trailing
   #   `push_deadline_override=""` reset deleted: this assertion is the only thing that would catch
   #   the override surviving into the NEXT case, since a leaked value here still happens to equal
@@ -5174,47 +5275,52 @@ case_push_dl_deny_production_budget() {
 }
 case_push_dl_deny_driver_site() {
   # mutant:435-dl-check-off; mutant:435-dl-driver-site -- a bare `-C` push (n == 0) runs ZERO
-  # iterations of every evaluate_segment() loop (word-splitting an empty REST yields no tokens), and
-  # the resolved lane carries no config of its own, so cfg_parse_file()'s read loop never runs
-  # either: the driver loop's own check_deadline call, sampled once per PUSH line dequeued, is the
-  # ONLY sample reachable on this path. 3000 resolved "-C" targets (route 3: many resolved -C
-  # lanes), each a fresh resolve_repo() call, then a final bare session push -- without the
-  # driver-loop sample, the flood completes and the final push denies via the session's own current
-  # branch instead.
+  # iterations of every evaluate_segment() loop (word-splitting an empty REST yields no tokens), the
+  # resolved lane carries no config of its own (so cfg_parse_file()'s read loop never runs), and
+  # config_deny's lists are empty. The samples reachable are the post-tokenizer one (the one
+  # dl_site_run's knob-0 control measures; the calibrated budget keeps it from firing first) and,
+  # once the loop starts, the driver loop's own check_deadline call, sampled once per PUSH line
+  # dequeued. 3000 resolved "-C" targets (route 3: many resolved -C lanes), each a fresh
+  # resolve_repo() call, then a final bare session push -- without the driver-loop sample, the flood
+  # runs past the 9s harness deadline or the final push denies via the session's own current branch
+  # instead.
   local main="$tmpbase/repo-dl-drv" wt="$tmpbase/dl-drv-wt-1"
   mk_fixture_repo "$main" main main
   mk_fixture_repo "$wt" trunk feature/x
-  push_budget_override="1"
-  push_deadline_override=9
-  local flood
+  local flood payload
   flood="$(printf 'git -C ../dl-drv-wt-1 push;%.0s' $(seq 1 3000))"
-  run_push_guard "$(mk_push_cmd_big "${flood}git push" "$main")"
-  expect_push_deny_exact "$DL_DEADLINE_LINE"
+  payload="$(mk_push_cmd_big "${flood}git push" "$main")"
+  dl_site_run "$payload"
 }
 case_push_dl_deny_evaluate_sites() {
   # mutant:435-dl-check-off; mutant:435-dl-evaluate-sites -- ONE push segment whose own refspec list
-  # is huge (10000 harmless "a" tokens, then "main"): the driver loop samples check_deadline only
-  # ONCE for this single segment, so without evaluate_segment()'s own four internal samples, its
-  # refspec loop (idx 1..n-1) runs to completion in one shot and finds "main" as the last refspec,
-  # denying via that ordinary dest reason instead.
+  # is huge (10000 harmless "a" tokens, then "main"): before evaluate_segment() runs, only the
+  # post-tokenizer sample (the one dl_site_run's knob-0 control measures) and the driver loop's
+  # single sample for this one segment are reachable, so without evaluate_segment()'s own four
+  # internal samples, its refspec loop (idx 1..n-1) runs to completion in one shot and finds "main"
+  # as the last refspec, denying via that ordinary dest reason instead. The cwd is a fixture repo
+  # so the session resolves at depth 0: a non-git cwd made resolve_repo walk dirname upward
+  # through a host-dependent TMPDIR depth, between those two samples, where the control cannot
+  # see it. "main" is a deny member through the session default.
   local dir="$tmpbase/repo-dl-evaluate-sites"
-  mkdir -p "$dir"
-  push_budget_override="1"
-  push_deadline_override=9
-  local filler
+  mk_fixture_repo "$dir" main feature/x
+  local filler payload
   filler="$(printf ' a%.0s' $(seq 1 10000))"
-  run_push_guard "$(mk_push_cmd_big "git push origin${filler} main" "$dir")"
-  expect_push_deny_exact "$DL_DEADLINE_LINE"
+  payload="$(mk_push_cmd_big "git push origin${filler} main" "$dir")"
+  dl_site_run "$payload"
 }
 case_push_dl_deny_config_lines() {
   # mutant:435-dl-check-off; mutant:435-dl-cfgline-site -- a bare `-C` push (n == 0, so no
   # evaluate_segment() loop ever iterates -- see case_push_dl_deny_driver_site above) resolves a
   # lane whose depth-0 config is M harmless "[core]" lines, each safely UNDER the new
-  # CFG_TOPLEVEL_MAX_LINE_CHARS cap (so the length cap never fires): only cfg_parse_file()'s own
-  # read-loop sample can stop this mid-parse. Without it, the whole file is read and trimmed in
-  # full (M sized, per the approved sizing rule, so the check-off run comfortably clears the
-  # required multiple of the knob), then the lane's OWN current branch (main) gives an ordinary
-  # dest deny with no sampled loop ever having run.
+  # CFG_TOPLEVEL_MAX_LINE_CHARS cap (so the length cap never fires): once past the post-tokenizer
+  # sample (the one dl_site_run's knob-0 control measures) and the driver loop's single sample,
+  # both before the parse, only cfg_parse_file()'s own read-loop sample can stop this mid-parse.
+  # Without it, the whole file is read and trimmed in full, then the lane's OWN current branch
+  # (main) gives an ordinary dest deny with no sampled loop ever having run. The S-only work here
+  # is the lane's config file, not the payload, so M can grow without raising the control's cost;
+  # it is sized for timed budgets up to DL_KNOB_MAX, not a fixed 1s knob. The session's fixture
+  # repo has no config.
   local main="$tmpbase/repo-dl-cfg" wt="$tmpbase/dl-cfg-wt-1"
   mk_fixture_repo "$main" trunk feature/x
   mk_fixture_repo "$wt" main main
@@ -5222,15 +5328,12 @@ case_push_dl_deny_config_lines() {
   sp="$(printf ' %.0s' $(seq 1 400))"
   # $(...) strips printf's own trailing newline, so it is re-added outside the substitution; the
   # printf '%.0s' idiom below (mirroring case_ab_pc_deny_dbracket_timing/mk_push_cmd_big's own
-  # flood builders) then repeats this one already-newline-terminated line 1500 times without ever
+  # flood builders) then repeats this one already-newline-terminated line M times without ever
   # building the whole body via O(n^2) bash string concatenation.
   line_lit="$(printf '\tx = y%s' "$sp")"$'\n'
-  body="[core]"$'\n'"$(printf "${line_lit}%.0s" $(seq 1 1500))"
+  body="[core]"$'\n'"$(printf "${line_lit}%.0s" $(seq 1 6000))"
   mk_fixture_config "$wt" "$body"
-  push_budget_override="1"
-  push_deadline_override=9
-  run_push_guard "$(mk_push_cmd_big 'git -C ../dl-cfg-wt-1 push' "$main")"
-  expect_push_deny_exact "$DL_DEADLINE_LINE"
+  dl_site_run "$(mk_push_cmd_big 'git -C ../dl-cfg-wt-1 push' "$main")"
 }
 case_push_dl_deny_c_lane_flood() {
   # mutant:435-dl-check-off -- FLOOD (route 3: many resolved -C lanes). Many resolved "-C" targets,
@@ -6753,6 +6856,236 @@ case_cdg_dl_cap_trim_bash() {
   cdg_dl_cap_check_bash "echo apply_patch${sp}"
 }
 
+# --- claude-dir-guard.sh decoy inline patch (#455) -------------------------------------------
+# When the shim's own segment takes its input from anything but its own inline `<<` heredoc, the
+# Bash route denies before the structured parse can be satisfied by an unrelated benign inline
+# patch elsewhere in the command. Safe set: a heredoc, an output redirect, a bare-digits fd before
+# an output redirect. An unquoted heredoc delimiter on a command carrying `$`, a backtick or a
+# backslash also denies (the shell expands the body first). Shared fixture text: CDG_P is the
+# issue's benign patch, CDG_DECOY an unrelated heredoc feeding it to `cat`.
+#
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "cdg-dec-").
+# mutant:455-cdg-dec-route — the Bash route's new decoy deny is switched off, so a benign inline
+#   patch next to an unsafe shim input is judged by the structured parse alone again.
+# mutant:455-cdg-dec-shim-record — the shim's resolved index is never recorded, so no segment's
+#   input is ever scanned.
+# mutant:455-cdg-dec-min — the smallest-index rule is dropped, so a later tail's shim index
+#   overwrites an earlier one and the scan skips the unsafe argument between them.
+# mutant:455-cdg-dec-in-redirect — a stdin redirect after a heredoc is no longer unsafe.
+# mutant:455-cdg-dec-heredoc-exact — the heredoc test accepts three or more `<`, so a here-string
+#   is read as a heredoc.
+# mutant:455-cdg-dec-delim-required — the missing-delimiter guard is dropped, so a process
+#   substitution's bare `< <` run is read as a heredoc.
+# mutant:455-cdg-dec-arg — a non-redirect token after the shim is skipped instead of unsafe.
+# mutant:455-cdg-dec-no-heredoc — a shim segment with no heredoc at all is no longer unsafe.
+# mutant:455-cdg-dec-fd-out — the fd-before-output-redirect skip is removed, so `2>&1` reads as an
+#   argument.
+# mutant:455-cdg-dec-out-target — the output redirect's target is no longer skipped, so
+#   `>/dev/null` reads as an argument.
+# mutant:455-cdg-dec-unquoted-flag — an unquoted delimiter never sets iapw_unquoted.
+# mutant:455-cdg-dec-delim-sq — a single-quote in the delimiter no longer counts as quoted.
+# mutant:455-cdg-dec-delim-dq — a double-quote in the delimiter no longer counts as quoted.
+# mutant:455-cdg-dec-delim-bs — a backslash in the delimiter no longer counts as quoted.
+# mutant:455-cdg-dec-text-dollar — `$` no longer makes an unquoted-delimiter command unsafe.
+# mutant:455-cdg-dec-text-backtick — a backtick no longer does.
+# mutant:455-cdg-dec-text-backslash — a backslash no longer does.
+CDG_P="*** Begin Patch${LF}*** Add File: /repo/ok${LF}+x${LF}*** End Patch"
+CDG_DECOY="cat >/dev/null <<'EOF'${LF}${CDG_P}${LF}EOF"
+expect_cdg_dec_deny() {
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"not from an inline heredoc"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'not from an inline heredoc': '$cdg_err'\n" ;;
+  esac
+}
+cdg_dec_run() { run_claude_guard "$(mk_codex_shell 'implementer' "$1")"; }
+case_cdg_dec_deny_redirect_file() { cdg_dec_run "${CDG_DECOY}${LF}apply_patch < evil.patch"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_redirect_first() { cdg_dec_run "apply_patch < evil.patch${LF}${CDG_DECOY}"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_applypatch() { cdg_dec_run "${CDG_DECOY}${LF}applypatch < evil.patch"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_pipe() { cdg_dec_run "${CDG_DECOY}${LF}cat evil.patch | apply_patch"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_herestring() { cdg_dec_run "${CDG_DECOY}${LF}apply_patch <<< \"\$p\""; expect_cdg_dec_deny; }
+case_cdg_dec_deny_heredoc_then_redirect() { cdg_dec_run "apply_patch <<'EOF' < evil.patch${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_heredoc_then_herestring() { cdg_dec_run "apply_patch <<'EOF' <<< \"\$p\"${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_heredoc_then_rw() { cdg_dec_run "apply_patch <<'EOF' <> evil.patch${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_file_arg() { cdg_dec_run "apply_patch evil.patch <<'EOF'${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_fd_heredoc() { cdg_dec_run "cat evil.patch | apply_patch 3<<'EOF'${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_procsubst() { cdg_dec_run "${CDG_DECOY}${LF}apply_patch < <(cat evil.patch)"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_second_shim() {
+  cdg_dec_run "apply_patch <<'EOF'${LF}${CDG_P}${LF}EOF${LF}apply_patch < evil.patch"
+  expect_cdg_dec_deny
+}
+case_cdg_dec_deny_two_tails() {
+  # The first tail's shim has a file argument; the second tail's shim is a legitimate heredoc. The
+  # scan must start from the FIRST resolved shim index.
+  cdg_dec_run "if [[ -n x ]] apply_patch evil.patch ]] apply_patch <<'EOF'${LF}${CDG_P}${LF}EOF"
+  expect_cdg_dec_deny
+}
+case_cdg_dec_deny_unquoted_dollar() {
+  cdg_dec_run "D=.cla\"\"ude; apply_patch <<EOF${LF}*** Begin Patch${LF}*** Add File: "'$D'"/settings.local.json${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_dec_deny
+}
+case_cdg_dec_deny_unquoted_backtick() {
+  cdg_dec_run "apply_patch <<EOF${LF}*** Begin Patch${LF}*** Add File: src/"'`printf x`'"/y${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_dec_deny
+}
+case_cdg_dec_deny_unquoted_backslash() {
+  # The shell's backslash-newline joins `.cla\` and `ude/...` into `.claude/...` inside an
+  # unquoted heredoc body.
+  local bs='\'
+  cdg_dec_run "apply_patch <<EOF${LF}*** Begin Patch${LF}*** Add File: .cla${bs}${LF}ude/settings.local.json${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_dec_deny
+}
+case_cdg_dec_deny_body_codespan() {
+  # Documented over-block: a body line whose first word is a code span of the shim name is its own
+  # walk segment, a bare shim with no heredoc.
+  cdg_dec_run "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Update File: src/a.txt${LF}+See "'`apply_patch`'" docs${LF}*** End Patch${LF}EOF"
+  expect_cdg_dec_deny
+}
+case_cdg_dec_deny_heredoc_dotdot() {
+  # The legitimate heredoc shape still reaches the structured parse, which judges its headers.
+  cdg_dec_run "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: ../etc/x${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_deny_unclassifiable
+}
+case_cdg_dec_noop_heredoc_sq_dollar() {
+  cdg_dec_run "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+echo "'$HOME'"${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_heredoc_dq_dollar() {
+  cdg_dec_run "apply_patch <<\"EOF\"${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+echo "'$HOME'"${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_heredoc_bs_dollar() {
+  cdg_dec_run "apply_patch <<\\EOF${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+echo "'$HOME'"${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_heredoc_dash() {
+  local t=$'\t'
+  cdg_dec_run "apply_patch <<-'EOF'${LF}${t}*** Begin Patch${LF}${t}*** Add File: src/a.txt${LF}${t}+x${LF}${t}*** End Patch${LF}${t}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_heredoc_out_redirects() {
+  cdg_dec_run "apply_patch <<'EOF' >/dev/null 2>&1${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_heredoc_chain() {
+  cdg_dec_run "cd src && apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_unquoted_plain() {
+  cdg_dec_run "apply_patch <<EOF${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_two_shims() {
+  local one="apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
+  cdg_dec_run "${one}${LF}${one}"
+  expect_cdg_no_opinion
+}
+cdg_trap_path() {
+  # cdg_trap_path NAME -- build a booby-trapped bin dir; sets cdg_trapdir and cdg_sentinel.
+  cdg_trapdir="$tmpbase/trapbin-$1"
+  cdg_sentinel="$tmpbase/sentinel-$1"
+  mkdir -p "$cdg_trapdir"
+  rm -f "$cdg_sentinel"
+  local bin
+  for bin in git gh rm dirname tr awk grep sed; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$cdg_sentinel"
+      printf 'exit 1\n'
+    } > "$cdg_trapdir/$bin"
+    chmod +x "$cdg_trapdir/$bin"
+  done
+}
+case_cdg_dec_never_executes() {
+  cdg_trap_path cdg-dec
+  run_claude_guard "$(mk_codex_shell 'implementer' "${CDG_DECOY}${LF}apply_patch < evil.patch")" "$cdg_trapdir:$PATH"
+  expect_cdg_dec_deny
+  [ ! -e "$cdg_sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+case_cdg_dec_deny_flood_timing() {
+  # A long run of safe output redirects before an unsafe argument: the scan must walk the whole
+  # run and still deny. Under a 15s active deadline (#463); the command reaches jq on stdin, as in
+  # cdg-dbq-deny-timing (killed by 455-cdg-dec-arg: the scan reaches the trailing argument). The
+  # run length is bounded because this shape's cost is superlinear in pre-existing code outside
+  # this change (main overruns the deadline at larger sizes; the cause is not isolated here).
+  local flood payload
+  flood="$(printf ' >o%.0s' $(seq 1 1500))"
+  payload="$(printf '%s' "apply_patch${flood} <<'EOF' x${LF}${CDG_P}${LF}EOF" \
+    | jq -Rs '{tool_name: "Bash", agent_type: "implementer", cwd: "/repo", tool_input: {command: .}}')"
+  cdg_deadline_override=15
+  run_claude_guard "$payload"
+  expect_cdg_dec_deny
+}
+
+# --- claude-dir-guard.sh quoted assignment value (#455, absorbing #456) ----------------------
+# A token carrying an odd count of `'` or `"`, or ending in a backslash, between a walk window's
+# start and its resolved non-shim command word, in a segment that mentions the shim, denies: the
+# whitespace split happens before quotes are stripped, so `X='a b'` leaves `b'` to resolve as the
+# command word and hide the shim.
+#
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "cdg-qa-"
+# unless noted).
+# mutant:455-cdg-qa-check — the parity test never fires.
+# mutant:455-cdg-qa-sq — only double quotes are counted.
+# mutant:455-cdg-qa-dq — only single quotes are counted.
+# mutant:455-cdg-qa-backslash — the trailing-backslash arm never fires.
+# mutant:455-cdg-qa-range-start — the check covers only the resolved token, not the tokens
+#   before it.
+# mutant:455-cdg-qa-range-end — the check runs through the window's end, past the resolved word.
+# mutant:455-cdg-qa-resolved-inclusive — the check stops one token short of the resolved word.
+# mutant:455-cdg-qa-scope — the check runs in every segment, not only those mentioning the shim.
+# mutant:455-cdg-qa-scope-applypatch — the segment scope drops the `applypatch` spelling, so a
+#   quoted-assignment prefix before `applypatch` is never checked.
+# mutant:455-cdg-qa-shim-exempt — the check also runs when the resolved word IS the shim (filter
+#   "cdg-dbq-").
+expect_cdg_qa_deny() {
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"unbalanced quote"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'unbalanced quote': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_qa_deny_sq_space() { cdg_dec_run "X='a b' apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_applypatch() { cdg_dec_run "X='a b' applypatch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_dq_space() { cdg_dec_run "X=\"a b\" apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_sq_many_spaces() { cdg_dec_run "X='a b c d' apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_dq_many_spaces() { cdg_dec_run "X=\"a b  c\" apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_env_assign() { cdg_dec_run "env X='a b' apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_env_quoted_assign() { cdg_dec_run "env 'X=a b' apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_redirect_target() { cdg_dec_run "< 'a b c' apply_patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_two_assigns() { cdg_dec_run "X='a b' Y='c d' apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_heredoc() { cdg_dec_run "X='a b' apply_patch <<'EOF'${LF}${CDG_P}${LF}EOF"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_cut_tail() { cdg_dec_run "if [[ -n x ]] X='a b' apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_backslash_space() { cdg_dec_run 'X=a\ b apply_patch < x.patch'; expect_cdg_qa_deny; }
+case_cdg_qa_deny_body_possessive() {
+  # Documented over-block: a context line whose first word carries an apostrophe and which
+  # mentions the shim.
+  cdg_dec_run "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Update File: src/a.txt${LF} Codex's apply_patch shim${LF}*** End Patch${LF}EOF"
+  expect_cdg_qa_deny
+}
+case_cdg_qa_noop_quoted_arg() { cdg_dec_run "echo 'a b' apply_patch"; expect_cdg_no_opinion; }
+case_cdg_qa_noop_other_segment() { cdg_dec_run "X='a b' echo hi; rg apply_patch hooks/"; expect_cdg_no_opinion; }
+case_cdg_qa_noop_balanced_assign() {
+  cdg_dec_run "X='ab' apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_qa_never_executes() {
+  cdg_trap_path cdg-qa
+  run_claude_guard "$(mk_codex_shell 'implementer' "X='a b' apply_patch < x.patch")" "$cdg_trapdir:$PATH"
+  expect_cdg_qa_deny
+  [ ! -e "$cdg_sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+case_cdg_qa_noop_flood_timing() {
+  # Thousands of balanced quoted tokens before the resolved word: the parity pass must stay linear.
+  local flood payload
+  flood="$(printf "'env' %.0s" $(seq 1 10000))"
+  payload="$(printf '%s' "${flood}x apply_patch" \
+    | jq -Rs '{tool_name: "Bash", agent_type: "implementer", cwd: "/repo", tool_input: {command: .}}')"
+  cdg_deadline_override=15
+  run_claude_guard "$payload"
+  expect_cdg_no_opinion
+}
+
 # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
 # These exercise EXISTING logic under a new payload shape (the full documented Codex key set --
 # session_id, turn_id, cwd, hook_event_name, model, permission_mode, tool_name, tool_use_id,
@@ -6850,6 +7183,7 @@ cases=(
   "status-rel|case_status_rel|allow: relative sibling path, status"
   "status-abs|case_status_abs|allow: absolute path, status"
   "deadline-kill-tree|case_deadline_kill_tree|#463: wait_deadline/kill_tree's shared mechanism against a synthetic TERM-ignoring root+child tree -> overrun detected, case failed and told why, returns in under 8s (not the child's own 15s lifetime), both pids dead afterwards"
+  "deadline-site-budget|case_deadline_site_budget|#476: calibrated_site_budget's whole-second window, K-scaling and MAX clamp arithmetic -- no live clock"
   "deadline-calibrate|case_deadline_calibrate|#470: calibrated_deadline's floor/scale/round-up arithmetic and _ms_from_timeformat's shape parsing (leading-zero sub-second digits, comma decimal separator, unparseable input) -- plus a real sleep 0.3 through measure_ms, lower bound only"
   "status-quoted|case_status_quoted|allow: double-quoted path, status"
   "path-windows|case_path_windows|allow: Windows drive-letter path, diff"
@@ -8400,10 +8734,10 @@ cases=(
   "push-dl-deny-budget-zero|case_push_dl_deny_budget_zero|knob 0 denies the very first sample even for an ordinary feature/x push -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off)"
   "push-dl-noop-budget-zero-no-push|case_push_dl_noop_budget_zero_no_push|no push segment stays no-opinion even at knob 0, via the pre-deadline scan_out exit -- mutation proof: dev/mutants/hook-tests.json (435-dl-scan-empty-exit)"
   "push-dl-noop-budget-zero-xseg-no-push|case_push_dl_noop_budget_zero_xseg_no_push|a cd with no push segment (only #433's marker line in the scan) stays no-opinion even at knob 0 -- mutation proof: dev/mutants/hook-tests.json (435-dl-scan-empty-exit, 435-dl-xseg-early-exit)"
-  "push-dl-deny-production-budget|case_push_dl_deny_production_budget|FLOOD+TIMING route 1: 10000x harmless push segments, knob 99 ignored (not less than the 5s production budget) -- deny under a 9s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-knob-raise)"
-  "push-dl-deny-driver-site|case_push_dl_deny_driver_site|FLOOD route 3: 3000x bare -C push (zero evaluate_segment loop iterations, no lane config), only the driver-loop sample can stop it -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-driver-site)"
-  "push-dl-deny-evaluate-sites|case_push_dl_deny_evaluate_sites|one push segment with a 10000-token refspec list -- only evaluate_segment()'s own internal samples can stop its refspec loop before it reaches the trailing main -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-evaluate-sites)"
-  "push-dl-deny-config-lines|case_push_dl_deny_config_lines|bare -C push resolving a lane with a many-line, under-cap depth-0 config -- only cfg_parse_file()'s read-loop sample can stop the parse mid-file -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-cfgline-site)"
+  "push-dl-deny-production-budget|case_push_dl_deny_production_budget|FLOOD+TIMING route 1: 10000x harmless push segments, knob 99 ignored (not less than the 5s production budget) -- deny under an active deadline calibrated from a same-run knob-0 control (#463, #476) -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-knob-raise)"
+  "push-dl-deny-driver-site|case_push_dl_deny_driver_site|FLOOD route 3: 3000x bare -C push (zero evaluate_segment loop iterations, no lane config), once the driver loop starts only its own sample can stop it; budget calibrated from a same-run knob-0 control (#476) -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-driver-site)"
+  "push-dl-deny-evaluate-sites|case_push_dl_deny_evaluate_sites|one push segment with a 10000-token refspec list -- only evaluate_segment()'s own internal samples can stop its refspec loop before it reaches the trailing main; budget calibrated from a same-run knob-0 control (#476) -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-evaluate-sites)"
+  "push-dl-deny-config-lines|case_push_dl_deny_config_lines|bare -C push resolving a lane with a many-line, under-cap depth-0 config -- only cfg_parse_file()'s read-loop sample can stop the parse mid-file; budget calibrated from a same-run knob-0 control (#476) -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-cfgline-site)"
   "push-dl-deny-c-lane-flood|case_push_dl_deny_c_lane_flood|FLOOD route 3: 120x resolved -C lanes each including a 2000-line all-comment file -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off)"
   "push-dl-deny-toplevel-longline|case_push_dl_deny_toplevel_longline|TIMING route 2: a depth-0 line padded with 20000 trailing spaces denies instantly via the length cap; without it, no later line exists for the read-loop sample to catch, so the quadratic trim runs past a 9s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (435-dl-toplevel-cap)"
   "push-dl-deny-toplevel-over-cap|case_push_dl_deny_toplevel_over_cap|a depth-0 line one character past the cap denies via the length check (checked before comment-strip), not the ordinary route its comment-stripped remainder would otherwise still reach -- mutation proof: dev/mutants/hook-tests.json (435-dl-toplevel-cap)"
@@ -8686,6 +9020,52 @@ cases=(
   "cdg-dl-cap-trim-header|case_cdg_dl_cap_trim_header|deny (#457): a header with 100 trailing spaces under cap 50 -- only trim's trailing loop samples that many times"
   "cdg-dl-cap-trim-nested|case_cdg_dl_cap_trim_nested|deny (#457): a header path with 100 leading spaces under cap 50 -- only the ltrim nested inside trim samples that many times"
   "cdg-dl-cap-trim-bash|case_cdg_dl_cap_trim_bash|deny (#457): a Bash command with 100 trailing spaces under cap 50 -- only the trim inside has_exact_begin_patch_line samples that many times"
+  "cdg-dec-deny-redirect-file|case_cdg_dec_deny_redirect_file|deny: decoy / shim input (#455), deny-redirect-file"
+  "cdg-dec-deny-redirect-first|case_cdg_dec_deny_redirect_first|deny: decoy / shim input (#455), deny-redirect-first"
+  "cdg-dec-deny-applypatch|case_cdg_dec_deny_applypatch|deny: decoy / shim input (#455), deny-applypatch"
+  "cdg-dec-deny-pipe|case_cdg_dec_deny_pipe|deny: decoy / shim input (#455), deny-pipe"
+  "cdg-dec-deny-herestring|case_cdg_dec_deny_herestring|deny: decoy / shim input (#455), deny-herestring"
+  "cdg-dec-deny-heredoc-then-redirect|case_cdg_dec_deny_heredoc_then_redirect|deny: decoy / shim input (#455), deny-heredoc-then-redirect"
+  "cdg-dec-deny-heredoc-then-herestring|case_cdg_dec_deny_heredoc_then_herestring|deny: decoy / shim input (#455), deny-heredoc-then-herestring"
+  "cdg-dec-deny-heredoc-then-rw|case_cdg_dec_deny_heredoc_then_rw|deny: decoy / shim input (#455), deny-heredoc-then-rw"
+  "cdg-dec-deny-file-arg|case_cdg_dec_deny_file_arg|deny: decoy / shim input (#455), deny-file-arg"
+  "cdg-dec-deny-fd-heredoc|case_cdg_dec_deny_fd_heredoc|deny: decoy / shim input (#455), deny-fd-heredoc"
+  "cdg-dec-deny-procsubst|case_cdg_dec_deny_procsubst|deny: decoy / shim input (#455), deny-procsubst"
+  "cdg-dec-deny-second-shim|case_cdg_dec_deny_second_shim|deny: decoy / shim input (#455), deny-second-shim"
+  "cdg-dec-deny-two-tails|case_cdg_dec_deny_two_tails|deny: decoy / shim input (#455), deny-two-tails"
+  "cdg-dec-deny-unquoted-dollar|case_cdg_dec_deny_unquoted_dollar|deny: decoy / shim input (#455), deny-unquoted-dollar"
+  "cdg-dec-deny-unquoted-backtick|case_cdg_dec_deny_unquoted_backtick|deny: decoy / shim input (#455), deny-unquoted-backtick"
+  "cdg-dec-deny-unquoted-backslash|case_cdg_dec_deny_unquoted_backslash|deny: decoy / shim input (#455), deny-unquoted-backslash"
+  "cdg-dec-deny-body-codespan|case_cdg_dec_deny_body_codespan|deny: decoy / shim input (#455), deny-body-codespan"
+  "cdg-dec-deny-heredoc-dotdot|case_cdg_dec_deny_heredoc_dotdot|deny: decoy / shim input (#455), deny-heredoc-dotdot"
+  "cdg-dec-noop-heredoc-sq-dollar|case_cdg_dec_noop_heredoc_sq_dollar|no opinion: decoy / shim input (#455), noop-heredoc-sq-dollar"
+  "cdg-dec-noop-heredoc-dq-dollar|case_cdg_dec_noop_heredoc_dq_dollar|no opinion: decoy / shim input (#455), noop-heredoc-dq-dollar"
+  "cdg-dec-noop-heredoc-bs-dollar|case_cdg_dec_noop_heredoc_bs_dollar|no opinion: decoy / shim input (#455), noop-heredoc-bs-dollar"
+  "cdg-dec-noop-heredoc-dash|case_cdg_dec_noop_heredoc_dash|no opinion: decoy / shim input (#455), noop-heredoc-dash"
+  "cdg-dec-noop-heredoc-out-redirects|case_cdg_dec_noop_heredoc_out_redirects|no opinion: decoy / shim input (#455), noop-heredoc-out-redirects"
+  "cdg-dec-noop-heredoc-chain|case_cdg_dec_noop_heredoc_chain|no opinion: decoy / shim input (#455), noop-heredoc-chain"
+  "cdg-dec-noop-unquoted-plain|case_cdg_dec_noop_unquoted_plain|no opinion: decoy / shim input (#455), noop-unquoted-plain"
+  "cdg-dec-noop-two-shims|case_cdg_dec_noop_two_shims|no opinion: decoy / shim input (#455), noop-two-shims"
+  "cdg-dec-never-executes|case_cdg_dec_never_executes|deny, sentinel absent on a booby-trapped PATH: decoy / shim input (#455), never-executes"
+  "cdg-dec-deny-flood-timing|case_cdg_dec_deny_flood_timing|wall-clock proof under a 15s active deadline: decoy / shim input (#455), deny-flood-timing"
+  "cdg-qa-deny-sq-space|case_cdg_qa_deny_sq_space|deny: quoted assignment (#455, absorbing #456), deny-sq-space"
+  "cdg-qa-deny-applypatch|case_cdg_qa_deny_applypatch|deny: quoted assignment before the applypatch spelling (#455, absorbing #456)"
+  "cdg-qa-deny-dq-space|case_cdg_qa_deny_dq_space|deny: quoted assignment (#455, absorbing #456), deny-dq-space"
+  "cdg-qa-deny-sq-many-spaces|case_cdg_qa_deny_sq_many_spaces|deny: quoted assignment (#455, absorbing #456), deny-sq-many-spaces"
+  "cdg-qa-deny-dq-many-spaces|case_cdg_qa_deny_dq_many_spaces|deny: quoted assignment (#455, absorbing #456), deny-dq-many-spaces"
+  "cdg-qa-deny-env-assign|case_cdg_qa_deny_env_assign|deny: quoted assignment (#455, absorbing #456), deny-env-assign"
+  "cdg-qa-deny-env-quoted-assign|case_cdg_qa_deny_env_quoted_assign|deny: quoted assignment (#455, absorbing #456), deny-env-quoted-assign"
+  "cdg-qa-deny-redirect-target|case_cdg_qa_deny_redirect_target|deny: quoted assignment (#455, absorbing #456), deny-redirect-target"
+  "cdg-qa-deny-two-assigns|case_cdg_qa_deny_two_assigns|deny: quoted assignment (#455, absorbing #456), deny-two-assigns"
+  "cdg-qa-deny-heredoc|case_cdg_qa_deny_heredoc|deny: quoted assignment (#455, absorbing #456), deny-heredoc"
+  "cdg-qa-deny-cut-tail|case_cdg_qa_deny_cut_tail|deny: quoted assignment (#455, absorbing #456), deny-cut-tail"
+  "cdg-qa-deny-backslash-space|case_cdg_qa_deny_backslash_space|deny: quoted assignment (#455, absorbing #456), deny-backslash-space"
+  "cdg-qa-deny-body-possessive|case_cdg_qa_deny_body_possessive|deny: quoted assignment (#455, absorbing #456), deny-body-possessive"
+  "cdg-qa-noop-quoted-arg|case_cdg_qa_noop_quoted_arg|no opinion: quoted assignment (#455, absorbing #456), noop-quoted-arg"
+  "cdg-qa-noop-other-segment|case_cdg_qa_noop_other_segment|no opinion: quoted assignment (#455, absorbing #456), noop-other-segment"
+  "cdg-qa-noop-balanced-assign|case_cdg_qa_noop_balanced_assign|no opinion: quoted assignment (#455, absorbing #456), noop-balanced-assign"
+  "cdg-qa-never-executes|case_cdg_qa_never_executes|deny, sentinel absent on a booby-trapped PATH: quoted assignment (#455, absorbing #456), never-executes"
+  "cdg-qa-noop-flood-timing|case_cdg_qa_noop_flood_timing|wall-clock proof under a 15s active deadline: quoted assignment (#455, absorbing #456), noop-flood-timing"
   # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
   "codex-gcg-main-status|case_codex_gcg_main_status|allow: git-c-guard.sh under a Codex-shaped main-session payload, git -C ../demo-wt-1 status --porcelain (pins the unchanged verdict -- Codex ignores this hook's if gate, but the script itself never reads it)"
   "codex-gcg-apply-patch|case_codex_gcg_apply_patch|silent: a Codex apply_patch payload (tool_name != Bash)"
