@@ -4190,7 +4190,11 @@ case_push_kw_noop_then_feature() {
 # mutant:304-inc-line-budget-depth0 — drops the "depth >= 1" guard, so the line budget also applies
 #   to a depth-0 top-level candidate, which can then be truncated mid-file.
 # mutant:304-inc-line-chars — drops the CFG_INCLUDE_MAX_LINE_CHARS length check entirely, so a line
-#   of any length reaches comment-strip and trim regardless of how long it is.
+#   of any length reaches comment-strip and trim regardless of how long it is. Its registry filter
+#   names push-include-noop-over-line-chars alone (#476): with the check gone, the oversized filler
+#   line in push-include-noop-over-char-budget is also parsed, and whether that parse finishes inside
+#   the hook's analysis budget depends on host speed, so that case's verdict under this mutant is
+#   load-dependent and must not be part of the recorded set.
 # mutant:304-inc-line-chars-off-by-one — narrows the length-cap boundary from "-le" to "-lt", so a
 #   line exactly at the cap is skipped one character too early.
 # mutant:304-inc-char-budget — drops the CFG_INCLUDE_MAX_CHARS check entirely, so a line is always
@@ -5227,9 +5231,10 @@ case_push_dl_deny_production_budget() {
   # and a bare "a" refspec never resolves to a deny member), so only check_deadline (sampled once
   # per driver-loop iteration, and again inside each of evaluate_segment()'s own loops) can stop
   # this well before the flood ever reaches the final "git push origin main" segment. With
-  # check-off, or with knob-raise adopting the ignored 99s budget, the flood instead runs past the
-  # calibrated active deadline below (#463) and this case's own kill_tree ends it, or completes and
-  # denies via that final segment's ordinary reason.
+  # check-off, the knob-0 control below can never print the deadline line, so the case fails there
+  # and returns before the timed run. With knob-raise adopting the ignored 99s budget, the timed
+  # flood instead runs past the calibrated active deadline below (#463) and this case's own
+  # kill_tree ends it, or completes and denies via that final segment's ordinary reason.
   local dir="$tmpbase/repo-dl-production-budget"
   mk_fixture_repo "$dir" main feature/x
   push_budget_override="99"
@@ -5242,7 +5247,7 @@ case_push_dl_deny_production_budget() {
   # tokenizer over every segment) that eats into the production budget. The active deadline for the
   # timed run is the production budget (hand-typed 5, the hook's PUSH_ANALYSIS_BUDGET_SECS) plus one
   # whole-second sample window plus a K-scaled multiple of that prefix, capped well below the time
-  # the unsampled flood needs, so the check-off and knob-raise mutants still run past it.
+  # the unsampled flood needs, so the knob-raise mutant's timed flood still runs past it.
   push_budget_override="0"
   push_deadline_override=15
   measure_ms run_push_guard "$payload"

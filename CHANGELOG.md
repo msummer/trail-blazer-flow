@@ -18,7 +18,7 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
-- #476: the push-dl-* site-proving fixtures (driver-site, evaluate-sites, config-lines) calibrate their analysis budget from a same-run knob-0 control instead of a fixed 1s knob, so a loaded host can no longer let an earlier deadline sample rescue a site mutant; test-only, no consumer step.
+- #476: the push-dl-* site-proving fixtures (driver-site, evaluate-sites, config-lines) calibrate their analysis budget from a same-run knob-0 control instead of a fixed 1s knob, so a loaded host can no longer let an earlier deadline sample rescue a site mutant. push-dl-deny-production-budget sizes its harness deadline from the same kind of control, and the 304-inc-line-chars mutant's filter now names only its killing case, whose sibling's verdict under that mutant depended on host speed. Test-only, no consumer step.
 
 ## v3.3.0
 
