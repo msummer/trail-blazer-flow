@@ -18,6 +18,8 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #496: an unattended Codex run that stops at its own preflight prints `Unattended stop: preflight`; the scheduled-run wrapper records it `failed reason=unattended-stop-preflight`, so failure tracking opens the `needs-human` issue.
+- #490: codex-setup.sh refuses a quoted project_doc_fallback_filenames key name ("..." or '...') in .codex/config.toml as fallback-conflict instead of prepending a duplicate bare key. Consumer step (Codex): if --check now reports fallback-conflict, write the key bare.
 - #455: `hooks/claude-dir-guard.sh` denies a Bash call whose `apply_patch` shim takes its patch from anything but its own inline heredoc when an inline patch appears elsewhere in the command (a decoy), and fails closed when an unbalanced quote or a trailing backslash precedes the shim's command word, such as `X='a b' apply_patch < x.patch` (absorbs #456).
 
 ## v3.3.0

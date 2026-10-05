@@ -114,7 +114,8 @@
 # resolved from the wrapper's own directory only (a decoy earlier on PATH is never run), the exact
 # launch argv and its `< /dev/null` stdin (a sentinel file proves it never reaches the child), the
 # watchdog's timeout/kill-grace and that it leaves no orphan, the outcome classification (completed,
-# failed, died-mid-run, timed-out, and the `Unattended stop: permission-denied` whole-line match),
+# failed, died-mid-run, timed-out, and the `Unattended stop: permission-denied` and `Unattended
+# stop: preflight` whole-line matches),
 # and the run-record pruning (newest 100 kept, bounded deletion, non-matching entries untouched) —
 # plus the narrowed `codex-setup-rules-gated` case this addition requires (the gated allow-rule
 # names no longer include a `.sh` FORBIDDEN rule by coincidence), (I3, #428) the wrapper's own
@@ -3656,7 +3657,9 @@ case_codex_setup_config_no_newline() {
 # codex-setup-config-refusals (#484) — config.toml shapes bin/codex-setup.sh refuses rather than
 # edits: a space-indented key line, a tab-indented key line (both naming CLAUDE.md), the exact
 # duplicated file the pre-fix script produced (comment line plus two key lines, no final newline),
-# a multi-line array whose first line has no "CLAUDE.md", and a single-quoted value. Each: write
+# a multi-line array whose first line has no "CLAUDE.md", a single-quoted value, a double- or
+# single-quoted key name (also tab-indented with no space around =), and the file the quoted-key
+# bug produced (bare key line followed by a quoted key line). Each: write
 # mode rc 2 with the file byte-identical (cmp against a saved copy), no .codex/agents and no
 # .codex/rules (the conflict is caught before anything is installed), and the stderr text naming
 # the cause; --check then reports rc 1 with reason=fallback-conflict, never ok.
@@ -3666,10 +3669,17 @@ case_codex_setup_config_no_newline() {
 #   that names CLAUDE.md.
 # mutant:484-cx-dup-off — raising the more-than-one-key threshold reads an already-duplicated
 #   file as current.
+# mutant:490-cx-quoted-off — disabling the quoted-key rule reads a quoted key as no key, so write
+#   mode prepends a bare duplicate instead of refusing.
+# mutant:490-cx-apostrophe-off — skipping the apostrophe-to-double-quote rewrite misses a
+#   single-quoted key name.
+# mutant:490-cx-quoted-branch-off — raising the quoted-key threshold accepts a lone quoted key
+#   naming CLAUDE.md as current.
 case_codex_setup_config_refusals() {
   local plugin repo variant needle
   plugin="$(mk_cx_plugin cx-refusals-plugin 2.9.0)"
-  for variant in indented tab-indented duplicated multiline-array single-quoted; do
+  for variant in indented tab-indented duplicated multiline-array single-quoted \
+    double-quoted-key single-quoted-key quoted-indented-nospace quoted-after-bare; do
     repo="$(mk_cx_repo "cx-refusals-repo-$variant")"
     mkdir -p "$repo/.codex"
     needle='without "CLAUDE.md"'
@@ -3693,6 +3703,23 @@ case_codex_setup_config_refusals() {
       single-quoted)
         printf "project_doc_fallback_filenames = ['CLAUDE.md']\n" > "$repo/.codex/config.toml"
         ;;
+      double-quoted-key)
+        printf '"project_doc_fallback_filenames" = ["CLAUDE.md"]\n' > "$repo/.codex/config.toml"
+        needle='with a quoted key name'
+        ;;
+      single-quoted-key)
+        printf "'project_doc_fallback_filenames' = [\"CLAUDE.md\"]\n" > "$repo/.codex/config.toml"
+        needle='with a quoted key name'
+        ;;
+      quoted-indented-nospace)
+        printf "\t'project_doc_fallback_filenames'=[\"CLAUDE.md\"]\n" > "$repo/.codex/config.toml"
+        needle='with a quoted key name'
+        ;;
+      quoted-after-bare)
+        printf '%s\nproject_doc_fallback_filenames = ["CLAUDE.md"]\n"project_doc_fallback_filenames" = ["CLAUDE.md"]\n' \
+          "# trail-blazer-flow: load CLAUDE.md as Codex's project doc when AGENTS.md is absent (#408)." > "$repo/.codex/config.toml"
+        needle='on more than one line'
+        ;;
     esac
     cp "$repo/.codex/config.toml" "$tmpbase/cx-refusals-before-$variant"
     run_cx "$plugin" "$repo"
@@ -3712,15 +3739,19 @@ case_codex_setup_config_refusals() {
 # top-level key: a # comment line carrying the exact key text, and the key inside a [profiles.x]
 # table with a different value. Each: --check reports reason=missing-fallback; write mode rc 0
 # prints wrote=, keeps the original line, and leaves exactly one key line above the first table
-# header; a later --check is rc 0 with ok.
+# header; a later --check is rc 0 with ok. The same two shapes with a quoted key name (a # comment
+# line, and a single-quoted key inside a table) are not the key either.
 # mutant:484-cx-key-unanchored — dropping the leading-whitespace-only prefix from the key regex
 #   lets the comment line count as the key, so --check reports ok instead of missing-fallback.
 # mutant:484-cx-table-scope — setting the in-table flag to 0 on a table header counts the
 #   table-scoped key as top-level, so it is refused as a foreign value instead of added to.
+# mutant:490-cx-quoted-unanchored — dropping the leading-whitespace-only prefix from the quoted-key
+#   regex lets a commented quoted key count as the key, so --check reports fallback-conflict
+#   instead of missing-fallback.
 case_codex_setup_config_not_key() {
   local plugin repo variant keep count
   plugin="$(mk_cx_plugin cx-not-key-plugin 2.9.0)"
-  for variant in comment table-key; do
+  for variant in comment table-key quoted-comment quoted-table-key; do
     repo="$(mk_cx_repo "cx-not-key-repo-$variant")"
     mkdir -p "$repo/.codex"
     case "$variant" in
@@ -3730,6 +3761,14 @@ case_codex_setup_config_not_key() {
         ;;
       table-key)
         keep='project_doc_fallback_filenames = ["README.md"]'
+        printf 'other_key = 1\n\n[profiles.x]\n%s\n' "$keep" > "$repo/.codex/config.toml"
+        ;;
+      quoted-comment)
+        keep='# "project_doc_fallback_filenames" = ["README.md"]'
+        printf '%s\nother_key = 1\n' "$keep" > "$repo/.codex/config.toml"
+        ;;
+      quoted-table-key)
+        keep="'project_doc_fallback_filenames' = [\"README.md\"]"
         printf 'other_key = 1\n\n[profiles.x]\n%s\n' "$keep" > "$repo/.codex/config.toml"
         ;;
     esac
@@ -3982,7 +4021,10 @@ dead_pid_sched() {
 # hostname sentinel, plus a second, separately-sentinelled stderr line, exit 1 — proves the
 # failure-tracking body never quotes either line verbatim); nomsg (exit 0, never writes the -o
 # file); denied (the -o file's only line is exactly
-# "Unattended stop: permission-denied"); denied-midline (the same phrase embedded mid-line); die
+# "Unattended stop: permission-denied"); denied-midline (the same phrase embedded mid-line);
+# preflight-stop (#496: three lines, the middle one exactly "Unattended stop: preflight", proving the
+# whole-line match among other lines); preflight-midline (#496: the preflight phrase embedded
+# mid-line); die
 # (kills itself with SIGKILL); hang/hang-noterm (exec the REAL sleep, resolved via `command -v` at
 # BUILD time in this process's own PATH, for 20s — hang-noterm first sets TERM's disposition to
 # ignore, which persists across exec, so only SIGKILL ends it; both replace the process image via
@@ -4071,6 +4113,18 @@ case "$mode" in
     ;;
   denied-midline)
     [ -n "$outfile" ] && printf 'note: Unattended stop: permission-denied (embedded)\n' > "$outfile"
+    exit 0
+    ;;
+  preflight-stop)
+    [ -n "$outfile" ] && printf '%s\n' 'The bounded pass stopped during preflight.' 'Unattended stop: preflight' '`fetch origin` failed: fatal: could not read Username' > "$outfile"
+    exit 0
+    ;;
+  preflight-midline)
+    [ -n "$outfile" ] && printf 'note: Unattended stop: preflight (embedded)\n' > "$outfile"
+    exit 0
+    ;;
+  denied-and-preflight)
+    [ -n "$outfile" ] && printf '%s\n' 'Unattended stop: preflight' 'Unattended stop: permission-denied' > "$outfile"
     exit 0
     ;;
   die)
@@ -5061,9 +5115,19 @@ case_codex_sched_failed() {
 
 # codex-sched-unattended-stop — last-message.md's ONLY line is exactly "Unattended stop:
 # permission-denied": failed reason=unattended-stop-permission-denied, exit 1. Control: the same
-# phrase embedded mid-line (denied-midline) is NOT a whole-line match: completed.
+# phrase embedded mid-line (denied-midline) is NOT a whole-line match: completed. Likewise (#496) a
+# last-message.md carrying the line "Unattended stop: preflight" among other lines: failed
+# reason=unattended-stop-preflight, exit 1, and the failure's tracking issue is created with that
+# reason in its body; that phrase embedded mid-line (preflight-midline): completed. When both lines
+# are present (denied-and-preflight, preflight line first), permission-denied wins.
+# mutant:496-precedence-swapped — bin: the preflight block is checked before the permission-denied
+#   block. Killed here (the denied-and-preflight stub classifies unattended-stop-preflight).
 # mutant:427-unattended-stop-ignored — bin: the whole-line `grep -qxF` classification condition
 #   becomes `false`. Killed here (the denied stub no longer classifies as failed).
+# mutant:496-preflight-stop-ignored — bin: the preflight whole-line grep condition becomes `false`.
+#   Killed here (the preflight-stop stub classifies completed).
+# mutant:496-preflight-stop-substring — bin: the preflight grep loses -x (whole-line becomes
+#   substring). Killed here (the preflight-midline control classifies failed).
 case_codex_sched_unattended_stop() {
   mk_sched sched-unattended-stop
   build_stub_sched_codex "$sched_stub" denied
@@ -5078,6 +5142,32 @@ case_codex_sched_unattended_stop() {
   run_sched "$sched_stub:$PATH" --
   expect_rc 0
   expect_sched_out "outcome=completed"
+
+  mk_sched sched-unattended-stop-preflight
+  build_stub_sched_codex "$sched_stub" preflight-stop
+  build_stub_sched_gh "$sched_stub" ok
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  expect_sched_out "outcome=failed reason=unattended-stop-preflight"
+  expect_record_line "tracking=created"
+  case "$(cat "$sched_stub/gh.body.1" 2>/dev/null)" in
+    *'- Reason: `unattended-stop-preflight`'*) : ;;
+    *) __ok=0; __why="${__why}preflight stop tracking body missing its Reason line\n" ;;
+  esac
+
+  mk_sched sched-unattended-stop-preflight-midline
+  build_stub_sched_codex "$sched_stub" preflight-midline
+  build_stub_sched_gh "$sched_stub" ok
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=completed"
+
+  mk_sched sched-unattended-stop-both
+  build_stub_sched_codex "$sched_stub" denied-and-preflight
+  build_stub_sched_gh "$sched_stub" ok
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  expect_sched_out "outcome=failed reason=unattended-stop-permission-denied"
 }
 
 # codex-sched-died — the launched codex is killed outright (SIGKILL): died-mid-run reason=signal-9,
@@ -7411,8 +7501,8 @@ cases=(
   "codex-setup-config-merge|case_codex_setup_config_merge|#408: a pre-existing config.toml with a top-level key plus a [profiles.x] table: the fallback key is inserted above the first table, both originals survive; --check before it pins reason=missing-fallback"
   "codex-setup-config-conflict|case_codex_setup_config_conflict|#408: a top-level project_doc_fallback_filenames not naming CLAUDE.md: write refuses (rc 2, unchanged, .codex/agents and .codex/rules absent); --check reports reason=fallback-conflict"
   "codex-setup-config-no-newline|case_codex_setup_config_no_newline|#484: a config.toml holding only the exact fallback key line with no final newline: --check ok, write unchanged and byte-identical with one key line, a later --check ok"
-  "codex-setup-config-refusals|case_codex_setup_config_refusals|#484: space-indented, tab-indented, duplicated, multi-line-array and single-quoted key shapes: write refuses (rc 2, byte-identical, .codex/agents and .codex/rules absent, stderr names the cause); --check reports reason=fallback-conflict"
-  "codex-setup-config-not-key|case_codex_setup_config_not_key|#484: a # comment carrying the key text and a key inside a [profiles.x] table are not the top-level key: --check reports missing-fallback, write adds one key above the first table, a later --check is ok"
+  "codex-setup-config-refusals|case_codex_setup_config_refusals|#484: space-indented, tab-indented, duplicated, multi-line-array, single-quoted value, quoted key name and quoted-after-bare key shapes: write refuses (rc 2, byte-identical, .codex/agents and .codex/rules absent, stderr names the cause); --check reports reason=fallback-conflict"
+  "codex-setup-config-not-key|case_codex_setup_config_not_key|#484: a # comment carrying the key text (bare or quoted) and a key inside a [profiles.x] table (bare or quoted) are not the top-level key: --check reports missing-fallback, write adds one key above the first table, a later --check is ok"
   "codex-setup-check-drift|case_codex_setup_check_drift|#408: --check on a fresh repo: rc 1, reason=missing per file, no .codex created; after setup, a hand-edited agent TOML gives reason=differs for exactly that file"
   "codex-setup-check-stale-version|case_codex_setup_check_stale_version|#408: rules generated from 2.9.0, then --checked from a 3.0.0 copy: reason=stale-plugin-path, proven to write nothing via a find-listing plus checksums; a write from 3.0.0 then --check is rc 0"
   "codex-setup-whitespace-plugin-root|case_codex_setup_whitespace_plugin_root|#408: a plugin root containing a space: write rc 2 nothing written; --check rc 1 unsupported=plugin-root reason=whitespace"
@@ -7464,7 +7554,7 @@ cases=(
   "codex-sched-stop-exit|case_codex_sched_stop_exit|#427: harness-stop.sh replaced with a stub exiting 2 -> preflight-failed reason=harness-stop-exit-2, no argc; the stub's own stderr line lands in preflight.log (#443, bounded_run's own append-mode redirect)"
   "codex-sched-rundir-uncreatable|case_codex_sched_rundir_uncreatable|#427: trail-blazer/runs pre-created as a regular file -> mkdir -p fails, exit 2, no argc (the same failure shape a read-only .git under Codex produces)"
   "codex-sched-failed|case_codex_sched_failed|#427: the launched codex exits 1 -> failed reason=exit-1, stderr.log non-empty; a no-final-message run -> failed reason=no-final-message"
-  "codex-sched-unattended-stop|case_codex_sched_unattended_stop|#427: last-message.md's only line is exactly \"Unattended stop: permission-denied\" -> failed reason=unattended-stop-permission-denied; the same phrase embedded mid-line -> completed"
+  "codex-sched-unattended-stop|case_codex_sched_unattended_stop|#427: last-message.md's only line is exactly \"Unattended stop: permission-denied\" -> failed reason=unattended-stop-permission-denied; the same phrase embedded mid-line -> completed; #496: a line that is exactly \"Unattended stop: preflight\" -> failed reason=unattended-stop-preflight with its tracking issue created, the same phrase embedded mid-line -> completed, and with both lines present permission-denied wins"
   "codex-sched-died|case_codex_sched_died|#427: the launched codex is SIGKILLed -> died-mid-run reason=signal-9"
   "codex-sched-timeout|case_codex_sched_timeout|#427: a 1s timeout against a stub that takes the default TERM action -> timed-out, watchdog-fired present, the stub pid no longer alive"
   "codex-sched-timeout-kill|case_codex_sched_timeout_kill|#427: a stub that ignores TERM -> the kill-grace KILL ends it -> timed-out, the stub pid dead"
