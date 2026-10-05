@@ -2167,7 +2167,7 @@
       "name": "304-inc-line-chars",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
-      "filter": "push-include-",
+      "filter": "push-include-noop-over-line-chars",
       "edits": [
         {
           "from": "      [ \"${#cfgline}\" -le \"$CFG_INCLUDE_MAX_LINE_CHARS\" ] || continue",
@@ -3807,6 +3807,36 @@
       "expect_fail": [
         "push-unres-deny-codex-main-session",
         "push-xseg-deny-codex-main-session"
+      ]
+    },
+    {
+      "name": "476-hook-site-budget-window",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "deadline-site-budget",
+      "edits": [
+        {
+          "from": "  site_budget_secs=$((calibrated_secs + 1))",
+          "to": "  site_budget_secs=$calibrated_secs"
+        }
+      ],
+      "expect_fail": [
+        "deadline-site-budget"
+      ]
+    },
+    {
+      "name": "476-hook-site-budget-cap",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "deadline-site-budget",
+      "edits": [
+        {
+          "from": "  [ \"$site_budget_secs\" -le \"$max\" ] || site_budget_secs=\"$max\"",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "deadline-site-budget"
       ]
     }
   ]
