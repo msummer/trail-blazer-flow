@@ -16,6 +16,10 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #476: the push-dl-* site-proving fixtures (driver-site, evaluate-sites, config-lines) calibrate their analysis budget from a same-run knob-0 control instead of a fixed 1s knob, so a loaded host can no longer let an earlier deadline sample rescue a site mutant; test-only, no consumer step.
+
 ## v3.3.0
 
 This release makes scheduled unattended Codex runs a supported surface: `codex exec` passes of
