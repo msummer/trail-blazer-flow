@@ -2553,6 +2553,21 @@
       "expect_fail": [
         "codex-sched-unattended-stop"
       ]
+    },
+    {
+      "name": "496-precedence-swapped",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-unattended-stop",
+      "edits": [
+        {
+          "from": "if grep -qxF -- 'Unattended stop: permission-denied' \"$run_dir/last-message.md\"; then\n  finish failed unattended-stop-permission-denied\nfi\nif grep -qxF -- 'Unattended stop: preflight' \"$run_dir/last-message.md\"; then\n  finish failed unattended-stop-preflight\nfi\n",
+          "to": "if grep -qxF -- 'Unattended stop: preflight' \"$run_dir/last-message.md\"; then\n  finish failed unattended-stop-preflight\nfi\nif grep -qxF -- 'Unattended stop: permission-denied' \"$run_dir/last-message.md\"; then\n  finish failed unattended-stop-permission-denied\nfi\n"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-unattended-stop"
+      ]
     }
   ]
 }

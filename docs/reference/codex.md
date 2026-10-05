@@ -305,9 +305,9 @@ own `codex-path-*` cases — #444, below) and exercised live at that gate. Only 
 
 **Prerequisite: the checkout's `origin` must authenticate with no prompt** — an SSH key, or a
 credential helper that works outside a terminal. At the #429 gate, an HTTPS remote with no
-stored credential made the session's own step-0 `git fetch` fail; such a stop now ends the run
-`failed reason=unattended-stop-preflight` and opens the tracking issue (#496; see "Unattended
-runs (`codex exec`)").
+stored credential made the session's own step-0 `git fetch` fail. When the session prints the
+preflight-stop marker, such a stop ends the run `failed reason=unattended-stop-preflight` and
+opens the tracking issue (#496; see "Unattended runs (`codex exec`)").
 
 **Refuses under Claude Code.** If `CLAUDE_PID` is set (even to an empty string), the wrapper exits
 2 before doing anything else — a Claude Code session must never launch a Codex run. On Claude Code
@@ -1103,9 +1103,11 @@ Unattended stop: preflight
 followed by the failing command (or the check that stopped the run) and its output, quoted
 verbatim. Emit it on at least: a non-zero `codex-setup.sh --check` in the preamble, `harness-lock.sh
 acquire` exit 2, a failed `gh auth status`, `git fetch origin`, or default-branch read, a dirty
-tree off a `claude/<n>-*` branch, a red baseline, and a failed dependency install. Print no marker
-(the run stays `completed`) for the step-0 stop switch, whether `stop=true`, `stop=unknown`, or an
-undocumented exit (mirroring the wrapper's own `skipped-stop`), for `acquire` exit 3, a live
+tree off a `claude/<n>-*` branch, a red baseline, a failed dependency install, and a step-0 stop
+switch that exits with an undocumented status (mirroring the wrapper's own tracked
+`preflight-failed reason=harness-stop-exit-<n>`). Print no marker (the run stays `completed`) for
+the step-0 stop switch reading `stop=true` or `stop=unknown` (mirroring the wrapper's own
+`skipped-stop`), for `acquire` exit 3, a live
 holder (mirroring `skipped-busy`), and for a run with nothing to do. A step-0 crash recovery on a
 `claude/<n>-*` branch, a missing `.claude/BASELINE.md`, and a degraded discovery
 (`*_query_unavailable`) are not stops and need no marker. A rejection listed under

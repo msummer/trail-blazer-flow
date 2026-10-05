@@ -228,8 +228,10 @@
 #     settings (belt-and-braces with the CLAUDE_PID guard above) — see docs/reference/codex.md
 #     "Rules" for what each backstop does and does not cover.
 #   - A launched session that stops at its own preflight (for example a `git fetch` that can't
-#     authenticate) exits 0 with an ordinary final message, so it is recorded `completed` and opens
-#     no tracking issue (#496).
+#     authenticate) is classified failed (CLASSIFICATION rule 6) only when its final message
+#     carries the "Unattended stop: preflight" line, which the session reports itself. A session
+#     that stops without printing that line exits 0 with an ordinary final message and is still
+#     recorded `completed`, opening no tracking issue.
 set -uo pipefail
 
 if [ -n "${CLAUDE_PID+set}" ]; then echo "codex-scheduled-run.sh: refusing: CLAUDE_PID is set — a Claude Code session must never launch a Codex run" >&2; exit 2; fi
