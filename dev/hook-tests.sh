@@ -5228,15 +5228,39 @@ case_push_dl_deny_production_budget() {
   # per driver-loop iteration, and again inside each of evaluate_segment()'s own loops) can stop
   # this well before the flood ever reaches the final "git push origin main" segment. With
   # check-off, or with knob-raise adopting the ignored 99s budget, the flood instead runs past the
-  # 9s active deadline below (#463) and this case's own kill_tree ends it, instead of denying via
-  # that final segment's ordinary reason.
+  # calibrated active deadline below (#463) and this case's own kill_tree ends it, or completes and
+  # denies via that final segment's ordinary reason.
   local dir="$tmpbase/repo-dl-production-budget"
   mk_fixture_repo "$dir" main feature/x
   push_budget_override="99"
   local flood
   flood="$(printf 'git push o a a a a a;%.0s' $(seq 1 10000))"
-  push_deadline_override=9
-  run_push_guard "$(mk_push_cmd_big "${flood}git push origin main" "$dir")"
+  local payload
+  payload="$(mk_push_cmd_big "${flood}git push origin main" "$dir")"
+  # Same-run control (#476's design rule): the identical payload at knob 0 denies at the hook's
+  # first sample, so its wall time is the unsampled prefix (jq over the large payload plus the awk
+  # tokenizer over every segment) that eats into the production budget. The active deadline for the
+  # timed run is the production budget (hand-typed 5, the hook's PUSH_ANALYSIS_BUDGET_SECS) plus one
+  # whole-second sample window plus a K-scaled multiple of that prefix, capped well below the time
+  # the unsampled flood needs, so the check-off and knob-raise mutants still run past it.
+  push_budget_override="0"
+  push_deadline_override=15
+  measure_ms run_push_guard "$payload"
+  if [ -z "$measured_ms" ]; then
+    __ok=0; __why="${__why}knob-0 control's timing report could not be parsed -- can't calibrate a deadline\n"
+    return
+  fi
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+  if [ "$__ok" -eq 0 ]; then
+    __why="${__why}knob-0 control did not deny at the first sample\n"
+    return
+  fi
+  calibrated_deadline 3 4 "$measured_ms"
+  local active_deadline=$((5 + 1 + calibrated_secs))
+  [ "$active_deadline" -le 20 ] || active_deadline=20
+  push_budget_override="99"
+  push_deadline_override="$active_deadline"
+  run_push_guard "$payload"
   # mutant:463-hook-push-override-leaks — run_push_guard's own trailing
   #   `push_deadline_override=""` reset deleted: this assertion is the only thing that would catch
   #   the override surviving into the NEXT case, since a leaked value here still happens to equal
@@ -8206,7 +8230,7 @@ cases=(
   "push-dl-deny-budget-zero|case_push_dl_deny_budget_zero|knob 0 denies the very first sample even for an ordinary feature/x push -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off)"
   "push-dl-noop-budget-zero-no-push|case_push_dl_noop_budget_zero_no_push|no push segment stays no-opinion even at knob 0, via the pre-deadline scan_out exit -- mutation proof: dev/mutants/hook-tests.json (435-dl-scan-empty-exit)"
   "push-dl-noop-budget-zero-xseg-no-push|case_push_dl_noop_budget_zero_xseg_no_push|a cd with no push segment (only #433's marker line in the scan) stays no-opinion even at knob 0 -- mutation proof: dev/mutants/hook-tests.json (435-dl-scan-empty-exit, 435-dl-xseg-early-exit)"
-  "push-dl-deny-production-budget|case_push_dl_deny_production_budget|FLOOD+TIMING route 1: 10000x harmless push segments, knob 99 ignored (not less than the 5s production budget) -- deny under a 9s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-knob-raise)"
+  "push-dl-deny-production-budget|case_push_dl_deny_production_budget|FLOOD+TIMING route 1: 10000x harmless push segments, knob 99 ignored (not less than the 5s production budget) -- deny under an active deadline calibrated from a same-run knob-0 control (#463, #476) -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-knob-raise)"
   "push-dl-deny-driver-site|case_push_dl_deny_driver_site|FLOOD route 3: 3000x bare -C push (zero evaluate_segment loop iterations, no lane config), once the driver loop starts only its own sample can stop it; budget calibrated from a same-run knob-0 control (#476) -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-driver-site)"
   "push-dl-deny-evaluate-sites|case_push_dl_deny_evaluate_sites|one push segment with a 10000-token refspec list -- only evaluate_segment()'s own internal samples can stop its refspec loop before it reaches the trailing main; budget calibrated from a same-run knob-0 control (#476) -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-evaluate-sites)"
   "push-dl-deny-config-lines|case_push_dl_deny_config_lines|bare -C push resolving a lane with a many-line, under-cap depth-0 config -- only cfg_parse_file()'s read-loop sample can stop the parse mid-file; budget calibrated from a same-run knob-0 control (#476) -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off, 435-dl-cfgline-site)"
