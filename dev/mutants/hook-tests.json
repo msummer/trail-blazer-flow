@@ -1097,8 +1097,8 @@
       "filter": "cdg-patch-",
       "edits": [
         {
-          "from": "  patch=\"${patch_cmd//$cr/}\"\n",
-          "to": "  patch=\"$patch_cmd\"\n"
+          "from": "      ln=\"${ln//$cr/}\"\n",
+          "to": "      :\n"
         }
       ],
       "expect_fail": [
@@ -1523,8 +1523,8 @@
       "filter": "cdg-bash-",
       "edits": [
         {
-          "from": "  flat=\"${text//[;\\&\\|()\\`]/$lf}\"\n",
-          "to": "  flat=\"${text//[;\\&\\|\\`]/$lf}\"\n"
+          "from": "    flat=\"${ln//[;\\&\\|()\\`]/$lf}\"\n",
+          "to": "    flat=\"${ln//[;\\&\\|\\`]/$lf}\"\n"
         }
       ],
       "expect_fail": [
@@ -1591,8 +1591,8 @@
       "filter": "cdg-bash-",
       "edits": [
         {
-          "from": "  text=\"${text//>&/>}\"\n",
-          "to": "  :\n"
+          "from": "    ln=\"${ln//>&/>}\"\n",
+          "to": "    :\n"
         }
       ],
       "expect_fail": [
@@ -1623,8 +1623,8 @@
       "filter": "cdg-bash-",
       "edits": [
         {
-          "from": "  text=\"${text//>|/>}\"\n",
-          "to": "  :\n"
+          "from": "    ln=\"${ln//>|/>}\"\n",
+          "to": "    :\n"
         }
       ],
       "expect_fail": [
@@ -1638,8 +1638,8 @@
       "filter": "cdg-bash-",
       "edits": [
         {
-          "from": "  text=\"${text//<&/<}\"\n",
-          "to": "  :\n"
+          "from": "    ln=\"${ln//<&/<}\"\n",
+          "to": "    :\n"
         }
       ],
       "expect_fail": [
@@ -4343,7 +4343,7 @@
       "expect_fail": [
         "cdg-dl-deny-budget-zero",
         "cdg-dl-deny-budget-zero-patch",
-        "cdg-dl-deny-production-budget",
+        "cdg-dl-deny-production-budget-lines",
         "cdg-dl-never-executes"
       ]
     },
@@ -4359,7 +4359,7 @@
         }
       ],
       "expect_fail": [
-        "cdg-dl-deny-production-budget"
+        "cdg-dl-deny-production-budget-lines"
       ]
     },
     {
@@ -4422,6 +4422,7 @@
         }
       ],
       "expect_fail": [
+        "cdg-dl-cap-qpc",
         "cdg-dl-cap-ww"
       ]
     },
@@ -4467,7 +4468,7 @@
         }
       ],
       "expect_fail": [
-        "cdg-dl-cap-bpl"
+        "cdg-dl-cap-lines"
       ]
     },
     {
@@ -4609,41 +4610,42 @@
       ]
     },
     {
-      "name": "457-cdg-dl-bash-cap-off",
+      "name": "457-cdg-dl-line-cap-off",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
       "filter": "cdg-dl-",
       "edits": [
         {
-          "from": "  [ \"${#bash_cmd}\" -le \"$CDG_BASH_MAX_CHARS\" ] || deny_too_large\n",
-          "to": "  :\n"
+          "from": "    [ \"${#ln}\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
+          "to": "    :\n"
         }
       ],
       "expect_fail": [
-        "cdg-dl-deny-bash-over-cap",
-        "cdg-dl-deny-bash-just-over-cap"
+        "cdg-dl-deny-line-400k",
+        "cdg-dl-deny-line-just-over-cap",
+        "cdg-dl-deny-patch-cr-line"
       ]
     },
     {
-      "name": "457-cdg-dl-bash-cap-offbyone",
+      "name": "457-cdg-dl-line-cap-offbyone",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
       "filter": "cdg-dl-",
       "edits": [
         {
-          "from": "[ \"${#bash_cmd}\" -le \"$CDG_BASH_MAX_CHARS\" ]",
-          "to": "[ \"${#bash_cmd}\" -lt \"$CDG_BASH_MAX_CHARS\" ]"
+          "from": "[ \"${#ln}\" -le \"$CDG_LINE_MAX_CHARS\" ]",
+          "to": "[ \"${#ln}\" -lt \"$CDG_LINE_MAX_CHARS\" ]"
         }
       ],
       "expect_fail": [
-        "cdg-dl-noop-bash-at-cap"
+        "cdg-dl-noop-line-at-cap"
       ]
     },
     {
-      "name": "457-cdg-dl-bash-cap-before-role",
+      "name": "457-cdg-dl-line-cap-before-role",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dl-noop-over-cap-",
+      "filter": "cdg-dl-noop-line-over-cap-",
       "edits": [
         {
           "from": "[ -n \"$role\" ] || exit 0\n",
@@ -4651,7 +4653,145 @@
         }
       ],
       "expect_fail": [
-        "cdg-dl-noop-over-cap-other-agent"
+        "cdg-dl-noop-line-over-cap-other-agent"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-prepare-site",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-cap-",
+      "edits": [
+        {
+          "from": "  for ln in $text; do\n    check_deadline\n    [ \"${#ln}\"",
+          "to": "  for ln in $text; do\n    [ \"${#ln}\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-cap-lines",
+        "cdg-dl-cap-ph"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-iapw-line-site",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-cap-",
+      "edits": [
+        {
+          "from": "  for ln in $text; do\n    check_deadline\n    # An fd",
+          "to": "  for ln in $text; do\n    # An fd"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-cap-lines"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-qpc-site",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-cap-",
+      "edits": [
+        {
+          "from": "  while [ \"$j\" -le \"$2\" ]; do\n    check_deadline\n",
+          "to": "  while [ \"$j\" -le \"$2\" ]; do\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-cap-qpc"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-scan-outer-site",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-cap-",
+      "edits": [
+        {
+          "from": "  while [ \"$j\" -lt \"$2\" ]; do\n    check_deadline\n    d=",
+          "to": "  while [ \"$j\" -lt \"$2\" ]; do\n    d="
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-cap-scan-shim"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-scan-inner-site",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-cap-",
+      "edits": [
+        {
+          "from": "      while [ \"$k\" -lt \"$2\" ]; do\n        check_deadline\n",
+          "to": "      while [ \"$k\" -lt \"$2\" ]; do\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-cap-scan-shim"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-patch-prepare-off",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-",
+      "edits": [
+        {
+          "from": "  cdg_prepare_text \"$patch_cmd\"\n  patch=\"$cdg_text\"\n",
+          "to": "  patch=\"$patch_cmd\"\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-cap-ph",
+        "cdg-dl-deny-patch-cr-line",
+        "cdg-dl-noop-patch-cr-many"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-path-cap-off",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-",
+      "edits": [
+        {
+          "from": "  [ \"${#raw}\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
+          "to": "  :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-deny-path-cr"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-cwd-cap-off",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-",
+      "edits": [
+        {
+          "from": "\n  [ \"${#cwd}\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
+          "to": "\n  :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-deny-cwd-cr"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-cwd-cap-bash-off",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-",
+      "edits": [
+        {
+          "from": "    [ \"${#cwd}\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
+          "to": "    :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-deny-cwd-cr-bash"
       ]
     }
   ]
