@@ -16,6 +16,10 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #490: codex-setup.sh refuses a quoted project_doc_fallback_filenames key name ("..." or '...') in .codex/config.toml as fallback-conflict instead of prepending a duplicate bare key. Consumer step (Codex): if --check now reports fallback-conflict, write the key bare.
+
 ## v3.3.0
 
 This release makes scheduled unattended Codex runs a supported surface: `codex exec` passes of
