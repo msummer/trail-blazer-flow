@@ -16,6 +16,10 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #496: an unattended Codex run that stops at its own preflight prints `Unattended stop: preflight`; the scheduled-run wrapper records it `failed reason=unattended-stop-preflight`, so failure tracking opens the `needs-human` issue.
+
 ## v3.3.0
 
 This release makes scheduled unattended Codex runs a supported surface: `codex exec` passes of

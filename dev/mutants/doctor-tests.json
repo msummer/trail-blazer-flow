@@ -2523,6 +2523,36 @@
       "expect_fail": [
         "codex-setup-first-file-failure"
       ]
+    },
+    {
+      "name": "496-preflight-stop-ignored",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-unattended-stop",
+      "edits": [
+        {
+          "from": "if grep -qxF -- 'Unattended stop: preflight' \"$run_dir/last-message.md\"; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-unattended-stop"
+      ]
+    },
+    {
+      "name": "496-preflight-stop-substring",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-unattended-stop",
+      "edits": [
+        {
+          "from": "grep -qxF -- 'Unattended stop: preflight'",
+          "to": "grep -qF -- 'Unattended stop: preflight'"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-unattended-stop"
+      ]
     }
   ]
 }
