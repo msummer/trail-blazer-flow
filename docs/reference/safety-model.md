@@ -454,7 +454,14 @@ slash, a Windows drive-letter prefix, or a backslash (normalised to a forward sl
 denies, fail-closed, when the path cannot be classified as absolute (`/…` or `[A-Za-z]:/…`) and
 free of a `..` segment, or when an apply_patch (or apply_patch-shaped Bash) command cannot be
 parsed at all (an absent command, an unrecognised `*** ` marker, an empty header path, or zero
-headers found); a case that matches more than one class resolves to the most specific message. For
+headers found), or (#457) when its own analysis cannot finish inside a 5-second budget sampled
+from hook start, or, for a Bash call, when the command is longer than `CDG_BASH_MAX_CHARS`
+characters (a fixed "too large to analyse" reason, implementer and verifier only; the size cap
+exists because bash 3.2's text substitutions on a long or match-dense command cannot be sampled
+against the budget — a legitimate over-cap Bash call that passes the hook's fast path denies too,
+and the remedy is to split it, or to use `Edit`/`Write` or Codex's native `apply_patch` tool, which
+carry no size cap — see the hook's own "Analysis deadline (#457)" header section for the mechanism,
+the two test-only knobs, and the residuals); a case that matches more than one class resolves to the most specific message. For
 a plain Bash call, whenever `apply_patch`/`applypatch` (bare, or a path-qualified spelling such as
 `./apply_patch`, matched by basename) resolves as the command word of any `;`/`&`/`|`/`(`/`)`/`{`/
 `}`/backtick-delimited segment — skipping a leading redirect's own target/source and a bare-digits
@@ -501,12 +508,12 @@ apply_patch shim"`) gets no opinion. `apply_patch`/`applypatch` appearing only a
 (`rg apply_patch hooks/`) still gets no opinion. Every other case — the main session (no `agent_type`), another
 agent, `permission_mode: "plan"`, a tool other than `Edit`/`Write`/`apply_patch`/`Bash`, malformed
 stdin, an absent or empty `file_path`/command, an ordinary Bash call that neither carries an inline
-patch nor invokes the shim as its command word, or an ordinary absolute path outside any
-`.claude`/`.codex` segment — is "no opinion" (exit 0, empty stdout, empty stderr), including two
+patch nor invokes the shim as its command word and is small enough to analyse inside the budget and size cap,
+or an ordinary absolute path outside any `.claude`/`.codex` segment — is "no opinion" (exit 0, empty stdout, empty stderr), including two
 release-blocker controls: the orchestrator's own main-session `.claude/LESSONS.md` append still
 works, and so does the verifier's own transient mutation-probe `Edit` of a tracked source file.
 Pinned by fixture cases in `dev/hook-tests.sh` (prefixes `cdg-`, `cdg-patch-`, `cdg-codexseg-`,
-`cdg-bash-`, `cdg-pc-`, and `cdg-dbq-`): the same booby-trapped-`PATH` idiom (widened here to
+`cdg-bash-`, `cdg-pc-`, `cdg-dbq-`, and `cdg-dl-`): the same booby-trapped-`PATH` idiom (widened here to
 `git`/`gh`/`rm`/`dirname`/`tr`/`awk`/`grep`/`sed`, since this hook uses none of them) proves it
 executes none of them, and a byte-identical fixture-tree listing proves the `Edit`/`Write` route
 writes nothing to the filesystem — this hook also never *reads* the filesystem at all, true by

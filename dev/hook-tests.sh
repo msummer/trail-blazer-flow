@@ -5346,38 +5346,74 @@ mk_cdg_missing_file_path() { jq -n --arg agent "$1" --arg tool "$2" '{tool_name:
 # mk_cdg_main_session TOOL FILE_PATH — no agent_type key at all (the main-session shape, M1).
 mk_cdg_main_session() { jq -n --arg tool "$1" --arg fp "$2" '{tool_name: $tool, tool_input: {file_path: $fp}}'; }
 
+# mk_cdg_dl_bash AGENT MODE / mk_cdg_dl_patch AGENT (#457) — payload builders for the analysis-
+# deadline fixtures: the Bash command (or the apply_patch patch text) is read from STDIN via jq -Rs,
+# never a --arg, since a flood payload can pass the byte budget a single --arg value carries. cwd is
+# "/repo". AGENT "" omits agent_type (the main-session shape); MODE "" omits permission_mode.
+mk_cdg_dl_bash() {
+  jq -Rs --arg agent "$1" --arg mode "$2" '
+    {tool_name: "Bash", cwd: "/repo", tool_input: {command: .}}
+    + (if $agent != "" then {agent_type: $agent} else {} end)
+    + (if $mode != "" then {permission_mode: $mode} else {} end)'
+}
+mk_cdg_dl_patch() {
+  jq -Rs --arg agent "$1" '
+    {tool_name: "apply_patch", cwd: "/repo", tool_input: {command: .}}
+    + (if $agent != "" then {agent_type: $agent} else {} end)'
+}
+
 # run_claude_guard JSON [PATHVAL] — runs the real claude-dir-guard.sh script against JSON on
 # stdin, with PATH set to PATHVAL (defaults to this process's own PATH), leaving $cdg_out
 # (stdout)/$cdg_err (stderr, read back from a file under $tmpbase)/$cdg_rc set as globals. Same
 # separate-stdout/stderr-capture idiom as run_boundary/run_push_guard above (LESSON 2026-09-08b) —
 # a merged capture cannot pin "exactly one line on stderr, nothing on stdout". $cdg_deadline_override
 # (#463) is an opt-in override, the same shape as run_boundary's own: unset by default (the
-# foreground path below, unchanged in shape from before), and when a case sets it immediately
+# foreground path below), and when a case sets it immediately
 # before calling run_claude_guard, this runner instead runs the script backgrounded under
 # wait_deadline at that many seconds, killing its whole process tree on overrun instead of letting
-# the case block on it. Cleared after every call either way.
+# the case block on it. Cleared after every call either way. #457: both paths now run the script
+# through ( cdg_exec … ), which unsets the hook's two test-only knobs
+# (TBF_CLAUDE_DIR_GUARD_BUDGET_SECS, TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP) so an exported value in the
+# harness's own environment never reaches a fixture, then re-exports each only from the two
+# override globals below ($cdg_budget_override, $cdg_cap_override), both cleared after every call
+# like $cdg_deadline_override.
 cdg_out=""
 cdg_err=""
 cdg_rc=0
 cdg_deadline_override=""
+cdg_budget_override=""
+cdg_cap_override=""
+# cdg_exec PATHVAL (#457) — the env block every run_claude_guard call execs into; mirrors
+# push_guard_exec. MUST be called only inside an explicit "( … )": run in the harness's own shell
+# it would leak its exports and PATH, and its own `exec` would replace the harness process itself.
+cdg_exec() {
+  local pathval="$1"
+  unset TBF_CLAUDE_DIR_GUARD_BUDGET_SECS TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP
+  [ -z "$cdg_budget_override" ] || export TBF_CLAUDE_DIR_GUARD_BUDGET_SECS="$cdg_budget_override"
+  [ -z "$cdg_cap_override" ] || export TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP="$cdg_cap_override"
+  export PATH="$pathval"
+  exec "$bash_bin" "$claude_dir_guard"
+}
 run_claude_guard() {
   local json="$1" pathval="${2:-$PATH}" errfile="$tmpbase/cdg-stderr"
   if [ -n "$cdg_deadline_override" ]; then
     local stdin_file="$tmpbase/cdg-stdin" out_file="$tmpbase/cdg-out" cpid
     printf '%s' "$json" > "$stdin_file"
-    ( export PATH="$pathval"; exec "$bash_bin" "$claude_dir_guard" ) < "$stdin_file" > "$out_file" 2> "$errfile" &
+    ( cdg_exec "$pathval" ) < "$stdin_file" > "$out_file" 2> "$errfile" &
     cpid=$!
     wait_deadline "$cpid" "$cdg_deadline_override"
     cdg_rc=$deadline_rc
     cdg_out="$(cat "$out_file" 2>/dev/null)"
     rm -f "$out_file" "$stdin_file"
   else
-    cdg_out="$(printf '%s' "$json" | PATH="$pathval" "$bash_bin" "$claude_dir_guard" 2>"$errfile")"
+    cdg_out="$(printf '%s' "$json" | ( cdg_exec "$pathval" ) 2>"$errfile")"
     cdg_rc=$?
   fi
   cdg_err="$(cat "$errfile" 2>/dev/null)"
   rm -f "$errfile"
   cdg_deadline_override=""
+  cdg_budget_override=""
+  cdg_cap_override=""
 }
 
 # expect_cdg_deny_claude/expect_cdg_deny_unclassifiable/expect_cdg_no_opinion — assert against
@@ -5411,6 +5447,21 @@ expect_cdg_no_opinion() {
   [ "$cdg_rc" -eq 0 ] || { __ok=0; __why="${__why}rc: expected 0, got $cdg_rc\n"; }
   [ -z "$cdg_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$cdg_out'\n"; }
   [ -z "$cdg_err" ] || { __ok=0; __why="${__why}expected empty stderr, got: '$cdg_err'\n"; }
+}
+
+# expect_cdg_deny_too_large ROLE TOOL (#457) — the analysis-deadline deny: rc 2, empty stdout, and
+# the WHOLE stderr equal to the one fixed line, hand-typed here with ROLE and TOOL spliced in.
+# Refuses an empty ROLE or TOOL (see CLAUDE.md's empty-needle bullet).
+expect_cdg_deny_too_large() {
+  local r="$1" t="$2" want
+  if [ -z "$r" ] || [ -z "$t" ]; then
+    __ok=0; __why="${__why}expect_cdg_deny_too_large: needle_required (empty role or tool)\n"
+    return
+  fi
+  want="trail-blazer-flow claude-dir guard: ${r} role's ${t} call is too large to analyse before the hook's time limit (blocked: too large to analyse), and is denied fail-closed — split it into smaller calls"
+  [ "$cdg_rc" -eq 2 ] || { __ok=0; __why="${__why}rc: expected 2, got $cdg_rc\n"; }
+  [ -z "$cdg_out" ] || { __ok=0; __why="${__why}expected empty stdout, got: '$cdg_out'\n"; }
+  [ "$cdg_err" = "$want" ] || { __ok=0; __why="${__why}stderr is not exactly the too-large line: '$cdg_err'\n"; }
 }
 
 # --- deny: ".claude" segment ---------------------------------------------------------------
@@ -6393,16 +6444,15 @@ case_cdg_dbq_deny_quoted_prefix() {
   esac
 }
 case_cdg_dbq_deny_timing() {
-  # Wall-clock proof: the filler goes BEFORE the 64 standalone "]]" so their own tail windows start
-  # at HIGH indices, exposing any per-index quadratic scan on bash 3.2. Runs under a 15s active
-  # deadline (#463 -- cdg_deadline_override, not a passive post-hoc SECONDS comparison): claude-dir-
-  # guard.sh is pure bash (no awk), and this case's own real cost stays well under a second even on
-  # bash 3.2, so 15s leaves wide headroom for a driver run's own contention without ever
-  # mistaking scheduling delay for a hang. The command reaches jq on stdin (printf is a builtin),
-  # never as a --arg: this command is over 128KB, past the byte budget a single --arg value can
-  # carry.
+  # Flood shape: the filler goes BEFORE the 64 standalone "]]" so their own tail windows start at
+  # higher indices than the base walk's. Runs under a 15s active deadline (#463 --
+  # cdg_deadline_override, not a passive post-hoc SECONDS comparison). Since #457 the hook denies a
+  # Bash command longer than CDG_BASH_MAX_CHARS as "too large to analyse" before any walk, so the
+  # whole command (filler included) is sized to stay under that cap and reach the "no inline patch"
+  # reason this case expects; the cdg-dl-* cases pin the over-cap and deadline denies themselves.
+  # The command reaches jq on stdin (printf is a builtin), never as a --arg.
   local filler
-  filler="$(printf ' a%.0s' $(seq 1 100000))"
+  filler="$(printf ' a%.0s' $(seq 1 900))"
   local flood="x${filler}" i
   for i in $(seq 1 64); do flood="${flood} ]] true"; done
   local payload
@@ -6482,6 +6532,225 @@ case_cdg_dbq_never_executes() {
     *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
   esac
   [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+
+# --- hooks/claude-dir-guard.sh: analysis deadline (#457) ---------------------------------------
+# Per-site kills use the sample-count cap (cdg_cap_override), not wall time: each cap fixture floods
+# exactly ONE sample site with about 100 iterations under cap 50, while every other source
+# contributes only a handful of samples, so the verdict never depends on host speed. Time-path kills
+# use budget 0, where the very first sample denies. Fixture tails are `echo apply_patch`, never the
+# shim itself. Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh).
+# mutant:457-cdg-dl-check-off — check_deadline's `$SECONDS` comparison becomes a no-op, so a zero
+#   budget and the production-size flood no longer deny.
+# mutant:457-cdg-dl-knob-raise — the budget knob's `strictly less than` guard dropped, so a
+#   two-digit knob raises the budget instead of being ignored.
+# mutant:457-cdg-dl-before-role — a sample before the role exit, so a non-role call denies.
+# mutant:457-cdg-dl-before-plan — a sample before the plan-mode exit, so a plan-mode call denies.
+# mutant:457-cdg-dl-seg-site — is_apply_patch_word's segment loop loses its sample.
+# mutant:457-cdg-dl-ww-site — walk_window's outer loop loses its sample.
+# mutant:457-cdg-dl-redir-site — walk_window's redirect-run loop loses its sample.
+# mutant:457-cdg-dl-db-site — the `]]` pass loses its sample.
+# mutant:457-cdg-dl-bpl-site — has_exact_begin_patch_line's line loop loses its sample.
+# mutant:457-cdg-dl-ph-site — parse_patch_headers' line loop loses its sample.
+# mutant:457-cdg-dl-ltrim-site — ltrim's strip loop loses its sample.
+# mutant:457-cdg-dl-trim-site — trim's trailing strip loop loses its sample.
+# mutant:457-cdg-dl-ph-ltrim-propagate — parse_patch_headers stops propagating a deny out of its
+#   ltrim command substitution.
+# mutant:457-cdg-dl-ph-trim-propagate — parse_patch_headers stops propagating a deny out of its
+#   header-path trim command substitution.
+# mutant:457-cdg-dl-trim-ltrim-propagate — trim stops propagating a deny out of its nested ltrim.
+# mutant:457-cdg-dl-bpl-trim-propagate — has_exact_begin_patch_line stops propagating a deny out of
+#   its trim command substitution.
+# mutant:457-cdg-dl-bash-cap-off — the Bash size cap check becomes a no-op, so an over-cap command
+#   reaches the unsampled substitutions instead of denying at the cap.
+# mutant:457-cdg-dl-bash-cap-offbyone — the cap comparison becomes strict, so a command of exactly
+#   the cap's length denies.
+# mutant:457-cdg-dl-bash-cap-before-role — a size check before the role exit, so an over-cap command
+#   from a non-role agent denies.
+# mutant:457-hook-cdg-budget-override-leaks — run_claude_guard's own trailing budget-override reset
+#   deleted: the post-call emptiness assertion is the only thing that catches it.
+# mutant:457-hook-cdg-cap-override-leaks — the same for the cap-override reset.
+case_cdg_dl_deny_budget_zero() {
+  cdg_budget_override=0
+  run_claude_guard "$(printf '%s' 'echo apply_patch' | mk_cdg_dl_bash implementer '')"
+  [ -z "$cdg_budget_override" ] || { __ok=0; __why="${__why}cdg_budget_override not cleared after run_claude_guard: '$cdg_budget_override'\n"; }
+  expect_cdg_deny_too_large implementer Bash
+}
+case_cdg_dl_deny_budget_zero_patch() {
+  local patch="*** Begin Patch${LF}*** Add File: /repo/a${LF}+x${LF}*** End Patch"
+  cdg_budget_override=0
+  run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch verifier)"
+  expect_cdg_deny_too_large verifier apply_patch
+}
+case_cdg_dl_never_executes() {
+  local trapdir="$tmpbase/trapbin-cdg-dl" sentinel="$tmpbase/sentinel-cdg-dl" bin
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname tr awk grep sed; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  cdg_budget_override=0
+  run_claude_guard "$(printf '%s' 'echo apply_patch' | mk_cdg_dl_bash implementer '')" "$trapdir:$PATH"
+  expect_cdg_deny_too_large implementer Bash
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+case_cdg_dl_deny_production_budget() {
+  # The production deadline, through the walk-free route that can still reach it: an apply_patch
+  # whose one header line carries a long trailing-whitespace run, which trim's strip loop eats one
+  # character at a time (quadratic in the run's length, far past the 5s budget at this size on any
+  # host). The apply_patch route carries no Bash size cap, so the unmutated hook reaches the
+  # deadline deny, bounded by the wall-clock budget rather than by the run's size. The budget knob
+  # is set to 99 (must be ignored: the knob only lowers), and the run sits under a 15s active
+  # deadline. The payload reaches jq on stdin, never as a --arg.
+  local sp patch payload
+  sp="$(printf ' %.0s' $(seq 1 100000))"
+  patch="*** Begin Patch${LF}*** Add File: /repo/a${sp}${LF}*** End Patch"
+  payload="$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
+  cdg_budget_override=99
+  cdg_deadline_override=15
+  run_claude_guard "$payload"
+  expect_cdg_deny_too_large implementer apply_patch
+}
+# cdg_dl_bash_cap — the CDG_BASH_MAX_CHARS value, extracted from the hook's own vocabulary line.
+cdg_dl_bash_cap() {
+  sed -n 's/^CDG_BASH_MAX_CHARS="\([0-9][0-9]*\)"$/\1/p' "$claude_dir_guard"
+}
+# cdg_dl_pad_cmd LEN — a benign, non-whitespace-padded command of exactly LEN characters.
+cdg_dl_pad_cmd() {
+  local len="$1" cmd="echo apply_patch"
+  while [ "${#cmd}" -lt "$len" ]; do cmd="${cmd} a"; done
+  printf '%s' "${cmd:0:$len}"
+}
+case_cdg_dl_deny_bash_over_cap() {
+  # The 400KB whitespace-plus-`<` command that used to outlast the hook timeout inside is_apply_patch_word's
+  # own unsampled substitution: it now denies at the size cap, before any substitution, well inside
+  # a 15s active deadline.
+  local sp
+  sp="$(printf ' %.0s' $(seq 1 400000))"
+  cdg_deadline_override=15
+  run_claude_guard "$(printf 'apply_patch < x.patch\n%s' "$sp" | mk_cdg_dl_bash implementer '')"
+  expect_cdg_deny_too_large implementer Bash
+}
+case_cdg_dl_deny_bash_just_over_cap() {
+  local cap cmd
+  cap="$(cdg_dl_bash_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_BASH_MAX_CHARS from the hook\n"; return; fi
+  cmd="$(cdg_dl_pad_cmd $((cap + 1)))"
+  [ "${#cmd}" -eq $((cap + 1)) ] || { __ok=0; __why="${__why}fixture bug: command is ${#cmd} chars, wanted $((cap + 1))\n"; return; }
+  run_claude_guard "$(printf '%s' "$cmd" | mk_cdg_dl_bash implementer '')"
+  expect_cdg_deny_too_large implementer Bash
+}
+case_cdg_dl_noop_bash_at_cap() {
+  local cap cmd
+  cap="$(cdg_dl_bash_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_BASH_MAX_CHARS from the hook\n"; return; fi
+  cmd="$(cdg_dl_pad_cmd "$cap")"
+  [ "${#cmd}" -eq "$cap" ] || { __ok=0; __why="${__why}fixture bug: command is ${#cmd} chars, wanted $cap\n"; return; }
+  run_claude_guard "$(printf '%s' "$cmd" | mk_cdg_dl_bash implementer '')"
+  expect_cdg_no_opinion
+}
+case_cdg_dl_noop_over_cap_main_session() {
+  run_claude_guard "$(cdg_dl_pad_cmd 5000 | mk_cdg_dl_bash '' '')"
+  expect_cdg_no_opinion
+}
+case_cdg_dl_noop_over_cap_other_agent() {
+  run_claude_guard "$(cdg_dl_pad_cmd 5000 | mk_cdg_dl_bash Explore '')"
+  expect_cdg_no_opinion
+}
+case_cdg_dl_noop_budget_zero_edit() {
+  cdg_budget_override=0
+  cdg_cap_override=1
+  run_claude_guard "$(mk_cdg_agent_path implementer Edit /repo/src/a.rs)"
+  expect_cdg_no_opinion
+}
+case_cdg_dl_noop_main_session() {
+  # Fast path 1 (no agent_type) excludes this call before any sample site, so this is a contract
+  # pin with no mutant of its own.
+  cdg_budget_override=0
+  cdg_cap_override=1
+  run_claude_guard "$(printf '%s' 'echo apply_patch' | mk_cdg_dl_bash '' '')"
+  expect_cdg_no_opinion
+}
+case_cdg_dl_noop_other_agent() {
+  cdg_budget_override=0
+  cdg_cap_override=1
+  run_claude_guard "$(printf '%s' 'echo apply_patch' | mk_cdg_dl_bash Explore '')"
+  expect_cdg_no_opinion
+}
+case_cdg_dl_noop_plan_mode() {
+  cdg_budget_override=0
+  cdg_cap_override=1
+  run_claude_guard "$(printf '%s' 'echo apply_patch' | mk_cdg_dl_bash implementer plan)"
+  expect_cdg_no_opinion
+}
+# cdg_dl_cap_check_bash CMD — run CMD as an implementer Bash call under cap 50, expect the deny,
+# and assert the cap override was cleared.
+cdg_dl_cap_check_bash() {
+  cdg_cap_override=50
+  run_claude_guard "$(printf '%s' "$1" | mk_cdg_dl_bash implementer '')"
+  [ -z "$cdg_cap_override" ] || { __ok=0; __why="${__why}cdg_cap_override not cleared after run_claude_guard: '$cdg_cap_override'\n"; }
+  expect_cdg_deny_too_large implementer Bash
+}
+cdg_dl_cap_check_patch() {
+  cdg_cap_override=50
+  run_claude_guard "$(printf '%s' "$1" | mk_cdg_dl_patch implementer)"
+  expect_cdg_deny_too_large implementer apply_patch
+}
+case_cdg_dl_cap_seg() {
+  local cmd="" i
+  for i in $(seq 1 100); do cmd="${cmd}; "; done
+  cdg_dl_cap_check_bash "${cmd}echo apply_patch"
+}
+case_cdg_dl_cap_ww() {
+  local cmd="" i
+  for i in $(seq 1 100); do cmd="${cmd}env "; done
+  cdg_dl_cap_check_bash "${cmd}echo apply_patch"
+}
+case_cdg_dl_cap_redir() {
+  local cmd="" i
+  for i in $(seq 1 100); do cmd="${cmd}>"; done
+  cdg_dl_cap_check_bash "${cmd}x echo apply_patch"
+}
+case_cdg_dl_cap_db() {
+  local cmd="echo apply_patch ]] " i
+  for i in $(seq 1 100); do cmd="${cmd}a "; done
+  cdg_dl_cap_check_bash "$cmd"
+}
+case_cdg_dl_cap_bpl() {
+  # A `;`-only line makes no segment, but it is a line for the begin-patch scan.
+  local cmd="echo apply_patch" i
+  for i in $(seq 1 100); do cmd="${cmd}${LF};"; done
+  cdg_dl_cap_check_bash "$cmd"
+}
+case_cdg_dl_cap_ph() {
+  local patch="*** Begin Patch${LF}*** Add File: /repo/a" i
+  for i in $(seq 1 100); do patch="${patch}${LF}+x"; done
+  cdg_dl_cap_check_patch "${patch}${LF}*** End Patch"
+}
+case_cdg_dl_cap_ltrim() {
+  local sp
+  sp="$(printf ' %.0s' $(seq 1 100))"
+  cdg_dl_cap_check_patch "*** Begin Patch${LF}${sp}*** Add File: /repo/a${LF}*** End Patch"
+}
+case_cdg_dl_cap_trim_header() {
+  local sp
+  sp="$(printf ' %.0s' $(seq 1 100))"
+  cdg_dl_cap_check_patch "*** Begin Patch${LF}*** Add File: /repo/a${sp}${LF}*** End Patch"
+}
+case_cdg_dl_cap_trim_nested() {
+  local sp
+  sp="$(printf ' %.0s' $(seq 1 100))"
+  cdg_dl_cap_check_patch "*** Begin Patch${LF}*** Add File: ${sp}/repo/a${LF}*** End Patch"
+}
+case_cdg_dl_cap_trim_bash() {
+  local sp
+  sp="$(printf ' %.0s' $(seq 1 100))"
+  cdg_dl_cap_check_bash "echo apply_patch${sp}"
 }
 
 # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
@@ -8386,7 +8655,7 @@ cases=(
   "cdg-dbq-deny-bash-c-dq|case_cdg_dbq_deny_bash_c_dq|unparseable deny (#437): bash -c \"apply_patch < x.patch\" -- a double-quoted bash -c argument -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-dq)"
   "cdg-dbq-deny-quoted-name|case_cdg_dbq_deny_quoted_name|unparseable deny (#437): \"apply_patch\" < x.patch -- a quoted shim spelling as the command word itself -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-dq)"
   "cdg-dbq-deny-quoted-prefix|case_cdg_dbq_deny_quoted_prefix|unparseable deny (#437): bash -c 'noglob apply_patch < x.patch' -- the PREFIX_WORDS match itself uses the stripped token -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-sq)"
-  "cdg-dbq-deny-timing|case_cdg_dbq_deny_timing|wall-clock proof (#437): a >128KB command (x + 100000x' a' filler, then 64x' ]] true', then a newline, then apply_patch < x.patch) -- deny under a 15s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-cap-exact, 463-hook-cdg-override-leaks)"
+  "cdg-dbq-deny-timing|case_cdg_dbq_deny_timing|flood shape (#437): a command just under the Bash size cap (x + 900x' a' filler, then 64x' ]] true', then a newline, then apply_patch < x.patch) -- deny under a 15s active deadline (#463) -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-cap-exact, 463-hook-cdg-override-leaks)"
   "cdg-dbq-noop-flood-at-cap|case_cdg_dbq_noop_flood_at_cap|no opinion (#437): exactly DBRACKET_MAX (64) standalone ]] -- the cap never trips -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-cap-exact)"
   "cdg-dbq-noop-cap-per-segment|case_cdg_dbq_noop_cap_per_segment|no opinion (#437): 65 heredoc lines, each with exactly one standalone ]] in its own segment -- DBRACKET_MAX resets per segment -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-cap-per-segment)"
   "cdg-dbq-noop-bash-dbracket|case_cdg_dbq_noop_bash_dbracket|no opinion (#437): [[ -n x ]] && echo apply_patch -- an ordinary && conditional, not the short-if form"
@@ -8394,6 +8663,29 @@ cases=(
   "cdg-dbq-noop-short-if-other|case_cdg_dbq_noop_short_if_other|no opinion (#437): if [[ -n x ]] echo apply_patch -- the tail resolves to echo, apply_patch is only its argument"
   "cdg-dbq-noop-short-if-benign-heredoc|case_cdg_dbq_noop_short_if_benign_heredoc|no opinion (#437): if [[ -n x ]] apply_patch <<'EOF' carrying a benign src/a.txt patch -- the existing structured-parse route is unaffected by the additive ]] pass"
   "cdg-dbq-never-executes|case_cdg_dbq_never_executes|deny via the short-if ]]-tail route specifically, AND it never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-tails, 437-cdg-dbq-last-tail)"
+  "cdg-dl-deny-budget-zero|case_cdg_dl_deny_budget_zero|deny (#457): implementer Bash echo apply_patch under budget knob 0 -- the first sample denies with the exact too-large line, and the budget override is cleared after the call"
+  "cdg-dl-deny-budget-zero-patch|case_cdg_dl_deny_budget_zero_patch|deny (#457): verifier apply_patch with a benign patch under budget knob 0 -- exact too-large line naming verifier and apply_patch"
+  "cdg-dl-never-executes|case_cdg_dl_never_executes|deny (#457): the budget-zero deny never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH -- sentinel absent"
+  "cdg-dl-deny-production-budget|case_cdg_dl_deny_production_budget|wall-clock proof (#457): an apply_patch header with a 100000-space trailing run, budget knob 99 ignored -- exact too-large line under a 15s active deadline"
+  "cdg-dl-deny-bash-over-cap|case_cdg_dl_deny_bash_over_cap|deny (#457): apply_patch < x.patch plus 400000 spaces -- over the Bash size cap, exact too-large line under a 15s active deadline, before any substitution runs"
+  "cdg-dl-deny-bash-just-over-cap|case_cdg_dl_deny_bash_just_over_cap|deny (#457): a benign command exactly one character over the Bash size cap -- exact too-large line"
+  "cdg-dl-noop-bash-at-cap|case_cdg_dl_noop_bash_at_cap|no opinion (#457): a benign command of exactly the Bash size cap's length -- the cap is an upper bound, not a strict one"
+  "cdg-dl-noop-over-cap-main-session|case_cdg_dl_noop_over_cap_main_session|no opinion (#457): an over-cap command with no agent_type -- fast path 1 excludes it before the cap (contract pin)"
+  "cdg-dl-noop-over-cap-other-agent|case_cdg_dl_noop_over_cap_other_agent|no opinion (#457): an over-cap command from an Explore agent -- the role exit precedes the cap"
+  "cdg-dl-noop-budget-zero-edit|case_cdg_dl_noop_budget_zero_edit|no opinion (#457): implementer Edit of a benign path under budget 0 and cap 1 -- the Edit/Write route has no sampled loop"
+  "cdg-dl-noop-main-session|case_cdg_dl_noop_main_session|no opinion (#457): main session under budget 0 and cap 1 -- fast path 1 excludes it before any sample (contract pin, no mutant)"
+  "cdg-dl-noop-other-agent|case_cdg_dl_noop_other_agent|no opinion (#457): Explore agent under budget 0 and cap 1 -- no sample site precedes the role exit"
+  "cdg-dl-noop-plan-mode|case_cdg_dl_noop_plan_mode|no opinion (#457): implementer in plan mode under budget 0 and cap 1 -- no sample site precedes the plan-mode exit"
+  "cdg-dl-cap-seg|case_cdg_dl_cap_seg|deny (#457): 100 empty segments under cap 50 -- only is_apply_patch_word's segment loop samples that many times; the cap override is cleared after the call"
+  "cdg-dl-cap-ww|case_cdg_dl_cap_ww|deny (#457): 100 env prefix words under cap 50 -- only walk_window's outer loop samples that many times"
+  "cdg-dl-cap-redir|case_cdg_dl_cap_redir|deny (#457): a 100-operator redirect run under cap 50 -- only walk_window's redirect-run loop samples that many times"
+  "cdg-dl-cap-db|case_cdg_dl_cap_db|deny (#457): echo apply_patch then a standalone ]] and 100 more words under cap 50 -- only the ]] pass samples that many times"
+  "cdg-dl-cap-bpl|case_cdg_dl_cap_bpl|deny (#457): 100 semicolon-only lines under cap 50 -- only has_exact_begin_patch_line's line loop samples that many times"
+  "cdg-dl-cap-ph|case_cdg_dl_cap_ph|deny (#457): an apply_patch with 100 content lines under cap 50 -- only parse_patch_headers' line loop samples that many times"
+  "cdg-dl-cap-ltrim|case_cdg_dl_cap_ltrim|deny (#457): a header indented by 100 spaces under cap 50 -- only ltrim's strip loop, in its command substitution, samples that many times"
+  "cdg-dl-cap-trim-header|case_cdg_dl_cap_trim_header|deny (#457): a header with 100 trailing spaces under cap 50 -- only trim's trailing loop samples that many times"
+  "cdg-dl-cap-trim-nested|case_cdg_dl_cap_trim_nested|deny (#457): a header path with 100 leading spaces under cap 50 -- only the ltrim nested inside trim samples that many times"
+  "cdg-dl-cap-trim-bash|case_cdg_dl_cap_trim_bash|deny (#457): a Bash command with 100 trailing spaces under cap 50 -- only the trim inside has_exact_begin_patch_line samples that many times"
   # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
   "codex-gcg-main-status|case_codex_gcg_main_status|allow: git-c-guard.sh under a Codex-shaped main-session payload, git -C ../demo-wt-1 status --porcelain (pins the unchanged verdict -- Codex ignores this hook's if gate, but the script itself never reads it)"
   "codex-gcg-apply-patch|case_codex_gcg_apply_patch|silent: a Codex apply_patch payload (tool_name != Bash)"

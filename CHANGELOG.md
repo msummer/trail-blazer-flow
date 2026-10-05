@@ -16,6 +16,10 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #457: claude-dir-guard denies an implementer/verifier call too large to analyse within a 5-second budget, instead of timing out with no deny.
+
 ## v3.3.0
 
 This release makes scheduled unattended Codex runs a supported surface: `codex exec` passes of
