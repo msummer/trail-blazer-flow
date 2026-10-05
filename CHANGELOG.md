@@ -22,6 +22,13 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 - #490: codex-setup.sh refuses a quoted project_doc_fallback_filenames key name ("..." or '...') in .codex/config.toml as fallback-conflict instead of prepending a duplicate bare key. Consumer step (Codex): if --check now reports fallback-conflict, write the key bare.
 - #476: the push-dl-* site-proving fixtures (driver-site, evaluate-sites, config-lines) calibrate their analysis budget from a same-run knob-0 control instead of a fixed 1s knob, so a loaded host can no longer let an earlier deadline sample rescue a site mutant. push-dl-deny-production-budget sizes its harness deadline from the same kind of control, and the 304-inc-line-chars mutant's filter now names only its killing case, whose sibling's verdict under that mutant depended on host speed. Test-only, no consumer step.
 - #455: `hooks/claude-dir-guard.sh` denies a Bash call whose `apply_patch` shim takes its patch from anything but its own inline heredoc when an inline patch appears elsewhere in the command (a decoy), and fails closed when an unbalanced quote or a trailing backslash precedes the shim's command word, such as `X='a b' apply_patch < x.patch` (absorbs #456).
+- #449: `push-guard.sh` now denies, as an unresolved push target, a push segment it loses track of
+  and that could still be a push: a quoted or escaped git option (`git "-c" k=v push`), a quoted
+  git option value containing a space (`git -c "core.sshCommand=ssh -i k" push ...`; a `-C` value
+  stays exempt), a quoted or escaped assignment value containing a space
+  (`X="a b" git push ...`), or an `env` option outside a
+  short allowlist (`env -C <dir>`, `--chdir=`, `-S`; absorbs #451). `env -u NAME` now consumes its
+  value, so `env -u git push origin main` is no longer denied. No consumer step.
 
 ## v3.3.0
 
