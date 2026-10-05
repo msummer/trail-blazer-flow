@@ -6587,6 +6587,236 @@ case_cdg_dbq_never_executes() {
   [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
 }
 
+# --- claude-dir-guard.sh decoy inline patch (#455) -------------------------------------------
+# When the shim's own segment takes its input from anything but its own inline `<<` heredoc, the
+# Bash route denies before the structured parse can be satisfied by an unrelated benign inline
+# patch elsewhere in the command. Safe set: a heredoc, an output redirect, a bare-digits fd before
+# an output redirect. An unquoted heredoc delimiter on a command carrying `$`, a backtick or a
+# backslash also denies (the shell expands the body first). Shared fixture text: CDG_P is the
+# issue's benign patch, CDG_DECOY an unrelated heredoc feeding it to `cat`.
+#
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "cdg-dec-").
+# mutant:455-cdg-dec-route — the Bash route's new decoy deny is switched off, so a benign inline
+#   patch next to an unsafe shim input is judged by the structured parse alone again.
+# mutant:455-cdg-dec-shim-record — the shim's resolved index is never recorded, so no segment's
+#   input is ever scanned.
+# mutant:455-cdg-dec-min — the smallest-index rule is dropped, so a later tail's shim index
+#   overwrites an earlier one and the scan skips the unsafe argument between them.
+# mutant:455-cdg-dec-in-redirect — a stdin redirect after a heredoc is no longer unsafe.
+# mutant:455-cdg-dec-heredoc-exact — the heredoc test accepts three or more `<`, so a here-string
+#   is read as a heredoc.
+# mutant:455-cdg-dec-delim-required — the missing-delimiter guard is dropped, so a process
+#   substitution's bare `< <` run is read as a heredoc.
+# mutant:455-cdg-dec-arg — a non-redirect token after the shim is skipped instead of unsafe.
+# mutant:455-cdg-dec-no-heredoc — a shim segment with no heredoc at all is no longer unsafe.
+# mutant:455-cdg-dec-fd-out — the fd-before-output-redirect skip is removed, so `2>&1` reads as an
+#   argument.
+# mutant:455-cdg-dec-out-target — the output redirect's target is no longer skipped, so
+#   `>/dev/null` reads as an argument.
+# mutant:455-cdg-dec-unquoted-flag — an unquoted delimiter never sets iapw_unquoted.
+# mutant:455-cdg-dec-delim-sq — a single-quote in the delimiter no longer counts as quoted.
+# mutant:455-cdg-dec-delim-dq — a double-quote in the delimiter no longer counts as quoted.
+# mutant:455-cdg-dec-delim-bs — a backslash in the delimiter no longer counts as quoted.
+# mutant:455-cdg-dec-text-dollar — `$` no longer makes an unquoted-delimiter command unsafe.
+# mutant:455-cdg-dec-text-backtick — a backtick no longer does.
+# mutant:455-cdg-dec-text-backslash — a backslash no longer does.
+CDG_P="*** Begin Patch${LF}*** Add File: /repo/ok${LF}+x${LF}*** End Patch"
+CDG_DECOY="cat >/dev/null <<'EOF'${LF}${CDG_P}${LF}EOF"
+expect_cdg_dec_deny() {
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"not from an inline heredoc"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'not from an inline heredoc': '$cdg_err'\n" ;;
+  esac
+}
+cdg_dec_run() { run_claude_guard "$(mk_codex_shell 'implementer' "$1")"; }
+case_cdg_dec_deny_redirect_file() { cdg_dec_run "${CDG_DECOY}${LF}apply_patch < evil.patch"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_redirect_first() { cdg_dec_run "apply_patch < evil.patch${LF}${CDG_DECOY}"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_applypatch() { cdg_dec_run "${CDG_DECOY}${LF}applypatch < evil.patch"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_pipe() { cdg_dec_run "${CDG_DECOY}${LF}cat evil.patch | apply_patch"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_herestring() { cdg_dec_run "${CDG_DECOY}${LF}apply_patch <<< \"\$p\""; expect_cdg_dec_deny; }
+case_cdg_dec_deny_heredoc_then_redirect() { cdg_dec_run "apply_patch <<'EOF' < evil.patch${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_heredoc_then_herestring() { cdg_dec_run "apply_patch <<'EOF' <<< \"\$p\"${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_heredoc_then_rw() { cdg_dec_run "apply_patch <<'EOF' <> evil.patch${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_file_arg() { cdg_dec_run "apply_patch evil.patch <<'EOF'${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_fd_heredoc() { cdg_dec_run "cat evil.patch | apply_patch 3<<'EOF'${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_procsubst() { cdg_dec_run "${CDG_DECOY}${LF}apply_patch < <(cat evil.patch)"; expect_cdg_dec_deny; }
+case_cdg_dec_deny_second_shim() {
+  cdg_dec_run "apply_patch <<'EOF'${LF}${CDG_P}${LF}EOF${LF}apply_patch < evil.patch"
+  expect_cdg_dec_deny
+}
+case_cdg_dec_deny_two_tails() {
+  # The first tail's shim has a file argument; the second tail's shim is a legitimate heredoc. The
+  # scan must start from the FIRST resolved shim index.
+  cdg_dec_run "if [[ -n x ]] apply_patch evil.patch ]] apply_patch <<'EOF'${LF}${CDG_P}${LF}EOF"
+  expect_cdg_dec_deny
+}
+case_cdg_dec_deny_unquoted_dollar() {
+  cdg_dec_run "D=.cla\"\"ude; apply_patch <<EOF${LF}*** Begin Patch${LF}*** Add File: "'$D'"/settings.local.json${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_dec_deny
+}
+case_cdg_dec_deny_unquoted_backtick() {
+  cdg_dec_run "apply_patch <<EOF${LF}*** Begin Patch${LF}*** Add File: src/"'`printf x`'"/y${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_dec_deny
+}
+case_cdg_dec_deny_unquoted_backslash() {
+  # The shell's backslash-newline joins `.cla\` and `ude/...` into `.claude/...` inside an
+  # unquoted heredoc body.
+  local bs='\'
+  cdg_dec_run "apply_patch <<EOF${LF}*** Begin Patch${LF}*** Add File: .cla${bs}${LF}ude/settings.local.json${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_dec_deny
+}
+case_cdg_dec_deny_body_codespan() {
+  # Documented over-block: a body line whose first word is a code span of the shim name is its own
+  # walk segment, a bare shim with no heredoc.
+  cdg_dec_run "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Update File: src/a.txt${LF}+See "'`apply_patch`'" docs${LF}*** End Patch${LF}EOF"
+  expect_cdg_dec_deny
+}
+case_cdg_dec_deny_heredoc_dotdot() {
+  # The legitimate heredoc shape still reaches the structured parse, which judges its headers.
+  cdg_dec_run "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: ../etc/x${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_deny_unclassifiable
+}
+case_cdg_dec_noop_heredoc_sq_dollar() {
+  cdg_dec_run "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+echo "'$HOME'"${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_heredoc_dq_dollar() {
+  cdg_dec_run "apply_patch <<\"EOF\"${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+echo "'$HOME'"${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_heredoc_bs_dollar() {
+  cdg_dec_run "apply_patch <<\\EOF${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+echo "'$HOME'"${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_heredoc_dash() {
+  local t=$'\t'
+  cdg_dec_run "apply_patch <<-'EOF'${LF}${t}*** Begin Patch${LF}${t}*** Add File: src/a.txt${LF}${t}+x${LF}${t}*** End Patch${LF}${t}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_heredoc_out_redirects() {
+  cdg_dec_run "apply_patch <<'EOF' >/dev/null 2>&1${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_heredoc_chain() {
+  cdg_dec_run "cd src && apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_unquoted_plain() {
+  cdg_dec_run "apply_patch <<EOF${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_dec_noop_two_shims() {
+  local one="apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
+  cdg_dec_run "${one}${LF}${one}"
+  expect_cdg_no_opinion
+}
+cdg_trap_path() {
+  # cdg_trap_path NAME -- build a booby-trapped bin dir; sets cdg_trapdir and cdg_sentinel.
+  cdg_trapdir="$tmpbase/trapbin-$1"
+  cdg_sentinel="$tmpbase/sentinel-$1"
+  mkdir -p "$cdg_trapdir"
+  rm -f "$cdg_sentinel"
+  local bin
+  for bin in git gh rm dirname tr awk grep sed; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$cdg_sentinel"
+      printf 'exit 1\n'
+    } > "$cdg_trapdir/$bin"
+    chmod +x "$cdg_trapdir/$bin"
+  done
+}
+case_cdg_dec_never_executes() {
+  cdg_trap_path cdg-dec
+  run_claude_guard "$(mk_codex_shell 'implementer' "${CDG_DECOY}${LF}apply_patch < evil.patch")" "$cdg_trapdir:$PATH"
+  expect_cdg_dec_deny
+  [ ! -e "$cdg_sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+case_cdg_dec_deny_flood_timing() {
+  # A long run of safe output redirects before an unsafe argument: the scan must walk the whole
+  # run and still deny. Under a 15s active deadline (#463); the command reaches jq on stdin, as in
+  # cdg-dbq-deny-timing (killed by 455-cdg-dec-arg: the scan reaches the trailing argument). The
+  # run length is bounded because this shape's cost is superlinear in pre-existing code outside
+  # this change (main overruns the deadline at larger sizes; the cause is not isolated here).
+  local flood payload
+  flood="$(printf ' >o%.0s' $(seq 1 1500))"
+  payload="$(printf '%s' "apply_patch${flood} <<'EOF' x${LF}${CDG_P}${LF}EOF" \
+    | jq -Rs '{tool_name: "Bash", agent_type: "implementer", cwd: "/repo", tool_input: {command: .}}')"
+  cdg_deadline_override=15
+  run_claude_guard "$payload"
+  expect_cdg_dec_deny
+}
+
+# --- claude-dir-guard.sh quoted assignment value (#455, absorbing #456) ----------------------
+# A token carrying an odd count of `'` or `"`, or ending in a backslash, between a walk window's
+# start and its resolved non-shim command word, in a segment that mentions the shim, denies: the
+# whitespace split happens before quotes are stripped, so `X='a b'` leaves `b'` to resolve as the
+# command word and hide the shim.
+#
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "cdg-qa-"
+# unless noted).
+# mutant:455-cdg-qa-check — the parity test never fires.
+# mutant:455-cdg-qa-sq — only double quotes are counted.
+# mutant:455-cdg-qa-dq — only single quotes are counted.
+# mutant:455-cdg-qa-backslash — the trailing-backslash arm never fires.
+# mutant:455-cdg-qa-range-start — the check covers only the resolved token, not the tokens
+#   before it.
+# mutant:455-cdg-qa-range-end — the check runs through the window's end, past the resolved word.
+# mutant:455-cdg-qa-resolved-inclusive — the check stops one token short of the resolved word.
+# mutant:455-cdg-qa-scope — the check runs in every segment, not only those mentioning the shim.
+# mutant:455-cdg-qa-scope-applypatch — the segment scope drops the `applypatch` spelling, so a
+#   quoted-assignment prefix before `applypatch` is never checked.
+# mutant:455-cdg-qa-shim-exempt — the check also runs when the resolved word IS the shim (filter
+#   "cdg-dbq-").
+expect_cdg_qa_deny() {
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"unbalanced quote"*) ;;
+    *) __ok=0; __why="${__why}stderr does not contain 'unbalanced quote': '$cdg_err'\n" ;;
+  esac
+}
+case_cdg_qa_deny_sq_space() { cdg_dec_run "X='a b' apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_applypatch() { cdg_dec_run "X='a b' applypatch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_dq_space() { cdg_dec_run "X=\"a b\" apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_sq_many_spaces() { cdg_dec_run "X='a b c d' apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_dq_many_spaces() { cdg_dec_run "X=\"a b  c\" apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_env_assign() { cdg_dec_run "env X='a b' apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_env_quoted_assign() { cdg_dec_run "env 'X=a b' apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_redirect_target() { cdg_dec_run "< 'a b c' apply_patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_two_assigns() { cdg_dec_run "X='a b' Y='c d' apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_heredoc() { cdg_dec_run "X='a b' apply_patch <<'EOF'${LF}${CDG_P}${LF}EOF"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_cut_tail() { cdg_dec_run "if [[ -n x ]] X='a b' apply_patch < x.patch"; expect_cdg_qa_deny; }
+case_cdg_qa_deny_backslash_space() { cdg_dec_run 'X=a\ b apply_patch < x.patch'; expect_cdg_qa_deny; }
+case_cdg_qa_deny_body_possessive() {
+  # Documented over-block: a context line whose first word carries an apostrophe and which
+  # mentions the shim.
+  cdg_dec_run "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Update File: src/a.txt${LF} Codex's apply_patch shim${LF}*** End Patch${LF}EOF"
+  expect_cdg_qa_deny
+}
+case_cdg_qa_noop_quoted_arg() { cdg_dec_run "echo 'a b' apply_patch"; expect_cdg_no_opinion; }
+case_cdg_qa_noop_other_segment() { cdg_dec_run "X='a b' echo hi; rg apply_patch hooks/"; expect_cdg_no_opinion; }
+case_cdg_qa_noop_balanced_assign() {
+  cdg_dec_run "X='ab' apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+}
+case_cdg_qa_never_executes() {
+  cdg_trap_path cdg-qa
+  run_claude_guard "$(mk_codex_shell 'implementer' "X='a b' apply_patch < x.patch")" "$cdg_trapdir:$PATH"
+  expect_cdg_qa_deny
+  [ ! -e "$cdg_sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+case_cdg_qa_noop_flood_timing() {
+  # Thousands of balanced quoted tokens before the resolved word: the parity pass must stay linear.
+  local flood payload
+  flood="$(printf "'env' %.0s" $(seq 1 10000))"
+  payload="$(printf '%s' "${flood}x apply_patch" \
+    | jq -Rs '{tool_name: "Bash", agent_type: "implementer", cwd: "/repo", tool_input: {command: .}}')"
+  cdg_deadline_override=15
+  run_claude_guard "$payload"
+  expect_cdg_no_opinion
+}
+
 # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
 # These exercise EXISTING logic under a new payload shape (the full documented Codex key set --
 # session_id, turn_id, cwd, hook_event_name, model, permission_mode, tool_name, tool_use_id,
@@ -8498,6 +8728,52 @@ cases=(
   "cdg-dbq-noop-short-if-other|case_cdg_dbq_noop_short_if_other|no opinion (#437): if [[ -n x ]] echo apply_patch -- the tail resolves to echo, apply_patch is only its argument"
   "cdg-dbq-noop-short-if-benign-heredoc|case_cdg_dbq_noop_short_if_benign_heredoc|no opinion (#437): if [[ -n x ]] apply_patch <<'EOF' carrying a benign src/a.txt patch -- the existing structured-parse route is unaffected by the additive ]] pass"
   "cdg-dbq-never-executes|case_cdg_dbq_never_executes|deny via the short-if ]]-tail route specifically, AND it never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-tails, 437-cdg-dbq-last-tail)"
+  "cdg-dec-deny-redirect-file|case_cdg_dec_deny_redirect_file|deny: decoy / shim input (#455), deny-redirect-file"
+  "cdg-dec-deny-redirect-first|case_cdg_dec_deny_redirect_first|deny: decoy / shim input (#455), deny-redirect-first"
+  "cdg-dec-deny-applypatch|case_cdg_dec_deny_applypatch|deny: decoy / shim input (#455), deny-applypatch"
+  "cdg-dec-deny-pipe|case_cdg_dec_deny_pipe|deny: decoy / shim input (#455), deny-pipe"
+  "cdg-dec-deny-herestring|case_cdg_dec_deny_herestring|deny: decoy / shim input (#455), deny-herestring"
+  "cdg-dec-deny-heredoc-then-redirect|case_cdg_dec_deny_heredoc_then_redirect|deny: decoy / shim input (#455), deny-heredoc-then-redirect"
+  "cdg-dec-deny-heredoc-then-herestring|case_cdg_dec_deny_heredoc_then_herestring|deny: decoy / shim input (#455), deny-heredoc-then-herestring"
+  "cdg-dec-deny-heredoc-then-rw|case_cdg_dec_deny_heredoc_then_rw|deny: decoy / shim input (#455), deny-heredoc-then-rw"
+  "cdg-dec-deny-file-arg|case_cdg_dec_deny_file_arg|deny: decoy / shim input (#455), deny-file-arg"
+  "cdg-dec-deny-fd-heredoc|case_cdg_dec_deny_fd_heredoc|deny: decoy / shim input (#455), deny-fd-heredoc"
+  "cdg-dec-deny-procsubst|case_cdg_dec_deny_procsubst|deny: decoy / shim input (#455), deny-procsubst"
+  "cdg-dec-deny-second-shim|case_cdg_dec_deny_second_shim|deny: decoy / shim input (#455), deny-second-shim"
+  "cdg-dec-deny-two-tails|case_cdg_dec_deny_two_tails|deny: decoy / shim input (#455), deny-two-tails"
+  "cdg-dec-deny-unquoted-dollar|case_cdg_dec_deny_unquoted_dollar|deny: decoy / shim input (#455), deny-unquoted-dollar"
+  "cdg-dec-deny-unquoted-backtick|case_cdg_dec_deny_unquoted_backtick|deny: decoy / shim input (#455), deny-unquoted-backtick"
+  "cdg-dec-deny-unquoted-backslash|case_cdg_dec_deny_unquoted_backslash|deny: decoy / shim input (#455), deny-unquoted-backslash"
+  "cdg-dec-deny-body-codespan|case_cdg_dec_deny_body_codespan|deny: decoy / shim input (#455), deny-body-codespan"
+  "cdg-dec-deny-heredoc-dotdot|case_cdg_dec_deny_heredoc_dotdot|deny: decoy / shim input (#455), deny-heredoc-dotdot"
+  "cdg-dec-noop-heredoc-sq-dollar|case_cdg_dec_noop_heredoc_sq_dollar|no opinion: decoy / shim input (#455), noop-heredoc-sq-dollar"
+  "cdg-dec-noop-heredoc-dq-dollar|case_cdg_dec_noop_heredoc_dq_dollar|no opinion: decoy / shim input (#455), noop-heredoc-dq-dollar"
+  "cdg-dec-noop-heredoc-bs-dollar|case_cdg_dec_noop_heredoc_bs_dollar|no opinion: decoy / shim input (#455), noop-heredoc-bs-dollar"
+  "cdg-dec-noop-heredoc-dash|case_cdg_dec_noop_heredoc_dash|no opinion: decoy / shim input (#455), noop-heredoc-dash"
+  "cdg-dec-noop-heredoc-out-redirects|case_cdg_dec_noop_heredoc_out_redirects|no opinion: decoy / shim input (#455), noop-heredoc-out-redirects"
+  "cdg-dec-noop-heredoc-chain|case_cdg_dec_noop_heredoc_chain|no opinion: decoy / shim input (#455), noop-heredoc-chain"
+  "cdg-dec-noop-unquoted-plain|case_cdg_dec_noop_unquoted_plain|no opinion: decoy / shim input (#455), noop-unquoted-plain"
+  "cdg-dec-noop-two-shims|case_cdg_dec_noop_two_shims|no opinion: decoy / shim input (#455), noop-two-shims"
+  "cdg-dec-never-executes|case_cdg_dec_never_executes|deny, sentinel absent on a booby-trapped PATH: decoy / shim input (#455), never-executes"
+  "cdg-dec-deny-flood-timing|case_cdg_dec_deny_flood_timing|wall-clock proof under a 15s active deadline: decoy / shim input (#455), deny-flood-timing"
+  "cdg-qa-deny-sq-space|case_cdg_qa_deny_sq_space|deny: quoted assignment (#455, absorbing #456), deny-sq-space"
+  "cdg-qa-deny-applypatch|case_cdg_qa_deny_applypatch|deny: quoted assignment before the applypatch spelling (#455, absorbing #456)"
+  "cdg-qa-deny-dq-space|case_cdg_qa_deny_dq_space|deny: quoted assignment (#455, absorbing #456), deny-dq-space"
+  "cdg-qa-deny-sq-many-spaces|case_cdg_qa_deny_sq_many_spaces|deny: quoted assignment (#455, absorbing #456), deny-sq-many-spaces"
+  "cdg-qa-deny-dq-many-spaces|case_cdg_qa_deny_dq_many_spaces|deny: quoted assignment (#455, absorbing #456), deny-dq-many-spaces"
+  "cdg-qa-deny-env-assign|case_cdg_qa_deny_env_assign|deny: quoted assignment (#455, absorbing #456), deny-env-assign"
+  "cdg-qa-deny-env-quoted-assign|case_cdg_qa_deny_env_quoted_assign|deny: quoted assignment (#455, absorbing #456), deny-env-quoted-assign"
+  "cdg-qa-deny-redirect-target|case_cdg_qa_deny_redirect_target|deny: quoted assignment (#455, absorbing #456), deny-redirect-target"
+  "cdg-qa-deny-two-assigns|case_cdg_qa_deny_two_assigns|deny: quoted assignment (#455, absorbing #456), deny-two-assigns"
+  "cdg-qa-deny-heredoc|case_cdg_qa_deny_heredoc|deny: quoted assignment (#455, absorbing #456), deny-heredoc"
+  "cdg-qa-deny-cut-tail|case_cdg_qa_deny_cut_tail|deny: quoted assignment (#455, absorbing #456), deny-cut-tail"
+  "cdg-qa-deny-backslash-space|case_cdg_qa_deny_backslash_space|deny: quoted assignment (#455, absorbing #456), deny-backslash-space"
+  "cdg-qa-deny-body-possessive|case_cdg_qa_deny_body_possessive|deny: quoted assignment (#455, absorbing #456), deny-body-possessive"
+  "cdg-qa-noop-quoted-arg|case_cdg_qa_noop_quoted_arg|no opinion: quoted assignment (#455, absorbing #456), noop-quoted-arg"
+  "cdg-qa-noop-other-segment|case_cdg_qa_noop_other_segment|no opinion: quoted assignment (#455, absorbing #456), noop-other-segment"
+  "cdg-qa-noop-balanced-assign|case_cdg_qa_noop_balanced_assign|no opinion: quoted assignment (#455, absorbing #456), noop-balanced-assign"
+  "cdg-qa-never-executes|case_cdg_qa_never_executes|deny, sentinel absent on a booby-trapped PATH: quoted assignment (#455, absorbing #456), never-executes"
+  "cdg-qa-noop-flood-timing|case_cdg_qa_noop_flood_timing|wall-clock proof under a 15s active deadline: quoted assignment (#455, absorbing #456), noop-flood-timing"
   # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
   "codex-gcg-main-status|case_codex_gcg_main_status|allow: git-c-guard.sh under a Codex-shaped main-session payload, git -C ../demo-wt-1 status --porcelain (pins the unchanged verdict -- Codex ignores this hook's if gate, but the script itself never reads it)"
   "codex-gcg-apply-patch|case_codex_gcg_apply_patch|silent: a Codex apply_patch payload (tool_name != Bash)"

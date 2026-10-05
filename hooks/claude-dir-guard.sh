@@ -19,8 +19,11 @@
 # `..`-free (fail-closed per the triage record this issue settled), OR (apply_patch, or Bash
 # carrying an inline patch, #407) when the patch itself cannot be parsed into a recognised header
 # shape, OR (Bash only, #407 amendment) when the command word is `apply_patch`/`applypatch` but
-# carries no inline patch this hook can see at all (e.g. reading the patch from a file); every
-# other case — main session (no agent_type), any other agent, `permission_mode: "plan"`, a tool
+# carries no inline patch this hook can see at all (e.g. reading the patch from a file), OR (Bash
+# only, #455) when the shim's own input is anything but its own inline heredoc while an inline
+# patch also appears elsewhere in the command (a decoy), OR (Bash only, #455/#456) when an
+# unbalanced quote or a trailing backslash precedes a command word the walk resolved in a segment
+# that mentions the shim; every other case — main session (no agent_type), any other agent, `permission_mode: "plan"`, a tool
 # other than Edit/Write/apply_patch/Bash, malformed stdin, an absent/empty file_path/command, an
 # ordinary Bash call that neither carries an inline patch nor invokes the shim as its command word
 # (`apply_patch`/`applypatch` appearing only as an ordinary argument gets no opinion; the walk
@@ -126,7 +129,9 @@
 # the call is an Edit/Write/apply_patch/Bash from a recognised implementer/verifier agent_type
 # whose target path(s) the policy below denies, or whose patch (apply_patch, or an inline
 # Bash-carried patch) cannot be parsed at all, or whose Bash command word is `apply_patch`/
-# `applypatch` with no inline patch this hook can see, in which case print exactly one reason line
+# `applypatch` with no inline patch this hook can see, or whose shim input is not its own inline
+# heredoc next to an inline decoy patch, or whose shim segment is preceded by an unbalanced quote
+# or trailing backslash (#455), in which case print exactly one reason line
 # to stderr and exit 2 ("deny"); stdout is always empty. Wired in hooks/hooks.json via
 # `${CLAUDE_PLUGIN_ROOT}`, with no "if" gate: the "if" field is permission-rule syntax over
 # tool_input constituents only -- it cannot see agent_type, it cannot express a case-insensitive/
@@ -169,13 +174,43 @@
 # (`echo "x ]] apply_patch"`) now denies too, the same class hooks/agent-boundary.sh's own tokenizer
 # already documents for itself.
 #
-# (#437, found while planning, not fixed here -- see this repo's issue tracker for the filed
-# follow-up) A Bash call that both invokes the shim reading a patch FILE (`apply_patch <
-# evil.patch`) and separately carries an unrelated, exact `*** Begin Patch` block with only benign
-# headers (e.g., inside an unrelated `cat <<'EOF' >/dev/null` heredoc) lets the structured parse
-# below run and pass on the benign block while the shim itself reads the untrusted file -- the
-# "no inline patch" deny never runs because is_apply_patch_word AND has_exact_begin_patch_line both
-# see something to work with, just not the same file the shim actually reads.
+# (#455) A Bash call that both invokes the shim reading a patch FILE (`apply_patch < evil.patch`)
+# and separately carries an unrelated, exact `*** Begin Patch` block with only benign headers (e.g.
+# inside an unrelated `cat <<'EOF' >/dev/null` heredoc) used to let the structured parse pass on the
+# benign block while the shim read the untrusted file. is_apply_patch_word now scans the shim's own
+# segment once: its input is safe only when it is an inline `<<` heredoc (plus output redirects and
+# a bare fd before one); a file argument, `<`, `<<<`, `<>` (even after a heredoc, the last stdin
+# redirect wins), an fd-numbered input such as `3<<`, a process substitution, a pipe into a bare
+# shim, or an unquoted heredoc delimiter in a command carrying `$`, a backtick or a backslash (the
+# shell expands the body first) is unsafe, and the Bash route denies an unsafe shim BEFORE the
+# structured parse whenever an exact Begin Patch line is present -- measured: the issue's decoy
+# plus `apply_patch < evil.patch` -> rc 2 ("not from an inline heredoc"). Documented over-blocks
+# (fail-closed, measured directly against this script): a heredoc patch whose body line begins with
+# a code span of the shim name (the name between backticks) -> rc 2, since that line is its own
+# walk segment with no heredoc; `cd "$HOME/x" && apply_patch <<EOF ...` with an unquoted delimiter
+# -> rc 2. The unbalanced-quote rule below over-blocks more broadly: ANY line of a multi-line Bash
+# string (a commit body, echo/printf text, a `cat <<'EOF' > file` body, a patch context line such
+# as " Codex's apply_patch shim") that mentions apply_patch/applypatch and whose words up to its
+# command word (any leading skipped assignment or prefix word included) carry an unbalanced quote
+# or a trailing backslash denies for implementer/verifier calls, with no patch and no shim
+# invocation involved -- measured: `printf '%s' "one<newline>Don't call apply_patch here"` -> rc 2,
+# and so does the same line as a `cat > f <<'EOF'` body, since every heredoc body line is its own
+# walk segment whatever the delimiter's quoting (rc 0 before, and rc 0 for the main session).
+# Remedies: write such text with Edit/Write (then, e.g., `git commit -F <file>`), use Codex's
+# native apply_patch tool call for a patch, or avoid the shim name on that line. A quoted heredoc
+# delimiter does NOT help here (it is the remedy only for the unquoted-<<EOF over-block above).
+#
+# (#455, absorbing #456) In a segment whose text mentions `apply_patch`/`applypatch` and carries a
+# quote or a backslash, any token from a walk window's start through its resolved non-shim command
+# word that has an odd count of `'` or of `"`, or ends in a backslash, denies ("unbalanced quote"):
+# the whitespace split happens before quotes are stripped, so `X='a b' apply_patch < x.patch` or
+# `X=a\ b apply_patch < x.patch` would otherwise resolve `b` as the command word -- measured: both
+# -> rc 2 (rc 0 before). `echo 'a b' apply_patch` (the odd token follows the resolved word) and
+# `X='a b' echo hi; rg apply_patch hooks/` (the segment never mentions the shim) stay no opinion.
+# RESIDUAL, not closed: a quoted value that contains a segment-break character plus whitespace
+# (`X='a;b c' apply_patch < x.patch`) still evades -- measured: rc 0 -- because the opening quote
+# sits in the previous segment, and tracking quotes across segments would over-block heredoc
+# bodies.
 #
 # Documented under-blocking classes (evasions, named rather than hidden): a Bash-issued write
 # (`cat >>`, `tee`, `sed -i`) never reaches an Edit/Write/apply_patch hook by construction; since
@@ -191,7 +226,9 @@
 # redirect target/source and a bare-digits fd immediately before a redirect, so a LEADING
 # redirect cannot hide the command word either), matches a path-qualified spelling
 # (`./apply_patch`, `/usr/local/bin/apply_patch`) by basename, and skips a leading `NAME=value`
-# assignment or a hooks/agent-boundary.sh-vocabulary PREFIX_WORDS member (including
+# assignment (since #455 a prefix token carrying an unbalanced quote or a trailing backslash
+# denies instead, see the #455 paragraphs above) or a hooks/agent-boundary.sh-vocabulary
+# PREFIX_WORDS member (including
 # `bash`/`sh`/`env`/`sudo`/…, so `bash -c apply_patch` now resolves past `bash -c` to `apply_patch`
 # and denies) -- still backslash-blind like every other scan in this directory (since #437, quote
 # CHARACTERS are stripped from each token before matching/resolving it -- see walk_window()'s own
@@ -216,7 +253,8 @@
 # genuinely different segment separator this walk does not parse (a literal newline INSIDE
 # one already-broken-out segment, e.g. inside a nested subshell) can all still evade BOTH the
 # belt-and-braces `.claude`/`.codex` raw-text check and the "no inline patch" deny (neither ever
-# runs at all when is_apply_patch_word itself returns false) without evading the "carries an
+# runs at all when is_apply_patch_word itself returns false, and neither does the #455 decoy deny
+# or unbalanced-quote deny) without evading the "carries an
 # inline patch" deny (which matches on the patch grammar's own literal text regardless of how the
 # shim was invoked, independently of command-word detection). A header line's OWN indentation is
 # stripped only of ASCII space and tab (see ltrim()/trim() below) -- a header preceded by Unicode
@@ -537,14 +575,103 @@ parse_patch_headers() {
   [ "$headers" -gt 0 ] || deny_patch_unparseable "no file header"
 }
 
+# quote_parity_check START END (#455, absorbing #456; the unbalanced-quote predicate #449 states
+# for push-guard too) -- fail-closed deny when any token toks[START..END] (inclusive, the CALLER's
+# own `toks` array through dynamic scope, the same convention walk_window uses) carries an odd
+# count of `'` or of `"`: this walk splits a segment on whitespace BEFORE it strips quotes, so a
+# quoted value with a space (`X='a b'`) arrives as two tokens, the second of which would otherwise
+# be resolved as the command word and hide the shim that follows. Length differences only (no
+# external command, no subshell); each token is touched once, and walk_window calls this only over
+# tokens its own window already walked.
+quote_parity_check() {
+  local j="$1" qraw qa qb
+  while [ "$j" -le "$2" ]; do
+    qraw="${toks[$j]:-}"
+    qa="${qraw//$sq/}"
+    qb="${qa//$dq/}"
+    if [ $(( ((${#qraw} - ${#qa}) | (${#qa} - ${#qb})) & 1 )) -eq 1 ]; then
+      set +f
+      deny_patch_unparseable "command word cannot be resolved: an unbalanced quote precedes it in a segment that mentions apply_patch/applypatch"
+    fi
+    # A trailing backslash escapes the following space (`X=a\ b`), splitting one word in two just
+    # like a quoted space does, and carries no quote for the parity test above to see.
+    if [ "${qraw%\\}" != "$qraw" ]; then
+      set +f
+      deny_patch_unparseable "command word cannot be resolved: an unbalanced quote or a trailing backslash precedes it in a segment that mentions apply_patch/applypatch"
+    fi
+    j=$((j + 1))
+  done
+}
+
+# scan_shim_input START STOP (#455) -- one linear pass over the CALLER's `toks[START..STOP)` (the
+# tokens AFTER the shim word in its own segment), recording in the global `iapw_unsafe` the first
+# reason the shim's input is NOT only an inline `<<` heredoc, and returning at that finding. Safe
+# set: a heredoc operator run (exactly two `<`, no `>`) plus its delimiter, an output redirect run
+# plus its target, and a bare-digits fd immediately before an output redirect. Everything else is
+# unsafe -- a file argument, `<`, `<<<`, `<>` (the LAST stdin redirect wins, so one after a heredoc
+# still counts), an fd-numbered input such as `3<<`, a heredoc operator with no delimiter token
+# (process substitution `< <(...)`) -- and so is a segment with no heredoc at all (a pipe into a
+# bare shim, a bare `apply_patch`). A heredoc whose delimiter carries a quote or backslash is
+# literal; any other sets `iapw_unquoted`, which is_apply_patch_word judges against the text.
+scan_shim_input() {
+  local j="$1" k nin nout saw_hd=0 d
+  while [ "$j" -lt "$2" ]; do
+    d="${toks[$j]}"
+    if [ "$d" = "$mark_in" ] || [ "$d" = "$mark_out" ]; then
+      nin=0
+      nout=0
+      k="$j"
+      while [ "$k" -lt "$2" ]; do
+        case "${toks[$k]}" in
+          "$mark_in") nin=$((nin + 1)) ;;
+          "$mark_out") nout=$((nout + 1)) ;;
+          *) break ;;
+        esac
+        k=$((k + 1))
+      done
+      if [ "$nin" -eq 2 ] && [ "$nout" -eq 0 ]; then
+        if [ "$k" -ge "$2" ]; then
+          iapw_unsafe="from a process substitution, or a heredoc operator with no delimiter"
+          return 0
+        fi
+        case "${toks[$k]}" in
+          *"$sq"*|*"$dq"*|*\\*) ;;
+          *) iapw_unquoted=1 ;;
+        esac
+        saw_hd=1
+      elif [ "$nin" -gt 0 ]; then
+        iapw_unsafe="from an input redirect or here-string"
+        return 0
+      fi
+      j=$((k + 1))
+      continue
+    fi
+    if [[ "$d" =~ $digits_ere ]]; then
+      case "${toks[$((j + 1))]:-}" in
+        "$mark_out") j=$((j + 1)); continue ;;
+      esac
+    fi
+    iapw_unsafe="from an argument"
+    return 0
+  done
+  if [ "$saw_hd" -eq 0 ]; then
+    iapw_unsafe="from its standard input, with no heredoc on its own command"
+  fi
+  return 0
+}
+
 # walk_window START STOP (#437) -- resolves ONE window `toks[START..STOP)` of the CALLER's own
 # `local -a toks` array, read through bash's own dynamic scope (this helper takes no `toks`
 # parameter; it must only ever be called from inside is_apply_patch_word, which always declares
-# `toks`, plus `mark_in`/`mark_out`/`assign_ere`/`digits_ere`, in its own scope first). Shared by
+# `toks`, plus `mark_in`/`mark_out`/`assign_ere`/`digits_ere`/`seg_shim_at`/`seg_qflag`, in its own
+# scope first). Shared by
 # the base walk (the whole segment, START=0, STOP=token count) and each `]]` tail below
 # (START/STOP bracket the tokens strictly between two standalone `]]` -- a cut tail -- or between
 # the last `]]` and the segment's own end -- the final tail) -- the same per-token skip order either way. Sets two globals (not `local`, so
-# the caller reads them after this returns) and never prints or exits:
+# the caller reads them after this returns); since #455 it also records, in the caller's
+# `seg_shim_at`, the smallest resolved shim index, and (only in a segment the caller flagged with
+# `seg_qflag`) runs quote_parity_check over its own walked tokens, which can exit 2. Otherwise it
+# never prints or exits:
 #   - `ww_word`: the resolved token with quote characters stripped, or empty if the window is
 #     exhausted (or empty) before any word resolves.
 #   - `ww_skipped`: 1 when at least one token in the window was consumed by the redirect/fd skip,
@@ -612,6 +739,28 @@ walk_window() {
     break
   done
   [ "$saw_prefix" -eq 1 ] && ww_skipped=1
+  # (#455) Bookkeeping after the per-token loop, which is untouched. A window that resolved the shim
+  # records the SMALLEST resolved index in the caller's `seg_shim_at` (the base walk and every `]]`
+  # tail may each resolve it; the input scan starts from the earliest). Any other window, in a
+  # segment the caller flagged (`seg_qflag`: the segment text mentions the shim and carries a
+  # quote or a backslash), runs the unbalanced-quote check over its own already-walked tokens, start through the
+  # resolved word (through the window's last token when nothing resolved).
+  case "${ww_word##*/}" in
+    apply_patch|applypatch)
+      if [ "$seg_shim_at" -lt 0 ] || [ "$i" -lt "$seg_shim_at" ]; then
+        seg_shim_at="$i"
+      fi
+      ;;
+    *)
+      if [ "$seg_qflag" -eq 1 ]; then
+        if [ -n "$ww_word" ]; then
+          quote_parity_check "$1" "$i"
+        else
+          quote_parity_check "$1" $((n - 1))
+        fi
+      fi
+      ;;
+  esac
 }
 
 # is_apply_patch_word TEXT (#407 amendment A1; reworked #407 kickback rounds 2/3; reworked again
@@ -662,17 +811,29 @@ walk_window() {
 # cut-push rule, the downstream checks in the Bash route below (the belt-and-braces raw-text scan,
 # the structured patch parse, and the "no inline patch" deny) all read the WHOLE command text, never
 # only the resolved tail, so cutting the command-word search here hides nothing those checks use.
+# (#455) The shim's own-segment input scan likewise never stops at a `]]` cut: it starts after the
+# smallest shim index any window of the segment resolved and runs to the segment's end, and it runs
+# once per segment, stopping at the first unsafe token. An unquoted heredoc delimiter (the
+# `iapw_unquoted` flag) is judged once at the end against the whole text: `$`, a backtick or a
+# backslash anywhere makes it unsafe.
 #
 # (#437) Memoised: both call sites in the Bash route below always pass the identical text, so the
 # global `iapw_memo` (declared just below, empty until the first call in this process) short-
 # circuits the second call rather than re-walking the whole command a second time.
 iapw_memo=""
+# (#455) Globals is_apply_patch_word fills while it walks (not `local`, so the Bash route reads them
+# after the call, including on a memoised return): `iapw_unsafe` holds the first reason a shim
+# segment's input is not only an inline heredoc (empty when every shim segment is safe), and
+# `iapw_unquoted` is 1 once any shim heredoc has an unquoted delimiter.
+iapw_unsafe=""
+iapw_unquoted=0
 is_apply_patch_word() {
   local text="$1" flat seg base oldifs found=1
   local mark_in=$'\x01LT\x01' mark_out=$'\x01GT\x01'
   local assign_ere='^[A-Za-z_][A-Za-z0-9_]*='
   local digits_ere='^[0-9]+$'
   local db_n k prev t
+  local seg_shim_at=-1 seg_qflag=0
 
   if [ -n "$iapw_memo" ]; then
     return "$iapw_memo"
@@ -703,6 +864,15 @@ is_apply_patch_word() {
     local -a toks
     toks=($seg)
     local n="${#toks[@]}"
+    seg_shim_at=-1
+    seg_qflag=0
+    case "$seg" in
+      *apply_patch*|*applypatch*)
+        case "$seg" in
+          *"$sq"*|*"$dq"*|*\\*) seg_qflag=1 ;;
+        esac
+        ;;
+    esac
 
     walk_window 0 "$n"
     base="${ww_word##*/}"
@@ -750,10 +920,23 @@ is_apply_patch_word() {
         fi
         ;;
     esac
+    # (#455) The shim's own segment: scan its input once, from the smallest resolved shim index,
+    # unless an earlier segment already recorded an unsafe input.
+    if [ "$seg_shim_at" -ge 0 ] && [ -z "$iapw_unsafe" ]; then
+      scan_shim_input $((seg_shim_at + 1)) "$n"
+    fi
     IFS="$lf"
   done
   set +f
   IFS="$oldifs"
+  # (#455) An unquoted heredoc delimiter lets the shell expand the body before the shim reads it,
+  # so the patch the hook parsed is not the patch the shim applies whenever the command carries
+  # anything expandable.
+  if [ -z "$iapw_unsafe" ] && [ "$iapw_unquoted" -eq 1 ]; then
+    case "$text" in
+      *'$'*|*'`'*|*\\*) iapw_unsafe="through an unquoted heredoc delimiter, whose body the shell expands first" ;;
+    esac
+  fi
   iapw_memo="$found"
   return "$found"
 }
@@ -825,10 +1008,17 @@ elif [ "$tool_name" = "Bash" ]; then
   fi
 
   if has_exact_begin_patch_line "$bash_cmd"; then
-    # The command text carries an inline patch: parse it exactly like the apply_patch route,
+    # The command text carries an inline patch. (#455) When the shim is invoked with an input that
+    # is not only its own inline heredoc (a file, a redirect, a pipe, a here-string, an unquoted
+    # delimiter on an expandable command), the inline patch found here may be an unrelated decoy
+    # while the shim applies something this hook never sees, so deny BEFORE the structured parse
+    # trusts it. Otherwise parse the inline patch exactly like the apply_patch route,
     # resolved against the SAME top-level `cwd` field -- this gives the precise ".claude"/".codex"
     # segment message (via classify_path) whenever the structured patch itself names one AND the
     # belt-and-braces check above did not already deny.
+    if is_apply_patch_word "$bash_cmd" && [ -n "$iapw_unsafe" ]; then
+      deny_patch_unparseable "apply_patch/applypatch invoked via Bash takes its patch $iapw_unsafe, not from an inline heredoc this hook parsed"
+    fi
     cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
     cwd="${cwd//$cr/}"
     cwd="${cwd//\\//}"
