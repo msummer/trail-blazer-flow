@@ -3808,6 +3808,479 @@
         "push-unres-deny-codex-main-session",
         "push-xseg-deny-codex-main-session"
       ]
+    },
+    {
+      "name": "455-cdg-dec-route",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "    if is_apply_patch_word \"$bash_cmd\" && [ -n \"$iapw_unsafe\" ]; then",
+          "to": "    if false && [ -n \"$iapw_unsafe\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-deny-applypatch",
+        "cdg-dec-deny-body-codespan",
+        "cdg-dec-deny-fd-heredoc",
+        "cdg-dec-deny-file-arg",
+        "cdg-dec-deny-flood-timing",
+        "cdg-dec-deny-heredoc-then-herestring",
+        "cdg-dec-deny-heredoc-then-redirect",
+        "cdg-dec-deny-heredoc-then-rw",
+        "cdg-dec-deny-herestring",
+        "cdg-dec-deny-pipe",
+        "cdg-dec-deny-procsubst",
+        "cdg-dec-deny-redirect-file",
+        "cdg-dec-deny-redirect-first",
+        "cdg-dec-deny-second-shim",
+        "cdg-dec-deny-two-tails",
+        "cdg-dec-deny-unquoted-backslash",
+        "cdg-dec-deny-unquoted-backtick",
+        "cdg-dec-deny-unquoted-dollar",
+        "cdg-dec-never-executes"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-shim-record",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "        seg_shim_at=\"$i\"\n      fi\n      ;;",
+          "to": "        :\n      fi\n      ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-deny-applypatch",
+        "cdg-dec-deny-body-codespan",
+        "cdg-dec-deny-fd-heredoc",
+        "cdg-dec-deny-file-arg",
+        "cdg-dec-deny-flood-timing",
+        "cdg-dec-deny-heredoc-then-herestring",
+        "cdg-dec-deny-heredoc-then-redirect",
+        "cdg-dec-deny-heredoc-then-rw",
+        "cdg-dec-deny-herestring",
+        "cdg-dec-deny-pipe",
+        "cdg-dec-deny-procsubst",
+        "cdg-dec-deny-redirect-file",
+        "cdg-dec-deny-redirect-first",
+        "cdg-dec-deny-second-shim",
+        "cdg-dec-deny-two-tails",
+        "cdg-dec-deny-unquoted-backslash",
+        "cdg-dec-deny-unquoted-backtick",
+        "cdg-dec-deny-unquoted-dollar",
+        "cdg-dec-never-executes"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-min",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "if [ \"$seg_shim_at\" -lt 0 ] || [ \"$i\" -lt \"$seg_shim_at\" ]; then",
+          "to": "if true; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-deny-two-tails"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-in-redirect",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "elif [ \"$nin\" -gt 0 ]; then",
+          "to": "elif false; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-deny-heredoc-then-herestring",
+        "cdg-dec-deny-heredoc-then-redirect",
+        "cdg-dec-deny-heredoc-then-rw"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-heredoc-exact",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "if [ \"$nin\" -eq 2 ] && [ \"$nout\" -eq 0 ]; then",
+          "to": "if [ \"$nin\" -ge 2 ] && [ \"$nout\" -eq 0 ]; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-deny-heredoc-then-herestring",
+        "cdg-dec-deny-herestring"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-delim-required",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "        if [ \"$k\" -ge \"$2\" ]; then",
+          "to": "        if false; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-deny-procsubst"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-arg",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "    iapw_unsafe=\"from an argument\"\n    return 0\n",
+          "to": "    j=$((j + 1))\n    continue\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-deny-fd-heredoc",
+        "cdg-dec-deny-file-arg",
+        "cdg-dec-deny-flood-timing",
+        "cdg-dec-deny-two-tails"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-no-heredoc",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "  if [ \"$saw_hd\" -eq 0 ]; then",
+          "to": "  if false; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-deny-body-codespan",
+        "cdg-dec-deny-pipe"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-fd-out",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "        \"$mark_out\") j=$((j + 1)); continue ;;",
+          "to": "        \"$mark_out\") : ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-noop-heredoc-out-redirects"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-out-target",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "      j=$((k + 1))\n      continue\n",
+          "to": "      j=\"$k\"\n      continue\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-deny-heredoc-dotdot",
+        "cdg-dec-noop-heredoc-bs-dollar",
+        "cdg-dec-noop-heredoc-chain",
+        "cdg-dec-noop-heredoc-dash",
+        "cdg-dec-noop-heredoc-dq-dollar",
+        "cdg-dec-noop-heredoc-out-redirects",
+        "cdg-dec-noop-heredoc-sq-dollar",
+        "cdg-dec-noop-two-shims",
+        "cdg-dec-noop-unquoted-plain"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-unquoted-flag",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "          *) iapw_unquoted=1 ;;",
+          "to": "          *) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-deny-unquoted-backslash",
+        "cdg-dec-deny-unquoted-backtick",
+        "cdg-dec-deny-unquoted-dollar"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-delim-sq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "          *\"$sq\"*|*\"$dq\"*|*\\\\*) ;;",
+          "to": "          *\"$dq\"*|*\\\\*) ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-noop-heredoc-sq-dollar"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-delim-dq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "          *\"$sq\"*|*\"$dq\"*|*\\\\*) ;;",
+          "to": "          *\"$sq\"*|*\\\\*) ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-noop-heredoc-dq-dollar"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-delim-bs",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "          *\"$sq\"*|*\"$dq\"*|*\\\\*) ;;",
+          "to": "          *\"$sq\"*|*\"$dq\"*) ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-noop-heredoc-bs-dollar"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-text-dollar",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "      *'$'*|*'`'*|*\\\\*) iapw_unsafe=",
+          "to": "      *'`'*|*\\\\*) iapw_unsafe="
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-deny-unquoted-dollar"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-text-backtick",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "      *'$'*|*'`'*|*\\\\*) iapw_unsafe=",
+          "to": "      *'$'*|*\\\\*) iapw_unsafe="
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-deny-unquoted-backtick"
+      ]
+    },
+    {
+      "name": "455-cdg-dec-text-backslash",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dec-",
+      "edits": [
+        {
+          "from": "      *'$'*|*'`'*|*\\\\*) iapw_unsafe=",
+          "to": "      *'$'*|*'`'*) iapw_unsafe="
+        }
+      ],
+      "expect_fail": [
+        "cdg-dec-deny-unquoted-backslash"
+      ]
+    },
+    {
+      "name": "455-cdg-qa-check",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-qa-",
+      "edits": [
+        {
+          "from": "if [ $(( ((${#qraw} - ${#qa}) | (${#qa} - ${#qb})) & 1 )) -eq 1 ]; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-qa-deny-body-possessive",
+        "cdg-qa-deny-cut-tail",
+        "cdg-qa-deny-dq-many-spaces",
+        "cdg-qa-deny-dq-space",
+        "cdg-qa-deny-env-assign",
+        "cdg-qa-deny-env-quoted-assign",
+        "cdg-qa-deny-heredoc",
+        "cdg-qa-deny-redirect-target",
+        "cdg-qa-deny-sq-many-spaces",
+        "cdg-qa-deny-sq-space",
+        "cdg-qa-deny-two-assigns",
+        "cdg-qa-never-executes"
+      ]
+    },
+    {
+      "name": "455-cdg-qa-sq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-qa-",
+      "edits": [
+        {
+          "from": "$(( ((${#qraw} - ${#qa}) | (${#qa} - ${#qb})) & 1 ))",
+          "to": "$(( (${#qa} - ${#qb}) & 1 ))"
+        }
+      ],
+      "expect_fail": [
+        "cdg-qa-deny-body-possessive",
+        "cdg-qa-deny-cut-tail",
+        "cdg-qa-deny-env-assign",
+        "cdg-qa-deny-env-quoted-assign",
+        "cdg-qa-deny-heredoc",
+        "cdg-qa-deny-redirect-target",
+        "cdg-qa-deny-sq-many-spaces",
+        "cdg-qa-deny-sq-space",
+        "cdg-qa-deny-two-assigns",
+        "cdg-qa-never-executes"
+      ]
+    },
+    {
+      "name": "455-cdg-qa-dq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-qa-",
+      "edits": [
+        {
+          "from": "$(( ((${#qraw} - ${#qa}) | (${#qa} - ${#qb})) & 1 ))",
+          "to": "$(( (${#qraw} - ${#qa}) & 1 ))"
+        }
+      ],
+      "expect_fail": [
+        "cdg-qa-deny-dq-many-spaces",
+        "cdg-qa-deny-dq-space"
+      ]
+    },
+    {
+      "name": "455-cdg-qa-backslash",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-qa-",
+      "edits": [
+        {
+          "from": "if [ \"${qraw%\\\\}\" != \"$qraw\" ]; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-qa-deny-backslash-space"
+      ]
+    },
+    {
+      "name": "455-cdg-qa-range-start",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-qa-",
+      "edits": [
+        {
+          "from": "          quote_parity_check \"$1\" \"$i\"",
+          "to": "          quote_parity_check \"$i\" \"$i\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-qa-deny-backslash-space",
+        "cdg-qa-deny-dq-many-spaces",
+        "cdg-qa-deny-redirect-target",
+        "cdg-qa-deny-sq-many-spaces"
+      ]
+    },
+    {
+      "name": "455-cdg-qa-range-end",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-qa-",
+      "edits": [
+        {
+          "from": "          quote_parity_check \"$1\" \"$i\"",
+          "to": "          quote_parity_check \"$1\" $((n - 1))"
+        }
+      ],
+      "expect_fail": [
+        "cdg-qa-noop-quoted-arg"
+      ]
+    },
+    {
+      "name": "455-cdg-qa-resolved-inclusive",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-qa-",
+      "edits": [
+        {
+          "from": "          quote_parity_check \"$1\" \"$i\"",
+          "to": "          quote_parity_check \"$1\" $((i - 1))"
+        }
+      ],
+      "expect_fail": [
+        "cdg-qa-deny-body-possessive",
+        "cdg-qa-deny-env-quoted-assign"
+      ]
+    },
+    {
+      "name": "455-cdg-qa-scope",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-qa-",
+      "edits": [
+        {
+          "from": "      *apply_patch*|*applypatch*)\n",
+          "to": "      *)\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-qa-noop-other-segment"
+      ]
+    },
+    {
+      "name": "455-cdg-qa-shim-exempt",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dbq-",
+      "edits": [
+        {
+          "from": "        seg_shim_at=\"$i\"\n      fi\n      ;;",
+          "to": "        seg_shim_at=\"$i\"\n      fi\n      if [ \"$seg_qflag\" -eq 1 ]; then quote_parity_check \"$1\" \"$i\"; fi\n      ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dbq-deny-bash-c-dq",
+        "cdg-dbq-deny-eval-dq",
+        "cdg-dbq-deny-eval-lead-space",
+        "cdg-dbq-deny-eval-sq",
+        "cdg-dbq-deny-quoted-prefix",
+        "cdg-dbq-deny-trap-sq"
+      ]
     }
   ]
 }

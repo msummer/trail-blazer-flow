@@ -16,6 +16,10 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #455: `hooks/claude-dir-guard.sh` denies a Bash call whose `apply_patch` shim takes its patch from anything but its own inline heredoc when an inline patch appears elsewhere in the command (a decoy), and fails closed when an unbalanced quote or a trailing backslash precedes the shim's command word, such as `X='a b' apply_patch < x.patch` (absorbs #456).
+
 ## v3.3.0
 
 This release makes scheduled unattended Codex runs a supported surface: `codex exec` passes of
