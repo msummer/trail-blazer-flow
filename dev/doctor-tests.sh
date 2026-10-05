@@ -114,7 +114,8 @@
 # resolved from the wrapper's own directory only (a decoy earlier on PATH is never run), the exact
 # launch argv and its `< /dev/null` stdin (a sentinel file proves it never reaches the child), the
 # watchdog's timeout/kill-grace and that it leaves no orphan, the outcome classification (completed,
-# failed, died-mid-run, timed-out, and the `Unattended stop: permission-denied` whole-line match),
+# failed, died-mid-run, timed-out, and the `Unattended stop: permission-denied` and `Unattended
+# stop: preflight` whole-line matches),
 # and the run-record pruning (newest 100 kept, bounded deletion, non-matching entries untouched) —
 # plus the narrowed `codex-setup-rules-gated` case this addition requires (the gated allow-rule
 # names no longer include a `.sh` FORBIDDEN rule by coincidence), (I3, #428) the wrapper's own
@@ -4020,7 +4021,10 @@ dead_pid_sched() {
 # hostname sentinel, plus a second, separately-sentinelled stderr line, exit 1 — proves the
 # failure-tracking body never quotes either line verbatim); nomsg (exit 0, never writes the -o
 # file); denied (the -o file's only line is exactly
-# "Unattended stop: permission-denied"); denied-midline (the same phrase embedded mid-line); die
+# "Unattended stop: permission-denied"); denied-midline (the same phrase embedded mid-line);
+# preflight-stop (#496: three lines, the middle one exactly "Unattended stop: preflight", proving the
+# whole-line match among other lines); preflight-midline (#496: the preflight phrase embedded
+# mid-line); die
 # (kills itself with SIGKILL); hang/hang-noterm (exec the REAL sleep, resolved via `command -v` at
 # BUILD time in this process's own PATH, for 20s — hang-noterm first sets TERM's disposition to
 # ignore, which persists across exec, so only SIGKILL ends it; both replace the process image via
@@ -4109,6 +4113,18 @@ case "$mode" in
     ;;
   denied-midline)
     [ -n "$outfile" ] && printf 'note: Unattended stop: permission-denied (embedded)\n' > "$outfile"
+    exit 0
+    ;;
+  preflight-stop)
+    [ -n "$outfile" ] && printf '%s\n' 'The bounded pass stopped during preflight.' 'Unattended stop: preflight' '`fetch origin` failed: fatal: could not read Username' > "$outfile"
+    exit 0
+    ;;
+  preflight-midline)
+    [ -n "$outfile" ] && printf 'note: Unattended stop: preflight (embedded)\n' > "$outfile"
+    exit 0
+    ;;
+  denied-and-preflight)
+    [ -n "$outfile" ] && printf '%s\n' 'Unattended stop: preflight' 'Unattended stop: permission-denied' > "$outfile"
     exit 0
     ;;
   die)
@@ -5099,9 +5115,19 @@ case_codex_sched_failed() {
 
 # codex-sched-unattended-stop — last-message.md's ONLY line is exactly "Unattended stop:
 # permission-denied": failed reason=unattended-stop-permission-denied, exit 1. Control: the same
-# phrase embedded mid-line (denied-midline) is NOT a whole-line match: completed.
+# phrase embedded mid-line (denied-midline) is NOT a whole-line match: completed. Likewise (#496) a
+# last-message.md carrying the line "Unattended stop: preflight" among other lines: failed
+# reason=unattended-stop-preflight, exit 1, and the failure's tracking issue is created with that
+# reason in its body; that phrase embedded mid-line (preflight-midline): completed. When both lines
+# are present (denied-and-preflight, preflight line first), permission-denied wins.
+# mutant:496-precedence-swapped — bin: the preflight block is checked before the permission-denied
+#   block. Killed here (the denied-and-preflight stub classifies unattended-stop-preflight).
 # mutant:427-unattended-stop-ignored — bin: the whole-line `grep -qxF` classification condition
 #   becomes `false`. Killed here (the denied stub no longer classifies as failed).
+# mutant:496-preflight-stop-ignored — bin: the preflight whole-line grep condition becomes `false`.
+#   Killed here (the preflight-stop stub classifies completed).
+# mutant:496-preflight-stop-substring — bin: the preflight grep loses -x (whole-line becomes
+#   substring). Killed here (the preflight-midline control classifies failed).
 case_codex_sched_unattended_stop() {
   mk_sched sched-unattended-stop
   build_stub_sched_codex "$sched_stub" denied
@@ -5116,6 +5142,32 @@ case_codex_sched_unattended_stop() {
   run_sched "$sched_stub:$PATH" --
   expect_rc 0
   expect_sched_out "outcome=completed"
+
+  mk_sched sched-unattended-stop-preflight
+  build_stub_sched_codex "$sched_stub" preflight-stop
+  build_stub_sched_gh "$sched_stub" ok
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  expect_sched_out "outcome=failed reason=unattended-stop-preflight"
+  expect_record_line "tracking=created"
+  case "$(cat "$sched_stub/gh.body.1" 2>/dev/null)" in
+    *'- Reason: `unattended-stop-preflight`'*) : ;;
+    *) __ok=0; __why="${__why}preflight stop tracking body missing its Reason line\n" ;;
+  esac
+
+  mk_sched sched-unattended-stop-preflight-midline
+  build_stub_sched_codex "$sched_stub" preflight-midline
+  build_stub_sched_gh "$sched_stub" ok
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 0
+  expect_sched_out "outcome=completed"
+
+  mk_sched sched-unattended-stop-both
+  build_stub_sched_codex "$sched_stub" denied-and-preflight
+  build_stub_sched_gh "$sched_stub" ok
+  run_sched "$sched_stub:$PATH" --
+  expect_rc 1
+  expect_sched_out "outcome=failed reason=unattended-stop-permission-denied"
 }
 
 # codex-sched-died — the launched codex is killed outright (SIGKILL): died-mid-run reason=signal-9,
@@ -7502,7 +7554,7 @@ cases=(
   "codex-sched-stop-exit|case_codex_sched_stop_exit|#427: harness-stop.sh replaced with a stub exiting 2 -> preflight-failed reason=harness-stop-exit-2, no argc; the stub's own stderr line lands in preflight.log (#443, bounded_run's own append-mode redirect)"
   "codex-sched-rundir-uncreatable|case_codex_sched_rundir_uncreatable|#427: trail-blazer/runs pre-created as a regular file -> mkdir -p fails, exit 2, no argc (the same failure shape a read-only .git under Codex produces)"
   "codex-sched-failed|case_codex_sched_failed|#427: the launched codex exits 1 -> failed reason=exit-1, stderr.log non-empty; a no-final-message run -> failed reason=no-final-message"
-  "codex-sched-unattended-stop|case_codex_sched_unattended_stop|#427: last-message.md's only line is exactly \"Unattended stop: permission-denied\" -> failed reason=unattended-stop-permission-denied; the same phrase embedded mid-line -> completed"
+  "codex-sched-unattended-stop|case_codex_sched_unattended_stop|#427: last-message.md's only line is exactly \"Unattended stop: permission-denied\" -> failed reason=unattended-stop-permission-denied; the same phrase embedded mid-line -> completed; #496: a line that is exactly \"Unattended stop: preflight\" -> failed reason=unattended-stop-preflight with its tracking issue created, the same phrase embedded mid-line -> completed, and with both lines present permission-denied wins"
   "codex-sched-died|case_codex_sched_died|#427: the launched codex is SIGKILLed -> died-mid-run reason=signal-9"
   "codex-sched-timeout|case_codex_sched_timeout|#427: a 1s timeout against a stub that takes the default TERM action -> timed-out, watchdog-fired present, the stub pid no longer alive"
   "codex-sched-timeout-kill|case_codex_sched_timeout_kill|#427: a stub that ignores TERM -> the kill-grace KILL ends it -> timed-out, the stub pid dead"
