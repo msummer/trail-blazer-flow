@@ -8113,12 +8113,17 @@ case_cdg_dl_deny_production_budget() {
   expect_cdg_deny_too_large implementer apply_patch
 }
 case_cdg_dl_deny_patch_marker_line() {
-  # A native header line `*** Add File: /repo/a` followed by 3000 trailing spaces is over the line
-  # cap by its `*** ` marker alone (no CR), so it denies at the cap; uncapped it would parse as a
-  # benign path and give no opinion.
-  local sp patch
-  sp="$(printf ' %.0s' $(seq 1 3000))"
-  patch="*** Begin Patch${LF}*** Add File: /repo/a${sp}${LF}+x${LF}*** End Patch"
+  # A native patch whose first line is an unrecognised `*** ` marker one byte over the line cap,
+  # padded with non-whitespace (no CR, no trailing whitespace): over the cap by its `*** ` marker
+  # alone, so it denies at the cap with the too-large line. Uncapped, the parser reaches line 1 and
+  # denies with its unrecognised-marker line at once, a different verdict with no trim loop, so the
+  # kill does not depend on host load. (Not a long path: classify_path's own cap would also print
+  # the too-large line.)
+  local cap patch
+  cap="$(cdg_dl_line_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_LINE_MAX_BYTES from the hook\n"; return; fi
+  patch="${CDG_TEXTCAP_PROBE}$(cdg_dl_fill $((cap + 1 - ${#CDG_TEXTCAP_PROBE})))"
+  [ "${#patch}" -eq $((cap + 1)) ] || { __ok=0; __why="${__why}fixture bug: line is ${#patch} chars, wanted $((cap + 1))\n"; return; }
   run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
   expect_cdg_deny_too_large implementer apply_patch
 }
@@ -8285,7 +8290,7 @@ case_cdgtextcap_deny_parse_at_cap() {
     __ok=0
     __why="${__why}expected rc 2, empty stdout and the parser's unrecognised-marker line; got rc=${cdg_rc} stdout=[${cdg_out}] stderr=[${cdg_err}]; hook run ${measured_ms}ms\n"
     case "$cdg_err" in
-      *"too large to analyse"*) __why="${__why}the too-large line means either the cap comparison is strict, or the pre-parser 1MB work outran the budget on this host\n" ;;
+      *"too large to analyse"*) __why="${__why}the too-large line means the cap comparison is strict, a native line cap hit the CR-free content line, or the pre-parser 1MB work outran the budget on this host\n" ;;
     esac
   fi
 }
@@ -10723,7 +10728,7 @@ cases=(
   "cdg-dl-deny-patch-cr-just-over-cap|case_cdg_dl_deny_patch_cr_just_over_cap|deny (#457): a native content line of a plus sign and per-line-cap CRs (one byte over the cap) -- over the line cap by its CR alone, exact too-large line"
   "cdg-dl-noop-patch-cr-many|case_cdg_dl_noop_patch_cr_many|no opinion (#457): a 250-line native apply_patch with a CR on every line adding a benign path -- CRs stripped per line, same verdict as before, inside a 15s active deadline"
   "cdg-dl-deny-production-budget|case_cdg_dl_deny_production_budget|wall-clock proof (#457): a native apply_patch with a 500000-space CR-free content line, budget knob 99 ignored -- ltrim's sampled loop denies, exact too-large line under a 15s active deadline"
-  "cdg-dl-deny-patch-marker-line|case_cdg_dl_deny_patch_marker_line|deny (#457): a native header line with 3000 trailing spaces -- over the line cap through its *** marker alone, exact too-large line"
+  "cdg-dl-deny-patch-marker-line|case_cdg_dl_deny_patch_marker_line|deny (#457): a native patch whose first line is an unrecognised *** marker one byte over the line cap, padded with non-whitespace -- over the line cap through its *** marker alone, exact too-large line (uncapped, the parser denies at line 1 instead)"
   "cdg-dl-deny-cwd-just-over-cap|case_cdg_dl_deny_cwd_just_over_cap|deny (#457): a native apply_patch whose cwd is one character over the per-line cap -- exact too-large line"
   "cdg-dl-deny-cwd-just-over-cap-bash|case_cdg_dl_deny_cwd_just_over_cap_bash|deny (#457): a Bash inline-patch call whose cwd is one character over the per-line cap -- exact too-large line"
   "cdg-dl-deny-line-multibyte|case_cdg_dl_deny_line_multibyte|deny (#457): a Bash line of 600 four-byte characters (over the cap in bytes, under it in characters) -- the cap is measured in bytes"
