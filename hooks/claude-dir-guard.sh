@@ -248,15 +248,17 @@
 #     break, so the segments are identical), inside a loop that samples the deadline first;
 #   - cdg_prepare_text runs first on BOTH text routes (the Bash route's command, the apply_patch
 #     route's patch text) and denies fail-closed, BEFORE any split or substitution, when the whole
-#     text is longer than `CDG_TEXT_MAX_CHARS` characters; it then strips CRs line by line in a
-#     sampled loop, and denies a physical line longer than `CDG_LINE_MAX_CHARS` characters. On the
+#     text is longer than `CDG_TEXT_MAX_BYTES` bytes; it then strips CRs line by line in a
+#     sampled loop, and denies a physical line longer than `CDG_LINE_MAX_BYTES` bytes. On the
 #     apply_patch route the line cap applies only to a line that contains a CR (the strip is the
 #     only superlinear step a long CR-free content line meets there) or a `*** ` patch-grammar
 #     marker (a header line the parser acts on); every other line is only bounded by the whole-text
 #     cap and by the sampled loops that touch it. The Bash route caps every line;
 #   - a single path (an Edit/Write file_path, or a patch header path joined to cwd) and the stdin
-#     `cwd` field are each denied, before any substitution, when longer than `CDG_LINE_MAX_CHARS`
-#     characters.
+#     `cwd` field are each denied, before any substitution, when longer than `CDG_LINE_MAX_BYTES`
+#     bytes. Every cap counts BYTES, not characters: the length check runs under a scoped
+#     `LC_ALL=C`, because `${#x}` counts characters under a multibyte locale and a text of 4-byte
+#     characters would otherwise pass at four times its byte size.
 # Like every deadline deny these are reachable only after the role and plan-mode exits. The line cap
 # is sized so one worst-case dense line costs a bounded slice of the budget; many such lines are
 # bounded by the per-line deadline samples. The Edit/Write route analyses no text, so only its path
@@ -265,9 +267,9 @@
 # around -- `cat`, the fast-path globs, up to five `jq` calls, the length checks, cdg_prepare_text's
 # CR-presence glob and its whole-text `for ln in $text` word-split, the like whole-text splits in
 # is_apply_patch_word, has_exact_begin_patch_line and parse_patch_headers (all linear, all bounded by
-# `CDG_TEXT_MAX_CHARS`), and the raw-text `.claude`/`.codex` glob -- and `U_max` is the largest
+# `CDG_TEXT_MAX_BYTES`), and the raw-text `.claude`/`.codex` glob -- and `U_max` is the largest
 # single step the deadline cannot interrupt: one line's substitutions (bounded by
-# `CDG_LINE_MAX_CHARS`), one segment's `toks=($seg)` word-split, one `"${toks[@]}"` expansion, one
+# `CDG_LINE_MAX_BYTES`), one segment's `toks=($seg)` word-split, one `"${toks[@]}"` expansion, one
 # walk_window iteration (plus any per-index cost bash 3.2's arrays add), one forked `trim`/`ltrim`
 # call up to its first in-subshell sample, or one classify_path. Residuals this deadline and these
 # caps do NOT close: `T_prefix` is unsampled (though still counted by the wall clock), and the Codex
@@ -278,15 +280,15 @@
 # particular a legitimately large shell-issued patch (many ordinary lines, each costing a forked
 # `trim`) can approach the budget on a loaded host under bash 3.2, and the remedy is to split it
 # into smaller patches or to use Codex's native apply_patch tool, which forks less per line; a Bash
-# call with a SINGLE physical line longer than `CDG_LINE_MAX_CHARS` characters that passes fast path
+# call with a SINGLE physical line longer than `CDG_LINE_MAX_BYTES` bytes that passes fast path
 # 2 (it names `Edit`, `Write`, `apply_patch`, `applypatch` or `*** Begin Patch` anywhere in the raw
 # payload) denies, and the remedy is to break the line or, for a patch, to use the native tool,
 # whose route does not cap an ordinary content line; a native apply_patch call whose CR-bearing line
 # or `*** ` marker line is over the cap denies, and the remedy is to split the patch or remove the
-# CR; and a path or `cwd` longer than `CDG_LINE_MAX_CHARS` characters denies (a header path is
+# CR; and a path or `cwd` longer than `CDG_LINE_MAX_BYTES` bytes denies (a header path is
 # joined to `cwd` first, so the cap bounds their combined length, well under typical OS path limits).
 # A command or patch made of ordinary-length lines is not capped by size alone short of
-# `CDG_TEXT_MAX_CHARS`.
+# `CDG_TEXT_MAX_BYTES`.
 #
 # Documented under-blocking classes (evasions, named rather than hidden): a Bash-issued write
 # (`cat >>`, `tee`, `sed -i`) never reaches an Edit/Write/apply_patch hook by construction; since
@@ -403,14 +405,14 @@ DBRACKET_MAX="64"
 # see "Analysis deadline (#457)" in this file's header. Sized well under Claude Code's 10s hook
 # timeout (hooks/hooks.json), the same value hooks/push-guard.sh's own deadline uses.
 CDG_ANALYSIS_BUDGET_SECS="5"
-# CDG_LINE_MAX_CHARS (#457) -- longest physical line of a Bash command (every line), of an
+# CDG_LINE_MAX_BYTES (#457) -- longest physical line of a Bash command (every line), of an
 # apply_patch patch (only a CR-bearing or `*** ` marker line), and longest single path or `cwd`
 # value, measured in BYTES (cdg_prepare_text and cdg_bytes scope LC_ALL=C to the length check),
 # analysed at all; see "Size caps (#457)" in this file's header.
-CDG_LINE_MAX_CHARS="2000"
-# CDG_TEXT_MAX_CHARS (#457) -- longest whole Bash command or patch text, in bytes, analysed at
+CDG_LINE_MAX_BYTES="2000"
+# CDG_TEXT_MAX_BYTES (#457) -- longest whole Bash command or patch text, in bytes, analysed at
 # all (it bounds the unsampled whole-text word-split); see "Size caps (#457)" in this file's header.
-CDG_TEXT_MAX_CHARS="1000000"
+CDG_TEXT_MAX_BYTES="1000000"
 
 # #457: cdg_budget defaults to CDG_ANALYSIS_BUDGET_SECS; TBF_CLAUDE_DIR_GUARD_BUDGET_SECS is a
 # test-only, environment-only knob (never read from stdin JSON) that can only LOWER it -- adopted
@@ -451,7 +453,7 @@ deny_too_large() {
 shopt -s expand_aliases
 # cdg_bytes VALUE (#457) -- sets cdg_n to VALUE's length in BYTES (LC_ALL=C scoped to this one call):
 # `${#x}` counts characters under a multibyte locale, so a text of 4-byte characters could pass a
-# character cap at four times its byte size. Not for use inside a hot loop (a function call).
+# cap at four times its byte size. Not for use inside a hot loop (a function call).
 cdg_bytes() { local LC_ALL=C; cdg_n="${#1}"; }
 count_sample() { cdg_samples=$((cdg_samples + 1)); [ "$cdg_samples" -lt "$cdg_sample_cap" ] || deny_too_large; }
 alias check_deadline='[ "$SECONDS" -lt "$cdg_deadline" ] || deny_too_large; [ "$cdg_sample_cap" -eq 0 ] || count_sample;'
@@ -544,9 +546,9 @@ classify_path() {
   local tool="$1" raw="$2" p p_disp
   # #457: a single path (an Edit/Write file_path, or a header path joined to cwd) longer than the
   # per-line cap denies BEFORE the whole-string substitutions below, which are superlinear under
-  # bash 3.2 (see the header's "Per-line size cap (#457)").
+  # bash 3.2 (see the header's "Size caps (#457)").
   cdg_bytes "$raw"
-  [ "$cdg_n" -le "$CDG_LINE_MAX_CHARS" ] || deny_too_large
+  [ "$cdg_n" -le "$CDG_LINE_MAX_BYTES" ] || deny_too_large
 
   # Separator normalisation: a Windows-native or backslash-spelled ".claude"/".codex" still
   # denies (see README's Windows section on Git Bash's own path-form quirks). Documented
@@ -995,9 +997,9 @@ is_apply_patch_word() {
   # (#457) Every substitution below runs on ONE physical line at a time, never on the whole command
   # text, and never builds a whole-text `flat` string: bash 3.2's `${x//pat/repl}` is superlinear in
   # the text's length and match count, and a newline is itself a segment break, so processing line
-  # by line gives the identical segments. Each line is at most CDG_LINE_MAX_CHARS characters
-  # (cdg_prepare_text, run on the command first, denies a longer one), and the loop below
-  # samples the deadline before every line.
+  # by line gives the identical segments. Each line is at most CDG_LINE_MAX_BYTES bytes
+  # (cdg_prepare_text, run on the command first under a scoped LC_ALL=C so the length is a byte
+  # count, denies a longer one), and the loop below samples the deadline before every line.
   oldifs="$IFS"
   set -f
   IFS="$lf"
@@ -1128,8 +1130,9 @@ has_exact_begin_patch_line() {
 
 # cdg_prepare_text TEXT [MODE] (#457) -- run once on the Bash route's command (MODE "all", the
 # default) AND on the apply_patch route's patch text (MODE "native"), before any substitution on
-# either: denies (deny_too_large) a text longer than CDG_TEXT_MAX_CHARS before any split, denies a
-# physical line longer than CDG_LINE_MAX_CHARS (in MODE "native" only a line holding a CR or a
+# either, under a scoped LC_ALL=C so every length is a BYTE count: denies (deny_too_large) a text
+# longer than CDG_TEXT_MAX_BYTES before any split, denies a
+# physical line longer than CDG_LINE_MAX_BYTES (in MODE "native" only a line holding a CR or a
 # `*** ` marker; any other line is bounded by the whole-text cap), and sets the global cdg_text to
 # TEXT with every CR stripped LINE BY LINE (a whole-text `${x//$cr/}` is superlinear in the CR count
 # under bash 3.2; blank lines are dropped only when a CR was present, which no later consumer
@@ -1139,7 +1142,7 @@ cdg_text=""
 cdg_prepare_text() {
   local text="$1" mode="${2:-all}" ln lmax oldifs="$IFS" hascr=0 out=""
   local LC_ALL=C
-  [ "${#text}" -le "$CDG_TEXT_MAX_CHARS" ] || deny_too_large
+  [ "${#text}" -le "$CDG_TEXT_MAX_BYTES" ] || deny_too_large
   case "$text" in
     *"$cr"*) hascr=1 ;;
   esac
@@ -1147,11 +1150,11 @@ cdg_prepare_text() {
   IFS="$lf"
   for ln in $text; do
     check_deadline
-    lmax="$CDG_LINE_MAX_CHARS"
+    lmax="$CDG_LINE_MAX_BYTES"
     if [ "$mode" = native ]; then
       case "$ln" in
         *"$cr"*|*"*** "*) ;;
-        *) lmax="$CDG_TEXT_MAX_CHARS" ;;
+        *) lmax="$CDG_TEXT_MAX_BYTES" ;;
       esac
     fi
     [ "${#ln}" -le "$lmax" ] || deny_too_large
@@ -1179,7 +1182,7 @@ if [ "$tool_name" = "apply_patch" ]; then
 
   cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
   cdg_bytes "$cwd"
-  [ "$cdg_n" -le "$CDG_LINE_MAX_CHARS" ] || deny_too_large
+  [ "$cdg_n" -le "$CDG_LINE_MAX_BYTES" ] || deny_too_large
   cwd="${cwd//$cr/}"
   cwd="${cwd//\\//}"
 
@@ -1200,7 +1203,7 @@ elif [ "$tool_name" = "Bash" ]; then
   bash_cmd="$(printf '%s' "$input" | jq -r '.tool_input.command? // empty' 2>/dev/null)"
   [ -n "$bash_cmd" ] || exit 0
   # #457: the per-line size cap and the per-line CR strip, BEFORE any other substitution on the
-  # command text (see the header's "Per-line size cap (#457)").
+  # command text (see the header's "Size caps (#457)").
   cdg_prepare_text "$bash_cmd"
   bash_cmd="$cdg_text"
 
@@ -1234,7 +1237,7 @@ elif [ "$tool_name" = "Bash" ]; then
     fi
     cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
     cdg_bytes "$cwd"
-    [ "$cdg_n" -le "$CDG_LINE_MAX_CHARS" ] || deny_too_large
+    [ "$cdg_n" -le "$CDG_LINE_MAX_BYTES" ] || deny_too_large
     cwd="${cwd//$cr/}"
     cwd="${cwd//\\//}"
     parse_patch_headers "Bash" "$bash_cmd" "$cwd"

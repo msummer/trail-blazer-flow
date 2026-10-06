@@ -458,13 +458,13 @@ headers found), or (#457) when its own analysis cannot finish inside a 5-second 
 from hook start, or when a text-size cap trips (a fixed "too large to analyse" reason, implementer
 and verifier only). The caps exist because bash 3.2's text substitutions on a long or match-dense
 line, and a very large whole-text split, cannot be sampled against the budget: a Bash call with any
-physical line longer than `CDG_LINE_MAX_CHARS` characters denies; a native `apply_patch` call denies
+physical line longer than `CDG_LINE_MAX_BYTES` bytes denies; a native `apply_patch` call denies
 for a line over that cap only when the line holds a CR or a `*** ` patch-grammar marker (an ordinary
 long content line is not capped there); either route denies a whole text longer than
-`CDG_TEXT_MAX_CHARS`; and a single path (an `Edit`/`Write` `file_path`, or a patch header path joined
-to `cwd`) or the stdin `cwd` field longer than `CDG_LINE_MAX_CHARS` denies. Every cap is measured in bytes, not characters. Many ordinary lines are
+`CDG_TEXT_MAX_BYTES`; and a single path (an `Edit`/`Write` `file_path`, or a patch header path joined
+to `cwd`) or the stdin `cwd` field longer than `CDG_LINE_MAX_BYTES` denies. Every cap counts bytes, not characters. Many ordinary lines are
 bounded by the deadline instead of by size, so a command or patch made of ordinary-length lines is
-not capped by length short of `CDG_TEXT_MAX_CHARS`. The remedies are all to send less per call:
+not capped by length short of `CDG_TEXT_MAX_BYTES`. The remedies are all to send less per call:
 break the over-long line, split a large patch into smaller patches, or use Codex's native
 `apply_patch` tool for a patch with a long content line; a legitimately large shell-issued patch
 (many ordinary lines, each costing a forked `trim`) can also approach the 5-second budget on a

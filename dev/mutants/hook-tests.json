@@ -4757,7 +4757,7 @@
       "filter": "cdg-dl-",
       "edits": [
         {
-          "from": "  cdg_bytes \"$raw\"\n  [ \"$cdg_n\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
+          "from": "  cdg_bytes \"$raw\"\n  [ \"$cdg_n\" -le \"$CDG_LINE_MAX_BYTES\" ] || deny_too_large\n",
           "to": "  cdg_bytes \"$raw\"\n  :\n"
         }
       ],
@@ -4774,7 +4774,7 @@
       "filter": "cdg-dl-deny-cwd-just-over-cap",
       "edits": [
         {
-          "from": "\n  cdg_bytes \"$cwd\"\n  [ \"$cdg_n\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
+          "from": "\n  cdg_bytes \"$cwd\"\n  [ \"$cdg_n\" -le \"$CDG_LINE_MAX_BYTES\" ] || deny_too_large\n",
           "to": "\n  cdg_bytes \"$cwd\"\n  :\n"
         }
       ],
@@ -4789,7 +4789,7 @@
       "filter": "cdg-dl-deny-cwd-just-over-cap-bash",
       "edits": [
         {
-          "from": "    cdg_bytes \"$cwd\"\n    [ \"$cdg_n\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
+          "from": "    cdg_bytes \"$cwd\"\n    [ \"$cdg_n\" -le \"$CDG_LINE_MAX_BYTES\" ] || deny_too_large\n",
           "to": "    cdg_bytes \"$cwd\"\n    :\n"
         }
       ],
@@ -4804,11 +4804,13 @@
       "filter": "cdg-dl-",
       "edits": [
         {
-          "from": "  [ \"${#text}\" -le \"$CDG_TEXT_MAX_CHARS\" ] || deny_too_large\n",
+          "from": "  [ \"${#text}\" -le \"$CDG_TEXT_MAX_BYTES\" ] || deny_too_large\n",
           "to": "  :\n"
         }
       ],
       "expect_fail": [
+        "cdg-dl-deny-text-multibyte",
+        "cdg-dl-deny-text-multibyte-bash",
         "cdg-dl-deny-text-over-cap"
       ]
     },
@@ -4819,8 +4821,8 @@
       "filter": "cdg-dl-",
       "edits": [
         {
-          "from": "[ \"${#text}\" -le \"$CDG_TEXT_MAX_CHARS\" ]",
-          "to": "[ \"${#text}\" -lt \"$CDG_TEXT_MAX_CHARS\" ]"
+          "from": "[ \"${#text}\" -le \"$CDG_TEXT_MAX_BYTES\" ]",
+          "to": "[ \"${#text}\" -lt \"$CDG_TEXT_MAX_BYTES\" ]"
         }
       ],
       "expect_fail": [
@@ -4864,8 +4866,8 @@
       "filter": "cdg-dl-",
       "edits": [
         {
-          "from": "  cdg_bytes \"$raw\"\n  [ \"$cdg_n\" -le \"$CDG_LINE_MAX_CHARS\" ]",
-          "to": "  cdg_bytes \"$raw\"\n  [ \"$cdg_n\" -lt \"$CDG_LINE_MAX_CHARS\" ]"
+          "from": "  cdg_bytes \"$raw\"\n  [ \"$cdg_n\" -le \"$CDG_LINE_MAX_BYTES\" ]",
+          "to": "  cdg_bytes \"$raw\"\n  [ \"$cdg_n\" -lt \"$CDG_LINE_MAX_BYTES\" ]"
         }
       ],
       "expect_fail": [
@@ -4900,7 +4902,8 @@
       ],
       "expect_fail": [
         "cdg-dl-deny-line-multibyte",
-        "cdg-dl-deny-text-multibyte"
+        "cdg-dl-deny-text-multibyte",
+        "cdg-dl-deny-text-multibyte-bash"
       ]
     },
     {
@@ -4915,7 +4918,55 @@
         }
       ],
       "expect_fail": [
+        "cdg-dl-deny-cwd-multibyte",
+        "cdg-dl-deny-cwd-multibyte-bash",
         "cdg-dl-deny-path-multibyte"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-bytes-late-prepare",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-",
+      "edits": [
+        {
+          "from": "  local LC_ALL=C\n  [ \"${#text}\" -le \"$CDG_TEXT_MAX_BYTES\" ] || deny_too_large\n",
+          "to": "  [ \"${#text}\" -le \"$CDG_TEXT_MAX_BYTES\" ] || deny_too_large\n  local LC_ALL=C\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-deny-text-multibyte",
+        "cdg-dl-deny-text-multibyte-bash"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-cwd-chars",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-deny-cwd-multibyte",
+      "edits": [
+        {
+          "from": "\n  cdg_bytes \"$cwd\"\n",
+          "to": "\n  cdg_n=\"${#cwd}\"\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-deny-cwd-multibyte"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-cwd-chars-bash",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-deny-cwd-multibyte-bash",
+      "edits": [
+        {
+          "from": "    cdg_bytes \"$cwd\"\n",
+          "to": "    cdg_n=\"${#cwd}\"\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-deny-cwd-multibyte-bash"
       ]
     }
   ]
