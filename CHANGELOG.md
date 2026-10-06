@@ -18,6 +18,7 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #507: the push-guard lost-scan flood fixture (now push-lostscan-noop-flood) sizes its token count from a same-run, mutant-invariant control, so its unmutated cost stays well under push-guard's 5s analysis budget on a loaded runner, and only 449-pg-scan-once runs it. Test-only, no consumer step.
 - #496: an unattended Codex run that stops at its own preflight prints `Unattended stop: preflight`; the scheduled-run wrapper records it `failed reason=unattended-stop-preflight`, so failure tracking opens the `needs-human` issue.
 - #490: codex-setup.sh refuses a quoted project_doc_fallback_filenames key name ("..." or '...') in .codex/config.toml as fallback-conflict instead of prepending a duplicate bare key. Consumer step (Codex): if --check now reports fallback-conflict, write the key bare.
 - #476: the push-dl-* site-proving fixtures (driver-site, evaluate-sites, config-lines) calibrate their analysis budget from a same-run knob-0 control instead of a fixed 1s knob, so a loaded host can no longer let an earlier deadline sample rescue a site mutant. push-dl-deny-production-budget sizes its harness deadline from the same kind of control, and the 304-inc-line-chars mutant's filter now names only its killing case, whose sibling's verdict under that mutant depended on host speed. Test-only, no consumer step.

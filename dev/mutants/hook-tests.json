@@ -4588,7 +4588,6 @@
         "push-parse-noop-assign-space-commit",
         "push-parse-noop-assign-space-nonpush",
         "push-parse-noop-env-c-nonpush",
-        "push-parse-noop-flood",
         "push-parse-noop-gopt-value-nonpush",
         "push-parse-noop-quoted-opt-nonpush",
         "push-parse-noop-quoted-opt-push-word"
@@ -4812,7 +4811,7 @@
       "name": "449-pg-scan-once",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
-      "filter": "push-parse-",
+      "filter": "push-lostscan-",
       "edits": [
         {
           "from": "  while (idx <= ntok) {\n    tok = toks[idx]\n",
@@ -4824,7 +4823,7 @@
         }
       ],
       "expect_fail": [
-        "push-parse-noop-flood"
+        "push-lostscan-noop-flood"
       ]
     },
     {
@@ -5463,6 +5462,36 @@
       ],
       "expect_fail": [
         "cdg-dl-deny-cwd-multibyte-bash"
+      ]
+    },
+    {
+      "name": "507-hook-flood-tokens-min",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "deadline-flood-tokens",
+      "edits": [
+        {
+          "from": "  [ \"$flood_tokens\" -ge \"$min\" ] || flood_tokens=\"$min\"",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "deadline-flood-tokens"
+      ]
+    },
+    {
+      "name": "507-hook-flood-tokens-max",
+      "target": "dev/hook-tests.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "deadline-flood-tokens",
+      "edits": [
+        {
+          "from": "  [ \"$flood_tokens\" -le \"$max\" ] || flood_tokens=\"$max\"",
+          "to": "  :"
+        }
+      ],
+      "expect_fail": [
+        "deadline-flood-tokens"
       ]
     }
   ]
