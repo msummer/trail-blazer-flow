@@ -462,7 +462,7 @@ physical line longer than `CDG_LINE_MAX_CHARS` characters denies; a native `appl
 for a line over that cap only when the line holds a CR or a `*** ` patch-grammar marker (an ordinary
 long content line is not capped there); either route denies a whole text longer than
 `CDG_TEXT_MAX_CHARS`; and a single path (an `Edit`/`Write` `file_path`, or a patch header path joined
-to `cwd`) or the stdin `cwd` field longer than `CDG_LINE_MAX_CHARS` denies. Many ordinary lines are
+to `cwd`) or the stdin `cwd` field longer than `CDG_LINE_MAX_CHARS` denies. Every cap is measured in bytes, not characters. Many ordinary lines are
 bounded by the deadline instead of by size, so a command or patch made of ordinary-length lines is
 not capped by length short of `CDG_TEXT_MAX_CHARS`. The remedies are all to send less per call:
 break the over-long line, split a large patch into smaller patches, or use Codex's native

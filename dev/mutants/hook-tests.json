@@ -4613,7 +4613,7 @@
       "name": "457-cdg-dl-line-cap-off",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dl-",
+      "filter": "cdg-dl-deny-line-just-over-cap",
       "edits": [
         {
           "from": "    [ \"${#ln}\" -le \"$lmax\" ] || deny_too_large\n",
@@ -4621,9 +4621,7 @@
         }
       ],
       "expect_fail": [
-        "cdg-dl-deny-line-400k",
-        "cdg-dl-deny-line-just-over-cap",
-        "cdg-dl-deny-patch-cr-line"
+        "cdg-dl-deny-line-just-over-cap"
       ]
     },
     {
@@ -4746,6 +4744,8 @@
       "expect_fail": [
         "cdg-dl-cap-ph",
         "cdg-dl-deny-patch-cr-line",
+        "cdg-dl-deny-patch-marker-line",
+        "cdg-dl-deny-text-multibyte",
         "cdg-dl-deny-text-over-cap",
         "cdg-dl-noop-patch-cr-many"
       ]
@@ -4757,43 +4757,44 @@
       "filter": "cdg-dl-",
       "edits": [
         {
-          "from": "  [ \"${#raw}\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
-          "to": "  :\n"
+          "from": "  cdg_bytes \"$raw\"\n  [ \"$cdg_n\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
+          "to": "  cdg_bytes \"$raw\"\n  :\n"
         }
       ],
       "expect_fail": [
         "cdg-dl-deny-path-cr",
-        "cdg-dl-deny-path-just-over-cap"
+        "cdg-dl-deny-path-just-over-cap",
+        "cdg-dl-deny-path-multibyte"
       ]
     },
     {
       "name": "457-cdg-dl-cwd-cap-off",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dl-",
+      "filter": "cdg-dl-deny-cwd-just-over-cap",
       "edits": [
         {
-          "from": "\n  [ \"${#cwd}\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
-          "to": "\n  :\n"
+          "from": "\n  cdg_bytes \"$cwd\"\n  [ \"$cdg_n\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
+          "to": "\n  cdg_bytes \"$cwd\"\n  :\n"
         }
       ],
       "expect_fail": [
-        "cdg-dl-deny-cwd-cr"
+        "cdg-dl-deny-cwd-just-over-cap"
       ]
     },
     {
       "name": "457-cdg-dl-cwd-cap-bash-off",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dl-",
+      "filter": "cdg-dl-deny-cwd-just-over-cap-bash",
       "edits": [
         {
-          "from": "    [ \"${#cwd}\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
-          "to": "    :\n"
+          "from": "    cdg_bytes \"$cwd\"\n    [ \"$cdg_n\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
+          "to": "    cdg_bytes \"$cwd\"\n    :\n"
         }
       ],
       "expect_fail": [
-        "cdg-dl-deny-cwd-cr-bash"
+        "cdg-dl-deny-cwd-just-over-cap-bash"
       ]
     },
     {
@@ -4863,12 +4864,58 @@
       "filter": "cdg-dl-",
       "edits": [
         {
-          "from": "[ \"${#raw}\" -le \"$CDG_LINE_MAX_CHARS\" ]",
-          "to": "[ \"${#raw}\" -lt \"$CDG_LINE_MAX_CHARS\" ]"
+          "from": "  cdg_bytes \"$raw\"\n  [ \"$cdg_n\" -le \"$CDG_LINE_MAX_CHARS\" ]",
+          "to": "  cdg_bytes \"$raw\"\n  [ \"$cdg_n\" -lt \"$CDG_LINE_MAX_CHARS\" ]"
         }
       ],
       "expect_fail": [
         "cdg-dl-noop-path-at-cap"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-patch-marker-uncapped",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-",
+      "edits": [
+        {
+          "from": "        *\"$cr\"*|*\"*** \"*) ;;\n",
+          "to": "        *\"$cr\"*) ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-deny-patch-marker-line"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-bytes-off-prepare",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-",
+      "edits": [
+        {
+          "from": "  local LC_ALL=C\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-deny-line-multibyte",
+        "cdg-dl-deny-text-multibyte"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-bytes-off-fn",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-",
+      "edits": [
+        {
+          "from": "cdg_bytes() { local LC_ALL=C; cdg_n=\"${#1}\"; }",
+          "to": "cdg_bytes() { cdg_n=\"${#1}\"; }"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-deny-path-multibyte"
       ]
     }
   ]

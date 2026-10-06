@@ -5486,6 +5486,7 @@ cdg_rc=0
 cdg_deadline_override=""
 cdg_budget_override=""
 cdg_cap_override=""
+cdg_locale_override=""
 # cdg_exec PATHVAL (#457) — the env block every run_claude_guard call execs into; mirrors
 # push_guard_exec. MUST be called only inside an explicit "( … )": run in the harness's own shell
 # it would leak its exports and PATH, and its own `exec` would replace the harness process itself.
@@ -5494,6 +5495,7 @@ cdg_exec() {
   unset TBF_CLAUDE_DIR_GUARD_BUDGET_SECS TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP
   [ -z "$cdg_budget_override" ] || export TBF_CLAUDE_DIR_GUARD_BUDGET_SECS="$cdg_budget_override"
   [ -z "$cdg_cap_override" ] || export TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP="$cdg_cap_override"
+  [ -z "$cdg_locale_override" ] || export LC_ALL="$cdg_locale_override"
   export PATH="$pathval"
   exec "$bash_bin" "$claude_dir_guard"
 }
@@ -5517,6 +5519,7 @@ run_claude_guard() {
   cdg_deadline_override=""
   cdg_budget_override=""
   cdg_cap_override=""
+  cdg_locale_override=""
 }
 
 # expect_cdg_deny_claude/expect_cdg_deny_unclassifiable/expect_cdg_no_opinion — assert against
@@ -6677,6 +6680,10 @@ case_cdg_dbq_never_executes() {
 # mutant:457-cdg-dl-cwd-cap-off — the apply_patch route's cwd length check becomes a no-op, so a
 #   200000-CR cwd reaches the whole-string substitutions.
 # mutant:457-cdg-dl-cwd-cap-bash-off — the same for the Bash route's inline-patch cwd check.
+# mutant:457-cdg-dl-patch-marker-uncapped — the native route stops line-capping a `*** ` marker
+#   line, so an over-cap header line reaches the parser.
+# mutant:457-cdg-dl-bytes-off-prepare — cdg_prepare_text measures characters, not bytes.
+# mutant:457-cdg-dl-bytes-off-fn — cdg_bytes measures characters, not bytes.
 # mutant:457-cdg-dl-text-cap-off — the whole-text size check becomes a no-op, so an over-cap native
 #   patch reaches the split instead of denying.
 # mutant:457-cdg-dl-text-cap-offbyone — the whole-text comparison becomes strict, so a text of
@@ -6738,6 +6745,8 @@ cdg_dl_pad_cmd() {
   printf '%s' "${cmd:0:$len}"
 }
 case_cdg_dl_deny_line_400k() {
+  # Regression pin (no registry mutant: uncapped, the run denies via a sample on bash 5 but only via
+  # the deadline overrun on bash 3.2; line-cap-off is killed by the just-over-cap fixture instead).
   # The 400KB whitespace-plus-`<` single-line command that used to outlast the hook timeout inside
   # is_apply_patch_word's own unsampled substitution: it now denies at the per-line size cap,
   # before any substitution, well inside a 15s active deadline.
@@ -6814,6 +6823,8 @@ case_cdg_dl_deny_path_cr() {
   expect_cdg_deny_too_large implementer Edit
 }
 case_cdg_dl_deny_cwd_cr() {
+  # Regression pin (no registry mutant: whether an uncapped run times out or merely denies later
+  # depends on the bash; the just-over-cap cwd fixtures carry the kill).
   local crs
   crs="$(printf '\r%.0s' $(seq 1 200000))"
   cdg_deadline_override=15
@@ -6821,6 +6832,7 @@ case_cdg_dl_deny_cwd_cr() {
   expect_cdg_deny_too_large implementer apply_patch
 }
 case_cdg_dl_deny_cwd_cr_bash() {
+  # Regression pin, as case_cdg_dl_deny_cwd_cr.
   local crs cmd
   crs="$(printf '\r%.0s' $(seq 1 200000))"
   cmd="apply_patch <<'EOF'${LF}${CDG_P}${LF}EOF"
@@ -6850,6 +6862,61 @@ case_cdg_dl_deny_production_budget() {
   sp="$(printf ' %.0s' $(seq 1 500000))"
   patch="*** Begin Patch${LF}*** Add File: /repo/a${LF}${sp}${LF}*** End Patch"
   cdg_budget_override=99
+  cdg_deadline_override=15
+  run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
+  expect_cdg_deny_too_large implementer apply_patch
+}
+case_cdg_dl_deny_patch_marker_line() {
+  # A native header line `*** Add File: /repo/a` followed by 3000 trailing spaces is over the line
+  # cap by its `*** ` marker alone (no CR), so it denies at the cap; uncapped it would parse as a
+  # benign path and give no opinion.
+  local sp patch
+  sp="$(printf ' %.0s' $(seq 1 3000))"
+  patch="*** Begin Patch${LF}*** Add File: /repo/a${sp}${LF}+x${LF}*** End Patch"
+  run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
+  expect_cdg_deny_too_large implementer apply_patch
+}
+case_cdg_dl_deny_cwd_just_over_cap() {
+  local cap c
+  cap="$(cdg_dl_line_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_LINE_MAX_CHARS from the hook\n"; return; fi
+  c="/repo/$(printf 'c%.0s' $(seq 1 $((cap - 5))))"
+  [ "${#c}" -eq $((cap + 1)) ] || { __ok=0; __why="${__why}fixture bug: cwd is ${#c} chars, wanted $((cap + 1))\n"; return; }
+  run_claude_guard "$(printf '%s' "$c" | jq -Rs --arg p "$CDG_P" '{tool_name: "apply_patch", agent_type: "implementer", cwd: ., tool_input: {command: $p}}')"
+  expect_cdg_deny_too_large implementer apply_patch
+}
+case_cdg_dl_deny_cwd_just_over_cap_bash() {
+  local cap c cmd
+  cap="$(cdg_dl_line_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_LINE_MAX_CHARS from the hook\n"; return; fi
+  c="/repo/$(printf 'c%.0s' $(seq 1 $((cap - 5))))"
+  cmd="apply_patch <<'EOF'${LF}${CDG_P}${LF}EOF"
+  run_claude_guard "$(printf '%s' "$c" | jq -Rs --arg p "$cmd" '{tool_name: "Bash", agent_type: "implementer", cwd: ., tool_input: {command: $p}}')"
+  expect_cdg_deny_too_large implementer Bash
+}
+case_cdg_dl_deny_line_multibyte() {
+  # 600 four-byte characters (2400 bytes, 600 characters): over the byte cap, under it in
+  # characters -- the hook measures bytes. The harness pins a UTF-8 locale for the run.
+  local mb
+  mb="$(printf '\360\237\230\200%.0s' $(seq 1 600))"
+  cdg_locale_override="C.UTF-8"
+  run_claude_guard "$(printf 'echo apply_patch %s' "$mb" | mk_cdg_dl_bash implementer '')"
+  expect_cdg_deny_too_large implementer Bash
+}
+case_cdg_dl_deny_path_multibyte() {
+  local mb
+  mb="$(printf '\360\237\230\200%.0s' $(seq 1 600))"
+  cdg_locale_override="C.UTF-8"
+  run_claude_guard "$(printf '%s' "/repo/${mb}" | jq -Rs '{tool_name: "Edit", agent_type: "implementer", tool_input: {file_path: .}}')"
+  expect_cdg_deny_too_large implementer Edit
+}
+case_cdg_dl_deny_text_multibyte() {
+  # 260000 four-byte characters in one native content line (about 1.04MB, 260000 characters): over
+  # the whole-text byte cap, under it in characters.
+  local mb patch
+  mb="$(printf '\360\237\230\200%.0s' $(seq 1 260000))"
+  patch="*** Begin Patch${LF}*** Add File: /repo/a${LF}+${mb}${LF}*** End Patch"
+  cdg_locale_override="C.UTF-8"
   cdg_deadline_override=15
   run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
   expect_cdg_deny_too_large implementer apply_patch
@@ -7249,9 +7316,10 @@ case_cdg_qa_never_executes() {
 }
 case_cdg_qa_noop_flood_timing() {
   # Many balanced quoted tokens before the resolved word, on one physical line (which must stay
-  # under CDG_LINE_MAX_CHARS, #457): pins that balanced quotes never trip the parity check and the
-  # shim word is still found past them (no opinion for a non-shim resolved word). It no longer
-  # pins linearity: the line is too short for that, which the cdg-dl-cap-qpc sample fixture covers.
+  # under CDG_LINE_MAX_CHARS, #457): pins that balanced quotes never trip the parity check, so a
+  # segment whose resolved word is not the shim (here `x`, with apply_patch only its argument) gets
+  # no opinion. It no longer pins linearity: the line is too short for that, which the
+  # cdg-dl-cap-qpc sample fixture covers.
   local flood payload
   flood="$(printf "'env' %.0s" $(seq 1 250))"
   payload="$(printf '%s' "${flood}x apply_patch" \
@@ -9188,6 +9256,12 @@ cases=(
   "cdg-dl-deny-cwd-cr-bash|case_cdg_dl_deny_cwd_cr_bash|deny (#457): a Bash inline-patch call whose cwd is 200000 CRs -- over the per-line cap, exact too-large line under a 15s active deadline"
   "cdg-dl-noop-patch-cr-many|case_cdg_dl_noop_patch_cr_many|no opinion (#457): a 250-line native apply_patch with a CR on every line adding a benign path -- CRs stripped per line, same verdict as before, inside a 15s active deadline"
   "cdg-dl-deny-production-budget|case_cdg_dl_deny_production_budget|wall-clock proof (#457): a native apply_patch with a 500000-space CR-free content line, budget knob 99 ignored -- ltrim's sampled loop denies, exact too-large line under a 15s active deadline"
+  "cdg-dl-deny-patch-marker-line|case_cdg_dl_deny_patch_marker_line|deny (#457): a native header line with 3000 trailing spaces -- over the line cap through its *** marker alone, exact too-large line"
+  "cdg-dl-deny-cwd-just-over-cap|case_cdg_dl_deny_cwd_just_over_cap|deny (#457): a native apply_patch whose cwd is one character over the per-line cap -- exact too-large line"
+  "cdg-dl-deny-cwd-just-over-cap-bash|case_cdg_dl_deny_cwd_just_over_cap_bash|deny (#457): a Bash inline-patch call whose cwd is one character over the per-line cap -- exact too-large line"
+  "cdg-dl-deny-line-multibyte|case_cdg_dl_deny_line_multibyte|deny (#457): a Bash line of 600 four-byte characters (over the cap in bytes, under it in characters) -- the cap is measured in bytes"
+  "cdg-dl-deny-path-multibyte|case_cdg_dl_deny_path_multibyte|deny (#457): an Edit path of 600 four-byte characters -- the path cap is measured in bytes"
+  "cdg-dl-deny-text-multibyte|case_cdg_dl_deny_text_multibyte|deny (#457): a native patch of 260000 four-byte characters (over the whole-text cap in bytes, under it in characters) -- exact too-large line under a 15s active deadline"
   "cdg-dl-noop-native-long-line|case_cdg_dl_noop_native_long_line|no opinion (#457): a native apply_patch with a 3700-character CR-free content line adding a benign path -- an ordinary long line is not capped on the native route"
   "cdg-dl-deny-text-over-cap|case_cdg_dl_deny_text_over_cap|deny (#457): a native apply_patch whose whole text is one character over the whole-text cap -- exact too-large line before any split, under a 15s active deadline"
   "cdg-dl-noop-text-at-cap|case_cdg_dl_noop_text_at_cap|no opinion (#457): a native apply_patch whose whole text is exactly the whole-text cap -- the cap is an upper bound, not a strict one"

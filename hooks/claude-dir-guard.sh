@@ -263,7 +263,8 @@
 # is capped. Worst-case wall clock for the whole hook, stated for review: at most
 # `max(cdg_budget, T_prefix(L)) + U_max`, where `T_prefix` is the prefix this deadline cannot sample
 # around -- `cat`, the fast-path globs, up to five `jq` calls, the length checks, cdg_prepare_text's
-# CR-presence glob and its whole-text `for ln in $text` word-split (linear, bounded by
+# CR-presence glob and its whole-text `for ln in $text` word-split, the like whole-text splits in
+# is_apply_patch_word, has_exact_begin_patch_line and parse_patch_headers (all linear, all bounded by
 # `CDG_TEXT_MAX_CHARS`), and the raw-text `.claude`/`.codex` glob -- and `U_max` is the largest
 # single step the deadline cannot interrupt: one line's substitutions (bounded by
 # `CDG_LINE_MAX_CHARS`), one segment's `toks=($seg)` word-split, one `"${toks[@]}"` expansion, one
@@ -404,9 +405,10 @@ DBRACKET_MAX="64"
 CDG_ANALYSIS_BUDGET_SECS="5"
 # CDG_LINE_MAX_CHARS (#457) -- longest physical line of a Bash command (every line), of an
 # apply_patch patch (only a CR-bearing or `*** ` marker line), and longest single path or `cwd`
-# value, in characters, analysed at all; see "Size caps (#457)" in this file's header.
+# value, measured in BYTES (cdg_prepare_text and cdg_bytes scope LC_ALL=C to the length check),
+# analysed at all; see "Size caps (#457)" in this file's header.
 CDG_LINE_MAX_CHARS="2000"
-# CDG_TEXT_MAX_CHARS (#457) -- longest whole Bash command or patch text, in characters, analysed at
+# CDG_TEXT_MAX_CHARS (#457) -- longest whole Bash command or patch text, in bytes, analysed at
 # all (it bounds the unsampled whole-text word-split); see "Size caps (#457)" in this file's header.
 CDG_TEXT_MAX_CHARS="1000000"
 
@@ -447,6 +449,10 @@ deny_too_large() {
 # expand_aliases in a non-interactive shell, and this definition must precede every function that
 # uses it.
 shopt -s expand_aliases
+# cdg_bytes VALUE (#457) -- sets cdg_n to VALUE's length in BYTES (LC_ALL=C scoped to this one call):
+# `${#x}` counts characters under a multibyte locale, so a text of 4-byte characters could pass a
+# character cap at four times its byte size. Not for use inside a hot loop (a function call).
+cdg_bytes() { local LC_ALL=C; cdg_n="${#1}"; }
 count_sample() { cdg_samples=$((cdg_samples + 1)); [ "$cdg_samples" -lt "$cdg_sample_cap" ] || deny_too_large; }
 alias check_deadline='[ "$SECONDS" -lt "$cdg_deadline" ] || deny_too_large; [ "$cdg_sample_cap" -eq 0 ] || count_sample;'
 
@@ -539,7 +545,8 @@ classify_path() {
   # #457: a single path (an Edit/Write file_path, or a header path joined to cwd) longer than the
   # per-line cap denies BEFORE the whole-string substitutions below, which are superlinear under
   # bash 3.2 (see the header's "Per-line size cap (#457)").
-  [ "${#raw}" -le "$CDG_LINE_MAX_CHARS" ] || deny_too_large
+  cdg_bytes "$raw"
+  [ "$cdg_n" -le "$CDG_LINE_MAX_CHARS" ] || deny_too_large
 
   # Separator normalisation: a Windows-native or backslash-spelled ".claude"/".codex" still
   # denies (see README's Windows section on Git Bash's own path-form quirks). Documented
@@ -1131,6 +1138,7 @@ has_exact_begin_patch_line() {
 cdg_text=""
 cdg_prepare_text() {
   local text="$1" mode="${2:-all}" ln lmax oldifs="$IFS" hascr=0 out=""
+  local LC_ALL=C
   [ "${#text}" -le "$CDG_TEXT_MAX_CHARS" ] || deny_too_large
   case "$text" in
     *"$cr"*) hascr=1 ;;
@@ -1170,7 +1178,8 @@ if [ "$tool_name" = "apply_patch" ]; then
   [ -n "$patch_cmd" ] || deny_patch_unparseable "no command"
 
   cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
-  [ "${#cwd}" -le "$CDG_LINE_MAX_CHARS" ] || deny_too_large
+  cdg_bytes "$cwd"
+  [ "$cdg_n" -le "$CDG_LINE_MAX_CHARS" ] || deny_too_large
   cwd="${cwd//$cr/}"
   cwd="${cwd//\\//}"
 
@@ -1224,7 +1233,8 @@ elif [ "$tool_name" = "Bash" ]; then
       deny_patch_unparseable "apply_patch/applypatch invoked via Bash takes its patch $iapw_unsafe, not from an inline heredoc this hook parsed"
     fi
     cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
-    [ "${#cwd}" -le "$CDG_LINE_MAX_CHARS" ] || deny_too_large
+    cdg_bytes "$cwd"
+    [ "$cdg_n" -le "$CDG_LINE_MAX_CHARS" ] || deny_too_large
     cwd="${cwd//$cr/}"
     cwd="${cwd//\\//}"
     parse_patch_headers "Bash" "$bash_cmd" "$cwd"
