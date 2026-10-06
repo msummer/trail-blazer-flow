@@ -6880,6 +6880,7 @@
       ],
       "expect_fail": [
         "push-rtexp-deny-git-slot",
+        "push-rtexp-deny-git-slot-ansi-c-concat",
         "push-rtexp-deny-git-slot-ansi-c-literal",
         "push-rtexp-deny-git-slot-ansi-c-opt",
         "push-rtexp-deny-git-slot-push-text"
@@ -6892,13 +6893,12 @@
       "filter": "push-rtexp-",
       "edits": [
         {
-          "from": "if (rx_word(tok)) { if (!rxg_at) rxg_at = j; if (!rxn_at && substr(tok, 1, 1) != \"-\") rxn_at = j; if (substr(tok, 1, 2) == \"$\" sq && index(tok, \"\\\\\") > 0) rxbs = 1; j++; continue }",
-          "to": "if (rx_word(tok)) { if (!rxg_at) rxg_at = j }"
+          "from": "if (rx_word(tok) || av_bad) { if (!rxg_at) rxg_at = j; if (!rxn_at && substr(tok, 1, 1) != \"-\") rxn_at = j; j++; continue }",
+          "to": "if (rx_word(tok) || av_bad) { if (!rxg_at) rxg_at = j }"
         }
       ],
       "expect_fail": [
         "push-rtexp-deny-git-slot-alias",
-        "push-rtexp-deny-git-slot-ansi-c-literal",
         "push-rtexp-deny-git-slot-dash-led"
       ]
     },
@@ -6914,7 +6914,6 @@
         }
       ],
       "expect_fail": [
-        "push-rtexp-deny-git-slot-ansi-c-literal",
         "push-rtexp-deny-git-slot-ansi-c-opt",
         "push-rtexp-deny-quote-expansion"
       ]
@@ -7485,11 +7484,12 @@
       "filter": "push-rtexp-",
       "edits": [
         {
-          "from": "    if (ansic_body(tok) != \"\") tok = ansic_body(tok)\n",
+          "from": "    if (av != \"\") tok = av\n",
           "to": ""
         }
       ],
       "expect_fail": [
+        "push-rtexp-deny-git-slot-ansi-c-concat",
         "push-rtexp-deny-git-slot-ansi-c-literal"
       ]
     },
@@ -7505,7 +7505,38 @@
         }
       ],
       "expect_fail": [
+        "push-rtexp-deny-git-slot-ansi-c-concat",
         "push-rtexp-deny-git-slot-ansi-c-literal"
+      ]
+    },
+    {
+      "name": "508-pg-rx-ansic-concat",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (index(tok, \"$\" sq) == 0) return \"\"",
+          "to": "if (substr(tok, 1, 2) != \"$\" sq) return \"\""
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-git-slot-ansi-c-concat"
+      ]
+    },
+    {
+      "name": "508-pg-rx-ansic-bs-anywhere",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (index(o, \"\\\\\") > 0 && substr(parts[i - 1], length(parts[i - 1])) == \"$\")",
+          "to": "if (index(o, \"\\\\\") > 0 && i == 2 && parts[1] == \"$\")"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-git-slot-ansi-c-concat"
       ]
     },
     {
