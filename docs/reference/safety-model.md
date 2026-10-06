@@ -464,6 +464,13 @@ Since #435, this hook also denies (a fixed reason, distinct from every deny abov
 own analysis cannot finish inside a 5-second budget sampled from hook start, or a push that reads a
 git config file with a depth-0 line too long to analyse safely — see the residual paragraph above
 for the mechanism and its own remaining limits.
+Since #510, a key written on the same line as its section header (`[remote "origin"] push =
+HEAD:main`, `[alias] p = push`) is read the way git reads it, and so are the dotted
+(`[remote.origin]`), mixed (`[branch.v1 "2"]`) and any-blank-run header spellings, a leading UTF-8 byte-order mark, and a `#`, `;` or `]` inside a quoted
+subsection name; a section header line the hook cannot split the way git does (a chained header, or a
+backslash or uppercase letter git would read differently) denies with its own fixed reason — see
+`hooks/push-guard.sh`'s "Section headers and same-line keys (#510)" header section for the accepted
+shapes and the deliberate over-blocks.
 
 **The fourth hook, `hooks/claude-dir-guard.sh` (#327; apply_patch, `.codex`, and a Bash
 apply_patch-shim route added #407), denies an implementer or verifier subagent's `Edit`, `Write`,
