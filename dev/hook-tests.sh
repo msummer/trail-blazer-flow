@@ -260,6 +260,41 @@ case_deadline_site_budget() {
   done
 }
 
+# calibrated_flood_tokens CTL_MS CTL_N TARGET_MS MIN MAX (#507) — sets $flood_tokens to the
+# control-scaled linear size clamp(CTL_N * TARGET_MS / max(CTL_MS, 1), MIN, MAX): a control that ran
+# CTL_N tokens in CTL_MS predicts a linear cost of CTL_MS / CTL_N per token, so this is the token
+# count whose predicted cost is TARGET_MS, never below MIN (the smallest size the kill still
+# needs) nor above MAX (the proven full size). Integer arithmetic only. The CTL_MS < 1 guard has no
+# registry mutant: deleting it makes a 0ms control a bash division-by-zero expansion error that
+# aborts the dispatch loop instead of failing one case (the containment concern
+# _ms_from_timeformat's comment documents).
+# mutant:507-hook-flood-tokens-min — deletes the MIN clamp, so a slow control yields a token count
+#   below the smallest size the kill needs; caught by case_deadline_flood_tokens' own 1143ms
+#   assertion.
+# mutant:507-hook-flood-tokens-max — deletes the MAX clamp, so a fast control yields a token count
+#   above the proven full size; caught by case_deadline_flood_tokens' own 79ms and 0ms assertions.
+flood_tokens=0
+calibrated_flood_tokens() {
+  local ms="$1" n="$2" target="$3" min="$4" max="$5"
+  [ "$ms" -ge 1 ] || ms=1
+  flood_tokens=$(( n * target / ms ))
+  [ "$flood_tokens" -ge "$min" ] || flood_tokens="$min"
+  [ "$flood_tokens" -le "$max" ] || flood_tokens="$max"
+}
+
+# case_deadline_flood_tokens (#507) — pins calibrated_flood_tokens' control scaling and MIN/MAX
+# clamps with N=1000, TARGET=800, MIN=700, MAX=10000, without a live clock: 0ms, 79ms and 80ms all
+# land on MAX (80ms is the first value that scales to exactly MAX), 1000ms gives 800, 1142ms gives
+# exactly MIN, and 1143ms and 5000ms are the values the MIN clamp has to raise.
+case_deadline_flood_tokens() {
+  local pair ms want
+  for pair in 0:10000 79:10000 80:10000 1000:800 1142:700 1143:700 5000:700; do
+    ms="${pair%%:*}"; want="${pair##*:}"
+    calibrated_flood_tokens "$ms" 1000 800 700 10000
+    [ "$flood_tokens" -eq "$want" ] || { __ok=0; __why="${__why}calibrated_flood_tokens ${ms} 1000 800 700 10000: expected ${want}, got ${flood_tokens}\n"; }
+  done
+}
+
 # case_deadline_kill_tree (#463) — pins the shared wait_deadline/kill_tree mechanism directly,
 # independent of any hook fixture: builds a synthetic TERM-ignoring process tree (a root script plus
 # one real "sleep 15" child), runs it through wait_deadline with a 2s deadline, and asserts the
@@ -2815,7 +2850,7 @@ case_push_cmdcfg_deny_precedence() {
 # mutant:449-pg-lost-mode2 — makes the split-value walk disarm on a non-option word like the others.
 # mutant:449-pg-gopt-c-exempt — removes the -C exemption from the value check.
 # mutant:449-pg-scan-once — removes both per-segment memos, so lost_push() re-scans the segment
-#   once per trigger token and a long segment goes quadratic.
+#   once per trigger token and a long segment goes quadratic (filter "push-lostscan-").
 pp_run() {
   local dir="$tmpbase/repo-pp"
   mk_fixture_repo "$dir" main feature/x
@@ -3096,28 +3131,58 @@ pp_flood_cmd() {
   r5="git$(printf ' -c "a%.0s' $(seq 1 "$n")) status"
   printf '%s\n%s\n%s\n%s\n%s\ngit push origin feature/x' "$r1" "$r2" "$r3" "$r4" "$r5"
 }
-case_pp_noop_flood() {
-  # FLOOD + TIMING, calibrated by cost RATIO (#470 helpers), never by absolute speed: the same
-  # flood shape at a tenth of the size is timed first as a same-run control, and the flood's
-  # active deadline is a multiple of that control. The memoised lost_push() keeps the tokenizer
-  # linear, so the flood scales linearly from the control and finishes well inside the deadline;
-  # without the memos each trigger token re-scans the rest of its segment, the flood scales
-  # quadratically from the control, and it overruns the deadline. FLOOR keeps the production budget
-  # headroom on an idle host, where the control alone is too fast for K*control to leave any.
-  local dir="$tmpbase/repo-pp-flood" cmd
+# pp_flood_twin_cmd N (#507) — the mutant-invariant twin of pp_flood_cmd N: the same six-line
+# layout, the same token count per line and the same byte length per token, but records 1, 2, 3
+# and 5 carry exactly ONE trigger token (the first) followed by N-1 tokens that trigger nothing
+# (X=ab, -xyz, -i, -c ab). lost_push() therefore runs at most once per record whether or not the
+# per-segment memos exist, so the twin's cost tracks the unmutated flood and is the same under
+# 449-pg-scan-once, as #470's ab-pc control is under its overlap mutant. Record 4 and the final
+# push line are copied verbatim. Requires N >= 2 (BSD seq counts down when first > last).
+pp_flood_twin_cmd() {
+  local n="$1" r1 r2 r3 r4 r5 m=$(( $1 - 1 ))
+  r1=' X="a'"$(printf ' X=ab%.0s' $(seq 1 "$m"))"
+  r2='git -"x"'"$(printf ' -xyz%.0s' $(seq 1 "$m"))"' status'
+  r3='env -Z'"$(printf ' -i%.0s' $(seq 1 "$m"))"' true'
+  r4="env$(printf ' -u X%.0s' $(seq 1 "$n"))$(printf ' Y="b"%.0s' $(seq 1 "$n")) true"
+  r5='git -c "a'"$(printf ' -c ab%.0s' $(seq 1 "$m"))"' status'
+  printf '%s\n%s\n%s\n%s\n%s\ngit push origin feature/x' "$r1" "$r2" "$r3" "$r4" "$r5"
+}
+case_push_lostscan_noop_flood() {
+  # FLOOD + TIMING, sized and bounded by cost RATIO from a same-run control, never by absolute
+  # speed. The control is pp_flood_twin_cmd (the flood's token count and byte lengths, one trigger
+  # per trigger record, so linear under 449-pg-scan-once too), timed in the foreground with no
+  # deadline override. calibrated_flood_tokens scales the flood's token count so the PREDICTED
+  # linear cost is TARGET, a fifth of the hook's effective whole-second budget (DL_KNOB_MAX), so a
+  # load swing of up to about 5x between control and flood still leaves the unmutated flood under
+  # the production budget; MAX keeps the full proven size on a fast host and MIN the smallest size
+  # the kill still needs. The flood then runs under an active deadline of K times that prediction
+  # (FLOOR absorbs the whole-second granularity): K sits between the unmutated flood-to-prediction
+  # ratio (1 plus the load swing) and the scan-once flood's ratio, whose per-trigger re-scans grow
+  # with the token count while the twin stays linear. A fail-open of the >128 KB input route is
+  # covered by push-dl-deny-production-budget.
+  local dir="$tmpbase/repo-pp-flood" ctl_n=1000 min_n=700 max_n=10000 floor=2 k=8
+  local target_ms=$(( DL_KNOB_MAX * 200 )) ctl_ms pred_ms
   mk_fixture_repo "$dir" main feature/x
-  measure_ms run_push_guard "$(mk_push_cmd_big "$(pp_flood_cmd 1000)" "$dir")"
-  if [ -z "$measured_ms" ]; then
-    __ok=0; __why="${__why}control run's own timing report could not be parsed — can't calibrate a deadline\n"
+  measure_ms run_push_guard "$(mk_push_cmd_big "$(pp_flood_twin_cmd "$ctl_n")" "$dir")"
+  ctl_ms="$measured_ms"
+  if [ -z "$ctl_ms" ]; then
+    __ok=0; __why="${__why}control run's own timing report could not be parsed — can't size the flood\n"
     return
   fi
-  cmd="$(pp_flood_cmd 10000)"
-  [ "${#cmd}" -gt 131072 ] || { __ok=0; __why="${__why}flood payload is only ${#cmd} bytes, expected more than 131072\n"; }
-  calibrated_deadline 9 40 "$measured_ms"
-  push_deadline_override="$calibrated_secs"
-  run_push_guard "$(mk_push_cmd_big "$cmd" "$dir")"
   expect_push_no_opinion
-  if [ "$push_rc" -ne 0 ]; then __why="${__why}control ${measured_ms}ms -> deadline ${calibrated_secs}s\n"; fi
+  if [ "$__ok" -eq 0 ]; then
+    __why="${__why}twin control did not return no opinion\n"
+    return
+  fi
+  calibrated_flood_tokens "$ctl_ms" "$ctl_n" "$target_ms" "$min_n" "$max_n"
+  pred_ms=$(( ctl_ms * flood_tokens / ctl_n ))
+  calibrated_deadline "$floor" "$k" "$pred_ms"
+  push_deadline_override="$calibrated_secs"
+  measure_ms run_push_guard "$(mk_push_cmd_big "$(pp_flood_cmd "$flood_tokens")" "$dir")"
+  expect_push_no_opinion
+  if [ "$__ok" -eq 0 ]; then
+    __why="${__why}control ${ctl_ms}ms at ${ctl_n} -> ${flood_tokens} tokens, predicted ${pred_ms}ms -> deadline ${calibrated_secs}s, flood ${measured_ms}ms\n"
+  fi
 }
 
 # --- git aliases and config relocation (#448, absorbs #450) ----------------------------------------
@@ -8658,6 +8723,7 @@ cases=(
   "status-abs|case_status_abs|allow: absolute path, status"
   "deadline-kill-tree|case_deadline_kill_tree|#463: wait_deadline/kill_tree's shared mechanism against a synthetic TERM-ignoring root+child tree -> overrun detected, case failed and told why, returns in under 8s (not the child's own 15s lifetime), both pids dead afterwards"
   "deadline-site-budget|case_deadline_site_budget|#476: calibrated_site_budget's whole-second window, K-scaling and MAX clamp arithmetic -- no live clock"
+  "deadline-flood-tokens|case_deadline_flood_tokens|#507: calibrated_flood_tokens' control scaling and MIN/MAX clamps -- no live clock"
   "deadline-calibrate|case_deadline_calibrate|#470: calibrated_deadline's floor/scale/round-up arithmetic and _ms_from_timeformat's shape parsing (leading-zero sub-second digits, comma decimal separator, unparseable input) -- plus a real sleep 0.3 through measure_ms, lower bound only"
   "status-quoted|case_status_quoted|allow: double-quoted path, status"
   "path-windows|case_path_windows|allow: Windows drive-letter path, diff"
@@ -10249,7 +10315,7 @@ cases=(
   "push-parse-deny-never-executes|case_pp_deny_never_executes|deny via the new route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND the fixture repo's file listing is byte-identical -- mutation proof: dev/mutants/hook-tests.json (449-pg-obscured-off)"
   "push-parse-deny-codex-main-session|case_pp_deny_codex_main_session|deny: a Codex-shaped main-session payload with env -C ../other git push origin main -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off, 494-pg-wd-precedence)"
   "push-parse-noop-c-quoted-value|case_pp_noop_c_quoted_value|no opinion: git -C \"../demo-wt-1\" push -u origin \"claude/17-a\" (the harness's own worktree shape) -- control, not part of the mutation-proof registry"
-  "push-parse-noop-flood|case_pp_noop_flood|FLOOD+TIMING: large records, one per trigger, then a feature push -- no opinion under an active deadline calibrated from a same-run control (#470) -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated, 449-pg-scan-once)"
+  "push-lostscan-noop-flood|case_push_lostscan_noop_flood|FLOOD+TIMING: large records, one per trigger, then a feature push -- no opinion; token count sized from a same-run, mutant-invariant twin control, deadline a multiple of the predicted linear cost (#507) -- mutation proof: dev/mutants/hook-tests.json (449-pg-scan-once)"
   "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"
   "push-alias-deny-feature-dest|case_al_deny_feature_dest|a push alias denies even when the destination is a feature branch -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
   "push-alias-deny-global-config|case_al_deny_global_config|an alias in \$HOME/.gitconfig denies and names your global git config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-section)"
