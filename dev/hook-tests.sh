@@ -1611,14 +1611,28 @@ abx_noop() {
 }
 # mutant:508-ab-rx-skip-off — drops the skip of an expansion word, so it ends the walk as the
 #   command word and the real git or gh behind it never resolves.
+# mutant:508-ab-rx-re-zsh — drops the zsh expansion characters (equals, tilde, caret) from the
+#   expansion predicate, so $=X gh is no expansion.
 case_ab_rtexp_deny_impl_gh() {
-  abx_deny implementer gh '$X gh pr merge 5'
+  abx_deny implementer gh '$X gh pr merge 5' '$=X gh pr merge 5' '$~X gh pr merge 5' '$^X gh pr merge 5'
 }
 case_ab_rtexp_deny_impl_git() {
   abx_deny implementer 'git -expansion-' '$X git push origin feature/x' '$X git commit -m m'
 }
 # mutant:508-ab-rx-re-sq — drops the apostrophe from the expansion predicate, so an ANSI-C quoted
 #   word is no expansion.
+# mutant:508-ab-rx-skip-no-prefix — drops the prefix flag from the expansion skip, so an option word
+#   after the expansion becomes the command word.
+case_ab_rtexp_deny_option_word_gh() {
+  # The skipped expansion still counts as a prefix word, so the option after it is skipped too.
+  abx_deny implementer gh '$X -rf gh pr merge 5'
+}
+case_ab_rtexp_deny_env_s_record_wide() {
+  # The env -S check is record-wide: an expansion-bearing -S string denies when the record names
+  # git or gh anywhere as an exact word.
+  abx_deny implementer gh "env -S'\$X' true; echo gh"
+  abx_deny verifier 'git -expansion-' "env -S'\$X' true; git status"
+}
 case_ab_rtexp_deny_env_ansi_c_gh() {
   abx_deny implementer gh "env \$'A=b' gh pr merge 5"
 }
@@ -1672,6 +1686,12 @@ case_ab_rtexp_deny_verifier_git_slot() {
 }
 # mutant:508-ab-rx-lone-dollar — treats any dollar sign as an expansion, so a lone prompt dollar is
 #   skipped and the gh behind it denies.
+# mutant:508-ab-rx-in-env-any — tracks every prefix word as env, so a sudo -S option with an
+#   expansion runs the env -S check.
+case_ab_rtexp_noop_sudo_s() {
+  # -S belongs to sudo here, not env, so the env -S check never applies.
+  abx_noop implementer "sudo -S'\$X' true && echo gh"
+}
 case_ab_rtexp_noop_prompt_dollar() {
   abx_noop implementer "$(printf 'cat <<EOF\n$ gh pr merge 5\nEOF\nls')"
 }
@@ -3381,8 +3401,11 @@ case_push_rtexp_deny_dollar_name() {
 }
 # mutant:508-pg-rx-re-special — drops digits and special parameters from the expansion predicate, so
 #   a positional or all-arguments expansion is no expansion.
+# mutant:508-pg-rx-re-zsh — drops the zsh expansion characters (equals, tilde, caret) from the
+#   expansion predicate, so $=X, $~X and $^X are no expansion.
 case_push_rtexp_deny_special() {
-  rtx_deny "$PP_R_RXP" '$1 git push origin feature/x' '$@ git push origin feature/x'
+  rtx_deny "$PP_R_RXP" '$1 git push origin feature/x' '$@ git push origin feature/x' \
+    '$=X git push origin main' '$~X git push origin main' '$^X git push origin main'
 }
 # mutant:508-pg-rx-re-sq — drops the apostrophe from the expansion predicate, so an ANSI-C quoted
 #   word is no expansion.
@@ -3423,7 +3446,7 @@ case_push_rtexp_deny_built_command_word() {
 # mutant:508-pg-rx-git-off — never fires the git-option-slot gate, so an expansion between git and
 #   push gets no opinion.
 case_push_rtexp_deny_git_slot() {
-  rtx_deny "$PP_R_RXG" 'git $X push origin main' 'git -$X push origin feature/x'
+  rtx_deny "$PP_R_RXG" 'git $X push origin main' 'git -$X push origin feature/x' 'git $=X push origin main'
 }
 # mutant:508-pg-rx-git-armed2 — scans the git-slot tail with the option-value skip enabled, so an
 #   option-looking token swallows the push behind it.
@@ -3433,6 +3456,23 @@ case_push_rtexp_deny_git_slot_ansi_c_opt() {
 # mutant:508-pg-rx-git-self — drops the check that the git-slot expansion word itself names push.
 case_push_rtexp_deny_git_slot_push_text() {
   rtx_deny "$PP_R_RXG" "git \$'push' origin main"
+}
+# mutant:508-pg-rx-git-trailing — drops the fallback that makes a skipped expansion word the
+#   candidate subcommand when no subcommand follows it, so the alias and relocation checks never
+#   run.
+case_push_rtexp_deny_git_slot_trailing() {
+  # The skipped expansion word is the last word of the option slot, so no subcommand follows it: it
+  # stays the alias candidate it was before the skip, and config this hook cannot read still denies.
+  local c w0
+  for c in "git -c alias.p=push \$'p'" 'git -c alias.p=push $X' 'HOME=/x git $X' 'env HOME=/x git $X' \
+    'git --config-env=alias.p=V $X' 'git -c include.path=/x $X' \
+    "git -c alias.p=push -c remote.origin.push=HEAD:main \$'p'"; do
+    w0="$__why"; __why=""
+    pp_run "$c"
+    expect_push_deny
+    al_expect_no_echo '$'
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
 }
 # rtx_alias_run CMD — CMD against a repo whose config defines a push alias, expecting the alias deny.
 rtx_alias_run() {
@@ -3510,6 +3550,13 @@ case_push_rtexp_noop_dir_expansion() {
 }
 # mutant:508-pg-rec-cut-gate — drops the cut-character condition of that fallback, so every record
 #   naming env is scanned whole.
+# mutant:508-pg-rec-lost-always — makes the record-level fallback unconditional instead of push-
+#   reachability gated, so an unsupported env option in a cut record denies even when no push can
+#   follow.
+case_push_rtexp_noop_env_c_status() {
+  # An unsupported env option in a cut record denies only when a push can follow.
+  rtx_noop 'env -C ${D} git status'
+}
 case_push_rtexp_noop_env_s_uncut() {
   rtx_noop 'env -S'"'"'echo hi'"'"' true; git push origin feature/x'
 }
@@ -9438,8 +9485,10 @@ cases=(
   "ab-pc-deny-dbracket-timing|case_ab_pc_deny_dbracket_timing|wall-clock proof: implementer, a tee/]] flood sized per-awk by ab_pc_dbracket_timing_filler -- deny under a deadline calibrated (#470) from a same-run, same-length, single-]] control measurement (a floor, else a multiple of the control) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-overlap, 463-hook-boundary-override-leaks)"
   "ab-pc-deny-dbracket-sed-cut|case_ab_pc_deny_dbracket_sed_cut|cut-sed proof: verifier, x ]] sed s/a/b/ ]] y; git diff -- a non-in-place sed cut short by the SECOND ]] fails closed -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-sed-noninplace)"
   "ab-pc-deny-dbracket-sed-inplace-cut|case_ab_pc_deny_dbracket_sed_inplace_cut|cut-sed proof: verifier, x ]] sed -i s/a/b/ ]] y; git diff -- an in-place sed cut short by the SECOND ]] fails closed -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-dbracket-sed-inplace)"
-  "ab-rtexp-deny-impl-gh|case_ab_rtexp_deny_impl_gh|\$X gh pr merge 5 denies for the implementer -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-skip-off)"
+  "ab-rtexp-deny-impl-gh|case_ab_rtexp_deny_impl_gh|\$X gh pr merge 5 denies for the implementer -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-skip-off, 508-ab-rx-re-zsh)"
   "ab-rtexp-deny-impl-git|case_ab_rtexp_deny_impl_git|\$X git push / \$X git commit deny for the implementer as git -expansion- -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-skip-off, 508-ab-rx-git-sentinel)"
+  "ab-rtexp-deny-option-word-gh|case_ab_rtexp_deny_option_word_gh|\$X -rf gh pr merge 5 denies: the skipped expansion is a prefix word -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-skip-off, 508-ab-rx-skip-no-prefix)"
+  "ab-rtexp-deny-env-s-record-wide|case_ab_rtexp_deny_env_s_record_wide|the env -S check is record-wide for both roles -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-envs-off)"
   "ab-rtexp-deny-env-ansi-c-gh|case_ab_rtexp_deny_env_ansi_c_gh|env \$'A=b' gh pr merge 5 denies for the implementer -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-skip-off, 508-ab-rx-re-sq)"
   "ab-rtexp-deny-positional-gh|case_ab_rtexp_deny_positional_gh|\$1 gh pr merge 5 denies for the implementer -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-skip-off, 508-ab-rx-re-special)"
   "ab-rtexp-deny-verifier-git-status|case_ab_rtexp_deny_verifier_git_status|\$X git status denies for the verifier as git -expansion- -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-skip-off, 508-ab-rx-git-sentinel)"
@@ -9451,6 +9500,7 @@ cases=(
   "ab-rtexp-deny-dir-expansion-gh|case_ab_rtexp_deny_dir_expansion_gh|\$X/usr/bin/gh still resolves by its basename -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-lone-dollar, 508-ab-rx-basename)"
   "ab-rtexp-deny-codex-impl-gh|case_ab_rtexp_deny_codex_impl_gh|a Codex-shaped implementer \$X gh pr merge 5 denies -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-skip-off)"
   "ab-rtexp-deny-verifier-git-slot|case_ab_rtexp_deny_verifier_git_slot|control: git \$X status already denies for the verifier -- control, not part of the mutation-proof registry"
+  "ab-rtexp-noop-sudo-s|case_ab_rtexp_noop_sudo_s|no opinion: sudo -S with an expansion is not env -S -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-in-env-any)"
   "ab-rtexp-noop-prompt-dollar|case_ab_rtexp_noop_prompt_dollar|no opinion: a heredoc line starting with a lone dollar sign -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-lone-dollar)"
   "ab-rtexp-noop-env-s-no-names|case_ab_rtexp_noop_env_s_no_names|no opinion: env -S with an expansion that names neither git nor gh -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-envs-word)"
   "ab-rtexp-noop-verifier-bare-assign|case_ab_rtexp_noop_verifier_bare_assign|no opinion: a bare assignment with an expansion value before git status -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-bare-assign)"
@@ -10762,15 +10812,16 @@ cases=(
   "push-parse-noop-c-quoted-value|case_pp_noop_c_quoted_value|no opinion: git -C \"../demo-wt-1\" push -u origin \"claude/17-a\" (the harness's own worktree shape) -- control, not part of the mutation-proof registry"
   "push-lostscan-noop-flood|case_push_lostscan_noop_flood|FLOOD+TIMING: large records, one per trigger, then a feature push -- no opinion; token count sized from a same-run, mutant-invariant twin control, deadline a multiple of the predicted linear cost (#507) -- mutation proof: dev/mutants/hook-tests.json (449-pg-scan-once)"
   "push-rtexp-deny-dollar-name|case_push_rtexp_deny_dollar_name|deny: \$X (and \"\$X\", a\$X, env \$X, sudo -\$X) before a push, naming the command-prefix reason and never echoing input -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-prefix-off)"
-  "push-rtexp-deny-special|case_push_rtexp_deny_special|deny: \$1 and \$@ in command position -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-prefix-off, 508-pg-rx-re-special)"
+  "push-rtexp-deny-special|case_push_rtexp_deny_special|deny: \$1 and \$@ in command position -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-prefix-off, 508-pg-rx-re-special, 508-pg-rx-re-zsh)"
   "push-rtexp-deny-quote-expansion|case_push_rtexp_deny_quote_expansion|deny: \$'' , \$\"\" and env \$'A=b' in command position -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-prefix-off, 508-pg-rx-re-sq, 508-pg-rx-re-dq)"
   "push-rtexp-deny-env-assign|case_push_rtexp_deny_env_assign|deny: an env assignment whose value holds an expansion -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-prefix-off, 508-pg-rx-assign-prefix)"
   "push-rtexp-deny-env-u-value|case_push_rtexp_deny_env_u_value|deny: env -u with an expansion value -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-prefix-off, 508-pg-rx-env-u-value)"
   "push-rtexp-deny-env-u-attached|case_push_rtexp_deny_env_u_attached|deny: env -u<expansion> attached -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-prefix-off, 508-pg-rx-env-u-attached)"
   "push-rtexp-deny-built-command-word|case_push_rtexp_deny_built_command_word|deny: \$G push origin main with no git text in the raw stdin -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-prefix-off, 508-pg-rx-armed, 508-pg-fastpath-dollar)"
-  "push-rtexp-deny-git-slot|case_push_rtexp_deny_git_slot|deny: an expansion in the git option slot, naming the git-options reason -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-off)"
+  "push-rtexp-deny-git-slot|case_push_rtexp_deny_git_slot|deny: an expansion in the git option slot, naming the git-options reason -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-off, 508-pg-rx-re-zsh)"
   "push-rtexp-deny-git-slot-ansi-c-opt|case_push_rtexp_deny_git_slot_ansi_c_opt|deny: git \$'-c' core.pager=cat push -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-off, 508-pg-rx-re-sq, 508-pg-rx-git-armed2)"
   "push-rtexp-deny-git-slot-push-text|case_push_rtexp_deny_git_slot_push_text|deny: git \$'push' origin main -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-off, 508-pg-rx-re-sq, 508-pg-rx-git-self)"
+  "push-rtexp-deny-git-slot-trailing|case_push_rtexp_deny_git_slot_trailing|deny: an expansion as the last word of the git option slot keeps the alias and relocation checks -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-trailing)"
   "push-rtexp-deny-git-slot-alias|case_push_rtexp_deny_git_slot_alias|deny: git \$X zqp with a push alias in .git/config -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-skip-off, 508-pg-rx-git-ungated)"
   "push-rtexp-deny-prefix-alias|case_push_rtexp_deny_prefix_alias|deny: \$X git zqp with a push alias in .git/config -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-skip-off, 508-pg-rx-ungated)"
   "push-rtexp-deny-prefix-cd|case_push_rtexp_deny_prefix_cd|deny: \$X cd ../other then a push resolves cd as the command word -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-skip-off, 508-pg-rx-ungated)"
@@ -10785,6 +10836,7 @@ cases=(
   "push-rtexp-noop-prompt-dollar|case_push_rtexp_noop_prompt_dollar|no opinion: a heredoc line starting with a lone dollar sign -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-lone-dollar)"
   "push-rtexp-noop-dir-expansion|case_push_rtexp_noop_dir_expansion|no opinion: an expansion only in the directory part of a command word -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-lone-dollar, 508-pg-rx-basename)"
   "push-rtexp-noop-env-s-uncut|case_push_rtexp_noop_env_s_uncut|no opinion: env -S with no expansion in an uncut record -- mutation proof: dev/mutants/hook-tests.json (508-pg-rec-cut-gate)"
+  "push-rtexp-noop-env-c-status|case_push_rtexp_noop_env_c_status|no opinion: env -C \${D} git status (no push can follow) -- mutation proof: dev/mutants/hook-tests.json (508-pg-rec-lost-always)"
   "push-rtexp-noop-controls|case_push_rtexp_noop_controls|no opinion: expansion text outside command position, and the skills' own worktree push shape -- control, not part of the mutation-proof registry"
   "push-rtexpscan-noop-flood|case_push_rtexpscan_noop_flood|FLOOD+TIMING: one record per expansion trigger shape, then a feature push -- no opinion; token count sized from a same-run, mutant-invariant twin control, deadline a multiple of the predicted linear cost -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-scan-per-token)"
   "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"

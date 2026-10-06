@@ -342,8 +342,9 @@
 # is resolved from the literal token, but a word holding a runtime expansion may expand to nothing (or
 # to several words) before the shell runs it, so `$X git push origin main` ran the push while the walk
 # saw a non-git command word. An EXPANSION WORD is a token whose basename (the part after the last `/`)
-# holds a dollar sign followed by a name character, a digit, a special parameter (`@ * # ? ! $ -`), an
-# apostrophe or a double quote: `$X`, `$1`, `$@`, `"$X"`, `a$X`, `$''`, `$""`, `$'A=b'`. The predicate,
+# holds a dollar sign followed by a name character, a digit, a special parameter (`@ * # ? ! $ -`), one
+# of zsh's expansion flags (`= ~ ^`, which expand to nothing for an unset name), an apostrophe or a
+# double quote: `$X`, `$1`, `$@`, `$=X`, `"$X"`, `a$X`, `$''`, `$""`, `$'A=b'`. The predicate,
 # rx_word() over rx_re, is quote-blind (`'$X'` and `\$X` count) and a lone `$` never counts; the
 # directory part never counts, so `$D/git push` still resolves by its basename. `${...}`, `$(...)` and a
 # backtick are not expansion words: the segmenter cuts at them. Since #508, (a) in command position an
@@ -362,7 +363,9 @@
 # ...`, `git $'push' origin main`) and remembered; after the subcommand loop the segment denies with
 # the fixed reason `runtime expansion in the git options` when that word itself names push or the
 # split-value gate (armed == 2: an expansion may stand for any number of options and values) finds one
-# after it. A git alias behind the skipped word is judged by the #448 route as usual. (c) The segmenter
+# after it. A skipped word with no subcommand after it stays the candidate subcommand, as it was before
+# the skip existed, so the #448 alias and relocation checks still run on it. A git alias behind the
+# skipped word is judged by the #448 route as usual. (c) The segmenter
 # cuts a record at `${`, `$(` and a backtick, so an `env -S` string such as
 # `env -S'${X}git\_push\_origin\_main'` arrives in pieces and its unsupported `env` option (#449) was
 # judged without the tail: for a record that holds one of those three and names `env`, lost_push() is
@@ -1278,7 +1281,7 @@ BEGIN {
   xcfg = 0
   has_bt = 0
   # #508: a dollar sign followed by a name character, a digit, a special parameter, or a quote
-  rx_re = "[$][A-Za-z0-9_@*#?!$\"" sq "-]"
+  rx_re = "[$][A-Za-z0-9_@*#?!$=~^\"" sq "-]"
 }
 function normalize(tok,    t, parts, np) {
   t = tok
@@ -1408,7 +1411,7 @@ function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, u, na
   for (i = 1; i <= nc; i++) print "ALIAS\t" cpath "\t" chunk[i]
   if (names != "") print "ALIAS\t" cpath "\t" names
 }
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, cfgdollar, cv, ro, k, xname, cmdcfg, co, cp, cfgname, rx_at, rxg_at) {
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, cfgdollar, cv, rx_at, rxg_at, ro, k, xname, cmdcfg, co, cp, cfgname) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
@@ -1610,6 +1613,9 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     j++
     break
   }
+  # #508: the skipped expansion word was the last word of the option slot: it is the candidate
+  # subcommand, exactly as before the skip existed, so the alias and relocation checks below still run
+  if (subcmd == "" && rxg_at) { subcmd = normalize(toks[rxg_at]); j = rxg_at + 1 }
   # #508: an expansion in the git option slot may stand for options, the subcommand, or nothing
   if (rxg_at && (index(strip_quotes(toks[rxg_at]), "push") > 0 || lost_push(toks, rxg_at + 1, ntok, 2))) { emit_lost("runtime expansion in the git options", unres, cmdcfg, cut_flag); return }
   # #448: every git segment whose subcommand is not push is an alias candidate -- git never lets an

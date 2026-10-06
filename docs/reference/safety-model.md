@@ -190,12 +190,12 @@ the command word and the shell-keyword skip are case-folded (since #398) — the
 subcommand itself stays an exact match, so a case-variant subcommand such as `git STATUS` also
 denies (fail closed), never widening the verifier's read-only allowance. Since #508, a word whose
 basename holds a runtime expansion (a dollar sign followed by a name character, a digit, a special
-parameter, an apostrophe or a double quote) is skipped like a prefix word, so a `git`/`gh` behind it
+parameter, a zsh expansion flag `=`/`~`/`^`, an apostrophe or a double quote) is skipped like a prefix word, so a `git`/`gh` behind it
 resolves (`$X gh pr merge 5`; a `git` reached past one emits the fail-closed subcommand
 `-expansion-`), and an `env -S` string that holds an expansion and names `git` or `gh` denies; the
 header's "Over-blocking and residuals of the #508 expansion skip" paragraph lists the measured
 over-blocks, and a command word built entirely at run time (`$G pr merge 5`) stays the residual
-`$(which git) push` already is. Since
+`$(which git) push` already is, as is an ANSI-C-quoted command word (`$'gh' pr merge 5`). Since
 #340, both roles ALSO deny a Bash command that puts a `.claude`-segment path in a write position —
 a `>`-family redirect target, an argument to `tee`/`cp`/`mv`/`cd`/`pushd`, or an in-place `sed`'s
 argument — closing most of the Bash-issued write route into `.claude/` (see `hooks/claude-dir-guard.sh`'s

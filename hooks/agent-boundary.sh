@@ -369,7 +369,8 @@ cmd="${cmd//$cr/}"
 #   - once that flag is set, a further token starting with '-' is also skipped (an option to the
 #     prefix word, e.g. `bash -c`, `xargs -I{}`);
 #   - since #508, a token whose basename holds a runtime expansion (a dollar sign followed by a name
-#     character, a digit, a special parameter `@ * # ? ! $ -`, an apostrophe or a double quote; the
+#     character, a digit, a special parameter `@ * # ? ! $ -`, a zsh expansion flag `= ~ ^`, an
+#     apostrophe or a double quote; the
 #     directory part never counts, so `$X/usr/bin/gh` still resolves to `gh`) is skipped too, as a
 #     possibly-empty prefix word, and sets a flag: a `git` reached past one emits the subcommand
 #     `-expansion-`, which the verifier's read-only rule denies like any unlisted subcommand (an
@@ -406,10 +407,12 @@ cmd="${cmd//$cr/}"
 # denies (the expansion could be anything); a heredoc or multi-line line that starts with an
 # expansion word followed by `git` or `gh` denies, like every line scanned as its own segment; a
 # command whose command word is an expansion and whose first argument is literally `git` or `gh`
-# (`$EDITOR gh`) denies; `env FOO=$BAR git status` denies for the verifier. Expansion text outside
+# (`$EDITOR gh`) denies; `env FOO=$BAR git status` denies for the verifier; the `env -S` check reads
+# the whole record, so `env -S'$X' true; echo gh` denies for the implementer and
+# `env -S'$X' true; git status` for the verifier. Expansion text outside
 # command position (`echo $X gh pr merge 5`, a commit message) and a lone `$` keep no opinion. The
-# residual is a command word built entirely at run time (`$G pr merge 5`, `$(which git) push`):
-# no literal `git` or `gh` token exists to find.
+# residual is a command word built entirely at run time (`$G pr merge 5`, `$(which git) push`) or
+# written with ANSI-C quoting (`$'gh' pr merge 5`): no literal `git` or `gh` token exists to find.
 #
 # Command-level, since #387: emit_segment() additionally captures, into the GLOBAL cw_word, the
 # first segment's command word (in its case-folded since #398, non-version-stripped form) found
@@ -438,7 +441,7 @@ BEGIN {
   ncw = split(cw_cmds, cwarr, " ")
   for (i = 1; i <= ncw; i++) cw_set[cwarr[i]] = 1
   # #508: a dollar sign followed by a name character, a digit, a special parameter, or a quote
-  rx_re = "[$][A-Za-z0-9_@*#?!$\"" sq "-]"
+  rx_re = "[$][A-Za-z0-9_@*#?!$=~^\"" sq "-]"
 }
 function normalize(tok,    t, parts, np) {
   t = tok
