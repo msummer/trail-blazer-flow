@@ -297,11 +297,11 @@ included), and denies when the expansion's first word is `push`, empty, a `!` sh
 option, or another defined alias, or the value ends in a backslash continuation; the deny line names
 only the source file, never the alias. A git segment that runs under config the hook cannot read denies
 the same way: an inline `HOME=`/`XDG_CONFIG_HOME=`/`GIT_CONFIG_GLOBAL=`/`GIT_CONFIG_SYSTEM=`
-assignment, command-line config naming an alias or include (or holding a dollar sign), or an export
+assignment, command-line config naming an alias or include (or whose value holds a dollar sign or a backtick), or an export
 or bare assignment of any of those names, or of any `GIT_CONFIG_*` name, in another segment (an
 inline `GIT_CONFIG_COUNT=1 git st` with no alias text is no opinion), and on a push segment an inline `HOME=`/`XDG_CONFIG_HOME=`
 denies as command-line config. The cost is deliberate over-blocking of non-push git commands
-(`!` aliases, push aliases to a feature branch, relocated config); the hook header's "Fail-closed:
+(`!` aliases, push aliases to a feature branch, relocated config, and any push-ish subsection alias such as `[alias "x"]` with `command = push`, which makes every alias candidate of that checkout deny); the hook header's "Fail-closed:
 git aliases and config relocation (#448)" paragraph lists every class and measured residual.
 **Since #449**, a push segment the
 tokenizer loses track of also denies, as an unresolved target, whenever the rest of the segment

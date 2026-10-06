@@ -3173,6 +3173,18 @@ case_pp_noop_flood() {
 # mutant:448-pg-alias-subcmd-fold -- drops the lowercase fold of the subcommand in the ALIAS line.
 # mutant:448-pg-alias-reset -- drops the alias-record reset in resolve_repo(), so the session records
 #   leak into a resolved -C target.
+# mutant:448-pg-alias-subsection-name -- reads a subsection alias only under a matching name, so a
+#   subsection alias no longer denies every alias candidate of its checkout.
+# mutant:448-pg-alias-subsection-space -- drops the blank-run alternative of the subsection header.
+# mutant:448-pg-alias-subsection-tab -- drops the TAB alternative of the subsection header.
+# mutant:448-pg-alias-subsection-dot -- drops the dotted alias header alternative.
+# mutant:448-pg-alias-lost-quoted-cfg -- drops the GIT_CONFIG_* name tests from the embedded
+#   assignment scan of a lost segment.
+# mutant:448-pg-alias-lost-substring -- makes the embedded assignment scan prefix-only, so an
+#   assignment inside an env -S string no longer counts.
+# mutant:448-pg-alias-backtick -- drops the backtick test on command-line config of an alias candidate.
+# mutant:448-pg-alias-dollar-env -- drops the dollar-sign test on GIT_CONFIG_* assignment values.
+# mutant:448-pg-alias-cr-mid-subsection -- drops the interior-CR marker on a subsection alias value.
 al_cfg_body() { printf '[alias]\n\t%s\n' "$1"; }
 al_run() { run_push_guard "$(mk_push_cmd_cwd "$1" "$2")"; }
 al_expect_alias() {
@@ -3654,16 +3666,136 @@ case_al_noop_c_target_clean() {
   al_run 'git -C ../alclean-wt-1 zqp origin feature/x' "$dir"
   expect_push_no_opinion
 }
+case_al_deny_subsection_spaces() {
+  local dir="$tmpbase/repo-al-sub-spaces"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias   "zqp"]\n\tcommand = push\n')"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_subsection_tab() {
+  local dir="$tmpbase/repo-al-sub-tab"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias\t"zqp"]\n\tcommand = push\n')"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_subsection_dotted() {
+  local dir="$tmpbase/repo-al-sub-dotted"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias.zqp]\n\tcommand = push\n')"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_subsection_escaped_name() {
+  # The name is a backslash then p, which git reads as p: the name is never read here, so it cannot be misread.
+  local dir="$tmpbase/repo-al-sub-escaped"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias "\\zqp"]\n\tcommand = push\n')"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_subsection_odd_name() {
+  # A name holding a blank (run as a quoted subcommand) and a name holding a slash.
+  local dir="$tmpbase/repo-al-sub-odd"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias "p q"]\n\tcommand = push\n')"
+  al_run 'git "p q" origin main' "$dir"
+  al_expect_alias ".git/config"
+  mk_fixture_config "$dir" "$(printf '[alias "a/p"]\n\tcommand = push\n')"
+  al_run 'git a/p origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_subsection_any_subcommand() {
+  # Over-block, deliberate: a push-ish subsection alias makes every alias candidate of the checkout deny.
+  local dir="$tmpbase/repo-al-sub-any"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias "zqp"]\n\tcommand = push\n')"
+  al_run 'git status' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_env_s_attached() {
+  local dir="$tmpbase/repo-al-env-s-att"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'env -S"HOME=/x git p origin main"' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_s_squoted() {
+  local dir="$tmpbase/repo-al-env-s-sq"
+  mk_fixture_repo "$dir" main feature/x
+  al_run "env -S'XDG_CONFIG_HOME=/x git p origin main'" "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_split_string() {
+  local dir="$tmpbase/repo-al-env-split"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'env --split-string="HOME=/x git p origin main"' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_quoted_gitconfig() {
+  local dir="$tmpbase/repo-al-env-qcfg"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'env "GIT_CONFIG_PARAMETERS=$X" git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_backtick_quoted() {
+  # The backtick cuts the segment inside the quoted key, so the -c value is never seen whole.
+  local dir="$tmpbase/repo-al-bt-quoted"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'git -c "`echo alias.p`=push" p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_backtick_bare() {
+  local dir="$tmpbase/repo-al-bt-bare"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'git -c `echo alias.p`=push p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_backtick_config_env() {
+  local dir="$tmpbase/repo-al-bt-cenv"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'git --config-env "`echo alias.p`=PV" p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_noop_dollar_not_config() {
+  # A dollar sign outside the config VALUE tokens is no reason to deny.
+  local dir="$tmpbase/repo-al-dollar-noop"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'git -c color.ui=false -C "$WT" status' "$dir"
+  expect_push_no_opinion
+  al_run 'X=$Y GIT_CONFIG_COUNT=0 git log' "$dir"
+  expect_push_no_opinion
+}
 case_al_deny_flood() {
   # mutant:448-pg-aliasdl-check-off -- FLOOD + TIMING, calibrated by dl_site_run's same-run knob-0
   # control. 3000 alias candidates that each resolve cleanly (st = status), then one that denies as
   # a push alias: only the driver loop's own per-line check_deadline can stop the flood, so the line
   # printed is the deadline one, never the alias one. With the sample neutered the knob-0 control
   # cannot print the deadline line and the case fails there.
-  local dir="$tmpbase/repo-al-flood" flood payload
+  # The candidate count is sized from a same-run per-candidate cost, measured on a small flood as the
+  # wall time of an unbudgeted run minus its knob-0 control (the unsampled prefix), so the work clearly
+  # exceeds the largest knob (DL_KNOB_MAX seconds) by a factor of three on any host and shell.
+  local dir="$tmpbase/repo-al-flood" flood payload small t0 ms0 c_us n
   mk_fixture_repo "$dir" main feature/x
   mk_fixture_config "$dir" "$(printf '[alias]\n\tst = status\n\tp = push\n')"
-  flood="$(printf 'git st;%.0s' $(seq 1 3000))"
+  small="$(mk_push_cmd_big "$(printf 'git st;%.0s' $(seq 1 300))git p origin main" "$dir")"
+  push_deadline_override=9
+  measure_ms run_push_guard "$small"
+  t0="$measured_ms"
+  push_budget_override="0"
+  push_deadline_override=9
+  measure_ms run_push_guard "$small"
+  ms0="$measured_ms"
+  if [ -z "$t0" ] || [ -z "$ms0" ]; then
+    __ok=0; __why="${__why}per-candidate cost control's timing report could not be parsed\n"
+    return
+  fi
+  c_us=$(( (t0 - ms0) * 1000 / 300 ))
+  [ "$c_us" -ge 100 ] || c_us=100
+  n=$(( DL_KNOB_MAX * 3000000 / c_us ))
+  [ "$n" -ge 3000 ] || n=3000
+  [ "$n" -le 40000 ] || n=40000
+  flood="$(printf 'git st;%.0s' $(seq 1 "$n"))"
   payload="$(mk_push_cmd_big "${flood}git p origin main" "$dir")"
   dl_site_run "$payload"
 }
@@ -9552,7 +9684,7 @@ cases=(
   "push-alias-deny-escape-tab|case_al_deny_escape_tab|an alias value push, backslash t, origin denies (the escape is a word break) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-escape)"
   "push-alias-deny-escape-newline|case_al_deny_escape_newline|an alias value push, backslash n, origin denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-escape)"
   "push-alias-deny-cr-mid|case_al_deny_cr_mid|a raw CR inside an alias value denies instead of fusing the words around it -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cr-mid)"
-  "push-alias-deny-cr-mid-subsection|case_al_deny_cr_mid_subsection|a raw CR inside a subsection alias value denies -- control, not part of the mutation-proof registry"
+  "push-alias-deny-cr-mid-subsection|case_al_deny_cr_mid_subsection|a raw CR inside a subsection alias value denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cr-mid-subsection)"
   "push-alias-deny-env-quoted-home|case_al_deny_env_quoted_home|env \"HOME=<d>\" git p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-reloc)"
   "push-alias-deny-env-squoted-xdg|case_al_deny_env_squoted_xdg|env single-quoted XDG_CONFIG_HOME=/x git p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-reloc)"
   "push-alias-deny-command-env-quoted|case_al_deny_command_env_quoted|command env \"HOME=<d>\" git p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-reloc)"
@@ -9566,7 +9698,21 @@ cases=(
   "push-alias-deny-dollar-subst|case_al_deny_dollar_subst|git -c with a command substitution in the key denies even though it splits the segment -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-dollar)"
   "push-alias-deny-subcmd-fold|case_al_deny_subcmd_fold|git ZQP with zqp = push denies (alias keys match case-insensitively) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subcmd-fold)"
   "push-alias-noop-c-target-clean|case_al_noop_c_target_clean|a push alias in the session does not leak into a resolved -C checkout that defines none -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-reset)"
-  "push-aliasdl-deny-flood|case_al_deny_flood|FLOOD+TIMING: 3000 clean alias candidates then a push alias denies with the deadline line, calibrated from a same-run knob-0 control (#476) -- mutation proof: dev/mutants/hook-tests.json (448-pg-aliasdl-check-off)"
+  "push-alias-deny-subsection-spaces|case_al_deny_subsection_spaces|[alias   \"zqp\"] (several blanks) command = push denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-space)"
+  "push-alias-deny-subsection-tab|case_al_deny_subsection_tab|[alias<TAB>\"zqp\"] command = push denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-tab)"
+  "push-alias-deny-subsection-dotted|case_al_deny_subsection_dotted|the deprecated [alias.zqp] command = push denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-dot)"
+  "push-alias-deny-subsection-escaped-name|case_al_deny_subsection_escaped_name|a backslash-escaped subsection name denies (the name is never read) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-name)"
+  "push-alias-deny-subsection-odd-name|case_al_deny_subsection_odd_name|subsection names holding a blank or a slash deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-name)"
+  "push-alias-deny-subsection-any-subcommand|case_al_deny_subsection_any_subcommand|a push-ish subsection alias makes every alias candidate of that checkout deny (deliberate over-block) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-name)"
+  "push-alias-deny-env-s-attached|case_al_deny_env_s_attached|env -S\"HOME=/x git p ...\" (attached string) denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-substring)"
+  "push-alias-deny-env-s-squoted|case_al_deny_env_s_squoted|env -S single-quoted XDG_CONFIG_HOME string denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-substring)"
+  "push-alias-deny-env-split-string|case_al_deny_env_split_string|env --split-string=\"HOME=/x git p ...\" denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-substring)"
+  "push-alias-deny-env-quoted-gitconfig|case_al_deny_env_quoted_gitconfig|env \"GIT_CONFIG_PARAMETERS=\$X\" git p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-cfg)"
+  "push-alias-deny-backtick-quoted|case_al_deny_backtick_quoted|a backtick substitution inside a quoted -c key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"
+  "push-alias-deny-backtick-bare|case_al_deny_backtick_bare|a backtick substitution as the -c key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"
+  "push-alias-deny-backtick-config-env|case_al_deny_backtick_config_env|a backtick substitution in a --config-env key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"
+  "push-alias-noop-dollar-not-config|case_al_noop_dollar_not_config|a dollar sign outside the config value tokens (-C \"\$WT\", X=\$Y) stays no opinion -- control, not part of the mutation-proof registry"
+  "push-aliasdl-deny-flood|case_al_deny_flood|FLOOD+TIMING: a flood of clean alias candidates, sized from a same-run per-candidate cost, then a push alias denies with the deadline line, calibrated from a same-run knob-0 control (#476) -- mutation proof: dev/mutants/hook-tests.json (448-pg-aliasdl-check-off)"
   "push-aliasdl-deny-budget-zero|case_al_deny_budget_zero|a bare git log at knob 0 reaches the deadline sample instead of the early exit -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-early-exit)"
   "push-reloc-deny-home-inline|case_rl_deny_home_inline|HOME=<d> git push with a push route in <d>/.gitconfig denies with the command-line-config message -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-vocab, 448-pg-reloc-push-sentinel)"
   "push-reloc-deny-xdg-inline|case_rl_deny_xdg_inline|XDG_CONFIG_HOME=/nonexistent git push denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-vocab, 448-pg-reloc-push-sentinel)"
