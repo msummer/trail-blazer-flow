@@ -476,7 +476,22 @@ slash, a Windows drive-letter prefix, or a backslash (normalised to a forward sl
 denies, fail-closed, when the path cannot be classified as absolute (`/…` or `[A-Za-z]:/…`) and
 free of a `..` segment, or when an apply_patch (or apply_patch-shaped Bash) command cannot be
 parsed at all (an absent command, an unrecognised `*** ` marker, an empty header path, or zero
-headers found); a case that matches more than one class resolves to the most specific message. For
+headers found), or (#457) when its own analysis cannot finish inside a 5-second budget sampled
+from hook start, or when a text-size cap trips (a fixed "too large to analyse" reason, implementer
+and verifier only). The caps exist because bash 3.2's text substitutions on a long or match-dense
+line, and a very large whole-text split, cannot be sampled against the budget: a Bash call with any
+physical line longer than `CDG_LINE_MAX_BYTES` bytes denies; a native `apply_patch` call denies
+for a line over that cap only when the line holds a CR or a `*** ` patch-grammar marker (an ordinary
+long content line is not capped there); either route denies a whole text longer than
+`CDG_TEXT_MAX_BYTES`; and a single path (an `Edit`/`Write` `file_path`, or a patch header path joined
+to `cwd`) or the stdin `cwd` field longer than `CDG_LINE_MAX_BYTES` denies. Every cap counts bytes, not characters. Many ordinary lines are
+bounded by the deadline instead of by size, so a command or patch made of ordinary-length lines is
+not capped by length short of `CDG_TEXT_MAX_BYTES`. The remedies are all to send less per call:
+break the over-long line, split a large patch into smaller patches, or use Codex's native
+`apply_patch` tool for a patch with a long content line; a legitimately large shell-issued patch
+(many ordinary lines, each costing a forked `trim`) can also approach the 5-second budget on a
+loaded host under bash 3.2 and deny fail-closed, and the same remedies apply. See the hook's own
+"Analysis deadline (#457)" and "Size caps (#457)" header sections for the mechanism, the two test-only knobs, and the residuals); a case that matches more than one class resolves to the most specific message. For
 a plain Bash call, whenever `apply_patch`/`applypatch` (bare, or a path-qualified spelling such as
 `./apply_patch`, matched by basename) resolves as the command word of any `;`/`&`/`|`/`(`/`)`/`{`/
 `}`/backtick-delimited segment — skipping a leading redirect's own target/source and a bare-digits
@@ -553,13 +568,14 @@ apply_patch shim"`) gets no opinion. `apply_patch`/`applypatch` appearing only a
 (`rg apply_patch hooks/`) still gets no opinion. Every other case — the main session (no `agent_type`), another
 agent, `permission_mode: "plan"`, a tool other than `Edit`/`Write`/`apply_patch`/`Bash`, malformed
 stdin, an absent or empty `file_path`/command, an ordinary Bash call that neither carries an inline
-patch nor invokes the shim as its command word and has no line with an unbalanced quote or
-trailing backslash that also mentions the shim (the #455 rules above), or an ordinary absolute path outside any
+patch nor invokes the shim as its command word, has no line with an unbalanced quote or
+trailing backslash that also mentions the shim (the #455 rules above), and is small enough to
+analyse inside the budget and the size caps (#457), or an ordinary absolute path outside any
 `.claude`/`.codex` segment — is "no opinion" (exit 0, empty stdout, empty stderr), including two
 release-blocker controls: the orchestrator's own main-session `.claude/LESSONS.md` append still
 works, and so does the verifier's own transient mutation-probe `Edit` of a tracked source file.
 Pinned by fixture cases in `dev/hook-tests.sh` (prefixes `cdg-`, `cdg-patch-`, `cdg-codexseg-`,
-`cdg-bash-`, `cdg-pc-`, `cdg-dbq-`, `cdg-dec-`, and `cdg-qa-`): the same booby-trapped-`PATH` idiom (widened here to
+`cdg-bash-`, `cdg-pc-`, `cdg-dbq-`, `cdg-dec-`, `cdg-qa-`, and `cdg-dl-`): the same booby-trapped-`PATH` idiom (widened here to
 `git`/`gh`/`rm`/`dirname`/`tr`/`awk`/`grep`/`sed`, since this hook uses none of them) proves it
 executes none of them, and a byte-identical fixture-tree listing proves the `Edit`/`Write` route
 writes nothing to the filesystem — this hook also never *reads* the filesystem at all, true by
