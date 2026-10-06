@@ -62,7 +62,12 @@
 # scripts' PREFIX_WORDS vocabulary stays byte-identical. Differences from agent-boundary.sh's
 # tokenizer: after resolving a segment's command word as `git`, this script walks forward again
 # skipping a GIT_GLOBAL_OPTS_WITH_VALUE token together with its next token (a value), or any other
-# `-…` token alone, until the first non-dash token — the subcommand; if that subcommand is exactly
+# `-…` token alone, until the first non-dash token — the subcommand (except that a quote- or
+# backslash-bearing option fails closed when a push can follow, see "Fail-closed: a segment the
+# tokenizer cannot follow (#449)" below); and, in the command-word walk, this script alone has an
+# `env` arm (the allowlisted `env` options, `-u`/`--unset` with their value) and three #449
+# fail-closed triggers that `hooks/agent-boundary.sh` does not have, the shared PREFIX_WORDS skip
+# itself being unchanged; if that subcommand is exactly
 # `push`, the segment's REMAINING tokens (the push's own options/remote/refspecs) are emitted
 # quote/backslash-stripped but WITHOUT a basename normalisation — a refspec destination like
 # `refs/heads/main` or `claude/17-a` is a path-shaped value whose `/` is semantically load-bearing,
@@ -257,9 +262,77 @@
 # echoed in the deny message (a GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> match stores a boolean
 # only). Residuals this leaves, reasoned from the code but not run (see "Documented under-blocking
 # classes" below and this issue's own follow-ups): a git alias that expands to `push` (e.g. `git -c alias.p=push p origin
-# main`); a quoted or escaped option spelling (`git "-c" k=v push`, which normalises the quoted
-# option into the subcommand slot); a quoted value containing a space (splits the same way an ordinary `-C`/`GIT_DIR=` value does);
-# and an inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself reads.
+# main`); and an inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself
+# reads. (The simple quoted or escaped option spelling, `git "-c" k=v push`, and a `-c` value whose
+# quoted text holds a space and an odd count of one quote character are caught since #449; the forms
+# that stay open are listed in "Fail-closed: a segment the tokenizer cannot follow (#449)" below.)
+#
+# Fail-closed: a segment the tokenizer cannot follow (#449, absorbing #451). This hook splits a
+# segment on whitespace and strips quotes only to resolve a command word, so a quoted or escaped
+# option, a quoted value containing a space, or an `env` option that takes a value can make it lose
+# track of the segment while git itself still pushes. Three triggers in emit_segment() fail closed,
+# each through the #292 "unresolved" deny with one FIXED reason (never command text): (a) in git's
+# option slot, a token carrying a quote or backslash whose unquoted form starts with `-` —
+# `git "-c" k=v push`, `git \-c k=v push`, `git "--git-dir=../other/.git" push origin develop`,
+# `git -"c" k=v push`, `git '-c' k=v push` — reason `quoted or escaped git option`, tested with
+# strip_quotes() (not normalize(), which keeps only the last path component); the same reason also
+# covers the VALUE of a global option other than -C that the whitespace split cut in two (`git -c
+# "user.name=A B" push origin feature/x`, `git "-c" "a b" push ...`, `git --namespace "a b" push
+# ...`) and an attached option whose value was cut (`git --exec-path="a b" push ...`), where the
+# leftover fragments would otherwise become the subcommand and drop the segment — the -C value is
+# deliberately exempt, because failing closed there would deny the harness's own `git -C "<path with
+# a space>" push`; (b) in the command prefix, an
+# assignment (or an `env -u` value, or an attached `-uNAME`) with an odd count of `"`, an odd count
+# of `'`, or a trailing backslash — the whitespace split cut a quoted or escaped value in two
+# (`X="a b" git push origin main`, `X='a b' ...`, `X=a\ b ...`) — or, after a prefix word, a
+# quote-bearing token that reads as an option or an assignment once unquoted (`env "X=a" git push
+# ...`, `env "-C" ../other git push ...`), reason `quote or escape in the command prefix`; the
+# command-word candidate itself is never a trigger, so heredoc or commit prose such as `Don't let
+# git push skip the guard` stays silent; (c) after an `env` prefix word, any option outside
+# PUSH_ENV_NOVALUE_OPTS (skipped alone) and the PUSH_ENV_UNSET_OPTS forms (`-u NAME`, `--unset
+# NAME`, `-uNAME`, `--unset=NAME`, skipped with their value) — `env -C <dir>`, `--chdir=<dir>`,
+# `-S <string>`, a clustered `-iu`, an abbreviation — reason `unsupported env option`; which
+# options a given GNU or BSD `env` accepts is UNVERIFIED here, which is why the allowlist is
+# narrow. A trigger denies only when lost_push() says the rest of the segment could still be a
+# push — one token naming both git and push, or a token naming git followed only by option words
+# (and the values of git global options) and then a token naming push — so `X="a b" git status`,
+# `GIT_AUTHOR_NAME="A B" git commit -m "fix push"`, `git "--no-pager" log --grep push` and `env -C
+# <dir> git status` keep no opinion. The two split-value triggers (a global option VALUE or attached
+# option cut by the whitespace split) use a looser gate, armed == 2: the fragments after the cut are
+# junk, so the walk never disarms on a non-option word and never applies the option-value skip (a
+# fragment such as the -c" of `-c "k=a b -c" push` could otherwise swallow the real push), and ANY
+# later token naming push counts. When the gate says no, the walk behaves exactly as before. A cut
+# push keeps its `-cut-push-` sentinel, command-line git config (#439) keeps its own message, and
+# an earlier #292 reason (`GIT_DIR=`) keeps precedence over the new reason; all three still deny.
+# Every rule only adds denies, with one exception: `env -u git push origin main` and `env --unset
+# git push origin main` no longer deny, because `-u`/`--unset` now consume `git` as their value and
+# the command real `env` runs is `push`.
+# Deliberate over-blocking, each measured rc 2: `X="a b" git -C ../x push-docs`, `sh -c 'FOO=1 git
+# push origin feature/x'`, `HOME="/a b" git push origin feature/x`, `sudo "-u" root git push
+# origin main`, `env -C . git push origin feature/x`, `env -iu X git push ...`, `env --ignor git
+# push ...`, a lone `env - git push ...`, `git "--no-pager" push origin feature/x`, the looser
+# split-value gate's `git -c "user.name=A B" commit -m "fix push"` and `git --namespace "a b" log
+# --grep push`, and a heredoc or
+# prose line led by a markdown bullet (`- env -C ../other git push origin x`, scanned as its own
+# segment, where `-` is a PREFIX_WORDS member so the command-word exemption does not apply; write
+# such text with an editor tool and `git commit -F <file>` instead). The
+# harness's own shapes are unaffected: `git -C "<worktree>" push -u origin "claude/<n>-<slug>"`
+# consumes the quoted `-C` value with its option. Residuals this leaves, each measured rc 0: a
+# quote or escape split that keeps an EVEN count of the same quote character, which the odd-count
+# test cannot see (`X="a'"'b c' git push origin main`, `X="\" x" git push origin main`,
+# `X="a\" b" git push origin main`, `env -u "a'"'b c' git push origin main`, an option value `git -c
+# "k=a'"'b c' push origin main`); ANSI-C quoting
+# (`git $'-c' remote.origin.push=HEAD:main push`); a quoted `-C` value containing a space (`git -C
+# "../a b" push origin main`, rows (b), (d) and (j) below, unchanged), which also hides any later
+# option such as a `-c` after it (`git -C "../a b" -c "k=x y" push origin main`, and `git "-C"
+# "../a b" push origin main`, are both rc 0); an
+# assignment whose quoted value contains `;`, `&`, `|`, `(`, `)`, `{`, `}`, a backtick or a newline
+# (`X="a;b" git push origin main` — the split-off segment starts with the closing-quote word, which
+# as a command-word candidate is never checked); a `repeat` count containing a space (`repeat "2 3"
+# git push origin main`); a lost segment that changes directory (`X="a b" cd ../x && git push
+# origin trunk` — not added to the cross-segment rule above); and the git-alias form and inline
+# `HOME=`/`XDG_CONFIG_HOME=` relocation of #448. hooks/agent-boundary.sh has the same gaps and is
+# left for a follow-up, so a fix here is not mirrored there.
 #
 # Fail-closed: Codex shell workdir (#494). Codex's shell tool takes its own `workdir` parameter,
 # which is NOT part of the PreToolUse payload (ADR 0002 U9, confirmed live on Codex 0.156.1: the
@@ -521,7 +594,9 @@
 # still glued to them: an empty fragment is skipped; a fragment that exactly equals a
 # GIT_GLOBAL_OPTS_WITH_VALUE name (so `-c` does, but `-c"` with the closing quote glued on does
 # not) is consumed together with the fragment after it; any other fragment beginning with `-`
-# is skipped; the first fragment left standing is the subcommand candidate, and the segment is
+# is skipped — except that, since #449, one carrying a quote or backslash whose unquoted form
+# begins with `-` (the `-x"` of row (a)) fails closed instead when a push can still follow;
+# the first fragment left standing is the subcommand candidate, and the segment is
 # recognised iff `normalize()` of it — quote characters and backslashes removed, then the last
 # `/`-separated component — is exactly `push`. Nothing about the captured `-C` fragment itself
 # enters that decision; whether that fragment is then RESOLVED is decided separately, by
@@ -532,24 +607,22 @@
 # rule beyond it is claimed for shapes not listed here — except rows (f) and (i), where the #439
 # command-line-config check (added after these rows were measured) also applies, and wins:
 #
-# (a) `git -C "../a-wt-1 -x" push origin trunk` -> rc 2 — `-x"` begins with `-` and is skipped,
-# the real `push` is the candidate, the segment is recognised; the captured fragment
-# (`../a-wt-1`) satisfies PATH_ERE and is resolved, so the deny names `../a-wt-1`'s own default
-# — a directory OTHER than the one git would actually `-C` into (the literal, on-disk
-# `../a-wt-1 -x`): a mis-resolution, not a containment breach (see the containment paragraph
-# above). Controls: the same command with a non-matching first fragment (`../plain-dir -x`)
-# -> rc 2 (denied as unresolved: `../plain-dir` fails PATH_ERE and is not lexically the session
-# checkout either — see "Fail-closed: an unresolvable push target" above), and the session alone
-# pushing to `trunk` with no `-C` -> rc 0, isolating that row (a)'s own deny comes from the
-# fragment's own resolution, not from this control's separate unresolved-target route.
+# (a) `git -C "../a-wt-1 -x" push origin trunk` -> rc 2 — `-x"` begins with `-` and carries the
+# glued closing quote, so since #449 it fails closed as UNRESOLVED (`quoted or escaped git
+# option`) before any `-C` resolution: a push follows it, so the segment could still be a push
+# whose real option this hook cannot read. (Before #449 it was skipped as a dash fragment and the
+# captured `../a-wt-1` was resolved, naming that directory's own default — a mis-resolution, not
+# a containment breach; no row of this list reaches that outcome through a quoted option any
+# more.) Controls: the same command with a non-matching first fragment (`../plain-dir -x`) -> rc
+# 2, the same reason, and the session alone pushing to `trunk` with no `-C` -> rc 0.
 # (b) `git -C "../a-wt-1 foo" push origin main` -> rc 0 — `foo"` normalises to `foo`, not
 # `push`: the segment is dropped as unrecognised, nothing is resolved, and a push whose
 # destination is literally the session's own default branch gets no opinion (control: the
 # session alone pushing to `main` -> rc 2).
-# (c) `git -C "../plain-dir -x" push origin main` -> rc 2 — recognised exactly as (a); the
-# captured fragment fails PATH_ERE and is not lexically the session checkout, so this denies as
-# UNRESOLVED (`-C path outside the <name>-wt-<n> worktree shape`) unconditionally, regardless of
-# what the destination is.
+# (c) `git -C "../plain-dir -x" push origin main` -> rc 2 — fails closed exactly as (a), as
+# UNRESOLVED (`quoted or escaped git option`), whatever the destination is. (Before #449 the
+# captured fragment failed PATH_ERE and the deny named `-C path outside the <name>-wt-<n>
+# worktree shape` instead; either way this denies.)
 # (d) `git -C "../repo with space-wt-1" push origin develop` -> rc 0 — `with` normalises to
 # `with`: hidden, the same way as (b).
 # (e) `git -C "../a-wt-1 push" push origin trunk` -> rc 2 — `push"` normalises to `push`, so
@@ -581,7 +654,7 @@
 # PRE-DATES #269 (the plain whitespace split that produces it is older than this issue and
 # independent of whether `-C` resolution exists at all): a quoted `-C` value containing a
 # space can hide the whole segment from this hook, including a push whose destination is
-# literally the session's own default branch. Rows (a), (e), (h) and the two rc-2
+# literally the session's own default branch. Rows (e), (h) and the two rc-2
 # shapes in (j) share the one resolve-a-different-directory outcome that is new to this
 # change, and it is a mis-resolution, not a containment breach: the facts applied still belong
 # to a directory this hook itself derived and read under the same predicate, never an
@@ -589,7 +662,8 @@
 # actually executes in (see the containment paragraph above for the qualification this
 # residual class requires). Rows (f) and (i) no longer belong to that group: since #439, both
 # deny via the command-line-config check before `-C` is ever resolved (see each row's own text
-# above), so neither one reaches — or depends on — `../a-wt-1`'s own facts at all. Since #268 closed the repo-local
+# above), so neither one reaches — or depends on — `../a-wt-1`'s own facts at all; nor does row
+# (a) since #449, which fails closed on its quoted option the same way. Since #268 closed the repo-local
 # `push.default`/`remote.<name>.push` class named here in every prior version of this file, #290
 # closed the GLOBAL half of that same class (`$GIT_CONFIG_GLOBAL`, `$XDG_CONFIG_HOME/git/config`
 # or its default, `$HOME/.gitconfig`), and #304/#305 closed most of the SYSTEM half plus
@@ -645,8 +719,9 @@
 # `GIT_CONFIG_SYSTEM` environment assignment, bare or behind `env`, are no longer read-and-ignored
 # residuals — every push segment carrying one is denied outright (see "Fail-closed: command-line
 # git config" above) whatever the key or destination. What remains residual there instead: an
-# inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself reads, the
-# quote-blind and alias-shaped forms that same paragraph names. (A cross-segment `export
+# inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself reads, and
+# the alias-shaped forms that same paragraph names (#449 catches only the simple quoted-option and
+# odd-quote-count forms, and leaves others open: see its own paragraph). (A cross-segment `export
 # GIT_CONFIG_*=…` or bare `GIT_CONFIG_*=…;` segment is denied by #433's cross-segment rule.)
 #
 # Since #433, the new cross-segment ("xseg") rule above still leaves these residuals open: a
@@ -659,10 +734,8 @@
 # already names (a literal `cd` with a substituted ARGUMENT, e.g. `cd "$(dirname "$x")"`, is still
 # a `cd` command word and denies); other variable-setting
 # builtins this hook does not track, `read`/`printf -v` and `set -a` paired with a non-bare
-# assignment; `env --chdir=<dir> git push` (a dash-prefixed token immediately after the `env`
-# prefix word, skipped like any other) and `env -C <dir> git push` (`<dir>` itself becomes the
-# resolved command word, the same class as the `sudo -u foo` bullet above) — filed as a follow-up
-# alongside this change. (Codex's shell `workdir`, which never appears in this hook's payload at
+# assignment. (`env --chdir=<dir> git push` and `env -C <dir> git push` are no longer residuals:
+# since #449 an `env` option outside a short allowlist fails closed when a push can follow.) (Codex's shell `workdir`, which never appears in this hook's payload at
 # all (ADR 0002 U9) and so cannot be tracked by any command-string mechanism, is closed since #494
 # by reading the rollout instead — see "Fail-closed: Codex shell workdir (#494)" above for what that
 # still leaves open: a workdir key built at runtime or written with escapes, a cwd-like parameter
@@ -677,7 +750,9 @@
 # unconditional `main`/`master` fallback), OR whose target repository this hook cannot resolve at
 # all (#292 — see "Fail-closed: an unresolvable push target" above), OR whose push segment carries
 # git config supplied on the command line (#439 — see "Fail-closed: command-line git config"
-# above), OR, since #435, whose analysis cannot finish inside this hook's own time budget, or that
+# above), OR whose push segment lost the tokenizer — a quoted or escaped git option, a quote or
+# escape in the command prefix, or an unsupported `env` option (#449 — see "Fail-closed: a segment
+# the tokenizer cannot follow (#449)" above), OR, since #435, whose analysis cannot finish inside this hook's own time budget, or that
 # reads a git config file with a depth-0 line too long to analyse safely (see "Analysis deadline
 # (#435)" below), OR, since #494, a Codex-shaped payload whose shell `workdir` is not provably the
 # session checkout, whose transcript cannot be read, whose transcript window holds no tool call, or
@@ -698,7 +773,9 @@
 # push_budget`) — never by resetting `$SECONDS` itself. The sampling rule this binds on every future
 # addition to this file — #439 has already landed entirely inside the awk tokenizer (its own
 # "-cmdline-config-" sentinel, covered by `T_prefix` below, the linear pre-tokenizer cost this
-# deadline cannot sample around at all), and #433 has landed in the awk tokenizer plus one
+# deadline cannot sample around at all), #449 likewise (its per-token shape checks and at most three
+# lost_push() scans per segment, one memoised scan for each of three trigger families, all inside that tokenizer and so inside
+# `T_prefix`), and #433 has landed in the awk tokenizer plus one
 # constant-cost post-loop fallback: call `check_deadline` as the FIRST statement of every loop whose trip
 # count grows with the command string or a config file's own content — never partway through a loop
 # body, and never only once at the top of a function that itself contains such a loop. The early
@@ -883,6 +960,16 @@ PUSH_EXPORT_WORDS="export declare typeset local readonly"
 GIT_CMDCFG_OPTS="-c --config-env"
 GIT_CMDCFG_ENV_VARS="GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM"
 GIT_CMDCFG_ENV_PREFIXES="GIT_CONFIG_KEY_ GIT_CONFIG_VALUE_"
+# #449: the `env` options the prefix walk understands, push-guard-only (no twin in
+# hooks/agent-boundary.sh, which this change leaves alone). PUSH_ENV_NOVALUE_OPTS take no value and
+# are skipped alone; PUSH_ENV_UNSET_OPTS (`-u NAME`, `--unset NAME`, attached `-uNAME`,
+# `--unset=NAME`) are skipped together with their value. Any OTHER dash token after an `env` word
+# (`-C`/`--chdir`, `-S`/`--split-string`, a clustered `-iu`, an abbreviation, ...) is an option this
+# hook cannot follow, so a segment that could still be a push fails closed. UNVERIFIED which options
+# a given GNU or BSD `env` accepts: the allowlist is deliberately narrow, so an unlisted option
+# denies rather than being guessed at.
+PUSH_ENV_NOVALUE_OPTS="-i -0 -v -- --ignore-environment --null --debug"
+PUSH_ENV_UNSET_OPTS="-u --unset"
 # #494: the most bytes read from the END of the Codex rollout file named by the payload's
 # `transcript_path` when scanning the tool-call records (see the post-loop "#494" block and the
 # header's "Fail-closed: Codex shell workdir (#494)" paragraph). A record pushed out of this window
@@ -995,8 +1082,9 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
 # --- the tokenizer (POSIX awk, inlined) -------------------------------------------------------
 # See this file's header for the full cross-reference to hooks/agent-boundary.sh's twin scan.
 # Emits one "PUSH<TAB><-C value, only when exactly one><TAB><#292 unresolved-reason, empty when
-# none><TAB><space-joined remaining tokens>" line per push segment found; nothing for any other
-# segment, EXCEPT: a push segment carrying command-line git config (#439), which emits the fixed
+# none><TAB><space-joined remaining tokens>" line per push segment found, and (#449) one with an
+# empty -C value, a fixed reason and no remaining tokens for a segment that lost the tokenizer but
+# could still be a push (see emit_lost()); nothing for any other segment, EXCEPT: a push segment carrying command-line git config (#439), which emits the fixed
 # sentinel "-cmdline-config-" instead of a "PUSH…" line (see emit_segment()'s own cmdcfg
 # handling below); and (#433) one final "-xseg-<TAB><reason>" line, emitted by the END block
 # below, iff any segment anywhere in the whole command (a push segment or otherwise) resolved to a
@@ -1006,7 +1094,7 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
 # on "[ \t]+". Processes $cmd one input line (awk record) at a time — the same deliberate,
 # documented false-positive class agent-boundary.sh's header explains (a heredoc line that starts
 # with "git push" is scanned as its own segment).
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" -v dirwords="$PUSH_DIR_CHANGE_WORDS" -v exportwords="$PUSH_EXPORT_WORDS" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" '
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" -v dirwords="$PUSH_DIR_CHANGE_WORDS" -v exportwords="$PUSH_EXPORT_WORDS" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" -v envnov="$PUSH_ENV_NOVALUE_OPTS" -v envunset="$PUSH_ENV_UNSET_OPTS" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
@@ -1032,6 +1120,11 @@ BEGIN {
   nce = split(cmdcfgenv, cearr, " ")
   for (i = 1; i <= nce; i++) ccenv_set[cearr[i]] = 1
   nccp = split(cmdcfgpfx, ccparr, " ")
+  # #449
+  nenv = split(envnov, envnovarr, " ")
+  for (i = 1; i <= nenv; i++) envnov_set[envnovarr[i]] = 1
+  neun = split(envunset, envunsetarr, " ")
+  for (i = 1; i <= neun; i++) envunset_set[envunsetarr[i]] = 1
 }
 function normalize(tok,    t, parts, np) {
   t = tok
@@ -1053,13 +1146,70 @@ function is_cmdcfg_name(n,    c) {
   for (c = 1; c <= nccp; c++) if (index(n, ccparr[c]) == 1) return 1
   return 0
 }
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, ro, k, xname, cmdcfg, co, cp, cfgname) {
+# #449: token-shape predicates and the push-reachability gate for the fail-closed triggers in
+# emit_segment() below. This program is single-quoted shell: it must never contain a literal
+# apostrophe (use sq). quote_bearing: the token carries a quote or a backslash. quote_unbalanced:
+# an odd count of double quotes, an odd count of single quotes, or a trailing backslash -- the
+# token opens a quoted or escaped span that the whitespace split cut in two.
+function quote_bearing(tok) {
+  return (index(tok, "\"") > 0 || index(tok, sq) > 0 || index(tok, "\\") > 0)
+}
+function quote_unbalanced(tok,    t, n) {
+  t = tok
+  n = gsub(/"/, "", t)
+  if (n % 2) return 1
+  t = tok
+  n = gsub(sq, "", t)
+  if (n % 2) return 1
+  return (substr(tok, length(tok)) == "\\")
+}
+# lost_push(toks, from, ntok, armed): one left-to-right pass over toks[from..ntok], true iff the
+# rest of the segment could still be a push -- a single token naming both git and push, or a token
+# naming git followed only by option words (and the values of git global options) and then a token
+# naming push. armed starts the walk as if a git word had just been seen; armed == 2 additionally
+# never disarms on a non-option word and never applies the option-value skip (the fragments a split
+# quoted value leaves behind may themselves look like an option, e.g. the -c" of "k=a b -c", so any
+# later token naming push counts). Never consulted for a
+# segment that cannot be a push, so a non-push command keeps its old no-opinion verdict.
+function lost_push(toks, from, ntok, armed,    i, tok, s, lo, skip, arm) {
+  arm = armed
+  skip = 0
+  for (i = from; i <= ntok; i++) {
+    tok = toks[i]
+    if (tok == "") continue
+    s = strip_quotes(tok)
+    lo = tolower(s)
+    if (index(lo, "git") > 0 && index(s, "push") > 0) return 1
+    if (arm) {
+      if (skip) { skip = 0; continue }
+      if (substr(s, 1, 1) == "-") { if (armed != 2 && (s in gopt_set)) skip = 1; continue }
+      if (index(s, "push") > 0) return 1
+      if (armed != 2) arm = 0
+    }
+    if (index(lo, "git") > 0) { arm = 1; skip = 0 }
+  }
+  return 0
+}
+# emit_lost: the segment lost the tokenizer and could still be a push -- fail closed. A cut push
+# keeps its own sentinel, command-line git config keeps its own message, and an earlier #292 reason
+# (unres) keeps precedence over the fixed new reason; the reason is never input text.
+function emit_lost(reason, unres, cc, cut) {
+  if (cut) print "-cut-push-"
+  else if (cc) print "-cmdline-config-"
+  else print "PUSH\t\t" (unres != "" ? unres : reason) "\t"
+}
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, m2, s0, ro, k, xname, cmdcfg, co, cp, cfgname) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
   cmdword = ""
   unres = ""
   cmdcfg = 0
+  # #449: per-segment memos of the lost_push() scans (-1 = not yet scanned) and the env-context flag
+  in_env = 0
+  m0 = -1
+  m1 = -1
+  m2 = -1
   while (idx <= ntok) {
     tok = toks[idx]
     if (tok == "") { idx++; continue }
@@ -1072,11 +1222,53 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
         if (aname in ccenv_set) cmdcfg = 1
         else for (cp = 1; cp <= nccp; cp++) if (index(aname, ccparr[cp]) == 1) { cmdcfg = 1; break }
       }
+      # #449: an assignment whose quoted or escaped value the whitespace split cut in two
+      # (X="a b", X=a\ b) leaves the rest of the value as a bogus command word -- fail closed when
+      # the remaining tokens could still be a push.
+      if (quote_unbalanced(tok)) {
+        if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
+        if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
+      }
       idx++
       continue
     }
     norm = tolower(normalize(tok))
     if (norm == "") { idx++; continue }
+    # #449: an option after an env word. The allowlisted no-value options are skipped alone, -u/--unset
+    # take their value with them, and any other option is one this hook cannot follow (-C/--chdir
+    # change the directory, -S splits a string into more words): fail closed when a push can follow.
+    # Anything not handled here falls through to the unchanged walk below.
+    if (in_env && substr(tok, 1, 1) == "-") {
+      if (tok in envnov_set) { idx++; continue }
+      if (tok in envunset_set) {
+        if (quote_unbalanced(toks[idx + 1])) {
+          if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
+          if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
+        }
+        idx += 2
+        continue
+      }
+      if (substr(tok, 1, 2) == "-u" || index(tok, "--unset=") == 1) {
+        if (quote_unbalanced(tok)) {
+          if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
+          if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
+        }
+        idx++
+        continue
+      }
+      if (m0 < 0) m0 = lost_push(toks, idx, ntok, 0)
+      if (m0) { emit_lost("unsupported env option", unres, cmdcfg, cut_flag); return }
+    }
+    # #449: after a prefix word, a quote-bearing token that reads as an option or an assignment once
+    # unquoted ("X=a", "-C") is skipped by the real shell or env but is no command word here.
+    if (saw_prefix && quote_bearing(tok)) {
+      s0 = strip_quotes(tok)
+      if (substr(s0, 1, 1) == "-" || match(s0, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) {
+        if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
+        if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
+      }
+    }
+    if (norm in prefix_set && norm != "-") in_env = (norm == "env")
     if (norm in prefix_set) { saw_prefix = 1; idx += (norm == "repeat") ? 2 : 1; continue }
     if (saw_prefix && substr(tok, 1, 1) == "-") { idx++; continue }
     cmdword = norm
@@ -1128,6 +1320,27 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
       if (tok in ccopt_set) cmdcfg = 1
       else if (substr(tok, 1, 2) == "-c") cmdcfg = 1
       else for (co = 1; co <= ncco; co++) if (index(tok, ccoarr[co] "=") == 1) { cmdcfg = 1; break }
+    }
+    # #449: a quoted or escaped option in the option slot ("-c", \-c, "--git-dir=...", -"c") is
+    # applied by git but never read here -- it would otherwise normalise into the subcommand slot
+    # or be skipped unread. Fail closed when a push can still follow. strip_quotes, not normalize:
+    # normalize keeps only the last path component and would turn "--git-dir=../x/.git" into .git.
+    # An attached option whose own quoted value was split by the whitespace tokenizer
+    # (--git-dir="a b", -c"k=a b"), or the detached VALUE token of a global option other than -C that
+    # is itself unbalanced (-c "k=a b"): the leftover fragments would become the subcommand and drop
+    # the segment. The -C value stays exempt (the harness own worktree paths may hold a space).
+    if (quote_unbalanced(tok) && substr(strip_quotes(tok), 1, 1) == "-") {
+      if (m2 < 0) m2 = lost_push(toks, j + 1, ntok, 2)
+      if (m2) { emit_lost("quoted or escaped git option", unres, cmdcfg, cut_flag); return }
+    }
+    s0 = strip_quotes(tok)
+    if ((s0 in gopt_set) && s0 != "-C" && quote_unbalanced(toks[j + 1])) {
+      if (m2 < 0) m2 = lost_push(toks, j + 2, ntok, 2)
+      if (m2) { emit_lost("quoted or escaped git option", unres, cmdcfg, cut_flag); return }
+    }
+    if (quote_bearing(tok) && substr(strip_quotes(tok), 1, 1) == "-") {
+      if (m1 < 0) m1 = lost_push(toks, j, ntok, 1)
+      if (m1) { emit_lost("quoted or escaped git option", unres, cmdcfg, cut_flag); return }
     }
     if (tok in gopt_set) {
       if (tok == "-C") { ccount++; cpath = strip_quotes(toks[j + 1]) }
