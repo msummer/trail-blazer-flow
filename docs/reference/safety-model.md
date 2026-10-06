@@ -184,8 +184,9 @@ since the text on the far side of that `]]` was deliberately never read, this ho
 denies through the ordinary route instead. For the verifier role it denies `gh` outright and
 denies `git` unless the resolved subcommand is one of `status diff log show rev-parse ls-files
 merge-base blame grep restore`; an unlisted subcommand, a global option before the subcommand, a
-bare `git`, and a runtime expansion before `git` (`$X git status`) all deny too — fail-closed, not an
-enumerated allow-list of "safe" subcommands. Only
+bare `git`, a runtime expansion before `git` (`$X git status`), and (since #505) a `git` behind a
+command prefix the scan cannot follow (`GIT_PAGER="less -R" git log`, `env -C /tmp git status`) all
+deny too — fail-closed, not an enumerated allow-list of "safe" subcommands. Only
 the command word and the shell-keyword skip are case-folded (since #398) — the resolved `git`
 subcommand itself stays an exact match, so a case-variant subcommand such as `git STATUS` also
 denies (fail closed), never widening the verifier's read-only allowance. Since #508, a word whose
@@ -195,7 +196,13 @@ resolves (`$X gh pr merge 5`; a `git` reached past one emits the fail-closed sub
 `-expansion-`), and an `env -S` string that holds an expansion and names `git` or `gh` denies; the
 header's "Over-blocking and residuals of the #508 expansion skip" paragraph lists the measured
 over-blocks, and a command word built entirely at run time (`$G pr merge 5`) stays the residual
-`$(which git) push` already is, as is an ANSI-C-quoted command word (`$'gh' pr merge 5`). Since
+`$(which git) push` already is, as is an ANSI-C-quoted command word (`$'gh' pr merge 5`). Since #505,
+the walk follows `env -u`/`--unset` values, and a command prefix the scan cannot follow — a quoted or
+escaped assignment value split at a space (`X="a b" gh …`), an `env` option outside a short allowlist
+(`env -C /tmp gh …`, `env -S'gh …'`), or a quoted option or assignment after a prefix word (`env "X=a
+b" gh …`) — denies, for the verifier too, when a later word in the same segment is `git` or `gh`, or
+a `.claude` path segment; the script header's "Fail-closed: a command prefix the scan cannot follow"
+paragraph lists the over-blocking and the residuals. Since
 #340, both roles ALSO deny a Bash command that puts a `.claude`-segment path in a write position —
 a `>`-family redirect target, an argument to `tee`/`cp`/`mv`/`cd`/`pushd`, or an in-place `sed`'s
 argument — closing most of the Bash-issued write route into `.claude/` (see `hooks/claude-dir-guard.sh`'s

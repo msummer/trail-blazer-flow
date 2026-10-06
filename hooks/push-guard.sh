@@ -71,9 +71,10 @@
 # skipping a GIT_GLOBAL_OPTS_WITH_VALUE token together with its next token (a value), or any other
 # `-…` token alone, until the first non-dash token — the subcommand (except that a quote- or
 # backslash-bearing option fails closed when a push can follow, see "Fail-closed: a segment the
-# tokenizer cannot follow (#449)" below); and, in the command-word walk, this script alone has an
-# `env` arm (the allowlisted `env` options, `-u`/`--unset` with their value) and three #449
-# fail-closed triggers that `hooks/agent-boundary.sh` does not have, the shared PREFIX_WORDS skip
+# tokenizer cannot follow (#449)" below); and, in the command-word walk, this script alone has the
+# git-option-slot trigger, while the `env` arm (the allowlisted `env` options, `-u`/`--unset` with
+# their value) and the two command-prefix #449 triggers are applied by `hooks/agent-boundary.sh` too,
+# each hook with its own verdict (see that file's header), the shared PREFIX_WORDS skip
 # itself being unchanged; since #508 the expansion-word predicate (rx_re and rx_word(), see "Fail-closed:
 # a runtime expansion in the command prefix or the git options (#508)" below) is the same text in both
 # scripts, each with its own verdict; if that subcommand is exactly
@@ -384,8 +385,8 @@
 # as a command-word candidate is never checked); a `repeat` count containing a space (`repeat "2 3"
 # git push origin main`); a lost segment that changes directory (`X="a b" cd ../x && git push
 # origin trunk` — not added to the cross-segment rule above); and the git-alias form and inline
-# `HOME=`/`XDG_CONFIG_HOME=` relocation of #448. hooks/agent-boundary.sh has the same gaps and is
-# left for a follow-up, so a fix here is not mirrored there.
+# `HOME=`/`XDG_CONFIG_HOME=` relocation of #448. hooks/agent-boundary.sh applies the same env arm and
+# command-prefix triggers with a role verdict (see its header), not the push-reachability gate here.
 #
 # Fail-closed: a runtime expansion in the command prefix or the git options (#508). The command word
 # is resolved from the literal token, but a word holding a runtime expansion may expand to nothing (or
@@ -1166,8 +1167,8 @@ GIT_CMDCFG_ENV_PREFIXES="GIT_CONFIG_KEY_ GIT_CONFIG_VALUE_"
 # carrying one denies as an unreadable config that may define an alias. Push-guard-only, consumed
 # only by the awk tokenizer below.
 GIT_CFG_RELOC_ENV_VARS="HOME XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM"
-# #449: the `env` options the prefix walk understands, push-guard-only (no twin in
-# hooks/agent-boundary.sh, which this change leaves alone). PUSH_ENV_NOVALUE_OPTS take no value and
+# #449: the `env` options the prefix walk understands; byte-identical to hooks/agent-boundary.sh's
+# ENV_NOVALUE_OPTS / ENV_UNSET_OPTS (by convention, unpinned). PUSH_ENV_NOVALUE_OPTS take no value and
 # are skipped alone; PUSH_ENV_UNSET_OPTS (`-u NAME`, `--unset NAME`, attached `-uNAME`,
 # `--unset=NAME`) are skipped together with their value. Any OTHER dash token after an `env` word
 # (`-C`/`--chdir`, `-S`/`--split-string`, a clustered `-iu`, an abbreviation, ...) is an option this

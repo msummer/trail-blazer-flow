@@ -14,8 +14,9 @@
 # response to a record this hook can no longer afford to finish analysing safely;
 # for the verifier subagent, denies
 # `gh` outright and denies `git` unless the resolved subcommand is on VERIFIER_GIT_READONLY below
-# (fail closed: an unlisted subcommand, a global option before the subcommand, a bare `git`, and,
-# since #508, a runtime expansion before `git`, all deny). Since #340, this hook also denies, for both roles, a Bash command that puts a path
+# (fail closed: an unlisted subcommand, a global option before the subcommand, a bare `git`, a
+# runtime expansion before `git` (#508), and a `git` behind a command prefix the scan cannot follow
+# (#505), all deny). Since #340, this hook also denies, for both roles, a Bash command that puts a path
 # under a `.claude` segment in a write position — a `>`-family redirect target, an argument to a
 # CLAUDE_PATH_ARG_COMMANDS member (`tee`/`cp`/`mv`/`cd`/`pushd`), or an in-place `sed`'s argument —
 # closing most of the Bash-issued write route into `.claude/` (e.g. `.claude/LESSONS.md`) that
@@ -44,8 +45,10 @@
 # `[ -n "$cmd" ]` guard (see that same point in each file). A future fix to the shared behaviour
 # (segment breaking; the additive standalone `]]` handling; normalize(); the prefix-word skip,
 # including the `repeat`-count skip; the empty-normalised-token skip; the command-word case fold;
-# the #508 expansion-word predicate, rx_re and rx_word(), whose verdict differs per file; the CR
-# strip) must be applied to BOTH files — dev/selfcheck.sh's assertion 4.40 clause (c) mechanically pins
+# the #508 expansion-word predicate, rx_re and rx_word(), whose verdict differs per file; the #505
+# env option arm and prefix triggers, with strip_quotes(), quote_bearing(), quote_unbalanced() and
+# the ENV_* values, each hook with its own verdict; the CR
+# strip) must be applied to BOTH files —dev/selfcheck.sh's assertion 4.40 clause (c) mechanically pins
 # the two scripts' PREFIX_WORDS vocabulary stays byte-identical; since #398, PREFIX_WORDS also
 # includes shell reserved words (`if`/`then`/`elif`/`else`/`do`/`while`/`until`/`!`/`coproc`) that
 # can directly precede a command in the same segment, alongside the pre-existing interpreter-
@@ -75,7 +78,9 @@
 # denies — a git/gh command the role's BLOCKED_COMMANDS policy denies, OR (since #340) a command
 # that writes a path under a `.claude` segment, OR (since #387) a command whose command word names a
 # CLAUDE_CMDLINE_WRITE_COMMANDS member while the same command text merely NAMES a `.claude` segment
-# anywhere — in which case print exactly one reason line to
+# anywhere, OR (since #505) a segment whose command prefix the scan cannot follow and whose later
+# words name `gh`/`git` or a `.claude` path segment (see "Fail-closed: a command prefix the scan
+# cannot follow" below) — in which case print exactly one reason line to
 # stderr and exit 2 ("deny"); stdout is always empty. Wired in hooks/hooks.json via
 # `${CLAUDE_PLUGIN_ROOT}`, with no `if` gate (the `if` field is permission-rule syntax over tool
 # input only — it cannot see `agent_type`, so any `if` here would silence the boundary for exactly
@@ -139,7 +144,13 @@
 # reconnecting a write split across disjoint tails. The remedy is the same one this header already
 # gives: use the Write/Edit tools for file content.
 #
-# Still possible (under-blocking, not closed): a writer outside CLAUDE_CMDLINE_WRITE_COMMANDS
+# Still possible (under-blocking, not closed): a value-taking option of a prefix word other than env
+# (`nice -n 5 gh pr merge 5`, `sudo -u root gh …`, `stdbuf -o L gh …`, `exec -a foo gh …`, `xargs -n 1
+# gh …`), whose value the walk takes as the command word; an even-count quote split of an assignment
+# value (`X="a'"'b c' gh …`, `X="\" x" gh …`) or an ANSI-C value with an escaped quote
+# (`X=$'a\'b c' gh …`), which the parity check does not see; a quoted value holding a
+# segment-break character or a newline (`X="a;b" gh …`); a `gh`/`git` built by ANSI-C escapes or an
+# expansion inside an already-lost segment; a writer outside CLAUDE_CMDLINE_WRITE_COMMANDS
 # (`sort -o`, `split`, `unzip -d`, `scp`, `cpio`, `vim -es`, `sed`'s `w` command); a launcher that
 # becomes the resolved command word instead of the vocabulary member (`uv run python`, `npx`,
 # `poetry run`), and `sudo -u x python3` (the same PREFIX_WORDS limit this header's known-evasions
@@ -201,6 +212,13 @@ CLAUDE_PATH_ARG_COMMANDS="tee cp mv cd pushd"
 # `perl5.34` all match `python`/`perl`. tee/cp/mv/cd/pushd/sed stay in the per-segment rules above —
 # not repeated here.
 CLAUDE_CMDLINE_WRITE_COMMANDS="python perl ruby node nodejs deno bun php lua awk gawk ed ex dd install ln touch truncate rsync tar patch curl wget"
+# ENV_NOVALUE_OPTS / ENV_UNSET_OPTS (#505) — the `env` options the walk follows: the first list takes
+# no value and is skipped alone; the second takes the NEXT token as its value (`-u NAME`, `--unset NAME`;
+# the attached `-uNAME` and `--unset=NAME` forms are handled by shape). Any other option after `env`
+# is one the walk cannot follow (see the fail-closed paragraph below). Byte-identical to
+# hooks/push-guard.sh PUSH_ENV_NOVALUE_OPTS / PUSH_ENV_UNSET_OPTS (by convention, unpinned).
+ENV_NOVALUE_OPTS="-i -0 -v -- --ignore-environment --null --debug"
+ENV_UNSET_OPTS="-u --unset"
 # DBRACKET_MAX — the most standalone `]]` matches the scan's additive pass
 # (further down) will analyse per input record before failing closed; bounds that pass's own work
 # to about DBRACKET_MAX times the record's length, keeping it linear rather than quadratic in the
@@ -353,7 +371,10 @@ cmd="${cmd//$cr/}"
 # carrying more is denied unconditionally instead of walked further, the fail-closed response to a
 # record too large to keep analysing at this bounded cost. Within each segment (from either pass),
 # tokens are walked from the start:
-#   - a token matching ^[A-Za-z_][A-Za-z0-9_]*= (an assignment prefix, e.g. FOO=1) is skipped;
+#   - a token matching ^[A-Za-z_][A-Za-z0-9_]*= (an assignment prefix, e.g. FOO=1) is skipped, after
+#     a parity check (since #505): an odd count of double quotes, an odd count of single quotes or a
+#     trailing backslash means the whitespace split cut its value in two, and the rest of the segment
+#     is read for `gh`/`git` (see the fail-closed paragraph below);
 #   - a token whose normalised, lower-cased form (quote/backslash characters stripped; basename
 #     taken after the last '/'; case-folded, since #398) is EMPTY — e.g. a lone `"` token left
 #     behind by a leading space inside a quoted `eval` argument (`eval " gh issue close 5"`) — is
@@ -367,7 +388,10 @@ cmd="${cmd//$cr/}"
 #     ONE token right after it (the repeat count) is ALSO skipped, since a bare digit there is never
 #     itself a command word;
 #   - once that flag is set, a further token starting with '-' is also skipped (an option to the
-#     prefix word, e.g. `bash -c`, `xargs -I{}`);
+#     prefix word, e.g. `bash -c`, `xargs -I{}`) — except, since #505, after an `env` word, where an
+#     option follows the ENV_NOVALUE_OPTS / ENV_UNSET_OPTS allowlist: `-u`/`--unset` take their value
+#     with them, an attached `-uNAME` / `--unset=NAME` is skipped alone, and any other option reads
+#     the rest of the segment first (see the fail-closed paragraph below);
 #   - since #508, a token whose basename holds a runtime expansion (a dollar sign followed by a name
 #     character, a digit, a special parameter `@ * # ? ! $ -`, a zsh expansion flag `= ~ ^`, an
 #     apostrophe or a double quote; the
@@ -383,7 +407,8 @@ cmd="${cmd//$cr/}"
 #     that expands at run time is otherwise never seen. The predicate is the same text as
 #     hooks/push-guard.sh's rx_word(), each hook with its own verdict, and quote-blind (`'$X'` and
 #     `\$X` count);
-#   - the first token that survives all five skips is the segment's command word, emitted in its
+#   - the first token that survives all five skips and the #505 env arm and prefix triggers is the
+#     segment's command word, emitted in its
 #     normalised, lower-cased form (since #398 — only the command word and prefix-word matching are
 #     case-folded; the git subcommand below, redirect targets, and other arguments are not). If it
 #     is exactly "git" (already case-folded), the token(s) after it are walked once more to
@@ -414,6 +439,39 @@ cmd="${cmd//$cr/}"
 # residual is a command word built entirely at run time (`$G pr merge 5`, `$(which git) push`) or
 # written with ANSI-C quoting (`$'gh' pr merge 5`): no literal `git` or `gh` token exists to find.
 #
+# Fail-closed: a command prefix the scan cannot follow (#505). The walk above reads whitespace-split
+# tokens and is quote-blind, so a prefix whose real extent it cannot see leaves a bogus word in
+# command position. Three triggers, each a token shape, never the command-word candidate itself (so a
+# heredoc or commit-message line stays quiet): (1) an assignment with an odd double-quote count, an odd
+# single-quote count or a trailing backslash (`X="a b" gh …`, `X=a\ b gh …`, `X=$'a b' gh …`); (2) after
+# an `env` word, an option outside ENV_NOVALUE_OPTS / ENV_UNSET_OPTS (`env -C /tmp gh …`, `env -S'gh …'`,
+# `env - gh …`); (3) after a prefix word, a quote-bearing token that reads as an option or an
+# assignment once unquoted (`env "X=a b" gh …`, `env '-C' /tmp gh …`, `bash -c "X=1 gh …"`). The env
+# arm itself follows `-u`/`--unset` (the value is skipped with it, so `env -u gh pr merge 5` runs `pr`
+# and gets no opinion), an attached `-uNAME`/`--unset=NAME`, and the no-value options; a runtime
+# expansion in a `-u` value or token sets the same flag an expansion prefix word does, so
+# `env -u $X git status` keeps the `-expansion-` verdict; a `-u` value or token with unbalanced
+# quotes is trigger (1) again. A trigger reads its own token (lost_word(), with LEAD for an option, so
+# `-Sgh` and `-vSgit` count) and then, ONCE per segment, every later token of the segment (lost_scan()):
+# a word that is exactly `gh` prints `gh`, a word that is exactly `git` prints the fixed sentinel
+# `git -prefix-` (denied for BOTH roles: it is not on VERIFIER_GIT_READONLY), else a token carrying a
+# `.claude` path segment prints the `-claude-write-` line. Words are read the way `env -S` reads its
+# string: case-folded, each backslash-underscore a space, quote and backslash characters deleted, split
+# at every run of characters outside letters, digits, dot, underscore and hyphen. A hit ends the
+# segment; no hit leaves the walk unchanged, so `env -C /tmp ls` stays quiet. #508's `env -S` check
+# runs first: an expansion-bearing or segment-cut `-S` string keeps its record-level route and its
+# `-expansion-` text. git's own option slot needs no trigger here: a quoted or escaped option
+# normalises to a dash subcommand or `-globalopt-`, which the verifier denies, and the implementer
+# denies any git. Cost: per token a constant number of checks, each O(token length); per segment at
+# most one lost_scan(), O(segment length); the additive `]]` tails are disjoint, so the bound holds
+# per record. Over-blocking, each a new deny: an implementer segment whose lost prefix is followed by
+# the word `gh`/`git` anywhere (`MSG="fix the gh flow" ./run.sh`, `env -C /tmp ls gh`, `env -S'echo gh'`,
+# `bash -c "X=1 echo gh"`), or by any `.claude` path (`X="a b" cat .claude/f`); the verifier's
+# read-only git behind such a prefix (`GIT_PAGER="less -R" git log`, `env -C <dir> git status`,
+# `env - git status`, `env -S'git status'`); a heredoc or prose line starting with a spaced quoted
+# assignment that later names `gh`/`git`; an env option word that merely ends in `gh`/`git`
+# (`env -Shigh`). Under-blocking is listed under "Still possible" below.
+#
 # Command-level, since #387: emit_segment() additionally captures, into the GLOBAL cw_word, the
 # first segment's command word (in its case-folded since #398, non-version-stripped form) found
 # anywhere across
@@ -431,7 +489,7 @@ cmd="${cmd//$cr/}"
 # emits the same "-claude-write- <target>" sentinel the redirect/arg-vocab/in-place-sed passes above
 # already use, joining both captures, whenever BOTH cw_word and cw_tok are non-empty — so the
 # existing role-policy `"-claude-write- "*)` arm and deny printf need no #387-specific change.
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v dbracket_max="$DBRACKET_MAX" '
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v dbracket_max="$DBRACKET_MAX" -v envnov="$ENV_NOVALUE_OPTS" -v envunset="$ENV_UNSET_OPTS" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
@@ -440,6 +498,10 @@ BEGIN {
   for (i = 1; i <= na; i++) arg_set[acarr[i]] = 1
   ncw = split(cw_cmds, cwarr, " ")
   for (i = 1; i <= ncw; i++) cw_set[cwarr[i]] = 1
+  nenv = split(envnov, envnovarr, " ")
+  for (i = 1; i <= nenv; i++) envnov_set[envnovarr[i]] = 1
+  neun = split(envunset, envunsetarr, " ")
+  for (i = 1; i <= neun; i++) envunset_set[envunsetarr[i]] = 1
   # #508: a dollar sign followed by a name character, a digit, a special parameter, or a quote
   rx_re = "[$][A-Za-z0-9_@*#?!$=~^\"" sq "-]"
 }
@@ -497,8 +559,78 @@ function claude_seg_in_text(s,    v) {
   v = tolower(" " s " ")
   return match(v, /[^a-z0-9_.-]\.claude[^a-z0-9_.-]/) > 0
 }
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, gitsub, inplace, lw, found_claude, saw_exp, in_env) {
+# #505: token-shape predicates and the lost-prefix scan used by the fail-closed triggers in
+# emit_segment() below. This program is single-quoted shell: it must never contain a literal
+# apostrophe (use sq). strip_quotes: the token without quote or backslash characters.
+# quote_bearing: the token carries a quote or a backslash. quote_unbalanced: an odd count of double
+# quotes, an odd count of single quotes, or a trailing backslash -- the token opens a quoted or
+# escaped span that the whitespace split cut in two. Same bodies as hooks/push-guard.sh.
+function strip_quotes(tok,    t) {
+  t = tok
+  gsub(sq, "", t)
+  gsub(/"/, "", t)
+  gsub(/\\/, "", t)
+  return t
+}
+function quote_bearing(tok) {
+  return (index(tok, "\"") > 0 || index(tok, sq) > 0 || index(tok, "\\") > 0)
+}
+function quote_unbalanced(tok,    t, n) {
+  t = tok
+  n = gsub(/"/, "", t)
+  if (n % 2) return 1
+  t = tok
+  n = gsub(sq, "", t)
+  if (n % 2) return 1
+  return (substr(tok, length(tok)) == "\\")
+}
+# lost_word (#505) -- read one token the way env -S reads its string: case-folded, each backslash-
+# underscore separator read as a space, quote and backslash characters deleted, then split into
+# words at every run of characters outside letters, digits, dot, underscore and hyphen. Returns "gh"
+# for the first word that is exactly gh, "git -prefix-" for the first that is exactly git (a fixed
+# sentinel the role policy denies for both roles), else the empty string. With LEAD set, the first
+# non-empty word also counts when it starts with a hyphen and ends in gh or git (an option with an
+# attached value: -Sgh, -vSgit).
+function lost_word(tok, lead,    lx, lwa, lwn, lwi, lwf, lwv) {
+  lx = tolower(tok)
+  gsub(/\\_/, " ", lx)
+  gsub(sq, "", lx)
+  gsub(/"/, "", lx)
+  gsub(/\\/, "", lx)
+  lwn = split(lx, lwa, /[^a-z0-9._-]+/)
+  lwf = 1
+  for (lwi = 1; lwi <= lwn; lwi++) {
+    lwv = lwa[lwi]
+    if (lwv == "") continue
+    if (lwv == "gh") return "gh"
+    if (lwv == "git") return "git -prefix-"
+    if (lead && lwf && substr(lwv, 1, 1) == "-") {
+      if (length(lwv) > 2 && substr(lwv, length(lwv) - 1) == "gh") return "gh"
+      if (length(lwv) > 3 && substr(lwv, length(lwv) - 2) == "git") return "git -prefix-"
+    }
+    lwf = 0
+  }
+  return ""
+}
+# lost_scan (#505) -- once per segment (ls_done): the verdict line for the rest of a segment whose
+# command word the walk can no longer find: the first word that is exactly gh or git in
+# toks[from..ntok] (lost_word), else the first token carrying a .claude path segment (has_claude_seg)
+# as a "-claude-write- <token>" line, else the empty string. A later trigger in the same segment reads
+# a suffix of what the first scan already read, so it returns the empty string at once.
+function lost_scan(toks, from, ntok,    i, r, c) {
+  if (ls_done) return ""
+  ls_done = 1
+  c = ""
+  for (i = from; i <= ntok; i++) {
+    r = lost_word(toks[i], 0)
+    if (r != "") return r
+    if (c == "" && has_claude_seg(toks[i])) c = "-claude-write- " toks[i]
+  }
+  return c
+}
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, gitsub, inplace, lw, found_claude, saw_exp, in_env, lost, s0) {
   ntok = split(seg, toks, /[ \t]+/)
+  ls_done = 0
   idx = 1
   saw_prefix = 0
   cmdword = ""
@@ -507,11 +639,43 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   while (idx <= ntok) {
     tok = toks[idx]
     if (tok == "") { idx++; continue }
+    if (match(tok, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1 && quote_unbalanced(tok)) { lost = lost_scan(toks, idx + 1, ntok); if (lost != "") { print lost; return } }
     if (match(tok, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) { if (saw_prefix && rx_word(tok)) saw_exp = 1; idx++; continue }
     norm = tolower(normalize(tok))
     if (norm == "") { idx++; continue }
     # #508: an env -S option whose string holds (or was cut at) a runtime expansion and names git or gh
     if (in_env && (index(tok, "-S") == 1 || index(tok, "--split-string") == 1) && (rx_word(tok) || rx_cut) && rx_env_hit != "") { print rx_env_hit; return }
+    # #505: an option after an env word. The allowlisted no-value options are skipped alone, -u/--unset
+    # take their value with them, and any other option is one this walk cannot follow (-C/--chdir change
+    # the directory, -S splits a string into more words): read the rest of the segment for gh or git.
+    if (in_env && substr(tok, 1, 1) == "-") {
+      if (tok in envnov_set) { idx++; continue }
+      if (tok in envunset_set) {
+        if (rx_word(toks[idx + 1])) saw_exp = 1
+        if (quote_unbalanced(toks[idx + 1])) { lost = lost_scan(toks, idx + 1, ntok); if (lost != "") { print lost; return } }
+        idx += 2
+        continue
+      }
+      if (substr(tok, 1, 2) == "-u" || index(tok, "--unset=") == 1) {
+        if (rx_word(tok)) saw_exp = 1
+        if (quote_unbalanced(tok)) { lost = lost_scan(toks, idx + 1, ntok); if (lost != "") { print lost; return } }
+        idx++
+        continue
+      }
+      lost = lost_word(tok, 1)
+      if (lost == "") lost = lost_scan(toks, idx + 1, ntok)
+      if (lost != "") { print lost; return }
+    }
+    # #505: after a prefix word, a quote-bearing token that reads as an option or an assignment once
+    # unquoted ("X=a", "-C") is skipped by the real shell or env but is no command word here.
+    if (saw_prefix && quote_bearing(tok)) {
+      s0 = strip_quotes(tok)
+      if (substr(s0, 1, 1) == "-" || match(s0, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) {
+        lost = lost_word(tok, 1)
+        if (lost == "") lost = lost_scan(toks, idx + 1, ntok)
+        if (lost != "") { print lost; return }
+      }
+    }
     # #508: a runtime expansion in command position may expand to nothing: skip it so the real command
     # word behind it still resolves
     if (rx_word(tok)) { saw_exp = 1; saw_prefix = 1; idx++; continue }
@@ -657,8 +821,8 @@ END { if (cw_word != "" && cw_tok != "") print "-claude-write- " cw_word " with 
 # Implementer: deny on ANY segment whose command word is git or gh, regardless of git subcommand
 # (the implementer needs neither — see the Decision this issue implements). Verifier: deny on gh
 # outright; for git, deny unless the resolved subcommand is a member of VERIFIER_GIT_READONLY —
-# so "-globalopt-", "-none-", "-expansion-" (#508), and any subcommand not on that list all deny
-# (fail closed). Since
+# so "-globalopt-", "-none-", "-expansion-" (#508), "-prefix-" (#505), and any subcommand not on that
+# list all deny (fail closed). Since
 # #340, BOTH roles also deny on a "-claude-write- <target>" line emitted by the awk scan's redirect
 # pass, CLAUDE_PATH_ARG_COMMANDS vocabulary walk, or in-place-sed walk above — a `.claude`-segment
 # write is denied for the implementer AND the verifier alike, unlike the git/gh policy's per-role

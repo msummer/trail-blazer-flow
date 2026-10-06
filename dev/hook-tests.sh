@@ -1666,6 +1666,8 @@ case_ab_rtexp_deny_env_s_brace_gh() {
 #   name glued to it is no exact word.
 case_ab_rtexp_deny_env_s_escaped_gh() {
   abx_deny implementer gh 'env -S'"'"'$X\_gh\_pr\_merge\_5'"'"
+  # the segment-cut form: the record-level check alone reads it, the split string's own tokens do not
+  abx_deny implementer gh 'env -S'"'"'${X}\_gh\_pr\_merge\_5'"'"
 }
 # mutant:508-ab-rx-basename — tests the whole token instead of its basename, so an expansion in a
 #   directory part hides the command word.
@@ -1749,6 +1751,161 @@ case_ab_rtexpscan_noop_flood() {
   calibrated_deadline "$floor" "$k" "$pred_ms"
   boundary_deadline_override="$calibrated_secs"
   measure_ms run_boundary "$(ab_rx_payload "$(ab_rx_flood_cmd "$flood_tokens")")"
+  expect_no_opinion
+  if [ "$__ok" -eq 0 ]; then
+    __why="${__why}control ${ctl_ms}ms at ${ctl_n} -> ${flood_tokens} tokens, predicted ${pred_ms}ms -> deadline ${calibrated_secs}s, flood ${measured_ms}ms\n"
+  fi
+}
+
+# --- hooks/agent-boundary.sh: a command prefix the scan cannot follow (#505) ----------------------
+# An env option that takes a value, or an assignment whose quoted or escaped value holds a space,
+# leaves a bogus word in command position. The walk follows env's -u/--unset values, and a trigger
+# (an assignment with unbalanced quotes, an env option outside the allowlist, a quote-bearing option
+# or assignment after a prefix word) reads the rest of the segment once for an exact word git or gh,
+# or a .claude path segment. A hit prints gh, the fixed sentinel "git -prefix-", or the .claude
+# write line; no hit keeps the old walk. Every payload names git, gh, github or claude, or the
+# raw-stdin fast path would pass it vacuously. abx_deny and abx_noop are defined above.
+# mutant:505-ab-env-u-consume — makes the detached env -u value skip one token instead of two, so
+#   the value stays a command word and the real command behind it is no longer read.
+case_ab_lost_deny_env_u_gh() {
+  abx_deny implementer gh 'env -u X gh pr merge 5' 'env --unset X gh pr merge 5'
+}
+case_ab_lost_deny_env_u_git() {
+  abx_deny implementer 'git commit' 'env -u X git commit -m m'
+}
+# mutant:505-ab-env-u-value-check — drops the unbalanced-quote check on the detached env -u value,
+#   so a value split at a space leaves its tail as the command word.
+# mutant:505-ab-env-u-attached-quote — drops the same check on the attached -u token.
+case_ab_lost_deny_env_u_quoted() {
+  abx_deny implementer gh 'env -u "A B" gh pr merge 5' 'env -u"A B" gh pr merge 5'
+}
+# mutant:505-ab-env-opt-off — drops the fail-closed read for an env option outside the allowlist.
+case_ab_lost_deny_env_opt() {
+  abx_deny implementer gh 'env -C /tmp gh pr merge 5' 'if [[ -n x ]] env -C /tmp gh pr merge 5'
+}
+# mutant:505-ab-word-lead-off — drops the rule that reads an option with an attached value (-Sgh),
+#   so a split string glued to its option is no exact word.
+case_ab_lost_deny_env_split_string() {
+  abx_deny implementer gh "env -S'gh pr merge 5'" 'env -S"X=1 gh pr merge 5"' "env --split-string='gh pr merge 5'"
+}
+# mutant:505-ab-word-unescape — stops reading the backslash-underscore separator as a space.
+case_ab_lost_deny_env_split_string_escaped() {
+  abx_deny implementer gh "env -S'gh\\_pr\\_merge\\_5'"
+}
+# mutant:505-ab-git-sentinel — makes the git hit print a read-only git subcommand instead of the
+#   fixed sentinel, so the verifier no longer denies it and the implementer's blocked text changes.
+case_ab_lost_deny_env_split_string_git() {
+  abx_deny implementer 'git -prefix-' "env -S'git commit -m m'" 'env -S"X=1 git commit -m m"'
+}
+# mutant:505-ab-unbalanced-off — never fires the assignment trigger.
+# mutant:505-ab-unbalanced-dq — drops the odd double-quote arm of quote_unbalanced().
+case_ab_lost_deny_assign_dquote() {
+  abx_deny implementer gh 'X="a b" gh pr merge 5' 'env X="a b" gh pr merge 5'
+}
+# mutant:505-ab-unbalanced-sq — drops the odd single-quote arm of quote_unbalanced().
+case_ab_lost_deny_assign_squote() {
+  abx_deny implementer gh "X='a b' gh pr merge 5" "X=\$'a b' gh pr merge 5"
+}
+# mutant:505-ab-unbalanced-bs — drops the trailing-backslash arm of quote_unbalanced().
+case_ab_lost_deny_assign_backslash() {
+  abx_deny implementer gh 'X=a\ b gh pr merge 5'
+}
+# mutant:505-ab-prefix-quoted-shape — never fires the trigger for a quote-bearing option or
+#   assignment after a prefix word.
+case_ab_lost_deny_prefix_quoted() {
+  abx_deny implementer gh 'env "X=a b" gh pr merge 5' 'env "-Sgh pr merge 5"' 'bash -c "X=1 gh pr merge 5"'
+}
+# mutant:505-ab-quote-bearing-sq — drops the single-quote arm of quote_bearing().
+case_ab_lost_deny_prefix_squoted_opt() {
+  abx_deny implementer gh "env '-C' /tmp gh pr merge 5"
+}
+case_ab_lost_deny_verifier_git() {
+  abx_deny verifier 'git -prefix-' 'GIT_PAGER="less -R" git log' 'env -C /tmp git status' "env -S'git status'"
+}
+# mutant:505-ab-env-arm-prefix-guard — keeps a word whose basename is a prefix word (a directory
+#   named env, a lone dash) out of the env option arm.
+case_ab_lost_deny_verifier_env_arm_basename() {
+  abx_deny verifier 'git -prefix-' 'env --chdir=../env git status' 'env - git status'
+}
+# mutant:505-ab-env-u-rx — drops the expansion flag for a detached env -u value.
+# mutant:505-ab-env-u-attached-rx — drops the expansion flag for an attached env -u token.
+case_ab_lost_deny_verifier_env_u_expansion() {
+  abx_deny verifier 'git -expansion-' 'env -u $X git status' 'env -u$X git status'
+}
+# mutant:505-ab-claude-arm — drops the .claude path arm of the lost-prefix scan. The first two
+#   commands deny through the scan (an assignment trigger, an env option trigger); the third through
+#   the env -u value walk, which resolves tee as the command word for the ordinary .claude walk.
+case_ab_lost_deny_claude() {
+  abx_deny implementer '.claude/LESSONS.md' 'X="a b" tee -a .claude/LESSONS.md' \
+    'env -C . tee -a .claude/LESSONS.md' 'env -u X tee -a .claude/LESSONS.md'
+}
+case_ab_lost_noop_env_u_consumes() {
+  abx_noop implementer 'env -u gh pr merge 5' 'env --unset git status'
+}
+# mutant:505-ab-env-novalue-vocab — empties the allowlist of no-value env options.
+# mutant:505-ab-env-u-attached — drops the attached -uNAME arm, so it reads as an unsupported option.
+case_ab_lost_noop_verifier_env_allowlist() {
+  abx_noop verifier 'env -i git status' 'env -uX git status' 'env --unset=X git status' \
+    'git -C "../demo-wt-5" status --porcelain' 'git -C "../demo-wt-5" diff main...HEAD --stat'
+}
+# mutant:505-ab-env-context — tracks every prefix word as env, so an option of sudo reads as one.
+case_ab_lost_noop_verifier_nonenv_opt() {
+  abx_noop verifier 'sudo -E git status'
+}
+# mutant:505-ab-word-exact — matches git and gh as substrings instead of exact words.
+# mutant:505-ab-scan-lead — applies the attached-value rule to every scanned token.
+case_ab_lost_noop_scan_precision() {
+  abx_noop implementer 'env -C /tmp cat gh-notes.md && echo ok' 'env -C /tmp ls -lgh && echo ok'
+}
+# mutant:505-ab-shape-gate — drops the option-or-assignment shape test of the prefix trigger.
+case_ab_lost_noop_candidate_exempt() {
+  abx_noop implementer $'cat > notes.md <<\'EOF\'\n- "Fix" the gh merge flow\nEOF'
+}
+# mutant:505-ab-word-ungated — makes every read report gh, so a trigger always denies.
+case_ab_lost_noop_controls() {
+  abx_noop implementer 'env -C /tmp ls && echo github' 'X="a b" ls && echo github' \
+    'X="a b" tee -a notes.md && echo github' \
+    'PATH=/bin:$PATH bash dev/selfcheck.sh && echo github' \
+    $'cat > notes.md <<\'EOF\'\nDon\'t let gh merge it\nX="a b" is quoted\nEOF'
+}
+# ab_lost_flood_cmd N — three triggering lines of N tokens each (an unbalanced assignment, an env
+# option outside the allowlist, a quoted option after a prefix word), then a line naming github so the
+# raw-stdin fast path reads the payload. ab_lost_flood_twin_cmd N keeps the same layout and per-token
+# byte length but only the FIRST token of each line is a trigger.
+ab_lost_flood_cmd() {
+  printf '%s true\nenv%s true\nnice%s true\necho github' \
+    "$(printf ' X="a%.0s' $(seq 1 "$1"))" "$(printf ' -Z%.0s' $(seq 1 "$1"))" "$(printf ' "-x"%.0s' $(seq 1 "$1"))"
+}
+ab_lost_flood_twin_cmd() {
+  local m=$(( $1 - 1 ))
+  printf ' X="a%s true\nenv -Z%s true\nnice "-x"%s true\necho github' \
+    "$(printf ' X=ab%.0s' $(seq 1 "$m"))" "$(printf ' -i%.0s' $(seq 1 "$m"))" "$(printf ' -xyz%.0s' $(seq 1 "$m"))"
+}
+# mutant:505-ab-scan-once — drops the once-per-segment memo, so every trigger rescans the rest of its
+#   segment, the flood turns quadratic and overruns its calibrated deadline.
+case_ab_lostscan_noop_flood() {
+  # FLOOD + TIMING, sized and bounded by cost RATIO from a same-run control, never by absolute speed:
+  # the twin (one trigger per record) is timed with no deadline, the flood's token count is scaled
+  # from it, and the flood runs under an active deadline of K times the predicted linear cost. The
+  # command reaches jq on stdin, never as a --arg.
+  local ctl_n=1000 min_n=700 max_n=10000 floor=2 k=8
+  local target_ms=$(( DL_KNOB_MAX * 200 )) ctl_ms pred_ms
+  measure_ms run_boundary "$(ab_rx_payload "$(ab_lost_flood_twin_cmd "$ctl_n")")"
+  ctl_ms="$measured_ms"
+  if [ -z "$ctl_ms" ]; then
+    __ok=0; __why="${__why}control run's own timing report could not be parsed — can't size the flood\n"
+    return
+  fi
+  expect_no_opinion
+  if [ "$__ok" -eq 0 ]; then
+    __why="${__why}twin control did not return no opinion\n"
+    return
+  fi
+  calibrated_flood_tokens "$ctl_ms" "$ctl_n" "$target_ms" "$min_n" "$max_n"
+  pred_ms=$(( ctl_ms * flood_tokens / ctl_n ))
+  calibrated_deadline "$floor" "$k" "$pred_ms"
+  boundary_deadline_override="$calibrated_secs"
+  measure_ms run_boundary "$(ab_rx_payload "$(ab_lost_flood_cmd "$flood_tokens")")"
   expect_no_opinion
   if [ "$__ok" -eq 0 ]; then
     __why="${__why}control ${ctl_ms}ms at ${ctl_n} -> ${flood_tokens} tokens, predicted ${pred_ms}ms -> deadline ${calibrated_secs}s, flood ${measured_ms}ms\n"
@@ -9946,6 +10103,29 @@ cases=(
   "ab-rtexp-noop-verifier-bare-assign|case_ab_rtexp_noop_verifier_bare_assign|no opinion: a bare assignment with an expansion value before git status -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-bare-assign)"
   "ab-rtexp-noop-controls|case_ab_rtexp_noop_controls|no opinion: expansion text outside command position and the env PATH prefix shape -- control, not part of the mutation-proof registry"
   "ab-rtexpscan-noop-flood|case_ab_rtexpscan_noop_flood|FLOOD+TIMING: an env line of expansion-bearing -S options, no opinion; token count sized from a same-run, mutant-invariant twin control, deadline a multiple of the predicted linear cost -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-rescan)"
+  "ab-lost-deny-env-u-gh|case_ab_lost_deny_env_u_gh|env -u/--unset consumes its value, so the next word is the command; gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-u-consume)"
+  "ab-lost-deny-env-u-git|case_ab_lost_deny_env_u_git|env -u X git commit denies for the implementer -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-u-consume)"
+  "ab-lost-deny-env-u-quoted|case_ab_lost_deny_env_u_quoted|an env -u value split at a space, detached or attached, still reaches gh -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-u-attached-quote, 505-ab-env-u-value-check, 505-ab-unbalanced-dq)"
+  "ab-lost-deny-env-opt|case_ab_lost_deny_env_opt|an env option outside the allowlist (-C) before gh denies, also after an additive ]] -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-opt-off)"
+  "ab-lost-deny-env-split-string|case_ab_lost_deny_env_split_string|env -S and --split-string with a quoted string naming gh deny -- mutation proof: dev/mutants/hook-tests.json (505-ab-word-lead-off)"
+  "ab-lost-deny-env-split-string-escaped|case_ab_lost_deny_env_split_string_escaped|env -S with backslash-underscore separators naming gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-word-lead-off, 505-ab-word-unescape)"
+  "ab-lost-deny-env-split-string-git|case_ab_lost_deny_env_split_string_git|env -S naming git denies as the fixed git -prefix- sentinel -- mutation proof: dev/mutants/hook-tests.json (505-ab-git-sentinel, 505-ab-word-lead-off, 505-ab-word-ungated)"
+  "ab-lost-deny-assign-dquote|case_ab_lost_deny_assign_dquote|an assignment with a double-quoted value holding a space before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-unbalanced-dq, 505-ab-unbalanced-off)"
+  "ab-lost-deny-assign-squote|case_ab_lost_deny_assign_squote|an assignment with a single-quoted or ANSI-C value holding a space before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-unbalanced-off, 505-ab-unbalanced-sq)"
+  "ab-lost-deny-assign-backslash|case_ab_lost_deny_assign_backslash|an assignment with a backslash-escaped space before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-unbalanced-bs, 505-ab-unbalanced-off)"
+  "ab-lost-deny-prefix-quoted|case_ab_lost_deny_prefix_quoted|a quoted assignment or option after a prefix word before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-prefix-quoted-shape, 505-ab-word-lead-off)"
+  "ab-lost-deny-prefix-squoted-opt|case_ab_lost_deny_prefix_squoted_opt|a single-quoted env option before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-prefix-quoted-shape, 505-ab-quote-bearing-sq)"
+  "ab-lost-deny-verifier-git|case_ab_lost_deny_verifier_git|the verifier denies read-only git behind a lost prefix as git -prefix- -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-opt-off, 505-ab-git-sentinel, 505-ab-unbalanced-dq, 505-ab-unbalanced-off, 505-ab-word-lead-off, 505-ab-word-ungated)"
+  "ab-lost-deny-verifier-env-arm-basename|case_ab_lost_deny_verifier_env_arm_basename|the env option arm reads a word whose basename is a prefix word -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-arm-prefix-guard, 505-ab-env-opt-off, 505-ab-git-sentinel, 505-ab-word-ungated)"
+  "ab-lost-deny-verifier-env-u-expansion|case_ab_lost_deny_verifier_env_u_expansion|an expansion as the env -u value keeps the git -expansion- verdict -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-u-attached, 505-ab-env-u-attached-rx, 505-ab-env-u-rx)"
+  "ab-lost-deny-claude|case_ab_lost_deny_claude|a .claude write behind a lost prefix denies with the .claude reason -- mutation proof: dev/mutants/hook-tests.json (505-ab-claude-arm, 505-ab-env-opt-off, 505-ab-env-u-consume, 505-ab-unbalanced-dq, 505-ab-unbalanced-off, 505-ab-word-ungated)"
+  "ab-lost-noop-env-u-consumes|case_ab_lost_noop_env_u_consumes|no opinion: env -u gh pr merge 5 runs pr, the value is consumed -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-u-consume)"
+  "ab-lost-noop-verifier-env-allowlist|case_ab_lost_noop_verifier_env_allowlist|no opinion: allowlisted env options and the harness git -C shapes -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-novalue-vocab, 505-ab-env-u-attached)"
+  "ab-lost-noop-verifier-nonenv-opt|case_ab_lost_noop_verifier_nonenv_opt|no opinion: an option of sudo is not an env option -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-context)"
+  "ab-lost-noop-scan-precision|case_ab_lost_noop_scan_precision|no opinion: the scan reads exact words, not substrings or option suffixes -- mutation proof: dev/mutants/hook-tests.json (505-ab-scan-lead, 505-ab-word-exact, 505-ab-word-ungated)"
+  "ab-lost-noop-candidate-exempt|case_ab_lost_noop_candidate_exempt|no opinion: a heredoc bullet line with a quoted word is no option or assignment -- mutation proof: dev/mutants/hook-tests.json (505-ab-shape-gate)"
+  "ab-lost-noop-controls|case_ab_lost_noop_controls|no opinion: a trigger with no gh, git or claude word after it -- mutation proof: dev/mutants/hook-tests.json (505-ab-word-ungated)"
+  "ab-lostscan-noop-flood|case_ab_lostscan_noop_flood|FLOOD+TIMING: three records of triggering tokens, no opinion; token count sized from a same-run twin holding one trigger per record, deadline a multiple of the predicted linear cost -- mutation proof: dev/mutants/hook-tests.json (505-ab-scan-once)"
   # --- hooks/push-guard.sh (#260) cases -----------------------------------------------------------
   # Mutation-proof table (LESSON 2026-09-01, LESSON 2026-09-07(b)): each row below cites one of
   # the mutants actually applied to hooks/push-guard.sh via a Python literal-string replace
