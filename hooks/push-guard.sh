@@ -348,26 +348,35 @@
 # files, plus a `-C` target resolved under the PATH_ERE predicate exactly like a push segment's (the
 # session's own records are restored for every segment, so an earlier `-C` segment never hides them).
 # Git never lets an alias shadow a built-in command, so the lookup alone decides and there is no
-# built-in list. Classification, after quote and backslash stripping and lowercasing: the first word
+# built-in list. An alias is read from both spellings, `[alias]` with `<name> = <expansion>` and the
+# subsection form `[alias "<name>"]` with `command = <expansion>`; names fold to lower case on both
+# sides (git matches case-sensitively, so folding only over-blocks). Classification, after treating
+# git-config whitespace escapes (a backslash then t, n or b) as word breaks, then quote and backslash
+# stripping and lowercasing: the first word
 # of the expansion denies when it is `push`, is empty, starts with `!` (a shell alias, opaque) or `-`
 # (an option hides the subcommand behind it), or names another defined alias (a chain this hook does
 # not follow); a value ending in a backslash (a continuation the line parser never joins) also denies;
-# any other value is no opinion. The deny line names only the fixed source label (`.git/config`, `your
+# a raw CR strictly inside an alias line (which the line reader would delete, fusing the words around
+# it) is recorded as an opaque `!` value, so it denies too; any other value is no opinion. The deny line names only the fixed source label (`.git/config`, `your
 # global git config`, each optionally ` (via include)`) with `(blocked: git alias may push)`, never the
 # alias name, its value or any command token. (b) Config this hook cannot read denies the candidate
 # with the fixed text `(blocked: unreadable git config may define an alias)`: an inline
 # `HOME=`/`XDG_CONFIG_HOME=`/`GIT_CONFIG_GLOBAL=`/`GIT_CONFIG_SYSTEM=` assignment (bare or behind
 # `env`; GIT_CFG_RELOC_ENV_VARS), a command-line config token naming alias or include (`-c alias.p=…`,
-# `-c include.path=…`, `--config-env=alias.p=…`, a `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` pair),
+# `-c include.path=…`, `--config-env=alias.p=…`, a `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` pair, or
+# any `-c`/`--config-env` value or `GIT_CONFIG_*` assignment on the segment holding a dollar sign, which
+# may build the key at run time),
 # and an export or bare assignment of any of those names in ANY other segment of the command (the
 # tokenizer's `-xcfg-` marker). (c) On a PUSH segment, an inline `HOME=`/`XDG_CONFIG_HOME=` (the #450
 # half) denies with the #439 command-line-config message, and an `export HOME=…` or bare
 # `XDG_CONFIG_HOME=…;` in another segment denies through #433's cross-segment rule with the reason
-# `HOME or XDG_CONFIG_HOME set earlier in this command`. (d) The #449 interplay: a segment the
+# `HOME or XDG_CONFIG_HOME set earlier in this command`. An inline `GIT_CONFIG_COUNT=1 git st`, with
+# no alias or include text and no dollar sign, stays no opinion by design. (d) The #449 interplay: a segment the
 # tokenizer lost (a quoted or escaped option, a quote-split assignment, an unsupported `env` option)
 # that lost_push() says is no push no longer drops silently. emit_alias_lost() hands the driver EVERY
 # remaining token as a candidate alias name (for a loss in the command prefix only when a later token
-# names git), and denies outright when a relocation name was assigned or any token mentions alias or
+# names git), and denies outright when a relocation or command-line-config name was assigned (quoted
+# spellings included: `env "HOME=<d>" git p`, `env -S "HOME=<d> git p"`) or any token mentions alias or
 # include, so `HOME="/tmp/a b" git p origin main`, `X="a b" git zqp origin main` and `git "--no-pager"
 # zqp origin main` all deny while `X="a b" git status` stays no opinion. Union semantics, as
 # everywhere in this file: an alias in any candidate file counts, whatever the file order. Containment:
@@ -381,7 +390,9 @@
 # git itself ignores but this hook denies as `git status`; relocation or inline alias/include config
 # on any git segment; an export of `HOME`/`XDG_CONFIG_HOME`/`GIT_CONFIG_*` anywhere in a command that
 # also has a non-push git segment; a heredoc or commit-message line that starts `git <alias name>`; a
-# lost segment whose text mentions alias or include (`X="a b" git log --grep=include`); and an
+# lost segment whose text mentions alias or include (`X="a b" git log --grep=include`); a self-referential
+# alias named like a built-in (`log = log --oneline`, which git ignores) read as a chain, so `git log`
+# denies; command-line config holding a dollar sign on a non-push git segment; and an
 # over-cap config line or the analysis deadline, which now deny non-push git commands too, still with
 # their "denies this push" or "denies this command" text. Under-blocking residuals, each measured rc 0:
 # an alias defined only in another checkout's config, reached by `cd`, an unresolvable `-C`,
@@ -390,7 +401,10 @@
 # the gap every section has); `env -u XDG_CONFIG_HOME`; the `HOME` that `sudo` sets; a subcommand
 # built at runtime or written with ANSI-C quoting (`git $'p'`, `S=p; git $S`); an alias run through
 # `xargs` or a script file; and `help.autocorrect`, where the hook says rc 0 for a mistyped
-# subcommand (UNVERIFIED whether git then runs push).
+# subcommand (UNVERIFIED whether git then runs push); a variable-setting builtin this hook does not
+# track (`read HOME <<< /x; git p`, `printf -v HOME /x; git p`, the same class #433 lists for GIT_DIR);
+# and a Codex session whose workdir holds the alias: an alias candidate never sets `saw_push`, so the
+# #494 workdir check does not run for it (the same class as the `cd` residual above).
 #
 # Fail-closed: Codex shell workdir (#494). Codex's shell tool takes its own `workdir` parameter,
 # which is NOT part of the PreToolUse payload (ADR 0002 U9, confirmed live on Codex 0.156.1: the
@@ -1285,7 +1299,7 @@ function emit_lost(reason, unres, cc, cut) {
 # needgit set (a prefix-position trigger, where the command word is unknown) it stays silent unless
 # some later token names git. The output is fixed vocabulary or lowercased input tokens that the driver
 # only ever compares, never echoes. Quote, backslash and apostrophe handling: strip_quotes() only.
-function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, names, sep, saw_git, saw_alias) {
+function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, u, eq, names, sep, saw_git, saw_alias) {
   saw_git = 0
   saw_alias = 0
   names = ""
@@ -1294,6 +1308,11 @@ function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, names
     t = tolower(strip_quotes(toks[i]))
     if (t == "") continue
     if (index(t, "alias") > 0 || index(t, "include") > 0) saw_alias = 1
+    # a relocation or command-line-config assignment hidden behind quotes (env "HOME=<d>" git ...,
+    # env -S "HOME=<d> git ...") is no unquoted assignment token, so the prefix walk never saw it
+    u = strip_quotes(toks[i])
+    eq = index(u, "=")
+    if (eq > 1 && (substr(u, 1, eq - 1) in reloc_set || is_cmdcfg_name(substr(u, 1, eq - 1)))) reloc = 1
     if (i < from) continue
     if (index(t, "git") > 0) saw_git = 1
     names = names sep t
@@ -1489,6 +1508,12 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   # alias shadow a built-in, so the config lookup in the driver loop alone decides. Config this hook
   # cannot read (a relocation assignment, or command-line config naming an alias or include) denies
   # here with a fixed sentinel. Runs even for a CUT segment: a cut never matters to an alias verdict.
+  # #448: command-line config on a git segment that is no push, whose text holds a dollar sign (a
+  # variable or substitution the hook cannot expand), may build an alias key at run time: deny. A
+  # command substitution splits the segment, so this also runs when the subcommand was never reached.
+  if (cmdcfg && subcmd != "push") {
+    for (k = 1; k < j && k <= ntok; k++) if (index(toks[k], "$") > 0) { print "-alias-cmdline-config-"; break }
+  }
   if (subcmd != "" && subcmd != "push") {
     aliasish = 0
     if (cmdcfg) for (k = 1; k <= j - 2; k++) { at = tolower(strip_quotes(toks[k])); if (index(at, "alias") > 0 || index(at, "include") > 0) { aliasish = 1; break } }
@@ -1762,6 +1787,15 @@ cfg_parse_file() {
       [ "$cfg_inc_char_budget" -ge 0 ] || break
       [ "${#cfgline}" -le "$CFG_INCLUDE_MAX_LINE_CHARS" ] || continue
     fi
+    # #448: a CR strictly inside the line is removed by the strip below, which would fuse the words
+    # around it (an alias value split at a raw CR); remember it so the alias arms can fail closed. Only
+    # a line within the top-level cap is scanned, so the glob never runs on an over-cap line.
+    cfg_cr_mid=0
+    if [ "${#cfgline}" -le "$CFG_TOPLEVEL_MAX_LINE_CHARS" ]; then
+      case "$cfgline" in
+        *"$cfg_cr"?*) cfg_cr_mid=1 ;;
+      esac
+    fi
     # #435: the depth-0 (top-level) counterpart to the depth>=1 length check just above — a
     # top-level candidate is still always read in full, never budgeted (CFG_INCLUDE_MAX_FOLLOWS/
     # _LINES/_LINE_CHARS/_CHARS above apply to an INCLUDED file only), but an over-cap line here now
@@ -1797,6 +1831,14 @@ cfg_parse_file() {
       \[[Pp][Uu][Ss][Hh]\]*)
         cfg_section="push"
         cfg_subsection=""
+        continue
+        ;;
+      \[[Aa][Ll][Ii][Aa][Ss]\ \"*\"\]*)
+        # #448: the subsection spelling, [alias "<name>"] with a command key (git 2.55 documents
+        # alias.*.command) -- the key is recorded under the subsection name.
+        cfg_section="aliassub"
+        cfg_subsection="${cfgline#*\"}"
+        cfg_subsection="${cfg_subsection%%\"*}"
         continue
         ;;
       \[[Aa][Ll][Ii][Aa][Ss]\]*)
@@ -1855,7 +1897,17 @@ cfg_parse_file() {
       alias)
         # #448: label first, then key, then the value as the unbounded tail (the same reasoning as
         # cfg_push_lines above): a value holding a TAB byte cannot truncate into another field.
+        [ "$cfg_cr_mid" = 0 ] || cfg_val="!"
         cfg_alias_lines="${cfg_alias_lines}${label}${cfg_tab}${cfg_key}${cfg_tab}${cfg_val}"$'\n'
+        ;;
+      aliassub)
+        # #448: [alias "<name>"] command = <expansion>: recorded exactly like alias.<name>.
+        case "$cfg_key" in
+          [Cc][Oo][Mm][Mm][Aa][Nn][Dd])
+            [ "$cfg_cr_mid" = 0 ] || cfg_val="!"
+            cfg_alias_lines="${cfg_alias_lines}${label}${cfg_tab}${cfg_subsection}${cfg_tab}${cfg_val}"$'\n'
+            ;;
+        esac
         ;;
       push)
         case "$cfg_key" in
@@ -2338,6 +2390,8 @@ alias_deny() {
         v = val[r]
         if (substr(v, length(v)) == "\\") { print lab[r]; exit }
         w = v
+        gsub(/\\[tnb]/, " ", w)
+        sub(/^[ \t]+/, "", w)
         sub(/[ \t].*$/, "", w)
         gsub(/[\\"\047]/, "", w)
         w = tolower(w)

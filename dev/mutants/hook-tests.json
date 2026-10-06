@@ -4838,8 +4838,17 @@
         "push-alias-deny-chain",
         "push-alias-deny-cmdline-include",
         "push-alias-deny-codex-shaped",
+        "push-alias-deny-command-env-quoted",
         "push-alias-deny-config-env",
         "push-alias-deny-continuation",
+        "push-alias-deny-cr-mid",
+        "push-alias-deny-cr-mid-subsection",
+        "push-alias-deny-dollar-parameters",
+        "push-alias-deny-env-quoted-home",
+        "push-alias-deny-env-s-reloc",
+        "push-alias-deny-env-squoted-xdg",
+        "push-alias-deny-escape-newline",
+        "push-alias-deny-escape-tab",
         "push-alias-deny-feature-dest",
         "push-alias-deny-global-config",
         "push-alias-deny-include",
@@ -4854,8 +4863,13 @@
         "push-alias-deny-repo-config",
         "push-alias-deny-session-after-c-target",
         "push-alias-deny-shell",
+        "push-alias-deny-subcmd-fold",
+        "push-alias-deny-subsection-global",
+        "push-alias-deny-subsection-repo",
+        "push-alias-deny-xcfg-bare-gitconfig",
         "push-alias-deny-xcfg-bare-xdg",
         "push-alias-deny-xcfg-export-home",
+        "push-alias-deny-xcfg-export-parameters",
         "push-alias-deny-xdg-config"
       ]
     },
@@ -4891,6 +4905,10 @@
         "push-alias-deny-chain",
         "push-alias-deny-codex-shaped",
         "push-alias-deny-continuation",
+        "push-alias-deny-cr-mid",
+        "push-alias-deny-cr-mid-subsection",
+        "push-alias-deny-escape-newline",
+        "push-alias-deny-escape-tab",
         "push-alias-deny-feature-dest",
         "push-alias-deny-global-config",
         "push-alias-deny-include",
@@ -4903,8 +4921,14 @@
         "push-alias-deny-repo-config",
         "push-alias-deny-session-after-c-target",
         "push-alias-deny-shell",
+        "push-alias-deny-subcmd-fold",
+        "push-alias-deny-subsection-global",
+        "push-alias-deny-subsection-repo",
+        "push-alias-deny-xcfg-bare-gitconfig",
         "push-alias-deny-xcfg-bare-xdg",
+        "push-alias-deny-xcfg-export-gitconfig",
         "push-alias-deny-xcfg-export-home",
+        "push-alias-deny-xcfg-export-parameters",
         "push-alias-deny-xdg-config",
         "push-aliasdl-deny-budget-zero",
         "push-aliasdl-deny-flood"
@@ -4927,6 +4951,10 @@
         "push-alias-deny-chain",
         "push-alias-deny-codex-shaped",
         "push-alias-deny-continuation",
+        "push-alias-deny-cr-mid",
+        "push-alias-deny-cr-mid-subsection",
+        "push-alias-deny-escape-newline",
+        "push-alias-deny-escape-tab",
         "push-alias-deny-feature-dest",
         "push-alias-deny-global-config",
         "push-alias-deny-include",
@@ -4936,8 +4964,14 @@
         "push-alias-deny-repo-config",
         "push-alias-deny-session-after-c-target",
         "push-alias-deny-shell",
+        "push-alias-deny-subcmd-fold",
+        "push-alias-deny-subsection-global",
+        "push-alias-deny-subsection-repo",
+        "push-alias-deny-xcfg-bare-gitconfig",
         "push-alias-deny-xcfg-bare-xdg",
+        "push-alias-deny-xcfg-export-gitconfig",
         "push-alias-deny-xcfg-export-home",
+        "push-alias-deny-xcfg-export-parameters",
         "push-alias-deny-xdg-config"
       ]
     },
@@ -4958,6 +4992,9 @@
         "push-alias-deny-chain",
         "push-alias-deny-codex-shaped",
         "push-alias-deny-continuation",
+        "push-alias-deny-cr-mid",
+        "push-alias-deny-escape-newline",
+        "push-alias-deny-escape-tab",
         "push-alias-deny-feature-dest",
         "push-alias-deny-global-config",
         "push-alias-deny-include",
@@ -4970,6 +5007,7 @@
         "push-alias-deny-repo-config",
         "push-alias-deny-session-after-c-target",
         "push-alias-deny-shell",
+        "push-alias-deny-subcmd-fold",
         "push-alias-deny-xdg-config"
       ]
     },
@@ -4985,6 +5023,8 @@
         }
       ],
       "expect_fail": [
+        "push-alias-deny-cr-mid",
+        "push-alias-deny-cr-mid-subsection",
         "push-alias-deny-shell"
       ]
     },
@@ -5140,8 +5180,11 @@
         }
       ],
       "expect_fail": [
+        "push-alias-deny-xcfg-bare-gitconfig",
         "push-alias-deny-xcfg-bare-xdg",
-        "push-alias-deny-xcfg-export-home"
+        "push-alias-deny-xcfg-export-gitconfig",
+        "push-alias-deny-xcfg-export-home",
+        "push-alias-deny-xcfg-export-parameters"
       ]
     },
     {
@@ -5195,7 +5238,8 @@
         "push-alias-noop-env-nosystem",
         "push-alias-noop-nonpush-alias",
         "push-alias-noop-other-alias-word",
-        "push-alias-noop-scoped-home"
+        "push-alias-noop-scoped-home",
+        "push-alias-noop-subsection"
       ]
     },
     {
@@ -5210,6 +5254,10 @@
         }
       ],
       "expect_fail": [
+        "push-alias-deny-command-env-quoted",
+        "push-alias-deny-env-quoted-home",
+        "push-alias-deny-env-s-reloc",
+        "push-alias-deny-env-squoted-xdg",
         "push-alias-deny-lost-prefix-config",
         "push-alias-deny-lost-reloc-prefix",
         "push-alias-deny-quoted-space-assign"
@@ -5244,6 +5292,10 @@
         }
       ],
       "expect_fail": [
+        "push-alias-deny-command-env-quoted",
+        "push-alias-deny-env-quoted-home",
+        "push-alias-deny-env-s-reloc",
+        "push-alias-deny-env-squoted-xdg",
         "push-alias-deny-lost-reloc-prefix",
         "push-alias-deny-quoted-space-assign"
       ]
@@ -5388,6 +5440,151 @@
       ],
       "expect_fail": [
         "push-alias-noop-lost-no-git"
+      ]
+    },
+    {
+      "name": "448-pg-alias-subsection",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-alias-deny-",
+      "edits": [
+        {
+          "from": "      \\[[Aa][Ll][Ii][Aa][Ss]\\ \\\"*\\\"\\]*)",
+          "to": "      \\[[Aa][Ll][Ii][Aa][Ss]X\\ \\\"*\\\"\\]*)"
+        }
+      ],
+      "expect_fail": [
+        "push-alias-deny-cr-mid-subsection",
+        "push-alias-deny-subsection-global",
+        "push-alias-deny-subsection-repo"
+      ]
+    },
+    {
+      "name": "448-pg-alias-escape",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-alias-deny-",
+      "edits": [
+        {
+          "from": "        gsub(/\\\\[tnb]/, \" \", w)\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-alias-deny-escape-newline",
+        "push-alias-deny-escape-tab"
+      ]
+    },
+    {
+      "name": "448-pg-alias-cr-mid",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-alias-deny-",
+      "edits": [
+        {
+          "from": "[ \"$cfg_cr_mid\" = 0 ] || cfg_val=\"!\"\n        cfg_alias_lines=",
+          "to": "cfg_alias_lines="
+        }
+      ],
+      "expect_fail": [
+        "push-alias-deny-cr-mid"
+      ]
+    },
+    {
+      "name": "448-pg-alias-lost-quoted-reloc",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-alias-deny-",
+      "edits": [
+        {
+          "from": "    if (eq > 1 && (substr(u, 1, eq - 1) in reloc_set || is_cmdcfg_name(substr(u, 1, eq - 1)))) reloc = 1\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-alias-deny-command-env-quoted",
+        "push-alias-deny-env-quoted-home",
+        "push-alias-deny-env-s-reloc",
+        "push-alias-deny-env-squoted-xdg"
+      ]
+    },
+    {
+      "name": "448-pg-alias-xcfg-export-cfg",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-alias-deny-",
+      "edits": [
+        {
+          "from": "if ((rname in reloc_set) || is_cmdcfg_name(rname)) { xcfg = 1; break }",
+          "to": "if (rname in reloc_set) { xcfg = 1; break }"
+        }
+      ],
+      "expect_fail": [
+        "push-alias-deny-xcfg-export-gitconfig",
+        "push-alias-deny-xcfg-export-parameters"
+      ]
+    },
+    {
+      "name": "448-pg-alias-xcfg-bare-cfg",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-alias-deny-",
+      "edits": [
+        {
+          "from": "    else if (cmdword == \"\" && (reloc || cmdcfg)) xcfg = 1",
+          "to": "    else if (cmdword == \"\" && reloc) xcfg = 1"
+        }
+      ],
+      "expect_fail": [
+        "push-alias-deny-xcfg-bare-gitconfig"
+      ]
+    },
+    {
+      "name": "448-pg-alias-dollar",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-alias-deny-",
+      "edits": [
+        {
+          "from": "if (index(toks[k], \"$\") > 0) { print",
+          "to": "if (index(toks[k], \"$\") < 0) { print"
+        }
+      ],
+      "expect_fail": [
+        "push-alias-deny-dollar-c",
+        "push-alias-deny-dollar-env-key",
+        "push-alias-deny-dollar-parameters",
+        "push-alias-deny-dollar-subst"
+      ]
+    },
+    {
+      "name": "448-pg-alias-subcmd-fold",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-alias-deny-",
+      "edits": [
+        {
+          "from": "\"\\t\" tolower(subcmd)",
+          "to": "\"\\t\" subcmd"
+        }
+      ],
+      "expect_fail": [
+        "push-alias-deny-subcmd-fold"
+      ]
+    },
+    {
+      "name": "448-pg-alias-reset",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-alias-noop-",
+      "edits": [
+        {
+          "from": "  cfg_alias_lines=\"\"\n  cfg_push_defaults=\"\"",
+          "to": "  cfg_alias_lines=\"${cfg_alias_lines:-}\"\n  cfg_push_defaults=\"\""
+        }
+      ],
+      "expect_fail": [
+        "push-alias-noop-c-target-clean"
       ]
     }
   ]
