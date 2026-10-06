@@ -363,8 +363,12 @@
 # ...`, `git $'push' origin main`) and remembered; after the subcommand loop the segment denies with
 # the fixed reason `runtime expansion in the git options` when that word itself names push or the
 # split-value gate (armed == 2: an expansion may stand for any number of options and values) finds one
-# after it. A skipped word with no subcommand after it stays the candidate subcommand, as it was before
-# the skip existed, so the #448 alias and relocation checks still run on it. A git alias behind the
+# after it. A plain ANSI-C literal there (`$'zqp'`: letters, digits, `_`, `.`, `-`, no leading dash, no
+# backslash) is the word it spells (one with a backslash fails closed in the option slot), so `git $'zqp' origin main` looks up the alias zqp and `$'push'` is
+# push. When no subcommand follows the skipped words, the first skipped word that does not start with a
+# dash is the candidate subcommand (the word taken before the skip existed; none when every skipped
+# word is dash-led, so a cut push still fails closed), and the #448 alias and relocation scan covers the
+# whole option slot, since an expansion may hide where it ends. A git alias behind the
 # skipped word is judged by the #448 route as usual. (c) The segmenter
 # cuts a record at `${`, `$(` and a backtick, so an `env -S` string such as
 # `env -S'${X}git\_push\_origin\_main'` arrives in pieces and its unsupported `env` option (#449) was
@@ -1305,6 +1309,14 @@ function rx_word(tok,    parts, np) {
   np = split(tok, parts, "/")
   return match(parts[np], rx_re) > 0
 }
+# #508: the body of an ANSI-C word that is a plain literal ($'zqp': a name made of letters, digits, `_`,
+# `.` and `-`, no leading dash, no backslash, no quote), else the empty string
+function ansic_body(tok,    b) {
+  if (substr(tok, 1, 2) != "$" sq || substr(tok, length(tok)) != sq || length(tok) < 4) return ""
+  b = substr(tok, 3, length(tok) - 3)
+  if (b ~ /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/) return b
+  return ""
+}
 function is_cmdcfg_name(n,    c) {
   if (n in ccenv_set) return 1
   for (c = 1; c <= nccp; c++) if (index(n, ccparr[c]) == 1) return 1
@@ -1411,7 +1423,7 @@ function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, u, na
   for (i = 1; i <= nc; i++) print "ALIAS\t" cpath "\t" chunk[i]
   if (names != "") print "ALIAS\t" cpath "\t" names
 }
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, cfgdollar, cv, rx_at, rxg_at, ro, k, xname, cmdcfg, co, cp, cfgname) {
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, cfgdollar, cv, rx_at, rxg_at, rxn_at, rxbs, jend, ro, k, xname, cmdcfg, co, cp, cfgname) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
@@ -1428,6 +1440,8 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   cfgdollar = 0
   rx_at = 0
   rxg_at = 0
+  rxn_at = 0
+  rxbs = 0
   while (idx <= ntok) {
     tok = toks[idx]
     if (tok == "") { idx++; continue }
@@ -1606,18 +1620,23 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
       j += 2
       continue
     }
-    if (rx_word(tok)) { if (!rxg_at) rxg_at = j; j++; continue }
+    # #508: a plain ANSI-C literal in the option slot is the word it spells ($'zqp' is zqp)
+    if (ansic_body(tok) != "") tok = ansic_body(tok)
+    if (rx_word(tok)) { if (!rxg_at) rxg_at = j; if (!rxn_at && substr(tok, 1, 1) != "-") rxn_at = j; if (substr(tok, 1, 2) == "$" sq && index(tok, "\\") > 0) rxbs = 1; j++; continue }
     if (substr(tok, 1, 1) == "-") { j++; continue }
     if (normalize(tok) == "") { j++; continue }
     subcmd = normalize(tok)
     j++
     break
   }
-  # #508: the skipped expansion word was the last word of the option slot: it is the candidate
-  # subcommand, exactly as before the skip existed, so the alias and relocation checks below still run
-  if (subcmd == "" && rxg_at) { subcmd = normalize(toks[rxg_at]); j = rxg_at + 1 }
+  # #508: no subcommand followed the skipped expansion words. The first one that does not start with a
+  # dash is the candidate subcommand, the word the walk took before the skip existed; when every
+  # skipped word is dash-led there is none. The alias and relocation scan below then covers the whole
+  # option slot, since an expansion may hide where the slot ends.
+  jend = j
+  if (subcmd == "" && rxn_at) { subcmd = normalize(toks[rxn_at]); j = jend + 1 }
   # #508: an expansion in the git option slot may stand for options, the subcommand, or nothing
-  if (rxg_at && (index(strip_quotes(toks[rxg_at]), "push") > 0 || lost_push(toks, rxg_at + 1, ntok, 2))) { emit_lost("runtime expansion in the git options", unres, cmdcfg, cut_flag); return }
+  if (rxg_at && (rxbs || index(strip_quotes(toks[rxg_at]), "push") > 0 || lost_push(toks, rxg_at + 1, ntok, 2))) { emit_lost("runtime expansion in the git options", unres, cmdcfg, cut_flag); return }
   # #448: every git segment whose subcommand is not push is an alias candidate -- git never lets an
   # alias shadow a built-in, so the config lookup in the driver loop alone decides. Config this hook
   # cannot read (a relocation assignment, or command-line config naming an alias or include) denies

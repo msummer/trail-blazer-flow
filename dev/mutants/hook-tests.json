@@ -6535,12 +6535,13 @@
       "filter": "push-rtexp-",
       "edits": [
         {
-          "from": "if (rxg_at && (index(",
-          "to": "if (0 && (index("
+          "from": "if (rxg_at && (rxbs || index(",
+          "to": "if (0 && (rxbs || index("
         }
       ],
       "expect_fail": [
         "push-rtexp-deny-git-slot",
+        "push-rtexp-deny-git-slot-ansi-c-literal",
         "push-rtexp-deny-git-slot-ansi-c-opt",
         "push-rtexp-deny-git-slot-push-text"
       ]
@@ -6552,12 +6553,14 @@
       "filter": "push-rtexp-",
       "edits": [
         {
-          "from": "if (rx_word(tok)) { if (!rxg_at) rxg_at = j; j++; continue }",
+          "from": "if (rx_word(tok)) { if (!rxg_at) rxg_at = j; if (!rxn_at && substr(tok, 1, 1) != \"-\") rxn_at = j; if (substr(tok, 1, 2) == \"$\" sq && index(tok, \"\\\\\") > 0) rxbs = 1; j++; continue }",
           "to": "if (rx_word(tok)) { if (!rxg_at) rxg_at = j }"
         }
       ],
       "expect_fail": [
-        "push-rtexp-deny-git-slot-alias"
+        "push-rtexp-deny-git-slot-alias",
+        "push-rtexp-deny-git-slot-ansi-c-literal",
+        "push-rtexp-deny-git-slot-dash-led"
       ]
     },
     {
@@ -6572,8 +6575,8 @@
         }
       ],
       "expect_fail": [
+        "push-rtexp-deny-git-slot-ansi-c-literal",
         "push-rtexp-deny-git-slot-ansi-c-opt",
-        "push-rtexp-deny-git-slot-push-text",
         "push-rtexp-deny-quote-expansion"
       ]
     },
@@ -6663,7 +6666,7 @@
       "filter": "push-rtexp-",
       "edits": [
         {
-          "from": "(index(strip_quotes(toks[rxg_at]), \"push\") > 0 || lost_push(toks, rxg_at + 1, ntok, 2))",
+          "from": "(rxbs || index(strip_quotes(toks[rxg_at]), \"push\") > 0 || lost_push(toks, rxg_at + 1, ntok, 2))",
           "to": "1"
         }
       ],
@@ -6824,8 +6827,8 @@
           "to": "if (saw_prefix && rx_word(tok)) { if (!rx_at) rx_at = idx; if (lost_push(toks, idx + 1, ntok, 1)) { emit_lost(\"scan\", unres, cmdcfg, cut_flag); return } }"
         },
         {
-          "from": "if (rx_word(tok)) { if (!rxg_at) rxg_at = j; j++; continue }",
-          "to": "if (rx_word(tok)) { if (!rxg_at) rxg_at = j; if (lost_push(toks, j + 1, ntok, 2)) { emit_lost(\"scan\", unres, cmdcfg, cut_flag); return } j++; continue }"
+          "from": "rxg_at = j; if (!rxn_at",
+          "to": "rxg_at = j; if (lost_push(toks, j + 1, ntok, 2)) { emit_lost(\"scan\", unres, cmdcfg, cut_flag); return } if (!rxn_at"
         }
       ],
       "expect_fail": [
@@ -7037,11 +7040,12 @@
       "filter": "push-rtexp-",
       "edits": [
         {
-          "from": "if (subcmd == \"\" && rxg_at) { subcmd = normalize(toks[rxg_at]); j = rxg_at + 1 }",
-          "to": ""
+          "from": "if (subcmd == \"\" && rxn_at)",
+          "to": "if (0 && rxn_at)"
         }
       ],
       "expect_fail": [
+        "push-rtexp-deny-git-slot-dash-led",
         "push-rtexp-deny-git-slot-trailing"
       ]
     },
@@ -7103,6 +7107,66 @@
       ],
       "expect_fail": [
         "ab-rtexp-deny-option-word-gh"
+      ]
+    },
+    {
+      "name": "508-pg-rx-git-nondash",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (!rxn_at && substr(tok, 1, 1) != \"-\") rxn_at = j;",
+          "to": "if (!rxn_at) rxn_at = j;"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-git-slot-dash-led"
+      ]
+    },
+    {
+      "name": "508-pg-rx-git-wholeslot",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "j = jend + 1 }",
+          "to": "j = rxn_at + 1 }"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-git-slot-dash-led"
+      ]
+    },
+    {
+      "name": "508-pg-rx-ansic-literal",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "    if (ansic_body(tok) != \"\") tok = ansic_body(tok)\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-git-slot-ansi-c-literal"
+      ]
+    },
+    {
+      "name": "508-pg-rx-ansic-backslash",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (rxg_at && (rxbs || index(",
+          "to": "if (rxg_at && (index("
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-git-slot-ansi-c-literal"
       ]
     },
     {
