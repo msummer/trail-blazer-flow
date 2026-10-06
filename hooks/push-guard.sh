@@ -412,14 +412,17 @@
 # ...`, `git $X'push' origin main`) and remembered; after the subcommand loop the segment denies with
 # the fixed reason `runtime expansion in the git options` when that word itself names push or the
 # split-value gate (armed == 2: an expansion may stand for any number of options and values) finds one
-# after it. A git-slot word made of plain literal parts and ANSI-C (`$'...'`) or locale (`$"..."`)
-# segments is its shell value, concatenated (`$'zqp'` is zqp, `p$'ush'`, `$'p'$'ush'` and `p$"ush"` are
-# push): every part must be letters, digits, `_`, `.` or `-` and the value must not start with a dash, and
-# the value then serves as the subcommand, so `git z$'qp' origin main` looks up the alias zqp and
-# `git p$'ush' origin main` is a push. A word with a segment holding a backslash (`p$'\x75sh'`), or
-# mixing both quote kinds, fails closed under the git-options reason wherever the segment sits in the
-# word. The value is built in one linear pass per word (one split on the quote character, one loop over
-# its pieces), so the cost stays proportional to the word length. When no subcommand follows the skipped words, the first skipped word that does not start with a
+# after it. ANSI-C (`$'...'`) and locale (`$"..."`) words in the option slot or the subcommand position
+# are treated by one rule. A word that is EXACTLY one segment with a plain body (letters, digits, `_`,
+# `.` or `-`, no leading dash) is read as that name and substituted into the token list, so `git
+# $'zqp' origin main` looks up the alias zqp and `git $'push' origin main` is a push, and every later
+# scan sees the name. Any OTHER word there that holds a dollar sign followed by a quote (`p$'ush'`,
+# `$'p'$'ush'`, `"p"$'ush'`, `z$'qp'`, a backslash body such as `$'\x70ush'`, mixed or unpaired quotes,
+# an attached option value such as `--git-dir=$'/a b'`) fails closed under the git-options reason,
+# whether or not a push follows: the shell value of such a word is never computed. That is a deliberate
+# over-block that includes `git st$'atus'` and `git $'a b' status`. The check is one `index()` per word
+# (linear in the word), and the value of a detached `-c`, `-C` or `--config-env` option is consumed with
+# its option and never inspected, as before. When no subcommand follows the skipped words, the first skipped word that does not start with a
 # dash is the candidate subcommand (the word taken before the skip existed; none when every skipped
 # word is dash-led, so a cut push still fails closed), and the #448 alias and relocation scan covers the
 # whole option slot, since an expansion may hide where it ends. A git alias behind the
@@ -437,8 +440,7 @@
 # expansion mid-line (`git commit -m "$X git push origin main"`, `echo $X git push ...`) keeps no
 # opinion. Residuals, each measured rc 0: a `${...}`, `$(...)` or backtick prefix (the text after its
 # close is judged precisely, so an injected prefix is not failed closed), a runtime-built git
-# subcommand (`git $S origin main`, or a word mixing a segment with an expansion such as
-# `git $"zqp"$X origin main`), a runtime-built refspec destination (`git push origin
+# subcommand (`git $S origin main`), a runtime-built refspec destination (`git push origin
 # HEAD:$B`), and `eval "$c"`.
 #
 # Fail-closed: git aliases and config relocation (#448, absorbing #450). This hook once recognised only
@@ -511,8 +513,8 @@
 # an alias defined only in another checkout's config, reached by `cd`, an unresolvable `-C`,
 # `GIT_DIR=` or `--git-dir`; a `git-<name>` external on `PATH` (or via `--exec-path`/`GIT_EXEC_PATH`);
 # `env -u XDG_CONFIG_HOME`; the `HOME` that `sudo` sets; a subcommand
-# built at runtime (`S=p; git $S`; a subcommand spelled with plain ANSI-C or locale segments is read as
-# its value, see the #508 paragraph); an alias run through
+# built at runtime (`S=p; git $S`; an ANSI-C or locale spelling in the option slot is read only as a
+# whole plain word and otherwise fails closed, see the #508 paragraph); an alias run through
 # `xargs` or a script file; and `help.autocorrect`, where the hook says rc 0 for a mistyped
 # subcommand (UNVERIFIED whether git then runs push); a relocation or config name built at run time
 # (`V=HOME; env "$V=/x" git p`, the same class as `S=p; git $S`); a variable-setting builtin this hook does not
@@ -963,8 +965,8 @@
 # deadline cannot sample around at all), #449 likewise (its per-token shape checks and at most three
 # lost_push() scans per segment, one memoised scan for each of three trigger families, all inside that tokenizer and so inside
 # `T_prefix`), #508 likewise (rx_word() is linear in one token; at most two more lost_push() scans per
-# segment, both after their loops and never at a trigger; at most one split and one loop over the pieces of
-# each git-slot word (ansic_value()); at most one more split of the record plus one
+# segment, both after their loops and never at a trigger; one index() per git-slot word for the ANSI-C
+# rule; at most one more split of the record plus one
 # lost_push() per record; no emit_alias_lost() call is added), and #433 has landed in the awk tokenizer plus one
 # constant-cost post-loop fallback: call `check_deadline` as the FIRST statement of every loop whose trip
 # count grows with the command string or a config file's own content — never partway through a loop
@@ -1365,42 +1367,16 @@ function rx_word(tok,    parts, np) {
   np = split(tok, parts, "/")
   return match(parts[np], rx_re) > 0
 }
-# #508: the shell value of a word that holds ANSI-C segments (a dollar sign then a quoted body), as one
-# linear pass (this program is single-quoted shell, so no literal apostrophe may appear here): the word
-# is split once on the single-quote character, and the pieces alternate outside and inside quotes. Every outside piece and
-# every segment body must be a plain name (letters, digits, `_`, `.`, `-`), and the value must start with
-# a letter, digit or `_`; the dollar sign that opens a segment ends its outside piece. The value is returned
-# when all of that holds, else the empty string. av_bad is set when an ANSI-C segment holds a backslash or
-# the quotes of the word do not pair up: such a word cannot be read and fails closed.
-function ansic_value(tok,    n, parts, i, out, o, last, t) {
-  av_bad = 0
-  # a locale string (dollar sign, double quote) reads the same way: with no single quote in the word, its
-  # double quotes become single quotes first; a word holding both kinds fails closed
-  if (index(tok, "$\"") > 0) {
-    if (index(tok, sq) > 0) { av_bad = 1; return "" }
-    t = tok
-    gsub(/"/, sq, t)
-    tok = t
-  }
-  if (index(tok, "$" sq) == 0) return ""
-  n = split(tok, parts, sq)
-  if (n % 2 == 0) { av_bad = 1; return "" }
-  out = ""
-  for (i = 1; i <= n; i++) {
-    o = parts[i]
-    if (i % 2 == 1) {
-      last = (i < n) && (substr(o, length(o)) == "$")
-      if (last) o = substr(o, 1, length(o) - 1)
-      if (o !~ /^[A-Za-z0-9_.-]*$/) return ""
-      out = out o
-    } else {
-      if (index(o, "\\") > 0 && substr(parts[i - 1], length(parts[i - 1])) == "$") { av_bad = 1; return "" }
-      if (o !~ /^[A-Za-z0-9_.-]*$/) return ""
-      out = out o
-    }
-  }
-  if (out !~ /^[A-Za-z0-9_]/) return ""
-  return out
+# #508: the body of a word that is EXACTLY one ANSI-C or locale segment (a dollar sign, a quote, a plain
+# name, the same quote): letters, digits, `_`, `.` or `-`, no leading dash. Else the empty string. (This
+# program is single-quoted shell, so no literal apostrophe may appear in it.)
+function whole_lit(tok,    q, b) {
+  q = substr(tok, 2, 1)
+  if (substr(tok, 1, 1) != "$" || (q != sq && q != "\"")) return ""
+  if (length(tok) < 4 || substr(tok, length(tok)) != q) return ""
+  b = substr(tok, 3, length(tok) - 3)
+  if (b ~ /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/) return b
+  return ""
 }
 function is_cmdcfg_name(n,    c) {
   if (n in ccenv_set) return 1
@@ -1705,11 +1681,15 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
       j += 2
       continue
     }
-    # #508: a plain ANSI-C literal in the option slot is the word it spells (a dollar-quoted zqp is zqp)
-    av = ansic_value(tok)
-    if (av_bad) rxbs = 1
-    if (av != "") tok = av
-    if (rx_word(tok) || av_bad) { if (!rxg_at) rxg_at = j; if (!rxn_at && substr(tok, 1, 1) != "-") rxn_at = j; j++; continue }
+    # #508: a word that is exactly one plain ANSI-C or locale segment is the name it spells (a dollar-quoted
+    # zqp is zqp), substituted into toks so every later scan sees it; any other word in the option slot
+    # holding a dollar sign and a quote fails closed
+    if (index(tok, "$" sq) > 0 || index(tok, "$\"") > 0) {
+      av = whole_lit(tok)
+      if (av != "") { tok = av; toks[j] = av }
+      else { rxbs = 1; if (!rxg_at) rxg_at = j; j++; continue }
+    }
+    if (rx_word(tok)) { if (!rxg_at) rxg_at = j; if (!rxn_at && substr(tok, 1, 1) != "-") rxn_at = j; j++; continue }
     if (substr(tok, 1, 1) == "-") { j++; continue }
     if (normalize(tok) == "") { j++; continue }
     subcmd = normalize(tok)

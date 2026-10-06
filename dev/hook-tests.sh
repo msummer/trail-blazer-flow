@@ -3446,7 +3446,8 @@ case_push_rtexp_deny_built_command_word() {
 # mutant:508-pg-rx-git-off — never fires the git-option-slot gate, so an expansion between git and
 #   push gets no opinion.
 case_push_rtexp_deny_git_slot() {
-  rtx_deny "$PP_R_RXG" 'git $X push origin main' 'git -$X push origin feature/x' 'git $=X push origin main'
+  rtx_deny "$PP_R_RXG" 'git $X push origin main' 'git -$X push origin feature/x' 'git $=X push origin main' \
+    'git $X core.pager=cat push origin feature/x'
 }
 # mutant:508-pg-rx-git-armed2 — scans the git-slot tail with the option-value skip enabled, so an
 #   option-looking token swallows the push behind it.
@@ -3459,8 +3460,10 @@ case_push_rtexp_deny_git_slot_push_text() {
 }
 # mutant:508-pg-rx-ansic-literal — stops reading a plain ANSI-C literal in the git slot as the word
 #   it spells, so its alias is never looked up.
-# mutant:508-pg-rx-ansic-backslash — drops the unconditional fail-closed deny for an ANSI-C word
-#   with a backslash in the git slot.
+# mutant:508-pg-rx-ansic-locale — stops treating a dollar sign with a double quote as a segment
+#   opener in the git slot, so locale spellings are never read as their name.
+# mutant:508-pg-rx-ansic-backslash — drops the unconditional git-options deny that the fail-closed
+#   flag drives, so an unreadable slot word only denies when push text follows.
 case_push_rtexp_deny_git_slot_ansi_c_literal() {
   # A plain ANSI-C literal is the word it spells: $'push' is push, $'zqp' looks up the alias zqp, and
   # one with a backslash in its body fails closed under the git-options reason.
@@ -3475,41 +3478,35 @@ case_push_rtexp_deny_git_slot_ansi_c_literal() {
   mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
   al_run "git \$'zqp' origin main" "$dir"
   al_expect_alias ".git/config"
-  rtx_deny "$PP_R_RXG" "git \$'z\\x71p' origin main"
+  al_run 'git $"zqp" origin main' "$dir"
+  al_expect_alias ".git/config"
+  rtx_deny "$PP_R_RXG" "git \$'z\\x71p' origin main" "git -\$X \$'push' origin feature/x" 'git -$X $"push" origin feature/x'
 }
 # mutant:508-pg-rx-git-nondash — takes the first skipped expansion word as the candidate subcommand
 #   even when it is dash-led, so the alias scan stops short of the options after it and a cut push
 #   loses its sentinel.
 # mutant:508-pg-rx-git-wholeslot — scans for alias and include text only up to the candidate
 #   subcommand, so a trailing option value after the skipped words is never read.
-# mutant:508-pg-rx-ansic-concat — reads only a git-slot word that starts with an ANSI-C segment, so
-#   a word with literal parts around its segments keeps a dollar sign and its push or alias spelling
-#   is never matched.
-# mutant:508-pg-rx-ansic-bs-anywhere — fails closed on a backslash only in a segment at the very
-#   start of the word, so a backslash segment after a literal part is read as no expansion.
+# mutant:508-pg-rx-ansic-failclosed — drops the unconditional deny for a git-slot word that holds a
+#   dollar sign and a quote but is not exactly one plain segment, so concatenated, mixed-quote and
+#   backslash spellings fall through to the push-text check only.
 case_push_rtexp_deny_git_slot_ansi_c_concat() {
-  # A word built from literal parts and ANSI-C segments is its concatenated value: p$'ush' is push, z$'qp'
-  # looks up the alias zqp, st$'atus' is status. A segment holding a backslash fails closed.
-  local c w0 dir="$tmpbase/repo-rtx-alias"
-  for c in "git p\$'ush' origin main" "git \$'p'\$'ush' origin main" "git pu\$'sh' origin main" \
-    "git --no-pager p\$'ush' origin main" 'git p$"ush" origin main'; do
-    w0="$__why"; __why=""
-    pp_run "$c"
-    expect_push_deny
-    case "$push_err" in
-      *"resolves to the default branch"*) ;;
-      *) __ok=0; __why="${__why}stderr missing the default-branch reason: '$push_err'\n" ;;
-    esac
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-  rtx_deny "$PP_R_RXG" "git p\$'\\x75sh' origin main" "git pu\$'s\\x68' origin feature/x"
-  mk_fixture_repo "$dir" main feature/x
-  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
-  al_run "git z\$'qp' origin main" "$dir"
-  al_expect_alias ".git/config"
-  al_run 'git $"zqp" origin main' "$dir"
-  al_expect_alias ".git/config"
-  rtx_noop "git st\$'atus'" 'git st$"atus"'
+  # Any git-slot word holding a dollar sign and a quote that is not exactly one plain segment fails closed
+  # under the git-options reason, push or not: concatenations, mixed quote kinds, backslashes, attached
+  # option values. A whole-word plain literal is read as its name, so $'status' stays no opinion.
+  rtx_deny "$PP_R_RXG" "git p\$'ush' origin main" "git \$'p'\$'ush' origin main" "git pu\$'sh' origin main" \
+    "git --no-pager p\$'ush' origin main" 'git p$"ush" origin main' 'git $"p"$'"'ush'"' origin main' \
+    "git \"p\"\$'ush' origin main" "git p\$'u'\"sh\" origin main" "git p\\u\$'sh' origin main" "git \\p\$'ush' origin main" \
+    "git p\$'us'\\h origin main" "git \$'p'\\u\$'sh' origin main" "git \"p\"\$'\\x75sh' origin main" \
+    "git \"z\"\$'qp' origin main" "git \$'z'\"q\"p origin main" "git z\\q\$'p' origin main" \
+    "git p\$'\\x75sh' origin main" "git pu\$'s\\x68' origin feature/x" \
+    'git -$X p$'"'ush'"' origin feature/x' "git -\$X \$'p'\$'ush' origin feature/x" "git \$X p\$'ush' origin feature/x" \
+    "git \$'-c' core.pager=cat p\$'ush' origin feature/x" \
+    "git st\$'atus'" 'git st$"atus"' "git --namespace=\$'a b' status" "git \$'a b' status"
+  # An attached option holding a space-bearing segment is a deliberate over-block, whichever reason names it.
+  pp_run "git --git-dir=\$'/tmp/a b/.git' status"
+  expect_push_deny
+  rtx_noop "git \$'status'"
 }
 case_push_rtexp_deny_git_slot_dash_led() {
   # The candidate subcommand is the first skipped word that does not start with a dash, and the alias
@@ -11276,11 +11273,11 @@ cases=(
   "push-rtexp-deny-env-u-value|case_push_rtexp_deny_env_u_value|deny: env -u with an expansion value -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-prefix-off, 508-pg-rx-env-u-value)"
   "push-rtexp-deny-env-u-attached|case_push_rtexp_deny_env_u_attached|deny: env -u<expansion> attached -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-prefix-off, 508-pg-rx-env-u-attached)"
   "push-rtexp-deny-built-command-word|case_push_rtexp_deny_built_command_word|deny: \$G push origin main with no git text in the raw stdin -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-prefix-off, 508-pg-rx-armed, 508-pg-fastpath-dollar)"
-  "push-rtexp-deny-git-slot|case_push_rtexp_deny_git_slot|deny: an expansion in the git option slot, naming the git-options reason -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-off, 508-pg-rx-re-zsh)"
-  "push-rtexp-deny-git-slot-ansi-c-opt|case_push_rtexp_deny_git_slot_ansi_c_opt|deny: git \$'-c' core.pager=cat push -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-off, 508-pg-rx-re-sq, 508-pg-rx-git-armed2)"
+  "push-rtexp-deny-git-slot|case_push_rtexp_deny_git_slot|deny: an expansion in the git option slot, naming the git-options reason -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-off, 508-pg-rx-git-armed2, 508-pg-rx-re-zsh)"
+  "push-rtexp-deny-git-slot-ansi-c-opt|case_push_rtexp_deny_git_slot_ansi_c_opt|deny: git \$'-c' core.pager=cat push -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-off)"
   "push-rtexp-deny-git-slot-push-text|case_push_rtexp_deny_git_slot_push_text|deny: git \$X'push' origin main -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-off, 508-pg-rx-git-self)"
-  "push-rtexp-deny-git-slot-ansi-c-literal|case_push_rtexp_deny_git_slot_ansi_c_literal|deny: a plain ANSI-C literal in the git slot is the word it spells -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-off, 508-pg-rx-ansic-literal, 508-pg-rx-ansic-backslash)"
-  "push-rtexp-deny-git-slot-ansi-c-concat|case_push_rtexp_deny_git_slot_ansi_c_concat|deny: a git-slot word built from literal parts and ANSI-C segments is its concatenated value (p\$'ush' is push); a segment with a backslash fails closed; st\$'atus' is no opinion -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-off, 508-pg-rx-ansic-literal, 508-pg-rx-ansic-backslash, 508-pg-rx-ansic-concat, 508-pg-rx-ansic-bs-anywhere)"
+  "push-rtexp-deny-git-slot-ansi-c-literal|case_push_rtexp_deny_git_slot_ansi_c_literal|deny: a whole-word plain ANSI-C or locale literal in the git slot is the name it spells -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-off, 508-pg-rx-ansic-literal, 508-pg-rx-ansic-failclosed, 508-pg-rx-ansic-locale, 508-pg-rx-ansic-backslash)"
+  "push-rtexp-deny-git-slot-ansi-c-concat|case_push_rtexp_deny_git_slot_ansi_c_concat|deny: any git-slot word holding a dollar sign and a quote that is not exactly one plain segment fails closed (concatenations, mixed quotes, backslashes, attached values); \$'status' stays no opinion -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-off, 508-pg-rx-git-skip-off, 508-pg-rx-ansic-literal, 508-pg-rx-ansic-failclosed, 508-pg-rx-ansic-locale, 508-pg-rx-ansic-backslash)"
   "push-rtexp-deny-git-slot-dash-led|case_push_rtexp_deny_git_slot_dash_led|deny: a dash-led expansion first in the git slot keeps base subcommand choice and a whole-slot scan -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-skip-off, 508-pg-rx-git-trailing, 508-pg-rx-git-nondash, 508-pg-rx-git-wholeslot)"
   "push-rtexp-deny-git-slot-trailing|case_push_rtexp_deny_git_slot_trailing|deny: an expansion as the last word of the git option slot keeps the alias and relocation checks -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-trailing)"
   "push-rtexp-deny-git-slot-alias|case_push_rtexp_deny_git_slot_alias|deny: git \$X zqp with a push alias in .git/config -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-git-skip-off, 508-pg-rx-git-ungated)"

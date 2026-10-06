@@ -325,9 +325,10 @@ over-blocking this fail-closed rule creates and the residuals it leaves. **Since
 command position (or in git's option slot) whose basename holds a runtime expansion (`$X git push
 origin main`, `env $'A=b' git push ...`, `git $X push ...`, `git $'-c' k=v push`) is skipped as a
 possibly-empty word, and the segment denies as unresolved when the rest could still be a push; an
-`env -S` string cut at `${`, `$(` or a backtick is judged on the whole record. A git-slot word spelled
-with plain ANSI-C or locale segments (`p$'ush'`, `z$'qp'`) is read as its concatenated value, and one
-whose segment holds a backslash fails closed. The header's
+`env -S` string cut at `${`, `$(` or a backtick is judged on the whole record. A git-slot word that is exactly
+one plain ANSI-C or locale segment (`$'zqp'`) is read as that name; any other git-slot word holding a
+dollar sign and a quote (`p$'ush'`, `git st$'atus'`, `--git-dir=$'/a b'`) fails closed, a deliberate
+over-block. The header's
 "Fail-closed: a runtime expansion in the command prefix or the git options (#508)" paragraph lists
 the over-blocks and residuals (a `${...}`/`$(...)` prefix, a runtime-built subcommand or refspec
 destination, `eval "$c"`). Since #433, a push segment in
