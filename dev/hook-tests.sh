@@ -6143,6 +6143,13 @@ case_push_include_deny_never_executes() {
 # mutant:510-pg-hdr-dotted-scope — records the whole dotted text, section name included, as the
 #   subsection.
 # mutant:510-pg-hdr-reason — the unclassifiable-header deny prints the over-long-line reason.
+# mutant:510-pg-hdr-mixed-off — a mixed header (`[branch.v1 "2"]`) is rewritten with the quoted part
+#   alone as the subsection, dropping the dotted part git joins to it.
+# mutant:510-pg-hdr-mixed-upper-off — drops the deny for an uppercase letter in the dotted part of a
+#   mixed header.
+# mutant:510-pg-hdr-quoted-upper — applies the dotted-subsection uppercase deny to quoted
+#   subsections too, so `[remote "Upstream"]` (a quoted name keeps its case) denies.
+# mutant:510-pg-hdr-bom-off — never strips the byte-order mark from a file's first line.
 # HK_CONFIGHDR_LINE is hand-typed from hooks/push-guard.sh's deny_too_large confighdr arm, so a
 # drift between the two is a visible test diff; the line carries no input text.
 HK_CONFIGHDR_LINE="trail-blazer-flow push guard: denies this git command: a git config file it reads has a section header line it cannot split the way git does (blocked: unparseable config header line) — put that section header on a line of its own, or run the command from a terminal; see README.md's Safety model"
@@ -6319,6 +6326,57 @@ case_push_hdrkey_deny_new_spellings() {
 	path = extra.inc
 " 'git push'
 }
+case_push_hdrkey_deny_mixed_spellings() {
+  # A dotted section part followed by a quoted subsection: git joins them (branch.v1 + "2" is the
+  # branch v1.2, remote.my + "fork" the remote my.fork).
+  hk_cdeny branch-mixed '[push]
+	default = upstream
+[branch.v1 "2"]
+	merge = refs/heads/main
+' 'git push' v1.2
+  hk_cdeny remote-mixed '[remote.my "fork"]
+	push = HEAD:main
+' 'git push my.fork'
+  hk_inc='[remote.my "fork"]
+	push = HEAD:main
+'
+  hk_cdeny remote-mixed-in-include '[include]
+	path = extra.inc
+' 'git push my.fork'
+  hk_alias alias-mixed '[alias.x "y"] command = push
+' 'git zqp origin main' ".git/config"
+}
+case_push_hdrkey_deny_confighdr_mixed_upper() {
+  # git lowercases the dotted part of a mixed header, which this hook cannot do: it denies.
+  hk_hdr branch-mixed-upper '[push]
+	default = upstream
+[Branch.V1 "2"]
+	merge = refs/heads/main
+' 'git push' v1.2
+}
+case_push_hdrkey_deny_bom() {
+  # git skips a UTF-8 byte-order mark at the start of a config file, so the first header still counts.
+  local bom=$'\357\273\277' home="$tmpbase/home-hdrkey-bom"
+  hk_cdeny bom-depth0 "$bom"'[remote "origin"]
+	push = HEAD:main
+' 'git push'
+  hk_inc="$bom"'[remote "origin"]
+	push = HEAD:main
+'
+  hk_cdeny bom-in-include '[include]
+	path = extra.inc
+' 'git push'
+  mk_fixture_global_config "$home/.gitconfig" "$bom"'[remote "origin"]
+	push = HEAD:main
+'
+  push_home_override="$home"
+  hk_run bom-global '' 'git push'
+  expect_push_deny
+  case "$push_err" in
+    *"your global git config"*) ;;
+    *) __ok=0; __why="${__why}bom-global: stderr does not name the global config: '$push_err'\n" ;;
+  esac
+}
 case_push_hdrkey_deny_confighdr_chained() {
   hk_hdr chained '[core] [remote "origin"] push = HEAD:main
 ' 'git push'
@@ -6404,6 +6462,10 @@ case_push_hdrkey_noop_controls() {
 ' 'git push'
   hk_noop explicit-refspec '[remote "origin"] push = HEAD:main
 ' 'git push -u origin "claude/17-a"'
+  # A quoted subsection keeps its case: this is the remote Upstream, not origin.
+  hk_noop remote-quoted-upper '[remote "Upstream"]
+	push = HEAD:main
+' 'git push origin'
   # A dotted section for another remote, and a subsection-less [remote], never apply to origin.
   hk_noop dotted-other-remote '[remote.backup]
 	push = HEAD:main
@@ -10584,12 +10646,15 @@ cases=(
   "push-hdrkey-deny-cap-length-header|case_push_hdrkey_deny_cap_length_header|a header line of exactly the depth-0 line cap, ending in a same-line push key, denies through the config route rather than the configline reason -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-rest-off)"
   "push-hdrkey-deny-alias-same-line|case_push_hdrkey_deny_alias_same_line|a push alias written on its section header's line, in every alias spelling, repo and global, never echoing the alias name -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-rest-off, 510-pg-hdr-raw, 510-pg-hdr-simple-end, 510-pg-hdr-ws-space-only)"
   "push-hdrkey-deny-new-spellings|case_push_hdrkey_deny_new_spellings|the dotted, TAB and blank-run remote, branch and includeIf header spellings git accepts -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-rest-off, 510-pg-hdr-canon-off, 510-pg-hdr-dotted-off, 510-pg-hdr-ws-space-only, 510-pg-hdr-dotted-scope)"
+  "push-hdrkey-deny-mixed-spellings|case_push_hdrkey_deny_mixed_spellings|a dotted section part followed by a quoted subsection (branch.v1 \"2\", remote.my \"fork\", alias.x \"y\") reads as git reads it, at depth 0 and in an include -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-rest-off, 510-pg-hdr-canon-off, 510-pg-hdr-mixed-off)"
+  "push-hdrkey-deny-confighdr-mixed-upper|case_push_hdrkey_deny_confighdr_mixed_upper|an uppercase letter in the dotted part of a mixed header denies with the fixed confighdr line -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-mixed-upper-off)"
+  "push-hdrkey-deny-bom|case_push_hdrkey_deny_bom|a UTF-8 byte-order mark before the first header of the repo config, an included file and the global config does not hide it -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-bom-off)"
   "push-hdrkey-deny-confighdr-chained|case_push_hdrkey_deny_confighdr_chained|a chained header denies with the fixed confighdr line, in the config, in an include, and for a feature push and a non-push command -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-simple-end, 510-pg-hdr-chain-off, 510-pg-hdr-reason)"
   "push-hdrkey-deny-confighdr-quote-shapes|case_push_hdrkey_deny_confighdr_quote_shapes|an escaped closing quote, a backslash-pair alias name, text before the closing bracket and junk before the quote deny with the fixed confighdr line -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-escape-off, 510-pg-hdr-after-quote-off, 510-pg-hdr-namepart-off)"
   "push-hdrkey-deny-confighdr-backslash|case_push_hdrkey_deny_confighdr_backslash|a backslash in a remote or branch subsection, also in an include, denies with the fixed confighdr line -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-backslash-off)"
   "push-hdrkey-deny-confighdr-dotted-upper|case_push_hdrkey_deny_confighdr_dotted_upper|an uppercase letter in a dotted remote subsection denies with the fixed confighdr line -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-dotted-off, 510-pg-hdr-dotted-upper-off)"
   "push-hdrkey-deny-never-executes|case_push_hdrkey_deny_never_executes|the confighdr deny runs nothing on a booby-trapped PATH and leaves the fixture tree byte-identical -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-simple-end, 510-pg-hdr-chain-off, 510-pg-hdr-reason)"
-  "push-hdrkey-noop-controls|case_push_hdrkey_noop_controls|no opinion: a same-line url, a commented key, a bracket inside a comment, a non-push alias, another destination, an explicit refspec, a dotted section for another remote and a subsection-less [remote] -- a control: no registry record fails it, it pins that the new reader does not over-deny"
+  "push-hdrkey-noop-controls|case_push_hdrkey_noop_controls|no opinion: a same-line url, a commented key, a bracket inside a comment, a non-push alias, another destination, an explicit refspec, a quoted remote name keeping its case, a dotted section for another remote and a subsection-less [remote] -- mutation proof for the quoted-case control: dev/mutants/hook-tests.json (510-pg-hdr-quoted-upper); the other shapes pin that the reader does not over-deny"
   "push-hdrkey-noop-escaped-name|case_push_hdrkey_noop_escaped_name|no opinion: a subsection name ending in a backslash pair with nothing after the closing bracket -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-escape-strict)"
   "push-pc-deny-eval|case_push_pc_deny_eval|eval deny: eval git push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
   "push-pc-deny-eval-quoted|case_push_pc_deny_eval_quoted|eval-quoted deny: eval 'git push origin main' -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"

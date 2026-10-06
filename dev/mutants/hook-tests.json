@@ -2329,6 +2329,7 @@
         "push-hdrkey-deny-alias-same-line",
         "push-hdrkey-deny-cap-length-header",
         "push-hdrkey-deny-in-included-file",
+        "push-hdrkey-deny-mixed-spellings",
         "push-hdrkey-deny-new-spellings",
         "push-hdrkey-deny-remote-name-chars",
         "push-hdrkey-deny-remote-same-line",
@@ -2492,6 +2493,7 @@
       ],
       "expect_fail": [
         "push-hdrkey-deny-in-included-file",
+        "push-hdrkey-deny-mixed-spellings",
         "push-hdrkey-deny-new-spellings"
       ]
     },
@@ -2589,6 +2591,66 @@
       "expect_fail": [
         "push-hdrkey-deny-confighdr-chained",
         "push-hdrkey-deny-never-executes"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-mixed-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "                    ?*) cfg_sub=\"$cfg_mix.$cfg_sub\" ;;",
+          "to": "                    ?*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-mixed-spellings"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-mixed-upper-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "*[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) deny_too_large confighdr ;;\n                    ?*)",
+          "to": "*[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) : ;;\n                    ?*)"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-confighdr-mixed-upper"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-quoted-upper",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "                  if [ \"$cfg_form\" = dotted ]; then",
+          "to": "                  if :; then"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-noop-controls"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-bom-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "cfgline=\"${cfgline#\"$cfg_bom\"}\"",
+          "to": ":"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-bom"
       ]
     },
     {

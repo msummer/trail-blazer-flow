@@ -450,7 +450,7 @@ git config file with a depth-0 line too long to analyse safely — see the resid
 for the mechanism and its own remaining limits.
 Since #510, a key written on the same line as its section header (`[remote "origin"] push =
 HEAD:main`, `[alias] p = push`) is read the way git reads it, and so are the dotted
-(`[remote.origin]`) and any-blank-run header spellings and a `#`, `;` or `]` inside a quoted
+(`[remote.origin]`), mixed (`[branch.v1 "2"]`) and any-blank-run header spellings, a leading UTF-8 byte-order mark, and a `#`, `;` or `]` inside a quoted
 subsection name; a section header line the hook cannot split the way git does (a chained header, or a
 backslash or uppercase letter git would read differently) denies with its own fixed reason — see
 `hooks/push-guard.sh`'s "Section headers and same-line keys (#510)" header section for the accepted

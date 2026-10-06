@@ -177,11 +177,17 @@
 # does: a `]`, `#` or `;` inside a quoted subsection stays part of its name (`[remote "a]b"]`,
 # `[remote "back#up"]`, `[alias "zq;p"]`), and only keys and values are truncated at a comment marker.
 # The section name is matched case-insensitively and may be followed by any run of blanks or TABs
-# before the quote, or written in the legacy dotted form (`[remote.origin]`, `[branch.featx]`);
-# `remote`, `branch` and `includeIf` headers are rewritten to the one canonical `[name "sub"]` text
-# the section arms accept, so a spelling git reads is never a different section here. `alias`
-# headers need no rewrite: every alias spelling already reads its keys under one name-independent key.
-# A dotted `includeIf` is never followed (git conditions need a colon). A header line this hook
+# before the quote, or written in the legacy dotted form (`[remote.origin]`, `[branch.featx]`), or in
+# the mixed form git also reads (`[branch.v1 "2"]` is the branch `v1.2`, `[remote.my "fork"]` the
+# remote `my.fork`); `remote` and `branch` headers, and a quoted `includeIf`, are rewritten to the one
+# canonical `[name "sub"]` text the section arms accept (the mixed form as `<dotted part>.<quoted
+# part>`), so these spellings read the same section the quoted form does. `alias` headers need no
+# rewrite: every alias spelling, the mixed `[alias.x "y"]` included, already reads its keys under one
+# name-independent key. A dotted or mixed `includeIf` is never followed (git conditions need a colon).
+# A UTF-8 byte-order mark at the start of a config file's first line is skipped, as git skips it: only
+# that first line of each file opened (depth 0, an include, the global config) is tested, by a
+# byte-literal parameter expansion, so a BOM can no longer hide the file's first header.
+# A header line this hook
 # cannot classify denies with the fixed text of `deny_too_large confighdr`, which echoes no input:
 #   - a chained header (`[core] [remote "origin"] push = HEAD:main`, or `[core] [user]`);
 #   - text after a quoted subsection's closing quote that is not the closing bracket
@@ -191,14 +197,18 @@
 #     "origin"]`, `[remote"origin"]`, which git itself refuses);
 #   - a backslash in a remote or branch subsection (git drops it, so `[remote "or\igin"]` is the
 #     remote `origin`, which this hook would read as another name);
-#   - an uppercase letter in a dotted remote or branch subsection (git lowercases it).
+#   - an uppercase letter in the dotted part of a remote or branch header, dotted or mixed (git
+#     lowercases it; a quoted subsection keeps its case, so `[remote "Upstream"]` reads normally).
 # The last two are real catches; the junk-before-the-quote shapes only deny a config git itself
 # refuses. Deliberate over-blocks: a chained header git accepts, in any file at any depth (an
 # `includeIf` target that would not match included), a push with an explicit refspec or a non-push git
-# command that reads such a file, and a remote or branch name holding a backslash (git refnames
-# cannot contain one). Cost: a fixed number of parameter expansions per header line, run after the
-# depth-0 line cap, the depth >= 1 budgets and the length skip, inside the per-line `check_deadline()`
-# sample, with no loop and no budget of its own; a line still makes at most three `cfg_trim()` calls.
+# command that reads such a file, a remote or branch name holding a backslash (git refnames cannot
+# contain one), and any section whose quoted name ends in an escaped backslash and is followed by a
+# same-line key (`[core "x\\"] foo = bar`, which git reads). Cost: a fixed number of parameter
+# expansions per header line, linear in the number of lines, run after the depth-0 line cap, the
+# depth >= 1 budgets and the length skip, with no loop and no budget of its own and at most three
+# `cfg_trim()` calls per line. A header line with a same-line key costs more than a key line of the
+# same length; the per-line `check_deadline()` sample bounds the total, and the deadline fails closed.
 #
 # Since #269, a push segment carrying exactly one DETACHED `-C <path>` token (not the attached
 # `-C<path>` form, and not a segment with a second `-C`) whose value satisfies the PATH_ERE
@@ -1752,6 +1762,10 @@ nl=$'\n'
 # producing that mutant's documented, measured result. File scope (not per candidate file), since
 # it is a fixed literal independent of which candidate is being parsed.
 cfg_cr=$'\r'
+# #510: the three bytes of a UTF-8 byte-order mark, written as octal escapes so the match is byte-literal
+# whatever the locale. git skips one at the start of a config file; cfg_parse_file() strips it from the
+# first line of each file it opens.
+cfg_bom=$'\357\273\277'
 
 # cfg_parse_file PATH LABEL DEPTH (#304/#305) — parses one config file inline, recursively
 # following `include`/`includeIf` directives found in its own content (conditions ignored — the
@@ -1838,7 +1852,8 @@ cfg_parse_file() {
 
   local cfg_section="" cfg_subsection="" cfgline cfg_h cfg_s cfg_key cfg_val
   local inc_resolved inc_childlabel
-  local cfg_raw cfg_rest cfg_hdr cfg_pre cfg_q cfg_nm cfg_after cfg_np cfg_name cfg_ws cfg_sub cfg_lead cfg_form
+  local cfg_raw cfg_rest cfg_hdr cfg_pre cfg_q cfg_nm cfg_after cfg_np cfg_name cfg_ws cfg_sub cfg_lead cfg_form cfg_mix
+  local cfg_first=1
   while IFS= read -r cfgline || [ -n "$cfgline" ]; do
     check_deadline
     # Three depth->=1-only budgets, checked here, in this order, before comment-strip or trim ever
@@ -1879,6 +1894,9 @@ cfg_parse_file() {
     # cfg_trim()'s own pattern matching is not uniformly fast for a long line or whitespace run.
     [ "$depth" -ge 1 ] || [ "${#cfgline}" -le "$CFG_TOPLEVEL_MAX_LINE_CHARS" ] || deny_too_large configline
     cfgline="${cfgline//$cfg_cr/}"
+    # #510: a UTF-8 BOM on the file's first line is skipped, as git skips it; only that first line of
+    # each file this call opens, so no later line is ever scanned for it.
+    if [ "$cfg_first" = 1 ]; then cfg_first=0; cfgline="${cfgline#"$cfg_bom"}"; fi
     cfg_raw="$cfgline"
     # Strip a trailing comment: whichever of '#'/';' appears first, with no quote-tracking -- git
     # ref names MAY legitimately contain '#' or ';' (e.g. refs/heads/feat#123 and
@@ -1908,6 +1926,7 @@ cfg_parse_file() {
         cfg_pre="${cfgline%%\]*}"
         cfg_name=""
         cfg_sub=""
+        cfg_mix=""
         cfg_form=none
         if [ "$cfg_pre" != "$cfgline" ]; then
           case "$cfg_pre" in
@@ -1937,6 +1956,9 @@ cfg_parse_file() {
                 cfg_rest="${cfg_after#\]}"
                 cfg_sub="$cfg_nm"
                 cfg_form=quoted
+                case "$cfg_name" in
+                  ?*.?*) cfg_mix="${cfg_name#*.}"; cfg_name="${cfg_name%%.*}" ;;
+                esac
               fi
               ;;
             *)
@@ -1959,7 +1981,7 @@ cfg_parse_file() {
             quoted|dotted)
               case "$cfg_name" in
                 [Rr][Ee][Mm][Oo][Tt][Ee]|[Bb][Rr][Aa][Nn][Cc][Hh])
-                  case "$cfg_sub" in
+                  case "$cfg_mix$cfg_sub" in
                     *\\*) deny_too_large confighdr ;;
                   esac
                   if [ "$cfg_form" = dotted ]; then
@@ -1967,10 +1989,14 @@ cfg_parse_file() {
                       *[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) deny_too_large confighdr ;;
                     esac
                   fi
+                  case "$cfg_mix" in
+                    *[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) deny_too_large confighdr ;;
+                    ?*) cfg_sub="$cfg_mix.$cfg_sub" ;;
+                  esac
                   cfgline="[$cfg_name \"$cfg_sub\"]"
                   ;;
                 [Ii][Nn][Cc][Ll][Uu][Dd][Ee][Ii][Ff])
-                  if [ "$cfg_form" = quoted ]; then cfgline="[$cfg_name \"$cfg_sub\"]"; fi
+                  if [ "$cfg_form" = quoted ] && [ -z "$cfg_mix" ]; then cfgline="[$cfg_name \"$cfg_sub\"]"; fi
                   ;;
               esac
               ;;
@@ -2060,9 +2086,10 @@ cfg_parse_file() {
             # `push =` value containing a literal TAB byte is unusual but not impossible (this
             # config parser never rejects one), and a bounded middle field would let such a value
             # truncate at the embedded TAB and leak its own remainder into config_deny()'s
-            # source-label field. cfg_subsection (the remote name) is read from a quoted section
-            # header, never a value that could itself carry a raw TAB in any fixture this file
-            # constructs.
+            # source-label field. cfg_subsection (the remote name) is read from a section header
+            # (a quoted, dotted or mixed spelling, rewritten to the canonical text above), never from
+            # a value; a raw TAB inside a quoted name is possible but no fixture this file constructs
+            # carries one.
             cfg_push_lines="${cfg_push_lines}${label}${cfg_tab}${cfg_subsection}${cfg_tab}${cfg_val}"$'\n'
             ;;
         esac
