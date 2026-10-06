@@ -455,19 +455,21 @@ denies, fail-closed, when the path cannot be classified as absolute (`/…` or `
 free of a `..` segment, or when an apply_patch (or apply_patch-shaped Bash) command cannot be
 parsed at all (an absent command, an unrecognised `*** ` marker, an empty header path, or zero
 headers found), or (#457) when its own analysis cannot finish inside a 5-second budget sampled
-from hook start, or, for a Bash call, when any single physical line of the command is longer than
-`CDG_LINE_MAX_CHARS` characters (a fixed "too large to analyse" reason, implementer and verifier
-only; the per-line cap exists because bash 3.2's text substitutions on a long or match-dense line
-cannot be sampled against the budget, so they run one line at a time and many lines are bounded by
-the deadline instead — a command of any total size made of ordinary-length lines is not capped by
-length; a legitimate Bash call with one over-cap line that passes the hook's fast path denies, and
-the remedy is to break the line (for a patch, to split it into smaller patches); the same cap applies
-to Codex's native `apply_patch` tool call, whose patch text is processed line by line the same way,
-and a legitimately large shell-issued patch can approach the 5-second budget on a loaded host and
-deny fail-closed too — split it. A single path (an `Edit`/`Write` `file_path`, or a patch header path joined to `cwd`) and the
-stdin `cwd` field are held to the same per-line cap, since their whole-string substitutions are
-superlinear under bash 3.2 too; no real path is that long. See the hook's own "Analysis deadline (#457)" header section for the
-mechanism, the two test-only knobs, and the residuals); a case that matches more than one class resolves to the most specific message. For
+from hook start, or when a text-size cap trips (a fixed "too large to analyse" reason, implementer
+and verifier only). The caps exist because bash 3.2's text substitutions on a long or match-dense
+line, and a very large whole-text split, cannot be sampled against the budget: a Bash call with any
+physical line longer than `CDG_LINE_MAX_CHARS` characters denies; a native `apply_patch` call denies
+for a line over that cap only when the line holds a CR or a `*** ` patch-grammar marker (an ordinary
+long content line is not capped there); either route denies a whole text longer than
+`CDG_TEXT_MAX_CHARS`; and a single path (an `Edit`/`Write` `file_path`, or a patch header path joined
+to `cwd`) or the stdin `cwd` field longer than `CDG_LINE_MAX_CHARS` denies. Many ordinary lines are
+bounded by the deadline instead of by size, so a command or patch made of ordinary-length lines is
+not capped by length short of `CDG_TEXT_MAX_CHARS`. The remedies are all to send less per call:
+break the over-long line, split a large patch into smaller patches, or use Codex's native
+`apply_patch` tool for a patch with a long content line; a legitimately large shell-issued patch
+(many ordinary lines, each costing a forked `trim`) can also approach the 5-second budget on a
+loaded host under bash 3.2 and deny fail-closed, and the same remedies apply. See the hook's own
+"Analysis deadline (#457)" and "Size caps (#457)" header sections for the mechanism, the two test-only knobs, and the residuals); a case that matches more than one class resolves to the most specific message. For
 a plain Bash call, whenever `apply_patch`/`applypatch` (bare, or a path-qualified spelling such as
 `./apply_patch`, matched by basename) resolves as the command word of any `;`/`&`/`|`/`(`/`)`/`{`/
 `}`/backtick-delimited segment — skipping a leading redirect's own target/source and a bare-digits
@@ -546,7 +548,7 @@ agent, `permission_mode: "plan"`, a tool other than `Edit`/`Write`/`apply_patch`
 stdin, an absent or empty `file_path`/command, an ordinary Bash call that neither carries an inline
 patch nor invokes the shim as its command word, has no line with an unbalanced quote or
 trailing backslash that also mentions the shim (the #455 rules above), and is small enough to
-analyse inside the budget and per-line cap (#457), or an ordinary absolute path outside any
+analyse inside the budget and the size caps (#457), or an ordinary absolute path outside any
 `.claude`/`.codex` segment — is "no opinion" (exit 0, empty stdout, empty stderr), including two
 release-blocker controls: the orchestrator's own main-session `.claude/LESSONS.md` append still
 works, and so does the verifier's own transient mutation-probe `Edit` of a tracked source file.

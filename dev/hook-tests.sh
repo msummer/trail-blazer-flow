@@ -6677,6 +6677,14 @@ case_cdg_dbq_never_executes() {
 # mutant:457-cdg-dl-cwd-cap-off — the apply_patch route's cwd length check becomes a no-op, so a
 #   200000-CR cwd reaches the whole-string substitutions.
 # mutant:457-cdg-dl-cwd-cap-bash-off — the same for the Bash route's inline-patch cwd check.
+# mutant:457-cdg-dl-text-cap-off — the whole-text size check becomes a no-op, so an over-cap native
+#   patch reaches the split instead of denying.
+# mutant:457-cdg-dl-text-cap-offbyone — the whole-text comparison becomes strict, so a text of
+#   exactly the cap denies.
+# mutant:457-cdg-dl-native-cr-uncapped — the native route stops line-capping a CR-bearing line.
+# mutant:457-cdg-dl-bash-cr-strip-off — the Bash route keeps its unstripped command text.
+# mutant:457-cdg-dl-path-cap-offbyone — classify_path's comparison becomes strict, so a path of
+#   exactly the cap denies.
 # mutant:457-cdg-dl-patch-prepare-off — the apply_patch route stops running cdg_prepare_text, so an
 #   over-cap patch line reaches the whole-text work instead of denying at the cap.
 # mutant:457-cdg-dl-iapw-line-site — is_apply_patch_word's per-line loop loses its sample.
@@ -6719,18 +6727,15 @@ case_cdg_dl_never_executes() {
 cdg_dl_line_cap() {
   sed -n 's/^CDG_LINE_MAX_CHARS="\([0-9][0-9]*\)"$/\1/p' "$claude_dir_guard"
 }
+# cdg_dl_text_cap — the CDG_TEXT_MAX_CHARS value, extracted from the hook's own vocabulary line.
+cdg_dl_text_cap() {
+  sed -n 's/^CDG_TEXT_MAX_CHARS="\([0-9][0-9]*\)"$/\1/p' "$claude_dir_guard"
+}
 # cdg_dl_pad_cmd LEN — a benign one-line command of exactly LEN characters.
 cdg_dl_pad_cmd() {
   local len="$1" cmd="echo apply_patch"
   while [ "${#cmd}" -lt "$len" ]; do cmd="${cmd} a"; done
   printf '%s' "${cmd:0:$len}"
-}
-# cdg_dl_dense_line N — one line of at most N characters packed with every character the hook's
-# per-line substitutions replace.
-cdg_dl_dense_line() {
-  local n="$1" line=""
-  while [ "${#line}" -le $((n - 16)) ]; do line="${line}<>;{}|&(\`>&<&>|"; done
-  printf '%s' "$line"
 }
 case_cdg_dl_deny_line_400k() {
   # The 400KB whitespace-plus-`<` single-line command that used to outlast the hook timeout inside
@@ -6805,14 +6810,14 @@ case_cdg_dl_deny_path_cr() {
   local crs
   crs="$(printf '\r%.0s' $(seq 1 200000))"
   cdg_deadline_override=15
-  run_claude_guard "$(jq -n --arg p "/repo/a${crs}" '{tool_name: "Edit", agent_type: "implementer", tool_input: {file_path: $p}}')"
+  run_claude_guard "$(printf '%s' "/repo/a${crs}" | jq -Rs '{tool_name: "Edit", agent_type: "implementer", tool_input: {file_path: .}}')"
   expect_cdg_deny_too_large implementer Edit
 }
 case_cdg_dl_deny_cwd_cr() {
   local crs
   crs="$(printf '\r%.0s' $(seq 1 200000))"
   cdg_deadline_override=15
-  run_claude_guard "$(printf '%s' "$CDG_P" | jq -Rs --arg c "/repo${crs}" '{tool_name: "apply_patch", agent_type: "implementer", cwd: $c, tool_input: {command: .}}')"
+  run_claude_guard "$(printf '%s' "/repo${crs}" | jq -Rs --arg p "$CDG_P" '{tool_name: "apply_patch", agent_type: "implementer", cwd: ., tool_input: {command: $p}}')"
   expect_cdg_deny_too_large implementer apply_patch
 }
 case_cdg_dl_deny_cwd_cr_bash() {
@@ -6820,7 +6825,7 @@ case_cdg_dl_deny_cwd_cr_bash() {
   crs="$(printf '\r%.0s' $(seq 1 200000))"
   cmd="apply_patch <<'EOF'${LF}${CDG_P}${LF}EOF"
   cdg_deadline_override=15
-  run_claude_guard "$(printf '%s' "$cmd" | jq -Rs --arg c "/repo${crs}" '{tool_name: "Bash", agent_type: "implementer", cwd: $c, tool_input: {command: .}}')"
+  run_claude_guard "$(printf '%s' "/repo${crs}" | jq -Rs --arg p "$cmd" '{tool_name: "Bash", agent_type: "implementer", cwd: ., tool_input: {command: $p}}')"
   expect_cdg_deny_too_large implementer Bash
 }
 case_cdg_dl_noop_patch_cr_many() {
@@ -6834,20 +6839,81 @@ case_cdg_dl_noop_patch_cr_many() {
   run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
   expect_cdg_no_opinion
 }
-case_cdg_dl_deny_production_budget_lines() {
-  # The production deadline through the Bash walk's own line loop: 200 lines, each just under the
-  # per-line cap and packed with substituted characters, so each line alone costs a large slice of
-  # the 5s budget and the 200 together cost far more. The deadline sample before each line denies
-  # once the budget is spent. Budget knob 99 must be ignored (the knob only lowers); the run sits
-  # under a 15s active deadline.
-  local dense cmd i
-  dense="$(cdg_dl_dense_line 1900)"
-  cmd="echo apply_patch"
-  for i in $(seq 1 200); do cmd="${cmd}${LF}${dense}"; done
+case_cdg_dl_deny_production_budget() {
+  # The production deadline, deterministically on any host and bash: a native apply_patch whose one
+  # CR-free content line is 500000 spaces (under the whole-text cap, and not line-capped on this
+  # route), which ltrim's strip loop eats one character at a time -- quadratic in the run, so far
+  # past the 5s budget on any host. The deadline sample inside that loop denies once the budget is
+  # spent. Budget knob 99 must be ignored (the knob only lowers); the run sits under a 15s active
+  # deadline. The payload reaches jq on stdin, never as a --arg.
+  local sp patch
+  sp="$(printf ' %.0s' $(seq 1 500000))"
+  patch="*** Begin Patch${LF}*** Add File: /repo/a${LF}${sp}${LF}*** End Patch"
   cdg_budget_override=99
   cdg_deadline_override=15
-  run_claude_guard "$(printf '%s' "$cmd" | mk_cdg_dl_bash implementer '')"
-  expect_cdg_deny_too_large implementer Bash
+  run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
+  expect_cdg_deny_too_large implementer apply_patch
+}
+case_cdg_dl_noop_native_long_line() {
+  # A native patch whose CR-free content line is 3700 characters (longer than the line cap) adding
+  # a benign path: an ordinary long line is not capped on the native route -- no opinion.
+  local x patch
+  x="$(printf 'x%.0s' $(seq 1 3700))"
+  patch="*** Begin Patch${LF}*** Add File: /repo/a${LF}+${x}${LF}*** End Patch"
+  run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
+  expect_cdg_no_opinion
+}
+case_cdg_dl_deny_text_over_cap() {
+  # A native patch of CR-free ordinary content whose WHOLE text is one character over the whole-text
+  # cap: denies before any split, inside a 15s active deadline. (The one long line is not line-capped
+  # on this route, so only the whole-text cap can fire.)
+  local cap x patch
+  cap="$(cdg_dl_text_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_TEXT_MAX_CHARS from the hook\n"; return; fi
+  patch="*** Begin Patch${LF}*** Add File: /repo/a${LF}+"
+  x="$(printf 'x%.0s' $(seq 1 $((cap - ${#patch} - 14 + 1))))"
+  patch="${patch}${x}${LF}*** End Patch"
+  [ "${#patch}" -eq $((cap + 1)) ] || { __ok=0; __why="${__why}fixture bug: text is ${#patch} chars, wanted $((cap + 1))\n"; return; }
+  cdg_deadline_override=15
+  run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
+  expect_cdg_deny_too_large implementer apply_patch
+}
+case_cdg_dl_noop_text_at_cap() {
+  local cap x patch
+  cap="$(cdg_dl_text_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_TEXT_MAX_CHARS from the hook\n"; return; fi
+  patch="*** Begin Patch${LF}*** Add File: /repo/a${LF}+"
+  x="$(printf 'x%.0s' $(seq 1 $((cap - ${#patch} - 14))))"
+  patch="${patch}${x}${LF}*** End Patch"
+  [ "${#patch}" -eq "$cap" ] || { __ok=0; __why="${__why}fixture bug: text is ${#patch} chars, wanted $cap\n"; return; }
+  cdg_deadline_override=15
+  run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
+  expect_cdg_no_opinion
+}
+case_cdg_dl_deny_bash_cr_word() {
+  # A CR glued to the shim word (`apply_patch<CR> < x.patch`): only the Bash route's CR strip lets
+  # the walk recognise the command word, after which the no-inline-patch deny fires. Losing the
+  # strip leaves a token the walk does not recognise, so the call would pass.
+  run_claude_guard "$(printf 'apply_patch\r < x.patch' | mk_cdg_dl_bash implementer '')"
+  expect_cdg_deny_unparseable
+}
+case_cdg_dl_noop_path_at_cap() {
+  local cap p
+  cap="$(cdg_dl_line_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_LINE_MAX_CHARS from the hook\n"; return; fi
+  p="/repo/$(printf 'a%.0s' $(seq 1 $((cap - 6))))"
+  [ "${#p}" -eq "$cap" ] || { __ok=0; __why="${__why}fixture bug: path is ${#p} chars, wanted $cap\n"; return; }
+  run_claude_guard "$(mk_cdg_agent_path implementer Edit "$p")"
+  expect_cdg_no_opinion
+}
+case_cdg_dl_deny_path_just_over_cap() {
+  local cap p
+  cap="$(cdg_dl_line_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_LINE_MAX_CHARS from the hook\n"; return; fi
+  p="/repo/$(printf 'a%.0s' $(seq 1 $((cap - 5))))"
+  [ "${#p}" -eq $((cap + 1)) ] || { __ok=0; __why="${__why}fixture bug: path is ${#p} chars, wanted $((cap + 1))\n"; return; }
+  run_claude_guard "$(mk_cdg_agent_path implementer Edit "$p")"
+  expect_cdg_deny_too_large implementer Edit
 }
 case_cdg_dl_noop_budget_zero_edit() {
   cdg_budget_override=0
@@ -7182,8 +7248,10 @@ case_cdg_qa_never_executes() {
   [ ! -e "$cdg_sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
 }
 case_cdg_qa_noop_flood_timing() {
-  # Hundreds of balanced quoted tokens before the resolved word, on one physical line (which must
-  # stay under CDG_LINE_MAX_CHARS, #457): the parity pass must stay linear.
+  # Many balanced quoted tokens before the resolved word, on one physical line (which must stay
+  # under CDG_LINE_MAX_CHARS, #457): pins that balanced quotes never trip the parity check and the
+  # shim word is still found past them (no opinion for a non-shim resolved word). It no longer
+  # pins linearity: the line is too short for that, which the cdg-dl-cap-qpc sample fixture covers.
   local flood payload
   flood="$(printf "'env' %.0s" $(seq 1 250))"
   payload="$(printf '%s' "${flood}x apply_patch" \
@@ -9119,7 +9187,13 @@ cases=(
   "cdg-dl-deny-cwd-cr|case_cdg_dl_deny_cwd_cr|deny (#457): an apply_patch whose cwd is 200000 CRs -- over the per-line cap, exact too-large line under a 15s active deadline"
   "cdg-dl-deny-cwd-cr-bash|case_cdg_dl_deny_cwd_cr_bash|deny (#457): a Bash inline-patch call whose cwd is 200000 CRs -- over the per-line cap, exact too-large line under a 15s active deadline"
   "cdg-dl-noop-patch-cr-many|case_cdg_dl_noop_patch_cr_many|no opinion (#457): a 250-line native apply_patch with a CR on every line adding a benign path -- CRs stripped per line, same verdict as before, inside a 15s active deadline"
-  "cdg-dl-deny-production-budget-lines|case_cdg_dl_deny_production_budget_lines|wall-clock proof (#457): 200 near-cap lines packed with substituted characters, budget knob 99 ignored -- the per-line deadline sample denies, exact too-large line under a 15s active deadline"
+  "cdg-dl-deny-production-budget|case_cdg_dl_deny_production_budget|wall-clock proof (#457): a native apply_patch with a 500000-space CR-free content line, budget knob 99 ignored -- ltrim's sampled loop denies, exact too-large line under a 15s active deadline"
+  "cdg-dl-noop-native-long-line|case_cdg_dl_noop_native_long_line|no opinion (#457): a native apply_patch with a 3700-character CR-free content line adding a benign path -- an ordinary long line is not capped on the native route"
+  "cdg-dl-deny-text-over-cap|case_cdg_dl_deny_text_over_cap|deny (#457): a native apply_patch whose whole text is one character over the whole-text cap -- exact too-large line before any split, under a 15s active deadline"
+  "cdg-dl-noop-text-at-cap|case_cdg_dl_noop_text_at_cap|no opinion (#457): a native apply_patch whose whole text is exactly the whole-text cap -- the cap is an upper bound, not a strict one"
+  "cdg-dl-deny-bash-cr-word|case_cdg_dl_deny_bash_cr_word|deny (#457): apply_patch followed by a CR as the command word -- only the Bash route's CR strip lets the walk see the shim, so the no-inline-patch deny fires"
+  "cdg-dl-noop-path-at-cap|case_cdg_dl_noop_path_at_cap|no opinion (#457): an Edit of a benign path of exactly the per-line cap's length -- the path cap is an upper bound, not a strict one"
+  "cdg-dl-deny-path-just-over-cap|case_cdg_dl_deny_path_just_over_cap|deny (#457): an Edit of a benign path one character over the per-line cap -- exact too-large line"
   "cdg-dl-noop-budget-zero-edit|case_cdg_dl_noop_budget_zero_edit|no opinion (#457): implementer Edit of a benign path under budget 0 and cap 1 -- the Edit/Write route has no sampled loop"
   "cdg-dl-noop-main-session|case_cdg_dl_noop_main_session|no opinion (#457): main session under budget 0 and cap 1 -- fast path 1 excludes it before any sample (contract pin, no mutant)"
   "cdg-dl-noop-other-agent|case_cdg_dl_noop_other_agent|no opinion (#457): Explore agent under budget 0 and cap 1 -- no sample site precedes the role exit"
@@ -9131,7 +9205,7 @@ cases=(
   "cdg-dl-cap-lines|case_cdg_dl_cap_lines|deny (#457): 100 semicolon-only lines under cap 250 -- only the three per-line loops together (prepass, per-line segment builder, begin-patch scan) sample that many times"
   "cdg-dl-cap-qpc|case_cdg_dl_cap_qpc|deny (#457): 100 prefix words before the resolved word in a quoted shim-mentioning segment under cap 150 -- only the walk plus the parity pass sample that many times"
   "cdg-dl-cap-scan-shim|case_cdg_dl_cap_scan_shim|deny (#457): a heredoc shim with 100 output redirects under cap 270 -- only the input scan's two loops together sample that many times"
-  "cdg-dl-cap-ph|case_cdg_dl_cap_ph|deny (#457): an apply_patch with 100 content lines under cap 50 -- only parse_patch_headers' line loop samples that many times"
+  "cdg-dl-cap-ph|case_cdg_dl_cap_ph|deny (#457): an apply_patch with 100 content lines under cap 150 -- only parse_patch_headers' line loop samples that many times"
   "cdg-dl-cap-ltrim|case_cdg_dl_cap_ltrim|deny (#457): a header indented by 100 spaces under cap 50 -- only ltrim's strip loop, in its command substitution, samples that many times"
   "cdg-dl-cap-trim-header|case_cdg_dl_cap_trim_header|deny (#457): a header with 100 trailing spaces under cap 50 -- only trim's trailing loop samples that many times"
   "cdg-dl-cap-trim-nested|case_cdg_dl_cap_trim_nested|deny (#457): a header path with 100 leading spaces under cap 50 -- only the ltrim nested inside trim samples that many times"

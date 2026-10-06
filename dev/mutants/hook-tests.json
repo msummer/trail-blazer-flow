@@ -4343,7 +4343,7 @@
       "expect_fail": [
         "cdg-dl-deny-budget-zero",
         "cdg-dl-deny-budget-zero-patch",
-        "cdg-dl-deny-production-budget-lines",
+        "cdg-dl-deny-production-budget",
         "cdg-dl-never-executes"
       ]
     },
@@ -4359,7 +4359,7 @@
         }
       ],
       "expect_fail": [
-        "cdg-dl-deny-production-budget-lines"
+        "cdg-dl-deny-production-budget"
       ]
     },
     {
@@ -4616,7 +4616,7 @@
       "filter": "cdg-dl-",
       "edits": [
         {
-          "from": "    [ \"${#ln}\" -le \"$CDG_LINE_MAX_CHARS\" ] || deny_too_large\n",
+          "from": "    [ \"${#ln}\" -le \"$lmax\" ] || deny_too_large\n",
           "to": "    :\n"
         }
       ],
@@ -4633,8 +4633,8 @@
       "filter": "cdg-dl-",
       "edits": [
         {
-          "from": "[ \"${#ln}\" -le \"$CDG_LINE_MAX_CHARS\" ]",
-          "to": "[ \"${#ln}\" -lt \"$CDG_LINE_MAX_CHARS\" ]"
+          "from": "[ \"${#ln}\" -le \"$lmax\" ]",
+          "to": "[ \"${#ln}\" -lt \"$lmax\" ]"
         }
       ],
       "expect_fail": [
@@ -4663,8 +4663,8 @@
       "filter": "cdg-dl-cap-",
       "edits": [
         {
-          "from": "  for ln in $text; do\n    check_deadline\n    [ \"${#ln}\"",
-          "to": "  for ln in $text; do\n    [ \"${#ln}\""
+          "from": "  for ln in $text; do\n    check_deadline\n    lmax=",
+          "to": "  for ln in $text; do\n    lmax="
         }
       ],
       "expect_fail": [
@@ -4739,13 +4739,14 @@
       "filter": "cdg-dl-",
       "edits": [
         {
-          "from": "  cdg_prepare_text \"$patch_cmd\"\n  patch=\"$cdg_text\"\n",
+          "from": "  cdg_prepare_text \"$patch_cmd\" native\n  patch=\"$cdg_text\"\n",
           "to": "  patch=\"$patch_cmd\"\n"
         }
       ],
       "expect_fail": [
         "cdg-dl-cap-ph",
         "cdg-dl-deny-patch-cr-line",
+        "cdg-dl-deny-text-over-cap",
         "cdg-dl-noop-patch-cr-many"
       ]
     },
@@ -4761,7 +4762,8 @@
         }
       ],
       "expect_fail": [
-        "cdg-dl-deny-path-cr"
+        "cdg-dl-deny-path-cr",
+        "cdg-dl-deny-path-just-over-cap"
       ]
     },
     {
@@ -4792,6 +4794,81 @@
       ],
       "expect_fail": [
         "cdg-dl-deny-cwd-cr-bash"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-text-cap-off",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-",
+      "edits": [
+        {
+          "from": "  [ \"${#text}\" -le \"$CDG_TEXT_MAX_CHARS\" ] || deny_too_large\n",
+          "to": "  :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-deny-text-over-cap"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-text-cap-offbyone",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-",
+      "edits": [
+        {
+          "from": "[ \"${#text}\" -le \"$CDG_TEXT_MAX_CHARS\" ]",
+          "to": "[ \"${#text}\" -lt \"$CDG_TEXT_MAX_CHARS\" ]"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-noop-text-at-cap"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-native-cr-uncapped",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-",
+      "edits": [
+        {
+          "from": "        *\"$cr\"*|*\"*** \"*) ;;\n",
+          "to": "        *\"*** \"*) ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-deny-patch-cr-line"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-bash-cr-strip-off",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-",
+      "edits": [
+        {
+          "from": "  bash_cmd=\"$cdg_text\"\n",
+          "to": "  :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-deny-bash-cr-word"
+      ]
+    },
+    {
+      "name": "457-cdg-dl-path-cap-offbyone",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-dl-",
+      "edits": [
+        {
+          "from": "[ \"${#raw}\" -le \"$CDG_LINE_MAX_CHARS\" ]",
+          "to": "[ \"${#raw}\" -lt \"$CDG_LINE_MAX_CHARS\" ]"
+        }
+      ],
+      "expect_fail": [
+        "cdg-dl-noop-path-at-cap"
       ]
     }
   ]

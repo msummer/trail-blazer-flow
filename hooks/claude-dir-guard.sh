@@ -24,7 +24,8 @@
 # patch also appears elsewhere in the command (a decoy), OR (Bash only, #455/#456) when an
 # unbalanced quote or a trailing backslash precedes a command word the walk resolved in a segment
 # that mentions the shim, OR (#457) when the call is too large for this hook's own analysis to
-# finish inside its analysis budget (see "Analysis deadline (#457)" below); every other case — main session (no agent_type), any other agent, `permission_mode: "plan"`, a tool
+# finish inside its analysis budget, or a Bash command / patch line, a path, or the `cwd` field
+# exceeds a size cap (see "Analysis deadline (#457)" and "Size caps (#457)" below); every other case — main session (no agent_type), any other agent, `permission_mode: "plan"`, a tool
 # other than Edit/Write/apply_patch/Bash, malformed stdin, an absent/empty file_path/command, an
 # ordinary Bash call that neither carries an inline patch nor invokes the shim as its command word
 # (`apply_patch`/`applypatch` appearing only as an ordinary argument gets no opinion; the walk
@@ -217,72 +218,74 @@
 # Analysis deadline (#457). This hook's own analysis (everything after the role and plan-mode exits)
 # is bounded by a whole-second wall-clock budget, `CDG_ANALYSIS_BUDGET_SECS` (5s in production),
 # sampled from `$SECONDS` as an elapsed difference from `cdg_t0` (captured right after `set -uo
-# pipefail`): `check_deadline()` denies with one fixed "too large to analyse" reason
+# pipefail`): `check_deadline` denies with one fixed "too large to analyse" reason
 # (`deny_too_large`, fail-closed, naming only the resolved role and tool) the first time `$SECONDS`
 # reaches `cdg_deadline` (`cdg_t0 + cdg_budget`) -- never by resetting `$SECONDS`. Without it a long
-# run of prefix words ahead of the shim (`env env ... env apply_patch < x.patch`, 100000 tokens)
-# kept the walk busy for about as long as Claude Code's own 10s hook timeout, and a timed-out
-# PreToolUse hook gives no deny, so the shim ran unguarded. The sampling rule this binds on every
-# future addition to this file (`check_deadline` is an alias, defined before every function body
-# that uses it is parsed -- see its definition for why): call `check_deadline` as the FIRST statement of every loop whose
-# trip count grows with the input (today: is_apply_patch_word's segment loop and its `]]` pass,
-# walk_window's outer loop and redirect-run loop, has_exact_begin_patch_line's and
-# parse_patch_headers' line loops, and the whitespace-strip loops in ltrim/trim, which sample only
-# when there is whitespace left to strip), and every `$(...)` call to a helper that samples
-# (`ltrim`/`trim`) must propagate a deny back to its parent with `[ "$?" -eq 0 ] || exit 2` --
-# a deny raised inside a command substitution only exits that subshell. Every sample site is
-# reachable only AFTER the role and plan-mode exits, so the deadline's deny reaches the implementer
-# and verifier only; the main session, any other agent, and plan mode always get no opinion
-# (unlike hooks/push-guard.sh, which has no role scoping and denies in every session). Two
-# test-only knobs are read from the ENVIRONMENT only (never from the stdin JSON) and can only make
-# the hook deny sooner, never later: `TBF_CLAUDE_DIR_GUARD_BUDGET_SECS` lowers the budget (adopted
-# only when exactly one or two ASCII digits and strictly less than the production budget; any other
-# value is ignored), and `TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP` denies once that many samples have been
-# taken (adopted only when 1-4 digits with no leading zero; anything else means off), which lets a
-# fixture pin one sample site independent of host speed -- a whole-second time budget cannot, since
-# the second boundary can land during work done before that site. Worst-case wall clock for the
-# whole hook, stated here for review: at most `max(cdg_budget, T_prefix(L)) + U_max`, where
-# `T_prefix` is the prefix this deadline cannot sample around -- `cat`, the fast-path globs, up to
-# five `jq` calls, the CR strip, is_apply_patch_word's text substitutions and its `flat` build, and
-# the raw-text `.claude`/`.codex` glob -- and `U_max` is the largest single step the deadline cannot
-# interrupt: one segment's `toks=($seg)` word-split, one `"${toks[@]}"` expansion, one walk_window
-# iteration (plus any per-index cost bash 3.2's arrays add), one forked `trim`/`ltrim` call up to its
-# first in-subshell sample, or one classify_path.
+# run of prefix words ahead of the shim (`env env ... env apply_patch < x.patch`) kept the walk busy
+# for about as long as Claude Code's own 10s hook timeout, and a timed-out PreToolUse hook gives no
+# deny, so the shim ran unguarded. The sampling rule this binds on every future addition to this
+# file (`check_deadline` is an alias, defined before every function body that uses it is parsed --
+# see its definition for why): call `check_deadline` as the FIRST statement of EVERY loop whose trip
+# count grows with the input -- grep this file for `check_deadline` for the current list rather than
+# trusting an enumeration here -- and every `$(...)` call to a helper that samples (`ltrim`/`trim`)
+# must propagate a deny back to its parent with `[ "$?" -eq 0 ] || exit 2`, since a deny raised
+# inside a command substitution only exits that subshell. Every sample site is reachable only AFTER
+# the role and plan-mode exits, so the deadline's deny reaches the implementer and verifier only; the
+# main session, any other agent, and plan mode always get no opinion (unlike hooks/push-guard.sh,
+# which has no role scoping and denies in every session). Two test-only knobs are read from the
+# ENVIRONMENT only (never from the stdin JSON) and can only make the hook deny sooner, never later:
+# `TBF_CLAUDE_DIR_GUARD_BUDGET_SECS` lowers the budget (adopted only when exactly one or two ASCII
+# digits and strictly less than the production budget; any other value is ignored), and
+# `TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP` denies once that many samples have been taken (adopted only when
+# 1-4 digits with no leading zero; anything else means off), which lets a fixture pin one sample site
+# independent of host speed -- a whole-second time budget cannot, since the second boundary can land
+# during work done before that site.
 #
-# Per-line size cap (#457). Under Apple's bash 3.2 a command's or patch's `T_prefix` was NOT linear:
-# the CR strip and every `${text//pat/repl}` substitution in is_apply_patch_word cost superlinear
-# time once the text held many matches (measured: a few thousand `<`, `>`, `;`, `&`, `|`, `(`, `)`,
-# `{`, `}`, backtick, `>&`, `<&` or `>|` characters take seconds, growing roughly with the cube of
-# the count; a whole-text CR strip of a few hundred KB of CR-bearing lines never finished within two
-# minutes) or one match in a text of hundreds of KB (roughly quadratic in length), and none of that
-# work can be sampled from inside bash's own substitution. So every such substitution now runs on
-# ONE physical line at a time (a newline is itself a segment break, so the segments are identical),
-# inside a loop that samples the deadline first, and BOTH text routes -- the Bash route's command and
-# the apply_patch route's patch text -- first run cdg_prepare_text, which denies fail-closed with the
-# same `deny_too_large` line, BEFORE any substitution, when any one physical line is longer than
-# `CDG_LINE_MAX_CHARS` characters, and otherwise strips CRs line by line in a sampled loop; like every
-# deadline deny it is reachable only after the role and plan-mode exits. The cap is sized so one
-# worst-case dense line stays around a second under bash 3.2 on a loaded host; many such lines are
-# bounded by the per-line deadline samples instead. Only the Edit/Write route carries no cap (it
-# analyses no text). Residuals this deadline and cap do NOT close: the rest of `T_prefix` is
-# unsampled (though still counted by the wall clock), and the Codex CLI's own hook timeout, if any,
-# is UNVERIFIED here -- the budget is sized against Claude Code's documented 10s PreToolUse timeout
-# only. Three over-blocking classes follow: a legitimately large, but benign, implementer/verifier
-# call that passes fast path 2 denies as "too large to analyse" once its own analysis crosses the
-# budget, with no way to widen the budget from the call itself -- in particular a legitimately large
-# shell-issued patch (many ordinary lines, each costing a forked `trim`) can approach the 5s budget
-# on a loaded host under bash 3.2 (a 50KB, 1000-line patch measured about 3s) and deny fail-closed,
-# and the remedy is to split it into smaller patches or to use Codex's native apply_patch tool, which
-# forks less per line; a Bash call with a SINGLE physical line longer than `CDG_LINE_MAX_CHARS`
-# characters that passes fast path 2 (it names `Edit`, `Write`, `apply_patch`, `applypatch` or
-# `*** Begin Patch` anywhere in the raw payload) denies the same way; and an apply_patch tool call
-# with one over-cap line denies too -- the remedy for both is to break the line (split the patch). A
-# command or patch of any total size made of ordinary-length lines is not capped by length at all.
-# The same cap bounds the other whole-string substitutions this hook runs: a path (an Edit/Write
-# file_path, or a patch header path joined to cwd) and the stdin `cwd` field are each denied, before
-# any substitution, when longer than `CDG_LINE_MAX_CHARS` characters (measured: a 200000-character
-# file_path or cwd of CRs or backslashes never finished within two minutes without it); a legitimate
-# path that long does not exist, so this adds no practical over-block.
+# Size caps (#457). Under Apple's bash 3.2 a `${text//pat/repl}` substitution is superlinear in the
+# text's length and in its match count, and none of that work can be sampled from inside bash's own
+# substitution; a whole-text word-split (`for x in $text`) is linear but likewise unsampled. So:
+#   - every such substitution runs on ONE physical line at a time (a newline is itself a segment
+#     break, so the segments are identical), inside a loop that samples the deadline first;
+#   - cdg_prepare_text runs first on BOTH text routes (the Bash route's command, the apply_patch
+#     route's patch text) and denies fail-closed, BEFORE any split or substitution, when the whole
+#     text is longer than `CDG_TEXT_MAX_CHARS` characters; it then strips CRs line by line in a
+#     sampled loop, and denies a physical line longer than `CDG_LINE_MAX_CHARS` characters. On the
+#     apply_patch route the line cap applies only to a line that contains a CR (the strip is the
+#     only superlinear step a long CR-free content line meets there) or a `*** ` patch-grammar
+#     marker (a header line the parser acts on); every other line is only bounded by the whole-text
+#     cap and by the sampled loops that touch it. The Bash route caps every line;
+#   - a single path (an Edit/Write file_path, or a patch header path joined to cwd) and the stdin
+#     `cwd` field are each denied, before any substitution, when longer than `CDG_LINE_MAX_CHARS`
+#     characters.
+# Like every deadline deny these are reachable only after the role and plan-mode exits. The line cap
+# is sized so one worst-case dense line costs a bounded slice of the budget; many such lines are
+# bounded by the per-line deadline samples. The Edit/Write route analyses no text, so only its path
+# is capped. Worst-case wall clock for the whole hook, stated for review: at most
+# `max(cdg_budget, T_prefix(L)) + U_max`, where `T_prefix` is the prefix this deadline cannot sample
+# around -- `cat`, the fast-path globs, up to five `jq` calls, the length checks, cdg_prepare_text's
+# CR-presence glob and its whole-text `for ln in $text` word-split (linear, bounded by
+# `CDG_TEXT_MAX_CHARS`), and the raw-text `.claude`/`.codex` glob -- and `U_max` is the largest
+# single step the deadline cannot interrupt: one line's substitutions (bounded by
+# `CDG_LINE_MAX_CHARS`), one segment's `toks=($seg)` word-split, one `"${toks[@]}"` expansion, one
+# walk_window iteration (plus any per-index cost bash 3.2's arrays add), one forked `trim`/`ltrim`
+# call up to its first in-subshell sample, or one classify_path. Residuals this deadline and these
+# caps do NOT close: `T_prefix` is unsampled (though still counted by the wall clock), and the Codex
+# CLI's own hook timeout, if any, is UNVERIFIED here -- the budget is sized against Claude Code's
+# documented 10s PreToolUse timeout only. Over-blocking classes that follow (all fail-closed, none
+# widenable from the call itself): a legitimately large, but benign, implementer/verifier call that
+# passes fast path 2 denies as "too large to analyse" once its own analysis crosses the budget -- in
+# particular a legitimately large shell-issued patch (many ordinary lines, each costing a forked
+# `trim`) can approach the budget on a loaded host under bash 3.2, and the remedy is to split it
+# into smaller patches or to use Codex's native apply_patch tool, which forks less per line; a Bash
+# call with a SINGLE physical line longer than `CDG_LINE_MAX_CHARS` characters that passes fast path
+# 2 (it names `Edit`, `Write`, `apply_patch`, `applypatch` or `*** Begin Patch` anywhere in the raw
+# payload) denies, and the remedy is to break the line or, for a patch, to use the native tool,
+# whose route does not cap an ordinary content line; a native apply_patch call whose CR-bearing line
+# or `*** ` marker line is over the cap denies, and the remedy is to split the patch or remove the
+# CR; and a path or `cwd` longer than `CDG_LINE_MAX_CHARS` characters denies (a header path is
+# joined to `cwd` first, so the cap bounds their combined length, well under typical OS path limits).
+# A command or patch made of ordinary-length lines is not capped by size alone short of
+# `CDG_TEXT_MAX_CHARS`.
 #
 # Documented under-blocking classes (evasions, named rather than hidden): a Bash-issued write
 # (`cat >>`, `tee`, `sed -i`) never reaches an Edit/Write/apply_patch hook by construction; since
@@ -399,9 +402,13 @@ DBRACKET_MAX="64"
 # see "Analysis deadline (#457)" in this file's header. Sized well under Claude Code's 10s hook
 # timeout (hooks/hooks.json), the same value hooks/push-guard.sh's own deadline uses.
 CDG_ANALYSIS_BUDGET_SECS="5"
-# CDG_LINE_MAX_CHARS (#457) -- longest single physical line (in characters) of a Bash command
-# analysed at all; see "Per-line size cap (#457)" in this file's header.
+# CDG_LINE_MAX_CHARS (#457) -- longest physical line of a Bash command (every line), of an
+# apply_patch patch (only a CR-bearing or `*** ` marker line), and longest single path or `cwd`
+# value, in characters, analysed at all; see "Size caps (#457)" in this file's header.
 CDG_LINE_MAX_CHARS="2000"
+# CDG_TEXT_MAX_CHARS (#457) -- longest whole Bash command or patch text, in characters, analysed at
+# all (it bounds the unsampled whole-text word-split); see "Size caps (#457)" in this file's header.
+CDG_TEXT_MAX_CHARS="1000000"
 
 # #457: cdg_budget defaults to CDG_ANALYSIS_BUDGET_SECS; TBF_CLAUDE_DIR_GUARD_BUDGET_SECS is a
 # test-only, environment-only knob (never read from stdin JSON) that can only LOWER it -- adopted
@@ -431,12 +438,12 @@ deny_too_large() {
 
 # count_sample / check_deadline (#457) -- check_deadline is the first statement of every loop whose
 # trip count grows with the input (see "Analysis deadline (#457)" in this file's header for the
-# site list and the sampling rule). Each is kept on one line so a mutant that neuters it has a
+# sampling rule). Each is kept on one line so a mutant that neuters it has a
 # single, unique `from` to target. check_deadline is an ALIAS, not a function, on purpose: under
-# Apple's bash 3.2 a function call costs several times more while the calling frame holds a large
-# string or array (this hook's walk always does), so a function sample at every loop head made a
-# benign 100000-token command about six times slower, measured; an alias is expanded when each
-# function body below is parsed, so a sample costs two builtin tests and no call. Aliases need
+# Apple's bash 3.2 a function call is much more expensive while the calling frame holds a large
+# string or array (this hook's walk always does), so a function sample at every loop head would
+# slow every benign large command; an alias is expanded when each function body below is parsed, so
+# a sample costs two builtin tests and no call. Aliases need
 # expand_aliases in a non-interactive shell, and this definition must precede every function that
 # uses it.
 shopt -s expand_aliases
@@ -1112,15 +1119,19 @@ has_exact_begin_patch_line() {
   return "$found"
 }
 
-# cdg_prepare_text TEXT (#457) -- run once on the Bash route's command AND on the apply_patch
-# route's patch text, before any substitution on either: denies (deny_too_large) text carrying a
-# physical line longer than CDG_LINE_MAX_CHARS, and sets the global cdg_text to TEXT with every CR
-# stripped LINE BY LINE (a whole-text `${x//$cr/}` is superlinear in the CR count under bash 3.2;
-# blank lines are dropped only when a CR was present, which no later consumer distinguishes, since
-# each reads its text with IFS-splitting on LF). The loop samples the deadline before every line.
+# cdg_prepare_text TEXT [MODE] (#457) -- run once on the Bash route's command (MODE "all", the
+# default) AND on the apply_patch route's patch text (MODE "native"), before any substitution on
+# either: denies (deny_too_large) a text longer than CDG_TEXT_MAX_CHARS before any split, denies a
+# physical line longer than CDG_LINE_MAX_CHARS (in MODE "native" only a line holding a CR or a
+# `*** ` marker; any other line is bounded by the whole-text cap), and sets the global cdg_text to
+# TEXT with every CR stripped LINE BY LINE (a whole-text `${x//$cr/}` is superlinear in the CR count
+# under bash 3.2; blank lines are dropped only when a CR was present, which no later consumer
+# distinguishes, since each reads its text with IFS-splitting on LF). The loop samples the deadline
+# before every line.
 cdg_text=""
 cdg_prepare_text() {
-  local text="$1" ln oldifs="$IFS" hascr=0 out=""
+  local text="$1" mode="${2:-all}" ln lmax oldifs="$IFS" hascr=0 out=""
+  [ "${#text}" -le "$CDG_TEXT_MAX_CHARS" ] || deny_too_large
   case "$text" in
     *"$cr"*) hascr=1 ;;
   esac
@@ -1128,7 +1139,14 @@ cdg_prepare_text() {
   IFS="$lf"
   for ln in $text; do
     check_deadline
-    [ "${#ln}" -le "$CDG_LINE_MAX_CHARS" ] || deny_too_large
+    lmax="$CDG_LINE_MAX_CHARS"
+    if [ "$mode" = native ]; then
+      case "$ln" in
+        *"$cr"*|*"*** "*) ;;
+        *) lmax="$CDG_TEXT_MAX_CHARS" ;;
+      esac
+    fi
+    [ "${#ln}" -le "$lmax" ] || deny_too_large
     if [ "$hascr" -eq 1 ]; then
       ln="${ln//$cr/}"
       out="$out$ln$lf"
@@ -1158,8 +1176,8 @@ if [ "$tool_name" = "apply_patch" ]; then
 
   # Strip every CR from the patch up front (#270 idiom; see the shared cr/lf/tab note above) --
   # every line handled below is then CR-free. #457: line by line, after the per-line size cap, in a
-  # sampled loop (cdg_prepare_text), never as one whole-text substitution.
-  cdg_prepare_text "$patch_cmd"
+  # sampled loop (cdg_prepare_text, MODE native), never as one whole-text substitution.
+  cdg_prepare_text "$patch_cmd" native
   patch="$cdg_text"
   parse_patch_headers "apply_patch" "$patch" "$cwd"
 elif [ "$tool_name" = "Bash" ]; then
