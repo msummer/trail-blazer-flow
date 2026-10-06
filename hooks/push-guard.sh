@@ -12,7 +12,9 @@
 # denies, since #494, a Codex push whose shell `workdir` is not provably the session checkout (see
 # "Fail-closed: Codex shell workdir (#494)" below), ALSO denies, since #448, any git command whose
 # subcommand is a git alias that may expand to a push, or that runs under config this hook cannot read
-# (see "Fail-closed: git aliases and config relocation (#448)" below), and
+# (see "Fail-closed: git aliases and config relocation (#448)" below), ALSO denies, since #510, a git
+# command that reads a git config file holding a section header line it cannot split the way git does
+# (see "Section headers and same-line keys (#510)" below), and
 # says nothing (exit 0, empty stdout, empty stderr — "no opinion") about everything else, so the
 # normal permission flow — a prompt, or a matching deny rule in
 # templates/repo-settings.json, which always wins over this hook's decision — applies. This closes
@@ -27,7 +29,8 @@
 # safely inside this hook's own time budget", and, since #494, "deny a Codex push whose shell
 # `workdir` is not the session checkout as a plain string literal", and, since #448, "deny a git
 # command whose subcommand may be an alias for a push, or an inline HOME=/XDG_CONFIG_HOME= relocation
-# on a push"; does NOT enforce an
+# on a push", and, since #510, "deny a git command that reads a config file with a section header line
+# this hook cannot split the way git does"; does NOT enforce an
 # allow-list of `claude/<n>-<slug>` destinations (the Decision's other clause) — that would deny
 # ordinary work (a `release/vX.Y.Z` branch, an annotated-tag push, any `git push origin
 # feature/x` a human runs in ANY Claude Code session in a plugin-enabled repo, since this hook is
@@ -162,7 +165,53 @@
 # leaving it open. See
 # `cfg_parse_file()`'s own header comment for where every budget is spent. Any failure at
 # any step leaves both branch values, and the config-derived variables, empty — never an error,
-# never a non-zero exit from this hook on that account alone.
+# never a non-zero exit from this hook on that account alone. (The depth-0 line cap and the
+# unparseable-header deny of "Section headers and same-line keys (#510)" below are deliberate denies,
+# not failures.)
+#
+# Section headers and same-line keys (#510). Git reads whatever follows a section header's closing
+# bracket on that line as variables of that section (`[alias] p = push`, `[remote "origin"] push =
+# HEAD:main`), so cfg_parse_file() splits every header line into the header and the rest of the line:
+# the rest goes through the ordinary comment strip and key/value split, under the section the header
+# just set. The header's end is found on the RAW line, before the comment strip, the way git's grammar
+# does: a `]`, `#` or `;` inside a quoted subsection stays part of its name (`[remote "a]b"]`,
+# `[remote "back#up"]`, `[alias "zq;p"]`), and only keys and values are truncated at a comment marker.
+# The section name is matched case-insensitively and may be followed by any run of blanks or TABs
+# before the quote, or written in the legacy dotted form (`[remote.origin]`, `[branch.featx]`), or in
+# the mixed form git also reads (`[branch.v1 "2"]` is the branch `v1.2`, `[remote.my "fork"]` the
+# remote `my.fork`); `remote` and `branch` headers, and a quoted `includeIf`, are rewritten to the one
+# canonical `[name "sub"]` text the section arms accept (the mixed form as `<dotted part>.<quoted
+# part>`), so these spellings read the same section the quoted form does. `alias` headers need no
+# rewrite: every alias spelling, the mixed `[alias.x "y"]` included, already reads its keys under one
+# name-independent key. A dotted or mixed `includeIf` is never followed (git conditions need a colon).
+# A UTF-8 byte-order mark at the start of a config file's first line is skipped, as git skips it: only
+# the first line of each file opened (depth 0, an include, the global config) that reaches the strip
+# is tested, by a byte-literal parameter expansion, so a BOM can no longer hide the file's first
+# header. An included file's over-cap first line is skipped before the strip, so its next line is
+# tested instead; a strip only ever adds reads.
+# A header line this hook
+# cannot classify denies with the fixed text of `deny_too_large confighdr`, which echoes no input:
+#   - a chained header (`[core] [remote "origin"] push = HEAD:main`, or `[core] [user]`);
+#   - text after a quoted subsection's closing quote that is not the closing bracket
+#     (`[remote "origin" ] push = HEAD:main`, which git itself refuses);
+#   - an escaped closing quote followed by more text (`[remote "a\"] push = HEAD:main"]`);
+#   - junk or a missing blank before the quote, or whitespace inside a plain name (`[remote x
+#     "origin"]`, `[remote"origin"]`, which git itself refuses);
+#   - a backslash in a remote or branch subsection (git drops it, so `[remote "or\igin"]` is the
+#     remote `origin`, which this hook would read as another name);
+#   - an uppercase letter in the dotted part of a remote or branch header, dotted or mixed (git
+#     lowercases it; a quoted subsection keeps its case, so `[remote "Upstream"]` reads normally).
+# The last two are real catches; the junk-before-the-quote shapes only deny a config git itself
+# refuses. Deliberate over-blocks: a chained header git accepts, in any file at any depth (an
+# `includeIf` target that would not match included), a push with an explicit refspec or a non-push git
+# command that reads such a file, a remote or branch name holding a backslash (git refnames cannot
+# contain one), and any section whose quoted name ends in an escaped backslash and is followed by
+# anything on the same line, a key, a comment or trailing blanks (`[core "x\\"] foo = bar`, which
+# git reads). Cost: a fixed number of parameter
+# expansions per header line, linear in the number of lines, run after the depth-0 line cap, the
+# depth >= 1 budgets and the length skip, with no loop and no budget of its own and at most three
+# `cfg_trim()` calls per line. A header line with a same-line key costs more than a key line of the
+# same length; the per-line `check_deadline()` sample bounds the total, and the deadline fails closed.
 #
 # Since #269, a push segment carrying exactly one DETACHED `-C <path>` token (not the attached
 # `-C<path>` form, and not a segment with a second `-C`) whose value satisfies the PATH_ERE
@@ -406,8 +455,7 @@
 # their "denies this push" or "denies this command" text. Under-blocking residuals, each measured rc 0:
 # an alias defined only in another checkout's config, reached by `cd`, an unresolvable `-C`,
 # `GIT_DIR=` or `--git-dir`; a `git-<name>` external on `PATH` (or via `--exec-path`/`GIT_EXEC_PATH`);
-# a key on the same line as its section header (`[alias] p = push`: the parser reads only the header,
-# the gap every section has); `env -u XDG_CONFIG_HOME`; the `HOME` that `sudo` sets; a subcommand
+# `env -u XDG_CONFIG_HOME`; the `HOME` that `sudo` sets; a subcommand
 # built at runtime or written with ANSI-C quoting (`git $'p'`, `S=p; git $S`); an alias run through
 # `xargs` or a script file; and `help.autocorrect`, where the hook says rc 0 for a mistyped
 # subcommand (UNVERIFIED whether git then runs push); a relocation or config name built at run time
@@ -783,20 +831,13 @@
 # deadline reason well before either can cross Claude Code's own hook timeout, closing this residual
 # rather than leaving it open),
 # or an
-# include value or `includeIf` condition containing an unquoted `#`/`;` (truncated by the same
-# comment-strip every other line goes through, or the header falls to the generic "other"
-# section) — every one of these fails OPEN (silently not followed), never denies;
+# include value containing an unquoted `#`/`;` (truncated by the same comment-strip every other
+# value goes through) — every one of these fails OPEN (silently not followed), never denies;
 # `config.worktree` (`extensions.worktreeConfig`) inside any file this hook reads, still never
-# followed; the legacy dotted `[remote.origin]` section
-# spelling (only
-# the quoted `[remote "origin"]` form is parsed); backslash-continued or backslash-escaped config
-# values; a key on the same line as its own section header, e.g. `[remote "origin"] push =
-# HEAD:main` (the parser reads only the section declaration on such a line, never any text after
-# the closing `]`); and a remote/branch SUBSECTION NAME itself containing an unquoted `#`/`;`
-# (e.g. `[remote "back#up"]`) loses its whole section — the header line is truncated before its
-# own closing `"]`, so it matches none of the three named section patterns, falls through to the
-# generic "other" section, and every key inside it (including a denying `push =` line) is silently
-# never captured — measured: rc 0. Since #439, a command-line `-c`/`--config-env` option (any key,
+# followed; and backslash-continued or backslash-escaped config values. (Since #510 the section
+# header itself is read the way git reads it: a key on the header's line, the dotted and any-blank
+# spellings, and a `#`/`;`/`]` inside a quoted subsection are no longer residuals — see "Section
+# headers and same-line keys (#510)" above.) Since #439, a command-line `-c`/`--config-env` option (any key,
 # including `-c push.default=…`/`-c remote.<name>.push=…`) and an inline `GIT_CONFIG_COUNT`/
 # `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`/`GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_GLOBAL`/
 # `GIT_CONFIG_SYSTEM` environment assignment, bare or behind `env`, are no longer read-and-ignored
@@ -842,7 +883,9 @@
 # reads a git config file with a depth-0 line too long to analyse safely (see "Analysis deadline
 # (#435)" below), OR, since #494, a Codex-shaped payload whose shell `workdir` is not provably the
 # session checkout, whose transcript cannot be read, whose transcript window holds no tool call, or
-# whose window starts with an unparseable record of at least half its size (see "Fail-closed: Codex shell workdir (#494)" above), in which case print exactly one reason line
+# whose window starts with an unparseable record of at least half its size (see "Fail-closed: Codex shell workdir (#494)" above), OR, since #510, a git command that reads a git config file
+# holding a section header line this hook cannot split the way git does (see "Section headers and
+# same-line keys (#510)" above), in which case print exactly one reason line
 # to stderr and exit 2 ("deny"); stdout
 # is always empty. Wired in hooks/hooks.json via
 # `${CLAUDE_PLUGIN_ROOT}`, with no `if` gate — an `if` filter matches only `tool_input.command`
@@ -897,7 +940,8 @@
 # the sampled config read loop managed to read), one session upward walk (at most 64 levels, each an `[ -f ]`-guarded probe,
 # plus up to 63 `dirname` subshell+exec forks — one per level that finds no `.git`, via
 # `resolve_repo()`'s own `parent="$(dirname "$dir" …)"` — when no `.git` is ever found before the
-# depth cap), one config line's comment-strip plus up to three `cfg_trim()` calls (at most
+# depth cap), one config line's comment-strip (a header line takes a second one, on the text after
+# its header, plus a fixed number of header expansions, #510) plus up to three `cfg_trim()` calls (at most
 # `CFG_TOPLEVEL_MAX_LINE_CHARS`/`CFG_INCLUDE_MAX_LINE_CHARS` characters, quadratic only in that
 # capped length), one include open, up to two `grep` processes plus a depth-1 resolve's file stats,
 # one `refspec_dest()` subshell, one word-split of a segment's remaining tokens, the `read` of a
@@ -1098,11 +1142,16 @@ esac
 push_deadline=$((push_t0 + push_budget))
 
 # deny_too_large KIND (#435) — KIND is "configline" (the depth-0 line-length cap in
-# cfg_parse_file() below) or anything else (the deadline case, reached only via check_deadline()
+# cfg_parse_file() below), "confighdr" (#510: a section header line cfg_parse_file() cannot split
+# the way git does) or anything else (the deadline case, reached only via check_deadline()
 # below); prints exactly one fixed stderr line, echoing no input from the command or config it
 # denies, then exits 2.
 deny_too_large() {
   case "$1" in
+    confighdr)
+      printf '%s denies this git command: a git config file it reads has a section header line it cannot split the way git does (blocked: unparseable config header line) — put that section header on a line of its own, or run the command from a terminal; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" >&2
+      ;;
     configline)
       printf '%s denies this push: a git config file it reads has a line too long to analyse (blocked: config line too long to analyse) — shorten that line, or run the push from a terminal; see README.md'"'"'s Safety model\n' \
         "$PUSH_DENY_STEM" >&2
@@ -1716,6 +1765,10 @@ nl=$'\n'
 # producing that mutant's documented, measured result. File scope (not per candidate file), since
 # it is a fixed literal independent of which candidate is being parsed.
 cfg_cr=$'\r'
+# #510: the three bytes of a UTF-8 byte-order mark, written as octal escapes so the match is byte-literal
+# whatever the locale. git skips one at the start of a config file; cfg_parse_file() strips it from the
+# first line of each file it opens.
+cfg_bom=$'\357\273\277'
 
 # cfg_parse_file PATH LABEL DEPTH (#304/#305) — parses one config file inline, recursively
 # following `include`/`includeIf` directives found in its own content (conditions ignored — the
@@ -1787,7 +1840,9 @@ cfg_cr=$'\r'
 # expansion only (see the `include)` key arm below), so no include-derived string ever reaches any
 # process's argv. Still appends to the plain (non-local) globals cfg_push_lines/cfg_push_defaults/
 # cfg_branch_merge, and reads the plain global current_branch, exactly as the pre-#304/#305 inline
-# loop did.
+# loop did. Since #510 a section header line is split before the comment strip, and the text after
+# its closing bracket is read as a key of that section (see this file's header, "Section headers and
+# same-line keys (#510)"); a header line it cannot classify denies via deny_too_large confighdr.
 cfg_parse_file() {
   local path="$1" label="$2" depth="$3"
   [ -n "$path" ] || return 0
@@ -1800,6 +1855,8 @@ cfg_parse_file() {
 
   local cfg_section="" cfg_subsection="" cfgline cfg_h cfg_s cfg_key cfg_val
   local inc_resolved inc_childlabel
+  local cfg_raw cfg_rest cfg_hdr cfg_pre cfg_q cfg_nm cfg_after cfg_np cfg_name cfg_ws cfg_sub cfg_lead cfg_form cfg_mix
+  local cfg_first=1
   while IFS= read -r cfgline || [ -n "$cfgline" ]; do
     check_deadline
     # Three depth->=1-only budgets, checked here, in this order, before comment-strip or trim ever
@@ -1840,35 +1897,130 @@ cfg_parse_file() {
     # cfg_trim()'s own pattern matching is not uniformly fast for a long line or whitespace run.
     [ "$depth" -ge 1 ] || [ "${#cfgline}" -le "$CFG_TOPLEVEL_MAX_LINE_CHARS" ] || deny_too_large configline
     cfgline="${cfgline//$cfg_cr/}"
+    # #510: a UTF-8 BOM on the file's first line is skipped, as git skips it; only the first line of
+    # each file this call opens that reaches this point is tested (see the header paragraph).
+    if [ "$cfg_first" = 1 ]; then cfg_first=0; cfgline="${cfgline#"$cfg_bom"}"; fi
+    cfg_raw="$cfgline"
     # Strip a trailing comment: whichever of '#'/';' appears first, with no quote-tracking -- git
     # ref names MAY legitimately contain '#' or ';' (e.g. refs/heads/feat#123 and
     # refs/heads/feat;123 are both accepted by git itself), so this is a known, documented parsing
     # gap, not a safe assumption. See this file's header "Documented over-blocking classes" (a
-    # destination value truncated at the marker) and "Documented under-blocking classes" (a
-    # remote/branch subsection name, or an include value/includeIf condition, truncated at the
-    # marker) for the behaviour classes this creates.
+    # destination value truncated at the marker) and "Documented under-blocking classes" (an
+    # include value truncated at the marker) for the behaviour classes this creates. A SECTION
+    # HEADER line is split before this strip, on the raw line (see "Section headers and same-line
+    # keys (#510)" in this file's header): only the keys and values after it are truncated.
     cfg_h="${cfgline%%#*}"
     cfg_s="${cfgline%%;*}"
     if [ "${#cfg_h}" -le "${#cfg_s}" ]; then cfgline="$cfg_h"; else cfgline="$cfg_s"; fi
     cfg_trim "$cfgline"; cfgline="$cfg_trim_out"
     [ -n "$cfgline" ] || continue
+    # #510: a section header line is split on the RAW line (see "Section headers and same-line keys
+    # (#510)" in this file's header), before the comment strip above could cut a quoted subsection
+    # short. cfgline becomes the header text git reads as the declaration (remote/branch/includeIf
+    # rewritten to the one canonical `[name "sub"]` spelling the arms below accept), and cfg_rest the
+    # text after the header's closing bracket. A shape it cannot classify denies. Parameter
+    # expansion and case only: no loop, no subshell, no external command.
+    cfg_hdr=0
+    cfg_rest=""
+    case "$cfgline" in
+      \[*)
+        cfg_hdr=1
+        cfgline="[${cfg_raw#*\[}"
+        cfg_pre="${cfgline%%\]*}"
+        cfg_name=""
+        cfg_sub=""
+        cfg_mix=""
+        cfg_form=none
+        if [ "$cfg_pre" != "$cfgline" ]; then
+          case "$cfg_pre" in
+            *\"*)
+              cfg_q="${cfgline#*\"}"
+              cfg_nm="${cfg_q%%\"*}"
+              cfg_after="${cfg_q#*\"}"
+              cfg_np="${cfgline%%\"*}"
+              cfg_np="${cfg_np#\[}"
+              cfg_name="${cfg_np%%[[:space:]]*}"
+              cfg_ws="${cfg_np#"$cfg_name"}"
+              [ -n "$cfg_name" ] || deny_too_large confighdr
+              [ -n "$cfg_ws" ] || deny_too_large confighdr
+              case "$cfg_ws" in
+                *[![:space:]]*) deny_too_large confighdr ;;
+              esac
+              if [ "$cfg_nm" = "$cfg_q" ]; then
+                cfg_name=""
+              else
+                case "$cfg_nm" in
+                  *\\) [ "$cfg_after" = "]" ] || deny_too_large confighdr ;;
+                esac
+                case "$cfg_after" in
+                  \]*) ;;
+                  *) deny_too_large confighdr ;;
+                esac
+                cfg_rest="${cfg_after#\]}"
+                cfg_sub="$cfg_nm"
+                cfg_form=quoted
+                case "$cfg_name" in
+                  ?*.?*) cfg_mix="${cfg_name#*.}"; cfg_name="${cfg_name%%.*}" ;;
+                esac
+              fi
+              ;;
+            *)
+              cfg_np="${cfg_pre#\[}"
+              case "$cfg_np" in
+                *[[:space:]]*) deny_too_large confighdr ;;
+              esac
+              cfg_rest="${cfgline#*\]}"
+              cfg_name="$cfg_np"
+              case "$cfg_np" in
+                *.?*)
+                  cfg_name="${cfg_np%%.*}"
+                  cfg_sub="${cfg_np#*.}"
+                  cfg_form=dotted
+                  ;;
+              esac
+              ;;
+          esac
+          case "$cfg_form" in
+            quoted|dotted)
+              case "$cfg_name" in
+                [Rr][Ee][Mm][Oo][Tt][Ee]|[Bb][Rr][Aa][Nn][Cc][Hh])
+                  case "$cfg_mix$cfg_sub" in
+                    *\\*) deny_too_large confighdr ;;
+                  esac
+                  if [ "$cfg_form" = dotted ]; then
+                    case "$cfg_sub" in
+                      *[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) deny_too_large confighdr ;;
+                    esac
+                  fi
+                  case "$cfg_mix" in
+                    *[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) deny_too_large confighdr ;;
+                    ?*) cfg_sub="$cfg_mix.$cfg_sub" ;;
+                  esac
+                  cfgline="[$cfg_name \"$cfg_sub\"]"
+                  ;;
+                [Ii][Nn][Cc][Ll][Uu][Dd][Ee][Ii][Ff])
+                  if [ "$cfg_form" = quoted ] && [ -z "$cfg_mix" ]; then cfgline="[$cfg_name \"$cfg_sub\"]"; fi
+                  ;;
+              esac
+              ;;
+          esac
+        fi
+        ;;
+    esac
     case "$cfgline" in
       \[[Rr][Ee][Mm][Oo][Tt][Ee]\ \"*\"\]*)
         cfg_section="remote"
         cfg_subsection="${cfgline#*\"}"
         cfg_subsection="${cfg_subsection%%\"*}"
-        continue
         ;;
       \[[Bb][Rr][Aa][Nn][Cc][Hh]\ \"*\"\]*)
         cfg_section="branch"
         cfg_subsection="${cfgline#*\"}"
         cfg_subsection="${cfg_subsection%%\"*}"
-        continue
         ;;
       \[[Pp][Uu][Ss][Hh]\]*)
         cfg_section="push"
         cfg_subsection=""
-        continue
         ;;
       \[[Aa][Ll][Ii][Aa][Ss]\ *|\[[Aa][Ll][Ii][Aa][Ss]$'\t'*|\[[Aa][Ll][Ii][Aa][Ss].*)
         # #448: any subsection spelling of an alias (alias.<name>.command): [alias "<name>"] with any
@@ -1877,19 +2029,16 @@ cfg_parse_file() {
         # name-independent key "*", so the verdict cannot depend on a name spelling this hook might misread.
         cfg_section="aliassub"
         cfg_subsection=""
-        continue
         ;;
       \[[Aa][Ll][Ii][Aa][Ss]\]*)
         # #448: an [alias] section -- its keys are recorded, never executed or expanded.
         cfg_section="alias"
         cfg_subsection=""
-        continue
         ;;
       \[[Ii][Nn][Cc][Ll][Uu][Dd][Ee]\]*)
         # #304/#305: a plain [include] section — the child path key is dispatched below.
         cfg_section="include"
         cfg_subsection=""
-        continue
         ;;
       \[[Ii][Nn][Cc][Ll][Uu][Dd][Ee][Ii][Ff]\ \"*\"\]*)
         # #304/#305: an [includeIf "<condition>"] section — the condition itself is never
@@ -1897,14 +2046,29 @@ cfg_parse_file() {
         # include is followed exactly like an unconditional one.
         cfg_section="include"
         cfg_subsection=""
-        continue
         ;;
       \[*)
         cfg_section="other"
         cfg_subsection=""
-        continue
         ;;
     esac
+    # #510: the text after a header's closing bracket is read as a key under the section that header
+    # just set, with the same comment strip and key/value split as any other line. A second header
+    # in that text (a chained header) is not classified: it denies.
+    if [ "$cfg_hdr" = 1 ]; then
+      cfg_h="${cfg_rest%%#*}"
+      cfg_s="${cfg_rest%%;*}"
+      if [ "${#cfg_h}" -le "${#cfg_s}" ]; then cfg_rest="$cfg_h"; else cfg_rest="$cfg_s"; fi
+      case "$cfg_rest" in
+        *[![:space:]]*) ;;
+        *) continue ;;
+      esac
+      cfg_lead="${cfg_rest%%[![:space:]]*}"
+      case "${cfg_rest#"$cfg_lead"}" in
+        \[*) deny_too_large confighdr ;;
+      esac
+      cfgline="$cfg_rest"
+    fi
     case "$cfgline" in
       *=*)
         cfg_trim "${cfgline%%=*}"; cfg_key="$cfg_trim_out"
@@ -1925,9 +2089,10 @@ cfg_parse_file() {
             # `push =` value containing a literal TAB byte is unusual but not impossible (this
             # config parser never rejects one), and a bounded middle field would let such a value
             # truncate at the embedded TAB and leak its own remainder into config_deny()'s
-            # source-label field. cfg_subsection (the remote name) is read from a quoted section
-            # header, never a value that could itself carry a raw TAB in any fixture this file
-            # constructs.
+            # source-label field. cfg_subsection (the remote name) is read from a section header
+            # (a quoted, dotted or mixed spelling, rewritten to the canonical text above), never from
+            # a value; a raw TAB inside a quoted name is possible but no fixture this file constructs
+            # carries one.
             cfg_push_lines="${cfg_push_lines}${label}${cfg_tab}${cfg_subsection}${cfg_tab}${cfg_val}"$'\n'
             ;;
         esac
