@@ -7899,9 +7899,10 @@ case_cdg_dbq_never_executes() {
 # mutant:457-cdg-dl-cwd-chars-bash — the Bash route measures cwd in characters.
 # mutant:457-cdg-dl-bytes-off-fn — cdg_bytes measures characters, not bytes.
 # mutant:457-cdg-dl-text-cap-off — the whole-text size check becomes a no-op, so an over-cap native
-#   patch reaches the split instead of denying.
+#   patch reaches the parser, which denies at its unrecognised-marker probe line instead of the
+#   too-large line.
 # mutant:457-cdg-dl-text-cap-offbyone — the whole-text comparison becomes strict, so a text of
-#   exactly the cap denies.
+#   exactly the cap denies as too large instead of reaching the parser (filter "cdgtextcap-").
 # mutant:457-cdg-dl-native-cr-uncapped — the native route stops line-capping a CR-bearing line.
 # mutant:457-cdg-dl-bash-cr-strip-off — the Bash route keeps its unstripped command text.
 # mutant:457-cdg-dl-path-cap-offbyone — classify_path's comparison becomes strict, so a path of
@@ -7951,6 +7952,25 @@ cdg_dl_line_cap() {
 # cdg_dl_text_cap — the CDG_TEXT_MAX_BYTES value, extracted from the hook's own vocabulary line.
 cdg_dl_text_cap() {
   sed -n 's/^CDG_TEXT_MAX_BYTES="\([0-9][0-9]*\)"$/\1/p' "$claude_dir_guard"
+}
+# cdg_dl_fill N — N ASCII x characters (N >= 1), built by doubling a string rather than by a
+# million-argument printf, which is expensive on the harness side under bash 3.2.
+cdg_dl_fill() {
+  local n="$1" s=x
+  while [ "${#s}" -lt "$n" ]; do s="$s$s"; done
+  printf '%s' "${s:0:$n}"
+}
+# CDG_TEXTCAP_PROBE — the first line of the whole-text-cap payloads. The native route caps a "*** "
+# line at CDG_LINE_MAX_BYTES (this one is short) and never line-caps a CR-free content line, and
+# parse_patch_headers denies an unrecognised "*** " marker on the first line it reads. So a payload
+# that reaches the parser is denied at this line with the parser's own line, and the filler line
+# after it is only scanned by cdg_prepare_text and the whole-text splits, never trimmed or matched.
+CDG_TEXTCAP_PROBE="*** Text Cap Probe"
+# cdg_textcap_patch LEN — the probe line, then one CR-free content line of x characters: exactly LEN
+# ASCII bytes, no CR, no trailing LF.
+cdg_textcap_patch() {
+  local len="$1"
+  printf '%s%s+%s' "$CDG_TEXTCAP_PROBE" "$LF" "$(cdg_dl_fill $((len - ${#CDG_TEXTCAP_PROBE} - 2)))"
 }
 # cdg_dl_pad_cmd LEN — a benign one-line command of exactly LEN characters.
 cdg_dl_pad_cmd() {
@@ -8093,12 +8113,17 @@ case_cdg_dl_deny_production_budget() {
   expect_cdg_deny_too_large implementer apply_patch
 }
 case_cdg_dl_deny_patch_marker_line() {
-  # A native header line `*** Add File: /repo/a` followed by 3000 trailing spaces is over the line
-  # cap by its `*** ` marker alone (no CR), so it denies at the cap; uncapped it would parse as a
-  # benign path and give no opinion.
-  local sp patch
-  sp="$(printf ' %.0s' $(seq 1 3000))"
-  patch="*** Begin Patch${LF}*** Add File: /repo/a${sp}${LF}+x${LF}*** End Patch"
+  # A native patch whose first line is an unrecognised `*** ` marker one byte over the line cap,
+  # padded with non-whitespace (no CR, no trailing whitespace): over the cap by its `*** ` marker
+  # alone, so it denies at the cap with the too-large line. Uncapped, the parser reaches line 1 and
+  # denies with its unrecognised-marker line at once, a different verdict with no trim loop, so the
+  # kill does not depend on host load. (Not a long path: classify_path's own cap would also print
+  # the too-large line.)
+  local cap patch
+  cap="$(cdg_dl_line_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_LINE_MAX_BYTES from the hook\n"; return; fi
+  patch="${CDG_TEXTCAP_PROBE}$(cdg_dl_fill $((cap + 1 - ${#CDG_TEXTCAP_PROBE})))"
+  [ "${#patch}" -eq $((cap + 1)) ] || { __ok=0; __why="${__why}fixture bug: line is ${#patch} chars, wanted $((cap + 1))\n"; return; }
   run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
   expect_cdg_deny_too_large implementer apply_patch
 }
@@ -8174,14 +8199,14 @@ case_cdg_dl_deny_path_multibyte() {
   expect_cdg_deny_too_large implementer Edit
 }
 case_cdg_dl_deny_text_multibyte() {
-  # A native patch of two CR-free content lines of 150000 four-byte characters each (about 1.2MB,
-  # 300000 characters): over the whole-text byte cap, under it in characters. The native route does
-  # not line-cap an ordinary content line, so only the whole-text check can see the size; and with
-  # only a few lines, a mutant that loses the check finishes its analysis in a fraction of a second
-  # (no per-line forks), so the kill does not depend on host load.
+  # A native patch whose first line is the unrecognised-marker probe, then two CR-free content lines
+  # of 150000 four-byte characters each (about 1.2MB, 300000 characters): over the whole-text byte
+  # cap, under it in characters. The native route does not line-cap an ordinary content line, so
+  # only the whole-text check can see the size; a mutant that loses the check reaches the parser,
+  # which denies at the probe line at once, so the kill does not depend on host load.
   local mb patch
   mb="$(printf '\360\237\230\200%.0s' $(seq 1 150000))"
-  patch="*** Begin Patch${LF}*** Add File: /repo/a${LF}+${mb}${LF}+${mb}${LF}*** End Patch"
+  patch="${CDG_TEXTCAP_PROBE}${LF}+${mb}${LF}+${mb}"
   cdg_need_utf8 || return
   cdg_deadline_override=15
   run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
@@ -8227,31 +8252,47 @@ case_cdg_dl_noop_native_long_line() {
   expect_cdg_no_opinion
 }
 case_cdg_dl_deny_text_over_cap() {
-  # A native patch of CR-free ordinary content whose WHOLE text is one character over the whole-text
-  # cap: denies before any split, inside a 15s active deadline. (The one long line is not line-capped
-  # on this route, so only the whole-text cap can fire.)
-  local cap x patch
+  # The one-byte twin of cdgtextcap-deny-parse-at-cap: the same marker-first payload, one byte over
+  # the whole-text cap, denies at the whole-text check before any split, inside a 15s active
+  # deadline. (The one long line is not line-capped on this route, so only the whole-text cap can
+  # fire.) A mutant that drops or bypasses the check (457-cdg-dl-text-cap-off,
+  # 457-cdg-dl-patch-prepare-off) reaches the parser and is denied by its unrecognised-marker line,
+  # a different verdict on any host.
+  local cap patch
   cap="$(cdg_dl_text_cap)"
   if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_TEXT_MAX_BYTES from the hook\n"; return; fi
-  patch="*** Begin Patch${LF}*** Add File: /repo/a${LF}+"
-  x="$(printf 'x%.0s' $(seq 1 $((cap - ${#patch} - 14 + 1))))"
-  patch="${patch}${x}${LF}*** End Patch"
+  patch="$(cdg_textcap_patch $((cap + 1)))"
   [ "${#patch}" -eq $((cap + 1)) ] || { __ok=0; __why="${__why}fixture bug: text is ${#patch} chars, wanted $((cap + 1))\n"; return; }
   cdg_deadline_override=15
   run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
   expect_cdg_deny_too_large implementer apply_patch
 }
-case_cdg_dl_noop_text_at_cap() {
-  local cap x patch
+case_cdgtextcap_deny_parse_at_cap() {
+  # A native patch of exactly the whole-text cap whose first line is an unrecognised marker. The
+  # parser's unrecognised-marker line proves the text cap did not fire at exactly the cap (the cap
+  # is an upper bound), without needing a full 1MB analysis inside the 5s production budget: the
+  # parser stops at line 1, and a strict comparison would print the too-large line instead.
+  # LC_ALL=C: the payload is ASCII, so its byte boundary is locale-independent, and C keeps
+  # multibyte pattern matching out of the unsampled prefix. The case has its own cdgtextcap- prefix
+  # so only the one registry record that needs it runs it. The residual cost is the floor every
+  # at-cap call pays: reading the 1MB, the jq calls and one split before the parser's first sample.
+  local cap patch json want
   cap="$(cdg_dl_text_cap)"
   if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_TEXT_MAX_BYTES from the hook\n"; return; fi
-  patch="*** Begin Patch${LF}*** Add File: /repo/a${LF}+"
-  x="$(printf 'x%.0s' $(seq 1 $((cap - ${#patch} - 14))))"
-  patch="${patch}${x}${LF}*** End Patch"
+  patch="$(cdg_textcap_patch "$cap")"
   [ "${#patch}" -eq "$cap" ] || { __ok=0; __why="${__why}fixture bug: text is ${#patch} chars, wanted $cap\n"; return; }
+  json="$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
+  want="trail-blazer-flow claude-dir guard: implementer role's apply_patch could not be parsed (unrecognised marker: *** Text Cap Probe), and is denied fail-closed"
+  cdg_locale_override=C
   cdg_deadline_override=15
-  run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
-  expect_cdg_no_opinion
+  measure_ms run_claude_guard "$json"
+  if [ "$cdg_rc" != "2" ] || [ -n "$cdg_out" ] || [ "$cdg_err" != "$want" ]; then
+    __ok=0
+    __why="${__why}expected rc 2, empty stdout and the parser's unrecognised-marker line; got rc=${cdg_rc} stdout=[${cdg_out}] stderr=[${cdg_err}]; hook run ${measured_ms}ms\n"
+    case "$cdg_err" in
+      *"too large to analyse"*) __why="${__why}the too-large line means the cap comparison is strict, a native line cap hit the CR-free content line, or the pre-parser 1MB work outran the budget on this host\n" ;;
+    esac
+  fi
 }
 case_cdg_dl_deny_bash_cr_word() {
   # A CR glued to the shim word (`apply_patch<CR> < x.patch`): only the Bash route's CR strip lets
@@ -10687,7 +10728,7 @@ cases=(
   "cdg-dl-deny-patch-cr-just-over-cap|case_cdg_dl_deny_patch_cr_just_over_cap|deny (#457): a native content line of a plus sign and per-line-cap CRs (one byte over the cap) -- over the line cap by its CR alone, exact too-large line"
   "cdg-dl-noop-patch-cr-many|case_cdg_dl_noop_patch_cr_many|no opinion (#457): a 250-line native apply_patch with a CR on every line adding a benign path -- CRs stripped per line, same verdict as before, inside a 15s active deadline"
   "cdg-dl-deny-production-budget|case_cdg_dl_deny_production_budget|wall-clock proof (#457): a native apply_patch with a 500000-space CR-free content line, budget knob 99 ignored -- ltrim's sampled loop denies, exact too-large line under a 15s active deadline"
-  "cdg-dl-deny-patch-marker-line|case_cdg_dl_deny_patch_marker_line|deny (#457): a native header line with 3000 trailing spaces -- over the line cap through its *** marker alone, exact too-large line"
+  "cdg-dl-deny-patch-marker-line|case_cdg_dl_deny_patch_marker_line|deny (#457): a native patch whose first line is an unrecognised *** marker one byte over the line cap, padded with non-whitespace -- over the line cap through its *** marker alone, exact too-large line (uncapped, the parser denies at line 1 instead)"
   "cdg-dl-deny-cwd-just-over-cap|case_cdg_dl_deny_cwd_just_over_cap|deny (#457): a native apply_patch whose cwd is one character over the per-line cap -- exact too-large line"
   "cdg-dl-deny-cwd-just-over-cap-bash|case_cdg_dl_deny_cwd_just_over_cap_bash|deny (#457): a Bash inline-patch call whose cwd is one character over the per-line cap -- exact too-large line"
   "cdg-dl-deny-line-multibyte|case_cdg_dl_deny_line_multibyte|deny (#457): a Bash line of 600 four-byte characters (over the cap in bytes, under it in characters) -- the cap is measured in bytes"
@@ -10695,10 +10736,10 @@ cases=(
   "cdg-dl-pin-bash-text-wide|case_cdg_dl_pin_bash_text_wide|deny (#457): a Bash command of 540 lines of four-byte characters (over the whole-text cap in bytes, under it in characters; each line under the line cap) -- exact too-large line under a 15s active deadline"
   "cdg-dl-deny-cwd-multibyte|case_cdg_dl_deny_cwd_multibyte|deny (#457): a native apply_patch whose cwd is 600 four-byte characters (over the cap in bytes, under it in characters) -- the cwd cap is measured in bytes"
   "cdg-dl-deny-cwd-multibyte-bash|case_cdg_dl_deny_cwd_multibyte_bash|deny (#457): a Bash inline-patch call whose cwd is 600 four-byte characters -- the cwd cap is measured in bytes"
-  "cdg-dl-deny-text-multibyte|case_cdg_dl_deny_text_multibyte|deny (#457): a native patch of two content lines of 150000 four-byte characters (over the whole-text cap in bytes, under it in characters) -- exact too-large line under a 15s active deadline"
+  "cdg-dl-deny-text-multibyte|case_cdg_dl_deny_text_multibyte|deny (#457): a native patch whose first line is an unrecognised marker, then two content lines of 150000 four-byte characters (over the whole-text cap in bytes, under it in characters) -- exact too-large line under a 15s active deadline"
   "cdg-dl-noop-native-long-line|case_cdg_dl_noop_native_long_line|no opinion (#457): a native apply_patch with a 3700-character CR-free content line adding a benign path -- an ordinary long line is not capped on the native route"
-  "cdg-dl-deny-text-over-cap|case_cdg_dl_deny_text_over_cap|deny (#457): a native apply_patch whose whole text is one character over the whole-text cap -- exact too-large line before any split, under a 15s active deadline"
-  "cdg-dl-noop-text-at-cap|case_cdg_dl_noop_text_at_cap|no opinion (#457): a native apply_patch whose whole text is exactly the whole-text cap -- the cap is an upper bound, not a strict one"
+  "cdg-dl-deny-text-over-cap|case_cdg_dl_deny_text_over_cap|deny (#457): a native apply_patch whose whole text (an unrecognised-marker first line, then one long content line) is one character over the whole-text cap -- exact too-large line before any split, under a 15s active deadline"
+  "cdgtextcap-deny-parse-at-cap|case_cdgtextcap_deny_parse_at_cap|deny (#457, #512): a native apply_patch of exactly the whole-text cap whose first line is an unrecognised marker -- the parser's unrecognised-marker line, never the too-large line, so the cap is an upper bound; the parser stops at line 1, so no full analysis is needed; C locale -- mutation proof: dev/mutants/hook-tests.json (457-cdg-dl-text-cap-offbyone)"
   "cdg-dl-deny-bash-cr-word|case_cdg_dl_deny_bash_cr_word|deny (#457): apply_patch followed by a CR as the command word -- only the Bash route's CR strip lets the walk see the shim, so the no-inline-patch deny fires"
   "cdg-dl-noop-path-at-cap|case_cdg_dl_noop_path_at_cap|no opinion (#457): an Edit of a benign path of exactly the per-line cap's length -- the path cap is an upper bound, not a strict one"
   "cdg-dl-deny-path-just-over-cap|case_cdg_dl_deny_path_just_over_cap|deny (#457): an Edit of a benign path one character over the per-line cap -- exact too-large line"

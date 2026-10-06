@@ -5309,7 +5309,7 @@
       "name": "457-cdg-dl-text-cap-offbyone",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dl-",
+      "filter": "cdgtextcap-",
       "edits": [
         {
           "from": "[ \"${#text}\" -le \"$CDG_TEXT_MAX_BYTES\" ]",
@@ -5317,7 +5317,7 @@
         }
       ],
       "expect_fail": [
-        "cdg-dl-noop-text-at-cap"
+        "cdgtextcap-deny-parse-at-cap"
       ]
     },
     {
