@@ -185,8 +185,10 @@
 # rewrite: every alias spelling, the mixed `[alias.x "y"]` included, already reads its keys under one
 # name-independent key. A dotted or mixed `includeIf` is never followed (git conditions need a colon).
 # A UTF-8 byte-order mark at the start of a config file's first line is skipped, as git skips it: only
-# that first line of each file opened (depth 0, an include, the global config) is tested, by a
-# byte-literal parameter expansion, so a BOM can no longer hide the file's first header.
+# the first line of each file opened (depth 0, an include, the global config) that reaches the strip
+# is tested, by a byte-literal parameter expansion, so a BOM can no longer hide the file's first
+# header. An included file's over-cap first line is skipped before the strip, so its next line is
+# tested instead; a strip only ever adds reads.
 # A header line this hook
 # cannot classify denies with the fixed text of `deny_too_large confighdr`, which echoes no input:
 #   - a chained header (`[core] [remote "origin"] push = HEAD:main`, or `[core] [user]`);
@@ -203,8 +205,9 @@
 # refuses. Deliberate over-blocks: a chained header git accepts, in any file at any depth (an
 # `includeIf` target that would not match included), a push with an explicit refspec or a non-push git
 # command that reads such a file, a remote or branch name holding a backslash (git refnames cannot
-# contain one), and any section whose quoted name ends in an escaped backslash and is followed by a
-# same-line key (`[core "x\\"] foo = bar`, which git reads). Cost: a fixed number of parameter
+# contain one), and any section whose quoted name ends in an escaped backslash and is followed by
+# anything on the same line, a key, a comment or trailing blanks (`[core "x\\"] foo = bar`, which
+# git reads). Cost: a fixed number of parameter
 # expansions per header line, linear in the number of lines, run after the depth-0 line cap, the
 # depth >= 1 budgets and the length skip, with no loop and no budget of its own and at most three
 # `cfg_trim()` calls per line. A header line with a same-line key costs more than a key line of the
@@ -1894,8 +1897,8 @@ cfg_parse_file() {
     # cfg_trim()'s own pattern matching is not uniformly fast for a long line or whitespace run.
     [ "$depth" -ge 1 ] || [ "${#cfgline}" -le "$CFG_TOPLEVEL_MAX_LINE_CHARS" ] || deny_too_large configline
     cfgline="${cfgline//$cfg_cr/}"
-    # #510: a UTF-8 BOM on the file's first line is skipped, as git skips it; only that first line of
-    # each file this call opens, so no later line is ever scanned for it.
+    # #510: a UTF-8 BOM on the file's first line is skipped, as git skips it; only the first line of
+    # each file this call opens that reaches this point is tested (see the header paragraph).
     if [ "$cfg_first" = 1 ]; then cfg_first=0; cfgline="${cfgline#"$cfg_bom"}"; fi
     cfg_raw="$cfgline"
     # Strip a trailing comment: whichever of '#'/';' appears first, with no quote-tracking -- git
