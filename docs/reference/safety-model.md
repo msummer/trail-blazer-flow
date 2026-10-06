@@ -328,7 +328,7 @@ possibly-empty word, and the segment denies as unresolved when the rest could st
 `env -S` string cut at `${`, `$(` or a backtick is judged on the whole record. A git-slot word that is exactly
 one plain ANSI-C or locale segment (`$'zqp'`) is read as that name; any other git-slot word holding a
 dollar sign and a quote (`p$'ush'`, `git st$'atus'`, `--git-dir=$'/a b'`) fails closed, a deliberate
-over-block. The header's
+over-block. A locale word is read untranslated. The header's
 "Fail-closed: a runtime expansion in the command prefix or the git options (#508)" paragraph lists
 the over-blocks and residuals (a `${...}`/`$(...)` prefix, a runtime-built subcommand or refspec
 destination, `eval "$c"`). Since #433, a push segment in

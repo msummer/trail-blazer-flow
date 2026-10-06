@@ -413,14 +413,15 @@
 # the fixed reason `runtime expansion in the git options` when that word itself names push or the
 # split-value gate (armed == 2: an expansion may stand for any number of options and values) finds one
 # after it. ANSI-C (`$'...'`) and locale (`$"..."`) words in the option slot or the subcommand position
-# are treated by one rule. A word that is EXACTLY one segment with a plain body (letters, digits, `_`,
-# `.` or `-`, no leading dash) is read as that name and substituted into the token list, so `git
+# are treated by one rule. A word that is EXACTLY one segment with a plain body (starting with a letter,
+# digit or `_`, then letters, digits, `_`, `.` or `-`) is read as that name and substituted into the token list, so `git
 # $'zqp' origin main` looks up the alias zqp and `git $'push' origin main` is a push, and every later
 # scan sees the name. Any OTHER word there that holds a dollar sign followed by a quote (`p$'ush'`,
 # `$'p'$'ush'`, `"p"$'ush'`, `z$'qp'`, a backslash body such as `$'\x70ush'`, mixed or unpaired quotes,
-# an attached option value such as `--git-dir=$'/a b'`) fails closed under the git-options reason,
+# an attached option value such as `--git-dir=$'/a b'`) fails closed under the git-options reason (an
+# earlier #292 reason such as `--git-dir`, or command-line config, keeps its own precedence, as in (a)),
 # whether or not a push follows: the shell value of such a word is never computed. That is a deliberate
-# over-block that includes `git st$'atus'` and `git $'a b' status`. The check is one `index()` per word
+# over-block that includes `git st$'atus'` and `git $'a b' status`. The check is two `index()` calls per word
 # (linear in the word), and the value of a detached `-c`, `-C` or `--config-env` option is consumed with
 # its option and never inspected, as before. When no subcommand follows the skipped words, the first skipped word that does not start with a
 # dash is the candidate subcommand (the word taken before the skip existed; none when every skipped
@@ -514,7 +515,8 @@
 # `GIT_DIR=` or `--git-dir`; a `git-<name>` external on `PATH` (or via `--exec-path`/`GIT_EXEC_PATH`);
 # `env -u XDG_CONFIG_HOME`; the `HOME` that `sudo` sets; a subcommand
 # built at runtime (`S=p; git $S`; an ANSI-C or locale spelling in the option slot is read only as a
-# whole plain word and otherwise fails closed, see the #508 paragraph); an alias run through
+# whole plain word and otherwise fails closed, see the #508 paragraph; a locale word `$"zqp"` is read
+# untranslated, so a bash locale catalog that translates it is not followed); an alias run through
 # `xargs` or a script file; and `help.autocorrect`, where the hook says rc 0 for a mistyped
 # subcommand (UNVERIFIED whether git then runs push); a relocation or config name built at run time
 # (`V=HOME; env "$V=/x" git p`, the same class as `S=p; git $S`); a variable-setting builtin this hook does not
@@ -965,7 +967,7 @@
 # deadline cannot sample around at all), #449 likewise (its per-token shape checks and at most three
 # lost_push() scans per segment, one memoised scan for each of three trigger families, all inside that tokenizer and so inside
 # `T_prefix`), #508 likewise (rx_word() is linear in one token; at most two more lost_push() scans per
-# segment, both after their loops and never at a trigger; one index() per git-slot word for the ANSI-C
+# segment, both after their loops and never at a trigger; two index() calls per git-slot word for the ANSI-C
 # rule; at most one more split of the record plus one
 # lost_push() per record; no emit_alias_lost() call is added), and #433 has landed in the awk tokenizer plus one
 # constant-cost post-loop fallback: call `check_deadline` as the FIRST statement of every loop whose trip
@@ -1368,7 +1370,7 @@ function rx_word(tok,    parts, np) {
   return match(parts[np], rx_re) > 0
 }
 # #508: the body of a word that is EXACTLY one ANSI-C or locale segment (a dollar sign, a quote, a plain
-# name, the same quote): letters, digits, `_`, `.` or `-`, no leading dash. Else the empty string. (This
+# name, the same quote): a letter, digit or `_`, then letters, digits, `_`, `.` or `-`. Else the empty string. (This
 # program is single-quoted shell, so no literal apostrophe may appear in it.)
 function whole_lit(tok,    q, b) {
   q = substr(tok, 2, 1)

@@ -3490,6 +3490,8 @@ case_push_rtexp_deny_git_slot_ansi_c_literal() {
 # mutant:508-pg-rx-ansic-failclosed — drops the unconditional deny for a git-slot word that holds a
 #   dollar sign and a quote but is not exactly one plain segment, so concatenated, mixed-quote and
 #   backslash spellings fall through to the push-text check only.
+# mutant:508-pg-rx-ansic-unpaired — drops the closing-quote check in whole_lit(), so an unterminated
+#   segment ($'pu) is read as a truncated name instead of failing closed.
 case_push_rtexp_deny_git_slot_ansi_c_concat() {
   # Any git-slot word holding a dollar sign and a quote that is not exactly one plain segment fails closed
   # under the git-options reason, push or not: concatenations, mixed quote kinds, backslashes, attached
@@ -3502,7 +3504,7 @@ case_push_rtexp_deny_git_slot_ansi_c_concat() {
     "git p\$'\\x75sh' origin main" "git pu\$'s\\x68' origin feature/x" \
     'git -$X p$'"'ush'"' origin feature/x' "git -\$X \$'p'\$'ush' origin feature/x" "git \$X p\$'ush' origin feature/x" \
     "git \$'-c' core.pager=cat p\$'ush' origin feature/x" \
-    "git st\$'atus'" 'git st$"atus"' "git --namespace=\$'a b' status" "git \$'a b' status"
+    "git st\$'atus'" 'git st$"atus"' "git --namespace=\$'a b' status" "git \$'a b' status" "git \$'pu status"
   # An attached option holding a space-bearing segment is a deliberate over-block, whichever reason names it.
   pp_run "git --git-dir=\$'/tmp/a b/.git' status"
   expect_push_deny

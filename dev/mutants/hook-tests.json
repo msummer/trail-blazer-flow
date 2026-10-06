@@ -7555,6 +7555,21 @@
       "expect_fail": [
         "ab-rtexpscan-noop-flood"
       ]
+    },
+    {
+      "name": "508-pg-rx-ansic-unpaired",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "  if (length(tok) < 4 || substr(tok, length(tok)) != q) return \"\"",
+          "to": "  if (length(tok) < 4) return \"\""
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-git-slot-ansi-c-concat"
+      ]
     }
   ]
 }
