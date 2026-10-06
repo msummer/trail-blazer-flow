@@ -1551,7 +1551,7 @@ mk_push_cmd_mode() { jq -n --arg cmd "$1" --arg mode "$2" '{tool_name: "Bash", t
 mk_push_tool() { jq -n --arg tool "$1" --arg cmd "$2" '{tool_name: $tool, tool_input: {command: $cmd}}'; }
 # mk_push_missing_command — tool_input.command absent, but the raw JSON still contains both the
 # literal 'push' and 'git' substrings (in an unrelated field) so this case actually reaches the
-# "cmd empty" check instead of passing vacuously via either raw-stdin fast path (LESSON
+# "cmd empty" check instead of passing vacuously via the raw-stdin git fast path (LESSON
 # 2026-08-26's analogue, mirroring mk_agent_missing_command above).
 mk_push_missing_command() { jq -n --arg note 'was going to run git push origin main' '{tool_name: "Bash", tool_input: {}, note: $note}'; }
 
@@ -1599,8 +1599,11 @@ mk_fixture_worktree() {
 # a worktree fixture that is the MAIN dir (mk_fixture_worktree's first argument), never the
 # pointer dir, mirroring where hooks/push-guard.sh itself reads (the common dir, not the resolved
 # gitdir). AMBIENT-$PWD RULE: every push fixture below that builds a config has n <= 1 non-option
-# tokens (a bare `git push` or `git push <remote>`), because config is consulted ONLY in that
-# branch — so every one of them MUST pass an explicit cwd via mk_push_cmd_cwd, or push-guard.sh
+# tokens (a bare `git push` or `git push <remote>`), because the push routes are consulted ONLY in
+# that branch — and since #448 every non-push git segment is an alias candidate whose alias lookup
+# reads config too (so a no-cwd fixture with a bare git log reads the developer's own checkout; a
+# push-capable alias there named like a built-in would flip it, which is why the fixtures that matter
+# pass a cwd) — so every one of them MUST pass an explicit cwd via mk_push_cmd_cwd, or push-guard.sh
 # resolves the developer's own checkout and reads THAT machine's real .git/config (today, before
 # this builder existed, no such flake was possible: every no-cwd push fixture in this file has
 # n >= 2 — see this file's push mutation table header). Since #269, the SAME rule also binds any
@@ -1889,8 +1892,8 @@ case_pd_n1_refspec() {
 case_pd_crlf_dest() {
   # #270: the exact command the issue measured. Isolates the destination compare, which goes
   # through strip_quotes() + is_deny_member (NOT normalize() — push destinations never pass
-  # through it, see the hook's own header). Raw stdin carries both required fast-path substrings
-  # ("push", "git") ahead of the escaped \r, so this reaches the tokenizer.
+  # through it, see the hook's own header). Raw stdin carries the required fast-path substring
+  # ("git") ahead of the escaped \r, so this reaches the tokenizer.
   run_push_guard "$(mk_push_cmd "git push origin main${CR}")"
   expect_push_deny
 }
@@ -1901,8 +1904,8 @@ case_pd_crlf_interior() {
   # survived the whole suite undetected; this shape kills both a trailing-only strip (the first
   # two CRs, including the verdict-bearing one, are untouched) AND a once-only strip (the
   # verdict-bearing CR is the SECOND, not the one a once-only strip removes) — see M23/M24/M25
-  # below. Raw stdin carries both fast-path substrings ("git", "push") intact after the first
-  # escaped \r — the fast paths are whole-string substring tests, so position is irrelevant here
+  # below. Raw stdin carries the fast-path substring ("git") intact after the first
+  # escaped \r — the fast path is a whole-string substring test, so position is irrelevant here
   # (unlike case_pd_crlf_cmdword, where the "g","i","t" run must survive ahead of the escape).
   run_push_guard "$(mk_push_cmd "echo a${CR} && git push origin main${CR} && echo b${CR}")"
   expect_push_deny
@@ -1918,7 +1921,7 @@ case_pd_crlf_cmdword() {
 }
 case_pn_crlf_feature() {
   # #270: the strip must not widen the deny set — exact match is still required against a
-  # non-default destination. Raw stdin carries both fast-path substrings.
+  # non-default destination. Raw stdin carries the fast-path substring.
   run_push_guard "$(mk_push_cmd "git push origin feature/x${CR}")"
   expect_push_no_opinion
 }
@@ -2009,9 +2012,9 @@ case_pn_bash_script() {
   # Control proving exact-match, not substring-match: the command word after the "bash" prefix
   # skip is "hooks/push-guard.sh" (basename "push-guard.sh"), which CONTAINS "push" but is not
   # "git". The trailing shell comment supplies a literal "git" token so the raw stdin JSON
-  # contains BOTH "push" and "git" (LESSON — a fixture whose raw JSON is missing either literal
-  # exits at one of the two raw-stdin fast paths above and never reaches the tokenizer, which
-  # would make this case's own claim about normalize()'s basename step vacuous); the comment
+  # contains "git" (LESSON — a fixture whose raw JSON is missing that literal exits at the raw-stdin
+  # fast path above and never reaches the tokenizer, which would make this case's own claim about
+  # normalize()'s basename step vacuous); the comment
   # text itself is never reached by emit_segment, since cmdword already resolves (to
   # "push-guard.sh") from the tokens before it.
   run_push_guard "$(mk_push_cmd 'bash hooks/push-guard.sh # not a git push')"
@@ -2742,7 +2745,9 @@ case_push_cmdcfg_deny_codex_main_session() {
 }
 case_push_cmdcfg_noop_nonpush_segment() {
   # Only push segments are judged, and the flag doesn't leak across segments.
-  run_push_guard "$(mk_push_cmd 'git -c core.pager=cat log && git push origin feature/x')"
+  local dir="$tmpbase/repo-cmdcfg-noop-nonpush"
+  mk_fixture_repo "$dir" main feature/x
+  run_push_guard "$(mk_push_cmd_cwd 'git -c core.pager=cat log && git push origin feature/x' "$dir")"
   expect_push_no_opinion
 }
 case_push_cmdcfg_noop_env_nosystem() {
@@ -2766,7 +2771,7 @@ case_push_cmdcfg_deny_precedence() {
 # Every deny fixture builds the same fixture checkout (default branch main, current branch
 # feature/x) and asserts the ONE fixed #292 "unresolved" line naming the fixed reason; every
 # no-opinion fixture also passes that checkout as cwd (the AMBIENT-$PWD rule) and its raw payload
-# holds both "push" and "git", so neither raw-stdin fast path can pass it vacuously. Every reason is
+# holds both "push" and "git", so the raw-stdin fast path cannot pass it vacuously. Every reason is
 # a fixed string -- no deny line echoes command text.
 # mutant:449-pg-obscured-off — drops the quoted-or-escaped-git-option trigger in the subcommand
 #   walk, so the option is judged as before (normalised into the subcommand slot, segment dropped).
@@ -3115,6 +3120,786 @@ case_pp_noop_flood() {
   if [ "$push_rc" -ne 0 ]; then __why="${__why}control ${measured_ms}ms -> deadline ${calibrated_secs}s\n"; fi
 }
 
+# --- git aliases and config relocation (#448, absorbs #450) ----------------------------------------
+# Every non-push git segment is an alias candidate: the hook looks `alias.<subcmd>` up in the config it
+# already reads and denies when the expansion could push (first word push, a `!` shell alias, an
+# option, another defined alias, or a trailing-backslash continuation). Config it cannot read (inline
+# or exported HOME=/XDG_CONFIG_HOME=/GIT_CONFIG_*, a -c/--config-env value naming alias or include)
+# denies the candidate outright. Every fixture passes an explicit cwd (AMBIENT-$PWD RULE above), and
+# the raw stdin of the config-file cases never contains the word push, so a re-added push fast path
+# cannot hide them. Suffixes sit before -wt-<n>.
+# mutant:448-pg-fastpath-push -- re-inserts the raw-stdin push fast path ahead of the git one, so a
+#   config-file alias (no push literal anywhere in the command text) exits before the tokenizer.
+# mutant:448-pg-fastpath-crlf -- same re-inserted fast path, killed by the carriage-return fixture.
+# mutant:448-pg-alias-early-exit -- drops the ALIAS pattern from the pre-deadline early exit, so an
+#   alias candidate never reaches the driver loop.
+# mutant:448-pg-alias-emit -- blanks the ALIAS line the tokenizer prints for a non-push git segment.
+# mutant:448-pg-alias-section -- makes the [alias] section header arm unmatchable, so no alias key is
+#   ever recorded.
+# mutant:448-pg-alias-shell -- drops the leading-! test from the alias classifier.
+# mutant:448-pg-alias-dash -- drops the leading-dash test from the alias classifier.
+# mutant:448-pg-alias-chain -- drops the names-another-defined-alias test from the alias classifier.
+# mutant:448-pg-alias-fold -- drops the lowercase fold of the alias key.
+# mutant:448-pg-alias-continuation -- drops the trailing-backslash test from the alias classifier.
+# mutant:448-pg-alias-word-strip -- drops the quote and backslash strip of the expansion first word.
+# mutant:448-pg-alias-c-target -- drops the resolved-checkout alias assignment in apply_c_target().
+# mutant:448-pg-alias-session-restore -- drops the alias restore in apply_session_repo().
+# mutant:448-pg-alias-cmdline -- stops treating a command-line alias or include as unreadable config.
+# mutant:448-pg-alias-reloc-nonpush -- stops treating a relocation assignment on a non-push git
+#   segment as unreadable config.
+# mutant:448-pg-alias-xcfg -- drops the cross-segment config flag from the ALIAS arm of the driver.
+# mutant:448-pg-alias-cmdline-text -- treats any command-line config as alias-bearing.
+# mutant:448-pg-alias-name-match -- matches an alias record whatever its key is.
+# mutant:448-pg-alias-classify-open -- makes every matching alias record deny.
+# mutant:448-pg-alias-lost-prefix -- drops the alias lookup for a segment lost to a quoted prefix
+#   assignment.
+# mutant:448-pg-alias-lost-option -- drops the alias lookup for a segment lost to a quoted option.
+# mutant:448-pg-alias-lost-reloc -- drops the relocation test for a lost segment.
+# mutant:448-pg-alias-lost-needgit -- drops the names-git gate for a loss in the command prefix, so a
+#   quote-split assignment in front of a command that never names git is treated as an alias candidate.
+# mutant:448-pg-alias-subsection -- makes the [alias "<name>"] subsection header arm unmatchable, so a
+#   command key under it is never recorded.
+# mutant:448-pg-alias-escape -- drops the git-config whitespace escapes (backslash t, n, b) as word
+#   breaks, so push followed by an escaped TAB or LF fuses into one word.
+# mutant:448-pg-alias-cr-mid -- drops the interior-CR marker on an [alias] value, so a CR strictly
+#   inside the line fuses the words around it.
+# mutant:448-pg-alias-lost-quoted-reloc -- drops the quoted relocation or command-line-config
+#   assignment test from emit_alias_lost().
+# mutant:448-pg-alias-xcfg-export-cfg -- drops the GIT_CONFIG_* test from the exported-name arm of the
+#   cross-segment config flag.
+# mutant:448-pg-alias-xcfg-bare-cfg -- drops the GIT_CONFIG_* test from the bare-assignment arm of the
+#   cross-segment config flag.
+# mutant:448-pg-alias-dollar -- drops the dollar-sign test on command-line config of an alias candidate.
+# mutant:448-pg-alias-subcmd-fold -- drops the lowercase fold of the subcommand in the ALIAS line.
+# mutant:448-pg-alias-reset -- drops the alias-record reset in resolve_repo(), so the session records
+#   leak into a resolved -C target.
+# mutant:448-pg-alias-subsection-name -- reads a subsection alias only under a matching name, so a
+#   subsection alias no longer denies every alias candidate of its checkout.
+# mutant:448-pg-alias-subsection-space -- drops the blank-run alternative of the subsection header.
+# mutant:448-pg-alias-subsection-tab -- drops the TAB alternative of the subsection header.
+# mutant:448-pg-alias-subsection-dot -- drops the dotted alias header alternative.
+# mutant:448-pg-alias-lost-quoted-cfg -- drops the GIT_CONFIG_* name tests from the embedded
+#   assignment scan of a lost segment.
+# mutant:448-pg-alias-lost-trigger-git -- drops the trigger token from the names-git gate of a lost
+#   segment, so a relocation packed with git into one env -S token (backslash-underscore separators) is
+#   not treated as an alias candidate.
+# mutant:448-pg-alias-lost-substring -- makes the embedded assignment scan prefix-only, so an
+#   assignment inside an env -S string no longer counts.
+# mutant:448-pg-alias-backtick -- drops the backtick test on command-line config of an alias candidate.
+# mutant:448-pg-alias-dollar-env -- drops the dollar-sign test on GIT_CONFIG_* assignment values.
+# mutant:448-pg-alias-cr-mid-subsection -- drops the interior-CR marker on a subsection alias value.
+al_cfg_body() { printf '[alias]\n\t%s\n' "$1"; }
+al_run() { run_push_guard "$(mk_push_cmd_cwd "$1" "$2")"; }
+al_expect_alias() {
+  local src="$1"
+  expect_push_deny
+  case "$push_err" in
+    *"(blocked: git alias may push)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing '(blocked: git alias may push)': '$push_err'\n" ;;
+  esac
+  case "$push_err" in
+    *"$src"*) ;;
+    *) __ok=0; __why="${__why}stderr does not name the source '$src': '$push_err'\n" ;;
+  esac
+}
+al_expect_aliascfg() {
+  expect_push_deny
+  case "$push_err" in
+    *"(blocked: unreadable git config may define an alias)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing '(blocked: unreadable git config may define an alias)': '$push_err'\n" ;;
+  esac
+}
+# al_expect_no_echo TOKEN -- the deny line must never echo a command token, alias name or alias value.
+al_expect_no_echo() {
+  [ -n "$1" ] || { __ok=0; __why="${__why}al_expect_no_echo called with an empty TOKEN (needle_required)\n"; return; }
+  case "$push_err" in
+    *"$1"*) __ok=0; __why="${__why}stderr echoes '$1': '$push_err'\n" ;;
+  esac
+}
+case_al_deny_repo_config() {
+  local dir="$tmpbase/repo-al-repo"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+  al_expect_no_echo "zqp"
+}
+case_al_deny_feature_dest() {
+  local dir="$tmpbase/repo-al-feature"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'p = push')"
+  al_run 'git p origin feature/x' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_global_config() {
+  local dir="$tmpbase/repo-al-global" home="$tmpbase/home-al-global"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$home/.gitconfig" "$(al_cfg_body 'zqp = push')"
+  push_home_override="$home"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias "your global git config"
+}
+case_al_deny_xdg_config() {
+  local dir="$tmpbase/repo-al-xdg" xdg="$tmpbase/xdg-al-xdg"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$xdg/git/config" "$(al_cfg_body 'zqp = push')"
+  push_xdg_home="$xdg"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias "your global git config"
+}
+case_al_deny_include() {
+  local dir="$tmpbase/repo-al-include" inc="$tmpbase/inc-al-include.cfg"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$inc" "$(al_cfg_body 'zqp = push')"
+  mk_fixture_config "$dir" "$(printf '[include]\n\tpath = %s\n' "$inc")"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config (via include)"
+}
+case_al_deny_shell() {
+  local dir="$tmpbase/repo-al-shell"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = !git push origin main')"
+  al_run 'git zqp' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_option_first() {
+  local dir="$tmpbase/repo-al-option"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = --no-pager push')"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_chain() {
+  local dir="$tmpbase/repo-al-chain"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias]\n\ta = b\n\tb = push\n')"
+  al_run 'git a origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_case_fold() {
+  local dir="$tmpbase/repo-al-fold"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[ALIAS]\n\tZp = PUSH\n')"
+  al_run 'git zp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_continuation() {
+  # alias.p is pu, a backslash, a newline, then sh: the line parser never joins the continuation.
+  local dir="$tmpbase/repo-al-continuation"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias]\n\tzqp = pu\\\n\tsh\n')"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_quoted_word() {
+  local dir="$tmpbase/repo-al-quoted"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = "pu\"s\"h"')"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_c_target() {
+  # The alias lives only in the resolved -C worktree, never in the session checkout.
+  local dir="$tmpbase/repo-al-ctarget" wt="$tmpbase/alctarget-wt-1"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_repo "$wt" main feature/x
+  mk_fixture_config "$wt" "$(al_cfg_body 'zqp = push')"
+  al_run 'git -C ../alctarget-wt-1 zqp origin feature/x' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_session_after_c_target() {
+  # An earlier -C segment resolves a checkout with no alias; the session alias must be restored for
+  # the next segment.
+  local dir="$tmpbase/repo-al-session" wt="$tmpbase/alsession-wt-1"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_repo "$wt" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
+  al_run 'git -C ../alsession-wt-1 status; git zqp origin feature/x' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_cmdline_c() {
+  local dir="$tmpbase/repo-al-cmdline"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'git -c alias.p=push p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_cmdline_include() {
+  local dir="$tmpbase/repo-al-cmdline-include"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'git -c include.path=/x p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_config_env() {
+  local dir="$tmpbase/repo-al-config-env"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'git --config-env=alias.p=PV p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_key() {
+  local dir="$tmpbase/repo-al-env-key"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_home_nonpush() {
+  local dir="$tmpbase/repo-al-home-nonpush"
+  mk_fixture_repo "$dir" main feature/x
+  al_run "HOME=$tmpbase/home-al-nonpush git p origin main" "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_xdg_nonpush() {
+  local dir="$tmpbase/repo-al-xdg-nonpush"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'env XDG_CONFIG_HOME=/x git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_global_env_nonpush() {
+  local dir="$tmpbase/repo-al-global-nonpush"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'GIT_CONFIG_GLOBAL=/x git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_xcfg_export_home() {
+  local dir="$tmpbase/repo-al-xcfg-export"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'export HOME=/x; git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_xcfg_bare_xdg() {
+  local dir="$tmpbase/repo-al-xcfg-bare"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'XDG_CONFIG_HOME=/x; git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_quoted_option() {
+  # #449 interplay: the quoted -c option is lost to the tokenizer; the push word in its value makes
+  # it a lost push segment, denied through #449's own fixed reason.
+  local dir="$tmpbase/repo-al-quoted-option"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'git "-c" alias.p=push p origin main' "$dir"
+  expect_push_deny
+}
+case_al_deny_quoted_space_assign() {
+  # #449 interplay: the quoted assignment splits at its space, so the real command word is lost. The
+  # HOME relocation it carries makes the rest of the segment an alias candidate that denies.
+  local dir="$tmpbase/repo-al-quoted-assign"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'HOME="/tmp/a b" git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_lost_prefix_config() {
+  # #449 interplay: X="a b" leaves a bogus command word; the alias is still looked up for every later
+  # token, so a config-file alias behind it denies.
+  local dir="$tmpbase/repo-al-lost-prefix"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
+  al_run 'X="a b" git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_lost_option_config() {
+  # #449 interplay: a quoted option the tokenizer cannot follow must not hide the alias behind it.
+  local dir="$tmpbase/repo-al-lost-option"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
+  al_run 'git "--no-pager" zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_lost_value_config() {
+  # #449 interplay: a quoted -c value split at its space leaves junk fragments; the real subcommand
+  # after them is still looked up.
+  local dir="$tmpbase/repo-al-lost-value"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
+  al_run 'git -c "user.name=A B" zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_lost_reloc_prefix() {
+  # #449 interplay: a quoted relocation assignment in front of a lost segment that names git.
+  local dir="$tmpbase/repo-al-lost-reloc"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'env XDG_CONFIG_HOME="/a b" git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_codex_shaped() {
+  # Not suffixed -deny-codex-main-session: 494-pg-wd-precedence filters on that substring.
+  local dir="$tmpbase/repo-al-codex"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
+  run_push_guard "$(mk_codex_shell '' 'git zqp origin main' "$dir")"
+  al_expect_alias ".git/config"
+}
+case_al_deny_never_executes() {
+  local dir="$tmpbase/repo-al-never-executes"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
+  local trapdir="$tmpbase/trapbin-al-never-executes" sentinel="$tmpbase/sentinel-al-never-executes"
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm dirname; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  local before after
+  before="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  run_push_guard "$(mk_push_cmd_cwd 'git zqp origin main' "$dir")" "$trapdir:$PATH"
+  after="$(find "$dir" -type f -exec ls -la {} \; | sort)"
+  al_expect_alias ".git/config"
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH while denying an alias\n"; }
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}fixture repo's file listing changed — push-guard.sh wrote to or altered a file it should only read\n"; }
+}
+case_al_noop_nonpush_alias() {
+  local dir="$tmpbase/repo-al-noop-nonpush"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'st = status')"
+  al_run 'git st' "$dir"
+  expect_push_no_opinion
+}
+case_al_noop_builtins_with_push_alias() {
+  local dir="$tmpbase/repo-al-noop-builtins"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'p = push')"
+  al_run 'git status && git log --oneline -5 && git diff' "$dir"
+  expect_push_no_opinion
+}
+case_al_noop_undefined_subcommand() {
+  local dir="$tmpbase/repo-al-noop-undefined"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'p = push')"
+  al_run 'git lfs pull' "$dir"
+  expect_push_no_opinion
+}
+case_al_noop_other_alias_word() {
+  local dir="$tmpbase/repo-al-noop-other"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias]\n\tco = checkout\n\tp = push\n')"
+  al_run 'git co main' "$dir"
+  expect_push_no_opinion
+}
+case_al_noop_c_benign() {
+  local dir="$tmpbase/repo-al-noop-c-benign"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'st = status')"
+  al_run 'git -c core.pager=cat st' "$dir"
+  expect_push_no_opinion
+}
+case_al_noop_env_nosystem() {
+  local dir="$tmpbase/repo-al-noop-nosystem"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'st = status')"
+  al_run 'GIT_CONFIG_NOSYSTEM=1 git st' "$dir"
+  expect_push_no_opinion
+}
+case_al_noop_scoped_home() {
+  # The HOME assignment belongs to the ls segment only; the git segment is judged on its own.
+  local dir="$tmpbase/repo-al-noop-scoped"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'st = status')"
+  al_run 'HOME=/x ls; git st' "$dir"
+  expect_push_no_opinion
+}
+case_al_noop_harness_shapes() {
+  local dir="$tmpbase/repo-al-noop-harness"
+  mk_fixture_repo "$dir" main claude/17-a
+  mk_fixture_config "$dir" "$(printf '[alias]\n\tp = push\n\tup = !git pull\n')"
+  al_run 'git add -A && git commit -m "x" && git push -u origin "claude/17-a"' "$dir"
+  expect_push_no_opinion
+}
+case_al_noop_quoted_prefix_nonalias() {
+  # A quoted-space assignment before an ordinary built-in stays no opinion, alias config present.
+  local dir="$tmpbase/repo-al-noop-quoted-prefix"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'p = push')"
+  al_run 'X="a b" git status' "$dir"
+  expect_push_no_opinion
+}
+case_al_noop_quoted_option_nonalias() {
+  local dir="$tmpbase/repo-al-noop-quoted-option"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'p = push')"
+  al_run 'git "--no-pager" log -5' "$dir"
+  expect_push_no_opinion
+}
+case_al_noop_lost_no_git() {
+  # A quote-split assignment in front of a command that never names git, mentioning alias text: with
+  # no later git token the lost segment is not an alias candidate. The fixture directory name carries
+  # the git literal the raw-stdin fast path needs.
+  local dir="$tmpbase/repo-al-lost-no-git-gitdir"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'X="a b" echo alias include' "$dir"
+  expect_push_no_opinion
+}
+case_al_deny_subsection_repo() {
+  local dir="$tmpbase/repo-al-subsection"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias "zqp"]\n\tcommand = push\n')"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_subsection_global() {
+  local dir="$tmpbase/repo-al-subsection-global" home="$tmpbase/home-al-subsection"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$home/.gitconfig" "$(printf '[alias "zqp"]\n\tcommand = push\n')"
+  push_home_override="$home"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias "your global git config"
+}
+case_al_noop_subsection() {
+  local dir="$tmpbase/repo-al-noop-subsection"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias "st"]\n\tcommand = status\n\n[alias "zqp"]\n\tother = push\n')"
+  al_run 'git st && git zqp' "$dir"
+  expect_push_no_opinion
+}
+case_al_deny_escape_tab() {
+  # git-config escapes the TAB as backslash t, and git splits the alias at whitespace: the first word is push.
+  local dir="$tmpbase/repo-al-escape-tab"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push\torigin')"
+  al_run 'git zqp main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_escape_newline() {
+  local dir="$tmpbase/repo-al-escape-newline"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push\norigin')"
+  al_run 'git zqp main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_cr_mid() {
+  # A raw CR strictly inside the line is stripped by the line reader, which would fuse push and origin.
+  local dir="$tmpbase/repo-al-cr-mid"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body "zqp = push${CR}origin")"
+  al_run 'git zqp main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_cr_mid_subsection() {
+  local dir="$tmpbase/repo-al-cr-mid-sub"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias "zqp"]\n\tcommand = push%sorigin\n' "$CR")"
+  al_run 'git zqp main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_env_quoted_home() {
+  local dir="$tmpbase/repo-al-env-qhome"
+  mk_fixture_repo "$dir" main feature/x
+  al_run "env \"HOME=$tmpbase/home-al-qhome\" git p origin main" "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_squoted_xdg() {
+  local dir="$tmpbase/repo-al-env-qxdg"
+  mk_fixture_repo "$dir" main feature/x
+  al_run "env 'XDG_CONFIG_HOME=/x' git p origin main" "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_command_env_quoted() {
+  local dir="$tmpbase/repo-al-command-env"
+  mk_fixture_repo "$dir" main feature/x
+  al_run "command env \"HOME=$tmpbase/home-al-cenv\" git p origin main" "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_s_reloc() {
+  local dir="$tmpbase/repo-al-env-s"
+  mk_fixture_repo "$dir" main feature/x
+  al_run "env -S \"HOME=$tmpbase/home-al-envs git p origin main\"" "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_xcfg_export_gitconfig() {
+  local dir="$tmpbase/repo-al-xcfg-export-cfg"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push; git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_xcfg_export_parameters() {
+  local dir="$tmpbase/repo-al-xcfg-export-params"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'export GIT_CONFIG_PARAMETERS=x; git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_xcfg_bare_gitconfig() {
+  local dir="$tmpbase/repo-al-xcfg-bare-cfg"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'GIT_CONFIG_COUNT=1; git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_dollar_c() {
+  # A variable builds the config key at run time, which the hook cannot expand.
+  local dir="$tmpbase/repo-al-dollar-c"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'K=alias.p; git -c $K=push p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_dollar_env_key() {
+  local dir="$tmpbase/repo-al-dollar-env"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'K=alias.p; GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=$K GIT_CONFIG_VALUE_0=push git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_dollar_parameters() {
+  local dir="$tmpbase/repo-al-dollar-params"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'GIT_CONFIG_PARAMETERS=$X git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_dollar_subst() {
+  # The command substitution splits the segment, so the subcommand is never reached in it.
+  local dir="$tmpbase/repo-al-dollar-subst"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'git -c "$(echo alias.p)=push" p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_subcmd_fold() {
+  # git matches an alias key case-insensitively.
+  local dir="$tmpbase/repo-al-subcmd-fold"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
+  al_run 'git ZQP origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_noop_c_target_clean() {
+  # The session defines a push alias; the resolved -C checkout defines none, so its own records decide.
+  local dir="$tmpbase/repo-al-clean-session" wt="$tmpbase/alclean-wt-1"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_repo "$wt" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
+  al_run 'git -C ../alclean-wt-1 zqp origin feature/x' "$dir"
+  expect_push_no_opinion
+}
+case_al_deny_subsection_spaces() {
+  local dir="$tmpbase/repo-al-sub-spaces"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias   "zqp"]\n\tcommand = push\n')"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_subsection_tab() {
+  local dir="$tmpbase/repo-al-sub-tab"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias\t"zqp"]\n\tcommand = push\n')"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_subsection_dotted() {
+  local dir="$tmpbase/repo-al-sub-dotted"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias.zqp]\n\tcommand = push\n')"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_subsection_escaped_name() {
+  # The name is a backslash then p, which git reads as p: the name is never read here, so it cannot be misread.
+  local dir="$tmpbase/repo-al-sub-escaped"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias "\\zqp"]\n\tcommand = push\n')"
+  al_run 'git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_subsection_odd_name() {
+  # A name holding a blank (run as a quoted subcommand) and a name holding a slash.
+  local dir="$tmpbase/repo-al-sub-odd"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias "p q"]\n\tcommand = push\n')"
+  al_run 'git "p q" origin main' "$dir"
+  al_expect_alias ".git/config"
+  mk_fixture_config "$dir" "$(printf '[alias "a/p"]\n\tcommand = push\n')"
+  al_run 'git a/p origin main' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_subsection_any_subcommand() {
+  # Over-block, deliberate: a push-ish subsection alias makes every alias candidate of the checkout deny.
+  local dir="$tmpbase/repo-al-sub-any"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias "zqp"]\n\tcommand = push\n')"
+  al_run 'git status' "$dir"
+  al_expect_alias ".git/config"
+}
+case_al_deny_env_s_attached() {
+  local dir="$tmpbase/repo-al-env-s-att"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'env -S"HOME=/x git p origin main"' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_s_squoted() {
+  local dir="$tmpbase/repo-al-env-s-sq"
+  mk_fixture_repo "$dir" main feature/x
+  al_run "env -S'XDG_CONFIG_HOME=/x git p origin main'" "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_split_string() {
+  local dir="$tmpbase/repo-al-env-split"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'env --split-string="HOME=/x git p origin main"' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_s_underscore_all() {
+  local dir="$tmpbase/repo-al-env-s-us-all"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'env -S"HOME=/x\_git\_p\_origin\_main"' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_s_underscore_git() {
+  local dir="$tmpbase/repo-al-env-s-us-git"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'env -S"HOME=/x\_git" p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_quoted_gitconfig() {
+  local dir="$tmpbase/repo-al-env-qcfg"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'env "GIT_CONFIG_PARAMETERS=$X" git p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_backtick_quoted() {
+  # The backtick cuts the segment inside the quoted key, so the -c value is never seen whole.
+  local dir="$tmpbase/repo-al-bt-quoted"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'git -c "`echo alias.p`=push" p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_backtick_bare() {
+  local dir="$tmpbase/repo-al-bt-bare"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'git -c `echo alias.p`=push p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_backtick_config_env() {
+  local dir="$tmpbase/repo-al-bt-cenv"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'git --config-env "`echo alias.p`=PV" p origin main' "$dir"
+  al_expect_aliascfg
+}
+case_al_noop_dollar_not_config() {
+  # A dollar sign outside the config VALUE tokens is no reason to deny.
+  local dir="$tmpbase/repo-al-dollar-noop"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'git -c color.ui=false -C "$WT" status' "$dir"
+  expect_push_no_opinion
+  al_run 'X=$Y GIT_CONFIG_COUNT=0 git log' "$dir"
+  expect_push_no_opinion
+}
+case_al_deny_flood() {
+  # mutant:448-pg-aliasdl-check-off -- FLOOD + TIMING, calibrated by dl_site_run's same-run knob-0
+  # control. 3000 alias candidates that each resolve cleanly (st = status), then one that denies as
+  # a push alias: only the driver loop's own per-line check_deadline can stop the flood, so the line
+  # printed is the deadline one, never the alias one. With the sample neutered the knob-0 control
+  # cannot print the deadline line and the case fails there.
+  # The candidate count is sized from a same-run per-candidate cost, measured on a small flood as the
+  # wall time of an unbudgeted run minus its knob-0 control (the unsampled prefix), so the work clearly
+  # exceeds the largest knob (DL_KNOB_MAX seconds) by a factor of three on any host and shell.
+  local dir="$tmpbase/repo-al-flood" flood payload small t0 ms0 c_us n
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(printf '[alias]\n\tst = status\n\tp = push\n')"
+  small="$(mk_push_cmd_big "$(printf 'git st;%.0s' $(seq 1 300))git p origin main" "$dir")"
+  push_deadline_override=9
+  measure_ms run_push_guard "$small"
+  t0="$measured_ms"
+  push_budget_override="0"
+  push_deadline_override=9
+  measure_ms run_push_guard "$small"
+  ms0="$measured_ms"
+  if [ -z "$t0" ] || [ -z "$ms0" ]; then
+    __ok=0; __why="${__why}per-candidate cost control's timing report could not be parsed\n"
+    return
+  fi
+  c_us=$(( (t0 - ms0) * 1000 / 300 ))
+  [ "$c_us" -ge 100 ] || c_us=100
+  n=$(( DL_KNOB_MAX * 3000000 / c_us ))
+  [ "$n" -ge 3000 ] || n=3000
+  [ "$n" -le 40000 ] || n=40000
+  flood="$(printf 'git st;%.0s' $(seq 1 "$n"))"
+  payload="$(mk_push_cmd_big "${flood}git p origin main" "$dir")"
+  dl_site_run "$payload"
+}
+case_al_deny_budget_zero() {
+  # mutant:448-pg-alias-early-exit -- an alias candidate reaches the deadline sample: a bare
+  # git log is no push, yet at knob 0 it must deny with the deadline line, because the early exit no
+  # longer hides a command that could still run an alias.
+  local dir="$tmpbase/repo-al-budget-zero"
+  mk_fixture_repo "$dir" main feature/x
+  push_budget_override="0"
+  run_push_guard "$(mk_push_cmd_big 'git log' "$dir")"
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+}
+# --- #450: an inline HOME=/XDG_CONFIG_HOME= relocation on a push segment -----------------------
+# mutant:448-pg-reloc-vocab -- empties the relocation vocabulary, so no assignment is ever flagged.
+# mutant:448-pg-reloc-push-sentinel -- deletes the push-segment relocation deny.
+# mutant:448-pg-reloc-xseg -- deletes the HOME/XDG cross-segment block.
+# mutant:448-pg-reloc-exact -- widens relocation membership to any name containing HOME.
+# mutant:448-pg-reloc-scoped -- drops the command-word-empty guard from the bare-assignment arm of the
+#   HOME/XDG cross-segment rule, so a HOME assignment scoped to another command flags the whole command.
+# mutant:448-pg-alias-xcfg-scoped -- drops the same guard from the cross-segment config flag, so a HOME
+#   assignment scoped to an ls segment makes a later alias candidate deny.
+al_expect_reloc() {
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+}
+case_rl_deny_home_inline() {
+  # The orchestrator's shape: HOME names a directory whose .gitconfig carries a push route to main.
+  local dir="$tmpbase/repo-rl-home" home="$tmpbase/home-rl-inline"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_global_config "$home/.gitconfig" "$(printf '[remote "origin"]\n\tpush = HEAD:main\n')"
+  al_run "HOME=$home git push" "$dir"
+  al_expect_reloc
+}
+case_rl_deny_xdg_inline() {
+  local dir="$tmpbase/repo-rl-xdg"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'XDG_CONFIG_HOME=/nonexistent git push origin feature/x' "$dir"
+  al_expect_reloc
+}
+case_rl_deny_env_home() {
+  local dir="$tmpbase/repo-rl-env"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'env HOME=/nonexistent git push origin feature/x' "$dir"
+  al_expect_reloc
+}
+case_rl_deny_xseg_export_home() {
+  local dir="$tmpbase/repo-rl-xseg-export"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'export HOME=/x; git push origin feature/x' "$dir"
+  expect_push_deny
+  case "$push_err" in
+    *"(HOME or XDG_CONFIG_HOME set earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing '(HOME or XDG_CONFIG_HOME set earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_rl_deny_xseg_bare_xdg() {
+  local dir="$tmpbase/repo-rl-xseg-bare"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'XDG_CONFIG_HOME=/x; git push origin feature/x' "$dir"
+  expect_push_deny
+  case "$push_err" in
+    *"(HOME or XDG_CONFIG_HOME set earlier in this command)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing '(HOME or XDG_CONFIG_HOME set earlier in this command)': '$push_err'\n" ;;
+  esac
+}
+case_rl_noop_similar_name() {
+  local dir="$tmpbase/repo-rl-similar"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'HOMEBREW_NO_AUTO_UPDATE=1 git push origin feature/x' "$dir"
+  expect_push_no_opinion
+}
+case_rl_noop_scoped() {
+  local dir="$tmpbase/repo-rl-scoped"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'HOME=/x ls; git push origin feature/x' "$dir"
+  expect_push_no_opinion
+}
+case_pd_crlf_push_literal() {
+  # A carriage return inside the push subcommand literal: the #270 strip runs after the jq
+  # extraction, so with no raw-stdin push fast path the command now reaches the tokenizer as git
+  # push origin main and denies.
+  run_push_guard "$(mk_push_cmd "git pu${CR}sh origin main")"
+  expect_push_deny
+}
+
 # --- cross-segment ("xseg"): a cd/pushd/popd/chdir or a GIT_DIR-family export/assignment in
 # another segment of the same push command denies as unresolved (#433) ------------------------
 # mutant:433-pg-dir-vocab -- empties PUSH_DIR_CHANGE_WORDS, so no cd/pushd/popd/chdir segment is
@@ -3354,7 +4139,9 @@ case_px_deny_export_git_config_exact() {
 }
 case_px_noop_git_config_scoped() {
   # A GIT_CONFIG_* assignment scoped to another command's own environment never reaches the push.
-  run_push_guard "$(mk_push_cmd 'GIT_CONFIG_COUNT=1 git log; git push origin feature/x')"
+  local dir="$tmpbase/repo-px-git-config-scoped"
+  mk_fixture_repo "$dir" main feature/x
+  run_push_guard "$(mk_push_cmd_cwd 'GIT_CONFIG_COUNT=1 git log; git push origin feature/x' "$dir")"
   expect_push_no_opinion
 }
 case_px_deny_bare_git_config() {
@@ -3472,10 +4259,12 @@ case_px_deny_never_executes() {
   [ "$before_other" = "$after_other" ] || { __ok=0; __why="${__why}other checkout's file listing changed — push-guard.sh wrote to or altered a file it should only read\n"; }
 }
 case_px_noop_cd_no_push() {
-  # Contains "push" and "git" (passes both raw-stdin fast paths) but has no PUSH segment at all.
-  # Since #435 the pre-deadline early exit returns no opinion for a scan with no PUSH line or
-  # sentinel before the driver ever runs, so the driver's own "saw_push" guard is defense in depth
-  # that no fixture can reach independently; this control pins the combined verdict.
+  # Contains "push" and "git" but has no PUSH segment at all. Since #448 its git log segment is an
+  # alias candidate (an ALIAS line), so the scan passes the pre-deadline early exit with #433's
+  # cross-segment marker still in it, and only the driver's own "saw_push" guard keeps the cd from
+  # denying a command that has no push segment.
+  # mutant:448-pg-xseg-saw-push -- drops the saw_push condition from the driver's cross-segment
+  #   fallback, so the cd marker denies this push-free command.
   local main="$tmpbase/repo-px-y1"
   mk_fixture_repo "$main" main "claude/17-a"
   run_push_guard "$(mk_push_cmd_cwd 'cd ../other-y1 && git log --grep=push' "$main")"
@@ -4396,7 +5185,7 @@ case_pr_plan_mode()      { run_push_guard "$(mk_push_cmd_mode 'git push origin m
 case_pr_wrong_tool()     { run_push_guard "$(mk_push_tool 'Read' 'git push origin main')"; expect_push_no_opinion; }
 case_pr_malformed_json() {
   # Deliberately contains both literal substrings 'push' and 'git' so this exercises jq's own
-  # parse failure rather than passing vacuously via either raw-stdin fast path.
+  # parse failure rather than passing vacuously via the raw-stdin fast path.
   run_push_guard 'not json at all, but mentions push and git anyway'
   expect_push_no_opinion
 }
@@ -5562,19 +6351,21 @@ case_push_dl_deny_budget_zero() {
 }
 case_push_dl_noop_budget_zero_no_push() {
   # mutant:435-dl-scan-empty-exit -- deletes the pre-deadline early exit; a command with no push
-  # segment at all must stay "no opinion" even at knob 0 -- without the early exit, control falls
-  # straight into the very next statement, check_deadline itself, which denies immediately at
-  # budget 0.
+  # segment and no git alias candidate at all must stay "no opinion" even at knob 0 -- without the
+  # early exit, control falls straight into the very next statement, check_deadline itself, which
+  # denies immediately at budget 0. The command word is echo, not git: since #448 a bare git log is
+  # an alias candidate, which the early exit deliberately lets through to the config lookup.
   push_budget_override="0"
-  run_push_guard "$(mk_push_cmd_big 'git log --grep=push' "$tmpbase")"
+  run_push_guard "$(mk_push_cmd_big 'echo git log --grep=push' "$tmpbase")"
   expect_push_no_opinion
 }
 case_push_dl_noop_budget_zero_xseg_no_push() {
   # mutant:435-dl-xseg-early-exit -- makes the early exit fire only on an EMPTY scan again; a command
-  # with a cd (so #433's "-xseg-" marker line is emitted) but no push segment must still stay "no
-  # opinion" at knob 0, since that marker alone never denies.
+  # with a cd (so #433's "-xseg-" marker line is emitted) but no push segment and no git alias
+  # candidate (the command word of the second segment is echo, #448) must still stay "no opinion" at
+  # knob 0, since that marker alone never denies.
   push_budget_override="0"
-  run_push_guard "$(mk_push_cmd_big 'cd x && git log --grep=push' "$tmpbase")"
+  run_push_guard "$(mk_push_cmd_big 'cd x && echo git log --grep=push' "$tmpbase")"
   expect_push_no_opinion
 }
 case_push_dl_deny_production_budget() {
@@ -8272,15 +9063,13 @@ cases=(
   # source-label assertion). Every other mutant (M15, M17, M18, M27, M28, M29, M30, M31, M33, M34,
   # M35, M36, M37, M38, M39, M40, M41, M43, M44, M45, M46, M47, M48, M49, M50, M51, M52, M53, M54,
   # M55, M56, M57, M59, M61, M62, M66, M69) keeps its EXACT pre-kickback failing set, +2 pass each.
-  # M1/M2 (the two raw-stdin fast paths) are coarse — breaking either silences the WHOLE hook, so
-  # they only distinguish a deny-verdict case from everything else, never one deny case from
-  # another:
-  #   M1  fast path 1 pattern corrupted (*push* -> *pushX*)                -> 23 pass, 33 fail
+  # M2 (the raw-stdin git fast path) is coarse — breaking it silences the WHOLE hook, so it only
+  # distinguishes a deny-verdict case from everything else, never one deny case from another (M1,
+  # the push fast path's own pattern, no longer exists since #448 removed that fast path):
   #   M2  fast path 2 pattern corrupted (*git* -> *gitX*)                  -> 23 pass, 33 fail
-  #       (M1 and M2 fail the identical 33-case set, measured against the #260 56-case baseline:
-  #       every push-deny-* case plus push-never-executes-deny and
-  #       push-never-executes-reads-only — the four new #270 push-deny-crlf-* /
-  #       push-noop-crlf-feature fixtures did not exist yet)
+  #       (fails every push-deny-* case plus push-never-executes-deny and
+  #       push-never-executes-reads-only, measured against the #260 56-case baseline — the four
+  #       new #270 push-deny-crlf-* / push-noop-crlf-feature fixtures did not exist yet)
   #   M3  the .tool_name == "Bash" check disabled                         -> 55 pass,  1 fail
   #   M4  the .permission_mode == "plan" check disabled                   -> 55 pass,  1 fail
   #   M5  PREFIX_WORDS emptied                                            -> 54 pass,  2 fail
@@ -9250,7 +10039,7 @@ cases=(
   "push-xseg-deny-inseg-precedence|case_px_deny_inseg_precedence|deny: cd ../other-x18 && git --git-dir=../other-x18/.git push origin develop -- the push segment's OWN in-segment reason (#292's --git-dir) keeps precedence over the cross-segment fallback -- control, not part of the mutation-proof registry (see the section header above for why)"
   "push-xseg-deny-codex-main-session|case_px_deny_codex_main_session|deny: a Codex-shaped main-session payload (mk_codex_shell '') with cd ../other-x19 && git push origin develop -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
   "push-xseg-deny-never-executes|case_px_deny_never_executes|deny via the cross-segment route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND BOTH the session repo's and the other checkout's file listings are byte-identical before/after -- mutation proof: dev/mutants/hook-tests.json (433-pg-dir-vocab, 433-pg-fallback-drop)"
-  "push-xseg-noop-cd-no-push|case_px_noop_cd_no_push|no opinion: cd ../other-y1 && git log --grep=push -- contains \"push\" and \"git\" but has no PUSH segment at all -- control (the #435 early exit answers first; the driver's saw_push guard is defense in depth)"
+  "push-xseg-noop-cd-no-push|case_px_noop_cd_no_push|no opinion: cd ../other-y1 && git log --grep=push -- contains \"push\" and \"git\" but has no PUSH segment at all, so the driver's saw_push guard alone keeps the cd marker from denying -- mutation proof: dev/mutants/hook-tests.json (448-pg-xseg-saw-push)"
   "push-xseg-noop-cd-as-argument|case_px_noop_cd_as_argument|no opinion: echo cd && git push origin feature/x -- \"cd\" here is an argument, never the resolved command word -- control, not part of the mutation-proof registry"
   "push-xseg-noop-export-unrelated|case_px_noop_export_unrelated|no opinion: export GIT_TRACE=1; git push origin feature/x -- an unrelated exported variable is never flagged -- mutation proof: dev/mutants/hook-tests.json (433-pg-export-exact)"
   "push-wd-allow-no-workdir|case_wd_allow_no_workdir|no opinion: a Codex payload whose code-mode call carries no workdir -- control, not part of the mutation-proof registry"
@@ -9461,6 +10250,93 @@ cases=(
   "push-parse-deny-codex-main-session|case_pp_deny_codex_main_session|deny: a Codex-shaped main-session payload with env -C ../other git push origin main -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off, 494-pg-wd-precedence)"
   "push-parse-noop-c-quoted-value|case_pp_noop_c_quoted_value|no opinion: git -C \"../demo-wt-1\" push -u origin \"claude/17-a\" (the harness's own worktree shape) -- control, not part of the mutation-proof registry"
   "push-parse-noop-flood|case_pp_noop_flood|FLOOD+TIMING: large records, one per trigger, then a feature push -- no opinion under an active deadline calibrated from a same-run control (#470) -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated, 449-pg-scan-once)"
+  "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"
+  "push-alias-deny-feature-dest|case_al_deny_feature_dest|a push alias denies even when the destination is a feature branch -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
+  "push-alias-deny-global-config|case_al_deny_global_config|an alias in \$HOME/.gitconfig denies and names your global git config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-section)"
+  "push-alias-deny-xdg-config|case_al_deny_xdg_config|an alias in \$XDG_CONFIG_HOME/git/config denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-section)"
+  "push-alias-deny-include|case_al_deny_include|an alias in an included file denies, naming the source with (via include) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-section)"
+  "push-alias-deny-shell|case_al_deny_shell|a ! shell alias denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-shell)"
+  "push-alias-deny-option-first|case_al_deny_option_first|an alias whose expansion starts with a git option (--no-pager push) denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-dash)"
+  "push-alias-deny-chain|case_al_deny_chain|an alias naming another defined alias (a = b, b = push) denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-chain)"
+  "push-alias-deny-case-fold|case_al_deny_case_fold|[ALIAS] with Zp = PUSH run as git zp denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-fold)"
+  "push-alias-deny-continuation|case_al_deny_continuation|an alias value ending in a backslash continuation denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-continuation)"
+  "push-alias-deny-quoted-word|case_al_deny_quoted_word|an alias whose first word is the quoted and escaped spelling of push denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-word-strip)"
+  "push-alias-deny-c-target|case_al_deny_c_target|an alias defined only in a resolved -C worktree denies a segment run there -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-c-target)"
+  "push-alias-deny-session-after-c-target|case_al_deny_session_after_c_target|the session alias still denies after an earlier -C segment resolved another checkout -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-session-restore)"
+  "push-alias-deny-cmdline-c|case_al_deny_cmdline_c|git -c alias.p=push p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cmdline)"
+  "push-alias-deny-cmdline-include|case_al_deny_cmdline_include|git -c include.path=/x p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cmdline)"
+  "push-alias-deny-config-env|case_al_deny_config_env|git --config-env=alias.p=PV p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cmdline)"
+  "push-alias-deny-env-key|case_al_deny_env_key|GIT_CONFIG_COUNT/KEY/VALUE naming an alias denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cmdline)"
+  "push-alias-deny-home-nonpush|case_al_deny_home_nonpush|an inline HOME= on a non-push git segment denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-reloc-nonpush)"
+  "push-alias-deny-env-xdg-nonpush|case_al_deny_env_xdg_nonpush|env XDG_CONFIG_HOME= on a non-push git segment denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-reloc-nonpush)"
+  "push-alias-deny-global-env-nonpush|case_al_deny_global_env_nonpush|an inline GIT_CONFIG_GLOBAL= on a non-push git segment denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-reloc-nonpush)"
+  "push-alias-deny-xcfg-export-home|case_al_deny_xcfg_export_home|export HOME=/x in an earlier segment makes a later alias candidate deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg)"
+  "push-alias-deny-xcfg-bare-xdg|case_al_deny_xcfg_bare_xdg|a bare XDG_CONFIG_HOME= segment makes a later alias candidate deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg)"
+  "push-alias-deny-quoted-option|case_al_deny_quoted_option|git \"-c\" alias.p=push p origin main denies (#449 interplay) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-option)"
+  "push-alias-deny-quoted-space-assign|case_al_deny_quoted_space_assign|HOME=\"/tmp/a b\" git p origin main denies as unreadable config (#449 interplay) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-prefix, 448-pg-alias-lost-reloc)"
+  "push-alias-deny-lost-prefix-config|case_al_deny_lost_prefix_config|X=\"a b\" git zqp denies via the config-file alias (#449 interplay) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-prefix)"
+  "push-alias-deny-lost-option-config|case_al_deny_lost_option_config|git \"--no-pager\" zqp denies via the config-file alias (#449 interplay) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-option)"
+  "push-alias-deny-lost-value-config|case_al_deny_lost_value_config|git -c \"user.name=A B\" zqp denies via the config-file alias (#449 interplay) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-option)"
+  "push-alias-deny-lost-reloc-prefix|case_al_deny_lost_reloc_prefix|env XDG_CONFIG_HOME=\"/a b\" git p denies as unreadable config (#449 interplay) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-reloc)"
+  "push-alias-deny-codex-shaped|case_al_deny_codex_shaped|a Codex-shaped main-session payload with a repo alias denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
+  "push-alias-deny-never-executes|case_al_deny_never_executes|the alias route never invokes git/gh/rm/dirname on a booby-trapped PATH and leaves the fixture tree byte-identical -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
+  "push-alias-noop-nonpush-alias|case_al_noop_nonpush_alias|git st with st = status is no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-classify-open)"
+  "push-alias-noop-builtins-with-push-alias|case_al_noop_builtins_with_push_alias|built-in subcommands stay no opinion while p = push is configured -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-name-match)"
+  "push-alias-noop-undefined-subcommand|case_al_noop_undefined_subcommand|git lfs pull (no alias.lfs) is no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-name-match)"
+  "push-alias-noop-other-alias-word|case_al_noop_other_alias_word|git co main with co = checkout and p = push is no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-classify-open)"
+  "push-alias-noop-c-benign|case_al_noop_c_benign|git -c core.pager=cat st is no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cmdline-text)"
+  "push-alias-noop-env-nosystem|case_al_noop_env_nosystem|GIT_CONFIG_NOSYSTEM=1 git st is no opinion -- control, not part of the mutation-proof registry"
+  "push-alias-noop-scoped-home|case_al_noop_scoped_home|HOME=/x scoped to an ls segment leaves a later git st no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg-scoped)"
+  "push-alias-noop-harness-shapes|case_al_noop_harness_shapes|the harness own add/commit/push shape is no opinion with p = push and up = !git pull configured -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-name-match)"
+  "push-alias-noop-quoted-prefix-nonalias|case_al_noop_quoted_prefix_nonalias|X=\"a b\" git status stays no opinion with a push alias configured -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-classify-open)"
+  "push-alias-noop-quoted-option-nonalias|case_al_noop_quoted_option_nonalias|git \"--no-pager\" log -5 stays no opinion with a push alias configured -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-classify-open)"
+  "push-alias-noop-lost-no-git|case_al_noop_lost_no_git|a quote-split assignment before a command that never names git stays no opinion even with alias text in it -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-needgit)"
+  "push-alias-deny-subsection-repo|case_al_deny_subsection_repo|[alias \"zqp\"] command = push in .git/config denies git zqp -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection)"
+  "push-alias-deny-subsection-global|case_al_deny_subsection_global|[alias \"zqp\"] command = push in the global config denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection)"
+  "push-alias-noop-subsection|case_al_noop_subsection|a subsection alias to status, and a subsection key other than command, stay no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-classify-open)"
+  "push-alias-deny-escape-tab|case_al_deny_escape_tab|an alias value push, backslash t, origin denies (the escape is a word break) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-escape)"
+  "push-alias-deny-escape-newline|case_al_deny_escape_newline|an alias value push, backslash n, origin denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-escape)"
+  "push-alias-deny-cr-mid|case_al_deny_cr_mid|a raw CR inside an alias value denies instead of fusing the words around it -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cr-mid)"
+  "push-alias-deny-cr-mid-subsection|case_al_deny_cr_mid_subsection|a raw CR inside a subsection alias value denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cr-mid-subsection)"
+  "push-alias-deny-env-quoted-home|case_al_deny_env_quoted_home|env \"HOME=<d>\" git p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-reloc)"
+  "push-alias-deny-env-squoted-xdg|case_al_deny_env_squoted_xdg|env single-quoted XDG_CONFIG_HOME=/x git p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-reloc)"
+  "push-alias-deny-command-env-quoted|case_al_deny_command_env_quoted|command env \"HOME=<d>\" git p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-reloc)"
+  "push-alias-deny-env-s-reloc|case_al_deny_env_s_reloc|env -S \"HOME=<d> git p origin main\" denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-reloc)"
+  "push-alias-deny-xcfg-export-gitconfig|case_al_deny_xcfg_export_gitconfig|an exported GIT_CONFIG_COUNT/KEY/VALUE triple makes a later alias candidate deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg-export-cfg)"
+  "push-alias-deny-xcfg-export-parameters|case_al_deny_xcfg_export_parameters|an exported GIT_CONFIG_PARAMETERS makes a later alias candidate deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg-export-cfg)"
+  "push-alias-deny-xcfg-bare-gitconfig|case_al_deny_xcfg_bare_gitconfig|a bare GIT_CONFIG_COUNT= segment makes a later alias candidate deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg-bare-cfg)"
+  "push-alias-deny-dollar-c|case_al_deny_dollar_c|git -c \$K=push p (a variable-built key) denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-dollar)"
+  "push-alias-deny-dollar-env-key|case_al_deny_dollar_env_key|GIT_CONFIG_KEY_0=\$K on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-dollar)"
+  "push-alias-deny-dollar-parameters|case_al_deny_dollar_parameters|GIT_CONFIG_PARAMETERS=\$X on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-dollar)"
+  "push-alias-deny-dollar-subst|case_al_deny_dollar_subst|git -c with a command substitution in the key denies even though it splits the segment -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-dollar)"
+  "push-alias-deny-subcmd-fold|case_al_deny_subcmd_fold|git ZQP with zqp = push denies (alias keys match case-insensitively) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subcmd-fold)"
+  "push-alias-noop-c-target-clean|case_al_noop_c_target_clean|a push alias in the session does not leak into a resolved -C checkout that defines none -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-reset)"
+  "push-alias-deny-subsection-spaces|case_al_deny_subsection_spaces|[alias   \"zqp\"] (several blanks) command = push denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-space)"
+  "push-alias-deny-subsection-tab|case_al_deny_subsection_tab|[alias<TAB>\"zqp\"] command = push denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-tab)"
+  "push-alias-deny-subsection-dotted|case_al_deny_subsection_dotted|the deprecated [alias.zqp] command = push denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-dot)"
+  "push-alias-deny-subsection-escaped-name|case_al_deny_subsection_escaped_name|a backslash-escaped subsection name denies (the name is never read) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-name)"
+  "push-alias-deny-subsection-odd-name|case_al_deny_subsection_odd_name|subsection names holding a blank or a slash deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-name)"
+  "push-alias-deny-subsection-any-subcommand|case_al_deny_subsection_any_subcommand|a push-ish subsection alias makes every alias candidate of that checkout deny (deliberate over-block) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-name)"
+  "push-alias-deny-env-s-attached|case_al_deny_env_s_attached|env -S\"HOME=/x git p ...\" (attached string) denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-substring)"
+  "push-alias-deny-env-s-squoted|case_al_deny_env_s_squoted|env -S single-quoted XDG_CONFIG_HOME string denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-substring)"
+  "push-alias-deny-env-split-string|case_al_deny_env_split_string|env --split-string=\"HOME=/x git p ...\" denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-substring)"
+  "push-alias-deny-env-s-underscore-all|case_al_deny_env_s_underscore_all|env -S with HOME and git packed into one token by backslash-underscore separators denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-trigger-git)"
+  "push-alias-deny-env-s-underscore-git|case_al_deny_env_s_underscore_git|env -S with HOME and git in the trigger token, the rest as plain words, denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-trigger-git)"
+  "push-alias-deny-env-quoted-gitconfig|case_al_deny_env_quoted_gitconfig|env \"GIT_CONFIG_PARAMETERS=\$X\" git p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-cfg)"
+  "push-alias-deny-backtick-quoted|case_al_deny_backtick_quoted|a backtick substitution inside a quoted -c key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"
+  "push-alias-deny-backtick-bare|case_al_deny_backtick_bare|a backtick substitution as the -c key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"
+  "push-alias-deny-backtick-config-env|case_al_deny_backtick_config_env|a backtick substitution in a --config-env key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"
+  "push-alias-noop-dollar-not-config|case_al_noop_dollar_not_config|a dollar sign outside the config value tokens (-C \"\$WT\", X=\$Y) stays no opinion -- control, not part of the mutation-proof registry"
+  "push-aliasdl-deny-flood|case_al_deny_flood|FLOOD+TIMING: a flood of clean alias candidates, sized from a same-run per-candidate cost, then a push alias denies with the deadline line, calibrated from a same-run knob-0 control (#476) -- mutation proof: dev/mutants/hook-tests.json (448-pg-aliasdl-check-off)"
+  "push-aliasdl-deny-budget-zero|case_al_deny_budget_zero|a bare git log at knob 0 reaches the deadline sample instead of the early exit -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-early-exit)"
+  "push-reloc-deny-home-inline|case_rl_deny_home_inline|HOME=<d> git push with a push route in <d>/.gitconfig denies with the command-line-config message -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-vocab, 448-pg-reloc-push-sentinel)"
+  "push-reloc-deny-xdg-inline|case_rl_deny_xdg_inline|XDG_CONFIG_HOME=/nonexistent git push denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-vocab, 448-pg-reloc-push-sentinel)"
+  "push-reloc-deny-env-home|case_rl_deny_env_home|env HOME=/nonexistent git push denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-vocab, 448-pg-reloc-push-sentinel)"
+  "push-reloc-deny-xseg-export-home|case_rl_deny_xseg_export_home|export HOME=/x then a push denies with the HOME/XDG reason -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-xseg)"
+  "push-reloc-deny-xseg-bare-xdg|case_rl_deny_xseg_bare_xdg|a bare XDG_CONFIG_HOME= then a push denies with the HOME/XDG reason -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-xseg)"
+  "push-reloc-noop-similar-name|case_rl_noop_similar_name|HOMEBREW_NO_AUTO_UPDATE=1 git push origin feature/x is no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-exact)"
+  "push-reloc-noop-scoped|case_rl_noop_scoped|HOME=/x scoped to ls then a feature push is no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-scoped)"
+  "push-deny-crlf-push-literal|case_pd_crlf_push_literal|git pu<CR>sh origin main denies once the raw-stdin push fast path is gone -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-crlf)"
   # --- hooks/push-guard.sh: analysis deadline (#435) cases ----------------------------------------
   "push-dl-deny-budget-zero|case_push_dl_deny_budget_zero|knob 0 denies the very first sample even for an ordinary feature/x push -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off)"
   "push-dl-noop-budget-zero-no-push|case_push_dl_noop_budget_zero_no_push|no push segment stays no-opinion even at knob 0, via the pre-deadline scan_out exit -- mutation proof: dev/mutants/hook-tests.json (435-dl-scan-empty-exit)"
