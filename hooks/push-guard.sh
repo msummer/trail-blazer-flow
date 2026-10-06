@@ -74,7 +74,9 @@
 # tokenizer cannot follow (#449)" below); and, in the command-word walk, this script alone has an
 # `env` arm (the allowlisted `env` options, `-u`/`--unset` with their value) and three #449
 # fail-closed triggers that `hooks/agent-boundary.sh` does not have, the shared PREFIX_WORDS skip
-# itself being unchanged; if that subcommand is exactly
+# itself being unchanged; since #508 the expansion-word predicate (rx_re and rx_word(), see "Fail-closed:
+# a runtime expansion in the command prefix or the git options (#508)" below) is the same text in both
+# scripts, each with its own verdict; if that subcommand is exactly
 # `push`, the segment's REMAINING tokens (the push's own options/remote/refspecs) are emitted
 # quote/backslash-stripped but WITHOUT a basename normalisation — a refspec destination like
 # `refs/heads/main` or `claude/17-a` is a path-shaped value whose `/` is semantically load-bearing,
@@ -373,8 +375,7 @@
 # quote or escape split that keeps an EVEN count of the same quote character, which the odd-count
 # test cannot see (`X="a'"'b c' git push origin main`, `X="\" x" git push origin main`,
 # `X="a\" b" git push origin main`, `env -u "a'"'b c' git push origin main`, an option value `git -c
-# "k=a'"'b c' push origin main`); ANSI-C quoting
-# (`git $'-c' remote.origin.push=HEAD:main push`); a quoted `-C` value containing a space (`git -C
+# "k=a'"'b c' push origin main`); a quoted `-C` value containing a space (`git -C
 # "../a b" push origin main`, rows (b), (d) and (j) below, unchanged), which also hides any later
 # option such as a `-c` after it (`git -C "../a b" -c "k=x y" push origin main`, and `git "-C"
 # "../a b" push origin main`, are both rc 0); an
@@ -385,6 +386,63 @@
 # origin trunk` — not added to the cross-segment rule above); and the git-alias form and inline
 # `HOME=`/`XDG_CONFIG_HOME=` relocation of #448. hooks/agent-boundary.sh has the same gaps and is
 # left for a follow-up, so a fix here is not mirrored there.
+#
+# Fail-closed: a runtime expansion in the command prefix or the git options (#508). The command word
+# is resolved from the literal token, but a word holding a runtime expansion may expand to nothing (or
+# to several words) before the shell runs it, so `$X git push origin main` ran the push while the walk
+# saw a non-git command word. An EXPANSION WORD is a token whose basename (the part after the last `/`)
+# holds a dollar sign followed by a name character, a digit, a special parameter (`@ * # ? ! $ -`), one
+# of zsh's expansion flags (`= ~ ^`, which expand to nothing for an unset name), an apostrophe or a
+# double quote: `$X`, `$1`, `$@`, `$=X`, `"$X"`, `a$X`, `$''`, `$""`, `$'A=b'`. The predicate,
+# rx_word() over rx_re, is quote-blind (`'$X'` and `\$X` count) and a lone `$` never counts; the
+# directory part never counts, so `$D/git push` still resolves by its basename. `${...}`, `$(...)` and a
+# backtick are not expansion words: the segmenter cuts at them. Since #508, (a) in command position an
+# expansion word is SKIPPED as a possibly-empty prefix word (PREFIX_WORDS itself is unchanged), so the
+# real command word behind it still resolves: `$X cd ../other && git push ...` is a cd, `$X git zqp ...`
+# an alias candidate. The trigger is an expansion word in command position, in the dash slot of a prefix
+# word (`sudo -$X`), as the value of `env -u` (detached or attached), or an assignment AFTER a prefix
+# word (`env X=$Y git ...`); a bare assignment before any prefix word (`X=$Y git push ...`) is never
+# word-split and never a trigger. The first trigger is remembered, and after the walk, when
+# lost_push() says the rest of the segment could still be a push, the segment denies as UNRESOLVED with
+# the fixed reason `runtime expansion in the command prefix` (an earlier #292 reason, command-line git
+# config and a cut push keep their own precedence). A pure-expansion command word may be a runtime-built
+# git (`$G push origin main`, whose raw stdin holds no git text), which is why the raw-stdin fast path
+# below also admits a dollar sign together with `push`. (b) In the git option slot an expansion word is
+# skipped the same way (`git $X push origin main`, `git -$X push ...`, `git $'-c' core.pager=cat push
+# ...`, `git $X'push' origin main`) and remembered; after the subcommand loop the segment denies with
+# the fixed reason `runtime expansion in the git options` when that word itself names push or the
+# split-value gate (armed == 2: an expansion may stand for any number of options and values) finds one
+# after it. ANSI-C (`$'...'`) and locale (`$"..."`) words in the option slot or the subcommand position
+# are treated by one rule. A word that is EXACTLY one segment with a plain body (starting with a letter,
+# digit or `_`, then letters, digits, `_`, `.` or `-`) is read as that name and substituted into the token list, so `git
+# $'zqp' origin main` looks up the alias zqp and `git $'push' origin main` is a push, and every later
+# scan sees the name. Any OTHER word there that holds a dollar sign followed by a quote (`p$'ush'`,
+# `$'p'$'ush'`, `"p"$'ush'`, `z$'qp'`, a backslash body such as `$'\x70ush'`, mixed or unpaired quotes,
+# an attached option value such as `--git-dir=$'/a b'`) fails closed under the git-options reason (an
+# earlier #292 reason such as `--git-dir`, or command-line config, keeps its own precedence, as in (a)),
+# whether or not a push follows: the shell value of such a word is never computed. That is a deliberate
+# over-block that includes `git st$'atus'` and `git $'a b' status`. The check is two `index()` calls per word
+# (linear in the word), and the value of a detached `-c`, `-C` or `--config-env` option is consumed with
+# its option and never inspected, as before. When no subcommand follows the skipped words, the first skipped word that does not start with a
+# dash is the candidate subcommand (the word taken before the skip existed; none when every skipped
+# word is dash-led, so a cut push still fails closed), and the #448 alias and relocation scan covers the
+# whole option slot, since an expansion may hide where it ends. A git alias behind the
+# skipped word is judged by the #448 route as usual. (c) The segmenter
+# cuts a record at `${`, `$(` and a backtick, so an `env -S` string such as
+# `env -S'${X}git\_push\_origin\_main'` arrives in pieces and its unsupported `env` option (#449) was
+# judged without the tail: for a record that holds one of those three and names `env`, lost_push() is
+# run once over the whole record's tokens, and the unsupported-env-option trigger fires on it too.
+# Every rule only adds denies. Deliberate over-blocking, each measured rc 2: `$DOCKER push img`, `$X
+# pushd ../other`, any word that merely contains push after a pure-expansion command word, `git $X log
+# --grep push`, `env FOO=$BAR git push origin feature/x`, `'$X' git push ...` and `\$X git push ...`
+# (quote-blind), an unsupported `env` option in a record holding `${`, `$(` or a backtick that also
+# holds `git ... push`, and a heredoc or multi-line line that starts with an expansion word followed
+# by `git ... push` (scanned as its own segment, like every line). A commit message or prose with the
+# expansion mid-line (`git commit -m "$X git push origin main"`, `echo $X git push ...`) keeps no
+# opinion. Residuals, each measured rc 0: a `${...}`, `$(...)` or backtick prefix (the text after its
+# close is judged precisely, so an injected prefix is not failed closed), a runtime-built git
+# subcommand (`git $S origin main`), a runtime-built refspec destination (`git push origin
+# HEAD:$B`), and `eval "$c"`.
 #
 # Fail-closed: git aliases and config relocation (#448, absorbing #450). This hook once recognised only
 # the literal subcommand `push`, so a git alias that expands to push hid it (a config-file alias such
@@ -456,7 +514,9 @@
 # an alias defined only in another checkout's config, reached by `cd`, an unresolvable `-C`,
 # `GIT_DIR=` or `--git-dir`; a `git-<name>` external on `PATH` (or via `--exec-path`/`GIT_EXEC_PATH`);
 # `env -u XDG_CONFIG_HOME`; the `HOME` that `sudo` sets; a subcommand
-# built at runtime or written with ANSI-C quoting (`git $'p'`, `S=p; git $S`); an alias run through
+# built at runtime (`S=p; git $S`; an ANSI-C or locale spelling in the option slot is read only as a
+# whole plain word and otherwise fails closed, see the #508 paragraph; a locale word `$"zqp"` is read
+# untranslated, so a bash locale catalog that translates it is not followed); an alias run through
 # `xargs` or a script file; and `help.autocorrect`, where the hook says rc 0 for a mistyped
 # subcommand (UNVERIFIED whether git then runs push); a relocation or config name built at run time
 # (`V=HOME; env "$V=/x" git p`, the same class as `S=p; git $S`); a variable-setting builtin this hook does not
@@ -879,7 +939,9 @@
 # config this hook cannot read (see "Fail-closed: git aliases and config relocation (#448)" above), OR
 # whose push segment lost the tokenizer — a quoted or escaped git option, a quote or
 # escape in the command prefix, or an unsupported `env` option (#449 — see "Fail-closed: a segment
-# the tokenizer cannot follow (#449)" above), OR, since #435, whose analysis cannot finish inside this hook's own time budget, or that
+# the tokenizer cannot follow (#449)" above), OR, since #508, a segment whose command prefix or git
+# option slot holds a runtime expansion that may hide a push (see "Fail-closed: a runtime expansion
+# in the command prefix or the git options (#508)" above), OR, since #435, whose analysis cannot finish inside this hook's own time budget, or that
 # reads a git config file with a depth-0 line too long to analyse safely (see "Analysis deadline
 # (#435)" below), OR, since #494, a Codex-shaped payload whose shell `workdir` is not provably the
 # session checkout, whose transcript cannot be read, whose transcript window holds no tool call, or
@@ -904,7 +966,10 @@
 # "-cmdline-config-" sentinel, covered by `T_prefix` below, the linear pre-tokenizer cost this
 # deadline cannot sample around at all), #449 likewise (its per-token shape checks and at most three
 # lost_push() scans per segment, one memoised scan for each of three trigger families, all inside that tokenizer and so inside
-# `T_prefix`), and #433 has landed in the awk tokenizer plus one
+# `T_prefix`), #508 likewise (rx_word() is linear in one token; at most two more lost_push() scans per
+# segment, both after their loops and never at a trigger; two index() calls per git-slot word for the ANSI-C
+# rule; at most one more split of the record plus one
+# lost_push() per record; no emit_alias_lost() call is added), and #433 has landed in the awk tokenizer plus one
 # constant-cost post-loop fallback: call `check_deadline` as the FIRST statement of every loop whose trip
 # count grows with the command string or a config file's own content — never partway through a loop
 # body, and never only once at the top of a function that itself contains such a loop. The early
@@ -1178,7 +1243,8 @@ input="$(cat)"
 # the same documented, quote-blind limit hooks/agent-boundary.sh's fast paths carry. Since #448
 # there is no `push` fast path: a git alias that expands to push carries no `push` literal in the
 # command text at all (`git zqp origin main`), so a call may only skip the tokenizer when it never
-# names git. The #270 CR strip below (after the jq extraction) fixes an unstripped `\r` for every
+# names git. Since #508 it must also never hold a dollar sign together with `push` (a runtime-built
+# command word: `$G push origin main` names no git at all). The #270 CR strip below (after the jq extraction) fixes an unstripped `\r` for every
 # command that reaches the tokenizer, but a CR *inside* the `git` literal this fast path scans (a raw
 # stdin substring like `g<CR>it`, where a conforming JSON writer has already escaped the `\r`) still
 # exits here, before the strip ever runs — see this file's header "Documented under-blocking
@@ -1187,6 +1253,7 @@ input="$(cat)"
 # case-folds `git`.
 case "$input" in
   *[Gg][Ii][Tt]*) : ;;
+  *'$'*push*|*push*'$'*) : ;;
   *) exit 0 ;;
 esac
 
@@ -1277,6 +1344,8 @@ BEGIN {
   for (i = 1; i <= nrl; i++) reloc_set[rlarr[i]] = 1
   xcfg = 0
   has_bt = 0
+  # #508: a dollar sign followed by a name character, a digit, a special parameter, or a quote
+  rx_re = "[$][A-Za-z0-9_@*#?!$=~^\"" sq "-]"
 }
 function normalize(tok,    t, parts, np) {
   t = tok
@@ -1292,6 +1361,24 @@ function strip_quotes(tok,    t) {
   gsub(/"/, "", t)
   gsub(/\\/, "", t)
   return t
+}
+# #508: a runtime expansion in the token basename (the directory part never counts: $D/git is still
+# resolved by its last component). split on a literal slash, never a greedy regex.
+function rx_word(tok,    parts, np) {
+  if (index(tok, "$") == 0) return 0
+  np = split(tok, parts, "/")
+  return match(parts[np], rx_re) > 0
+}
+# #508: the body of a word that is EXACTLY one ANSI-C or locale segment (a dollar sign, a quote, a plain
+# name, the same quote): a letter, digit or `_`, then letters, digits, `_`, `.` or `-`. Else the empty string. (This
+# program is single-quoted shell, so no literal apostrophe may appear in it.)
+function whole_lit(tok,    q, b) {
+  q = substr(tok, 2, 1)
+  if (substr(tok, 1, 1) != "$" || (q != sq && q != "\"")) return ""
+  if (length(tok) < 4 || substr(tok, length(tok)) != q) return ""
+  b = substr(tok, 3, length(tok) - 3)
+  if (b ~ /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/) return b
+  return ""
 }
 function is_cmdcfg_name(n,    c) {
   if (n in ccenv_set) return 1
@@ -1399,7 +1486,7 @@ function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, u, na
   for (i = 1; i <= nc; i++) print "ALIAS\t" cpath "\t" chunk[i]
   if (names != "") print "ALIAS\t" cpath "\t" names
 }
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, cfgdollar, cv, ro, k, xname, cmdcfg, co, cp, cfgname) {
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, cfgdollar, cv, rx_at, rxg_at, rxn_at, rxbs, av, jend, ro, k, xname, cmdcfg, co, cp, cfgname) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
@@ -1414,6 +1501,10 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   reloc = 0
   al_done = 0
   cfgdollar = 0
+  rx_at = 0
+  rxg_at = 0
+  rxn_at = 0
+  rxbs = 0
   while (idx <= ntok) {
     tok = toks[idx]
     if (tok == "") { idx++; continue }
@@ -1439,6 +1530,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
         if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
         if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
       }
+      if (saw_prefix && !rx_at && rx_word(tok)) rx_at = idx
       idx++
       continue
     }
@@ -1451,6 +1543,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     if (in_env && substr(tok, 1, 1) == "-") {
       if (tok in envnov_set) { idx++; continue }
       if (tok in envunset_set) {
+        if (!rx_at && rx_word(toks[idx + 1])) rx_at = idx + 1
         if (quote_unbalanced(toks[idx + 1])) {
           if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
           if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
@@ -1460,6 +1553,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
         continue
       }
       if (substr(tok, 1, 2) == "-u" || index(tok, "--unset=") == 1) {
+        if (!rx_at && rx_word(tok)) rx_at = idx
         if (quote_unbalanced(tok)) {
           if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
           if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
@@ -1469,7 +1563,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
         continue
       }
       if (m0 < 0) m0 = lost_push(toks, idx, ntok, 0)
-      if (m0) { emit_lost("unsupported env option", unres, cmdcfg, cut_flag); return }
+      if (m0 || rec_lost) { emit_lost("unsupported env option", unres, cmdcfg, cut_flag); return }
       if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
     }
     # #449: after a prefix word, a quote-bearing token that reads as an option or an assignment once
@@ -1482,6 +1576,9 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
         if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
       }
     }
+    # #508: a runtime expansion in command position may expand to nothing (or to several words): skip
+    # it as a possibly-empty prefix word so the real command word behind it still resolves
+    if (rx_word(tok)) { if (!rx_at) rx_at = idx; saw_prefix = 1; idx++; continue }
     if (norm in prefix_set && norm != "-") in_env = (norm == "env")
     if (norm in prefix_set) { saw_prefix = 1; idx += (norm == "repeat") ? 2 : 1; continue }
     if (saw_prefix && substr(tok, 1, 1) == "-") { idx++; continue }
@@ -1489,6 +1586,8 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     idx++
     break
   }
+  # #508: an expansion in the command prefix, and the rest of the segment could still be a push
+  if (rx_at && lost_push(toks, rx_at + 1, ntok, 1)) { emit_lost("runtime expansion in the command prefix", unres, cmdcfg, cut_flag); return }
   # #433: cross-segment ("xseg") detection, order-independent -- first segment of any kind (a push
   # segment or otherwise) to match one of these three shapes sets the flag for the WHOLE command;
   # this push segment resolution below never reads xseg, only the driver post-loop fallback does
@@ -1584,12 +1683,29 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
       j += 2
       continue
     }
+    # #508: a word that is exactly one plain ANSI-C or locale segment is the name it spells (a dollar-quoted
+    # zqp is zqp), substituted into toks so every later scan sees it; any other word in the option slot
+    # holding a dollar sign and a quote fails closed
+    if (index(tok, "$" sq) > 0 || index(tok, "$\"") > 0) {
+      av = whole_lit(tok)
+      if (av != "") { tok = av; toks[j] = av }
+      else { rxbs = 1; if (!rxg_at) rxg_at = j; j++; continue }
+    }
+    if (rx_word(tok)) { if (!rxg_at) rxg_at = j; if (!rxn_at && substr(tok, 1, 1) != "-") rxn_at = j; j++; continue }
     if (substr(tok, 1, 1) == "-") { j++; continue }
     if (normalize(tok) == "") { j++; continue }
     subcmd = normalize(tok)
     j++
     break
   }
+  # #508: no subcommand followed the skipped expansion words. The first one that does not start with a
+  # dash is the candidate subcommand, the word the walk took before the skip existed; when every
+  # skipped word is dash-led there is none. The alias and relocation scan below then covers the whole
+  # option slot, since an expansion may hide where the slot ends.
+  jend = j
+  if (subcmd == "" && rxn_at) { subcmd = normalize(toks[rxn_at]); j = jend + 1 }
+  # #508: an expansion in the git option slot may stand for options, the subcommand, or nothing
+  if (rxg_at && (rxbs || index(strip_quotes(toks[rxg_at]), "push") > 0 || lost_push(toks, rxg_at + 1, ntok, 2))) { emit_lost("runtime expansion in the git options", unres, cmdcfg, cut_flag); return }
   # #448: every git segment whose subcommand is not push is an alias candidate -- git never lets an
   # alias shadow a built-in, so the config lookup in the driver loop alone decides. Config this hook
   # cannot read (a relocation assignment, or command-line config naming an alias or include) denies
@@ -1634,6 +1750,13 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   gsub(/[;&|(){}`]/, "\n", line)
   gsub(/[<>]/, " ", line)
   has_bt = (index($0, "`") > 0)
+  # #508: the segmenter cuts a record at ${, $( and a backtick, so an env -S string holding one is
+  # judged without its tail: fail closed on the whole record instead
+  rec_lost = 0
+  if ((index($0, "${") > 0 || index($0, "$(") > 0 || has_bt) && index(tolower($0), "env") > 0) {
+    rntok = split($0, rtoks, /[ \t]+/)
+    rec_lost = lost_push(rtoks, 1, rntok, 0)
+  }
   nseg = split(line, segs, /\n/)
   for (s = 1; s <= nseg; s++) emit_segment(segs[s])
   # Additive standalone-`]]` handling (see the identical mechanism and comment in

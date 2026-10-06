@@ -21,6 +21,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 - #510: push-guard reads a git config key written on its section header's line, the dotted, mixed
   (`[remote.a "b"]`) and tab-separated header spellings, and a file behind a leading UTF-8 BOM, and
   denies a header line it cannot split the way git does. No consumer step.
+- #508: `push-guard.sh` and `agent-boundary.sh` no longer lose a push or a git/gh call behind a runtime
+  expansion in command position (`$X git push origin main`, `env $'A=b' gh pr merge 5`, `git $X push`,
+  `env -S'${X}git\_push...'`): the word is skipped so the real command resolves. No consumer step.
 
 ## v3.3.1
 
