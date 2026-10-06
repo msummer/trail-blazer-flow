@@ -601,7 +601,7 @@ check-harness.sh
 It lists what the new version needs that your repo is missing. Fix what it flags and you're done.
 
 <details>
-<summary>Per-version migration notes (v1.9.0 → v3.3.0)</summary>
+<summary>Per-version migration notes (v1.9.0 → v3.3.1)</summary>
 
 For older history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration notes, v1.9.0
 to v2.7.7" subsection).
@@ -690,6 +690,11 @@ authenticate with no prompt (SSH, or a credential helper that works outside a te
 `codex-setup.sh --check` now reports `fallback-conflict`, keep exactly one top-level
 `project_doc_fallback_filenames` line, unindented and listing `"CLAUDE.md"` on that line, in
 `.codex/config.toml` (#484).
+
+**v3.3.0 → v3.3.1** — On Codex only: re-run `bin/codex-setup.sh` (and re-point an existing
+LaunchAgent plist's plugin path). If `codex-setup.sh --check` now reports `fallback-conflict`
+for a quoted `project_doc_fallback_filenames` key name in `.codex/config.toml`, write the key
+name bare (#490).
 
 </details>
 
