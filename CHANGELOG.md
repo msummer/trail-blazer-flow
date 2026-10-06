@@ -16,7 +16,18 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v3.3.1
+
+This patch release hardens two hooks. push-guard now denies a push segment it loses track of (quoted
+or escaped options, quoted values containing a space, unlisted `env` options, #449), and a git alias
+or config relocation that could hide a push (#448). Since #448, a non-push git command can also
+deny: one run through an alias that could push, or one whose `-c` value contains `$`.
+claude-dir-guard now denies a decoy-hidden or quote-split `apply_patch` shim (#455), and an
+implementer/verifier call too large to analyse, instead of timing out with no deny (#457). Also in
+this release: an unattended Codex run that stops at its own preflight is tracked as a failure
+(#496); `codex-setup.sh` refuses a quoted fallback-filenames key (#490); and the timing fixtures
+behind red macOS driver runs are de-flaked (#476, #507, #512). Consumer steps, on Codex only: re-run
+`bin/codex-setup.sh`, and if `--check` now reports `fallback-conflict`, write the key bare.
 
 - #512: the claude-dir-guard whole-text cap fixtures send a patch whose first line is an unrecognised marker, so the at-cap case (now cdgtextcap-deny-parse-at-cap, run only by 457-cdg-dl-text-cap-offbyone) gets the parser's deny at line 1 instead of analysing 1 MB inside the hook's 5s budget, and the over-cap and multibyte cases' mutant kills no longer need a full analysis. Test-only, no consumer step.
 - #507: the push-guard lost-scan flood fixture (now push-lostscan-noop-flood) sizes its token count from a same-run, mutant-invariant control, so its unmutated cost stays well under push-guard's 5s analysis budget on a loaded runner, and only 449-pg-scan-once runs it. Test-only, no consumer step.
