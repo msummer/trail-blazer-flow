@@ -10,7 +10,9 @@
 # whose analysis cannot finish inside this hook's own time budget, or a push that reads a git config
 # file with a depth-0 line too long to analyse safely (see "Analysis deadline (#435)" below), ALSO
 # denies, since #494, a Codex push whose shell `workdir` is not provably the session checkout (see
-# "Fail-closed: Codex shell workdir (#494)" below), and
+# "Fail-closed: Codex shell workdir (#494)" below), ALSO denies, since #448, any git command whose
+# subcommand is a git alias that may expand to a push, or that runs under config this hook cannot read
+# (see "Fail-closed: git aliases and config relocation (#448)" below), and
 # says nothing (exit 0, empty stdout, empty stderr — "no opinion") about everything else, so the
 # normal permission flow — a prompt, or a matching deny rule in
 # templates/repo-settings.json, which always wins over this hook's decision — applies. This closes
@@ -23,7 +25,9 @@
 # repository cannot be resolved at all" (#292), "deny a push segment carrying command-line git
 # config" (#439), and, since #435, "deny a command (or a config line it reads) too large to analyse
 # safely inside this hook's own time budget", and, since #494, "deny a Codex push whose shell
-# `workdir` is not the session checkout as a plain string literal"; does NOT enforce an
+# `workdir` is not the session checkout as a plain string literal", and, since #448, "deny a git
+# command whose subcommand may be an alias for a push, or an inline HOME=/XDG_CONFIG_HOME= relocation
+# on a push"; does NOT enforce an
 # allow-list of `claude/<n>-<slug>` destinations (the Decision's other clause) — that would deny
 # ordinary work (a `release/vX.Y.Z` branch, an annotated-tag push, any `git push origin
 # feature/x` a human runs in ANY Claude Code session in a plugin-enabled repo, since this hook is
@@ -146,7 +150,7 @@
 # still always read in full, so none of these four axes can ever mask a pre-#304/#305 route WITHIN
 # ONE RESOLUTION. All four axes, and the uncapped depth-0 read itself, are bounded PER
 # `resolve_repo()` call, never across the whole hook invocation: since #269 (below), this hook calls
-# `resolve_repo()` once for the SESSION checkout and once MORE for every push segment whose own `-C`
+# `resolve_repo()` once for the SESSION checkout and once MORE for every push segment (or, since #448, alias-candidate segment) whose own `-C`
 # value resolves a checkout of its own, so a single command naming enough such resolved `-C`
 # targets — each supplying its own at-cap-but-legal include content, or its own large top-level
 # file — multiplies this same bounded work across resolutions exactly as it already multiplies the
@@ -260,10 +264,9 @@
 # GIT_CMDCFG_ENV_VARS/GIT_CMDCFG_ENV_PREFIXES membership and a fixed-prefix `index()`/`substr()`
 # check already need — no filesystem path is read, and the matched key/value/env-var name is never
 # echoed in the deny message (a GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> match stores a boolean
-# only). Residuals this leaves, reasoned from the code but not run (see "Documented under-blocking
-# classes" below and this issue's own follow-ups): a git alias that expands to `push` (e.g. `git -c alias.p=push p origin
-# main`); and an inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself
-# reads. (The simple quoted or escaped option spelling, `git "-c" k=v push`, and a `-c` value whose
+# only). Both residuals this paragraph used to name, a git alias that expands to `push` and an inline
+# `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself reads, are closed since
+# #448 (see "Fail-closed: git aliases and config relocation (#448)" below). (The simple quoted or escaped option spelling, `git "-c" k=v push`, and a `-c` value whose
 # quoted text holds a space and an odd count of one quote character are caught since #449; the forms
 # that stay open are listed in "Fail-closed: a segment the tokenizer cannot follow (#449)" below.)
 #
@@ -334,6 +337,61 @@
 # `HOME=`/`XDG_CONFIG_HOME=` relocation of #448. hooks/agent-boundary.sh has the same gaps and is
 # left for a follow-up, so a fix here is not mirrored there.
 #
+# Fail-closed: git aliases and config relocation (#448, absorbing #450). This hook once recognised only
+# the literal subcommand `push`, so a git alias that expands to push hid it (a config-file alias such
+# as `zqp = push` under `[alias]`, run as `git zqp origin main`, or `git -c alias.p=push p origin
+# main`), and an inline `HOME=<dir>`/`XDG_CONFIG_HOME=<dir>` moved the global config this hook reads.
+# Since #448: (a) every git segment whose subcommand is not `push` is an ALIAS CANDIDATE. The
+# tokenizer prints one `ALIAS` line for it (its `-C` value when exactly one, and the lowercased
+# subcommand) and the driver loop looks `alias.<subcommand>` up in the alias records cfg_parse_file()
+# captures from the SAME routes the push routes read: the system, global, repo-local and include
+# files, plus a `-C` target resolved under the PATH_ERE predicate exactly like a push segment's (the
+# session's own records are restored for every segment, so an earlier `-C` segment never hides them).
+# Git never lets an alias shadow a built-in command, so the lookup alone decides and there is no
+# built-in list. Classification, after quote and backslash stripping and lowercasing: the first word
+# of the expansion denies when it is `push`, is empty, starts with `!` (a shell alias, opaque) or `-`
+# (an option hides the subcommand behind it), or names another defined alias (a chain this hook does
+# not follow); a value ending in a backslash (a continuation the line parser never joins) also denies;
+# any other value is no opinion. The deny line names only the fixed source label (`.git/config`, `your
+# global git config`, each optionally ` (via include)`) with `(blocked: git alias may push)`, never the
+# alias name, its value or any command token. (b) Config this hook cannot read denies the candidate
+# with the fixed text `(blocked: unreadable git config may define an alias)`: an inline
+# `HOME=`/`XDG_CONFIG_HOME=`/`GIT_CONFIG_GLOBAL=`/`GIT_CONFIG_SYSTEM=` assignment (bare or behind
+# `env`; GIT_CFG_RELOC_ENV_VARS), a command-line config token naming alias or include (`-c alias.p=…`,
+# `-c include.path=…`, `--config-env=alias.p=…`, a `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` pair),
+# and an export or bare assignment of any of those names in ANY other segment of the command (the
+# tokenizer's `-xcfg-` marker). (c) On a PUSH segment, an inline `HOME=`/`XDG_CONFIG_HOME=` (the #450
+# half) denies with the #439 command-line-config message, and an `export HOME=…` or bare
+# `XDG_CONFIG_HOME=…;` in another segment denies through #433's cross-segment rule with the reason
+# `HOME or XDG_CONFIG_HOME set earlier in this command`. (d) The #449 interplay: a segment the
+# tokenizer lost (a quoted or escaped option, a quote-split assignment, an unsupported `env` option)
+# that lost_push() says is no push no longer drops silently. emit_alias_lost() hands the driver EVERY
+# remaining token as a candidate alias name (for a loss in the command prefix only when a later token
+# names git), and denies outright when a relocation name was assigned or any token mentions alias or
+# include, so `HOME="/tmp/a b" git p origin main`, `X="a b" git zqp origin main` and `git "--no-pager"
+# zqp origin main` all deny while `X="a b" git status` stays no opinion. Union semantics, as
+# everywhere in this file: an alias in any candidate file counts, whatever the file order. Containment:
+# the alias lookup reads only the config files the push routes already read, plus the one `-C` path
+# class above under the same predicate; alias names and values are only compared (one awk pass over
+# a here-string), never executed, expanded or echoed. The raw-stdin `*push*` fast path is gone, because
+# an alias push carries no `push` text; the early exit now also lets an ALIAS line through.
+# Over-blocking, deliberate, each measured rc 2: any `!` shell alias run as a subcommand (`git up`
+# with `up = !git pull`), an alias whose first word is a git option, a chain, and any push alias even
+# to a feature branch; an alias NAMED like a built-in and expanding to push (`status = push`), which
+# git itself ignores but this hook denies as `git status`; relocation or inline alias/include config
+# on any git segment; an export of `HOME`/`XDG_CONFIG_HOME`/`GIT_CONFIG_*` anywhere in a command that
+# also has a non-push git segment; a heredoc or commit-message line that starts `git <alias name>`; a
+# lost segment whose text mentions alias or include (`X="a b" git log --grep=include`); and an
+# over-cap config line or the analysis deadline, which now deny non-push git commands too, still with
+# their "denies this push" or "denies this command" text. Under-blocking residuals, each measured rc 0:
+# an alias defined only in another checkout's config, reached by `cd`, an unresolvable `-C`,
+# `GIT_DIR=` or `--git-dir`; a `git-<name>` external on `PATH` (or via `--exec-path`/`GIT_EXEC_PATH`);
+# a key on the same line as its section header (`[alias] p = push`: the parser reads only the header,
+# the gap every section has); `env -u XDG_CONFIG_HOME`; the `HOME` that `sudo` sets; a subcommand
+# built at runtime or written with ANSI-C quoting (`git $'p'`, `S=p; git $S`); an alias run through
+# `xargs` or a script file; and `help.autocorrect`, where the hook says rc 0 for a mistyped
+# subcommand (UNVERIFIED whether git then runs push).
+#
 # Fail-closed: Codex shell workdir (#494). Codex's shell tool takes its own `workdir` parameter,
 # which is NOT part of the PreToolUse payload (ADR 0002 U9, confirmed live on Codex 0.156.1: the
 # payload carries only `tool_input.command` and the session `cwd`), so a push run through it
@@ -387,7 +445,8 @@
 #
 # Never invokes `git`, `gh`, or anything else derived from the untrusted command string; never
 # `eval`s; never writes a file. Since #269, this hook reads exactly one class of filesystem path
-# taken from the untrusted command string — a push segment's own `-C <path>` value, and ONLY when
+# taken from the untrusted command string — a push segment's own `-C <path>` value (since #448 also
+# the `-C <path>` value of any non-push git segment, an alias candidate), and ONLY when
 # it satisfies PATH_ERE below — for `<path>/.git` (directory or `gitdir:` pointer file), that
 # gitdir's `HEAD`, and that gitdir's common dir's `refs/remotes/origin/HEAD` and `config`, every
 # read the same `[ -f ]`/`[ -d ]`-guarded builtin redirection every other read in this file uses;
@@ -431,7 +490,7 @@
 # `resolve_repo()`'s `MAX_DEPTH` parameter below), so that value never reaches `dirname`'s argv —
 # or any other process's argv — is never `eval`ed, and is never opened for writing. bash + POSIX
 # awk only — jq is not needed to PARSE the command (unlike its two siblings this hook parses
-# `tool_input.command` with awk, not a JSON library), but the raw-stdin fast paths below still gate
+# `tool_input.command` with awk, not a JSON library), but the raw-stdin fast path below still gates
 # on `jq`'s presence for the few scalar field reads (`tool_name`, `permission_mode`,
 # `tool_input.command`, `cwd`, and, since #494, `turn_id` and `transcript_path`) this hook does
 # need, and, since #494, a Codex push also runs one jq pass over the rollout tail (jq 1.5
@@ -564,13 +623,13 @@
 # generic single-dash-token skip consumes it whole in one step and the subcommand still resolves
 # to `push` correctly — neither `--git-dir=<path>` nor an unresolved `-C` value evades WHICH repo
 # gets resolved by staying silent about it: both deny outright instead (#292 — see "Fail-closed: an
-# unresolvable push target" above); a CR *inside* a raw-stdin fast-path
-# literal, e.g. `git
-# pu<CR>sh origin main` (measured: rc 0) — a conforming JSON writer escapes an embedded `\r` as the
-# two characters `\`+`r`, so the raw stdin substring `push` never appears intact and fast path 1
-# (below) exits before the #270 CR strip ever runs, regardless of the strip's own correctness; the
-# resulting command cannot execute as a real `git push` either, so this is documented, not fixed
-# (see the fast-path comment below); `nice -n 5 git push origin main` (the same class
+# unresolvable push target" above); a CR *inside* the raw-stdin `git`
+# fast-path literal, e.g. `g<CR>it push origin main` — a conforming JSON writer escapes an embedded
+# `\r` as the two characters `\`+`r`, so the raw stdin substring `git` never appears intact and the
+# fast path (below) exits before the #270 CR strip ever runs, regardless of the strip's own
+# correctness; the resulting command cannot execute as a real `git push` either, so this is
+# documented, not fixed (see the fast-path comment below; since #448 a CR inside the push literal, `git
+# pu<CR>sh origin main`, no longer evades, because there is no push fast path); `nice -n 5 git push origin main` (the same class
 # as the `sudo -u foo` bullet above — `nice`'s option value `5` becomes the resolved command word,
 # not `git`); since #398, `git PUSH origin main` — the command word is case-folded (so `GIT push
 # origin main` IS caught), but the subcommand comparison (`subcmd == "push"` in emit_segment()
@@ -718,11 +777,12 @@
 # `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`/`GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_GLOBAL`/
 # `GIT_CONFIG_SYSTEM` environment assignment, bare or behind `env`, are no longer read-and-ignored
 # residuals — every push segment carrying one is denied outright (see "Fail-closed: command-line
-# git config" above) whatever the key or destination. What remains residual there instead: an
-# inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config this hook itself reads, and
-# the alias-shaped forms that same paragraph names (#449 catches only the simple quoted-option and
-# odd-quote-count forms, and leaves others open: see its own paragraph). (A cross-segment `export
-# GIT_CONFIG_*=…` or bare `GIT_CONFIG_*=…;` segment is denied by #433's cross-segment rule.)
+# git config" above) whatever the key or destination, and since #448 an inline `HOME=`/`XDG_CONFIG_HOME=`
+# relocation of the global config this hook itself reads is denied the same way. What remains
+# residual there instead: the quote and escape forms #449 does not catch (see its own paragraph) and
+# the alias residuals listed in "Fail-closed: git aliases and config relocation (#448)". (A
+# cross-segment `export GIT_CONFIG_*=…` or bare `GIT_CONFIG_*=…;` segment is denied by #433's
+# cross-segment rule.)
 #
 # Since #433, the new cross-segment ("xseg") rule above still leaves these residuals open: a
 # directory or `GIT_DIR`-family change made inside a SOURCED file (`.`/`source`) or a script FILE
@@ -746,11 +806,13 @@
 # hooks/agent-boundary.sh already document for their own scopes.
 #
 # Contract: read the PreToolUse hook JSON on stdin; print nothing and exit 0 ("no opinion") unless
-# the call is a Bash `git push` whose resolved destination is the default branch (or the
+# the call is a Bash `git push` (or, since #448, a git alias that may push) whose resolved destination is the default branch (or the
 # unconditional `main`/`master` fallback), OR whose target repository this hook cannot resolve at
 # all (#292 — see "Fail-closed: an unresolvable push target" above), OR whose push segment carries
 # git config supplied on the command line (#439 — see "Fail-closed: command-line git config"
-# above), OR whose push segment lost the tokenizer — a quoted or escaped git option, a quote or
+# above), OR, since #448, a git command whose subcommand is an alias that may push or that runs under
+# config this hook cannot read (see "Fail-closed: git aliases and config relocation (#448)" above), OR
+# whose push segment lost the tokenizer — a quoted or escaped git option, a quote or
 # escape in the command prefix, or an unsupported `env` option (#449 — see "Fail-closed: a segment
 # the tokenizer cannot follow (#449)" above), OR, since #435, whose analysis cannot finish inside this hook's own time budget, or that
 # reads a git config file with a depth-0 line too long to analyse safely (see "Analysis deadline
@@ -780,11 +842,14 @@
 # count grows with the command string or a config file's own content — never partway through a loop
 # body, and never only once at the top of a function that itself contains such a loop. The early
 # exit right after the tokenizer, before the deadline is ever sampled, continues only when the scan
-# holds a "PUSH" line or a `-too-many-dbrackets-`/`-cut-push-`/`-cmdline-config-` sentinel — a scan
-# that is empty, or holds nothing but #433's own `-xseg-` marker line, exits with no opinion — so a
-# command with no push segment is never denied merely for being large: this is the identical verdict
-# the driver loop below would reach anyway (nothing it would deny on), just reached without spending
-# any of the budget getting there. The one step this deadline's sampling cannot reach MID-step is a single depth-0 (top-level)
+# holds a "PUSH" line, an "ALIAS" candidate line (#448) or a `-too-many-dbrackets-`/`-cut-push-`/
+# `-cmdline-config-` sentinel — a scan that is empty, or holds nothing but #433's own `-xseg-` or
+# #448's `-xcfg-` marker line, exits with no opinion — so a command with no push segment and no git
+# alias candidate is never denied merely for being large: this is the identical verdict the driver
+# loop below would reach anyway (nothing it would deny on), just reached without spending any of the
+# budget getting there. Since #448 a command with a non-push git segment is no longer in that class:
+# it is analysed (config read, alias lookup) and can be denied as too large, still with the "denies
+# this command" text. The one step this deadline's sampling cannot reach MID-step is a single depth-0 (top-level)
 # config line's own read and trim: `cfg_trim()`'s own pattern matching is not uniformly fast for a
 # long whitespace run (see that function's header comment), so instead of merely sampling around it,
 # `CFG_TOPLEVEL_MAX_LINE_CHARS` below caps that line's own length outright, checked with the cheap
@@ -800,11 +865,12 @@
 # production. Worst-case wall clock for the whole hook, stated here for review: at most
 # `max(push_budget, T_prefix(L)) + U_max`, where `T_prefix` is the LINEAR (in the command's own
 # length L) pre-tokenizer prefix this deadline cannot sample around at all — `cat`, the two
-# fast-path glob checks, four `jq` invocations, the CR strip, and the awk tokenizer itself, whose own
+# fast-path glob check, four `jq` invocations, the CR strip, and the awk tokenizer itself, whose own
 # additive `]]` pass costs at most `DBRACKET_MAX` times one record's length — counted by the wall
 # clock even though unsampled, so the very next `check_deadline()` call denies at once if that prefix
 # alone already spent the whole budget; and `U_max` is the largest single step this deadline cannot
-# interrupt mid-step: one session upward walk (at most 64 levels, each an `[ -f ]`-guarded probe,
+# interrupt mid-step: one alias-lookup awk pass over the resolved alias records (#448, linear in what
+# the sampled config read loop managed to read), one session upward walk (at most 64 levels, each an `[ -f ]`-guarded probe,
 # plus up to 63 `dirname` subshell+exec forks — one per level that finds no `.git`, via
 # `resolve_repo()`'s own `parent="$(dirname "$dir" …)"` — when no `.git` is ever found before the
 # depth cap), one config line's comment-strip plus up to three `cfg_trim()` calls (at most
@@ -960,6 +1026,13 @@ PUSH_EXPORT_WORDS="export declare typeset local readonly"
 GIT_CMDCFG_OPTS="-c --config-env"
 GIT_CMDCFG_ENV_VARS="GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM"
 GIT_CMDCFG_ENV_PREFIXES="GIT_CONFIG_KEY_ GIT_CONFIG_VALUE_"
+# #448: an assignment that moves a config FILE this hook reads (HOME and XDG_CONFIG_HOME relocate
+# the global config; GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM name the global and system files
+# outright). Set inline (bare or behind "env") the hook reads the wrong file, so a push segment
+# carrying one denies through the #439 command-line-config message, and a non-push git segment
+# carrying one denies as an unreadable config that may define an alias. Push-guard-only, consumed
+# only by the awk tokenizer below.
+GIT_CFG_RELOC_ENV_VARS="HOME XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM"
 # #449: the `env` options the prefix walk understands, push-guard-only (no twin in
 # hooks/agent-boundary.sh, which this change leaves alone). PUSH_ENV_NOVALUE_OPTS take no value and
 # are skipped alone; PUSH_ENV_UNSET_OPTS (`-u NAME`, `--unset NAME`, attached `-uNAME`,
@@ -1027,23 +1100,18 @@ check_deadline() { [ "$SECONDS" -lt "$push_deadline" ] || deny_too_large deadlin
 input="$(cat)"
 
 # --- fast paths ------------------------------------------------------------------------------
-# Both are pure performance optimisations, each semantics-preserving with the check it stands in
-# for below except for a command word/subcommand split by quote, backslash, or carriage-return
-# characters — the same documented, quote-blind limit hooks/agent-boundary.sh's fast paths carry.
-# The #270 CR strip below (after the jq extraction) fixes an unstripped `\r` for every command
-# that reaches the tokenizer, but a CR *inside* the literal these fast paths scan (a raw stdin
-# substring like `pu<CR>sh`, where a conforming JSON writer has already escaped the `\r`) still
+# One fast path, a pure performance optimisation, semantics-preserving with the check it stands in
+# for below except for a command word split by quote, backslash, or carriage-return characters —
+# the same documented, quote-blind limit hooks/agent-boundary.sh's fast paths carry. Since #448
+# there is no `push` fast path: a git alias that expands to push carries no `push` literal in the
+# command text at all (`git zqp origin main`), so a call may only skip the tokenizer when it never
+# names git. The #270 CR strip below (after the jq extraction) fixes an unstripped `\r` for every
+# command that reaches the tokenizer, but a CR *inside* the `git` literal this fast path scans (a raw
+# stdin substring like `g<CR>it`, where a conforming JSON writer has already escaped the `\r`) still
 # exits here, before the strip ever runs — see this file's header "Documented under-blocking
-# classes" for that residual case. A miss on either fast path always means "this call is out of
-# scope for this hook", which is also what the slower checks below it would conclude. Since #398,
-# the second fast path (below) case-folds `git` — `*push*` (the first fast path, immediately below)
-# stays case-sensitive: the push SUBCOMMAND itself is never case-folded (see this file's header
-# "Documented under-blocking classes" for the `git PUSH …` residual this leaves), so a
-# case-sensitive `*push*` never rejects a call the slower tokenizer would still recognise.
-case "$input" in
-  *push*) : ;;
-  *) exit 0 ;;
-esac
+# classes" for that residual case. A miss on this fast path always means "this call is out of scope
+# for this hook", which is also what the slower checks below it would conclude. Since #398 it
+# case-folds `git`.
 case "$input" in
   *[Gg][Ii][Tt]*) : ;;
   *) exit 0 ;;
@@ -1084,17 +1152,22 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
 # Emits one "PUSH<TAB><-C value, only when exactly one><TAB><#292 unresolved-reason, empty when
 # none><TAB><space-joined remaining tokens>" line per push segment found, and (#449) one with an
 # empty -C value, a fixed reason and no remaining tokens for a segment that lost the tokenizer but
-# could still be a push (see emit_lost()); nothing for any other segment, EXCEPT: a push segment carrying command-line git config (#439), which emits the fixed
+# could still be a push (see emit_lost()); for a git segment whose subcommand is not push (#448) one "ALIAS<TAB><-C value, only when exactly one><TAB><the
+# lowercased subcommand, or, for a segment lost to the tokenizer, every remaining token>" candidate line, or the
+# fixed sentinel "-alias-cmdline-config-" when that segment carries a relocation assignment or config naming an alias
+# or include (see emit_segment() and emit_alias_lost()); nothing for any other segment, EXCEPT: a push segment carrying command-line git config (#439), which emits the fixed
 # sentinel "-cmdline-config-" instead of a "PUSH…" line (see emit_segment()'s own cmdcfg
 # handling below); and (#433) one final "-xseg-<TAB><reason>" line, emitted by the END block
 # below, iff any segment anywhere in the whole command (a push segment or otherwise) resolved to a
 # directory-change builtin or an export/bare-assignment of a GIT_REPO_ENV_VARS member or of one of
-# #439's command-line-config names — see the "xseg" comment on emit_segment() below for the mechanism. Neither the "-C" value, the reason,
+# #439's command-line-config names — see the "xseg" comment on emit_segment() below for the mechanism —
+# and (#448) one final "-xcfg-" line iff any segment exported or bare-assigned a relocation or command-line-config name.
+# Neither the "-C" value, the reason,
 # nor the remaining-tokens field can itself contain a TAB, since every token comes from splitting
 # on "[ \t]+". Processes $cmd one input line (awk record) at a time — the same deliberate,
 # documented false-positive class agent-boundary.sh's header explains (a heredoc line that starts
 # with "git push" is scanned as its own segment).
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" -v dirwords="$PUSH_DIR_CHANGE_WORDS" -v exportwords="$PUSH_EXPORT_WORDS" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" -v envnov="$PUSH_ENV_NOVALUE_OPTS" -v envunset="$PUSH_ENV_UNSET_OPTS" '
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" -v dirwords="$PUSH_DIR_CHANGE_WORDS" -v exportwords="$PUSH_EXPORT_WORDS" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" -v envnov="$PUSH_ENV_NOVALUE_OPTS" -v envunset="$PUSH_ENV_UNSET_OPTS" -v relocenv="$GIT_CFG_RELOC_ENV_VARS" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
@@ -1125,6 +1198,11 @@ BEGIN {
   for (i = 1; i <= nenv; i++) envnov_set[envnovarr[i]] = 1
   neun = split(envunset, envunsetarr, " ")
   for (i = 1; i <= neun; i++) envunset_set[envunsetarr[i]] = 1
+  # #448: config-file relocation names, and the per-COMMAND flag (like xseg, never reset per record)
+  # that any segment exported or bare-assigned a relocation or command-line-config name.
+  nrl = split(relocenv, rlarr, " ")
+  for (i = 1; i <= nrl; i++) reloc_set[rlarr[i]] = 1
+  xcfg = 0
 }
 function normalize(tok,    t, parts, np) {
   t = tok
@@ -1198,7 +1276,34 @@ function emit_lost(reason, unres, cc, cut) {
   else if (cc) print "-cmdline-config-"
   else print "PUSH\t\t" (unres != "" ? unres : reason) "\t"
 }
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, m2, s0, ro, k, xname, cmdcfg, co, cp, cfgname) {
+# #448 (and the #449 interplay): a segment the tokenizer lost but that is no push still names git, so
+# its real subcommand could be a git alias that expands to push. emit_alias_lost() runs at each #449
+# trigger when lost_push() said no, once per segment (al_done keeps a many-token segment linear): it
+# denies outright when a relocation name was assigned (reloc) or any token of the segment mentions an
+# alias or include (a quoted -c option hides the config it carries), and otherwise hands the driver EVERY remaining token as an alias candidate name,
+# since the fragments a split quoted value leaves behind make the real subcommand unlocatable. With
+# needgit set (a prefix-position trigger, where the command word is unknown) it stays silent unless
+# some later token names git. The output is fixed vocabulary or lowercased input tokens that the driver
+# only ever compares, never echoes. Quote, backslash and apostrophe handling: strip_quotes() only.
+function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, names, sep, saw_git, saw_alias) {
+  saw_git = 0
+  saw_alias = 0
+  names = ""
+  sep = ""
+  for (i = 1; i <= ntok; i++) {
+    t = tolower(strip_quotes(toks[i]))
+    if (t == "") continue
+    if (index(t, "alias") > 0 || index(t, "include") > 0) saw_alias = 1
+    if (i < from) continue
+    if (index(t, "git") > 0) saw_git = 1
+    names = names sep t
+    sep = " "
+  }
+  if (needgit && !saw_git) return
+  if (reloc || saw_alias) { print "-alias-cmdline-config-"; return }
+  print "ALIAS\t" cpath "\t" names
+}
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, ro, k, xname, cmdcfg, co, cp, cfgname) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
@@ -1210,6 +1315,8 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   m0 = -1
   m1 = -1
   m2 = -1
+  reloc = 0
+  al_done = 0
   while (idx <= ntok) {
     tok = toks[idx]
     if (tok == "") { idx++; continue }
@@ -1222,12 +1329,16 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
         if (aname in ccenv_set) cmdcfg = 1
         else for (cp = 1; cp <= nccp; cp++) if (index(aname, ccparr[cp]) == 1) { cmdcfg = 1; break }
       }
+      # #448: an inline assignment that relocates a config file this hook reads -- boolean only, the
+      # name is never echoed.
+      if (aname in reloc_set) reloc = 1
       # #449: an assignment whose quoted or escaped value the whitespace split cut in two
       # (X="a b", X=a\ b) leaves the rest of the value as a bogus command word -- fail closed when
       # the remaining tokens could still be a push.
       if (quote_unbalanced(tok)) {
         if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
         if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
+        if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
       }
       idx++
       continue
@@ -1244,6 +1355,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
         if (quote_unbalanced(toks[idx + 1])) {
           if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
           if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
+          if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
         }
         idx += 2
         continue
@@ -1252,12 +1364,14 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
         if (quote_unbalanced(tok)) {
           if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
           if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
+          if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
         }
         idx++
         continue
       }
       if (m0 < 0) m0 = lost_push(toks, idx, ntok, 0)
       if (m0) { emit_lost("unsupported env option", unres, cmdcfg, cut_flag); return }
+      if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
     }
     # #449: after a prefix word, a quote-bearing token that reads as an option or an assignment once
     # unquoted ("X=a", "-C") is skipped by the real shell or env but is no command word here.
@@ -1266,6 +1380,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
       if (substr(s0, 1, 1) == "-" || match(s0, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) {
         if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
         if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
+        if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
       }
     }
     if (norm in prefix_set && norm != "-") in_env = (norm == "env")
@@ -1291,6 +1406,20 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   if (xseg == "") {
     if (cmdword in export_set) { for (k = idx; k <= ntok; k++) { cfgname = strip_quotes(toks[k]); sub(/=.*/, "", cfgname); if (is_cmdcfg_name(cfgname)) { xseg = "GIT_CONFIG_* set earlier in this command"; break } } }
     else if (cmdword == "" && cmdcfg) xseg = "GIT_CONFIG_* set earlier in this command"
+  }
+  # #448: the same cross-segment rule for HOME / XDG_CONFIG_HOME exported or bare-assigned in another
+  # segment (GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM are GIT_CMDCFG_ENV_VARS members, so the block above
+  # already took them). Fixed reason text; the name is never echoed.
+  if (xseg == "") {
+    if (cmdword in export_set) { for (k = idx; k <= ntok; k++) { rname = strip_quotes(toks[k]); sub(/=.*/, "", rname); if (rname in reloc_set) { xseg = "HOME or XDG_CONFIG_HOME set earlier in this command"; break } } }
+    else if (cmdword == "" && reloc) xseg = "HOME or XDG_CONFIG_HOME set earlier in this command"
+  }
+  # #448: unconditional per-COMMAND flag (xseg is first-writer-wins and push-gated, this one is neither):
+  # some segment exported or bare-assigned a relocation or command-line-config name, so a git alias
+  # candidate anywhere in the command may be defined by config this hook cannot read.
+  if (!xcfg) {
+    if (cmdword in export_set) { for (k = idx; k <= ntok; k++) { rname = strip_quotes(toks[k]); sub(/=.*/, "", rname); if ((rname in reloc_set) || is_cmdcfg_name(rname)) { xcfg = 1; break } } }
+    else if (cmdword == "" && (reloc || cmdcfg)) xcfg = 1
   }
   if (cmdword != "git") return
   j = idx
@@ -1332,15 +1461,18 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     if (quote_unbalanced(tok) && substr(strip_quotes(tok), 1, 1) == "-") {
       if (m2 < 0) m2 = lost_push(toks, j + 1, ntok, 2)
       if (m2) { emit_lost("quoted or escaped git option", unres, cmdcfg, cut_flag); return }
+      if (!al_done) { al_done = 1; emit_alias_lost(toks, j + 1, ntok, 0, reloc, ccount == 1 ? cpath : "") }
     }
     s0 = strip_quotes(tok)
     if ((s0 in gopt_set) && s0 != "-C" && quote_unbalanced(toks[j + 1])) {
       if (m2 < 0) m2 = lost_push(toks, j + 2, ntok, 2)
       if (m2) { emit_lost("quoted or escaped git option", unres, cmdcfg, cut_flag); return }
+      if (!al_done) { al_done = 1; emit_alias_lost(toks, j + 1, ntok, 0, reloc, ccount == 1 ? cpath : "") }
     }
     if (quote_bearing(tok) && substr(strip_quotes(tok), 1, 1) == "-") {
       if (m1 < 0) m1 = lost_push(toks, j, ntok, 1)
       if (m1) { emit_lost("quoted or escaped git option", unres, cmdcfg, cut_flag); return }
+      if (!al_done) { al_done = 1; emit_alias_lost(toks, j + 1, ntok, 0, reloc, ccount == 1 ? cpath : "") }
     }
     if (tok in gopt_set) {
       if (tok == "-C") { ccount++; cpath = strip_quotes(toks[j + 1]) }
@@ -1353,6 +1485,16 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     j++
     break
   }
+  # #448: every git segment whose subcommand is not push is an alias candidate -- git never lets an
+  # alias shadow a built-in, so the config lookup in the driver loop alone decides. Config this hook
+  # cannot read (a relocation assignment, or command-line config naming an alias or include) denies
+  # here with a fixed sentinel. Runs even for a CUT segment: a cut never matters to an alias verdict.
+  if (subcmd != "" && subcmd != "push") {
+    aliasish = 0
+    if (cmdcfg) for (k = 1; k <= j - 2; k++) { at = tolower(strip_quotes(toks[k])); if (index(at, "alias") > 0 || index(at, "include") > 0) { aliasish = 1; break } }
+    if (reloc || aliasish) print "-alias-cmdline-config-"
+    else print "ALIAS\t" (ccount == 1 ? cpath : "") "\t" tolower(subcmd)
+  }
   if (subcmd != "push") {
     if (subcmd == "" && cut_flag) print "-cut-push-"
     return
@@ -1361,6 +1503,9 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   # #439: a real push segment carrying command-line git config denies outright, ahead of the #292
   # unresolved-target reason (Q5) — either way the segment denies.
   if (cmdcfg) { print "-cmdline-config-"; return }
+  # #448: an inline HOME/XDG_CONFIG_HOME/GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM assignment on a push segment
+  # moves a config file this hook reads, so it is denied the same way and with the same message.
+  if (reloc) { print "-cmdline-config-"; return }
   if (unres == "" && ccount >= 2) unres = "more than one -C"
   rest = ""
   sep = ""
@@ -1430,20 +1575,30 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   }
 }
 END { if (xseg != "") print "-xseg-\t" xseg }
+END { if (xcfg) print "-xcfg-" }
 ')"
 
-# #435: no push segment (no "PUSH" line, and no dbracket/cut-push/command-line-config sentinel)
-# anywhere in the scan — the driver loop below would find nothing to deny and exit 0 anyway, so this
-# is equivalent to today's verdict, not a behaviour change; it just gets there before ever sampling
-# the deadline, so a command with no push segment at all is never denied merely for being large.
-# #433's own "-xseg-" marker line alone does not count: its fallback below denies only when a push
-# segment was also seen, so a scan holding nothing but that marker exits here too. (None of the four
-# patterns can occur in the marker line: its reason is a fixed phrase or a GIT_REPO_ENV_VARS name.)
+# #435: nothing to judge anywhere in the scan — no "PUSH" line, no "ALIAS" candidate line (#448: a
+# git segment whose subcommand is not push, which may be a git alias), and no dbracket/cut-push/
+# command-line-config sentinel (the "-alias-cmdline-config-" sentinel contains the last one) — so the
+# driver loop below would find nothing to deny and exit 0 anyway; this just gets there before ever
+# sampling the deadline, so a command with no push segment and no git alias candidate at all is never
+# denied merely for being large. #433's own "-xseg-" marker line and #448's "-xcfg-" marker alone do
+# not count: the xseg fallback below denies only when a push segment was also seen, and an xcfg only
+# denies an alias candidate, so a scan holding nothing but those markers exits here too. (None of the
+# patterns can occur in a marker line: its reason is a fixed phrase or a GIT_REPO_ENV_VARS name.)
 case "$scan_out" in
-  *PUSH*|*-too-many-dbrackets-*|*-cut-push-*|*-cmdline-config-*) ;;
+  *PUSH*|*ALIAS*|*-too-many-dbrackets-*|*-cut-push-*|*-cmdline-config-*) ;;
   *) exit 0 ;;
 esac
 check_deadline
+# #448: a relocation or command-line-config name exported or bare-assigned anywhere in the command
+# (the tokenizer's "-xcfg-" marker line) makes every alias candidate in it deny, since the alias may
+# live in config this hook cannot read.
+xcfg_seen=0
+case "$scan_out" in
+  *-xcfg-*) xcfg_seen=1 ;;
+esac
 
 # --- repo resolution (reads only, never executes) ---------------------------------------------
 # cfg_trim VALUE — strips leading/trailing [:space:], setting the plain global $cfg_trim_out (the
@@ -1644,6 +1799,12 @@ cfg_parse_file() {
         cfg_subsection=""
         continue
         ;;
+      \[[Aa][Ll][Ii][Aa][Ss]\]*)
+        # #448: an [alias] section -- its keys are recorded, never executed or expanded.
+        cfg_section="alias"
+        cfg_subsection=""
+        continue
+        ;;
       \[[Ii][Nn][Cc][Ll][Uu][Dd][Ee]\]*)
         # #304/#305: a plain [include] section — the child path key is dispatched below.
         cfg_section="include"
@@ -1690,6 +1851,11 @@ cfg_parse_file() {
             cfg_push_lines="${cfg_push_lines}${label}${cfg_tab}${cfg_subsection}${cfg_tab}${cfg_val}"$'\n'
             ;;
         esac
+        ;;
+      alias)
+        # #448: label first, then key, then the value as the unbounded tail (the same reasoning as
+        # cfg_push_lines above): a value holding a TAB byte cannot truncate into another field.
+        cfg_alias_lines="${cfg_alias_lines}${label}${cfg_tab}${cfg_key}${cfg_tab}${cfg_val}"$'\n'
         ;;
       push)
         case "$cfg_key" in
@@ -1756,7 +1922,7 @@ cfg_parse_file() {
 # cfg_push_defaults, cfg_branch_merge for the caller to read afterward — the same "set a plain
 # global, caller reads it after the call returns" idiom evaluate_segment() below already uses for
 # __deny_dest/__deny_kind/__deny_via. Called once for the session checkout (MAX_DEPTH 64, just
-# below) and, per push segment whose "-C" value passes is_c_target_path(), once more with
+# below) and, per push or alias-candidate segment whose "-C" value passes is_c_target_path(), once more with
 # MAX_DEPTH 1 (see apply_c_target() further down) — examining the named directory itself only,
 # never walking upward the way git itself would from a real "-C" (a documented residual class,
 # see this file's header). The MAX_DEPTH guard below makes the untrusted "-C" path passed on that
@@ -1819,6 +1985,7 @@ resolve_repo() {
   # CFG_INCLUDE_MAX_LINE_CHARS could otherwise still add up to real time before
   # CFG_INCLUDE_MAX_LINES lines are reached.
   cfg_push_lines=""
+  cfg_alias_lines=""
   cfg_push_defaults=""
   cfg_branch_merge=""
   cfg_seen="$nl"
@@ -1869,9 +2036,9 @@ resolve_repo() {
     # INSIDE the same $nosys guard as the three PUSH_SYSTEM_CONFIG_PATHS entries, not outside it.
     # See this file's header "Repo resolution" paragraph for the full reasoning and "Documented
     # under-blocking classes" for what stays unread (a system config at a path not on this static
-    # list, an include form this hook cannot resolve, config.worktree, and an inline HOME=/
-    # XDG_CONFIG_HOME= relocation) — since #439 a command-line "-c"/"--config-env" option or a
-    # GIT_CONFIG_* environment assignment denies the push outright instead of being read as config.
+    # list, an include form this hook cannot resolve, and config.worktree) — since #439 a
+    # command-line "-c"/"--config-env" option or a GIT_CONFIG_* environment assignment, and since #448 an
+    # inline HOME=/XDG_CONFIG_HOME= relocation, denies the push outright instead of being read as config.
     xdg_cfg=""
     if [ -n "${XDG_CONFIG_HOME:-}" ]; then
       xdg_cfg="$XDG_CONFIG_HOME/git/config"
@@ -1932,6 +2099,7 @@ session_root=""
 session_default_branch="$default_branch"
 session_current_branch="$current_branch"
 session_cfg_push_lines="$cfg_push_lines"
+session_cfg_alias_lines="$cfg_alias_lines"
 session_cfg_push_defaults="$cfg_push_defaults"
 session_cfg_branch_merge="$cfg_branch_merge"
 
@@ -1957,7 +2125,7 @@ is_session_checkout_path() {
 # apply_session_repo (#269) — (re)applies the session checkout's own resolved facts (captured
 # above, right after the one and only session-scoped resolve_repo call) to
 # default_branch/current_branch/cfg_*, and rebuilds deny_set/default_display exactly as the
-# pre-#269 file-scope statements did. Called once per push segment (see the driver loop below),
+# pre-#269 file-scope statements did. Called once per push or alias-candidate segment (see the driver loop below),
 # before that segment's own "-C" value (if any) is considered — so a segment with no "-C", or one
 # whose "-C" value satisfies PATH_ERE but resolves no gitdir of its own, is judged by these session
 # facts alone. A "-C" value that fails PATH_ERE (and is not lexically the session checkout) never
@@ -1966,6 +2134,7 @@ apply_session_repo() {
   default_branch="$session_default_branch"
   current_branch="$session_current_branch"
   cfg_push_lines="$session_cfg_push_lines"
+  cfg_alias_lines="$session_cfg_alias_lines"
   cfg_push_defaults="$session_cfg_push_defaults"
   cfg_branch_merge="$session_cfg_branch_merge"
   deny_set="$PUSH_DEFAULT_BRANCH_FALLBACK"
@@ -1994,7 +2163,7 @@ apply_session_repo() {
 apply_c_target() {
   local cpath="$1" start
   local resolved_current resolved_cfg_push_lines resolved_cfg_push_defaults resolved_cfg_branch_merge
-  local resolved_default
+  local resolved_default resolved_cfg_alias_lines
   [ -n "$cpath" ] || return 0
   is_c_target_path "$cpath" || return 0
   case "$cpath" in
@@ -2005,11 +2174,13 @@ apply_c_target() {
   [ -n "$gitdir" ] || { apply_session_repo; return 0; }
   resolved_current="$current_branch"
   resolved_cfg_push_lines="$cfg_push_lines"
+  resolved_cfg_alias_lines="$cfg_alias_lines"
   resolved_cfg_push_defaults="$cfg_push_defaults"
   resolved_cfg_branch_merge="$cfg_branch_merge"
   resolved_default="$default_branch"
   current_branch="$resolved_current"
   cfg_push_lines="$resolved_cfg_push_lines"
+  cfg_alias_lines="$resolved_cfg_alias_lines"
   cfg_push_defaults="$resolved_cfg_push_defaults"
   cfg_branch_merge="$resolved_cfg_branch_merge"
   deny_set="$PUSH_DEFAULT_BRANCH_FALLBACK"
@@ -2131,6 +2302,56 @@ CFGEOF
   fi
 }
 
+# alias_deny NAMES (#448) — NAMES is the space-joined, already lowercased candidate list from one
+# "ALIAS" tokenizer line: the single subcommand of an ordinary alias candidate, or every remaining
+# token of a segment the tokenizer lost (see emit_alias_lost()). Looks each up as `alias.<name>` in
+# the alias records the repo-resolution parse above captured (every candidate file read, the
+# resolved checkout's own `-C` target included) and denies when the expansion COULD push. One awk
+# pass over the records, fed by a here-string — never a pipe, never argv, never the shell: the
+# candidate names and the alias values are only ever compared, never executed or echoed. The first
+# word of the value, with quotes and backslashes stripped and lowercased, decides: `push`, an empty
+# word, a `!` shell alias, an option (a leading `-` hides the subcommand behind it), or the name of
+# ANOTHER defined alias (a chain this hook does not follow) all deny, and so does a value ending in
+# a backslash (a continuation the line parser does not join). Any other value gives no opinion. Git
+# never lets an alias shadow a built-in command, so the lookup alone decides and no built-in list is
+# needed; the price is that an alias NAMED like a built-in and expanding to push denies that built-in
+# here although git ignores it. On a deny sets __deny_src to the source label (one of the fixed
+# labels cfg_parse_file() builds, never input text), __deny_dest/__deny_kind to "alias".
+alias_deny() {
+  __deny_dest=""
+  __deny_kind=""
+  __deny_via=""
+  __deny_src=""
+  [ -n "$cfg_alias_lines" ] || return 0
+  local alias_hit
+  alias_hit="$(awk -F "$cfg_tab" '
+    NR == 1 { n = split($0, cand, " "); for (i = 1; i <= n; i++) want[cand[i]] = 1; next }
+    {
+      lab[NR] = $1
+      key[NR] = tolower($2)
+      val[NR] = substr($0, length($1) + length($2) + 3)
+      defined[key[NR]] = 1
+    }
+    END {
+      for (r = 2; r <= NR; r++) {
+        if (!(key[r] in want)) continue
+        v = val[r]
+        if (substr(v, length(v)) == "\\") { print lab[r]; exit }
+        w = v
+        sub(/[ \t].*$/, "", w)
+        gsub(/[\\"\047]/, "", w)
+        w = tolower(w)
+        if (w == "" || substr(w, 1, 1) == "!" || substr(w, 1, 1) == "-" || w == "push" || (w in defined)) { print lab[r]; exit }
+      }
+    }
+  ' <<<"$1$nl$cfg_alias_lines")"
+  if [ -n "$alias_hit" ]; then
+    __deny_dest="alias"
+    __deny_kind="alias"
+    __deny_src="$alias_hit"
+  fi
+}
+
 # evaluate_segment REST — REST is one push segment's remaining tokens (space-joined, already
 # quote/backslash-stripped by the tokenizer above). Sets $__deny_dest (non-empty on deny) and
 # $__deny_kind ("allrefs" or "dest"). Builds its own token array from the REST string rather than
@@ -2213,7 +2434,7 @@ evaluate_segment() {
   done
 }
 
-# --- drive the verdict over every push segment found (first offender decides) -----------------
+# --- drive the verdict over every push segment and alias candidate found (first offender decides)
 TAB="$(printf '\t')"
 deny_dest=""
 deny_kind=""
@@ -2242,7 +2463,38 @@ while IFS= read -r line; do
       deny_kind="cmdcfg"
       break
       ;;
+    "-alias-cmdline-config-")
+      # #448: fixed reason, no input — see the aliascfg) message arm below.
+      deny_dest="unreadable config"
+      deny_kind="aliascfg"
+      break
+      ;;
+    "-xcfg-") continue ;;
     "-xseg-$TAB"*) xseg_reason="${line#-xseg-"$TAB"}"; continue ;;
+    "ALIAS$TAB"*)
+      # #448: an alias candidate (a git segment whose subcommand is not push). A relocation or
+      # command-line-config export elsewhere in the command denies it outright; otherwise the alias
+      # records of the session checkout (or its resolved -C target) decide. Never sets saw_push: the
+      # push-gated fallbacks below stay push-only.
+      al_body="${line#ALIAS$TAB}"
+      al_cpath="${al_body%%"$TAB"*}"
+      al_names="${al_body#*"$TAB"}"
+      if [ "$xcfg_seen" = 1 ]; then
+        deny_dest="unreadable config"
+        deny_kind="aliascfg"
+        break
+      fi
+      apply_session_repo
+      apply_c_target "$al_cpath"
+      alias_deny "$al_names"
+      if [ -n "$__deny_dest" ]; then
+        deny_dest="$__deny_dest"
+        deny_kind="$__deny_kind"
+        deny_src="$__deny_src"
+        break
+      fi
+      continue
+      ;;
     "PUSH$TAB"*) : ;;
     *) continue ;;
   esac
@@ -2287,8 +2539,8 @@ EOF
 # `[ -z "$deny_dest" ]`, though see dev/hook-tests.sh's own "xseg" section header for why no
 # fixture can independently exercise that one guard given this loop's own break-on-deny shape),
 # and only when this command actually contains a push segment at all (`[ "$saw_push" = 1 ]` — a
-# bare `cd`/`export` with no push must stay a no-opinion; the #435 early exit above already returns
-# for a scan with no PUSH line, so this guard is defense in depth). Reuses the existing "unresolved" verdict
+# bare `cd`/`export` with no push must stay a no-opinion; since #448 a scan can pass the #435 early exit
+# on an ALIAS candidate line alone, so this guard is what keeps that command a no-opinion). Reuses the existing "unresolved" verdict
 # below unchanged; xseg_reason is always either a fixed phrase or "<NAME> set earlier in this
 # command" for a GIT_REPO_ENV_VARS member NAME (see emit_segment()'s "xseg" comment above), so this
 # echoes no input.
@@ -2430,10 +2682,21 @@ if [ -n "$deny_dest" ]; then
       printf '%s denies this push: it cannot resolve which repository the push runs in (%s) — a Codex shell workdir is not in the hook payload, and any recent tool call in the session transcript whose workdir is not the session directory as a plain string literal keeps this denying; issue the push with no workdir from a session started in that checkout, or a human can run it from a terminal; see README.md'"'"'s Safety model\n' \
         "$PUSH_DENY_STEM" "$deny_dest" >&2
       ;;
+    alias)
+      # #448: the only %s is the fixed source label cfg_parse_file() builds — never the alias name,
+      # its value, or any command token.
+      printf '%s denies this git command (blocked: git alias may push) — defined in %s: a git alias that may expand to a push is never run here, since this hook cannot tell where it pushes — run the real subcommand instead, or a human can run it from a terminal; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" "$deny_src" >&2
+      ;;
+    aliascfg)
+      # #448: fixed message, no %s for input.
+      printf '%s denies this git command (blocked: unreadable git config may define an alias): it runs under git config this hook does not read (git -c, --config-env, a GIT_CONFIG_* assignment, or an inline or exported HOME=/XDG_CONFIG_HOME=), so it cannot rule out that the subcommand is an alias for a push — the harness never runs git this way; drop the extra config, or a human can run it from a terminal; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" >&2
+      ;;
     cmdcfg)
       # #439: fixed message, no %s for input — never echoes the -c key/value or a matched
       # GIT_CONFIG_KEY_<suffix>/GIT_CONFIG_VALUE_<suffix> name.
-      printf '%s denies this push: it carries git config supplied on the command line (git -c, --config-env, or a GIT_CONFIG_* environment assignment), which this hook does not read, so it cannot rule out the default branch — the harness never pushes this way; drop the command-line config, or a human can run it from a terminal; see README.md'"'"'s Safety model\n' \
+      printf '%s denies this push: it carries git config supplied on the command line (git -c, --config-env, a GIT_CONFIG_* environment assignment, or an inline HOME=/XDG_CONFIG_HOME= that relocates the global git config), which this hook does not read, so it cannot rule out the default branch — the harness never pushes this way; drop the command-line config, or a human can run it from a terminal; see README.md'"'"'s Safety model\n' \
         "$PUSH_DENY_STEM" >&2
       ;;
     *)

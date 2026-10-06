@@ -290,7 +290,18 @@ is still judged against the session's own facts, exactly as before. **Since #439
 carrying command-line git config (`git -c`, `--config-env`, or a `GIT_CONFIG_COUNT`/
 `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`/`GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_GLOBAL`/
 `GIT_CONFIG_SYSTEM` assignment, bare or behind `env`) is denied outright, whatever the key or
-destination — this hook never reads any of these forms. **Since #449**, a push segment the
+destination — this hook never reads any of these forms. **Since #448**, a git alias that may expand to
+a push no longer hides it: every git segment whose subcommand is not `push` is looked up as
+`alias.<subcommand>` in the same config files the push routes read (a resolved `-C` target
+included), and denies when the expansion's first word is `push`, empty, a `!` shell alias, a git
+option, or another defined alias, or the value ends in a backslash continuation; the deny line names
+only the source file, never the alias. A git segment that runs under config the hook cannot read (an
+inline or exported `HOME=`/`XDG_CONFIG_HOME=`/`GIT_CONFIG_*`, or `-c`/`--config-env` naming an
+alias or include) denies the same way, and on a push segment an inline `HOME=`/`XDG_CONFIG_HOME=`
+denies as command-line config. The cost is deliberate over-blocking of non-push git commands
+(`!` aliases, push aliases to a feature branch, relocated config); the hook header's "Fail-closed:
+git aliases and config relocation (#448)" paragraph lists every class and measured residual.
+**Since #449**, a push segment the
 tokenizer loses track of also denies, as an unresolved target, whenever the rest of the segment
 could still be a push: a quoted or escaped git option (`git "-c" k=v push`), a quoted assignment
 value containing a space (`X="a b" git push origin main`), a quote-bearing option or assignment
@@ -404,11 +415,11 @@ included file appends ` (via include)` to whichever source label already applies
 matter how deep the nesting goes. The complete residual — a system config at a path not on this
 static list (another git build's prefix, Xcode.app's own copy, a Git-for-Windows path), an include
 form this hook cannot resolve (`%(prefix)/…`, `~user/…`, beyond the depth cap, a path already
-parsed, or beyond any of the four follow/line/character/length caps above), `config.worktree`, and
-an inline `HOME=`/`XDG_CONFIG_HOME=` relocation of the global config — lives in the hook's own
-header, not here (since #439, a command-line `-c`/`--config-env` option and the env-injected
-`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`/`GIT_CONFIG_PARAMETERS`/
-`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` forms are no longer residual — see the sentence above). The
+parsed, or beyond any of the four follow/line/character/length caps above), and `config.worktree`
+— lives in the hook's own header, not here (since #439, a command-line `-c`/`--config-env` option
+and the env-injected `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`/
+`GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` forms, and since #448 an inline
+`HOME=`/`XDG_CONFIG_HOME=` relocation, are no longer residual — see the sentences above). The
 union is deliberately
 over-broad rather than modelling git's own remote-selection precedence: a bare push checks EVERY
 configured remote's push
@@ -426,7 +437,7 @@ it — extended to the config-read route specifically. Composition with the deny
 re-measured for this third hook — it uses the identical mechanism, but only two hooks were ever
 replayed together live. This hook shares `hooks/agent-boundary.sh`'s own additive `]]` pass, cap, and
 disjoint-tail cutting described above, and this applies in the main session too: any record that
-reaches the hook's full scan (it mentions both `git` and `push`) carrying more than DBRACKET_MAX
+reaches the hook's full scan (it mentions `git`) carrying more than DBRACKET_MAX
 standalone `]]` denies unconditionally, and a `git … push` tail cut short by a following `]]`
 denies unconditionally too, even when the destination inside the cut segment would not itself
 deny — the same deny fires when the cut arrives mid-subcommand-search (e.g. while still consuming a
