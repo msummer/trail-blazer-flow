@@ -16,6 +16,12 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #508: `push-guard.sh` and `agent-boundary.sh` no longer lose a push or a git/gh call behind a runtime
+  expansion in command position (`$X git push origin main`, `env $'A=b' gh pr merge 5`, `git $X push`,
+  `env -S'${X}git\_push...'`): the word is skipped so the real command resolves. No consumer step.
+
 ## v3.3.1
 
 This patch release hardens two hooks. push-guard now denies a push segment it loses track of (quoted

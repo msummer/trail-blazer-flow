@@ -6474,6 +6474,558 @@
       "expect_fail": [
         "deadline-flood-tokens"
       ]
+    },
+    {
+      "name": "508-pg-rx-prefix-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (rx_at && lost_push(toks, rx_at + 1, ntok, 1)) {",
+          "to": "if (0 && lost_push(toks, rx_at + 1, ntok, 1)) {"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-built-command-word",
+        "push-rtexp-deny-codex-shaped",
+        "push-rtexp-deny-dollar-name",
+        "push-rtexp-deny-env-assign",
+        "push-rtexp-deny-env-u-attached",
+        "push-rtexp-deny-env-u-value",
+        "push-rtexp-deny-quote-expansion",
+        "push-rtexp-deny-special"
+      ]
+    },
+    {
+      "name": "508-pg-rx-armed",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "lost_push(toks, rx_at + 1, ntok, 1)",
+          "to": "lost_push(toks, rx_at + 1, ntok, 0)"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-built-command-word"
+      ]
+    },
+    {
+      "name": "508-pg-rx-skip-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (rx_word(tok)) { if (!rx_at) rx_at = idx; saw_prefix = 1; idx++; continue }",
+          "to": "if (rx_word(tok)) { if (!rx_at) rx_at = idx }"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-prefix-alias",
+        "push-rtexp-deny-prefix-cd"
+      ]
+    },
+    {
+      "name": "508-pg-rx-git-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (rxg_at && (index(",
+          "to": "if (0 && (index("
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-git-slot",
+        "push-rtexp-deny-git-slot-ansi-c-opt",
+        "push-rtexp-deny-git-slot-push-text"
+      ]
+    },
+    {
+      "name": "508-pg-rx-git-skip-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (rx_word(tok)) { if (!rxg_at) rxg_at = j; j++; continue }",
+          "to": "if (rx_word(tok)) { if (!rxg_at) rxg_at = j }"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-git-slot-alias"
+      ]
+    },
+    {
+      "name": "508-pg-rx-re-sq",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "\"[$][A-Za-z0-9_@*#?!$\\\"\" sq \"-]\"",
+          "to": "\"[$][A-Za-z0-9_@*#?!$\\\"\" \"-]\""
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-git-slot-ansi-c-opt",
+        "push-rtexp-deny-git-slot-push-text",
+        "push-rtexp-deny-quote-expansion"
+      ]
+    },
+    {
+      "name": "508-pg-rx-re-dq",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "\"[$][A-Za-z0-9_@*#?!$\\\"\" sq \"-]\"",
+          "to": "\"[$][A-Za-z0-9_@*#?!$\" sq \"-]\""
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-quote-expansion"
+      ]
+    },
+    {
+      "name": "508-pg-rx-re-special",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "\"[$][A-Za-z0-9_@*#?!$\\\"\" sq \"-]\"",
+          "to": "\"[$][A-Za-z_\\\"\" sq \"-]\""
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-special"
+      ]
+    },
+    {
+      "name": "508-pg-rx-lone-dollar",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "return match(parts[np], rx_re) > 0",
+          "to": "return 1"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-noop-dir-expansion",
+        "push-rtexp-noop-prompt-dollar"
+      ]
+    },
+    {
+      "name": "508-pg-rx-basename",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "np = split(tok, parts, \"/\")\n  return match(parts[np], rx_re) > 0",
+          "to": "return match(tok, rx_re) > 0"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-noop-dir-expansion"
+      ]
+    },
+    {
+      "name": "508-pg-rx-ungated",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (rx_at && lost_push(toks, rx_at + 1, ntok, 1)) {",
+          "to": "if (rx_at) {"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-prefix-alias",
+        "push-rtexp-deny-prefix-cd",
+        "push-rtexp-noop-editor",
+        "push-rtexp-noop-status"
+      ]
+    },
+    {
+      "name": "508-pg-rx-git-ungated",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "(index(strip_quotes(toks[rxg_at]), \"push\") > 0 || lost_push(toks, rxg_at + 1, ntok, 2))",
+          "to": "1"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-git-slot-alias",
+        "push-rtexp-noop-git-slot-status"
+      ]
+    },
+    {
+      "name": "508-pg-rx-git-armed2",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "lost_push(toks, rxg_at + 1, ntok, 2)",
+          "to": "lost_push(toks, rxg_at + 1, ntok, 1)"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-git-slot-ansi-c-opt"
+      ]
+    },
+    {
+      "name": "508-pg-rx-git-self",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "index(strip_quotes(toks[rxg_at]), \"push\") > 0 || ",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-git-slot-push-text"
+      ]
+    },
+    {
+      "name": "508-pg-rx-assign-prefix",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (saw_prefix && !rx_at && rx_word(tok)) rx_at = idx",
+          "to": "if (0) rx_at = idx"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-env-assign"
+      ]
+    },
+    {
+      "name": "508-pg-rx-bare-assign",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (saw_prefix && !rx_at && rx_word(tok)) rx_at = idx",
+          "to": "if (!rx_at && rx_word(tok)) rx_at = idx"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-noop-bare-assign"
+      ]
+    },
+    {
+      "name": "508-pg-rx-env-u-value",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (!rx_at && rx_word(toks[idx + 1])) rx_at = idx + 1",
+          "to": "if (0) rx_at = idx + 1"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-env-u-value"
+      ]
+    },
+    {
+      "name": "508-pg-rx-env-u-attached",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (!rx_at && rx_word(tok)) rx_at = idx",
+          "to": "if (0) rx_at = idx"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-env-u-attached"
+      ]
+    },
+    {
+      "name": "508-pg-fastpath-dollar",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "  *'$'*push*|*push*'$'*) : ;;\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-built-command-word"
+      ]
+    },
+    {
+      "name": "508-pg-rec-lost-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if (m0 || rec_lost) {",
+          "to": "if (m0) {"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-deny-env-c-brace",
+        "push-rtexp-deny-env-s-brace",
+        "push-rtexp-deny-env-s-cmdsubst"
+      ]
+    },
+    {
+      "name": "508-pg-rec-cut-gate",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexp-",
+      "edits": [
+        {
+          "from": "if ((index($0, \"${\") > 0 || index($0, \"$(\") > 0 || has_bt) && index(tolower($0), \"env\") > 0) {",
+          "to": "if (index(tolower($0), \"env\") > 0) {"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexp-noop-env-s-uncut"
+      ]
+    },
+    {
+      "name": "508-pg-rx-scan-per-token",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rtexpscan-",
+      "edits": [
+        {
+          "from": "if (rx_word(tok)) { if (!rx_at) rx_at = idx; saw_prefix = 1; idx++; continue }",
+          "to": "if (rx_word(tok)) { if (!rx_at) rx_at = idx; if (lost_push(toks, idx + 1, ntok, 1)) { emit_lost(\"scan\", unres, cmdcfg, cut_flag); return } saw_prefix = 1; idx++; continue }"
+        },
+        {
+          "from": "if (saw_prefix && !rx_at && rx_word(tok)) rx_at = idx",
+          "to": "if (saw_prefix && rx_word(tok)) { if (!rx_at) rx_at = idx; if (lost_push(toks, idx + 1, ntok, 1)) { emit_lost(\"scan\", unres, cmdcfg, cut_flag); return } }"
+        },
+        {
+          "from": "if (rx_word(tok)) { if (!rxg_at) rxg_at = j; j++; continue }",
+          "to": "if (rx_word(tok)) { if (!rxg_at) rxg_at = j; if (lost_push(toks, j + 1, ntok, 2)) { emit_lost(\"scan\", unres, cmdcfg, cut_flag); return } j++; continue }"
+        }
+      ],
+      "expect_fail": [
+        "push-rtexpscan-noop-flood"
+      ]
+    },
+    {
+      "name": "508-ab-rx-skip-off",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-rtexp-",
+      "edits": [
+        {
+          "from": "if (rx_word(tok)) { saw_exp = 1;",
+          "to": "if (0 && rx_word(tok)) { saw_exp = 1;"
+        }
+      ],
+      "expect_fail": [
+        "ab-rtexp-deny-claude-tee",
+        "ab-rtexp-deny-codex-impl-gh",
+        "ab-rtexp-deny-env-ansi-c-gh",
+        "ab-rtexp-deny-impl-gh",
+        "ab-rtexp-deny-impl-git",
+        "ab-rtexp-deny-positional-gh",
+        "ab-rtexp-deny-verifier-gh",
+        "ab-rtexp-deny-verifier-git-status"
+      ]
+    },
+    {
+      "name": "508-ab-rx-git-sentinel",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-rtexp-",
+      "edits": [
+        {
+          "from": "if (saw_exp) gitsub = \"-expansion-\"",
+          "to": "if (saw_exp) gitsub = gitsub"
+        }
+      ],
+      "expect_fail": [
+        "ab-rtexp-deny-impl-git",
+        "ab-rtexp-deny-verifier-env-assign",
+        "ab-rtexp-deny-verifier-git-status"
+      ]
+    },
+    {
+      "name": "508-ab-rx-re-sq",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-rtexp-",
+      "edits": [
+        {
+          "from": "\"[$][A-Za-z0-9_@*#?!$\\\"\" sq \"-]\"",
+          "to": "\"[$][A-Za-z0-9_@*#?!$\\\"\" \"-]\""
+        }
+      ],
+      "expect_fail": [
+        "ab-rtexp-deny-env-ansi-c-gh"
+      ]
+    },
+    {
+      "name": "508-ab-rx-re-special",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-rtexp-",
+      "edits": [
+        {
+          "from": "\"[$][A-Za-z0-9_@*#?!$\\\"\" sq \"-]\"",
+          "to": "\"[$][A-Za-z_\\\"\" sq \"-]\""
+        }
+      ],
+      "expect_fail": [
+        "ab-rtexp-deny-positional-gh"
+      ]
+    },
+    {
+      "name": "508-ab-rx-lone-dollar",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-rtexp-",
+      "edits": [
+        {
+          "from": "return match(parts[np], rx_re) > 0",
+          "to": "return 1"
+        }
+      ],
+      "expect_fail": [
+        "ab-rtexp-deny-dir-expansion-gh",
+        "ab-rtexp-noop-prompt-dollar"
+      ]
+    },
+    {
+      "name": "508-ab-rx-basename",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-rtexp-",
+      "edits": [
+        {
+          "from": "np = split(tok, parts, \"/\")\n  return match(parts[np], rx_re) > 0",
+          "to": "return match(tok, rx_re) > 0"
+        }
+      ],
+      "expect_fail": [
+        "ab-rtexp-deny-dir-expansion-gh"
+      ]
+    },
+    {
+      "name": "508-ab-rx-assign-prefix",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-rtexp-",
+      "edits": [
+        {
+          "from": "if (saw_prefix && rx_word(tok)) saw_exp = 1",
+          "to": "if (0) saw_exp = 1"
+        }
+      ],
+      "expect_fail": [
+        "ab-rtexp-deny-verifier-env-assign"
+      ]
+    },
+    {
+      "name": "508-ab-rx-bare-assign",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-rtexp-",
+      "edits": [
+        {
+          "from": "if (saw_prefix && rx_word(tok)) saw_exp = 1",
+          "to": "if (rx_word(tok)) saw_exp = 1"
+        }
+      ],
+      "expect_fail": [
+        "ab-rtexp-noop-verifier-bare-assign"
+      ]
+    },
+    {
+      "name": "508-ab-rx-envs-off",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-rtexp-",
+      "edits": [
+        {
+          "from": "if (in_env && (index(tok, \"-S\") == 1",
+          "to": "if (0 && in_env && (index(tok, \"-S\") == 1"
+        }
+      ],
+      "expect_fail": [
+        "ab-rtexp-deny-env-s-brace-gh",
+        "ab-rtexp-deny-env-s-escaped-gh"
+      ]
+    },
+    {
+      "name": "508-ab-rx-envs-unescape",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-rtexp-",
+      "edits": [
+        {
+          "from": "gsub(/\\\\_/, \" \", t)",
+          "to": "t = t"
+        }
+      ],
+      "expect_fail": [
+        "ab-rtexp-deny-env-s-escaped-gh"
+      ]
+    },
+    {
+      "name": "508-ab-rx-envs-word",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-rtexp-",
+      "edits": [
+        {
+          "from": "if (w[i] == \"gh\") return \"gh\"",
+          "to": "if (index(w[i], \"gh\") > 0) return \"gh\""
+        },
+        {
+          "from": "if (w[i] == \"git\") return",
+          "to": "if (index(w[i], \"git\") > 0) return"
+        }
+      ],
+      "expect_fail": [
+        "ab-rtexp-noop-env-s-no-names"
+      ]
+    },
+    {
+      "name": "508-ab-rx-rescan",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-rtexpscan-",
+      "edits": [
+        {
+          "from": "(rx_word(tok) || rx_cut) && rx_env_hit != \"\") {",
+          "to": "(rx_word(tok) || rx_cut) && rx_env_scan() != \"\") {"
+        }
+      ],
+      "expect_fail": [
+        "ab-rtexpscan-noop-flood"
+      ]
     }
   ]
 }

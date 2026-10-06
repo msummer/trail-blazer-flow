@@ -166,8 +166,9 @@ namespaced form is the live spelling, confirmed by the live-probe record below; 
 retained as insurance against a future de-namespacing). For the implementer role it denies
 (exit 2, one stderr line, empty stdout) any Bash command whose parsed command-position word
 resolves, case-insensitively and after skipping a leading shell reserved word (`if`/`then`/`elif`/
-`else`/`do`/`while`/`until`/`!`/`coproc`), an `eval`/`trap` string argument, or a zsh precommand
-modifier (`noglob`/`nocorrect`/`-`/`repeat N`) — and, for a zsh short `if [[ cond ]] cmd` form, an
+`else`/`do`/`while`/`until`/`!`/`coproc`), an `eval`/`trap` string argument, a zsh precommand
+modifier (`noglob`/`nocorrect`/`-`/`repeat N`), or (since #508) a word holding a runtime expansion
+that may expand to nothing (`$X git push`) — and, for a zsh short `if [[ cond ]] cmd` form, an
 ADDITIVE pass (never truncating an existing segment; each tail is DISJOINT from every other, ending
 at whichever comes first, a real segment-break character or the next standalone `]]`, so resolving a
 command word, a git subcommand, or a `.claude` write no longer scales with how much of the record
@@ -182,11 +183,19 @@ since the text on the far side of that `]]` was deliberately never read, this ho
 `.claude` path it did not see; a cut tail that DOES show a `.claude` segment among its own tokens
 denies through the ordinary route instead. For the verifier role it denies `gh` outright and
 denies `git` unless the resolved subcommand is one of `status diff log show rev-parse ls-files
-merge-base blame grep restore`; an unlisted subcommand, a global option before the subcommand, and
-a bare `git` all deny too — fail-closed, not an enumerated allow-list of "safe" subcommands. Only
+merge-base blame grep restore`; an unlisted subcommand, a global option before the subcommand, a
+bare `git`, and a runtime expansion before `git` (`$X git status`) all deny too — fail-closed, not an
+enumerated allow-list of "safe" subcommands. Only
 the command word and the shell-keyword skip are case-folded (since #398) — the resolved `git`
 subcommand itself stays an exact match, so a case-variant subcommand such as `git STATUS` also
-denies (fail closed), never widening the verifier's read-only allowance. Since
+denies (fail closed), never widening the verifier's read-only allowance. Since #508, a word whose
+basename holds a runtime expansion (a dollar sign followed by a name character, a digit, a special
+parameter, an apostrophe or a double quote) is skipped like a prefix word, so a `git`/`gh` behind it
+resolves (`$X gh pr merge 5`; a `git` reached past one emits the fail-closed subcommand
+`-expansion-`), and an `env -S` string that holds an expansion and names `git` or `gh` denies; the
+header's "Over-blocking and residuals of the #508 expansion skip" paragraph lists the measured
+over-blocks, and a command word built entirely at run time (`$G pr merge 5`) stays the residual
+`$(which git) push` already is. Since
 #340, both roles ALSO deny a Bash command that puts a `.claude`-segment path in a write position —
 a `>`-family redirect target, an argument to `tee`/`cp`/`mv`/`cd`/`pushd`, or an in-place `sed`'s
 argument — closing most of the Bash-issued write route into `.claude/` (see `hooks/claude-dir-guard.sh`'s
@@ -310,9 +319,16 @@ value containing a space (`X="a b" git push origin main`), a quote-bearing optio
 after a prefix word (`env "-C" <dir> git push`), or an `env` option outside a short allowlist
 (`env -C <dir>`, `--chdir=`, `-S`), or a quoted value of a global option other than `-C` that
 splits at a space (`git -c "k=a b" push`); `env -u NAME` consumes its value, which stops `env -u git
-push origin main` from denying. Mixed-quote or even-count splits, ANSI-C quoting (`$'-c'`) and a
+push origin main` from denying. Mixed-quote or even-count splits and a
 quoted `-C` value containing a space (which also hides any later option) still get no opinion. The push-guard header lists the
-over-blocking this fail-closed rule creates and the residuals it leaves. Since #433, a push segment in
+over-blocking this fail-closed rule creates and the residuals it leaves. **Since #508**, a word in
+command position (or in git's option slot) whose basename holds a runtime expansion (`$X git push
+origin main`, `env $'A=b' git push ...`, `git $X push ...`, `git $'-c' k=v push`) is skipped as a
+possibly-empty word, and the segment denies as unresolved when the rest could still be a push; an
+`env -S` string cut at `${`, `$(` or a backtick is judged on the whole record. The header's
+"Fail-closed: a runtime expansion in the command prefix or the git options (#508)" paragraph lists
+the over-blocks and residuals (a `${...}`/`$(...)` prefix, a runtime-built subcommand or refspec
+destination, `eval "$c"`). Since #433, a push segment in
 the same Bash command as any OTHER segment that changes directory (`cd`/`pushd`/`popd`/`chdir`) or
 sets a `GIT_DIR`-family variable or one of the command-line-config names above
 (`export`/`declare`/`typeset`/`local`/`readonly`, or a bare assignment) also denies as unresolved,
