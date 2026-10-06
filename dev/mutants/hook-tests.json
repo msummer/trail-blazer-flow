@@ -4850,6 +4850,8 @@
         "push-alias-deny-env-s-attached",
         "push-alias-deny-env-s-reloc",
         "push-alias-deny-env-s-squoted",
+        "push-alias-deny-env-s-underscore-all",
+        "push-alias-deny-env-s-underscore-git",
         "push-alias-deny-env-split-string",
         "push-alias-deny-env-squoted-xdg",
         "push-alias-deny-escape-newline",
@@ -5284,6 +5286,8 @@
         "push-alias-deny-env-s-attached",
         "push-alias-deny-env-s-reloc",
         "push-alias-deny-env-s-squoted",
+        "push-alias-deny-env-s-underscore-all",
+        "push-alias-deny-env-s-underscore-git",
         "push-alias-deny-env-split-string",
         "push-alias-deny-env-squoted-xdg",
         "push-alias-deny-lost-prefix-config",
@@ -5326,6 +5330,8 @@
         "push-alias-deny-env-s-attached",
         "push-alias-deny-env-s-reloc",
         "push-alias-deny-env-s-squoted",
+        "push-alias-deny-env-s-underscore-all",
+        "push-alias-deny-env-s-underscore-git",
         "push-alias-deny-env-split-string",
         "push-alias-deny-env-squoted-xdg",
         "push-alias-deny-lost-reloc-prefix",
@@ -5547,6 +5553,8 @@
         "push-alias-deny-env-s-attached",
         "push-alias-deny-env-s-reloc",
         "push-alias-deny-env-s-squoted",
+        "push-alias-deny-env-s-underscore-all",
+        "push-alias-deny-env-s-underscore-git",
         "push-alias-deny-env-split-string",
         "push-alias-deny-env-squoted-xdg"
       ]
@@ -5731,6 +5739,8 @@
       "expect_fail": [
         "push-alias-deny-env-s-attached",
         "push-alias-deny-env-s-squoted",
+        "push-alias-deny-env-s-underscore-all",
+        "push-alias-deny-env-s-underscore-git",
         "push-alias-deny-env-split-string"
       ]
     },
@@ -5780,6 +5790,22 @@
       ],
       "expect_fail": [
         "push-alias-deny-cr-mid-subsection"
+      ]
+    },
+    {
+      "name": "448-pg-alias-lost-trigger-git",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-alias-deny-",
+      "edits": [
+        {
+          "from": "    if (i == from - 1 && index(t, \"git\") > 0) saw_git = 1\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-alias-deny-env-s-underscore-all",
+        "push-alias-deny-env-s-underscore-git"
       ]
     }
   ]

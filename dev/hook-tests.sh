@@ -3180,6 +3180,9 @@ case_pp_noop_flood() {
 # mutant:448-pg-alias-subsection-dot -- drops the dotted alias header alternative.
 # mutant:448-pg-alias-lost-quoted-cfg -- drops the GIT_CONFIG_* name tests from the embedded
 #   assignment scan of a lost segment.
+# mutant:448-pg-alias-lost-trigger-git -- drops the trigger token from the names-git gate of a lost
+#   segment, so a relocation packed with git into one env -S token (backslash-underscore separators) is
+#   not treated as an alias candidate.
 # mutant:448-pg-alias-lost-substring -- makes the embedded assignment scan prefix-only, so an
 #   assignment inside an env -S string no longer counts.
 # mutant:448-pg-alias-backtick -- drops the backtick test on command-line config of an alias candidate.
@@ -3730,6 +3733,18 @@ case_al_deny_env_split_string() {
   local dir="$tmpbase/repo-al-env-split"
   mk_fixture_repo "$dir" main feature/x
   al_run 'env --split-string="HOME=/x git p origin main"' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_s_underscore_all() {
+  local dir="$tmpbase/repo-al-env-s-us-all"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'env -S"HOME=/x\_git\_p\_origin\_main"' "$dir"
+  al_expect_aliascfg
+}
+case_al_deny_env_s_underscore_git() {
+  local dir="$tmpbase/repo-al-env-s-us-git"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'env -S"HOME=/x\_git" p origin main' "$dir"
   al_expect_aliascfg
 }
 case_al_deny_env_quoted_gitconfig() {
@@ -9707,6 +9722,8 @@ cases=(
   "push-alias-deny-env-s-attached|case_al_deny_env_s_attached|env -S\"HOME=/x git p ...\" (attached string) denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-substring)"
   "push-alias-deny-env-s-squoted|case_al_deny_env_s_squoted|env -S single-quoted XDG_CONFIG_HOME string denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-substring)"
   "push-alias-deny-env-split-string|case_al_deny_env_split_string|env --split-string=\"HOME=/x git p ...\" denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-substring)"
+  "push-alias-deny-env-s-underscore-all|case_al_deny_env_s_underscore_all|env -S with HOME and git packed into one token by backslash-underscore separators denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-trigger-git)"
+  "push-alias-deny-env-s-underscore-git|case_al_deny_env_s_underscore_git|env -S with HOME and git in the trigger token, the rest as plain words, denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-trigger-git)"
   "push-alias-deny-env-quoted-gitconfig|case_al_deny_env_quoted_gitconfig|env \"GIT_CONFIG_PARAMETERS=\$X\" git p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-cfg)"
   "push-alias-deny-backtick-quoted|case_al_deny_backtick_quoted|a backtick substitution inside a quoted -c key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"
   "push-alias-deny-backtick-bare|case_al_deny_backtick_bare|a backtick substitution as the -c key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"

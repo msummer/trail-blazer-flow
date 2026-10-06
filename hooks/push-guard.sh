@@ -395,7 +395,9 @@
 # git itself ignores but this hook denies as `git status`; relocation or inline alias/include config
 # on any git segment; an export of `HOME`/`XDG_CONFIG_HOME`/`GIT_CONFIG_*` anywhere in a command that
 # also has a non-push git segment; a heredoc or commit-message line that starts `git <alias name>`; a
-# lost segment whose text mentions alias or include (`X="a b" git log --grep=include`); a self-referential
+# lost segment whose text mentions alias or include (`X="a b" git log --grep=include`), or merely contains a
+# relocation or config assignment as a substring (`-m "HOME=/x"`, `--grep=GIT_CONFIG_KEY_`; each measured
+# rc 2); a self-referential
 # alias named like a built-in (`log = log --oneline`, which git ignores) read as a chain, so `git log`
 # denies; a dollar sign in a command-line config value, or a backtick anywhere in a record holding such
 # config, on a non-push git segment; a checkout with a push-ish subsection alias, where every alias
@@ -1330,6 +1332,9 @@ function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, u, na
     # (env "HOME=<d>" git ..., env -S"HOME=<d> git ...") is no unquoted assignment token, so the prefix
     # walk never saw it: a substring match, fail closed
     if (has_cfg_assign(strip_quotes(toks[i]))) reloc = 1
+    # the trigger token itself may hold git (env -S"HOME=/x\_git\_p": the backslash-underscore is an
+    # env -S separator), so it counts toward the names-git gate too
+    if (i == from - 1 && index(t, "git") > 0) saw_git = 1
     if (i < from) continue
     if (index(t, "git") > 0) saw_git = 1
     # unique names only, handed over in chunks of bounded size: the string append stays cheap however
