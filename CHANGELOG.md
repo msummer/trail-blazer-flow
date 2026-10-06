@@ -24,12 +24,6 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 - #457: claude-dir-guard now denies an implementer/verifier call too large to analyse, instead of timing out with no deny. It bounds its own analysis with a 5-second budget, and it also denies up front, whatever the elapsed time, a Bash command with a physical line over 2000 bytes, a native apply_patch whose CR-bearing or `*** ` marker line is over 2000 bytes, a Bash command or patch over 1000000 bytes in total, and an Edit/Write path or a `cwd` over 2000 bytes, whenever the call passes the hook's fast path (any mention of `Edit`, `Write`, `apply_patch`, `applypatch` or `*** Begin Patch` in the payload). The remedy is to send less per call: break the long line, split a large patch into smaller patches, or use Codex's native apply_patch tool for a patch with a long content line.
 - #455: `hooks/claude-dir-guard.sh` denies a Bash call whose `apply_patch` shim takes its patch from anything but its own inline heredoc when an inline patch appears elsewhere in the command (a decoy), and fails closed when an unbalanced quote or a trailing backslash precedes the shim's command word, such as `X='a b' apply_patch < x.patch` (absorbs #456).
 - #449: `push-guard.sh` now denies, as an unresolved push target, a push segment it loses track of
-  and that could still be a push: a quoted or escaped git option (`git "-c" k=v push`), a quoted
-  git option value containing a space (`git -c "core.sshCommand=ssh -i k" push ...`; a `-C` value
-  stays exempt), a quoted or escaped assignment value containing a space
-  (`X="a b" git push ...`), or an `env` option outside a
-  short allowlist (`env -C <dir>`, `--chdir=`, `-S`; absorbs #451). `env -u NAME` now consumes its
-  value, so `env -u git push origin main` is no longer denied. No consumer step.
 
 ## v3.3.0
 
