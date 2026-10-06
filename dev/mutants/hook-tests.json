@@ -2315,6 +2315,283 @@
       ]
     },
     {
+      "name": "510-pg-hdr-rest-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "      cfgline=\"$cfg_rest\"",
+          "to": "      cfgline=\"\""
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-alias-same-line",
+        "push-hdrkey-deny-cap-length-header",
+        "push-hdrkey-deny-in-included-file",
+        "push-hdrkey-deny-new-spellings",
+        "push-hdrkey-deny-remote-name-chars",
+        "push-hdrkey-deny-remote-same-line",
+        "push-hdrkey-deny-sections-same-line"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-raw",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "        cfgline=\"[${cfg_raw#*\\[}\"",
+          "to": "        :"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-alias-same-line",
+        "push-hdrkey-deny-remote-name-chars",
+        "push-hdrkey-deny-sections-same-line"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-quoted-end",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "                cfg_rest=\"${cfg_after#\\]}\"",
+          "to": "                cfg_rest=\"${cfgline#*\\]}\""
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-remote-name-chars"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-simple-end",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "              cfg_rest=\"${cfgline#*\\]}\"",
+          "to": "              cfg_rest=\"${cfgline##*\\]}\""
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-alias-same-line",
+        "push-hdrkey-deny-confighdr-chained",
+        "push-hdrkey-deny-never-executes"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-rest-nostrip",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "      cfg_h=\"${cfg_rest%%#*}\"\n      cfg_s=\"${cfg_rest%%;*}\"",
+          "to": "      cfg_h=\"$cfg_rest\"\n      cfg_s=\"$cfg_rest\""
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-remote-same-line"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-chain-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "        \\[*) deny_too_large confighdr ;;",
+          "to": "        \\[*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-confighdr-chained",
+        "push-hdrkey-deny-never-executes"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-escape-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "                  *\\\\) [ \"$cfg_after\" = \"]\" ] || deny_too_large confighdr ;;",
+          "to": "                  *\\\\) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-confighdr-quote-shapes"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-escape-strict",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "                  *\\\\) [ \"$cfg_after\" = \"]\" ] || deny_too_large confighdr ;;",
+          "to": "                  *\\\\) deny_too_large confighdr ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-noop-escaped-name"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-after-quote-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "                  *) deny_too_large confighdr ;;",
+          "to": "                  *) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-confighdr-quote-shapes"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-namepart-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "                *[![:space:]]*) deny_too_large confighdr ;;",
+          "to": "                *[![:space:]]*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-confighdr-quote-shapes"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-canon-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "                  cfgline=\"[$cfg_name \\\"$cfg_sub\\\"]\"",
+          "to": "                  :"
+        },
+        {
+          "from": "then cfgline=\"[$cfg_name \\\"$cfg_sub\\\"]\"; fi",
+          "to": "then :; fi"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-in-included-file",
+        "push-hdrkey-deny-new-spellings"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-dotted-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "                  cfg_form=dotted",
+          "to": "                  cfg_form=none"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-confighdr-dotted-upper",
+        "push-hdrkey-deny-in-included-file",
+        "push-hdrkey-deny-new-spellings"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-ws-space-only",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "              cfg_name=\"${cfg_np%%[[:space:]]*}\"",
+          "to": "              cfg_name=\"${cfg_np%% *}\""
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-alias-same-line",
+        "push-hdrkey-deny-in-included-file",
+        "push-hdrkey-deny-new-spellings"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-backslash-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "                    *\\\\*) deny_too_large confighdr ;;",
+          "to": "                    *\\\\*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-confighdr-backslash"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-dotted-upper-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "                      *[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) deny_too_large confighdr ;;",
+          "to": "                      *[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) : ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-confighdr-dotted-upper"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-dotted-scope",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "                  cfg_sub=\"${cfg_np#*.}\"",
+          "to": "                  cfg_sub=\"$cfg_np\""
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-in-included-file",
+        "push-hdrkey-deny-new-spellings"
+      ]
+    },
+    {
+      "name": "510-pg-hdr-reason",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-hdrkey-",
+      "edits": [
+        {
+          "from": "        \\[*) deny_too_large confighdr ;;",
+          "to": "        \\[*) deny_too_large configline ;;"
+        }
+      ],
+      "expect_fail": [
+        "push-hdrkey-deny-confighdr-chained",
+        "push-hdrkey-deny-never-executes"
+      ]
+    },
+    {
       "name": "403-cdg-pc-vocab",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
