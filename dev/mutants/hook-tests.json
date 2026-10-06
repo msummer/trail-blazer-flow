@@ -7570,6 +7570,516 @@
       "expect_fail": [
         "push-rtexp-deny-git-slot-ansi-c-concat"
       ]
+    },
+    {
+      "name": "505-ab-unbalanced-off",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "== 1 && quote_unbalanced(tok)) { lost = lost_scan(toks, idx + 1, ntok);",
+          "to": "== 1 && 0) { lost = lost_scan(toks, idx + 1, ntok);"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-assign-backslash",
+        "ab-lost-deny-assign-dquote",
+        "ab-lost-deny-assign-squote",
+        "ab-lost-deny-claude",
+        "ab-lost-deny-env-opt",
+        "ab-lost-deny-verifier-git"
+      ]
+    },
+    {
+      "name": "505-ab-unbalanced-dq",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  n = gsub(/\"/, \"\", t)\n  if (n % 2) return 1",
+          "to": "  n = 0\n  if (n % 2) return 1"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-assign-dquote",
+        "ab-lost-deny-claude",
+        "ab-lost-deny-env-opt",
+        "ab-lost-deny-env-u-quoted",
+        "ab-lost-deny-verifier-git"
+      ]
+    },
+    {
+      "name": "505-ab-unbalanced-sq",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  n = gsub(sq, \"\", t)\n  if (n % 2) return 1",
+          "to": "  n = 0\n  if (n % 2) return 1"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-assign-squote"
+      ]
+    },
+    {
+      "name": "505-ab-unbalanced-bs",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  return (substr(tok, length(tok)) == \"\\\\\")",
+          "to": "  return 0"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-assign-backslash"
+      ]
+    },
+    {
+      "name": "505-ab-prefix-quoted-shape",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "    if (saw_prefix && quote_bearing(tok)) {",
+          "to": "    if (0 && quote_bearing(tok)) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-prefix-quoted",
+        "ab-lost-deny-prefix-squoted-opt"
+      ]
+    },
+    {
+      "name": "505-ab-shape-gate",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "      if (substr(s0, 1, 1) == \"-\" || match(s0, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) {",
+          "to": "      if (1) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-noop-candidate-exempt"
+      ]
+    },
+    {
+      "name": "505-ab-quote-bearing-sq",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  return (index(tok, \"\\\"\") > 0 || index(tok, sq) > 0 || index(tok, \"\\\\\") > 0)",
+          "to": "  return (index(tok, \"\\\"\") > 0 || index(tok, \"\\\\\") > 0)"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-prefix-squoted-opt"
+      ]
+    },
+    {
+      "name": "505-ab-env-u-consume",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "        idx += 2\n        continue\n      }\n      if (substr(tok, 1, 2) == \"-u\"",
+          "to": "        idx += 1\n        continue\n      }\n      if (substr(tok, 1, 2) == \"-u\""
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-claude",
+        "ab-lost-deny-env-u-gh",
+        "ab-lost-deny-env-u-git",
+        "ab-lost-noop-env-u-consumes"
+      ]
+    },
+    {
+      "name": "505-ab-env-u-value-check",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "        if (quote_unbalanced(toks[idx + 1])) {",
+          "to": "        if (0) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-env-u-quoted"
+      ]
+    },
+    {
+      "name": "505-ab-env-u-attached",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "      if (substr(tok, 1, 2) == \"-u\" || index(tok, \"--unset=\") == 1) {",
+          "to": "      if (0) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-verifier-env-u-expansion",
+        "ab-lost-noop-verifier-env-allowlist"
+      ]
+    },
+    {
+      "name": "505-ab-env-u-attached-quote",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "        if (quote_unbalanced(tok)) { lost = lost_scan(toks, idx + 1, ntok); if (lost != \"\") { print lost; return } }\n        idx++",
+          "to": "        if (0) { lost = lost_scan(toks, idx + 1, ntok); if (lost != \"\") { print lost; return } }\n        idx++"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-env-u-quoted"
+      ]
+    },
+    {
+      "name": "505-ab-env-u-rx",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "        if (rx_word(toks[idx + 1])) saw_exp = 1",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-verifier-env-u-expansion"
+      ]
+    },
+    {
+      "name": "505-ab-env-u-attached-rx",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "        if (rx_word(tok)) saw_exp = 1\n        if (quote_unbalanced(tok))",
+          "to": "        if (quote_unbalanced(tok))"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-verifier-env-u-expansion"
+      ]
+    },
+    {
+      "name": "505-ab-env-opt-off",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "      lost = lost_word(tok, 1)\n      if (lost == \"\") lost = lost_scan(toks, idx + 1, ntok)\n      if (lost != \"\") { print lost; return }\n    }\n    # #505: after a prefix word",
+          "to": "    }\n    # #505: after a prefix word"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-claude",
+        "ab-lost-deny-env-opt",
+        "ab-lost-deny-env-split-string-git",
+        "ab-lost-deny-verifier-env-arm-basename",
+        "ab-lost-deny-verifier-git"
+      ]
+    },
+    {
+      "name": "505-ab-env-novalue-vocab",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "ENV_NOVALUE_OPTS=\"-i -0 -v -- --ignore-environment --null --debug\"",
+          "to": "ENV_NOVALUE_OPTS=\"\""
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-noop-verifier-env-allowlist"
+      ]
+    },
+    {
+      "name": "505-ab-env-context",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "    if (norm in prefix_set && norm != \"-\") in_env = (norm == \"env\")",
+          "to": "    if (norm in prefix_set && norm != \"-\") in_env = 1"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-noop-verifier-nonenv-opt"
+      ]
+    },
+    {
+      "name": "505-ab-env-arm-prefix-guard",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "    if (in_env && substr(tok, 1, 1) == \"-\") {\n      if (tok in envnov_set)",
+          "to": "    if (in_env && substr(tok, 1, 1) == \"-\" && !(norm in prefix_set)) {\n      if (tok in envnov_set)"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-verifier-env-arm-basename"
+      ]
+    },
+    {
+      "name": "505-ab-word-lead-off",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "    if (lead && lwf && substr(lwv, 1, 1) == \"-\") {",
+          "to": "    if (0) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-env-split-string",
+        "ab-lost-deny-env-split-string-escaped",
+        "ab-lost-deny-env-split-string-git",
+        "ab-lost-deny-prefix-quoted",
+        "ab-lost-deny-verifier-git"
+      ]
+    },
+    {
+      "name": "505-ab-word-unescape",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  gsub(/\\\\_/, \" \", lx)",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-env-split-string-escaped"
+      ]
+    },
+    {
+      "name": "505-ab-word-exact",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "    if (lwv == \"gh\") return \"gh\"\n    if (lwv == \"git\") return \"git -prefix-\"",
+          "to": "    if (index(lwv, \"gh\") > 0) return \"gh\"\n    if (index(lwv, \"git\") > 0) return \"git -prefix-\""
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-noop-scan-precision"
+      ]
+    },
+    {
+      "name": "505-ab-scan-lead",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "    r = lost_word(toks[i], 0)",
+          "to": "    r = lost_word(toks[i], 1)"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-noop-scan-precision"
+      ]
+    },
+    {
+      "name": "505-ab-word-ungated",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  lx = tolower(tok)",
+          "to": "  return \"gh\"\n  lx = tolower(tok)"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-claude",
+        "ab-lost-deny-env-split-string-git",
+        "ab-lost-deny-verifier-env-arm-basename",
+        "ab-lost-deny-verifier-git",
+        "ab-lost-noop-controls",
+        "ab-lost-noop-scan-precision"
+      ]
+    },
+    {
+      "name": "505-ab-git-sentinel",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "    if (lwv == \"git\") return \"git -prefix-\"",
+          "to": "    if (lwv == \"git\") return \"git status\""
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-env-split-string-git",
+        "ab-lost-deny-verifier-env-arm-basename",
+        "ab-lost-deny-verifier-git"
+      ]
+    },
+    {
+      "name": "505-ab-claude-arm",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "    if (c == \"\" && has_claude_seg(toks[i])) c = \"-claude-write- \" toks[i]",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-claude"
+      ]
+    },
+    {
+      "name": "505-ab-scan-once",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lostscan-",
+      "edits": [
+        {
+          "from": "  if (ls_done) return \"\"",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-lostscan-noop-flood"
+      ]
+    },
+    {
+      "name": "505-ab-scan-reset",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  ls_done = 0\n  idx = 1",
+          "to": "  idx = 1"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-env-opt"
+      ]
+    },
+    {
+      "name": "505-ab-word-lower",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  lx = tolower(tok)",
+          "to": "  lx = tok"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-assign-dquote",
+        "ab-lost-deny-env-split-string-git"
+      ]
+    },
+    {
+      "name": "505-ab-word-strip-sq",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  gsub(sq, \"\", lx)",
+          "to": "  "
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-assign-dquote"
+      ]
+    },
+    {
+      "name": "505-ab-word-strip-dq",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  gsub(/\"/, \"\", lx)",
+          "to": "  "
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-assign-dquote"
+      ]
+    },
+    {
+      "name": "505-ab-word-strip-bs",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  gsub(/\\\\/, \"\", lx)",
+          "to": "  "
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-assign-dquote"
+      ]
+    },
+    {
+      "name": "505-ab-quote-bearing-bs",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  return (index(tok, \"\\\"\") > 0 || index(tok, sq) > 0 || index(tok, \"\\\\\") > 0)",
+          "to": "  return (index(tok, \"\\\"\") > 0 || index(tok, sq) > 0)"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-prefix-squoted-opt"
+      ]
+    },
+    {
+      "name": "505-ab-strip-bs",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  gsub(/\"/, \"\", t)\n  gsub(/\\\\/, \"\", t)\n  return t",
+          "to": "  gsub(/\"/, \"\", t)\n  return t"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-prefix-squoted-opt"
+      ]
     }
   ]
 }

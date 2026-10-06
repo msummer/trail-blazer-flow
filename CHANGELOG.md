@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #505: `agent-boundary.sh` follows `env -u`/`--unset` values and fails closed on an unlisted `env`
+  option, a quoted or escaped assignment value split at a space, or a quoted option or assignment after
+  a prefix word, when the rest of the segment names `git`, `gh` or a `.claude` path. No consumer step.
 - #510: push-guard reads a git config key written on its section header's line, the dotted, mixed
   (`[remote.a "b"]`) and tab-separated header spellings, and a file behind a leading UTF-8 BOM, and
   denies a header line it cannot split the way git does. No consumer step.
