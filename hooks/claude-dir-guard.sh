@@ -23,7 +23,9 @@
 # only, #455) when the shim's own input is anything but its own inline heredoc while an inline
 # patch also appears elsewhere in the command (a decoy), OR (Bash only, #455/#456) when an
 # unbalanced quote or a trailing backslash precedes a command word the walk resolved in a segment
-# that mentions the shim; every other case — main session (no agent_type), any other agent, `permission_mode: "plan"`, a tool
+# that mentions the shim, OR (#457) when the call is too large for this hook's own analysis to
+# finish inside its analysis budget, or a Bash command / patch line, a path, or the `cwd` field
+# exceeds a size cap (see "Analysis deadline (#457)" and "Size caps (#457)" below); every other case — main session (no agent_type), any other agent, `permission_mode: "plan"`, a tool
 # other than Edit/Write/apply_patch/Bash, malformed stdin, an absent/empty file_path/command, an
 # ordinary Bash call that neither carries an inline patch nor invokes the shim as its command word
 # (`apply_patch`/`applypatch` appearing only as an ordinary argument gets no opinion; the walk
@@ -131,7 +133,8 @@
 # Bash-carried patch) cannot be parsed at all, or whose Bash command word is `apply_patch`/
 # `applypatch` with no inline patch this hook can see, or whose shim input is not its own inline
 # heredoc next to an inline decoy patch, or whose shim segment is preceded by an unbalanced quote
-# or trailing backslash (#455), in which case print exactly one reason line
+# or trailing backslash (#455), or (#457) whose own analysis cannot finish inside the analysis
+# budget, in which case print exactly one reason line
 # to stderr and exit 2 ("deny"); stdout is always empty. Wired in hooks/hooks.json via
 # `${CLAUDE_PLUGIN_ROOT}`, with no "if" gate: the "if" field is permission-rule syntax over
 # tool_input constituents only -- it cannot see agent_type, it cannot express a case-insensitive/
@@ -212,6 +215,81 @@
 # sits in the previous segment, and tracking quotes across segments would over-block heredoc
 # bodies.
 #
+# Analysis deadline (#457). This hook's own analysis (everything after the role and plan-mode exits)
+# is bounded by a whole-second wall-clock budget, `CDG_ANALYSIS_BUDGET_SECS` (5s in production),
+# sampled from `$SECONDS` as an elapsed difference from `cdg_t0` (captured right after `set -uo
+# pipefail`): `check_deadline` denies with one fixed "too large to analyse" reason
+# (`deny_too_large`, fail-closed, naming only the resolved role and tool) the first time `$SECONDS`
+# reaches `cdg_deadline` (`cdg_t0 + cdg_budget`) -- never by resetting `$SECONDS`. Without it a long
+# run of prefix words ahead of the shim (`env env ... env apply_patch < x.patch`) kept the walk busy
+# for about as long as Claude Code's own 10s hook timeout, and a timed-out PreToolUse hook gives no
+# deny, so the shim ran unguarded. The sampling rule this binds on every future addition to this
+# file (`check_deadline` is an alias, defined before every function body that uses it is parsed --
+# see its definition for why): call `check_deadline` as the FIRST statement of EVERY loop whose trip
+# count grows with the input -- grep this file for `check_deadline` for the current list rather than
+# trusting an enumeration here -- and every `$(...)` call to a helper that samples (`ltrim`/`trim`)
+# must propagate a deny back to its parent with `[ "$?" -eq 0 ] || exit 2`, since a deny raised
+# inside a command substitution only exits that subshell. Every sample site is reachable only AFTER
+# the role and plan-mode exits, so the deadline's deny reaches the implementer and verifier only; the
+# main session, any other agent, and plan mode always get no opinion (unlike hooks/push-guard.sh,
+# which has no role scoping and denies in every session). Two test-only knobs are read from the
+# ENVIRONMENT only (never from the stdin JSON) and can only make the hook deny sooner, never later:
+# `TBF_CLAUDE_DIR_GUARD_BUDGET_SECS` lowers the budget (adopted only when exactly one or two ASCII
+# digits and strictly less than the production budget; any other value is ignored), and
+# `TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP` denies once that many samples have been taken (adopted only when
+# 1-4 digits with no leading zero; anything else means off), which lets a fixture pin one sample site
+# independent of host speed -- a whole-second time budget cannot, since the second boundary can land
+# during work done before that site.
+#
+# Size caps (#457). Under Apple's bash 3.2 a `${text//pat/repl}` substitution is superlinear in the
+# text's length and in its match count, and none of that work can be sampled from inside bash's own
+# substitution; a whole-text word-split (`for x in $text`) is linear but likewise unsampled. So:
+#   - every such substitution runs on ONE physical line at a time (a newline is itself a segment
+#     break, so the segments are identical), inside a loop that samples the deadline first;
+#   - cdg_prepare_text runs first on BOTH text routes (the Bash route's command, the apply_patch
+#     route's patch text) and denies fail-closed, BEFORE any split or substitution, when the whole
+#     text is longer than `CDG_TEXT_MAX_BYTES` bytes; it then strips CRs line by line in a
+#     sampled loop, and denies a physical line longer than `CDG_LINE_MAX_BYTES` bytes. On the
+#     apply_patch route the line cap applies only to a line that contains a CR (the strip is the
+#     only superlinear step a long CR-free content line meets there) or a `*** ` patch-grammar
+#     marker (a header line the parser acts on); every other line is only bounded by the whole-text
+#     cap and by the sampled loops that touch it. The Bash route caps every line;
+#   - a single path (an Edit/Write file_path, or a patch header path joined to cwd) and the stdin
+#     `cwd` field are each denied, before any substitution, when longer than `CDG_LINE_MAX_BYTES`
+#     bytes. Every cap counts BYTES, not characters: the length check runs under a scoped
+#     `LC_ALL=C`, because `${#x}` counts characters under a multibyte locale and a text of 4-byte
+#     characters would otherwise pass at four times its byte size.
+# Like every deadline deny these are reachable only after the role and plan-mode exits. The line cap
+# is sized so one worst-case dense line costs a bounded slice of the budget; many such lines are
+# bounded by the per-line deadline samples. The Edit/Write route analyses no text, so only its path
+# is capped. Worst-case wall clock for the whole hook, stated for review: at most
+# `max(cdg_budget, T_prefix(L)) + U_max`, where `T_prefix` is the prefix this deadline cannot sample
+# around -- `cat`, the fast-path globs, up to five `jq` calls, the length checks, cdg_prepare_text's
+# CR-presence glob and its whole-text `for ln in $text` word-split, the like whole-text splits in
+# is_apply_patch_word, has_exact_begin_patch_line and parse_patch_headers (all linear, all bounded by
+# `CDG_TEXT_MAX_BYTES`), and the raw-text `.claude`/`.codex` glob -- and `U_max` is the largest
+# single step the deadline cannot interrupt: one line's substitutions (bounded by
+# `CDG_LINE_MAX_BYTES`), one segment's `toks=($seg)` word-split, one `"${toks[@]}"` expansion, one
+# walk_window iteration (plus any per-index cost bash 3.2's arrays add), one forked `trim`/`ltrim`
+# call up to its first in-subshell sample, or one classify_path. Residuals this deadline and these
+# caps do NOT close: `T_prefix` is unsampled (though still counted by the wall clock), and the Codex
+# CLI's own hook timeout, if any, is UNVERIFIED here -- the budget is sized against Claude Code's
+# documented 10s PreToolUse timeout only. Over-blocking classes that follow (all fail-closed, none
+# widenable from the call itself): a legitimately large, but benign, implementer/verifier call that
+# passes fast path 2 denies as "too large to analyse" once its own analysis crosses the budget -- in
+# particular a legitimately large shell-issued patch (many ordinary lines, each costing a forked
+# `trim`) can approach the budget on a loaded host under bash 3.2, and the remedy is to split it
+# into smaller patches or to use Codex's native apply_patch tool, which forks less per line; a Bash
+# call with a SINGLE physical line longer than `CDG_LINE_MAX_BYTES` bytes that passes fast path
+# 2 (it names `Edit`, `Write`, `apply_patch`, `applypatch` or `*** Begin Patch` anywhere in the raw
+# payload) denies, and the remedy is to break the line or, for a patch, to use the native tool,
+# whose route does not cap an ordinary content line; a native apply_patch call whose CR-bearing line
+# or `*** ` marker line is over the cap denies, and the remedy is to split the patch or remove the
+# CR; and a path or `cwd` longer than `CDG_LINE_MAX_BYTES` bytes denies (a header path is
+# joined to `cwd` first, so the cap bounds their combined length, well under typical OS path limits).
+# A command or patch made of ordinary-length lines is not capped by size alone short of
+# `CDG_TEXT_MAX_BYTES`.
+#
 # Documented under-blocking classes (evasions, named rather than hidden): a Bash-issued write
 # (`cat >>`, `tee`, `sed -i`) never reaches an Edit/Write/apply_patch hook by construction; since
 # #340, hooks/agent-boundary.sh's own Bash policy denies the redirect/tee/cp/mv/cd-pushd/in-place-
@@ -291,6 +369,8 @@
 # ${CLAUDE_PLUGIN_ROOT} -- every one degrades this hook to silent no-opinion, with no prompt and no
 # visible sign, exactly as every sibling hook in this directory already documents.
 set -uo pipefail
+# #457: sampled once, at hook start; see "Analysis deadline (#457)" in this file's header.
+cdg_t0=$SECONDS
 
 # --- vocabulary --------------------------------------------------------------------------------
 # Grep-extractable single-line KEY="value" declarations (the 2.5/4.36-4.42 idiom). The two
@@ -321,6 +401,62 @@ PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh
 # PER SEGMENT here (agent-boundary counts per record); see is_apply_patch_word()'s own comment for
 # why per-segment is the right granularity for this hook.
 DBRACKET_MAX="64"
+# CDG_ANALYSIS_BUDGET_SECS (#457) -- whole-second wall-clock budget for this hook's own analysis;
+# see "Analysis deadline (#457)" in this file's header. Sized well under Claude Code's 10s hook
+# timeout (hooks/hooks.json), the same value hooks/push-guard.sh's own deadline uses.
+CDG_ANALYSIS_BUDGET_SECS="5"
+# CDG_LINE_MAX_BYTES (#457) -- longest physical line of a Bash command (every line), of an
+# apply_patch patch (only a CR-bearing or `*** ` marker line), and longest single path or `cwd`
+# value, measured in BYTES (cdg_prepare_text and cdg_bytes scope LC_ALL=C to the length check),
+# analysed at all; see "Size caps (#457)" in this file's header.
+CDG_LINE_MAX_BYTES="2000"
+# CDG_TEXT_MAX_BYTES (#457) -- longest whole Bash command or patch text, in bytes, analysed at
+# all (it bounds the unsampled whole-text word-split); see "Size caps (#457)" in this file's header.
+CDG_TEXT_MAX_BYTES="1000000"
+
+# #457: cdg_budget defaults to CDG_ANALYSIS_BUDGET_SECS; TBF_CLAUDE_DIR_GUARD_BUDGET_SECS is a
+# test-only, environment-only knob (never read from stdin JSON) that can only LOWER it -- adopted
+# only when it is exactly one or two ASCII digits and strictly less than cdg_budget.
+cdg_budget="$CDG_ANALYSIS_BUDGET_SECS"
+case "${TBF_CLAUDE_DIR_GUARD_BUDGET_SECS:-}" in
+  [0-9]|[0-9][0-9]) [ "$TBF_CLAUDE_DIR_GUARD_BUDGET_SECS" -lt "$cdg_budget" ] && cdg_budget="$TBF_CLAUDE_DIR_GUARD_BUDGET_SECS" ;;
+esac
+cdg_deadline=$((cdg_t0 + cdg_budget))
+# #457: TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP is a second test-only, environment-only knob: a sample-count
+# cap (1-4 digits, no leading zero; anything else means 0, off) that denies once that many samples
+# have been taken, so a fixture can pin one sample site deterministically, independent of host
+# speed. It can only add denies, never remove one.
+cdg_sample_cap=0
+case "${TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP:-}" in
+  [1-9]|[1-9][0-9]|[1-9][0-9][0-9]|[1-9][0-9][0-9][0-9]) cdg_sample_cap="$TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP" ;;
+esac
+cdg_samples=0
+
+# deny_too_large (#457) -- prints exactly one fixed stderr line (it echoes no part of the input
+# beyond the role and tool name this hook itself resolved), then exits 2.
+deny_too_large() {
+  printf '%s %s role'"'"'s %s call is too large to analyse before the hook'"'"'s time limit (blocked: too large to analyse), and is denied fail-closed — split it into smaller calls\n' \
+    "$CLAUDE_DIR_DENY_STEM" "$role" "$tool_name" >&2
+  exit 2
+}
+
+# count_sample / check_deadline (#457) -- check_deadline is the first statement of every loop whose
+# trip count grows with the input (see "Analysis deadline (#457)" in this file's header for the
+# sampling rule). Each is kept on one line so a mutant that neuters it has a
+# single, unique `from` to target. check_deadline is an ALIAS, not a function, on purpose: under
+# Apple's bash 3.2 a function call is much more expensive while the calling frame holds a large
+# string or array (this hook's walk always does), so a function sample at every loop head would
+# slow every benign large command; an alias is expanded when each function body below is parsed, so
+# a sample costs two builtin tests and no call. Aliases need
+# expand_aliases in a non-interactive shell, and this definition must precede every function that
+# uses it.
+shopt -s expand_aliases
+# cdg_bytes VALUE (#457) -- sets cdg_n to VALUE's length in BYTES (LC_ALL=C scoped to this one call):
+# `${#x}` counts characters under a multibyte locale, so a text of 4-byte characters could pass a
+# cap at four times its byte size. Not for use inside a hot loop (a function call).
+cdg_bytes() { local LC_ALL=C; cdg_n="${#1}"; }
+count_sample() { cdg_samples=$((cdg_samples + 1)); [ "$cdg_samples" -lt "$cdg_sample_cap" ] || deny_too_large; }
+alias check_deadline='[ "$SECONDS" -lt "$cdg_deadline" ] || deny_too_large; [ "$cdg_sample_cap" -eq 0 ] || count_sample;'
 
 input="$(cat)"
 
@@ -408,6 +544,11 @@ dq='"'
 # reason line and exits 2 on any deny; returns (no output, no exit) when RAW_PATH is benign.
 classify_path() {
   local tool="$1" raw="$2" p p_disp
+  # #457: a single path (an Edit/Write file_path, or a header path joined to cwd) longer than the
+  # per-line cap denies BEFORE the whole-string substitutions below, which are superlinear under
+  # bash 3.2 (see the header's "Size caps (#457)").
+  cdg_bytes "$raw"
+  [ "$cdg_n" -le "$CDG_LINE_MAX_BYTES" ] || deny_too_large
 
   # Separator normalisation: a Windows-native or backslash-spelled ".claude"/".codex" still
   # denies (see README's Windows section on Git Bash's own path-form quirks). Documented
@@ -494,11 +635,11 @@ deny_patch_unparseable() {
 # genuine filename.
 ltrim() {
   local s="$1"
-  while :; do
+  while case "$s" in " "*|"$tab"*) true ;; *) false ;; esac; do
+    check_deadline
     case "$s" in
       " "*) s="${s# }" ;;
       "$tab"*) s="${s#"$tab"}" ;;
-      *) break ;;
     esac
   done
   printf '%s' "$s"
@@ -506,11 +647,12 @@ ltrim() {
 trim() {
   local s
   s="$(ltrim "$1")"
-  while :; do
+  [ "$?" -eq 0 ] || exit 2
+  while case "$s" in *" "|*"$tab") true ;; *) false ;; esac; do
+    check_deadline
     case "$s" in
       *" ") s="${s% }" ;;
       *"$tab") s="${s%"$tab"}" ;;
-      *) break ;;
     esac
   done
   printf '%s' "$s"
@@ -537,14 +679,17 @@ parse_patch_headers() {
   oldifs="$IFS"
   IFS="$lf"
   for raw_line in $patch; do
+    check_deadline
     IFS="$oldifs"
     line="$(ltrim "$raw_line")"
+    [ "$?" -eq 0 ] || exit 2
     case "$line" in
       "*** Begin Patch"|"*** End Patch"|"*** End of File")
         : # structural marker, not a header; ignored
         ;;
       "*** Add File: "*|"*** Update File: "*|"*** Delete File: "*|"*** Move to: "*)
         hdr_path="$(trim "${line#*: }")"
+        [ "$?" -eq 0 ] || exit 2
         [ -n "$hdr_path" ] || { set +f; deny_patch_unparseable "empty header path"; }
         headers=$((headers + 1))
         hdr_path="${hdr_path//\\//}"
@@ -586,6 +731,7 @@ parse_patch_headers() {
 quote_parity_check() {
   local j="$1" qraw qa qb
   while [ "$j" -le "$2" ]; do
+    check_deadline
     qraw="${toks[$j]:-}"
     qa="${qraw//$sq/}"
     qb="${qa//$dq/}"
@@ -616,12 +762,14 @@ quote_parity_check() {
 scan_shim_input() {
   local j="$1" k nin nout saw_hd=0 d
   while [ "$j" -lt "$2" ]; do
+    check_deadline
     d="${toks[$j]}"
     if [ "$d" = "$mark_in" ] || [ "$d" = "$mark_out" ]; then
       nin=0
       nout=0
       k="$j"
       while [ "$k" -lt "$2" ]; do
+        check_deadline
         case "${toks[$k]}" in
           "$mark_in") nin=$((nin + 1)) ;;
           "$mark_out") nout=$((nout + 1)) ;;
@@ -691,12 +839,14 @@ walk_window() {
   ww_skipped=0
   saw_prefix=0
   while [ "$i" -lt "$n" ]; do
+    check_deadline
     tok="${toks[$i]}"
     if [ "$tok" = "$mark_in" ] || [ "$tok" = "$mark_out" ]; then
       # A run of operators (`>>`, `<>`, `<<<`) is one redirect: skip every marker in the run, then
       # the single target/source token after it (#407 kickback round 3).
       i=$((i + 1))
       while [ "$i" -lt "$n" ] && { [ "${toks[$i]}" = "$mark_in" ] || [ "${toks[$i]}" = "$mark_out" ]; }; do
+        check_deadline
         i=$((i + 1))
       done
       i=$((i + 1))
@@ -828,7 +978,7 @@ iapw_memo=""
 iapw_unsafe=""
 iapw_unquoted=0
 is_apply_patch_word() {
-  local text="$1" flat seg base oldifs found=1
+  local text="$1" ln flat seg base oldifs found=1
   local mark_in=$'\x01LT\x01' mark_out=$'\x01GT\x01'
   local assign_ere='^[A-Za-z_][A-Za-z0-9_]*='
   local digits_ere='^[0-9]+$'
@@ -844,22 +994,33 @@ is_apply_patch_word() {
   # pattern and everything after it -- measured directly against this exact construct under both
   # bash 5 and Apple's bash 3.2), so "{"/"}" are substituted in their own separate statements
   # rather than folded into the bracket expression below.
-  # An fd duplication (`>&2`, `2>&1`, `<&0`, `>&-`) keeps its `&` as part of the redirect rather
-  # than letting it act as a segment break below (#407 kickback round 3).
-  text="${text//>&/>}"
-  text="${text//<&/<}"
-  # `>|` (noclobber override) is one redirect operator too; its `|` must not split the segment.
-  text="${text//>|/>}"
-  flat="${text//[;\&\|()\`]/$lf}"
-  flat="${flat//\{/$lf}"
-  flat="${flat//\}/$lf}"
-  flat="${flat//</ $mark_in }"
-  flat="${flat//>/ $mark_out }"
-
+  # (#457) Every substitution below runs on ONE physical line at a time, never on the whole command
+  # text, and never builds a whole-text `flat` string: bash 3.2's `${x//pat/repl}` is superlinear in
+  # the text's length and match count, and a newline is itself a segment break, so processing line
+  # by line gives the identical segments. Each line is at most CDG_LINE_MAX_BYTES bytes
+  # (cdg_prepare_text, run on the command first under a scoped LC_ALL=C so the length is a byte
+  # count, denies a longer one), and the loop below samples the deadline before every line.
   oldifs="$IFS"
   set -f
   IFS="$lf"
-  for seg in $flat; do
+  for ln in $text; do
+    check_deadline
+    # An fd duplication (`>&2`, `2>&1`, `<&0`, `>&-`) keeps its `&` as part of the redirect rather
+    # than letting it act as a segment break below (#407 kickback round 3).
+    ln="${ln//>&/>}"
+    ln="${ln//<&/<}"
+    # `>|` (noclobber override) is one redirect operator too; its `|` must not split the segment.
+    ln="${ln//>|/>}"
+    flat="${ln//[;\&\|()\`]/$lf}"
+    flat="${flat//\{/$lf}"
+    flat="${flat//\}/$lf}"
+    flat="${flat//</ $mark_in }"
+    flat="${flat//>/ $mark_out }"
+    # (The segment loop's body below keeps its pre-#457 indentation, so every line stays textually
+    # identical to the version it was nested inside.)
+    IFS="$lf"
+    for seg in $flat; do
+    check_deadline
     IFS="$oldifs"
     local -a toks
     toks=($seg)
@@ -888,6 +1049,7 @@ is_apply_patch_word() {
         prev=-1
         k=0
         for t in "${toks[@]}"; do
+          check_deadline
           if [ "$t" = "]]" ]; then
             db_n=$((db_n + 1))
             if [ "$db_n" -gt "$DBRACKET_MAX" ]; then
@@ -926,6 +1088,7 @@ is_apply_patch_word() {
       scan_shim_input $((seg_shim_at + 1)) "$n"
     fi
     IFS="$lf"
+    done
   done
   set +f
   IFS="$oldifs"
@@ -953,14 +1116,60 @@ has_exact_begin_patch_line() {
   oldifs="$IFS"
   IFS="$lf"
   for raw_line in $text; do
+    check_deadline
     IFS="$oldifs"
     line="$(trim "$raw_line")"
+    [ "$?" -eq 0 ] || exit 2
     [ "$line" = "*** Begin Patch" ] && found=0
     IFS="$lf"
   done
   set +f
   IFS="$oldifs"
   return "$found"
+}
+
+# cdg_prepare_text TEXT [MODE] (#457) -- run once on the Bash route's command (MODE "all", the
+# default) AND on the apply_patch route's patch text (MODE "native"), before any substitution on
+# either, under a scoped LC_ALL=C so every length is a BYTE count: denies (deny_too_large) a text
+# longer than CDG_TEXT_MAX_BYTES before any split, denies a
+# physical line longer than CDG_LINE_MAX_BYTES (in MODE "native" only a line holding a CR or a
+# `*** ` marker; any other line is bounded by the whole-text cap), and sets the global cdg_text to
+# TEXT with every CR stripped LINE BY LINE (a whole-text `${x//$cr/}` is superlinear in the CR count
+# under bash 3.2; blank lines are dropped only when a CR was present, which no later consumer
+# distinguishes, since each reads its text with IFS-splitting on LF). The loop samples the deadline
+# before every line.
+cdg_text=""
+cdg_prepare_text() {
+  local text="$1" mode="${2:-all}" ln lmax oldifs="$IFS" hascr=0 out=""
+  local LC_ALL=C
+  [ "${#text}" -le "$CDG_TEXT_MAX_BYTES" ] || deny_too_large
+  case "$text" in
+    *"$cr"*) hascr=1 ;;
+  esac
+  set -f
+  IFS="$lf"
+  for ln in $text; do
+    check_deadline
+    lmax="$CDG_LINE_MAX_BYTES"
+    if [ "$mode" = native ]; then
+      case "$ln" in
+        *"$cr"*|*"*** "*) ;;
+        *) lmax="$CDG_TEXT_MAX_BYTES" ;;
+      esac
+    fi
+    [ "${#ln}" -le "$lmax" ] || deny_too_large
+    if [ "$hascr" -eq 1 ]; then
+      ln="${ln//$cr/}"
+      out="$out$ln$lf"
+    fi
+  done
+  set +f
+  IFS="$oldifs"
+  if [ "$hascr" -eq 0 ]; then
+    cdg_text="$text"
+  else
+    cdg_text="$out"
+  fi
 }
 
 if [ "$tool_name" = "apply_patch" ]; then
@@ -972,12 +1181,16 @@ if [ "$tool_name" = "apply_patch" ]; then
   [ -n "$patch_cmd" ] || deny_patch_unparseable "no command"
 
   cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
+  cdg_bytes "$cwd"
+  [ "$cdg_n" -le "$CDG_LINE_MAX_BYTES" ] || deny_too_large
   cwd="${cwd//$cr/}"
   cwd="${cwd//\\//}"
 
-  # Strip every CR from the whole patch up front (#270 idiom; see the shared cr/lf/tab note
-  # above) -- every line handled below is then CR-free.
-  patch="${patch_cmd//$cr/}"
+  # Strip every CR from the patch up front (#270 idiom; see the shared cr/lf/tab note above) --
+  # every line handled below is then CR-free. #457: line by line, after the per-line size cap, in a
+  # sampled loop (cdg_prepare_text, MODE native), never as one whole-text substitution.
+  cdg_prepare_text "$patch_cmd" native
+  patch="$cdg_text"
   parse_patch_headers "apply_patch" "$patch" "$cwd"
 elif [ "$tool_name" = "Bash" ]; then
   # --- Bash apply_patch-shim route (#407 amendment A1) ------------------------------------------
@@ -989,7 +1202,10 @@ elif [ "$tool_name" = "Bash" ]; then
   # this hook (pre-#407-amendment) exited 0 on the Bash-shaped payload.
   bash_cmd="$(printf '%s' "$input" | jq -r '.tool_input.command? // empty' 2>/dev/null)"
   [ -n "$bash_cmd" ] || exit 0
-  bash_cmd="${bash_cmd//$cr/}"
+  # #457: the per-line size cap and the per-line CR strip, BEFORE any other substitution on the
+  # command text (see the header's "Size caps (#457)").
+  cdg_prepare_text "$bash_cmd"
+  bash_cmd="$cdg_text"
 
   # Belt and braces (#407 kickback round 2, finding A): evaluated FIRST and UNCONDITIONALLY,
   # before either branch below, whenever apply_patch/applypatch is the resolved command word
@@ -1020,6 +1236,8 @@ elif [ "$tool_name" = "Bash" ]; then
       deny_patch_unparseable "apply_patch/applypatch invoked via Bash takes its patch $iapw_unsafe, not from an inline heredoc this hook parsed"
     fi
     cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
+    cdg_bytes "$cwd"
+    [ "$cdg_n" -le "$CDG_LINE_MAX_BYTES" ] || deny_too_large
     cwd="${cwd//$cr/}"
     cwd="${cwd//\\//}"
     parse_patch_headers "Bash" "$bash_cmd" "$cwd"
