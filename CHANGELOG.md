@@ -18,6 +18,7 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #512: the claude-dir-guard whole-text cap fixtures send a patch whose first line is an unrecognised marker, so the at-cap case (now cdgtextcap-deny-parse-at-cap, run only by 457-cdg-dl-text-cap-offbyone) gets the parser's deny at line 1 instead of analysing 1 MB inside the hook's 5s budget, and the over-cap and multibyte cases' mutant kills no longer need a full analysis. Test-only, no consumer step.
 - #507: the push-guard lost-scan flood fixture (now push-lostscan-noop-flood) sizes its token count from a same-run, mutant-invariant control, so its unmutated cost stays well under push-guard's 5s analysis budget on a loaded runner, and only 449-pg-scan-once runs it. Test-only, no consumer step.
 - #496: an unattended Codex run that stops at its own preflight prints `Unattended stop: preflight`; the scheduled-run wrapper records it `failed reason=unattended-stop-preflight`, so failure tracking opens the `needs-human` issue.
 - #490: codex-setup.sh refuses a quoted project_doc_fallback_filenames key name ("..." or '...') in .codex/config.toml as fallback-conflict instead of prepending a duplicate bare key. Consumer step (Codex): if --check now reports fallback-conflict, write the key bare.
