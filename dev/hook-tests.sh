@@ -1780,8 +1780,13 @@ case_ab_lost_deny_env_u_quoted() {
   abx_deny implementer gh 'env -u "A B" gh pr merge 5' 'env -u"A B" gh pr merge 5'
 }
 # mutant:505-ab-env-opt-off — drops the fail-closed read for an env option outside the allowlist.
+# mutant:505-ab-scan-reset — never resets the once-per-segment memo at a segment start, so a no-hit
+#   scan in an earlier segment or line silences the scan of every later one. The multi-segment and
+#   two-line commands below carry a no-hit trigger first.
 case_ab_lost_deny_env_opt() {
-  abx_deny implementer gh 'env -C /tmp gh pr merge 5' 'if [[ -n x ]] env -C /tmp gh pr merge 5'
+  abx_deny implementer gh 'env -C /tmp gh pr merge 5' 'if [[ -n x ]] env -C /tmp gh pr merge 5' \
+    'env -C /tmp ls; env -C /tmp gh pr merge 5' 'X="a b" ls && X="a b" gh pr merge 5' \
+    $'env -C /tmp ls\nenv -C /tmp gh pr merge 5'
 }
 # mutant:505-ab-word-lead-off — drops the rule that reads an option with an attached value (-Sgh),
 #   so a split string glued to its option is no exact word.
@@ -1794,13 +1799,23 @@ case_ab_lost_deny_env_split_string_escaped() {
 }
 # mutant:505-ab-git-sentinel — makes the git hit print a read-only git subcommand instead of the
 #   fixed sentinel, so the verifier no longer denies it and the implementer's blocked text changes.
+# mutant:505-ab-word-lower — stops case-folding the scanned token, so an upper-case GIT or GH word
+#   (which runs on a case-insensitive filesystem) is no exact word.
 case_ab_lost_deny_env_split_string_git() {
-  abx_deny implementer 'git -prefix-' "env -S'git commit -m m'" 'env -S"X=1 git commit -m m"'
+  abx_deny implementer 'git -prefix-' "env -S'git commit -m m'" 'env -S"X=1 git commit -m m"' \
+    'env -C /tmp GIT push'
 }
 # mutant:505-ab-unbalanced-off — never fires the assignment trigger.
 # mutant:505-ab-unbalanced-dq — drops the odd double-quote arm of quote_unbalanced().
+# mutant:505-ab-word-strip-sq — stops deleting single quotes from a scanned word, so g'h' is no gh.
+# mutant:505-ab-word-strip-dq — stops deleting double quotes from a scanned word, so g"h" is no gh.
+# mutant:505-ab-word-strip-bs — stops deleting backslashes from a scanned word, so g\h is no gh.
+#   The quote-split commands end in a gh-notes comment word: it is no exact word, and only keeps the
+#   raw-stdin fast path from passing the payload vacuously.
 case_ab_lost_deny_assign_dquote() {
-  abx_deny implementer gh 'X="a b" gh pr merge 5' 'env X="a b" gh pr merge 5'
+  abx_deny implementer gh 'X="a b" gh pr merge 5' 'env X="a b" gh pr merge 5' 'X="a b" GH pr merge 5' \
+    "X=\"a b\" g'h' pr merge 5 # gh-notes" 'X="a b" g"h" pr merge 5 # gh-notes' \
+    'X="a b" g\h pr merge 5 # gh-notes'
 }
 # mutant:505-ab-unbalanced-sq — drops the odd single-quote arm of quote_unbalanced().
 case_ab_lost_deny_assign_squote() {
@@ -1816,8 +1831,12 @@ case_ab_lost_deny_prefix_quoted() {
   abx_deny implementer gh 'env "X=a b" gh pr merge 5' 'env "-Sgh pr merge 5"' 'bash -c "X=1 gh pr merge 5"'
 }
 # mutant:505-ab-quote-bearing-sq — drops the single-quote arm of quote_bearing().
+# mutant:505-ab-strip-bs — stops deleting backslashes in strip_quotes(), so an escaped option still
+#   starts with its backslash and the shape test of the prefix trigger no longer sees a dash.
+# mutant:505-ab-quote-bearing-bs — drops the backslash arm of quote_bearing(), so an escaped option
+#   (its first character is no dash) is no trigger.
 case_ab_lost_deny_prefix_squoted_opt() {
-  abx_deny implementer gh "env '-C' /tmp gh pr merge 5"
+  abx_deny implementer gh "env '-C' /tmp gh pr merge 5" 'env \-C /tmp gh pr merge 5'
 }
 case_ab_lost_deny_verifier_git() {
   abx_deny verifier 'git -prefix-' 'GIT_PAGER="less -R" git log' 'env -C /tmp git status' "env -S'git status'"
@@ -10106,15 +10125,15 @@ cases=(
   "ab-lost-deny-env-u-gh|case_ab_lost_deny_env_u_gh|env -u/--unset consumes its value, so the next word is the command; gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-u-consume)"
   "ab-lost-deny-env-u-git|case_ab_lost_deny_env_u_git|env -u X git commit denies for the implementer -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-u-consume)"
   "ab-lost-deny-env-u-quoted|case_ab_lost_deny_env_u_quoted|an env -u value split at a space, detached or attached, still reaches gh -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-u-attached-quote, 505-ab-env-u-value-check, 505-ab-unbalanced-dq)"
-  "ab-lost-deny-env-opt|case_ab_lost_deny_env_opt|an env option outside the allowlist (-C) before gh denies, also after an additive ]] -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-opt-off)"
+  "ab-lost-deny-env-opt|case_ab_lost_deny_env_opt|an env option outside the allowlist (-C) before gh denies, also after an additive ]] -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-opt-off, 505-ab-scan-reset, 505-ab-unbalanced-dq, 505-ab-unbalanced-off)"
   "ab-lost-deny-env-split-string|case_ab_lost_deny_env_split_string|env -S and --split-string with a quoted string naming gh deny -- mutation proof: dev/mutants/hook-tests.json (505-ab-word-lead-off)"
   "ab-lost-deny-env-split-string-escaped|case_ab_lost_deny_env_split_string_escaped|env -S with backslash-underscore separators naming gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-word-lead-off, 505-ab-word-unescape)"
-  "ab-lost-deny-env-split-string-git|case_ab_lost_deny_env_split_string_git|env -S naming git denies as the fixed git -prefix- sentinel -- mutation proof: dev/mutants/hook-tests.json (505-ab-git-sentinel, 505-ab-word-lead-off, 505-ab-word-ungated)"
-  "ab-lost-deny-assign-dquote|case_ab_lost_deny_assign_dquote|an assignment with a double-quoted value holding a space before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-unbalanced-dq, 505-ab-unbalanced-off)"
+  "ab-lost-deny-env-split-string-git|case_ab_lost_deny_env_split_string_git|env -S naming git denies as the fixed git -prefix- sentinel -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-opt-off, 505-ab-git-sentinel, 505-ab-word-lead-off, 505-ab-word-lower, 505-ab-word-ungated)"
+  "ab-lost-deny-assign-dquote|case_ab_lost_deny_assign_dquote|an assignment with a double-quoted value holding a space before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-unbalanced-dq, 505-ab-unbalanced-off, 505-ab-word-lower, 505-ab-word-strip-bs, 505-ab-word-strip-dq, 505-ab-word-strip-sq)"
   "ab-lost-deny-assign-squote|case_ab_lost_deny_assign_squote|an assignment with a single-quoted or ANSI-C value holding a space before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-unbalanced-off, 505-ab-unbalanced-sq)"
   "ab-lost-deny-assign-backslash|case_ab_lost_deny_assign_backslash|an assignment with a backslash-escaped space before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-unbalanced-bs, 505-ab-unbalanced-off)"
   "ab-lost-deny-prefix-quoted|case_ab_lost_deny_prefix_quoted|a quoted assignment or option after a prefix word before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-prefix-quoted-shape, 505-ab-word-lead-off)"
-  "ab-lost-deny-prefix-squoted-opt|case_ab_lost_deny_prefix_squoted_opt|a single-quoted env option before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-prefix-quoted-shape, 505-ab-quote-bearing-sq)"
+  "ab-lost-deny-prefix-squoted-opt|case_ab_lost_deny_prefix_squoted_opt|a single-quoted env option before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-prefix-quoted-shape, 505-ab-quote-bearing-bs, 505-ab-quote-bearing-sq, 505-ab-strip-bs)"
   "ab-lost-deny-verifier-git|case_ab_lost_deny_verifier_git|the verifier denies read-only git behind a lost prefix as git -prefix- -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-opt-off, 505-ab-git-sentinel, 505-ab-unbalanced-dq, 505-ab-unbalanced-off, 505-ab-word-lead-off, 505-ab-word-ungated)"
   "ab-lost-deny-verifier-env-arm-basename|case_ab_lost_deny_verifier_env_arm_basename|the env option arm reads a word whose basename is a prefix word -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-arm-prefix-guard, 505-ab-env-opt-off, 505-ab-git-sentinel, 505-ab-word-ungated)"
   "ab-lost-deny-verifier-env-u-expansion|case_ab_lost_deny_verifier_env_u_expansion|an expansion as the env -u value keeps the git -expansion- verdict -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-u-attached, 505-ab-env-u-attached-rx, 505-ab-env-u-rx)"

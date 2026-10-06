@@ -7587,6 +7587,7 @@
         "ab-lost-deny-assign-dquote",
         "ab-lost-deny-assign-squote",
         "ab-lost-deny-claude",
+        "ab-lost-deny-env-opt",
         "ab-lost-deny-verifier-git"
       ]
     },
@@ -7604,6 +7605,7 @@
       "expect_fail": [
         "ab-lost-deny-assign-dquote",
         "ab-lost-deny-claude",
+        "ab-lost-deny-env-opt",
         "ab-lost-deny-env-u-quoted",
         "ab-lost-deny-verifier-git"
       ]
@@ -7792,6 +7794,7 @@
       "expect_fail": [
         "ab-lost-deny-claude",
         "ab-lost-deny-env-opt",
+        "ab-lost-deny-env-split-string-git",
         "ab-lost-deny-verifier-env-arm-basename",
         "ab-lost-deny-verifier-git"
       ]
@@ -7970,6 +7973,112 @@
       ],
       "expect_fail": [
         "ab-lostscan-noop-flood"
+      ]
+    },
+    {
+      "name": "505-ab-scan-reset",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  ls_done = 0\n  idx = 1",
+          "to": "  idx = 1"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-env-opt"
+      ]
+    },
+    {
+      "name": "505-ab-word-lower",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  lx = tolower(tok)",
+          "to": "  lx = tok"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-assign-dquote",
+        "ab-lost-deny-env-split-string-git"
+      ]
+    },
+    {
+      "name": "505-ab-word-strip-sq",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  gsub(sq, \"\", lx)",
+          "to": "  "
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-assign-dquote"
+      ]
+    },
+    {
+      "name": "505-ab-word-strip-dq",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  gsub(/\"/, \"\", lx)",
+          "to": "  "
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-assign-dquote"
+      ]
+    },
+    {
+      "name": "505-ab-word-strip-bs",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  gsub(/\\\\/, \"\", lx)",
+          "to": "  "
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-assign-dquote"
+      ]
+    },
+    {
+      "name": "505-ab-quote-bearing-bs",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  return (index(tok, \"\\\"\") > 0 || index(tok, sq) > 0 || index(tok, \"\\\\\") > 0)",
+          "to": "  return (index(tok, \"\\\"\") > 0 || index(tok, sq) > 0)"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-prefix-squoted-opt"
+      ]
+    },
+    {
+      "name": "505-ab-strip-bs",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-lost-",
+      "edits": [
+        {
+          "from": "  gsub(/\"/, \"\", t)\n  gsub(/\\\\/, \"\", t)\n  return t",
+          "to": "  gsub(/\"/, \"\", t)\n  return t"
+        }
+      ],
+      "expect_fail": [
+        "ab-lost-deny-prefix-squoted-opt"
       ]
     }
   ]

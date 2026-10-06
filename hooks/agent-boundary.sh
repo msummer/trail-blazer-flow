@@ -48,7 +48,7 @@
 # the #508 expansion-word predicate, rx_re and rx_word(), whose verdict differs per file; the #505
 # env option arm and prefix triggers, with strip_quotes(), quote_bearing(), quote_unbalanced() and
 # the ENV_* values, each hook with its own verdict; the CR
-# strip) must be applied to BOTH files —dev/selfcheck.sh's assertion 4.40 clause (c) mechanically pins
+# strip) must be applied to BOTH files — dev/selfcheck.sh's assertion 4.40 clause (c) mechanically pins
 # the two scripts' PREFIX_WORDS vocabulary stays byte-identical; since #398, PREFIX_WORDS also
 # includes shell reserved words (`if`/`then`/`elif`/`else`/`do`/`while`/`until`/`!`/`coproc`) that
 # can directly precede a command in the same segment, alongside the pre-existing interpreter-
@@ -451,8 +451,10 @@ cmd="${cmd//$cr/}"
 # and gets no opinion), an attached `-uNAME`/`--unset=NAME`, and the no-value options; a runtime
 # expansion in a `-u` value or token sets the same flag an expansion prefix word does, so
 # `env -u $X git status` keeps the `-expansion-` verdict; a `-u` value or token with unbalanced
-# quotes is trigger (1) again. A trigger reads its own token (lost_word(), with LEAD for an option, so
-# `-Sgh` and `-vSgit` count) and then, ONCE per segment, every later token of the segment (lost_scan()):
+# quotes is trigger (1) again. An option trigger (the unlisted `env` option and the quoted option or
+# assignment after a prefix word) reads its own token (lost_word(), with LEAD, so `-Sgh` and `-vSgit`
+# count); the assignment trigger and the attached or detached `-u` trigger read only the tokens after
+# them. Every trigger then reads, ONCE per segment, every later token of the segment (lost_scan()):
 # a word that is exactly `gh` prints `gh`, a word that is exactly `git` prints the fixed sentinel
 # `git -prefix-` (denied for BOTH roles: it is not on VERIFIER_GIT_READONLY), else a token carrying a
 # `.claude` path segment prints the `-claude-write-` line. Words are read the way `env -S` reads its
