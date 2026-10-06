@@ -4743,6 +4743,7 @@
       ],
       "expect_fail": [
         "cdg-dl-cap-ph",
+        "cdg-dl-deny-patch-cr-just-over-cap",
         "cdg-dl-deny-patch-cr-line",
         "cdg-dl-deny-patch-marker-line",
         "cdg-dl-deny-text-multibyte",
@@ -4801,7 +4802,7 @@
       "name": "457-cdg-dl-text-cap-off",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dl-",
+      "filter": "cdg-dl-deny-text-",
       "edits": [
         {
           "from": "  [ \"${#text}\" -le \"$CDG_TEXT_MAX_BYTES\" ] || deny_too_large\n",
@@ -4810,7 +4811,6 @@
       ],
       "expect_fail": [
         "cdg-dl-deny-text-multibyte",
-        "cdg-dl-deny-text-multibyte-bash",
         "cdg-dl-deny-text-over-cap"
       ]
     },
@@ -4833,7 +4833,7 @@
       "name": "457-cdg-dl-native-cr-uncapped",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dl-",
+      "filter": "cdg-dl-deny-patch-cr-just-over-cap",
       "edits": [
         {
           "from": "        *\"$cr\"*|*\"*** \"*) ;;\n",
@@ -4841,7 +4841,7 @@
         }
       ],
       "expect_fail": [
-        "cdg-dl-deny-patch-cr-line"
+        "cdg-dl-deny-patch-cr-just-over-cap"
       ]
     },
     {
@@ -4893,7 +4893,7 @@
       "name": "457-cdg-dl-bytes-off-prepare",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dl-",
+      "filter": "-multibyte",
       "edits": [
         {
           "from": "  local LC_ALL=C\n",
@@ -4902,8 +4902,7 @@
       ],
       "expect_fail": [
         "cdg-dl-deny-line-multibyte",
-        "cdg-dl-deny-text-multibyte",
-        "cdg-dl-deny-text-multibyte-bash"
+        "cdg-dl-deny-text-multibyte"
       ]
     },
     {
@@ -4927,7 +4926,7 @@
       "name": "457-cdg-dl-bytes-late-prepare",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dl-",
+      "filter": "cdg-dl-deny-text-multibyte",
       "edits": [
         {
           "from": "  local LC_ALL=C\n  [ \"${#text}\" -le \"$CDG_TEXT_MAX_BYTES\" ] || deny_too_large\n",
@@ -4935,8 +4934,7 @@
         }
       ],
       "expect_fail": [
-        "cdg-dl-deny-text-multibyte",
-        "cdg-dl-deny-text-multibyte-bash"
+        "cdg-dl-deny-text-multibyte"
       ]
     },
     {

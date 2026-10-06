@@ -6786,12 +6786,12 @@ case_cdg_dl_noop_line_over_cap_other_agent() {
   run_claude_guard "$(cdg_dl_pad_cmd 5000 | mk_cdg_dl_bash Explore '')"
   expect_cdg_no_opinion
 }
-# cdg_dl_big_patch_cmd PATH — a shell-issued inline heredoc patch of 200 ordinary-length lines
+# cdg_dl_big_patch_cmd PATH — a shell-issued inline heredoc patch of 100 ordinary-length lines
 # (well over any single-line cap in total, but each line short), adding the file PATH. Sized so the
 # per-line forked trims it costs stay far inside the hook's 5s analysis budget on a loaded host.
 cdg_dl_big_patch_cmd() {
   local body="" i
-  for i in $(seq 1 200); do body="${body}+line ${i} of the added file, ordinary prose here${LF}"; done
+  for i in $(seq 1 100); do body="${body}+line ${i} of the added file, ordinary prose here${LF}"; done
   printf "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: %s${LF}%s*** End Patch${LF}EOF" "$1" "$body"
 }
 case_cdg_dl_noop_big_patch() {
@@ -6843,6 +6843,18 @@ case_cdg_dl_deny_cwd_cr_bash() {
   cdg_deadline_override=15
   run_claude_guard "$(printf '%s' "/repo${crs}" | jq -Rs --arg p "$cmd" '{tool_name: "Bash", agent_type: "implementer", cwd: ., tool_input: {command: $p}}')"
   expect_cdg_deny_too_large implementer Bash
+}
+case_cdg_dl_deny_patch_cr_just_over_cap() {
+  # A native content line of exactly cap+1 bytes made of a leading `+` and CRs: over the line cap by
+  # its CR alone, so it denies at the cap; uncapped, the 2000 CRs strip in a blink and the patch
+  # parses as a benign path (no opinion), so the verdict differs on any host and bash.
+  local cap crs patch
+  cap="$(cdg_dl_line_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_LINE_MAX_BYTES from the hook\n"; return; fi
+  crs="$(printf '\r%.0s' $(seq 1 "$cap"))"
+  patch="*** Begin Patch${LF}*** Add File: /repo/a${LF}+${crs}${LF}*** End Patch"
+  run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
+  expect_cdg_deny_too_large implementer apply_patch
 }
 case_cdg_dl_noop_patch_cr_many() {
   # A many-line patch with a CR on every line, adding a benign path: CRs are stripped per line, the
@@ -6952,21 +6964,23 @@ case_cdg_dl_deny_path_multibyte() {
   expect_cdg_deny_too_large implementer Edit
 }
 case_cdg_dl_deny_text_multibyte() {
-  # A native patch of 300 lines of 1000 four-byte characters each (about 1.2MB, 300000 characters):
-  # over the whole-text byte cap, under it in characters. The text is spread across many lines so
-  # only the whole-text check can see the size (the native route does not line-cap an ordinary
-  # content line).
-  local mb row patch i
-  mb="$(printf '\360\237\230\200%.0s' $(seq 1 1000))"
-  patch="*** Begin Patch${LF}*** Add File: /repo/a"
-  for i in $(seq 1 300); do patch="${patch}${LF}+${mb}"; done
-  patch="${patch}${LF}*** End Patch"
+  # A native patch of two CR-free content lines of 150000 four-byte characters each (about 1.2MB,
+  # 300000 characters): over the whole-text byte cap, under it in characters. The native route does
+  # not line-cap an ordinary content line, so only the whole-text check can see the size; and with
+  # only a few lines, a mutant that loses the check finishes its analysis in a fraction of a second
+  # (no per-line forks), so the kill does not depend on host load.
+  local mb patch
+  mb="$(printf '\360\237\230\200%.0s' $(seq 1 150000))"
+  patch="*** Begin Patch${LF}*** Add File: /repo/a${LF}+${mb}${LF}+${mb}${LF}*** End Patch"
   cdg_need_utf8 || return
   cdg_deadline_override=15
   run_claude_guard "$(printf '%s' "$patch" | mk_cdg_dl_patch implementer)"
   expect_cdg_deny_too_large implementer apply_patch
 }
-case_cdg_dl_deny_text_multibyte_bash() {
+case_cdg_dl_pin_bash_text_wide() {
+  # Regression pin with no registry mutant: 540 lines cost one forked trim each, so a mutant that
+  # loses the whole-text check has to finish a full analysis under the 5s budget to differ, which
+  # depends on host load; the native cdg-dl-deny-text-multibyte carries the kills.
   # The Bash-route twin: 540 lines of 475 four-byte characters (1900 bytes each, under the line cap):
   # about 1.03MB, only 256500 characters.
   local mb cmd i
@@ -9320,12 +9334,13 @@ cases=(
   "cdg-dl-noop-line-at-cap|case_cdg_dl_noop_line_at_cap|no opinion (#457): a benign one-line command of exactly the per-line size cap's length -- the cap is an upper bound, not a strict one"
   "cdg-dl-noop-line-over-cap-main-session|case_cdg_dl_noop_line_over_cap_main_session|no opinion (#457): an over-cap line with no agent_type -- fast path 1 excludes it before the cap (contract pin)"
   "cdg-dl-noop-line-over-cap-other-agent|case_cdg_dl_noop_line_over_cap_other_agent|no opinion (#457): an over-cap line from an Explore agent -- the role exit precedes the cap"
-  "cdg-dl-noop-big-patch|case_cdg_dl_noop_big_patch|no opinion (#457): a heredoc patch over 200 ordinary lines adding a benign path -- not capped by total size, finishes inside a 15s active deadline"
-  "cdg-dl-deny-big-patch-claude|case_cdg_dl_deny_big_patch_claude|deny (#457): the same 200-line heredoc patch adding a path under .claude -- still denied, finishes inside a 15s active deadline"
+  "cdg-dl-noop-big-patch|case_cdg_dl_noop_big_patch|no opinion (#457): a heredoc patch over 100 ordinary lines adding a benign path -- not capped by total size, finishes inside a 15s active deadline"
+  "cdg-dl-deny-big-patch-claude|case_cdg_dl_deny_big_patch_claude|deny (#457): the same 100-line heredoc patch adding a path under .claude -- still denied, finishes inside a 15s active deadline"
   "cdg-dl-deny-patch-cr-line|case_cdg_dl_deny_patch_cr_line|deny (#457): a native apply_patch with a 400000-CR content line -- over the per-line size cap on the patch route, exact too-large line under a 15s active deadline, before any CR strip runs"
   "cdg-dl-deny-path-cr|case_cdg_dl_deny_path_cr|deny (#457): an Edit with a 200000-CR file_path -- over the per-line cap in classify_path, exact too-large line under a 15s active deadline"
   "cdg-dl-deny-cwd-cr|case_cdg_dl_deny_cwd_cr|deny (#457): an apply_patch whose cwd is 200000 CRs -- over the per-line cap, exact too-large line under a 15s active deadline"
   "cdg-dl-deny-cwd-cr-bash|case_cdg_dl_deny_cwd_cr_bash|deny (#457): a Bash inline-patch call whose cwd is 200000 CRs -- over the per-line cap, exact too-large line under a 15s active deadline"
+  "cdg-dl-deny-patch-cr-just-over-cap|case_cdg_dl_deny_patch_cr_just_over_cap|deny (#457): a native content line of a plus sign and per-line-cap CRs (one byte over the cap) -- over the line cap by its CR alone, exact too-large line"
   "cdg-dl-noop-patch-cr-many|case_cdg_dl_noop_patch_cr_many|no opinion (#457): a 250-line native apply_patch with a CR on every line adding a benign path -- CRs stripped per line, same verdict as before, inside a 15s active deadline"
   "cdg-dl-deny-production-budget|case_cdg_dl_deny_production_budget|wall-clock proof (#457): a native apply_patch with a 500000-space CR-free content line, budget knob 99 ignored -- ltrim's sampled loop denies, exact too-large line under a 15s active deadline"
   "cdg-dl-deny-patch-marker-line|case_cdg_dl_deny_patch_marker_line|deny (#457): a native header line with 3000 trailing spaces -- over the line cap through its *** marker alone, exact too-large line"
@@ -9333,10 +9348,10 @@ cases=(
   "cdg-dl-deny-cwd-just-over-cap-bash|case_cdg_dl_deny_cwd_just_over_cap_bash|deny (#457): a Bash inline-patch call whose cwd is one character over the per-line cap -- exact too-large line"
   "cdg-dl-deny-line-multibyte|case_cdg_dl_deny_line_multibyte|deny (#457): a Bash line of 600 four-byte characters (over the cap in bytes, under it in characters) -- the cap is measured in bytes"
   "cdg-dl-deny-path-multibyte|case_cdg_dl_deny_path_multibyte|deny (#457): an Edit path of 600 four-byte characters -- the path cap is measured in bytes"
-  "cdg-dl-deny-text-multibyte-bash|case_cdg_dl_deny_text_multibyte_bash|deny (#457): a Bash command of 540 lines of four-byte characters (over the whole-text cap in bytes, under it in characters; each line under the line cap) -- exact too-large line under a 15s active deadline"
+  "cdg-dl-pin-bash-text-wide|case_cdg_dl_pin_bash_text_wide|deny (#457): a Bash command of 540 lines of four-byte characters (over the whole-text cap in bytes, under it in characters; each line under the line cap) -- exact too-large line under a 15s active deadline"
   "cdg-dl-deny-cwd-multibyte|case_cdg_dl_deny_cwd_multibyte|deny (#457): a native apply_patch whose cwd is 600 four-byte characters (over the cap in bytes, under it in characters) -- the cwd cap is measured in bytes"
   "cdg-dl-deny-cwd-multibyte-bash|case_cdg_dl_deny_cwd_multibyte_bash|deny (#457): a Bash inline-patch call whose cwd is 600 four-byte characters -- the cwd cap is measured in bytes"
-  "cdg-dl-deny-text-multibyte|case_cdg_dl_deny_text_multibyte|deny (#457): a native patch of 300 lines of 1000 four-byte characters (over the whole-text cap in bytes, under it in characters) -- exact too-large line under a 15s active deadline"
+  "cdg-dl-deny-text-multibyte|case_cdg_dl_deny_text_multibyte|deny (#457): a native patch of two content lines of 150000 four-byte characters (over the whole-text cap in bytes, under it in characters) -- exact too-large line under a 15s active deadline"
   "cdg-dl-noop-native-long-line|case_cdg_dl_noop_native_long_line|no opinion (#457): a native apply_patch with a 3700-character CR-free content line adding a benign path -- an ordinary long line is not capped on the native route"
   "cdg-dl-deny-text-over-cap|case_cdg_dl_deny_text_over_cap|deny (#457): a native apply_patch whose whole text is one character over the whole-text cap -- exact too-large line before any split, under a 15s active deadline"
   "cdg-dl-noop-text-at-cap|case_cdg_dl_noop_text_at_cap|no opinion (#457): a native apply_patch whose whole text is exactly the whole-text cap -- the cap is an upper bound, not a strict one"
