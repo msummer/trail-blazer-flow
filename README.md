@@ -601,7 +601,7 @@ check-harness.sh
 It lists what the new version needs that your repo is missing. Fix what it flags and you're done.
 
 <details>
-<summary>Per-version migration notes (v1.9.0 → v3.3.1)</summary>
+<summary>Per-version migration notes (v1.9.0 → v3.3.2)</summary>
 
 For older history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration notes, v1.9.0
 to v2.7.7" subsection).
@@ -695,6 +695,8 @@ authenticate with no prompt (SSH, or a credential helper that works outside a te
 LaunchAgent plist's plugin path). If `codex-setup.sh --check` now reports `fallback-conflict`
 for a quoted `project_doc_fallback_filenames` key name in `.codex/config.toml`, write the key
 name bare (#490).
+
+**v3.3.1 → v3.3.2** needs no grant, label, script, settings entry, or baseline step.
 
 </details>
 

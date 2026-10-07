@@ -16,7 +16,15 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v3.3.2
+
+This patch release closes command-prefix gaps in two hooks. A word the shell expands at run time
+(`$X`, `"$X"`, `$'...'`, zsh `$=X`) no longer hides a push from push-guard or a forbidden git/gh call
+from agent-boundary (#508). A git-slot word built from `$'...'`/`$"..."` pieces now fails closed, a
+deliberate over-block. agent-boundary also follows `env -u` values and fails closed on an unlisted
+`env` option or a quoted, space-split assignment before a git, gh or `.claude` write (#505).
+push-guard now reads a config key on its section header's line and every header spelling git accepts
+(#510). No consumer step.
 
 - #505: `agent-boundary.sh` follows `env -u`/`--unset` values and fails closed on an unlisted `env`
   option, a quoted or escaped assignment value split at a space, or a quoted option or assignment after
