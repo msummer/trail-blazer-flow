@@ -20,8 +20,8 @@ jobs:
     # The driver step below is gated off pull requests (see that step's own `if:`), so the per-PR
     # ceiling (15, #477) covers only the other nine commands; the post-merge/nightly/dispatch
     # ceiling also holds the full registry's driver run on top of them, with headroom for the
-    # registry to keep growing (#359).
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 15 || 35 }}
+    # registry to keep growing (#359; raised from 35 when the full run outgrew it, #525).
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 15 || 50 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Full history (#464): the driver step below diffs github.event.before..HEAD to select
@@ -59,7 +59,8 @@ jobs:
     # selfcheck-macos's own comment below for why that job stays last.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
-    timeout-minutes: 50
+    # Sized for a full driver run with headroom (raised from 50 when the full run outgrew it, #525).
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Same PATH pin as selfcheck-macos below — see that job's comment for why /bin comes first.

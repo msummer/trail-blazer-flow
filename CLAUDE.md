@@ -30,7 +30,7 @@ because the maintainer's own local run already happens under bash 3.2, so a BSD-
 caught on `main` within a day rather than holding every merge for that job's run time; and
 `selfcheck-macos-driver`, also on `macos-latest` with the same `/bin` PATH pin, which runs only
 `bash dev/mutant-driver.sh`, only on `schedule` and `workflow_dispatch`, in parallel with
-`selfcheck-macos` (its `timeout-minutes: 50` is sized for a nightly *full* driver run). `selfcheck`
+`selfcheck-macos` (its `timeout-minutes: 75` is sized for a nightly *full* driver run). `selfcheck`
 runs ten commands; the ninth, `bash dev/mutant-driver.sh` (#359), is gated by
 `if: github.event_name != 'pull_request'`, and on a push runs only the records the pushed range can
 affect (#464). `selfcheck-macos` runs the other nine and never the driver. So a pull request runs

@@ -16,6 +16,12 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #525: CI's full mutant-driver runs get more time: the `selfcheck` job's post-merge/nightly/dispatch
+  ceiling rises from 35 to 50 minutes and `selfcheck-macos-driver`'s from 50 to 75, so the nightly
+  full run finishes again. No consumer step.
+
 ## v3.3.2
 
 This patch release closes command-prefix gaps in two hooks. A word the shell expands at run time
