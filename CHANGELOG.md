@@ -18,6 +18,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #526: the full mutant-driver run is split into four parallel shards per platform (`--shard <i>/<n>` /
+  `MUTANT_DRIVER_SHARD`, whole `(suite, filter)` groups balanced by record count); the driver leaves
+  the `selfcheck` job for its own `selfcheck-driver` job; macOS shards run at lower concurrency to
+  stop the timing-case flakes (#527). No consumer step.
 - #525: CI's full mutant-driver runs get more time: the `selfcheck` job's post-merge/nightly/dispatch
   ceiling rises from 35 to 50 minutes and `selfcheck-macos-driver`'s from 50 to 75, so the nightly
   full run finishes again. No consumer step.

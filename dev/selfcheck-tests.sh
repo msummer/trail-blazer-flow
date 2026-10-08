@@ -606,6 +606,18 @@ p_4_9_split_job_dropped() {
     { print }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
+# p_4_9_ubuntu_split_job_dropped — the ubuntu twin of the case above: drops the driver's run step
+# from inside selfcheck-driver only, so the selfcheck+selfcheck-driver group loses its one
+# dev/mutant-driver.sh coverage (the macOS group still runs it, so the set bijection alone would
+# not catch this).
+p_4_9_ubuntu_split_job_dropped() {
+  local f="$1/.github/workflows/selfcheck.yml"
+  awk '
+    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $0; sub(/^  /, "", job); sub(/:.*/, "", job) }
+    job == "selfcheck-driver" && /run: bash dev\/mutant-driver\.sh/ { next }
+    { print }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
 # p_4_9_cross_job_move — moves the doctor-tests.sh run step out of the selfcheck job and into
 # selfcheck-macos-driver: the script's TOTAL run-step count across the whole file is unchanged
 # (still 2), but it is now 0 in the selfcheck group and 2 in the selfcheck-macos group. A
@@ -894,6 +906,7 @@ cases=(
   "4.9-orphan-step|4.9|p_4_9_orphan_step|add a CI run step for a nonexistent dev/nonexistent.sh"
   "4.9-uneven-jobs|4.9|p_4_9_one_job_only|delete the workflow's last line (the macOS suites job's dev/mutant-driver-tests.sh step, #359), leaving that script covered on ubuntu only"
   "4.9-split-job-dropped|4.9|p_4_9_split_job_dropped|drop dev/mutant-driver.sh's run step from the selfcheck-macos-driver job only, leaving it uncovered in that job's group"
+  "4.9-ubuntu-split-job-dropped|4.9|p_4_9_ubuntu_split_job_dropped|drop dev/mutant-driver.sh's run step from the selfcheck-driver job only, leaving the selfcheck group without driver coverage"
   "4.9-cross-job-move|4.9|p_4_9_cross_job_move|move the doctor-tests.sh run step from the ubuntu job into selfcheck-macos-driver: total count unchanged, per-group coverage broken"
   "4.9-job-extraction|4.9|p_4_9_job_extraction|re-indent every job key so the gate parses zero jobs under jobs: (runs-on cross-check)"
   "4.9-duplicate-in-group|4.9|p_4_9_duplicate_in_group|run dev/mutant-driver-tests.sh twice in the selfcheck-macos group (a second step inside selfcheck-macos-driver): every group still covers every script at least once"
