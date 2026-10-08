@@ -578,6 +578,23 @@ p_4_52_noncomment_token() {
 p_4_53_unguarded_tool() { edit "$1/agents/implementer.md" 's/^tools: Read, Write, Edit, Grep, Glob, Bash$/tools: Read, Write, Edit, Grep, Glob, Bash, MultiEdit/'; }
 p_4_53_stale_guard()    { edit "$1/hooks/claude-dir-guard.sh" 's/^GUARDED_TOOLS="Edit Write"$/GUARDED_TOOLS="Edit Write NotebookEdit"/'; }
 p_4_53_extraction()     { edit "$1/hooks/claude-dir-guard.sh" 's/GUARDED_TOOLS/GUARDED_TOLS/g'; }
+
+# p_4_54_* (#486) — nobody reads the informational `building` label. p_4_54_not_created changes
+# characters inside the label name on bin/setup-labels.sh's create_or_update line (not a suffix),
+# so the label is no longer created: 4.54 clause (a) and, because the doctor loop still names it,
+# 4.6. p_4_54_search_reader appends a `label:building` search qualifier to bin/harness-status.sh.
+# p_4_54_filter_reader_skill appends a `--label building` list filter to the unbudgeted
+# worktree-mode.md (so 4.14 stays quiet). p_4_54_quoted_literal appends a quoted "building" to
+# bin/harness-status.sh (a jq/shell test of the name). p_4_54_sweep_reworded changes the
+# sanctioned sweep line in SKILL.md so the exemption goes dead (whole-line count, and the reworded
+# line is itself a filter hit). p_4_54_setter_control appends the --remove-label setter shape,
+# which no clause may flag.
+p_4_54_not_created()           { edit "$1/bin/setup-labels.sh" 's/^create_or_update "building"/create_or_update "biulding"/'; }
+p_4_54_search_reader()         { printf 'gh issue list --search "is:open label:building" --json number\n' | append "$1/bin/harness-status.sh"; }
+p_4_54_filter_reader_skill()   { printf 'gh issue list --label building --json number\n' | append "$1/skills/issue-implementer/references/worktree-mode.md"; }
+p_4_54_quoted_literal()        { printf 'x="building"\n' | append "$1/bin/harness-status.sh"; }
+p_4_54_sweep_reworded()        { edit "$1/skills/issue-implementer/SKILL.md" 's/--label building --limit 100/--label building --limit 99/'; }
+p_4_54_setter_control()        { printf 'gh issue edit 1 --remove-label building\n' | append "$1/skills/issue-implementer/references/worktree-mode.md"; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -1026,6 +1043,12 @@ cases=(
   "4.53-unguarded-tool|4.53|p_4_53_unguarded_tool|append MultiEdit to agents/implementer.md's tools: line without touching GUARDED_TOOLS: a tool on a role's tools: line that is neither guarded nor exempt"
   "4.53-stale-guard|4.53|p_4_53_stale_guard|append NotebookEdit to hooks/claude-dir-guard.sh's own GUARDED_TOOLS value without either role ever gaining that tool: a GUARDED_TOOLS member on neither role's tools: line"
   "4.53-extraction|4.53|p_4_53_extraction|rename GUARDED_TOOLS to GUARDED_TOLS throughout hooks/claude-dir-guard.sh so the gate's anchored extraction comes back empty"
+  "4.54-not-created|4.6 4.54|p_4_54_not_created|alter characters inside the building label name on bin/setup-labels.sh's create_or_update line: the label is no longer created while the doctor loop still names it"
+  "4.54-search-reader|4.54|p_4_54_search_reader|append a gh issue list --search with a label:building qualifier to bin/harness-status.sh: a search-qualifier reader in bin/"
+  "4.54-filter-reader-skill|4.54|p_4_54_filter_reader_skill|append a gh issue list --label building filter to skills/issue-implementer/references/worktree-mode.md: a list-filter reader in a skill reference"
+  "4.54-quoted-literal|4.54|p_4_54_quoted_literal|append x=\"building\" to bin/harness-status.sh: a quoted label-name literal in a script"
+  "4.54-sweep-reworded|4.54|p_4_54_sweep_reworded|change the step-0 sweep line's --limit in skills/issue-implementer/SKILL.md: the sanctioned whole line no longer appears, so the exemption is dead and the line is itself a reader hit"
+  "4.54-setter-control||p_4_54_setter_control|control: append the --remove-label building setter shape to worktree-mode.md; no 4.54 clause may flag a setter"
 )
 
 # ---------------------------------------------------------------------------------------------

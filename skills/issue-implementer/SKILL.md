@@ -39,6 +39,12 @@ the run.
   the human removes this label to retry).
 - `needs-human` — set by a Durable escalation (see "Resilient dispatch" below); removes the issue
   from every discovery query until the human answers and removes it.
+- `building` — informational only (#486), never read by the harness; a human adding or removing
+  it changes nothing. Added just before an issue's first dispatch (step 2c; worktree mode: its
+  step c); removed right after `pr-open` is added, at step 2g (worktree mode: step f), and before
+  any stop that leaves an issue mid-step-2 without reaching 2g (a Codex canary abort, an
+  unattended permission-denied stop); swept at step 0. Best effort: a failed call is noted in the
+  step 3 summary and never blocks, fails, or changes the run's outcome.
 
 ## Hard rules
 
@@ -161,7 +167,8 @@ any future change to step 2f's commit, or a blocked branch would misclassify as 
   before appending, appends only when it prints nothing, and otherwise doesn't append and reports
   it instead.
 - **Worktree-parallel mode:** every command here takes `-C <worktree>`, against that worktree's
-  copy.
+  copy — except your own lesson (step 2e's distill), whose compare and append target the main
+  checkout (see `references/worktree-mode.md` step e).
 
 Orchestrator prose, not a mechanical rail — no hook matches Edit/Write. The `add -u`/`--ignored`
 forms were chosen because they keep working when `.claude/` itself is an ignored directory
@@ -320,6 +327,13 @@ and anything committed remains on the branch, then
 work is already committed). **A path that is not one of ours is never yours to remove** — leave
 it; if it holds a branch this batch needs, skip that issue and tell the human. Report every sweep
 in the summary.
+
+**Stale `building` labels → sweep**, in both modes (cleanup, never a status decision; best
+effort, see "Labels involved"):
+```bash
+gh issue list --state open --label building --limit 100 --json number --jq '.[].number'
+```
+then `gh issue edit <n> --remove-label building` for each number printed.
 
 **Sync & hygiene:** run `cleanup-after-merge.sh --fix` (fast-forwards the default branch when
 checked out — check it out first if you aren't on it and the tree is clean; prunes merged
@@ -517,6 +531,10 @@ c. **Dispatch the `implementer` subagent** (Claude Code: Task tool; Codex: `spaw
    unanswered question as the evidence, then move to the next issue (step 2g). If the dispatch
    itself fails, retry per the "Resilient dispatch" ladder rather than treating it as a blocker.
 
+   **Before the first dispatch** for this issue (not a resume relaunch, kickback, or retry), run
+   `gh issue edit <number> --add-label building` — best effort; record whether it succeeded, as
+   step 2g removes only what this run added.
+
    **Checkpoint on `status: complete`:** run the LESSONS.md dispatch guard's compare first, then
    `git add -A && git commit -m "wip: checkpoint implementer (#<n>)"` (skip if nothing changed) —
    makes the verifier's diff (step 2e) non-empty and correct.
@@ -695,6 +713,7 @@ git commit -m "feat: <concise title> (#<number>)"   # use the project's commit c
 git push -u origin "claude/<number>-<slug>"
 gh pr create --title "<concise title> (#<number>)" --body-file <tempfile>
 gh issue edit <number> --add-label pr-open
+gh issue edit <number> --remove-label building   # its own call, never combined with pr-open
 ```
      The PR body (the temp file) must include: a one-paragraph summary; `Closes #<number>`; the
      files changed; the verification results; **the verifier's own closing status line, pasted
@@ -795,7 +814,9 @@ gh issue edit <number> --add-label impl-blocked
 git checkout <default-branch>
 ```
 
-g. Move to the next issue (back to step 2a).
+g. If this run added `building` and step 2e didn't already remove it,
+   `gh issue edit <number> --remove-label building` (best effort). Then move to the next issue
+   (back to step 2a).
 
 ### 3. Summarise
 

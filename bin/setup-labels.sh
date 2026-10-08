@@ -50,6 +50,10 @@
 #                      --label/--add-label/--remove-label argument anywhere in skills/*/SKILL.md,
 #                      skills/*/references/*.md, agents/*.md, or bin/*.sh; README.md documents the
 #                      human's own set/clear commands.
+#   building        -> informational only (#486): set by the issue-implementer skill just before
+#                      an issue's first implementer dispatch, cleared when its PR opens and at
+#                      every other exit, swept at step 0; no harness script, hook, skill or agent
+#                      ever reads it (gate assertion 4.54); a human adding/removing it has no effect.
 #
 # Every description above is at most 100 characters: GitHub's API rejects a longer one with
 # HTTP 422 ("description is too long (maximum is 100 characters)"), and under this script's
@@ -58,7 +62,8 @@
 # this repo 2026-09-23 with a 109-character description). Gate assertion 1.8 pins the bound.
 #
 # Requesting plan changes does NOT use a label — just comment on the issue and the planner
-# revises on its next run. Approval and the implementation states ARE labels (unambiguous signals).
+# revises on its next run. Approval and the implementation states ARE labels (unambiguous signals;
+# `building` aside: informational only).
 #
 # Requires: gh (authenticated). Run once per repo.
 set -euo pipefail
@@ -82,6 +87,7 @@ create_or_update() {
 create_or_update "plan-proposed"   "0E8A16" "Planner posted a plan; awaiting human review (comment to request changes)"
 create_or_update "plan-approved"   "1D76DB" "Plan approved; ready for the implementer"
 create_or_update "pr-open"         "5319E7" "PR opened for this issue; awaiting human review/merge"
+create_or_update "building"        "FEF2C0" "Informational: the implementer is building this issue now. Never read by the harness."
 create_or_update "impl-blocked"    "B60205" "Implementation hit a blocker; needs human input (remove to retry)"
 create_or_update "no-plan"         "EEEEEE" "Excluded from the planning workflow; the planner ignores this issue"
 create_or_update "no-auto-approve" "FBCA04" "Human-only veto: never auto-approve this issue's plans (the harness never applies it)"
