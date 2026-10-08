@@ -585,15 +585,30 @@ p_4_53_extraction()     { edit "$1/hooks/claude-dir-guard.sh" 's/GUARDED_TOOLS/G
 # 4.6. p_4_54_search_reader appends a `label:building` search qualifier to bin/harness-status.sh.
 # p_4_54_filter_reader_skill appends a `--label building` list filter to the unbudgeted
 # worktree-mode.md (so 4.14 stays quiet). p_4_54_quoted_literal appends a quoted "building" to
-# bin/harness-status.sh (a jq/shell test of the name). p_4_54_sweep_reworded changes the
-# sanctioned sweep line in SKILL.md so the exemption goes dead (whole-line count, and the reworded
-# line is itself a filter hit). p_4_54_setter_control appends the --remove-label setter shape,
-# which no clause may flag.
+# bin/harness-status.sh (a jq/shell test of the name). p_4_54_sweep_reworded respells the
+# sanctioned sweep line's filter as -l (not a clause (b) shape), so only clause (d)'s whole-line
+# count of zero catches the dead exemption. p_4_54_sweep_duplicated appends a second byte-equal
+# copy of the sanctioned line to SKILL.md: clause (b) exempts both, so only (d)'s exactly-once
+# count catches it. p_4_54_reader_in_sweep_file appends a non-sanctioned --label reader to SKILL.md
+# itself (the exemption is the whole line, not the file), and p_4_54_sanctioned_elsewhere appends
+# the sanctioned literal to worktree-mode.md (the exemption is that file only).
+# p_4_54_setter_control appends the --remove-label setter shape, which no clause may flag.
+# mutant:486-sc-454-exempt-anyline — dropping 4.54's whole-line equality exempts every hit in
+# SKILL.md; killed by 4.54-reader-in-sweep-file.
+# mutant:486-sc-454-exempt-anyfile — dropping 4.54's file check exempts the sanctioned line in any
+# scanned file; killed by 4.54-sanctioned-elsewhere.
+# mutant:486-sc-454-count-atleast — relaxing clause (d) to at-least-once lets a second copy of the
+# sanctioned line through; killed by 4.54-sweep-duplicated.
+# mutant:486-sc-454-count-off — deleting clause (d); killed by 4.54-sweep-duplicated and
+# 4.54-sweep-reworded.
 p_4_54_not_created()           { edit "$1/bin/setup-labels.sh" 's/^create_or_update "building"/create_or_update "biulding"/'; }
 p_4_54_search_reader()         { printf 'gh issue list --search "is:open label:building" --json number\n' | append "$1/bin/harness-status.sh"; }
 p_4_54_filter_reader_skill()   { printf 'gh issue list --label building --json number\n' | append "$1/skills/issue-implementer/references/worktree-mode.md"; }
 p_4_54_quoted_literal()        { printf 'x="building"\n' | append "$1/bin/harness-status.sh"; }
-p_4_54_sweep_reworded()        { edit "$1/skills/issue-implementer/SKILL.md" 's/--label building --limit 100/--label building --limit 99/'; }
+p_4_54_sweep_reworded()        { edit "$1/skills/issue-implementer/SKILL.md" 's/--label building --limit 100/-l building --limit 100/'; }
+p_4_54_sweep_duplicated()      { printf '%s\n' "gh issue list --state open --label building --limit 100 --json number --jq '.[].number'" | append "$1/skills/issue-implementer/SKILL.md"; }
+p_4_54_reader_in_sweep_file()  { printf 'gh issue list --label building --json number\n' | append "$1/skills/issue-implementer/SKILL.md"; }
+p_4_54_sanctioned_elsewhere()  { printf '%s\n' "gh issue list --state open --label building --limit 100 --json number --jq '.[].number'" | append "$1/skills/issue-implementer/references/worktree-mode.md"; }
 p_4_54_setter_control()        { printf 'gh issue edit 1 --remove-label building\n' | append "$1/skills/issue-implementer/references/worktree-mode.md"; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
@@ -1047,7 +1062,10 @@ cases=(
   "4.54-search-reader|4.54|p_4_54_search_reader|append a gh issue list --search with a label:building qualifier to bin/harness-status.sh: a search-qualifier reader in bin/"
   "4.54-filter-reader-skill|4.54|p_4_54_filter_reader_skill|append a gh issue list --label building filter to skills/issue-implementer/references/worktree-mode.md: a list-filter reader in a skill reference"
   "4.54-quoted-literal|4.54|p_4_54_quoted_literal|append x=\"building\" to bin/harness-status.sh: a quoted label-name literal in a script"
-  "4.54-sweep-reworded|4.54|p_4_54_sweep_reworded|change the step-0 sweep line's --limit in skills/issue-implementer/SKILL.md: the sanctioned whole line no longer appears, so the exemption is dead and the line is itself a reader hit"
+  "4.54-sweep-reworded|4.54|p_4_54_sweep_reworded|respell the step-0 sweep line's filter as -l in skills/issue-implementer/SKILL.md: the sanctioned whole line no longer appears, so the exemption is dead (clause (d) only)"
+  "4.54-sweep-duplicated|4.54|p_4_54_sweep_duplicated|append a second copy of the sanctioned sweep line to skills/issue-implementer/SKILL.md: the exemption covers exactly one line (clause (d) only)"
+  "4.54-reader-in-sweep-file|4.54|p_4_54_reader_in_sweep_file|append a --label building reader to skills/issue-implementer/SKILL.md itself: the exemption is the sanctioned whole line, not the file"
+  "4.54-sanctioned-elsewhere|4.54|p_4_54_sanctioned_elsewhere|append the sanctioned sweep line to skills/issue-implementer/references/worktree-mode.md: the exemption holds only in skills/issue-implementer/SKILL.md"
   "4.54-setter-control||p_4_54_setter_control|control: append the --remove-label building setter shape to worktree-mode.md; no 4.54 clause may flag a setter"
 )
 
