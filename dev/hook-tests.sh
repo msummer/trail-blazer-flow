@@ -4230,30 +4230,31 @@ case_push_cmdcaptime_pin_at_cap_worst() {
   # the pin holds under the mutant driver's concurrency. A step that waits without using CPU is
   # outside what this pin measures; the hook has no such step. Both runs carry a generous safety
   # deadline only so a runaway mutant cannot hang the suite.
-  local dir="$tmpbase/repo-pp-cap-worst" shape want payload cpu_max_ms=6000 run_cpu_max_ms=8000
+  local dir="$tmpbase/repo-pp-cap-worst" shape want payload cpu_max_ms=6000 run_cpu_max_ms=8000 bound rel_max_ms
   mk_fixture_repo "$dir" main feature/x
+  # The #503 shapes (u v w x y) cost what the base scan costs, and the base scan's cost at the cap
+  # depends on the host (on a slow runner it alone nears the fixed bounds), so each is bounded relative
+  # to a same-run control instead: xc, the heaviest base scan at the cap with the chain gate shut,
+  # within 1.3 times it plus 250ms -- which fails an unbudgeted chain pass on x -- and at most the hook's
+  # 10s timeout in CPU time, which never fails before the real hook would time out.
+  pcap_shape xc
+  push_deadline_override=60
+  measure_cpu_ms run_push_guard "$(mk_push_cmd_big "$pcap_cmd" "$dir")"
+  pcap_verdict noop
+  if [ -z "$measured_cpu_ms" ]; then
+    __ok=0; __why="${__why}[shape xc] control run's CPU report could not be parsed\n"
+    return
+  fi
+  rel_max_ms=$(( measured_cpu_ms * 13 / 10 + 250 ))
+  [ "$rel_max_ms" -le 10000 ] || rel_max_ms=10000
   for shape in a b c d f i s t o u v w x y; do
     case "$shape" in a|c|d) want=rxdest ;; i) want=unres ;; s|t|o) want=noop ;; u|v|w|x|y) want=budget ;; *) want=main ;; esac
     pcap_shape "$shape"
     payload="$(mk_push_cmd_big "$pcap_cmd" "$dir")"
-    # the #503 shapes cost what the base scan costs: u v w y run the knob-0 prefix check only, x (whose
-    # base scan alone is the heaviest) the production run only, to keep the suite short. x's base scan
-    # alone is near the fixed production bound on a slow host, so x's production run is bounded two
-    # ways instead: within 1.3 times its same-run control xc (the base scan with the chain gate shut)
-    # plus 250ms, which fails an unbudgeted chain pass on this shape, and at most the hook's 10s
-    # timeout in CPU time, which never fails before the real hook would time out
-    if [ "$shape" = x ]; then
-      pcap_shape xc
-      push_deadline_override=60
-      measure_cpu_ms run_push_guard "$(mk_push_cmd_big "$pcap_cmd" "$dir")"
-      pcap_verdict noop
-      if [ -z "$measured_cpu_ms" ]; then
-        __ok=0; __why="${__why}[shape xc] control run's CPU report could not be parsed\n"
-        continue
-      fi
-      run_cpu_max_ms=$(( measured_cpu_ms * 13 / 10 + 250 ))
-      [ "$run_cpu_max_ms" -le 10000 ] || run_cpu_max_ms=10000
-    fi
+    # the #503 shapes: u v w y run the knob-0 prefix check only, x (whose base scan alone is the
+    # heaviest) the production run only, to keep the suite short; all of them against rel_max_ms
+    bound="$cpu_max_ms"
+    case "$shape" in u|v|w|y) bound="$rel_max_ms" ;; x) run_cpu_max_ms="$rel_max_ms" ;; esac
     if [ "$shape" != x ]; then
       push_budget_override="0"
       push_deadline_override=60
@@ -4262,8 +4263,8 @@ case_push_cmdcaptime_pin_at_cap_worst() {
         __ok=0; __why="${__why}[shape $shape] knob-0 run's CPU report could not be parsed\n"
         continue
       fi
-      if [ "$measured_cpu_ms" -gt "$cpu_max_ms" ]; then
-        __ok=0; __why="${__why}[shape $shape] unsampled prefix used ${measured_cpu_ms}ms of CPU, over the ${cpu_max_ms}ms bound\n"
+      if [ "$measured_cpu_ms" -gt "$bound" ]; then
+        __ok=0; __why="${__why}[shape $shape] unsampled prefix used ${measured_cpu_ms}ms of CPU, over the ${bound}ms bound\n"
       fi
       case "$shape" in u|v|w|y) continue ;; esac
     fi
@@ -12797,7 +12798,7 @@ cases=(
   "push-cmdcap-noop-no-git|case_push_cmdcap_noop_no_git|no opinion: an over-cap command whose raw stdin never names git leaves through the fast path (a control, no registry mutant)"
   "push-cmdcap-noop-plan-mode|case_push_cmdcap_noop_plan_mode|no opinion: an over-cap command in plan mode leaves before the cap (a control, no registry mutant)"
   "push-cmdcaptime-deny-flood|case_push_cmdcaptime_deny_flood|FLOOD+TIMING: a push followed by one multi-megabyte dollar-quote word denies via the cap under an active deadline calibrated from a same-run plan-mode control -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
-  "push-cmdcaptime-pin-at-cap-worst|case_push_cmdcaptime_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap stays within a fixed CPU bound before its first deadline sample, and within a bound of at most the hook timeout for its whole production-budget run (x: also within a margin of a same-run control), and reaches its verdict (regression pin, no registry mutant)"
+  "push-cmdcaptime-pin-at-cap-worst|case_push_cmdcaptime_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap stays within a fixed CPU bound before its first deadline sample, and within a bound of at most the hook timeout for its whole production-budget run (the #503 shapes: u v w y prefix, x production, within a margin of a same-run control), and reaches its verdict (regression pin, no registry mutant)"
   "push-rxscan-noop-flood|case_push_rxscan_noop_flood|FLOOD+TIMING: a lost segment and a push full of plain dollar-quote words, then a feature push -- no opinion; token count sized from a same-run twin control -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-rescan)"
   "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"
   "push-alias-deny-feature-dest|case_al_deny_feature_dest|a push alias denies even when the destination is a feature branch -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
