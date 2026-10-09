@@ -2049,6 +2049,7 @@ push_guard_exec() {
   [ -z "$push_git_config_system" ] || export GIT_CONFIG_SYSTEM="$push_git_config_system"
   [ -z "$push_git_config_nosystem" ] || export GIT_CONFIG_NOSYSTEM="$push_git_config_nosystem"
   [ -z "$push_budget_override" ] || export TBF_PUSH_GUARD_BUDGET_SECS="$push_budget_override"
+  [ -z "$push_locale_override" ] || export LC_ALL="$push_locale_override"
   export PATH="$pathval"
   exec "$bash_bin" "$push_guard"
 }
@@ -2078,7 +2079,10 @@ push_guard_exec() {
 # override: unset by default (the foreground path below, unchanged in shape from before), and when a
 # case sets it immediately before calling run_push_guard, push_guard_exec instead runs backgrounded
 # under wait_deadline at that many seconds, killing its whole process tree on overrun instead of
-# letting the case block on it. Every one of these nine is cleared again right after the call. The
+# letting the case block on it. $push_locale_override (#517) is a TENTH override: exported as LC_ALL
+# for that one call when non-empty (the multibyte command-cap case needs a verified UTF-8 locale, as
+# $cdg_locale_override does for claude-dir-guard). Every one of these ten is cleared again right after
+# the call. The
 # environment mutation always happens inside an explicit "( push_guard_exec … )" subshell — a
 # portable, bash-3.2/Git-Bash-safe idiom (this file's own convention prefers it to `env -u`, which is
 # not obviously safe across Git-Bash) — so it can never leak into this harness's own environment or
@@ -2096,6 +2100,7 @@ push_git_config_nosystem=""
 push_home_empty=""
 push_budget_override=""
 push_deadline_override=""
+push_locale_override=""
 run_push_guard() {
   local json="$1" pathval="${2:-$PATH}" errfile="$tmpbase/push-guard-stderr"
   local home_val="${push_home_override:-$neutral_home}"
@@ -2125,6 +2130,7 @@ run_push_guard() {
   push_home_empty=""
   push_budget_override=""
   push_deadline_override=""
+  push_locale_override=""
 }
 
 # expect_push_deny/expect_push_no_opinion — assert against $push_out/$push_err/$push_rc.
@@ -2278,6 +2284,8 @@ case_pd_n1_refspec() {
   run_push_guard "$(mk_push_cmd_cwd 'git push main' "$dir")"
   expect_push_deny
 }
+# mutant:517-pg-cr-strip-off -- deletes the awk carriage-return strip, so a trailing CR stays on the
+#   destination token and the exact compare misses it.
 case_pd_crlf_dest() {
   # #270: the exact command the issue measured. Isolates the destination compare, which goes
   # through strip_quotes() + is_deny_member (NOT normalize() — push destinations never pass
@@ -2286,14 +2294,15 @@ case_pd_crlf_dest() {
   run_push_guard "$(mk_push_cmd "git push origin main${CR}")"
   expect_push_deny
 }
+# mutant:517-pg-cr-strip-once -- strips only the first CR of each record, so the verdict-bearing second
+#   CR stays on its token.
 case_pd_crlf_interior() {
   # #270 round-2 kickback: three CRs, with the verdict-bearing one (the second) NEITHER the
   # command's first NOR its final byte — the original two-CR fixture's verdict-bearing CR was
   # its FIRST, so a once-only ("strip the first \r found") mutant happened to strip it too and
   # survived the whole suite undetected; this shape kills both a trailing-only strip (the first
   # two CRs, including the verdict-bearing one, are untouched) AND a once-only strip (the
-  # verdict-bearing CR is the SECOND, not the one a once-only strip removes) — see M23/M24/M25
-  # below. Raw stdin carries the fast-path substring ("git") intact after the first
+  # verdict-bearing CR is the SECOND, not the one a once-only strip removes). Raw stdin carries the fast-path substring ("git") intact after the first
   # escaped \r — the fast path is a whole-string substring test, so position is irrelevant here
   # (unlike case_pd_crlf_cmdword, where the "g","i","t" run must survive ahead of the escape).
   run_push_guard "$(mk_push_cmd "echo a${CR} && git push origin main${CR} && echo b${CR}")"
@@ -3859,6 +3868,357 @@ case_push_rtexpscan_noop_flood() {
   calibrated_deadline "$floor" "$k" "$pred_ms"
   push_deadline_override="$calibrated_secs"
   measure_ms run_push_guard "$(mk_push_cmd_big "$(pp_rx_flood_cmd "$flood_tokens")" "$dir")"
+  expect_push_no_opinion
+  if [ "$__ok" -eq 0 ]; then
+    __why="${__why}control ${ctl_ms}ms at ${ctl_n} -> ${flood_tokens} tokens, predicted ${pred_ms}ms -> deadline ${calibrated_secs}s, flood ${measured_ms}ms\n"
+  fi
+}
+
+# --- runtime expansion in the push destination, the lost-segment alias name, the command-size cap (#517)
+# A destination built at run time cannot be judged against the default branch, so it denies with one
+# fixed line that never echoes it; a destination that is exactly one plain ANSI-C or locale segment is
+# read as the name it spells. Every fixture passes an explicit cwd (pp_run). Case names avoid the
+# substrings other registry filters match.
+PP_R_RXD="runtime expansion in the push destination"
+# rxd_deny CMD... -- each CMD denies with the fixed rxdest line, echoing no input.
+rxd_deny() {
+  local c w0
+  for c in "$@"; do
+    w0="$__why"; __why=""
+    pp_run "$c"
+    expect_push_deny
+    case "$push_err" in
+      *"(blocked: $PP_R_RXD)"*) ;;
+      *) __ok=0; __why="${__why}stderr missing '(blocked: $PP_R_RXD)': '$push_err'\n" ;;
+    esac
+    al_expect_no_echo '$'
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+# rxd_lit_deny CMD... -- each CMD denies pushing to main (the plain name the segment spells).
+rxd_lit_deny() {
+  local c w0
+  for c in "$@"; do
+    w0="$__why"; __why=""
+    pp_run "$c"
+    expect_push_deny
+    case "$push_err" in
+      *'denies pushing to "main"'*) ;;
+      *) __ok=0; __why="${__why}stderr missing 'denies pushing to \"main\"': '$push_err'\n" ;;
+    esac
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+# mutant:517-pg-rxdest-dollar-off -- hands the bash side the unrewritten token, so a destination
+#   holding a dollar sign is judged by its literal text and gets no opinion.
+# mutant:517-pg-rxdest-deny-off -- drops the n>=2 compare, so a refspec rewritten to a lone dollar
+#   sign is judged as a branch named dollar.
+case_push_rxdest_deny_dollar() {
+  rxd_deny 'B=main; git push origin HEAD:$B' 'git push origin HEAD:$B' 'git push origin "HEAD:${B}"' \
+    'git push origin $B' 'git push origin "$B"' 'git push origin +HEAD:$B' 'git push origin HEAD:refs/heads/$B' \
+    'git push origin refs/$X' "git push origin ma\$'in'" "git push origin \$'\\x6dain'" \
+    'git push origin feature/x HEAD:$B' "git push origin HEAD:\$'ma'in"
+}
+# mutant:517-pg-rxdest-n1-off -- drops the n==1 compare, so a lone expansion argument is no destination.
+case_push_rxdest_deny_single_arg() {
+  rxd_deny 'git push $B' 'git push "$B"'
+}
+# mutant:517-pg-rxdest-lit-off -- drops the plain-segment read, so a plain ANSI-C or locale
+#   destination is a runtime expansion instead of the name it spells.
+# mutant:517-pg-rxdest-plus -- drops the leading-plus split, so a forced plain segment is read whole.
+case_push_rxdest_deny_ansi_c_literal() {
+  rxd_lit_deny "git push origin \$'main'" "git push origin HEAD:\$'main'" "git push origin \$\"main\"" \
+    "git push origin HEAD:\$\"main\"" "git push origin +\$'main'" "git push \$'main'"
+}
+# mutant:517-pg-rxdest-whole-token -- looks for the dollar sign in the whole token instead of its
+#   destination part, so a source-only expansion is rewritten and denied.
+case_push_rxdest_noop_source_only() {
+  rtx_noop 'git push origin $B:feature/x' "git push origin \$'feature-x'" "git push origin HEAD:\$'claude-17-a'" \
+    'git push -o $X origin feature/x' 'git push "$REMOTE" feature/x'
+}
+# mutant:517-pg-argmax-off -- drops the length gate, so an overlong push word is judged by its text.
+case_push_rxdest_deny_overlong() {
+  # A push word longer than the awk tok_max (hand-typed mirror: 4096) names no real remote, branch or
+  # refspec, and its bash-side colon split is quadratic on bash 3.2: it denies with the rxdest line.
+  pcap_fill 5000 x
+  rxd_deny "git push origin $pcap_s" "git push origin HEAD:$pcap_s"
+}
+# mutant:517-pg-argmax-option -- applies the length gate to an option word too, so a long option is
+#   read as a refspec.
+case_push_rxdest_noop_overlong_option() {
+  pcap_fill 5000 x
+  rtx_noop "git push --receive-pack=$pcap_s origin feature/x" "git push origin feature/x --signed=$pcap_s"
+}
+# mutant:517-pg-cpath-big-off -- drops the length gate on a -C path, so an overlong path is judged by
+#   its text instead of denying as outside the worktree shape.
+case_push_rxdest_deny_overlong_cpath() {
+  # The path has the worktree shape (a relative <name>-wt-<n> directory), so only the length gate
+  # stops it being resolved; an unresolvable directory otherwise falls back to the session checkout.
+  pcap_fill 5000 x
+  pp_run "git -C ../$pcap_s-wt-1 push origin feature/x"
+  pp_expect_unres "-C path outside the <name>-wt-<n> worktree shape"
+}
+case_push_rxdest_noop_controls() {
+  rtx_noop 'git push -u origin "claude/17-a"' 'git -C "../demo-wt-1" push -u origin "claude/17-a"'
+}
+# mutant:517-pg-rxlost-lit-off -- hands the driver a plain ANSI-C or locale word with its dollar sign
+#   still on, so the alias name is never found in the lost segment.
+case_push_rxlost_deny_alias_ansi_c() {
+  local dir="$tmpbase/repo-rxlost-alias" c w0
+  mk_fixture_repo "$dir" main main
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
+  for c in 'git "--no-pager" zqp origin main' "git --no-pager \$'zqp' origin main" "git \"--no-pager\" \$'zqp' origin main" \
+    "git \"--no-pager\" \$\"zqp\" origin main" "X=\"a b\" git \$'zqp' origin main"; do
+    w0="$__why"; __why=""
+    al_run "$c" "$dir"
+    al_expect_alias ".git/config"
+    al_expect_no_echo "zqp"
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+# mutant:517-pg-rxlost-failclosed-off -- never fails a non-plain dollar-quote word closed, so a word
+#   the tokenizer cannot read as one name is dropped from the candidates.
+case_push_rxlost_deny_concat() {
+  rtx_deny "$PP_R_RXG" "git \"--no-pager\" z\$'qp' origin main" "git \"--no-pager\" \$'z'\$'qp' origin main" \
+    "git \"--no-pager\" \$'\\x7aqp' origin main" "git \"--no-pager\" status \$'a b'"
+}
+case_push_rxlost_noop_status() {
+  rtx_noop "git \"--no-pager\" \$'status'" 'git "--no-pager" log'
+}
+
+# pcap_fill N UNIT -- sets pcap_s to exactly N BYTES: UNIT repeated whole times, then x padding for
+# the remainder. Built by doubling in the C locale, so the length is bytes whatever the harness locale.
+pcap_s=""
+pcap_fill() {
+  local n="$1" unit="$2" ulen full s pad r
+  local LC_ALL=C
+  ulen="${#unit}"
+  r=$(( n % ulen ))
+  full=$(( n - r ))
+  s="$unit"
+  while [ "${#s}" -lt "$full" ]; do s="$s$s"; done
+  s="${s:0:full}"
+  pad=""
+  if [ "$r" -gt 0 ]; then pad="$(printf '%*s' "$r" '')"; pad="${pad// /x}"; fi
+  pcap_s="$s$pad"
+}
+# PCAP_MAX_BYTES -- hand-typed mirror of hooks/push-guard.sh's PUSH_CMD_MAX_BYTES.
+PCAP_MAX_BYTES=524288
+# mk_push_cmd_big_plan CMD CWD -- mk_push_cmd_big with permission_mode plan: the hook exits no opinion
+# right after the second jq pass, so the run times the unsampled stdin prefix alone (cat, the
+# fast-path globs, two jq passes) of the identical bytes -- a same-run control no cap mutant changes.
+mk_push_cmd_big_plan() {
+  printf '%s' "$1" | jq -Rs --arg cwd "$2" '{tool_name: "Bash", tool_input: {command: .}, cwd: $cwd, permission_mode: "plan"}'
+}
+# pg_need_utf8 -- sets push_locale_override to a verified UTF-8 locale, or fails the case with a clear
+# message (never a silent pass) when the host has none.
+pg_need_utf8() {
+  cdg_utf8_locale
+  if [ -z "$cdg_utf8" ]; then
+    __ok=0; __why="${__why}no working UTF-8 locale on this host (tried C.UTF-8, en_US.UTF-8, and locale -a): the multibyte cases cannot run\n"
+    return 1
+  fi
+  push_locale_override="$cdg_utf8"
+  return 0
+}
+# mutant:517-pg-cmdcap-off -- deletes the cap check, so an over-cap command is analysed (cheaply, here)
+#   and gets no opinion instead of the too-large line.
+case_push_cmdcap_deny_over_cap() {
+  local dir="$tmpbase/repo-pp" pre='git push origin feature/x; echo '
+  mk_fixture_repo "$dir" main feature/x
+  pcap_fill $(( PCAP_MAX_BYTES + 1 - ${#pre} )) x
+  run_push_guard "$(mk_push_cmd_big "$pre$pcap_s" "$dir")"
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+}
+# mutant:517-pg-cmdcap-off-by-one -- denies a command of exactly the cap.
+case_push_cmdcap_noop_at_cap() {
+  local dir="$tmpbase/repo-pp" pre='git push origin feature/x; echo '
+  mk_fixture_repo "$dir" main feature/x
+  pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) x
+  run_push_guard "$(mk_push_cmd_big "$pre$pcap_s" "$dir")"
+  expect_push_no_opinion
+}
+# mutant:517-pg-cmdcap-chars -- counts characters in a UTF-8 locale instead of bytes, so a payload over
+#   the cap in bytes but under it in characters is analysed.
+case_push_cmdcap_deny_multibyte() {
+  local dir="$tmpbase/repo-pp" pre='git push origin feature/x; echo ' mb
+  mk_fixture_repo "$dir" main feature/x
+  # 131073 four-byte characters: 524292 bytes, 131073 characters
+  pcap_fill 524292 "$(printf '\360\237\230\200')"
+  mb="$pcap_s"
+  pg_need_utf8 || return
+  run_push_guard "$(mk_push_cmd_big "$pre$mb" "$dir")"
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+}
+case_push_cmdcap_noop_no_git() {
+  # An over-cap command whose raw stdin never names git (and holds no dollar sign with push) leaves
+  # through the fast path, before the cap.
+  local payload
+  pcap_fill $(( PCAP_MAX_BYTES + 1 - 5 )) x
+  payload="$(mk_push_cmd_big "echo $pcap_s" "/")"
+  case "$(printf '%s' "$payload" | tr '[:upper:]' '[:lower:]')" in
+    *git*) __ok=0; __why="${__why}fixture payload names git, so the fast path is not the gate under test\n"; return ;;
+  esac
+  run_push_guard "$payload"
+  expect_push_no_opinion
+}
+case_push_cmdcap_noop_plan_mode() {
+  # Plan mode leaves before the cap, even for a payload over it.
+  local dir="$tmpbase/repo-pp" pre='git push origin main; echo '
+  mk_fixture_repo "$dir" main feature/x
+  pcap_fill $(( PCAP_MAX_BYTES + 1 - ${#pre} )) x
+  run_push_guard "$(mk_push_cmd_big_plan "$pre$pcap_s" "$dir")"
+  expect_push_no_opinion
+}
+# mutant:517-pg-cmdcap-off -- FLOOD + TIMING: the issue-C payload shape (a push, then one very long
+#   ab$'cd' word) at four times the cap denies via the cap. With the cap deleted the unsampled
+#   tokenizer runs on the whole word: on a slow awk it overruns the deadline, on a fast one it denies
+#   with the default-branch reason instead of the too-large line. The active deadline is calibrated
+#   from a same-run plan-mode control of identical bytes and clamped below the 5s production budget,
+#   so the too-large line can never come from the deadline sampler.
+case_push_cmdcaptime_deny_flood() {
+  local dir="$tmpbase/repo-pp-cap" pre='git push origin main ' cmd ctl_ms secs
+  mk_fixture_repo "$dir" main feature/x
+  pcap_fill $(( PCAP_MAX_BYTES * 4 - ${#pre} )) "ab\$'cd'"
+  cmd="$pre$pcap_s"
+  measure_ms run_push_guard "$(mk_push_cmd_big_plan "$cmd" "$dir")"
+  ctl_ms="$measured_ms"
+  if [ -z "$ctl_ms" ]; then
+    __ok=0; __why="${__why}control run's own timing report could not be parsed -- can't size the deadline\n"
+    return
+  fi
+  expect_push_no_opinion
+  if [ "$__ok" -eq 0 ]; then
+    __why="${__why}plan-mode control did not return no opinion\n"
+    return
+  fi
+  calibrated_deadline 2 4 "$ctl_ms"
+  secs="$calibrated_secs"
+  [ "$secs" -le "$DL_KNOB_MAX" ] || secs="$DL_KNOB_MAX"
+  push_deadline_override="$secs"
+  run_push_guard "$(mk_push_cmd_big "$cmd" "$dir")"
+  expect_push_deny_exact "$DL_DEADLINE_LINE"
+  if [ "$__ok" -eq 0 ]; then
+    __why="${__why}control ${ctl_ms}ms -> deadline ${secs}s\n"
+  fi
+}
+# pcap_shape SHAPE -- sets pcap_cmd to a command of exactly PCAP_MAX_BYTES bytes in one of the worst
+# shapes for the unsampled prefix: a one long ab$'cd' word (a), a carriage-return flood (b), one
+# refspec whose first colon is at its end (c), one quote-dense word (d), one push with very many
+# short refspecs (f), one -C path (i) or one -C path of a non-push git segment (s) filling the
+# command, and a segment the tokenizer lost followed by very many short words (t).
+pcap_cmd=""
+pcap_shape() {
+  local pre
+  case "$1" in
+    a) pre='git push origin '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) "ab\$'cd'"; pcap_cmd="$pre$pcap_s" ;;
+    b) pre='git push origin main'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) "$(printf '\r')"; pcap_cmd="$pre$pcap_s" ;;
+    c) pre='git push origin '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 6 )) x; pcap_cmd="$pre$pcap_s: main" ;;
+    d) pre='git push origin feature/x '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) '"a"'; pcap_cmd="$pre$pcap_s" ;;
+    f) pre='git push origin'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 5 )) ' a'; pcap_cmd="$pre$pcap_s main" ;;
+    i) pre='git -C '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 17 )) x; pcap_cmd="$pre$pcap_s push origin main" ;;
+    s) pre='git -C '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 7 )) x; pcap_cmd="$pre$pcap_s status" ;;
+    t) pre='git "--no-pager" '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) 'ab '; pcap_cmd="$pre$pcap_s" ;;
+  esac
+}
+# pcap_verdict WANT -- the run reached a verdict: the too-large line, or WANT (rxdest, main, unres or noop).
+pcap_verdict() {
+  if [ "$push_rc" -eq 2 ] && [ "$push_err" = "$DL_DEADLINE_LINE" ]; then return; fi
+  case "$1" in
+    rxdest)
+      expect_push_deny
+      case "$push_err" in *"(blocked: $PP_R_RXD)"*) ;; *) __ok=0; __why="${__why}stderr missing '(blocked: $PP_R_RXD)': '$push_err'\n" ;; esac
+      ;;
+    main)
+      expect_push_deny
+      case "$push_err" in *'denies pushing to "main"'*) ;; *) __ok=0; __why="${__why}stderr missing 'denies pushing to \"main\"': '$push_err'\n" ;; esac
+      ;;
+    unres)
+      expect_push_deny
+      case "$push_err" in *"cannot resolve which repository"*) ;; *) __ok=0; __why="${__why}stderr missing the unresolved line: '$push_err'\n" ;; esac
+      ;;
+    noop) expect_push_no_opinion ;;
+  esac
+}
+case_push_cmdcaptime_pin_at_cap_worst() {
+  # Regression pin (no registry mutant: whether an unbounded run overruns depends on the bash and awk
+  # build, as case_cdg_dl_deny_cwd_cr's comment says for claude-dir-guard). Each worst shape exactly at
+  # the cap must reach a verdict under an active deadline of the production budget (hand-typed 5, the
+  # hook's PUSH_ANALYSIS_BUDGET_SECS) plus one whole-second sample window plus a K-scaled multiple of
+  # that same payload's own unsampled prefix, measured by a same-run knob-0 control (the hook denies at
+  # its first sample, right after the tokenizer). The control, not a fixed second count, carries the
+  # host load: this suite runs under driver concurrency on small CI runners.
+  local dir="$tmpbase/repo-pp-cap-worst" shape want ctl_ms secs w0 payload ok0 ctl_ok
+  mk_fixture_repo "$dir" main feature/x
+  for shape in a b c d f i s t; do
+    case "$shape" in a|c|d) want=rxdest ;; i) want=unres ;; s|t) want=noop ;; *) want=main ;; esac
+    w0="$__why"; __why=""
+    pcap_shape "$shape"
+    payload="$(mk_push_cmd_big "$pcap_cmd" "$dir")"
+    push_budget_override="0"
+    push_deadline_override=20
+    measure_ms run_push_guard "$payload"
+    ctl_ms="$measured_ms"
+    if [ -z "$ctl_ms" ]; then
+      __ok=0; __why="${w0}[shape $shape] knob-0 control's timing report could not be parsed -- can't size the deadline\n"
+      continue
+    fi
+    ok0="$__ok"; __ok=1
+    expect_push_deny_exact "$DL_DEADLINE_LINE"
+    ctl_ok="$__ok"; __ok="$ok0"
+    if [ "$ctl_ok" -eq 0 ]; then
+      __ok=0; __why="${w0}[shape $shape] knob-0 control did not deny at the first sample: ${__why}"
+      continue
+    fi
+    calibrated_deadline 1 4 "$ctl_ms"
+    secs=$(( 5 + 1 + calibrated_secs ))
+    [ "$secs" -le 20 ] || secs=20
+    push_deadline_override="$secs"
+    run_push_guard "$payload"
+    pcap_verdict "$want"
+    if [ -n "$__why" ]; then __why="${w0}[shape $shape, control ${ctl_ms}ms, deadline ${secs}s] ${__why}"; else __why="$w0"; fi
+  done
+}
+# pp_rxs_flood_cmd N -- a lost segment holding N plain ANSI-C words, a push holding N option values
+# written the same way, then a real push so the hook reaches check_deadline after the tokenizer.
+# pp_rxs_flood_twin_cmd N is its mutant-invariant twin: the same layout and byte length per token with
+# no dollar sign in it.
+pp_rxs_flood_cmd() {
+  local n="$1" r1 r2
+  r1='git "--no-pager" log'"$(printf " \$'a'%.0s" $(seq 1 "$n"))"
+  r2='git push origin feature/x'"$(printf " -o \$'a'%.0s" $(seq 1 "$n"))"
+  printf '%s\n%s\ngit push origin feature/x' "$r1" "$r2"
+}
+pp_rxs_flood_twin_cmd() {
+  local n="$1" r1 r2
+  r1='git "--no-pager" log'"$(printf ' abcd%.0s' $(seq 1 "$n"))"
+  r2='git push origin feature/x'"$(printf ' -o abcd%.0s' $(seq 1 "$n"))"
+  printf '%s\n%s\ngit push origin feature/x' "$r1" "$r2"
+}
+# mutant:517-pg-rxlost-rescan -- re-scans the rest of the lost segment at every dollar-quote word
+#   instead of reading each word once, so the flood turns quadratic and overruns its deadline.
+case_push_rxscan_noop_flood() {
+  # FLOOD + TIMING, sized and bounded by cost RATIO from a same-run control exactly as
+  # case_push_rtexpscan_noop_flood does.
+  local dir="$tmpbase/repo-pp-flood" ctl_n=1000 min_n=700 max_n=10000 floor=2 k=8
+  local target_ms=$(( DL_KNOB_MAX * 200 )) ctl_ms pred_ms
+  mk_fixture_repo "$dir" main feature/x
+  measure_ms run_push_guard "$(mk_push_cmd_big "$(pp_rxs_flood_twin_cmd "$ctl_n")" "$dir")"
+  ctl_ms="$measured_ms"
+  if [ -z "$ctl_ms" ]; then
+    __ok=0; __why="${__why}control run's own timing report could not be parsed -- can't size the flood\n"
+    return
+  fi
+  expect_push_no_opinion
+  if [ "$__ok" -eq 0 ]; then
+    __why="${__why}twin control did not return no opinion\n"
+    return
+  fi
+  calibrated_flood_tokens "$ctl_ms" "$ctl_n" "$target_ms" "$min_n" "$max_n"
+  pred_ms=$(( ctl_ms * flood_tokens / ctl_n ))
+  calibrated_deadline "$floor" "$k" "$pred_ms"
+  push_deadline_override="$calibrated_secs"
+  measure_ms run_push_guard "$(mk_push_cmd_big "$(pp_rxs_flood_cmd "$flood_tokens")" "$dir")"
   expect_push_no_opinion
   if [ "$__ok" -eq 0 ]; then
     __why="${__why}control ${ctl_ms}ms at ${ctl_n} -> ${flood_tokens} tokens, predicted ${pred_ms}ms -> deadline ${calibrated_secs}s, flood ${measured_ms}ms\n"
@@ -10372,6 +10732,8 @@ cases=(
   #   M22 tool_input.command's jq default changed from empty to a real   -> 55 pass,  1 fail
   #       command string
   #   M23 the two #270 CR-strip lines deleted (cr=$'\r'; cmd="${cmd//$cr/}") -> 57 pass,  3 fail
+  #       (history: since #517 the strip is the awk gsub(cr, "") and these three mutants are the
+  #       517-pg-cr-strip-off and 517-pg-cr-strip-once registry records)
   #       (measured against the then-current 60-case push-* set — the three new #270 push-deny-crlf-*
   #       fixtures are the only cases that flip; push-noop-crlf-feature is NOT flipped, see below.
   #       Re-measured after the #270 round-2 kickback rewrote push-deny-crlf-interior's raw
@@ -11146,9 +11508,9 @@ cases=(
   "push-deny-global-opt-two|case_pd_global_opt_two|deny: git -c core.pager=cat -C ../demo-wt-1 push origin main (TWO chained global-option-with-value pairs, the 0/1/2+ boundary -- LESSON 2026-09-08d) -- measured: M1/M2, 23 pass 33 fail (also M6, 53 pass 3 fail)"
   "push-deny-origin-master|case_pd_origin_master|deny: git push origin master (the second PUSH_DEFAULT_BRANCH_FALLBACK member) -- measured: M1/M2, 23 pass 33 fail (also M16, 55 pass 1 fail)"
   "push-deny-n1-refspec|case_pd_n1_refspec|deny: git push main against a fixture repo whose current branch is feature/x (n==1 -- the single argument is ALSO evaluated as a refspec destination, isolated from a real, non-denying current branch) -- measured: M1/M2, 23 pass 33 fail"
-  "push-deny-crlf-dest|case_pd_crlf_dest|deny: git push origin main<CR> (#270, the exact command the issue measured -- isolates the destination compare, which goes through strip_quotes()+is_deny_member, not normalize()) -- measured: M23, 57 pass 3 fail (with push-deny-crlf-interior and push-deny-crlf-cmdword); NOT flipped by M24 or M25 (its one CR is both the first and the last, so either a trailing-only or a once-only strip removes it too)"
-  "push-deny-crlf-interior|case_pd_crlf_interior|deny: echo a<CR> && git push origin main<CR> && echo b<CR> (#270, three CRs, the verdict-bearing one (second) neither first nor last -- distinguishes a global strip from both a trailing-only AND a once-only strip) -- measured: M23, 57 pass 3 fail (with push-deny-crlf-dest and push-deny-crlf-cmdword); M24 (trailing-only), 58 pass 2 fail (with push-deny-crlf-cmdword); M25 (once-only), 59 pass 1 fail (this case alone)"
-  "push-deny-crlf-cmdword|case_pd_crlf_cmdword|deny: git<CR> push origin main (#270, isolates normalize() on the command word -- the site the issue's filed shape names, and which alone would not fix the issue's own measured command) -- measured: M23, 57 pass 3 fail (with push-deny-crlf-dest and push-deny-crlf-interior); also M24 (trailing-only), 58 pass 2 fail (with push-deny-crlf-interior) -- its one CR is not the command's final byte, so a trailing-only strip leaves it in place; NOT flipped by M25 (its one CR is also the only/first one, so a once-only strip removes it too)"
+  "push-deny-crlf-dest|case_pd_crlf_dest|deny: git push origin main<CR> (#270, the exact command the issue measured -- isolates the destination compare, which goes through strip_quotes()+is_deny_member, not normalize()) -- mutation proof: dev/mutants/hook-tests.json (517-pg-cr-strip-off); NOT killed by 517-pg-cr-strip-once (its one CR is both the first and the last)"
+  "push-deny-crlf-interior|case_pd_crlf_interior|deny: echo a<CR> && git push origin main<CR> && echo b<CR> (#270, three CRs, the verdict-bearing one (second) neither first nor last -- distinguishes a global strip from a once-only one) -- mutation proof: dev/mutants/hook-tests.json (517-pg-cr-strip-off, 517-pg-cr-strip-once)"
+  "push-deny-crlf-cmdword|case_pd_crlf_cmdword|deny: git<CR> push origin main (#270, isolates normalize() on the command word -- the site the issue's filed shape names, and which alone would not fix the issue's own measured command) -- mutation proof: dev/mutants/hook-tests.json (517-pg-cr-strip-off); NOT killed by 517-pg-cr-strip-once (its one CR is also the only one)"
   "push-deny-trunk-base|case_pd_trunk_base|deny: git push origin trunk against a fixture repo whose refs/remotes/origin/HEAD symref names trunk (default-branch resolution, base cwd) -- measured: M1/M2, 23 pass 33 fail (also M15, 53 pass 3 fail)"
   "push-deny-trunk-subdir|case_pd_trunk_subdir|deny: same trunk fixture repo, cwd a SUBDIRECTORY of it (the upward .git walk) -- measured: M1/M2, 23 pass 33 fail (also M15, 53 pass 3 fail; also M18, 55 pass 1 fail)"
   "push-deny-trunk-worktree|case_pd_trunk_worktree|deny: same trunk default branch, cwd a WORKTREE POINTER FILE (gitdir: ... resolution, common-dir derivation) -- measured: M1/M2, 23 pass 33 fail (also M15, 53 pass 3 fail; also M17, 55 pass 1 fail)"
@@ -11498,6 +11860,25 @@ cases=(
   "push-rtexp-noop-env-c-status|case_push_rtexp_noop_env_c_status|no opinion: env -C \${D} git status (no push can follow) -- mutation proof: dev/mutants/hook-tests.json (508-pg-rec-lost-always)"
   "push-rtexp-noop-controls|case_push_rtexp_noop_controls|no opinion: expansion text outside command position, and the skills' own worktree push shape -- control, not part of the mutation-proof registry"
   "push-rtexpscan-noop-flood|case_push_rtexpscan_noop_flood|FLOOD+TIMING: one record per expansion trigger shape, then a feature push -- no opinion; token count sized from a same-run, mutant-invariant twin control, deadline a multiple of the predicted linear cost -- mutation proof: dev/mutants/hook-tests.json (508-pg-rx-scan-per-token)"
+  "push-rxdest-deny-dollar|case_push_rxdest_deny_dollar|deny: a push destination built at run time (HEAD:\$B, \"HEAD:\${B}\", \$B, +HEAD:\$B, refs/heads/\$B, a non-plain dollar-quote word, a second refspec) -- the fixed rxdest line, echoing nothing -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxdest-dollar-off, 517-pg-rxdest-deny-off)"
+  "push-rxdest-deny-single-arg|case_push_rxdest_deny_single_arg|deny: a lone push argument built at run time -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxdest-n1-off, 517-pg-rxdest-dollar-off)"
+  "push-rxdest-deny-ansi-c-literal|case_push_rxdest_deny_ansi_c_literal|deny: a destination that is exactly one plain ANSI-C or locale segment is read as the name it spells -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxdest-lit-off, 517-pg-rxdest-plus)"
+  "push-rxdest-noop-source-only|case_push_rxdest_noop_source_only|no opinion: an expansion only in the source or the remote of a push to a feature branch -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxdest-lit-off, 517-pg-rxdest-whole-token)"
+  "push-rxdest-deny-overlong|case_push_rxdest_deny_overlong|deny: a push word longer than the length gate -- mutation proof: dev/mutants/hook-tests.json (517-pg-argmax-off)"
+  "push-rxdest-noop-overlong-option|case_push_rxdest_noop_overlong_option|no opinion: an overlong option word is not a refspec -- mutation proof: dev/mutants/hook-tests.json (517-pg-argmax-option)"
+  "push-rxdest-deny-overlong-cpath|case_push_rxdest_deny_overlong_cpath|deny: an overlong -C path denies as outside the worktree shape -- mutation proof: dev/mutants/hook-tests.json (517-pg-cpath-big-off)"
+  "push-rxdest-noop-controls|case_push_rxdest_noop_controls|no opinion: the harness's own quoted push shapes (a control, no registry mutant)"
+  "push-rxlost-deny-alias-ansi-c|case_push_rxlost_deny_alias_ansi_c|deny: a push alias spelled as an ANSI-C or locale word in a segment the tokenizer lost -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-lit-off)"
+  "push-rxlost-deny-concat|case_push_rxlost_deny_concat|deny: a non-plain dollar-quote word in a lost segment fails closed -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-failclosed-off)"
+  "push-rxlost-noop-status|case_push_rxlost_noop_status|no opinion: a plain dollar-quote git status in a lost segment, and a plain lost log (a control, no registry mutant)"
+  "push-cmdcap-deny-over-cap|case_push_cmdcap_deny_over_cap|deny: a command one byte over the cap -- the too-large line -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
+  "push-cmdcap-noop-at-cap|case_push_cmdcap_noop_at_cap|no opinion: a command of exactly the cap is analysed -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off-by-one)"
+  "push-cmdcap-deny-multibyte|case_push_cmdcap_deny_multibyte|deny: four-byte characters over the cap in bytes but under it in characters, under a UTF-8 locale -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-chars)"
+  "push-cmdcap-noop-no-git|case_push_cmdcap_noop_no_git|no opinion: an over-cap command whose raw stdin never names git leaves through the fast path (a control, no registry mutant)"
+  "push-cmdcap-noop-plan-mode|case_push_cmdcap_noop_plan_mode|no opinion: an over-cap command in plan mode leaves before the cap (a control, no registry mutant)"
+  "push-cmdcaptime-deny-flood|case_push_cmdcaptime_deny_flood|FLOOD+TIMING: a push followed by one multi-megabyte dollar-quote word denies via the cap under an active deadline calibrated from a same-run plan-mode control -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
+  "push-cmdcaptime-pin-at-cap-worst|case_push_cmdcaptime_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap reaches a verdict inside an active deadline calibrated from a same-run knob-0 control of the same payload (regression pin, no registry mutant)"
+  "push-rxscan-noop-flood|case_push_rxscan_noop_flood|FLOOD+TIMING: a lost segment and a push full of plain dollar-quote words, then a feature push -- no opinion; token count sized from a same-run twin control -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-rescan)"
   "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"
   "push-alias-deny-feature-dest|case_al_deny_feature_dest|a push alias denies even when the destination is a feature branch -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
   "push-alias-deny-global-config|case_al_deny_global_config|an alias in \$HOME/.gitconfig denies and names your global git config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-section)"
@@ -11584,7 +11965,7 @@ cases=(
   "push-reloc-deny-xseg-bare-xdg|case_rl_deny_xseg_bare_xdg|a bare XDG_CONFIG_HOME= then a push denies with the HOME/XDG reason -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-xseg)"
   "push-reloc-noop-similar-name|case_rl_noop_similar_name|HOMEBREW_NO_AUTO_UPDATE=1 git push origin feature/x is no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-exact)"
   "push-reloc-noop-scoped|case_rl_noop_scoped|HOME=/x scoped to ls then a feature push is no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-scoped)"
-  "push-deny-crlf-push-literal|case_pd_crlf_push_literal|git pu<CR>sh origin main denies once the raw-stdin push fast path is gone -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-crlf)"
+  "push-deny-crlf-push-literal|case_pd_crlf_push_literal|git pu<CR>sh origin main denies once the raw-stdin push fast path is gone -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-crlf, 517-pg-cr-strip-off)"
   # --- hooks/push-guard.sh: analysis deadline (#435) cases ----------------------------------------
   "push-dl-deny-budget-zero|case_push_dl_deny_budget_zero|knob 0 denies the very first sample even for an ordinary feature/x push -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off)"
   "push-dl-noop-budget-zero-no-push|case_push_dl_noop_budget_zero_no_push|no push segment stays no-opinion even at knob 0, via the pre-deadline scan_out exit -- mutation proof: dev/mutants/hook-tests.json (435-dl-scan-empty-exit)"

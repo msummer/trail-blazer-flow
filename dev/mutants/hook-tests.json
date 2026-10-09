@@ -8080,6 +8080,269 @@
       "expect_fail": [
         "ab-lost-deny-prefix-squoted-opt"
       ]
+    },
+    {
+      "name": "517-pg-rxdest-dollar-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rxdest-",
+      "edits": [
+        {
+          "from": "  return strip_quotes(hd) \"$\"\n",
+          "to": "  return strip_quotes(tok)\n"
+        }
+      ],
+      "expect_fail": [
+        "push-rxdest-deny-dollar",
+        "push-rxdest-deny-single-arg"
+      ]
+    },
+    {
+      "name": "517-pg-rxdest-deny-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rxdest-",
+      "edits": [
+        {
+          "from": "    if [ \"$d\" = '$' ]; then __deny_dest='$'; __deny_kind=\"rxdest\"; return; fi\n",
+          "to": "    :\n"
+        }
+      ],
+      "expect_fail": [
+        "push-rxdest-deny-dollar",
+        "push-rxdest-deny-overlong"
+      ]
+    },
+    {
+      "name": "517-pg-rxdest-n1-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rxdest-",
+      "edits": [
+        {
+          "from": "      if [ \"$d1\" = '$' ]; then __deny_dest='$'; __deny_kind=\"rxdest\"; return; fi\n",
+          "to": "      :\n"
+        }
+      ],
+      "expect_fail": [
+        "push-rxdest-deny-single-arg"
+      ]
+    },
+    {
+      "name": "517-pg-rxdest-lit-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rxdest-",
+      "edits": [
+        {
+          "from": "  if (av != \"\") return strip_quotes(hd) av\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-rxdest-deny-ansi-c-literal",
+        "push-rxdest-noop-source-only"
+      ]
+    },
+    {
+      "name": "517-pg-rxdest-plus",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rxdest-",
+      "edits": [
+        {
+          "from": "} else if (substr(tok, 1, 1) == \"+\") {",
+          "to": "} else if (0) {"
+        }
+      ],
+      "expect_fail": [
+        "push-rxdest-deny-ansi-c-literal"
+      ]
+    },
+    {
+      "name": "517-pg-rxdest-whole-token",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rxdest-",
+      "edits": [
+        {
+          "from": "  if (index(d, \"$\") == 0) return strip_quotes(tok)\n",
+          "to": "  if (index(tok, \"$\") == 0) return strip_quotes(tok)\n"
+        }
+      ],
+      "expect_fail": [
+        "push-rxdest-noop-source-only"
+      ]
+    },
+    {
+      "name": "517-pg-argmax-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rxdest-",
+      "edits": [
+        {
+          "from": "  if (length(tok) > tok_max && substr(tok, 1, 1) != \"-\") return \"$\"\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-rxdest-deny-overlong"
+      ]
+    },
+    {
+      "name": "517-pg-argmax-option",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rxdest-",
+      "edits": [
+        {
+          "from": "length(tok) > tok_max && substr(tok, 1, 1) != \"-\"",
+          "to": "length(tok) > tok_max"
+        }
+      ],
+      "expect_fail": [
+        "push-rxdest-noop-overlong-option"
+      ]
+    },
+    {
+      "name": "517-pg-cpath-big-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rxdest-",
+      "edits": [
+        {
+          "from": "if (length(cpath) > tok_max) { cpath = \"\"; cpath_big = 1 }",
+          "to": "if (0) { cpath = \"\"; cpath_big = 1 }"
+        }
+      ],
+      "expect_fail": [
+        "push-rxdest-deny-overlong-cpath"
+      ]
+    },
+    {
+      "name": "517-pg-rxlost-lit-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rxlost-",
+      "edits": [
+        {
+          "from": "      else t = tolower(av)\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-rxlost-deny-alias-ansi-c"
+      ]
+    },
+    {
+      "name": "517-pg-rxlost-failclosed-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rxlost-",
+      "edits": [
+        {
+          "from": "      if (av == \"\") al_rx = 1\n",
+          "to": "      if (av == \"\") al_rx = 0\n"
+        }
+      ],
+      "expect_fail": [
+        "push-rxlost-deny-concat"
+      ]
+    },
+    {
+      "name": "517-pg-rxlost-rescan",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-rxscan-",
+      "edits": [
+        {
+          "from": "      if (av == \"\") al_rx = 1\n",
+          "to": "      if (lost_push(toks, i, ntok, 0) || av == \"\") al_rx = 1\n"
+        }
+      ],
+      "expect_fail": [
+        "push-rxscan-noop-flood"
+      ]
+    },
+    {
+      "name": "517-pg-cmdcap-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcap",
+      "edits": [
+        {
+          "from": "[ \"$pg_n\" -le \"$PUSH_CMD_MAX_BYTES\" ] || deny_too_large command",
+          "to": ":"
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcap-deny-multibyte",
+        "push-cmdcap-deny-over-cap",
+        "push-cmdcaptime-deny-flood"
+      ]
+    },
+    {
+      "name": "517-pg-cmdcap-off-by-one",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcap-",
+      "edits": [
+        {
+          "from": "[ \"$pg_n\" -le \"$PUSH_CMD_MAX_BYTES\" ]",
+          "to": "[ \"$pg_n\" -lt \"$PUSH_CMD_MAX_BYTES\" ]"
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcap-noop-at-cap"
+      ]
+    },
+    {
+      "name": "517-pg-cmdcap-chars",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-cmdcap-",
+      "edits": [
+        {
+          "from": "pg_bytes() { local LC_ALL=C; pg_n=\"${#1}\"; }",
+          "to": "pg_bytes() { pg_n=\"${#1}\"; }"
+        }
+      ],
+      "expect_fail": [
+        "push-cmdcap-deny-multibyte"
+      ]
+    },
+    {
+      "name": "517-pg-cr-strip-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-deny-crlf-",
+      "edits": [
+        {
+          "from": "  gsub(cr, \"\")\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-deny-crlf-cmdword",
+        "push-deny-crlf-dest",
+        "push-deny-crlf-interior",
+        "push-deny-crlf-push-literal"
+      ]
+    },
+    {
+      "name": "517-pg-cr-strip-once",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-deny-crlf-",
+      "edits": [
+        {
+          "from": "gsub(cr, \"\")",
+          "to": "sub(cr, \"\")"
+        }
+      ],
+      "expect_fail": [
+        "push-deny-crlf-interior"
+      ]
     }
   ]
 }

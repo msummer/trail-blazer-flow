@@ -14,7 +14,10 @@
 # subcommand is a git alias that may expand to a push, or that runs under config this hook cannot read
 # (see "Fail-closed: git aliases and config relocation (#448)" below), ALSO denies, since #510, a git
 # command that reads a git config file holding a section header line it cannot split the way git does
-# (see "Section headers and same-line keys (#510)" below), and
+# (see "Section headers and same-line keys (#510)" below), ALSO denies, since #517, a push whose
+# destination is built at run time, a segment whose git alias name the tokenizer lost behind an
+# ANSI-C or locale spelling, and a command longer than PUSH_CMD_MAX_BYTES (see "Fail-closed: a runtime
+# expansion in the push destination (#517)" and "Analysis deadline (#435)" below), and
 # says nothing (exit 0, empty stdout, empty stderr — "no opinion") about everything else, so the
 # normal permission flow — a prompt, or a matching deny rule in
 # templates/repo-settings.json, which always wins over this hook's decision — applies. This closes
@@ -30,7 +33,9 @@
 # `workdir` is not the session checkout as a plain string literal", and, since #448, "deny a git
 # command whose subcommand may be an alias for a push, or an inline HOME=/XDG_CONFIG_HOME= relocation
 # on a push", and, since #510, "deny a git command that reads a config file with a section header line
-# this hook cannot split the way git does"; does NOT enforce an
+# this hook cannot split the way git does", and, since #517, "deny a push whose destination is built at
+# run time", "deny a lost segment holding a dollar-quote word the hook cannot read as one name", and
+# "deny a command longer than PUSH_CMD_MAX_BYTES"; does NOT enforce an
 # allow-list of `claude/<n>-<slug>` destinations (the Decision's other clause) — that would deny
 # ordinary work (a `release/vX.Y.Z` branch, an annotated-tag push, any `git push origin
 # feature/x` a human runs in ANY Claude Code session in a plugin-enabled repo, since this hook is
@@ -57,9 +62,9 @@
 # and to prefix-word matching (so `if true; then git push origin main; fi`, `! git push origin
 # main`, and `GIT push origin main` all still resolve `git` as the command word — see PREFIX_WORDS'
 # own declaration above for the added shell-keyword vocabulary), and, since #270, the same
-# bash-native carriage-return strip
-# of $cmd applied immediately after the jq extraction and before this script's own `[ -n "$cmd" ]`
-# guard (see that same point in each file — a CRLF-carrying transport can otherwise deliver a
+# carriage-return strip of the command text before it is tokenized (agent-boundary.sh does it as a
+# bash-native expansion right after the jq extraction; this file has done it, since #517, as the
+# first statement of the awk record block — a CRLF-carrying transport can otherwise deliver a
 # command whose tokens carry a trailing `\r`, which every exact-match comparison below would miss).
 # A future fix to either tokenizer's shared behaviour (segment breaking; the additive standalone
 # `]]` handling; normalize(); the prefix-word skip, including the `repeat`-count skip; the
@@ -442,8 +447,36 @@
 # expansion mid-line (`git commit -m "$X git push origin main"`, `echo $X git push ...`) keeps no
 # opinion. Residuals, each measured rc 0: a `${...}`, `$(...)` or backtick prefix (the text after its
 # close is judged precisely, so an injected prefix is not failed closed), a runtime-built git
-# subcommand (`git $S origin main`), a runtime-built refspec destination (`git push origin
-# HEAD:$B`), and `eval "$c"`.
+# subcommand (`git $S origin main`), and `eval "$c"`. (A runtime-built refspec destination, `git push
+# origin HEAD:$B`, was a residual until #517: it now denies, see the next paragraph.)
+#
+# Fail-closed: a runtime expansion in the push destination (#517). A destination the shell builds at
+# run time (`B=main; git push origin HEAD:$B`, `"HEAD:${B}"`, `$B`, `+HEAD:$B`, `refs/heads/$B`) cannot
+# be judged against the default branch from its text. The tokenizer's dest_word() reads the
+# DESTINATION of every push-rest word (the text after its first colon, else the text after an optional
+# leading plus, else the whole word): a destination with no dollar sign is unchanged; a destination
+# that is EXACTLY one plain ANSI-C or locale segment (`$'main'`, `HEAD:$"main"`, `+$'main'`, the plain
+# body rule of the #508 paragraph above) is read as the name it spells, so it denies with the ordinary
+# default-branch line; any other destination holding a dollar sign becomes the single character dollar,
+# and evaluate_segment() then denies it with the fixed reason `runtime expansion in the push
+# destination` (kind rxdest) — never echoing the word. That covers every refspec position at two or more
+# non-option arguments and the lone argument at one (`git push $B`). A word that is not an option and is
+# longer than the awk variable tok_max is rewritten the same way, since no real remote, branch or refspec
+# is that long and the bash side splits a refspec at its first colon with pattern removals whose cost
+# grows with the square of the word on bash 3.2; a -C path longer than that denies as outside the
+# worktree shape for the same reason. A source-only expansion stays judged by its literal destination
+# (`git push origin $B:feature/x`, `git push origin $'feature-x'`, no opinion), as does an expansion in
+# the REMOTE position at two or more arguments and the value of an option such as `-o $X`. Deliberate
+# over-blocking, each measured rc 2: `git push origin "$(git branch --show-current)"` (push `HEAD`
+# instead), `git push "$REMOTE"` (the lone argument is judged as a possible destination),
+# `refs/tags/$T`, `$'feature/x'` (a slash is outside the plain body rule), and any non-plain
+# dollar-quote word anywhere in a segment the tokenizer lost (`git "--no-pager" log --format=$'%h'`; in
+# a lost segment the slot boundaries are unknowable, so emit_alias_lost() reads a plain word as the
+# alias name it spells and fails any other closed with the git-options reason). Residuals, each measured
+# rc 0: an expansion in the remote position at two or more arguments (including an unquoted `$R` that
+# word-splits into refspecs), `eval "$c"`, and a runtime-built subcommand (`git $S`). The segmenter
+# still cuts a record at `${`, `$(` and a backtick (owned by a separate issue); the dollar-sign
+# remnant it leaves in a destination (`git push origin ${B}:main`) now denies through this rule.
 #
 # Fail-closed: git aliases and config relocation (#448, absorbing #450). This hook once recognised only
 # the literal subcommand `push`, so a git alias that expands to push hid it (a config-file alias such
@@ -487,8 +520,9 @@
 # no alias or include text and no dollar sign, stays no opinion by design. (d) The #449 interplay: a segment the
 # tokenizer lost (a quoted or escaped option, a quote-split assignment, an unsupported `env` option)
 # that lost_push() says is no push no longer drops silently. emit_alias_lost() hands the driver EVERY
-# remaining token as a candidate alias name (for a loss in the command prefix only when a later token
-# names git), and denies outright when a relocation or command-line-config name was assigned (quoted
+# remaining token as a candidate alias name (a token that is exactly one plain ANSI-C or locale segment
+# as the name it spells, #517; for a loss in the command prefix only when a later token names git), and
+# fails the whole segment closed when any other token holds a dollar sign and a quote, and denies outright when a relocation or command-line-config name was assigned (quoted
 # spellings included: `env "HOME=<d>" git p`, `env -S "HOME=<d> git p"`) or any token mentions alias or
 # include, so `HOME="/tmp/a b" git p origin main`, `X="a b" git zqp origin main` and `git "--no-pager"
 # zqp origin main` all deny while `X="a b" git status` stays no opinion. Union semantics, as
@@ -515,8 +549,9 @@
 # an alias defined only in another checkout's config, reached by `cd`, an unresolvable `-C`,
 # `GIT_DIR=` or `--git-dir`; a `git-<name>` external on `PATH` (or via `--exec-path`/`GIT_EXEC_PATH`);
 # `env -u XDG_CONFIG_HOME`; the `HOME` that `sudo` sets; a subcommand
-# built at runtime (`S=p; git $S`; an ANSI-C or locale spelling in the option slot is read only as a
-# whole plain word and otherwise fails closed, see the #508 paragraph; a locale word `$"zqp"` is read
+# built at runtime (`S=p; git $S`; an ANSI-C or locale spelling in the option slot, or anywhere in a
+# lost segment, is read only as a whole plain word and otherwise fails closed, see the #508 and #517
+# paragraphs; a locale word `$"zqp"` is read
 # untranslated, so a bash locale catalog that translates it is not followed); an alias run through
 # `xargs` or a script file; and `help.autocorrect`, where the hook says rc 0 for a mistyped
 # subcommand (UNVERIFIED whether git then runs push); a relocation or config name built at run time
@@ -964,7 +999,7 @@
 # (`deny_too_large deadline`) the first time `$SECONDS` reaches `push_deadline` (`push_t0 +
 # push_budget`) — never by resetting `$SECONDS` itself. The sampling rule this binds on every future
 # addition to this file — #439 has already landed entirely inside the awk tokenizer (its own
-# "-cmdline-config-" sentinel, covered by `T_prefix` below, the linear pre-tokenizer cost this
+# "-cmdline-config-" sentinel, covered by `T_prefix` below, the pre-tokenizer cost this
 # deadline cannot sample around at all), #449 likewise (its per-token shape checks and at most three
 # lost_push() scans per segment, one memoised scan for each of three trigger families, all inside that tokenizer and so inside
 # `T_prefix`), #508 likewise (rx_word() is linear in one token; at most two more lost_push() scans per
@@ -978,7 +1013,8 @@
 # holds a "PUSH" line, an "ALIAS" candidate line (#448) or a `-too-many-dbrackets-`/`-cut-push-`/
 # `-cmdline-config-` sentinel — a scan that is empty, or holds nothing but #433's own `-xseg-` or
 # #448's `-xcfg-` marker line, exits with no opinion — so a command with no push segment and no git
-# alias candidate is never denied merely for being large: this is the identical verdict the driver
+# alias candidate is never denied merely for being large once it is under the command-size cap below:
+# this is the identical verdict the driver
 # loop below would reach anyway (nothing it would deny on), just reached without spending any of the
 # budget getting there. Since #448 a command with a non-push git segment is no longer in that class:
 # it is analysed (config read, alias lookup) and can be denied as too large, still with the "denies
@@ -995,13 +1031,25 @@
 # less than the production budget; any other value (empty, non-numeric, three-plus digits, or a
 # value that is not strictly less) is ignored outright, so this knob can make a fixture deny sooner
 # against a small, fast payload, but can never raise the budget or reopen a fail-open path in
-# production. Worst-case wall clock for the whole hook, stated here for review: at most
-# `max(push_budget, T_prefix(L)) + U_max`, where `T_prefix` is the LINEAR (in the command's own
-# length L) pre-tokenizer prefix this deadline cannot sample around at all — `cat`, the two
-# fast-path glob check, four `jq` invocations, the CR strip, and the awk tokenizer itself, whose own
-# additive `]]` pass costs at most `DBRACKET_MAX` times one record's length — counted by the wall
-# clock even though unsampled, so the very next `check_deadline()` call denies at once if that prefix
-# alone already spent the whole budget; and `U_max` is the largest single step this deadline cannot
+# production. Command-size cap (#517): a Bash command longer than `PUSH_CMD_MAX_BYTES` BYTES (counted
+# in the C locale by pg_bytes(), so a multibyte payload is not undercounted), once it is past the
+# fast path and the plan-mode exit, denies with the "too large to analyse" line before the tokenizer
+# or any other use of the command text, because a timed-out hook gives no deny at all: the cap is what
+# keeps the unsampled prefix below finishing inside Claude Code's own hook timeout. It applies to every
+# such command, whether or not it holds a push, the same shape as hooks/claude-dir-guard.sh's own cap;
+# a command whose raw stdin never names git (and holds no dollar sign together with `push`) still
+# leaves through the fast path, and plan mode still leaves with no opinion. The carriage-return strip
+# runs inside the awk tokenizer (one `gsub` per record, before anything else reads the record) rather
+# than as a whole-text bash expansion, which does not finish within the timeout on a long run of
+# carriage returns. Worst-case wall clock for the whole hook, stated here for review: at most
+# `max(push_budget, T_prefix(L)) + U_max`, where `T_prefix` is the pre-tokenizer prefix this deadline
+# cannot sample around at all: `cat`, the two fast-path globs and the three jq extractions of the raw
+# stdin (linear in the stdin, unbounded by the cap), then, only for a command at or under the cap,
+# the cwd jq and the awk tokenizer (which includes the CR strip), whose own additive `]]` pass costs
+# at most `DBRACKET_MAX` times one record's length — counted by the wall clock even though unsampled,
+# so the very next `check_deadline()` call denies at once if that prefix alone already spent the
+# whole budget. The tokenizer is bounded by the cap, not claimed linear; its output is streamed, and
+# a push word longer than its tok_max is rewritten so no bash-side split ever runs on one; and `U_max` is the largest single step this deadline cannot
 # interrupt mid-step: one alias-lookup awk pass over the resolved alias records (#448, linear in what
 # the sampled config read loop managed to read), one session upward walk (at most 64 levels, each an `[ -f ]`-guarded probe,
 # plus up to 63 `dirname` subshell+exec forks — one per level that finds no `.git`, via
@@ -1014,8 +1062,8 @@
 # single config line (linear in that line's own length), or (#494, Codex push only) the one
 # `tail -c` + jq + awk pass over the rollout tail, bounded by `PUSH_TRANSCRIPT_TAIL_BYTES`.
 # Residuals this deadline does NOT close: the
-# `T_prefix` work above is linear and unsampled, though still bounded by the wall clock rather than
-# by the deadline's own sampling; the single config-line `read` inside `U_max` is spent before
+# `T_prefix` work above is unsampled, though still bounded by the wall clock (and, for a command, by
+# the cap) rather than by the deadline's own sampling; the single config-line `read` inside `U_max` is spent before
 # `check_deadline` can run again; and the Codex CLI's own hook timeout, if any, is UNVERIFIED here —
 # this deadline is sized against Claude Code's own documented 10s PreToolUse timeout only
 # (`hooks/hooks.json`'s `"timeout": 10`), not against an unknown Codex figure. Two new over-blocking
@@ -1123,6 +1171,10 @@ CFG_INCLUDE_MAX_CHARS=65536
 # check_deadline() below, before it denies as too large to analyse rather than risk running past
 # Claude Code's 10s PreToolUse hook timeout — see "Analysis deadline (#435)" in this file's header.
 PUSH_ANALYSIS_BUDGET_SECS=5
+# #517: the longest Bash command, in BYTES, this hook analyses at all. A longer one that got past the
+# fast path below denies as too large to analyse before the tokenizer ever runs, because a timed-out
+# hook gives no deny. Sized so the worst-case shape at the cap finishes well inside the hook timeout.
+PUSH_CMD_MAX_BYTES="524288"
 # #435: a depth-0 (top-level) config line longer than this many characters denies outright, checked
 # BEFORE comment-strip or trim ever run on it, instead of reaching cfg_trim() — see that function's
 # own header comment for why a long line or whitespace run there is not uniformly fast.
@@ -1197,6 +1249,10 @@ PUSH_WORKDIR_KEYS="workdir working_directory"
 # validate_segment() use of PATH_ERE is the precedent this copies).
 is_c_target_path() { grep -qE "$PATH_ERE" <<<"$1"; }
 
+# #517: pg_bytes STRING sets pg_n to STRING's length in BYTES (a C-locale length, whatever locale
+# the hook runs under); mirrors hooks/claude-dir-guard.sh's cdg_bytes.
+pg_bytes() { local LC_ALL=C; pg_n="${#1}"; }
+
 # #435: push_budget defaults to PUSH_ANALYSIS_BUDGET_SECS; TBF_PUSH_GUARD_BUDGET_SECS is a
 # test-only, environment-only knob (never read from the untrusted command string) that can only
 # LOWER it — adopted only when it is exactly one or two ASCII digits and strictly less than
@@ -1209,8 +1265,9 @@ push_deadline=$((push_t0 + push_budget))
 
 # deny_too_large KIND (#435) — KIND is "configline" (the depth-0 line-length cap in
 # cfg_parse_file() below), "confighdr" (#510: a section header line cfg_parse_file() cannot split
-# the way git does) or anything else (the deadline case, reached only via check_deadline()
-# below); prints exactly one fixed stderr line, echoing no input from the command or config it
+# the way git does) or anything else (the deadline case, via check_deadline() below, and, since #517,
+# KIND "command": a Bash command over PUSH_CMD_MAX_BYTES, denied before the tokenizer runs);
+# prints exactly one fixed stderr line, echoing no input from the command or config it
 # denies, then exits 2.
 deny_too_large() {
   case "$1" in
@@ -1245,7 +1302,7 @@ input="$(cat)"
 # there is no `push` fast path: a git alias that expands to push carries no `push` literal in the
 # command text at all (`git zqp origin main`), so a call may only skip the tokenizer when it never
 # names git. Since #508 it must also never hold a dollar sign together with `push` (a runtime-built
-# command word: `$G push origin main` names no git at all). The #270 CR strip below (after the jq extraction) fixes an unstripped `\r` for every
+# command word: `$G push origin main` names no git at all). The #270 CR strip (since #517, inside the awk tokenizer below) fixes an unstripped `\r` for every
 # command that reaches the tokenizer, but a CR *inside* the `git` literal this fast path scans (a raw
 # stdin substring like `g<CR>it`, where a conforming JSON writer has already escaped the `\r`) still
 # exits here, before the strip ever runs — see this file's header "Documented under-blocking
@@ -1270,15 +1327,17 @@ pmode="$(printf '%s' "$input" | jq -r '.permission_mode? // empty' 2>/dev/null)"
 
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command? // empty' 2>/dev/null)"
 
+# #517: the command-size cap, before anything else touches $cmd (see PUSH_CMD_MAX_BYTES above).
+pg_bytes "$cmd"
+[ "$pg_n" -le "$PUSH_CMD_MAX_BYTES" ] || deny_too_large command
+
 # A CRLF-carrying transport (Git Bash, a CRLF-translating layer) can deliver a command whose
 # tokens carry a trailing \r; every comparison below is an exact match, so an unstripped \r
-# made `git push origin main\r` no-opinion (#270). Stripped here, once, before the tokenizer —
-# not inside normalize(), which the refspec destination tokens never pass through (they take
-# strip_quotes() at line ~241 and the Bash membership tests, is_deny_member() at line ~316,
-# below). Pure parameter expansion: no new process, so this hook still executes nothing (see
-# this file's header).
-cr=$'\r'
-cmd="${cmd//$cr/}"
+# made `git push origin main\r` no-opinion (#270). Since #517 the strip runs inside the awk
+# tokenizer below (one gsub per record, before anything else reads the record), not as a
+# whole-text bash expansion here: that expansion does not finish within the hook timeout on a
+# very long run of carriage returns. It is not done in normalize(), which the refspec
+# destination tokens never pass through.
 
 [ -n "$cmd" ] || exit 0
 
@@ -1311,6 +1370,9 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
 scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" -v dirwords="$PUSH_DIR_CHANGE_WORDS" -v exportwords="$PUSH_EXPORT_WORDS" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" -v envnov="$PUSH_ENV_NOVALUE_OPTS" -v envunset="$PUSH_ENV_UNSET_OPTS" -v relocenv="$GIT_CFG_RELOC_ENV_VARS" '
 BEGIN {
   sq = sprintf("%c", 39)
+  cr = sprintf("%c", 13)
+  # #517: the longest push-rest word (other than an option) whose destination is read at all; see dest_word()
+  tok_max = 4096
   n = split(prefix_words, pwarr, " ")
   for (i = 1; i <= n; i++) prefix_set[pwarr[i]] = 1
   ng = split(gopts, goarr, " ")
@@ -1381,6 +1443,32 @@ function whole_lit(tok,    q, b) {
   if (b ~ /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/) return b
   return ""
 }
+# #517: the form a push-rest token takes on the PUSH line. A token whose destination (the text after
+# the first colon, else the text after an optional leading plus, else the whole token) holds no
+# dollar sign is just strip_quotes(tok). A destination that is exactly one plain ANSI-C or locale
+# segment is read as the name it spells. Any other destination that holds a dollar sign becomes the
+# single character dollar, so the bash side can deny it without echoing it. A word that is not an
+# option and is longer than tok_max is rewritten the same way: no real remote, branch or refspec is
+# that long, and the bash side splits a refspec at its first colon with pattern removals whose cost
+# grows with the square of the word on the bash 3.2 that macOS ships. O(length of tok).
+function dest_word(tok,    p, hd, d, av) {
+  if (length(tok) > tok_max && substr(tok, 1, 1) != "-") return "$"
+  p = index(tok, ":")
+  if (p > 0) {
+    hd = substr(tok, 1, p)
+    d = substr(tok, p + 1)
+  } else if (substr(tok, 1, 1) == "+") {
+    hd = "+"
+    d = substr(tok, 2)
+  } else {
+    hd = ""
+    d = tok
+  }
+  if (index(d, "$") == 0) return strip_quotes(tok)
+  av = whole_lit(d)
+  if (av != "") return strip_quotes(hd) av
+  return strip_quotes(hd) "$"
+}
 function is_cmdcfg_name(n,    c) {
   if (n in ccenv_set) return 1
   for (c = 1; c <= nccp; c++) if (index(n, ccparr[c]) == 1) return 1
@@ -1442,8 +1530,10 @@ function emit_lost(reason, unres, cc, cut) {
 # its real subcommand could be a git alias that expands to push. emit_alias_lost() runs at each #449
 # trigger when lost_push() said no, once per segment (al_done keeps a many-token segment linear): it
 # denies outright when a relocation name was assigned (reloc) or any token of the segment mentions an
-# alias or include (a quoted -c option hides the config it carries), and otherwise hands the driver EVERY remaining token as an alias candidate name,
-# since the fragments a split quoted value leaves behind make the real subcommand unlocatable. With
+# alias or include (a quoted -c option hides the config it carries), and otherwise hands the driver EVERY remaining token as an alias candidate name
+# (#517: a token that is exactly one plain ANSI-C or locale segment is handed over as the name it spells,
+# and any other token holding a dollar sign and a quote makes the whole segment fail closed with the
+# git-options reason), since the fragments a split quoted value leaves behind make the real subcommand unlocatable. With
 # needgit set (a prefix-position trigger, where the command word is unknown) it stays silent unless
 # some later token names git. The output is fixed vocabulary or lowercased input tokens that the driver
 # only ever compares, never echoes. Quote, backslash and apostrophe handling: strip_quotes() only.
@@ -1454,9 +1544,10 @@ function has_cfg_assign(u,    c) {
   for (c = 1; c <= nccp; c++) if (index(u, ccparr[c]) > 0) return 1
   return 0
 }
-function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, u, names, sep, saw_git, saw_alias, seen, nn, nc, chunk) {
+function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, u, av, al_rx, names, sep, saw_git, saw_alias, seen, nn, nc, chunk) {
   saw_git = 0
   saw_alias = 0
+  al_rx = 0
   names = ""
   sep = ""
   nn = 0
@@ -1473,6 +1564,14 @@ function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, u, na
     # env -S separator), so it counts toward the names-git gate too
     if (i == from - 1 && index(t, "git") > 0) saw_git = 1
     if (i < from) continue
+    # #517: a word that is exactly one plain ANSI-C or locale segment is the name it spells; any
+    # other word holding one cannot be read, so the whole segment fails closed below
+    u = toks[i]
+    if (index(u, "$" sq) > 0 || index(u, "$\"") > 0) {
+      av = whole_lit(u)
+      if (av == "") al_rx = 1
+      else t = tolower(av)
+    }
     if (index(t, "git") > 0) saw_git = 1
     # unique names only, handed over in chunks of bounded size: the string append stays cheap however
     # many tokens a segment holds
@@ -1484,10 +1583,11 @@ function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, u, na
   }
   if (needgit && !saw_git) return
   if (reloc || saw_alias) { print "-alias-cmdline-config-"; return }
+  if (al_rx) { print "PUSH\t\truntime expansion in the git options\t"; return }
   for (i = 1; i <= nc; i++) print "ALIAS\t" cpath "\t" chunk[i]
   if (names != "") print "ALIAS\t" cpath "\t" names
 }
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, cfgdollar, cv, rx_at, rxg_at, rxn_at, rxbs, av, jend, ro, k, xname, cmdcfg, co, cp, cfgname) {
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, cfgdollar, cv, rx_at, rxg_at, rxn_at, rxbs, av, jend, ro, k, xname, cmdcfg, co, cp, cfgname, cpath_big) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
@@ -1624,6 +1724,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   j = idx
   subcmd = ""
   cpath = ""
+  cpath_big = 0
   ccount = 0
   while (j <= ntok) {
     tok = toks[j]
@@ -1680,7 +1781,13 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
       if (!al_done) { al_done = 1; emit_alias_lost(toks, j + 1, ntok, 0, reloc, ccount == 1 ? cpath : "") }
     }
     if (tok in gopt_set) {
-      if (tok == "-C") { ccount++; cpath = strip_quotes(toks[j + 1]) }
+      if (tok == "-C") {
+        ccount++
+        cpath = strip_quotes(toks[j + 1])
+        # #517: a path longer than tok_max names no real directory; the bash side splits this field off
+        # with pattern removals whose cost grows with the square of its length on bash 3.2
+        if (length(cpath) > tok_max) { cpath = ""; cpath_big = 1 }
+      }
       j += 2
       continue
     }
@@ -1734,19 +1841,23 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   # moves a config file this hook reads, so it is denied the same way and with the same message.
   if (reloc) { print "-cmdline-config-"; return }
   if (unres == "" && ccount >= 2) unres = "more than one -C"
-  rest = ""
+  if (unres == "" && ccount == 1 && cpath_big) unres = "-C path outside the <name>-wt-<n> worktree shape"
+  # #517: streamed, never built by repeated appends to one string, so the cost stays linear in the
+  # segment however many tokens it holds
   sep = ""
+  printf "PUSH\t%s\t%s\t", (ccount == 1 ? cpath : ""), unres
   while (j <= ntok) {
     tok = toks[j]
     if (tok != "") {
-      rest = rest sep strip_quotes(tok)
+      printf "%s%s", sep, dest_word(tok)
       sep = " "
     }
     j++
   }
-  print "PUSH\t" (ccount == 1 ? cpath : "") "\t" unres "\t" rest
+  printf "\n"
 }
 {
+  gsub(cr, "")
   line = $0
   gsub(/[;&|(){}`]/, "\n", line)
   gsub(/[<>]/, " ", line)
@@ -1818,7 +1929,8 @@ END { if (xcfg) print "-xcfg-" }
 # command-line-config sentinel (the "-alias-cmdline-config-" sentinel contains the last one) — so the
 # driver loop below would find nothing to deny and exit 0 anyway; this just gets there before ever
 # sampling the deadline, so a command with no push segment and no git alias candidate at all is never
-# denied merely for being large. #433's own "-xseg-" marker line and #448's "-xcfg-" marker alone do
+# denied by the deadline merely for being large (the command-size cap above is the one size rule that
+# applies to it, and it runs before the tokenizer). #433's own "-xseg-" marker line and #448's "-xcfg-" marker alone do
 # not count: the xseg fallback below denies only when a push segment was also seen, and an xcfg only
 # denies an alias candidate, so a scan holding nothing but those markers exits here too. (None of the
 # patterns can occur in a marker line: its reason is a fixed phrase or a GIT_REPO_ENV_VARS name.)
@@ -1883,11 +1995,9 @@ cfg_tab="$(printf '\t')"
 # textual substring of another. File scope, like cfg_tab, since cfg_parse_file() is called both
 # from resolve_repo() and, recursively, from itself.
 nl=$'\n'
-# #304/#305: a SEPARATE carriage-return literal from $cr (declared above for the #270
-# command-string strip): the push mutation table's M23 mutant deletes both of $cr's declaration
-# and its use, and a config parser referencing $cr here would blow up under `set -u` instead of
-# producing that mutant's documented, measured result. File scope (not per candidate file), since
-# it is a fixed literal independent of which candidate is being parsed.
+# #304/#305: the carriage-return literal the config parser strips from a config line. File scope
+# (not per candidate file), since it is a fixed literal independent of which candidate is being
+# parsed. (The command-string strip is not bash since #517: it lives in the awk tokenizer.)
 cfg_cr=$'\r'
 # #510: the three bytes of a UTF-8 byte-order mark, written as octal escapes so the match is byte-literal
 # whatever the locale. git skips one at the start of a config file; cfg_parse_file() strips it from the
@@ -2585,7 +2695,7 @@ refspec_dest() {
     +*) tok="${tok#+}" ;;
   esac
   case "$tok" in
-    *:*) dest="${tok#*:}" ;;
+    *:*) dest="${tok%%:*}"; dest="${tok:$((${#dest} + 1))}" ;;
     *) dest="$tok" ;;
   esac
   case "$dest" in
@@ -2785,6 +2895,7 @@ evaluate_segment() {
       scope_remote="${nonopt[0]}"
       local d1
       d1="$(refspec_dest "${nonopt[0]}")"
+      if [ "$d1" = '$' ]; then __deny_dest='$'; __deny_kind="rxdest"; return; fi
       if [ -n "$d1" ] && is_deny_member "$d1"; then
         __deny_dest="$d1"; __deny_kind="dest"
         return
@@ -2807,6 +2918,7 @@ evaluate_segment() {
     check_deadline
     local d
     d="$(refspec_dest "${nonopt[$idx]}")"
+    if [ "$d" = '$' ]; then __deny_dest='$'; __deny_kind="rxdest"; return; fi
     if [ -n "$d" ] && is_deny_member "$d"; then
       __deny_dest="$d"; __deny_kind="dest"
       return
@@ -3072,6 +3184,11 @@ if [ -n "$deny_dest" ]; then
     aliascfg)
       # #448: fixed message, no %s for input.
       printf '%s denies this git command (blocked: unreadable git config may define an alias): it runs under git config this hook does not read (git -c, --config-env, a GIT_CONFIG_* assignment, or an inline or exported HOME=/XDG_CONFIG_HOME=), so it cannot rule out that the subcommand is an alias for a push — the harness never runs git this way; drop the extra config, or a human can run it from a terminal; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" >&2
+      ;;
+    rxdest)
+      # #517: fixed message, no %s for input -- the destination is never echoed.
+      printf '%s denies this push: its destination is built at run time (blocked: runtime expansion in the push destination), so it cannot rule out the default branch — spell the destination branch literally, or push HEAD; see README.md'"'"'s Safety model\n' \
         "$PUSH_DENY_STEM" >&2
       ;;
     cmdcfg)
