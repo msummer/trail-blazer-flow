@@ -25,6 +25,13 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 - #525: CI's full mutant-driver runs get more time: the `selfcheck` job's post-merge/nightly/dispatch
   ceiling rises from 35 to 50 minutes and `selfcheck-macos-driver`'s from 50 to 75, so the nightly
   full run finishes again. No consumer step.
+- #517 (absorbs #520, #522): push-guard now denies a push whose destination is built at run time
+  (`HEAD:$B`, `"HEAD:${B}"`, `$B`) with a fixed `runtime expansion in the push destination` line, reads a
+  destination that is exactly one plain `$'main'`/`$"main"` segment as the name it spells, finds a push
+  alias written `$'zqp'` behind a quoted git option, and denies a Bash command over 512 KiB as too large
+  to analyse before the tokenizer runs. The carriage-return strip moved into the awk scan. Deliberate
+  over-blocks: `git push "$REMOTE"`, `refs/tags/$T`, a push word longer than 4096 characters. No consumer
+  step.
 - #486: new informational `building` label, set by the implementer just before an issue's first
   implementer dispatch and cleared when its PR opens or at any other exit (stale ones swept at
   pre-flight); the harness never reads it (gate assertion 4.54). Worktree-parallel mode's lesson

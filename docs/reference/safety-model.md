@@ -337,8 +337,19 @@ one plain ANSI-C or locale segment (`$'zqp'`) is read as that name; any other gi
 dollar sign and a quote (`p$'ush'`, `git st$'atus'`, `--git-dir=$'/a b'`) fails closed, a deliberate
 over-block. A locale word is read untranslated. The header's
 "Fail-closed: a runtime expansion in the command prefix or the git options (#508)" paragraph lists
-the over-blocks and residuals (a `${...}`/`$(...)` prefix, a runtime-built subcommand or refspec
-destination, `eval "$c"`). Since #433, a push segment in
+the over-blocks and residuals (a `${...}`/`$(...)` prefix, a runtime-built subcommand, `eval "$c"`).
+**Since #517**, a push destination built at run time (`B=main; git push origin HEAD:$B`, `"HEAD:${B}"`,
+`$B`, `+HEAD:$B`, `refs/heads/$B`) denies with the fixed line `(blocked: runtime expansion in the push
+destination)`, which never echoes the word. A destination that is exactly one plain ANSI-C or locale
+segment (`$'main'`, `HEAD:$"main"`) is read as the name it spells instead. A source-only expansion
+(`$B:feature/x`) and an expansion in the remote position keep being judged by their literal text. Two
+deliberate over-blocks: the lone argument of `git push "$REMOTE"` is judged as a possible destination,
+and `refs/tags/$T` denies (push `HEAD`, or spell the branch). A push word longer than 4096 characters
+is treated the same way, and a `-C` path that long denies as outside the worktree shape. In a segment
+the tokenizer lost (a quoted git option), a plain `$'zqp'` word is read as the alias name it spells, and
+any other word holding a dollar sign and a quote fails closed under the git-options reason. The
+header's "Fail-closed: a runtime expansion in the push destination (#517)" paragraph lists the
+residuals. Since #433, a push segment in
 the same Bash command as any OTHER segment that changes directory (`cd`/`pushd`/`popd`/`chdir`) or
 sets a `GIT_DIR`-family variable or one of the command-line-config names above
 (`export`/`declare`/`typeset`/`local`/`readonly`, or a bare assignment) also denies as unresolved,
@@ -436,8 +447,14 @@ in the whole invocation — so a many-line depth-0 file, or enough multiplied `-
 denies with a fixed reason well before it can cross Claude Code's own 10-second hook timeout,
 instead of silently degrading into it. See `hooks/push-guard.sh`'s own "Analysis deadline (#435)"
 header section for the exact sampling rule, the worst-case wall-clock bound, and the residual this
-deadline still cannot reach (the linear, unsampled pre-tokenizer prefix; one single config line's
-own `read`; and the Codex CLI's own hook timeout, which is UNVERIFIED here). A
+deadline still cannot reach (the unsampled pre-tokenizer prefix, bounded by the command-size cap
+described next; one single config line's own `read`; and the Codex CLI's own hook timeout, which is
+UNVERIFIED here). Since #517 a Bash command longer than `PUSH_CMD_MAX_BYTES` bytes (524288, counted in
+the C locale so multibyte text is not undercounted) that gets past the git fast path and plan mode
+denies with the same "too large to analyse" line before the tokenizer runs, because a hook that times
+out gives no deny at all; the remedy is the same, split the call or write large content with the Write
+tool. The carriage-return strip runs inside the awk scan, where a long run of carriage returns stays
+cheap. A
 deny whose route came from a system file names the source `your system git config`; one from an
 included file appends ` (via include)` to whichever source label already applies, exactly once no
 matter how deep the nesting goes. The complete residual — a system config at a path not on this
