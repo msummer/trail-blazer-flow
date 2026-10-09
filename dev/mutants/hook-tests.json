@@ -8615,6 +8615,7 @@
       "expect_fail": [
         "cdg-optval-deny-overblock",
         "cdg-optval-deny-prefix-words",
+        "cdg-optval-deny-quote-split",
         "cdg-optval-dl-cap",
         "cdg-optval-heredoc"
       ]
@@ -8662,6 +8663,51 @@
       ],
       "expect_fail": [
         "cdg-optval-noop-flood-cap"
+      ]
+    },
+    {
+      "name": "518-cdg-optval-quote",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-optval-",
+      "edits": [
+        {
+          "from": "      *\"$sq\"*|*\"$dq\"*) seg_mflag=1 ;;\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "cdg-optval-deny-quote-split"
+      ]
+    },
+    {
+      "name": "518-cdg-optval-parity",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-optval-",
+      "edits": [
+        {
+          "from": "                    quote_parity_check \"$1\" $((i + 1))\n",
+          "to": "                    :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-optval-deny-quote-parity"
+      ]
+    },
+    {
+      "name": "518-pg-optval-alias-quoted",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-optval-",
+      "edits": [
+        {
+          "from": "if (!al_done && !quote_bearing(toks[idx + 1])) {",
+          "to": "if (!al_done) {"
+        }
+      ],
+      "expect_fail": [
+        "push-optval-deny-alias-quoted"
       ]
     }
   ]

@@ -493,7 +493,8 @@
 # command prefix`, never echoing input. The precedence is the #449 triggers': an earlier #292 reason,
 # command-line config (`-cmdline-config-`) and a cut push (`-cut-push-`) each keep their own deny. When
 # no push can follow, emit_alias_lost() runs at most once per segment (al_done), starting one token later
-# than the #449 triggers so that only tokens after the value word count toward its names-git gate:
+# than the #449 triggers so that only tokens after the value word count toward its names-git gate (a
+# quote-bearing value word skips this call, so its own #449 trigger runs as before and keeps counting it):
 # `nice -n 5 git zqp origin main` under a push alias denies through the #448 alias line, while `sudo -E
 # git commit -m "fix include path" && git push origin feature/x` keeps no opinion. An expansion word in
 # command position opens no value context here: #508's post-walk check already covers it. A later prefix
@@ -1733,7 +1734,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     if (in_vp && substr(tok, 1, 1) == "-" && idx < ntok && toks[idx + 1] != "" && substr(toks[idx + 1], 1, 1) != "-") {
       if (m0 < 0) m0 = lost_push(toks, idx + 2, ntok, 0)
       if (m0) { emit_lost("option value in the command prefix", unres, cmdcfg, cut_flag); return }
-      if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 3, ntok, 1, reloc, "") }
+      if (!al_done && !quote_bearing(toks[idx + 1])) { al_done = 1; emit_alias_lost(toks, idx + 3, ntok, 1, reloc, "") }
     }
     # #508: a runtime expansion in command position may expand to nothing (or to several words): skip
     # it as a possibly-empty prefix word so the real command word behind it still resolves

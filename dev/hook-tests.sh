@@ -10397,6 +10397,20 @@ case_push_optval_deny_alias() {
   al_expect_alias ".git/config"
   al_expect_no_echo "zqp"
 }
+# mutant:518-pg-optval-alias-quoted — drops the quote-bearing guard on the alias call, so the trigger sets
+#   the once-per-segment alias flag first and the value word own trigger, which counts it toward the
+#   names-git gate, never runs.
+case_push_optval_deny_alias_quoted() {
+  local dir="$tmpbase/repo-optval-alias-quoted" c w0
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
+  for c in 'nice -n "X=git" zqp origin main' 'sudo -u "-git" zqp origin main'; do
+    w0="$__why"; __why=""
+    al_run "$c" "$dir"
+    al_expect_alias ".git/config"
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
 case_push_optval_noop_alias_none() {
   local dir="$tmpbase/repo-optval-noalias"
   mk_fixture_repo "$dir" main feature/x
@@ -10481,6 +10495,30 @@ case_cdg_optval_noop_unmentioned() {
   expect_cdg_no_opinion
   cdg_optval_run implementer 'nice -n 5 ls src/ && sudo -u root ls Edit'
   expect_cdg_no_opinion
+}
+# mutant:518-cdg-optval-quote — drops the quote-bearing arm of the segment flag, so a shim spelled with a
+#   quote inside its name (apply_"patch") behind a prefix option's value never reaches the scan.
+case_cdg_optval_deny_quote_split() {
+  # The other segment spells the shim plainly only so the raw-stdin fast path reads the payload.
+  cdg_optval_run implementer 'nice -n 5 apply_"patch" < x.patch; echo applypatch.md'
+  expect_cdg_deny_unparseable
+}
+# mutant:518-cdg-optval-parity — drops the unbalanced-quote check on a scan hit, so a quoted value with a
+#   space before the shim (nice -n "a b" apply_patch) resolves the shim and its benign heredoc passes.
+case_cdg_optval_deny_quote_parity() {
+  local c w0 body="<<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}*** End Patch${LF}EOF"
+  for c in 'nice -n "a b" apply_patch' 'nice -n a\ b apply_patch' 'nice -n "a apply_patch' \
+    'exec -a "a b" apply_patch' 'env -u "a b" apply_patch' 'sudo -u "a b" apply_patch' \
+    'stdbuf -o "a b" apply_patch' 'time -o "a b" apply_patch' 'xargs -a "a b" apply_patch'; do
+    w0="$__why"; __why=""
+    cdg_optval_run implementer "$c $body"
+    expect_cdg_deny_unparseable
+    case "$cdg_err" in
+      *"command word cannot be resolved: an unbalanced quote"*) ;;
+      *) __ok=0; __why="${__why}stderr missing 'command word cannot be resolved: an unbalanced quote': '$cdg_err'\n" ;;
+    esac
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
 }
 case_cdg_optval_dl_cap() {
   # nice -n, 100 plain words, then a word that is not the shim: only the scan's own sample can reach
@@ -12674,6 +12712,7 @@ cases=(
   "push-optval-noop|case_push_optval_noop|no opinion: the scan starts after the value word and resets at a non-value prefix word -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-start, 518-pg-optval-nonopt, 518-pg-optval-reset, 518-pg-optval-alias-from)"
   "push-optval-deny-runtime-expansion|case_push_optval_deny_runtime_expansion|deny: sudo -\$X git push keeps the runtime-expansion reason -- control, not part of the mutation-proof registry"
   "push-optval-deny-alias|case_push_optval_deny_alias|deny: nice -n 5 git zqp origin main with a push alias, through the alias line -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-alias-off)"
+  "push-optval-deny-alias-quoted|case_push_optval_deny_alias_quoted|deny: a quote-bearing value word before a push alias keeps the alias deny the value word own trigger gave -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-alias-quoted)"
   "push-optval-noop-alias-none|case_push_optval_noop_alias_none|no opinion: nice -n 5 git status with no alias config -- control, not part of the mutation-proof registry"
   "push-optval-deny-alias-word|case_push_optval_deny_alias_word|deny: nice -n 10 git log --grep alias, the documented alias-word over-block -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-alias-off)"
   "push-optvalscan-noop-flood|case_push_optvalscan_noop_flood|FLOOD+TIMING: a segment of value-context triggers then a feature push, no opinion; CPU time within a multiple of a same-size twin with one trigger -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-memo)"
@@ -12683,6 +12722,8 @@ cases=(
   "cdg-optval-w-shim-decoy|case_cdg_optval_w_shim_decoy|deny: env -i apply_patch evil.patch applypatch, the value word naming the shim is never skipped -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-w-shim)"
   "cdg-optval-deny-overblock|case_cdg_optval_deny_overblock|deny: nice -n 5 rg apply_patch hooks/, the documented read over-block -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-off)"
   "cdg-optval-noop-unmentioned|case_cdg_optval_noop_unmentioned|no opinion: value-context prefix words before a word that merely contains the shim name, and in a segment that never names it -- control, not part of the mutation-proof registry"
+  "cdg-optval-deny-quote-split|case_cdg_optval_deny_quote_split|deny: nice -n 5 apply_\"patch\" < x.patch, a quote-split shim name behind a value-taking option -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-quote)"
+  "cdg-optval-deny-quote-parity|case_cdg_optval_deny_quote_parity|deny: a quoted or escaped option value with a space before the shim keeps the unbalanced-quote deny, for every value-taking prefix word and env -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-parity)"
   "cdg-optval-dl-cap|case_cdg_optval_dl_cap|deny (#457): nice -n then 100 plain words under cap 50, only the scan's own deadline sample reaches the cap -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-site)"
   "cdg-optval-noop-flood-cap|case_cdg_optval_noop_flood_cap|SAMPLE COUNT: 100 value-context triggers under a cap between one scan and a rescan per trigger, no opinion -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-memo)"
   # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
