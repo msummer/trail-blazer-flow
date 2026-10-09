@@ -578,6 +578,38 @@ p_4_52_noncomment_token() {
 p_4_53_unguarded_tool() { edit "$1/agents/implementer.md" 's/^tools: Read, Write, Edit, Grep, Glob, Bash$/tools: Read, Write, Edit, Grep, Glob, Bash, MultiEdit/'; }
 p_4_53_stale_guard()    { edit "$1/hooks/claude-dir-guard.sh" 's/^GUARDED_TOOLS="Edit Write"$/GUARDED_TOOLS="Edit Write NotebookEdit"/'; }
 p_4_53_extraction()     { edit "$1/hooks/claude-dir-guard.sh" 's/GUARDED_TOOLS/GUARDED_TOLS/g'; }
+
+# p_4_54_* (#486) — nobody reads the informational `building` label. p_4_54_not_created changes
+# characters inside the label name on bin/setup-labels.sh's create_or_update line (not a suffix),
+# so the label is no longer created: 4.54 clause (a) and, because the doctor loop still names it,
+# 4.6. p_4_54_search_reader appends a `label:building` search qualifier to bin/harness-status.sh.
+# p_4_54_filter_reader_skill appends a `--label building` list filter to the unbudgeted
+# worktree-mode.md (so 4.14 stays quiet). p_4_54_quoted_literal appends a quoted "building" to
+# bin/harness-status.sh (a jq/shell test of the name). p_4_54_sweep_reworded respells the
+# sanctioned sweep line's filter as -l (not a clause (b) shape), so only clause (d)'s whole-line
+# count of zero catches the dead exemption. p_4_54_sweep_duplicated appends a second byte-equal
+# copy of the sanctioned line to SKILL.md: clause (b) exempts both, so only (d)'s exactly-once
+# count catches it. p_4_54_reader_in_sweep_file appends a non-sanctioned --label reader to SKILL.md
+# itself (the exemption is the whole line, not the file), and p_4_54_sanctioned_elsewhere appends
+# the sanctioned literal to worktree-mode.md (the exemption is that file only).
+# p_4_54_setter_control appends the --remove-label setter shape, which no clause may flag.
+# mutant:486-sc-454-exempt-anyline — dropping 4.54's whole-line equality exempts every hit in
+# SKILL.md; killed by 4.54-reader-in-sweep-file.
+# mutant:486-sc-454-exempt-anyfile — dropping 4.54's file check exempts the sanctioned line in any
+# scanned file; killed by 4.54-sanctioned-elsewhere.
+# mutant:486-sc-454-count-atleast — relaxing clause (d) to at-least-once lets a second copy of the
+# sanctioned line through; killed by 4.54-sweep-duplicated.
+# mutant:486-sc-454-count-off — deleting clause (d); killed by 4.54-sweep-duplicated and
+# 4.54-sweep-reworded.
+p_4_54_not_created()           { edit "$1/bin/setup-labels.sh" 's/^create_or_update "building"/create_or_update "biulding"/'; }
+p_4_54_search_reader()         { printf 'gh issue list --search "is:open label:building" --json number\n' | append "$1/bin/harness-status.sh"; }
+p_4_54_filter_reader_skill()   { printf 'gh issue list --label building --json number\n' | append "$1/skills/issue-implementer/references/worktree-mode.md"; }
+p_4_54_quoted_literal()        { printf 'x="building"\n' | append "$1/bin/harness-status.sh"; }
+p_4_54_sweep_reworded()        { edit "$1/skills/issue-implementer/SKILL.md" 's/--label building --limit 100/-l building --limit 100/'; }
+p_4_54_sweep_duplicated()      { printf '%s\n' "gh issue list --state open --label building --limit 100 --json number --jq '.[].number'" | append "$1/skills/issue-implementer/SKILL.md"; }
+p_4_54_reader_in_sweep_file()  { printf 'gh issue list --label building --json number\n' | append "$1/skills/issue-implementer/SKILL.md"; }
+p_4_54_sanctioned_elsewhere()  { printf '%s\n' "gh issue list --state open --label building --limit 100 --json number --jq '.[].number'" | append "$1/skills/issue-implementer/references/worktree-mode.md"; }
+p_4_54_setter_control()        { printf 'gh issue edit 1 --remove-label building\n' | append "$1/skills/issue-implementer/references/worktree-mode.md"; }
 p_2_6()               { drop "$1/templates/repo-settings.json" '"Bash\(git -C \* clean\*\)"'; }
 p_3_4()               { edit "$1/agents/planner.md" 's/retries=<k>/retries=<kk>/'; }
 p_4_2_empty_desc() {
@@ -603,6 +635,18 @@ p_4_9_split_job_dropped() {
   awk '
     /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $0; sub(/^  /, "", job); sub(/:.*/, "", job) }
     job == "selfcheck-macos-driver" && /run: bash dev\/mutant-driver\.sh/ { next }
+    { print }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+# p_4_9_ubuntu_split_job_dropped — the ubuntu twin of the case above: drops the driver's run step
+# from inside selfcheck-driver only, so the selfcheck+selfcheck-driver group loses its one
+# dev/mutant-driver.sh coverage (the macOS group still runs it, so the set bijection alone would
+# not catch this).
+p_4_9_ubuntu_split_job_dropped() {
+  local f="$1/.github/workflows/selfcheck.yml"
+  awk '
+    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $0; sub(/^  /, "", job); sub(/:.*/, "", job) }
+    job == "selfcheck-driver" && /run: bash dev\/mutant-driver\.sh/ { next }
     { print }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
@@ -894,6 +938,7 @@ cases=(
   "4.9-orphan-step|4.9|p_4_9_orphan_step|add a CI run step for a nonexistent dev/nonexistent.sh"
   "4.9-uneven-jobs|4.9|p_4_9_one_job_only|delete the workflow's last line (the macOS suites job's dev/mutant-driver-tests.sh step, #359), leaving that script covered on ubuntu only"
   "4.9-split-job-dropped|4.9|p_4_9_split_job_dropped|drop dev/mutant-driver.sh's run step from the selfcheck-macos-driver job only, leaving it uncovered in that job's group"
+  "4.9-ubuntu-split-job-dropped|4.9|p_4_9_ubuntu_split_job_dropped|drop dev/mutant-driver.sh's run step from the selfcheck-driver job only, leaving the selfcheck group without driver coverage"
   "4.9-cross-job-move|4.9|p_4_9_cross_job_move|move the doctor-tests.sh run step from the ubuntu job into selfcheck-macos-driver: total count unchanged, per-group coverage broken"
   "4.9-job-extraction|4.9|p_4_9_job_extraction|re-indent every job key so the gate parses zero jobs under jobs: (runs-on cross-check)"
   "4.9-duplicate-in-group|4.9|p_4_9_duplicate_in_group|run dev/mutant-driver-tests.sh twice in the selfcheck-macos group (a second step inside selfcheck-macos-driver): every group still covers every script at least once"
@@ -1026,6 +1071,15 @@ cases=(
   "4.53-unguarded-tool|4.53|p_4_53_unguarded_tool|append MultiEdit to agents/implementer.md's tools: line without touching GUARDED_TOOLS: a tool on a role's tools: line that is neither guarded nor exempt"
   "4.53-stale-guard|4.53|p_4_53_stale_guard|append NotebookEdit to hooks/claude-dir-guard.sh's own GUARDED_TOOLS value without either role ever gaining that tool: a GUARDED_TOOLS member on neither role's tools: line"
   "4.53-extraction|4.53|p_4_53_extraction|rename GUARDED_TOOLS to GUARDED_TOLS throughout hooks/claude-dir-guard.sh so the gate's anchored extraction comes back empty"
+  "4.54-not-created|4.6 4.54|p_4_54_not_created|alter characters inside the building label name on bin/setup-labels.sh's create_or_update line: the label is no longer created while the doctor loop still names it"
+  "4.54-search-reader|4.54|p_4_54_search_reader|append a gh issue list --search with a label:building qualifier to bin/harness-status.sh: a search-qualifier reader in bin/"
+  "4.54-filter-reader-skill|4.54|p_4_54_filter_reader_skill|append a gh issue list --label building filter to skills/issue-implementer/references/worktree-mode.md: a list-filter reader in a skill reference"
+  "4.54-quoted-literal|4.54|p_4_54_quoted_literal|append x=\"building\" to bin/harness-status.sh: a quoted label-name literal in a script"
+  "4.54-sweep-reworded|4.54|p_4_54_sweep_reworded|respell the step-0 sweep line's filter as -l in skills/issue-implementer/SKILL.md: the sanctioned whole line no longer appears, so the exemption is dead (clause (d) only)"
+  "4.54-sweep-duplicated|4.54|p_4_54_sweep_duplicated|append a second copy of the sanctioned sweep line to skills/issue-implementer/SKILL.md: the exemption covers exactly one line (clause (d) only)"
+  "4.54-reader-in-sweep-file|4.54|p_4_54_reader_in_sweep_file|append a --label building reader to skills/issue-implementer/SKILL.md itself: the exemption is the sanctioned whole line, not the file"
+  "4.54-sanctioned-elsewhere|4.54|p_4_54_sanctioned_elsewhere|append the sanctioned sweep line to skills/issue-implementer/references/worktree-mode.md: the exemption holds only in skills/issue-implementer/SKILL.md"
+  "4.54-setter-control||p_4_54_setter_control|control: append the --remove-label building setter shape to worktree-mode.md; no 4.54 clause may flag a setter"
 )
 
 # ---------------------------------------------------------------------------------------------

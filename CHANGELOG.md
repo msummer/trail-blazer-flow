@@ -18,6 +18,13 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #526: the full mutant-driver run is split into four parallel shards per platform (`--shard <i>/<n>` /
+  `MUTANT_DRIVER_SHARD`, whole `(suite, filter)` groups balanced by record count); the driver leaves
+  the `selfcheck` job for its own `selfcheck-driver` job; macOS shards run at lower concurrency to
+  stop the timing-case flakes (#527). No consumer step.
+- #525: CI's full mutant-driver runs get more time: the `selfcheck` job's post-merge/nightly/dispatch
+  ceiling rises from 35 to 50 minutes and `selfcheck-macos-driver`'s from 50 to 75, so the nightly
+  full run finishes again. No consumer step.
 - #517 (absorbs #520, #522): push-guard now denies a push whose destination is built at run time
   (`HEAD:$B`, `"HEAD:${B}"`, `$B`) with a fixed `runtime expansion in the push destination` line, reads a
   destination that is exactly one plain `$'main'`/`$"main"` segment as the name it spells, finds a push
@@ -25,9 +32,12 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
   to analyse before the tokenizer runs. The carriage-return strip moved into the awk scan. Deliberate
   over-blocks: `git push "$REMOTE"`, `refs/tags/$T`, a push word longer than 4096 characters. No consumer
   step.
-- #525: CI's full mutant-driver runs get more time: the `selfcheck` job's post-merge/nightly/dispatch
-  ceiling rises from 35 to 50 minutes and `selfcheck-macos-driver`'s from 50 to 75, so the nightly
-  full run finishes again. No consumer step.
+- #486: new informational `building` label, set by the implementer just before an issue's first
+  implementer dispatch and cleared when its PR opens or at any other exit (stale ones swept at
+  pre-flight); the harness never reads it (gate assertion 4.54). Worktree-parallel mode's lesson
+  distill now appends to the main checkout's `.claude/LESSONS.md`, so worktree cleanup no longer
+  meets a lesson-dirty tree (absorbs #328). Consumer step: re-run `bin/setup-labels.sh` (creates
+  `building`; the doctor now requires it).
 
 ## v3.3.2
 

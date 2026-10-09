@@ -2,7 +2,7 @@
 #
 # mutant-driver.sh — checked-in mutant driver for this repo's own dev/*.sh test suites (#359).
 #
-# Usage: dev/mutant-driver.sh [-j <n>|--serial] [--changed-from <file>] [name-filter]
+# Usage: dev/mutant-driver.sh [-j <n>|--serial] [--changed-from <file>] [--shard <i>/<n>] [name-filter]
 #   -j <n>       run <n> mutants concurrently (a positive integer; an invalid value prints usage
 #                on stderr and exits 2).
 #   --serial     equivalent to -j 1 — one mutant at a time, in declared order.
@@ -11,6 +11,11 @@
 #                repo-relative changed paths (one per line; blank lines ignored; a trailing \r is
 #                stripped). Wins over MUTANT_DRIVER_SINCE. A file that doesn't exist, or a missing
 #                argument, exits 2 with usage on stderr before any suite runs.
+#   --shard <i>/<n>
+#                run only slice i of n (1 <= i <= n, plain digits, no leading zero). The env form is
+#                MUTANT_DRIVER_SHARD=<i>/<n>; an empty or unset value means no sharding, and the
+#                flag wins when both are given. A malformed spec, or a --shard with no argument,
+#                exits 2 with usage on stderr before any suite runs.
 #   name-filter  run only the registry records whose "name" contains this substring (a non-zero
 #                exit if the filter matches no record).
 #   With no -j/--serial, the job count comes from MUTANT_DRIVER_JOBS if set (env var), else from
@@ -19,15 +24,22 @@
 #   always wins over MUTANT_DRIVER_JOBS.
 #
 #   Change-based selection (#464): with neither --changed-from nor a non-empty
-#   MUTANT_DRIVER_SINCE, every registry record runs (after any name-filter) and this script's
-#   output is byte-identical to before #464. Set MUTANT_DRIVER_SINCE=<rev> to select instead, by
-#   `git -C <root> diff --no-renames --name-only <rev> HEAD --`: a record is selected iff a
-#   changed path equals its target, its suite, or its registry file, or matches a
+#   MUTANT_DRIVER_SINCE, and no shard spec, every registry record runs (after any name-filter)
+#   and this script's output is byte-identical to before #464. Set MUTANT_DRIVER_SINCE=<rev> to
+#   select instead, by `git -C <root> diff --no-renames --name-only <rev> HEAD --`: a record is
+#   selected iff a changed path equals its target, its suite, or its registry file, or matches a
 #   dev/mutants/suite-deps.txt pattern its suite declares — a suite with no map line matches any
 #   change. A changed path under bin/, hooks/, templates/, agents/, skills/ or dev/ that no record
 #   or map pattern (other than a bare "*") claims, or any change to this script itself, forces a
 #   full run instead — so does an unusable MUTANT_DRIVER_SINCE (a leading "-", an all-zero or
 #   unknown commit, or any other git-diff failure).
+#
+#   Sharding: a shard spec partitions whatever set the run would otherwise run — after the
+#   name-filter and any change-based selection. The set is grouped by (suite, filter) pair, the
+#   same pairs that get one baseline each, in order of first appearance; each whole group goes to
+#   the shard with the fewest records so far (ties to the lowest index), so a baseline is never
+#   run by two shards and every record lands in exactly one shard. A shard left with no record
+#   prints the zero-record footer and exits 0.
 #
 # What this does: reads every dev/mutants/*.json registry file (or the directory named by
 # MUTANT_DRIVER_REGISTRY_DIR, default dev/mutants — the override a fixture harness uses to point
@@ -57,6 +69,8 @@
 #   == mutant-driver: <N> jobs ==                   (first line; N is concurrency, not job count)
 #   == mutant-driver: selected <N> of <M> records ==  (change-based selection only; #464)
 #   == mutant-driver: full run (reason: <text>) ==    (change-based selection fell back; #464)
+#   == mutant-driver: shard <i>/<n>: <K> of <N> records ==  (sharded runs only; N is the set left
+#                                                    after the name-filter and any selection)
 #   PASS baseline:<suite>:<filter> <total> -        (or FAIL ... <total> <set>, red baseline)
 #   PASS <name> <total> <set>                       (<set> is "-" when empty)
 #   FAIL <name> <total|-> <set|->
@@ -65,9 +79,9 @@
 #   == summary: <N> pass, <M> fail ==
 # Exit 0 iff every baseline and mutant passed; 1 if any FAILed; 2 on a usage or registry error
 # (before any suite ever runs). With neither --changed-from nor a non-empty MUTANT_DRIVER_SINCE,
-# neither selection line ever prints and every registry record runs — byte-identical to before
-# #464. Zero records selected is itself a PASS: the "selected 0 of <M>" line, then the summary
-# footer, exit 0, no suite ever runs.
+# and no shard spec, neither a selection line nor the shard line ever prints and every registry
+# record runs — byte-identical to before #464. Zero records selected is itself a PASS: the
+# "selected 0 of <M>" line, then the summary footer, exit 0, no suite ever runs.
 #
 # Writes only under its own single mktemp -d root (an EXIT trap removes it); the tracked tree is
 # never touched — every edit lands on a fresh_copy scratch copy, and the copy's own root (never a
@@ -113,17 +127,19 @@ detect_jobs() {
 }
 
 usage_die() {
-  echo "usage: dev/mutant-driver.sh [-j <n>|--serial] [--changed-from <file>] [name-filter] -- $1" >&2
+  echo "usage: dev/mutant-driver.sh [-j <n>|--serial] [--changed-from <file>] [--shard <i>/<n>] [name-filter] -- $1" >&2
   exit 2
 }
 
 jobs_flag=""
 changed_from=""
+shard_flag=""
+shard_flag_set=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help)
       cat <<'EOF'
-usage: dev/mutant-driver.sh [-j <n>|--serial] [--changed-from <file>] [name-filter]
+usage: dev/mutant-driver.sh [-j <n>|--serial] [--changed-from <file>] [--shard <i>/<n>] [name-filter]
 
   -j <n>            run <n> mutants concurrently (a positive integer)
   --serial          equivalent to -j 1 -- one mutant at a time, in declared order
@@ -131,13 +147,16 @@ usage: dev/mutant-driver.sh [-j <n>|--serial] [--changed-from <file>] [name-filt
                     select only the registry records a change can affect, from a file of
                     repo-relative changed paths (one per line; blank lines ignored; a trailing
                     \r is stripped). Wins over MUTANT_DRIVER_SINCE.
+  --shard <i>/<n>   run only slice i of n (whole (suite, filter) groups, balanced by record
+                    count); MUTANT_DRIVER_SHARD is the env form; the flag wins
   name-filter       run only the registry records whose name contains this substring
 
-With no name-filter, runs every selected registry record (every record, when selection isn't in
-effect). MUTANT_DRIVER_JOBS overrides the detected default when neither -j nor --serial is given.
-MUTANT_DRIVER_REGISTRY_DIR overrides the registry directory (default: dev/mutants under this
-checkout). With neither --changed-from nor a non-empty MUTANT_DRIVER_SINCE, every registry record
-runs -- unchanged from before change-based selection landed. MUTANT_DRIVER_SINCE=<rev> selects
+With no name-filter, runs every selected registry record (every record, when neither selection
+nor a shard spec is in effect). MUTANT_DRIVER_JOBS overrides the detected default when neither -j
+nor --serial is given. MUTANT_DRIVER_REGISTRY_DIR overrides the registry directory (default:
+dev/mutants under this checkout). With neither --changed-from nor a non-empty
+MUTANT_DRIVER_SINCE, and no shard spec, every registry record runs -- unchanged from before
+change-based selection landed. MUTANT_DRIVER_SINCE=<rev> selects
 instead by `git diff --no-renames --name-only <rev> HEAD` against this checkout and
 dev/mutants/suite-deps.txt; an unusable base (a leading "-", an all-zero or unknown commit, or any
 other git-diff failure) forces a full run instead.
@@ -162,6 +181,13 @@ EOF
       [ -n "$changed_from" ] || usage_die "--changed-from requires a file argument"
       shift
       ;;
+    --shard)
+      shift
+      shard_flag="${1:-}"
+      shard_flag_set=1
+      [ -n "$shard_flag" ] || usage_die "--shard requires <i>/<n>"
+      shift
+      ;;
     -*)
       usage_die "unknown option: $1"
       ;;
@@ -174,6 +200,36 @@ filter="${1:-}"
 
 if [ -n "$changed_from" ] && [ ! -f "$changed_from" ]; then
   usage_die "--changed-from file '$changed_from' does not exist"
+fi
+
+# Shard spec: the flag wins over MUTANT_DRIVER_SHARD; empty means no sharding. Both halves must be
+# plain digits with no leading zero (so bash arithmetic never reads one as octal) and i <= n.
+shard_spec=""
+shard_where="MUTANT_DRIVER_SHARD must be"
+if [ "$shard_flag_set" -eq 1 ]; then
+  shard_spec="$shard_flag"
+  shard_where="--shard expects"
+elif [ -n "${MUTANT_DRIVER_SHARD:-}" ]; then
+  shard_spec="$MUTANT_DRIVER_SHARD"
+fi
+shard_i=""; shard_n=""
+if [ -n "$shard_spec" ]; then
+  case "$shard_spec" in
+    */*/*) usage_die "$shard_where <i>/<n> with 1 <= i <= n, got '$shard_spec'" ;;
+    */*) ;;
+    *) usage_die "$shard_where <i>/<n> with 1 <= i <= n, got '$shard_spec'" ;;
+  esac
+  shard_i="${shard_spec%%/*}"
+  shard_n="${shard_spec#*/}"
+  case "$shard_i" in
+    ''|*[!0-9]*|0*) usage_die "$shard_where <i>/<n> with 1 <= i <= n, got '$shard_spec'" ;;
+  esac
+  case "$shard_n" in
+    ''|*[!0-9]*|0*) usage_die "$shard_where <i>/<n> with 1 <= i <= n, got '$shard_spec'" ;;
+  esac
+  if [ "$shard_i" -gt "$shard_n" ]; then
+    usage_die "$shard_where <i>/<n> with 1 <= i <= n, got '$shard_spec'"
+  fi
 fi
 
 if [ -n "$jobs_flag" ]; then
@@ -484,6 +540,65 @@ if [ "$sel_mode" -eq 1 ]; then
     fi
     sel=("${new_sel[@]}")
   fi
+fi
+
+# ---------------------------------------------------------------------------------------------
+# Sharding. With no shard spec this block is a no-op. Otherwise it partitions the set left after
+# the name filter and change-based selection: records are grouped by (suite, filter) pair in order
+# of first appearance, and each whole group goes to the shard with the fewest records so far
+# (strict < keeps ties on the lowest index). Indexed arrays only — bash 3.2 has no declare -A.
+if [ -n "$shard_n" ]; then
+  sh_gsuite=(); sh_gfilter=(); sh_gcount=(); sh_rgroup=()
+  for sh_pos in "${!sel[@]}"; do
+    sh_ridx="${sel[$sh_pos]}"
+    sh_found=-1
+    for sh_g in "${!sh_gsuite[@]}"; do
+      if [ "${sh_gsuite[$sh_g]}" = "${rec_suite[$sh_ridx]}" ] && [ "${sh_gfilter[$sh_g]}" = "${rec_filter[$sh_ridx]}" ]; then
+        sh_found="$sh_g"
+        break
+      fi
+    done
+    if [ "$sh_found" -lt 0 ]; then
+      sh_gsuite+=("${rec_suite[$sh_ridx]}")
+      sh_gfilter+=("${rec_filter[$sh_ridx]}")
+      sh_gcount+=(0)
+      sh_found=$(( ${#sh_gsuite[@]} - 1 ))
+    fi
+    sh_gcount[$sh_found]=$(( ${sh_gcount[$sh_found]} + 1 ))
+    sh_rgroup[$sh_pos]="$sh_found"
+  done
+  sh_load=()
+  sh_k=1
+  while [ "$sh_k" -le "$shard_n" ]; do
+    sh_load[$sh_k]=0
+    sh_k=$((sh_k+1))
+  done
+  sh_gshard=()
+  for sh_g in "${!sh_gsuite[@]}"; do
+    sh_best=1
+    sh_k=2
+    while [ "$sh_k" -le "$shard_n" ]; do
+      if [ "${sh_load[$sh_k]}" -lt "${sh_load[$sh_best]}" ]; then
+        sh_best="$sh_k"
+      fi
+      sh_k=$((sh_k+1))
+    done
+    sh_gshard[$sh_g]="$sh_best"
+    sh_load[$sh_best]=$(( ${sh_load[$sh_best]} + ${sh_gcount[$sh_g]} ))
+  done
+  shard_sel=()
+  for sh_pos in "${!sel[@]}"; do
+    if [ "${sh_gshard[${sh_rgroup[$sh_pos]}]}" = "$shard_i" ]; then
+      shard_sel+=("${sel[$sh_pos]}")
+    fi
+  done
+  echo "== mutant-driver: shard ${shard_i}/${shard_n}: ${#shard_sel[@]} of ${#sel[@]} records =="
+  if [ "${#shard_sel[@]}" = 0 ]; then
+    echo
+    echo "== summary: 0 pass, 0 fail =="
+    exit 0
+  fi
+  sel=("${shard_sel[@]}")
 fi
 
 # ---------------------------------------------------------------------------------------------
