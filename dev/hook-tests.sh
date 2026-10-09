@@ -4145,7 +4145,8 @@ case_push_cmdcaptime_deny_flood() {
 # shapes for the unsampled prefix: a one long ab$'cd' word (a), a carriage-return flood (b), one
 # refspec whose first colon is at its end (c), one quote-dense word (d), one push with very many
 # short refspecs (f), one -C path (i) or one -C path of a non-push git segment (s) filling the
-# command, and a segment the tokenizer lost followed by very many short words (t).
+# command, a segment the tokenizer lost followed by very many short words (t), and a segment of
+# value-context prefix-word triggers (o).
 pcap_cmd=""
 pcap_shape() {
   local pre
@@ -4158,6 +4159,7 @@ pcap_shape() {
     i) pre='git -C '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 17 )) x; pcap_cmd="$pre$pcap_s push origin main" ;;
     s) pre='git -C '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 7 )) x; pcap_cmd="$pre$pcap_s status" ;;
     t) pre='git "--no-pager" '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) 'ab '; pcap_cmd="$pre$pcap_s" ;;
+    o) pre='git push origin feature/x; nice'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) ' -n nice'; pcap_cmd="$pre$pcap_s" ;;
   esac
 }
 # pcap_verdict WANT -- the run reached a verdict: the too-large line, or WANT (rxdest, main, unres or noop).
@@ -4215,8 +4217,8 @@ case_push_cmdcaptime_pin_at_cap_worst() {
   # deadline only so a runaway mutant cannot hang the suite.
   local dir="$tmpbase/repo-pp-cap-worst" shape want payload cpu_max_ms=6000 run_cpu_max_ms=8000
   mk_fixture_repo "$dir" main feature/x
-  for shape in a b c d f i s t; do
-    case "$shape" in a|c|d) want=rxdest ;; i) want=unres ;; s|t) want=noop ;; *) want=main ;; esac
+  for shape in a b c d f i s t o; do
+    case "$shape" in a|c|d) want=rxdest ;; i) want=unres ;; s|t|o) want=noop ;; *) want=main ;; esac
     pcap_shape "$shape"
     payload="$(mk_push_cmd_big "$pcap_cmd" "$dir")"
     push_budget_override="0"
@@ -10228,6 +10230,325 @@ case_canary_main_session() {
 
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
+# ---------------------------------------------------------------------------------------------
+# A value-taking option of a prefix word (#518). After exec/nice/stdbuf/sudo/time/xargs, a dash token
+# followed by a non-option word W may be an option and its VALUE, so W is no proof of the command word:
+# each hook reads the rest of the segment AFTER W (never W itself). agent-boundary denies a later gh/git
+# or .claude path, push-guard a later push or git alias, claude-dir-guard resolves a later shim-named
+# word. Case names carry "optval" so `bash dev/hook-tests.sh optval` runs the family; no name here
+# contains the filter of an existing registry record. Every payload names gh, git, claude or the shim,
+# or the raw-stdin fast path would pass it vacuously.
+# mutant:518-ab-optval-off — empties this hook's PREFIX_VALUE_WORDS, so no prefix word opens a value
+#   context and the walk takes the option value as the command word again.
+# mutant:518-ab-optval-start — scans from the value word itself instead of after it, so a prefix word
+#   followed by git or gh that is the command word itself denies for the verifier.
+# mutant:518-ab-optval-nonopt — drops the next-token-is-not-an-option test, so an option followed by
+#   another option reads the rest of the segment.
+# mutant:518-ab-optval-reset — keeps the value context after a later non-value prefix word, so
+#   sudo bash -c with gh in a string denies.
+# mutant:518-ab-optval-rx — never opens the value context for an expansion word, so an expansion
+#   before an option and its value hides the command.
+# mutant:518-ab-optval-memo — clears the per-segment scan memo before each value-context scan, so a
+#   flood of triggers rescans the segment each time (filter "ab-optvalscan-").
+# mutant:518-ab-lost-cw — drops the interpreter capture from the lost-prefix scan, so an interpreter
+#   behind a value-taking option never meets the .claude mention rule.
+case_ab_optval_deny_impl_gh() {
+  abx_deny implementer gh 'nice -n 5 gh pr merge 5' 'sudo -u root gh pr merge 5' 'stdbuf -o L gh pr merge 5' \
+    'exec -a foo gh pr merge 5' 'xargs -n 1 gh pr merge < /dev/null' 'time -o /tmp/t gh pr merge 5' \
+    'command time -o /tmp/t gh pr merge 5' '\time -o /tmp/t gh pr merge 5' 'NICE -n 5 gh pr merge 5'
+}
+case_ab_optval_deny_codex() {
+  run_boundary "$(mk_codex_shell implementer 'nice -n 5 gh pr merge 5')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: gh)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing '(blocked: gh)': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_optval_deny_impl_other() {
+  abx_deny implementer '.claude/LESSONS.md' 'nice -n 5 tee -a .claude/LESSONS.md'
+  abx_deny implementer 'git -prefix-' 'nice -n 5 git push origin feature/x' 'sudo -u git git commit -m m'
+}
+case_ab_optval_deny_verifier() {
+  abx_deny verifier 'git -prefix-' 'nice -n 5 git status' 'sudo -u root git log' 'xargs -I % git log %'
+  abx_deny verifier gh 'sudo -u root gh pr view 5'
+}
+case_ab_optval_deny_expansion() {
+  abx_deny implementer gh '$X -n 5 gh pr merge 5' 'sudo -$X root gh pr merge 5'
+}
+case_ab_optval_deny_interpreter() {
+  run_boundary "$(mk_agent_cmd implementer "nice -n 5 python3 -c \"open('.claude/LESSONS.md','a')\"")"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: python3 with "*) ;;
+    *) __ok=0; __why="${__why}stderr missing '(blocked: python3 with ': '$boundary_err'\n" ;;
+  esac
+}
+case_ab_optval_noop() {
+  abx_noop verifier 'sudo -E git status' 'time -p git status' 'sudo -E -H git status'
+  abx_noop implementer 'bash -c "echo gh"' 'sudo bash -c "echo gh"' 'nice -n 5 make test && echo github' \
+    'xargs -n 1 wc -l < files.txt && echo github'
+}
+# ab_optvalscan_cmd N — one segment of N value-context triggers (a prefix word, an option, a prefix
+# word, ...) then a line naming github so the raw-stdin fast path reads the payload.
+# ab_optvalscan_twin_cmd N keeps the layout and the byte length per pair but only the first option
+# is followed by a non-option word, so one scan reads the whole segment.
+ab_optvalscan_cmd() {
+  printf 'nice%s -n x true\necho github' "$(printf ' -n nice%.0s' $(seq 1 "$1"))"
+}
+ab_optvalscan_twin_cmd() {
+  printf 'nice -n x%s true\necho github' "$(printf ' -n -ice%.0s' $(seq 1 "$1"))"
+}
+# optval_cpu_check TWIN_MS FLOOD_MS LABEL — the flood's CPU time must stay within K times the twin's
+# plus a constant: both are CPU time of the hook's whole process tree for the same record size, so
+# host load stretches neither, while a rescan per trigger grows with the trigger count.
+OPTVAL_K=4
+OPTVAL_F=250
+optval_cpu_check() {
+  if [ -z "$1" ] || [ -z "$2" ]; then
+    __ok=0; __why="${__why}[$3] a CPU report could not be parsed\n"
+    return
+  fi
+  if [ "$2" -gt $(( OPTVAL_K * $1 + OPTVAL_F )) ]; then
+    __ok=0; __why="${__why}[$3] flood used ${2}ms of CPU against ${1}ms for the twin, over ${OPTVAL_K}x plus ${OPTVAL_F}ms\n"
+  fi
+}
+case_ab_optvalscan_noop_flood() {
+  # FLOOD + TIMING by CPU ratio, never wall clock: the twin and the flood have the same size and both
+  # must be no opinion. boundary_deadline_override is only a hang guard that reaps the whole tree.
+  local n=1000 twin_ms flood_ms
+  boundary_deadline_override=60
+  measure_cpu_ms run_boundary "$(ab_rx_payload "$(ab_optvalscan_twin_cmd "$n")")"
+  twin_ms="$measured_cpu_ms"
+  expect_no_opinion
+  boundary_deadline_override=60
+  measure_cpu_ms run_boundary "$(ab_rx_payload "$(ab_optvalscan_cmd "$n")")"
+  flood_ms="$measured_cpu_ms"
+  expect_no_opinion
+  optval_cpu_check "$twin_ms" "$flood_ms" "ab"
+}
+
+# push-guard. PP_R_OPTV is the fixed reason; the deny never echoes input.
+# mutant:518-pg-optval-off — empties this hook's PREFIX_VALUE_WORDS, so no prefix word opens a value
+#   context and the walk takes the option value as the command word again.
+# mutant:518-pg-optval-start — scans from the value word itself instead of after it, so an option of
+#   sudo before git with a feature push denies.
+# mutant:518-pg-optval-nonopt — drops the next-token-is-not-an-option test, so an option followed by
+#   another option reads the rest of the segment.
+# mutant:518-pg-optval-reset — keeps the value context after a later non-value prefix word, so a push
+#   behind bash and its option denies.
+# mutant:518-pg-optval-alias-off — drops the alias check at the value-context trigger, so a git alias
+#   that expands to push behind a value-taking option is never looked up.
+# mutant:518-pg-optval-alias-from — starts the alias check one token early, so the value word counts
+#   toward the names-git gate and an include in a commit message denies.
+# mutant:518-pg-optval-memo — runs the push scan at every trigger instead of once per segment, so a
+#   flood of triggers turns quadratic (filter "push-optvalscan-").
+PP_R_OPTV="option value in the command prefix"
+case_push_optval_deny_main() {
+  local c
+  for c in 'nice -n 5 git push origin main' 'sudo -u root git push origin main' 'stdbuf -o L git push origin main' \
+    'exec -a foo git push origin main' 'xargs -n 1 git push origin main < /dev/null' \
+    'time -o t git push origin main' 'command time -o t git push origin main' \
+    'nice -n 5 git push origin feature/x' 'sudo -u git git push origin main'; do
+    pp_run "$c"
+    pp_expect_unres "$PP_R_OPTV"
+    case "$push_err" in
+      *"$c"*) __ok=0; __why="${__why}[$c] deny line echoes the command: '$push_err'\n" ;;
+    esac
+  done
+}
+case_push_optval_deny_precedence() {
+  pp_run 'GIT_DIR=../x/.git nice -n 5 git push origin feature/x'
+  pp_expect_unres "GIT_DIR="
+  pp_run 'GIT_CONFIG_COUNT=1 nice -n 5 git push origin feature/x'
+  expect_push_deny
+  case "$push_err" in
+    *"git config supplied on the command line"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'git config supplied on the command line': '$push_err'\n" ;;
+  esac
+  run_push_guard "$(mk_push_cmd 'if [[ a ]] nice -n 5 git push origin ]] main')"
+  expect_push_deny
+  case "$push_err" in
+    *"(cannot analyse a push split by ]])"*) ;;
+    *) __ok=0; __why="${__why}stderr missing '(cannot analyse a push split by ]])': '$push_err'\n" ;;
+  esac
+}
+case_push_optval_noop() {
+  local c w0
+  for c in 'sudo -E git push origin feature/x' 'sudo -E -H git push origin feature/x' 'time -p git push origin feature/x' \
+    'nice -n 5 git status && git push origin feature/x' 'nice -n 5 make && git push origin feature/x' \
+    'sudo -E git commit -m "fix include path" && git push origin feature/x' \
+    'nice bash -x deploy.sh git push origin feature/x' 'nice -n 5 git status'; do
+    w0="$__why"; __why=""
+    pp_run "$c"
+    expect_push_no_opinion
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+case_push_optval_deny_runtime_expansion() {
+  pp_run 'sudo -$X git push origin feature/x'
+  pp_expect_unres "$PP_R_RXP"
+}
+case_push_optval_deny_alias() {
+  local dir="$tmpbase/repo-optval-alias"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
+  al_run 'nice -n 5 git zqp origin main' "$dir"
+  al_expect_alias ".git/config"
+  al_expect_no_echo "zqp"
+}
+# mutant:518-pg-optval-alias-quoted — drops the quote-bearing guard on the alias call, so the trigger sets
+#   the once-per-segment alias flag first and the value word own trigger, which counts it toward the
+#   names-git gate, never runs.
+case_push_optval_deny_alias_quoted() {
+  local dir="$tmpbase/repo-optval-alias-quoted" c w0
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
+  for c in 'nice -n "X=git" zqp origin main' 'sudo -u "-git" zqp origin main'; do
+    w0="$__why"; __why=""
+    al_run "$c" "$dir"
+    al_expect_alias ".git/config"
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+case_push_optval_noop_alias_none() {
+  local dir="$tmpbase/repo-optval-noalias"
+  mk_fixture_repo "$dir" main feature/x
+  al_run 'nice -n 5 git status' "$dir"
+  expect_push_no_opinion
+}
+case_push_optval_deny_alias_word() {
+  # A documented over-block: the segment names git behind a value-taking option and any later word
+  # naming an alias or include fails closed.
+  pp_run 'nice -n 10 git log --grep alias'
+  expect_push_deny
+}
+pp_optvalscan_cmd() {
+  printf 'nice%s -n x git status\ngit push origin feature/x' "$(printf ' -n nice%.0s' $(seq 1 "$1"))"
+}
+pp_optvalscan_twin_cmd() {
+  printf 'nice -n x%s git status\ngit push origin feature/x' "$(printf ' -n -ice%.0s' $(seq 1 "$1"))"
+}
+case_push_optvalscan_noop_flood() {
+  local dir="$tmpbase/repo-optval-flood" n=1000 twin_ms flood_ms
+  mk_fixture_repo "$dir" main feature/x
+  push_deadline_override=60
+  measure_cpu_ms run_push_guard "$(mk_push_cmd_big "$(pp_optvalscan_twin_cmd "$n")" "$dir")"
+  twin_ms="$measured_cpu_ms"
+  expect_push_no_opinion
+  push_deadline_override=60
+  measure_cpu_ms run_push_guard "$(mk_push_cmd_big "$(pp_optvalscan_cmd "$n")" "$dir")"
+  flood_ms="$measured_cpu_ms"
+  expect_push_no_opinion
+  optval_cpu_check "$twin_ms" "$flood_ms" "push"
+}
+
+# claude-dir-guard (Codex shell payloads; the guard is role-scoped and pure bash).
+# mutant:518-cdg-optval-off — empties this hook's PREFIX_VALUE_WORDS (its env member stays), so the
+#   prefix words other than env open no value context.
+# mutant:518-cdg-optval-w-shim — drops the exclusion of a value word that itself names the shim, so
+#   the scan can resolve a later shim index than the walk would.
+# mutant:518-cdg-optval-site — removes the deadline sample from the scan loop (filter "cdg-optval-").
+# mutant:518-cdg-optval-memo — never marks the window scanned, so every trigger rescans (filter
+#   "cdg-optval-").
+cdg_optval_run() {
+  run_claude_guard "$(mk_codex_shell "$1" "$2")"
+}
+case_cdg_optval_deny_prefix_words() {
+  local c
+  for c in 'nice -n 5 apply_patch < x.patch' 'sudo -u root apply_patch < x.patch' 'stdbuf -o L apply_patch < x.patch' \
+    'exec -a foo apply_patch < x.patch' 'xargs -a x applypatch' 'time -o t apply_patch < x.patch' \
+    'command time -o t apply_patch < x.patch' 'env -u X apply_patch < x.patch'; do
+    cdg_optval_run implementer "$c"
+    expect_cdg_deny_unparseable
+    case "$cdg_err" in
+      *"invoked via Bash with no inline patch text"*) ;;
+      *) __ok=0; __why="${__why}[$c] stderr missing 'invoked via Bash with no inline patch text': '$cdg_err'\n" ;;
+    esac
+  done
+}
+case_cdg_optval_heredoc() {
+  cdg_optval_run implementer "nice -n 5 apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}*** End Patch${LF}EOF"
+  expect_cdg_no_opinion
+  cdg_optval_run implementer "nice -n 5 apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: .claude/x${LF}*** End Patch${LF}EOF"
+  expect_cdg_deny_unparseable
+}
+case_cdg_optval_main_session() {
+  cdg_optval_run '' 'nice -n 5 apply_patch < x.patch'
+  expect_cdg_no_opinion
+}
+case_cdg_optval_w_shim_decoy() {
+  # The value word is itself the shim name: the walk resolves it at the smaller index, so the argument
+  # check still sees `evil.patch applypatch` and denies. Dropping the exclusion lets the scan move the
+  # resolved shim to the later `applypatch`, whose input is only the benign heredoc.
+  cdg_optval_run implementer "env -i apply_patch evil.patch applypatch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}*** End Patch${LF}EOF"
+  expect_cdg_deny_unparseable
+}
+case_cdg_optval_deny_overblock() {
+  # A documented over-block: a read naming the shim behind a value-taking option resolves as the shim.
+  cdg_optval_run implementer 'nice -n 5 rg apply_patch hooks/'
+  expect_cdg_deny_unparseable
+}
+case_cdg_optval_noop_unmentioned() {
+  # The scan matches a shim-named token exactly: a word that merely contains the shim name is no shim.
+  cdg_optval_run implementer 'nice -n 5 echo apply_patch.md'
+  expect_cdg_no_opinion
+  cdg_optval_run implementer 'nice -n 5 ls src/ && sudo -u root ls Edit'
+  expect_cdg_no_opinion
+}
+# mutant:518-cdg-optval-quote — drops the quote-bearing arm of the segment flag, so a shim spelled with a
+#   quote inside its name (apply_"patch") behind a prefix option's value never reaches the scan.
+case_cdg_optval_deny_quote_split() {
+  # The other segment spells the shim plainly only so the raw-stdin fast path reads the payload.
+  local c w0
+  for c in 'nice -n 5 apply_"patch" < x.patch; echo applypatch.md' \
+    "nice -n 5 apply_'patch' < x.patch; echo applypatch.md"; do
+    w0="$__why"; __why=""
+    cdg_optval_run implementer "$c"
+    expect_cdg_deny_unparseable
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+# mutant:518-cdg-optval-parity — drops the unbalanced-quote check on a scan hit, so a quoted value with a
+#   space before the shim (nice -n "a b" apply_patch) resolves the shim and its benign heredoc passes.
+# The check covers every token before the hit, not only the value word: the rows whose value word is
+# itself a prefix word (xargs -0 command time -I "a b" apply_patch) put the quote past it, and the
+# last row is the documented over-block of a quoted value of a later prefix option.
+case_cdg_optval_deny_quote_parity() {
+  local c w0 body="<<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}*** End Patch${LF}EOF"
+  for c in 'nice -n "a b" apply_patch' 'nice -n a\ b apply_patch' 'nice -n "a apply_patch' \
+    'exec -a "a b" apply_patch' 'env -u "a b" apply_patch' 'sudo -u "a b" apply_patch' \
+    'stdbuf -o "a b" apply_patch' 'time -o "a b" apply_patch' 'xargs -a "a b" apply_patch' \
+    "xargs -0 command time -I \"a b\" apply_patch" "env -c nice nice -l 'a b' timeout 5 apply_patch" \
+    "sudo exec -c -P sudo -0 \"a repeat 2 -S apply_patch" "xargs -0 then -n5 b' apply_patch" \
+    "nice -n 5 sudo -u \"a b\" apply_patch"; do
+    w0="$__why"; __why=""
+    cdg_optval_run implementer "$c $body"
+    expect_cdg_deny_unparseable
+    case "$cdg_err" in
+      *"command word cannot be resolved: an unbalanced quote"*) ;;
+      *) __ok=0; __why="${__why}stderr missing 'command word cannot be resolved: an unbalanced quote': '$cdg_err'\n" ;;
+    esac
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+case_cdg_optval_dl_cap() {
+  # nice -n, 100 plain words, then a word that is not the shim: only the scan's own sample can reach
+  # the cap (50), since the walk itself resolves the first plain word.
+  local cmd="nice -n" i
+  for i in $(seq 1 100); do cmd="${cmd} a"; done
+  cdg_dl_cap_check_bash "${cmd} echo apply_patch.md"
+}
+case_cdg_optval_noop_flood_cap() {
+  # SAMPLE COUNT, not time: nice -n repeated 100 times is 100 triggers. One scan per window stays far
+  # below the cap; a rescan per trigger passes it.
+  local cmd="" i
+  for i in $(seq 1 100); do cmd="${cmd}nice -n "; done
+  cdg_cap_override=2500
+  run_claude_guard "$(printf '%s' "${cmd}echo apply_patch.md" | mk_cdg_dl_bash implementer '')"
+  expect_cdg_no_opinion
+}
+
 cases=(
   "status-rel|case_status_rel|allow: relative sibling path, status"
   "status-abs|case_status_abs|allow: absolute path, status"
@@ -12389,6 +12710,34 @@ cases=(
   "cdg-qa-noop-balanced-assign|case_cdg_qa_noop_balanced_assign|no opinion: quoted assignment (#455, absorbing #456), noop-balanced-assign"
   "cdg-qa-never-executes|case_cdg_qa_never_executes|deny, sentinel absent on a booby-trapped PATH: quoted assignment (#455, absorbing #456), never-executes"
   "cdg-qa-noop-flood-timing|case_cdg_qa_noop_flood_timing|wall-clock proof under a 15s active deadline: quoted assignment (#455, absorbing #456), noop-flood-timing"
+  # --- a value-taking option of a prefix word (#518) cases ---------------------------------------
+  "ab-optval-deny-impl-gh|case_ab_optval_deny_impl_gh|deny: gh behind nice/sudo/stdbuf/exec/xargs/time and an option with a separate value, implementer -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-off, 518-ab-optval-start)"
+  "ab-optval-deny-codex|case_ab_optval_deny_codex|deny: nice -n 5 gh pr merge 5 as a Codex-shaped implementer payload -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-off)"
+  "ab-optval-deny-impl-other|case_ab_optval_deny_impl_other|deny: a .claude tee and git behind a value-taking option, implementer -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-off)"
+  "ab-optval-deny-verifier|case_ab_optval_deny_verifier|deny: read-only git and gh behind a value-taking option, verifier -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-off)"
+  "ab-optval-deny-expansion|case_ab_optval_deny_expansion|deny: an expansion word before an option and its value, and an expansion option after sudo -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-rx)"
+  "ab-optval-deny-interpreter|case_ab_optval_deny_interpreter|deny: nice -n 5 python3 -c with a .claude path -- mutation proof: dev/mutants/hook-tests.json (518-ab-lost-cw)"
+  "ab-optval-noop|case_ab_optval_noop|no opinion: the scan starts after the value word, stops at a non-option, and resets at a non-value prefix word -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-start, 518-ab-optval-nonopt, 518-ab-optval-reset)"
+  "ab-optvalscan-noop-flood|case_ab_optvalscan_noop_flood|FLOOD+TIMING: a segment of value-context triggers, no opinion; CPU time within a multiple of a same-size twin with one trigger -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-memo)"
+  "push-optval-deny-main|case_push_optval_deny_main|deny: a push behind nice/sudo/stdbuf/exec/xargs/time and an option with a separate value, naming the fixed command-prefix reason -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-off)"
+  "push-optval-deny-precedence|case_push_optval_deny_precedence|deny: an earlier unresolved reason, command-line config and a cut push keep their own deny -- control, not part of the mutation-proof registry"
+  "push-optval-noop|case_push_optval_noop|no opinion: the scan starts after the value word and resets at a non-value prefix word -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-start, 518-pg-optval-nonopt, 518-pg-optval-reset, 518-pg-optval-alias-from)"
+  "push-optval-deny-runtime-expansion|case_push_optval_deny_runtime_expansion|deny: sudo -\$X git push keeps the runtime-expansion reason -- control, not part of the mutation-proof registry"
+  "push-optval-deny-alias|case_push_optval_deny_alias|deny: nice -n 5 git zqp origin main with a push alias, through the alias line -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-alias-off)"
+  "push-optval-deny-alias-quoted|case_push_optval_deny_alias_quoted|deny: a quote-bearing value word before a push alias keeps the alias deny the value word own trigger gave -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-alias-quoted)"
+  "push-optval-noop-alias-none|case_push_optval_noop_alias_none|no opinion: nice -n 5 git status with no alias config -- control, not part of the mutation-proof registry"
+  "push-optval-deny-alias-word|case_push_optval_deny_alias_word|deny: nice -n 10 git log --grep alias, the documented alias-word over-block -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-alias-off)"
+  "push-optvalscan-noop-flood|case_push_optvalscan_noop_flood|FLOOD+TIMING: a segment of value-context triggers then a feature push, no opinion; CPU time within a multiple of a same-size twin with one trigger -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-memo)"
+  "cdg-optval-deny-prefix-words|case_cdg_optval_deny_prefix_words|deny: apply_patch behind every value-taking prefix word and env, Codex implementer -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-off)"
+  "cdg-optval-heredoc|case_cdg_optval_heredoc|no opinion for a benign heredoc patch, deny for a .claude header, behind nice -n 5 -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-off)"
+  "cdg-optval-main-session|case_cdg_optval_main_session|no opinion: nice -n 5 apply_patch from the main session (the route stays role-scoped) -- control, not part of the mutation-proof registry"
+  "cdg-optval-w-shim-decoy|case_cdg_optval_w_shim_decoy|deny: env -i apply_patch evil.patch applypatch, the value word naming the shim is never skipped -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-w-shim)"
+  "cdg-optval-deny-overblock|case_cdg_optval_deny_overblock|deny: nice -n 5 rg apply_patch hooks/, the documented read over-block -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-off)"
+  "cdg-optval-noop-unmentioned|case_cdg_optval_noop_unmentioned|no opinion: value-context prefix words before a word that merely contains the shim name, and in a segment that never names it -- control, not part of the mutation-proof registry"
+  "cdg-optval-deny-quote-split|case_cdg_optval_deny_quote_split|deny: nice -n 5 apply_\"patch\" < x.patch, a quote-split shim name behind a value-taking option -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-quote)"
+  "cdg-optval-deny-quote-parity|case_cdg_optval_deny_quote_parity|deny: a quoted or escaped option value with a space before the shim keeps the unbalanced-quote deny, for every value-taking prefix word and env -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-parity)"
+  "cdg-optval-dl-cap|case_cdg_optval_dl_cap|deny (#457): nice -n then 100 plain words under cap 50, only the scan's own deadline sample reaches the cap -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-site)"
+  "cdg-optval-noop-flood-cap|case_cdg_optval_noop_flood_cap|SAMPLE COUNT: 100 value-context triggers under a cap between one scan and a rescan per trigger, no opinion -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-memo)"
   # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
   "codex-gcg-main-status|case_codex_gcg_main_status|allow: git-c-guard.sh under a Codex-shaped main-session payload, git -C ../demo-wt-1 status --porcelain (pins the unchanged verdict -- Codex ignores this hook's if gate, but the script itself never reads it)"
   "codex-gcg-apply-patch|case_codex_gcg_apply_patch|silent: a Codex apply_patch payload (tool_name != Bash)"

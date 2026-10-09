@@ -18,6 +18,11 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #518: agent-boundary, push-guard and claude-dir-guard fail closed on a separate option value after
+  `nice`, `sudo`, `stdbuf`, `exec`, `xargs` or `time` (`nice -n 5 gh pr merge 5`, `sudo -u root git push
+  origin main`, `nice -n 5 apply_patch < x.patch`): the rest of the segment after that value is read for
+  `gh`/`git`, a push, or the shim; a lost segment that names an interpreter now meets the `.claude`
+  mention rule. No consumer step.
 - #526: the full mutant-driver run is split into four parallel shards per platform (`--shard <i>/<n>` /
   `MUTANT_DRIVER_SHARD`, whole `(suite, filter)` groups balanced by record count); the driver leaves
   the `selfcheck` job for its own `selfcheck-driver` job; macOS shards run at lower concurrency to
