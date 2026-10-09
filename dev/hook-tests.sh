@@ -4168,6 +4168,9 @@ pcap_shape() {
     w) pre='git log'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) ' "a;b";'; pcap_cmd="$pre$pcap_s" ;;
     x) pre='git -C a'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 17 )) '``'; pcap_cmd="$pre$pcap_s push origin main" ;;
     y) pre='git -C a'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 17 )) '$('; pcap_cmd="$pre$pcap_s push origin main" ;;
+    # x-control: x with each backtick pair spelled ;; -- the same segment breaks for the base scan, but no
+    # quote or substitution character, so the chain gate never opens: the base scan alone
+    xc) pre='git -C a'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 17 )) ';;'; pcap_cmd="$pre$pcap_s push origin main" ;;
   esac
 }
 # pcap_verdict WANT -- the run reached a verdict: the too-large line, or WANT (rxdest, main, unres or noop).
@@ -4220,7 +4223,7 @@ case_push_cmdcaptime_pin_at_cap_worst() {
   # cannot interrupt. For each worst shape exactly at the cap this pin bounds CPU time -- the hook's
   # whole process tree, user plus system -- twice: (1) a zero-budget run, which denies at the first
   # sample and so is the unsampled prefix alone, against a tight bound; (2) the production-budget run,
-  # which also covers the budget and U_max, against a bound below the hook's 10s timeout, and that
+  # which also covers the budget and U_max, against a bound at most the hook's 10s timeout, and that
   # run must reach its verdict: the shape's own, or the too-large line. CPU time, not wall clock: a
   # super-linear step at the cap (the whole-text CR strip this issue removed costs tens of seconds of
   # CPU there) still blows a bound, while host load, which stretches wall clock, barely moves it, so
@@ -4234,7 +4237,23 @@ case_push_cmdcaptime_pin_at_cap_worst() {
     pcap_shape "$shape"
     payload="$(mk_push_cmd_big "$pcap_cmd" "$dir")"
     # the #503 shapes cost what the base scan costs: u v w y run the knob-0 prefix check only, x (whose
-    # base scan alone is the heaviest) the production run only, to keep the suite short
+    # base scan alone is the heaviest) the production run only, to keep the suite short. x's base scan
+    # alone is near the fixed production bound on a slow host, so x's production run is bounded two
+    # ways instead: within 1.3 times its same-run control xc (the base scan with the chain gate shut)
+    # plus 250ms, which fails an unbudgeted chain pass on this shape, and at most the hook's 10s
+    # timeout in CPU time, which never fails before the real hook would time out
+    if [ "$shape" = x ]; then
+      pcap_shape xc
+      push_deadline_override=60
+      measure_cpu_ms run_push_guard "$(mk_push_cmd_big "$pcap_cmd" "$dir")"
+      pcap_verdict noop
+      if [ -z "$measured_cpu_ms" ]; then
+        __ok=0; __why="${__why}[shape xc] control run's CPU report could not be parsed\n"
+        continue
+      fi
+      run_cpu_max_ms=$(( measured_cpu_ms * 13 / 10 + 250 ))
+      [ "$run_cpu_max_ms" -le 10000 ] || run_cpu_max_ms=10000
+    fi
     if [ "$shape" != x ]; then
       push_budget_override="0"
       push_deadline_override=60
@@ -4256,6 +4275,7 @@ case_push_cmdcaptime_pin_at_cap_worst() {
     elif [ "$measured_cpu_ms" -gt "$run_cpu_max_ms" ]; then
       __ok=0; __why="${__why}[shape $shape] production run used ${measured_cpu_ms}ms of CPU, over the ${run_cpu_max_ms}ms bound\n"
     fi
+    run_cpu_max_ms=8000
   done
 }
 # pp_rxs_flood_cmd N -- a lost segment holding N plain ANSI-C words, a push holding N option values
@@ -12777,7 +12797,7 @@ cases=(
   "push-cmdcap-noop-no-git|case_push_cmdcap_noop_no_git|no opinion: an over-cap command whose raw stdin never names git leaves through the fast path (a control, no registry mutant)"
   "push-cmdcap-noop-plan-mode|case_push_cmdcap_noop_plan_mode|no opinion: an over-cap command in plan mode leaves before the cap (a control, no registry mutant)"
   "push-cmdcaptime-deny-flood|case_push_cmdcaptime_deny_flood|FLOOD+TIMING: a push followed by one multi-megabyte dollar-quote word denies via the cap under an active deadline calibrated from a same-run plan-mode control -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
-  "push-cmdcaptime-pin-at-cap-worst|case_push_cmdcaptime_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap stays within a fixed CPU bound before its first deadline sample, and within one below the hook timeout for its whole production-budget run, and reaches its verdict (regression pin, no registry mutant)"
+  "push-cmdcaptime-pin-at-cap-worst|case_push_cmdcaptime_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap stays within a fixed CPU bound before its first deadline sample, and within a bound of at most the hook timeout for its whole production-budget run (x: also within a margin of a same-run control), and reaches its verdict (regression pin, no registry mutant)"
   "push-rxscan-noop-flood|case_push_rxscan_noop_flood|FLOOD+TIMING: a lost segment and a push full of plain dollar-quote words, then a feature push -- no opinion; token count sized from a same-run twin control -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-rescan)"
   "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"
   "push-alias-deny-feature-dest|case_al_deny_feature_dest|a push alias denies even when the destination is a feature branch -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"

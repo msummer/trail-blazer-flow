@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #503 (CI fix): `dev/hook-tests.sh`'s at-cap timing pin bounds the backtick-flood shape by a same-run
+  control (the same base scan with the chain gate shut) instead of the fixed production bound, which the
+  base scan alone overran on the macOS runner, plus a cap at the hook timeout. No consumer step.
 - #503: push-guard, agent-boundary and claude-dir-guard run an additive chain pass per line that lexes
   quotes, backslashes, comments and `$(...)`/`${...}`/backtick substitutions and re-judges text the
   segment split cut apart, so a quoted value holding a segment-break character (`X="a;b c" git push
