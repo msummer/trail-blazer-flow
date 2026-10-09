@@ -4200,18 +4200,20 @@ measure_cpu_ms() {
 }
 case_push_cmdcaptime_pin_at_cap_worst() {
   # Regression pin (no registry mutant: whether an unbounded run overruns depends on the bash and awk
-  # build, as case_cdg_dl_deny_cwd_cr's comment says for claude-dir-guard). The hook's own
-  # check_deadline bounds everything after its first deadline sample (pinned by the push-dl- cases);
-  # what nothing samples is the prefix before it -- the jq extraction, the cap check, the awk tokenizer
-  # and the driver's set-up. For each worst shape exactly at the cap this pin runs the hook at a zero
-  # budget (it denies at the first sample, so the run is the unsampled prefix alone) and holds the
-  # CPU time of that run -- the hook's whole process tree, user plus system -- to a fixed bound well
-  # under the hook's 10s timeout. CPU time, not wall clock: a super-linear prefix (the bash 3.2
-  # whole-word expansions and the whole-text CR strip this issue removed cost tens of seconds of CPU
-  # at the cap) still blows the bound, while host load, which stretches wall clock, barely moves it,
-  # so the pin holds under the mutant driver's concurrency. It then runs the production budget under
-  # a generous safety deadline and checks the verdict: the shape's own, or the too-large line.
-  local dir="$tmpbase/repo-pp-cap-worst" shape want payload cpu_max_ms=6000
+  # build, as case_cdg_dl_deny_cwd_cr's comment says for claude-dir-guard). The hook's worst case is
+  # max(budget, T_prefix) + U_max (see the hook's Analysis deadline paragraph): the unsampled prefix
+  # before its first deadline sample, then sampled work up to the budget, plus the one step a sample
+  # cannot interrupt. For each worst shape exactly at the cap this pin bounds CPU time -- the hook's
+  # whole process tree, user plus system -- twice: (1) a zero-budget run, which denies at the first
+  # sample and so is the unsampled prefix alone, against a tight bound; (2) the production-budget run,
+  # which also covers the budget and U_max, against a bound below the hook's 10s timeout, and that
+  # run must reach its verdict: the shape's own, or the too-large line. CPU time, not wall clock: a
+  # super-linear step at the cap (the whole-text CR strip this issue removed costs tens of seconds of
+  # CPU there) still blows a bound, while host load, which stretches wall clock, barely moves it, so
+  # the pin holds under the mutant driver's concurrency. A step that waits without using CPU is
+  # outside what this pin measures; the hook has no such step. Both runs carry a generous safety
+  # deadline only so a runaway mutant cannot hang the suite.
+  local dir="$tmpbase/repo-pp-cap-worst" shape want payload cpu_max_ms=6000 run_cpu_max_ms=8000
   mk_fixture_repo "$dir" main feature/x
   for shape in a b c d f i s t; do
     case "$shape" in a|c|d) want=rxdest ;; i) want=unres ;; s|t) want=noop ;; *) want=main ;; esac
@@ -4228,8 +4230,13 @@ case_push_cmdcaptime_pin_at_cap_worst() {
       __ok=0; __why="${__why}[shape $shape] unsampled prefix used ${measured_cpu_ms}ms of CPU, over the ${cpu_max_ms}ms bound\n"
     fi
     push_deadline_override=60
-    run_push_guard "$payload"
+    measure_cpu_ms run_push_guard "$payload"
     pcap_verdict "$want"
+    if [ -z "$measured_cpu_ms" ]; then
+      __ok=0; __why="${__why}[shape $shape] production run's CPU report could not be parsed\n"
+    elif [ "$measured_cpu_ms" -gt "$run_cpu_max_ms" ]; then
+      __ok=0; __why="${__why}[shape $shape] production run used ${measured_cpu_ms}ms of CPU, over the ${run_cpu_max_ms}ms bound\n"
+    fi
   done
 }
 # pp_rxs_flood_cmd N -- a lost segment holding N plain ANSI-C words, a push holding N option values
@@ -11932,7 +11939,7 @@ cases=(
   "push-cmdcap-noop-no-git|case_push_cmdcap_noop_no_git|no opinion: an over-cap command whose raw stdin never names git leaves through the fast path (a control, no registry mutant)"
   "push-cmdcap-noop-plan-mode|case_push_cmdcap_noop_plan_mode|no opinion: an over-cap command in plan mode leaves before the cap (a control, no registry mutant)"
   "push-cmdcaptime-deny-flood|case_push_cmdcaptime_deny_flood|FLOOD+TIMING: a push followed by one multi-megabyte dollar-quote word denies via the cap under an active deadline calibrated from a same-run plan-mode control -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
-  "push-cmdcaptime-pin-at-cap-worst|case_push_cmdcaptime_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap spends at most a fixed CPU bound, well under the hook timeout, before its first deadline sample, and reaches its verdict (regression pin, no registry mutant)"
+  "push-cmdcaptime-pin-at-cap-worst|case_push_cmdcaptime_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap stays within a fixed CPU bound before its first deadline sample, and within one below the hook timeout for its whole production-budget run, and reaches its verdict (regression pin, no registry mutant)"
   "push-rxscan-noop-flood|case_push_rxscan_noop_flood|FLOOD+TIMING: a lost segment and a push full of plain dollar-quote words, then a feature push -- no opinion; token count sized from a same-run twin control -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-rescan)"
   "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"
   "push-alias-deny-feature-dest|case_al_deny_feature_dest|a push alias denies even when the destination is a feature branch -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
