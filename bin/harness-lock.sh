@@ -6,6 +6,8 @@
 #   harness-lock.sh acquire [--owner-pid <pid>]
 #   harness-lock.sh release <run-id> | release --force
 #   harness-lock.sh status
+#   harness-lock.sh journal <run-id> stage=<s> issue=<n> outcome=<o> [retries=<k>] [deploy=<d>]
+#                           [harness=<v>] [pr=<n>] [branch=<b>] [reason=<r>]
 #   harness-lock.sh --help
 #
 # An atomic `mkdir` of <git-common-dir>/trail-blazer/lock (git rev-parse --git-common-dir, so
@@ -17,7 +19,8 @@
 # environment error (bad/missing arguments, not inside a git repository, a malformed owner pid, an
 # owner that is a Codex app-server daemon); 3 = conflict (the lock is held by someone else, a
 # release's run-id doesn't match the current holder, or a stale-lock reclaim is already in
-# progress or was interrupted — the reclaim marker below).
+# progress or was interrupted — the reclaim marker below); 1 = a `journal` write failed (the
+# `journal` subcommand only — acquire/release/status never exit 1 on a journal failure).
 #
 # RECLAIM RULE — applied only when `acquire` finds the lock already held:
 #   - the stored record is unreadable (pid or host file missing/empty, or pid is not
@@ -56,8 +59,21 @@
 # is a usage error (exit 2), never silently ignored, because a caller that names an owner
 # explicitly (the Codex contract below) gets an explicit failure rather than a silently wrong one.
 # The run id is `run-<YYYYMMDDTHHMMSSZ>-<recorded pid>`, using that same pid.
-# CLAUDE_CODE_SESSION_ID is deliberately NOT written to the lock — it belongs to the (future)
-# JSONL run-journal follow-up, not this lock.
+# CLAUDE_CODE_SESSION_ID is deliberately NOT written to the lock — it is recorded in each run
+# journal record's `session` field instead (RUN JOURNAL below).
+#
+# RUN JOURNAL (#251): an append-only, identifiers-only JSONL audit trail at
+# <git-common-dir>/trail-blazer/journal/<run-id>.jsonl, one file per run, one line per event.
+# `acquire` (fresh or stale-reclaim) creates the run's file with an `acquire` record (a reclaim
+# adds `reclaimed_run_id`) and prunes the directory to the newest JOURNAL_KEEP run files; `release`
+# and `release --force` append `release`/`release-force`; `journal <run-id> key=value ...` appends
+# one `stage` record for the orchestrating skills, only to a file `acquire` already created. Every
+# value is held to an explicit character set and length cap, so a record can carry no prose,
+# secret, or issue/PR text, and the run id must have the run-id shape before it becomes a file
+# name. A symlink or non-regular file/directory at the journal path is refused. A journal failure
+# inside acquire/release never changes their exit status, stdout, or lock files (one stderr
+# `warning: journal` line); only the `journal` subcommand itself exits 1. `session` is
+# CLAUDE_CODE_SESSION_ID only when it matches [A-Za-z0-9-]{1,64}, else "".
 #
 # CODEX CALLER CONTRACT (#408): Codex sets neither CLAUDE_PID nor TBF_OWNER_PID, and under
 # `codex exec`/`codex --no-daemon` the session's own native `codex` process is every shell call's
@@ -94,9 +110,14 @@
 # while a reclaim is live is a human override and can let a second reclaimer in. A fresh
 # `mkdir` of the lock directory does not consult the marker: one that lands between a reclaimer's
 # remove_lock and its own mkdir wins the lock, and the reclaimer then refuses ("lost the race").
+# The run journal is advisory and local-only, not tamper-evident (anything with write access to
+# .git can edit it, and the model holds the grant to append false stage records); a missing
+# record does not prove nothing happened. Append atomicity assumes a local filesystem, like the
+# lock, and a check-then-append window (a symlink swapped in between) remains. The skills' calls
+# to `journal` are prompt-enforced, like their acquire/release placement.
 #
-# Read-only except its own lock directory: never touches the tracked working tree, makes no
-# network call. #233 landed bin/harness-version.sh; this file's own direct `jq .version` read
+# Writes only under <git-common-dir>/trail-blazer/ (the lock directory, the reclaim marker, and
+# the run journal): never touches the tracked working tree, makes no network call. #233 landed bin/harness-version.sh; this file's own direct `jq .version` read
 # below is deliberately retained rather than shelling out to that script — one extra process per
 # acquire for a single field isn't worth it, and this file's six-file lock-record layout is
 # unaffected either way.
@@ -107,13 +128,18 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 # The subcommand vocabulary — kept as one grep-extractable line (dev/selfcheck.sh's 4.36
 # extracts this exact KEY="value" shape, the same idiom as hooks/git-c-guard.sh's
 # GIT_C_SUBCOMMANDS= and bin/reconcile-ledger.sh's STAGES=).
-LOCK_SUBCOMMANDS="acquire release status"
+LOCK_SUBCOMMANDS="acquire release status journal"
+
+# Newest run-journal files kept by acquire's prune (one line so fixtures can grep it).
+JOURNAL_KEEP=500
 
 usage() {
   cat <<'EOF'
 usage: harness-lock.sh acquire [--owner-pid <pid>]
        harness-lock.sh release <run-id> | release --force
        harness-lock.sh status
+       harness-lock.sh journal <run-id> stage=<s> issue=<n> outcome=<o> [retries=<k>] [deploy=<d>]
+                               [harness=<v>] [pr=<n>] [branch=<b>] [reason=<r>]
        harness-lock.sh --help
 
 Single-flight lock for one harness checkout: an atomic `mkdir` of
@@ -139,6 +165,15 @@ directory holds six plain files: run-id, pid, host, started-at, harness-version,
   status            Always exits 0. Prints `state=free` or `state=held` plus `lock-path=<path>`,
                     and the holder record when held; then, only when a reclaim marker exists,
                     `reclaim=held` and `reclaim-pid=<pid>`.
+  journal <run-id> key=value...
+                    Append one identifiers-only `stage` record to the run's journal file
+                    <git-common-dir>/trail-blazer/journal/<run-id>.jsonl and print
+                    `journal=written` (exit 0). Required keys: stage, issue, outcome; optional:
+                    retries, deploy, harness, pr, branch, reason. An unknown/duplicate key, a value
+                    outside its character set or length cap, or a malformed run id is a usage error
+                    (exit 2, nothing written); a missing run file (only acquire creates it), a
+                    symlink, or a failed write exits 1. acquire/release also write lock events to
+                    the journal, best effort.
   -h, --help        This text (exit 0).
 
 Recorded pid precedence: `--owner-pid <pid>` > `TBF_OWNER_PID` > `${CLAUDE_PID:-$PPID}`. Under
@@ -152,7 +187,8 @@ silently ignored. On Codex, pass the session's own pid explicitly: `harness-lock
 --owner-pid "$PPID"`.
 
 Exit codes: 0 = success, 2 = usage/environment error (including a malformed owner pid or a
-Codex app-server daemon owner), 3 = conflict (held, release mismatch, or a reclaim marker).
+Codex app-server daemon owner), 3 = conflict (held, release mismatch, or a reclaim marker),
+1 = a `journal` write failed (journal subcommand only).
 EOF
 }
 
@@ -219,6 +255,139 @@ write_record() {
   printf '%s' "$(pwd -P)" > "$lockdir/checkout-path"
 }
 
+# --- run journal (#251) --------------------------------------------------------------------------
+# Explicit character lists throughout (never ranges): bash 3.2 `case` ranges follow the locale.
+
+# journal_runid_ok ID — the run-id shape: run-<8 digits>T<6 digits>Z-<1-10 digits>.
+journal_runid_ok() {
+  local id="$1" suffix
+  case "$id" in
+    run-[0123456789][0123456789][0123456789][0123456789][0123456789][0123456789][0123456789][0123456789]T[0123456789][0123456789][0123456789][0123456789][0123456789][0123456789]Z-*) ;;
+    *) return 1 ;;
+  esac
+  suffix="${id#run-????????T??????Z-}"
+  case "$suffix" in
+    ''|*[!0123456789]*) return 1 ;;
+  esac
+  [ "${#suffix}" -le 10 ]
+}
+
+# journal_value_ok KIND VALUE — KIND is slug | harness | num | retries | branch.
+journal_value_ok() {
+  local kind="$1" v="$2"
+  case "$kind" in
+    slug)
+      case "$v" in ''|-*|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;; esac
+      [ "${#v}" -le 40 ]
+      ;;
+    harness)
+      case "$v" in ''|*[!0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.+-]*) return 1 ;; esac
+      [ "${#v}" -le 32 ]
+      ;;
+    num)
+      case "$v" in ''|0*|*[!0123456789]*) return 1 ;; esac
+      [ "${#v}" -le 10 ]
+      ;;
+    retries)
+      case "$v" in ''|*[!0123456789]*) return 1 ;; esac
+      case "$v" in 0?*) return 1 ;; esac
+      [ "${#v}" -le 3 ]
+      ;;
+    branch)
+      case "$v" in ''|-*|/*|*..*|*//*|*[!0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz._/-]*) return 1 ;; esac
+      [ "${#v}" -le 100 ]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# journal_session — prints CLAUDE_CODE_SESSION_ID only when it is wholly [A-Za-z0-9-]{1,64};
+# otherwise prints nothing (the empty string), never a sanitized fragment.
+journal_session() {
+  local s="${CLAUDE_CODE_SESSION_ID:-}"
+  case "$s" in
+    ''|*[!0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-]*) return 0 ;;
+  esac
+  [ "${#s}" -le 64 ] && printf '%s' "$s"
+  return 0
+}
+
+# journal_append FILE LINE — one append, refusing a symlink or non-regular file/directory at the
+# journal path. Writes nothing to stdout; on failure one stderr `warning: journal` line, return 1.
+journal_append() {
+  local file="$1" line="$2"
+  if [ -L "$journaldir" ] || { [ -e "$journaldir" ] && [ ! -d "$journaldir" ]; }; then
+    echo "harness-lock.sh: warning: journal directory $journaldir is a symlink or not a directory — not written" >&2
+    return 1
+  fi
+  if [ -L "$file" ] || { [ -e "$file" ] && [ ! -f "$file" ]; }; then
+    echo "harness-lock.sh: warning: journal file $file is a symlink or not a regular file — not written" >&2
+    return 1
+  fi
+  if ! mkdir -p "$journaldir" 2>/dev/null; then
+    echo "harness-lock.sh: warning: journal directory $journaldir could not be created — not written" >&2
+    return 1
+  fi
+  if ! { printf '%s\n' "$line" >> "$file"; } 2>/dev/null; then
+    echo "harness-lock.sh: warning: journal append to $file failed — not written" >&2
+    return 1
+  fi
+  return 0
+}
+
+# journal_lock_event EVENT RUNID [RECLAIMED_RUNID] — the script's own acquire/release/release-force
+# record. Best effort: always returns 0, so the caller's exit status and stdout are untouched.
+journal_lock_event() {
+  local event="$1" rid="$2" reclaimed="${3:-}" ts rec host hv pid
+  journal_runid_ok "$rid" || return 0
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  rec='{"v":1,"ts":"'"$ts"'","run_id":"'"$rid"'","event":"'"$event"'","session":"'"$(journal_session)"'"'
+  if [ "$event" = "acquire" ]; then
+    host="$(uname -n 2>/dev/null | LC_ALL=C tr -cd 'A-Za-z0-9._-' | cut -c1-64)"
+    [ -n "$host" ] || host="unknown"
+    hv="$(printf '%s' "$version" | LC_ALL=C tr -cd 'A-Za-z0-9.+-' | cut -c1-32)"
+    pid="$(cat "$lockdir/pid" 2>/dev/null || true)"
+    case "$pid" in ''|*[!0123456789]*) pid="" ;; esac
+    pid="$(printf '%s' "$pid" | cut -c1-10)"
+    rec="$rec"',"host":"'"$host"'","pid":"'"$pid"'","harness_version":"'"$hv"'"'
+    if [ -n "$reclaimed" ] && journal_runid_ok "$reclaimed"; then
+      rec="$rec"',"reclaimed_run_id":"'"$reclaimed"'"'
+    fi
+  fi
+  rec="$rec}"
+  journal_append "$journaldir/$rid.jsonl" "$rec" || true
+  return 0
+}
+
+# prune_journal CURRENT_ID — keep the newest JOURNAL_KEEP run-shaped files directly under the
+# journal directory (lexical order = chronological). Never removes the current run's file, never
+# touches a non-matching name, and deletes with one `rm -f` per file (never a recursive delete).
+# Always returns 0.
+prune_journal() {
+  local current="$1.jsonl" f name names="" total=0 excess old
+  { [ -d "$journaldir" ] && [ ! -L "$journaldir" ]; } || return 0
+  for f in "$journaldir"/run-*.jsonl; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    name="${f##*/}"
+    journal_runid_ok "${name%.jsonl}" || continue
+    names="$names$name
+"
+    total=$((total + 1))
+  done
+  [ "$total" -gt "$JOURNAL_KEEP" ] || return 0
+  excess=$((total - JOURNAL_KEEP))
+  while IFS= read -r old; do
+    [ "$excess" -gt 0 ] || break
+    [ -n "$old" ] || continue
+    [ "$old" = "$current" ] && continue
+    rm -f "$journaldir/$old"
+    excess=$((excess - 1))
+  done <<EOF
+$(printf '%s' "$names" | LC_ALL=C sort)
+EOF
+  return 0
+}
+
 # resolved_pid — computes ${CLAUDE_PID:-$PPID} per the header's RECORDED-PID RULE, printing one
 # `note=` line (stderr) first when a present-but-non-digits CLAUDE_PID is ignored.
 resolved_pid() {
@@ -266,6 +435,8 @@ reclaim_stale() {
     return 3
   fi
   write_record "$owner"
+  journal_lock_event acquire "$(cat "$lockdir/run-id")" "${obs_ident%:*}"
+  prune_journal "$(cat "$lockdir/run-id")"
   echo "run-id=$(cat "$lockdir/run-id")"
   return 0
 }
@@ -346,6 +517,8 @@ cmd_acquire() {
 
   if mkdir "$lockdir" 2>/dev/null; then
     write_record "$used_pid"
+    journal_lock_event acquire "$(cat "$lockdir/run-id")"
+    prune_journal "$(cat "$lockdir/run-id")"
     echo "run-id=$(cat "$lockdir/run-id")"
     exit 0
   fi
@@ -423,7 +596,10 @@ cmd_release() {
 
   if [ "$arg" = "--force" ]; then
     print_holder
+    local forced_id
+    forced_id="$(cat "$lockdir/run-id" 2>/dev/null || true)"
     remove_lock
+    journal_lock_event release-force "$forced_id"
     exit 0
   fi
 
@@ -431,6 +607,7 @@ cmd_release() {
   stored="$(cat "$lockdir/run-id" 2>/dev/null || true)"
   if [ "$stored" = "$arg" ]; then
     remove_lock
+    journal_lock_event release "$stored"
     exit 0
   fi
 
@@ -458,6 +635,105 @@ cmd_status() {
   exit 0
 }
 
+cmd_journal() {
+  if [ "$#" -lt 4 ]; then
+    usage >&2
+    exit 2
+  fi
+  local rid="$1" a k v
+  shift
+  if ! journal_runid_ok "$rid"; then
+    echo "harness-lock.sh: journal: run id must look like run-<YYYYMMDD>T<HHMMSS>Z-<pid>, got '$rid'" >&2
+    exit 2
+  fi
+  local f_stage="" f_issue="" f_outcome="" f_retries="" f_deploy="" f_harness="" f_pr="" f_branch="" f_reason=""
+  for a in "$@"; do
+    case "$a" in
+      *=*) ;;
+      *) echo "harness-lock.sh: journal: expected key=value, got '$a'" >&2; exit 2 ;;
+    esac
+    k="${a%%=*}"
+    v="${a#*=}"
+    case "$k" in
+      stage)
+        [ -z "$f_stage" ] || { echo "harness-lock.sh: journal: duplicate key '$k'" >&2; exit 2; }
+        journal_value_ok slug "$v" || { echo "harness-lock.sh: journal: bad value for '$k'" >&2; exit 2; }
+        f_stage="$v"
+        ;;
+      issue)
+        [ -z "$f_issue" ] || { echo "harness-lock.sh: journal: duplicate key '$k'" >&2; exit 2; }
+        journal_value_ok num "$v" || { echo "harness-lock.sh: journal: bad value for '$k'" >&2; exit 2; }
+        f_issue="$v"
+        ;;
+      outcome)
+        [ -z "$f_outcome" ] || { echo "harness-lock.sh: journal: duplicate key '$k'" >&2; exit 2; }
+        journal_value_ok slug "$v" || { echo "harness-lock.sh: journal: bad value for '$k'" >&2; exit 2; }
+        f_outcome="$v"
+        ;;
+      retries)
+        [ -z "$f_retries" ] || { echo "harness-lock.sh: journal: duplicate key '$k'" >&2; exit 2; }
+        journal_value_ok retries "$v" || { echo "harness-lock.sh: journal: bad value for '$k'" >&2; exit 2; }
+        f_retries="$v"
+        ;;
+      deploy)
+        [ -z "$f_deploy" ] || { echo "harness-lock.sh: journal: duplicate key '$k'" >&2; exit 2; }
+        journal_value_ok slug "$v" || { echo "harness-lock.sh: journal: bad value for '$k'" >&2; exit 2; }
+        f_deploy="$v"
+        ;;
+      harness)
+        [ -z "$f_harness" ] || { echo "harness-lock.sh: journal: duplicate key '$k'" >&2; exit 2; }
+        journal_value_ok harness "$v" || { echo "harness-lock.sh: journal: bad value for '$k'" >&2; exit 2; }
+        f_harness="$v"
+        ;;
+      pr)
+        [ -z "$f_pr" ] || { echo "harness-lock.sh: journal: duplicate key '$k'" >&2; exit 2; }
+        journal_value_ok num "$v" || { echo "harness-lock.sh: journal: bad value for '$k'" >&2; exit 2; }
+        f_pr="$v"
+        ;;
+      branch)
+        [ -z "$f_branch" ] || { echo "harness-lock.sh: journal: duplicate key '$k'" >&2; exit 2; }
+        journal_value_ok branch "$v" || { echo "harness-lock.sh: journal: bad value for '$k'" >&2; exit 2; }
+        f_branch="$v"
+        ;;
+      reason)
+        [ -z "$f_reason" ] || { echo "harness-lock.sh: journal: duplicate key '$k'" >&2; exit 2; }
+        journal_value_ok slug "$v" || { echo "harness-lock.sh: journal: bad value for '$k'" >&2; exit 2; }
+        f_reason="$v"
+        ;;
+      *)
+        echo "harness-lock.sh: journal: unknown key '$k'" >&2
+        exit 2
+        ;;
+    esac
+  done
+  if [ -z "$f_stage" ] || [ -z "$f_issue" ] || [ -z "$f_outcome" ]; then
+    echo "harness-lock.sh: journal: stage, issue and outcome are required" >&2
+    exit 2
+  fi
+
+  local file="$journaldir/$rid.jsonl"
+  if [ -L "$journaldir" ] || { [ -e "$journaldir" ] && [ ! -d "$journaldir" ]; } \
+     || [ -L "$file" ] || [ ! -f "$file" ]; then
+    echo "harness-lock.sh: journal: no regular journal file for $rid — mistyped run id, or acquire's record failed (or the path is a symlink)" >&2
+    exit 1
+  fi
+
+  local rec
+  rec='{"v":1,"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","run_id":"'"$rid"'","event":"stage","session":"'"$(journal_session)"'","stage":"'"$f_stage"'","issue":'"$f_issue"',"outcome":"'"$f_outcome"'"'
+  [ -z "$f_retries" ] || rec="$rec"',"retries":'"$f_retries"
+  [ -z "$f_deploy" ]  || rec="$rec"',"deploy":"'"$f_deploy"'"'
+  [ -z "$f_harness" ] || rec="$rec"',"harness":"'"$f_harness"'"'
+  [ -z "$f_pr" ]      || rec="$rec"',"pr":'"$f_pr"
+  [ -z "$f_branch" ]  || rec="$rec"',"branch":"'"$f_branch"'"'
+  [ -z "$f_reason" ]  || rec="$rec"',"reason":"'"$f_reason"'"'
+  rec="$rec}"
+  if journal_append "$file" "$rec"; then
+    echo "journal=written"
+    exit 0
+  fi
+  exit 1
+}
+
 # --- dispatch ------------------------------------------------------------------------------
 
 sub="${1:-}"
@@ -483,6 +759,7 @@ fi
 lockroot="$common_abs/trail-blazer"
 lockdir="$lockroot/lock"
 reclaimdir="$lockroot/reclaim"
+journaldir="$lockroot/journal"
 
 version="unknown"
 if command -v jq >/dev/null 2>&1; then
@@ -494,4 +771,5 @@ case "$sub" in
   acquire) cmd_acquire "$@" ;;
   release) cmd_release "$@" ;;
   status)  cmd_status "$@" ;;
+  journal) cmd_journal "$@" ;;
 esac

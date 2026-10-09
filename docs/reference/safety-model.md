@@ -1157,3 +1157,37 @@ own behavior above — the acquire/reclaim/release/status semantics, the shared-
 and the recorded-pid rule; see CLAUDE.md's "Verification" section. The skills' acquire-at-step-0 /
 release-at-close-or-abort placement is prompt-enforced, not mechanically checked — gate assertion
 4.36 pins only the subcommand vocabulary the three skills invoke against `LOCK_SUBCOMMANDS`.
+
+**Run journal (#251).** The lock script also keeps a local, append-only audit trail of what each
+run did, so the record outlives the session. `acquire` creates `<git-common-dir>/trail-blazer/journal/<run-id>.jsonl`
+(next to `lock/`, `reclaim/` and Codex's `runs/`; every worktree of one checkout shares it) with
+one `acquire` record, and `release` / `release --force` append `release` / `release-force`. The
+orchestrating skills add `stage` records through `harness-lock.sh journal <run-id> stage=<s>
+issue=<n> outcome=<o> [retries=<k>] [deploy=<d>] [harness=<v>] [pr=<n>] [branch=<b>] [reason=<r>]`:
+one per recorded `<!-- harness-status: … -->` line (merge lines included) plus three exit records
+from `issue-implementer`'s "Run journal" bullet — `pr-opened`, `impl-blocked` and `escalated`.
+Each line is one JSON object, `"v":1`, with keys in a fixed order: `ts`, `run_id`, `event`
+(`acquire`, `release`, `release-force`, `stage`), `session`, then the event's own keys (`host`,
+`pid`, `harness_version` and, after a stale reclaim, `reclaimed_run_id` on `acquire`; the
+`stage`/`issue`/`outcome` keys and the optional ones above on `stage`). `session` is
+`CLAUDE_CODE_SESSION_ID` when it is wholly `[A-Za-z0-9-]{1,64}` and `""` otherwise — always `""`
+on Codex, where that variable is not exported; the `acquire` record's `pid` and `host` identify
+the session there. Every value is held to an explicit character set and length cap and the run id
+to its `run-<UTC stamp>-<pid>` shape before it becomes a file name, so a record is identifiers only:
+no prose, no secrets, no issue or PR text. A `journal` call never creates a run's file (only
+`acquire` does), refuses a symlink or non-regular file or directory, and exits 2 for a rejected
+argument and 1 for a failed write; a journal failure inside `acquire` / `release` never changes
+their exit status, stdout or lock files (one `warning: journal` line on stderr), and the skills
+treat a failed or denied `journal` call as best effort. Each successful `acquire` prunes the
+directory to the newest `JOURNAL_KEEP` run files (500), never the current run's, deleting one file
+at a time and never recursively. Codex's `trail-blazer/runs/<stamp>-<pid>/record.txt` is the
+whole-run outcome; the journal holds the per-stage records, and the two join on the run id (the
+first line of that run's `last-message.md`). Read it with, for example, `jq -cR 'fromjson? |
+select(.pr == 530 or .issue == 251)' "$(git rev-parse --git-common-dir)"/trail-blazer/journal/run-*.jsonl`
+(`fromjson?` skips a truncated line); `select(.event != "stage")` reads the lock tenure.
+**Honest limits:** the journal is advisory and not tamper-evident — anything with write access to
+`.git` can edit it, and the model holds the grant to append a false `stage` record; a missing
+record does not prove nothing happened; stage-record placement is prompt-enforced like
+acquire/release placement; append atomicity assumes a local filesystem, and a window between the
+symlink check and the append remains; a refused `acquire` (exit 3) leaves no record, and a run that
+stops before dispatching anything (red baseline, stop switch) journals only its lock events.

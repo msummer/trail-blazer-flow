@@ -450,6 +450,7 @@ issue-implementer skill's "Resilient dispatch" vocabulary for `merge`, and `harn
 carry a trailing `deploy=<verified|pending|failed>` field before it, e.g.:
 `<!-- harness-status: stage=merge issue=<n> outcome=merged retries=0 deploy=verified harness=<version> -->`;
 no deploy field is emitted when there is no declaration or the outcome is not `merged`.
+Journal it with `pr=<pr>`, per `issue-implementer`'s "Run journal" bullet.
 
 PRs that fail any check (guard or policy) simply stay in the "waits on the human" queue with a
 one-line reason — a normal outcome, not an error (the loud escalations above are for cases
@@ -475,7 +476,7 @@ in "what this cycle did" — issue links, the measurement figure, and that each 
 ### 5. Close the loop
 
 The report's **first line** is `run-id: <id>` — the id `harness-lock.sh acquire` printed at step
-0 (never re-derived; a future run-journal keys off this same value) — and its **second line** is
+0 (never re-derived; the run journal keys off this same value) — and its **second line** is
 `harness: <version> <sha>`, step 0's `harness-version.sh` output pasted verbatim.
 
 ```bash

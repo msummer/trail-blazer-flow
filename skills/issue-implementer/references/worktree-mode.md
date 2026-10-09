@@ -70,7 +70,9 @@ row: each dispatch's status line is its record, with the same `stage`/`outcome`/
 vocabulary, and you emit the line yourself for any worktree stage that died with no usable
 report. Records land out of issue order as completions interleave — harmless:
 `reconcile-ledger.sh` sorts by issue and keeps the last record per issue+stage, so a swarm run
-reconciles exactly like a sequential one.
+reconciles exactly like a sequential one. The run journal is unchanged too: journal calls run from
+the main checkout with the run's own id, and `harness-lock.sh` resolves the shared common dir
+from any worktree.
 
 ## Swarm procedure
 
