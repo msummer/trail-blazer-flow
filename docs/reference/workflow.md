@@ -504,7 +504,11 @@ loop (`bin/harness-stop.sh`) — see "Stopping a cycle" above; the harness only 
 label, and never applies or removes it. `triaged-held` (#346) is human-applied: it marks a held
 follow-up issue you have read and deliberately decided to keep parked — see "Returning to a
 laptop" above for the `followups_to_triage` bucket this excludes from and the `gh issue edit`
-set/clear commands; the harness never applies or removes it either. `plan-approved`
+set/clear commands; the harness never applies or removes it either. `building` (#486) is
+informational only: the `issue-implementer` skill adds it just before an issue's first
+implementer dispatch and removes it when the PR opens or at any other exit, sweeping leftovers
+from every open issue at its pre-flight; no harness script, hook, skill or agent ever reads it,
+so a human adding or removing it changes nothing. `plan-approved`
 can also come back off: the `issue-implementer` skill removes it (with an audit comment) when the
 approval no longer covers the freshest plan comment — a same-run revision landed after the label
 was applied (#174), the plan comment was itself edited in place after approval (#192), or, since

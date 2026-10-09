@@ -491,6 +491,7 @@ passes 300 lines or 20,000 bytes.
 | `plan-proposed` | harness | A plan is posted and waiting for your review |
 | `plan-approved` | **you** (or an auto-approval policy) | Go ahead and build it. Remove it to halt the issue |
 | `pr-open` | harness | A PR is open for this issue |
+| `building` | harness | Informational: the implementer is building this issue right now. The harness never reads it; adding or removing it yourself changes nothing |
 | `impl-blocked` | harness | Implementation hit a blocker. Read the comment, then remove the label to retry |
 | `needs-human` | harness | The harness asked you a question and moved on. Answer it, then remove the label |
 | `no-plan` | you, or the harness on follow-ups | Keep this issue out of planning |

@@ -63,6 +63,67 @@
       "expect_fail": [
         "harness-dead-case"
       ]
+    },
+    {
+      "name": "486-sc-454-exempt-anyline",
+      "target": "dev/selfcheck.sh",
+      "suite": "dev/selfcheck-tests.sh",
+      "filter": "4.54-",
+      "edits": [
+        {
+          "from": " && [ \"${hit_454#*:}\" = \"$sanctioned_454\" ]",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "4.54-reader-in-sweep-file"
+      ]
+    },
+    {
+      "name": "486-sc-454-exempt-anyfile",
+      "target": "dev/selfcheck.sh",
+      "suite": "dev/selfcheck-tests.sh",
+      "filter": "4.54-",
+      "edits": [
+        {
+          "from": "[ \"$f\" = \"$root/skills/issue-implementer/SKILL.md\" ] && [ \"${hit_454",
+          "to": "[ \"${hit_454"
+        }
+      ],
+      "expect_fail": [
+        "4.54-sanctioned-elsewhere"
+      ]
+    },
+    {
+      "name": "486-sc-454-count-atleast",
+      "target": "dev/selfcheck.sh",
+      "suite": "dev/selfcheck-tests.sh",
+      "filter": "4.54-",
+      "edits": [
+        {
+          "from": "if [ \"$sweep_n_454\" != \"1\" ]",
+          "to": "if [ \"$sweep_n_454\" = \"0\" ]"
+        }
+      ],
+      "expect_fail": [
+        "4.54-sweep-duplicated"
+      ]
+    },
+    {
+      "name": "486-sc-454-count-off",
+      "target": "dev/selfcheck.sh",
+      "suite": "dev/selfcheck-tests.sh",
+      "filter": "4.54-",
+      "edits": [
+        {
+          "from": "if [ \"$sweep_n_454\" != \"1\" ]",
+          "to": "if false"
+        }
+      ],
+      "expect_fail": [
+        "4.54-sweep-duplicated",
+        "4.54-sweep-reworded"
+      ]
     }
   ]
 }

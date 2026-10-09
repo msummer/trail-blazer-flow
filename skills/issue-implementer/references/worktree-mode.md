@@ -59,7 +59,8 @@ issue-implementer skill's step 2c's relaunch with `-C <worktree>` in front of th
 recorded, `impl-blocked` via the issue-implementer skill's step 2f, a stage escalated as failed
 after the ladder, or held on an unknown approval-binding verdict per the issue-implementer
 skill's step 2e (#219, a `wip: checkpoint binding-recheck` commit with `plan-approved` untouched,
-not a stage failure) — and every one leaves a status line and a ledger record. Exhausting the
+not a stage failure) — each clears `building` (step f below), and every one leaves a status line
+and a ledger record. Exhausting the
 ladder or the resume cap in one worktree routes that issue to the blocked path and leaves the
 rest of the swarm running; it never ends the swarm. A worktree you launched and never accounted
 for is exactly the failure this loop exists to prevent.
@@ -125,7 +126,9 @@ c. **Dispatch the implementers as one batch** (up to the concurrency bound; they
    Git Bash, where backslash paths get mangled by quoting. Also name the sibling issues'
    affected files as explicitly out of scope ("issues <n>, <m> are being implemented
    concurrently — do NOT touch <their files>") so a subagent that discovers adjacent work
-   doesn't drift into a concurrent issue's territory.
+   doesn't drift into a concurrent issue's territory. Immediately before each issue's first
+   dispatch in the batch (never a relaunch or kickback), `gh issue edit <number> --add-label
+   building` — best effort, per the skill's "Labels involved".
 
 d. **Dependency caveat (critical):** ignored files don't exist in a fresh worktree — virtualenvs,
    `node_modules`, `.env`. Tell each subagent how to verify without reinstalling: e.g. for a
@@ -202,8 +205,15 @@ e. **As each implementer completes, run the issue-implementer skill's steps 2d�
      <worktree> status --porcelain --ignored -- .claude/LESSONS.md`) on its return, death, or
      `incomplete` exit, judged against that worktree's own copy exactly as in sequential mode's
      "Resilient dispatch" guard block;
+   - **your own lesson goes to the MAIN checkout's `.claude/LESSONS.md`, never a worktree's
+     copy** (#328) — snapshot the main checkout's copy (`git add -u -- .claude/LESSONS.md`, no
+     `-C`) once on entering the swarm, before step c's first batch, and again right after each of
+     your own appends; the distill's pre-append compare (`git diff --name-only --
+     .claude/LESSONS.md`, or its absent-baseline form) runs there too. A worktree's copy is only
+     ever touched by its per-dispatch guard above, so step f's plain `git worktree remove` never
+     meets a lesson-dirty tree;
    - **the checkpoint lands in the worktree, not the main checkout**, which stays on the default
-     branch, untouched, for the whole swarm;
+     branch, untouched apart from your own `.claude/LESSONS.md` lesson, for the whole swarm;
    - **the worktree path travels in every prompt** (the verifier's included) and in every
      verification command you quote.
    Kickbacks re-dispatch the implementer into the same worktree and rejoin the parallel lane,
@@ -215,7 +225,9 @@ f. **Clean up each worktree once its issue is terminal** — its PR is open *and
    watch (plus any CI-fix attempt) has drained, it took the blocked path and its `wip:` commit
    exists, or it held on an unknown approval-binding verdict and its `wip: checkpoint
    binding-recheck` commit exists (#219). Removing it earlier breaks the CI-fix attempt, which
-   re-dispatches into it. The branch lives on in the repo:
+   re-dispatches into it. First, if this run added `building` to the issue and step e didn't
+   already remove it at PR open, `gh issue edit <number> --remove-label building` (best effort).
+   The branch lives on in the repo:
 ```bash
 git worktree remove "../<repo-dirname>-wt-<number>"
 ```
