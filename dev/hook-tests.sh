@@ -4179,66 +4179,57 @@ pcap_verdict() {
     noop) expect_push_no_opinion ;;
   esac
 }
+# measure_cpu_ms CMD [ARGS...] -- like measure_ms, but times user+system CPU (TIMEFORMAT=%3U and
+# %3S, which bash's `time` keyword takes over the command and every child it reaped, so the whole
+# hook process tree run_push_guard waits for), not wall clock: CPU time barely moves with host load,
+# so a bound on it holds on an oversubscribed CI runner where a wall-clock bound flakes. Sets
+# $measured_cpu_ms, or "" when either half of the report could not be parsed.
+measured_cpu_ms=""
+measure_cpu_ms() {
+  local file="$tmpbase/measure-cpu-ms" line last="" u s
+  local TIMEFORMAT='%3U %3S'
+  { time "$@" ; } 2>"$file"
+  while IFS= read -r line; do
+    [ -n "$line" ] && last="$line"
+  done < "$file"
+  rm -f "$file"
+  measured_cpu_ms=""
+  _ms_from_timeformat "${last%% *}"; u="$parsed_ms"
+  _ms_from_timeformat "${last##* }"; s="$parsed_ms"
+  [ -n "$u" ] && [ -n "$s" ] && measured_cpu_ms=$(( u + s ))
+}
 case_push_cmdcaptime_pin_at_cap_worst() {
   # Regression pin (no registry mutant: whether an unbounded run overruns depends on the bash and awk
-  # build, as case_cdg_dl_deny_cwd_cr's comment says for claude-dir-guard). Each worst shape exactly at
-  # the cap is held to two bounds, both against a same-run control that is the plan-mode twin of the
-  # identical bytes: it leaves before the tokenizer, so it times cat, the fast-path globs and two jq
-  # passes only, carrying the host load WITHOUT absorbing the tokenizer cost the pin bounds.
-  # (1) Load-invariant ratio: the knob-0 run of the same payload, which denies at the first deadline
-  #     sample and so times the unsampled prefix including the tokenizer, must stay within a fixed
-  #     multiple of the control (with a floor on the control, so a tiny denominator cannot make the
-  #     bound hair-trigger). The fastest of up to three knob-0 runs counts, since a transient load spike
-  #     moves one run but a real regression moves every run. The multiple sits well above the measured ratios and well below one that
-  #     would put the prefix near the hook timeout on an unloaded host.
-  # (2) Absolute: the run at the production budget (hand-typed 5, the hook's PUSH_ANALYSIS_BUDGET_SECS)
-  #     reaches a verdict under an active deadline of the budget plus one sample window plus a K-scaled
-  #     multiple of the control, clamped at 9s, below the hook's own 10s timeout. A deadline overrun is
-  #     retried once, since a transient load spike moves wall time but not the ratio; two overruns fail.
-  local dir="$tmpbase/repo-pp-cap-worst" shape want ctl_ms pre_ms secs w0 payload ok_save why_save
-  local ratio_max=25 ctl_floor_ms=100 limit_ms try
+  # build, as case_cdg_dl_deny_cwd_cr's comment says for claude-dir-guard). The hook's own
+  # check_deadline bounds everything after its first deadline sample (pinned by the push-dl- cases);
+  # what nothing samples is the prefix before it -- the jq extraction, the cap check, the awk tokenizer
+  # and the driver's set-up. For each worst shape exactly at the cap this pin runs the hook at a zero
+  # budget (it denies at the first sample, so the run is the unsampled prefix alone) and holds the
+  # CPU time of that run -- the hook's whole process tree, user plus system -- to a fixed bound well
+  # under the hook's 10s timeout. CPU time, not wall clock: a super-linear prefix (the bash 3.2
+  # whole-word expansions and the whole-text CR strip this issue removed cost tens of seconds of CPU
+  # at the cap) still blows the bound, while host load, which stretches wall clock, barely moves it,
+  # so the pin holds under the mutant driver's concurrency. It then runs the production budget under
+  # a generous safety deadline and checks the verdict: the shape's own, or the too-large line.
+  local dir="$tmpbase/repo-pp-cap-worst" shape want payload cpu_max_ms=6000
   mk_fixture_repo "$dir" main feature/x
   for shape in a b c d f i s t; do
     case "$shape" in a|c|d) want=rxdest ;; i) want=unres ;; s|t) want=noop ;; *) want=main ;; esac
-    w0="$__why"; __why=""
     pcap_shape "$shape"
     payload="$(mk_push_cmd_big "$pcap_cmd" "$dir")"
-    push_deadline_override=9
-    measure_ms run_push_guard "$(mk_push_cmd_big_plan "$pcap_cmd" "$dir")"
-    ctl_ms="$measured_ms"
-    if [ -z "$ctl_ms" ]; then
-      __ok=0; __why="${w0}[shape $shape] control's timing report could not be parsed -- can't size the bounds\n"
+    push_budget_override="0"
+    push_deadline_override=60
+    measure_cpu_ms run_push_guard "$payload"
+    if [ -z "$measured_cpu_ms" ]; then
+      __ok=0; __why="${__why}[shape $shape] knob-0 run's CPU report could not be parsed\n"
       continue
     fi
-    expect_push_no_opinion
-    limit_ms=$(( ratio_max * (ctl_ms > ctl_floor_ms ? ctl_ms : ctl_floor_ms) ))
-    pre_ms=""
-    for try in 1 2 3; do
-      push_budget_override="0"
-      push_deadline_override=20
-      measure_ms run_push_guard "$payload"
-      if [ -z "$measured_ms" ]; then
-        __ok=0; __why="${w0}[shape $shape] knob-0 run's timing report could not be parsed\n"
-        continue 2
-      fi
-      if [ -z "$pre_ms" ] || [ "$measured_ms" -lt "$pre_ms" ]; then pre_ms="$measured_ms"; fi
-      [ "$pre_ms" -le "$limit_ms" ] && break
-    done
-    if [ "$pre_ms" -gt "$limit_ms" ]; then
-      __ok=0; __why="${__why}unsampled prefix ${pre_ms}ms exceeds ${ratio_max}x the plan-mode control (${ctl_ms}ms)\n"
+    if [ "$measured_cpu_ms" -gt "$cpu_max_ms" ]; then
+      __ok=0; __why="${__why}[shape $shape] unsampled prefix used ${measured_cpu_ms}ms of CPU, over the ${cpu_max_ms}ms bound\n"
     fi
-    calibrated_deadline 1 4 "$ctl_ms"
-    secs=$(( 6 + calibrated_secs ))
-    [ "$secs" -le 9 ] || secs=9
-    ok_save="$__ok"; why_save="$__why"
-    for try in 1 2; do
-      __ok="$ok_save"; __why="$why_save"
-      push_deadline_override="$secs"
-      run_push_guard "$payload"
-      [ "$deadline_overran" = true ] || break
-    done
+    push_deadline_override=60
+    run_push_guard "$payload"
     pcap_verdict "$want"
-    if [ -n "$__why" ]; then __why="${w0}[shape $shape, control ${ctl_ms}ms, prefix ${pre_ms}ms, deadline ${secs}s] ${__why}"; else __why="$w0"; fi
   done
 }
 # pp_rxs_flood_cmd N -- a lost segment holding N plain ANSI-C words, a push holding N option values
@@ -11941,7 +11932,7 @@ cases=(
   "push-cmdcap-noop-no-git|case_push_cmdcap_noop_no_git|no opinion: an over-cap command whose raw stdin never names git leaves through the fast path (a control, no registry mutant)"
   "push-cmdcap-noop-plan-mode|case_push_cmdcap_noop_plan_mode|no opinion: an over-cap command in plan mode leaves before the cap (a control, no registry mutant)"
   "push-cmdcaptime-deny-flood|case_push_cmdcaptime_deny_flood|FLOOD+TIMING: a push followed by one multi-megabyte dollar-quote word denies via the cap under an active deadline calibrated from a same-run plan-mode control -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
-  "push-cmdcaptime-pin-at-cap-worst|case_push_cmdcaptime_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap reaches a verdict inside an active deadline bounded by a load-invariant ratio and a clamped deadline, both from a same-run plan-mode control of the same bytes (regression pin, no registry mutant)"
+  "push-cmdcaptime-pin-at-cap-worst|case_push_cmdcaptime_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap spends at most a fixed CPU bound, well under the hook timeout, before its first deadline sample, and reaches its verdict (regression pin, no registry mutant)"
   "push-rxscan-noop-flood|case_push_rxscan_noop_flood|FLOOD+TIMING: a lost segment and a push full of plain dollar-quote words, then a feature push -- no opinion; token count sized from a same-run twin control -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-rescan)"
   "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"
   "push-alias-deny-feature-dest|case_al_deny_feature_dest|a push alias denies even when the destination is a feature branch -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
