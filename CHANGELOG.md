@@ -18,20 +18,24 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
-- #251: new run journal — `harness-lock.sh` gains a `journal` subcommand and writes an
-  identifiers-only JSONL audit trail (lock events plus per-stage records) to
-  `<git-common-dir>/trail-blazer/journal/<run-id>.jsonl`, pruned to the newest 500 runs on each
-  acquire; best effort, local, not tamper-evident. No consumer step (`harness-lock.sh` is already
-  granted); detail in `docs/reference/safety-model.md`.
+- #526: the full mutant-driver run is split into four parallel shards per platform (`--shard <i>/<n>` /
+  `MUTANT_DRIVER_SHARD`, whole `(suite, filter)` groups balanced by record count); the driver leaves
+  the `selfcheck` job for its own `selfcheck-driver` job; macOS shards run at lower concurrency to
+  stop the timing-case flakes (#527). No consumer step.
+- #525: CI's full mutant-driver runs get more time: the `selfcheck` job's post-merge/nightly/dispatch
+  ceiling rises from 35 to 50 minutes and `selfcheck-macos-driver`'s from 50 to 75, so the nightly
+  full run finishes again. No consumer step.
 - #486: new informational `building` label, set by the implementer just before an issue's first
   implementer dispatch and cleared when its PR opens or at any other exit (stale ones swept at
   pre-flight); the harness never reads it (gate assertion 4.54). Worktree-parallel mode's lesson
   distill now appends to the main checkout's `.claude/LESSONS.md`, so worktree cleanup no longer
   meets a lesson-dirty tree (absorbs #328). Consumer step: re-run `bin/setup-labels.sh` (creates
   `building`; the doctor now requires it).
-- #525: CI's full mutant-driver runs get more time: the `selfcheck` job's post-merge/nightly/dispatch
-  ceiling rises from 35 to 50 minutes and `selfcheck-macos-driver`'s from 50 to 75, so the nightly
-  full run finishes again. No consumer step.
+- #251: new run journal — `harness-lock.sh` gains a `journal` subcommand and writes an
+  identifiers-only JSONL audit trail (lock events plus per-stage records) to
+  `<git-common-dir>/trail-blazer/journal/<run-id>.jsonl`, pruned to the newest 500 runs on each
+  acquire; best effort, local, not tamper-evident. No consumer step (`harness-lock.sh` is already
+  granted); detail in `docs/reference/safety-model.md`.
 
 ## v3.3.2
 

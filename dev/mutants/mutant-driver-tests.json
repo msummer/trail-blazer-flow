@@ -53,6 +53,11 @@
         "sel-unclaimed",
         "sel-unmapped-suite",
         "sel-watched-claim",
+        "shard-after-selection",
+        "shard-balance",
+        "shard-partition",
+        "shard-precedence",
+        "shard-unset-unchanged",
         "suite-no-summary",
         "suite-runs-from-copy",
         "total-mismatch",
@@ -723,6 +728,101 @@
       ],
       "expect_fail": [
         "reg-deps-missing-literal"
+      ]
+    },
+    {
+      "name": "drv-shard-group",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "shard-",
+      "edits": [
+        {
+          "from": "        sh_found=\"$sh_g\"\n",
+          "to": "        sh_found=-1\n"
+        }
+      ],
+      "expect_fail": [
+        "shard-balance",
+        "shard-partition"
+      ]
+    },
+    {
+      "name": "drv-shard-greedy",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "shard-",
+      "edits": [
+        {
+          "from": "if [ \"${sh_load[$sh_k]}\" -lt \"${sh_load[$sh_best]}\" ]; then",
+          "to": "if [ \"$sh_k\" -eq $(( (sh_g % shard_n) + 1 )) ]; then"
+        }
+      ],
+      "expect_fail": [
+        "shard-balance"
+      ]
+    },
+    {
+      "name": "drv-shard-range",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "shard-",
+      "edits": [
+        {
+          "from": "if [ \"$shard_i\" -gt \"$shard_n\" ]; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "shard-bad-spec"
+      ]
+    },
+    {
+      "name": "drv-shard-presel",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "shard-",
+      "edits": [
+        {
+          "from": "for sh_pos in \"${!sel[@]}\"; do\n    sh_ridx=\"${sel[$sh_pos]}\"",
+          "to": "for sh_pos in \"${!rec_name[@]}\"; do\n    sh_ridx=\"$sh_pos\""
+        },
+        {
+          "from": "  for sh_pos in \"${!sel[@]}\"; do\n    if [ \"${sh_gshard[${sh_rgroup[$sh_pos]}]}\" = \"$shard_i\" ]; then\n      shard_sel+=(\"${sel[$sh_pos]}\")",
+          "to": "  for sh_pos in \"${!rec_name[@]}\"; do\n    if [ \"${sh_gshard[${sh_rgroup[$sh_pos]}]}\" = \"$shard_i\" ]; then\n      shard_sel+=(\"$sh_pos\")"
+        }
+      ],
+      "expect_fail": [
+        "shard-after-selection"
+      ]
+    },
+    {
+      "name": "drv-shard-precedence",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "shard-",
+      "edits": [
+        {
+          "from": "if [ \"$shard_flag_set\" -eq 1 ]; then\n  shard_spec=\"$shard_flag\"",
+          "to": "if [ \"$shard_flag_set\" -eq 1 ] && [ -z \"${MUTANT_DRIVER_SHARD:-}\" ]; then\n  shard_spec=\"$shard_flag\""
+        }
+      ],
+      "expect_fail": [
+        "shard-precedence"
+      ]
+    },
+    {
+      "name": "drv-shard-default",
+      "target": "dev/mutant-driver.sh",
+      "suite": "dev/mutant-driver-tests.sh",
+      "filter": "shard-",
+      "edits": [
+        {
+          "from": "shard_i=\"\"; shard_n=\"\"\nif [ -n \"$shard_spec\" ]; then",
+          "to": "shard_i=\"\"; shard_n=\"\"\n[ -n \"$shard_spec\" ] || shard_spec=\"1/1\"\nif [ -n \"$shard_spec\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "shard-unset-unchanged"
       ]
     }
   ]

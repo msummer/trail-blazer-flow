@@ -19,10 +19,12 @@
 # failed.
 set -uo pipefail
 
-# A CI step env (MUTANT_DRIVER_SINCE, #464) inherited through the OUTER driver run that runs this
-# very file as a suite would otherwise leak into every nested driver invocation this file makes
-# below, silently switching every plain run_driver call into (fallback) selection mode.
+# A CI step env (MUTANT_DRIVER_SINCE, #464; MUTANT_DRIVER_SHARD, #526) inherited through the OUTER
+# driver run that runs this very file as a suite would otherwise leak into every nested driver
+# invocation this file makes below, silently switching every plain run_driver call into (fallback)
+# selection mode or into a shard slice.
 unset MUTANT_DRIVER_SINCE
+unset MUTANT_DRIVER_SHARD
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 filter="${1:-}"
@@ -1820,6 +1822,185 @@ case_empty_needle_guard() {
 }
 
 # ---------------------------------------------------------------------------------------------
+# Sharding (#526).
+
+# write_shard_fixture DIR — one registry (mutants/reg.json) of six records whose (suite, filter)
+# groups are deliberately uneven, in declared order:
+#   m-a1, m-a2, m-a3  fixture-suite, filter ""            (group 1, three records)
+#   m-b1              fixture-suite, filter case-beta     (group 2)
+#   m-s1              step-suite,    filter ""            (group 3)
+#   m-c1              fixture-suite, filter case-gamma    (group 4)
+write_shard_fixture() {
+  local dir="$1"
+  write_generic_fixture "$dir"
+  write_multiedit_fixture "$dir"
+  write_registry "$dir" <<'EOF'
+{"mutants":[
+  {"name":"m-a1","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TAG_ALPHA=\"on\"","to":"TAG_ALPHA=\"off\""}],"expect_fail":["case-alpha"]},
+  {"name":"m-a2","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TAG_BETA=\"on\"","to":"TAG_BETA=\"off\""}],"expect_fail":["case-beta"]},
+  {"name":"m-a3","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TAG_GAMMA=\"on\"","to":"TAG_GAMMA=\"off\""}],"expect_fail":["case-gamma"]},
+  {"name":"m-b1","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"case-beta",
+   "edits":[{"from":"TAG_BETA=\"on\"","to":"TAG_BETA=\"off\""}],"expect_fail":["case-beta"]},
+  {"name":"m-s1","target":"step.sh","suite":"dev/step-suite.sh","filter":"",
+   "edits":[{"from":"STEP=\"zero\"","to":"STEP=\"one\""}],"expect_fail":["case-step"]},
+  {"name":"m-c1","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"case-gamma",
+   "edits":[{"from":"TAG_GAMMA=\"on\"","to":"TAG_GAMMA=\"off\""}],"expect_fail":["case-gamma"]}
+]}
+EOF
+}
+
+# driver_mutant_names — the mutant (not baseline) names in $driver_out's result lines, one per line.
+driver_mutant_names() {
+  grep -E '^(PASS|FAIL) m-' <<<"$driver_out" | awk '{print $2}' | LC_ALL=C sort
+}
+
+# driver_baseline_count — how many baseline result lines $driver_out holds.
+driver_baseline_count() {
+  grep -cE '^(PASS|FAIL) baseline:' <<<"$driver_out"
+}
+
+# mutant:drv-shard-group — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh shard-. Assigns each record to a shard by its own position instead of
+# by its (suite, filter) group, so one group's records straddle two shards: the baseline count
+# across shards then exceeds the group count and the shards' unions stop being a clean partition.
+case_shard_partition() {
+  local dir; dir="$(fresh_driver_root shard-partition)"
+  write_shard_fixture "$dir"
+  local want; want="$(jq -r '.mutants[].name' "$dir/mutants/reg.json" | LC_ALL=C sort)"
+  local n i got bases
+  for n in 1 2 3 5; do
+    got=""; bases=0
+    for i in $(seq 1 "$n"); do
+      run_driver "$dir" --serial --shard "$i/$n"
+      expect_rc 0
+      got="${got}$(driver_mutant_names)
+"
+      bases=$((bases + $(driver_baseline_count)))
+      if [ "$n" -eq 5 ] && [ "$i" -eq 5 ]; then
+        expect_out "shard 5/5: 0 of 6 records"
+        expect_out "== summary: 0 pass, 0 fail =="
+        expect_not_out "baseline:"
+      fi
+    done
+    got="$(printf '%s' "$got" | sed '/^$/d' | LC_ALL=C sort)"
+    if [ "$got" != "$want" ]; then
+      __ok=0; __why="${__why}n=$n: union of shards is not the registry record set exactly once\n"
+    fi
+    if [ "$bases" -ne 4 ]; then
+      __ok=0; __why="${__why}n=$n: baselines across shards were $bases, expected 4 (a group was split or repeated)\n"
+    fi
+  done
+}
+
+# mutant:drv-shard-greedy — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh shard-. Replaces the driver's least-loaded group pick with a
+# round-robin over groups: the lone-record groups then alternate shards instead of piling onto the
+# shard that has fewer records, so m-s1 lands in shard 1 instead of shard 2.
+case_shard_balance() {
+  local dir; dir="$(fresh_driver_root shard-balance)"
+  write_shard_fixture "$dir"
+  run_driver "$dir" --serial --shard 1/2
+  expect_rc 0
+  expect_out "== mutant-driver: shard 1/2: 3 of 6 records =="
+  [ "$(driver_mutant_names | tr '\n' ' ')" = "m-a1 m-a2 m-a3 " ] || { __ok=0; __why="${__why}shard 1/2 members are not exactly m-a1 m-a2 m-a3\n"; }
+  run_driver "$dir" --serial --shard 2/2
+  expect_rc 0
+  expect_out "== mutant-driver: shard 2/2: 3 of 6 records =="
+  [ "$(driver_mutant_names | tr '\n' ' ')" = "m-b1 m-c1 m-s1 " ] || { __ok=0; __why="${__why}shard 2/2 members are not exactly m-b1 m-c1 m-s1\n"; }
+}
+
+# mutant:drv-shard-range — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh shard-. Deletes the driver's own i <= n check, so 3/2 would be
+# accepted (selecting no group) instead of exiting 2 with usage before any suite runs.
+case_shard_bad_spec() {
+  local dir; dir="$(fresh_driver_root shard-bad-spec)"
+  local sentinel="$tmpbase/sentinel-shard-bad-spec"
+  write_sentinel_fixture "$dir" "$sentinel"
+  write_registry "$dir" <<'EOF'
+{"mutants":[
+  {"name":"m-a1","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TAG_ALPHA=\"on\"","to":"TAG_ALPHA=\"off\""}],"expect_fail":["case-alpha"]}
+]}
+EOF
+  local spec
+  for spec in 0/2 3/2 1/0 a/2 12 1/2/3 01/2 /2 1/ 1/02 -1/2; do
+    rm -f "$sentinel"
+    run_driver "$dir" --serial --shard "$spec"
+    assert_registry_rejected "$sentinel"
+    expect_out "usage: dev/mutant-driver.sh"
+  done
+  rm -f "$sentinel"
+  run_driver "$dir" --serial --shard
+  assert_registry_rejected "$sentinel"
+  expect_out "usage: dev/mutant-driver.sh"
+  rm -f "$sentinel"
+  driver_out="$(MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" MUTANT_DRIVER_SHARD=3/2 bash "$dir/dev/mutant-driver.sh" --serial 2>&1)"
+  driver_rc=$?
+  assert_registry_rejected "$sentinel"
+  expect_out "usage: dev/mutant-driver.sh"
+}
+
+# mutant:drv-shard-presel — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh shard-. Makes the driver's own shard block group and pick from every
+# registry record instead of the set left after change-based selection, so the shard's membership
+# ignores the selection (this fixture's shard 1/2 would then hold m-beta, not m-step).
+case_shard_after_selection() {
+  local dir; dir="$(fresh_driver_root shard-after-selection)"
+  write_selection_fixture "$dir"
+  printf 'step.sh\n' > "$dir/changed.txt"
+  run_driver "$dir" --serial --changed-from "$dir/changed.txt" --shard 1/2
+  expect_rc 0
+  expect_out "selected 1 of 2 records"
+  expect_out "shard 1/2: 1 of 1 records"
+  expect_out "PASS m-step"
+  expect_not_out "m-beta"
+  printf 'lib.sh\nstep.sh\n' > "$dir/changed.txt"
+  local got="" i
+  for i in 1 2; do
+    run_driver "$dir" --serial --changed-from "$dir/changed.txt" --shard "$i/2"
+    expect_rc 0
+    expect_out "shard $i/2: 1 of 2 records"
+    got="${got}$(driver_mutant_names)
+"
+  done
+  got="$(printf '%s' "$got" | sed '/^$/d' | tr '\n' ' ')"
+  [ "$got" = "m-beta m-step " ] || { __ok=0; __why="${__why}selected records across shards were '$got', expected m-beta m-step once each\n"; }
+}
+
+# mutant:drv-shard-default — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh shard-. Makes an empty shard spec behave as 1/1, so a plain run would
+# print a shard line (and an empty MUTANT_DRIVER_SHARD would not mean "off").
+case_shard_unset_unchanged() {
+  local dir; dir="$(fresh_driver_root shard-unset)"
+  write_shard_fixture "$dir"
+  run_driver "$dir" --serial
+  expect_rc 0
+  expect_not_out "shard"
+  expect_out "PASS m-c1"
+  driver_out="$(MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" MUTANT_DRIVER_SHARD= bash "$dir/dev/mutant-driver.sh" --serial 2>&1)"
+  driver_rc=$?
+  expect_rc 0
+  expect_not_out "shard"
+  expect_out "PASS m-c1"
+}
+
+# mutant:drv-shard-precedence — recorded in dev/mutants/mutant-driver-tests.json; run
+# bash dev/mutant-driver.sh shard-. Lets MUTANT_DRIVER_SHARD win over --shard when both are set,
+# the reverse of the documented flag-wins precedence.
+case_shard_precedence() {
+  local dir; dir="$(fresh_driver_root shard-precedence)"
+  write_shard_fixture "$dir"
+  driver_out="$(MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" MUTANT_DRIVER_SHARD=2/2 bash "$dir/dev/mutant-driver.sh" --serial --shard 1/2 2>&1)"
+  driver_rc=$?
+  expect_rc 0
+  expect_out "shard 1/2:"
+  expect_not_out "shard 2/2:"
+}
+
+# ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
   "pass-exact|case_pass_exact|an edit's failing set matches expect_fail exactly: PASS"
@@ -1885,6 +2066,12 @@ cases=(
   "footer-format|case_footer_format|the exact '== summary: N pass, M fail ==' footer wording"
   "unsorted-set-order|case_unsorted_set_order|the printed <set> is true LC_ALL=C-sorted, not merely the suite's own print order (kills drv-unsorted)"
   "empty-needle-guard|case_empty_needle_guard|expect_out/expect_not_out with an empty needle fail the CASE, not the driver, and name themselves"
+  "shard-partition|case_shard_partition|for n in 1, 2, 3, 5 the shards' mutant lines hold every record exactly once and no (suite, filter) group is split across shards; an excess shard runs nothing and exits 0 (kills drv-shard-group)"
+  "shard-balance|case_shard_balance|groups go to the shard with the fewest records so far, ties to the lowest index: exact membership a round-robin would fail (kills drv-shard-greedy)"
+  "shard-bad-spec|case_shard_bad_spec|a malformed or out-of-range spec, flag or env form, exits 2 with usage before any suite runs (kills drv-shard-range)"
+  "shard-after-selection|case_shard_after_selection|the shard partitions the set left after change-based selection, not the whole registry (kills drv-shard-presel)"
+  "shard-unset-unchanged|case_shard_unset_unchanged|no spec, or an empty MUTANT_DRIVER_SHARD: no shard line and every record runs (kills drv-shard-default)"
+  "shard-precedence|case_shard_precedence|--shard wins over MUTANT_DRIVER_SHARD (kills drv-shard-precedence)"
 )
 
 matched=0
