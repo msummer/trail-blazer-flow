@@ -31,6 +31,11 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
   distill now appends to the main checkout's `.claude/LESSONS.md`, so worktree cleanup no longer
   meets a lesson-dirty tree (absorbs #328). Consumer step: re-run `bin/setup-labels.sh` (creates
   `building`; the doctor now requires it).
+- #251: new run journal — `harness-lock.sh` gains a `journal` subcommand and writes an
+  identifiers-only JSONL audit trail (lock events plus per-stage records) to
+  `<git-common-dir>/trail-blazer/journal/<run-id>.jsonl`, pruned to the newest 500 runs on each
+  acquire; best effort, local, not tamper-evident. No consumer step (`harness-lock.sh` is already
+  granted); detail in `docs/reference/safety-model.md`.
 
 ## v3.3.2
 

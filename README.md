@@ -719,6 +719,7 @@ entirely, see [docs/reference/codex.md](docs/reference/codex.md#removing-the-cod
 |---|---|
 | A subagent stalls or a step is denied | A permission grant is missing. Run `check-harness.sh`, which names the exact `Bash(...)` entry to add |
 | A run aborts because the lock is held | Another session holds the checkout's lock. `harness-lock.sh status` shows who holds it. If that session is gone, run `harness-lock.sh release --force` |
+| You need to know what a past or unattended run did | Each run appends identifiers-only JSONL records under `.git/trail-blazer/journal/`. See the "Run journal" paragraph in `docs/reference/safety-model.md` for the format and a `jq` one-liner |
 | A run stops with a red baseline | Your default branch is failing its own verification commands. Fix `main` first, because the harness won't build on a broken base |
 | The cycle never merges anything | Run `check-harness.sh`. The usual causes are `merge autonomy: half-activated` (the deny is still in place), no CI on the repo, or a PR that touches governance files |
 | A plan you commented on wasn't revised | Only owner, member, and collaborator comments count as feedback, and only issues still labelled `plan-proposed` get revised |
