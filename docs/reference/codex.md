@@ -1063,6 +1063,11 @@ is handled as follows. In every case, never re-issue the rejected command in ano
 different path, a wrapper, a split, `bash -c`, or a `--force`/alternate flag — whichever branch
 below applies.
 
+**Exception — the `building` label's own calls** (`issue-implementer`'s step-0 sweep listing and
+every `building` add/remove): a rejection of one is noted in the run report and the run
+continues — not escalated, not a stop (the label is informational; see
+`skills/issue-implementer/SKILL.md`'s "Labels involved"). Never re-issue it in another form.
+
 - **With an issue in hand** (stages `2a`–`2f`, `plan-initial`, `plan-revision`): post a Durable
   escalation per `skills/issue-implementer/SKILL.md`'s "Durable escalation" procedure, stage set to
   the current stage, reason `permission-denied`, `comments=none`. Quote the exact command and the

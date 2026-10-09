@@ -840,7 +840,7 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 890
+budget_table="issue-implementer 915
 issue-cycle 615
 issue-planner 600
 project-kickoff 220
@@ -1992,6 +1992,72 @@ else
     bad "$msg453"
   else
     ok "4.53 hooks/claude-dir-guard.sh's GUARDED_TOOLS ('$guarded_453') is covered by, and covers within the exemption list ('$ab453_exempt'), the union of agents/implementer.md's and agents/verifier.md's tools: lines"
+  fi
+fi
+
+# 4.54 (#486) — nothing in the harness reads the informational `building` label. The label is
+# set and cleared by the issue-implementer skill for the repo dashboard's sake only; if a
+# discovery query, hook, or decision ever started filtering on it, a human adding or removing it
+# would silently change what the harness does. Four clauses folded into one id:
+# (a) `building` must be a member of the `create_or_update "<name>"` extraction of
+#     bin/setup-labels.sh (the 4.6 sed idiom) — an empty extraction FAILs ("structure changed"),
+#     and so does a rename, so the reader scans below can never go vacuous against a label that
+#     is no longer created.
+# (b) an ERE, scanned line-by-line over skills/*/SKILL.md, skills/*/references/*.md, agents/*.md,
+#     bin/*.sh, and hooks/*.sh, with two alternatives: the search qualifier `label:building`
+#     (optionally quoted) and the list filter `--label building` (bare or `=` form, optionally
+#     quoted); a longer label sharing the prefix (`building-x`) is not a hit. The setter shapes
+#     `--add-label`/`--remove-label` do not match, by construction. Every hit is a violation
+#     except one line: in skills/issue-implementer/SKILL.md, a line byte-equal to the step-0
+#     sweep's own listing command (sanctioned_454 below) — the sweep removes leftovers and
+#     decides nothing.
+# (c) in bin/*.sh and hooks/*.sh only, excluding bin/setup-labels.sh (which creates the label),
+#     the quoted literal `"building"`/`'building'` must not appear — the shape of a jq or shell
+#     test of a label name.
+# (d) the sanctioned line must appear exactly once, as a whole line, in
+#     skills/issue-implementer/SKILL.md — zero means the sweep was reworded and the exemption in
+#     (b) is dead, so it FAILs ("structure changed") rather than passing on a stale literal.
+# Proves only that those command shapes are absent; a prose instruction ("skip issues labelled
+# building") is not machine-detectable, and pinning prose is forbidden. dev/*.sh is out of scope
+# by construction — this assertion's own ERE source line is never scanned.
+bl_454="building"
+sanctioned_454="gh issue list --state open --label building --limit 100 --json number --jq '.[].number'"
+labels_454="$(sed -nE 's/^create_or_update "([^"]+)".*/\1/p' "$root/bin/setup-labels.sh")"
+if [ -z "$labels_454" ]; then
+  bad "4.54 bin/setup-labels.sh's create_or_update lines didn't match (structure changed) — extraction failed"
+elif ! grep -qxF -- "$bl_454" <<<"$labels_454"; then
+  bad "4.54 bin/setup-labels.sh no longer creates the '$bl_454' label — the reader scan below would be vacuous"
+else
+  sweep_n_454="$(grep -cxF -- "$sanctioned_454" "$root/skills/issue-implementer/SKILL.md")"
+  reader_ere_454='label:["'"'"']?building([^[:alnum:]_-]|$)|(^|[[:space:]])--label[[:space:]=]+["'"'"']?building([^[:alnum:]_-]|$)'
+  quoted_ere_454='["'"'"']building["'"'"']'
+  bad_list_454=""
+  for f in "$root"/skills/*/SKILL.md "$root"/skills/*/references/*.md "$root"/agents/*.md "$root"/bin/*.sh "$root"/hooks/*.sh; do
+    [ -f "$f" ] || continue
+    hits_454="$(grep -nE -- "$reader_ere_454" "$f")"
+    [ -n "$hits_454" ] || continue
+    while IFS= read -r hit_454; do
+      [ -n "$hit_454" ] || continue
+      if [ "$f" = "$root/skills/issue-implementer/SKILL.md" ] && [ "${hit_454#*:}" = "$sanctioned_454" ]; then
+        continue
+      fi
+      bad_list_454="$bad_list_454 $f:${hit_454%%:*}"
+    done <<<"$hits_454"
+  done
+  for f in "$root"/bin/*.sh "$root"/hooks/*.sh; do
+    [ -f "$f" ] || continue
+    [ "$f" = "$root/bin/setup-labels.sh" ] && continue
+    qhits_454="$(grep -nE -- "$quoted_ere_454" "$f" | cut -d: -f1)"
+    for ln in $qhits_454; do
+      bad_list_454="$bad_list_454 $f:$ln"
+    done
+  done
+  if [ "$sweep_n_454" != "1" ]; then
+    bad "4.54 skills/issue-implementer/SKILL.md: expected the step-0 sweep listing as exactly one whole line '$sanctioned_454' (structure changed), found $sweep_n_454"
+  elif [ -n "$bad_list_454" ]; then
+    bad "4.54 something reads the informational '$bl_454' label (search qualifier, --label filter, or quoted literal) outside the one sanctioned sweep line:$bad_list_454"
+  else
+    ok "4.54 bin/setup-labels.sh creates '$bl_454' and no skill, agent, script, or hook reads it outside the one sanctioned step-0 sweep line"
   fi
 fi
 
