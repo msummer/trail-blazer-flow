@@ -48,7 +48,7 @@
 # the #508 expansion-word predicate, rx_re and rx_word(), whose verdict differs per file; the #505
 # env option arm and prefix triggers, with strip_quotes(), quote_bearing(), quote_unbalanced() and
 # the ENV_* values, and the #518 value-context trigger with PREFIX_VALUE_WORDS, each hook with its own
-# verdict; the CR
+# verdict; the #503 chain lexer and pass, each hook with its own gate and output route; the CR
 # strip) must be applied to BOTH files — dev/selfcheck.sh's assertion 4.40 clause (c) mechanically pins
 # the two scripts' PREFIX_WORDS vocabulary stays byte-identical; since #398, PREFIX_WORDS also
 # includes shell reserved words (`if`/`then`/`elif`/`else`/`do`/`while`/`until`/`!`/`coproc`) that
@@ -151,8 +151,9 @@
 # (`bash -o pipefail -c 'gh pr merge 5'`, `bash +o pipefail -c …`; interpreter words are left out of
 # PREFIX_VALUE_WORDS because their `-c` value IS the command string); an even-count quote split of an assignment
 # value (`X="a'"'b c' gh …`, `X="\" x" gh …`) or an ANSI-C value with an escaped quote
-# (`X=$'a\'b c' gh …`), which the parity check does not see; a quoted value holding a
-# segment-break character or a newline (`X="a;b" gh …`); a `gh`/`git` built by ANSI-C escapes or an
+# (`X=$'a\'b c' gh …`), which the parity check does not see (with a segment-break character in the value
+# it is caught by #503's chain pass); a quoted value holding a newline (`X="a<LF>b" gh …`, rc 0); a
+# `gh`/`git` built by ANSI-C escapes or an
 # expansion inside an already-lost segment; a writer outside CLAUDE_CMDLINE_WRITE_COMMANDS
 # (`sort -o`, `split`, `unzip -d`, `scp`, `cpio`, `vim -es`, `sed`'s `w` command); a launcher that
 # becomes the resolved command word instead of the vocabulary member (`uv run python`, `npx`,
@@ -235,6 +236,12 @@ PREFIX_VALUE_WORDS="exec nice stdbuf sudo time xargs"
 # number of `]]` tokens a record carries. Byte-identical to hooks/push-guard.sh's own copy (by
 # convention, unpinned — same choice hooks/claude-dir-guard.sh's PREFIX_WORDS copy already makes).
 DBRACKET_MAX="64"
+# CHAIN_LEX_MAX (#503) -- the chain budget: the most characters, summed over every input line of one
+# command that passes the scan's additive chain-pass gate (further down), that pass will lex. This hook
+# has no command-size cap and no deadline, so the gated lines past the budget are denied outright (fail
+# closed) rather than lexed: without a budget, a dense line near the size of the whole command costs
+# the lexer more than the base scan itself. Specific to this hook; no sibling copy.
+CHAIN_LEX_MAX="65536"
 DENY_STEM="trail-blazer-flow agent boundary:"
 
 input="$(cat)"
@@ -336,17 +343,20 @@ cmd="${cmd//$cr/}"
 # A POSIX-awk tokenizer that never REJECTS (unlike git-c-guard.sh's lexer, which rejects on any
 # unquoted metacharacter — that behaviour would be a bypass here: rejecting outright would leave
 # this hook silent, i.e. no opinion, for the exact composite/injected forms it exists to catch).
-# Quote-blind by design (strips quote characters rather than tracking quote state) — see the
-# header's false-positive-class note below for the cost.
+# The base scan is quote-blind by design (strips quote characters rather than tracking quote state) — see
+# the header's false-positive-class note below for the cost. Since #503 an ADDITIVE chain pass (see its
+# paragraph below) does track quote state, per physical line, but only to re-judge text the base split
+# cut apart; it never changes a base verdict.
 #
 # Processes $cmd one input line (awk record) at a time, so an EMBEDDED NEWLINE inside
 # tool_input.command — e.g. a heredoc line that happens to start with `git`/`gh` while writing a
 # fixture file's contents — is scanned as its own independent segment start, exactly like any
 # other line. This is a deliberate false-positive class, not a bug: the remedy is to write file
 # content through the Write/Edit tools rather than a Bash heredoc (this repo's own CLAUDE.md and
-# skills already say so for other reasons). A quote-aware or newline-aware lexer that instead
+# skills already say so for other reasons). A quote-aware lexer that REPLACED the base split, and so
 # risked mis-tracking an unterminated quote or a multi-line construct and letting a real `git
-# push` through would be the worse failure mode for a control whose only job is to fail closed.
+# push` through, would be the worse failure mode for a control whose only job is to fail closed; the
+# #503 pass only adds denies and carries no quote state from one line to the next.
 #
 # Since #270, every `\r` in $cmd has already been stripped (see the bash-native strip right after
 # the jq extraction above) before this scan ever runs — normalize() below only ever strips quote
@@ -505,6 +515,48 @@ cmd="${cmd//$cr/}"
 # followed by a `.claude` path. Residuals, each measured rc 0: an interpreter prefix word's option
 # (`bash -o pipefail -c 'gh pr merge 5'`), and a launcher outside PREFIX_WORDS (`timeout 5 gh …`).
 #
+# Fail-closed: a segment break inside a quote or a command substitution (#503). The base split cuts a
+# record at every `;`, `&`, `|`, `(`, `)`, `{`, `}` and backtick before it looks at quoting, so a quoted
+# value holding one of them plus a space left the command word in a segment whose first word is junk
+# (`X="a;b c" gh pr merge 5`, rc 0 before). An ADDITIVE chain pass runs per gated input line, after the
+# base segments and the `]]` pass, and only adds lines: the base split and every verdict it produces are
+# untouched. The gate is a break character together with a quote, a backslash, `$(`, `${` or a
+# backtick, in a line that mentions `gh`, `git` or `claude` (case-insensitive). chain_lex() reads the
+# line once, tracking single quotes, double quotes, `$'...'`, backslash escapes, an unquoted `#` at a word
+# start outside any substitution (it ends the lexing) and a stack of `$(...)`, `${...}` and backtick
+# frames, and classifies each break character as HEAD (a real command break), LITERAL (quoted or escaped)
+# or a frame OPEN or CLOSE. Segments joined by LITERAL breaks, and the two sides of a frame, form a CHAIN;
+# chain_pass() queues every chain of two or more segments, and the last END block judges the queue through
+# the unchanged emit_segment() on the chain's own tokens, so every deny comes from an existing rule and
+# every line the base scan prints (the command-level capture's END line included) precedes every chain
+# line: the role policy's first-offending-line rule can never let a chain change a base verdict or its
+# text. A token that ends at a quoted or escaped separator or at a LITERAL break carries a trailing
+# backslash (the cut marker), which the #505 parity test already reads as "a quoted span was split here";
+# a substitution becomes the expansion word `$_` when it is glued to a word or follows a token that names
+# git or gh, and the inert word `_` when it starts a word after none; the text after a frame's close is
+# glued back onto the word before the frame (a glued token stops growing at 256 characters). Why this
+# does not repeat the #505 prose over-block: (a) the quote state is sequential, so an apostrophe inside
+# `"..."` or after a backslash never opens a quote; (b) the state never crosses an input line, so a
+# heredoc body is never poisoned by an earlier line; (c) a chain's command word is its first segment's
+# own, so a prose line resolves to that word and adds only arguments; (d) an unquoted `#` ends the
+# lexing; (e) a markdown code span that starts a word is the inert `_`. The pass reads the base segments
+# (segs, nseg) and skips a line whose segment count disagrees with the lexer's own. This hook has no
+# command-size cap and no deadline, the characters of all gated lines of one command are summed, and once
+# the sum passes CHAIN_LEX_MAX (the chain budget) the remaining gated lines are not lexed: the scan
+# prints a fixed sentinel once and the role policy denies with `(blocked: too much quoted text to
+# analyse)`, fail closed (without a budget, padding or a flood of frames would multiply the cost of the
+# whole scan). Cost: the lexer and assembly are O(line) and bounded by the budget, so a command pays at most
+# a budget-sized slice on top of the base scan; the check itself is O(1) per gated line. A gated line is
+# one with a break character, a quote or substitution character, and a word naming gh, git or claude, so
+# the budget is reached only by a command whose such lines total more than CHAIN_LEX_MAX characters, an
+# over-block (a very large heredoc of quoted prose that mentions git). Deliberate over-blocking, each measured rc 2: an implementer `MSG="a; see gh
+# docs" ./run.sh` (the #505 class: a quoted value with a break character that names gh) and a
+# verifier's `X="a;b c" git status` (`git -prefix-`). Residuals, each measured rc 0: a quote opened on an
+# earlier input line (`X="a<LF>b" gh pr merge 5`), a mixed or even-count quoted value with a space but no
+# break character (`X="a'"'b c' gh pr merge 5`), a substitution that starts the command word (`$(echo gh)
+# pr merge 5`), and the lexer's approximations (a `case` pattern's `)` inside `$(...)`, quoting inside
+# `${...}`, backslash-nested backticks, process substitution read as a plain subshell).
+#
 # Command-level, since #387: emit_segment() additionally captures, into the GLOBAL cw_word, the
 # first segment's command word (in its case-folded since #398, non-version-stripped form) found
 # anywhere across
@@ -522,7 +574,7 @@ cmd="${cmd//$cr/}"
 # emits the same "-claude-write- <target>" sentinel the redirect/arg-vocab/in-place-sed passes above
 # already use, joining both captures, whenever BOTH cw_word and cw_tok are non-empty — so the
 # existing role-policy `"-claude-write- "*)` arm and deny printf need no #387-specific change.
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v dbracket_max="$DBRACKET_MAX" -v envnov="$ENV_NOVALUE_OPTS" -v envunset="$ENV_UNSET_OPTS" -v vpwords="$PREFIX_VALUE_WORDS" '
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v dbracket_max="$DBRACKET_MAX" -v chain_lex_max="$CHAIN_LEX_MAX" -v envnov="$ENV_NOVALUE_OPTS" -v envunset="$ENV_UNSET_OPTS" -v vpwords="$PREFIX_VALUE_WORDS" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
@@ -539,6 +591,12 @@ BEGIN {
   for (i = 1; i <= nvp; i++) vprefix_set[vparr[i]] = 1
   # #508: a dollar sign followed by a name character, a digit, a special parameter, or a quote
   rx_re = "[$][A-Za-z0-9_@*#?!$=~^\"" sq "-]"
+  # #503: the chain pass character classes (see chain_lex()) and the cap on a token grown by gluing
+  ch_cls[" "] = 1; ch_cls["\t"] = 1; ch_cls["<"] = 1; ch_cls[">"] = 1
+  ch_cls[";"] = 2; ch_cls["&"] = 2; ch_cls["|"] = 2
+  ch_cls["("] = 3; ch_cls[")"] = 4; ch_cls["{"] = 5; ch_cls["}"] = 6; ch_cls["`"] = 7
+  ch_cls[sq] = 8; ch_cls["\""] = 9; ch_cls["\\"] = 10; ch_cls["$"] = 11; ch_cls["#"] = 12
+  glue_max = 256
 }
 function normalize(tok,    t, parts, np) {
   t = tok
@@ -674,7 +732,8 @@ function lost_scan(toks, from, ntok,    i, r, c, lw, cwf) {
   return c
 }
 function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, gitsub, inplace, lw, found_claude, saw_exp, in_env, in_vp, lost, s0) {
-  ntok = split(seg, toks, /[ \t]+/)
+  if (ch_use) { for (idx = 1; idx <= ch_n; idx++) toks[idx] = ch_t[idx]; ntok = ch_n }
+  else ntok = split(seg, toks, /[ \t]+/)
   ls_done = 0
   idx = 1
   saw_prefix = 0
@@ -783,6 +842,231 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     }
   }
 }
+# #503: the additive chain pass. The base segmenter above cuts a record at every break character
+# before it looks at quoting, so a break character inside a quote or a command substitution leaves
+# the command word in a segment whose first word is junk. This pass runs once per gated physical
+# line, AFTER the base segments and the standalone-bracket pass, and only ADDS output lines: it lexes
+# the line sequentially (single quote, double quote, dollar-single-quote, backslash, an unquoted
+# comment, whose later break characters stay head breaks, and a stack of dollar-paren / dollar-brace /
+# backtick frames), classifies every break
+# character as a head break (a real command break), a literal break (quoted or escaped), a frame
+# open or a frame close, and re-judges every chain of two or more segments joined by literal breaks
+# or frames with the unchanged per-segment logic, on the chain tokens. This program is single-quoted
+# shell: it must never contain a literal apostrophe, comments included (use sq).
+# ch_cls: 1 separator (space, tab, less, greater), 2 semicolon ampersand pipe, 3 open paren, 4 close
+# paren, 5 open brace, 6 close brace, 7 backtick, 8 single quote, 9 double quote, 10 backslash,
+# 11 dollar, 12 hash.
+# ch_brk: ends segment ch_s with a break of KIND (H head, L literal, O dollar frame open, T backtick
+# frame open, C frame close). A literal break flags the field it ends so the chain adds the cut
+# marker (a trailing backslash) to that token; ch_ot[] records whether the segment had text in its
+# last word, which tells a glued backtick from a word-initial one. ch_mk[s] lists the flagged fields
+# of segment s as a comma-delimited string.
+function ch_brk(kind) {
+  if (kind == "L" && ch_tokhas) ch_mk[ch_s] = ch_mk[ch_s] "," (ch_r + 1) ","
+  ch_bk[ch_s] = kind
+  ch_ot[ch_s] = ch_tokhas
+  ch_s++
+  ch_r = 0
+  ch_inrun = 0
+  ch_tokhas = 0
+  ch_pd = 0
+}
+# ch_sep: a separator character. Field ch_r (the word before the run) is flagged when the run is
+# quoted or escaped, which is where the chain adds the cut marker.
+function ch_sep(quoted) {
+  if (!ch_inrun) { ch_r++; ch_inrun = 1; ch_runtok = ch_tokhas; ch_tokhas = 0 }
+  if (quoted && ch_runtok) ch_mk[ch_s] = ch_mk[ch_s] "," ch_r ","
+  ch_pd = 0
+}
+# ch_qchar: a character that is quoted or escaped, of class K.
+function ch_qchar(k) {
+  if (k == 1) ch_sep(1)
+  else if (k >= 2 && k <= 7) ch_brk("L")
+  else { ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
+}
+function ch_open(fkind, okind) {
+  ch_ld++
+  ch_fk[ch_ld] = fkind
+  ch_fsv[ch_ld] = ch_lq
+  ch_fcn[ch_ld] = 0
+  ch_lq = 0
+  ch_brk(okind)
+}
+function ch_close() {
+  ch_lq = ch_fsv[ch_ld]
+  ch_ld--
+  ch_brk("C")
+}
+function chain_lex(rec,    n, lc, i, c, k, nx) {
+  n = split(rec, lc, "")
+  split("", ch_mk)
+  split("", ch_bk)
+  split("", ch_ot)
+  split("", ch_fk)
+  split("", ch_fsv)
+  split("", ch_fcn)
+  ch_lq = 0
+  ch_ld = 0
+  ch_s = 1
+  ch_r = 0
+  ch_inrun = 0
+  ch_tokhas = 0
+  ch_pd = 0
+  ch_cmt = 0
+  for (i = 1; i <= n; i++) {
+    c = lc[i]
+    k = ch_cls[c]
+    if (ch_cmt) { if (k >= 2 && k <= 7) ch_brk("H"); continue }
+    if (k == 0 && ch_lq == 0) { ch_inrun = 0; ch_tokhas = 1; ch_pd = 0; continue }
+    if (ch_lq == 1) {
+      if (k == 8) { ch_lq = 0; ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
+      else ch_qchar(k)
+    } else if (ch_lq == 3) {
+      if (k == 8) { ch_lq = 0; ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
+      else if (k == 10) {
+        ch_inrun = 0; ch_tokhas = 1; ch_pd = 0
+        if (i < n) { i++; ch_qchar(ch_cls[lc[i]]) }
+      } else ch_qchar(k)
+    } else if (ch_lq == 2) {
+      if (k == 9) { ch_lq = 0; ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
+      else if (k == 10) {
+        ch_inrun = 0; ch_tokhas = 1; ch_pd = 0
+        nx = lc[i + 1]
+        if (i < n && (nx == "$" || nx == "`" || nx == "\"" || nx == "\\")) { i++; ch_qchar(ch_cls[nx]) }
+      }
+      else if (k == 11) { ch_inrun = 0; ch_tokhas = 1; ch_pd = 1 }
+      else if (k == 7) ch_open("T", "T")
+      else if (k == 3 && ch_pd) ch_open("P", "O")
+      else if (k == 5 && ch_pd) ch_open("B", "O")
+      else ch_qchar(k)
+    } else if (k == 1) ch_sep(0)
+    else if (k == 2) ch_brk("H")
+    else if (k == 3) {
+      if (ch_pd) ch_open("P", "O")
+      else { if (ch_ld > 0 && ch_fk[ch_ld] == "P") ch_fcn[ch_ld]++; ch_brk("H") }
+    } else if (k == 4) {
+      if (ch_ld > 0 && ch_fk[ch_ld] == "P") {
+        if (ch_fcn[ch_ld] > 0) { ch_fcn[ch_ld]--; ch_brk("H") }
+        else ch_close()
+      } else ch_brk("H")
+    } else if (k == 5) {
+      if (ch_pd) ch_open("B", "O")
+      else { if (ch_ld > 0 && ch_fk[ch_ld] == "B") ch_fcn[ch_ld]++; ch_brk("H") }
+    } else if (k == 6) {
+      if (ch_ld > 0 && ch_fk[ch_ld] == "B") {
+        if (ch_fcn[ch_ld] > 0) { ch_fcn[ch_ld]--; ch_brk("H") }
+        else ch_close()
+      } else ch_brk("H")
+    } else if (k == 7) {
+      if (ch_ld > 0 && ch_fk[ch_ld] == "T") ch_close()
+      else ch_open("T", "T")
+    } else if (k == 8) { ch_lq = (ch_pd ? 3 : 1); ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
+    else if (k == 9) { ch_lq = 2; ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
+    else if (k == 10) {
+      ch_inrun = 0; ch_tokhas = 1; ch_pd = 0
+      if (i < n) { i++; ch_qchar(ch_cls[lc[i]]) }
+    } else if (k == 11) { ch_inrun = 0; ch_tokhas = 1; ch_pd = 1 }
+    else if (k == 12 && !ch_tokhas && ch_ld == 0) ch_cmt = 1
+    else { ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
+  }
+}
+# ch_judge: queue the chain at depth D when it joins two or more segments (the last END block judges
+# the queue through emit_segment() in token mode, so every line the base scan prints, the END block of
+# the command-level capture included, precedes every line a chain prints, and the role policy, whose
+# first offending line decides, never lets a chain change a base verdict or its text), then drop its tokens (ch_ct[] is one stack shared by every depth: a frame chain
+# starts where its parent chain currently ends, so ch_base[d] marks where depth d starts).
+function ch_judge(d,    k, nt) {
+  nt = ch_top - ch_base[d]
+  if (ch_cm[d] && nt > 0) {
+    ch_pn++
+    ch_pc[ch_pn] = nt
+    ch_ps[ch_pn] = ch_pq
+    for (k = 1; k <= nt; k++) ch_pt[++ch_pq] = ch_ct[ch_base[d] + k]
+  }
+  ch_top = ch_base[d]
+  ch_cm[d] = 0
+  ch_cg[d] = 0
+  ch_cgi[d] = ch_top
+}
+# ch_names_git: true iff a token of the chain at depth D, before the one being decided, names git or gh.
+# Scanned lazily and once per token (ch_cgi[] is the scan frontier), so a chain with no frame pays
+# nothing.
+function ch_names_git(d,    k, lo) {
+  if (!ch_cg[d]) {
+    for (k = ch_cgi[d] + 1; k <= ch_top; k++) {
+      lo = tolower(ch_ct[k])
+      if (index(lo, "git") > 0 || index(lo, "gh") > 0) { ch_cg[d] = 1; break }
+    }
+    ch_cgi[d] = ch_top
+  }
+  return ch_cg[d]
+}
+function chain_pass(rec,    ns, s, seg, tk, ntk, f, first, d, glue, tok, last, kind, mks) {
+  chain_lex(rec)
+  ns = nseg
+  if (ns != ch_s) return
+  d = 0
+  ch_top = 0
+  ch_base[0] = 0
+  ch_cm[0] = 0
+  ch_cg[0] = 0
+  ch_cgi[0] = 0
+  glue = 0
+  for (s = 1; s <= ns; s++) {
+    seg = segs[s]
+    mks = ch_mk[s]
+    if (index(seg, " ") == 0 && index(seg, "\t") == 0) { tk[1] = seg; ntk = (seg == "" ? 0 : 1) }
+    else ntk = split(seg, tk, /[ \t]+/)
+    first = 1
+    if (glue) {
+      glue = 0
+      if (ntk >= 1 && tk[1] != "" && ch_top > ch_base[d]) {
+        first = 2
+        last = ch_ct[ch_top]
+        if (length(last) < glue_max) {
+          tok = tk[1]
+          if (mks != "" && index(mks, ",1,")) tok = tok "\\"
+          ch_ct[ch_top] = last tok
+        }
+      }
+    }
+    for (f = first; f <= ntk; f++) {
+      tok = tk[f]
+      if (tok == "") continue
+      if (mks != "" && index(mks, "," f ",")) tok = tok "\\"
+      ch_ct[++ch_top] = tok
+    }
+    if (s == ns) break
+    kind = ch_bk[s]
+    if (kind == "L") ch_cm[d] = 1
+    else if (kind == "O" || kind == "T") {
+      ch_cm[d] = 1
+      last = (ch_top > ch_base[d] ? ch_ct[ch_top] : "")
+      if (kind == "O" && substr(last, length(last)) == "$") {
+        if (length(last) > 1) { if (length(last) < glue_max) ch_ct[ch_top] = last "_" }
+        else ch_ct[ch_top] = (ch_names_git(d) ? "$_" : "_")
+      } else if (kind == "T" && ch_ot[s] && ch_top > ch_base[d]) {
+        if (length(last) < glue_max) ch_ct[ch_top] = last "$_"
+      } else ch_ct[++ch_top] = (ch_names_git(d) ? "$_" : "_")
+      d++
+      ch_base[d] = ch_top
+      ch_cm[d] = 0
+      ch_cg[d] = 0
+      ch_cgi[d] = ch_top
+    } else if (kind == "C" && d > 0) {
+      ch_judge(d)
+      d--
+      glue = 1
+    } else ch_judge(d)
+  }
+  for (; d >= 0; d--) ch_judge(d)
+}
+function ch_gate(r,    lo) {
+  if (!match(r, /[;&|(){}`]/)) return 0
+  if (!(index(r, "\"") > 0 || index(r, sq) > 0 || index(r, "\\") > 0 || index(r, "$(") > 0 || index(r, "${") > 0 || index(r, "`") > 0)) return 0
+  lo = tolower(r)
+  return (index(lo, "git") > 0 || index(lo, "gh") > 0 || index(lo, "claude") > 0)
+}
 {
   # #508: per-record facts the env -S check in emit_segment() reads (computed before any split)
   rx_cut = (index($0, "${") > 0 || index($0, "$(") > 0 || index($0, "`") > 0)
@@ -860,6 +1144,14 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
       db_rest = substr(db_rest, db_next)
     }
   }
+  # #503: the additive chain pass (see chain_lex()). The gated lines of one command are lexed up to a
+  # budget of chain_lex_max characters in all; past it nothing more is lexed and a fixed sentinel is
+  # printed once, which the role policy denies on, since this hook has no other size cap.
+  if (ch_gate($0)) {
+    ch_used += length($0)
+    if (ch_used > chain_lex_max) { if (!ch_over++) print "-too-long-to-lex-" }
+    else chain_pass($0)
+  }
   if (cw_tok == "" && claude_seg_in_text($0)) {
     cw_ntok = split($0, cw_toks, /[ \t]+/)
     for (cw_j = 1; cw_j <= cw_ntok; cw_j++) {
@@ -868,6 +1160,17 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   }
 }
 END { if (cw_word != "" && cw_tok != "") print "-claude-write- " cw_word " with " cw_tok }
+END {
+  ch_cwb = (cw_word != "" && cw_tok != "")
+  for (ch_pi = 1; ch_pi <= ch_pn; ch_pi++) {
+    ch_n = ch_pc[ch_pi]
+    for (ch_pk = 1; ch_pk <= ch_n; ch_pk++) ch_t[ch_pk] = ch_pt[ch_ps[ch_pi] + ch_pk]
+    ch_use = 1
+    emit_segment("", 0)
+    ch_use = 0
+  }
+  if (!ch_cwb && cw_word != "" && cw_tok != "") print "-claude-write- " cw_word " with " cw_tok
+}
 ')"
 
 # --- role policy -----------------------------------------------------------------------------
@@ -899,6 +1202,11 @@ while IFS= read -r line; do
       deny_cmd="split by ]]"
       break
       ;;
+    "-too-long-to-lex-")
+      deny_kind="lexcap"
+      deny_cmd="too much quoted text to analyse"
+      break
+      ;;
     "-claude-write- "*)
       deny_kind="claude"
       deny_cmd="${line#-claude-write- }"
@@ -927,6 +1235,9 @@ EOF
 if [ -n "$deny_cmd" ]; then
   if [ "$deny_kind" = "dbracket" ]; then
     printf '%s %s role: command has too many standalone ]] tokens to analyse safely (blocked: %s) — see agents/%s.md\n' \
+      "$DENY_STEM" "$role" "$deny_cmd" "$role" >&2
+  elif [ "$deny_kind" = "lexcap" ]; then
+    printf '%s %s role: a command holds too much quoted or substituted text to analyse safely (blocked: %s) — see agents/%s.md\n' \
       "$DENY_STEM" "$role" "$deny_cmd" "$role" >&2
   elif [ "$deny_kind" = "cutclaude" ]; then
     printf '%s %s role: cannot verify whether this write reaches a .claude segment (blocked: %s) — see agents/%s.md\n' \

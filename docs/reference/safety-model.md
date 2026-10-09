@@ -228,8 +228,15 @@ no `jq` on `PATH`, an unresolved `${CLAUDE_PLUGIN_ROOT}` on Windows, or a Claude
 `agent_type` all leave this hook silent — but unlike the guard hook (whose non-firing degrades to
 an ordinary permission prompt), this hook's non-firing removes a control with **no** visible sign,
 since nothing else in the permission model was narrowing the implementer/verifier's `git`/`gh`
-surface to begin with. The scan is deliberately quote-blind (it strips quote characters rather than
-tracking quote state, the same trade-off `git-c-guard.sh` makes in the opposite direction) and
+surface to begin with. The base scan is deliberately quote-blind (it strips quote characters rather
+than tracking quote state, the same trade-off `git-c-guard.sh` makes in the opposite direction).
+**Since #503** an additive chain pass tracks quote state per input line, only to re-judge text the base
+split cut apart: a quoted value holding a segment-break character and a space (`X="a;b c" gh pr merge
+5`) or a command substitution glued into a word is now judged by the unchanged per-segment rules, and
+the pass can only add denies; the gated lines of one command are lexed up to a budget of
+`CHAIN_LEX_MAX` characters in all, and past it the command denies fail-closed (`too much quoted text
+to analyse`), because this hook has no other size cap — an over-block for a very large heredoc of quoted
+prose that mentions `git`/`gh`. The scan
 processes `tool_input.command` one line at a time, so several over-blocking classes are expected
 and documented in the script's own header: a literal `git`/`gh` word starting a quoted span right
 after a separator (e.g. `echo "a; git push"`) denies; **any line of a multi-line Bash command that
@@ -331,8 +338,17 @@ value containing a space (`X="a b" git push origin main`), a quote-bearing optio
 after a prefix word (`env "-C" <dir> git push`), or an `env` option outside a short allowlist
 (`env -C <dir>`, `--chdir=`, `-S`), or a quoted value of a global option other than `-C` that
 splits at a space (`git -c "k=a b" push`); `env -u NAME` consumes its value, which stops `env -u git
-push origin main` from denying. Mixed-quote or even-count splits and a
-quoted `-C` value containing a space (which also hides any later option) still get no opinion. The push-guard header lists the
+push origin main` from denying. Mixed-quote or even-count splits with no segment-break character, and a
+quoted `-C` value containing a space (which also hides any later option) still get no opinion. **Since
+#503**, an additive chain pass re-judges a quoted value that holds a segment-break character
+(`X="a;b c" git push origin main`) and a command substitution glued into a word or in git's option slot
+(`git -C "$(pwd)" push origin main`) through the same rules, so those deny as unresolved; deliberate
+over-blocks include `X="a;b c" git push origin feature/x`, `X="a;b" git push origin feature/x`, `git -C
+"$(pwd)" push origin feature/x`, and a benign non-push git command behind a quoted break (`X='(' git
+commit -m "fix include path"`, the unreadable-config alias deny). The pass lexes at most a fixed budget of
+characters of gated lines per command; a command past it denies fail-closed (`too much quoted text to
+analyse`), so the worst-case cost stays near the base scan's.
+The push-guard header lists the
 over-blocking this fail-closed rule creates and the residuals it leaves. **Since #508**, a word in
 command position (or in git's option slot) whose basename holds a runtime expansion (`$X git push
 origin main`, `env $'A=b' git push ...`, `git $X push ...`, `git $'-c' k=v push`) is skipped as a
@@ -342,7 +358,8 @@ one plain ANSI-C or locale segment (`$'zqp'`) is read as that name; any other gi
 dollar sign and a quote (`p$'ush'`, `git st$'atus'`, `--git-dir=$'/a b'`) fails closed, a deliberate
 over-block. A locale word is read untranslated. The header's
 "Fail-closed: a runtime expansion in the command prefix or the git options (#508)" paragraph lists
-the over-blocks and residuals (a `${...}`/`$(...)` prefix, a runtime-built subcommand, `eval "$c"`).
+the over-blocks and residuals (a `${...}`/`$(...)` that starts the command word, a runtime-built
+subcommand, `eval "$c"`).
 **Since #517**, a push destination built at run time (`B=main; git push origin HEAD:$B`, `"HEAD:${B}"`,
 `$B`, `+HEAD:$B`, `refs/heads/$B`) denies with the fixed line `(blocked: runtime expansion in the push
 destination)`, which never echoes the word. A destination that is exactly one plain ANSI-C or locale
@@ -596,10 +613,13 @@ count of `'` or of `"`, or ends in a backslash — the whitespace split happens 
 stripped, so `X='a b' apply_patch < x.patch` or `X=a\ b apply_patch < x.patch` would otherwise
 resolve the word after the space as the command word; `echo 'a b' apply_patch` (the odd token
 comes after the resolved word) and `X='a b' echo hi; rg apply_patch hooks/` (the segment never
-mentions the shim) still get no opinion. Residual: a quoted value that contains a segment-break
-character plus whitespace (`X='a;b c' apply_patch < x.patch`, rc 0) still evades, since the
-opening quote sits in the previous segment. The command-word walk strips quote characters (`'`/`"`) from each token before
-matching or resolving it, rather than tracking which quote ENCLOSES which span, and stays
+mentions the shim) still get no opinion. **Since #503**, a quoted value that contains a segment-break
+character plus whitespace (`X='a;b c' apply_patch < x.patch`, rc 0 before, whose opening quote sat in
+the previous segment) is caught by an additive chain pass that lexes each gated line in pure bash and
+re-judges the text the base split cut apart; the over-block is a benign inline patch behind such a value.
+The command-word walk strips quote characters (`'`/`"`) from each token before
+matching or resolving it, rather than tracking which quote ENCLOSES which span (the chain pass tracks
+quote state, but only to re-judge text the base split cut apart), and stays
 backslash-blind — the same tripwire-not-sandbox trade-off every scan in this directory makes: a
 backslash-quoted spelling, a variable-built name (`p=apply_patch; $p < x.patch` — this walk never
 expands a variable reference), an ANSI-C-quoted spelling (`$'apply_patch'` — the leading `$`

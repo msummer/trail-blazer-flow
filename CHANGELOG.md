@@ -18,6 +18,13 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #503: push-guard, agent-boundary and claude-dir-guard run an additive chain pass per line that lexes
+  quotes, backslashes, comments and `$(...)`/`${...}`/backtick substitutions and re-judges text the
+  segment split cut apart, so a quoted value holding a segment-break character (`X="a;b c" git push
+  origin main`, `X="a;b c" gh pr merge 5`, `X='a;b c' apply_patch < x.patch`) and a substitution in
+  git's option slot (`git -C "$(pwd)" push origin main`) no longer hide the command; push-guard and
+  agent-boundary deny a command whose gated lines pass a fixed chain budget (agent-boundary's new
+  `CHAIN_LEX_MAX`) fail-closed. No consumer step.
 - #518: agent-boundary, push-guard and claude-dir-guard fail closed on a separate option value after
   `nice`, `sudo`, `stdbuf`, `exec`, `xargs` or `time` (`nice -n 5 gh pr merge 5`, `sudo -u root git push
   origin main`, `nice -n 5 apply_patch < x.patch`): the rest of the segment after that value is read for
