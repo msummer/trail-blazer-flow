@@ -6731,6 +6731,10 @@
         {
           "from": "(cfgdollar || has_bt)",
           "to": "(cfgdollar)"
+        },
+        {
+          "from": "  if (ch_gate($0)) {\n    ch_used += length($0)",
+          "to": "  if (0 && ch_gate($0)) {\n    ch_used += length($0)"
         }
       ],
       "expect_fail": [
@@ -7129,6 +7133,10 @@
         {
           "from": "if (m0 || rec_lost) {",
           "to": "if (m0) {"
+        },
+        {
+          "from": "  if (ch_gate($0)) {\n    ch_used += length($0)",
+          "to": "  if (0 && ch_gate($0)) {\n    ch_used += length($0)"
         }
       ],
       "expect_fail": [
@@ -7315,6 +7323,10 @@
         {
           "from": "if (in_env && (index(tok, \"-S\") == 1",
           "to": "if (0 && in_env && (index(tok, \"-S\") == 1"
+        },
+        {
+          "from": "  if (ch_gate($0)) {\n    ch_used += length($0)",
+          "to": "  if (0 && ch_gate($0)) {\n    ch_used += length($0)"
         }
       ],
       "expect_fail": [
@@ -7332,6 +7344,10 @@
         {
           "from": "gsub(/\\\\_/, \" \", t)",
           "to": "t = t"
+        },
+        {
+          "from": "  if (ch_gate($0)) {\n    ch_used += length($0)",
+          "to": "  if (0 && ch_gate($0)) {\n    ch_used += length($0)"
         }
       ],
       "expect_fail": [
@@ -8709,6 +8725,648 @@
       ],
       "expect_fail": [
         "push-optval-deny-alias-quoted"
+      ]
+    },
+    {
+      "name": "503-pg-chain-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "  if (ch_gate($0)) {\n    ch_used += length($0)",
+          "to": "  if (0 && ch_gate($0)) {\n    ch_used += length($0)"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-budget",
+        "push-chain-deny-break-chars",
+        "push-chain-deny-misc",
+        "push-chain-deny-optval-compose",
+        "push-chain-deny-overblock",
+        "push-chain-deny-quote-forms",
+        "push-chain-deny-subst"
+      ]
+    },
+    {
+      "name": "503-pg-lex-sq",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "    } else if (k == 8) { ch_lq = (ch_pd ? 3 : 1); ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }",
+          "to": "    } else if (k == 8) { ch_lq = (ch_pd ? 3 : 0); ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-deny-break-chars",
+        "push-chain-deny-misc",
+        "push-chain-deny-overblock",
+        "push-chain-deny-quote-forms"
+      ]
+    },
+    {
+      "name": "503-pg-lex-ansi",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "ch_lq = (ch_pd ? 3 : 1)",
+          "to": "ch_lq = 1"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-deny-quote-forms"
+      ]
+    },
+    {
+      "name": "503-pg-lex-bs",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "    else if (k == 10) {\n      ch_inrun = 0; ch_tokhas = 1; ch_pd = 0\n      if (i < n) { i++; ch_qchar(ch_cls[lc[i]]) }\n    } else if (k == 11)",
+          "to": "    else if (k == 10) {\n      ch_inrun = 0; ch_tokhas = 1; ch_pd = 0\n    } else if (k == 11)"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-deny-quote-forms"
+      ]
+    },
+    {
+      "name": "503-pg-lex-dq-apos",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "      else if (k == 7) ch_open(\"T\", \"T\")\n      else if (k == 3 && ch_pd)",
+          "to": "      else if (k == 8) ch_lq = 1\n      else if (k == 7) ch_open(\"T\", \"T\")\n      else if (k == 3 && ch_pd)"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-deny-quote-forms",
+        "push-chain-quiet-prose"
+      ]
+    },
+    {
+      "name": "503-pg-lex-frame",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "      else if (k == 3 && ch_pd) ch_open(\"P\", \"O\")",
+          "to": "      else if (k == 3 && 0) ch_open(\"P\", \"O\")"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-deny-misc",
+        "push-chain-deny-overblock",
+        "push-chain-deny-subst",
+        "push-chain-quiet-prose"
+      ]
+    },
+    {
+      "name": "503-pg-ph-never",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "        else ch_ct[ch_top] = (ch_names_git(d) ? \"$_\" : \"_\")",
+          "to": "        else ch_ct[ch_top] = \"_\""
+        },
+        {
+          "from": "      } else ch_ct[++ch_top] = (ch_names_git(d) ? \"$_\" : \"_\")",
+          "to": "      } else ch_ct[++ch_top] = \"_\""
+        }
+      ],
+      "expect_fail": [
+        "push-chain-deny-subst"
+      ]
+    },
+    {
+      "name": "503-pg-ph-always",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "        else ch_ct[ch_top] = (ch_names_git(d) ? \"$_\" : \"_\")",
+          "to": "        else ch_ct[ch_top] = \"$_\""
+        },
+        {
+          "from": "      } else ch_ct[++ch_top] = (ch_names_git(d) ? \"$_\" : \"_\")",
+          "to": "      } else ch_ct[++ch_top] = \"$_\""
+        }
+      ],
+      "expect_fail": [
+        "push-chain-quiet-heredoc"
+      ]
+    },
+    {
+      "name": "503-pg-comment",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "    else if (k == 12 && !ch_tokhas && ch_ld == 0) ch_cmt = 1\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-chain-quiet-prose"
+      ]
+    },
+    {
+      "name": "503-pg-cutmark",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "      if (mks != \"\" && index(mks, \",\" f \",\")) tok = tok \"\\\\\"",
+          "to": "      if (0 && mks != \"\" && index(mks, \",\" f \",\")) tok = tok \"\\\\\""
+        }
+      ],
+      "expect_fail": [
+        "push-chain-deny-quote-forms"
+      ]
+    },
+    {
+      "name": "503-pg-perline",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "  ch_lq = 0\n  ch_ld = 0\n",
+          "to": "  ch_ld = 0\n"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-quiet-heredoc"
+      ]
+    },
+    {
+      "name": "503-pg-close-glue",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "    if (glue) {\n      glue = 0\n",
+          "to": "    if (0) {\n      glue = 0\n"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-deny-overblock",
+        "push-chain-deny-subst",
+        "push-chain-quiet-prose"
+      ]
+    },
+    {
+      "name": "503-ab-chain-off",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-chain-",
+      "edits": [
+        {
+          "from": "  if (ch_gate($0)) {\n    ch_used += length($0)",
+          "to": "  if (0 && ch_gate($0)) {\n    ch_used += length($0)"
+        }
+      ],
+      "expect_fail": [
+        "ab-chain-deny-codex",
+        "ab-chain-deny-impl-gh",
+        "ab-chain-deny-other",
+        "ab-chain-deny-over-cap"
+      ]
+    },
+    {
+      "name": "503-ab-lex-sq",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-chain-",
+      "edits": [
+        {
+          "from": "    } else if (k == 8) { ch_lq = (ch_pd ? 3 : 1); ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }",
+          "to": "    } else if (k == 8) { ch_lq = (ch_pd ? 3 : 0); ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }"
+        }
+      ],
+      "expect_fail": [
+        "ab-chain-deny-impl-gh"
+      ]
+    },
+    {
+      "name": "503-ab-lex-dq-apos",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-chain-",
+      "edits": [
+        {
+          "from": "      else if (k == 7) ch_open(\"T\", \"T\")\n      else if (k == 3 && ch_pd)",
+          "to": "      else if (k == 8) ch_lq = 1\n      else if (k == 7) ch_open(\"T\", \"T\")\n      else if (k == 3 && ch_pd)"
+        }
+      ],
+      "expect_fail": [
+        "ab-chain-deny-impl-gh",
+        "ab-chain-quiet"
+      ]
+    },
+    {
+      "name": "503-ab-lex-bs",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-chain-",
+      "edits": [
+        {
+          "from": "    else if (k == 10) {\n      ch_inrun = 0; ch_tokhas = 1; ch_pd = 0\n      if (i < n) { i++; ch_qchar(ch_cls[lc[i]]) }\n    } else if (k == 11)",
+          "to": "    else if (k == 10) {\n      ch_inrun = 0; ch_tokhas = 1; ch_pd = 0\n    } else if (k == 11)"
+        }
+      ],
+      "expect_fail": [
+        "ab-chain-deny-impl-gh"
+      ]
+    },
+    {
+      "name": "503-ab-lex-frame",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-chain-",
+      "edits": [
+        {
+          "from": "      else if (k == 3 && ch_pd) ch_open(\"P\", \"O\")",
+          "to": "      else if (k == 3 && 0) ch_open(\"P\", \"O\")"
+        }
+      ],
+      "expect_fail": [
+        "ab-chain-deny-impl-gh",
+        "ab-chain-deny-other"
+      ]
+    },
+    {
+      "name": "503-ab-cutmark",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-chain-",
+      "edits": [
+        {
+          "from": "      if (mks != \"\" && index(mks, \",\" f \",\")) tok = tok \"\\\\\"",
+          "to": "      if (0 && mks != \"\" && index(mks, \",\" f \",\")) tok = tok \"\\\\\""
+        }
+      ],
+      "expect_fail": [
+        "ab-chain-deny-impl-gh"
+      ]
+    },
+    {
+      "name": "503-ab-perline",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-chain-",
+      "edits": [
+        {
+          "from": "  ch_lq = 0\n  ch_ld = 0\n",
+          "to": "  ch_ld = 0\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-chain-noop-perline"
+      ]
+    },
+    {
+      "name": "503-cdg-chain-off",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-chain-",
+      "edits": [
+        {
+          "from": "                cdg_chain_line \"$ln\"\n",
+          "to": "                :\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-chain-deny-forms",
+        "cdg-chain-deny-overblock",
+        "cdg-chain-dl-cap",
+        "cdg-chain-never-executes"
+      ]
+    },
+    {
+      "name": "503-cdg-lex-sq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-chain-",
+      "edits": [
+        {
+          "from": "\"$sq\") if [ \"$pd\" -eq 1 ]; then lq=3; else lq=1; fi;",
+          "to": "\"$sq\") if [ \"$pd\" -eq 1 ]; then lq=3; else lq=0; fi;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-chain-deny-forms",
+        "cdg-chain-deny-overblock",
+        "cdg-chain-never-executes"
+      ]
+    },
+    {
+      "name": "503-cdg-lex-dq-apos",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-chain-",
+      "edits": [
+        {
+          "from": "          '`') ;;\n",
+          "to": "          '`') ;;\n          \"$sq\") lq=1; cur=\"$cur$c\"; pd=0; continue ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-chain-deny-forms",
+        "cdg-chain-quiet"
+      ]
+    },
+    {
+      "name": "503-cdg-lex-bs",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-chain-",
+      "edits": [
+        {
+          "from": "          \"$dq\") lq=2; cur=\"$cur$c\"; pd=0; continue ;;\n          '\\') cur=\"$cur$c\"; pd=0\n               if [ \"$i\" -lt \"$n\" ]; then c=\"${ln:$i:1}\"; i=$((i + 1)); qd=2; else continue; fi ;;",
+          "to": "          \"$dq\") lq=2; cur=\"$cur$c\"; pd=0; continue ;;\n          '\\') cur=\"$cur$c\"; pd=0; continue ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-chain-deny-forms"
+      ]
+    },
+    {
+      "name": "503-cdg-cutmark",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-chain-",
+      "edits": [
+        {
+          "from": "            *) cur=\"$cur\\\\ \" ;;",
+          "to": "            *) cur=\"$cur \" ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-chain-deny-forms"
+      ]
+    },
+    {
+      "name": "503-cdg-chain-site",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-chain-",
+      "edits": [
+        {
+          "from": "    check_deadline\n    c=\"${ln:$i:1}\"",
+          "to": "    c=\"${ln:$i:1}\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-chain-dl-cap"
+      ]
+    },
+    {
+      "name": "503-pg-comment-breaks",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "    if (ch_cmt) { if (k >= 2 && k <= 7) ch_brk(\"H\"); continue }\n",
+          "to": "    if (ch_cmt) continue\n"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-deny-quote-forms"
+      ]
+    },
+    {
+      "name": "503-ab-comment-breaks",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-chain-",
+      "edits": [
+        {
+          "from": "    if (ch_cmt) { if (k >= 2 && k <= 7) ch_brk(\"H\"); continue }\n",
+          "to": "    if (ch_cmt) continue\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-chain-deny-impl-gh"
+      ]
+    },
+    {
+      "name": "503-pg-glue-cap",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "        if (length(last) > 1) { if (length(last) < glue_max) ch_ct[ch_top] = last \"_\" }",
+          "to": "        if (length(last) > 1) { ch_ct[ch_top] = last \"_\" }"
+        },
+        {
+          "from": "        if (length(last) < glue_max) {\n          tok = tk[1]",
+          "to": "        if (1) {\n          tok = tk[1]"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-deny-overblock"
+      ]
+    },
+    {
+      "name": "503-ab-glue-cap",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-chain-",
+      "edits": [
+        {
+          "from": "        if (length(last) > 1) { if (length(last) < glue_max) ch_ct[ch_top] = last \"_\" }",
+          "to": "        if (length(last) > 1) { ch_ct[ch_top] = last \"_\" }"
+        },
+        {
+          "from": "        if (length(last) < glue_max) {\n          tok = tk[1]",
+          "to": "        if (1) {\n          tok = tk[1]"
+        }
+      ],
+      "expect_fail": [
+        "ab-chain-deny-other"
+      ]
+    },
+    {
+      "name": "503-pg-budget-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "    if (ch_used > chain_budget) {",
+          "to": "    if (0 && ch_used > chain_budget) {"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-budget"
+      ]
+    },
+    {
+      "name": "503-pg-budget-edge",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "    if (ch_used > chain_budget) {",
+          "to": "    if (ch_used >= chain_budget) {"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-budget"
+      ]
+    },
+    {
+      "name": "503-ab-budget-off",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-chain-",
+      "edits": [
+        {
+          "from": "    if (ch_used > chain_lex_max) {",
+          "to": "    if (0 && ch_used > chain_lex_max) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-chain-deny-over-cap"
+      ]
+    },
+    {
+      "name": "503-ab-budget-edge",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-chain-",
+      "edits": [
+        {
+          "from": "    if (ch_used > chain_lex_max) {",
+          "to": "    if (ch_used >= chain_lex_max) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-chain-noop-at-cap"
+      ]
+    },
+    {
+      "name": "503-ab-lex-ansi",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-chain-",
+      "edits": [
+        {
+          "from": "ch_lq = (ch_pd ? 3 : 1)",
+          "to": "ch_lq = 1"
+        }
+      ],
+      "expect_fail": [
+        "ab-chain-deny-impl-gh"
+      ]
+    },
+    {
+      "name": "503-cdg-lex-ansi",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-chain-",
+      "edits": [
+        {
+          "from": "\"$sq\") if [ \"$pd\" -eq 1 ]; then lq=3; else lq=1; fi;",
+          "to": "\"$sq\") if [ \"$pd\" -eq 1 ]; then lq=1; else lq=1; fi;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-chain-deny-forms"
+      ]
+    },
+    {
+      "name": "503-pg-lex-dq-bs",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "if (i < n && (nx == \"$\" || nx == \"`\" || nx == \"\\\"\" || nx == \"\\\\\")) { i++; ch_qchar(ch_cls[nx]) }",
+          "to": "if (0 && i < n && (nx == \"$\" || nx == \"`\" || nx == \"\\\"\" || nx == \"\\\\\")) { i++; ch_qchar(ch_cls[nx]) }"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-deny-quote-forms"
+      ]
+    },
+    {
+      "name": "503-ab-lex-dq-bs",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-chain-",
+      "edits": [
+        {
+          "from": "if (i < n && (nx == \"$\" || nx == \"`\" || nx == \"\\\"\" || nx == \"\\\\\")) { i++; ch_qchar(ch_cls[nx]) }",
+          "to": "if (0 && i < n && (nx == \"$\" || nx == \"`\" || nx == \"\\\"\" || nx == \"\\\\\")) { i++; ch_qchar(ch_cls[nx]) }"
+        }
+      ],
+      "expect_fail": [
+        "ab-chain-deny-impl-gh"
+      ]
+    },
+    {
+      "name": "503-cdg-lex-dq-bs",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-chain-",
+      "edits": [
+        {
+          "from": "if [ \"$i\" -lt \"$n\" ] && { [ \"$nx\" = '$' ]",
+          "to": "if [ \"$i\" -lt 0 ] && { [ \"$nx\" = '$' ]"
+        }
+      ],
+      "expect_fail": [
+        "cdg-chain-deny-forms"
+      ]
+    },
+    {
+      "name": "503-pg-gate-brace",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "index(r, \"$(\") > 0 || index(r, \"${\") > 0 ||",
+          "to": "index(r, \"$(\") > 0 ||"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-deny-subst"
+      ]
+    },
+    {
+      "name": "503-pg-frame-brace",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-chain-",
+      "edits": [
+        {
+          "from": "    } else if (k == 5) {\n      if (ch_pd) ch_open(\"B\", \"O\")",
+          "to": "    } else if (k == 5) {\n      if (0 && ch_pd) ch_open(\"B\", \"O\")"
+        }
+      ],
+      "expect_fail": [
+        "push-chain-deny-subst"
       ]
     }
   ]

@@ -29,7 +29,7 @@
 # exceeds a size cap (see "Analysis deadline (#457)" and "Size caps (#457)" below); every other case — main session (no agent_type), any other agent, `permission_mode: "plan"`, a tool
 # other than Edit/Write/apply_patch/Bash, malformed stdin, an absent/empty file_path/command, an
 # ordinary Bash call that neither carries an inline patch nor invokes the shim as its command word
-# (`apply_patch`/`applypatch` appearing only as an ordinary argument gets no opinion; the walk
+# (`apply_patch`/`applypatch` appearing only as an ordinary argument gets no opinion; the base walk
 # never tracks which quote ENCLOSES which span, so a quoted mention right after a segment-break
 # character can still deny -- see the documented over-blocks below), or
 # an ordinary absolute path outside any `.claude`/`.codex` segment — is "no opinion" (exit 0, empty
@@ -211,10 +211,34 @@
 # `X=a\ b apply_patch < x.patch` would otherwise resolve `b` as the command word -- measured: both
 # -> rc 2 (rc 0 before). `echo 'a b' apply_patch` (the odd token follows the resolved word) and
 # `X='a b' echo hi; rg apply_patch hooks/` (the segment never mentions the shim) stay no opinion.
-# RESIDUAL, not closed: a quoted value that contains a segment-break character plus whitespace
-# (`X='a;b c' apply_patch < x.patch`) still evades -- measured: rc 0 -- because the opening quote
-# sits in the previous segment, and tracking quotes across segments would over-block heredoc
-# bodies.
+# Since #503 a quoted value that contains a segment-break character plus whitespace
+# (`X='a;b c' apply_patch < x.patch`, rc 0 before) is closed by an additive chain pass, see the
+# paragraph of that issue below; its documented over-block is a benign inline patch behind such a
+# value (`X='a;b c' apply_patch <<'EOF'`, rc 2, the same class as `X='a b'` above).
+#
+# Fail-closed: a segment break inside a quote or a command substitution (#503). The base split in
+# is_apply_patch_word() cuts a line at every `;`, `&`, `|`, `(`, `)`, `{`, `}` and backtick before it
+# looks at quoting, so the opening quote of a value holding one of them sits in a previous segment and
+# the unbalanced-quote check above never sees it. An ADDITIVE pass, cdg_chain_line(), runs per gated
+# physical line -- a line that names the shim, carries a quote, a backslash, a backtick, `$(` or `${`,
+# and holds a break character -- and only adds segments: it lexes the line sequentially (single
+# quotes, double quotes, `$'...'`, backslash escapes, an unquoted `#` at a word start outside any
+# substitution, which ends the lexing, and a stack of `$(...)`, `${...}` and backtick frames), classifies
+# every break character as a head break (a real command break, which ends the current chain), a
+# literal break (quoted or escaped, which joins it) or a frame open or close, and appends one text per
+# chain of two or more segments to the line's segment list, so the unchanged walk, `]]` pass, #455
+# parity check and shim input scan judge each one. In a chain text a word that ends at a quoted or
+# escaped separator or at a literal break carries a trailing backslash (the cut marker, which the parity
+# check reads as "a quoted span was split here"), and a substitution is the expansion word `$_` when
+# glued to a word and the inert word `_` when it starts a word. Quote state never crosses a physical
+# line and an unquoted `#` ends the lexing, so a heredoc body or prose line is not poisoned by an
+# earlier line. Pure bash, nothing executed: this hook runs no awk, sed, grep or tr. Cost: one
+# deadline sample per character on a line already capped at CDG_LINE_MAX_BYTES (the scoped LC_ALL=C
+# makes indexing byte-wise), O(line) iterations plus O(line squared) byte copies at most, so the #457
+# deadline bounds the total; only gated lines pay it. Residuals, each measured rc 0: a substitution that
+# starts the command word (`$(echo apply_patch) < x.patch`) and the lexer's approximations (a `case`
+# pattern's `)` inside `$(...)`, quoting inside `${...}`, backslash-nested backticks, process
+# substitution read as a plain subshell).
 #
 # Analysis deadline (#457). This hook's own analysis (everything after the role and plan-mode exits)
 # is bounded by a whole-second wall-clock budget, `CDG_ANALYSIS_BUDGET_SECS` (5s in production),
@@ -270,7 +294,8 @@
 # is_apply_patch_word, has_exact_begin_patch_line and parse_patch_headers (all linear, all bounded by
 # `CDG_TEXT_MAX_BYTES`), and the raw-text `.claude`/`.codex` glob -- and `U_max` is the largest
 # single step the deadline cannot interrupt: one line's substitutions (bounded by
-# `CDG_LINE_MAX_BYTES`), one segment's `toks=($seg)` word-split, one `"${toks[@]}"` expansion, one
+# `CDG_LINE_MAX_BYTES`; since #503 also one character step of cdg_chain_line(), whose loop samples the
+# deadline per character), one segment's `toks=($seg)` word-split, one `"${toks[@]}"` expansion, one
 # walk_window iteration (plus any per-index cost bash 3.2's arrays add), one forked `trim`/`ltrim`
 # call up to its first in-subshell sample, or one classify_path. Residuals this deadline and these
 # caps do NOT close: `T_prefix` is unsampled (though still counted by the wall clock), and the Codex
@@ -311,8 +336,9 @@
 # `bash`/`sh`/`env`/`sudo`/…, so `bash -c apply_patch` now resolves past `bash -c` to `apply_patch`
 # and denies) -- still backslash-blind like every other scan in this directory (since #437, quote
 # CHARACTERS are stripped from each token before matching/resolving it -- see walk_window()'s own
-# comment -- but the walk still never tracks which quote ENCLOSES which span, only strips the
-# characters themselves), so deliberate obfuscation remains OUT OF SCOPE for this tripwire, not a
+# comment -- but the base walk still never tracks which quote ENCLOSES which span, only strips the
+# characters themselves; the #503 chain pass tracks quote state, but only to re-judge text the base
+# split cut apart), so deliberate obfuscation remains OUT OF SCOPE for this tripwire, not a
 # sandbox: a backslash-quoted spelling (`\apply_patch`, `a\pply_patch`, or a backslash-newline
 # splitting the word across two physical lines), a variable-built spelling of the shim's own name
 # (`p=apply_patch; $p < x.patch` -- this walk never expands a variable reference, so `$p` never
@@ -348,7 +374,8 @@
 # a matching pair of BACKTICKS denies too, even though the backticks themselves sit inside an
 # ENCLOSING pair of ordinary quotes -- measured: `git commit -m "See \`apply_patch\` docs"` -> rc
 # 2. Backtick is one of this walk's own segment-break characters (the same set
-# hooks/agent-boundary.sh's tokenizer already treats that way); this walk never tracks the
+# hooks/agent-boundary.sh's tokenizer already treats that way); the base walk (the #503 chain pass
+# only adds segments) never tracks the
 # ENCLOSING `"..."`/`'...'` quote state at all, so it cannot tell a markdown-style code span
 # quoted for a commit message apart from a genuine backtick command substitution (`` `apply_patch`
 # `` really does invoke apply_patch and substitute its output, which is a correct positive, not an
@@ -975,6 +1002,165 @@ walk_window() {
   esac
 }
 
+# cdg_chain_line LINE (#503) -- the additive chain pass, one physical line of the Bash command. The base
+# segmenter in is_apply_patch_word() below cuts a line at every break character before it looks at
+# quoting, so a break character inside a quote or a command substitution leaves the shim in a segment
+# whose first word is junk (`X='a;b c' apply_patch < x.patch`). This function lexes the line
+# sequentially -- single quotes, double quotes, dollar-single-quote, backslash escapes, an unquoted
+# comment, and a stack of dollar-paren / dollar-brace / backtick frames -- classifies every break
+# character as a head break (a real command break, which ends the current chain), a literal break (quoted
+# or escaped, which joins the chain), a frame open or a frame close, and prints, into the global
+# cdg_chain_out, one text per chain that joins two or more segments. The caller appends those texts to
+# its segment list, so the unchanged walk, the `]]` pass, the quote-parity check and the shim input
+# scan judge each one as a segment. In a chain text, a token that ends at a quoted or escaped separator
+# or at a literal break carries a trailing backslash (the cut marker, which the parity check reads as
+# "a quoted span was split here"), and a substitution is the expansion word dollar-underscore when it
+# is glued to a word and the inert word underscore when it starts a word. Pure bash, nothing executed:
+# this hook runs no awk, sed, grep or tr. The loop samples the deadline first, per character, on a line
+# already capped at CDG_LINE_MAX_BYTES; LC_ALL=C scopes to this call so indexing is by byte.
+cdg_chain_out=""
+cdg_chain_line() {
+  local ln="$1" LC_ALL=C
+  local n="${#ln}" i=0 c nx lq=0 ld=0 pd=0 cur="" mul=0 qd act last ph
+  local -a stx smu fk fsv fcn
+  cdg_chain_out=""
+  while [ "$n" -gt "$i" ]; do
+    check_deadline
+    c="${ln:$i:1}"
+    i=$((i + 1))
+    qd=0
+    act=plain
+    case "$lq" in
+      0)
+        case "$c" in
+          "$sq") if [ "$pd" -eq 1 ]; then lq=3; else lq=1; fi; cur="$cur$c"; pd=0; continue ;;
+          "$dq") lq=2; cur="$cur$c"; pd=0; continue ;;
+          '\') cur="$cur$c"; pd=0
+               if [ "$i" -lt "$n" ]; then c="${ln:$i:1}"; i=$((i + 1)); qd=2; else continue; fi ;;
+          '$') cur="$cur$c"; pd=1; continue ;;
+          '#') last="${cur: -1}"
+               if [ "$ld" -eq 0 ] && { [ -z "$cur" ] || [ "$last" = " " ] || [ "$last" = "$tab" ] || [ "$last" = "<" ] || [ "$last" = ">" ]; }; then break; fi ;;
+        esac ;;
+      1)
+        case "$c" in
+          "$sq") lq=0; cur="$cur$c"; pd=0; continue ;;
+          *) qd=1 ;;
+        esac ;;
+      2)
+        case "$c" in
+          "$dq") lq=0; cur="$cur$c"; pd=0; continue ;;
+          '\') cur="$cur$c"; pd=0
+               nx="${ln:$i:1}"
+               if [ "$i" -lt "$n" ] && { [ "$nx" = '$' ] || [ "$nx" = '`' ] || [ "$nx" = "$dq" ] || [ "$nx" = '\' ]; }; then
+                 c="$nx"; i=$((i + 1)); qd=2
+               else continue; fi ;;
+          '$') cur="$cur$c"; pd=1; continue ;;
+          '`') ;;
+          '('|'{') if [ "$pd" -eq 0 ]; then qd=1; fi ;;
+          *) qd=1 ;;
+        esac ;;
+      3)
+        case "$c" in
+          "$sq") lq=0; cur="$cur$c"; pd=0; continue ;;
+          '\') cur="$cur$c"; pd=0
+               if [ "$i" -lt "$n" ]; then c="${ln:$i:1}"; i=$((i + 1)); qd=2; else continue; fi ;;
+          *) qd=1 ;;
+        esac ;;
+    esac
+    # classify the character
+    case "$c" in
+      ' '|"$tab") if [ "$qd" -eq 0 ]; then act=sep; else act=qsep; fi ;;
+      '<'|'>') if [ "$qd" -eq 0 ]; then act=sep; else act=qsep; fi ;;
+      ';'|'&'|'|') if [ "$qd" -eq 0 ]; then act=head; else act=lit; fi ;;
+      '(')
+        if [ "$qd" -ne 0 ]; then act=lit
+        elif [ "$pd" -eq 1 ]; then act=openp
+        else
+          if [ "$ld" -gt 0 ] && [ "${fk[$ld]}" = P ]; then fcn[$ld]=$(( ${fcn[$ld]} + 1 )); fi
+          act=head
+        fi ;;
+      ')')
+        if [ "$qd" -ne 0 ]; then act=lit
+        elif [ "$ld" -gt 0 ] && [ "${fk[$ld]}" = P ]; then
+          if [ "${fcn[$ld]}" -gt 0 ]; then fcn[$ld]=$(( ${fcn[$ld]} - 1 )); act=head; else act=close; fi
+        else act=head; fi ;;
+      '{')
+        if [ "$qd" -ne 0 ]; then act=lit
+        elif [ "$pd" -eq 1 ]; then act=openb
+        else
+          if [ "$ld" -gt 0 ] && [ "${fk[$ld]}" = B ]; then fcn[$ld]=$(( ${fcn[$ld]} + 1 )); fi
+          act=head
+        fi ;;
+      '}')
+        if [ "$qd" -ne 0 ]; then act=lit
+        elif [ "$ld" -gt 0 ] && [ "${fk[$ld]}" = B ]; then
+          if [ "${fcn[$ld]}" -gt 0 ]; then fcn[$ld]=$(( ${fcn[$ld]} - 1 )); act=head; else act=close; fi
+        else act=head; fi ;;
+      '`')
+        if [ "$qd" -ne 0 ]; then act=lit
+        elif [ "$lq" -eq 0 ] && [ "$ld" -gt 0 ] && [ "${fk[$ld]}" = T ]; then act=close
+        else act=opent; fi ;;
+    esac
+    case "$act" in
+      plain) cur="$cur$c"; pd=0 ;;
+      sep) cur="$cur$c"; pd=0 ;;
+      qsep)
+        case "$c" in
+          ' '|"$tab") ph="$c" ;;
+          *) ph=" " ;;
+        esac
+        last="${cur: -1}"
+        if [ "$qd" -eq 2 ]; then cur="$cur$ph"
+        else
+          case "$last" in
+            ''|' '|"$tab"|'<'|'>') ;;
+            *) cur="$cur\\$ph" ;;
+          esac
+        fi
+        pd=0 ;;
+      lit)
+        mul=1
+        last="${cur: -1}"
+        if [ "$qd" -eq 2 ]; then cur="$cur "
+        else
+          case "$last" in
+            ''|' '|"$tab"|'<'|'>') ;;
+            *) cur="$cur\\ " ;;
+          esac
+        fi
+        pd=0 ;;
+      head)
+        if [ "$mul" -eq 1 ] && [ -n "$cur" ]; then cdg_chain_out="$cdg_chain_out$cur$lf"; fi
+        cur=""; mul=0; pd=0 ;;
+      openp|openb|opent)
+        if [ "$act" != opent ]; then cur="${cur%?}"; fi
+        last="${cur: -1}"
+        if [ -z "$cur" ] || [ "$last" = " " ] || [ "$last" = "$tab" ] || [ "$last" = "<" ] || [ "$last" = ">" ]; then ph="_"; else ph='$_'; fi
+        cur="$cur$ph"
+        ld=$((ld + 1))
+        stx[$ld]="$cur"; smu[$ld]=1; fsv[$ld]="$lq"; fcn[$ld]=0
+        case "$act" in
+          openp) fk[$ld]=P ;;
+          openb) fk[$ld]=B ;;
+          *) fk[$ld]=T ;;
+        esac
+        cur=""; mul=0; lq=0; pd=0 ;;
+      close)
+        if [ "$mul" -eq 1 ] && [ -n "$cur" ]; then cdg_chain_out="$cdg_chain_out$cur$lf"; fi
+        cur="${stx[$ld]}"; mul="${smu[$ld]}"; lq="${fsv[$ld]}"
+        ld=$((ld - 1)); pd=0 ;;
+    esac
+  done
+  # unwinding the open frames takes at most one pass per frame, and frames are bounded by the line
+  # (CDG_LINE_MAX_BYTES), so this loop needs no deadline sample of its own
+  while :; do
+    if [ "$mul" -eq 1 ] && [ -n "$cur" ]; then cdg_chain_out="$cdg_chain_out$cur$lf"; fi
+    [ "$ld" -gt 0 ] || break
+    cur="${stx[$ld]}"; mul="${smu[$ld]}"
+    ld=$((ld - 1))
+  done
+}
+
 # is_apply_patch_word TEXT (#407 amendment A1; reworked #407 kickback rounds 2/3; reworked again
 # #437) -- true iff TEXT (a whole tool_input.command, possibly multi-line) has a segment whose
 # RESOLVED command word is exactly "apply_patch"/"applypatch", OR a path-qualified spelling of
@@ -986,7 +1172,8 @@ walk_window() {
 #
 # Segment breaks (reset the walk_window skip state at the start of every new command position, the
 # same set hooks/agent-boundary.sh's own tokenizer treats as segment breaks): `;` `&` `|` `(` `)`
-# `{` `}` and a backtick. Word breaks WITHIN a segment: whitespace (via ordinary word-splitting
+# `{` `}` and a backtick (since #503 a gated line's segment list also carries the chain texts of
+# cdg_chain_line(), above, judged by this same walk). Word breaks WITHIN a segment: whitespace (via ordinary word-splitting
 # below) plus `<` and `>`, each replaced by a padded, near-uncollidable sentinel word (not a bare
 # space) so walk_window can still see WHERE a redirect operator was -- a redirect never starts a
 # new segment, but it DOES separate a command word from a glued redirect target or source
@@ -1102,6 +1289,23 @@ is_apply_patch_word() {
     flat="${ln//[;\&\|()\`]/$lf}"
     flat="${flat//\{/$lf}"
     flat="${flat//\}/$lf}"
+    # (#503) The additive chain pass: only a line that names the shim, carries a quote, a backslash, a
+    # backtick or a dollar-paren / dollar-brace, and holds a break character is lexed. Its chain texts
+    # join the segment list, so the unchanged loop below judges each one like a segment.
+    case "$ln" in
+      *applypatch*|*apply_patch*)
+        case "$ln" in
+          *"$sq"*|*"$dq"*|*\\*|*\`*|*'$('*|*'${'*)
+            case "$ln" in
+              *[\;\&\|\(\)\`]*|*\{*|*\}*)
+                cdg_chain_line "$ln"
+                flat="$flat$lf$cdg_chain_out"
+                ;;
+            esac
+            ;;
+        esac
+        ;;
+    esac
     flat="${flat//</ $mark_in }"
     flat="${flat//>/ $mark_out }"
     # (The segment loop's body below keeps its pre-#457 indentation, so every line stays textually

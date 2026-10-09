@@ -4160,6 +4160,14 @@ pcap_shape() {
     s) pre='git -C '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 7 )) x; pcap_cmd="$pre$pcap_s status" ;;
     t) pre='git "--no-pager" '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) 'ab '; pcap_cmd="$pre$pcap_s" ;;
     o) pre='git push origin feature/x; nice'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) ' -n nice'; pcap_cmd="$pre$pcap_s" ;;
+    # #503 chain pass: a literal-break flood in one quoted run (u), a frame flood glued into a -C value (v),
+    # many two-segment chains (w), a backtick flood (x), an unclosed nested-substitution flood (y). Each is
+    # past the chain budget, so the hook must spend about what it spends without the pass.
+    u) pre="X='"; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 22 )) ';a'; pcap_cmd="$pre$pcap_s' git push origin main" ;;
+    v) pre='git -C a'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 17 )) '$(b)'; pcap_cmd="$pre$pcap_s push origin main" ;;
+    w) pre='git log'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) ' "a;b";'; pcap_cmd="$pre$pcap_s" ;;
+    x) pre='git -C a'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 17 )) '``'; pcap_cmd="$pre$pcap_s push origin main" ;;
+    y) pre='git -C a'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 17 )) '$('; pcap_cmd="$pre$pcap_s push origin main" ;;
   esac
 }
 # pcap_verdict WANT -- the run reached a verdict: the too-large line, or WANT (rxdest, main, unres or noop).
@@ -4179,6 +4187,10 @@ pcap_verdict() {
       case "$push_err" in *"cannot resolve which repository"*) ;; *) __ok=0; __why="${__why}stderr missing the unresolved line: '$push_err'\n" ;; esac
       ;;
     noop) expect_push_no_opinion ;;
+    budget)
+      expect_push_deny
+      case "$push_err" in *"(blocked: too much quoted text to analyse)"*) ;; *) __ok=0; __why="${__why}stderr missing the chain-budget line: '$push_err'\n" ;; esac
+      ;;
   esac
 }
 # measure_cpu_ms CMD [ARGS...] -- like measure_ms, but times user+system CPU (TIMEFORMAT=%3U and
@@ -4217,19 +4229,24 @@ case_push_cmdcaptime_pin_at_cap_worst() {
   # deadline only so a runaway mutant cannot hang the suite.
   local dir="$tmpbase/repo-pp-cap-worst" shape want payload cpu_max_ms=6000 run_cpu_max_ms=8000
   mk_fixture_repo "$dir" main feature/x
-  for shape in a b c d f i s t o; do
-    case "$shape" in a|c|d) want=rxdest ;; i) want=unres ;; s|t|o) want=noop ;; *) want=main ;; esac
+  for shape in a b c d f i s t o u v w x y; do
+    case "$shape" in a|c|d) want=rxdest ;; i) want=unres ;; s|t|o) want=noop ;; u|v|w|x|y) want=budget ;; *) want=main ;; esac
     pcap_shape "$shape"
     payload="$(mk_push_cmd_big "$pcap_cmd" "$dir")"
-    push_budget_override="0"
-    push_deadline_override=60
-    measure_cpu_ms run_push_guard "$payload"
-    if [ -z "$measured_cpu_ms" ]; then
-      __ok=0; __why="${__why}[shape $shape] knob-0 run's CPU report could not be parsed\n"
-      continue
-    fi
-    if [ "$measured_cpu_ms" -gt "$cpu_max_ms" ]; then
-      __ok=0; __why="${__why}[shape $shape] unsampled prefix used ${measured_cpu_ms}ms of CPU, over the ${cpu_max_ms}ms bound\n"
+    # the #503 shapes cost what the base scan costs: u v w y run the knob-0 prefix check only, x (whose
+    # base scan alone is the heaviest) the production run only, to keep the suite short
+    if [ "$shape" != x ]; then
+      push_budget_override="0"
+      push_deadline_override=60
+      measure_cpu_ms run_push_guard "$payload"
+      if [ -z "$measured_cpu_ms" ]; then
+        __ok=0; __why="${__why}[shape $shape] knob-0 run's CPU report could not be parsed\n"
+        continue
+      fi
+      if [ "$measured_cpu_ms" -gt "$cpu_max_ms" ]; then
+        __ok=0; __why="${__why}[shape $shape] unsampled prefix used ${measured_cpu_ms}ms of CPU, over the ${cpu_max_ms}ms bound\n"
+      fi
+      case "$shape" in u|v|w|y) continue ;; esac
     fi
     push_deadline_override=60
     measure_cpu_ms run_push_guard "$payload"
@@ -10549,6 +10566,506 @@ case_cdg_optval_noop_flood_cap() {
   expect_cdg_no_opinion
 }
 
+# --- a segment break inside a quote or a command substitution (#503): the prose-quiet corpus ------
+# Every payload below is ordinary prose, a commit message, a heredoc body or a read-only command
+# that a quote-tracking pass could wrongly read as a hidden push, gh or apply_patch. Each must get
+# no opinion, before and after the chain pass lands (the corpus was committed against the unchanged
+# hooks first).
+pq_sq="'"
+# pq_push CMD... -- each CMD gets no opinion from push-guard (main session, clone on feature/x).
+pq_push() {
+  local dir="$tmpbase/repo-pq" c w0
+  mk_fixture_repo "$dir" main feature/x
+  for c in "$@"; do
+    w0="$__why"; __why=""
+    run_push_guard "$(mk_push_cmd_cwd "$c" "$dir")"
+    expect_push_no_opinion
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+case_push_chain_quiet_prose() {
+  pq_push \
+    "git commit -m \"Don${pq_sq}t push yet\"; echo done" \
+    "printf '%s\\n' \"Don${pq_sq}t\"; git push origin feature/x" \
+    "X=\"it${pq_sq}s\"; git push origin feature/x" \
+    'X="$(pwd)" git push origin feature/x' \
+    'git commit -m "fix: guard; git push now checks quotes"' \
+    "git push origin feature/x # don${pq_sq}t; main is protected" \
+    'git -C "$(pwd)" log --grep push' \
+    'git -C "$(git rev-parse --show-toplevel)" status' \
+    'mkdir -p "$(git rev-parse --git-common-dir)/trail-blazer" && touch "$(git rev-parse --git-common-dir)/trail-blazer/stop"'
+}
+case_push_chain_quiet_heredoc() {
+  pq_push \
+    "git commit -F - <<'EOF'${LF}Don${pq_sq}t let git push skip the guard; it${pq_sq}s fine.${LF}- \`git -C \"\$(pwd)\" log\` is read-only${LF}- \`bin/x.sh\` pushes the tag (see \`docs/y.md\`)${LF}EOF" \
+    "cat > f <<'EOF'${LF}Don${pq_sq}t panic${LF}X=1; git push origin feature/x${LF}EOF" \
+    "cat > f <<'EOF'${LF}Don${pq_sq}t git panic; ok${LF}X=\"1\"; git push origin feature/x${LF}EOF" \
+    "gh pr create --title t --body \"\$(cat <<'EOF'${LF}## Summary${LF}- Adds \`bin/x.sh\`; see \`docs/y.md\` for the rest.${LF}- Don${pq_sq}t touch \`hooks/z.sh\`.${LF}EOF${LF})\""
+}
+case_ab_chain_quiet() {
+  abx_noop implementer \
+    "printf '%s\\n' \"it${pq_sq}s done; see the gh docs\"" \
+    "cat > notes.md <<'EOF'${LF}Don${pq_sq}t use gh here; ask first${LF}EOF" \
+    'echo github "a;b"'
+  abx_noop verifier \
+    "X=\"it${pq_sq}s\"; git status" \
+    'git log --grep "fix; push"' \
+    'git log --format="%h (%s)"' \
+    'git log --format=%H "$(git merge-base main HEAD)"..HEAD'
+}
+case_cdg_chain_quiet() {
+  local c
+  for c in \
+    "git commit -m \"Don${pq_sq}t run apply_patch; use the native tool\"" \
+    'rg -n "apply_patch (shim)" hooks/' \
+    "X=\"it${pq_sq}s\"; echo apply_patch"; do
+    run_claude_guard "$(mk_codex_shell 'implementer' "$c")"
+    expect_cdg_no_opinion
+  done
+  # the main session is unscoped: the evasion shape stays no opinion (role scoping unchanged)
+  run_claude_guard "$(mk_codex_shell '' "X='a;b c' apply_patch < x.patch")"
+  expect_cdg_no_opinion
+}
+
+# --- a segment break inside a quote or a command substitution (#503): deny, over-block, flood ------
+PP_R_C="-C path outside the <name>-wt-<n> worktree shape"
+# pcd_unres REASON CMD... -- each CMD denies with the unresolved-repository line naming (REASON).
+pcd_unres() {
+  local reason="$1" c w0
+  shift
+  for c in "$@"; do
+    w0="$__why"; __why=""
+    pp_run "$c"
+    pp_expect_unres "$reason"
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+# mutant:503-pg-chain-off — the chain pass is never run, so every evasion below is judged by the
+#   base segments alone and the quoted-break pushes get no opinion.
+# mutant:503-pg-lex-sq — a single quote never opens a quoted span, so a break character inside
+#   single quotes is a head break and the single-quoted deny cases lose their chain.
+# mutant:503-pg-lex-ansi — a dollar-single-quote span is read as a plain single-quoted span, so the
+#   escaped quote inside it closes the span early and the break after it is a head break.
+# mutant:503-pg-lex-bs — a backslash escapes nothing, so an escaped break character is a head break.
+# mutant:503-pg-cutmark — a field cut at a literal break gets no trailing backslash, so a mixed-quote
+#   value whose quote counts are even looks balanced.
+# mutant:503-pg-close-glue — the text after a substitution close is not glued to the word before it,
+#   so a quoted substitution value reads as an unbalanced assignment value.
+# mutant:503-pg-lex-dq-apos — an apostrophe inside double quotes opens a single-quoted span (the #449
+#   over-block), so a quiet prose line is read as an unbalanced assignment.
+# mutant:503-pg-ph-always — a word-initial substitution is always the expansion word, so a markdown
+#   code span that starts a heredoc line reads as an expansion in command position.
+# mutant:503-pg-comment — an unquoted hash no longer ends the lexing, so an apostrophe in a trailing
+#   comment opens a quoted span that swallows the rest of the line.
+# mutant:503-pg-lex-dq-bs — a backslash inside double quotes escapes nothing, so an escaped double quote
+#   closes the span early and the break character after it is a head break.
+# mutant:503-pg-gate-brace — the chain gate no longer counts a dollar-brace, so a line whose only
+#   quote-like text is an unquoted brace expansion skips the pass.
+# mutant:503-pg-frame-brace — an unquoted dollar-brace opens no frame, so a brace expansion in a -C value is
+#   judged as plain text.
+# mutant:503-pg-comment-breaks — a break character after an unquoted hash is no longer counted, so the
+#   lexer's segment count disagrees with the base split and a line with a comment holding a break
+#   character skips the chain pass altogether.
+# mutant:503-pg-perline — the quote state carries over from the previous input line, so a prose line
+#   with an unclosed apostrophe poisons the next line.
+case_push_chain_deny_break_chars() {
+  local ch
+  for ch in ';' '&' '|' '(' ')' '{' '}'; do
+    pcd_unres "$PP_R_PFX" "X=\"a${ch}b c\" git push origin main" "X='a${ch}b c' git push origin main"
+  done
+  pcd_unres "$PP_R_PFX" "X='a\`b c' git push origin main"
+}
+case_push_chain_deny_quote_forms() {
+  pcd_unres "$PP_R_PFX" \
+    'X=a\;b\ c git push origin main' \
+    'X=a\;b git push origin main' \
+    'X="a\";b c" git push origin main' \
+    'X="a;b c" git push origin main # note; x' \
+    "X=\"a${pq_sq}\"${pq_sq}b;c d${pq_sq} git push origin main" \
+    "X=\$${pq_sq}a\\${pq_sq};b c${pq_sq} git push origin main"
+}
+# mutant:503-pg-lex-frame — a dollar-paren inside double quotes opens no frame, so the substitution
+#   in a quoted -C value is no placeholder and the push is judged with a literal -C path.
+# mutant:503-pg-ph-never — a word-initial substitution is always the inert word, so a -C value that is
+#   a bare substitution resolves to nothing the unresolved-path rule can see.
+case_push_chain_deny_subst() {
+  pcd_unres "$PP_R_C" \
+    'git -C "$(git rev-parse --show-toplevel)" push origin main' \
+    'git -C "$(pwd)" push origin main' \
+    'git -C `pwd` push origin main' \
+    'git -C $(pwd) push origin main' \
+    'git -C "$(pwd)"/sub push origin main' \
+    'git -C ${D} push origin main'
+  # a substitution in git option position: the expansion word, not the inert one
+  pcd_unres "runtime expansion in the git options" \
+    'git $(echo --no-pager) push origin main' \
+    'git `echo --no-pager` push origin main' \
+    'git "$(echo --no-pager)" push origin main'
+}
+case_push_chain_deny_misc() {
+  local dir="$tmpbase/repo-pcm"
+  pp_run 'git push origin "x;y" main'
+  expect_push_deny
+  case "$push_err" in
+    *'denies pushing to "main"'*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'denies pushing to \"main\"': '$push_err'\n" ;;
+  esac
+  pcd_unres "$PP_R_PFX" "echo \"\$(X='a;b c' git push origin main)\""
+  mk_fixture_repo "$dir" main feature/x
+  run_push_guard "$(mk_codex_shell '' 'X="a;b c" git push origin main' "$dir")"
+  pp_expect_unres "$PP_R_PFX"
+  pp_run 'git push origin ${B}:main'
+  expect_push_deny
+  case "$push_err" in
+    *"(blocked: $PP_R_RXD)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing '(blocked: $PP_R_RXD)': '$push_err'\n" ;;
+  esac
+}
+# mutant:503-pg-glue-cap — a glued token keeps growing past the cap, so the text after a substitution
+#   close is glued even onto a token of 256 or more characters and the quoted value reads as balanced.
+case_push_chain_deny_overblock() {
+  # Documented over-blocks, each listed in the hook header: a quoted value with a space and a break
+  # character before a push (the #449 class, whatever the destination), a quoted value that names a
+  # push, and a git -C value that is a command substitution. A token of 256 or more characters stops
+  # growing, so the closing quote after a substitution is dropped and the value reads as unbalanced:
+  # the cap can only add a deny.
+  local longv
+  pcap_fill 300 a
+  longv="$pcap_s"
+  pcd_unres "$PP_R_PFX" 'X="a;b c" git push origin feature/x' 'X="a;b" git push origin feature/x' 'MSG="fix; git push later"'
+  # a benign non-push git command behind a quoted break gets the unreadable-config alias deny
+  pp_run "X='(' git commit -m \"fix include path\""
+  expect_push_deny
+  pcd_unres "$PP_R_C" 'git -C "$(pwd)" push origin feature/x'
+  pcd_unres "$PP_R_PFX" "X=\"${longv}\$(pwd)\" git push origin feature/x"
+  pp_run 'X="$(pwd)" git push origin feature/x'
+  expect_push_no_opinion
+}
+case_push_chain_deny_optval_compose() {
+  pcd_unres "$PP_R_OPTV" 'nice -n "1;2" git push origin main'
+}
+# mutant:503-pg-budget-off — the budget check is dropped, so gated lines past it are lexed instead of
+#   denied.
+# mutant:503-pg-budget-edge — the budget check denies at the budget itself, not one character past it.
+# pcb_filler KIND -- sets pcb_line to a gated line of exactly 65536 characters of one worst shape for the
+# lexer: sub (unclosed substitutions), bt (backticks) or nest (balanced nested substitutions)
+pcb_line=""
+pcb_filler() {
+  local k o pre='git log '
+  case "$1" in
+    sub) pcap_fill 65528 '$('; pcb_line="$pre$pcap_s" ;;
+    bt) pcap_fill 65528 '``'; pcb_line="$pre$pcap_s" ;;
+    nest) k=21842; pcap_fill $(( 2 * k )) '$('; o="$pcap_s"; pcap_fill "$k" ')'
+          pcb_line="$pre$o$pcap_s"; pcap_fill $(( 65536 - ${#pcb_line} )) x; pcb_line="$pcb_line$pcap_s" ;;
+  esac
+}
+# pcb_quiet -- expect_push_no_opinion for an at-budget run, which goes through the production analysis
+# deadline: under host load that deadline can fire first, so its own deny line is also accepted (as
+# pcap_verdict does); the chain-budget deny line never is, so the edge mutant still dies
+pcb_quiet() {
+  if [ "$push_rc" -eq 2 ] && [ "$push_err" = "$DL_DEADLINE_LINE" ]; then return; fi
+  expect_push_no_opinion
+}
+case_push_chain_budget() {
+  local dir="$tmpbase/repo-pcb" pre='git log "a;b" ' l1 l2 kind k
+  mk_fixture_repo "$dir" main feature/x
+  # one character over the budget, on one line and summed over two
+  pcap_fill $(( 65537 - ${#pre} )) x
+  run_push_guard "$(mk_push_cmd_big "$pre$pcap_s" "$dir")"
+  expect_push_deny
+  case "$push_err" in *"(blocked: too much quoted text to analyse)"*) ;; *) __ok=0; __why="${__why}one line: stderr missing the budget line: '$push_err'\n" ;; esac
+  pcap_fill $(( 40000 - ${#pre} )) x; l1="$pre$pcap_s"
+  pcap_fill $(( 25537 - ${#pre} )) x; l2="$pre$pcap_s"
+  run_push_guard "$(mk_push_cmd_big "$l1$LF$l2" "$dir")"
+  expect_push_deny
+  case "$push_err" in *"(blocked: too much quoted text to analyse)"*) ;; *) __ok=0; __why="${__why}two lines: stderr missing the budget line: '$push_err'\n" ;; esac
+  # exactly the budget: no opinion, for one line, two lines and the worst lexer shapes, within a CPU bound
+  pcap_fill $(( 65536 - ${#pre} )) x
+  run_push_guard "$(mk_push_cmd_big "$pre$pcap_s" "$dir")"
+  pcb_quiet
+  pcap_fill $(( 40000 - ${#pre} )) x; l1="$pre$pcap_s"
+  pcap_fill $(( 25536 - ${#pre} )) x; l2="$pre$pcap_s"
+  run_push_guard "$(mk_push_cmd_big "$l1$LF$l2" "$dir")"
+  pcb_quiet
+  for kind in sub nest bt; do
+    pcb_filler "$kind"
+    measure_cpu_ms run_push_guard "$(mk_push_cmd_big "$pcb_line" "$dir")"
+    pcb_quiet
+    if [ -z "$measured_cpu_ms" ]; then
+      __ok=0; __why="${__why}[$kind] the CPU report could not be parsed\n"
+    elif [ "$measured_cpu_ms" -gt 6000 ]; then
+      __ok=0; __why="${__why}[$kind] a gated line of exactly the budget used ${measured_cpu_ms}ms of CPU, over the 6000ms bound\n"
+    fi
+  done
+}
+# pcf_flood KIND N -- a push-guard command of N units of one flood shape, no push anywhere: lit is a
+# literal-break flood inside one quoted run (one chain of N tokens), frame a flood of word-initial command
+# substitutions with the only mention of git after them (every one needs the git-naming decision, which
+# must resume from where the last one stopped), chain many two-segment chains.
+pcf_flood() {
+  local kind="$1" n="$2"
+  case "$kind" in
+    lit) printf "git log '"; printf ';a%.0s' $(seq 1 "$n"); printf "'" ;;
+    frame) printf 'echo'; printf ' $(b)%.0s' $(seq 1 "$n"); printf ' x git' ;;
+    chain) printf 'git log'; printf ' "a;b";%.0s' $(seq 1 "$n") ;;
+  esac
+}
+# case_push_chain_noop_flood_ratio -- CPU time, not wall clock, at N and 4N units of each no-push flood:
+# a linear pass costs about four times the smaller run's variable part, a quadratic step sixteen
+# times, so cpu(4N) within six times cpu(N) plus a fixed allowance holds under host load and fails a
+# super-linear step. The deadline override is only a hang guard.
+case_push_chain_noop_flood_ratio() {
+  local dir="$tmpbase/repo-pcf" kind n small big
+  mk_fixture_repo "$dir" main feature/x
+  for kind in lit frame chain; do
+    n=2000
+    pcf_flood "$kind" "$n" > "$tmpbase/pcf-small"
+    pcf_flood "$kind" $(( n * 4 )) > "$tmpbase/pcf-big"
+    push_deadline_override=60
+    measure_cpu_ms run_push_guard "$(mk_push_cmd_big "$(cat "$tmpbase/pcf-small")" "$dir")"
+    expect_push_no_opinion
+    small="$measured_cpu_ms"
+    push_deadline_override=60
+    measure_cpu_ms run_push_guard "$(mk_push_cmd_big "$(cat "$tmpbase/pcf-big")" "$dir")"
+    expect_push_no_opinion
+    big="$measured_cpu_ms"
+    if [ -z "$small" ] || [ -z "$big" ]; then
+      __ok=0; __why="${__why}[$kind] a CPU report could not be parsed\n"
+    elif [ "$big" -gt $(( 6 * small + 250 )) ]; then
+      __ok=0; __why="${__why}[$kind] ${big}ms of CPU at 4N against ${small}ms at N: super-linear\n"
+    fi
+  done
+}
+
+# mutant:503-ab-chain-off — the chain pass is never run, so every evasion below is judged by the
+#   base segments alone.
+# mutant:503-ab-lex-sq — a single quote never opens a quoted span, so a break character inside single
+#   quotes is a head break.
+# mutant:503-ab-lex-dq-apos — an apostrophe inside double quotes opens a single-quoted span (the
+#   #449 over-block), so a quiet prose line is read as an unbalanced assignment.
+# mutant:503-ab-lex-bs — a backslash escapes nothing, so an escaped break character is a head break.
+# mutant:503-ab-lex-frame — a dollar-paren inside double quotes opens no frame, so a quoted value
+#   holding a substitution and a space is not re-judged.
+# mutant:503-ab-cutmark — a field cut at a literal break gets no trailing backslash, so a mixed-quote
+#   value whose quote counts are even looks balanced.
+# mutant:503-ab-lex-ansi — a dollar-single-quote span is read as a plain single-quoted span, so the escaped
+#   quote inside it closes the span early and the break after it is a head break.
+# mutant:503-ab-lex-dq-bs — a backslash inside double quotes escapes nothing, so an escaped double quote
+#   closes the span early and the break character after it is a head break.
+# mutant:503-ab-comment-breaks — a break character after an unquoted hash is no longer counted, so the
+#   lexer's segment count disagrees with the base split and a line with a comment holding a break
+#   character skips the chain pass altogether.
+# mutant:503-ab-perline — the quote state carries over from the previous input line, so a prose line
+#   with an unclosed apostrophe poisons the next line.
+case_ab_chain_deny_impl_gh() {
+  abx_deny implementer gh \
+    'X="a;b c" gh pr merge 5' \
+    "X='a;b c' gh pr merge 5" \
+    "X=\"a${pq_sq}\"${pq_sq}b;c d${pq_sq} gh pr merge 5" \
+    'X=a\;b\ c gh pr merge 5' \
+    'X=a\;b gh pr merge 5' \
+    'X="a\";b c" gh pr merge 5' \
+    "X=\$${pq_sq}a\\${pq_sq};b c${pq_sq} gh pr merge 5" \
+    'X="a;b c" gh pr merge 5 # note; x' \
+    'X="$(pwd) y" gh pr merge 5' \
+    "echo \"\$(X='a;b c' gh pr merge 5)\"" \
+    'nice -n "1;2" gh pr merge 5'
+}
+case_ab_chain_deny_codex() {
+  run_boundary "$(mk_codex_shell 'implementer' 'X="a;b c" gh pr merge 5')"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: gh)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing '(blocked: gh)': '$boundary_err'\n" ;;
+  esac
+}
+# mutant:503-ab-glue-cap — a glued token keeps growing past the cap, so the text after a substitution
+#   close is glued even onto a token of 256 or more characters and the quoted value reads as balanced.
+case_ab_chain_deny_other() {
+  local longv
+  pcap_fill 300 a
+  longv="$pcap_s"
+  # a token of 256 or more characters stops growing, so the closing quote after a substitution is
+  # dropped and the value reads as unbalanced: the cap can only add a deny
+  abx_deny implementer gh "X=\"${longv}\$(pwd)\" echo gh"
+  abx_noop implementer 'X="$(pwd)" echo gh'
+  abx_deny implementer '.claude/LESSONS.md' 'tee "a;b" .claude/LESSONS.md'
+  abx_deny verifier 'git -prefix-' 'X="a;b c" git status'
+  # the #505 class, a documented over-block: a quoted value with a space and a break character that
+  # names gh, before an unrelated command
+  abx_deny implementer gh 'MSG="a; see gh docs" ./run.sh'
+}
+case_ab_chain_noop_perline() {
+  # a prose line with an unclosed apostrophe and a break character, then a quiet line that only a
+  # carried-over quote state would turn into a deny
+  abx_noop implementer "echo gh ${pq_sq}it; ok${LF}X=1; echo gh \"a;b\""
+}
+mk_agent_cmd_big() { printf '%s' "$2" | jq -Rs --arg agent "$1" '{tool_name: "Bash", agent_type: $agent, tool_input: {command: .}}'; }
+# hand-typed mirror of hooks/agent-boundary.sh's CHAIN_LEX_MAX, the chain budget: the characters of all
+# gated lines of one command that the chain pass will lex
+AB_CHAIN_LEX_MAX=65536
+# abc_pad LEN PREFIX -- sets abc_line to a line of exactly LEN characters: PREFIX, then x padding
+abc_line=""
+abc_pad() { pcap_fill $(( $1 - ${#2} )) x; abc_line="$2$pcap_s"; }
+# abc_filler KIND LEN -- sets abc_line to a gated line of exactly LEN characters of one worst shape for
+# the lexer: sub (an unclosed substitution flood) or nest (a balanced nested one), then x padding
+abc_filler() {
+  local kind="$1" len="$2" pre='echo gh ' k o
+  case "$kind" in
+    sub) pcap_fill $(( len - ${#pre} )) '$('; abc_line="$pre$pcap_s" ;;
+    nest) k=$(( (len - ${#pre}) / 3 )); pcap_fill $(( 2 * k )) '$('; o="$pcap_s"; pcap_fill "$k" ')'
+          abc_line="$pre$o$pcap_s"; pcap_fill $(( len - ${#abc_line} )) x; abc_line="$abc_line$pcap_s" ;;
+  esac
+}
+abc_run() { boundary_deadline_override=60; measure_cpu_ms run_boundary "$(mk_agent_cmd_big implementer "$1")"; }
+# mutant:503-ab-budget-off — the budget check is dropped, so gated lines past it are lexed instead of
+#   denied.
+# mutant:503-ab-budget-edge — the budget check denies at the budget itself, not one character past it.
+case_ab_chain_deny_over_cap() {
+  local pre='echo gh "a;b" ' l1
+  # one line one character over the budget
+  abc_pad $(( AB_CHAIN_LEX_MAX + 1 )) "$pre"
+  abc_run "$abc_line"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: too much quoted text to analyse)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing '(blocked: too much quoted text to analyse)': '$boundary_err'\n" ;;
+  esac
+  # the budget is per command: two gated lines that sum to one over it
+  abc_pad 40000 "$pre"; l1="$abc_line"
+  abc_pad $(( AB_CHAIN_LEX_MAX + 1 - 40000 )) "$pre"
+  abc_run "$l1$LF$abc_line"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: too much quoted text to analyse)"*) ;;
+    *) __ok=0; __why="${__why}two lines: stderr missing the budget line: '$boundary_err'\n" ;;
+  esac
+}
+case_ab_chain_noop_at_cap() {
+  local pre='echo gh "a;b" ' l1 kind
+  # exactly the budget: one line, two lines, and the worst lexer shapes, each within a CPU bound
+  abc_pad "$AB_CHAIN_LEX_MAX" "$pre"
+  abc_run "$abc_line"
+  expect_no_opinion
+  abc_pad 40000 "$pre"; l1="$abc_line"
+  abc_pad $(( AB_CHAIN_LEX_MAX - 40000 )) "$pre"
+  abc_run "$l1$LF$abc_line"
+  expect_no_opinion
+  for kind in sub nest; do
+    abc_filler "$kind" "$AB_CHAIN_LEX_MAX"
+    abc_run "$abc_line"
+    expect_no_opinion
+    if [ -z "$measured_cpu_ms" ]; then
+      __ok=0; __why="${__why}[$kind] the CPU report could not be parsed\n"
+    elif [ "$measured_cpu_ms" -gt 8000 ]; then
+      __ok=0; __why="${__why}[$kind] a gated line of exactly the budget used ${measured_cpu_ms}ms of CPU, over the 8000ms bound\n"
+    fi
+  done
+}
+abf_flood() {
+  local kind="$1" n="$2"
+  case "$kind" in
+    lit) printf "echo gh '"; printf ';a%.0s' $(seq 1 "$n"); printf "'" ;;
+    frame) printf 'echo'; printf ' $(b)%.0s' $(seq 1 "$n"); printf ' x gh' ;;
+    chain) printf 'echo gh'; printf ' "a;b";%.0s' $(seq 1 "$n") ;;
+  esac
+}
+case_ab_chain_noop_flood_ratio() {
+  local kind n small big
+  for kind in lit frame chain; do
+    n=2000
+    boundary_deadline_override=60
+    measure_cpu_ms run_boundary "$(mk_agent_cmd_big implementer "$(abf_flood "$kind" "$n")")"
+    expect_no_opinion
+    small="$measured_cpu_ms"
+    boundary_deadline_override=60
+    measure_cpu_ms run_boundary "$(mk_agent_cmd_big implementer "$(abf_flood "$kind" $(( n * 4 )))")"
+    expect_no_opinion
+    big="$measured_cpu_ms"
+    if [ -z "$small" ] || [ -z "$big" ]; then
+      __ok=0; __why="${__why}[$kind] a CPU report could not be parsed\n"
+    elif [ "$big" -gt $(( 6 * small + 250 )) ]; then
+      __ok=0; __why="${__why}[$kind] ${big}ms of CPU at 4N against ${small}ms at N: super-linear\n"
+    fi
+  done
+}
+
+# mutant:503-cdg-chain-off — the chain pass is never called, so the quoted-break forms below are judged
+#   by the base segments alone and get no opinion.
+# mutant:503-cdg-lex-ansi — a dollar-single-quote span is read as a plain single-quoted span, so the
+#   escaped quote inside it closes the span early and the break after it is a head break.
+# mutant:503-cdg-lex-dq-bs — a backslash inside double quotes escapes nothing, so an escaped double quote
+#   closes the span early and the break character after it is a head break.
+# mutant:503-cdg-lex-sq — a single quote never opens a quoted span, so a break character inside single
+#   quotes is a head break.
+# mutant:503-cdg-lex-dq-apos — an apostrophe inside double quotes opens a single-quoted span (the #449
+#   over-block), so a quiet prose line is read as an unbalanced assignment.
+# mutant:503-cdg-lex-bs — a backslash escapes nothing, so an escaped break character is a head break.
+# mutant:503-cdg-cutmark — a literal break leaves no trailing backslash on the word it cuts, so a
+#   value whose quote counts are even looks balanced.
+cdg_chain_run() { run_claude_guard "$(mk_codex_shell 'implementer' "$1")"; }
+case_cdg_chain_deny_forms() {
+  local c w0
+  for c in \
+    "X='a;b c' apply_patch < x.patch" \
+    'X="a;b c" apply_patch < x.patch' \
+    "X=\"a${pq_sq}\"${pq_sq}b;c d${pq_sq} apply_patch < x.patch" \
+    'X=a\;b\ c apply_patch < x.patch' \
+    'X=a\;b apply_patch < x.patch' \
+    'X="a\";b c" apply_patch < x.patch' \
+    "X=\$${pq_sq}a\\${pq_sq};b c${pq_sq} apply_patch < x.patch" \
+    "X='a;b c' apply_patch < x.patch # note; x" \
+    "X=\"x${pq_sq}\"${pq_sq}b;c${pq_sq}\"${pq_sq}\" apply_patch < x.patch" \
+    'X="$(pwd)a b" apply_patch < x.patch' \
+    'nice -n "1;2" apply_patch < x.patch'; do
+    w0="$__why"; __why=""
+    cdg_chain_run "$c"
+    expect_cdg_deny_unparseable
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+case_cdg_chain_deny_overblock() {
+  # the #455 X='a b' class: a benign inline patch behind a quoted value holding a break character
+  cdg_chain_run "X='a;b c' apply_patch <<'EOF'${LF}${CDG_P}${LF}EOF"
+  expect_cdg_deny_unparseable
+}
+case_cdg_chain_never_executes() {
+  cdg_trap_path cdg-chain
+  run_claude_guard "$(mk_codex_shell 'implementer' "X='a;b c' apply_patch < x.patch")" "$cdg_trapdir:$PATH"
+  expect_cdg_deny_unparseable
+  [ ! -e "$cdg_sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+# mutant:503-cdg-chain-site — the chain lexer loop loses its deadline sample, so a long gated line no
+#   longer reaches the sample cap.
+case_cdg_chain_dl_cap() {
+  local run
+  run="$(printf 'b%.0s' $(seq 1 100))"
+  cdg_dl_cap_check_bash "echo apply_patch \"a;${run}\""
+}
+case_cdg_chain_noop_flood_cap() {
+  # SAMPLE COUNT, not time: about three hundred quoted breaks on one line near the line cap. A linear
+  # lexer takes a few thousand samples; a cap of 9999 sits above that and far below any quadratic one.
+  local cmd="echo apply_patch" i
+  for i in $(seq 1 300); do cmd="${cmd} \"a;b\""; done
+  cdg_cap_override=9999
+  run_claude_guard "$(printf '%s' "$cmd" | mk_cdg_dl_bash implementer '')"
+  expect_cdg_no_opinion
+}
+case_cdg_chain_pin_patch_cpu() {
+  # A benign inline patch of 200 context lines, each naming the shim beside a quote, parentheses and a
+  # break character, is lexed line by line: it must stay no opinion and well inside the hook budget.
+  local cmd="apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: /repo/ok${LF}" i
+  for i in $(seq 1 200); do cmd="${cmd}+see apply_patch \"it${pq_sq}s (ok); fine\"${LF}"; done
+  cmd="${cmd}*** End Patch${LF}EOF"
+  measure_cpu_ms run_claude_guard "$(mk_codex_shell 'implementer' "$cmd")"
+  expect_cdg_no_opinion
+  if [ -z "$measured_cpu_ms" ]; then
+    __ok=0; __why="${__why}the CPU report could not be parsed\n"
+  elif [ "$measured_cpu_ms" -gt 3000 ]; then
+    __ok=0; __why="${__why}a 200-line shim patch used ${measured_cpu_ms}ms of CPU, over the 3000ms bound\n"
+  fi
+}
+
 cases=(
   "status-rel|case_status_rel|allow: relative sibling path, status"
   "status-abs|case_status_abs|allow: absolute path, status"
@@ -12738,6 +13255,32 @@ cases=(
   "cdg-optval-deny-quote-parity|case_cdg_optval_deny_quote_parity|deny: a quoted or escaped option value with a space before the shim keeps the unbalanced-quote deny, for every value-taking prefix word and env -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-parity)"
   "cdg-optval-dl-cap|case_cdg_optval_dl_cap|deny (#457): nice -n then 100 plain words under cap 50, only the scan's own deadline sample reaches the cap -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-site)"
   "cdg-optval-noop-flood-cap|case_cdg_optval_noop_flood_cap|SAMPLE COUNT: 100 value-context triggers under a cap between one scan and a rescan per trigger, no opinion -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-memo)"
+  # --- a segment break inside a quote or a command substitution (#503) cases ---------------------
+  "push-chain-deny-break-chars|case_push_chain_deny_break_chars|deny: a quoted value holding a break character before a push to main, each of ; & | ( ) { } inside double and single quotes and a backtick inside single quotes, naming the command-prefix reason -- mutation proof: dev/mutants/hook-tests.json (503-pg-chain-off, 503-pg-lex-sq)"
+  "push-chain-deny-quote-forms|case_push_chain_deny_quote_forms|deny: an escaped break character, a mixed-quote value and a dollar-single-quote value holding a break character, before a push to main -- mutation proof: dev/mutants/hook-tests.json (503-pg-lex-bs, 503-pg-cutmark, 503-pg-lex-ansi, 503-pg-lex-dq-apos)"
+  "push-chain-deny-subst|case_push_chain_deny_subst|deny: git -C with a command substitution, quoted, bare, in backticks and glued to a path, then push origin main -- mutation proof: dev/mutants/hook-tests.json (503-pg-lex-frame, 503-pg-ph-never, 503-pg-close-glue)"
+  "push-chain-deny-misc|case_push_chain_deny_misc|deny: a quoted break in a refspec argument, a substitution that holds the evasion, the Codex payload shape, and the runtime-expansion destination rule still in force -- mutation proof: dev/mutants/hook-tests.json (503-pg-chain-off)"
+  "push-chain-deny-overblock|case_push_chain_deny_overblock|deny: the documented over-blocks (a quoted value with a space and a break character before a push to a feature branch, a quoted value naming a push, git -C with a substitution) -- control, not part of the mutation-proof registry"
+  "push-chain-deny-optval-compose|case_push_chain_deny_optval_compose|deny: a value-taking option whose quoted value holds a break character, before a push to main (#518 composed with #503) -- mutation proof: dev/mutants/hook-tests.json (503-pg-chain-off)"
+  "push-chain-noop-flood-ratio|case_push_chain_noop_flood_ratio|FLOOD+TIMING: literal-break, frame and many-chain floods with no push, no opinion; CPU time at 4N within six times CPU time at N plus a fixed allowance -- no registry record (an awk-build-dependent quadratic)"
+  "ab-chain-deny-impl-gh|case_ab_chain_deny_impl_gh|deny: gh behind a quoted value holding a break character, in every quote form, in a substitution and behind nice -n, implementer -- mutation proof: dev/mutants/hook-tests.json (503-ab-chain-off, 503-ab-lex-sq, 503-ab-lex-bs, 503-ab-lex-frame, 503-ab-cutmark)"
+  "ab-chain-deny-codex|case_ab_chain_deny_codex|deny: a quoted value holding a break character before gh pr merge 5, as a Codex-shaped implementer payload -- mutation proof: dev/mutants/hook-tests.json (503-ab-chain-off)"
+  "ab-chain-deny-other|case_ab_chain_deny_other|deny: a .claude tee behind a quoted break, the verifier read-only git rule behind one, and the documented gh-naming over-block -- mutation proof: dev/mutants/hook-tests.json (503-ab-chain-off)"
+  "ab-chain-noop-perline|case_ab_chain_noop_perline|no opinion: an unclosed apostrophe on one input line never poisons the next -- mutation proof: dev/mutants/hook-tests.json (503-ab-perline)"
+  "ab-chain-deny-over-cap|case_ab_chain_deny_over_cap|deny: gated lines one character past the chain budget (one line, and two lines summed) deny with the fixed budget line -- mutation proof: dev/mutants/hook-tests.json (503-ab-budget-off, 503-ab-budget-edge)"
+  "ab-chain-noop-at-cap|case_ab_chain_noop_at_cap|no opinion: gated lines of exactly the chain budget (one line, two lines, an unclosed and a balanced nested substitution flood) are lexed, within a CPU bound -- mutation proof: dev/mutants/hook-tests.json (503-ab-budget-edge)"
+  "push-chain-budget|case_push_chain_budget|deny one character past the chain budget (one line, two lines summed), no opinion at exactly the budget, also for substitution and backtick floods within a CPU bound -- mutation proof: dev/mutants/hook-tests.json (503-pg-budget-off, 503-pg-budget-edge)"
+  "ab-chain-noop-flood-ratio|case_ab_chain_noop_flood_ratio|FLOOD+TIMING: literal-break, frame and many-chain floods, no opinion; CPU time at 4N within six times CPU time at N plus a fixed allowance -- no registry record (an awk-build-dependent quadratic)"
+  "cdg-chain-deny-forms|case_cdg_chain_deny_forms|deny: apply_patch behind a quoted or escaped value holding a break character, in every quote form, a substitution and nice -n -- mutation proof: dev/mutants/hook-tests.json (503-cdg-chain-off, 503-cdg-lex-sq, 503-cdg-lex-bs, 503-cdg-cutmark)"
+  "cdg-chain-deny-overblock|case_cdg_chain_deny_overblock|deny: a benign inline patch behind a quoted assignment holding a break character, the documented #455 quoted-assignment over-block -- control, not part of the mutation-proof registry"
+  "cdg-chain-never-executes|case_cdg_chain_never_executes|deny, sentinel absent on a booby-trapped PATH: the pure-bash chain lexer runs no awk, sed, grep or tr -- no registry record"
+  "cdg-chain-dl-cap|case_cdg_chain_dl_cap|deny (#457): a long quoted run after a break character under cap 50, only the chain lexer own deadline sample reaches the cap -- mutation proof: dev/mutants/hook-tests.json (503-cdg-chain-site)"
+  "cdg-chain-noop-flood-cap|case_cdg_chain_noop_flood_cap|SAMPLE COUNT: three hundred quoted breaks on one line under a cap above a linear sample count, no opinion -- no registry record"
+  "cdg-chain-pin-patch-cpu|case_cdg_chain_pin_patch_cpu|CPU TIME: a 200-line benign shim patch, every line gated, no opinion within a CPU bound -- no registry record"
+  "push-chain-quiet-prose|case_push_chain_quiet_prose|no opinion: quoted prose, a commit message, a comment and a read-only git -C with a command substitution, each beside a break character -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (503-pg-lex-dq-apos, 503-pg-comment, 503-pg-close-glue, 503-pg-lex-frame)"
+  "push-chain-quiet-heredoc|case_push_chain_quiet_heredoc|no opinion: heredoc bodies and a gh pr create body holding apostrophes, code spans and semicolons -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (503-pg-ph-always, 503-pg-perline)"
+  "ab-chain-quiet|case_ab_chain_quiet|no opinion: quoted prose and read-only git for the implementer and the verifier, beside a break character -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (503-ab-lex-dq-apos)"
+  "cdg-chain-quiet|case_cdg_chain_quiet|no opinion: prose naming apply_patch beside a break character, and the main session's quoted-break apply_patch -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (503-cdg-lex-dq-apos)"
   # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
   "codex-gcg-main-status|case_codex_gcg_main_status|allow: git-c-guard.sh under a Codex-shaped main-session payload, git -C ../demo-wt-1 status --porcelain (pins the unchanged verdict -- Codex ignores this hook's if gate, but the script itself never reads it)"
   "codex-gcg-apply-patch|case_codex_gcg_apply_patch|silent: a Codex apply_patch payload (tool_name != Bash)"
