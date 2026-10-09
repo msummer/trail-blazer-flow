@@ -687,7 +687,7 @@ fi
 # losing coverage elsewhere (see #58) — still fails, and a script MOVED from one group's job into
 # another group's job also fails (a total-count check alone would miss that). split_jobs is the
 # one declared exception: a job that carries only PART of a sibling job's former coverage (a
-# driver-only job split out of a suites job, #471) is folded into that sibling's group instead of
+# driver-only job split out of a suites job, #471, #526) is folded into that sibling's group instead of
 # forming its own — a legitimate exception needs an explicit entry here, not a silent gap. A
 # parsed-job-count cross-check against the `runs-on:` line count keeps the job-key parser itself
 # from passing vacuously (a re-indented `jobs:` block that yields zero parsed jobs must still
@@ -704,9 +704,10 @@ else
   job_count="$(grep -cE '^[[:space:]]+runs-on:' "$wf")"
   # split_jobs — space-separated "<job>=<partner>" pairs. <job>'s steps are folded into
   # <partner>'s coverage group instead of forming a group of their own. selfcheck-macos-driver
-  # (#471) carries only the driver step split out of selfcheck-macos, so the two together must
-  # still cover every dev/*.sh script exactly once.
-  split_jobs="selfcheck-macos-driver=selfcheck-macos"
+  # (#471) carries only the driver step split out of selfcheck-macos, and selfcheck-driver (#526)
+  # only the driver step split out of selfcheck, so each pair together must still cover every
+  # dev/*.sh script exactly once.
+  split_jobs="selfcheck-macos-driver=selfcheck-macos selfcheck-driver=selfcheck"
   wf9_pairs="$(awk -v decl="$split_jobs" '
     BEGIN {
       npairs = split(decl, pairlist, " ")
