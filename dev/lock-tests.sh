@@ -1146,6 +1146,12 @@ case_journal_stage_record() {
 # mutant:251-journal-value-unchecked — neuters the slug character-set check in journal_value_ok, so
 #   a value with a space or a quote is accepted.
 # mutant:251-journal-runid-unchecked — neuters journal_runid_ok, so a malformed run id passes.
+# mutant:251-journal-reason-unchecked — drops the reason key's value check, so quoted prose is
+#   written as a reason.
+# mutant:251-journal-deploy-unchecked — drops the deploy key's value check.
+# mutant:251-journal-branch-charset — drops the branch character-set clause, keeping only its
+#   leading-dash/slash and dot-dot/double-slash rules.
+# mutant:251-journal-retries-charset — drops the retries digits-only clause.
 jr_file=""
 jr_dir=""
 journal_rejects() {
@@ -1183,6 +1189,10 @@ case_journal_rejects_unsafe_values() {
   journal_rejects "dash-branch" "$rid" stage=a issue=1 outcome=b branch=-x
   journal_rejects "dotdot-branch" "$rid" stage=a issue=1 outcome=b branch=a/../b
   journal_rejects "retries-leading-zero" "$rid" stage=a issue=1 outcome=b retries=01
+  journal_rejects "retries-nondigit" "$rid" stage=a issue=1 outcome=b retries=a
+  journal_rejects "reason-prose" "$rid" stage=a issue=1 outcome=b 'reason=a b"c'
+  journal_rejects "deploy-space" "$rid" stage=a issue=1 outcome=b "deploy=a b"
+  journal_rejects "branch-quote" "$rid" stage=a issue=1 outcome=b 'branch=a"b'
   journal_rejects "bad-harness" "$rid" stage=a issue=1 outcome=b "harness=3 3"
   journal_rejects "runid-foo" "run-foo" stage=a issue=1 outcome=b
   journal_rejects "runid-traversal" "../../evil" stage=a issue=1 outcome=b

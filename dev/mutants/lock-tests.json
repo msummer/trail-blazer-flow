@@ -281,6 +281,66 @@
       "expect_fail": [
         "journal-reclaim-links-prior"
       ]
+    },
+    {
+      "name": "251-journal-reason-unchecked",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "      reason)\n        [ -z \"$f_reason\" ] || { echo \"harness-lock.sh: journal: duplicate key '$k'\" >&2; exit 2; }\n        journal_value_ok slug \"$v\" || { echo \"harness-lock.sh: journal: bad value for '$k'\" >&2; exit 2; }\n",
+          "to": "      reason)\n        [ -z \"$f_reason\" ] || { echo \"harness-lock.sh: journal: duplicate key '$k'\" >&2; exit 2; }\n"
+        }
+      ],
+      "expect_fail": [
+        "journal-rejects-unsafe-values"
+      ]
+    },
+    {
+      "name": "251-journal-deploy-unchecked",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "      deploy)\n        [ -z \"$f_deploy\" ] || { echo \"harness-lock.sh: journal: duplicate key '$k'\" >&2; exit 2; }\n        journal_value_ok slug \"$v\" || { echo \"harness-lock.sh: journal: bad value for '$k'\" >&2; exit 2; }\n",
+          "to": "      deploy)\n        [ -z \"$f_deploy\" ] || { echo \"harness-lock.sh: journal: duplicate key '$k'\" >&2; exit 2; }\n"
+        }
+      ],
+      "expect_fail": [
+        "journal-rejects-unsafe-values"
+      ]
+    },
+    {
+      "name": "251-journal-branch-charset",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "''|-*|/*|*..*|*//*|*[!0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz._/-]*) return 1 ;; esac",
+          "to": "''|-*|/*|*..*|*//*) return 1 ;; esac"
+        }
+      ],
+      "expect_fail": [
+        "journal-rejects-unsafe-values"
+      ]
+    },
+    {
+      "name": "251-journal-retries-charset",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "      case \"$v\" in ''|*[!0123456789]*) return 1 ;; esac\n      case \"$v\" in 0?*) return 1 ;; esac",
+          "to": "      case \"$v\" in '') return 1 ;; esac\n      case \"$v\" in 0?*) return 1 ;; esac"
+        }
+      ],
+      "expect_fail": [
+        "journal-rejects-unsafe-values"
+      ]
     }
   ]
 }
