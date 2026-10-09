@@ -8615,6 +8615,7 @@
       "expect_fail": [
         "cdg-optval-deny-overblock",
         "cdg-optval-deny-prefix-words",
+        "cdg-optval-deny-quote-parity",
         "cdg-optval-deny-quote-split",
         "cdg-optval-dl-cap",
         "cdg-optval-heredoc"
@@ -8687,7 +8688,7 @@
       "filter": "cdg-optval-",
       "edits": [
         {
-          "from": "                    quote_parity_check \"$1\" $((i + 1))\n",
+          "from": "                    quote_parity_check \"$1\" $((j - 1))\n",
           "to": "                    :\n"
         }
       ],

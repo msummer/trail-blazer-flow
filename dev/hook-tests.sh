@@ -10500,16 +10500,28 @@ case_cdg_optval_noop_unmentioned() {
 #   quote inside its name (apply_"patch") behind a prefix option's value never reaches the scan.
 case_cdg_optval_deny_quote_split() {
   # The other segment spells the shim plainly only so the raw-stdin fast path reads the payload.
-  cdg_optval_run implementer 'nice -n 5 apply_"patch" < x.patch; echo applypatch.md'
-  expect_cdg_deny_unparseable
+  local c w0
+  for c in 'nice -n 5 apply_"patch" < x.patch; echo applypatch.md' \
+    "nice -n 5 apply_'patch' < x.patch; echo applypatch.md"; do
+    w0="$__why"; __why=""
+    cdg_optval_run implementer "$c"
+    expect_cdg_deny_unparseable
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
 }
 # mutant:518-cdg-optval-parity — drops the unbalanced-quote check on a scan hit, so a quoted value with a
 #   space before the shim (nice -n "a b" apply_patch) resolves the shim and its benign heredoc passes.
+# The check covers every token before the hit, not only the value word: the rows whose value word is
+# itself a prefix word (xargs -0 command time -I "a b" apply_patch) put the quote past it, and the
+# last row is the documented over-block of a quoted value of a later prefix option.
 case_cdg_optval_deny_quote_parity() {
   local c w0 body="<<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}*** End Patch${LF}EOF"
   for c in 'nice -n "a b" apply_patch' 'nice -n a\ b apply_patch' 'nice -n "a apply_patch' \
     'exec -a "a b" apply_patch' 'env -u "a b" apply_patch' 'sudo -u "a b" apply_patch' \
-    'stdbuf -o "a b" apply_patch' 'time -o "a b" apply_patch' 'xargs -a "a b" apply_patch'; do
+    'stdbuf -o "a b" apply_patch' 'time -o "a b" apply_patch' 'xargs -a "a b" apply_patch' \
+    "xargs -0 command time -I \"a b\" apply_patch" "env -c nice nice -l 'a b' timeout 5 apply_patch" \
+    "sudo exec -c -P sudo -0 \"a repeat 2 -S apply_patch" "xargs -0 then -n5 b' apply_patch" \
+    "nice -n 5 sudo -u \"a b\" apply_patch"; do
     w0="$__why"; __why=""
     cdg_optval_run implementer "$c $body"
     expect_cdg_deny_unparseable

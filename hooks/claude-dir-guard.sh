@@ -931,10 +931,11 @@ walk_window() {
                   j=$((j + 1))
                 done
                 if [ "$hit" -eq 1 ]; then
-                  # the walk resolved the value word W (index i+1) here before #518, and its
-                  # non-shim branch ran the unbalanced-quote check through W: keep that deny
+                  # before #518 the walk resolved W or a later word and ran the unbalanced-quote
+                  # check through that word; the hit is past all of them, so check every token
+                  # before the hit (fail-closed, a superset of the base check)
                   if [ "$seg_qflag" -eq 1 ]; then
-                    quote_parity_check "$1" $((i + 1))
+                    quote_parity_check "$1" $((j - 1))
                   fi
                   ww_word="$vt"
                   i="$j"
@@ -1045,9 +1046,10 @@ walk_window() {
 # scan starts after the value word, never at it. Cost: at most one scan per window, so the base window
 # and the disjoint `]]` tails scan at most twice the segment's tokens; each token costs one deadline
 # sample, two quote strips and one glob, on a line already capped at CDG_LINE_MAX_BYTES. A scan hit in
-# a flagged segment (seg_qflag) first runs the #455 unbalanced-quote check through the value word, the
-# check the walk made before #518 when it resolved that word, so `nice -n "a b" apply_patch <<'EOF'`
-# keeps its deny; a segment that carries a quote but never spells the shim plainly (`nice -n 5
+# a flagged segment (seg_qflag) first runs the #455 unbalanced-quote check over every token before the
+# hit, a superset of the check the walk made before #518 through the word it resolved, so `nice -n
+# "a b" apply_patch <<'EOF'` keeps its deny (over-blocking, measured rc 2: a quoted value of a later
+# prefix option, `nice -n 5 sudo -u "a b" apply_patch <<'EOF'`); a segment that carries a quote but never spells the shim plainly (`nice -n 5
 # apply_"patch"`) is scanned too (seg_mflag). Over-blocking,
 # each measured rc 2: `nice -n 5 rg apply_patch hooks/` and `sudo -u root bash -c "echo apply_patch"`.
 # Residuals, each measured rc 0: an interpreter prefix word's option and a launcher outside PREFIX_WORDS
