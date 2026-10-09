@@ -118,6 +118,12 @@ Every `planner`, `implementer`, and `verifier` report ends with one machine-read
   last on the line. Required on every agent-emitted line (the orchestrator's own merge-stage line
   always carries it too); `reconcile-ledger.sh`'s parser tolerates it as optional trailing input,
   so a line from before this field existed still parses.
+- **Run journal (#251)** — after recording each status line (the orchestrator's own and merge
+  lines too), run `harness-lock.sh journal <run-id> stage=<stage> issue=<n> outcome=<slug>` (the
+  run id is step 0's; add `pr=<n>` once a PR exists). Also journal step 2e's PR open
+  (`outcome=pr-opened pr=<pr> branch=<branch>`), step 2f's blocked commit (`outcome=impl-blocked
+  branch=<branch>`), and each Durable escalation (`outcome=escalated reason=<slug>`). Identifiers
+  only; best effort — a failed or denied call is one summary line, never retried or escalated.
 
 The orchestrator emits this line itself, on the stage's behalf, whenever a stage died or never
 reported, and always for merge — keeping `issue-cycle`'s ledger reconciliation checkable.

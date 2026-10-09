@@ -274,7 +274,9 @@ checkpointing with resume-not-restart, bounded exponential backoff before a stag
 dispatch ledger reconciled by `reconcile-ledger.sh`, and merge guards — see "The steady state"
 below for the ledger and the guards. Every status line also carries a trailing `harness=<version>`
 field (#233) — the installed plugin revision that produced it, from `harness-version.sh` — which
-`reconcile-ledger.sh` accepts as an optional trailing field but doesn't otherwise interpret.
+`reconcile-ledger.sh` accepts as an optional trailing field but doesn't otherwise interpret. Each
+run also leaves a local per-stage audit trail, the run journal (#251) — see `safety-model.md`'s
+"Run journal".
 
 ## After the human merges
 

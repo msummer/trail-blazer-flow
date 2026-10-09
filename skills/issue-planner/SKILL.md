@@ -237,6 +237,7 @@ b. Dispatch the **`planner` subagent** (Claude Code: Task tool; Codex: `spawn_ag
    If the dispatch itself fails (tool error, API 429/500/529, no parseable report) or the
    subagent's status line reports `incomplete`/`died`, retry/relaunch per the `issue-implementer`
    skill's "Resilient dispatch" section — cited here by name, not restated.
+   Journal each status line, and any step-7 escalation, per that skill's "Run journal" bullet.
 
    **Harness-authored issues.** An issue labelled `test-ratchet` — its body opens with
    `<!-- ratchet-issue -->` — was filed by the `test-ratchet` skill, not by a human. Add to the

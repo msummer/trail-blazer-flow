@@ -18,6 +18,11 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #251: new run journal — `harness-lock.sh` gains a `journal` subcommand and writes an
+  identifiers-only JSONL audit trail (lock events plus per-stage records) to
+  `<git-common-dir>/trail-blazer/journal/<run-id>.jsonl`, pruned to the newest 500 runs on each
+  acquire; best effort, local, not tamper-evident. No consumer step (`harness-lock.sh` is already
+  granted); detail in `docs/reference/safety-model.md`.
 - #486: new informational `building` label, set by the implementer just before an issue's first
   implementer dispatch and cleared when its PR opens or at any other exit (stale ones swept at
   pre-flight); the harness never reads it (gate assertion 4.54). Worktree-parallel mode's lesson

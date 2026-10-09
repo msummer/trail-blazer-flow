@@ -844,7 +844,9 @@ form (see "One simple command per call" below). Exit 0 and exit 3 are handled ex
 skill already handles them. Exit 2: abort the run before any mutating command and quote the
 command's own stderr verbatim; when it names the Codex `app-server` daemon, tell the human to
 restart with `codex --no-daemon` (see "Lock owner on Codex" above). Release the same
-way, by absolute path: `<plugin root>/bin/harness-lock.sh release <run-id>`.
+way, by absolute path: `<plugin root>/bin/harness-lock.sh release <run-id>`. Journal calls (#251)
+are their own calls with literal tokens, never chained:
+`<plugin root>/bin/harness-lock.sh journal <run-id> stage=… issue=… outcome=…`.
 
 ### One simple command per call
 
@@ -1063,10 +1065,11 @@ is handled as follows. In every case, never re-issue the rejected command in ano
 different path, a wrapper, a split, `bash -c`, or a `--force`/alternate flag — whichever branch
 below applies.
 
-**Exception — the `building` label's own calls** (`issue-implementer`'s step-0 sweep listing and
-every `building` add/remove): a rejection of one is noted in the run report and the run
-continues — not escalated, not a stop (the label is informational; see
-`skills/issue-implementer/SKILL.md`'s "Labels involved"). Never re-issue it in another form.
+**Exception — the `building` label's own calls and the run journal's calls** (`issue-implementer`'s
+step-0 sweep listing and every `building` add/remove; every `harness-lock.sh journal` call): a
+rejection of one is noted in the run report and the run continues — not escalated, not a stop
+(the label is informational, see `skills/issue-implementer/SKILL.md`'s "Labels involved"; the
+journal is best effort, see `safety-model.md`'s "Run journal"). Never re-issue it in another form.
 
 - **With an issue in hand** (stages `2a`–`2f`, `plan-initial`, `plan-revision`): post a Durable
   escalation per `skills/issue-implementer/SKILL.md`'s "Durable escalation" procedure, stage set to

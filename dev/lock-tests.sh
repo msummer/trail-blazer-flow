@@ -93,7 +93,10 @@ case_bad() { echo "  FAIL  $1 — $2"; fail=$((fail+1)); }
 # renamed to "main", local identity + gpgsign off, its own home/xdgcfg dirs. No remote. Prints
 # the fixture path (already under the resolved $tmpbase).
 mk_repo() {
-  local name="$1" dir="$tmpbase/$name"
+  # Two statements on purpose: in one `local name=… dir="…$name"` the second expansion would read the
+  # runner loop's global $name, not this argument, and a case calling mk_repo twice would get one dir.
+  local name="$1"
+  local dir="$tmpbase/$name"
   mkdir -p "$dir/home" "$dir/xdgcfg"
   (
     cd "$dir" &&
@@ -165,21 +168,30 @@ reclaimdir_of() { printf '%s/.git/trail-blazer/reclaim' "$1"; }
 # `[ -n "${TBF_OWNER_PID:-}" ]`), so a case that never sets $lock_tbf_owner runs exactly as before
 # #408; explicitly assigning it every time (rather than leaving it to inherit) keeps a developer's
 # own real TBF_OWNER_PID, if any, from ever leaking into a fixture.
+#
+# CLAUDE_CODE_SESSION_ID CONTROL (#251): run_lock likewise always exports
+# CLAUDE_CODE_SESSION_ID="$lock_session_id" to both branches, a global reset to "" by the runner
+# loop before every case. An empty value is what the run journal records as `session: ""`, so a
+# case that never sets it never inherits the developer's own real session id; the journal-session-id
+# case assigns it explicitly to pin what is recorded.
 lock_rc=0
 lock_out=""
 lock_stdout=""
 lock_stderr=""
 lock_tbf_owner=""
+lock_session_id=""
 run_lock() {
   local dir="$1" pidval="$2"; shift 2
   local orig; orig="$(pwd)"
   cd "$dir" || { lock_rc=90; lock_out="cd $dir failed"; lock_stdout=""; lock_stderr=""; return; }
   if [ "$pidval" = "UNSET" ]; then
     HOME="$dir/home" XDG_CONFIG_HOME="$dir/xdgcfg" TBF_OWNER_PID="$lock_tbf_owner" \
+      CLAUDE_CODE_SESSION_ID="$lock_session_id" \
       "$bash_bin" -c 'unset CLAUDE_PID; exec "$@"' _ "$bash_bin" "$root/bin/harness-lock.sh" "$@" \
       > "$dir/.lock-out" 2> "$dir/.lock-err"
   else
     HOME="$dir/home" XDG_CONFIG_HOME="$dir/xdgcfg" CLAUDE_PID="$pidval" TBF_OWNER_PID="$lock_tbf_owner" \
+      CLAUDE_CODE_SESSION_ID="$lock_session_id" \
       "$bash_bin" "$root/bin/harness-lock.sh" "$@" \
       > "$dir/.lock-out" 2> "$dir/.lock-err"
   fi
@@ -742,6 +754,7 @@ case_help_exit_0() {
   expect "CLAUDE_PID"
   expect "--owner-pid"
   expect "TBF_OWNER_PID"
+  expect "journal"
 }
 
 # 16. unknown-subcommand — usage on stderr, not stdout (see case 12's note on the runner's split
@@ -1061,6 +1074,366 @@ case_reclaim_marker_dead() {
   [ -d "$rd" ] && { __ok=0; __why="${__why}marker-only fixture: marker still present after --force\n"; }
 }
 
+
+# ---------------------------------------------------------------------------------------------
+# RUN JOURNAL (#251). Records are JSONL under <git-common-dir>/trail-blazer/journal/<run-id>.jsonl;
+# every fixture asserts them with jq. Run ids the script did not mint use the run-id shape
+# run-<8 digits>T<6 digits>Z-<digits>.
+
+# jq_ok FILE LINE EXPR [JQ-ARGS...] — line LINE of FILE parses as JSON and satisfies EXPR
+# (jq -e). Not a needle-taking helper.
+jq_ok() {
+  local f="$1" n="$2" expr="$3"; shift 3
+  sed -n "${n}p" "$f" 2>/dev/null | jq -e "$@" "$expr" >/dev/null 2>&1 \
+    || { __ok=0; __why="${__why}jq check failed on line $n of ${f##*/}: $expr\n"; }
+}
+# jlines FILE — the number of lines in FILE (0 when absent).
+jlines() { if [ -f "$1" ]; then wc -l < "$1" | tr -d ' '; else printf '0'; fi; }
+journal_dir_of() { printf '%s/.git/trail-blazer/journal' "$1"; }
+
+# 33. journal-acquire-release — a fresh acquire appends exactly one valid acquire record with the
+# exact key order, run_id equal to the printed id and pid equal to the recorded pid; stdout keeps
+# run-id= as its last line and carries no journal text. release <id> appends a release record; a
+# mismatched release and released=none append nothing.
+# mutant:251-journal-acquire-dropped — removes the fresh-path journal_lock_event call from
+#   cmd_acquire, so no acquire record is written.
+case_journal_acquire_release() {
+  local dir; dir="$(mk_repo journal-acquire-release)"
+  run_lock "$dir" "$$" acquire
+  expect_rc 0
+  expect_last_line_prefix "run-id="
+  expect_absent_out "journal"
+  local rid; rid="$(run_id_from_out)"
+  local jf; jf="$(journal_dir_of "$dir")/$rid.jsonl"
+  [ "$(jlines "$jf")" = "1" ] || { __ok=0; __why="${__why}acquire: expected 1 journal line, got $(jlines "$jf")\n"; }
+  jq_ok "$jf" 1 '(keys_unsorted == ["v","ts","run_id","event","session","host","pid","harness_version"]) and .v == 1 and .run_id == $rid and .event == "acquire" and .pid == $pid and (.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))' --arg rid "$rid" --arg pid "$$"
+  run_lock "$dir" "$$" release "$rid"
+  expect_rc 0
+  [ "$(jlines "$jf")" = "2" ] || { __ok=0; __why="${__why}release: expected 2 journal lines, got $(jlines "$jf")\n"; }
+  jq_ok "$jf" 2 '.event == "release" and .run_id == $rid and .v == 1' --arg rid "$rid"
+  run_lock "$dir" "$$" release "$rid"
+  expect "released=none"
+  [ "$(jlines "$jf")" = "2" ] || { __ok=0; __why="${__why}released=none appended a record\n"; }
+  run_lock "$dir" "$$" acquire
+  local rid2; rid2="$(run_id_from_out)"
+  local jf2; jf2="$(journal_dir_of "$dir")/$rid2.jsonl"
+  local before; before="$(jlines "$jf2")"
+  run_lock "$dir" "$$" release run-20200101T000000Z-1
+  expect_rc 3
+  [ "$(jlines "$jf2")" = "$before" ] || { __ok=0; __why="${__why}mismatched release appended a record\n"; }
+}
+
+# 34. journal-stage-record — `journal` appends one stage record with the fixed key order and JSON
+# numbers for issue/pr/retries; a minimal call omits every optional key.
+case_journal_stage_record() {
+  local dir; dir="$(mk_repo journal-stage-record)"
+  run_lock "$dir" "$$" acquire
+  local rid; rid="$(run_id_from_out)"
+  local jf; jf="$(journal_dir_of "$dir")/$rid.jsonl"
+  run_lock "$dir" "$$" journal "$rid" stage=verifier issue=12 outcome=pass retries=0 pr=34 branch=claude/12-x reason=r harness=3.3.2 deploy=verified
+  expect_rc 0
+  expect_out "journal=written"
+  expect_count "journal" 1
+  jq_ok "$jf" 2 '(keys_unsorted == ["v","ts","run_id","event","session","stage","issue","outcome","retries","deploy","harness","pr","branch","reason"]) and .event == "stage" and .stage == "verifier" and .issue == 12 and (.issue | type) == "number" and .retries == 0 and (.retries | type) == "number" and .pr == 34 and (.pr | type) == "number" and .branch == "claude/12-x" and .reason == "r" and .harness == "3.3.2" and .deploy == "verified" and .outcome == "pass" and .run_id == $rid' --arg rid "$rid"
+  run_lock "$dir" "$$" journal "$rid" stage=planner issue=7 outcome=plan-posted
+  expect_rc 0
+  jq_ok "$jf" 3 '(keys_unsorted == ["v","ts","run_id","event","session","stage","issue","outcome"])'
+}
+
+# 35. journal-rejects-unsafe-values — every row exits 2 with a reason on stderr and leaves the
+# journal file and the whole trail-blazer tree untouched (no new file anywhere, including a
+# traversal target).
+# mutant:251-journal-value-unchecked — neuters the slug character-set check in journal_value_ok, so
+#   a value with a space or a quote is accepted.
+# mutant:251-journal-runid-unchecked — neuters journal_runid_ok, so a malformed run id passes.
+jr_file=""
+jr_dir=""
+journal_rejects() {
+  local label="$1" ridarg="$2"; shift 2
+  local before after tree_before tree_after
+  before="$(cksum < "$jr_file")"
+  tree_before="$(cd "$jr_dir" && find . -path ./.git/objects -prune -o -path ./.git/refs -prune -o -type f -print | LC_ALL=C sort)"
+  run_lock "$jr_dir" "$$" journal "$ridarg" "$@"
+  after="$(cksum < "$jr_file")"
+  tree_after="$(cd "$jr_dir" && find . -path ./.git/objects -prune -o -path ./.git/refs -prune -o -type f -print | LC_ALL=C sort)"
+  [ "$lock_rc" -eq 2 ] || { __ok=0; __why="${__why}$label: expected rc 2, got $lock_rc\n"; }
+  [ -n "$lock_stderr" ] || { __ok=0; __why="${__why}$label: no stderr reason\n"; }
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}$label: journal file changed\n"; }
+  [ "$tree_before" = "$tree_after" ] || { __ok=0; __why="${__why}$label: a file appeared or vanished\n"; }
+}
+case_journal_rejects_unsafe_values() {
+  local dir; dir="$(mk_repo journal-rejects-unsafe-values)"
+  run_lock "$dir" "$$" acquire
+  local rid; rid="$(run_id_from_out)"
+  jr_dir="$dir"
+  jr_file="$(journal_dir_of "$dir")/$rid.jsonl"
+  local long41; long41="$(printf '%041d' 0 | tr 0 a)"
+  local long101; long101="$(printf '%0101d' 0 | tr 0 a)"
+  journal_rejects "unknown-key" "$rid" stage=a issue=1 outcome=b body=x
+  journal_rejects "duplicate-key" "$rid" stage=a stage=b issue=1 outcome=b
+  journal_rejects "missing-outcome" "$rid" stage=a issue=1 retries=0
+  journal_rejects "space-in-value" "$rid" stage=a issue=1 "outcome=a b"
+  journal_rejects "quote-in-value" "$rid" stage=a issue=1 'outcome=a"b'
+  journal_rejects "uppercase-slug" "$rid" stage=A issue=1 outcome=b
+  journal_rejects "leading-zero-issue" "$rid" stage=a issue=012 outcome=b
+  journal_rejects "nondigit-issue" "$rid" stage=a issue=x outcome=b
+  journal_rejects "zero-pr" "$rid" stage=a issue=1 outcome=b pr=0
+  journal_rejects "long-stage" "$rid" "stage=$long41" issue=1 outcome=b
+  journal_rejects "long-branch" "$rid" stage=a issue=1 outcome=b "branch=$long101"
+  journal_rejects "dash-branch" "$rid" stage=a issue=1 outcome=b branch=-x
+  journal_rejects "dotdot-branch" "$rid" stage=a issue=1 outcome=b branch=a/../b
+  journal_rejects "retries-leading-zero" "$rid" stage=a issue=1 outcome=b retries=01
+  journal_rejects "bad-harness" "$rid" stage=a issue=1 outcome=b "harness=3 3"
+  journal_rejects "runid-foo" "run-foo" stage=a issue=1 outcome=b
+  journal_rejects "runid-traversal" "../../evil" stage=a issue=1 outcome=b
+  journal_rejects "runid-slash" "run-20200101T000000Z-1/../../x" stage=a issue=1 outcome=b
+  local stray; stray="$(find "$dir" -name 'evil*' -o -name 'x.jsonl' 2>/dev/null)"
+  [ -z "$stray" ] || { __ok=0; __why="${__why}stray traversal file: $stray\n"; }
+}
+
+# 36. journal-requires-run-file — `journal` never creates a run's file (rc 1, nothing created); a
+# symlink at the file path, or at the journal directory, is refused and its target stays untouched.
+# mutant:251-journal-symlink-followed — drops the symlink refusal from both cmd_journal and
+#   journal_append, so a symlinked run file is appended to through the link.
+case_journal_requires_run_file() {
+  local dir; dir="$(mk_repo journal-requires-run-file)"
+  run_lock "$dir" "$$" journal run-20200101T000000Z-123 stage=a issue=1 outcome=b
+  expect_rc 1
+  expect_err "journal"
+  [ -e "$dir/.git/trail-blazer" ] && { __ok=0; __why="${__why}journal created trail-blazer for a missing run file\n"; }
+  run_lock "$dir" "$$" acquire
+  local rid; rid="$(run_id_from_out)"
+  local jd; jd="$(journal_dir_of "$dir")"
+  run_lock "$dir" "$$" journal run-20200101T000000Z-123 stage=a issue=1 outcome=b
+  expect_rc 1
+  [ -e "$jd/run-20200101T000000Z-123.jsonl" ] && { __ok=0; __why="${__why}journal created the run file\n"; }
+  printf 'original\n' > "$dir/target.txt"
+  ln -s "$dir/target.txt" "$jd/run-20200101T000000Z-456.jsonl"
+  local before; before="$(cksum < "$dir/target.txt")"
+  run_lock "$dir" "$$" journal run-20200101T000000Z-456 stage=a issue=1 outcome=b
+  expect_rc 1
+  [ "$before" = "$(cksum < "$dir/target.txt")" ] || { __ok=0; __why="${__why}symlink target was written through\n"; }
+  # A symlinked journal directory: acquire stays rc 0 and writes nothing through the link.
+  local dir2; dir2="$(mk_repo journal-requires-run-file-dirlink)"
+  mkdir -p "$dir2/.git/trail-blazer" "$dir2/elsewhere"
+  ln -s "$dir2/elsewhere" "$dir2/.git/trail-blazer/journal"
+  run_lock "$dir2" "$$" acquire
+  expect_rc 0
+  expect_last_line_prefix "run-id="
+  [ -z "$(ls -A "$dir2/elsewhere")" ] || { __ok=0; __why="${__why}acquire wrote through a symlinked journal dir\n"; }
+}
+
+# 37. journal-best-effort — with the journal path blocked by a regular file, acquire and release
+# keep their exit status, stdout and lock files and add exactly one warning line; `journal` exits 1.
+# mutant:251-journal-fatal — makes journal_lock_event's append failure exit the script non-zero.
+case_journal_best_effort() {
+  local dir; dir="$(mk_repo journal-best-effort)"
+  mkdir -p "$dir/.git/trail-blazer"
+  printf 'not a directory\n' > "$dir/.git/trail-blazer/journal"
+  run_lock "$dir" "$$" acquire
+  expect_rc 0
+  expect_last_line_prefix "run-id="
+  expect_absent_out "journal"
+  expect_count_err "warning: journal" 1
+  local rid; rid="$(run_id_from_out)"
+  local f
+  for f in run-id pid host started-at harness-version checkout-path; do
+    [ -f "$(lockdir_of "$dir")/$f" ] || { __ok=0; __why="${__why}lock file $f missing\n"; }
+  done
+  run_lock "$dir" "$$" journal "$rid" stage=a issue=1 outcome=b
+  expect_rc 1
+  expect_absent_out "journal=written"
+  run_lock "$dir" "$$" release "$rid"
+  expect_rc 0
+  [ -d "$(lockdir_of "$dir")" ] && { __ok=0; __why="${__why}lock still present after release\n"; }
+  [ "$(cat "$dir/.git/trail-blazer/journal")" = "not a directory" ] || { __ok=0; __why="${__why}blocking journal file was modified\n"; }
+}
+
+# 38. journal-session-id — CLAUDE_CODE_SESSION_ID is recorded verbatim only when wholly
+# [A-Za-z0-9-]{1,64}; anything else (or unset) is recorded as "", never a sanitized fragment.
+# mutant:251-journal-session-raw — journal_session accepts any value, so the raw value is recorded.
+case_journal_session_id() {
+  local dir rid jf
+  dir="$(mk_repo journal-session-ok)"
+  lock_session_id="0b9a6f3e-1c2d-4e5f-8a7b-9c0d1e2f3a4b"
+  run_lock "$dir" "$$" acquire
+  rid="$(run_id_from_out)"
+  jf="$(journal_dir_of "$dir")/$rid.jsonl"
+  run_lock "$dir" "$$" journal "$rid" stage=a issue=1 outcome=b
+  jq_ok "$jf" 1 '.session == $s' --arg s "$lock_session_id"
+  jq_ok "$jf" 2 '.session == $s' --arg s "$lock_session_id"
+
+  dir="$(mk_repo journal-session-bad)"
+  lock_session_id='a b"c'
+  run_lock "$dir" "$$" acquire
+  rid="$(run_id_from_out)"
+  jf="$(journal_dir_of "$dir")/$rid.jsonl"
+  run_lock "$dir" "$$" journal "$rid" stage=a issue=1 outcome=b
+  jq_ok "$jf" 1 '.session == ""'
+  jq_ok "$jf" 2 '.session == ""'
+  [ "$(grep -cF 'b"c' "$jf")" = "0" ] || { __ok=0; __why="${__why}raw session value leaked into the journal\n"; }
+
+  dir="$(mk_repo journal-session-long)"
+  lock_session_id="$(printf '%065d' 0 | tr 0 a)"
+  run_lock "$dir" "$$" acquire
+  rid="$(run_id_from_out)"
+  jf="$(journal_dir_of "$dir")/$rid.jsonl"
+  jq_ok "$jf" 1 '.session == ""'
+
+  dir="$(mk_repo journal-session-unset)"
+  lock_session_id=""
+  run_lock "$dir" "$$" acquire
+  rid="$(run_id_from_out)"
+  jf="$(journal_dir_of "$dir")/$rid.jsonl"
+  jq_ok "$jf" 1 '.session == ""'
+}
+
+# 39. journal-reclaim-links-prior — a stale-holder reclaim writes the new run's acquire record with
+# reclaimed_run_id equal to the stale holder's id; a holder id that is not run-id-shaped omits it.
+# mutant:251-journal-reclaim-unlinked — drops the reclaimed run id argument from reclaim_stale's
+#   journal_lock_event call.
+case_journal_reclaim_links_prior() {
+  local dir dead host rid jf
+  host="$(uname -n)"
+  dir="$(mk_repo journal-reclaim-links-prior)"
+  dead="$(dead_pid)"
+  write_lock "$dir" "run-20200101T000000Z-$dead" "$dead" "$host" "2020-01-01T00:00:00Z" "0.0.0" "/nowhere"
+  run_lock "$dir" "$$" acquire
+  expect_rc 0
+  rid="$(run_id_from_out)"
+  jf="$(journal_dir_of "$dir")/$rid.jsonl"
+  [ "$(jlines "$jf")" = "1" ] || { __ok=0; __why="${__why}expected 1 acquire record, got $(jlines "$jf")\n"; }
+  jq_ok "$jf" 1 '.event == "acquire" and .reclaimed_run_id == $old and (keys_unsorted | last) == "reclaimed_run_id"' --arg old "run-20200101T000000Z-$dead"
+
+  dir="$(mk_repo journal-reclaim-unshaped)"
+  dead="$(dead_pid)"
+  write_lock "$dir" "run-old-$dead" "$dead" "$host" "2020-01-01T00:00:00Z" "0.0.0" "/nowhere"
+  run_lock "$dir" "$$" acquire
+  expect_rc 0
+  rid="$(run_id_from_out)"
+  jf="$(journal_dir_of "$dir")/$rid.jsonl"
+  jq_ok "$jf" 1 '.event == "acquire" and (has("reclaimed_run_id") | not)'
+}
+
+# 40. journal-release-force — a forced release appends release-force to the removed holder's file;
+# a holder whose id is not run-id-shaped gets no journal file; stdout and rc are unchanged.
+case_journal_release_force() {
+  local dir; dir="$(mk_repo journal-release-force)"
+  run_lock "$dir" "$$" acquire
+  local rid; rid="$(run_id_from_out)"
+  local jf; jf="$(journal_dir_of "$dir")/$rid.jsonl"
+  run_lock "$dir" "$$" release --force
+  expect_rc 0
+  expect "$rid"
+  expect_absent_out "journal="
+  [ "$(jlines "$jf")" = "2" ] || { __ok=0; __why="${__why}expected 2 journal lines, got $(jlines "$jf")\n"; }
+  jq_ok "$jf" 2 '.event == "release-force" and .run_id == $rid' --arg rid "$rid"
+  local jd; jd="$(journal_dir_of "$dir")"
+  local listing; listing="$(ls "$jd")"
+  write_lock "$dir" "run-foreign" "$$" "$(uname -n)" "2020-01-01T00:00:00Z" "0.0.0" "/nowhere"
+  run_lock "$dir" "$$" release --force
+  expect_rc 0
+  expect "run-foreign"
+  [ -e "$jd/run-foreign.jsonl" ] && { __ok=0; __why="${__why}a journal file was created for a non-shaped holder id\n"; }
+  [ "$listing" = "$(ls "$jd")" ] || { __ok=0; __why="${__why}journal directory changed for a non-shaped holder id\n"; }
+}
+
+# 41. journal-prune — acquire keeps the newest JOURNAL_KEEP shaped run files, removes the oldest
+# beyond that, never removes the current run's file even when it sorts oldest, and leaves
+# non-matching names and directories alone.
+# mutant:251-journal-prune-current — drops prune_journal's skip-the-current-file guard.
+case_journal_prune() {
+  local keep; keep="$(sed -nE 's/^JOURNAL_KEEP=([0-9]+)$/\1/p' "$root/bin/harness-lock.sh")"
+  if [ -z "$keep" ]; then
+    __ok=0; __why="${__why}could not extract JOURNAL_KEEP from bin/harness-lock.sh\n"
+    return 0
+  fi
+  local dir jd i rid count
+  dir="$(mk_repo journal-prune)"
+  jd="$(journal_dir_of "$dir")"
+  mkdir -p "$jd/stray-dir"
+  i=1
+  while [ "$i" -le $((keep + 1)) ]; do
+    : > "$jd/run-20200101T000000Z-$(printf '%05d' "$i").jsonl"
+    i=$((i + 1))
+  done
+  printf 'x\n' > "$jd/notes.txt"
+  printf 'x\n' > "$jd/run-foo.jsonl"
+  run_lock "$dir" "$$" acquire
+  expect_rc 0
+  rid="$(run_id_from_out)"
+  count="$(ls "$jd" | grep -cE '^run-[0-9]{8}T[0-9]{6}Z-[0-9]+\.jsonl$')"
+  [ "$count" = "$keep" ] || { __ok=0; __why="${__why}shaped files after prune: expected $keep, got $count\n"; }
+  [ -e "$jd/run-20200101T000000Z-00001.jsonl" ] && { __ok=0; __why="${__why}oldest file survived\n"; }
+  [ -e "$jd/run-20200101T000000Z-00002.jsonl" ] && { __ok=0; __why="${__why}second-oldest file survived\n"; }
+  [ -e "$jd/run-20200101T000000Z-00003.jsonl" ] || { __ok=0; __why="${__why}third-oldest file was removed\n"; }
+  [ -f "$jd/$rid.jsonl" ] || { __ok=0; __why="${__why}current run's file missing\n"; }
+  [ -f "$jd/notes.txt" ] && [ -f "$jd/run-foo.jsonl" ] && [ -d "$jd/stray-dir" ] \
+    || { __ok=0; __why="${__why}a non-matching name was touched\n"; }
+
+  # The current run's file sorts oldest here (every other file is dated in the future): it must
+  # survive, and the prune takes the next-oldest file instead.
+  dir="$(mk_repo journal-prune-current)"
+  jd="$(journal_dir_of "$dir")"
+  mkdir -p "$jd"
+  i=1
+  while [ "$i" -le "$keep" ]; do
+    : > "$jd/run-29991231T235959Z-$(printf '%05d' "$i").jsonl"
+    i=$((i + 1))
+  done
+  run_lock "$dir" "$$" acquire
+  expect_rc 0
+  rid="$(run_id_from_out)"
+  [ -f "$jd/$rid.jsonl" ] || { __ok=0; __why="${__why}current run's file was pruned while oldest\n"; }
+  count="$(ls "$jd" | grep -cE '^run-[0-9]{8}T[0-9]{6}Z-[0-9]+\.jsonl$')"
+  [ "$count" = "$keep" ] || { __ok=0; __why="${__why}future-dated fixture: expected $keep shaped files, got $count\n"; }
+}
+
+# 42. journal-worktree-shared — acquire and `journal` from a linked worktree write under the main
+# checkout's common dir, and nothing under the worktree's own gitdir.
+case_journal_worktree_shared() {
+  local dir; dir="$(mk_repo journal-worktree-shared)"
+  local wt="$tmpbase/journal-worktree-shared-wt"
+  ( cd "$dir" && git worktree add -q -b wt-branch "$wt" ) >/dev/null 2>&1
+  mkdir -p "$wt/home" "$wt/xdgcfg"
+  run_lock "$wt" "$$" acquire
+  expect_rc 0
+  local rid; rid="$(run_id_from_out)"
+  local jf; jf="$(journal_dir_of "$dir")/$rid.jsonl"
+  [ -f "$jf" ] || { __ok=0; __why="${__why}acquire from a worktree wrote no journal under the main checkout\n"; }
+  run_lock "$wt" "$$" journal "$rid" stage=a issue=1 outcome=b
+  expect_rc 0
+  [ "$(jlines "$jf")" = "2" ] || { __ok=0; __why="${__why}expected 2 journal lines, got $(jlines "$jf")\n"; }
+  local stray; stray="$(find "$dir/.git/worktrees" -name 'trail-blazer' 2>/dev/null)"
+  [ -z "$stray" ] || { __ok=0; __why="${__why}journal written under the worktree gitdir: $stray\n"; }
+  [ -e "$wt/.git/trail-blazer" ] && { __ok=0; __why="${__why}trail-blazer created inside the worktree\n"; }
+}
+
+# 43. journal-record-size — a stage record with every field at its maximum length is one line under
+# 1024 bytes and still parses; so does an acquire record with the longest pid.
+case_journal_record_size() {
+  local dir; dir="$(mk_repo journal-record-size)"
+  lock_session_id="$(printf '%064d' 0 | tr 0 a)"
+  run_lock "$dir" "$$" acquire --owner-pid 9999999999
+  expect_rc 0
+  local rid; rid="$(run_id_from_out)"
+  local jf; jf="$(journal_dir_of "$dir")/$rid.jsonl"
+  local s40 h32 b100
+  s40="$(printf '%040d' 0 | tr 0 a)"
+  h32="$(printf '%032d' 0 | tr 0 1)"
+  b100="$(printf '%0100d' 0 | tr 0 b)"
+  run_lock "$dir" "$$" journal "$rid" "stage=$s40" issue=9999999999 "outcome=$s40" retries=999 "deploy=$s40" "harness=$h32" pr=9999999999 "branch=$b100" "reason=$s40"
+  expect_rc 0
+  [ "$(jlines "$jf")" = "2" ] || { __ok=0; __why="${__why}expected 2 journal lines, got $(jlines "$jf")\n"; }
+  local n
+  for n in 1 2; do
+    local bytes; bytes="$(sed -n "${n}p" "$jf" | wc -c | tr -d ' ')"
+    [ "$bytes" -lt 1024 ] || { __ok=0; __why="${__why}line $n is $bytes bytes\n"; }
+    jq_ok "$jf" "$n" '.v == 1'
+  done
+  jq_ok "$jf" 2 '(.branch | length) == 100 and (.stage | length) == 40 and (.session | length) == 64'
+}
+
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
@@ -1078,7 +1451,7 @@ cases=(
   "release-missing-argument|case_release_missing_argument|rc 2, usage on stderr"
   "worktree-shares-lock|case_worktree_shares_lock|git worktree add a sibling; acquire in main, then from the worktree: rc 3, holder's checkout-path names the main checkout"
   "status-free-and-held|case_status_free_and_held|before acquire: state=free; after: state=held + record; lock-path never this repo's own .git"
-  "help-exit-0|case_help_exit_0|--help rc 0, output names acquire, release, status, CLAUDE_PID, --owner-pid, and TBF_OWNER_PID"
+  "help-exit-0|case_help_exit_0|--help rc 0, output names acquire, release, status, journal, CLAUDE_PID, --owner-pid, and TBF_OWNER_PID"
   "unknown-subcommand|case_unknown_subcommand|rc 2, usage on stderr, no lock created"
   "not-a-git-repo|case_not_a_git_repo|run under GIT_CEILING_DIRECTORIES with no .git present: rc 2, message names the cause, nothing written"
   "harness-version-recorded|case_harness_version_recorded|after acquire, harness-version equals jq -r .version of .claude-plugin/plugin.json"
@@ -1096,6 +1469,17 @@ cases=(
   "reclaim-race-replaced|case_reclaim_race_replaced|#482: as serial, but A's owner dies before B is released: B still rc 3 (only the record re-read stops it), record still A's"
   "reclaim-race-concurrent|case_reclaim_race_concurrent|#482: B is released while A holds the marker paused inside remove_lock: B rc 3 naming release --force, marker untouched, then A rc 0"
   "reclaim-marker-dead|case_reclaim_marker_dead|#482: stale lock plus a marker with a dead pid: acquire rc 3, status shows reclaim=held, release --force clears both, next acquire rc 0; a marker-only fixture is cleared too"
+  "journal-acquire-release|case_journal_acquire_release|#251: acquire appends one valid acquire record, stdout keeps run-id= last; release appends one; a mismatch and released=none append none"
+  "journal-stage-record|case_journal_stage_record|#251: journal appends a stage record with fixed key order and numeric issue/pr/retries; a minimal call omits optional keys"
+  "journal-rejects-unsafe-values|case_journal_rejects_unsafe_values|#251: unknown/duplicate/missing keys, out-of-set or over-long values and malformed run ids exit 2 and change nothing"
+  "journal-requires-run-file|case_journal_requires_run_file|#251: journal never creates a run file (rc 1); a symlinked run file or journal dir is refused untouched"
+  "journal-best-effort|case_journal_best_effort|#251: a blocked journal path leaves acquire/release rc, stdout and lock files unchanged with one warning; journal exits 1"
+  "journal-session-id|case_journal_session_id|#251: a UUID-shaped session id is recorded verbatim; an unsafe, over-long or unset one is recorded as an empty string"
+  "journal-reclaim-links-prior|case_journal_reclaim_links_prior|#251: a stale reclaim records reclaimed_run_id; a non-shaped stale id omits it"
+  "journal-release-force|case_journal_release_force|#251: release --force appends release-force to the holder's file; a non-shaped holder id writes no file"
+  "journal-prune|case_journal_prune|#251: acquire prunes to JOURNAL_KEEP shaped files, never the current one, never non-matching names"
+  "journal-worktree-shared|case_journal_worktree_shared|#251: acquire and journal from a linked worktree write under the main checkout's common dir"
+  "journal-record-size|case_journal_record_size|#251: a maximum-length stage record is one line under 1024 bytes and parses"
 )
 
 matched=0
@@ -1111,6 +1495,7 @@ for row in "${cases[@]}"; do
   desc="${rest#*|}"
   __ok=1; __why=""
   lock_tbf_owner=""
+  lock_session_id=""
   # mutant:383-fn-lock — renames a cases=() row's target function in a scratch copy of this
   #   suite; this declare -F guard must report that row FAIL naming the missing function, instead
   #   of a silent PASS the row would otherwise get by falling through with $__ok unchanged.

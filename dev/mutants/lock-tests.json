@@ -146,6 +146,141 @@
       "expect_fail": [
         "reclaim-marker-dead"
       ]
+    },
+    {
+      "name": "251-journal-acquire-dropped",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "    journal_lock_event acquire \"$(cat \"$lockdir/run-id\")\"\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "journal-acquire-release",
+        "journal-best-effort",
+        "journal-prune",
+        "journal-record-size",
+        "journal-release-force",
+        "journal-session-id",
+        "journal-stage-record",
+        "journal-worktree-shared"
+      ]
+    },
+    {
+      "name": "251-journal-value-unchecked",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "case \"$v\" in ''|-*|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;; esac",
+          "to": "case \"$v\" in '') return 1 ;; esac"
+        }
+      ],
+      "expect_fail": [
+        "journal-rejects-unsafe-values"
+      ]
+    },
+    {
+      "name": "251-journal-runid-unchecked",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "journal_runid_ok() {\n  local id=\"$1\" suffix",
+          "to": "journal_runid_ok() {\n  return 0\n  local id=\"$1\" suffix"
+        }
+      ],
+      "expect_fail": [
+        "journal-prune",
+        "journal-reclaim-links-prior",
+        "journal-rejects-unsafe-values",
+        "journal-release-force"
+      ]
+    },
+    {
+      "name": "251-journal-symlink-followed",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "     || [ -L \"$file\" ] || [ ! -f \"$file\" ]; then",
+          "to": "     || [ ! -f \"$file\" ]; then"
+        },
+        {
+          "from": "if [ -L \"$file\" ] || { [ -e \"$file\" ]",
+          "to": "if false || { [ -e \"$file\" ]"
+        }
+      ],
+      "expect_fail": [
+        "journal-requires-run-file"
+      ]
+    },
+    {
+      "name": "251-journal-prune-current",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "    [ \"$old\" = \"$current\" ] && continue\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "journal-prune"
+      ]
+    },
+    {
+      "name": "251-journal-session-raw",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "    ''|*[!0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-]*) return 0 ;;\n",
+          "to": "    '') return 0 ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "journal-session-id"
+      ]
+    },
+    {
+      "name": "251-journal-fatal",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "journal_append \"$journaldir/$rid.jsonl\" \"$rec\" || true",
+          "to": "journal_append \"$journaldir/$rid.jsonl\" \"$rec\" || exit 1"
+        }
+      ],
+      "expect_fail": [
+        "journal-best-effort",
+        "journal-requires-run-file"
+      ]
+    },
+    {
+      "name": "251-journal-reclaim-unlinked",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "journal_lock_event acquire \"$(cat \"$lockdir/run-id\")\" \"${obs_ident%:*}\"",
+          "to": "journal_lock_event acquire \"$(cat \"$lockdir/run-id\")\""
+        }
+      ],
+      "expect_fail": [
+        "journal-reclaim-links-prior"
+      ]
     }
   ]
 }
