@@ -1049,8 +1049,8 @@ walk_window() {
 # a flagged segment (seg_qflag) first runs the #455 unbalanced-quote check over every token before the
 # hit, a superset of the check the walk made before #518 through the word it resolved, so `nice -n
 # "a b" apply_patch <<'EOF'` keeps its deny (over-blocking, measured rc 2: a quoted value of a later
-# prefix option, `nice -n 5 sudo -u "a b" apply_patch <<'EOF'`); a segment that carries a quote but never spells the shim plainly (`nice -n 5
-# apply_"patch"`) is scanned too (seg_mflag). Over-blocking,
+# prefix option, `nice -n 5 sudo -u "a b" apply_patch <<'EOF'`); a segment that carries a quote but
+# never spells the shim plainly (`nice -n 5 apply_"patch"`) is scanned too (seg_mflag). Over-blocking,
 # each measured rc 2: `nice -n 5 rg apply_patch hooks/` and `sudo -u root bash -c "echo apply_patch"`.
 # Residuals, each measured rc 0: an interpreter prefix word's option and a launcher outside PREFIX_WORDS
 # (see the residual list above).
