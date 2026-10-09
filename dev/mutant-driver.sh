@@ -24,10 +24,10 @@
 #   always wins over MUTANT_DRIVER_JOBS.
 #
 #   Change-based selection (#464): with neither --changed-from nor a non-empty
-#   MUTANT_DRIVER_SINCE, every registry record runs (after any name-filter) and this script's
-#   output is byte-identical to before #464. Set MUTANT_DRIVER_SINCE=<rev> to select instead, by
-#   `git -C <root> diff --no-renames --name-only <rev> HEAD --`: a record is selected iff a
-#   changed path equals its target, its suite, or its registry file, or matches a
+#   MUTANT_DRIVER_SINCE, and no shard spec, every registry record runs (after any name-filter)
+#   and this script's output is byte-identical to before #464. Set MUTANT_DRIVER_SINCE=<rev> to
+#   select instead, by `git -C <root> diff --no-renames --name-only <rev> HEAD --`: a record is
+#   selected iff a changed path equals its target, its suite, or its registry file, or matches a
 #   dev/mutants/suite-deps.txt pattern its suite declares — a suite with no map line matches any
 #   change. A changed path under bin/, hooks/, templates/, agents/, skills/ or dev/ that no record
 #   or map pattern (other than a bare "*") claims, or any change to this script itself, forces a
@@ -79,9 +79,9 @@
 #   == summary: <N> pass, <M> fail ==
 # Exit 0 iff every baseline and mutant passed; 1 if any FAILed; 2 on a usage or registry error
 # (before any suite ever runs). With neither --changed-from nor a non-empty MUTANT_DRIVER_SINCE,
-# neither selection line ever prints and every registry record runs — byte-identical to before
-# #464; with no shard spec either, no shard line ever prints. Zero records selected is itself a PASS: the "selected 0 of <M>" line, then the summary
-# footer, exit 0, no suite ever runs.
+# and no shard spec, neither a selection line nor the shard line ever prints and every registry
+# record runs — byte-identical to before #464. Zero records selected is itself a PASS: the
+# "selected 0 of <M>" line, then the summary footer, exit 0, no suite ever runs.
 #
 # Writes only under its own single mktemp -d root (an EXIT trap removes it); the tracked tree is
 # never touched — every edit lands on a fresh_copy scratch copy, and the copy's own root (never a
@@ -152,10 +152,11 @@ usage: dev/mutant-driver.sh [-j <n>|--serial] [--changed-from <file>] [--shard <
   name-filter       run only the registry records whose name contains this substring
 
 With no name-filter, runs every selected registry record (every record, when neither selection
-nor a shard spec is in effect). MUTANT_DRIVER_JOBS overrides the detected default when neither -j nor --serial is given.
-MUTANT_DRIVER_REGISTRY_DIR overrides the registry directory (default: dev/mutants under this
-checkout). With neither --changed-from nor a non-empty MUTANT_DRIVER_SINCE, every registry record
-runs -- unchanged from before change-based selection landed. MUTANT_DRIVER_SINCE=<rev> selects
+nor a shard spec is in effect). MUTANT_DRIVER_JOBS overrides the detected default when neither -j
+nor --serial is given. MUTANT_DRIVER_REGISTRY_DIR overrides the registry directory (default:
+dev/mutants under this checkout). With neither --changed-from nor a non-empty
+MUTANT_DRIVER_SINCE, and no shard spec, every registry record runs -- unchanged from before
+change-based selection landed. MUTANT_DRIVER_SINCE=<rev> selects
 instead by `git diff --no-renames --name-only <rev> HEAD` against this checkout and
 dev/mutants/suite-deps.txt; an unusable base (a leading "-", an all-zero or unknown commit, or any
 other git-diff failure) forces a full run instead.
