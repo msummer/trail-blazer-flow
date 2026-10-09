@@ -202,7 +202,12 @@ escaped assignment value split at a space (`X="a b" gh …`), an `env` option ou
 (`env -C /tmp gh …`, `env -S'gh …'`), or a quoted option or assignment after a prefix word (`env "X=a
 b" gh …`) — denies, for the verifier too, when a later word in the same segment is `git` or `gh`, or
 a `.claude` path segment; the script header's "Fail-closed: a command prefix the scan cannot follow"
-paragraph lists the over-blocking and the residuals. Since
+paragraph lists the over-blocking and the residuals. Since #518, a dash option of `nice`, `sudo`,
+`stdbuf`, `exec`, `xargs` or `time` followed by a word reads the rest of the segment after that word the
+same way, because the option's separate value would otherwise be taken for the command word
+(`nice -n 5 gh pr merge 5` and `sudo -u root gh …` deny; the verifier's `nice -n 5 git status` denies
+too); the header's "Fail-closed: a value-taking option of a prefix word" paragraph lists the over-blocks
+and residuals. Since
 #340, both roles ALSO deny a Bash command that puts a `.claude`-segment path in a write position —
 a `>`-family redirect target, an argument to `tee`/`cp`/`mv`/`cd`/`pushd`, or an in-place `sed`'s
 argument — closing most of the Bash-issued write route into `.claude/` (see `hooks/claude-dir-guard.sh`'s
@@ -247,8 +252,8 @@ a `CLAUDE_CMDLINE_WRITE_COMMANDS` command word sharing a call with any `.claude`
 the remedy for a file-content case is to write through the Write/Edit tools rather than a Bash
 heredoc, and for the #387 read-adjacent case, the Read/Grep tools or a separate Bash call. Known
 evasions, documented rather than hidden: `$(which git) push` (the literal `git` token is never in
-command position), `sudo -u foo git push` (the argument to `-u` becomes the resolved command word
-instead of `git`), interpreter indirection outside the recognised prefix words (`env`, `command`,
+command position), a value-taking option of an interpreter prefix word (`bash -o pipefail -c 'gh pr
+merge 5'`), interpreter indirection outside the recognised prefix words (`env`, `command`,
 `builtin`, `exec`, `sudo`, `nohup`, `time`, `nice`, `stdbuf`, `xargs`, `bash`, `sh`, `zsh`, `ksh`,
 `dash`, the shell reserved words `if`, `then`, `elif`, `else`, `do`, `while`,
 `until`, `!`, `coproc`, the `eval`/`trap` builtins, and zsh's precommand modifiers `noglob`,
@@ -259,7 +264,7 @@ which does not exist); `eval`/`trap` of a variable- or substitution-built payloa
 whitespace (`repeat "1 + 1" git push`); and, for the `.claude`-write class specifically, a writer outside
 `CLAUDE_CMDLINE_WRITE_COMMANDS` (`sort -o`, `split`, `unzip -d`, `scp`, `cpio`, `vim -es`, `sed`'s
 `w` command), a launcher that becomes the resolved command word instead of a vocabulary member
-(`uv run python`, `npx`, `poetry run`, `sudo -u x python3`), a script file whose own CONTENTS name
+(`uv run python`, `npx`, `poetry run`), a script file whose own CONTENTS name
 the path rather than the command line itself (`python3 /tmp/w.py`), or a variable-built, glob, or
 quote/backslash-split target — this is a
 tripwire against an off-script subagent, the same framing this document already uses for the
@@ -349,7 +354,12 @@ is treated the same way, and a `-C` path that long denies as outside the worktre
 the tokenizer lost (a quoted git option), a plain `$'zqp'` word is read as the alias name it spells, and
 any other word holding a dollar sign and a quote fails closed under the git-options reason. The
 header's "Fail-closed: a runtime expansion in the push destination (#517)" paragraph lists the
-residuals. Since #433, a push segment in
+residuals. **Since #518**, a dash option of `nice`, `sudo`, `stdbuf`, `exec`, `xargs` or `time`
+followed by a word, with a push after that word, denies as unresolved with the fixed reason `option
+value in the command prefix` (`nice -n 5 git push origin main`, `sudo -u root git push …`; a deliberate
+over-block also catches the same option before a feature push), because the option's separate value
+would otherwise be taken for the command word; the header's "Fail-closed: a value-taking option of a
+prefix word (#518)" paragraph lists the over-blocks and residuals. Since #433, a push segment in
 the same Bash command as any OTHER segment that changes directory (`cd`/`pushd`/`popd`/`chdir`) or
 sets a `GIT_DIR`-family variable or one of the command-line-config names above
 (`export`/`declare`/`typeset`/`local`/`readonly`, or a bare assignment) also denies as unresolved,
@@ -593,11 +603,15 @@ matching or resolving it, rather than tracking which quote ENCLOSES which span, 
 backslash-blind — the same tripwire-not-sandbox trade-off every scan in this directory makes: a
 backslash-quoted spelling, a variable-built name (`p=apply_patch; $p < x.patch` — this walk never
 expands a variable reference), an ANSI-C-quoted spelling (`$'apply_patch'` — the leading `$`
-survives the quote strip and never matches), a PREFIX_WORDS option that itself takes a separate
-argument (`nice -n 5 apply_patch`), an INDIRECT `eval`/`trap` argument (`eval "$c"`, `eval
+survives the quote strip and never matches), an interpreter prefix word's value-taking option
+(`bash -o pipefail -c 'apply_patch < x.patch'`), an INDIRECT `eval`/`trap` argument (`eval "$c"`, `eval
 "$(cmd)"` — quote-stripping never expands a variable or runs a command substitution), a `]]` token
 itself glued to a quote character (a literal `"]]"` token is not the bare `]]` the cut loop matches
-against), or an unrecognised launcher can all still evade both checks. Since #437 the walk also
+against), or an unrecognised launcher can all still evade both checks. Since #518 a dash option of
+`nice`, `sudo`, `stdbuf`, `exec`, `xargs`, `time` or `env` followed by a word looks for a shim-named
+word after that word (`nice -n 5 apply_patch < x.patch`, `env -u X apply_patch < x.patch`), so the
+option's separate value no longer hides the shim; the script's "Fail-closed: a value-taking option of a
+prefix word (#518)" paragraph lists the over-blocks and residuals. Since #437 the walk also
 handles zsh's short `if [[ cond ]] apply_patch` form the same way `hooks/agent-boundary.sh`'s own
 tokenizer does: every standalone `]]` token splits its own segment into disjoint tails, so the text
 after each `]]` is also tried as a candidate command word; a segment carrying more than

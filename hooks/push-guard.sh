@@ -17,7 +17,9 @@
 # (see "Section headers and same-line keys (#510)" below), ALSO denies, since #517, a push whose
 # destination is built at run time, a segment whose git alias name the tokenizer lost behind an
 # ANSI-C or locale spelling, and a command longer than PUSH_CMD_MAX_BYTES (see "Fail-closed: a runtime
-# expansion in the push destination (#517)" and "Analysis deadline (#435)" below), and
+# expansion in the push destination (#517)" and "Analysis deadline (#435)" below), ALSO denies, since
+# #518, a segment whose push may hide behind the separate value of a prefix word's option (see
+# "Fail-closed: a value-taking option of a prefix word (#518)" below), and
 # says nothing (exit 0, empty stdout, empty stderr — "no opinion") about everything else, so the
 # normal permission flow — a prompt, or a matching deny rule in
 # templates/repo-settings.json, which always wins over this hook's decision — applies. This closes
@@ -35,7 +37,8 @@
 # on a push", and, since #510, "deny a git command that reads a config file with a section header line
 # this hook cannot split the way git does", and, since #517, "deny a push whose destination is built at
 # run time", "deny a lost segment holding a dollar-quote word the hook cannot read as one name", and
-# "deny a command longer than PUSH_CMD_MAX_BYTES"; does NOT enforce an
+# "deny a command longer than PUSH_CMD_MAX_BYTES", and, since #518, "deny a segment whose push may hide
+# behind the separate value of a prefix word's option"; does NOT enforce an
 # allow-list of `claude/<n>-<slug>` destinations (the Decision's other clause) — that would deny
 # ordinary work (a `release/vX.Y.Z` branch, an annotated-tag push, any `git push origin
 # feature/x` a human runs in ANY Claude Code session in a plugin-enabled repo, since this hook is
@@ -78,7 +81,8 @@
 # backslash-bearing option fails closed when a push can follow, see "Fail-closed: a segment the
 # tokenizer cannot follow (#449)" below); and, in the command-word walk, this script alone has the
 # git-option-slot trigger, while the `env` arm (the allowlisted `env` options, `-u`/`--unset` with
-# their value) and the two command-prefix #449 triggers are applied by `hooks/agent-boundary.sh` too,
+# their value), the two command-prefix #449 triggers and the #518 value-context trigger (with
+# PREFIX_VALUE_WORDS) are applied by `hooks/agent-boundary.sh` too,
 # each hook with its own verdict (see that file's header), the shared PREFIX_WORDS skip
 # itself being unchanged; since #508 the expansion-word predicate (rx_re and rx_word(), see "Fail-closed:
 # a runtime expansion in the command prefix or the git options (#508)" below) is the same text in both
@@ -478,6 +482,33 @@
 # still cuts a record at `${`, `$(` and a backtick (owned by a separate issue); the dollar-sign
 # remnant it leaves in a destination (`git push origin ${B}:main`) now denies through this rule.
 #
+# Fail-closed: a value-taking option of a prefix word (#518). A dash option of nice, sudo, stdbuf, exec,
+# xargs or time (PREFIX_VALUE_WORDS) may take the NEXT word as its value (`nice -n 5 git push origin
+# main`, `sudo -u root git push …`); the walk skips the option but not the value, so the value became the
+# command word and the push went unseen. This hook models no prefix command's option grammar. While the
+# most recent prefix word is in PREFIX_VALUE_WORDS, a token starting with a hyphen that is followed by a
+# word not starting with one is a trigger: the rest of the segment AFTER that word (never the word
+# itself, so `sudo -E git push origin feature/x` is still judged on `git`) is read with the segment's
+# memoised lost_push(), and a hit denies as unresolved with the fixed reason `option value in the
+# command prefix`, never echoing input. The precedence is the #449 triggers': an earlier #292 reason,
+# command-line config (`-cmdline-config-`) and a cut push (`-cut-push-`) each keep their own deny. When
+# no push can follow, emit_alias_lost() runs at most once per segment (al_done), starting one token later
+# than the #449 triggers so that only tokens after the value word count toward its names-git gate:
+# `nice -n 5 git zqp origin main` under a push alias denies through the #448 alias line, while `sudo -E
+# git commit -m "fix include path" && git push origin feature/x` keeps no opinion. An expansion word in
+# command position opens no value context here: #508's post-walk check already covers it. A later prefix
+# word outside the vocabulary closes the context (`nice bash -x deploy.sh git push origin feature/x`
+# keeps no opinion), and interpreter words stay out of it. Cost: O(1) checks per dash token and at most
+# one memoised lost_push() and one emit_alias_lost() per segment, all inside the tokenizer and so inside
+# T_prefix, bounded by PUSH_CMD_MAX_BYTES. Every rule only adds denies. Over-blocking, each measured rc
+# 2: `nice -n 5 git push origin feature/x`, `sudo -u root git push origin feature/x`, `sudo -u root
+# bash -c "echo git push origin feature/x"`, and `nice -n 10 git log --grep alias` (the segment names
+# git behind the option value and a later word names an alias). Residuals, each measured rc 0: an
+# interpreter prefix word's option (`bash -o pipefail -c 'git push origin main'`), a launcher outside
+# PREFIX_WORDS (`timeout 5 git push origin main`), and a value-context segment that changes directory
+# (`nice -n 5 cd ../x && git push origin trunk`), because the cross-segment directory rule keys on the
+# segment's resolved command word, which here is the option value.
+#
 # Fail-closed: git aliases and config relocation (#448, absorbing #450). This hook once recognised only
 # the literal subcommand `push`, so a git alias that expands to push hid it (a config-file alias such
 # as `zqp = push` under `[alias]`, run as `git zqp origin main`, or `git -c alias.p=push p origin
@@ -781,8 +812,10 @@
 # `git`/`push` text is never in the string this tokenizer reads; a `repeat` count containing
 # whitespace (`repeat "1 + 1" git push origin main` — the tokenizer skips exactly ONE token after
 # `repeat`, so a quoted multi-word count is not fully consumed and its own remaining word, not
-# `git`, is mistaken for the resolved command word); `sudo -u foo git push` (the argument to
-# `-u` becomes the resolved command word, not `git`); interpreter indirection outside
+# `git`, is mistaken for the resolved command word); an interpreter prefix word's value-taking option
+# (`bash -o pipefail -c 'git push origin main'`, `bash -O extglob -c …`, measured rc 0; see the #518
+# paragraph below); a launcher outside PREFIX_WORDS (`timeout 5 git push origin main`, `ionice -c 2 …`,
+# `doas -u root …`, measured rc 0); interpreter indirection outside
 # PREFIX_WORDS; a two-token global option NOT in GIT_GLOBAL_OPTS_WITH_VALUE that itself takes a
 # separate value, e.g. `git --foo bar push origin main` (the unlisted `--foo` is skipped alone,
 # and its separate value `bar` is then mistaken for the subcommand, so the real `push` token past
@@ -797,9 +830,7 @@
 # fast path (below) exits before the #270 CR strip ever runs, regardless of the strip's own
 # correctness; the resulting command cannot execute as a real `git push` either, so this is
 # documented, not fixed (see the fast-path comment below; since #448 a CR inside the push literal, `git
-# pu<CR>sh origin main`, no longer evades, because there is no push fast path); `nice -n 5 git push origin main` (the same class
-# as the `sudo -u foo` bullet above — `nice`'s option value `5` becomes the resolved command word,
-# not `git`); since #398, `git PUSH origin main` — the command word is case-folded (so `GIT push
+# pu<CR>sh origin main`, no longer evades, because there is no push fast path); since #398, `git PUSH origin main` — the command word is case-folded (so `GIT push
 # origin main` IS caught), but the subcommand comparison (`subcmd == "push"` in emit_segment()
 # below) stays exact, out of scope per this issue's decision, so an uppercase or mixed-case
 # subcommand is never recognised as a push and this hook opines "no opinion" on the whole segment;
@@ -1005,7 +1036,9 @@
 # `T_prefix`), #508 likewise (rx_word() is linear in one token; at most two more lost_push() scans per
 # segment, both after their loops and never at a trigger; two index() calls per git-slot word for the ANSI-C
 # rule; at most one more split of the record plus one
-# lost_push() per record; no emit_alias_lost() call is added), and #433 has landed in the awk tokenizer plus one
+# lost_push() per record; no emit_alias_lost() call is added), #518 likewise (O(1) checks per dash
+# token; its lost_push() and emit_alias_lost() calls share the segment's m0 and al_done memos, so no
+# scan is added per trigger), and #433 has landed in the awk tokenizer plus one
 # constant-cost post-loop fallback: call `check_deadline` as the FIRST statement of every loop whose trip
 # count grows with the command string or a config file's own content — never partway through a loop
 # body, and never only once at the top of a function that itself contains such a loop. The early
@@ -1229,6 +1262,14 @@ GIT_CFG_RELOC_ENV_VARS="HOME XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
 # denies rather than being guessed at.
 PUSH_ENV_NOVALUE_OPTS="-i -0 -v -- --ignore-environment --null --debug"
 PUSH_ENV_UNSET_OPTS="-u --unset"
+# PREFIX_VALUE_WORDS (#518) — the PREFIX_WORDS members whose dash options can take a SEPARATE value
+# word (`nice -n 5`, `sudo -u root`, `stdbuf -o L`, `exec -a foo`, `xargs -n 1`, `time -o f`): after
+# one of these, a dash token followed by a non-option word is a point where the walk cannot tell the
+# value from the command word (see the header paragraph "Fail-closed: a value-taking option of a
+# prefix word (#518)"). Interpreter words stay out: their `-c` value IS the command string.
+# Byte-identical to hooks/agent-boundary.sh's and hooks/claude-dir-guard.sh's own copies (by
+# convention, unpinned).
+PREFIX_VALUE_WORDS="exec nice stdbuf sudo time xargs"
 # #494: the most bytes read from the END of the Codex rollout file named by the payload's
 # `transcript_path` when scanning the tool-call records (see the post-loop "#494" block and the
 # header's "Fail-closed: Codex shell workdir (#494)" paragraph). A record pushed out of this window
@@ -1367,7 +1408,7 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
 # on "[ \t]+". Processes $cmd one input line (awk record) at a time — the same deliberate,
 # documented false-positive class agent-boundary.sh's header explains (a heredoc line that starts
 # with "git push" is scanned as its own segment).
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" -v dirwords="$PUSH_DIR_CHANGE_WORDS" -v exportwords="$PUSH_EXPORT_WORDS" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" -v envnov="$PUSH_ENV_NOVALUE_OPTS" -v envunset="$PUSH_ENV_UNSET_OPTS" -v relocenv="$GIT_CFG_RELOC_ENV_VARS" '
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" -v dirwords="$PUSH_DIR_CHANGE_WORDS" -v exportwords="$PUSH_EXPORT_WORDS" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" -v envnov="$PUSH_ENV_NOVALUE_OPTS" -v envunset="$PUSH_ENV_UNSET_OPTS" -v relocenv="$GIT_CFG_RELOC_ENV_VARS" -v vpwords="$PREFIX_VALUE_WORDS" '
 BEGIN {
   sq = sprintf("%c", 39)
   cr = sprintf("%c", 13)
@@ -1375,6 +1416,8 @@ BEGIN {
   tok_max = 4096
   n = split(prefix_words, pwarr, " ")
   for (i = 1; i <= n; i++) prefix_set[pwarr[i]] = 1
+  nvp = split(vpwords, vparr, " ")
+  for (i = 1; i <= nvp; i++) vprefix_set[vparr[i]] = 1
   ng = split(gopts, goarr, " ")
   for (i = 1; i <= ng; i++) gopt_set[goarr[i]] = 1
   nro = split(repoopts, roarr, " ")
@@ -1592,7 +1635,7 @@ function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, u, av
   for (i = 1; i <= nc; i++) print "ALIAS\t" cpath "\t" chunk[i]
   if (names != "") print "ALIAS\t" cpath "\t" names
 }
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, cfgdollar, cv, rx_at, rxg_at, rxn_at, rxbs, av, jend, ro, k, xname, cmdcfg, co, cp, cfgname, cpath_big) {
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, in_vp, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, cfgdollar, cv, rx_at, rxg_at, rxn_at, rxbs, av, jend, ro, k, xname, cmdcfg, co, cp, cfgname, cpath_big) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
@@ -1601,6 +1644,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   cmdcfg = 0
   # #449: per-segment memos of the lost_push() scans (-1 = not yet scanned) and the env-context flag
   in_env = 0
+  in_vp = 0
   m0 = -1
   m1 = -1
   m2 = -1
@@ -1682,10 +1726,19 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
         if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
       }
     }
+    # #518: a dash token in the value context of a prefix word (exec/nice/stdbuf/sudo/time/xargs)
+    # followed by a non-option word W: W may be that option value, so a push could follow it. Read the
+    # rest of the segment AFTER W (never W itself, so `sudo -E git push origin feature/x` is judged on
+    # W as before); the m0 and al_done memos are shared with the triggers above.
+    if (in_vp && substr(tok, 1, 1) == "-" && idx < ntok && toks[idx + 1] != "" && substr(toks[idx + 1], 1, 1) != "-") {
+      if (m0 < 0) m0 = lost_push(toks, idx + 2, ntok, 0)
+      if (m0) { emit_lost("option value in the command prefix", unres, cmdcfg, cut_flag); return }
+      if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 3, ntok, 1, reloc, "") }
+    }
     # #508: a runtime expansion in command position may expand to nothing (or to several words): skip
     # it as a possibly-empty prefix word so the real command word behind it still resolves
     if (rx_word(tok)) { if (!rx_at) rx_at = idx; saw_prefix = 1; idx++; continue }
-    if (norm in prefix_set && norm != "-") in_env = (norm == "env")
+    if (norm in prefix_set && norm != "-") { in_env = (norm == "env"); in_vp = (norm in vprefix_set) }
     if (norm in prefix_set) { saw_prefix = 1; idx += (norm == "repeat") ? 2 : 1; continue }
     if (saw_prefix && substr(tok, 1, 1) == "-") { idx++; continue }
     cmdword = norm

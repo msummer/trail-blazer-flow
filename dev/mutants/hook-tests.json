@@ -307,8 +307,8 @@
       "filter": "ab-cwrite-",
       "edits": [
         {
-          "from": "    sub(/[0-9.]+$/, \"\", lw)",
-          "to": "    sub(/ZZZNEVERMATCH/, \"\", lw)"
+          "from": "    lw = cmdword\n    sub(/[0-9.]+$/, \"\", lw)",
+          "to": "    lw = cmdword\n    sub(/ZZZNEVERMATCH/, \"\", lw)"
         }
       ],
       "expect_fail": [
@@ -2678,8 +2678,8 @@
       "filter": "cdg-pc-",
       "edits": [
         {
-          "from": "      *\" $tok \"*) saw_prefix=1; [ \"$tok\" = repeat ] && i=$((i + 1)); i=$((i + 1)); continue ;;",
-          "to": "      *\" $tok \"*) saw_prefix=1; i=$((i + 1)); continue ;;"
+          "from": "        [ \"$tok\" = repeat ] && i=$((i + 1))\n",
+          "to": ""
         }
       ],
       "expect_fail": [
@@ -4898,8 +4898,8 @@
       "filter": "push-parse-",
       "edits": [
         {
-          "from": "    if (norm in prefix_set && norm != \"-\") in_env = (norm == \"env\")",
-          "to": "    if (norm in prefix_set && norm != \"-\") in_env = 1"
+          "from": "    if (norm in prefix_set && norm != \"-\") { in_env = (norm == \"env\"); in_vp = (norm in vprefix_set) }",
+          "to": "    if (norm in prefix_set && norm != \"-\") { in_env = 1; in_vp = (norm in vprefix_set) }"
         }
       ],
       "expect_fail": [
@@ -4923,7 +4923,8 @@
         "push-parse-noop-env-c-nonpush",
         "push-parse-noop-gopt-value-nonpush",
         "push-parse-noop-quoted-opt-nonpush",
-        "push-parse-noop-quoted-opt-push-word"
+        "push-parse-noop-quoted-opt-push-word",
+        "push-parse-noop-sudo-opt-feature"
       ]
     },
     {
@@ -4939,7 +4940,8 @@
       ],
       "expect_fail": [
         "push-parse-noop-assign-space-commit",
-        "push-parse-noop-quoted-opt-push-word"
+        "push-parse-noop-quoted-opt-push-word",
+        "push-parse-noop-sudo-opt-feature"
       ]
     },
     {
@@ -7439,8 +7441,8 @@
       "filter": "ab-rtexp-",
       "edits": [
         {
-          "from": "if (rx_word(tok)) { saw_exp = 1; saw_prefix = 1; idx++; continue }",
-          "to": "if (rx_word(tok)) { saw_exp = 1; idx++; continue }"
+          "from": "if (rx_word(tok)) { saw_exp = 1; saw_prefix = 1; if (substr(tok, 1, 1) != \"-\") in_vp = 1; idx++; continue }",
+          "to": "if (rx_word(tok)) { saw_exp = 1; if (substr(tok, 1, 1) != \"-\") in_vp = 1; idx++; continue }"
         }
       ],
       "expect_fail": [
@@ -7821,8 +7823,8 @@
       "filter": "ab-lost-",
       "edits": [
         {
-          "from": "    if (norm in prefix_set && norm != \"-\") in_env = (norm == \"env\")",
-          "to": "    if (norm in prefix_set && norm != \"-\") in_env = 1"
+          "from": "    if (norm in prefix_set && norm != \"-\") { in_env = (norm == \"env\"); in_vp = (norm in vprefix_set) }",
+          "to": "    if (norm in prefix_set && norm != \"-\") { in_env = 1; in_vp = (norm in vprefix_set) }"
         }
       ],
       "expect_fail": [
@@ -7925,7 +7927,8 @@
         "ab-lost-deny-verifier-env-arm-basename",
         "ab-lost-deny-verifier-git",
         "ab-lost-noop-controls",
-        "ab-lost-noop-scan-precision"
+        "ab-lost-noop-scan-precision",
+        "ab-lost-noop-verifier-nonenv-opt"
       ]
     },
     {
@@ -8376,6 +8379,289 @@
       "expect_fail": [
         "push-rxdest-deny-option-dollar",
         "push-rxdest-deny-option-dollar-config"
+      ]
+    },
+    {
+      "name": "518-ab-optval-off",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-optval-",
+      "edits": [
+        {
+          "from": "PREFIX_VALUE_WORDS=\"exec nice stdbuf sudo time xargs\"",
+          "to": "PREFIX_VALUE_WORDS=\"\""
+        }
+      ],
+      "expect_fail": [
+        "ab-optval-deny-codex",
+        "ab-optval-deny-expansion",
+        "ab-optval-deny-impl-gh",
+        "ab-optval-deny-impl-other",
+        "ab-optval-deny-interpreter",
+        "ab-optval-deny-verifier"
+      ]
+    },
+    {
+      "name": "518-ab-optval-start",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-optval-",
+      "edits": [
+        {
+          "from": "lost = lost_scan(toks, idx + 2, ntok)",
+          "to": "lost = lost_scan(toks, idx + 1, ntok)"
+        }
+      ],
+      "expect_fail": [
+        "ab-optval-noop"
+      ]
+    },
+    {
+      "name": "518-ab-optval-nonopt",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-optval-",
+      "edits": [
+        {
+          "from": " && toks[idx + 1] != \"\" && substr(toks[idx + 1], 1, 1) != \"-\") {",
+          "to": " && toks[idx + 1] != \"\") {"
+        }
+      ],
+      "expect_fail": [
+        "ab-optval-noop"
+      ]
+    },
+    {
+      "name": "518-ab-optval-reset",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-optval-",
+      "edits": [
+        {
+          "from": "in_vp = (norm in vprefix_set) }",
+          "to": "if (norm in vprefix_set) in_vp = 1 }"
+        }
+      ],
+      "expect_fail": [
+        "ab-optval-noop"
+      ]
+    },
+    {
+      "name": "518-ab-optval-rx",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-optval-",
+      "edits": [
+        {
+          "from": "if (substr(tok, 1, 1) != \"-\") in_vp = 1; ",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-optval-deny-expansion"
+      ]
+    },
+    {
+      "name": "518-ab-optval-memo",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-optvalscan-",
+      "edits": [
+        {
+          "from": "      lost = lost_scan(toks, idx + 2, ntok)",
+          "to": "      ls_done = 0; lost = lost_scan(toks, idx + 2, ntok)"
+        }
+      ],
+      "expect_fail": [
+        "ab-optvalscan-noop-flood"
+      ]
+    },
+    {
+      "name": "518-ab-lost-cw",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-optval-",
+      "edits": [
+        {
+          "from": "      if (lw in cw_set) cw_word = cwf",
+          "to": "      if (0) cw_word = cwf"
+        }
+      ],
+      "expect_fail": [
+        "ab-optval-deny-interpreter"
+      ]
+    },
+    {
+      "name": "518-pg-optval-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-optval-",
+      "edits": [
+        {
+          "from": "PREFIX_VALUE_WORDS=\"exec nice stdbuf sudo time xargs\"",
+          "to": "PREFIX_VALUE_WORDS=\"\""
+        }
+      ],
+      "expect_fail": [
+        "push-optval-deny-alias",
+        "push-optval-deny-alias-word",
+        "push-optval-deny-main",
+        "push-optval-deny-precedence"
+      ]
+    },
+    {
+      "name": "518-pg-optval-start",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-optval-",
+      "edits": [
+        {
+          "from": "m0 = lost_push(toks, idx + 2, ntok, 0)",
+          "to": "m0 = lost_push(toks, idx + 1, ntok, 0)"
+        }
+      ],
+      "expect_fail": [
+        "push-optval-deny-runtime-expansion",
+        "push-optval-noop"
+      ]
+    },
+    {
+      "name": "518-pg-optval-nonopt",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-optval-",
+      "edits": [
+        {
+          "from": " && toks[idx + 1] != \"\" && substr(toks[idx + 1], 1, 1) != \"-\") {",
+          "to": " && toks[idx + 1] != \"\") {"
+        }
+      ],
+      "expect_fail": [
+        "push-optval-noop"
+      ]
+    },
+    {
+      "name": "518-pg-optval-reset",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-optval-",
+      "edits": [
+        {
+          "from": "in_vp = (norm in vprefix_set) }",
+          "to": "if (norm in vprefix_set) in_vp = 1 }"
+        }
+      ],
+      "expect_fail": [
+        "push-optval-noop"
+      ]
+    },
+    {
+      "name": "518-pg-optval-alias-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-optval-",
+      "edits": [
+        {
+          "from": "emit_alias_lost(toks, idx + 3, ntok, 1, reloc, \"\")",
+          "to": "al_done = 1"
+        }
+      ],
+      "expect_fail": [
+        "push-optval-deny-alias",
+        "push-optval-deny-alias-word"
+      ]
+    },
+    {
+      "name": "518-pg-optval-alias-from",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-optval-",
+      "edits": [
+        {
+          "from": "emit_alias_lost(toks, idx + 3, ntok, 1, reloc, \"\")",
+          "to": "emit_alias_lost(toks, idx + 2, ntok, 1, reloc, \"\")"
+        }
+      ],
+      "expect_fail": [
+        "push-optval-noop"
+      ]
+    },
+    {
+      "name": "518-pg-optval-memo",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-optvalscan-",
+      "edits": [
+        {
+          "from": "      if (m0 < 0) m0 = lost_push(toks, idx + 2, ntok, 0)",
+          "to": "      m0 = lost_push(toks, idx + 2, ntok, 0)"
+        }
+      ],
+      "expect_fail": [
+        "push-optvalscan-noop-flood"
+      ]
+    },
+    {
+      "name": "518-cdg-optval-off",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-optval-",
+      "edits": [
+        {
+          "from": "PREFIX_VALUE_WORDS=\"exec nice stdbuf sudo time xargs\"",
+          "to": "PREFIX_VALUE_WORDS=\"\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-optval-deny-overblock",
+        "cdg-optval-deny-prefix-words",
+        "cdg-optval-dl-cap",
+        "cdg-optval-heredoc"
+      ]
+    },
+    {
+      "name": "518-cdg-optval-w-shim",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-optval-",
+      "edits": [
+        {
+          "from": "|\"$mark_out\"|apply_patch|applypatch|*/apply_patch|*/applypatch) ;;",
+          "to": "|\"$mark_out\") ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-optval-w-shim-decoy"
+      ]
+    },
+    {
+      "name": "518-cdg-optval-site",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-optval-",
+      "edits": [
+        {
+          "from": "                  check_deadline\n                  vt=\"${toks[$j]}\"",
+          "to": "                  vt=\"${toks[$j]}\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-optval-dl-cap"
+      ]
+    },
+    {
+      "name": "518-cdg-optval-memo",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-optval-",
+      "edits": [
+        {
+          "from": "                vp_done=1\n                hit=0",
+          "to": "                hit=0"
+        }
+      ],
+      "expect_fail": [
+        "cdg-optval-noop-flood-cap"
       ]
     }
   ]
