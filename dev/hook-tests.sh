@@ -3958,6 +3958,45 @@ case_push_rxdest_deny_overlong_cpath() {
   pp_run "git -C ../$pcap_s-wt-1 push origin feature/x"
   pp_expect_unres "-C path outside the <name>-wt-<n> worktree shape"
 }
+# rxo_deny DIR CMD... -- each CMD, run in the fixture repo DIR, denies pushing to main.
+rxo_deny() {
+  local dir="$1" c w0
+  shift
+  for c in "$@"; do
+    w0="$__why"; __why=""
+    al_run "$c" "$dir"
+    expect_push_deny
+    case "$push_err" in
+      *'denies pushing to "main"'*) ;;
+      *) __ok=0; __why="${__why}stderr missing 'denies pushing to \"main\"': '$push_err'\n" ;;
+    esac
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+# mutant:517-pg-rxopt-off -- drops the option exemption in dest_word(), so an option word holding a
+#   dollar sign is rewritten to a lone dollar and the bash side counts it as an argument, shifting the
+#   remote and refspec positions and skipping the current-branch and config routes.
+# mutant:517-pg-rxopt-raw -- judges the option on the raw first character instead of the quote-stripped
+#   word, so a quoted option is no option to the exemption.
+case_push_rxdest_deny_option_dollar() {
+  # An option word is judged as the bash side judges it (quote-stripped, leading dash), never rewritten:
+  # the remote stays the remote and the current branch (main here) still denies.
+  local dir="$tmpbase/repo-rxopt-main" long
+  mk_fixture_repo "$dir" main main
+  pcap_fill 5000 x
+  long="$pcap_s"
+  rxo_deny "$dir" 'git push --force-with-lease=$X origin' 'git push "--force-with-lease=$X" origin' \
+    "git push --signed=\$'abc' origin" "git push \"--signed=$long\" origin" 'git push -u --force-with-lease="$L" origin' \
+    'git push --push-option=$X origin' 'git push --receive-pack=$X origin' 'git push origin --push-option=$X'
+}
+case_push_rxdest_deny_option_dollar_config() {
+  # The same shapes on a feature branch whose only route to main is a configured push refspec, which is
+  # consulted only when at most one argument remains.
+  local dir="$tmpbase/repo-rxopt-cfg"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"]\n\tpush = HEAD:refs/heads/main\n'
+  rxo_deny "$dir" 'git push --force-with-lease=$X origin' 'git push "--signed=$X" origin' 'git push --push-option=$X origin'
+}
 case_push_rxdest_noop_controls() {
   rtx_noop 'git push -u origin "claude/17-a"' 'git -C "../demo-wt-1" push -u origin "claude/17-a"'
 }
@@ -4143,40 +4182,63 @@ pcap_verdict() {
 case_push_cmdcaptime_pin_at_cap_worst() {
   # Regression pin (no registry mutant: whether an unbounded run overruns depends on the bash and awk
   # build, as case_cdg_dl_deny_cwd_cr's comment says for claude-dir-guard). Each worst shape exactly at
-  # the cap must reach a verdict under an active deadline of the production budget (hand-typed 5, the
-  # hook's PUSH_ANALYSIS_BUDGET_SECS) plus one whole-second sample window plus a K-scaled multiple of
-  # that same payload's own unsampled prefix, measured by a same-run knob-0 control (the hook denies at
-  # its first sample, right after the tokenizer). The control, not a fixed second count, carries the
-  # host load: this suite runs under driver concurrency on small CI runners.
-  local dir="$tmpbase/repo-pp-cap-worst" shape want ctl_ms secs w0 payload ok0 ctl_ok
+  # the cap is held to two bounds, both against a same-run control that is the plan-mode twin of the
+  # identical bytes: it leaves before the tokenizer, so it times cat, the fast-path globs and two jq
+  # passes only, carrying the host load WITHOUT absorbing the tokenizer cost the pin bounds.
+  # (1) Load-invariant ratio: the knob-0 run of the same payload, which denies at the first deadline
+  #     sample and so times the unsampled prefix including the tokenizer, must stay within a fixed
+  #     multiple of the control (with a floor on the control, so a tiny denominator cannot make the
+  #     bound hair-trigger). The fastest of up to three knob-0 runs counts, since a transient load spike
+  #     moves one run but a real regression moves every run. The multiple sits well above the measured ratios and well below one that
+  #     would put the prefix near the hook timeout on an unloaded host.
+  # (2) Absolute: the run at the production budget (hand-typed 5, the hook's PUSH_ANALYSIS_BUDGET_SECS)
+  #     reaches a verdict under an active deadline of the budget plus one sample window plus a K-scaled
+  #     multiple of the control, clamped at 9s, below the hook's own 10s timeout. A deadline overrun is
+  #     retried once, since a transient load spike moves wall time but not the ratio; two overruns fail.
+  local dir="$tmpbase/repo-pp-cap-worst" shape want ctl_ms pre_ms secs w0 payload ok_save why_save
+  local ratio_max=25 ctl_floor_ms=100 limit_ms try
   mk_fixture_repo "$dir" main feature/x
   for shape in a b c d f i s t; do
     case "$shape" in a|c|d) want=rxdest ;; i) want=unres ;; s|t) want=noop ;; *) want=main ;; esac
     w0="$__why"; __why=""
     pcap_shape "$shape"
     payload="$(mk_push_cmd_big "$pcap_cmd" "$dir")"
-    push_budget_override="0"
-    push_deadline_override=20
-    measure_ms run_push_guard "$payload"
+    push_deadline_override=9
+    measure_ms run_push_guard "$(mk_push_cmd_big_plan "$pcap_cmd" "$dir")"
     ctl_ms="$measured_ms"
     if [ -z "$ctl_ms" ]; then
-      __ok=0; __why="${w0}[shape $shape] knob-0 control's timing report could not be parsed -- can't size the deadline\n"
+      __ok=0; __why="${w0}[shape $shape] control's timing report could not be parsed -- can't size the bounds\n"
       continue
     fi
-    ok0="$__ok"; __ok=1
-    expect_push_deny_exact "$DL_DEADLINE_LINE"
-    ctl_ok="$__ok"; __ok="$ok0"
-    if [ "$ctl_ok" -eq 0 ]; then
-      __ok=0; __why="${w0}[shape $shape] knob-0 control did not deny at the first sample: ${__why}"
-      continue
+    expect_push_no_opinion
+    limit_ms=$(( ratio_max * (ctl_ms > ctl_floor_ms ? ctl_ms : ctl_floor_ms) ))
+    pre_ms=""
+    for try in 1 2 3; do
+      push_budget_override="0"
+      push_deadline_override=20
+      measure_ms run_push_guard "$payload"
+      if [ -z "$measured_ms" ]; then
+        __ok=0; __why="${w0}[shape $shape] knob-0 run's timing report could not be parsed\n"
+        continue 2
+      fi
+      if [ -z "$pre_ms" ] || [ "$measured_ms" -lt "$pre_ms" ]; then pre_ms="$measured_ms"; fi
+      [ "$pre_ms" -le "$limit_ms" ] && break
+    done
+    if [ "$pre_ms" -gt "$limit_ms" ]; then
+      __ok=0; __why="${__why}unsampled prefix ${pre_ms}ms exceeds ${ratio_max}x the plan-mode control (${ctl_ms}ms)\n"
     fi
     calibrated_deadline 1 4 "$ctl_ms"
-    secs=$(( 5 + 1 + calibrated_secs ))
-    [ "$secs" -le 20 ] || secs=20
-    push_deadline_override="$secs"
-    run_push_guard "$payload"
+    secs=$(( 6 + calibrated_secs ))
+    [ "$secs" -le 9 ] || secs=9
+    ok_save="$__ok"; why_save="$__why"
+    for try in 1 2; do
+      __ok="$ok_save"; __why="$why_save"
+      push_deadline_override="$secs"
+      run_push_guard "$payload"
+      [ "$deadline_overran" = true ] || break
+    done
     pcap_verdict "$want"
-    if [ -n "$__why" ]; then __why="${w0}[shape $shape, control ${ctl_ms}ms, deadline ${secs}s] ${__why}"; else __why="$w0"; fi
+    if [ -n "$__why" ]; then __why="${w0}[shape $shape, control ${ctl_ms}ms, prefix ${pre_ms}ms, deadline ${secs}s] ${__why}"; else __why="$w0"; fi
   done
 }
 # pp_rxs_flood_cmd N -- a lost segment holding N plain ANSI-C words, a push holding N option values
@@ -11867,6 +11929,8 @@ cases=(
   "push-rxdest-deny-overlong|case_push_rxdest_deny_overlong|deny: a push word longer than the length gate -- mutation proof: dev/mutants/hook-tests.json (517-pg-argmax-off)"
   "push-rxdest-noop-overlong-option|case_push_rxdest_noop_overlong_option|no opinion: an overlong option word is not a refspec -- mutation proof: dev/mutants/hook-tests.json (517-pg-argmax-option)"
   "push-rxdest-deny-overlong-cpath|case_push_rxdest_deny_overlong_cpath|deny: an overlong -C path denies as outside the worktree shape -- mutation proof: dev/mutants/hook-tests.json (517-pg-cpath-big-off)"
+  "push-rxdest-deny-option-dollar|case_push_rxdest_deny_option_dollar|deny: an option word holding a dollar sign (quoted or not, long or short) leaves the remote and the current-branch deny intact -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxopt-off, 517-pg-rxopt-raw)"
+  "push-rxdest-deny-option-dollar-config|case_push_rxdest_deny_option_dollar_config|deny: the same option words with a configured push route to main -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxopt-off)"
   "push-rxdest-noop-controls|case_push_rxdest_noop_controls|no opinion: the harness's own quoted push shapes (a control, no registry mutant)"
   "push-rxlost-deny-alias-ansi-c|case_push_rxlost_deny_alias_ansi_c|deny: a push alias spelled as an ANSI-C or locale word in a segment the tokenizer lost -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-lit-off)"
   "push-rxlost-deny-concat|case_push_rxlost_deny_concat|deny: a non-plain dollar-quote word in a lost segment fails closed -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-failclosed-off)"
@@ -11877,7 +11941,7 @@ cases=(
   "push-cmdcap-noop-no-git|case_push_cmdcap_noop_no_git|no opinion: an over-cap command whose raw stdin never names git leaves through the fast path (a control, no registry mutant)"
   "push-cmdcap-noop-plan-mode|case_push_cmdcap_noop_plan_mode|no opinion: an over-cap command in plan mode leaves before the cap (a control, no registry mutant)"
   "push-cmdcaptime-deny-flood|case_push_cmdcaptime_deny_flood|FLOOD+TIMING: a push followed by one multi-megabyte dollar-quote word denies via the cap under an active deadline calibrated from a same-run plan-mode control -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
-  "push-cmdcaptime-pin-at-cap-worst|case_push_cmdcaptime_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap reaches a verdict inside an active deadline calibrated from a same-run knob-0 control of the same payload (regression pin, no registry mutant)"
+  "push-cmdcaptime-pin-at-cap-worst|case_push_cmdcaptime_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap reaches a verdict inside an active deadline bounded by a load-invariant ratio and a clamped deadline, both from a same-run plan-mode control of the same bytes (regression pin, no registry mutant)"
   "push-rxscan-noop-flood|case_push_rxscan_noop_flood|FLOOD+TIMING: a lost segment and a push full of plain dollar-quote words, then a feature push -- no opinion; token count sized from a same-run twin control -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-rescan)"
   "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"
   "push-alias-deny-feature-dest|case_al_deny_feature_dest|a push alias denies even when the destination is a feature branch -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"

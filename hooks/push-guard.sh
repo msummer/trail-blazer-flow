@@ -1450,9 +1450,14 @@ function whole_lit(tok,    q, b) {
 # single character dollar, so the bash side can deny it without echoing it. A word that is not an
 # option and is longer than tok_max is rewritten the same way: no real remote, branch or refspec is
 # that long, and the bash side splits a refspec at its first colon with pattern removals whose cost
-# grows with the square of the word on the bash 3.2 that macOS ships. O(length of tok).
-function dest_word(tok,    p, hd, d, av) {
-  if (length(tok) > tok_max && substr(tok, 1, 1) != "-") return "$"
+# grows with the square of the word on the bash 3.2 that macOS ships. An OPTION is judged the way the
+# bash side judges it, on the quote-stripped word (a leading dash): it is returned stripped and
+# otherwise untouched, never rewritten, because a rewrite to the lone dollar would turn an option into
+# a non-option argument there and shift the remote and refspec positions. O(length of tok).
+function dest_word(tok,    p, hd, d, av, st) {
+  st = strip_quotes(tok)
+  if (substr(st, 1, 1) == "-") return st
+  if (length(tok) > tok_max) return "$"
   p = index(tok, ":")
   if (p > 0) {
     hd = substr(tok, 1, p)
@@ -1464,7 +1469,7 @@ function dest_word(tok,    p, hd, d, av) {
     hd = ""
     d = tok
   }
-  if (index(d, "$") == 0) return strip_quotes(tok)
+  if (index(d, "$") == 0) return st
   av = whole_lit(d)
   if (av != "") return strip_quotes(hd) av
   return strip_quotes(hd) "$"
