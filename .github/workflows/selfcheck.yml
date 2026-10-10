@@ -18,9 +18,15 @@ jobs:
   selfcheck:
     runs-on: ubuntu-latest
     # The nine commands below are the whole pull-request job; they run unchanged on every event.
-    # The full mutant driver run lives in selfcheck-driver below (#526), so this ceiling (15, #477)
+    # The full mutant driver run lives in selfcheck-driver below (#526), so this ceiling (#539)
     # no longer grows with the registry.
-    timeout-minutes: 15
+    # Headroom rule for both suites jobs (here and selfcheck-macos): a ceiling is at least 1.5 times
+    # the slowest recent full run of the job's steps, rounded up to the next whole 5 minutes; a
+    # cancelled run counts as its completed steps plus an estimate for the unfinished ones. Re-apply
+    # the rule whenever any run passes 2/3 of the ceiling. Basis here: about 1020 s estimated for the
+    # slowest full run (a push cancelled at 917 s with three suites unfinished), times 1.5, is about
+    # 1530 s, so 30.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: bash dev/selfcheck.sh
@@ -111,7 +117,9 @@ jobs:
     # not the driver, which runs in the selfcheck-macos-driver job above (#471).
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
-    timeout-minutes: 30
+    # Ceiling per the headroom rule in selfcheck's comment above (#539): slowest recent run 1506 s,
+    # times 1.5, is about 2259 s, so 40.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Apple's /bin/bash is 3.2.57 (last GPLv2 bash). Put /bin first so bare `bash` — including
