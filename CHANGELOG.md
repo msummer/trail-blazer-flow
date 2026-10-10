@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #539 (CI fix): the required `selfcheck` job's ceiling rises from 15 to 30 minutes and
+  `selfcheck-macos`'s from 30 to 40, sized by a headroom rule now stated in the workflow (1.5x the
+  slowest full run, rounded up to 5 minutes), so a green run is no longer cancelled. No consumer step.
 - #503 (CI fix): `dev/hook-tests.sh`'s at-cap timing pin bounds the five #503 shapes by a same-run
   control (the heaviest base scan at the cap, with the chain gate shut) and the hook timeout instead of
   the fixed bounds, which the base scan alone overran on the macOS runner. No consumer step.
