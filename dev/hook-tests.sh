@@ -4198,8 +4198,9 @@ pcap_verdict() {
 }
 # measure_cpu_ms CMD [ARGS...] -- like measure_ms, but times user+system CPU (TIMEFORMAT=%3U and
 # %3S, which bash's `time` keyword takes over the command and every child it reaped, so the whole
-# hook process tree run_push_guard waits for), not wall clock: CPU time barely moves with host load,
-# so a bound on it holds on an oversubscribed CI runner where a wall-clock bound flakes. Sets
+# hook process tree run_push_guard waits for), not wall clock: CPU time moves far less than wall
+# clock with host load (not zero: a contended runner still stretches it), so a bound on it flakes
+# less on an oversubscribed CI runner than a wall-clock bound. Sets
 # $measured_cpu_ms, or "" when either half of the report could not be parsed.
 measured_cpu_ms=""
 measure_cpu_ms() {
@@ -4215,7 +4216,7 @@ measure_cpu_ms() {
   _ms_from_timeformat "${last##* }"; s="$parsed_ms"
   [ -n "$u" ] && [ -n "$s" ] && measured_cpu_ms=$(( u + s ))
 }
-case_push_cmdcaptime_pin_at_cap_worst() {
+case_solo_cmdcap_pin_at_cap_worst() {
   # Regression pin (no registry mutant: whether an unbounded run overruns depends on the bash and awk
   # build, as case_cdg_dl_deny_cwd_cr's comment says for claude-dir-guard). The hook's worst case is
   # max(budget, T_prefix) + U_max (see the hook's Analysis deadline paragraph): the unsampled prefix
@@ -4226,10 +4227,13 @@ case_push_cmdcaptime_pin_at_cap_worst() {
   # which also covers the budget and U_max, against a bound at most the hook's 10s timeout, and that
   # run must reach its verdict: the shape's own, or the too-large line. CPU time, not wall clock: a
   # super-linear step at the cap (the whole-text CR strip this issue removed costs tens of seconds of
-  # CPU there) still blows a bound, while host load, which stretches wall clock, barely moves it, so
-  # the pin holds under the mutant driver's concurrency. A step that waits without using CPU is
-  # outside what this pin measures; the hook has no such step. Both runs carry a generous safety
-  # deadline only so a runaway mutant cannot hang the suite.
+  # CPU there) still blows a bound, while host load, which stretches wall clock, moves it far less.
+  # Far less is not nothing: on a contended runner it still crossed these bounds under the mutant
+  # driver's concurrency (#546). So this case carries a solo- name and runs only in the plain
+  # hook-tests run: a solo- name must not contain any registry filter, so no mutant-driver group ever
+  # selects it, and a new record's filter must not be a substring of a solo- name. A step that waits
+  # without using CPU is outside what this pin measures; the hook has no such step. Both runs carry a
+  # generous safety deadline only so a runaway mutant cannot hang the suite.
   local dir="$tmpbase/repo-pp-cap-worst" shape want payload cpu_max_ms=6000 run_cpu_max_ms=8000 bound rel_max_ms
   mk_fixture_repo "$dir" main feature/x
   # The #503 shapes (u v w x y) cost what the base scan costs, and the base scan's cost at the cap
@@ -11072,7 +11076,10 @@ case_cdg_chain_noop_flood_cap() {
   run_claude_guard "$(printf '%s' "$cmd" | mk_cdg_dl_bash implementer '')"
   expect_cdg_no_opinion
 }
-case_cdg_chain_pin_patch_cpu() {
+case_solo_cdgchain_patch_cpu() {
+  # A solo- case (#546): a fixed CPU bound with no registry record, so it runs only in the plain
+  # hook-tests run, never under a mutant-driver group's concurrency. Its name must stay free of every
+  # registry filter, cdg- and cdg-chain- included.
   # A benign inline patch of 200 context lines, each naming the shim beside a quote, parentheses and a
   # break character, is lexed line by line: it must stay no opinion and well inside the hook budget.
   local cmd="apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: /repo/ok${LF}" i
@@ -12798,7 +12805,7 @@ cases=(
   "push-cmdcap-noop-no-git|case_push_cmdcap_noop_no_git|no opinion: an over-cap command whose raw stdin never names git leaves through the fast path (a control, no registry mutant)"
   "push-cmdcap-noop-plan-mode|case_push_cmdcap_noop_plan_mode|no opinion: an over-cap command in plan mode leaves before the cap (a control, no registry mutant)"
   "push-cmdcaptime-deny-flood|case_push_cmdcaptime_deny_flood|FLOOD+TIMING: a push followed by one multi-megabyte dollar-quote word denies via the cap under an active deadline calibrated from a same-run plan-mode control -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
-  "push-cmdcaptime-pin-at-cap-worst|case_push_cmdcaptime_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap stays within a fixed CPU bound before its first deadline sample, and within a bound of at most the hook timeout for its whole production-budget run (the #503 shapes: u v w y prefix, x production, within a margin of a same-run control), and reaches its verdict (regression pin, no registry mutant)"
+  "solo-cmdcap-pin-at-cap-worst|case_solo_cmdcap_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap stays within a fixed CPU bound before its first deadline sample, and within a bound of at most the hook timeout for its whole production-budget run (the #503 shapes: u v w y prefix, x production, within a margin of a same-run control), and reaches its verdict (regression pin, no registry mutant; solo-: outside every registry filter, so it never runs under the mutant driver)"
   "push-rxscan-noop-flood|case_push_rxscan_noop_flood|FLOOD+TIMING: a lost segment and a push full of plain dollar-quote words, then a feature push -- no opinion; token count sized from a same-run twin control -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-rescan)"
   "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"
   "push-alias-deny-feature-dest|case_al_deny_feature_dest|a push alias denies even when the destination is a feature branch -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
@@ -13297,7 +13304,7 @@ cases=(
   "cdg-chain-never-executes|case_cdg_chain_never_executes|deny, sentinel absent on a booby-trapped PATH: the pure-bash chain lexer runs no awk, sed, grep or tr -- no registry record"
   "cdg-chain-dl-cap|case_cdg_chain_dl_cap|deny (#457): a long quoted run after a break character under cap 50, only the chain lexer own deadline sample reaches the cap -- mutation proof: dev/mutants/hook-tests.json (503-cdg-chain-site)"
   "cdg-chain-noop-flood-cap|case_cdg_chain_noop_flood_cap|SAMPLE COUNT: three hundred quoted breaks on one line under a cap above a linear sample count, no opinion -- no registry record"
-  "cdg-chain-pin-patch-cpu|case_cdg_chain_pin_patch_cpu|CPU TIME: a 200-line benign shim patch, every line gated, no opinion within a CPU bound -- no registry record"
+  "solo-cdgchain-patch-cpu|case_solo_cdgchain_patch_cpu|CPU TIME: a 200-line benign shim patch, every line gated, no opinion within a CPU bound -- no registry record; solo-: outside every registry filter, so it never runs under the mutant driver"
   "push-chain-quiet-prose|case_push_chain_quiet_prose|no opinion: quoted prose, a commit message, a comment and a read-only git -C with a command substitution, each beside a break character -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (503-pg-lex-dq-apos, 503-pg-comment, 503-pg-close-glue, 503-pg-lex-frame)"
   "push-chain-quiet-heredoc|case_push_chain_quiet_heredoc|no opinion: heredoc bodies and a gh pr create body holding apostrophes, code spans and semicolons -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (503-pg-ph-always, 503-pg-perline)"
   "ab-chain-quiet|case_ab_chain_quiet|no opinion: quoted prose and read-only git for the implementer and the verifier, beside a break character -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (503-ab-lex-dq-apos)"

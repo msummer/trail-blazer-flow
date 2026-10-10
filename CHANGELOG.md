@@ -18,6 +18,11 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #546 (CI fix): two `dev/hook-tests.sh` CPU-time pins with no registry mutant, the at-cap timing pin
+  and the 200-line shim-patch pin, are renamed `solo-cmdcap-pin-at-cap-worst` and
+  `solo-cdgchain-patch-cpu`, outside every mutant-registry filter, so they run only in the plain
+  hook-tests run and no longer under a mutant-driver shard's concurrency, under which the first failed
+  the nightly on both platforms. No consumer step.
 - #539 (CI fix): the required `selfcheck` job's ceiling rises from 15 to 30 minutes and
   `selfcheck-macos`'s from 30 to 40, sized by a headroom rule now stated in the workflow (1.5x the
   slowest full run, rounded up to 5 minutes), so a green run is no longer cancelled. No consumer step.
