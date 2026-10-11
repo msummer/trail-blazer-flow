@@ -16,7 +16,20 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v3.4.0
+
+This minor release adds a local run journal: `harness-lock.sh journal` writes an identifiers-only
+JSONL audit trail of lock events and per-stage records (#251). It also adds an informational
+`building` label, which is on while the implementer works an issue (#486). Worktree-parallel mode
+now distills lessons into the main checkout. push-guard, agent-boundary and claude-dir-guard close
+more command-hiding gaps:
+- a push destination built at run time and Bash commands over 512 KiB (#517);
+- option values after `nice`, `sudo`, `stdbuf`, `exec`, `xargs` or `time` (#518);
+- quoted segment breaks and substitutions that split a command apart (#503).
+
+CI splits the mutant driver into four shards per platform and resizes its job ceilings (#526, #525,
+#539, #546). Consumer step: re-run `bin/setup-labels.sh` (creates `building`; the doctor now requires
+it).
 
 - #546 (CI fix): two `dev/hook-tests.sh` CPU-time pins with no registry mutant, the at-cap timing pin
   and the 200-line shim-patch pin, are renamed `solo-cmdcap-pin-at-cap-worst` and
