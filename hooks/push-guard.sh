@@ -71,8 +71,8 @@
 # command whose tokens carry a trailing `\r`, which every exact-match comparison below would miss).
 # A future fix to either tokenizer's shared behaviour (segment breaking; the additive standalone
 # `]]` handling; normalize(); the prefix-word skip, including the `repeat`-count skip; the
-# empty-normalised-token skip; the command-word case fold; the CR strip; the #503 chain pass, whose
-# lexer is a near-twin of agent-boundary.sh's own) must be applied to BOTH
+# empty-normalised-token skip; the command-word case fold; the CR strip; the #503 chain pass and the #553
+# newline carry, whose lexer and carry are near-twins of agent-boundary.sh's own) must be applied to BOTH
 # files — see this repo's
 # CLAUDE.md and dev/selfcheck.sh's assertion 4.40 clause (c), which mechanically pins the two
 # scripts' PREFIX_WORDS vocabulary stays byte-identical. Differences from agent-boundary.sh's
@@ -384,16 +384,15 @@
 # harness's own shapes are unaffected: `git -C "<worktree>" push -u origin "claude/<n>-<slug>"`
 # consumes the quoted `-C` value with its option. Residuals this leaves, each measured rc 0: a
 # quote or escape split that keeps an EVEN count of the same quote character, which the odd-count
-# test cannot see (`X="a'"'b c' git push origin main`, `X="\" x" git push origin main`,
-# `X="a\" b" git push origin main`, `env -u "a'"'b c' git push origin main`, an option value `git -c
-# "k=a'"'b c' push origin main`); a quoted `-C` value containing a space (`git -C
+# test cannot see, in an option value that carries no assignment text (`env -u "a'"'b c' git push
+# origin main`; the assignment forms `X="a'"'b c' git push origin main`, `X="\" x" git push origin
+# main`, `X="a\" b" git push origin main` and the option value `git -c "k=a'"'b c' push origin main`
+# are closed by #553, as is an assignment whose quoted value holds a newline, and a value that holds a
+# segment-break character on ONE line by #503: see their paragraphs below); a quoted `-C` value
+# containing a space (`git -C
 # "../a b" push origin main`, rows (b), (d) and (j) below, unchanged), which also hides any later
 # option such as a `-c` after it (`git -C "../a b" -c "k=x y" push origin main`, and `git "-C"
-# "../a b" push origin main`, are both rc 0); an
-# assignment whose quoted value contains a newline (`X="a<LF>b" git push origin main` — the second line
-# starts with the closing-quote word, which as a command-word candidate is never checked; a quoted value
-# that holds a segment-break character on ONE line is closed by #503's chain pass, see its paragraph
-# below); a `repeat` count containing a space (`repeat "2 3"
+# "../a b" push origin main`, are both rc 0); a `repeat` count containing a space (`repeat "2 3"
 # git push origin main`); a lost segment that changes directory (`X="a b" cd ../x && git push
 # origin trunk` — not added to the cross-segment rule above); and the git-alias form and inline
 # `HOME=`/`XDG_CONFIG_HOME=` relocation of #448. hooks/agent-boundary.sh applies the same env arm and
@@ -523,13 +522,14 @@
 # physical line, after the base segments and the `]]` pass, and only adds output lines: the base split and
 # every verdict it produces are untouched, so a deny can never become an allow. The gate is a break
 # character together with a quote, a backslash, `$(`, `${` or a backtick, in a line whose lowercase holds
-# `git` or `push`. chain_lex() reads the line once, a character at a time, tracking single quotes, double
+# `git` or `push` (since #553 also the second gate arm, for a line with no break character, see that
+# paragraph). chain_lex() reads the line once, a character at a time, tracking single quotes, double
 # quotes, `$'...'`, backslash escapes (inside `"..."` only before `$`, a backtick, `"` and a backslash),
 # an unquoted `#` at a word start outside any substitution (it ends the lexing), and a stack of `$(...)`,
 # `${...}` and backtick frames, and classifies each break character as HEAD (a real command break),
 # LITERAL (quoted or escaped) or a frame OPEN or CLOSE. Segments joined by LITERAL breaks, and the two
-# sides of a frame, form a CHAIN; chain_pass() re-judges every chain of two or more segments once,
-# through the unchanged emit_segment(), on the chain's own tokens, so every deny comes from an existing
+# sides of a frame, form a CHAIN; chain_pass() re-judges every chain of two or more segments once (since #553
+# also a chain that carries a cut-marked field), through the unchanged emit_segment(), on the chain's own tokens, so every deny comes from an existing
 # rule. Two rules shape the tokens. A token that ends at a quoted or escaped separator or at a LITERAL
 # break carries a trailing backslash (the cut marker), which every #449 parity test already reads as "a
 # quoted span was split here". A substitution becomes the expansion word `$_` when it is glued to a word
@@ -537,15 +537,17 @@
 # starts a word after no git-naming token; the text after a frame's close is glued back onto the word
 # before the frame, and a glued token stops growing at 256 characters. Why this does not repeat the #449
 # prose over-block: (a) the quote state is sequential, so an apostrophe inside `"..."` or after a
-# backslash never opens a quote; (b) the state never crosses a physical line, so a heredoc body is never
-# poisoned by an earlier line; (c) a chain's command word is its first segment's own, so a prose line or a
+# backslash never opens a quote; (b) the state does not cross a physical line, except through the #553 newline
+# carry, which needs assignment text and a quote still open at the top level, so a heredoc body is not
+# poisoned by an earlier line unless it holds that shape; (c) a chain's command word is its first segment's own, so a prose line or a
 # `git commit -m "..."` line resolves to that word and adds only arguments; (d) an unquoted `#` ends the
 # lexing; (e) a markdown code span that starts a word is the inert `_`. The pass reads the base segments
 # (segs, nseg) and skips a line whose segment count disagrees with the lexer's own. Cost: the lexer is
 # O(line); the assembly is O(line) plus a capped glue term; each chain is judged once and chains are
 # disjoint, so the total is O(line), all of it inside the tokenizer and so inside T_prefix, bounded by
 # PUSH_CMD_MAX_BYTES. The chain BUDGET bounds it further: the characters of all gated lines of one
-# command are summed (the awk constant chain_budget), and once the sum passes it nothing more is lexed;
+# command (and, since #553, of every line the newline carry lexes, with the tokens it copies) are summed
+# (the awk constant chain_budget), and once the sum passes it nothing more is lexed;
 # the tokenizer prints a fixed sentinel once and the hook denies the whole command, fail closed, with
 # `(blocked: too much quoted text to analyse)`, ahead of the early exit. A dense line near the size cap
 # would otherwise cost the lexer, the assembly and the judging more than the base scan itself, and the
@@ -553,18 +555,63 @@
 # adds only a budget-sized slice and an O(1) check per gated line. The budget is an over-block of its
 # own: a command whose lines that name git or push beside a break character and a quote, a backslash or
 # a substitution total more than the budget (a very large heredoc of quoted prose that mentions git)
-# denies. Deliberate over-blocking, each measured rc 2: `X="a;b c" git push origin feature/x` and
+# denies, and since #553 so does one whose gated, candidate and carried lines add up to more.
+# Deliberate over-blocking, each measured rc 2: `X="a;b c" git push origin feature/x` and
 # `X="a;b" git push origin feature/x` (the #449 class: a quoted value that holds a break character, with
 # or without a space, before any push), `git -C "$(pwd)" push origin feature/x` (a substitution as the -C
 # value is unresolved), `MSG="fix; git push later"` (a quoted value that names a push), and a benign
 # non-push git command behind a quoted break, which meets the #448 alias route's unreadable-config deny
-# (`X='(' git commit -m "fix include path"`). Residuals, each measured rc 0: a quote
-# opened on an earlier physical line (`X="a<LF>b" git push origin main`), a mixed or even-count quoted
-# value with a space but no break character (`X="a'"'b c' git push origin main`), a substitution that
+# (`X='(' git commit -m "fix include path"`). Residuals, each measured rc 0 (a quote
+# opened on an earlier physical line, and a mixed or even-count quoted value with a space but no break
+# character, are closed by #553): a substitution that
 # starts the command word (`$(echo git) push origin main`), a quoted `-C` value with a space (`git -C
 # "../a;b c" push origin main`, as `git -C "../a b"` already is), and the lexer's approximations: a
 # `case` pattern's `)` inside `$(...)`, quoting inside `${...}`, backslash-nested backticks, and
 # process substitution (read as a plain subshell).
+#
+# Fail-closed: a quoted value the parity tests or the per-line lexer misread (#553). Two shapes still hid the
+# command word behind an assignment value after #503: (1) a mixed-quote or escaped-quote value with a
+# space and no break character whose quote counts are each even (`X="a'"'b c' git push origin main`,
+# `X="\" x" git push origin main`, `X="a\" b" ...`, `git -c "k=a'"'b c' push origin main`), which the #449
+# parity test reads as balanced, so the fragment after the value became the command word and no gated
+# line selected it; (2) a quote left open at a line end (`X="a<LF>b" git push origin main`), because the
+# lexer starts every physical line in the plain state, so the second line starts with the word that
+# closes the quote. Both are closed by two ADDITIVE extensions of the chain pass, which reuse its lexer,
+# the unchanged emit_segment() and its budget; the base split, emit_segment()'s non-token path and the
+# #503 gate block are untouched, so they only add output lines and a deny can never become an allow.
+# (1) ch_gate() has a second arm for a line with no break character: assignment text (a name character
+# and an equals sign), a backslash or both quote kinds, and `git` or `push` in the lowercase line
+# (ch_mixed()); and chain_pass() now also judges a chain that carries a cut-marked field. The lexer marks
+# `X="a'"'b` with a cut marker (a trailing backslash), so the #449 assignment trigger fires on it exactly
+# as on a quoted break. (2) The NEWLINE CARRY. A line with assignment text, a quote, and a quote count that
+# does not prove it closed (a backslash, both quote kinds, or an odd count of one kind: cy_cand() and
+# cy_closed()) is lexed once, capture only, judging nothing. If its lexer state at the end of the line is
+# an open quote with no substitution open, the chain's tokens up to and including the word that holds
+# that quote are kept (that word gets a cut marker, and the words inside the quote are dropped) together
+# with the quote state; a chain of more than cy_max (256) tokens up to and including that word starts no
+# carry. Each following line is lexed from the carried state, the carried tokens being the start of its
+# chain and its first word being glued onto the carried word as the close of a substitution does, unless
+# it cannot change the state and is skipped unlexed (cy_inside(): a single-quote or dollar-single-quote
+# state needs no single quote on the line, a double-quote state no double quote, backtick, dollar-paren
+# or dollar-brace). The chain is judged by the unchanged emit_segment() once the quote closes, so
+# `X="a<LF>b" git push origin feature/x` reads as `X="a\b" git push origin feature/x` (no opinion) and
+# `... origin main` denies with the ordinary default-branch line; a line that closes the quote and opens
+# another keeps the carry (`X="a<LF>b" Y="c<LF>d" git push origin main`). Cost: the new per-line tests are
+# a bounded number of index(), match() and gsub() calls, O(line); every line the carry lexes is charged
+# its length plus the tokens it copies (at most cy_max) to the same chain budget as #503, so the
+# lexing, the copies and the judging stay inside it, and the tokenizer prints the same fixed sentinel once
+# the sum passes it. Over-blocking, each measured rc 2: a heredoc body line that holds the carry shape
+# before a push to main (`cat <<'EOF'<LF>X="a<LF>b" git push origin main<LF>EOF`, the existing heredoc-body
+# class: write such text with an editor tool), a mixed-quote value with a space before any push
+# (`X="a'"'b c' git push origin feature/x`), a value with an apostrophe that runs past a line end
+# (`X="it's<LF>b" git push origin feature/x`), a value whose next line starts with a space
+# (`X="a<LF> b" git push origin feature/x`), and a command whose lines add up past the budget.
+# Residuals, each measured rc 0: a quote left open inside a substitution at a line end
+# (`X="a<LF>$(true<LF>)b" git push origin main`), an open quote on a line with no assignment text
+# (`exec -a "x<LF>y" git push origin main`), a chain of more than 256 tokens up to the word that opens
+# the quote, a mixed-quote split in an option value with no assignment text (`env -u "a'"'b c' git push
+# origin main`), and a backslash-newline continuation (`git push origin \<LF>main`, `X=a\<LF>b git push
+# origin main`), which this change does not cause: both are rc 0 without it.
 #
 # Fail-closed: git aliases and config relocation (#448, absorbing #450). This hook once recognised only
 # the literal subcommand `push`, so a git alias that expands to push hid it (a config-file alias such
@@ -1096,7 +1143,10 @@
 # lost_push() per record; no emit_alias_lost() call is added), #518 likewise (O(1) checks per dash
 # token; its lost_push() and emit_alias_lost() calls share the segment's m0 and al_done memos, so no
 # scan is added per trigger), #503 likewise (the chain lexer and assembly are linear in the line, each
-# chain is judged once, all inside the tokenizer and so inside `T_prefix`), and #433 has landed in the awk tokenizer plus one
+# chain is judged once, all inside the tokenizer and so inside `T_prefix`), #553 likewise (the gate
+# arm and the carry's candidate and closed tests are a bounded number of index(), match() and gsub()
+# calls per line; the lexing, the copied carry tokens and the judging are charged to the same chain
+# budget, all inside the tokenizer and so inside `T_prefix`), and #433 has landed in the awk tokenizer plus one
 # constant-cost post-loop fallback: call `check_deadline` as the FIRST statement of every loop whose trip
 # count grows with the command string or a config file's own content — never partway through a loop
 # body, and never only once at the top of a function that itself contains such a loop. The early
@@ -1466,7 +1516,8 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
 # on "[ \t]+". Processes $cmd one input line (awk record) at a time — the same deliberate,
 # documented false-positive class agent-boundary.sh's header explains (a heredoc line that starts
 # with "git push" is scanned as its own segment). Since #503, a gated line may also print the lines of
-# its chains (see the paragraph of that issue above), after the lines of that record's base segments.
+# its chains (see the paragraph of that issue above), after the lines of that record's base segments;
+# since #553 so may a line the newline carry lexes (see that paragraph).
 scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" -v dirwords="$PUSH_DIR_CHANGE_WORDS" -v exportwords="$PUSH_EXPORT_WORDS" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" -v envnov="$PUSH_ENV_NOVALUE_OPTS" -v envunset="$PUSH_ENV_UNSET_OPTS" -v relocenv="$GIT_CFG_RELOC_ENV_VARS" -v vpwords="$PREFIX_VALUE_WORDS" '
 BEGIN {
   sq = sprintf("%c", 39)
@@ -1517,8 +1568,12 @@ BEGIN {
   ch_cls["("] = 3; ch_cls[")"] = 4; ch_cls["{"] = 5; ch_cls["}"] = 6; ch_cls["`"] = 7
   ch_cls[sq] = 8; ch_cls["\""] = 9; ch_cls["\\"] = 10; ch_cls["$"] = 11; ch_cls["#"] = 12
   glue_max = 256
-  # the chain budget: the most characters, over every input line of one command that passes ch_gate(), the
-  # chain pass will lex; past it a fixed sentinel is printed once and the driver denies (fail closed)
+  # #553: the most chain tokens a newline carry holds; a chain of more tokens up to and including the
+  # word that opens a quote starts no carry, so a carried line copies a bounded number of tokens
+  cy_max = 256
+  # the chain budget: the most characters, over every input line of one command that passes ch_gate() or
+  # is lexed by the #553 newline carry (a carried line also counts the tokens it copies), the chain pass
+  # will lex; past it a fixed sentinel is printed once and the driver denies (fail closed)
   chain_budget = 65536
 }
 function normalize(tok,    t, parts, np) {
@@ -1986,13 +2041,15 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
 # #503: the additive chain pass. The base segmenter above cuts a record at every break character
 # before it looks at quoting, so a break character inside a quote or a command substitution leaves
 # the command word in a segment whose first word is junk. This pass runs once per gated physical
-# line, AFTER the base segments and the standalone-bracket pass, and only ADDS output lines: it lexes
+# line (and, since #553, once per line of a newline carry), AFTER the base segments and the
+# standalone-bracket pass, and only ADDS output lines: it lexes
 # the line sequentially (single quote, double quote, dollar-single-quote, backslash, an unquoted
 # comment, whose later break characters stay head breaks, and a stack of dollar-paren / dollar-brace /
 # backtick frames), classifies every break
 # character as a head break (a real command break), a literal break (quoted or escaped), a frame
 # open or a frame close, and re-judges every chain of two or more segments joined by literal breaks
-# or frames with the unchanged per-segment logic, on the chain tokens. This program is single-quoted
+# or frames, or holding a cut-marked field (#553), with the unchanged per-segment logic, on the chain
+# tokens. This program is single-quoted
 # shell: it must never contain a literal apostrophe, comments included (use sq).
 # ch_cls: 1 separator (space, tab, less, greater), 2 semicolon ampersand pipe, 3 open paren, 4 close
 # paren, 5 open brace, 6 close brace, 7 backtick, 8 single quote, 9 double quote, 10 backslash,
@@ -2038,7 +2095,7 @@ function ch_close() {
   ch_ld--
   ch_brk("C")
 }
-function chain_lex(rec,    n, lc, i, c, k, nx) {
+function chain_lex(rec, q0,    n, lc, i, c, k, nx, pl) {
   n = split(rec, lc, "")
   split("", ch_mk)
   split("", ch_bk)
@@ -2054,9 +2111,15 @@ function chain_lex(rec,    n, lc, i, c, k, nx) {
   ch_tokhas = 0
   ch_pd = 0
   ch_cmt = 0
+  # #553: ch_qs and ch_qf name the segment and the field of the word in which the last quote opened at
+  # depth 0 (zero when none did); a carried line starts inside the quote state q0 of the line before
+  ch_qs = 0
+  ch_qf = 0
+  if (q0) ch_lq = q0
   for (i = 1; i <= n; i++) {
     c = lc[i]
     k = ch_cls[c]
+    pl = ch_lq
     if (ch_cmt) { if (k >= 2 && k <= 7) ch_brk("H"); continue }
     if (k == 0 && ch_lq == 0) { ch_inrun = 0; ch_tokhas = 1; ch_pd = 0; continue }
     if (ch_lq == 1) {
@@ -2109,14 +2172,16 @@ function chain_lex(rec,    n, lc, i, c, k, nx) {
     } else if (k == 11) { ch_inrun = 0; ch_tokhas = 1; ch_pd = 1 }
     else if (k == 12 && !ch_tokhas && ch_ld == 0) ch_cmt = 1
     else { ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
+    if (ch_lq && !pl && !ch_ld && (k == 8 || k == 9)) { ch_qs = ch_s; ch_qf = ch_r + 1 }
   }
 }
 # ch_judge: judge the chain at depth D once, through emit_segment() in token mode, when it joins two
-# or more segments, then drop its tokens (ch_ct[] is one stack shared by every depth: a frame chain
-# starts where its parent chain currently ends, so ch_base[d] marks where depth d starts).
+# or more segments or holds a cut-marked field (#553), then drop its tokens (ch_ct[] is one stack
+# shared by every depth: a frame chain starts where its parent chain currently ends, so ch_base[d]
+# marks where depth d starts). A capture-only pass (ch_nj, #553) drops the tokens without judging.
 function ch_judge(d,    k, nt) {
   nt = ch_top - ch_base[d]
-  if (ch_cm[d] && nt > 0) {
+  if (ch_cm[d] && nt > 0 && !ch_nj) {
     for (k = 1; k <= nt; k++) ch_t[k] = ch_ct[ch_base[d] + k]
     ch_n = nt
     ch_use = 1
@@ -2141,8 +2206,8 @@ function ch_names_git(d,    k, lo) {
   }
   return ch_cg[d]
 }
-function chain_pass(rec,    ns, s, seg, tk, ntk, f, first, d, glue, tok, last, kind, mks) {
-  chain_lex(rec)
+function chain_pass(rec, q0, cy,    ns, s, seg, tk, ntk, f, first, d, glue, tok, last, kind, mks, ci) {
+  chain_lex(rec, q0)
   ns = nseg
   if (ns != ch_s) return
   d = 0
@@ -2152,6 +2217,19 @@ function chain_pass(rec,    ns, s, seg, tk, ntk, f, first, d, glue, tok, last, k
   ch_cg[0] = 0
   ch_cgi[0] = 0
   glue = 0
+  # #553: ch_qt is the chain token holding the quote that is still open at the end of the line. A fresh
+  # capture (cy without q0) only records the carry and judges nothing (ch_nj). A carried line (q0) is
+  # lexed from the quote state of the line before: its chain starts as the carried tokens, and the
+  # first word of the line is glued onto the last carried token, as the close of a substitution does.
+  ch_qt = 0
+  ch_nj = (cy && !q0)
+  if (q0) {
+    for (ci = 1; ci <= cy_n; ci++) ch_ct[ci] = cy_t[ci]
+    ch_top = cy_n
+    ch_cm[0] = 1
+    glue = 1
+    if (!ch_qs) ch_qt = cy_n
+  }
   for (s = 1; s <= ns; s++) {
     seg = segs[s]
     mks = ch_mk[s]
@@ -2168,6 +2246,7 @@ function chain_pass(rec,    ns, s, seg, tk, ntk, f, first, d, glue, tok, last, k
           if (mks != "" && index(mks, ",1,")) tok = tok "\\"
           ch_ct[ch_top] = last tok
         }
+        if (s == ch_qs && ch_qf == 1) ch_qt = ch_top
       }
     }
     for (f = first; f <= ntk; f++) {
@@ -2175,7 +2254,9 @@ function chain_pass(rec,    ns, s, seg, tk, ntk, f, first, d, glue, tok, last, k
       if (tok == "") continue
       if (mks != "" && index(mks, "," f ",")) tok = tok "\\"
       ch_ct[++ch_top] = tok
+      if (s == ch_qs && f == ch_qf) ch_qt = ch_top
     }
+    if (mks != "") ch_cm[d] = 1
     if (s == ns) break
     kind = ch_bk[s]
     if (kind == "L") ch_cm[d] = 1
@@ -2199,13 +2280,68 @@ function chain_pass(rec,    ns, s, seg, tk, ntk, f, first, d, glue, tok, last, k
       glue = 1
     } else ch_judge(d)
   }
+  # #553: the line ends inside a quote opened at depth 0 (no substitution open): keep the chain up to
+  # and including the word holding that quote as the carry, with a cut marker on its last token, and
+  # leave the chain unjudged until the quote closes on a later line. The capture-only flag ch_nj, the depth
+  # test here and the substitution tests of cy_inside() have no mutation record: the depth and
+  # substitution tests differ only for a line that holds or ends inside a substitution, a residual of
+  # this pass, and a capture-only line that were judged could only add a deny
+  if (cy && ch_lq && !ch_ld && ch_qt > 0 && ch_qt <= cy_max) {
+    cy_n = ch_qt
+    for (ci = 1; ci <= cy_n; ci++) cy_t[ci] = ch_ct[ci]
+    if (substr(cy_t[cy_n], length(cy_t[cy_n])) != "\\") cy_t[cy_n] = cy_t[cy_n] "\\"
+    cy_q = ch_lq
+    ch_cm[0] = 0
+  }
   for (; d >= 0; d--) ch_judge(d)
+  ch_nj = 0
+}
+# #553: the gate arm for a line with no break character: assignment text (a name character and an
+# equals sign), a backslash or both quote kinds, and the usual mention. Such a line is one segment, so
+# only a cut-marked field can make its chain worth judging.
+function ch_mixed(r,    lo) {
+  if (!match(r, /[A-Za-z0-9_]=/)) return 0
+  if (!(index(r, "\\") > 0 || (index(r, "\"") > 0 && index(r, sq) > 0))) return 0
+  lo = tolower(r)
+  return (index(lo, "git") > 0 || index(lo, "push") > 0)
 }
 function ch_gate(r,    lo) {
-  if (!match(r, /[;&|(){}`]/)) return 0
+  if (!match(r, /[;&|(){}`]/)) return ch_mixed(r)
   if (!(index(r, "\"") > 0 || index(r, sq) > 0 || index(r, "\\") > 0 || index(r, "$(") > 0 || index(r, "${") > 0 || index(r, "`") > 0)) return 0
   lo = tolower(r)
   return (index(lo, "git") > 0 || index(lo, "push") > 0)
+}
+# #553: the newline carry. A line with assignment text and a quote that may stay open at its end is
+# lexed once, capture only (cy_cand); if its lexer state ends inside a quote at depth 0, the chain up to
+# the word holding that quote and the quote state are carried (cy_t[1..cy_n], cy_q), and each following
+# line is lexed from that state (cy_pass) unless it cannot change it (cy_inside). cy_closed: no
+# backslash, and the quotes of one kind only, in an even count -- a line that cannot end inside a quote.
+function cy_closed(r,    t, nd, ns) {
+  if (index(r, "\\") > 0) return 0
+  t = r
+  nd = gsub(/"/, "", t)
+  t = r
+  ns = gsub(sq, "", t)
+  return ((ns == 0 && nd % 2 == 0) || (nd == 0 && ns % 2 == 0))
+}
+function cy_cand(r) {
+  if (index(r, "=") == 0) return 0
+  if (index(r, "\"") == 0 && index(r, sq) == 0) return 0
+  if (cy_closed(r)) return 0
+  return (match(r, /[A-Za-z0-9_]=/) > 0)
+}
+# cy_inside: the line cannot leave the carried quote state or open a substitution inside it: a single
+# quote or dollar-single-quote state needs no single quote on the line, a double quote state no double
+# quote, backtick, dollar-paren or dollar-brace. (The substitution tests only keep a substitution on the
+# line in the chain, a substitution that spans lines being outside the carry.)
+function cy_inside(r) {
+  if (cy_q == 1 || cy_q == 3) return (index(r, sq) == 0)
+  return (index(r, "\"") == 0 && index(r, "`") == 0 && index(r, "$(") == 0 && index(r, "${") == 0)
+}
+function cy_pass(r,    q) {
+  q = cy_q
+  cy_q = 0
+  chain_pass(r, q, 1)
 }
 {
   gsub(cr, "")
@@ -2275,6 +2411,13 @@ function ch_gate(r,    lo) {
     if (ch_used > chain_budget) { if (!ch_over++) print "-chain-budget-" }
     else chain_pass($0)
   }
+  # #553: the newline carry (see cy_closed()). A candidate line, or a carried line that is not wholly
+  # inside the carried quote, is charged its length plus the carried tokens it copies, to the same budget.
+  if (cy_q ? !cy_inside($0) : cy_cand($0)) {
+    ch_used += length($0) + (cy_q ? cy_n : 0)
+    if (chain_budget < ch_used) { if (!ch_over++) print "-chain-budget-"; cy_q = 0 }
+    else cy_pass($0)
+  }
 }
 END { if (xseg != "") print "-xseg-\t" xseg }
 END { if (xcfg) print "-xcfg-" }
@@ -2291,7 +2434,8 @@ END { if (xcfg) print "-xcfg-" }
 # denies an alias candidate, so a scan holding nothing but those markers exits here too. (None of the
 # patterns can occur in a marker line: its reason is a fixed phrase or a GIT_REPO_ENV_VARS name.)
 # #503: the chain budget (the tokenizer prints its fixed sentinel once, when the gated lines of this
-# command pass the awk constant chain_budget in all) denies here, fail closed, ahead of the early exit.
+# command, with the lines the #553 newline carry lexes, pass the awk constant chain_budget in all) denies
+# here, fail closed, ahead of the early exit.
 case "$scan_out" in
   *-chain-budget-*)
     printf '%s denies this command: too much quoted or substituted text to analyse safely (blocked: too much quoted text to analyse) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \

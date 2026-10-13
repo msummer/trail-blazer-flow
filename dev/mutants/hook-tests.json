@@ -8728,6 +8728,824 @@
       ]
     },
     {
+      "name": "553-pg-carry-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "  if (cy_q ? !cy_inside($0) : cy_cand($0)) {\n",
+          "to": "  if (0 && (cy_q ? !cy_inside($0) : cy_cand($0))) {\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-budget",
+        "push-qnl-cap",
+        "push-qnl-deny-newline",
+        "push-qnl-deny-overblock",
+        "push-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-pg-carry-start",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "  if (q0) ch_lq = q0\n",
+          "to": "  if (0 && q0) ch_lq = q0\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-cap",
+        "push-qnl-deny-newline",
+        "push-qnl-deny-overblock",
+        "push-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-pg-carry-glue",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "    glue = 1\n    if (!ch_qs) ch_qt = cy_n\n",
+          "to": "    glue = 0\n    if (!ch_qs) ch_qt = cy_n\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-cap",
+        "push-qnl-deny-newline",
+        "push-qnl-deny-overblock",
+        "push-qnl-quiet",
+        "push-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-pg-carry-mark",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "    if (substr(cy_t[cy_n], length(cy_t[cy_n])) != \"\\\\\") cy_t[cy_n] = cy_t[cy_n] \"\\\\\"\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-deny-newline"
+      ]
+    },
+    {
+      "name": "553-pg-carry-trunc",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "    cy_n = ch_qt\n",
+          "to": "    cy_n = ch_top\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-quiet"
+      ]
+    },
+    {
+      "name": "553-pg-carry-cap",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "  if (cy && ch_lq && !ch_ld && ch_qt > 0 && ch_qt <= cy_max) {\n",
+          "to": "  if (cy && ch_lq && !ch_ld && ch_qt > 0) {\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-cap"
+      ]
+    },
+    {
+      "name": "553-pg-carry-cap-edge",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "  if (cy && ch_lq && !ch_ld && ch_qt > 0 && ch_qt <= cy_max) {\n",
+          "to": "  if (cy && ch_lq && !ch_ld && ch_qt > 0 && ch_qt < cy_max) {\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-cap"
+      ]
+    },
+    {
+      "name": "553-pg-cand-assign",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "  if (index(r, \"=\") == 0) return 0\n",
+          "to": ""
+        },
+        {
+          "from": "  return (match(r, /[A-Za-z0-9_]=/) > 0)\n",
+          "to": "  return 1\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-noop-residual"
+      ]
+    },
+    {
+      "name": "553-pg-qt-map",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "      if (s == ch_qs && f == ch_qf) ch_qt = ch_top\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-budget",
+        "push-qnl-cap",
+        "push-qnl-deny-newline",
+        "push-qnl-deny-overblock",
+        "push-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-pg-qt-glue",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "        if (s == ch_qs && ch_qf == 1) ch_qt = ch_top\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-deny-newline"
+      ]
+    },
+    {
+      "name": "553-pg-qt-glue-cap",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "          ch_ct[ch_top] = last tok\n        }\n        if (s == ch_qs && ch_qf == 1) ch_qt = ch_top\n",
+          "to": "          ch_ct[ch_top] = last tok\n          if (s == ch_qs && ch_qf == 1) ch_qt = ch_top\n        }\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-deny-newline"
+      ]
+    },
+    {
+      "name": "553-pg-skip-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "function cy_inside(r) {\n",
+          "to": "function cy_inside(r) {\n  return 0\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-pg-skip-dq",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "  if (cy_q == 1 || cy_q == 3) return (index(r, sq) == 0)\n",
+          "to": "  if (cy_q != 0) return (index(r, sq) == 0)\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-budget",
+        "push-qnl-cap",
+        "push-qnl-deny-newline",
+        "push-qnl-deny-overblock",
+        "push-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-pg-skip-sq",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "  if (cy_q == 1 || cy_q == 3) return (index(r, sq) == 0)\n",
+          "to": "  if (cy_q == 3) return (index(r, sq) == 0)\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-deny-newline",
+        "push-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-pg-skip-ansi",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "  if (cy_q == 1 || cy_q == 3) return (index(r, sq) == 0)\n",
+          "to": "  if (cy_q == 1) return (index(r, sq) == 0)\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-deny-newline",
+        "push-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-pg-carry-inside",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "function cy_inside(r) {\n",
+          "to": "function cy_inside(r) {\n  return 1\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-budget",
+        "push-qnl-cap",
+        "push-qnl-deny-newline",
+        "push-qnl-deny-overblock",
+        "push-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-pg-simple-bs",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "function cy_closed(r,    t, nd, ns) {\n  if (index(r, \"\\\\\") > 0) return 0\n",
+          "to": "function cy_closed(r,    t, nd, ns) {\n  if (0) return 0\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-deny-newline"
+      ]
+    },
+    {
+      "name": "553-pg-simple-mixed",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "  return ((ns == 0 && nd % 2 == 0) || (nd == 0 && ns % 2 == 0))\n",
+          "to": "  return (nd % 2 == 0 && ns % 2 == 0)\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-deny-newline"
+      ]
+    },
+    {
+      "name": "553-pg-simple-parity",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "  return ((ns == 0 && nd % 2 == 0) || (nd == 0 && ns % 2 == 0))\n",
+          "to": "  return ((ns == 0 && nd % 2 == 1) || (nd == 0 && ns % 2 == 0))\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-budget",
+        "push-qnl-cap",
+        "push-qnl-deny-newline",
+        "push-qnl-deny-overblock",
+        "push-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-pg-mixed-gate-bs",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "  if (!(index(r, \"\\\\\") > 0 || (index(r, \"\\\"\") > 0 && index(r, sq) > 0))) return 0\n",
+          "to": "  if (!(index(r, \"\\\"\") > 0 && index(r, sq) > 0)) return 0\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-deny-mixed"
+      ]
+    },
+    {
+      "name": "553-pg-mixed-gate-kinds",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "  if (!(index(r, \"\\\\\") > 0 || (index(r, \"\\\"\") > 0 && index(r, sq) > 0))) return 0\n",
+          "to": "  if (!(index(r, \"\\\\\") > 0)) return 0\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-deny-mixed",
+        "push-qnl-deny-overblock"
+      ]
+    },
+    {
+      "name": "553-pg-mark-judge-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "    if (mks != \"\") ch_cm[d] = 1\n",
+          "to": "    if (0 && mks != \"\") ch_cm[d] = 1\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-deny-mixed",
+        "push-qnl-deny-overblock"
+      ]
+    },
+    {
+      "name": "553-pg-budget-off",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "    if (chain_budget < ch_used) {",
+          "to": "    if (0 && chain_budget < ch_used) {"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-budget"
+      ]
+    },
+    {
+      "name": "553-pg-budget-edge",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "    if (chain_budget < ch_used) {",
+          "to": "    if (chain_budget <= ch_used) {"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-budget"
+      ]
+    },
+    {
+      "name": "553-pg-budget-copy",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "    ch_used += length($0) + (cy_q ? cy_n : 0)\n",
+          "to": "    ch_used += length($0)\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-budget"
+      ]
+    },
+    {
+      "name": "553-ab-carry-off",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "  if (cy_q ? !cy_inside($0) : cy_cand($0)) {\n",
+          "to": "  if (0 && (cy_q ? !cy_inside($0) : cy_cand($0))) {\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-budget",
+        "ab-qnl-cap",
+        "ab-qnl-deny-newline",
+        "ab-qnl-deny-overblock",
+        "ab-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-ab-carry-start",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "  if (q0) ch_lq = q0\n",
+          "to": "  if (0 && q0) ch_lq = q0\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-cap",
+        "ab-qnl-deny-newline",
+        "ab-qnl-deny-overblock",
+        "ab-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-ab-carry-glue",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "    glue = 1\n    if (!ch_qs) ch_qt = cy_n\n",
+          "to": "    glue = 0\n    if (!ch_qs) ch_qt = cy_n\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-deny-newline",
+        "ab-qnl-quiet",
+        "ab-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-ab-carry-mark",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "    if (substr(cy_t[cy_n], length(cy_t[cy_n])) != \"\\\\\") cy_t[cy_n] = cy_t[cy_n] \"\\\\\"\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-deny-newline"
+      ]
+    },
+    {
+      "name": "553-ab-carry-trunc",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "    cy_n = ch_qt\n",
+          "to": "    cy_n = ch_top\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-quiet"
+      ]
+    },
+    {
+      "name": "553-ab-carry-cap",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "  if (cy && ch_lq && !ch_ld && ch_qt > 0 && ch_qt <= cy_max) {\n",
+          "to": "  if (cy && ch_lq && !ch_ld && ch_qt > 0) {\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-cap"
+      ]
+    },
+    {
+      "name": "553-ab-carry-cap-edge",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "  if (cy && ch_lq && !ch_ld && ch_qt > 0 && ch_qt <= cy_max) {\n",
+          "to": "  if (cy && ch_lq && !ch_ld && ch_qt > 0 && ch_qt < cy_max) {\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-cap"
+      ]
+    },
+    {
+      "name": "553-ab-cand-assign",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "  if (index(r, \"=\") == 0) return 0\n",
+          "to": ""
+        },
+        {
+          "from": "  return (match(r, /[A-Za-z0-9_]=/) > 0)\n",
+          "to": "  return 1\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-noop-residual"
+      ]
+    },
+    {
+      "name": "553-ab-qt-map",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "      if (s == ch_qs && f == ch_qf) ch_qt = ch_top\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-budget",
+        "ab-qnl-cap",
+        "ab-qnl-deny-newline",
+        "ab-qnl-deny-overblock",
+        "ab-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-ab-qt-glue",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "        if (s == ch_qs && ch_qf == 1) ch_qt = ch_top\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-deny-newline"
+      ]
+    },
+    {
+      "name": "553-ab-qt-glue-cap",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "          ch_ct[ch_top] = last tok\n        }\n        if (s == ch_qs && ch_qf == 1) ch_qt = ch_top\n",
+          "to": "          ch_ct[ch_top] = last tok\n          if (s == ch_qs && ch_qf == 1) ch_qt = ch_top\n        }\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-deny-newline"
+      ]
+    },
+    {
+      "name": "553-ab-skip-off",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "function cy_inside(r) {\n",
+          "to": "function cy_inside(r) {\n  return 0\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-ab-skip-dq",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "  if (cy_q == 1 || cy_q == 3) return (index(r, sq) == 0)\n",
+          "to": "  if (cy_q != 0) return (index(r, sq) == 0)\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-budget",
+        "ab-qnl-cap",
+        "ab-qnl-deny-newline",
+        "ab-qnl-deny-overblock",
+        "ab-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-ab-skip-sq",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "  if (cy_q == 1 || cy_q == 3) return (index(r, sq) == 0)\n",
+          "to": "  if (cy_q == 3) return (index(r, sq) == 0)\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-deny-newline",
+        "ab-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-ab-skip-ansi",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "  if (cy_q == 1 || cy_q == 3) return (index(r, sq) == 0)\n",
+          "to": "  if (cy_q == 1) return (index(r, sq) == 0)\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-deny-newline",
+        "ab-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-ab-carry-inside",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "function cy_inside(r) {\n",
+          "to": "function cy_inside(r) {\n  return 1\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-budget",
+        "ab-qnl-cap",
+        "ab-qnl-deny-newline",
+        "ab-qnl-deny-overblock",
+        "ab-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-ab-simple-bs",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "function cy_closed(r,    t, nd, ns) {\n  if (index(r, \"\\\\\") > 0) return 0\n",
+          "to": "function cy_closed(r,    t, nd, ns) {\n  if (0) return 0\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-deny-newline"
+      ]
+    },
+    {
+      "name": "553-ab-simple-mixed",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "  return ((ns == 0 && nd % 2 == 0) || (nd == 0 && ns % 2 == 0))\n",
+          "to": "  return (nd % 2 == 0 && ns % 2 == 0)\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-deny-newline"
+      ]
+    },
+    {
+      "name": "553-ab-simple-parity",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "  return ((ns == 0 && nd % 2 == 0) || (nd == 0 && ns % 2 == 0))\n",
+          "to": "  return ((ns == 0 && nd % 2 == 1) || (nd == 0 && ns % 2 == 0))\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-budget",
+        "ab-qnl-cap",
+        "ab-qnl-deny-newline",
+        "ab-qnl-deny-overblock",
+        "ab-qnl-skip"
+      ]
+    },
+    {
+      "name": "553-ab-mixed-gate-bs",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "  if (!(index(r, \"\\\\\") > 0 || (index(r, \"\\\"\") > 0 && index(r, sq) > 0))) return 0\n",
+          "to": "  if (!(index(r, \"\\\"\") > 0 && index(r, sq) > 0)) return 0\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-deny-mixed"
+      ]
+    },
+    {
+      "name": "553-ab-mixed-gate-kinds",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "  if (!(index(r, \"\\\\\") > 0 || (index(r, \"\\\"\") > 0 && index(r, sq) > 0))) return 0\n",
+          "to": "  if (!(index(r, \"\\\\\") > 0)) return 0\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-deny-mixed",
+        "ab-qnl-deny-overblock"
+      ]
+    },
+    {
+      "name": "553-ab-mark-judge-off",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "    if (mks != \"\") ch_cm[d] = 1\n",
+          "to": "    if (0 && mks != \"\") ch_cm[d] = 1\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-deny-mixed",
+        "ab-qnl-deny-overblock"
+      ]
+    },
+    {
+      "name": "553-ab-budget-off",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "    if (chain_lex_max < ch_used) {",
+          "to": "    if (0 && chain_lex_max < ch_used) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-budget"
+      ]
+    },
+    {
+      "name": "553-ab-budget-edge",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "    if (chain_lex_max < ch_used) {",
+          "to": "    if (chain_lex_max <= ch_used) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-budget"
+      ]
+    },
+    {
+      "name": "553-ab-budget-copy",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "    ch_used += length($0) + (cy_q ? cy_n : 0)\n",
+          "to": "    ch_used += length($0)\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-budget"
+      ]
+    },
+    {
       "name": "503-pg-chain-off",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",

@@ -230,13 +230,19 @@ an ordinary permission prompt), this hook's non-firing removes a control with **
 since nothing else in the permission model was narrowing the implementer/verifier's `git`/`gh`
 surface to begin with. The base scan is deliberately quote-blind (it strips quote characters rather
 than tracking quote state, the same trade-off `git-c-guard.sh` makes in the opposite direction).
-**Since #503** an additive chain pass tracks quote state per input line, only to re-judge text the base
-split cut apart: a quoted value holding a segment-break character and a space (`X="a;b c" gh pr merge
+**Since #503** an additive chain pass tracks quote state per input line (since #553 also from one line to
+the next, for a value left open at a line end), only to re-judge text the base split cut apart: a quoted value holding a segment-break character and a space (`X="a;b c" gh pr merge
 5`) or a command substitution glued into a word is now judged by the unchanged per-segment rules, and
 the pass can only add denies; the gated lines of one command are lexed up to a budget of
 `CHAIN_LEX_MAX` characters in all, and past it the command denies fail-closed (`too much quoted text
 to analyse`), because this hook has no other size cap — an over-block for a very large heredoc of quoted
-prose that mentions `git`/`gh`. The scan
+prose that mentions `git`/`gh`. **Since #553** the same pass also covers a quoted value that runs past a
+line end (`X="a<LF>b" gh pr merge 5`), by carrying the open quote state and the chain's tokens to the next
+line, and a mixed-quote or escaped-quote assignment value with a space and no break character (`X="a'"'b c'
+gh pr merge 5`); the lines it lexes and the tokens it copies count toward the same budget, and the header's
+#553 paragraph lists the measured over-blocks (a heredoc body line holding that shape before `gh`, `X="a'"'b
+c' echo gh`) and residuals (a quote left open inside a substitution, or on a line with no assignment text).
+The scan
 processes `tool_input.command` one line at a time, so several over-blocking classes are expected
 and documented in the script's own header: a literal `git`/`gh` word starting a quoted span right
 after a separator (e.g. `echo "a; git push"`) denies; **any line of a multi-line Bash command that
@@ -338,16 +344,25 @@ value containing a space (`X="a b" git push origin main`), a quote-bearing optio
 after a prefix word (`env "-C" <dir> git push`), or an `env` option outside a short allowlist
 (`env -C <dir>`, `--chdir=`, `-S`), or a quoted value of a global option other than `-C` that
 splits at a space (`git -c "k=a b" push`); `env -u NAME` consumes its value, which stops `env -u git
-push origin main` from denying. Mixed-quote or even-count splits with no segment-break character, and a
-quoted `-C` value containing a space (which also hides any later option) still get no opinion. **Since
+push origin main` from denying. A quoted `-C` value containing a space (which also hides any later option), and an
+even-count quote split in an option value with no assignment text (`env -u "a'"'b c' git push origin
+main`), still get no opinion. **Since
 #503**, an additive chain pass re-judges a quoted value that holds a segment-break character
 (`X="a;b c" git push origin main`) and a command substitution glued into a word or in git's option slot
 (`git -C "$(pwd)" push origin main`) through the same rules, so those deny as unresolved; deliberate
 over-blocks include `X="a;b c" git push origin feature/x`, `X="a;b" git push origin feature/x`, `git -C
 "$(pwd)" push origin feature/x`, and a benign non-push git command behind a quoted break (`X='(' git
-commit -m "fix include path"`, the unreadable-config alias deny). The pass lexes at most a fixed budget of
-characters of gated lines per command; a command past it denies fail-closed (`too much quoted text to
-analyse`), so the worst-case cost stays near the base scan's.
+commit -m "fix include path"`, the unreadable-config alias deny). **Since #553**, a mixed-quote or
+escaped-quote assignment value with a space and no break character (`X="a'"'b c' git push origin main`,
+`git -c "k=a'"'b c' push origin main`) and a quoted value that runs past a line end (`X="a<LF>b" git push
+origin main`, where the open quote state and the chain's tokens are carried to the next line) are
+re-judged the same way, so those deny; deliberate over-blocks include `X="a'"'b c' git push origin
+feature/x`, `X="it's<LF>b" git push origin feature/x` and a heredoc body line that holds the carry shape
+before a push to the default branch. The pass lexes at most a fixed budget of characters per command, of
+gated lines and of the lines the carry lexes; a command past it denies fail-closed (`too much quoted text to
+analyse`), so the worst-case cost stays near the base scan's. Residuals the header's #553 paragraph
+lists: a quote left open inside a substitution at a line end, an open quote on a line with no assignment
+text, and a chain of more than 256 tokens up to the word that opens the quote.
 The push-guard header lists the
 over-blocking this fail-closed rule creates and the residuals it leaves. **Since #508**, a word in
 command position (or in git's option slot) whose basename holds a runtime expansion (`$X git push

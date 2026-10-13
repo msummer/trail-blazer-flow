@@ -16,6 +16,12 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #553: push-guard and agent-boundary now also catch a quoted assignment value that runs past a line end
+  (`X="a<LF>b" git push origin main`) and a mixed-quote value with a space and no break character
+  (`X="a'"'b c' git push origin main`), through #503's chain pass. No consumer step.
+
 ## v3.4.0
 
 This minor release adds a local run journal: `harness-lock.sh journal` writes an identifiers-only

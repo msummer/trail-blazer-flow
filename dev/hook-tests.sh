@@ -4149,7 +4149,7 @@ case_push_cmdcaptime_deny_flood() {
 # value-context prefix-word triggers (o).
 pcap_cmd=""
 pcap_shape() {
-  local pre
+  local pre qc l1
   case "$1" in
     a) pre='git push origin '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) "ab\$'cd'"; pcap_cmd="$pre$pcap_s" ;;
     b) pre='git push origin main'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) "$(printf '\r')"; pcap_cmd="$pre$pcap_s" ;;
@@ -4171,6 +4171,14 @@ pcap_shape() {
     # x-control: x with each backtick pair spelled ;; -- the same segment breaks for the base scan, but no
     # quote or substitution character, so the chain gate never opens: the base scan alone
     xc) pre='git -C a'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 17 )) ';;'; pcap_cmd="$pre$pcap_s push origin main" ;;
+    # #553 newline carry: a first line whose chain holds a few hundred tokens and whose last word opens a
+    # double quote, then the twelve-byte unit assignment-quote-LF-word-quote-git-LF repeated to the cap
+    # (q): many candidate and carried lines, far past the chain budget. q0 is the same bytes with every
+    # double quote spelled x, so the carry gate stays shut: the base scan alone.
+    q|q0) pre='git log'; qc='"'; [ "$1" = q0 ] && qc=x
+          pcap_fill 1000 ' A=1'; l1="$pre$pcap_s X=${qc}a"
+          pcap_fill $(( PCAP_MAX_BYTES - ${#l1} - 1 )) "X=${qc}a${LF}b${qc} git${LF}"
+          pcap_cmd="$l1${LF}$pcap_s" ;;
   esac
 }
 # pcap_verdict WANT -- the run reached a verdict: the too-large line, or WANT (rxdest, main, unres or noop).
@@ -4282,6 +4290,30 @@ case_solo_cmdcap_pin_at_cap_worst() {
     fi
     run_cpu_max_ms=8000
   done
+  # The #553 newline-carry shape q is bounded relative to its own twin q0, the same bytes with every
+  # double quote spelled x so the carry gate stays shut (the base scan alone), both at knob 0: the budget
+  # line comes before the first deadline sample, so q reaches its verdict there, within 1.3 times the
+  # twin plus 250ms and at most the hook's 10s timeout in CPU time.
+  pcap_shape q0
+  push_budget_override="0"
+  push_deadline_override=60
+  measure_cpu_ms run_push_guard "$(mk_push_cmd_big "$pcap_cmd" "$dir")"
+  if [ -z "$measured_cpu_ms" ]; then
+    __ok=0; __why="${__why}[shape q0] control run's CPU report could not be parsed\n"
+    return
+  fi
+  rel_max_ms=$(( measured_cpu_ms * 13 / 10 + 250 ))
+  [ "$rel_max_ms" -le 10000 ] || rel_max_ms=10000
+  pcap_shape q
+  push_budget_override="0"
+  push_deadline_override=60
+  measure_cpu_ms run_push_guard "$(mk_push_cmd_big "$pcap_cmd" "$dir")"
+  pcap_verdict budget
+  if [ -z "$measured_cpu_ms" ]; then
+    __ok=0; __why="${__why}[shape q] knob-0 run's CPU report could not be parsed\n"
+  elif [ "$measured_cpu_ms" -gt "$rel_max_ms" ]; then
+    __ok=0; __why="${__why}[shape q] knob-0 run used ${measured_cpu_ms}ms of CPU, over the ${rel_max_ms}ms bound\n"
+  fi
 }
 # pp_rxs_flood_cmd N -- a lost segment holding N plain ANSI-C words, a push holding N option values
 # written the same way, then a real push so the hook reaches check_deadline after the tokenizer.
@@ -11094,6 +11126,445 @@ case_solo_cdgchain_patch_cpu() {
   fi
 }
 
+# --- a quote left open at a line end, or a mixed-quote value with a space (#553): the prose-quiet corpus
+# Every payload below is a quoted value that runs past a line end, a mixed-quote value or a heredoc body
+# line that a cross-line quote carry could wrongly read as a hidden push or gh call. Each must get no
+# opinion before and after the carry lands (the corpus was committed against the unchanged hooks first).
+# Every payload names git, gh or claude, or the raw-stdin fast path would pass it vacuously.
+# mutant:553-pg-carry-glue — the first word of a carried line is not glued onto the carried word, so a
+#   closed value that ran past the line end reads as an unbalanced assignment before a feature push.
+# mutant:553-pg-carry-trunc — the carry keeps the words inside the quote after the word holding it, so
+#   the word before them keeps its cut marker and a quiet value reads as an unbalanced assignment.
+case_push_qnl_quiet() {
+  pq_push \
+    "X=\"a${LF}b\" git push origin feature/x" \
+    "X='a${LF}b' git push origin feature/x" \
+    "X=\"a b${LF}c\" git push origin feature/x" \
+    "X=\"a${LF}b\" # git" \
+    "MSG=\"line one${LF}line two\" && git push origin feature/x" \
+    "git commit -m \"subject X=1${LF}${LF}it${pq_sq}s fine${LF}\" && git push origin feature/x" \
+    "echo \"it${pq_sq}s${LF}fine\" && git push origin feature/x" \
+    "cat > f <<'EOF'${LF}Set X=1 and don${pq_sq}t worry${LF}it${pq_sq}s git push origin main time${LF}EOF" \
+    "GIT_AUTHOR_NAME=\"O${pq_sq}Brien Pat\" git commit -m x && git push origin feature/x" \
+    "GIT_AUTHOR_NAME=\"O${pq_sq}Brien Pat\" git commit -m x" \
+    "git commit -m \"Don${pq_sq}t set X=${pq_sq}a b${pq_sq}\""
+}
+# mutant:553-ab-carry-glue — the first word of a carried line is not glued onto the carried word, so a
+#   closed value that ran past the line end reads as an unbalanced assignment before an echo naming gh.
+# mutant:553-ab-carry-trunc — the carry keeps the words inside the quote after the word holding it, so
+#   the word before them keeps its cut marker and a quiet value reads as an unbalanced assignment.
+case_ab_qnl_quiet() {
+  abx_noop implementer \
+    "X=\"a${LF}b\" echo gh" \
+    "echo \"a${LF}b gh pr merge 5\"" \
+    "X=\"a b${LF}c\" echo gh" \
+    "MSG=\"line one${LF}line two\" && echo gh" \
+    "cat > notes.md <<'EOF'${LF}Set X=1 and don${pq_sq}t worry${LF}it${pq_sq}s gh pr merge 5 time${LF}EOF" \
+    "GIT_AUTHOR_NAME=\"O${pq_sq}Brien Pat\" ./run.sh"
+  abx_noop verifier \
+    "X=\"a${LF}b\" git status" \
+    "git log --format=\"%h it${pq_sq}s\""
+}
+
+# --- a quote left open at a line end, or a mixed-quote value with a space (#553): deny, over-block, budget
+# pqn_deny WANT CMD... -- each CMD denies the push, the one stderr line containing WANT.
+pqn_deny() {
+  local want="$1" c w0
+  shift
+  if [ -z "$want" ]; then __ok=0; __why="${__why}pqn_deny called with an empty WANT (needle_required)\n"; return; fi
+  for c in "$@"; do
+    w0="$__why"; __why=""
+    pp_run "$c"
+    expect_push_deny
+    case "$push_err" in
+      *"$want"*) ;;
+      *) __ok=0; __why="${__why}stderr missing '$want': '$push_err'\n" ;;
+    esac
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+PQN_MAIN='denies pushing to "main"'
+PQN_CC='git config supplied on the command line'
+# mutant:553-pg-carry-start — a carried line is lexed from the plain state, not the carried quote state,
+#   so its closing quote opens a new quote and the chain is never judged.
+# mutant:553-pg-carry-off — the carry block never runs, so a quoted value that runs past a line end
+#   hides the command word of the next line again.
+# mutant:553-pg-carry-inside — every carried line counts as wholly inside the carried quote, so no
+#   carried line is ever lexed and the quote never closes.
+# mutant:553-pg-simple-bs — a line with a backslash counts as closed, so a dollar-single-quote value with
+#   an escaped quote that runs past the line end starts no carry.
+# mutant:553-pg-simple-mixed — a line whose quote kinds each have an even count counts as closed, so a
+#   mixed-quote value that runs past the line end starts no carry.
+# mutant:553-pg-simple-parity — a line with an odd count of double quotes counts as closed, so a plain
+#   double-quoted value that runs past the line end starts no carry.
+# mutant:553-pg-carry-mark — the carried word gets no cut marker, so a mixed-quote value whose quote
+#   counts are even looks balanced when the next line starts with a space.
+# mutant:553-pg-qt-map — the chain token that holds the open quote is never recorded, so no carry starts.
+# mutant:553-pg-qt-glue — the open quote of a word glued onto the word before a closed substitution is not
+#   recorded, so a quote that opens right after a substitution starts no carry.
+# mutant:553-pg-qt-glue-cap — the same record is made only when the glue happens, so after a glued token
+#   of 256 or more characters the quote that opens right after a substitution starts no carry.
+case_push_qnl_deny_newline() {
+  local dir="$tmpbase/repo-pqn" longv
+  pqn_deny "$PQN_MAIN" \
+    "X=\"a${LF}b\" git push origin main" \
+    "X='a${LF}b' git push origin main" \
+    "X=\"a${LF}b${LF}c\" git push origin main" \
+    "X=\"a${LF}b${LF}c${LF}d\" git push origin main" \
+    "X=\"a${LF}b\" Y=\"c${LF}d\" git push origin main" \
+    "env X=\"a${LF}b\" git push origin main"
+  pcd_unres "$PP_R_PFX" \
+    "X=\"a${pq_sq}\"${pq_sq}b${LF}c${pq_sq} git push origin main" \
+    "X=\$${pq_sq}a\\${pq_sq}b${LF}c${pq_sq} git push origin main" \
+    "X=\"a${pq_sq}\"${pq_sq}b${LF} c${pq_sq} git push origin main"
+  pqn_deny "$PQN_CC" "git -c \"user.name=a${LF}b\" push origin main"
+  pqn_deny "$PQN_MAIN" "X=\$(true)\"a${LF}b\" git push origin main"
+  pcap_fill 300 a
+  longv="$pcap_s"
+  pcd_unres "$PP_R_PFX" "X=${longv}\$(true)\"a${LF}b\" git push origin feature/x"
+  mk_fixture_repo "$dir" main feature/x
+  run_push_guard "$(mk_codex_shell '' "X=\"a${LF}b\" git push origin main" "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"$PQN_MAIN"*) ;;
+    *) __ok=0; __why="${__why}[codex main session] stderr missing '$PQN_MAIN': '$push_err'\n" ;;
+  esac
+}
+# mutant:553-pg-mixed-gate-bs — the gate arm for a line with no break character drops its backslash
+#   alternative, so an escaped quote in a value with a space hides the command word.
+# mutant:553-pg-mixed-gate-kinds — the gate arm drops its both-quote-kinds alternative, so a
+#   mixed-quote value with a space hides the command word.
+# mutant:553-pg-mark-judge-off — a chain with a cut-marked field is no longer judged, so a single
+#   segment with a quoted space is never re-judged.
+case_push_qnl_deny_mixed() {
+  pcd_unres "$PP_R_PFX" \
+    "X=\"a${pq_sq}\"${pq_sq}b c${pq_sq} git push origin main" \
+    "X=${pq_sq}a\"${pq_sq}\"b c\" git push origin main" \
+    'X="\" x" git push origin main' \
+    'X="a\" b" git push origin main' \
+    "X=\$${pq_sq}a\\${pq_sq}b c${pq_sq} git push origin main" \
+    "X=\"a${pq_sq}\"${pq_sq}b c${pq_sq}\"${pq_sq}\"${pq_sq}d${pq_sq} git push origin main" \
+    "X=\"a${pq_sq}\"${pq_sq}b c${pq_sq} git push origin main; true"
+  pqn_deny "$PQN_CC" "git -c \"k=a${pq_sq}\"${pq_sq}b c${pq_sq} push origin main"
+}
+case_push_qnl_deny_overblock() {
+  # Documented over-blocks, each listed in the hook header: a heredoc body line that holds the carry
+  # shape before a push to main (the existing body-line class), a mixed-quote value with a space before
+  # a push to a feature branch, a value with an apostrophe that runs past a line end, and a value whose
+  # next line starts with a space.
+  pqn_deny "$PQN_MAIN" "cat <<'EOF'${LF}X=\"a${LF}b\" git push origin main${LF}EOF"
+  pcd_unres "$PP_R_PFX" \
+    "X=\"a${pq_sq}\"${pq_sq}b c${pq_sq} git push origin feature/x" \
+    "X=\"it${pq_sq}s${LF}b\" git push origin feature/x" \
+    "X=\"a${LF} b\" git push origin feature/x"
+}
+# mutant:553-ab-carry-start — a carried line is lexed from the plain state, not the carried quote state,
+#   so its closing quote opens a new quote and the chain is never queued.
+# mutant:553-ab-carry-off — the carry block never runs, so a quoted value that runs past a line end
+#   hides the command word of the next line again.
+# mutant:553-ab-carry-inside — every carried line counts as wholly inside the carried quote, so no
+#   carried line is ever lexed and the quote never closes.
+# mutant:553-ab-simple-bs — a line with a backslash counts as closed, so a dollar-single-quote value with
+#   an escaped quote that runs past the line end starts no carry.
+# mutant:553-ab-simple-mixed — a line whose quote kinds each have an even count counts as closed, so a
+#   mixed-quote value that runs past the line end starts no carry.
+# mutant:553-ab-simple-parity — a line with an odd count of double quotes counts as closed, so a plain
+#   double-quoted value that runs past the line end starts no carry.
+# mutant:553-ab-carry-mark — the carried word gets no cut marker, so a mixed-quote value whose quote
+#   counts are even looks balanced when the next line starts with a space.
+# mutant:553-ab-qt-map — the chain token that holds the open quote is never recorded, so no carry starts.
+# mutant:553-ab-qt-glue — the open quote of a word glued onto the word before a closed substitution is not
+#   recorded, so a quote that opens right after a substitution starts no carry.
+# mutant:553-ab-qt-glue-cap — the same record is made only when the glue happens, so after a glued token
+#   of 256 or more characters the quote that opens right after a substitution starts no carry.
+case_ab_qnl_deny_newline() {
+  local longv
+  pcap_fill 300 a
+  longv="$pcap_s"
+  abx_deny implementer gh \
+    "X=\"a${LF}b\" gh pr merge 5" \
+    "X='a${LF}b' gh pr merge 5" \
+    "X=\"a${LF}b${LF}c\" gh pr merge 5" \
+    "X=\"a${LF}b${LF}c${LF}d\" gh pr merge 5" \
+    "X=\"a${LF}b\" Y=\"c${LF}d\" gh pr merge 5" \
+    "env X=\"a${LF}b\" gh pr merge 5" \
+    "X=\"a${pq_sq}\"${pq_sq}b${LF}c${pq_sq} gh pr merge 5" \
+    "X=\$${pq_sq}a\\${pq_sq}b${LF}c${pq_sq} gh pr merge 5" \
+    "X=\"a${pq_sq}\"${pq_sq}b${LF} c${pq_sq} gh pr merge 5" \
+    "X=\$(true)\"a${LF}b\" gh pr merge 5" \
+    "X=${longv}\$(true)\"a${LF}b\" gh pr merge 5"
+  run_boundary "$(mk_codex_shell 'implementer' "X=\"a${LF}b\" gh pr merge 5")"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: gh)"*) ;;
+    *) __ok=0; __why="${__why}[codex implementer] stderr missing '(blocked: gh)': '$boundary_err'\n" ;;
+  esac
+  abx_deny verifier 'git push' "X=\"a${LF}b\" git push origin x"
+}
+# mutant:553-ab-mixed-gate-bs — the gate arm for a line with no break character drops its backslash
+#   alternative, so an escaped quote in a value with a space hides the command word.
+# mutant:553-ab-mixed-gate-kinds — the gate arm drops its both-quote-kinds alternative, so a
+#   mixed-quote value with a space hides the command word.
+# mutant:553-ab-mark-judge-off — a chain with a cut-marked field is no longer queued, so a single
+#   segment with a quoted space is never re-judged.
+case_ab_qnl_deny_mixed() {
+  abx_deny implementer gh \
+    "X=\"a${pq_sq}\"${pq_sq}b c${pq_sq} gh pr merge 5" \
+    "X=${pq_sq}a\"${pq_sq}\"b c\" gh pr merge 5" \
+    'X="\" x" gh pr merge 5' \
+    'X="a\" b" gh pr merge 5' \
+    "X=\$${pq_sq}a\\${pq_sq}b c${pq_sq} gh pr merge 5" \
+    "X=\"a${pq_sq}\"${pq_sq}b c${pq_sq}\"${pq_sq}\"${pq_sq}d${pq_sq} gh pr merge 5" \
+    "X=\"a${pq_sq}\"${pq_sq}b c${pq_sq} gh pr merge 5; true"
+  abx_deny verifier 'git -prefix-' "X=\"a${pq_sq}\"${pq_sq}b c${pq_sq} git status"
+}
+case_ab_qnl_deny_overblock() {
+  # Documented over-blocks: a heredoc body line that holds the carry shape before gh, a mixed-quote
+  # value with a space before an echo that merely names gh, and a value with an apostrophe that runs
+  # past a line end.
+  abx_deny implementer gh \
+    "cat > notes.md <<'EOF'${LF}X=\"a${LF}b\" gh pr merge 5${LF}EOF" \
+    "X=\"a${pq_sq}\"${pq_sq}b c${pq_sq} echo gh" \
+    "X=\"it${pq_sq}s${LF}b\" echo gh"
+}
+# The carry holds at most 256 chain tokens (cy_max): a chain of more words before the word that opens the
+# quote starts no carry, which keeps a carried line's copy bounded and leaves a flood of assignments
+# alone. 255 assignments plus the word that opens the quote are 256 tokens (carried), 256 plus it are 257.
+# mutant:553-pg-carry-cap — the cap on the carried chain is dropped, so a chain of any length starts a carry.
+# mutant:553-pg-carry-cap-edge — the cap admits one token fewer, so a chain of exactly the cap starts no carry.
+case_push_qnl_cap() {
+  pcap_fill 1020 ' A=1'
+  pqn_deny "$PQN_MAIN" "${pcap_s} X=\"a${LF}b\" git push origin main"
+  pcap_fill 1024 ' A=1'
+  pq_push "${pcap_s} X=\"a${LF}b\" git push origin main"
+}
+# mutant:553-ab-carry-cap — the cap on the carried chain is dropped, so a chain of any length starts a carry.
+# mutant:553-ab-carry-cap-edge — the cap admits one token fewer, so a chain of exactly the cap starts no carry.
+case_ab_qnl_cap() {
+  pcap_fill 1020 ' A=1'
+  abx_deny implementer gh "${pcap_s} X=\"a${LF}b\" gh pr merge 5"
+  pcap_fill 1024 ' A=1'
+  abx_noop implementer "${pcap_s} X=\"a${LF}b\" gh pr merge 5"
+}
+# Documented under-blocking classes of the carry, each no opinion: a quote left open at a line end inside a
+# substitution, an open quote on a line with no assignment text, and an option value (env -u) with a
+# mixed-quote split whose word carries no assignment text.
+# mutant:553-pg-cand-assign — a carry candidate needs no assignment text, so an open quote on a line
+#   without one starts a carry and the push behind it denies.
+case_push_qnl_noop_residual() {
+  pq_push \
+    "X=\"a${LF}\$(true${LF})b\" git push origin main" \
+    "exec -a \"x${LF}y\" git push origin main" \
+    "env -u \"a${pq_sq}\"${pq_sq}b c${pq_sq} git push origin main"
+}
+# mutant:553-ab-cand-assign — a carry candidate needs no assignment text, so an open quote on a line
+#   without one starts a carry and the gh call behind it denies.
+case_ab_qnl_noop_residual() {
+  abx_noop implementer \
+    "X=\"a${LF}\$(true${LF})b\" gh pr merge 5" \
+    "exec -a \"x${LF}y\" gh pr merge 5" \
+    "env -u \"a${pq_sq}\"${pq_sq}b c${pq_sq} gh pr merge 5"
+}
+# A carried line that cannot change the quote state is skipped without lexing, so it is not charged to the
+# budget: a middle line of exactly the budget inside the quote costs nothing, in each quote state (double
+# quote, single quote, dollar-single-quote), and the push behind it is still judged. The middle line holds
+# the other kind of quote, which only the right state test lets through.
+# pqs_check LABEL OPEN MID CLOSE -- OPEN, MID and CLOSE are three lines of one push-guard command: a push to
+# a feature branch behind them gets no opinion, a push to main denies with the default-branch line
+pqs_check() {
+  local label="$1" open="$2" mid="$3" close="$4" w0
+  pqb_check quiet "$label feature" "$open$LF$mid$LF$close git push origin feature/x"
+  w0="$__why"; __why=""
+  run_push_guard "$(mk_push_cmd_big "$open$LF$mid$LF$close git push origin main" "$pqb_dir")"
+  expect_push_deny
+  case "$push_err" in *"$PQN_MAIN"*) ;; *) __ok=0; __why="${__why}stderr missing '$PQN_MAIN': '$push_err'\n" ;; esac
+  if [ -n "$__why" ]; then __why="${w0}[$label main] ${__why}"; else __why="$w0"; fi
+}
+# mutant:553-pg-skip-off — no carried line counts as wholly inside the carried quote, so a long middle line
+#   is lexed and charged to the budget.
+# mutant:553-pg-skip-dq — a double-quote carry tests the middle line for a single quote, so a middle line
+#   holding an apostrophe is lexed and charged.
+# mutant:553-pg-skip-sq — a single-quote carry tests the middle line for a double quote, so a middle line
+#   holding a double quote is lexed and charged.
+# mutant:553-pg-skip-ansi — a dollar-single-quote carry tests the middle line for a double quote, so a
+#   middle line holding a double quote is lexed and charged.
+case_push_qnl_skip() {
+  local dir="$tmpbase/repo-pqs" mid
+  mk_fixture_repo "$dir" main feature/x
+  pqb_dir="$dir"
+  pcap_fill "$PG_CHAIN_BUDGET" "x${pq_sq}"; mid="$pcap_s"
+  pqs_check "double quote" "X=\"git" "$mid" "b\""
+  pcap_fill "$PG_CHAIN_BUDGET" 'x"'; mid="$pcap_s"
+  pqs_check "single quote" "X=${pq_sq}git" "$mid" "b${pq_sq}"
+  pqs_check "ansi-c quote" "X=\$${pq_sq}git" "$mid" "b${pq_sq}"
+}
+# abs_check LABEL OPEN MID CLOSE -- the agent-boundary twin of pqs_check, for the implementer: an echo that
+# names gh gets no opinion, a gh call denies
+abs_check() {
+  local label="$1" open="$2" mid="$3" close="$4" w0
+  abq_check quiet "$label echo" "$open$LF$mid$LF$close echo gh"
+  w0="$__why"; __why=""
+  abc_run "$open$LF$mid$LF$close gh pr merge 5"
+  expect_deny
+  case "$boundary_err" in *"(blocked: gh)"*) ;; *) __ok=0; __why="${__why}stderr missing '(blocked: gh)': '$boundary_err'\n" ;; esac
+  if [ -n "$__why" ]; then __why="${w0}[$label gh] ${__why}"; else __why="$w0"; fi
+}
+# mutant:553-ab-skip-off — no carried line counts as wholly inside the carried quote, so a long middle line
+#   is lexed and charged to the budget.
+# mutant:553-ab-skip-dq — a double-quote carry tests the middle line for a single quote, so a middle line
+#   holding an apostrophe is lexed and charged.
+# mutant:553-ab-skip-sq — a single-quote carry tests the middle line for a double quote, so a middle line
+#   holding a double quote is lexed and charged.
+# mutant:553-ab-skip-ansi — a dollar-single-quote carry tests the middle line for a double quote, so a
+#   middle line holding a double quote is lexed and charged.
+case_ab_qnl_skip() {
+  local mid
+  pcap_fill "$AB_CHAIN_LEX_MAX" "x${pq_sq}"; mid="$pcap_s"
+  abs_check "double quote" "X=\"gh" "$mid" "b\""
+  pcap_fill "$AB_CHAIN_LEX_MAX" 'x"'; mid="$pcap_s"
+  abs_check "single quote" "X=${pq_sq}gh" "$mid" "b${pq_sq}"
+  abs_check "ansi-c quote" "X=\$${pq_sq}gh" "$mid" "b${pq_sq}"
+}
+
+# --- the newline carry's budget (#553). The carry shares the chain budget with the old gate: a candidate
+# line is charged its length, a carried line its length plus the carried tokens it copies. Every pair
+# below is one character over the budget, which denies with the budget line, and exactly the budget,
+# which gets no opinion.
+# hand-typed mirror of hooks/push-guard.sh's chain_budget
+PG_CHAIN_BUDGET=65536
+pqb_dir=""
+pqb_line=""
+# pqb_pad LEN PREFIX -- sets pqb_line to a line of exactly LEN characters: PREFIX, then x padding
+pqb_pad() { pcap_fill $(( $1 - ${#2} )) x; pqb_line="$2$pcap_s"; }
+# pqb_close LEN -- sets pqb_line to a line of exactly LEN characters: x padding, then one double quote
+pqb_close() { pcap_fill $(( $1 - 1 )) x; pqb_line="$pcap_s\""; }
+# pqb_check KIND LABEL CMD -- one budget run in the fixture clone: deny expects the chain-budget line, quiet
+# no opinion (pcb_quiet, which also accepts the production deadline line under load)
+pqb_check() {
+  local kind="$1" label="$2" cmd="$3" w0
+  w0="$__why"; __why=""
+  run_push_guard "$(mk_push_cmd_big "$cmd" "$pqb_dir")"
+  if [ "$kind" = deny ]; then
+    expect_push_deny
+    case "$push_err" in *"(blocked: too much quoted text to analyse)"*) ;; *) __ok=0; __why="${__why}stderr missing the budget line: '$push_err'\n" ;; esac
+  else
+    pcb_quiet
+  fi
+  if [ -n "$__why" ]; then __why="${w0}[$label] ${__why}"; else __why="$w0"; fi
+}
+# mutant:553-pg-budget-off — the carry block's budget check is dropped, so candidate and carried lines
+#   past the budget are lexed instead of denied.
+# mutant:553-pg-budget-edge — the carry block's budget check denies at the budget itself, not one
+#   character past it.
+# mutant:553-pg-budget-copy — a carried line is not charged the carried tokens it copies, so a long
+#   carried chain over many short lines is lexed past the budget.
+case_push_qnl_budget() {
+  local dir="$tmpbase/repo-pqb" pre='X="git' hd l1 b
+  mk_fixture_repo "$dir" main feature/x
+  pqb_dir="$dir"
+  b="$PG_CHAIN_BUDGET"
+  # one candidate line
+  pqb_pad $(( b + 1 )) "$pre"; pqb_check deny "one line over" "$pqb_line"
+  pqb_pad "$b" "$pre"; pqb_check quiet "one line at" "$pqb_line"
+  # a candidate line and a carried line that closes the quote: each is charged its length, the carried
+  # line also the one carried token
+  pqb_pad 40000 "$pre"; l1="$pqb_line"
+  pqb_close $(( b + 1 - 40000 - 1 )); pqb_check deny "carry over" "$l1$LF$pqb_line"
+  pqb_close $(( b - 40000 - 1 )); pqb_check quiet "carry at" "$l1$LF$pqb_line"
+  # the copy charge: the carried chain holds git, log, 250 assignments and the word holding the quote
+  pcap_fill 1000 ' A=1'
+  hd="git log$pcap_s X=\"a"
+  l1="$hd"
+  pqb_close $(( b + 1 - ${#hd} - 253 )); pqb_check deny "copy over" "$l1$LF$pqb_line"
+  pqb_close $(( b - ${#hd} - 253 )); pqb_check quiet "copy at" "$l1$LF$pqb_line"
+  # the shared counter: an old-gated line and a candidate line add up
+  pqb_pad 40000 'git log "a;b" '; l1="$pqb_line"
+  pqb_pad $(( b + 1 - 40000 )) "$pre"; pqb_check deny "shared over" "$l1$LF$pqb_line"
+  pqb_pad $(( b - 40000 )) "$pre"; pqb_check quiet "shared at" "$l1$LF$pqb_line"
+}
+# abq_check KIND LABEL CMD -- the agent-boundary twin of pqb_check, for the implementer
+abq_check() {
+  local kind="$1" label="$2" cmd="$3" w0
+  w0="$__why"; __why=""
+  abc_run "$cmd"
+  if [ "$kind" = deny ]; then
+    expect_deny
+    case "$boundary_err" in *"(blocked: too much quoted text to analyse)"*) ;; *) __ok=0; __why="${__why}stderr missing the budget line: '$boundary_err'\n" ;; esac
+  else
+    expect_no_opinion
+  fi
+  if [ -n "$__why" ]; then __why="${w0}[$label] ${__why}"; else __why="$w0"; fi
+}
+# mutant:553-ab-budget-off — the carry block's budget check is dropped, so candidate and carried lines
+#   past the budget are lexed instead of denied.
+# mutant:553-ab-budget-edge — the carry block's budget check denies at the budget itself, not one
+#   character past it.
+# mutant:553-ab-budget-copy — a carried line is not charged the carried tokens it copies, so a long
+#   carried chain over many short lines is lexed past the budget.
+case_ab_qnl_budget() {
+  local pre='X="gh' hd l1 b
+  b="$AB_CHAIN_LEX_MAX"
+  pqb_pad $(( b + 1 )) "$pre"; abq_check deny "one line over" "$pqb_line"
+  pqb_pad "$b" "$pre"; abq_check quiet "one line at" "$pqb_line"
+  pqb_pad 40000 "$pre"; l1="$pqb_line"
+  pqb_close $(( b + 1 - 40000 - 1 )); abq_check deny "carry over" "$l1$LF$pqb_line"
+  pqb_close $(( b - 40000 - 1 )); abq_check quiet "carry at" "$l1$LF$pqb_line"
+  pcap_fill 1000 ' A=1'
+  hd="echo gh$pcap_s X=\"a"
+  l1="$hd"
+  pqb_close $(( b + 1 - ${#hd} - 253 )); abq_check deny "copy over" "$l1$LF$pqb_line"
+  pqb_close $(( b - ${#hd} - 253 )); abq_check quiet "copy at" "$l1$LF$pqb_line"
+  pqb_pad 40000 'echo gh "a;b" '; l1="$pqb_line"
+  pqb_pad $(( b + 1 - 40000 )) "$pre"; abq_check deny "shared over" "$l1$LF$pqb_line"
+  pqb_pad $(( b - 40000 )) "$pre"; abq_check quiet "shared at" "$l1$LF$pqb_line"
+}
+# abq_shape SHAPE -- sets abq_cmd to a command of exactly PCAP_MAX_BYTES bytes: q is the newline-carry
+# flood (a chain of a few hundred tokens on line 1 whose last word opens a quote, then candidate and
+# carried lines far past the budget), q0 the same bytes with every double quote spelled x, so the carry
+# gate stays shut
+abq_cmd=""
+abq_shape() {
+  local qc='"' l1
+  [ "$1" = q0 ] && qc=x
+  pcap_fill 1000 ' A=1'
+  l1="echo gh$pcap_s X=${qc}a"
+  pcap_fill $(( PCAP_MAX_BYTES - ${#l1} - 1 )) "X=${qc}a${LF}b${qc} gh${LF}"
+  abq_cmd="$l1$LF$pcap_s"
+}
+case_solo_abqnl_flood_cpu() {
+  # A solo- case (#546): a CPU bound relative to a same-run control with no registry record, so it runs
+  # only in the plain hook-tests run, never under a mutant-driver group's concurrency. Its name must
+  # stay free of every registry filter, ab-qnl- included.
+  # agent-boundary has no command cap and no deadline, so the chain budget is the only bound on the new
+  # lexing: a command of 512 KiB in the worst carry shape reaches the budget line, and costs at most
+  # what the same bytes cost with the carry gate shut (every double quote spelled x), within 1.3 times
+  # it plus 250ms and at most the hook's 10s timeout. boundary_deadline_override is only a hang guard.
+  local ctl_ms rel_max_ms
+  abq_shape q0
+  boundary_deadline_override=60
+  measure_cpu_ms run_boundary "$(mk_agent_cmd_big implementer "$abq_cmd")"
+  ctl_ms="$measured_cpu_ms"
+  if [ -z "$ctl_ms" ]; then
+    __ok=0; __why="${__why}control run's CPU report could not be parsed\n"
+    return
+  fi
+  rel_max_ms=$(( ctl_ms * 13 / 10 + 250 ))
+  [ "$rel_max_ms" -le 10000 ] || rel_max_ms=10000
+  abq_shape q
+  boundary_deadline_override=60
+  measure_cpu_ms run_boundary "$(mk_agent_cmd_big implementer "$abq_cmd")"
+  expect_deny
+  case "$boundary_err" in
+    *"(blocked: too much quoted text to analyse)"*) ;;
+    *) __ok=0; __why="${__why}stderr missing the budget line: '$boundary_err'\n" ;;
+  esac
+  if [ -z "$measured_cpu_ms" ]; then
+    __ok=0; __why="${__why}the CPU report could not be parsed\n"
+  elif [ "$measured_cpu_ms" -gt "$rel_max_ms" ]; then
+    __ok=0; __why="${__why}the carry flood used ${measured_cpu_ms}ms of CPU against ${ctl_ms}ms for the gate-shut control, over the ${rel_max_ms}ms bound\n"
+  fi
+}
+
 cases=(
   "status-rel|case_status_rel|allow: relative sibling path, status"
   "status-abs|case_status_abs|allow: absolute path, status"
@@ -12805,7 +13276,7 @@ cases=(
   "push-cmdcap-noop-no-git|case_push_cmdcap_noop_no_git|no opinion: an over-cap command whose raw stdin never names git leaves through the fast path (a control, no registry mutant)"
   "push-cmdcap-noop-plan-mode|case_push_cmdcap_noop_plan_mode|no opinion: an over-cap command in plan mode leaves before the cap (a control, no registry mutant)"
   "push-cmdcaptime-deny-flood|case_push_cmdcaptime_deny_flood|FLOOD+TIMING: a push followed by one multi-megabyte dollar-quote word denies via the cap under an active deadline calibrated from a same-run plan-mode control -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
-  "solo-cmdcap-pin-at-cap-worst|case_solo_cmdcap_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap stays within a fixed CPU bound before its first deadline sample, and within a bound of at most the hook timeout for its whole production-budget run (the #503 shapes: u v w y prefix, x production, within a margin of a same-run control), and reaches its verdict (regression pin, no registry mutant; solo-: outside every registry filter, so it never runs under the mutant driver)"
+  "solo-cmdcap-pin-at-cap-worst|case_solo_cmdcap_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap stays within a fixed CPU bound before its first deadline sample, and within a bound of at most the hook timeout for its whole production-budget run (the #503 shapes: u v w y prefix, x production, within a margin of a same-run control; the #553 newline-carry shape q against its twin q0 with every double quote spelled x), and reaches its verdict (regression pin, no registry mutant; solo-: outside every registry filter, so it never runs under the mutant driver)"
   "push-rxscan-noop-flood|case_push_rxscan_noop_flood|FLOOD+TIMING: a lost segment and a push full of plain dollar-quote words, then a feature push -- no opinion; token count sized from a same-run twin control -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-rescan)"
   "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"
   "push-alias-deny-feature-dest|case_al_deny_feature_dest|a push alias denies even when the destination is a feature branch -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
@@ -13309,6 +13780,24 @@ cases=(
   "push-chain-quiet-heredoc|case_push_chain_quiet_heredoc|no opinion: heredoc bodies and a gh pr create body holding apostrophes, code spans and semicolons -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (503-pg-ph-always, 503-pg-perline)"
   "ab-chain-quiet|case_ab_chain_quiet|no opinion: quoted prose and read-only git for the implementer and the verifier, beside a break character -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (503-ab-lex-dq-apos)"
   "cdg-chain-quiet|case_cdg_chain_quiet|no opinion: prose naming apply_patch beside a break character, and the main session's quoted-break apply_patch -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (503-cdg-lex-dq-apos)"
+  # --- a quote left open at a line end, or a mixed-quote value with a space (#553) cases -------------
+  "push-qnl-quiet|case_push_qnl_quiet|no opinion: a quoted value running past a line end before a feature push, a closed value, prose and a heredoc body with an apostrophe and an assignment, and an apostrophe in a double-quoted value -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (553-pg-carry-glue, 553-pg-carry-trunc)"
+  "ab-qnl-quiet|case_ab_qnl_quiet|no opinion: a quoted value running past a line end before an echo that names gh, a heredoc body, and an apostrophe in a double-quoted value, implementer and verifier -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (553-ab-carry-glue, 553-ab-carry-trunc)"
+  "push-qnl-deny-newline|case_push_qnl_deny_newline|deny: a quoted value that runs past a line end before a push to main, in every quote form, with zero, one and two lines inside the quote and one and two such values, git -c with such a value, a quote right after a closed substitution, and the Codex payload shape -- mutation proof: dev/mutants/hook-tests.json (553-pg-carry-off, 553-pg-carry-start, 553-pg-carry-glue, 553-pg-carry-inside, 553-pg-simple-bs, 553-pg-simple-mixed, 553-pg-simple-parity, 553-pg-carry-mark, 553-pg-qt-map, 553-pg-qt-glue, 553-pg-qt-glue-cap)"
+  "push-qnl-deny-mixed|case_push_qnl_deny_mixed|deny: a mixed-quote or escaped-quote assignment value with a space and no break character before a push to main, and git -c with such a value -- mutation proof: dev/mutants/hook-tests.json (553-pg-mixed-gate-bs, 553-pg-mixed-gate-kinds, 553-pg-mark-judge-off)"
+  "push-qnl-deny-overblock|case_push_qnl_deny_overblock|deny: the documented over-blocks (a heredoc body line holding the carry shape, a mixed-quote value with a space before a push to a feature branch, an apostrophe in a value that runs past a line end, a next line that starts with a space) -- control, not part of the mutation-proof registry"
+  "push-qnl-cap|case_push_qnl_cap|deny a push to main behind a quoted value that runs past a line end when 255 assignments precede the word that opens the quote (256 chain tokens, the carry cap), no opinion with 256 (the documented residual) -- mutation proof: dev/mutants/hook-tests.json (553-pg-carry-cap, 553-pg-carry-cap-edge)"
+  "push-qnl-noop-residual|case_push_qnl_noop_residual|no opinion: the documented under-blocking classes of the carry (a quote left open inside a substitution at a line end, an open quote on a line with no assignment text, an env -u value with a mixed-quote split) -- mutation proof: dev/mutants/hook-tests.json (553-pg-cand-assign)"
+  "push-qnl-skip|case_push_qnl_skip|no opinion for a feature push and a deny for a push to main behind a middle line of exactly the chain budget inside a double-quoted, single-quoted and dollar-single-quoted value: a carried line that cannot change the quote state is skipped and not charged -- mutation proof: dev/mutants/hook-tests.json (553-pg-skip-off, 553-pg-skip-dq, 553-pg-skip-sq, 553-pg-skip-ansi)"
+  "push-qnl-budget|case_push_qnl_budget|deny one character past the chain budget and no opinion at exactly the budget, for a candidate line, a candidate and a carried line, a long carried chain copied by a short carried line, and an old-gated line plus a candidate line -- mutation proof: dev/mutants/hook-tests.json (553-pg-budget-off, 553-pg-budget-edge, 553-pg-budget-copy)"
+  "ab-qnl-deny-newline|case_ab_qnl_deny_newline|deny: gh behind a quoted value that runs past a line end, in every quote form, with zero, one and two lines inside the quote and one and two such values, as a Codex-shaped implementer payload, and a verifier git push -- mutation proof: dev/mutants/hook-tests.json (553-ab-carry-off, 553-ab-carry-start, 553-ab-carry-glue, 553-ab-carry-inside, 553-ab-simple-bs, 553-ab-simple-mixed, 553-ab-simple-parity, 553-ab-carry-mark, 553-ab-qt-map, 553-ab-qt-glue, 553-ab-qt-glue-cap)"
+  "ab-qnl-deny-mixed|case_ab_qnl_deny_mixed|deny: gh behind a mixed-quote or escaped-quote assignment value with a space and no break character, and a verifier git status behind one -- mutation proof: dev/mutants/hook-tests.json (553-ab-mixed-gate-bs, 553-ab-mixed-gate-kinds, 553-ab-mark-judge-off)"
+  "ab-qnl-deny-overblock|case_ab_qnl_deny_overblock|deny: the documented over-blocks (a heredoc body line holding the carry shape before gh, a mixed-quote value with a space before an echo that names gh, an apostrophe in a value that runs past a line end) -- control, not part of the mutation-proof registry"
+  "ab-qnl-cap|case_ab_qnl_cap|deny gh behind a quoted value that runs past a line end when 255 assignments precede the word that opens the quote (256 chain tokens, the carry cap), no opinion with 256 (the documented residual) -- mutation proof: dev/mutants/hook-tests.json (553-ab-carry-cap, 553-ab-carry-cap-edge)"
+  "ab-qnl-noop-residual|case_ab_qnl_noop_residual|no opinion: the documented under-blocking classes of the carry (a quote left open inside a substitution at a line end, an open quote on a line with no assignment text, an env -u value with a mixed-quote split) -- mutation proof: dev/mutants/hook-tests.json (553-ab-cand-assign)"
+  "ab-qnl-skip|case_ab_qnl_skip|no opinion for an echo that names gh and a deny for a gh call behind a middle line of exactly the chain budget inside a double-quoted, single-quoted and dollar-single-quoted value: a carried line that cannot change the quote state is skipped and not charged -- mutation proof: dev/mutants/hook-tests.json (553-ab-skip-off, 553-ab-skip-dq, 553-ab-skip-sq, 553-ab-skip-ansi)"
+  "ab-qnl-budget|case_ab_qnl_budget|deny one character past the chain budget and no opinion at exactly the budget, for a candidate line, a candidate and a carried line, a long carried chain copied by a short carried line, and an old-gated line plus a candidate line -- mutation proof: dev/mutants/hook-tests.json (553-ab-budget-off, 553-ab-budget-edge, 553-ab-budget-copy)"
+  "solo-abqnl-flood-cpu|case_solo_abqnl_flood_cpu|CPU TIME: a 512 KiB newline-carry flood reaches the chain budget within 1.3 times the CPU of the same bytes with the carry gate shut plus 250ms -- no registry record; solo-: outside every registry filter, so it never runs under the mutant driver"
   # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
   "codex-gcg-main-status|case_codex_gcg_main_status|allow: git-c-guard.sh under a Codex-shaped main-session payload, git -C ../demo-wt-1 status --porcelain (pins the unchanged verdict -- Codex ignores this hook's if gate, but the script itself never reads it)"
   "codex-gcg-apply-patch|case_codex_gcg_apply_patch|silent: a Codex apply_patch payload (tool_name != Bash)"
