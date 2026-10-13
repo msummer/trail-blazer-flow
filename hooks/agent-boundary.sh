@@ -564,8 +564,9 @@ cmd="${cmd//$cr/}"
 # mentions git). Deliberate over-blocking, each measured rc 2: an implementer `MSG="a; see gh docs"
 # ./run.sh` (the #505 class: a quoted value with a break character that names gh) and a
 # verifier's `X="a;b c" git status` (`git -prefix-`). Residuals, each measured rc 0 (a quote opened on
-# an earlier input line, and a mixed or even-count quoted value with a space but no break character, are
-# closed by #553): a substitution that starts the command word (`$(echo gh)
+# an earlier input line after assignment text, and a mixed or even-count quoted assignment value with a
+# space but no break character, are closed by #553, whose paragraph lists the forms it leaves open): a
+# substitution that starts the command word (`$(echo gh)
 # pr merge 5`), and the lexer's approximations (a `case` pattern's `)` inside `$(...)`, quoting inside
 # `${...}`, backslash-nested backticks, process substitution read as a plain subshell).
 #

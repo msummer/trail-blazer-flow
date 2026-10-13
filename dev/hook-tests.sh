@@ -11204,6 +11204,11 @@ PQN_CC='git config supplied on the command line'
 #   recorded, so a quote that opens right after a substitution starts no carry.
 # mutant:553-pg-qt-glue-cap — the same record is made only when the glue happens, so after a glued token
 #   of 256 or more characters the quote that opens right after a substitution starts no carry.
+# mutant:553-pg-preseed-qt — a carried line that opens no quote of its own no longer keeps the carried
+#   open-quote token, so a carried line that is lexed but stays inside the quote (one holding a
+#   substitution and no quote) ends the carry and the command word is never judged.
+# mutant:553-pg-qs-reset — the open-quote segment is not reset per lexed line, so a carried line that
+#   opens no quote of its own reuses the line before's and drops the carried open-quote token.
 case_push_qnl_deny_newline() {
   local dir="$tmpbase/repo-pqn" longv
   pqn_deny "$PQN_MAIN" \
@@ -11212,7 +11217,9 @@ case_push_qnl_deny_newline() {
     "X=\"a${LF}b${LF}c\" git push origin main" \
     "X=\"a${LF}b${LF}c${LF}d\" git push origin main" \
     "X=\"a${LF}b\" Y=\"c${LF}d\" git push origin main" \
-    "env X=\"a${LF}b\" git push origin main"
+    "env X=\"a${LF}b\" git push origin main" \
+    "X=\"a${LF}\$(date)${LF}b\" git push origin main" \
+    "X=\"a${LF}\`true\`${LF}b\" git push origin main"
   pcd_unres "$PP_R_PFX" \
     "X=\"a${pq_sq}\"${pq_sq}b${LF}c${pq_sq} git push origin main" \
     "X=\$${pq_sq}a\\${pq_sq}b${LF}c${pq_sq} git push origin main" \
@@ -11277,6 +11284,11 @@ case_push_qnl_deny_overblock() {
 #   recorded, so a quote that opens right after a substitution starts no carry.
 # mutant:553-ab-qt-glue-cap — the same record is made only when the glue happens, so after a glued token
 #   of 256 or more characters the quote that opens right after a substitution starts no carry.
+# mutant:553-ab-preseed-qt — a carried line that opens no quote of its own no longer keeps the carried
+#   open-quote token, so a carried line that is lexed but stays inside the quote (one holding a
+#   substitution and no quote) ends the carry and the command word is never judged.
+# mutant:553-ab-qs-reset — the open-quote segment is not reset per lexed line, so a carried line that
+#   opens no quote of its own reuses the line before's and drops the carried open-quote token.
 case_ab_qnl_deny_newline() {
   local longv
   pcap_fill 300 a
@@ -11292,7 +11304,9 @@ case_ab_qnl_deny_newline() {
     "X=\$${pq_sq}a\\${pq_sq}b${LF}c${pq_sq} gh pr merge 5" \
     "X=\"a${pq_sq}\"${pq_sq}b${LF} c${pq_sq} gh pr merge 5" \
     "X=\$(true)\"a${LF}b\" gh pr merge 5" \
-    "X=${longv}\$(true)\"a${LF}b\" gh pr merge 5"
+    "X=${longv}\$(true)\"a${LF}b\" gh pr merge 5" \
+    "X=\"a${LF}\`true\`${LF}b\" gh pr merge 5" \
+    "X=\"a${LF}\${HOME}${LF}b\" gh pr merge 5"
   run_boundary "$(mk_codex_shell 'implementer' "X=\"a${LF}b\" gh pr merge 5")"
   expect_deny
   case "$boundary_err" in

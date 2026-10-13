@@ -241,7 +241,8 @@ line end (`X="a<LF>b" gh pr merge 5`), by carrying the open quote state and the 
 line, and a mixed-quote or escaped-quote assignment value with a space and no break character (`X="a'"'b c'
 gh pr merge 5`); the lines it lexes and the tokens it copies count toward the same budget, and the header's
 #553 paragraph lists the measured over-blocks (a heredoc body line holding that shape before `gh`, `X="a'"'b
-c' echo gh`) and residuals (a quote left open inside a substitution, or on a line with no assignment text).
+c' echo gh`) and residuals (a quote left open inside a substitution, or on a line with no assignment text,
+and a chain of more than 256 tokens up to the word that opens the quote).
 The scan
 processes `tool_input.command` one line at a time, so several over-blocking classes are expected
 and documented in the script's own header: a literal `git`/`gh` word starting a quoted span right

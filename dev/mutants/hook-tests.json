@@ -8810,6 +8810,7 @@
         }
       ],
       "expect_fail": [
+        "push-qnl-deny-newline",
         "push-qnl-quiet"
       ]
     },
@@ -9543,6 +9544,66 @@
       ],
       "expect_fail": [
         "ab-qnl-budget"
+      ]
+    },
+    {
+      "name": "553-pg-preseed-qt",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "    if (!ch_qs) ch_qt = cy_n\n",
+          "to": "    if (0 && !ch_qs) ch_qt = cy_n\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-deny-newline"
+      ]
+    },
+    {
+      "name": "553-pg-qs-reset",
+      "target": "hooks/push-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "push-qnl-",
+      "edits": [
+        {
+          "from": "  ch_qs = 0\n",
+          "to": "  ch_qs = ch_qs\n"
+        }
+      ],
+      "expect_fail": [
+        "push-qnl-deny-newline"
+      ]
+    },
+    {
+      "name": "553-ab-preseed-qt",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "    if (!ch_qs) ch_qt = cy_n\n",
+          "to": "    if (0 && !ch_qs) ch_qt = cy_n\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-deny-newline"
+      ]
+    },
+    {
+      "name": "553-ab-qs-reset",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-qnl-",
+      "edits": [
+        {
+          "from": "  ch_qs = 0\n",
+          "to": "  ch_qs = ch_qs\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-qnl-deny-newline"
       ]
     },
     {

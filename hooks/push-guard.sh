@@ -561,10 +561,11 @@
 # or without a space, before any push), `git -C "$(pwd)" push origin feature/x` (a substitution as the -C
 # value is unresolved), `MSG="fix; git push later"` (a quoted value that names a push), and a benign
 # non-push git command behind a quoted break, which meets the #448 alias route's unreadable-config deny
-# (`X='(' git commit -m "fix include path"`). Residuals, each measured rc 0 (a quote
-# opened on an earlier physical line, and a mixed or even-count quoted value with a space but no break
-# character, are closed by #553): a substitution that
-# starts the command word (`$(echo git) push origin main`), a quoted `-C` value with a space (`git -C
+# (`X='(' git commit -m "fix include path"`). Residuals, each measured rc 0 (a quote opened on an
+# earlier physical line after assignment text, and a mixed or even-count quoted assignment value with a
+# space but no break character, are closed by #553, whose paragraph lists the forms it leaves open): a
+# substitution that starts the command word (`$(echo git) push origin main`), a quoted `-C` value
+# with a space (`git -C
 # "../a;b c" push origin main`, as `git -C "../a b"` already is), and the lexer's approximations: a
 # `case` pattern's `)` inside `$(...)`, quoting inside `${...}`, backslash-nested backticks, and
 # process substitution (read as a plain subshell).
