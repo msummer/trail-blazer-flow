@@ -2077,7 +2077,10 @@ function ch_sep(quoted) {
   if (quoted && ch_runtok) ch_mk[ch_s] = ch_mk[ch_s] "," ch_r ","
   ch_pd = 0
 }
-# ch_qchar: a character that is quoted or escaped, of class K.
+# ch_qchar: a character that is quoted or escaped, of class K. A caller reading the class of an
+# escaped character, which may have no class, passes ch_cls[c] + 0, a plain value, never the element
+# itself: gawk 5.2 aborts with an internal error when an element first created by such a call is
+# read as a scalar and then passed again (a line lexed twice, #553), and the scan would stop early.
 function ch_qchar(k) {
   if (k == 1) ch_sep(1)
   else if (k >= 2 && k <= 7) ch_brk("L")
@@ -2130,7 +2133,7 @@ function chain_lex(rec, q0,    n, lc, i, c, k, nx, pl) {
       if (k == 8) { ch_lq = 0; ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
       else if (k == 10) {
         ch_inrun = 0; ch_tokhas = 1; ch_pd = 0
-        if (i < n) { i++; ch_qchar(ch_cls[lc[i]]) }
+        if (i < n) { i++; ch_qchar(ch_cls[lc[i]] + 0) }
       } else ch_qchar(k)
     } else if (ch_lq == 2) {
       if (k == 9) { ch_lq = 0; ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
@@ -2169,7 +2172,7 @@ function chain_lex(rec, q0,    n, lc, i, c, k, nx, pl) {
     else if (k == 9) { ch_lq = 2; ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
     else if (k == 10) {
       ch_inrun = 0; ch_tokhas = 1; ch_pd = 0
-      if (i < n) { i++; ch_qchar(ch_cls[lc[i]]) }
+      if (i < n) { i++; ch_qchar(ch_cls[lc[i]] + 0) }
     } else if (k == 11) { ch_inrun = 0; ch_tokhas = 1; ch_pd = 1 }
     else if (k == 12 && !ch_tokhas && ch_ld == 0) ch_cmt = 1
     else { ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }

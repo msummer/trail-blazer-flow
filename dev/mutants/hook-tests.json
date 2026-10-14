@@ -9667,7 +9667,7 @@
       "filter": "push-chain-",
       "edits": [
         {
-          "from": "    else if (k == 10) {\n      ch_inrun = 0; ch_tokhas = 1; ch_pd = 0\n      if (i < n) { i++; ch_qchar(ch_cls[lc[i]]) }\n    } else if (k == 11)",
+          "from": "    else if (k == 10) {\n      ch_inrun = 0; ch_tokhas = 1; ch_pd = 0\n      if (i < n) { i++; ch_qchar(ch_cls[lc[i]] + 0) }\n    } else if (k == 11)",
           "to": "    else if (k == 10) {\n      ch_inrun = 0; ch_tokhas = 1; ch_pd = 0\n    } else if (k == 11)"
         }
       ],
@@ -9865,7 +9865,7 @@
       "filter": "ab-chain-",
       "edits": [
         {
-          "from": "    else if (k == 10) {\n      ch_inrun = 0; ch_tokhas = 1; ch_pd = 0\n      if (i < n) { i++; ch_qchar(ch_cls[lc[i]]) }\n    } else if (k == 11)",
+          "from": "    else if (k == 10) {\n      ch_inrun = 0; ch_tokhas = 1; ch_pd = 0\n      if (i < n) { i++; ch_qchar(ch_cls[lc[i]] + 0) }\n    } else if (k == 11)",
           "to": "    else if (k == 10) {\n      ch_inrun = 0; ch_tokhas = 1; ch_pd = 0\n    } else if (k == 11)"
         }
       ],

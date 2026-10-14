@@ -11135,6 +11135,22 @@ case_solo_cdgchain_patch_cpu() {
 #   closed value that ran past the line end reads as an unbalanced assignment before a feature push.
 # mutant:553-pg-carry-trunc — the carry keeps the words inside the quote after the word holding it, so
 #   the word before them keeps its cut marker and a quiet value reads as an unbalanced assignment.
+# --- push-guard.sh and agent-boundary.sh: a line the chain pass lexes twice (#553) ------------------
+# The lexer passes the class of an escaped character to ch_qchar() as a plain value (ch_cls[c] + 0),
+# never the array element itself. Under gawk 5.2 the element form aborts the scan with an internal
+# error once a line is lexed a second time (#553's capture pass, or a later gated line) after that
+# character was first escaped and then read unescaped, so the abort text reaches stderr and a deny the
+# scan had not printed yet is lost. Each pair holds a deny row (exactly one stderr line) and a quiet
+# row (empty stderr). Only gawk aborts, so these cases fail only where awk is gawk (the ubuntu CI
+# job): no registry record, since the macOS driver cannot observe the mutant.
+case_push_lexcls_gawk() {
+  pcd_unres "$PP_R_PFX" "X=\"a;b\" \\q q git status${LF}X=\"a;b\" \\q git push origin main"
+  pq_push "X=\"a\" \\h h # git push origin main"
+}
+case_ab_lexcls_gawk() {
+  abx_deny implementer gh "X=\"a;b\" \\q q gh status${LF}X=\"a;b\" \\q gh status"
+  abx_noop implementer "X=\"a\" \\q q # gh"
+}
 case_push_qnl_quiet() {
   pq_push \
     "X=\"a${LF}b\" git push origin feature/x" \
@@ -13811,6 +13827,8 @@ cases=(
   "ab-qnl-noop-residual|case_ab_qnl_noop_residual|no opinion: the documented under-blocking classes of the carry (a quote left open inside a substitution at a line end, an open quote on a line with no assignment text, an env -u value with a mixed-quote split) -- mutation proof: dev/mutants/hook-tests.json (553-ab-cand-assign)"
   "ab-qnl-skip|case_ab_qnl_skip|no opinion for an echo that names gh and a deny for a gh call behind a middle line of exactly the chain budget inside a double-quoted, single-quoted and dollar-single-quoted value: a carried line that cannot change the quote state is skipped and not charged -- mutation proof: dev/mutants/hook-tests.json (553-ab-skip-off, 553-ab-skip-dq, 553-ab-skip-sq, 553-ab-skip-ansi)"
   "ab-qnl-budget|case_ab_qnl_budget|deny one character past the chain budget and no opinion at exactly the budget, for a candidate line, a candidate and a carried line, a long carried chain copied by a short carried line, and an old-gated line plus a candidate line -- mutation proof: dev/mutants/hook-tests.json (553-ab-budget-off, 553-ab-budget-edge, 553-ab-budget-copy)"
+  "push-lexcls-gawk|case_push_lexcls_gawk|deny (unresolved prefix) for a push to main on a second gated line, and no opinion for a quiet line, each lexed twice after an escaped character that recurs unescaped, with exactly one stderr line or none: under gawk 5.2 the lexer aborted with an internal error and lost the deny (#553) -- no registry record: only gawk aborts, so the macOS driver cannot observe the mutant"
+  "ab-lexcls-gawk|case_ab_lexcls_gawk|deny for a gh call on a second gated line, and no opinion for a quiet line, each lexed twice after an escaped character that recurs unescaped, with exactly one stderr line or none: under gawk 5.2 the lexer aborted with an internal error and lost the deny (#553) -- no registry record: only gawk aborts, so the macOS driver cannot observe the mutant"
   "solo-abqnl-flood-cpu|case_solo_abqnl_flood_cpu|CPU TIME: a 512 KiB newline-carry flood reaches the chain budget within 1.3 times the CPU of the same bytes with the carry gate shut plus 250ms -- no registry record; solo-: outside every registry filter, so it never runs under the mutant driver"
   # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
   "codex-gcg-main-status|case_codex_gcg_main_status|allow: git-c-guard.sh under a Codex-shaped main-session payload, git -C ../demo-wt-1 status --porcelain (pins the unchanged verdict -- Codex ignores this hook's if gate, but the script itself never reads it)"
