@@ -565,8 +565,8 @@
 # earlier physical line after assignment text, and a mixed or even-count quoted assignment value with a
 # space but no break character, are closed by #553, whose paragraph lists the forms it leaves open): a
 # substitution that starts the command word (`$(echo git) push origin main`), a quoted `-C` value
-# with a space (`git -C
-# "../a;b c" push origin main`, as `git -C "../a b"` already is), and the lexer's approximations: a
+# with a space (`git -C "../a;b c" push origin main`, as `git -C "../a b"` already is), and the
+# lexer's approximations: a
 # `case` pattern's `)` inside `$(...)`, quoting inside `${...}`, backslash-nested backticks, and
 # process substitution (read as a plain subshell).
 #
