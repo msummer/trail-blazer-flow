@@ -4292,8 +4292,11 @@ case_solo_cmdcap_pin_at_cap_worst() {
   done
   # The #553 newline-carry shape q is bounded relative to its own twin q0, the same bytes with every
   # double quote spelled x so the carry gate stays shut (the base scan alone), both at knob 0: the budget
-  # line comes before the first deadline sample, so q reaches its verdict there, within 1.3 times the
-  # twin plus 250ms and at most the hook's 10s timeout in CPU time.
+  # line comes before the first deadline sample, so q reaches its verdict there, within twice the twin
+  # and at most the hook's 10s timeout in CPU time. The bound is a pure ratio: the base scan alone
+  # already costs more on q's quoted bytes than on the twin's, more so under gawk than under BSD awk,
+  # and a fixed allowance would swamp the ratio on a fast host. A carry that escapes the chain budget
+  # (its budget check dropped) lands past the bound on either awk.
   pcap_shape q0
   push_budget_override="0"
   push_deadline_override=60
@@ -4302,7 +4305,7 @@ case_solo_cmdcap_pin_at_cap_worst() {
     __ok=0; __why="${__why}[shape q0] control run's CPU report could not be parsed\n"
     return
   fi
-  rel_max_ms=$(( measured_cpu_ms * 13 / 10 + 250 ))
+  rel_max_ms=$(( measured_cpu_ms * 2 ))
   [ "$rel_max_ms" -le 10000 ] || rel_max_ms=10000
   pcap_shape q
   push_budget_override="0"
@@ -13306,7 +13309,7 @@ cases=(
   "push-cmdcap-noop-no-git|case_push_cmdcap_noop_no_git|no opinion: an over-cap command whose raw stdin never names git leaves through the fast path (a control, no registry mutant)"
   "push-cmdcap-noop-plan-mode|case_push_cmdcap_noop_plan_mode|no opinion: an over-cap command in plan mode leaves before the cap (a control, no registry mutant)"
   "push-cmdcaptime-deny-flood|case_push_cmdcaptime_deny_flood|FLOOD+TIMING: a push followed by one multi-megabyte dollar-quote word denies via the cap under an active deadline calibrated from a same-run plan-mode control -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
-  "solo-cmdcap-pin-at-cap-worst|case_solo_cmdcap_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap stays within a fixed CPU bound before its first deadline sample, and within a bound of at most the hook timeout for its whole production-budget run (the #503 shapes: u v w y prefix, x production, within a margin of a same-run control; the #553 newline-carry shape q against its twin q0 with every double quote spelled x), and reaches its verdict (regression pin, no registry mutant; solo-: outside every registry filter, so it never runs under the mutant driver)"
+  "solo-cmdcap-pin-at-cap-worst|case_solo_cmdcap_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap stays within a fixed CPU bound before its first deadline sample, and within a bound of at most the hook timeout for its whole production-budget run (the #503 shapes: u v w y prefix, x production, within a margin of a same-run control; the #553 newline-carry shape q within twice its twin q0, every double quote spelled x), and reaches its verdict (regression pin, no registry mutant; solo-: outside every registry filter, so it never runs under the mutant driver)"
   "push-rxscan-noop-flood|case_push_rxscan_noop_flood|FLOOD+TIMING: a lost segment and a push full of plain dollar-quote words, then a feature push -- no opinion; token count sized from a same-run twin control -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-rescan)"
   "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"
   "push-alias-deny-feature-dest|case_al_deny_feature_dest|a push alias denies even when the destination is a feature branch -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
