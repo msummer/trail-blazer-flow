@@ -18,6 +18,15 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #537: agent-boundary, push-guard and claude-dir-guard now follow the options of an interpreter prefix
+  word (`bash`, `sh`, `zsh`, `ksh`, `dash`) instead of taking an option's separate value for the command
+  word: a value option (`-o`, `+o`, `-O`, `+O`, `--rcfile`, `--init-file`, or a cluster ending in one of
+  the letters such as `-eo`) skips its plain value word and a flag (`-e`, `-c`, `+e`) skips alone, so the
+  `-c` string behind them is judged as usual (`bash -o pipefail -c 'gh pr merge 5'` denies, `bash -o
+  pipefail -c 'echo gh'` stays quiet); an option the walk cannot classify reads the rest of the segment
+  after its next word and fails closed, which also denies `bash --rcfile "$HOME/.bashrc" -c "git push origin
+  feature/x"` in every session. `docs/reference/safety-model.md` drops the two evasions this closes. No
+  consumer step.
 - #560: `dev/doctor-tests.sh`'s `forwarder` codex stub now pauses for a fixed half second in its TERM trap
   before it forwards to its child, so `codex-sched-wrapper-killed-forwards-term` kills the
   `427-wrapper-kill-immediate` mutant however the wrapper is scheduled between its two signals (a macOS

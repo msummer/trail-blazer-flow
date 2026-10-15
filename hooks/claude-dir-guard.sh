@@ -19,7 +19,9 @@
 # `..`-free (fail-closed per the triage record this issue settled), OR (apply_patch, or Bash
 # carrying an inline patch, #407) when the patch itself cannot be parsed into a recognised header
 # shape, OR (Bash only, #407 amendment) when the command word is `apply_patch`/`applypatch` (or, since
-# #518, a shim-named word follows the separate value of a prefix word's option, or, since #538, the
+# #518, a shim-named word follows the separate value of a prefix word's option, or, since #537, the
+# options of an interpreter prefix word are read or a shim-named word follows an option it cannot read,
+# or, since #538, the
 # name is split by quote or backslash characters, a runtime-expansion word precedes it, or an `env
 # -S` string names it) but
 # carries no inline patch this hook can see at all (e.g. reading the patch from a file), OR (Bash
@@ -399,9 +401,10 @@
 # (`p=apply_patch; $p < x.patch` -- this walk never expands a variable reference, so `$p` never
 # becomes "apply_patch"), an ANSI-C-quoted spelling (`$'apply_patch' < x.patch` -- the token holds a
 # dollar sign followed by a quote, so the walk skips it as a runtime-expansion word and the shim
-# never resolves), an interpreter prefix word's own value-taking option or a
-# launcher outside PREFIX_WORDS (`bash -o pipefail -c 'apply_patch < x.patch'`, `timeout 5 apply_patch
-# < x.patch`, `doas -u root apply_patch < x.patch`, measured rc 0; see the #518 paragraph below), a
+# never resolves), a value option of an interpreter prefix word outside the o/O letters and the
+# INTERP_VALUE_OPTS long options (`ksh -R x -c 'apply_patch < x.patch'`) or a
+# launcher outside PREFIX_WORDS (`timeout 5 apply_patch
+# < x.patch`, `doas -u root apply_patch < x.patch`, measured rc 0; see the #537 paragraph below), a
 # path-qualified prefix word (`/usr/bin/env apply_patch < x.patch`, rc 0: the prefix match is on the
 # whole token), an INDIRECT `eval`/`trap` argument (`eval "$c"`, `eval "$(cmd)"` -- quote-stripping
 # removes only the enclosing quote characters, it never expands a variable or runs a command
@@ -473,8 +476,9 @@ CLAUDE_DIR_DENY_STEM="trail-blazer-flow claude-dir guard:"
 # by dev/selfcheck.sh's assertion 4.40 clause (c)). Used only by walk_window() (called from
 # is_apply_patch_word() below) to skip a leading shell-keyword/interpreter-indirection word (and,
 # once one is seen, a following "-"-leading option, or, after a `repeat` prefix word, its own count
-# token too; since #518 a value-taking option of a PREFIX_VALUE_WORDS member is followed further, see
-# below) before resolving a Bash segment's own command word -- see that function's own comment
+# token too; since #518 a value-taking option of a PREFIX_VALUE_WORDS member is followed further, and
+# since #537 an interpreter member's options are classified, see below) before resolving a Bash
+# segment's own command word -- see that function's own comment
 # for why this hook needs the identical vocabulary, and (#437) for the additive `]]` handling and
 # quote-stripping this hook's own walk_window() now ALSO does, ported from #403's agent-boundary.sh/
 # push-guard.sh technique rather than copied byte-for-byte (this hook stays pure bash, no awk).
@@ -483,9 +487,19 @@ PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh
 # word (`nice -n 5`, `sudo -u root`, `stdbuf -o L`, `exec -a foo`, `xargs -a x`, `time -o f`); this
 # walk treats `env` as one too (it has no env arm of its own, so `env -u X apply_patch` hides the
 # shim behind the option value the same way). See walk_window()'s #518 trigger. Interpreter words
-# stay out: their `-c` value IS the command string. Byte-identical to hooks/agent-boundary.sh's and
+# stay out: their `-c` value IS the command string, so their options are classified by the #537 rule
+# instead (PREFIX_INTERP_WORDS below). Byte-identical to hooks/agent-boundary.sh's and
 # hooks/push-guard.sh's own copies (by convention, unpinned).
 PREFIX_VALUE_WORDS="exec nice stdbuf sudo time xargs"
+# PREFIX_INTERP_WORDS / INTERP_VALUE_OPTS (#537) -- the interpreter members of PREFIX_WORDS, and the long
+# options of those interpreters that take a SEPARATE value word (`bash --rcfile f -c ...`). While the most
+# recent prefix word is an interpreter, a `-`/`+` token is an option walk_window() classifies instead of
+# guessing (see the #537 paragraph at is_apply_patch_word()): a value option, a letter cluster ending in
+# a single `o` or `O` (`-o`, `+O`, `-eo`), skips its value word together with it when that word passes the
+# value-word test. Byte-identical to hooks/agent-boundary.sh's and hooks/push-guard.sh's own copies (by
+# convention, unpinned).
+PREFIX_INTERP_WORDS="bash dash ksh sh zsh"
+INTERP_VALUE_OPTS="--init-file --rcfile -init-file -rcfile"
 # DBRACKET_MAX (#437) -- copied from hooks/agent-boundary.sh:207 by the same "by convention,
 # unpinned" idiom this hook's own PREFIX_WORDS copy and hooks/push-guard.sh's copy already use (no
 # gate assertion pins any of the three copies against each other). Counts standalone `]]` tokens
@@ -939,10 +953,12 @@ scan_shim_input() {
 #   - `ww_word`: the resolved token with quote characters and backslashes stripped, or empty if the
 #     window is exhausted (or empty) before any word resolves; since #518 it is the first shim-named
 #     token after a prefix option's separate value when that scan fires (see is_apply_patch_word's #518
-#     paragraph), and since #538 it is the shim itself when an `env -S` string names it.
+#     paragraph), since #537 the first one after the next word of an interpreter option the walk cannot
+#     classify, and since #538 it is the shim itself when an `env -S` string names it.
 #   - `ww_skipped`: 1 when at least one token in the window was consumed by the redirect/fd skip,
 #     the assignment skip, a PREFIX_WORDS member (including its own `repeat` count token), a
-#     runtime-expansion word (#538), or a "-"-leading option once a PREFIX_WORDS member has been seen;
+#     runtime-expansion word (#538), a "-"-leading option once a PREFIX_WORDS member has been seen, or
+#     (#537) an option of an interpreter word together with its value word;
 #     0 otherwise. An empty token left
 #     behind by the quote strip is skipped too but does NOT set this flag (a lone quote character
 #     glued to nothing is not a meaningful skip). Only the in-loop cut-tail walk reads it (the base
@@ -952,6 +968,7 @@ scan_shim_input() {
 #     fail-closed rather than silently ignore).
 walk_window() {
   local i n tok nxt saw_prefix vp vp_done j vt hit ve ww_alt er
+  local ip=0 ipb ipk ipw ipj ipt iph
   i="$1"
   n="$2"
   ww_word=""
@@ -1011,11 +1028,112 @@ walk_window() {
         esac
         # #538: the env context follows the most recent prefix word too (a bare `-` leaves it alone)
         case "$tok" in env) ve=1 ;; -) ;; *) ve=0 ;; esac
+        # #537: the interpreter context follows the most recent prefix word too (a bare `-` leaves it alone)
+        case " $PREFIX_INTERP_WORDS " in
+          *" $tok "*) ip=1 ;;
+          *) [ "$tok" = "-" ] || ip=0 ;;
+        esac
         [ "$tok" = repeat ] && i=$((i + 1))
         i=$((i + 1))
         continue
         ;;
     esac
+    # #537: an option of an interpreter prefix word (bash/sh/zsh/ksh/dash), classified with globs only
+    # (no function call per token: see the check_deadline note above). A value option (-o, +O, -eo,
+    # --rcfile) is skipped together with its value word when that word is plain, a flag (-e, -c, +e)
+    # alone, so the -c string behind them is judged as usual. A token that is neither cannot be
+    # classified: when the next word is no option, no redirect marker and not shim-named, ONE scan per
+    # window (the vp_done memo the #518 scan shares) looks for a shim-named token after that word, never
+    # at it, and the option is then skipped alone. A token with a dollar sign is never skipped here, a
+    # token with a slash or the bare `--` keeps the walk it had, and an expansion word that reopened the
+    # value or env context after the interpreter leaves the option to the dash arm below, which scans.
+    if [ "$ip" -eq 1 ] && [ "$vp" -eq 0 ] && [ "$ve" -eq 0 ]; then
+      case "$tok" in
+        --|*/*) ;;
+        [-+]?*)
+          ipw=""
+          [ $((i + 1)) -lt "$n" ] && ipw="${toks[$((i + 1))]}"
+          ipk=u
+          case "$tok" in
+            *\$*) ;;
+            *)
+              case " $INTERP_VALUE_OPTS " in
+                *" $tok "*) ipk=v ;;
+                *)
+                  ipb="${tok#?}"
+                  case "$ipb" in
+                    *[!A-Za-z]*) ;;
+                    *[oO]*) case "${ipb%?}" in *[oO]*) ;; *) ipk=v ;; esac ;;
+                    *) ipk=f ;;
+                  esac
+                  ;;
+              esac
+              ;;
+          esac
+          if [ "$ipk" = f ]; then
+            i=$((i + 1)); ww_skipped=1; continue
+          fi
+          if [ "$ipk" = v ]; then
+            case "$ipw" in
+              ""|-*|+*|*"$sq"*|*"$dq"*|*\\*|*\$*) ;;
+              apply_patch|applypatch|*/apply_patch|*/applypatch|"$mark_in"|"$mark_out") ;;
+              *)
+                case " $PREFIX_WORDS " in
+                  *" $ipw "*) ;;
+                  *)
+                    if [[ ! $ipw =~ $assign_ere ]]; then
+                      i=$((i + 2)); ww_skipped=1; continue
+                    fi
+                    ;;
+                esac
+                ;;
+            esac
+          fi
+          if [ "$vp_done" -eq 0 ] && [ "$seg_mflag" -eq 1 ] && [ -n "$ipw" ]; then
+            ipt="${ipw//$sq/}"
+            ipt="${ipt//$dq/}"
+            ipt="${ipt//\\/}"
+            case "$ipt" in
+              apply_patch|applypatch|*/apply_patch|*/applypatch|""|-*|"$mark_in"|"$mark_out") ;;
+              *)
+                vp_done=1
+                iph=0
+                ipj=$((i + 2))
+                while [ "$ipj" -lt "$n" ]; do
+                  check_deadline
+                  ipt="${toks[$ipj]}"
+                  if [ "$ipt" != "$mark_in" ] && [ "$ipt" != "$mark_out" ]; then
+                    ipt="${ipt//$sq/}"
+                    ipt="${ipt//$dq/}"
+                    ipt="${ipt//\\/}"
+                    case "$ipt" in
+                      -*apply_patch|-*applypatch) ipt=apply_patch; iph=1; break ;;
+                      apply_patch|applypatch|*/apply_patch|*/applypatch) iph=1; break ;;
+                    esac
+                  fi
+                  ipj=$((ipj + 1))
+                done
+                if [ "$iph" -eq 1 ]; then
+                  # the walk never reached the option's next word or the tokens after it up to the hit;
+                  # any of those (a backslash-stripped prefix word, an expansion word, an env -S string)
+                  # would have marked the window for the whole-window check, so run it here
+                  if [ "$seg_qflag" -eq 1 ]; then
+                    quote_parity_check "$1" $((n - 1))
+                  fi
+                  ww_word="$ipt"
+                  i="$ipj"
+                  break
+                fi
+                ;;
+            esac
+          fi
+          case "$tok" in
+            *\$*) ;;
+            *) i=$((i + 1)); ww_skipped=1; continue ;;
+          esac
+          ;;
+      esac
+    fi
     if [ "$saw_prefix" -eq 1 ]; then
       case "$tok" in
         -*)
@@ -1329,7 +1447,9 @@ cdg_chain_line() {
 # `repeat`, its own count token right after it is skipped too), then -- once a PREFIX_WORDS member
 # has been seen -- a further "-"-leading option (an option to the prefix word itself, e.g. `env -i
 # apply_patch`; since #518, in the value context of a PREFIX_VALUE_WORDS member or `env`, a dash option
-# followed by a non-option word first looks for a shim-named word after that word; since #538 a
+# followed by a non-option word first looks for a shim-named word after that word; since #537, after an
+# interpreter word, a dash or plus option is classified and a value option takes its plain value word
+# with it; since #538 a
 # runtime-expansion word is skipped like a prefix word, and an option after an `env` word is read as
 # an `env -S` string); the first token surviving every skip is the segment's resolved command word,
 # compared both in full and by basename (finding E). (#437) Every token is also stripped of `'`/`"`
@@ -1389,8 +1509,51 @@ cdg_chain_line() {
 # never spells the shim plainly (`nice -n 5 apply_"patch"`, or since #538 `nice -n 5 apply\_patch`) is
 # scanned too (seg_mflag). Over-blocking,
 # each measured rc 2: `nice -n 5 rg apply_patch hooks/` and `sudo -u root bash -c "echo apply_patch"`.
-# Residuals, each measured rc 0: an interpreter prefix word's option and a launcher outside PREFIX_WORDS
-# (see the residual list above).
+# Residual, measured rc 0: a launcher outside PREFIX_WORDS (see the residual list above).
+#
+# An option of an interpreter prefix word (#537). Interpreters stay out of PREFIX_VALUE_WORDS: the value of
+# `bash -c` IS the command string, so scanning past it would deny `bash -e -o pipefail -c echo apply_patch`.
+# Their options are classified instead, with case globs only (no function call per token: bash 3.2 makes a
+# call expensive while this walk's frame is large). While the most recent prefix word is in
+# PREFIX_INTERP_WORDS (bash, dash, ksh, sh, zsh; a bare `-` leaves it alone), a token that starts with a dash
+# or a plus, is longer than one character, is not `--` and holds no slash is one of three kinds. A VALUE
+# option is a member of INTERP_VALUE_OPTS (--init-file, --rcfile, -init-file, -rcfile) or a dash or plus
+# followed by letters of which exactly one is o or O, and it is the last (`-o`, `+O`, `-eo`): it is skipped
+# together with the NEXT word (walk_window's `i + 2`), but only when that word is plain: not empty, not led
+# by a dash or plus, no quote, backslash or dollar sign, not a redirect marker, not shim-named, not an
+# assignment and not a PREFIX_WORDS member. The -c string behind the options is then resolved as usual, so
+# `bash -o pipefail -c 'apply_patch < x.patch'` denies with the "no inline patch text" reason. A FLAG is a
+# dash or plus followed by letters with no o or O (`-e`, `-c`, `-lc`, `+e`), skipped alone as every dash
+# token was (a plus-led token used to be the resolved word). Anything else is UNCLASSIFIED: two value
+# letters, a value letter that is not last, an unlisted long option, a non-letter, or a value option whose
+# next word failed the test. When the next word is no option, no redirect marker and not shim-named, ONE
+# scan per window (walk_window's vp_done, shared with the #518 scan) looks for a shim-named token after
+# that word, in a segment that mentions the shim or carries a quote (seg_mflag), with the #518 scan's
+# matching; a hit runs the #455 unbalanced-quote check over the WHOLE window, because the walk never
+# reached the option's next word or the tokens after it up to the hit, and any of them (a backslash-stripped
+# prefix word, an expansion word, an env -S string) would have marked the window for that whole-window
+# check on its own (`bash --login \env apply_patch <<'EOF' > a'b` keeps its unbalanced-quote deny); the
+# option is then skipped alone. A next word that itself names the shim is never skipped and never scanned
+# past: the walk resolves it at the smaller index, so the scan never moves seg_shim_at later (`zsh -cO apply_patch
+# evil.patch applypatch <<'EOF'` keeps its argument deny). A token holding a dollar sign is never skipped by
+# this rule, a token with a slash or the bare `--` keeps the walk it had (`bash +/apply_patch < x.patch`
+# still resolves the shim by its basename), and an expansion word that reopened the value or env context
+# after the interpreter (`bash $X -o pipefail -c ...`) leaves the option to the dash arm, which scans. A
+# word is skipped only when the old walk, which took it for the resolved word, could not have resolved the
+# shim through it, so no deny turns into an allow; every other path adds a scan. Cost: a constant number of
+# case globs and two `#?`/`%?` strips per option token, on a line already capped at CDG_LINE_MAX_BYTES; at
+# most one scan per window, so the base window and the disjoint `]]` tails scan at most twice the segment's
+# tokens, each scanned token costing one deadline sample, two quote strips, one backslash strip and one
+# glob. Over-blocking, each measured rc 2: `bash -O "extglob" -c 'echo apply_patch'` (a quoted value fails
+# the test, and the unbalanced-quote check of #455 then reads the quoted first word of the -c string),
+# `bash -o pipefail -c 'echo apply_patch'` (the option no longer hides the verdict `bash -c 'echo
+# apply_patch'` already gets through that same check), `bash --norc script.sh apply_patch` (an unlisted
+# long option followed by a script whose arguments name the shim), and `bash -oo x apply_patch <<'EOF' >
+# a'b` with a patch (the whole-window check on a scan hit reads a quote opened after the shim, which a plain
+# `apply_patch <<'EOF' > a'b` gets past). Residuals, each measured rc 0: a value
+# option outside the o/O letters and the two long options (`ksh -R x -c 'apply_patch < x.patch'`;
+# UNVERIFIED which shell takes which option's value), and an interpreter reached behind a launcher outside
+# PREFIX_WORDS (`timeout 5 bash -o pipefail -c 'apply_patch < x.patch'`).
 #
 # (#437) Memoised: both call sites in the Bash route below always pass the identical text, so the
 # global `iapw_memo` (declared just below, empty until the first call in this process) short-
