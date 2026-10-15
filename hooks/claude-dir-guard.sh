@@ -19,7 +19,9 @@
 # `..`-free (fail-closed per the triage record this issue settled), OR (apply_patch, or Bash
 # carrying an inline patch, #407) when the patch itself cannot be parsed into a recognised header
 # shape, OR (Bash only, #407 amendment) when the command word is `apply_patch`/`applypatch` (or, since
-# #518, a shim-named word follows the separate value of a prefix word's option) but
+# #518, a shim-named word follows the separate value of a prefix word's option, or, since #538, the
+# name is split by quote or backslash characters, a runtime-expansion word precedes it, or an `env
+# -S` string names it) but
 # carries no inline patch this hook can see at all (e.g. reading the patch from a file), OR (Bash
 # only, #455) when the shim's own input is anything but its own inline heredoc while an inline
 # patch also appears elsewhere in the command (a decoy), OR (Bash only, #455/#456) when an
@@ -194,7 +196,8 @@
 # walk segment with no heredoc; `cd "$HOME/x" && apply_patch <<EOF ...` with an unquoted delimiter
 # -> rc 2. The unbalanced-quote rule below over-blocks more broadly: ANY line of a multi-line Bash
 # string (a commit body, echo/printf text, a `cat <<'EOF' > file` body, a patch context line such
-# as " Codex's apply_patch shim") that mentions apply_patch/applypatch and whose words up to its
+# as " Codex's apply_patch shim") that mentions apply_patch/applypatch (since #538 a spelling split
+# by quote or backslash characters counts as a mention) and whose words up to its
 # command word (any leading skipped assignment or prefix word included) carry an unbalanced quote
 # or a trailing backslash denies for implementer/verifier calls, with no patch and no shim
 # invocation involved -- measured: `printf '%s' "one<newline>Don't call apply_patch here"` -> rc 2,
@@ -204,7 +207,8 @@
 # native apply_patch tool call for a patch, or avoid the shim name on that line. A quoted heredoc
 # delimiter does NOT help here (it is the remedy only for the unquoted-<<EOF over-block above).
 #
-# (#455, absorbing #456) In a segment whose text mentions `apply_patch`/`applypatch` and carries a
+# (#455, absorbing #456) In a segment whose text mentions `apply_patch`/`applypatch` (plain, or since
+# #538 split by quote or backslash characters) and carries a
 # quote or a backslash, any token from a walk window's start through its resolved non-shim command
 # word that has an odd count of `'` or of `"`, or ends in a backslash, denies ("unbalanced quote"):
 # the whitespace split happens before quotes are stripped, so `X='a b' apply_patch < x.patch` or
@@ -220,8 +224,8 @@
 # is_apply_patch_word() cuts a line at every `;`, `&`, `|`, `(`, `)`, `{`, `}` and backtick before it
 # looks at quoting, so the opening quote of a value holding one of them sits in a previous segment and
 # the unbalanced-quote check above never sees it. An ADDITIVE pass, cdg_chain_line(), runs per gated
-# physical line -- a line that names the shim, carries a quote, a backslash, a backtick, `$(` or `${`,
-# and holds a break character -- and only adds segments: it lexes the line sequentially (single
+# physical line -- a line that names the shim (since #538 a split spelling counts), carries a quote, a
+# backslash, a backtick, `$(` or `${`, and holds a break character -- and only adds segments: it lexes the line sequentially (single
 # quotes, double quotes, `$'...'`, backslash escapes, an unquoted `#` at a word start outside any
 # substitution, which ends the lexing, and a stack of `$(...)`, `${...}` and backtick frames), classifies
 # every break character as a head break (a real command break, which ends the current chain), a
@@ -239,6 +243,51 @@
 # starts the command word (`$(echo apply_patch) < x.patch`) and the lexer's approximations (a `case`
 # pattern's `)` inside `$(...)`, quoting inside `${...}`, backslash-nested backticks, process
 # substitution read as a plain subshell).
+#
+# Fail-closed: a shim name split by quote or backslash characters, a runtime expansion before it, or an
+# `env -S` string (#538). The shell deletes quote and backslash characters inside a word, so
+# `apply_"patch"`, `apply\_patch` and `a''pply_patch` run the shim; a runtime-expansion word may expand
+# to nothing, so `$X apply_patch` runs it; and `env -S'apply_patch'` splits its string into words, so
+# it runs it too. (1) Every shim-name comparison in the walk deletes backslashes as well as quotes
+# (a token that carried a backslash marks its window, `ww_alt`), and fast path 2, the #503 chain gate
+# and the #455 and #518 segment flags all count a split spelling as a mention of the shim: one regex
+# (cdg_split_ere, defined above the fast paths) tested on the raw payload only when the literal check
+# fails and the payload carries a backslash or an apostrophe, on a line only when it carries a quote or
+# a backslash and not the plain name, and on a segment only inside a line that names the shim, plain
+# or split (a backslash-only segment also gets the #518 scan flag, a quoted one has it already). (2)
+# A token whose basename holds a dollar sign followed by a name character, a digit, a special
+# parameter or a quote (the class of
+# hooks/agent-boundary.sh's #508 rx_re, by convention unpinned) is skipped like a prefix word, in a
+# segment that mentions the shim or carries a quote: a dash-led one opens no context, any other opens
+# the value context (#518) and the env context. The skip sits after the dash arm, so `nice -$X 5
+# apply_patch` still starts the #518 scan. (3) After an `env` word (or a skipped expansion word) an
+# option token is read the way `env -S` reads its string -- each backslash-underscore a space, then
+# quotes and backslashes deleted: a space-separated word that is the shim (exactly or by basename), or a
+# first word that is an option glued to the shim name (`-Sapply_patch`, `-vS'apply_patch'`), resolves
+# it, and a bare `-S` or `--split-string` reads the NEXT token the same way, without the glued-option
+# rule. The reading sits before the #518 scan, so it never reads past the token the string is in; the
+# scan itself also deletes backslashes now, and counts a dash token that ends in the shim name in any
+# value context (`nice -n 5 env -S'apply_patch'`, `env -u X -S'apply_patch'`). (4) A shim resolved
+# through a backslash strip, an expansion skip or an `env -S` string, in a segment flagged for the
+# parity check, runs the #455 unbalanced-quote check over the WHOLE window, a superset of what the
+# walk checked on those routes before, so no earlier unbalanced-quote deny is lost. Cost: the fast
+# path's second check is one linear regex pass over the payload (a fixed-length pattern with no
+# group, under a scoped C locale), run only when the literal check fails; it is unsampled and part of `T_prefix`. Per line at
+# most one regex over the line, per segment at most one over the segment, per walked token at most one
+# backslash substitution, one glob and, for a token holding a dollar sign, one regex, per dash token
+# after an env word two single-token reads, per #518 scan token one substitution and one glob: no new
+# loop grows with the input, so the total stays linear and each per-line step stays inside the
+# existing sampled loops. Over-blocking, each measured rc 2: a prose or heredoc line whose leading
+# words are prefix or expansion words before the shim name (`- $X apply_patch is how the old flow
+# ran`); the #455 apostrophe class extended to a split spelling (`Don't run apply_"patch" here`);
+# `"apply\_patch" < x.patch`, where the backslash is literal inside double quotes; an env option word
+# or a value-context dash word ending in the shim name (`env -uapply_patch true`, `nice -n 5 rg
+# -napply_patch hooks/`); `$PAGER apply_patch`; and a `]]` cut tail holding only an expansion word
+# (`if [[ -n x ]] $X ]] apply_patch.md`). Residuals, each measured rc 0: an ANSI-C-quoted or
+# expansion-glued name (`$'apply_patch' < x.patch`, `apply_$'patch' < x.patch`, `"$X"apply_patch <
+# x.patch`), a variable-built name (`p=apply_patch; $p < x.patch`), a backslash-newline split
+# (`apply_\<newline>patch < x.patch`), a path-qualified prefix word (`/usr/bin/env apply_patch <
+# x.patch`), and the interpreter-option and launcher residuals listed below.
 #
 # Analysis deadline (#457). This hook's own analysis (everything after the role and plan-mode exits)
 # is bounded by a whole-second wall-clock budget, `CDG_ANALYSIS_BUDGET_SECS` (5s in production),
@@ -289,14 +338,17 @@
 # bounded by the per-line deadline samples. The Edit/Write route analyses no text, so only its path
 # is capped. Worst-case wall clock for the whole hook, stated for review: at most
 # `max(cdg_budget, T_prefix(L)) + U_max`, where `T_prefix` is the prefix this deadline cannot sample
-# around -- `cat`, the fast-path globs, up to five `jq` calls, the length checks, cdg_prepare_text's
+# around -- `cat`, the fast-path globs, since #538 the fast path's one split-name regex pass over the
+# payload, up to five `jq` calls, the length checks, cdg_prepare_text's
 # CR-presence glob and its whole-text `for ln in $text` word-split, the like whole-text splits in
 # is_apply_patch_word, has_exact_begin_patch_line and parse_patch_headers (all linear, all bounded by
 # `CDG_TEXT_MAX_BYTES`), and the raw-text `.claude`/`.codex` glob -- and `U_max` is the largest
 # single step the deadline cannot interrupt: one line's substitutions (bounded by
 # `CDG_LINE_MAX_BYTES`; since #503 also one character step of cdg_chain_line(), whose loop samples the
-# deadline per character), one segment's `toks=($seg)` word-split, one `"${toks[@]}"` expansion, one
-# walk_window iteration (plus any per-index cost bash 3.2's arrays add), one forked `trim`/`ltrim`
+# deadline per character), since #538 also one line's or one segment's split-name regex, one segment's
+# `toks=($seg)` word-split, one `"${toks[@]}"` expansion, one
+# walk_window iteration (plus any per-index cost bash 3.2's arrays add; since #538 also one token's `env
+# -S` reading and one expansion-word regex), one forked `trim`/`ltrim`
 # call up to its first in-subshell sample, or one classify_path. Residuals this deadline and these
 # caps do NOT close: `T_prefix` is unsampled (though still counted by the wall clock), and the Codex
 # CLI's own hook timeout, if any, is UNVERIFIED here -- the budget is sized against Claude Code's
@@ -308,7 +360,8 @@
 # into smaller patches or to use Codex's native apply_patch tool, which forks less per line; a Bash
 # call with a SINGLE physical line longer than `CDG_LINE_MAX_BYTES` bytes that passes fast path
 # 2 (it names `Edit`, `Write`, `apply_patch`, `applypatch` or `*** Begin Patch` anywhere in the raw
-# payload) denies, and the remedy is to break the line or, for a patch, to use the native tool,
+# payload, or spells the shim split by quote or backslash characters) denies, and the remedy is to
+# break the line or, for a patch, to use the native tool,
 # whose route does not cap an ordinary content line; a native apply_patch call whose CR-bearing line
 # or `*** ` marker line is over the cap denies, and the remedy is to split the patch or remove the
 # CR; and a path or `cwd` longer than `CDG_LINE_MAX_BYTES` bytes denies (a header path is
@@ -331,24 +384,26 @@
 # redirect cannot hide the command word either), matches a path-qualified spelling
 # (`./apply_patch`, `/usr/local/bin/apply_patch`) by basename, and skips a leading `NAME=value`
 # assignment (since #455 a prefix token carrying an unbalanced quote or a trailing backslash
-# denies instead, see the #455 paragraphs above) or a hooks/agent-boundary.sh-vocabulary
+# denies instead, see the #455 paragraphs above), a runtime-expansion word (since #538, see that
+# paragraph) or a hooks/agent-boundary.sh-vocabulary
 # PREFIX_WORDS member (including
 # `bash`/`sh`/`env`/`sudo`/…, so `bash -c apply_patch` now resolves past `bash -c` to `apply_patch`
-# and denies) -- still backslash-blind like every other scan in this directory (since #437, quote
-# CHARACTERS are stripped from each token before matching/resolving it -- see walk_window()'s own
-# comment -- but the base walk still never tracks which quote ENCLOSES which span, only strips the
-# characters themselves; the #503 chain pass tracks quote state, but only to re-judge text the base
+# and denies). Since #437 quote CHARACTERS, and since #538 backslashes too, are stripped from each
+# token before matching/resolving it -- see walk_window()'s own comment -- but the base walk still
+# never tracks which quote ENCLOSES which span, only strips the characters themselves (so
+# `"apply\_patch"`, whose backslash is literal inside double quotes, resolves as the shim, a
+# documented over-block; the #503 chain pass tracks quote state, but only to re-judge text the base
 # split cut apart), so deliberate obfuscation remains OUT OF SCOPE for this tripwire, not a
-# sandbox: a backslash-quoted spelling (`\apply_patch`, `a\pply_patch`, or a backslash-newline
-# splitting the word across two physical lines), a variable-built spelling of the shim's own name
+# sandbox: a backslash-newline splitting the word across two physical lines, a variable-built
+# spelling of the shim's own name
 # (`p=apply_patch; $p < x.patch` -- this walk never expands a variable reference, so `$p` never
-# becomes "apply_patch"), an ANSI-C-quoted spelling (`$'apply_patch' < x.patch` -- stripping the `'`
-# characters leaves the leading `$` glued to the word, which matches neither "apply_patch" nor
-# "applypatch", in full or by basename), an interpreter prefix word's own value-taking option or a
+# becomes "apply_patch"), an ANSI-C-quoted spelling (`$'apply_patch' < x.patch` -- the token holds a
+# dollar sign followed by a quote, so the walk skips it as a runtime-expansion word and the shim
+# never resolves), an interpreter prefix word's own value-taking option or a
 # launcher outside PREFIX_WORDS (`bash -o pipefail -c 'apply_patch < x.patch'`, `timeout 5 apply_patch
-# < x.patch`, `doas -u root apply_patch < x.patch`, measured rc 0; see the #518 paragraph below), an
-# `env -S'apply_patch' < x.patch` string (rc 0), a runtime-expansion command word (`$X apply_patch <
-# x.patch`, rc 0), an INDIRECT `eval`/`trap` argument (`eval "$c"`, `eval "$(cmd)"` -- quote-stripping
+# < x.patch`, `doas -u root apply_patch < x.patch`, measured rc 0; see the #518 paragraph below), a
+# path-qualified prefix word (`/usr/bin/env apply_patch < x.patch`, rc 0: the prefix match is on the
+# whole token), an INDIRECT `eval`/`trap` argument (`eval "$c"`, `eval "$(cmd)"` -- quote-stripping
 # removes only the enclosing quote characters, it never expands a variable or runs a command
 # substitution, so a variable- or substitution-built spelling of the shim's own name stays invisible
 # to this text-only scan the same way the assignment case above does), a launcher this walk does not
@@ -510,20 +565,41 @@ case "$input" in
   *) exit 0 ;;
 esac
 
-# Fast path 2 (#407 amendment A1) -- true for every call this hook could possibly act on, false
+# cdg_split_ere (#538) -- the shim name with any run of backslash, double-quote or apostrophe
+# characters between its letters (and an optional underscore), the shell deleting them: apply_"patch",
+# apply\_patch, a''pply_patch. cdg_q is one such run, an ERE bracket expression (a backslash is
+# literal inside it). There is no group: `_?` covers the no-underscore spelling too, and the
+# pattern has a fixed length, so one pass over a payload is linear. cdg_split_raw tests the
+# raw payload under a scoped C locale (a byte-wise match, whatever the host's locale); the same
+# pattern is tested again, per line and per segment, in is_apply_patch_word().
+cdg_q="[\\\"']*"
+cdg_split_ere="a${cdg_q}p${cdg_q}p${cdg_q}l${cdg_q}y${cdg_q}_?${cdg_q}p${cdg_q}a${cdg_q}t${cdg_q}c${cdg_q}h"
+cdg_split_raw() { local LC_ALL=C; [[ $input =~ $cdg_split_ere ]]; }
+
+# Fast path 2 (#407 amendment A1, #538) -- true for every call this hook could possibly act on, false
 # for the overwhelming majority of ordinary Bash calls (the class #407 added a Bash route for):
 # every genuine Edit/Write/apply_patch tool call's own tool_name VALUE already spells one of
 # "Edit"/"Write"/"apply_patch" literally in this raw JSON, so requiring one of those three, OR
 # "applypatch" (Codex's shim also answers to the no-underscore spelling), OR the patch grammar's
 # own "*** Begin Patch" marker, to appear ANYWHERE in the raw stdin is safe for every route below:
-# it can only ever skip a Bash call that mentions NONE of them -- which cannot possibly invoke
-# apply_patch/applypatch as its command word or carry an inline "*** Begin Patch" patch either, so
-# "no opinion" is the correct verdict regardless -- and it never skips a real Edit, Write, or
-# apply_patch call, whose own tool_name field supplies the matching substring unconditionally.
-# This is what keeps an ordinary implementer/verifier Bash call (a `git`/`gh` command, an
-# ordinary read, …) from spawning jq at all now that Bash is in scope.
+# it never skips a real Edit, Write, or apply_patch call, whose own tool_name field supplies the
+# matching substring unconditionally. A Bash call that spells none of them can still run the shim
+# when the shell deletes quote or backslash characters inside its name (apply_"patch"), so a second
+# check runs only when that literal check fails and the raw payload carries a backslash or an
+# apostrophe (in raw JSON a double quote arrives as a backslash and a quote, and a backslash as two
+# backslashes, so those two characters cover all three): one regex pass for the shim name with a run
+# of those characters between its letters, which spawns no jq. A call that fails both checks spells
+# the shim neither literally nor split by quote or backslash characters, and gets "no opinion": a
+# name the shell builds from a variable, a substitution or an ANSI-C fragment is a documented
+# residual in the header above, not something a text scan finds, and a CR or NUL inside the name is
+# deleted only by this hook's own input cleanup, never by the shell. Both checks read the raw JSON
+# text as the serializer wrote it, so they assume it writes ASCII letters, the underscore and the
+# apostrophe literally rather than as a \u escape (the literal check already assumed that). This is
+# what keeps an ordinary implementer/verifier Bash call (a `git`/`gh` command, an ordinary read, …)
+# from spawning jq at all now that Bash is in scope.
 case "$input" in
   *Edit*|*Write*|*apply_patch*|*applypatch*|*'Begin Patch'*) : ;;
+  *\\*|*"'"*) cdg_split_raw || exit 0 ;;
   *) exit 0 ;;
 esac
 
@@ -572,6 +648,10 @@ tab=$'\t'
 # see is_apply_patch_word()'s comment). Pure parameter expansion, same as cr/lf/tab above.
 sq="'"
 dq='"'
+# cdg_rx_ere (#538) -- a runtime expansion inside a word: a dollar sign followed by a name character, a
+# digit, a special parameter or a quote. The same class as hooks/agent-boundary.sh's rx_re (by
+# convention, unpinned); walk_window() tests a token's basename against it.
+cdg_rx_ere="[\$][A-Za-z0-9_@*#?!\$=~^${dq}${sq}-]"
 
 # classify_path TOOL RAW_PATH -- the shared classifier both routes call, pure builtins, no
 # filesystem access at all. Order matters: the more specific ".claude"/".codex" message wins over
@@ -856,12 +936,14 @@ scan_shim_input() {
 # `seg_shim_at`, the smallest resolved shim index, and (only in a segment the caller flagged with
 # `seg_qflag`) runs quote_parity_check over its own walked tokens, which can exit 2. Otherwise it
 # never prints or exits:
-#   - `ww_word`: the resolved token with quote characters stripped, or empty if the window is
-#     exhausted (or empty) before any word resolves; since #518 it is the first shim-named token after
-#     a prefix option's separate value when that scan fires (see is_apply_patch_word's #518 paragraph).
+#   - `ww_word`: the resolved token with quote characters and backslashes stripped, or empty if the
+#     window is exhausted (or empty) before any word resolves; since #518 it is the first shim-named
+#     token after a prefix option's separate value when that scan fires (see is_apply_patch_word's #518
+#     paragraph), and since #538 it is the shim itself when an `env -S` string names it.
 #   - `ww_skipped`: 1 when at least one token in the window was consumed by the redirect/fd skip,
-#     the assignment skip, a PREFIX_WORDS member (including its own `repeat` count token), or a
-#     "-"-leading option once a PREFIX_WORDS member has been seen; 0 otherwise. An empty token left
+#     the assignment skip, a PREFIX_WORDS member (including its own `repeat` count token), a
+#     runtime-expansion word (#538), or a "-"-leading option once a PREFIX_WORDS member has been seen;
+#     0 otherwise. An empty token left
 #     behind by the quote strip is skipped too but does NOT set this flag (a lone quote character
 #     glued to nothing is not a meaningful skip). Only the in-loop cut-tail walk reads it (the base
 #     walk and the final tail never do), and only when `ww_word` is also empty, to tell "the window
@@ -869,13 +951,15 @@ scan_shim_input() {
 #     never reached a real one" (ww_skipped=1, a cut (non-final) tail is_apply_patch_word denies
 #     fail-closed rather than silently ignore).
 walk_window() {
-  local i n tok nxt saw_prefix vp vp_done j vt hit
+  local i n tok nxt saw_prefix vp vp_done j vt hit ve ww_alt er
   i="$1"
   n="$2"
   ww_word=""
   ww_skipped=0
   saw_prefix=0
   vp=0
+  ve=0
+  ww_alt=0
   vp_done=0
   while [ "$i" -lt "$n" ]; do
     check_deadline
@@ -905,13 +989,14 @@ walk_window() {
       ww_skipped=1
       continue
     fi
-    # #437: strip quote characters (not backslashes -- see this hook's header residual list) from
-    # the token before matching it against PREFIX_WORDS or resolving it as the command word, so a
-    # quoted `eval`/`trap`/`bash -c` argument or a quoted shim spelling resolves the same as an
-    # unquoted one. A token that strips to nothing (a lone quote glued to nothing else) is skipped
-    # without setting ww_skipped.
+    # #437: strip quote characters, and (#538) backslashes, from the token before matching it against
+    # PREFIX_WORDS or resolving it as the command word, so a quoted `eval`/`trap`/`bash -c` argument
+    # or a quoted or backslash-split shim spelling resolves the same as an unquoted one (a token that
+    # carried a backslash marks the window, `ww_alt`; see the shim arm below). A token that strips to
+    # nothing (a lone quote glued to nothing else) is skipped without setting ww_skipped.
     tok="${tok//$sq/}"
     tok="${tok//$dq/}"
+    case "$tok" in *\\*) tok="${tok//\\/}"; ww_alt=1 ;; esac
     if [ -z "$tok" ]; then
       i=$((i + 1))
       continue
@@ -924,6 +1009,8 @@ walk_window() {
           *" $tok "*) vp=1 ;;
           *) [ "$tok" = "-" ] || vp=0 ;;
         esac
+        # #538: the env context follows the most recent prefix word too (a bare `-` leaves it alone)
+        case "$tok" in env) ve=1 ;; -) ;; *) ve=0 ;; esac
         [ "$tok" = repeat ] && i=$((i + 1))
         i=$((i + 1))
         continue
@@ -932,6 +1019,34 @@ walk_window() {
     if [ "$saw_prefix" -eq 1 ]; then
       case "$tok" in
         -*)
+          # #538: after an env word, an option that reads as an env -S string names the shim. The
+          # token itself is read the way env reads a string (each backslash-underscore a space, then
+          # quotes and backslashes deleted): any space-separated word that is the shim, or a first word
+          # that is an option glued to the shim name (-Sapply_patch, -vS'apply_patch'), resolves it.
+          # A bare -S or --split-string takes the NEXT token as its string, read the same way without
+          # the glued-option rule. At most two single-token reads, before the #518 scan below so the
+          # scan never reads past the token the string sits in.
+          if [ "$ve" -eq 1 ] && [ "$seg_mflag" -eq 1 ]; then
+            er="${toks[$i]//\\_/ }"
+            er="${er//$sq/}"
+            er="${er//$dq/}"
+            er="${er//\\/}"
+            case " $er " in
+              *" apply_patch "*|*" applypatch "*|*/apply_patch" "*|*/applypatch" "*) ww_alt=1; ww_word=apply_patch; break ;;
+            esac
+            case "${er%% *}" in
+              -*apply_patch|-*applypatch) ww_alt=1; ww_word=apply_patch; break ;;
+            esac
+            if { [ "$tok" = "-S" ] || [ "$tok" = "--split-string" ]; } && [ $((i + 1)) -lt "$n" ]; then
+              er="${toks[$((i + 1))]//\\_/ }"
+              er="${er//$sq/}"
+              er="${er//$dq/}"
+              er="${er//\\/}"
+              case " $er " in
+                *" apply_patch "*|*" applypatch "*|*/apply_patch" "*|*/applypatch" "*) ww_alt=1; ww_word=apply_patch; i=$((i + 1)); break ;;
+              esac
+            fi
+          fi
           # #518: a dash token in the value context followed by a non-option word W: W may be that
           # option value, so look for a shim-named word AFTER W (never W itself -- when W names the
           # shim the walk resolves W below, at the smaller index). At most one scan per window.
@@ -939,6 +1054,7 @@ walk_window() {
             vt="${toks[$((i + 1))]}"
             vt="${vt//$sq/}"
             vt="${vt//$dq/}"
+            vt="${vt//\\/}"
             case "$vt" in
               ""|-*|"$mark_in"|"$mark_out"|apply_patch|applypatch|*/apply_patch|*/applypatch) ;;
               *)
@@ -951,8 +1067,10 @@ walk_window() {
                   if [ "$vt" != "$mark_in" ] && [ "$vt" != "$mark_out" ]; then
                     vt="${vt//$sq/}"
                     vt="${vt//$dq/}"
+                    vt="${vt//\\/}"
                     case "$vt" in
                       apply_patch|applypatch|*/apply_patch|*/applypatch) hit=1; break ;;
+                      -*apply_patch|-*applypatch) vt=apply_patch; hit=1; break ;;
                     esac
                   fi
                   j=$((j + 1))
@@ -974,6 +1092,27 @@ walk_window() {
           i=$((i + 1)); ww_skipped=1; continue ;;
       esac
     fi
+    # #538: a runtime expansion in command position may expand to nothing (hooks/agent-boundary.sh's
+    # #508 rule): a token whose basename holds a dollar sign followed by a name character, a digit, a
+    # special parameter or a quote is skipped like a prefix word, so the shim behind it still
+    # resolves. It opens the value context and the env context (a dash-led one opens neither), and
+    # sits AFTER the dash arm above so `nice -$X 5 apply_patch` still starts the #518 scan.
+    if [ "$seg_mflag" -eq 1 ]; then
+      case "${toks[$i]}" in
+        *'$'*)
+          if [[ ${toks[$i]##*/} =~ $cdg_rx_ere ]]; then
+            ww_alt=1
+            saw_prefix=1
+            case "${toks[$i]}" in
+              -*) ;;
+              *) vp=1; ve=1 ;;
+            esac
+            i=$((i + 1))
+            continue
+          fi
+          ;;
+      esac
+    fi
     ww_word="$tok"
     break
   done
@@ -981,11 +1120,15 @@ walk_window() {
   # (#455) Bookkeeping after the per-token loop, which is untouched. A window that resolved the shim
   # records the SMALLEST resolved index in the caller's `seg_shim_at` (the base walk and every `]]`
   # tail may each resolve it; the input scan starts from the earliest). Any other window, in a
-  # segment the caller flagged (`seg_qflag`: the segment text mentions the shim and carries a
-  # quote or a backslash), runs the unbalanced-quote check over its own already-walked tokens, start through the
-  # resolved word (through the window's last token when nothing resolved).
+  # segment the caller flagged (`seg_qflag`: the segment text mentions the shim, plain or split, and
+  # carries a quote or a backslash), runs the unbalanced-quote check over its own already-walked
+  # tokens, start through the resolved word (through the window's last token when nothing resolved).
   case "${ww_word##*/}" in
     apply_patch|applypatch)
+      # #538: a shim resolved through a backslash strip, an expansion skip or an env -S string runs the
+      # unbalanced-quote check over the WHOLE window, a superset of what the walk ran on those routes
+      # before (start through the word it resolved), so no earlier unbalanced-quote deny is lost
+      if [ "$ww_alt" -eq 1 ] && [ "$seg_qflag" -eq 1 ]; then quote_parity_check "$1" $((n - 1)); fi
       if [ "$seg_shim_at" -lt 0 ] || [ "$i" -lt "$seg_shim_at" ]; then
         seg_shim_at="$i"
       fi
@@ -1186,9 +1329,12 @@ cdg_chain_line() {
 # `repeat`, its own count token right after it is skipped too), then -- once a PREFIX_WORDS member
 # has been seen -- a further "-"-leading option (an option to the prefix word itself, e.g. `env -i
 # apply_patch`; since #518, in the value context of a PREFIX_VALUE_WORDS member or `env`, a dash option
-# followed by a non-option word first looks for a shim-named word after that word); the first token surviving every skip is the segment's resolved command word,
+# followed by a non-option word first looks for a shim-named word after that word; since #538 a
+# runtime-expansion word is skipped like a prefix word, and an option after an `env` word is read as
+# an `env -S` string); the first token surviving every skip is the segment's resolved command word,
 # compared both in full and by basename (finding E). (#437) Every token is also stripped of `'`/`"`
-# quote characters before any of the above matching happens (see walk_window's own comment).
+# quote characters, and (#538) of backslashes, before any of the above matching happens (see
+# walk_window's own comment).
 #
 # (#437) Each segment whose raw text carries a literal `]]` is ALSO walked one additional way,
 # ported from #403's agent-boundary.sh/push-guard.sh technique but kept pure bash here (no awk --
@@ -1218,26 +1364,30 @@ cdg_chain_line() {
 # backslash anywhere makes it unsafe.
 #
 # Fail-closed: a value-taking option of a prefix word (#518). A dash option of nice, sudo, stdbuf, exec,
-# xargs or time (PREFIX_VALUE_WORDS), or of `env` (this walk has no env arm, so `env -u X apply_patch`
-# hides the shim the same way), may take the NEXT word as its value (`nice -n 5 apply_patch < x.patch`,
+# xargs or time (PREFIX_VALUE_WORDS), or of `env` (this walk models no env option grammar beyond the
+# `-S` string of #538, so `env -u X apply_patch` hides the shim the same way), may take the NEXT word
+# as its value (`nice -n 5 apply_patch < x.patch`,
 # `sudo -u root apply_patch`, `xargs -a x applypatch`); the walk skipped the option but not the value, so
 # the value became the resolved word. This walk models no prefix command's option grammar. While the
 # most recent prefix word is in that set, a dash token followed by a word that is not an option, not a
 # redirect marker and not itself shim-named triggers ONE scan per window (walk_window's vp_done) of the
 # tokens after that word, in a segment that mentions the shim or carries a quote (seg_mflag): the first
-# shim-named token (quote-stripped, basename compared, markers skipped) becomes the resolved word, so
+# shim-named token (quote- and backslash-stripped, basename compared, markers skipped; since #538 a
+# dash token that ends in the shim name counts too, in any value context) becomes the resolved word, so
 # seg_shim_at records its index and the Bash route judges the call as usual (an inline heredoc patch
 # stays judged by its headers; no inline patch denies). A value word that itself names the shim is
 # excluded from the trigger: the walk resolves it at the smaller index, so the scan never moves
 # seg_shim_at later (`env -i apply_patch evil.patch applypatch <<'EOF'` keeps its argument deny). The
 # scan starts after the value word, never at it. Cost: at most one scan per window, so the base window
 # and the disjoint `]]` tails scan at most twice the segment's tokens; each token costs one deadline
-# sample, two quote strips and one glob, on a line already capped at CDG_LINE_MAX_BYTES. A scan hit in
+# sample, two quote strips, one backslash strip and one glob, on a line already capped at
+# CDG_LINE_MAX_BYTES. A scan hit in
 # a flagged segment (seg_qflag) first runs the #455 unbalanced-quote check over every token before the
 # hit, a superset of the check the walk made before #518 through the word it resolved, so `nice -n
 # "a b" apply_patch <<'EOF'` keeps its deny (over-blocking, measured rc 2: a quoted value of a later
 # prefix option, `nice -n 5 sudo -u "a b" apply_patch <<'EOF'`); a segment that carries a quote but
-# never spells the shim plainly (`nice -n 5 apply_"patch"`) is scanned too (seg_mflag). Over-blocking,
+# never spells the shim plainly (`nice -n 5 apply_"patch"`, or since #538 `nice -n 5 apply\_patch`) is
+# scanned too (seg_mflag). Over-blocking,
 # each measured rc 2: `nice -n 5 rg apply_patch hooks/` and `sudo -u root bash -c "echo apply_patch"`.
 # Residuals, each measured rc 0: an interpreter prefix word's option and a launcher outside PREFIX_WORDS
 # (see the residual list above).
@@ -1258,6 +1408,7 @@ is_apply_patch_word() {
   local assign_ere='^[A-Za-z_][A-Za-z0-9_]*='
   local digits_ere='^[0-9]+$'
   local db_n k prev t
+  local ln_m=0
   local seg_shim_at=-1 seg_qflag=0 seg_mflag=0
 
   if [ -n "$iapw_memo" ]; then
@@ -1289,11 +1440,23 @@ is_apply_patch_word() {
     flat="${ln//[;\&\|()\`]/$lf}"
     flat="${flat//\{/$lf}"
     flat="${flat//\}/$lf}"
-    # (#503) The additive chain pass: only a line that names the shim, carries a quote, a backslash, a
-    # backtick or a dollar-paren / dollar-brace, and holds a break character is lexed. Its chain texts
-    # join the segment list, so the unchanged loop below judges each one like a segment.
+    # (#538) Does the line name the shim: ln_m is 1 for the plain spelling, 2 for a split one (quote or
+    # backslash characters inside the name, one regex over the line), 0 otherwise.
+    ln_m=0
     case "$ln" in
       *applypatch*|*apply_patch*)
+        ln_m=1
+        ;;
+      *"$sq"*|*"$dq"*|*\\*)
+        [[ $ln =~ $cdg_split_ere ]] && ln_m=2
+        ;;
+    esac
+    # (#503) The additive chain pass: only a line that names the shim (plain or, since #538, split),
+    # carries a quote, a backslash, a backtick or a dollar-paren / dollar-brace, and holds a break
+    # character is lexed. Its chain texts join the segment list, so the unchanged loop below judges
+    # each one like a segment.
+    case "$ln_m" in
+      1|2)
         case "$ln" in
           *"$sq"*|*"$dq"*|*\\*|*\`*|*'$('*|*'${'*)
             case "$ln" in
@@ -1329,6 +1492,23 @@ is_apply_patch_word() {
         ;;
       *"$sq"*|*"$dq"*) seg_mflag=1 ;;
     esac
+    # (#538) A segment of a line that names the shim, which itself spells the shim split by quote or
+    # backslash characters (and not plainly), is flagged like one that mentions it: the parity check
+    # and, for a backslash-only spelling, the value scan (quoted ones are scanned already).
+    if [ "$ln_m" -ne 0 ] && [ "$seg_qflag" -eq 0 ]; then
+      case "$seg" in
+        *applypatch*|*apply_patch*) ;;
+        *"$sq"*|*"$dq"*|*\\*)
+          if [[ $seg =~ $cdg_split_ere ]]; then
+            seg_qflag=1
+            case "$seg" in
+              *"$sq"*|*"$dq"*) ;;
+              *) seg_mflag=1 ;;
+            esac
+          fi
+          ;;
+      esac
+    fi
 
     walk_window 0 "$n"
     base="${ww_word##*/}"
