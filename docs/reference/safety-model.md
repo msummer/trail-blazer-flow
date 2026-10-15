@@ -614,7 +614,8 @@ span of the shim name (`` `apply_patch` ``) denies (rc 2), as does `cd "$HOME/x"
 <<EOF …` with an unquoted delimiter (rc 2). The unbalanced-quote rule below over-blocks more
 broadly: any line of a multi-line Bash string (a commit body, `echo`/`printf` text, a `cat <<'EOF'
 > file` body, a patch context line such as ` Codex's apply_patch shim`) that mentions
-`apply_patch`/`applypatch` and whose words up to its command word (leading assignments and prefix
+`apply_patch`/`applypatch` (a spelling split by quote or backslash characters counts, since #538)
+and whose words up to its command word (leading assignments and prefix
 words included) carry an unbalanced quote or a trailing backslash denies for implementer and
 verifier calls, with no patch and no shim invocation involved — measured: `printf '%s' "one⏎Don't
 call apply_patch here"` is rc 2, and so is the same line as a `cat > f <<'EOF'` body, because every
@@ -623,8 +624,9 @@ for the main session). Remedies: write such text with `Edit`/`Write` (then, for 
 commit -F <file>`), use Codex's native `apply_patch` tool call (a separate route) for a patch, or
 avoid the shim name on that line; a quoted heredoc delimiter does not help here (it is the remedy
 only for the unquoted-`<<EOF` over-block above). The command-word walk also fails closed (#455,
-absorbing #456, "unbalanced quote") when, in a segment that mentions `apply_patch`/`applypatch`,
-any token from a walk window's start through its resolved non-shim command word carries an odd
+absorbing #456, "unbalanced quote") when, in a segment that mentions `apply_patch`/`applypatch`
+(plain or split, since #538), any token from a walk window's start through its resolved non-shim
+command word carries an odd
 count of `'` or of `"`, or ends in a backslash — the whitespace split happens before quotes are
 stripped, so `X='a b' apply_patch < x.patch` or `X=a\ b apply_patch < x.patch` would otherwise
 resolve the word after the space as the command word; `echo 'a b' apply_patch` (the odd token
@@ -633,17 +635,22 @@ mentions the shim) still get no opinion. **Since #503**, a quoted value that con
 character plus whitespace (`X='a;b c' apply_patch < x.patch`, rc 0 before, whose opening quote sat in
 the previous segment) is caught by an additive chain pass that lexes each gated line in pure bash and
 re-judges the text the base split cut apart; the over-block is a benign inline patch behind such a value.
-The command-word walk strips quote characters (`'`/`"`) from each token before
-matching or resolving it, rather than tracking which quote ENCLOSES which span (the chain pass tracks
-quote state, but only to re-judge text the base split cut apart), and stays
-backslash-blind — the same tripwire-not-sandbox trade-off every scan in this directory makes: a
-backslash-quoted spelling, a variable-built name (`p=apply_patch; $p < x.patch` — this walk never
-expands a variable reference), an ANSI-C-quoted spelling (`$'apply_patch'` — the leading `$`
-survives the quote strip and never matches), an interpreter prefix word's value-taking option
+The command-word walk strips quote characters (`'`/`"`) and, since #538, backslashes from each token
+before matching or resolving it, rather than tracking which quote ENCLOSES which span (the chain pass
+tracks quote state, but only to re-judge text the base split cut apart) — the same
+tripwire-not-sandbox trade-off every scan in this directory makes. **Since #538** a shim name split
+by quote or backslash characters (`apply_"patch"`, `apply\_patch`), a runtime-expansion word in front
+of the shim (`$X apply_patch < x.patch`, skipped like a prefix word), and an attached `env -S` string
+(`env -S'apply_patch' < x.patch`) all resolve to the shim and deny; the script's "Fail-closed: a shim
+name split by quote or backslash characters, a runtime expansion before it, or an `env -S` string
+(#538)" paragraph lists the mechanism, the over-blocks and the residuals. What can still evade both
+checks: a backslash-newline split, a variable-built name (`p=apply_patch; $p < x.patch` — this walk
+never expands a variable reference), an ANSI-C-quoted spelling (`$'apply_patch'` — the walk skips it
+as an expansion word and the shim never resolves), an interpreter prefix word's value-taking option
 (`bash -o pipefail -c 'apply_patch < x.patch'`), an INDIRECT `eval`/`trap` argument (`eval "$c"`, `eval
 "$(cmd)"` — quote-stripping never expands a variable or runs a command substitution), a `]]` token
 itself glued to a quote character (a literal `"]]"` token is not the bare `]]` the cut loop matches
-against), or an unrecognised launcher can all still evade both checks. Since #518 a dash option of
+against), or an unrecognised launcher. Since #518 a dash option of
 `nice`, `sudo`, `stdbuf`, `exec`, `xargs`, `time` or `env` followed by a word looks for a shim-named
 word after that word (`nice -n 5 apply_patch < x.patch`, `env -u X apply_patch < x.patch`), so the
 option's separate value no longer hides the shim; the script's "Fail-closed: a value-taking option of a

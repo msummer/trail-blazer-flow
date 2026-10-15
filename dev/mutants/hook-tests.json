@@ -10246,6 +10246,708 @@
       "expect_fail": [
         "push-chain-deny-subst"
       ]
+    },
+    {
+      "name": "538-cdg-fast-off",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "cdg_split_raw || exit 0 ;;",
+          "to": "exit 0 ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos",
+        "cdg-split-deny-env-s",
+        "cdg-split-deny-env-s-value",
+        "cdg-split-deny-names",
+        "cdg-split-deny-overblock",
+        "cdg-split-deny-verifier",
+        "cdg-split-never-executes"
+      ]
+    },
+    {
+      "name": "538-cdg-fast-sq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "  *\\\\*|*\"'\"*) cdg_split_raw",
+          "to": "  *\\\\*) cdg_split_raw"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos",
+        "cdg-split-deny-names"
+      ]
+    },
+    {
+      "name": "538-cdg-fast-bs",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "  *\\\\*|*\"'\"*) cdg_split_raw",
+          "to": "  *\"'\"*) cdg_split_raw"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos",
+        "cdg-split-deny-names",
+        "cdg-split-deny-verifier",
+        "cdg-split-never-executes"
+      ]
+    },
+    {
+      "name": "538-cdg-split-dq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "cdg_q=\"[\\\\\\\"']*\"",
+          "to": "cdg_q=\"[\\\\']*\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos",
+        "cdg-split-deny-env-s-value",
+        "cdg-split-deny-names",
+        "cdg-split-deny-overblock",
+        "cdg-split-deny-verifier",
+        "cdg-split-never-executes"
+      ]
+    },
+    {
+      "name": "538-cdg-split-sq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "cdg_q=\"[\\\\\\\"']*\"",
+          "to": "cdg_q=\"[\\\\\\\"]*\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos",
+        "cdg-split-deny-names"
+      ]
+    },
+    {
+      "name": "538-cdg-split-bs",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "cdg_q=\"[\\\\\\\"']*\"",
+          "to": "cdg_q=\"[\\\"']*\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos",
+        "cdg-split-deny-env-s",
+        "cdg-split-deny-env-s-value",
+        "cdg-split-deny-names",
+        "cdg-split-deny-overblock",
+        "cdg-split-deny-verifier",
+        "cdg-split-never-executes"
+      ]
+    },
+    {
+      "name": "538-cdg-split-underscore",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "y${cdg_q}_?${cdg_q}p",
+          "to": "y${cdg_q}_${cdg_q}p"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-names"
+      ]
+    },
+    {
+      "name": "538-cdg-bs-strip",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "case \"$tok\" in *\\\\*) tok=\"${tok//\\\\/}\"; ww_alt=1 ;; esac",
+          "to": "case \"$tok\" in *\\\\*) ww_alt=1 ;; esac"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos",
+        "cdg-split-deny-names"
+      ]
+    },
+    {
+      "name": "538-cdg-alt-parity",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "if [ \"$ww_alt\" -eq 1 ] && [ \"$seg_qflag\" -eq 1 ]; then quote_parity_check",
+          "to": "if [ \"$ww_alt\" -eq 9 ] && [ \"$seg_qflag\" -eq 1 ]; then quote_parity_check"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-expansion-guards"
+      ]
+    },
+    {
+      "name": "538-cdg-alt-bs",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "tok=\"${tok//\\\\/}\"; ww_alt=1 ;; esac",
+          "to": "tok=\"${tok//\\\\/}\" ;; esac"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-expansion-guards"
+      ]
+    },
+    {
+      "name": "538-cdg-alt-rx",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "            ww_alt=1\n            saw_prefix=1\n",
+          "to": "            saw_prefix=1\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-expansion-guards"
+      ]
+    },
+    {
+      "name": "538-cdg-alt-envs",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "-*apply_patch|-*applypatch) ww_alt=1; ww_word=apply_patch; break ;;",
+          "to": "-*apply_patch|-*applypatch) ww_word=apply_patch; break ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-expansion-guards"
+      ]
+    },
+    {
+      "name": "538-cdg-rx-off",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "if [[ ${toks[$i]##*/} =~ $cdg_rx_ere ]]; then",
+          "to": "if [ 0 -eq 1 ] && [[ ${toks[$i]##*/} =~ $cdg_rx_ere ]]; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-expansion",
+        "cdg-split-deny-expansion-prefix",
+        "cdg-split-deny-overblock",
+        "cdg-split-deny-verifier",
+        "cdg-split-heredoc",
+        "cdg-split-never-executes"
+      ]
+    },
+    {
+      "name": "538-cdg-rx-basename",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "[[ ${toks[$i]##*/} =~ $cdg_rx_ere ]]",
+          "to": "[[ ${toks[$i]} =~ $cdg_rx_ere ]]"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-expansion-guards"
+      ]
+    },
+    {
+      "name": "538-cdg-rx-lone-dollar",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "cdg_rx_ere=\"[\\$][A-Za-z0-9_@*#?!\\$=~^${dq}${sq}-]\"",
+          "to": "cdg_rx_ere=\"[\\$]\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-noop-expansion"
+      ]
+    },
+    {
+      "name": "538-cdg-rx-sq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "=~^${dq}${sq}-]\"",
+          "to": "=~^${dq}-]\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-expansion"
+      ]
+    },
+    {
+      "name": "538-cdg-rx-dq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "=~^${dq}${sq}-]\"",
+          "to": "=~^${sq}-]\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-expansion"
+      ]
+    },
+    {
+      "name": "538-cdg-rx-special",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "[A-Za-z0-9_@*#?!\\$=~^${dq}${sq}-]",
+          "to": "[A-Za-z_${dq}${sq}]"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-expansion"
+      ]
+    },
+    {
+      "name": "538-cdg-rx-vp",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "*) vp=1; ve=1 ;;",
+          "to": "*) ve=1 ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-expansion-prefix"
+      ]
+    },
+    {
+      "name": "538-cdg-rx-env",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "*) vp=1; ve=1 ;;",
+          "to": "*) vp=1 ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-expansion-prefix"
+      ]
+    },
+    {
+      "name": "538-cdg-envs-off",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "if [ \"$ve\" -eq 1 ] && [ \"$seg_mflag\" -eq 1 ]; then",
+          "to": "if [ \"$ve\" -eq 9 ] && [ \"$seg_mflag\" -eq 1 ]; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-env-s",
+        "cdg-split-deny-env-s-value",
+        "cdg-split-deny-expansion-prefix",
+        "cdg-split-deny-verifier",
+        "cdg-split-heredoc",
+        "cdg-split-never-executes"
+      ]
+    },
+    {
+      "name": "538-cdg-envs-lead",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "case \"${er%% *}\" in",
+          "to": "case \"\" in"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-env-s",
+        "cdg-split-deny-expansion-prefix",
+        "cdg-split-deny-verifier",
+        "cdg-split-heredoc",
+        "cdg-split-never-executes"
+      ]
+    },
+    {
+      "name": "538-cdg-envs-unescape",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "er=\"${toks[$i]//\\\\_/ }\"",
+          "to": "er=\"${toks[$i]}\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-env-s"
+      ]
+    },
+    {
+      "name": "538-cdg-envs-sep",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "if { [ \"$tok\" = \"-S\" ] || [ \"$tok\" = \"--split-string\" ]; } && [ $((i + 1)) -lt \"$n\" ]; then",
+          "to": "if [ 0 -eq 1 ]; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-env-s-value"
+      ]
+    },
+    {
+      "name": "538-cdg-envs-context",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "case \"$tok\" in env) ve=1 ;; -) ;; *) ve=0 ;; esac",
+          "to": "case \"$tok\" in env) ve=1 ;; -) ;; *) ve=1 ;; esac"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-noop-env-s"
+      ]
+    },
+    {
+      "name": "538-cdg-vp-lead",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "                      -*apply_patch|-*applypatch) vt=apply_patch; hit=1; break ;;\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-env-s-value"
+      ]
+    },
+    {
+      "name": "538-cdg-vp-bs-loop",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "                    vt=\"${vt//\\\\/}\"\n                    case \"$vt\" in\n                      apply_patch",
+          "to": "                    case \"$vt\" in\n                      apply_patch"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos"
+      ]
+    },
+    {
+      "name": "538-cdg-vp-bs-excl",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "            vt=\"${vt//\\\\/}\"\n            case \"$vt\" in\n              \"\"|-*|",
+          "to": "            case \"$vt\" in\n              \"\"|-*|"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos"
+      ]
+    },
+    {
+      "name": "538-cdg-seg-split",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "if [ \"$ln_m\" -ne 0 ] && [ \"$seg_qflag\" -eq 0 ]; then",
+          "to": "if [ \"$ln_m\" -eq 9 ] && [ \"$seg_qflag\" -eq 0 ]; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos",
+        "cdg-split-deny-overblock"
+      ]
+    },
+    {
+      "name": "538-cdg-seg-bs-scan",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "              *) seg_mflag=1 ;;",
+          "to": "              *) ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos"
+      ]
+    },
+    {
+      "name": "538-cdg-chain-split",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "      1|2)\n",
+          "to": "      1)\n"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos"
+      ]
+    },
+    {
+      "name": "538-cdg-envs-names",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; break ;;",
+          "to": "*\" apply_patch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; break ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-env-s"
+      ]
+    },
+    {
+      "name": "538-cdg-envs-basename",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; break ;;",
+          "to": "*\" apply_patch \"*|*\" applypatch \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; break ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-env-s"
+      ]
+    },
+    {
+      "name": "538-cdg-envs-delete-bs",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "            er=\"${er//\\\\/}\"\n            case \" $er \" in",
+          "to": "            case \" $er \" in"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-env-s"
+      ]
+    },
+    {
+      "name": "538-cdg-envs-dash",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "case \"$tok\" in env) ve=1 ;; -) ;; *) ve=0 ;; esac",
+          "to": "case \"$tok\" in env) ve=1 ;; *) ve=0 ;; esac"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-env-s"
+      ]
+    },
+    {
+      "name": "538-cdg-envs-longopt",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "if { [ \"$tok\" = \"-S\" ] || [ \"$tok\" = \"--split-string\" ]; } &&",
+          "to": "if { [ \"$tok\" = \"-S\" ]; } &&"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-env-s-value"
+      ]
+    },
+    {
+      "name": "538-cdg-rx-saw-prefix",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "            ww_alt=1\n            saw_prefix=1\n            case",
+          "to": "            ww_alt=1\n            case"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-expansion-prefix"
+      ]
+    },
+    {
+      "name": "538-cdg-ln-sq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "      *\"$sq\"*|*\"$dq\"*|*\\\\*)\n        [[ $ln =~ $cdg_split_ere ]] && ln_m=2",
+          "to": "      *\"$dq\"*|*\\\\*)\n        [[ $ln =~ $cdg_split_ere ]] && ln_m=2"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos"
+      ]
+    },
+    {
+      "name": "538-cdg-seg-sq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "        *\"$sq\"*|*\"$dq\"*|*\\\\*)\n          if [[ $seg =~ $cdg_split_ere ]]; then",
+          "to": "        *\"$dq\"*|*\\\\*)\n          if [[ $seg =~ $cdg_split_ere ]]; then"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-combos"
+      ]
+    },
+    {
+      "name": "538-cdg-envs-value-dq",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "              er=\"${er//$dq/}\"\n              er=\"${er//\\\\/}\"",
+          "to": "              er=\"${er//\\\\/}\""
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-env-s-value"
+      ]
+    },
+    {
+      "name": "538-cdg-envs-value-names",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; i=$((i + 1)); break ;;",
+          "to": "*\" apply_patch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; i=$((i + 1)); break ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-env-s-value"
+      ]
+    },
+    {
+      "name": "538-cdg-alt-envs-word",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; break ;;",
+          "to": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_word=apply_patch; break ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-expansion-guards"
+      ]
+    },
+    {
+      "name": "538-cdg-alt-envs-value",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; i=$((i + 1)); break ;;",
+          "to": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_word=apply_patch; i=$((i + 1)); break ;;"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-expansion-guards"
+      ]
+    },
+    {
+      "name": "538-cdg-rx-order",
+      "target": "hooks/claude-dir-guard.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "cdg-split-",
+      "edits": [
+        {
+          "from": "    # #538: a runtime expansion in command position may expand to nothing (hooks/agent-boundary.sh's\n    # #508 rule): a token whose basename holds a dollar sign followed by a name character, a digit, a\n    # special parameter or a quote is skipped like a prefix word, so the shim behind it still\n    # resolves. It opens the value context and the env context (a dash-led one opens neither), and\n    # sits AFTER the dash arm above so `nice -$X 5 apply_patch` still starts the #518 scan.\n    if [ \"$seg_mflag\" -eq 1 ]; then\n      case \"${toks[$i]}\" in\n        *'$'*)\n          if [[ ${toks[$i]##*/} =~ $cdg_rx_ere ]]; then\n            ww_alt=1\n            saw_prefix=1\n            case \"${toks[$i]}\" in\n              -*) ;;\n              *) vp=1; ve=1 ;;\n            esac\n            i=$((i + 1))\n            continue\n          fi\n          ;;\n      esac\n    fi\n    ww_word=\"$tok\"\n    break\n  done",
+          "to": "    ww_word=\"$tok\"\n    break\n  done"
+        },
+        {
+          "from": "    if [ \"$saw_prefix\" -eq 1 ]; then\n      case \"$tok\" in\n        -*)",
+          "to": "    if [ \"$seg_mflag\" -eq 1 ]; then\n      case \"${toks[$i]}\" in\n        *'$'*)\n          if [[ ${toks[$i]##*/} =~ $cdg_rx_ere ]]; then\n            ww_alt=1\n            saw_prefix=1\n            case \"${toks[$i]}\" in\n              -*) ;;\n              *) vp=1; ve=1 ;;\n            esac\n            i=$((i + 1))\n            continue\n          fi\n          ;;\n      esac\n    fi\n    if [ \"$saw_prefix\" -eq 1 ]; then\n      case \"$tok\" in\n        -*)"
+        }
+      ],
+      "expect_fail": [
+        "cdg-split-deny-expansion-prefix"
+      ]
     }
   ]
 }
