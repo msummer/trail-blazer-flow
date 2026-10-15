@@ -18,6 +18,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #553 (CI fix): the `505-ab-unbalanced-dq` registry record no longer lists `ab-lost-deny-env-opt`:
+  #553's chain pass now denies that case's `X="a b" ls && X="a b" gh pr merge 5` row on its own, so
+  dropping the double-quote count no longer flips it. The post-merge mutant driver failed on the stale
+  set. No consumer step.
 - #553: push-guard and agent-boundary now also catch a quoted assignment value that runs past a line end
   (`X="a<LF>b" git push origin main`) and a mixed-quote value with a space and no break character
   (`X="a'"'b c' git push origin main`), through #503's chain pass. No consumer step.
