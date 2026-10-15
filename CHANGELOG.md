@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #538: claude-dir-guard now reads a shim name split by quote or backslash characters (`apply_"patch"`,
+  `apply\_patch`), skips a runtime-expansion word before the shim (`$X apply_patch`), and reads an
+  attached `env -S` string (`env -S'apply_patch'`). No consumer step.
 - #553: push-guard and agent-boundary now also catch a quoted assignment value that runs past a line end
   (`X="a<LF>b" git push origin main`) and a mixed-quote value with a space and no break character
   (`X="a'"'b c' git push origin main`), through #503's chain pass. No consumer step.

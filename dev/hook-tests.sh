@@ -9031,11 +9031,12 @@ case_cdg_bash_deny_decoy_nbsp_header() {
 case_cdg_bash_deny_no_inline_patch_subshell()      { run_claude_guard "$(mk_codex_shell 'implementer' '(apply_patch < x.patch)')"; expect_cdg_deny_unparseable; }
 case_cdg_bash_deny_no_inline_patch_cmdsubst()      { run_claude_guard "$(mk_codex_shell 'implementer' 'echo $(apply_patch < x.patch)')"; expect_cdg_deny_unparseable; }
 # #407 kickback round 2, finding C: the ">" word break, and has_exact_begin_patch_line's OWN full
-# trim (not is_apply_patch_word's command-word detection -- the leading "\" defeats that, so this
-# denies via the STRUCTURED parse's classify_path message instead).
+# trim (not is_apply_patch_word's command-word detection -- a backslash-newline splitting the shim
+# name across two physical lines defeats that, so this denies via the STRUCTURED parse's
+# classify_path message instead).
 case_cdg_bash_deny_no_inline_patch_gt()            { run_claude_guard "$(mk_codex_shell 'implementer' 'apply_patch>out.txt')"; expect_cdg_deny_unparseable; }
 case_cdg_bash_deny_backslash_indented_begin_patch() {
-  run_claude_guard "$(mk_codex_shell 'implementer' "\\apply_patch <<'EOF'${LF}  *** Begin Patch${LF}  *** Add File: .claude/x${LF}  *** End Patch${LF}EOF")"
+  run_claude_guard "$(mk_codex_shell 'implementer' "apply_\\${LF}patch <<'EOF'${LF}  *** Begin Patch${LF}  *** Add File: .claude/x${LF}  *** End Patch${LF}EOF")"
   expect_cdg_deny_claude
 }
 # #407 kickback round 2, finding D: a leading redirect (with or without a bare-digits fd) must not
@@ -10576,7 +10577,6 @@ case_cdg_optval_noop_unmentioned() {
 # mutant:518-cdg-optval-quote — drops the quote-bearing arm of the segment flag, so a shim spelled with a
 #   quote inside its name (apply_"patch") behind a prefix option's value never reaches the scan.
 case_cdg_optval_deny_quote_split() {
-  # The other segment spells the shim plainly only so the raw-stdin fast path reads the payload.
   local c w0
   for c in 'nice -n 5 apply_"patch" < x.patch; echo applypatch.md' \
     "nice -n 5 apply_'patch' < x.patch; echo applypatch.md"; do
@@ -11127,6 +11127,372 @@ case_solo_cdgchain_patch_cpu() {
   elif [ "$measured_cpu_ms" -gt 3000 ]; then
     __ok=0; __why="${__why}a 200-line shim patch used ${measured_cpu_ms}ms of CPU, over the 3000ms bound\n"
   fi
+}
+
+# --- claude-dir-guard.sh: a shim name split by quote or backslash characters, a runtime expansion
+# before the shim, and an attached env -S string (#538) -----------------------------------------
+# Each spelling runs the shim in a real shell, and the walk resolves it the same way (a quote strip, a
+# backslash strip, an expansion skip, an env -S reading). The deny rows reach the Bash route's
+# no-inline-patch deny (or, behind a quoted or escaped prefix, the unbalanced-quote deny); the
+# no-opinion rows are the prose and precision controls that must stay quiet. Case names carry the
+# cdg-split- prefix, and no fixture command mentions a codex directory (the cdg- registry filters
+# select every cdg-* case).
+#
+# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, target
+# hooks/claude-dir-guard.sh, filter "cdg-split-").
+# cdg_split_nip ROLE CMD... -- each CMD, run as a Codex shell payload for ROLE, denies with the
+# no-inline-patch line.
+cdg_split_nip() {
+  local role="$1" c w0
+  shift
+  for c in "$@"; do
+    w0="$__why"; __why=""
+    run_claude_guard "$(mk_codex_shell "$role" "$c")"
+    expect_cdg_deny_unparseable
+    case "$cdg_err" in
+      *"with no inline patch text"*) ;;
+      *) __ok=0; __why="${__why}stderr missing 'with no inline patch text': '$cdg_err'\n" ;;
+    esac
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+# cdg_split_noop ROLE CMD... -- each CMD, run as a Codex shell payload for ROLE, gets no opinion.
+cdg_split_noop() {
+  local role="$1" c w0
+  shift
+  for c in "$@"; do
+    w0="$__why"; __why=""
+    run_claude_guard "$(mk_codex_shell "$role" "$c")"
+    expect_cdg_no_opinion
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+# cdg_split_body LINE -- a quoted-delimiter heredoc whose body is the single prose line LINE.
+cdg_split_body() { printf '%s' "cat > f <<'EOF'${LF}$1${LF}EOF"; }
+# mutant:538-cdg-fast-off — fast path 2's split-name arm is removed, so a payload that spells the shim
+#   only split exits silently before jq is spawned.
+# mutant:538-cdg-fast-sq — the arm's gate drops the apostrophe, so an apostrophe-only spelling (no
+#   backslash in the raw JSON) never reaches the regex.
+# mutant:538-cdg-fast-bs — the arm's gate drops the backslash, so a double-quote or backslash spelling
+#   (a backslash in the raw JSON) never reaches the regex.
+# mutant:538-cdg-split-dq — the regex run loses the double quote, so a name split by double quotes no
+#   longer matches (fast path and line and segment gates alike).
+# mutant:538-cdg-split-sq — the regex run loses the apostrophe.
+# mutant:538-cdg-split-bs — the regex run loses the backslash, so neither a backslash spelling nor a
+#   double quote in raw JSON (a backslash and a quote) matches.
+# mutant:538-cdg-split-underscore — the optional underscore becomes required, so a split
+#   no-underscore spelling (apply"patch") no longer matches.
+# mutant:538-cdg-bs-strip — the walk no longer deletes backslashes from a token, so a backslash
+#   spelling resolves to a word that is not the shim.
+case_cdg_split_deny_names() {
+  cdg_split_nip implementer \
+    'apply_"patch" < x.patch' \
+    "apply_'patch' < x.patch" \
+    'apply\_patch < x.patch' \
+    '"apply"_patch < x.patch' \
+    "a''pply_patch < x.patch" \
+    'apply"patch" < x.patch' \
+    '\apply_patch < x.patch' \
+    'a\pply_patch < x.patch'
+}
+case_cdg_split_deny_verifier() {
+  cdg_split_nip 'trail-blazer-flow:verifier' \
+    'apply_"patch" < x.patch' \
+    '$X apply_patch < x.patch' \
+    "env -S'apply_patch' < x.patch"
+}
+case_cdg_split_heredoc() {
+  # The three new routes each take an inline heredoc patch: a .claude header denies through the
+  # raw-text catch-all, and a benign header gets no opinion.
+  local f w0 hdr="*** Begin Patch${LF}*** Add File: .claude/settings.local.json${LF}+x${LF}*** End Patch"
+  for f in 'apply_"patch"' "env -S'apply_patch'" '"$X" apply_patch'; do
+    w0="$__why"; __why=""
+    run_claude_guard "$(mk_codex_shell implementer "$f <<'EOF'${LF}${hdr}${LF}EOF")"
+    expect_cdg_deny_unparseable
+    case "$cdg_err" in
+      *"mentioning a .claude/.codex path"*) ;;
+      *) __ok=0; __why="${__why}stderr missing 'mentioning a .claude/.codex path': '$cdg_err'\n" ;;
+    esac
+    run_claude_guard "$(mk_codex_shell implementer "$f <<'EOF'${LF}${CDG_P}${LF}EOF")"
+    expect_cdg_no_opinion
+    if [ -n "$__why" ]; then __why="${w0}[$f] ${__why}"; else __why="$w0"; fi
+  done
+}
+case_cdg_split_noop_prose() {
+  # Prose that merely mentions a split spelling, and a command that fast path 2 excludes outright.
+  cdg_split_noop implementer \
+    'echo apply_"patch"' \
+    'ls -la' \
+    "git commit -m \"use apply_'patch' here\"" \
+    "rg -n 'apply\\_patch' hooks/" \
+    "$(cdg_split_body 'Run apply_"patch" only via the native tool')"
+}
+case_cdg_split_noop_scope() {
+  # Role scoping is unchanged: the main session, another agent and a plan-mode turn are never judged.
+  cdg_split_noop '' 'apply_"patch" < x.patch'
+  cdg_split_noop Explore 'apply_"patch" < x.patch'
+  run_claude_guard "$(mk_agent_cmd_mode implementer 'apply_"patch" < x.patch' plan)"
+  expect_cdg_no_opinion
+}
+# mutant:538-cdg-rx-off — the expansion skip never fires, so the expansion word stays the resolved
+#   word and the shim behind it is never found.
+# mutant:538-cdg-rx-sq — the skip class drops the apostrophe, so an ANSI-C word ($'env') is no
+#   expansion word.
+# mutant:538-cdg-rx-dq — the skip class drops the double quote, so a locale-quoted word ($"env") is
+#   no expansion word.
+# mutant:538-cdg-rx-special — the skip class keeps only name characters and quotes, so a positional or
+#   special parameter ($1, $@) is no expansion word.
+case_cdg_split_deny_expansion() {
+  # A runtime-expansion word in command position may expand to nothing, so the walk skips it and
+  # resolves the shim behind it: the same rule hooks/agent-boundary.sh applies for its own words.
+  cdg_split_nip implementer \
+    '$X apply_patch < x.patch' \
+    '"$X" apply_patch < x.patch' \
+    '$X $Y applypatch < x.patch' \
+    'a$X apply_patch < x.patch' \
+    '-$X apply_patch < x.patch' \
+    '$1 apply_patch < x.patch' \
+    '$@ apply_patch < x.patch' \
+    "\$'env' apply_patch < x.patch" \
+    '$"env" apply_patch < x.patch' \
+    'X=1 $X apply_patch < x.patch' \
+    'cd src && $X apply_patch < x.patch'
+}
+# mutant:538-cdg-rx-vp — a skipped expansion word no longer opens the value context, so the option
+#   after it starts no value scan.
+# mutant:538-cdg-rx-env — a skipped expansion word no longer opens the env context, so an env -S
+#   string after it is never read.
+# mutant:538-cdg-rx-saw-prefix — a skipped expansion word no longer counts as a prefix word, so the
+#   option after it is resolved as the command word instead of skipped.
+# mutant:538-cdg-rx-order — the expansion skip runs before the dash arm, so a dash-led expansion
+#   option of a prefix word (nice -$X 5) is skipped and its value then resolves as the command word.
+case_cdg_split_deny_expansion_prefix() {
+  # A skipped expansion word opens the value context and the env context of a prefix word, and a
+  # dash-led expansion word after a prefix word still starts the value scan.
+  cdg_split_nip implementer \
+    '$X -n 5 apply_patch < x.patch' \
+    "\$E -S'apply_patch' < x.patch" \
+    'nice -$X 5 apply_patch < x.patch'
+}
+# mutant:538-cdg-rx-basename — the skip tests the whole token, not its basename, so a path-qualified
+#   expansion ($D/apply_patch) is skipped instead of resolved as the shim.
+# mutant:538-cdg-alt-parity — the whole-window parity check on a shim resolved through the new routes
+#   is switched off, so the unbalanced quote or trailing backslash before it no longer denies.
+# mutant:538-cdg-alt-bs — a backslash-stripped token no longer marks its window, so a trailing
+#   backslash before a shim resolved that way goes unchecked.
+# mutant:538-cdg-alt-rx — a skipped expansion word no longer marks its window, so an unbalanced quote
+#   inside it goes unchecked once the shim behind it resolves.
+# mutant:538-cdg-alt-envs — an env -S string resolved by the glued-option rule no longer marks its
+#   window, so an unbalanced quote before it goes unchecked.
+# mutant:538-cdg-alt-envs-word — an env -S string resolved by its word match no longer marks its
+#   window, so an unbalanced quote before -S/opt/apply_patch goes unchecked.
+# mutant:538-cdg-alt-envs-value — an env -S string read from the next token no longer marks its
+#   window, so an unbalanced quote before a separate -S string goes unchecked.
+case_cdg_split_expansion_guards() {
+  # Denies that exist before the skip and must survive it: the plain spellings, a path-qualified
+  # expansion (judged by its basename, so the skip never swallows the shim), and five prefixes
+  # whose unbalanced quote or trailing backslash the new-route parity check keeps denying.
+  local eof="<<'EOF'${LF}${CDG_P}${LF}EOF" c w0 q="'"
+  cdg_split_nip implementer \
+    'apply_patch < x.patch' \
+    'applypatch < x.patch' \
+    '"apply_patch" < x.patch' \
+    '${X} apply_patch < x.patch' \
+    "env -S 'apply_patch' < x.patch" \
+    'env apply_patch < x.patch' \
+    '$D/apply_patch < x.patch'
+  for c in '"$X apply_patch" '"$eof" 'apply_patch\ '"$eof" "env -u${q}a -S${q}apply_patch${q} $eof" \
+    "env -u${q}a -S/opt/apply_patch $eof" "env -u${q}a -S ${q}X=1\\_apply_patch${q} $eof"; do
+    w0="$__why"; __why=""
+    run_claude_guard "$(mk_codex_shell implementer "$c")"
+    expect_cdg_qa_deny
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+# mutant:538-cdg-rx-lone-dollar — the skip class becomes a bare dollar sign, so a lone dollar sign
+#   ahead of the shim is skipped and a heredoc prose line resolves it.
+case_cdg_split_noop_expansion() {
+  # A lone dollar sign, and an expansion word after the command word, are no expansion in command
+  # position.
+  cdg_split_noop implementer \
+    "$(cdg_split_body '$ apply_patch < x.patch')" \
+    'echo $X apply_patch' \
+    "$(cdg_split_body 'Note: $X apply_patch < x.patch')"
+}
+# mutant:538-cdg-envs-off — the env -S reading never runs, so an attached string naming the shim is
+#   never found.
+# mutant:538-cdg-envs-lead — the glued-option rule is removed, so a first word such as -Sapply_patch
+#   no longer resolves.
+# mutant:538-cdg-envs-unescape — a backslash-underscore is no longer read as a space, so a string whose
+#   shim word is followed by one (-S'apply_patch\_-') reads as one word that is not the name.
+# mutant:538-cdg-envs-names — the word match drops the no-underscore spelling, so a string whose second
+#   word is applypatch is never found.
+# mutant:538-cdg-envs-basename — the word match drops the path-qualified underscore spelling, so a
+#   string whose second word is /opt/bin/apply_patch is never found.
+# mutant:538-cdg-envs-delete-bs — the string reading keeps backslashes, so a name split by one inside
+#   the string (-S'a\pply_patch') no longer reads as the shim.
+# mutant:538-cdg-envs-dash — a bare dash prefix word resets the env context, so an env -S string after
+#   env - is never read.
+case_cdg_split_deny_env_s() {
+  # An attached env -S string is read the way env reads it: a backslash-underscore is a space, and
+  # quotes and backslashes are deleted. The first word may carry the option itself (-Sapply_patch).
+  local q="'"
+  cdg_split_nip implementer \
+    "env -S${q}apply_patch${q} < x.patch" \
+    'env -S"applypatch" < x.patch' \
+    'env -Sapply_patch < x.patch' \
+    'env --split-string=apply_patch < x.patch' \
+    "env -vS${q}apply_patch${q} < x.patch" \
+    "env -i -S${q}apply_patch${q} < x.patch" \
+    "env -S${q}X=1\\_apply_patch${q} < x.patch" \
+    "env -S${q}apply_patch\\_-${q} < x.patch" \
+    "env -S${q}X=1\\_applypatch${q} < x.patch" \
+    "env -S${q}X=1\\_/opt/bin/apply_patch${q} < x.patch" \
+    "env -S${q}a\\pply_patch${q} < x.patch" \
+    "env - -S${q}apply_patch${q} < x.patch"
+}
+# mutant:538-cdg-envs-sep — a bare -S no longer reads the next token as its string.
+# mutant:538-cdg-envs-longopt — the separate-string read drops the long option, so a bare
+#   --split-string never reads the next token.
+# mutant:538-cdg-vp-lead — the value scan loses its glued-option rule, so an env -S string behind
+#   another option's value (env -u X -S'apply_patch') is never found.
+# mutant:538-cdg-envs-value-dq — the separate-string read keeps double quotes, so a name split by them
+#   inside the string (-S 'X=1\_a"pply"_patch') no longer reads as the shim.
+# mutant:538-cdg-envs-value-names — the separate-string read drops the no-underscore spelling, so a
+#   separate string whose second word is applypatch is never found.
+case_cdg_split_deny_env_s_value() {
+  # The -S string as a separate value, and an attached one behind another option's value.
+  local q="'"
+  cdg_split_nip implementer \
+    "env -S ${q}X=1\\_apply_patch${q} < x.patch" \
+    "env -S ${q}X=1\\_a\"pply\"_patch${q} < x.patch" \
+    "env -S ${q}X=1\\_applypatch${q} < x.patch" \
+    "env --split-string ${q}X=1\\_apply_patch${q} < x.patch" \
+    "env -u X -S${q}apply_patch${q} < x.patch" \
+    "env -C /tmp -S${q}apply_patch${q} < x.patch" \
+    "nice -n 5 env -S${q}apply_patch${q} < x.patch"
+}
+# mutant:538-cdg-envs-context — every prefix word opens the env context, so an option of a non-env
+#   prefix word that ends in the shim name (exec -aapply_patch) is read as an env -S string.
+case_cdg_split_noop_env_s() {
+  # An env string or option that does not name the shim, and a non-env prefix option that merely
+  # ends in the shim name, stay quiet.
+  cdg_split_noop implementer \
+    "env -S'echo hi' true; echo applypatch.md" \
+    'env FOO=1 rg apply_patch hooks/' \
+    'env -i ls apply_patch.md' \
+    'exec -aapply_patch ./tool'
+}
+# mutant:538-cdg-seg-split — a segment spelling the shim split is no longer flagged for the parity
+#   check, so the quoted or escaped prefix before it is never judged.
+# mutant:538-cdg-seg-bs-scan — a backslash-only segment is no longer flagged for the value scan, so
+#   the shim behind a prefix option's value (nice -n 5 apply\_patch) is never found.
+# mutant:538-cdg-chain-split — the chain gate counts only the plain spelling, so a line spelling the
+#   shim split is not lexed and a quoted break before it hides it.
+# mutant:538-cdg-vp-bs-loop — the value scan no longer deletes backslashes from the tokens it reads, so
+#   a backslash spelling behind a prefix option's value is never found.
+# mutant:538-cdg-vp-bs-excl — the value-word exclusion no longer deletes backslashes, so a value word
+#   that names the shim split is scanned past and the later shim hides the argument check.
+# mutant:538-cdg-ln-sq — the line gate's split-name test drops the apostrophe, so a line spelling the
+#   shim split only by single quotes never flags its segments for the parity check.
+# mutant:538-cdg-seg-sq — the segment block's split-name test drops the apostrophe, so a segment
+#   spelling the shim split only by single quotes is never flagged for the parity check.
+case_cdg_split_deny_combos() {
+  # A split spelling behind a quoted or escaped prefix still meets the unbalanced-quote check, and a
+  # split spelling behind a prefix option's value is still found by the value scan.
+  local c w0 q="'"
+  for c in "X=${q}a b${q} apply_\"patch\" < x.patch" 'X=a\ b apply\_patch < x.patch' "X=${q}a;b c${q} apply_\"patch\" < x.patch" \
+    "X=${q}a b${q} apply_${q}patch${q} < x.patch"; do
+    w0="$__why"; __why=""
+    run_claude_guard "$(mk_codex_shell implementer "$c")"
+    expect_cdg_qa_deny
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+  cdg_split_nip implementer 'nice -n 5 apply\_patch < x.patch'
+  # the value word itself names the shim, so the argument check still sees evil.patch
+  run_claude_guard "$(mk_codex_shell implementer "env -i apply\\_patch evil.patch applypatch <<'EOF'${LF}${CDG_P}${LF}EOF")"
+  expect_cdg_dec_deny
+}
+case_cdg_split_deny_overblock() {
+  # Documented over-blocks, control rows: a prose line whose leading words are prefix or expansion
+  # words before the shim name, and an apostrophe on a line that spells the shim split.
+  run_claude_guard "$(mk_codex_shell implementer "$(cdg_split_body '- $X apply_patch is how the old flow ran')")"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"with no inline patch text"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'with no inline patch text': '$cdg_err'\n" ;;
+  esac
+  run_claude_guard "$(mk_codex_shell implementer "$(cdg_split_body "Don't run apply_\"patch\" here")")"
+  expect_cdg_qa_deny
+}
+case_cdg_split_never_executes() {
+  local c
+  cdg_trap_path cdg-split
+  for c in 'apply_"patch" < x.patch' '$X apply_patch < x.patch' "env -S'apply_patch' < x.patch"; do
+    run_claude_guard "$(mk_codex_shell 'implementer' "$c")" "$cdg_trapdir:$PATH"
+    expect_cdg_deny_unparseable
+  done
+  [ ! -e "$cdg_sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
+}
+# cdg_split_rel_check LABEL CTL_MS FLOOD_MS -- the relative CPU bound the two timing pins below share:
+# the flood within 1.3 times its same-run control plus 250ms, and at most the hook's own 10s timeout.
+cdg_split_rel_check() {
+  local rel_max_ms
+  if [ -z "$2" ] || [ -z "$3" ]; then
+    __ok=0; __why="${__why}[$1] a CPU report could not be parsed\n"
+    return
+  fi
+  rel_max_ms=$(( $2 * 13 / 10 + 250 ))
+  [ "$rel_max_ms" -le 10000 ] || rel_max_ms=10000
+  if [ "$3" -gt "$rel_max_ms" ]; then
+    __ok=0; __why="${__why}[$1] the flood used ${3}ms of CPU against ${2}ms for its control, over the ${rel_max_ms}ms bound\n"
+  fi
+}
+case_solo_cdgsplit_fastpath_cpu() {
+  # A solo- case (#546): a CPU bound relative to a same-run control with no registry record, so it runs
+  # only in the plain hook-tests run, never under a mutant-driver group's concurrency. Its name must
+  # stay free of every registry filter, cdg- and cdg-split- included.
+  # A payload of the command cap's size whose every unit is a near miss of the split shim name (no
+  # final letter, so the fast path's regex reads the whole payload and rejects it) is timed against a
+  # payload of the same length with no backslash or apostrophe, which shuts the check's gate. Both are
+  # no opinion; the regex pass must cost a bounded slice on top of the control.
+  local cap flood ctl ctl_ms flood_ms
+  cap="$(cdg_dl_text_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_TEXT_MAX_BYTES from the hook\n"; return; fi
+  pcap_fill "$cap" "axpxpxlxyx_xpxaxtxcx "
+  ctl="$pcap_s"
+  pcap_fill "$cap" "a'p\"p'l\"y'_\"p'a\"t'c\" "
+  flood="$pcap_s"
+  cdg_deadline_override=60
+  measure_cpu_ms run_claude_guard "$(printf '%s' "$ctl" | mk_cdg_dl_bash implementer '')"
+  ctl_ms="$measured_cpu_ms"
+  expect_cdg_no_opinion
+  cdg_deadline_override=60
+  measure_cpu_ms run_claude_guard "$(printf '%s' "$flood" | mk_cdg_dl_bash implementer '')"
+  flood_ms="$measured_cpu_ms"
+  expect_cdg_no_opinion
+  cdg_split_rel_check fastpath "$ctl_ms" "$flood_ms"
+}
+case_solo_cdgsplit_walk_cpu() {
+  # A solo- case, named like the fast-path pin above. Line 1 names the shim plainly so the payload
+  # passes fast path 2 either way; then 400 lines that each spell it split beside a quote, so every
+  # line and every segment runs the split-name regex, against a twin of the same layout and byte
+  # lengths whose lines spell no split name, so the regex never runs. Both are no opinion, inside the
+  # analysis budget.
+  local i flood="echo apply_patch.md" twin="echo apply_patch.md" flood_ms ctl_ms
+  for i in $(seq 1 400); do
+    flood="${flood}${LF}echo apply_\"patch\" 'a'"
+    twin="${twin}${LF}echo apply_xpatchx xax"
+  done
+  cdg_deadline_override=60
+  measure_cpu_ms run_claude_guard "$(printf '%s' "$twin" | mk_cdg_dl_bash implementer '')"
+  ctl_ms="$measured_cpu_ms"
+  expect_cdg_no_opinion
+  cdg_deadline_override=60
+  measure_cpu_ms run_claude_guard "$(printf '%s' "$flood" | mk_cdg_dl_bash implementer '')"
+  flood_ms="$measured_cpu_ms"
+  expect_cdg_no_opinion
+  cdg_split_rel_check walk "$ctl_ms" "$flood_ms"
 }
 
 # --- a quote left open at a line end, or a mixed-quote value with a space (#553): the prose-quiet corpus
@@ -13620,7 +13986,7 @@ cases=(
   "cdg-bash-deny-no-inline-patch-subshell|case_cdg_bash_deny_no_inline_patch_subshell|unparseable deny (#407 kickback round 2, finding B): (apply_patch < x.patch) -- a subshell"
   "cdg-bash-deny-no-inline-patch-cmdsubst|case_cdg_bash_deny_no_inline_patch_cmdsubst|unparseable deny (#407 kickback round 2, finding B): echo \$(apply_patch < x.patch) -- a command substitution"
   "cdg-bash-deny-no-inline-patch-gt|case_cdg_bash_deny_no_inline_patch_gt|unparseable deny (#407 kickback round 2, finding C): apply_patch>out.txt -- the \">\" word break"
-  "cdg-bash-deny-backslash-indented-begin-patch|case_cdg_bash_deny_backslash_indented_begin_patch|.claude deny (#407 kickback round 2, finding C): \\apply_patch heredoc with an INDENTED exact Begin Patch/Add File line -- has_exact_begin_patch_line's own full trim is what denies here, not command-word detection (the leading backslash defeats that)"
+  "cdg-bash-deny-backslash-indented-begin-patch|case_cdg_bash_deny_backslash_indented_begin_patch|.claude deny (#407 kickback round 2, finding C): a backslash-newline-split apply_patch heredoc with an INDENTED exact Begin Patch/Add File line -- has_exact_begin_patch_line's own full trim is what denies here, not command-word detection (the split defeats that)"
   "cdg-bash-deny-leading-redirect|case_cdg_bash_deny_leading_redirect|unparseable deny (#407 kickback round 2, finding D): < x.patch apply_patch -- a leading redirect must not hide the command word that follows it"
   "cdg-bash-deny-leading-redirect-fd|case_cdg_bash_deny_leading_redirect_fd|unparseable deny (#407 kickback round 2, finding D): 2>/dev/null apply_patch < x -- a bare-digits fd immediately before a redirect operator"
   "cdg-bash-deny-leading-redirect-append|case_cdg_bash_deny_leading_redirect_append|unparseable deny (#407 kickback round 3): >> log apply_patch < x.patch -- a >> run is one redirect"
@@ -13813,6 +14179,23 @@ cases=(
   "push-chain-quiet-heredoc|case_push_chain_quiet_heredoc|no opinion: heredoc bodies and a gh pr create body holding apostrophes, code spans and semicolons -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (503-pg-ph-always, 503-pg-perline)"
   "ab-chain-quiet|case_ab_chain_quiet|no opinion: quoted prose and read-only git for the implementer and the verifier, beside a break character -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (503-ab-lex-dq-apos)"
   "cdg-chain-quiet|case_cdg_chain_quiet|no opinion: prose naming apply_patch beside a break character, and the main session's quoted-break apply_patch -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (503-cdg-lex-dq-apos)"
+  "cdg-split-deny-names|case_cdg_split_deny_names|deny (#538): a shim name split by double quotes, single quotes or backslashes, with or without the underscore -- mutation proof: dev/mutants/hook-tests.json (538-cdg-fast-off, 538-cdg-split-dq, 538-cdg-bs-strip)"
+  "cdg-split-deny-verifier|case_cdg_split_deny_verifier|deny (#538): the split name, the expansion word and the env -S string for the verifier role"
+  "cdg-split-heredoc|case_cdg_split_heredoc|deny with a .claude header, no opinion with a benign one (#538): the three new routes each taking an inline heredoc patch"
+  "cdg-split-noop-prose|case_cdg_split_noop_prose|no opinion (#538): prose and a heredoc body line mentioning a split spelling, and a call fast path 2 excludes -- control, not part of the mutation-proof registry"
+  "cdg-split-noop-scope|case_cdg_split_noop_scope|no opinion (#538): a split spelling from the main session, another agent and a plan-mode turn -- control, not part of the mutation-proof registry"
+  "cdg-split-deny-expansion|case_cdg_split_deny_expansion|deny (#538): a runtime-expansion word before the shim in every form the skip class names, behind an assignment and behind a chain -- mutation proof: dev/mutants/hook-tests.json (538-cdg-rx-off, 538-cdg-rx-sq, 538-cdg-rx-dq, 538-cdg-rx-special)"
+  "cdg-split-deny-expansion-prefix|case_cdg_split_deny_expansion_prefix|deny (#538): a skipped expansion word opens the value context and the env context of the prefix word, and a dash-led expansion word after a prefix word starts the value scan -- mutation proof: dev/mutants/hook-tests.json (538-cdg-rx-vp, 538-cdg-rx-env, 538-cdg-rx-saw-prefix, 538-cdg-rx-order)"
+  "cdg-split-expansion-guards|case_cdg_split_expansion_guards|deny (#538): the plain spellings, a path-qualified expansion and five quoted or escaped prefixes keep their deny through the new routes -- mutation proof: dev/mutants/hook-tests.json (538-cdg-rx-basename, 538-cdg-alt-parity, 538-cdg-alt-rx, 538-cdg-alt-bs, 538-cdg-alt-envs, 538-cdg-alt-envs-word, 538-cdg-alt-envs-value)"
+  "cdg-split-noop-expansion|case_cdg_split_noop_expansion|no opinion (#538): a lone dollar sign and an expansion word after the command word -- mutation proof: dev/mutants/hook-tests.json (538-cdg-rx-lone-dollar)"
+  "cdg-split-deny-env-s|case_cdg_split_deny_env_s|deny (#538): an attached env -S string in every spelling the reading names -- mutation proof: dev/mutants/hook-tests.json (538-cdg-envs-off, 538-cdg-envs-lead, 538-cdg-envs-unescape, 538-cdg-envs-names, 538-cdg-envs-basename, 538-cdg-envs-delete-bs, 538-cdg-envs-dash)"
+  "cdg-split-deny-env-s-value|case_cdg_split_deny_env_s_value|deny (#538): an env -S string as a separate value, and behind another option's value -- mutation proof: dev/mutants/hook-tests.json (538-cdg-envs-sep, 538-cdg-envs-longopt, 538-cdg-vp-lead, 538-cdg-envs-value-dq, 538-cdg-envs-value-names)"
+  "cdg-split-noop-env-s|case_cdg_split_noop_env_s|no opinion (#538): an env string that does not name the shim, and a non-env prefix option ending in the shim name -- mutation proof: dev/mutants/hook-tests.json (538-cdg-envs-context)"
+  "cdg-split-deny-combos|case_cdg_split_deny_combos|deny (#538): a split spelling behind a quoted or escaped prefix, and behind a prefix option's value -- mutation proof: dev/mutants/hook-tests.json (538-cdg-seg-split, 538-cdg-chain-split, 538-cdg-vp-bs-loop, 538-cdg-seg-bs-scan, 538-cdg-vp-bs-excl, 538-cdg-ln-sq, 538-cdg-seg-sq)"
+  "cdg-split-deny-overblock|case_cdg_split_deny_overblock|deny (#538): the two documented over-blocks, a prose line led by prefix or expansion words before the shim and an apostrophe on a split-spelling line -- control, not part of the mutation-proof registry"
+  "cdg-split-never-executes|case_cdg_split_never_executes|deny, sentinel absent on a booby-trapped PATH: the three new routes run no awk, sed, grep or tr -- no registry record"
+  "solo-cdgsplit-fastpath-cpu|case_solo_cdgsplit_fastpath_cpu|CPU TIME: a payload of the command cap's size made of near misses of the split shim name, no opinion within a bound relative to a same-run control that shuts the new check's gate -- no registry record; solo-: outside every registry filter, so it never runs under the mutant driver"
+  "solo-cdgsplit-walk-cpu|case_solo_cdgsplit_walk_cpu|CPU TIME: hundreds of lines that each spell the shim split beside a quote, no opinion within a bound relative to a twin whose lines run no split-name regex -- no registry record; solo-: outside every registry filter, so it never runs under the mutant driver"
   # --- a quote left open at a line end, or a mixed-quote value with a space (#553) cases -------------
   "push-qnl-quiet|case_push_qnl_quiet|no opinion: a quoted value running past a line end before a feature push, a closed value, prose and a heredoc body with an apostrophe and an assignment, and an apostrophe in a double-quoted value -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (553-pg-carry-glue, 553-pg-carry-trunc)"
   "ab-qnl-quiet|case_ab_qnl_quiet|no opinion: a quoted value running past a line end before an echo that names gh, a heredoc body, and an apostrophe in a double-quoted value, implementer and verifier -- the prose-quiet corpus -- mutation proof: dev/mutants/hook-tests.json (553-ab-carry-glue, 553-ab-carry-trunc)"
