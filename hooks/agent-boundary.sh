@@ -47,7 +47,8 @@
 # including the `repeat`-count skip; the empty-normalised-token skip; the command-word case fold;
 # the #508 expansion-word predicate, rx_re and rx_word(), whose verdict differs per file; the #505
 # env option arm and prefix triggers, with strip_quotes(), quote_bearing(), quote_unbalanced() and
-# the ENV_* values, and the #518 value-context trigger with PREFIX_VALUE_WORDS, each hook with its own
+# the ENV_* values, and the #518 value-context trigger with PREFIX_VALUE_WORDS, and the #537 interpreter
+# option rule with PREFIX_INTERP_WORDS and INTERP_VALUE_OPTS, each hook with its own
 # verdict; the #503 chain lexer and pass and the #553 newline carry, each hook with its own gate and
 # output route; the CR
 # strip) must be applied to BOTH files — dev/selfcheck.sh's assertion 4.40 clause (c) mechanically pins
@@ -84,7 +85,11 @@
 # words name `gh`/`git` or a `.claude` path segment (see "Fail-closed: a command prefix the scan
 # cannot follow" below), OR (since #518) a segment in which a dash option of a PREFIX_VALUE_WORDS
 # member is followed by a word and a later word names `gh`/`git` or a `.claude` path segment (see
-# "Fail-closed: a value-taking option of a prefix word" below) — in which case print exactly one reason line to
+# "Fail-closed: a value-taking option of a prefix word" below), OR (since #537) a segment in which an
+# option of an interpreter prefix word cannot be classified, or takes a value word that fails the
+# plain-word test, and a later word names `gh`/`git` or a `.claude` path segment, or in which the
+# options are classified and the -c string behind them names a denied command (see "An option of an
+# interpreter prefix word" below) — in which case print exactly one reason line to
 # stderr and exit 2 ("deny"); stdout is always empty. Wired in hooks/hooks.json via
 # `${CLAUDE_PLUGIN_ROOT}`, with no `if` gate (the `if` field is permission-rule syntax over tool
 # input only — it cannot see `agent_type`, so any `if` here would silence the boundary for exactly
@@ -148,9 +153,9 @@
 # reconnecting a write split across disjoint tails. The remedy is the same one this header already
 # gives: use the Write/Edit tools for file content.
 #
-# Still possible (under-blocking, not closed): the value-taking option of an interpreter prefix word
-# (`bash -o pipefail -c 'gh pr merge 5'`, `bash +o pipefail -c …`; interpreter words are left out of
-# PREFIX_VALUE_WORDS because their `-c` value IS the command string); an even-count quote split of an option
+# Still possible (under-blocking, not closed): a value-taking option of an interpreter prefix word
+# outside the o/O value letters and the INTERP_VALUE_OPTS long options (`ksh -R x -c 'gh pr merge 5'`,
+# see the #537 paragraph below); an even-count quote split of an option
 # value with no assignment text (`env -u "a'"'b c' gh …`), which the parity check does not see (the
 # assignment forms `X="a'"'b c' gh …`, `X="\" x" gh …` and `X=$'a\'b c' gh …`, and a quoted value
 # holding a newline, `X="a<LF>b" gh …`, are closed by #553, and a value with a segment-break character by
@@ -231,9 +236,19 @@ ENV_UNSET_OPTS="-u --unset"
 # of these, a dash token followed by a non-option word is a point where the walk cannot tell the
 # value from the command word, so it reads the rest of the segment after that word (see the
 # fail-closed paragraph "a value-taking option of a prefix word" below). Interpreter words
-# (`bash`/`sh`/...) stay out: their `-c` value IS the command string. Byte-identical to
+# (`bash`/`sh`/...) stay out: their `-c` value IS the command string, so their options are classified
+# by the #537 rule instead (PREFIX_INTERP_WORDS below). Byte-identical to
 # hooks/push-guard.sh's and hooks/claude-dir-guard.sh's own copies (by convention, unpinned).
 PREFIX_VALUE_WORDS="exec nice stdbuf sudo time xargs"
+# PREFIX_INTERP_WORDS / INTERP_VALUE_OPTS (#537) — the interpreter members of PREFIX_WORDS, and the long
+# options of those interpreters that take a SEPARATE value word (`bash --rcfile f -c ...`). While the most
+# recent prefix word is an interpreter, a `-`/`+` token is an option the walk classifies instead of
+# guessing (see the paragraph "An option of an interpreter prefix word" below): a value option, a
+# letter cluster ending in a single `o` or `O` (`-o`, `+O`, `-eo`), skips its value word together with
+# it when that word passes the value-word test. Byte-identical to hooks/push-guard.sh's and
+# hooks/claude-dir-guard.sh's own copies (by convention, unpinned).
+PREFIX_INTERP_WORDS="bash dash ksh sh zsh"
+INTERP_VALUE_OPTS="--init-file --rcfile -init-file -rcfile"
 # DBRACKET_MAX — the most standalone `]]` matches the scan's additive pass
 # (further down) will analyse per input record before failing closed; bounds that pass's own work
 # to about DBRACKET_MAX times the record's length, keeping it linear rather than quadratic in the
@@ -420,7 +435,9 @@ cmd="${cmd//$cr/}"
 #     with them, an attached `-uNAME` / `--unset=NAME` is skipped alone, and any other option reads
 #     the rest of the segment first (see the fail-closed paragraph below), and, since #518, in the value
 #     context of a PREFIX_VALUE_WORDS member, where a dash token followed by a non-option word reads the
-#     rest of the segment after that word first (see the #518 paragraph below);
+#     rest of the segment after that word first (see the #518 paragraph below), and, since #537, after an
+#     interpreter word (PREFIX_INTERP_WORDS), where a dash or plus token is classified first and a value
+#     option takes its plain value word with it (see the #537 paragraph below);
 #   - since #508, a token whose basename holds a runtime expansion (a dollar sign followed by a name
 #     character, a digit, a special parameter `@ * # ? ! $ -`, a zsh expansion flag `= ~ ^`, an
 #     apostrophe or a double quote; the
@@ -437,7 +454,7 @@ cmd="${cmd//$cr/}"
 #     hooks/push-guard.sh's rx_word(), each hook with its own verdict, and quote-blind (`'$X'` and
 #     `\$X` count);
 #   - the first token that survives all five skips and the #505 env arm and prefix triggers (and the
-#     #518 value-context trigger) is the
+#     #518 value-context trigger and the #537 interpreter-option arm) is the
 #     segment's command word, emitted in its
 #     normalised, lower-cased form (since #398 — only the command word and prefix-word matching are
 #     case-folded; the git subcommand below, redirect targets, and other arguments are not). If it
@@ -513,14 +530,46 @@ cmd="${cmd//$cr/}"
 # trigger: lost_scan() reads the rest of the segment AFTER that word, never the word itself, so
 # `sudo -E git status` is still judged on `git`, and a hit prints its verdict (`gh`, `git -prefix-`, or
 # the `-claude-write-` line) and ends the segment. A later prefix word outside the vocabulary closes the
-# context (`sudo bash -c "echo gh"` keeps no opinion). Interpreter words stay out of the vocabulary. The
+# context (`sudo bash -c "echo gh"` keeps no opinion). Interpreter words stay out of the vocabulary (their
+# options follow the #537 rule below). The
 # scan memo is shared with the #505 triggers, which start at or before this one, so a later trigger
 # reads a suffix of what the first scan read. Cost: O(1) extra checks per dash token plus at most one
 # lost_scan() per segment, O(segment length); the disjoint `]]` tails keep the per-record bound.
 # Over-blocking, each a new deny: the implementer's `sudo -u root bash -c "echo gh"`, the verifier's
 # `nice -n 5 git status` and `xargs -I % git log %`, and any implementer segment whose value context is
-# followed by a `.claude` path. Residuals, each measured rc 0: an interpreter prefix word's option
-# (`bash -o pipefail -c 'gh pr merge 5'`), and a launcher outside PREFIX_WORDS (`timeout 5 gh …`).
+# followed by a `.claude` path. Residual, measured rc 0: a launcher outside PREFIX_WORDS (`timeout 5 gh …`).
+#
+# An option of an interpreter prefix word (#537). Interpreters stay out of PREFIX_VALUE_WORDS: the value of
+# `bash -c` IS the command string, so reading past it would deny `bash -e -o pipefail -c "echo gh"`. Their
+# options are classified instead. While the most recent prefix word is in PREFIX_INTERP_WORDS (bash, dash,
+# ksh, sh, zsh), a token that starts with a dash or a plus, is longer than one character, is not `--`, holds
+# no slash and is not read as a prefix word (any other keeps the walk it had) is one of three kinds
+# (ip_kind()). A VALUE option is a member of INTERP_VALUE_OPTS (--init-file, --rcfile, -init-file, -rcfile)
+# or a dash or plus followed by letters of which exactly one is o or O, and it is the last (`-o`, `+O`,
+# `-eo`): it is skipped together with the NEXT word, but only when that word is plain (ip_value_ok(): not
+# empty, not led by a dash or plus, no quote, backslash or dollar sign, not an assignment, and not a word
+# this hook's own command-word rule could deny on: a prefix word, `gh`, `git`, a CLAUDE_PATH_ARG_COMMANDS
+# member, `sed`, or a CLAUDE_CMDLINE_WRITE_COMMANDS member). The -c string behind the options is then judged
+# by the rules above, so `bash -o pipefail -c 'gh pr merge 5'` denies and `bash -o pipefail -c 'echo gh'`
+# keeps no opinion. A FLAG is a dash or plus followed by letters with no o or O (`-e`, `-c`, `-lc`, `+e`),
+# skipped alone as every dash token was (a plus-led token used to end the walk as the command word). Anything
+# else is UNCLASSIFIED: two value letters, a value letter that is not last, an unlisted long option, a
+# non-letter, or a value option whose next word failed the test. When the next word is no option,
+# lost_scan() reads the rest of the segment AFTER that word (never the word itself, which stays the command
+# word, so `zsh -cO gh pr merge 5` still resolves `gh`), through the scan memo the #505 and #518 triggers
+# share, and a hit prints its verdict; the option is then skipped alone. A token holding a dollar sign is
+# never skipped by this rule (it falls through to the #508 expansion skip, so `bash -o$X git status` keeps
+# the verifier's `git -expansion-`). A word is skipped only when the old walk, which took it for the command
+# word, could not have denied on it, so no deny turns into an allow; every other path adds a scan. Cost:
+# per token after an interpreter word one regex match, one gsub and a constant number of set lookups, each
+# O(token length); a value option consumes its value word with no rescan; at most one lost_scan() per
+# segment, shared through ls_done, O(segment length); the disjoint `]]` tails keep the per-record bound.
+# Over-blocking, each measured rc 2: an implementer `bash -O "extglob" -c 'echo gh'` (a quoted value fails
+# the test), `bash --login deploy.sh gh` and `bash --norc script.sh gh` (an unlisted long option followed by
+# a script whose arguments name gh), `zsh -cO echo gh`, and the verifier's `bash --norc script.sh git status`.
+# Residuals, each measured rc 0: a value option outside the o/O letters and the two long options (`ksh -R x
+# -c 'gh pr merge 5'`; UNVERIFIED which shell takes which option's value), and an interpreter reached behind a
+# launcher outside PREFIX_WORDS (`timeout 5 bash -o pipefail -c 'gh pr merge 5'`).
 #
 # Fail-closed: a segment break inside a quote or a command substitution (#503). The base split cuts a
 # record at every `;`, `&`, `|`, `(`, `)`, `{`, `}` and backtick before it looks at quoting, so a quoted
@@ -628,7 +677,7 @@ cmd="${cmd//$cr/}"
 # emits the same "-claude-write- <target>" sentinel the redirect/arg-vocab/in-place-sed passes above
 # already use, joining both captures, whenever BOTH cw_word and cw_tok are non-empty — so the
 # existing role-policy `"-claude-write- "*)` arm and deny printf need no #387-specific change.
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v dbracket_max="$DBRACKET_MAX" -v chain_lex_max="$CHAIN_LEX_MAX" -v envnov="$ENV_NOVALUE_OPTS" -v envunset="$ENV_UNSET_OPTS" -v vpwords="$PREFIX_VALUE_WORDS" '
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v dbracket_max="$DBRACKET_MAX" -v chain_lex_max="$CHAIN_LEX_MAX" -v envnov="$ENV_NOVALUE_OPTS" -v envunset="$ENV_UNSET_OPTS" -v vpwords="$PREFIX_VALUE_WORDS" -v ipwords="$PREFIX_INTERP_WORDS" -v ipvopts="$INTERP_VALUE_OPTS" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
@@ -643,6 +692,11 @@ BEGIN {
   for (i = 1; i <= neun; i++) envunset_set[envunsetarr[i]] = 1
   nvp = split(vpwords, vparr, " ")
   for (i = 1; i <= nvp; i++) vprefix_set[vparr[i]] = 1
+  # #537: the interpreter prefix words, and the long options of those interpreters that take a value
+  nip = split(ipwords, iparr, " ")
+  for (i = 1; i <= nip; i++) ip_set[iparr[i]] = 1
+  nipv = split(ipvopts, ipvarr, " ")
+  for (i = 1; i <= nipv; i++) ipv_set[ipvarr[i]] = 1
   # #508: a dollar sign followed by a name character, a digit, a special parameter, or a quote
   rx_re = "[$][A-Za-z0-9_@*#?!$=~^\"" sq "-]"
   # #503: the chain pass character classes (see chain_lex()) and the cap on a token grown by gluing
@@ -788,7 +842,40 @@ function lost_scan(toks, from, ntok,    i, r, c, lw, cwf) {
   }
   return c
 }
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, gitsub, inplace, lw, found_claude, saw_exp, in_env, in_vp, lost, s0) {
+# ip_kind (#537) -- how the walk reads a dash or plus token after an interpreter prefix word: "v" for a
+# value option (a member of INTERP_VALUE_OPTS, or a dash or plus followed by letters in which exactly one
+# is o or O and it is the last, -o, +O, -eo), which takes the NEXT word as its value; "f" for a flag (a
+# dash or plus followed by letters, none of them o or O, -e, -c, -lc, +e); "u" for anything else (two
+# value letters, a value letter that is not last, an unlisted long option, a non-letter), which the walk
+# cannot classify.
+function ip_kind(t,    u, c) {
+  if (t in ipv_set) return "v"
+  if (t !~ /^[-+][A-Za-z]+$/) return "u"
+  u = t
+  c = gsub(/[oO]/, "", u)
+  if (c == 0) return "f"
+  if (c == 1 && substr(t, length(t)) ~ /[oO]/) return "v"
+  return "u"
+}
+# ip_value_ok (#537) -- TRUE iff w, the word after a value option of an interpreter, may be skipped with
+# it: a plain word that the old walk, which took it for the command word, could not have denied on. Not
+# empty, not option-led, no quote, backslash or dollar sign, not an assignment, and not a word this
+# hook own command-word rule can deny on: a prefix word, gh, git, a CLAUDE_PATH_ARG_COMMANDS member, sed,
+# or (version-stripped) a CLAUDE_CMDLINE_WRITE_COMMANDS member.
+function ip_value_ok(w,    h, n, lv) {
+  if (w == "") return 0
+  h = substr(w, 1, 1)
+  if (h == "-" || h == "+") return 0
+  if (quote_bearing(w) || index(w, "$") > 0) return 0
+  if (match(w, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) return 0
+  n = tolower(normalize(w))
+  if (n == "" || (n in prefix_set) || n == "gh" || n == "git" || (n in arg_set) || n == "sed") return 0
+  lv = n
+  sub(/[0-9.]+$/, "", lv)
+  if (lv in cw_set) return 0
+  return 1
+}
+function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, gitsub, inplace, lw, found_claude, saw_exp, in_env, in_vp, in_ip, ipw, ipk, ipf, lost, s0) {
   if (ch_use) { for (idx = 1; idx <= ch_n; idx++) toks[idx] = ch_t[idx]; ntok = ch_n }
   else ntok = split(seg, toks, /[ \t]+/)
   ls_done = 0
@@ -798,6 +885,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   saw_exp = 0
   in_env = 0
   in_vp = 0
+  in_ip = 0
   while (idx <= ntok) {
     tok = toks[idx]
     if (tok == "") { idx++; continue }
@@ -845,9 +933,31 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
       lost = lost_scan(toks, idx + 2, ntok)
       if (lost != "") { print lost; return }
     }
+    # #537: an option of an interpreter prefix word (bash/sh/zsh/ksh/dash). A value option (-o, +O, -eo,
+    # --rcfile) is skipped together with its value word when that word is plain (ip_value_ok), a flag (-e,
+    # -c, +e) alone, so the -c string behind them is judged as usual. Anything else cannot be classified:
+    # when the next word is no option, the rest of the segment AFTER it is read (never the word itself,
+    # which stays the command word), through the scan memo the #505 and #518 triggers share. A token with
+    # a dollar sign is never skipped here: it falls through to the #508 expansion skip below. A token
+    # with a slash, or one the walk reads as a prefix word, keeps the walk it had before.
+    if (in_ip && length(tok) > 1 && tok != "--" && (substr(tok, 1, 1) == "-" || substr(tok, 1, 1) == "+") && index(tok, "/") == 0 && !(norm in prefix_set)) {
+      ipw = (idx < ntok) ? toks[idx + 1] : ""
+      if (index(tok, "$") == 0) {
+        ipk = ip_kind(tok)
+        if (ipk == "v" && ip_value_ok(ipw)) { idx += 2; continue }
+        if (ipk == "f") { idx++; continue }
+      }
+      if (ipw != "" && substr(ipw, 1, 1) != "-") {
+        ipf = idx + 2
+        lost = lost_scan(toks, ipf, ntok)
+        if (lost != "") { print lost; return }
+      }
+      if (index(tok, "$") == 0) { idx++; continue }
+    }
     # #508: a runtime expansion in command position may expand to nothing: skip it so the real command
     # word behind it still resolves
     if (rx_word(tok)) { saw_exp = 1; saw_prefix = 1; if (substr(tok, 1, 1) != "-") in_vp = 1; idx++; continue }
+    if (norm != "-" && (norm in prefix_set)) in_ip = (norm in ip_set)
     if (norm in prefix_set && norm != "-") { in_env = (norm == "env"); in_vp = (norm in vprefix_set) }
     if (norm in prefix_set) { saw_prefix = 1; idx += (norm == "repeat") ? 2 : 1; continue }
     if (saw_prefix && substr(tok, 1, 1) == "-") { idx++; continue }

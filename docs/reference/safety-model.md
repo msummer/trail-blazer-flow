@@ -207,7 +207,12 @@ paragraph lists the over-blocking and the residuals. Since #518, a dash option o
 same way, because the option's separate value would otherwise be taken for the command word
 (`nice -n 5 gh pr merge 5` and `sudo -u root gh …` deny; the verifier's `nice -n 5 git status` denies
 too); the header's "Fail-closed: a value-taking option of a prefix word" paragraph lists the over-blocks
-and residuals. Since
+and residuals. Since #537, an option of `bash`, `sh`, `zsh`, `ksh` or `dash` is classified instead of
+guessed: a value option (`-o`, `+O`, a cluster ending in one of them such as `-eo`, `--rcfile`,
+`--init-file`) is skipped together with its plain value word, a flag (`-e`, `-c`, `+e`) alone, and an
+option the walk cannot classify reads the rest of the segment after the next word the same way as above,
+so `bash -o pipefail -c 'gh pr merge 5'` denies while `bash -o pipefail -c 'echo gh'` stays quiet; the
+header's "An option of an interpreter prefix word (#537)" paragraph lists the over-blocks and residuals. Since
 #340, both roles ALSO deny a Bash command that puts a `.claude`-segment path in a write position —
 a `>`-family redirect target, an argument to `tee`/`cp`/`mv`/`cd`/`pushd`, or an in-place `sed`'s
 argument — closing most of the Bash-issued write route into `.claude/` (see `hooks/claude-dir-guard.sh`'s
@@ -266,8 +271,7 @@ a `CLAUDE_CMDLINE_WRITE_COMMANDS` command word sharing a call with any `.claude`
 the remedy for a file-content case is to write through the Write/Edit tools rather than a Bash
 heredoc, and for the #387 read-adjacent case, the Read/Grep tools or a separate Bash call. Known
 evasions, documented rather than hidden: `$(which git) push` (the literal `git` token is never in
-command position), a value-taking option of an interpreter prefix word (`bash -o pipefail -c 'gh pr
-merge 5'`), interpreter indirection outside the recognised prefix words (`env`, `command`,
+command position), interpreter indirection outside the recognised prefix words (`env`, `command`,
 `builtin`, `exec`, `sudo`, `nohup`, `time`, `nice`, `stdbuf`, `xargs`, `bash`, `sh`, `zsh`, `ksh`,
 `dash`, the shell reserved words `if`, `then`, `elif`, `else`, `do`, `while`,
 `until`, `!`, `coproc`, the `eval`/`trap` builtins, and zsh's precommand modifiers `noglob`,
@@ -646,15 +650,18 @@ name split by quote or backslash characters, a runtime expansion before it, or a
 (#538)" paragraph lists the mechanism, the over-blocks and the residuals. What can still evade both
 checks: a backslash-newline split, a variable-built name (`p=apply_patch; $p < x.patch` — this walk
 never expands a variable reference), an ANSI-C-quoted spelling (`$'apply_patch'` — the walk skips it
-as an expansion word and the shim never resolves), an interpreter prefix word's value-taking option
-(`bash -o pipefail -c 'apply_patch < x.patch'`), an INDIRECT `eval`/`trap` argument (`eval "$c"`, `eval
+as an expansion word and the shim never resolves), an INDIRECT `eval`/`trap` argument (`eval "$c"`, `eval
 "$(cmd)"` — quote-stripping never expands a variable or runs a command substitution), a `]]` token
 itself glued to a quote character (a literal `"]]"` token is not the bare `]]` the cut loop matches
 against), or an unrecognised launcher. Since #518 a dash option of
 `nice`, `sudo`, `stdbuf`, `exec`, `xargs`, `time` or `env` followed by a word looks for a shim-named
 word after that word (`nice -n 5 apply_patch < x.patch`, `env -u X apply_patch < x.patch`), so the
 option's separate value no longer hides the shim; the script's "Fail-closed: a value-taking option of a
-prefix word (#518)" paragraph lists the over-blocks and residuals. Since #437 the walk also
+prefix word (#518)" paragraph lists the over-blocks and residuals. Since #537 an option of `bash`, `sh`,
+`zsh`, `ksh` or `dash` is classified the same way (a value option such as `-o` or `--rcfile` skips its
+plain value word, a flag skips alone, an unclassifiable option looks for a shim-named word after the
+next word), so `bash -o pipefail -c 'apply_patch < x.patch'` denies; the script's "An option of an
+interpreter prefix word (#537)" paragraph lists the over-blocks and residuals. Since #437 the walk also
 handles zsh's short `if [[ cond ]] apply_patch` form the same way `hooks/agent-boundary.sh`'s own
 tokenizer does: every standalone `]]` token splits its own segment into disjoint tails, so the text
 after each `]]` is also tried as a candidate command word; a segment carrying more than
