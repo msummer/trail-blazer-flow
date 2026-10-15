@@ -1,467 +1,140 @@
 #!/usr/bin/env bash
 #
-# claude-dir-guard.sh — plugin-shipped PreToolUse hook (#327; apply_patch route, .codex, and the
-# Bash apply_patch-shim route added #407, the latter in an approved mid-flight scope amendment)
-# that mechanically denies an implementer or verifier subagent's Edit, Write, apply_patch, or (when
-# it carries an inline `apply_patch`-shaped patch) Bash call whose target path (a file_path for
-# Edit/Write, or every Add/Update/Delete/Move-to header path for apply_patch and for a Bash call
-# carrying an inline patch) carries a `.claude` or `.codex` path segment, turning #323's
-# orchestrator-prose LESSONS.md dispatch guard (which only detects a subagent's `.claude/
-# LESSONS.md` change after the dispatch returns, and only if the orchestrator runs the compare)
-# into a rail, and closing that guard's own documented blind spot for a repo whose
-# `.claude/LESSONS.md` is still untracked, PLUS (#407) Codex's own `apply_patch` tool call, which
-# carries no file_path at all (ADR 0002 amendment, P4), PLUS (#407 amendment) a shell-issued
-# `apply_patch <<'EOF' … EOF` heredoc that Codex's own PATH-installed shim runs as an ordinary Bash
-# call instead (ADR 0002 amendment 2, S0/#412, Q7). Reads the hook's stdin JSON; for an
-# Edit/Write/apply_patch/Bash tool call issued by a recognised implementer/verifier agent_type,
-# denies (exit 2, one stderr line, empty stdout) when a target path carries any path segment equal
-# to `.claude` or `.codex` case-insensitively, OR when a path cannot be classified as absolute or
-# `..`-free (fail-closed per the triage record this issue settled), OR (apply_patch, or Bash
-# carrying an inline patch, #407) when the patch itself cannot be parsed into a recognised header
-# shape, OR (Bash only, #407 amendment) when the command word is `apply_patch`/`applypatch` (or, since
-# #518, a shim-named word follows the separate value of a prefix word's option, or, since #537, the
-# options of an interpreter prefix word are read or a shim-named word follows an option it cannot read,
-# or, since #538, the
-# name is split by quote or backslash characters, a runtime-expansion word precedes it, or an `env
-# -S` string names it) but
-# carries no inline patch this hook can see at all (e.g. reading the patch from a file), OR (Bash
-# only, #455) when the shim's own input is anything but its own inline heredoc while an inline
-# patch also appears elsewhere in the command (a decoy), OR (Bash only, #455/#456) when an
-# unbalanced quote or a trailing backslash precedes a command word the walk resolved in a segment
-# that mentions the shim, OR (#457) when the call is too large for this hook's own analysis to
-# finish inside its analysis budget, or a Bash command / patch line, a path, or the `cwd` field
-# exceeds a size cap (see "Analysis deadline (#457)" and "Size caps (#457)" below); every other case — main session (no agent_type), any other agent, `permission_mode: "plan"`, a tool
-# other than Edit/Write/apply_patch/Bash, malformed stdin, an absent/empty file_path/command, an
-# ordinary Bash call that neither carries an inline patch nor invokes the shim as its command word
-# (`apply_patch`/`applypatch` appearing only as an ordinary argument gets no opinion; the base walk
-# never tracks which quote ENCLOSES which span, so a quoted mention right after a segment-break
-# character can still deny -- see the documented over-blocks below), or
-# an ordinary absolute path outside any `.claude`/`.codex` segment — is "no opinion" (exit 0, empty
-# stdout, empty stderr), the same convention every sibling hook in this directory uses.
+# claude-dir-guard.sh — plugin-shipped PreToolUse hook (#327; the apply_patch route, .codex and the Bash
+# apply_patch-shim route were added by #407) that mechanically denies an implementer or verifier subagent a
+# write to a path under a `.claude` or `.codex` segment through Edit, Write, apply_patch, or a Bash call
+# that runs Codex's apply_patch shim. It turns the orchestrator-prose LESSONS.md dispatch guard (which only
+# notices a change after the dispatch returns) into a rail.
 #
-# The classifier is a PURE STRING decision with NO FILESYSTEM ACCESS AT ALL — strictly less than
-# hooks/push-guard.sh, which reads cwd-derived `.git` paths to resolve branch/config facts; this
-# hook reads nothing but the stdin JSON itself (for apply_patch and the Bash inline-patch route,
-# that JSON's own `cwd` field is used to resolve a relative header path — still no filesystem
-# access: `cwd` is trusted only as a string to join, never opened, stat'd, or listed). Never
-# executes anything (no git, no gh, nothing derived from the untrusted file_path/command string),
-# never `eval`s, never writes a file. Both patch routes split the patch text into lines using shell
-# builtins only (IFS splitting under `set -f`), never a heredoc, here-string, or external tool; the
-# Bash route's own command-word check (is_apply_patch_word) is likewise pure parameter-expansion
-# splitting, no execve. bash + jq only — no python, no perl, no GNU-only flags (this repo's
-# CLAUDE.md portability convention); exercised under Apple's bash 3.2 by the selfcheck-macos CI
-# job, same as bin/*.sh and this directory's four siblings.
+# Contract: read the PreToolUse hook JSON on stdin. Print nothing and exit 0 ("no opinion") unless the call
+# is an Edit, Write, apply_patch or Bash call from a recognised implementer or verifier agent_type that the
+# policy below denies. A deny prints exactly one reason line to stderr and exits 2; stdout is always empty.
+# Denied:
+#   - Edit/Write: a file_path with any path segment equal to `.claude` or `.codex`, case-insensitively, or
+#     one that cannot be classified (not absolute, or holding a `..` segment: fail closed);
+#   - apply_patch, and a Bash call carrying an inline patch: an Add/Update/Delete/Move-to header path with
+#     such a segment (a relative header path is joined to the payload cwd), an unclassifiable path, or a
+#     patch that cannot be parsed into a recognised header shape (an unknown `*** ` marker, an empty header
+#     path, no header at all); an apply_patch call with an absent or empty command also denies;
+#   - Bash, the shim route (is_apply_patch_word resolves apply_patch or applypatch, by basename, as a
+#     command word): a shim with no inline patch this hook can see (a patch read from a file); a shim whose
+#     input is anything but its own inline heredoc while an inline patch also appears elsewhere in the call
+#     (a decoy); an unbalanced quote or trailing backslash before the resolved command word in a segment
+#     that mentions the shim; more than DBRACKET_MAX standalone `]]` in a segment, or a `]]` cut tail that
+#     consumes skip words without resolving one; and a `.claude` or `.codex` mention anywhere in the call
+#     text when the shim is a command word;
+#   - a call too large for the analysis budget, or over a size cap ("Analysis deadline (#457)" and
+#     "Size caps (#457)" below).
+# No opinion for everything else: the main session (no agent_type), any other agent, permission_mode
+# "plan", a tool other than Edit, Write, apply_patch or Bash, malformed stdin, an Edit/Write call with an
+# absent file_path, a Bash call with an absent command, a Bash call that neither carries an inline patch nor runs the shim as a command word (the shim
+# name as a plain argument is quiet), and an ordinary absolute path outside any such segment.
 #
-# Vocabulary cross-reference: AGENT_TYPES_IMPLEMENTER/AGENT_TYPES_VERIFIER below are copied
-# byte-identically from hooks/agent-boundary.sh:57-58 -- dev/selfcheck.sh's assertion 4.45 pins the
-# two files' declarations identical mechanically (the 4.42 script<->script idiom). See
-# hooks/agent-boundary.sh's own header for the full #259/#327 live-probe provenance of this
-# vocabulary; only the #327-specific measurements are restated below. GUARDED_TOOLS stays
-# "Edit Write" (#407 added apply_patch, and the #407 amendment added Bash, to their own, separate
-# PATCH_TOOLS/BASH_TOOLS variables instead of widening GUARDED_TOOLS itself) because
-# dev/selfcheck.sh's assertion 4.53 requires every GUARDED_TOOLS member to appear on an
-# implementer or verifier `tools:` line, and no role's frontmatter names apply_patch — see that
-# assertion's own comment. (Bash IS already on both roles' tools: lines, and already on 4.53's own
-# exemption list because hooks/agent-boundary.sh covers its `.claude`-write policy instead; leaving
-# BASH_TOOLS separate here simply keeps this hook's own vocabulary self-contained, the same reason
-# PATCH_TOOLS is separate.)
+# No `if` gate in hooks/hooks.json: the `if` field is permission-rule syntax over tool input only. It cannot
+# see agent_type, express a case-insensitive nested or `..` path-segment rule, parse an apply_patch patch
+# header grammar, or tell a Bash command word from an argument, so any `if` would silence this hook for
+# exactly the spellings it exists to catch.
 #
-# Live-probe record, #327 (orchestrator-measured 2026-09-17 against Claude Code 2.1.274, macOS, a
-# temporary logging PreToolUse hook with matcher "Edit|Write" supplied via --settings, this repo
-# loaded via --plugin-dir -- one Claude Code version, one platform, one install shape; not
-# re-verified across versions, platforms, or install shapes):
-#   - A main-session Edit/Write PreToolUse payload carries no agent_type key and no agent_id key
-#     at all (M1) -- the same "no opinion, fast path 1" shape hooks/agent-boundary.sh's own record
-#     already established for Bash.
-#   - An implementer-subagent Write payload carries agent_type = "trail-blazer-flow:implementer"
-#     (the namespaced spelling #259 measured for Bash), with tool_input keys {content, file_path}
-#     (M2); the same subagent's Edit payload carries the identical agent_type spelling, with
-#     tool_input keys {file_path, new_string, old_string, replace_all} (M3).
-#   - Across the six payloads captured during this probe, tool_input.file_path was an ABSOLUTE
-#     path under the session cwd; one call was requested with the relative path "blocked/rel.txt"
-#     and the payload still carried the absolute form (M4). Whether Claude Code or the model
-#     itself absolutised it is NOT established -- a relative file_path reaching this hook is
-#     therefore unproven either way, not ruled out, which is why the classifier below denies
-#     (fails closed) rather than passing a non-absolute path through.
-#   - A hook wired {"matcher":"Edit|Write", hooks:[{type:command,...}]} that exits 2 with one
-#     stderr line blocked the subagent's Write outright (the file was not created, and the
-#     subagent's own transcript showed "PreToolUse:Write hook error: [<command>]: <the stderr
-#     line>"); the same hook exiting 0 with empty stdout let the main session's Write through (M5).
-#   - A verifier-subagent dispatch given a realistic mutation-probe task on a tracked file (one
-#     commit already in the fixture repo) produced an Edit PreToolUse payload carrying agent_type
-#     = "trail-blazer-flow:verifier" and an agent_id, tool_input keys {file_path, new_string,
-#     old_string, replace_all}, and an absolute file_path -- the logging hook exited 0, the
-#     verifier's mutant was killed, and the file was restored before the dispatch returned (M7).
-#     So the verifier's Edit spelling is MEASURED, the same way the implementer's is, not inferred
-#     from the Bash measurement. agents/verifier.md's tools: line carries no Write tool, so no
-#     verifier Write payload exists to measure.
-#   - NOT measured: a MultiEdit/NotebookEdit payload (agents/implementer.md:9 and
-#     agents/verifier.md:12 list neither tool for either role today, so GUARDED_TOOLS below does
-#     not need to cover them; gate 4.53 pins this by comparing GUARDED_TOOLS against both roles'
-#     tools: lines, so a future MultiEdit/NotebookEdit grant fails the gate rather than silently
-#     reopening this hook's own blind spot); symlink/hard-link/`..`-normalisation resolution
-#     (documented below as an under-blocking class instead); whether `cwd` is always the repo root.
-#     An ORDINARY Bash-issued write into .claude/ (e.g. a redirect, `cp`, `tee`) is still outside
-#     THIS hook's own patch-parsing logic -- it carries no apply_patch-shaped patch for the Bash
-#     route below to recognise -- but since #340 hooks/agent-boundary.sh's own Bash policy covers
-#     part of that route (a `>`-family redirect, tee/cp/mv/cd/pushd, or in-place sed) for the
-#     implementer/verifier roles -- see that hook's own header for what it covers and the
-#     under-blocking note below for what it still doesn't. Only a Bash call SHAPED like the
-#     apply_patch shim (an inline patch, or the shim as the command word) is this hook's own
-#     concern (#407 amendment; see the Bash route below).
+# NO FILESYSTEM ACCESS, strictly less than hooks/push-guard.sh, which reads .git paths: the hook reads only
+# the stdin JSON, and the payload cwd is trusted only as a string to join, never opened. It executes nothing
+# (no git, no gh, nothing derived from the untrusted input), never evals, never writes a file, and runs no
+# awk, sed, grep or tr (the booby-trap fixtures in dev/hook-tests.sh trap them): text is split with shell
+# builtins only. bash + jq only, no GNU-only flag; exercised under Apple bash 3.2 by the macOS CI job.
 #
-# Codex `apply_patch` probe record, #407 (ADR 0002 amendment, P4; see docs/adr/0002-codex-
-# compatibility.md): Codex's file-editing tool call is named `apply_patch`, carries no `file_path`
-# at all, and instead carries a `tool_input.command` string holding the WHOLE PATCH TEXT in
-# Codex's own patch grammar (`*** Begin Patch` / `*** Add File: <path>` / `*** Update File: <path>`
-# / `*** Delete File: <path>` / `*** Move to: <path>` / `*** End of File` / `*** End Patch`, with
-# unmarked content lines in between), plus a top-level `cwd` field. Only the `Add File` and
-# `Update File` forms were probe-verified directly; `Delete File`, `Move to`, `Begin Patch`, `End
-# Patch`, and `End of File` follow Codex's patch grammar as generally known and are not separately
-# verified here — an unrecognised `*** ` marker denies fail-closed instead of guessing (see the
-# parser below and this repo's approved #407 plan, Open questions).
+# Shared with the sibling hooks:
+#   - AGENT_TYPES_IMPLEMENTER and AGENT_TYPES_VERIFIER are byte-identical to hooks/agent-boundary.sh, pinned by
+#     gate assertion 4.45; that hook's header holds the #259 live-probe record for the vocabulary.
+#   - GUARDED_TOOLS stays "Edit Write", pinned by gate assertion 4.53 (every member must appear on an
+#     implementer or verifier `tools:` line, and no role names apply_patch). apply_patch and Bash live in their
+#     own PATCH_TOOLS and BASH_TOOLS so GUARDED_TOOLS does not widen; Bash is on 4.53's exemption list because
+#     hooks/agent-boundary.sh covers its .claude-write policy. A write tool outside GUARDED_TOOLS,
+#     PATCH_TOOLS and BASH_TOOLS (MultiEdit, NotebookEdit) is not guarded: no role's tools: line names one
+#     today, and the gate fails if one gains it without a matching update.
+#   - By convention, unpinned: PREFIX_WORDS (agent-boundary.sh and push-guard.sh are pinned to each other by
+#     4.40(c); this copy is not), PREFIX_VALUE_WORDS, PREFIX_INTERP_WORDS, INTERP_VALUE_OPTS, DBRACKET_MAX
+#     (counted per segment here, per record in agent-boundary.sh) and cdg_rx_ere (the class of
+#     agent-boundary.sh's rx_re). The walk is a pure-bash port of the agent-boundary.sh and push-guard.sh
+#     technique, not a byte copy.
 #
-# Codex shell-`apply_patch` shim probe record, #407 amendment (ADR 0002 "Amendment 2026-09-26
-# (2)", S0/#412, Q7): Codex puts an `apply_patch` (and `applypatch`) shim on the shell PATH,
-# alongside the genuine `apply_patch` tool call above. A shell-issued `apply_patch <<'EOF' … EOF`
-# heredoc ran inside the Codex workspace sandbox and WROTE `.claude/settings.local.json`; replayed
-# as a `tool_name: "Bash"` payload, both v2.9.0 hooks/agent-boundary.sh and this hook (before this
-# amendment) exited 0, closing no gap at all. Whether Codex reports the shell form as `Bash` or
-# intercepts it as a genuine `apply_patch` tool call was NOT observed (the probe's usage limit was
-# reached first) -- this hook now covers the `Bash` shape either way (see the Bash route below);
-# if Codex instead always intercepts it as `apply_patch`, the route above already covers it and the
-# Bash route below is simply never reached for that call.
+# Live probe, #327 (measured 2026-09-17 against Claude Code 2.1.274, macOS, a temporary logging PreToolUse
+# hook with matcher Edit|Write, this repo loaded via --plugin-dir; one version, one platform, one install):
+#   M1  a main-session Edit/Write payload carries no agent_type and no agent_id key (fast path 1).
+#   M2/M3  an implementer Write or Edit payload carries agent_type trail-blazer-flow:implementer.
+#   M4  file_path was an absolute path under the session cwd in all six captured payloads, even when the call
+#       asked for a relative one. Whether Claude Code or the model absolutised it is not established, which is
+#       why a non-absolute path denies (fail closed) instead of passing.
+#   M5  a hook with matcher Edit|Write that exits 2 with one stderr line blocked the subagent's Write
+#       outright; exiting 0 let the main session's Write through. This is the matcher string measured.
+#   M7  a verifier Edit payload carries agent_type trail-blazer-flow:verifier, an agent_id and an absolute
+#       file_path; the verifier has no Write tool, so no verifier Write payload exists to measure.
+# Not measured: MultiEdit or NotebookEdit payloads, symlink and hard-link resolution, whether cwd is always
+# the repo root.
+# Codex apply_patch probe (#407, ADR 0002 amendment, P4): the tool call is named apply_patch, carries no
+# file_path, and holds the whole patch in tool_input.command in Codex's grammar (`*** Begin Patch`, `*** Add
+# File:`, `*** Update File:`, `*** Delete File:`, `*** Move to:`, `*** End of File`, `*** End Patch`), plus a
+# top-level cwd. Only Add File and Update File were verified directly; an unrecognised `*** ` marker denies
+# instead of guessing. Codex shim probe (#407, S0/#412): Codex puts an apply_patch (and applypatch) shim on
+# the shell PATH, and a shell-issued `apply_patch <<'EOF'` heredoc wrote .claude/settings.local.json inside
+# the sandbox. Whether Codex reports that shape as Bash or as an apply_patch tool call was not observed;
+# this hook covers the Bash shape either way.
 #
-# Contract: read the PreToolUse hook JSON on stdin; print nothing and exit 0 ("no opinion") unless
-# the call is an Edit/Write/apply_patch/Bash from a recognised implementer/verifier agent_type
-# whose target path(s) the policy below denies, or whose patch (apply_patch, or an inline
-# Bash-carried patch) cannot be parsed at all, or whose Bash command word is `apply_patch`/
-# `applypatch` with no inline patch this hook can see, or whose shim input is not its own inline
-# heredoc next to an inline decoy patch, or whose shim segment is preceded by an unbalanced quote
-# or trailing backslash (#455), or (#457) whose own analysis cannot finish inside the analysis
-# budget, in which case print exactly one reason line
-# to stderr and exit 2 ("deny"); stdout is always empty. Wired in hooks/hooks.json via
-# `${CLAUDE_PLUGIN_ROOT}`, with no "if" gate: the "if" field is permission-rule syntax over
-# tool_input constituents only -- it cannot see agent_type, it cannot express a case-insensitive/
-# nested/".." path-segment rule, and it cannot parse an apply_patch command's own patch-header
-# grammar or distinguish a Bash command's own command word from an argument, so any "if" here
-# would silence this hook for exactly the spellings it exists to catch (the same reasoning
-# hooks/agent-boundary.sh's and hooks/push-guard.sh's own registrations already give).
+# Analysis deadline (#457). This hook's own analysis (everything after the role and plan-mode exits) is
+# bounded by a whole-second wall-clock budget, CDG_ANALYSIS_BUDGET_SECS (5s), sampled from $SECONDS as an
+# elapsed difference from cdg_t0 (captured right after `set -uo pipefail`): check_deadline denies with one
+# fixed "too large to analyse" reason (deny_too_large, fail closed, naming only the resolved role and tool)
+# the first time $SECONDS reaches cdg_deadline, and never resets $SECONDS. Without it a long run of prefix
+# words ahead of the shim kept the walk busy for about as long as Claude Code's own 10s hook timeout, and a
+# timed-out PreToolUse hook gives no deny, so the shim ran unguarded. The sampling rule binds every future
+# addition: call check_deadline as the FIRST statement of EVERY loop whose trip count grows with the input
+# (grep this file for check_deadline for the current list), and every $(...) call to a helper that samples
+# (ltrim, trim) must propagate a deny with `[ "$?" -eq 0 ] || exit 2`, since a deny raised inside a command
+# substitution only exits that subshell. Every sample site is reachable only after the role and plan-mode
+# exits, so the deadline deny reaches the implementer and verifier only (unlike hooks/push-guard.sh, which
+# has no role scoping). Two test-only knobs are read from the ENVIRONMENT only and can only deny sooner:
+# TBF_CLAUDE_DIR_GUARD_BUDGET_SECS lowers the budget (exactly one or two ASCII digits, strictly less than the
+# production budget), and TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP denies once that many samples have been taken (1-4
+# digits, no leading zero; anything else means off), which pins one sample site independent of host speed.
 #
-# Documented over-blocking classes (deliberate, measured directly against this script): a path
-# carrying a ".." segment with no ".claude"/".codex" anywhere denies (fail-closed, unclassifiable)
-# -- measured: "/repo/../etc/passwd" -> rc 2; a non-absolute path denies -- measured: "src/main.rs"
-# -> rc 2; a POSIX filename containing a literal backslash is treated as separator-bearing, which
-# can manufacture a ".claude"/".codex" segment that was never a real directory boundary -- measured:
-# a file_path whose real, single-component filename is "foo\.claude\bar" (backslashes are legal
-# filename bytes on POSIX; no ".claude" directory exists) normalises to "/repo/foo/.claude/bar" and
-# denies (rc 2) purely from the rewrite; a case-variant spelling denies even on a case-sensitive
-# filesystem -- measured: "/repo/.Claude/x" -> rc 2; a test fixture the implementer or verifier must
-# write under any `.claude`/`.codex` segment denies -- remedy: create such fixtures from the test
-# script's own Bash, as this repo's harnesses (dev/hook-tests.sh included) already do. Since #407,
-# ALSO: an apply_patch (or Bash-carried inline patch) `cwd` under a Codex-managed worktree path
-# containing `.codex` (e.g. `~/.codex/worktrees/…`) denies every header in that patch, regardless
-# of the header path's own spelling; a patch context (unmarked, non-header) line whose TRIMMED text
-# happens to start with `*** ` (a coincidental collision with the patch grammar's own marker prefix)
-# denies as an unrecognised marker, fail-closed, since this parser has no notion of "inside a hunk"
-# versus "between hunks" -- the remedy is the same as every other apply_patch escape below: use
-# Bash to read/inspect a suspect patch body instead of trusting this hook to pass it through; a
-# Bash command that merely MENTIONS "apply_patch"/"applypatch" as its own command word inside a
-# heredoc BODY line (not the shell's own command word) is not distinguished from a genuine
-# invocation by is_apply_patch_word()'s segment walk -- fail-closed is the safer direction here too.
-# Since #437, ALSO: a segment carrying more than DBRACKET_MAX standalone `]]` tokens denies
-# unconditionally as soon as the excess one is seen (at most DBRACKET_MAX disjoint tails are ever
-# walked first) -- measured: "echo apply_patch" plus 65 standalone
-# `]]` -> rc 2 ("too many standalone ]] tokens to analyse"), where 64 gets no opinion; a cut
-# (non-final) tail, one ending at the next standalone `]]`, that consumes at least one skip token (a prefix word, a dash-option, a redirect/fd, or an
-# assignment) without ever resolving a word also denies -- measured: "if [[ -n x ]] env -u ]] -i
-# apply_patch < x.patch" -> rc 2 ("command word split by ]] cannot be resolved"), even though the
-# UNCUT text would have resolved "apply_patch" just past "-i"; a segment whose first word is a
-# QUOTED `'apply_patch'`/`"apply_patch"` now resolves as the shim (quote characters are stripped
-# before matching), and quoted PROSE containing a literal `]]` followed by `apply_patch` on its own
-# (`echo "x ]] apply_patch"`) now denies too, the same class hooks/agent-boundary.sh's own tokenizer
-# already documents for itself.
+# Size caps (#457). Under Apple bash 3.2 a `${text//pat/repl}` substitution is superlinear in the text's
+# length and match count and cannot be sampled from inside bash; a whole-text word-split is linear but
+# likewise unsampled. So:
+#   - every such substitution runs on ONE physical line at a time (a newline is itself a segment break, so
+#     the segments are identical), inside a loop that samples the deadline first;
+#   - cdg_prepare_text runs first on BOTH text routes and denies fail closed, BEFORE any split or
+#     substitution, when the whole text is longer than CDG_TEXT_MAX_BYTES bytes; it then strips CRs line by
+#     line in a sampled loop, and denies a physical line longer than CDG_LINE_MAX_BYTES bytes. On the
+#     apply_patch route the line cap applies only to a line that contains a CR (the strip is the only
+#     superlinear step a long CR-free content line meets there) or a `*** ` marker (a header line the parser
+#     acts on); every other line is bounded by the whole-text cap and the sampled loops. The Bash route caps
+#     every line;
+#   - a single path (an Edit/Write file_path, or a patch header path joined to cwd) and the stdin cwd field
+#     are each denied, before any substitution, when longer than CDG_LINE_MAX_BYTES bytes. Every cap counts
+#     BYTES, not characters: the length check runs under a scoped LC_ALL=C, because ${#x} counts characters
+#     under a multibyte locale and a text of 4-byte characters would otherwise pass at four times its size.
+# Worst-case wall clock for the whole hook, for review: at most max(cdg_budget, T_prefix(L)) + U_max.
+# T_prefix is the prefix the deadline cannot sample around: cat, the fast-path globs and the one split-name
+# regex pass over the payload, up to five jq calls, the length checks, cdg_prepare_text's CR-presence glob
+# and whole-text word-split, the like whole-text splits in is_apply_patch_word, has_exact_begin_patch_line
+# and parse_patch_headers (all linear, bounded by CDG_TEXT_MAX_BYTES), and the raw-text .claude/.codex glob.
+# U_max is the largest single step the deadline cannot interrupt: one line's substitutions (bounded by
+# CDG_LINE_MAX_BYTES; also one character step of cdg_chain_line, which samples per character), one line's or
+# segment's split-name regex, one segment's `toks=($seg)` word-split, one `"${toks[@]}"` expansion, one
+# walk_window iteration (plus any per-index cost bash 3.2's arrays add; also one token's env -S reading and
+# one expansion-word regex), one forked trim or ltrim call up to its first in-subshell sample, or one
+# classify_path. Not closed: T_prefix is unsampled (though counted by the wall clock), and the Codex CLI's
+# own hook timeout, if any, is UNVERIFIED; the budget is sized against Claude Code's documented 10s
+# PreToolUse timeout only.
 #
-# (#455) A Bash call that both invokes the shim reading a patch FILE (`apply_patch < evil.patch`)
-# and separately carries an unrelated, exact `*** Begin Patch` block with only benign headers (e.g.
-# inside an unrelated `cat <<'EOF' >/dev/null` heredoc) used to let the structured parse pass on the
-# benign block while the shim read the untrusted file. is_apply_patch_word now scans the shim's own
-# segment once: its input is safe only when it is an inline `<<` heredoc (plus output redirects and
-# a bare fd before one); a file argument, `<`, `<<<`, `<>` (even after a heredoc, the last stdin
-# redirect wins), an fd-numbered input such as `3<<`, a process substitution, a pipe into a bare
-# shim, or an unquoted heredoc delimiter in a command carrying `$`, a backtick or a backslash (the
-# shell expands the body first) is unsafe, and the Bash route denies an unsafe shim BEFORE the
-# structured parse whenever an exact Begin Patch line is present -- measured: the issue's decoy
-# plus `apply_patch < evil.patch` -> rc 2 ("not from an inline heredoc"). Documented over-blocks
-# (fail-closed, measured directly against this script): a heredoc patch whose body line begins with
-# a code span of the shim name (the name between backticks) -> rc 2, since that line is its own
-# walk segment with no heredoc; `cd "$HOME/x" && apply_patch <<EOF ...` with an unquoted delimiter
-# -> rc 2. The unbalanced-quote rule below over-blocks more broadly: ANY line of a multi-line Bash
-# string (a commit body, echo/printf text, a `cat <<'EOF' > file` body, a patch context line such
-# as " Codex's apply_patch shim") that mentions apply_patch/applypatch (since #538 a spelling split
-# by quote or backslash characters counts as a mention) and whose words up to its
-# command word (any leading skipped assignment or prefix word included) carry an unbalanced quote
-# or a trailing backslash denies for implementer/verifier calls, with no patch and no shim
-# invocation involved -- measured: `printf '%s' "one<newline>Don't call apply_patch here"` -> rc 2,
-# and so does the same line as a `cat > f <<'EOF'` body, since every heredoc body line is its own
-# walk segment whatever the delimiter's quoting (rc 0 before, and rc 0 for the main session).
-# Remedies: write such text with Edit/Write (then, e.g., `git commit -F <file>`), use Codex's
-# native apply_patch tool call for a patch, or avoid the shim name on that line. A quoted heredoc
-# delimiter does NOT help here (it is the remedy only for the unquoted-<<EOF over-block above).
-#
-# (#455, absorbing #456) In a segment whose text mentions `apply_patch`/`applypatch` (plain, or since
-# #538 split by quote or backslash characters) and carries a
-# quote or a backslash, any token from a walk window's start through its resolved non-shim command
-# word that has an odd count of `'` or of `"`, or ends in a backslash, denies ("unbalanced quote"):
-# the whitespace split happens before quotes are stripped, so `X='a b' apply_patch < x.patch` or
-# `X=a\ b apply_patch < x.patch` would otherwise resolve `b` as the command word -- measured: both
-# -> rc 2 (rc 0 before). `echo 'a b' apply_patch` (the odd token follows the resolved word) and
-# `X='a b' echo hi; rg apply_patch hooks/` (the segment never mentions the shim) stay no opinion.
-# Since #503 a quoted value that contains a segment-break character plus whitespace
-# (`X='a;b c' apply_patch < x.patch`, rc 0 before) is closed by an additive chain pass, see the
-# paragraph of that issue below; its documented over-block is a benign inline patch behind such a
-# value (`X='a;b c' apply_patch <<'EOF'`, rc 2, the same class as `X='a b'` above).
-#
-# Fail-closed: a segment break inside a quote or a command substitution (#503). The base split in
-# is_apply_patch_word() cuts a line at every `;`, `&`, `|`, `(`, `)`, `{`, `}` and backtick before it
-# looks at quoting, so the opening quote of a value holding one of them sits in a previous segment and
-# the unbalanced-quote check above never sees it. An ADDITIVE pass, cdg_chain_line(), runs per gated
-# physical line -- a line that names the shim (since #538 a split spelling counts), carries a quote, a
-# backslash, a backtick, `$(` or `${`, and holds a break character -- and only adds segments: it lexes the line sequentially (single
-# quotes, double quotes, `$'...'`, backslash escapes, an unquoted `#` at a word start outside any
-# substitution, which ends the lexing, and a stack of `$(...)`, `${...}` and backtick frames), classifies
-# every break character as a head break (a real command break, which ends the current chain), a
-# literal break (quoted or escaped, which joins it) or a frame open or close, and appends one text per
-# chain of two or more segments to the line's segment list, so the unchanged walk, `]]` pass, #455
-# parity check and shim input scan judge each one. In a chain text a word that ends at a quoted or
-# escaped separator or at a literal break carries a trailing backslash (the cut marker, which the parity
-# check reads as "a quoted span was split here"), and a substitution is the expansion word `$_` when
-# glued to a word and the inert word `_` when it starts a word. Quote state never crosses a physical
-# line and an unquoted `#` ends the lexing, so a heredoc body or prose line is not poisoned by an
-# earlier line. Pure bash, nothing executed: this hook runs no awk, sed, grep or tr. Cost: one
-# deadline sample per character on a line already capped at CDG_LINE_MAX_BYTES (the scoped LC_ALL=C
-# makes indexing byte-wise), O(line) iterations plus O(line squared) byte copies at most, so the #457
-# deadline bounds the total; only gated lines pay it. Residuals, each measured rc 0: a substitution that
-# starts the command word (`$(echo apply_patch) < x.patch`) and the lexer's approximations (a `case`
-# pattern's `)` inside `$(...)`, quoting inside `${...}`, backslash-nested backticks, process
-# substitution read as a plain subshell).
-#
-# Fail-closed: a shim name split by quote or backslash characters, a runtime expansion before it, or an
-# `env -S` string (#538). The shell deletes quote and backslash characters inside a word, so
-# `apply_"patch"`, `apply\_patch` and `a''pply_patch` run the shim; a runtime-expansion word may expand
-# to nothing, so `$X apply_patch` runs it; and `env -S'apply_patch'` splits its string into words, so
-# it runs it too. (1) Every shim-name comparison in the walk deletes backslashes as well as quotes
-# (a token that carried a backslash marks its window, `ww_alt`), and fast path 2, the #503 chain gate
-# and the #455 and #518 segment flags all count a split spelling as a mention of the shim: one regex
-# (cdg_split_ere, defined above the fast paths) tested on the raw payload only when the literal check
-# fails and the payload carries a backslash or an apostrophe, on a line only when it carries a quote or
-# a backslash and not the plain name, and on a segment only inside a line that names the shim, plain
-# or split (a backslash-only segment also gets the #518 scan flag, a quoted one has it already). (2)
-# A token whose basename holds a dollar sign followed by a name character, a digit, a special
-# parameter or a quote (the class of
-# hooks/agent-boundary.sh's #508 rx_re, by convention unpinned) is skipped like a prefix word, in a
-# segment that mentions the shim or carries a quote: a dash-led one opens no context, any other opens
-# the value context (#518) and the env context. The skip sits after the dash arm, so `nice -$X 5
-# apply_patch` still starts the #518 scan. (3) After an `env` word (or a skipped expansion word) an
-# option token is read the way `env -S` reads its string -- each backslash-underscore a space, then
-# quotes and backslashes deleted: a space-separated word that is the shim (exactly or by basename), or a
-# first word that is an option glued to the shim name (`-Sapply_patch`, `-vS'apply_patch'`), resolves
-# it, and a bare `-S` or `--split-string` reads the NEXT token the same way, without the glued-option
-# rule. The reading sits before the #518 scan, so it never reads past the token the string is in; the
-# scan itself also deletes backslashes now, and counts a dash token that ends in the shim name in any
-# value context (`nice -n 5 env -S'apply_patch'`, `env -u X -S'apply_patch'`). (4) A shim resolved
-# through a backslash strip, an expansion skip or an `env -S` string, in a segment flagged for the
-# parity check, runs the #455 unbalanced-quote check over the WHOLE window, a superset of what the
-# walk checked on those routes before, so no earlier unbalanced-quote deny is lost. Cost: the fast
-# path's second check is one linear regex pass over the payload (a fixed-length pattern with no
-# group, under a scoped C locale), run only when the literal check fails; it is unsampled and part of `T_prefix`. Per line at
-# most one regex over the line, per segment at most one over the segment, per walked token at most one
-# backslash substitution, one glob and, for a token holding a dollar sign, one regex, per dash token
-# after an env word two single-token reads, per #518 scan token one substitution and one glob: no new
-# loop grows with the input, so the total stays linear and each per-line step stays inside the
-# existing sampled loops. Over-blocking, each measured rc 2: a prose or heredoc line whose leading
-# words are prefix or expansion words before the shim name (`- $X apply_patch is how the old flow
-# ran`); the #455 apostrophe class extended to a split spelling (`Don't run apply_"patch" here`);
-# `"apply\_patch" < x.patch`, where the backslash is literal inside double quotes; an env option word
-# or a value-context dash word ending in the shim name (`env -uapply_patch true`, `nice -n 5 rg
-# -napply_patch hooks/`); `$PAGER apply_patch`; and a `]]` cut tail holding only an expansion word
-# (`if [[ -n x ]] $X ]] apply_patch.md`). Residuals, each measured rc 0: an ANSI-C-quoted or
-# expansion-glued name (`$'apply_patch' < x.patch`, `apply_$'patch' < x.patch`, `"$X"apply_patch <
-# x.patch`), a variable-built name (`p=apply_patch; $p < x.patch`), a backslash-newline split
-# (`apply_\<newline>patch < x.patch`), a path-qualified prefix word (`/usr/bin/env apply_patch <
-# x.patch`), and the interpreter-option and launcher residuals listed below.
-#
-# Analysis deadline (#457). This hook's own analysis (everything after the role and plan-mode exits)
-# is bounded by a whole-second wall-clock budget, `CDG_ANALYSIS_BUDGET_SECS` (5s in production),
-# sampled from `$SECONDS` as an elapsed difference from `cdg_t0` (captured right after `set -uo
-# pipefail`): `check_deadline` denies with one fixed "too large to analyse" reason
-# (`deny_too_large`, fail-closed, naming only the resolved role and tool) the first time `$SECONDS`
-# reaches `cdg_deadline` (`cdg_t0 + cdg_budget`) -- never by resetting `$SECONDS`. Without it a long
-# run of prefix words ahead of the shim (`env env ... env apply_patch < x.patch`) kept the walk busy
-# for about as long as Claude Code's own 10s hook timeout, and a timed-out PreToolUse hook gives no
-# deny, so the shim ran unguarded. The sampling rule this binds on every future addition to this
-# file (`check_deadline` is an alias, defined before every function body that uses it is parsed --
-# see its definition for why): call `check_deadline` as the FIRST statement of EVERY loop whose trip
-# count grows with the input -- grep this file for `check_deadline` for the current list rather than
-# trusting an enumeration here -- and every `$(...)` call to a helper that samples (`ltrim`/`trim`)
-# must propagate a deny back to its parent with `[ "$?" -eq 0 ] || exit 2`, since a deny raised
-# inside a command substitution only exits that subshell. Every sample site is reachable only AFTER
-# the role and plan-mode exits, so the deadline's deny reaches the implementer and verifier only; the
-# main session, any other agent, and plan mode always get no opinion (unlike hooks/push-guard.sh,
-# which has no role scoping and denies in every session). Two test-only knobs are read from the
-# ENVIRONMENT only (never from the stdin JSON) and can only make the hook deny sooner, never later:
-# `TBF_CLAUDE_DIR_GUARD_BUDGET_SECS` lowers the budget (adopted only when exactly one or two ASCII
-# digits and strictly less than the production budget; any other value is ignored), and
-# `TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP` denies once that many samples have been taken (adopted only when
-# 1-4 digits with no leading zero; anything else means off), which lets a fixture pin one sample site
-# independent of host speed -- a whole-second time budget cannot, since the second boundary can land
-# during work done before that site.
-#
-# Size caps (#457). Under Apple's bash 3.2 a `${text//pat/repl}` substitution is superlinear in the
-# text's length and in its match count, and none of that work can be sampled from inside bash's own
-# substitution; a whole-text word-split (`for x in $text`) is linear but likewise unsampled. So:
-#   - every such substitution runs on ONE physical line at a time (a newline is itself a segment
-#     break, so the segments are identical), inside a loop that samples the deadline first;
-#   - cdg_prepare_text runs first on BOTH text routes (the Bash route's command, the apply_patch
-#     route's patch text) and denies fail-closed, BEFORE any split or substitution, when the whole
-#     text is longer than `CDG_TEXT_MAX_BYTES` bytes; it then strips CRs line by line in a
-#     sampled loop, and denies a physical line longer than `CDG_LINE_MAX_BYTES` bytes. On the
-#     apply_patch route the line cap applies only to a line that contains a CR (the strip is the
-#     only superlinear step a long CR-free content line meets there) or a `*** ` patch-grammar
-#     marker (a header line the parser acts on); every other line is only bounded by the whole-text
-#     cap and by the sampled loops that touch it. The Bash route caps every line;
-#   - a single path (an Edit/Write file_path, or a patch header path joined to cwd) and the stdin
-#     `cwd` field are each denied, before any substitution, when longer than `CDG_LINE_MAX_BYTES`
-#     bytes. Every cap counts BYTES, not characters: the length check runs under a scoped
-#     `LC_ALL=C`, because `${#x}` counts characters under a multibyte locale and a text of 4-byte
-#     characters would otherwise pass at four times its byte size.
-# Like every deadline deny these are reachable only after the role and plan-mode exits. The line cap
-# is sized so one worst-case dense line costs a bounded slice of the budget; many such lines are
-# bounded by the per-line deadline samples. The Edit/Write route analyses no text, so only its path
-# is capped. Worst-case wall clock for the whole hook, stated for review: at most
-# `max(cdg_budget, T_prefix(L)) + U_max`, where `T_prefix` is the prefix this deadline cannot sample
-# around -- `cat`, the fast-path globs, since #538 the fast path's one split-name regex pass over the
-# payload, up to five `jq` calls, the length checks, cdg_prepare_text's
-# CR-presence glob and its whole-text `for ln in $text` word-split, the like whole-text splits in
-# is_apply_patch_word, has_exact_begin_patch_line and parse_patch_headers (all linear, all bounded by
-# `CDG_TEXT_MAX_BYTES`), and the raw-text `.claude`/`.codex` glob -- and `U_max` is the largest
-# single step the deadline cannot interrupt: one line's substitutions (bounded by
-# `CDG_LINE_MAX_BYTES`; since #503 also one character step of cdg_chain_line(), whose loop samples the
-# deadline per character), since #538 also one line's or one segment's split-name regex, one segment's
-# `toks=($seg)` word-split, one `"${toks[@]}"` expansion, one
-# walk_window iteration (plus any per-index cost bash 3.2's arrays add; since #538 also one token's `env
-# -S` reading and one expansion-word regex), one forked `trim`/`ltrim`
-# call up to its first in-subshell sample, or one classify_path. Residuals this deadline and these
-# caps do NOT close: `T_prefix` is unsampled (though still counted by the wall clock), and the Codex
-# CLI's own hook timeout, if any, is UNVERIFIED here -- the budget is sized against Claude Code's
-# documented 10s PreToolUse timeout only. Over-blocking classes that follow (all fail-closed, none
-# widenable from the call itself): a legitimately large, but benign, implementer/verifier call that
-# passes fast path 2 denies as "too large to analyse" once its own analysis crosses the budget -- in
-# particular a legitimately large shell-issued patch (many ordinary lines, each costing a forked
-# `trim`) can approach the budget on a loaded host under bash 3.2, and the remedy is to split it
-# into smaller patches or to use Codex's native apply_patch tool, which forks less per line; a Bash
-# call with a SINGLE physical line longer than `CDG_LINE_MAX_BYTES` bytes that passes fast path
-# 2 (it names `Edit`, `Write`, `apply_patch`, `applypatch` or `*** Begin Patch` anywhere in the raw
-# payload, or spells the shim split by quote or backslash characters) denies, and the remedy is to
-# break the line or, for a patch, to use the native tool,
-# whose route does not cap an ordinary content line; a native apply_patch call whose CR-bearing line
-# or `*** ` marker line is over the cap denies, and the remedy is to split the patch or remove the
-# CR; and a path or `cwd` longer than `CDG_LINE_MAX_BYTES` bytes denies (a header path is
-# joined to `cwd` first, so the cap bounds their combined length, well under typical OS path limits).
-# A command or patch made of ordinary-length lines is not capped by size alone short of
-# `CDG_TEXT_MAX_BYTES`.
-#
-# Documented under-blocking classes (evasions, named rather than hidden): a Bash-issued write
-# (`cat >>`, `tee`, `sed -i`) never reaches an Edit/Write/apply_patch hook by construction; since
-# #340, hooks/agent-boundary.sh's own Bash policy denies the redirect/tee/cp/mv/cd-pushd/in-place-
-# sed forms of that route for the implementer/verifier roles, and since #387 it also denies an
-# interpreter or one-step-writer command word when the same Bash call names a `.claude` segment
-# anywhere (see that hook's own header); that Bash-write class was NOT extended to `.codex` by this
-# issue (#407's own plan; see its Open questions) -- an ORDINARY Bash-issued write into `.codex/`
-# (e.g. `cp x .codex/y`, wholly outside the apply_patch-shim shape this amendment covers) is
-# unaffected by hooks/agent-boundary.sh either way. The Bash route's own command-word check
-# (is_apply_patch_word, reworked #407 kickback rounds 2/3) recognises `;`/`&`/`|`/`(`/`)`/`{`/`}`/a
-# backtick as segment breaks, `<`/`>`/whitespace as word breaks within a segment (skipping a
-# redirect target/source and a bare-digits fd immediately before a redirect, so a LEADING
-# redirect cannot hide the command word either), matches a path-qualified spelling
-# (`./apply_patch`, `/usr/local/bin/apply_patch`) by basename, and skips a leading `NAME=value`
-# assignment (since #455 a prefix token carrying an unbalanced quote or a trailing backslash
-# denies instead, see the #455 paragraphs above), a runtime-expansion word (since #538, see that
-# paragraph) or a hooks/agent-boundary.sh-vocabulary
-# PREFIX_WORDS member (including
-# `bash`/`sh`/`env`/`sudo`/…, so `bash -c apply_patch` now resolves past `bash -c` to `apply_patch`
-# and denies). Since #437 quote CHARACTERS, and since #538 backslashes too, are stripped from each
-# token before matching/resolving it -- see walk_window()'s own comment -- but the base walk still
-# never tracks which quote ENCLOSES which span, only strips the characters themselves (so
-# `"apply\_patch"`, whose backslash is literal inside double quotes, resolves as the shim, a
-# documented over-block; the #503 chain pass tracks quote state, but only to re-judge text the base
-# split cut apart), so deliberate obfuscation remains OUT OF SCOPE for this tripwire, not a
-# sandbox: a backslash-newline splitting the word across two physical lines, a variable-built
-# spelling of the shim's own name
-# (`p=apply_patch; $p < x.patch` -- this walk never expands a variable reference, so `$p` never
-# becomes "apply_patch"), an ANSI-C-quoted spelling (`$'apply_patch' < x.patch` -- the token holds a
-# dollar sign followed by a quote, so the walk skips it as a runtime-expansion word and the shim
-# never resolves), a value option of an interpreter prefix word outside the o/O letters and the
-# INTERP_VALUE_OPTS long options (`ksh -R x -c 'apply_patch < x.patch'`) or a
-# launcher outside PREFIX_WORDS (`timeout 5 apply_patch
-# < x.patch`, `doas -u root apply_patch < x.patch`, measured rc 0; see the #537 paragraph below), a
-# path-qualified prefix word (`/usr/bin/env apply_patch < x.patch`, rc 0: the prefix match is on the
-# whole token), an INDIRECT `eval`/`trap` argument (`eval "$c"`, `eval "$(cmd)"` -- quote-stripping
-# removes only the enclosing quote characters, it never expands a variable or runs a command
-# substitution, so a variable- or substitution-built spelling of the shim's own name stays invisible
-# to this text-only scan the same way the assignment case above does), a launcher this walk does not
-# recognise as a PREFIX_WORDS member (`uv run apply_patch`, `npx apply_patch`), a `]]` token itself
-# glued to a quote character (a literal four-character `"]]"` token is not the bare `]]` the
-# `]]`-cut loop matches against, so it is never treated as a standalone-`]]` split point), or a
-# genuinely different segment separator this walk does not parse (a literal newline INSIDE
-# one already-broken-out segment, e.g. inside a nested subshell) can all still evade BOTH the
-# belt-and-braces `.claude`/`.codex` raw-text check and the "no inline patch" deny (neither ever
-# runs at all when is_apply_patch_word itself returns false, and neither does the #455 decoy deny
-# or unbalanced-quote deny) without evading the "carries an
-# inline patch" deny (which matches on the patch grammar's own literal text regardless of how the
-# shim was invoked, independently of command-word detection). A header line's OWN indentation is
-# stripped only of ASCII space and tab (see ltrim()/trim() below) -- a header preceded by Unicode
-# whitespace (e.g. U+00A0 NO-BREAK SPACE) is not recognised as a header at all and is silently
-# treated as an ordinary content line instead; the belt-and-braces check's own raw-text scan
-# catches this residual too WHENEVER is_apply_patch_word succeeds (it does not depend on
-# recognising any header at all), so the two residuals above must BOTH apply together (a
-# command-word evasion AND a Unicode-hidden header) before this specific gap reopens.
-# Enclosing-quote-blind over-blocking, the opposite direction, on Claude Code too (measured
-# directly against this script): a commit message or an `echo` whose own text places
-# `apply_patch`/`applypatch` between
-# a matching pair of BACKTICKS denies too, even though the backticks themselves sit inside an
-# ENCLOSING pair of ordinary quotes -- measured: `git commit -m "See \`apply_patch\` docs"` -> rc
-# 2. Backtick is one of this walk's own segment-break characters (the same set
-# hooks/agent-boundary.sh's tokenizer already treats that way); the base walk (the #503 chain pass
-# only adds segments) never tracks the
-# ENCLOSING `"..."`/`'...'` quote state at all, so it cannot tell a markdown-style code span
-# quoted for a commit message apart from a genuine backtick command substitution (`` `apply_patch`
-# `` really does invoke apply_patch and substitute its output, which is a correct positive, not an
-# over-block) -- the remedy is the same one this repo's own CLAUDE.md and skills already give for
-# every over-block a subagent hits: use the Write/Edit tools for file content, or rephrase the
-# commit message, rather than relying on this hook to distinguish styling from execution. Plain
-# single/double quotes alone do NOT trigger this: `echo "apply_patch is our shim"` remains one
-# segment whose own first word is `echo`, so it gets no opinion, only backtick-delimited text
-# does. A symlink
-# or hard link whose own spelling carries no `.claude`/`.codex` segment
-# (this hook performs no filesystem access, so it cannot resolve one); a write tool outside
-# GUARDED_TOOLS/PATCH_TOOLS/BASH_TOOLS -- measured: no role's tools: line names MultiEdit or
-# NotebookEdit today (agents/implementer.md:9, agents/verifier.md:12; gate 4.53 pins GUARDED_TOOLS
-# against both roles' tools: lines, so this stays true only until a role's tools: line changes
-# without a matching GUARDED_TOOLS update); any other agent role -- measured: an agent_type of
-# "Explore" -> rc 0; a Claude Code that stops sending agent_type at all -- fails open, the same
-# documented note hooks/agent-boundary.sh's header already carries for its own vocabulary; the
-# plugin disabled, `disableAllHooks: true`, no `jq` on PATH, or an unresolved
-# ${CLAUDE_PLUGIN_ROOT} -- every one degrades this hook to silent no-opinion, with no prompt and no
-# visible sign, exactly as every sibling hook in this directory already documents.
+# This is a tripwire against an off-script subagent, not a sandbox. The spellings the hook does not see and
+# the harmless calls it denies (with the remedy for each) are listed in docs/reference/safety-model.md,
+# under "Known gaps" and "Known over-blocks".
 set -uo pipefail
 # #457: sampled once, at hook start; see "Analysis deadline (#457)" in this file's header.
 cdg_t0=$SECONDS
 
 # --- vocabulary --------------------------------------------------------------------------------
-# Grep-extractable single-line KEY="value" declarations (the 2.5/4.36-4.42 idiom). The two
-# AGENT_TYPES_* lines are copied byte-identically from hooks/agent-boundary.sh:57-58 -- see this
-# file's header cross-reference and dev/selfcheck.sh's assertion 4.45.
+# Grep-extractable single-line KEY="value" declarations (the 2.5/4.36-4.42 idiom). The two AGENT_TYPES_*
+# lines are byte-identical to hooks/agent-boundary.sh's, pinned by gate assertion 4.45.
 AGENT_TYPES_IMPLEMENTER="implementer trail-blazer-flow:implementer"
 AGENT_TYPES_VERIFIER="verifier trail-blazer-flow:verifier"
 GUARDED_TOOLS="Edit Write"
@@ -470,67 +143,42 @@ BASH_TOOLS="Bash"
 GUARDED_SEGMENT=".claude"
 GUARDED_SEGMENT_CODEX=".codex"
 CLAUDE_DIR_DENY_STEM="trail-blazer-flow claude-dir guard:"
-# PREFIX_WORDS (#407 kickback finding 2) -- copied byte-identically from hooks/agent-boundary.sh's
-# own declaration (kept in sync by hand; no gate pin added -- "reuse it" per the #407 kickback
-# approval; unlike this copy, hooks/push-guard.sh's own copy IS pinned against agent-boundary.sh's
-# by dev/selfcheck.sh's assertion 4.40 clause (c)). Used only by walk_window() (called from
-# is_apply_patch_word() below) to skip a leading shell-keyword/interpreter-indirection word (and,
-# once one is seen, a following "-"-leading option, or, after a `repeat` prefix word, its own count
-# token too; since #518 a value-taking option of a PREFIX_VALUE_WORDS member is followed further, and
-# since #537 an interpreter member's options are classified, see below) before resolving a Bash
-# segment's own command word -- see that function's own comment
-# for why this hook needs the identical vocabulary, and (#437) for the additive `]]` handling and
-# quote-stripping this hook's own walk_window() now ALSO does, ported from #403's agent-boundary.sh/
-# push-guard.sh technique rather than copied byte-for-byte (this hook stays pure bash, no awk).
+# PREFIX_WORDS: byte-identical to the hooks/agent-boundary.sh and hooks/push-guard.sh copies, by convention
+# (4.40(c) pins only those two against each other). Used only by walk_window() to skip a leading shell
+# keyword or interpreter-indirection word, then a following dash-led option (or, after repeat, its count
+# token), before resolving the command word of a segment.
 PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat"
-# PREFIX_VALUE_WORDS (#518) -- the PREFIX_WORDS members whose dash options can take a SEPARATE value
-# word (`nice -n 5`, `sudo -u root`, `stdbuf -o L`, `exec -a foo`, `xargs -a x`, `time -o f`); this
-# walk treats `env` as one too (it has no env arm of its own, so `env -u X apply_patch` hides the
-# shim behind the option value the same way). See walk_window()'s #518 trigger. Interpreter words
-# stay out: their `-c` value IS the command string, so their options are classified by the #537 rule
-# instead (PREFIX_INTERP_WORDS below). Byte-identical to hooks/agent-boundary.sh's and
-# hooks/push-guard.sh's own copies (by convention, unpinned).
+# PREFIX_VALUE_WORDS (#518): the PREFIX_WORDS members whose dash options can take a SEPARATE value word
+# (nice -n 5, sudo -u root). This walk treats env as one too (it has no env arm of its own). Interpreter words
+# stay out (see PREFIX_INTERP_WORDS). Byte-identical to the agent-boundary.sh and push-guard.sh copies, by
+# convention.
 PREFIX_VALUE_WORDS="exec nice stdbuf sudo time xargs"
-# PREFIX_INTERP_WORDS / INTERP_VALUE_OPTS (#537) -- the interpreter members of PREFIX_WORDS, and the long
-# options of those interpreters that take a SEPARATE value word (`bash --rcfile f -c ...`). While the most
-# recent prefix word is an interpreter, a `-`/`+` token is an option walk_window() classifies instead of
-# guessing (see the #537 paragraph at is_apply_patch_word()): a value option, a letter cluster ending in
-# a single `o` or `O` (`-o`, `+O`, `-eo`), skips its value word together with it when that word passes the
-# value-word test. Byte-identical to hooks/agent-boundary.sh's and hooks/push-guard.sh's own copies (by
-# convention, unpinned).
+# PREFIX_INTERP_WORDS / INTERP_VALUE_OPTS (#537): the interpreter members of PREFIX_WORDS, and the long
+# options of those interpreters that take a SEPARATE value word (see the #537 block above
+# is_apply_patch_word()). Byte-identical to the agent-boundary.sh and push-guard.sh copies, by convention.
 PREFIX_INTERP_WORDS="bash dash ksh sh zsh"
 INTERP_VALUE_OPTS="--init-file --rcfile -init-file -rcfile"
-# DBRACKET_MAX (#437) -- copied from hooks/agent-boundary.sh:207 by the same "by convention,
-# unpinned" idiom this hook's own PREFIX_WORDS copy and hooks/push-guard.sh's copy already use (no
-# gate assertion pins any of the three copies against each other). Counts standalone `]]` tokens
-# PER SEGMENT here (agent-boundary counts per record); see is_apply_patch_word()'s own comment for
-# why per-segment is the right granularity for this hook.
+# DBRACKET_MAX (#437): byte-identical to the agent-boundary.sh and push-guard.sh copies, by convention. It
+# counts standalone ]] tokens PER SEGMENT here (agent-boundary.sh counts per record).
 DBRACKET_MAX="64"
-# CDG_ANALYSIS_BUDGET_SECS (#457) -- whole-second wall-clock budget for this hook's own analysis;
-# see "Analysis deadline (#457)" in this file's header. Sized well under Claude Code's 10s hook
-# timeout (hooks/hooks.json), the same value hooks/push-guard.sh's own deadline uses.
+# CDG_ANALYSIS_BUDGET_SECS (#457): whole-second wall-clock budget; see "Analysis deadline (#457)". Sized well
+# under Claude Code's 10s hook timeout, like hooks/push-guard.sh's.
 CDG_ANALYSIS_BUDGET_SECS="5"
-# CDG_LINE_MAX_BYTES (#457) -- longest physical line of a Bash command (every line), of an
-# apply_patch patch (only a CR-bearing or `*** ` marker line), and longest single path or `cwd`
-# value, measured in BYTES (cdg_prepare_text and cdg_bytes scope LC_ALL=C to the length check),
-# analysed at all; see "Size caps (#457)" in this file's header.
+# CDG_LINE_MAX_BYTES (#457): longest physical line of a Bash command, of a patch (only a CR-bearing or
+# `*** ` line), and longest single path or cwd, in BYTES; see "Size caps (#457)".
 CDG_LINE_MAX_BYTES="2000"
-# CDG_TEXT_MAX_BYTES (#457) -- longest whole Bash command or patch text, in bytes, analysed at
-# all (it bounds the unsampled whole-text word-split); see "Size caps (#457)" in this file's header.
+# CDG_TEXT_MAX_BYTES (#457): longest whole Bash command or patch text, in bytes; see "Size caps (#457)".
 CDG_TEXT_MAX_BYTES="1000000"
 
-# #457: cdg_budget defaults to CDG_ANALYSIS_BUDGET_SECS; TBF_CLAUDE_DIR_GUARD_BUDGET_SECS is a
-# test-only, environment-only knob (never read from stdin JSON) that can only LOWER it -- adopted
-# only when it is exactly one or two ASCII digits and strictly less than cdg_budget.
+# #457: cdg_budget defaults to CDG_ANALYSIS_BUDGET_SECS; TBF_CLAUDE_DIR_GUARD_BUDGET_SECS is a test-only,
+# environment-only knob that can only LOWER it (see "Analysis deadline (#457)").
 cdg_budget="$CDG_ANALYSIS_BUDGET_SECS"
 case "${TBF_CLAUDE_DIR_GUARD_BUDGET_SECS:-}" in
   [0-9]|[0-9][0-9]) [ "$TBF_CLAUDE_DIR_GUARD_BUDGET_SECS" -lt "$cdg_budget" ] && cdg_budget="$TBF_CLAUDE_DIR_GUARD_BUDGET_SECS" ;;
 esac
 cdg_deadline=$((cdg_t0 + cdg_budget))
-# #457: TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP is a second test-only, environment-only knob: a sample-count
-# cap (1-4 digits, no leading zero; anything else means 0, off) that denies once that many samples
-# have been taken, so a fixture can pin one sample site deterministically, independent of host
-# speed. It can only add denies, never remove one.
+# #457: TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP is the second test-only, environment-only knob (see "Analysis
+# deadline (#457)"); anything other than 1-4 digits with no leading zero means 0, off.
 cdg_sample_cap=0
 case "${TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP:-}" in
   [1-9]|[1-9][0-9]|[1-9][0-9][0-9]|[1-9][0-9][0-9][0-9]) cdg_sample_cap="$TBF_CLAUDE_DIR_GUARD_SAMPLE_CAP" ;;
@@ -545,72 +193,51 @@ deny_too_large() {
   exit 2
 }
 
-# count_sample / check_deadline (#457) -- check_deadline is the first statement of every loop whose
-# trip count grows with the input (see "Analysis deadline (#457)" in this file's header for the
-# sampling rule). Each is kept on one line so a mutant that neuters it has a
-# single, unique `from` to target. check_deadline is an ALIAS, not a function, on purpose: under
-# Apple's bash 3.2 a function call is much more expensive while the calling frame holds a large
-# string or array (this hook's walk always does), so a function sample at every loop head would
-# slow every benign large command; an alias is expanded when each function body below is parsed, so
-# a sample costs two builtin tests and no call. Aliases need
-# expand_aliases in a non-interactive shell, and this definition must precede every function that
-# uses it.
+# count_sample / check_deadline (#457): check_deadline is the first statement of every loop whose trip count
+# grows with the input (the sampling rule is in the header). Each is kept on one line so a mutant that
+# neuters it has a single, unique `from`. check_deadline is an ALIAS, not a function, on purpose: under Apple
+# bash 3.2 a function call is much more expensive while the calling frame holds a large string or array (this
+# walk always does), so a function sample at every loop head would slow every benign large command; an alias
+# is expanded when each function body below is parsed, so a sample costs two builtin tests and no call.
+# Aliases need expand_aliases in a non-interactive shell, and this definition must precede every function
+# that uses it.
 shopt -s expand_aliases
-# cdg_bytes VALUE (#457) -- sets cdg_n to VALUE's length in BYTES (LC_ALL=C scoped to this one call):
-# `${#x}` counts characters under a multibyte locale, so a text of 4-byte characters could pass a
-# cap at four times its byte size. Not for use inside a hot loop (a function call).
+# cdg_bytes VALUE (#457): sets cdg_n to VALUE's length in BYTES (LC_ALL=C scoped to this call), since ${#x}
+# counts characters under a multibyte locale. Not for use inside a hot loop (a function call).
 cdg_bytes() { local LC_ALL=C; cdg_n="${#1}"; }
 count_sample() { cdg_samples=$((cdg_samples + 1)); [ "$cdg_samples" -lt "$cdg_sample_cap" ] || deny_too_large; }
 alias check_deadline='[ "$SECONDS" -lt "$cdg_deadline" ] || deny_too_large; [ "$cdg_sample_cap" -eq 0 ] || count_sample;'
 
 input="$(cat)"
 
-# --- fast paths ------------------------------------------------------------------------------
-# Fast path 1: a main-session Edit/Write/apply_patch/Bash call (no agent_type key in the JSON at
-# all) can never resolve to a recognised role, so skip straight to "no opinion" without spawning
-# jq (M1). There is deliberately no ".claude"/".codex"-substring fast path here: it would not be
-# semantics-preserving the way hooks/agent-boundary.sh's second fast path is -- the unclassifiable-
-# path deny class below (a non-absolute or `..`-carrying file_path, or an unparseable apply_patch
-# command) can deny a call that never contains either literal substring at all, so gating on those
-# substrings first would silently exit "no opinion" on exactly the fail-closed class this hook
-# exists to catch.
+# Fast path 1: a main-session call (no agent_type key in the JSON) can never resolve to a role, so skip jq
+# (M1). There is deliberately no .claude/.codex substring fast path: it would not be semantics-preserving,
+# because the unclassifiable-path deny (a non-absolute or ..-carrying file_path, an unparseable apply_patch
+# command) can deny a call that never holds either literal.
 case "$input" in
   *agent_type*) : ;;
   *) exit 0 ;;
 esac
 
-# cdg_split_ere (#538) -- the shim name with any run of backslash, double-quote or apostrophe
-# characters between its letters (and an optional underscore), the shell deleting them: apply_"patch",
-# apply\_patch, a''pply_patch. cdg_q is one such run, an ERE bracket expression (a backslash is
-# literal inside it). There is no group: `_?` covers the no-underscore spelling too, and the
-# pattern has a fixed length, so one pass over a payload is linear. cdg_split_raw tests the
-# raw payload under a scoped C locale (a byte-wise match, whatever the host's locale); the same
-# pattern is tested again, per line and per segment, in is_apply_patch_word().
+# cdg_split_ere (#538): the shim name with any run of backslash, double-quote or apostrophe characters between
+# its letters (and an optional underscore), which the shell deletes: apply_"patch", apply\_patch. cdg_q is one
+# such run, an ERE bracket expression (a backslash is literal inside it). There is no group and the pattern
+# has a fixed length, so one pass over a payload is linear. cdg_split_raw tests the raw payload under a scoped
+# C locale (byte-wise); the same pattern is tested per line and per segment in is_apply_patch_word().
 cdg_q="[\\\"']*"
 cdg_split_ere="a${cdg_q}p${cdg_q}p${cdg_q}l${cdg_q}y${cdg_q}_?${cdg_q}p${cdg_q}a${cdg_q}t${cdg_q}c${cdg_q}h"
 cdg_split_raw() { local LC_ALL=C; [[ $input =~ $cdg_split_ere ]]; }
 
-# Fast path 2 (#407 amendment A1, #538) -- true for every call this hook could possibly act on, false
-# for the overwhelming majority of ordinary Bash calls (the class #407 added a Bash route for):
-# every genuine Edit/Write/apply_patch tool call's own tool_name VALUE already spells one of
-# "Edit"/"Write"/"apply_patch" literally in this raw JSON, so requiring one of those three, OR
-# "applypatch" (Codex's shim also answers to the no-underscore spelling), OR the patch grammar's
-# own "*** Begin Patch" marker, to appear ANYWHERE in the raw stdin is safe for every route below:
-# it never skips a real Edit, Write, or apply_patch call, whose own tool_name field supplies the
-# matching substring unconditionally. A Bash call that spells none of them can still run the shim
-# when the shell deletes quote or backslash characters inside its name (apply_"patch"), so a second
-# check runs only when that literal check fails and the raw payload carries a backslash or an
-# apostrophe (in raw JSON a double quote arrives as a backslash and a quote, and a backslash as two
-# backslashes, so those two characters cover all three): one regex pass for the shim name with a run
-# of those characters between its letters, which spawns no jq. A call that fails both checks spells
-# the shim neither literally nor split by quote or backslash characters, and gets "no opinion": a
-# name the shell builds from a variable, a substitution or an ANSI-C fragment is a documented
-# residual in the header above, not something a text scan finds, and a CR or NUL inside the name is
-# deleted only by this hook's own input cleanup, never by the shell. Both checks read the raw JSON
-# text as the serializer wrote it, so they assume it writes ASCII letters, the underscore and the
-# apostrophe literally rather than as a \u escape (the literal check already assumed that). This is
-# what keeps an ordinary implementer/verifier Bash call (a `git`/`gh` command, an ordinary read, …)
-# from spawning jq at all now that Bash is in scope.
+# Fast path 2 (#407, #538): a pre-filter. Every genuine Edit, Write or apply_patch call spells its tool_name
+# literally in the raw JSON, so requiring Edit, Write, apply_patch, applypatch (Codex's shim also answers to
+# the no-underscore spelling) or the grammar marker "*** Begin Patch" anywhere in the raw stdin never skips a
+# real call; the substring can sit anywhere in the payload, so a pass only means "look closer". A Bash call
+# that spells none of them can still run the shim when the shell deletes quote or backslash characters inside
+# its name, so a second check runs only when the literal check fails and the payload carries a backslash or an
+# apostrophe (in raw JSON a double quote arrives as a backslash and a quote, and a backslash as two): one
+# regex pass for the split spelling, which spawns no jq. A call that fails both checks gets no opinion. Both
+# checks read the raw JSON text as the serializer wrote it, so they assume it writes ASCII letters, the
+# underscore and the apostrophe literally rather than as a \u escape.
 case "$input" in
   *Edit*|*Write*|*apply_patch*|*applypatch*|*'Begin Patch'*) : ;;
   *\\*|*"'"*) cdg_split_raw || exit 0 ;;
@@ -625,9 +252,8 @@ case " $GUARDED_TOOLS $PATCH_TOOLS $BASH_TOOLS " in
   *) exit 0 ;;
 esac
 
-# Role resolution: exact string match against space-delimited membership (the sub_allowed idiom
-# at hooks/git-c-guard.sh:154-159, reused verbatim by hooks/agent-boundary.sh) -- no match, empty,
-# or absent agent_type all resolve to no role, i.e. "no opinion".
+# Role resolution: exact string match against space-delimited membership. No match, an empty or an absent
+# agent_type resolves to no role, i.e. no opinion.
 agent_type="$(printf '%s' "$input" | jq -r '.agent_type? // empty' 2>/dev/null)"
 role=""
 if [ -n "$agent_type" ]; then
@@ -647,60 +273,46 @@ fi
 pmode="$(printf '%s' "$input" | jq -r '.permission_mode? // empty' 2>/dev/null)"
 [ "$pmode" != "plan" ] || exit 0
 
-# Shared constants for both routes below: a CRLF-carrying transport can deliver a path or patch
-# text whose spelling carries a trailing/embedded \r; stripping it can only WIDEN which paths
-# match ".claude"/".codex" below (removing a character can only join two fragments into a segment
-# this hook already looks for, never separate an already-matching segment apart) -- the same #270
-# idiom hooks/agent-boundary.sh and hooks/push-guard.sh both apply at the identical point in their
-# own tokenizers. Pure parameter expansion: no new process, so this hook still executes nothing
-# (see this file's header).
+# Shared constants for both routes. A CRLF-carrying transport can deliver a path or patch text with a trailing
+# or embedded \r (#270). Stripping it can only WIDEN which paths match .claude/.codex (removing a character
+# can only join two fragments into a segment this hook already looks for, never separate a matching one), so
+# the strip can never turn a deny into an allow. Pure parameter expansion: no new process.
 cr=$'\r'
 lf=$'\n'
 tab=$'\t'
-# sq/dq (#437) -- one single-quote and one double-quote character, used only by walk_window() below
-# to strip quote characters from a token before resolving it (#437's own quoted-argument technique;
-# see is_apply_patch_word()'s comment). Pure parameter expansion, same as cr/lf/tab above.
+# sq/dq (#437): one single-quote and one double-quote character, used by walk_window() to strip quote
+# characters from a token before resolving it. Pure parameter expansion, like cr/lf/tab above.
 sq="'"
 dq='"'
-# cdg_rx_ere (#538) -- a runtime expansion inside a word: a dollar sign followed by a name character, a
-# digit, a special parameter or a quote. The same class as hooks/agent-boundary.sh's rx_re (by
-# convention, unpinned); walk_window() tests a token's basename against it.
+# cdg_rx_ere (#538): a runtime expansion inside a word: a dollar sign followed by a name character, a digit,
+# a special parameter or a quote. The class of hooks/agent-boundary.sh's rx_re, by convention unpinned.
 cdg_rx_ere="[\$][A-Za-z0-9_@*#?!\$=~^${dq}${sq}-]"
 
-# classify_path TOOL RAW_PATH -- the shared classifier both routes call, pure builtins, no
-# filesystem access at all. Order matters: the more specific ".claude"/".codex" message wins over
-# the generic "unclassifiable" message whenever both could apply (e.g. a relative ".claude/..."
-# path, or an absolute path carrying both a ".." segment and a ".claude" segment). Prints the
-# reason line and exits 2 on any deny; returns (no output, no exit) when RAW_PATH is benign.
+# classify_path TOOL RAW_PATH -- the classifier both routes call: pure builtins, no filesystem access.
+# Order matters: the more specific ".claude"/".codex" message wins over the generic "unclassifiable" one.
+# Prints the reason line and exits 2 on any deny; returns (no output, no exit) when RAW_PATH is benign.
 classify_path() {
   local tool="$1" raw="$2" p p_disp
-  # #457: a single path (an Edit/Write file_path, or a header path joined to cwd) longer than the
-  # per-line cap denies BEFORE the whole-string substitutions below, which are superlinear under
-  # bash 3.2 (see the header's "Size caps (#457)").
+  # #457: a path longer than the per-line cap denies BEFORE the whole-string substitutions below, which are
+  # superlinear under bash 3.2.
   cdg_bytes "$raw"
   [ "$cdg_n" -le "$CDG_LINE_MAX_BYTES" ] || deny_too_large
 
-  # Separator normalisation: a Windows-native or backslash-spelled ".claude"/".codex" still
-  # denies (see README's Windows section on Git Bash's own path-form quirks). Documented
-  # over-block: a POSIX filename containing a literal backslash is treated as separator-bearing
-  # (see this file's header).
+  # Separator normalisation: a backslash-spelled .claude/.codex still denies. A POSIX filename that really
+  # holds a backslash is treated as separator-bearing, which can manufacture a segment that was never a
+  # directory boundary.
   p="${raw//$cr/}"
   p="${p//\\//}"
 
-  # A literal LF byte embedded in the path (distinct from the \r stripped above) would otherwise
-  # print as a second physical line inside a deny message, breaking this hook's own "exactly one
-  # stderr line" contract (#327 round-1 kickback: measured, an unfixed build printed 2 stderr
-  # lines). Build a PRINT-ONLY copy via pure parameter expansion (no new process) -- the
-  # classifier below keeps matching against $p itself, unmodified; only the printed wording folds
-  # each LF into the two-character "\n" so it renders on one line.
+  # A literal LF in the path would print as a second stderr line, breaking the exactly-one-line contract.
+  # Build a PRINT-ONLY copy by pure parameter expansion (each LF becomes the two characters backslash and
+  # n); the classifier keeps matching against $p itself.
   p_disp="${p//$lf/\\n}"
 
-  # ".claude" segment: matched against "/$p/" (both a LEADING and a TRAILING slash appended) so
-  # the same one pattern catches a nested segment, a final segment with nothing after it, AND a
-  # relative path whose very FIRST segment is ".claude" -- measured directly against this exact
-  # pattern; see the case-row table in dev/hook-tests.sh's cdg-* section for every shape checked.
-  # The bracket classes are the case-insensitive idiom hooks/push-guard.sh already uses for config
-  # keys.
+  # ".claude" segment: matched against "/$p/" (a leading AND a trailing slash appended), so the one pattern
+  # catches a nested segment, a final segment with nothing after it, and a relative path whose very FIRST
+  # segment is ".claude". The bracket classes are the case-insensitive idiom hooks/push-guard.sh uses for
+  # config keys.
   case "/$p/" in
     */.[Cc][Ll][Aa][Uu][Dd][Ee]/*)
       printf '%s %s role may not %s a path under a %s segment: %s — record it in your report'"'"'s Reviewer notes instead; see agents/%s.md\n' \
@@ -718,10 +330,8 @@ classify_path() {
       ;;
   esac
 
-  # Absoluteness: /... or a Windows/Git-Bash drive-letter form (README's "Git Bash accepts
-  # C:/Users/... and /c/Users/..." note; hooks/git-c-guard.sh's own PATH_ERE uses the identical
-  # [A-Za-z]:/ prefix class). Anything else cannot be classified and is denied fail-closed, per the
-  # triage record this issue settled (see this file's header "Live-probe record" note on M4).
+  # Absoluteness: /... or a Windows or Git Bash drive-letter form (the same [A-Za-z]:/ prefix class as
+  # hooks/git-c-guard.sh's PATH_ERE). Anything else cannot be classified and is denied fail closed (see M4).
   case "$p" in
     /*) ;;
     [A-Za-z]:/*) ;;
@@ -732,9 +342,8 @@ classify_path() {
       ;;
   esac
 
-  # A ".." segment anywhere: also denied fail-closed (the same triage record) -- a future payload
-  # whose path is not already normalised must not silently escape a ".claude"/".codex" check that
-  # only ever looks at the literal path string.
+  # A ".." segment anywhere is also denied fail closed: a path that is not already normalised must not
+  # silently escape a ".claude"/".codex" check that only looks at the literal path string.
   case "$p/" in
     */../*)
       printf '%s %s role'"'"'s %s file_path could not be classified as absolute or normalised, and is denied fail-closed: %s\n' \
@@ -744,25 +353,20 @@ classify_path() {
   esac
 }
 
-# deny_patch_unparseable REASON (#407) -- the apply_patch route's own fail-closed exit for a patch
-# this parser cannot make sense of at all (as opposed to a parsed header whose path classify_path
-# above denies). Always exits 2; the pinned phrase is "could not be parsed".
+# deny_patch_unparseable REASON (#407): the apply_patch route's fail-closed exit for a patch this parser
+# cannot make sense of (as opposed to a parsed header whose path classify_path denies). Always exits 2.
 deny_patch_unparseable() {
   printf '%s %s role'"'"'s apply_patch could not be parsed (%s), and is denied fail-closed\n' \
     "$CLAUDE_DIR_DENY_STEM" "$role" "$1" >&2
   exit 2
 }
 
-# ltrim/trim S (#407) -- strip leading (ltrim) or leading+trailing (trim) spaces and tabs via
-# parameter expansion only (no tr/sed, never executes anything; see this file's header). $tab is
-# declared above, alongside $cr/$lf. The line loop below LEFT-trims only (indentation tolerance,
-# e.g. "  *** Add File: x"), deliberately leaving any trailing whitespace on the whole line alone,
-# so a header with NOTHING after its "<marker>: " prefix (e.g. "*** Add File: ", trailing space,
-# nothing else) still matches that marker's own case pattern (its own trailing space plus an
-# empty match for the wildcard after it) and yields an EMPTY extracted path -- denied as such,
-# rather than falling through to the generic "unrecognised marker" arm. The extracted header-path
-# substring itself is then full-trimmed (trim) to drop any real trailing whitespace after a
-# genuine filename.
+# ltrim/trim S (#407): strip leading (ltrim) or leading and trailing (trim) spaces and tabs by parameter
+# expansion only. The header line loop LEFT-trims only, so a header with nothing after its "<marker>: "
+# prefix still matches that marker's case pattern with an empty path and is denied as such, not as an
+# unrecognised marker; the extracted path is then full-trimmed. Both sample the deadline, so a $(...) caller
+# must propagate a deny. Only ASCII space and tab are stripped: a header preceded by Unicode whitespace
+# (U+00A0) is not recognised as a header and is treated as a content line.
 ltrim() {
   local s="$1"
   while case "$s" in " "*|"$tab"*) true ;; *) false ;; esac; do
@@ -788,21 +392,11 @@ trim() {
   printf '%s' "$s"
 }
 
-# parse_patch_headers TOOL PATCH_TEXT CWD (#407) -- shared by the apply_patch route and the Bash
-# apply_patch-shim route below: splits PATCH_TEXT into lines (builtins only, IFS splitting under
-# `set -f`/noglob, so a line beginning with the patch grammar's own literal "***" is never
-# expanded as a filesystem glob -- this hook performs no filesystem access at all, see this file's
-# header), calls classify_path on every Add/Update/Delete/Move-to header path (resolved against
-# CWD when the header path itself is relative), and fails closed via deny_patch_unparseable on an
-# empty header path, an unrecognised "*** " marker line, or zero headers found in the whole text.
-# Returns normally (no output, no exit) only when every header in PATCH_TEXT is benign. The line
-# loop LEFT-trims only (ltrim, indentation tolerance, e.g. "  *** Add File: x"), deliberately
-# leaving any trailing whitespace on the whole line alone, so a header with NOTHING after its
-# "<marker>: " prefix (e.g. "*** Add File: ", trailing space, nothing else) still matches that
-# marker's own case pattern (its own trailing space plus an empty match for the wildcard after it)
-# and yields an EMPTY extracted path -- denied as such, rather than falling through to the generic
-# "unrecognised marker" arm. The extracted header-path substring itself is then full-trimmed
-# (trim) to drop any real trailing whitespace after a genuine filename.
+# parse_patch_headers TOOL PATCH_TEXT CWD (#407): shared by the apply_patch route and the Bash shim route.
+# Splits PATCH_TEXT into lines with builtins only (IFS splitting under set -f, so a line starting with the
+# grammar literal *** is never globbed), calls classify_path on every Add/Update/Delete/Move-to header path
+# (joined to CWD when relative), and fails closed via deny_patch_unparseable on an empty header path, an
+# unrecognised *** marker, or zero headers.
 parse_patch_headers() {
   local ptool="$1" patch="$2" pcwd="$3" headers=0 oldifs raw_line line hdr_path p
   set -f
@@ -850,14 +444,12 @@ parse_patch_headers() {
   [ "$headers" -gt 0 ] || deny_patch_unparseable "no file header"
 }
 
-# quote_parity_check START END (#455, absorbing #456; the unbalanced-quote predicate #449 states
-# for push-guard too) -- fail-closed deny when any token toks[START..END] (inclusive, the CALLER's
-# own `toks` array through dynamic scope, the same convention walk_window uses) carries an odd
-# count of `'` or of `"`: this walk splits a segment on whitespace BEFORE it strips quotes, so a
-# quoted value with a space (`X='a b'`) arrives as two tokens, the second of which would otherwise
-# be resolved as the command word and hide the shim that follows. Length differences only (no
-# external command, no subshell); each token is touched once, and walk_window calls this only over
-# tokens its own window already walked.
+# quote_parity_check START END (#455): fail-closed deny when any token toks[START..END] (inclusive, the
+# CALLER's toks array through dynamic scope) carries an odd count of single quotes or of double quotes, or
+# ends in a backslash. The walk splits a segment on whitespace BEFORE it strips quotes, so a quoted value
+# with a space (X='a b') or an escaped one (X=a\ b) arrives as two tokens, and the second would be resolved
+# as the command word and hide the shim. It runs only in a segment that mentions the shim and carries a quote
+# or backslash (seg_qflag), over tokens the window already walked; no subshell.
 quote_parity_check() {
   local j="$1" qraw qa qb
   while [ "$j" -le "$2" ]; do
@@ -879,16 +471,13 @@ quote_parity_check() {
   done
 }
 
-# scan_shim_input START STOP (#455) -- one linear pass over the CALLER's `toks[START..STOP)` (the
-# tokens AFTER the shim word in its own segment), recording in the global `iapw_unsafe` the first
-# reason the shim's input is NOT only an inline `<<` heredoc, and returning at that finding. Safe
-# set: a heredoc operator run (exactly two `<`, no `>`) plus its delimiter, an output redirect run
-# plus its target, and a bare-digits fd immediately before an output redirect. Everything else is
-# unsafe -- a file argument, `<`, `<<<`, `<>` (the LAST stdin redirect wins, so one after a heredoc
-# still counts), an fd-numbered input such as `3<<`, a heredoc operator with no delimiter token
-# (process substitution `< <(...)`) -- and so is a segment with no heredoc at all (a pipe into a
-# bare shim, a bare `apply_patch`). A heredoc whose delimiter carries a quote or backslash is
-# literal; any other sets `iapw_unquoted`, which is_apply_patch_word judges against the text.
+# scan_shim_input START STOP (#455): one linear pass over the CALLER's toks[START..STOP) (the tokens after the
+# shim word in its own segment), recording in the global iapw_unsafe the first reason the shim's input is NOT
+# only an inline << heredoc. Safe: a heredoc operator run (exactly two <, no >) plus its delimiter, an output
+# redirect run plus its target, and a bare-digits fd right before an output redirect. Unsafe: a file
+# argument, <, <<<, <> (the LAST stdin redirect wins), an fd-numbered input such as 3<<, a heredoc operator
+# with no delimiter token (process substitution), and a segment with no heredoc at all (a pipe into a bare
+# shim). A heredoc delimiter with a quote or backslash is literal; any other sets iapw_unquoted.
 scan_shim_input() {
   local j="$1" k nin nout saw_hd=0 d
   while [ "$j" -lt "$2" ]; do
@@ -938,34 +527,42 @@ scan_shim_input() {
   return 0
 }
 
-# walk_window START STOP (#437) -- resolves ONE window `toks[START..STOP)` of the CALLER's own
-# `local -a toks` array, read through bash's own dynamic scope (this helper takes no `toks`
-# parameter; it must only ever be called from inside is_apply_patch_word, which always declares
-# `toks`, plus `mark_in`/`mark_out`/`assign_ere`/`digits_ere`/`seg_shim_at`/`seg_qflag`/`seg_mflag`, in its own
-# scope first). Shared by
-# the base walk (the whole segment, START=0, STOP=token count) and each `]]` tail below
-# (START/STOP bracket the tokens strictly between two standalone `]]` -- a cut tail -- or between
-# the last `]]` and the segment's own end -- the final tail) -- the same per-token skip order either way. Sets two globals (not `local`, so
-# the caller reads them after this returns); since #455 it also records, in the caller's
-# `seg_shim_at`, the smallest resolved shim index, and (only in a segment the caller flagged with
-# `seg_qflag`) runs quote_parity_check over its own walked tokens, which can exit 2. Otherwise it
-# never prints or exits:
-#   - `ww_word`: the resolved token with quote characters and backslashes stripped, or empty if the
-#     window is exhausted (or empty) before any word resolves; since #518 it is the first shim-named
-#     token after a prefix option's separate value when that scan fires (see is_apply_patch_word's #518
-#     paragraph), since #537 the first one after the next word of an interpreter option the walk cannot
-#     classify, and since #538 it is the shim itself when an `env -S` string names it.
-#   - `ww_skipped`: 1 when at least one token in the window was consumed by the redirect/fd skip,
-#     the assignment skip, a PREFIX_WORDS member (including its own `repeat` count token), a
-#     runtime-expansion word (#538), a "-"-leading option once a PREFIX_WORDS member has been seen, or
-#     (#537) an option of an interpreter word together with its value word;
-#     0 otherwise. An empty token left
-#     behind by the quote strip is skipped too but does NOT set this flag (a lone quote character
-#     glued to nothing is not a meaningful skip). Only the in-loop cut-tail walk reads it (the base
-#     walk and the final tail never do), and only when `ww_word` is also empty, to tell "the window
-#     held nothing at all" (ww_skipped=0, benign) apart from "the window held only skip words and
-#     never reached a real one" (ww_skipped=1, a cut (non-final) tail is_apply_patch_word denies
-#     fail-closed rather than silently ignore).
+# walk_window START STOP (#437): resolves ONE window toks[START..STOP) of the CALLER's local `toks` array,
+# read through bash's dynamic scope: it takes no toks parameter and must only be called from
+# is_apply_patch_word, which declares toks, mark_in, mark_out, assign_ere, digits_ere, seg_shim_at, seg_qflag
+# and seg_mflag in its own scope first. Shared by the base walk (the whole segment) and each ]] tail. It
+# records in seg_shim_at the smallest resolved shim index and, in a segment flagged seg_qflag, runs
+# quote_parity_check over the tokens it walked (which can exit 2); otherwise it never prints or exits. Two
+# globals, not local, are read by the caller:
+#   - ww_word: the resolved token with quotes and backslashes stripped, or empty if the window is exhausted
+#     first. It is also the first shim-named token found by the #518 or #537 scan, or the shim itself when an
+#     env -S string names it (#538).
+#   - ww_skipped: 1 when at least one token was consumed by a skip (redirect or fd, assignment, PREFIX_WORDS
+#     member with its repeat count, expansion word, dash option after a prefix word, interpreter option with
+#     its value); a token left empty by the quote strip does not set it. Only the cut-tail walk reads it, and
+#     only when ww_word is empty, to tell "the window held nothing" (benign) from "only skip words, never a
+#     real one" (a cut tail, denied fail closed).
+#
+# #538 fail-closed: a shim name split by quote or backslash characters, a runtime expansion before it, or an
+# env -S string. The shell deletes quote and backslash characters inside a word, so apply_"patch" and
+# apply\_patch run the shim; a runtime-expansion word may expand to nothing, so `$X apply_patch` runs it; and
+# env -S'apply_patch' splits its string into words. (1) Every shim-name comparison deletes backslashes as
+# well as quotes (a token that carried one marks its window, ww_alt), and fast path 2, the #503 chain gate and
+# the #455 and #518 segment flags all count a split spelling as a mention of the shim, by cdg_split_ere
+# (tested on a line only when it carries a quote or a backslash and not the plain name, and on a segment only
+# inside a line that names the shim). (2) A token whose basename holds a dollar sign followed by a name
+# character, a digit, a special parameter or a quote is skipped like a prefix word, in a segment that mentions
+# the shim or carries a quote: a dash-led one opens no context, any other opens the value context (#518) and
+# the env context. The skip sits after the dash arm, so `nice -$X 5 apply_patch` still starts the #518 scan.
+# (3) After an env word (or a skipped expansion word) an option token is read the way env -S reads its
+# string, each backslash-underscore a space, then quotes and backslashes deleted: a space-separated word that
+# is the shim, or a first word that is an option glued to the shim name (-Sapply_patch), resolves it, and a
+# bare -S or --split-string reads the NEXT token the same way. The reading sits before the #518 scan, so it
+# never reads past the token the string is in. (4) A shim resolved through a backslash strip, an expansion
+# skip or an env -S string, in a segment flagged for the parity check, runs the #455 check over the WHOLE
+# window. Cost: per line at most one regex, per segment at most one, per walked token one backslash
+# substitution, one glob and, for a token holding a dollar sign, one regex, and per dash token after an env
+# word two single-token reads: no loop grows with the input.
 walk_window() {
   local i n tok nxt saw_prefix vp vp_done j vt hit ve ww_alt er
   local ip=0 ipb ipk ipw ipj ipt iph
@@ -982,8 +579,8 @@ walk_window() {
     check_deadline
     tok="${toks[$i]}"
     if [ "$tok" = "$mark_in" ] || [ "$tok" = "$mark_out" ]; then
-      # A run of operators (`>>`, `<>`, `<<<`) is one redirect: skip every marker in the run, then
-      # the single target/source token after it (#407 kickback round 3).
+      # A run of operators (>>, <>, <<<) is one redirect: skip every marker in the run, then the single
+      # target or source token after it.
       i=$((i + 1))
       while [ "$i" -lt "$n" ] && { [ "${toks[$i]}" = "$mark_in" ] || [ "${toks[$i]}" = "$mark_out" ]; }; do
         check_deadline
@@ -1006,11 +603,9 @@ walk_window() {
       ww_skipped=1
       continue
     fi
-    # #437: strip quote characters, and (#538) backslashes, from the token before matching it against
-    # PREFIX_WORDS or resolving it as the command word, so a quoted `eval`/`trap`/`bash -c` argument
-    # or a quoted or backslash-split shim spelling resolves the same as an unquoted one (a token that
-    # carried a backslash marks the window, `ww_alt`; see the shim arm below). A token that strips to
-    # nothing (a lone quote glued to nothing else) is skipped without setting ww_skipped.
+    # #437, #538: quote characters and backslashes are stripped from the token before it is matched against
+    # PREFIX_WORDS or resolved (a token that carried a backslash marks the window, ww_alt); a token that strips
+    # to nothing is skipped without setting ww_skipped.
     tok="${tok//$sq/}"
     tok="${tok//$dq/}"
     case "$tok" in *\\*) tok="${tok//\\/}"; ww_alt=1 ;; esac
@@ -1038,15 +633,9 @@ walk_window() {
         continue
         ;;
     esac
-    # #537: an option of an interpreter prefix word (bash/sh/zsh/ksh/dash), classified with globs only
-    # (no function call per token: see the check_deadline note above). A value option (-o, +O, -eo,
-    # --rcfile) is skipped together with its value word when that word is plain, a flag (-e, -c, +e)
-    # alone, so the -c string behind them is judged as usual. A token that is neither cannot be
-    # classified: when the next word is no option, no redirect marker and not shim-named, ONE scan per
-    # window (the vp_done memo the #518 scan shares) looks for a shim-named token after that word, never
-    # at it, and the option is then skipped alone. A token with a dollar sign is never skipped here, a
-    # token with a slash or the bare `--` keeps the walk it had, and an expansion word that reopened the
-    # value or env context after the interpreter leaves the option to the dash arm below, which scans.
+    # #537: an option of an interpreter prefix word, classified with globs only (no function call per token;
+    # see the #537 block above is_apply_patch_word()). A value option is skipped with its plain value word, a
+    # flag alone; anything else triggers ONE scan per window (vp_done, shared with #518) after the next word.
     if [ "$ip" -eq 1 ] && [ "$vp" -eq 0 ] && [ "$ve" -eq 0 ]; then
       case "$tok" in
         --|*/*) ;;
@@ -1137,12 +726,8 @@ walk_window() {
     if [ "$saw_prefix" -eq 1 ]; then
       case "$tok" in
         -*)
-          # #538: after an env word, an option that reads as an env -S string names the shim. The
-          # token itself is read the way env reads a string (each backslash-underscore a space, then
-          # quotes and backslashes deleted): any space-separated word that is the shim, or a first word
-          # that is an option glued to the shim name (-Sapply_patch, -vS'apply_patch'), resolves it.
-          # A bare -S or --split-string takes the NEXT token as its string, read the same way without
-          # the glued-option rule. At most two single-token reads, before the #518 scan below so the
+          # #538: after an env word, an option that reads as an env -S string names the shim (see the #538
+          # block above walk_window()). At most two single-token reads, before the #518 scan below so the
           # scan never reads past the token the string sits in.
           if [ "$ve" -eq 1 ] && [ "$seg_mflag" -eq 1 ]; then
             er="${toks[$i]//\\_/ }"
@@ -1166,7 +751,7 @@ walk_window() {
             fi
           fi
           # #518: a dash token in the value context followed by a non-option word W: W may be that
-          # option value, so look for a shim-named word AFTER W (never W itself -- when W names the
+          # option's value, so look for a shim-named word AFTER W (never W itself: when W names the
           # shim the walk resolves W below, at the smaller index). At most one scan per window.
           if [ "$vp" -eq 1 ] && [ "$vp_done" -eq 0 ] && [ "$seg_mflag" -eq 1 ] && [ $((i + 1)) -lt "$n" ]; then
             vt="${toks[$((i + 1))]}"
@@ -1194,9 +779,8 @@ walk_window() {
                   j=$((j + 1))
                 done
                 if [ "$hit" -eq 1 ]; then
-                  # before #518 the walk resolved W or a later word and ran the unbalanced-quote
-                  # check through that word; the hit is past all of them, so check every token
-                  # before the hit (fail-closed, a superset of the base check)
+                  # the hit is past tokens the walk never checked; check every token before it (a
+                  # superset of the base check), fail closed
                   if [ "$seg_qflag" -eq 1 ]; then
                     quote_parity_check "$1" $((j - 1))
                   fi
@@ -1235,17 +819,14 @@ walk_window() {
     break
   done
   [ "$saw_prefix" -eq 1 ] && ww_skipped=1
-  # (#455) Bookkeeping after the per-token loop, which is untouched. A window that resolved the shim
-  # records the SMALLEST resolved index in the caller's `seg_shim_at` (the base walk and every `]]`
-  # tail may each resolve it; the input scan starts from the earliest). Any other window, in a
-  # segment the caller flagged (`seg_qflag`: the segment text mentions the shim, plain or split, and
-  # carries a quote or a backslash), runs the unbalanced-quote check over its own already-walked
-  # tokens, start through the resolved word (through the window's last token when nothing resolved).
+  # Bookkeeping after the per-token loop. A window that resolved the shim records the SMALLEST resolved index
+  # in the caller's seg_shim_at (the input scan starts from the earliest). Any other window, in a segment
+  # flagged seg_qflag, runs the unbalanced-quote check over its own already-walked tokens, start through the
+  # resolved word (through the window's last token when nothing resolved).
   case "${ww_word##*/}" in
     apply_patch|applypatch)
       # #538: a shim resolved through a backslash strip, an expansion skip or an env -S string runs the
-      # unbalanced-quote check over the WHOLE window, a superset of what the walk ran on those routes
-      # before (start through the word it resolved), so no earlier unbalanced-quote deny is lost
+      # unbalanced-quote check over the WHOLE window (a superset of the walk's own check on those routes)
       if [ "$ww_alt" -eq 1 ] && [ "$seg_qflag" -eq 1 ]; then quote_parity_check "$1" $((n - 1)); fi
       if [ "$seg_shim_at" -lt 0 ] || [ "$i" -lt "$seg_shim_at" ]; then
         seg_shim_at="$i"
@@ -1263,22 +844,24 @@ walk_window() {
   esac
 }
 
-# cdg_chain_line LINE (#503) -- the additive chain pass, one physical line of the Bash command. The base
-# segmenter in is_apply_patch_word() below cuts a line at every break character before it looks at
-# quoting, so a break character inside a quote or a command substitution leaves the shim in a segment
-# whose first word is junk (`X='a;b c' apply_patch < x.patch`). This function lexes the line
-# sequentially -- single quotes, double quotes, dollar-single-quote, backslash escapes, an unquoted
-# comment, and a stack of dollar-paren / dollar-brace / backtick frames -- classifies every break
-# character as a head break (a real command break, which ends the current chain), a literal break (quoted
-# or escaped, which joins the chain), a frame open or a frame close, and prints, into the global
-# cdg_chain_out, one text per chain that joins two or more segments. The caller appends those texts to
-# its segment list, so the unchanged walk, the `]]` pass, the quote-parity check and the shim input
-# scan judge each one as a segment. In a chain text, a token that ends at a quoted or escaped separator
-# or at a literal break carries a trailing backslash (the cut marker, which the parity check reads as
-# "a quoted span was split here"), and a substitution is the expansion word dollar-underscore when it
-# is glued to a word and the inert word underscore when it starts a word. Pure bash, nothing executed:
-# this hook runs no awk, sed, grep or tr. The loop samples the deadline first, per character, on a line
-# already capped at CDG_LINE_MAX_BYTES; LC_ALL=C scopes to this call so indexing is by byte.
+# cdg_chain_line LINE (#503): the additive chain pass for one physical line of the Bash command. The base
+# segmenter in is_apply_patch_word() cuts a line at every break character before it looks at quoting, so a
+# break character inside a quote or a command substitution leaves the shim in a segment whose first word is
+# junk (X='a;b c' apply_patch < x.patch), and the parity check never sees the opening quote. This function
+# lexes the line sequentially (single and double quotes, dollar-single-quote, backslash escapes, an unquoted
+# # at a word start outside any substitution, which ends the lexing, and a stack of dollar-paren,
+# dollar-brace and backtick frames), classifies every break character as a head break (a real command
+# break), a literal break (quoted or escaped, which joins the chain) or a frame open or close, and prints,
+# into the global cdg_chain_out, one text per chain that joins two or more segments. The caller appends those
+# texts to its segment list, so the unchanged walk, ]] pass, parity check and shim input scan judge each as
+# a segment. In a chain text a token that ends at a quoted or escaped separator or at a literal break
+# carries a trailing backslash (the cut marker, which the parity check reads as a quoted span split here),
+# and a substitution is the expansion word dollar-underscore when glued to a word and the inert word
+# underscore when it starts a word. Quote state never crosses a physical line, so a heredoc body or prose
+# line is not poisoned by an earlier line. The caller gates it to a line that names the shim, carries a
+# quote, backslash, backtick, $( or ${, and holds a break character. Cost: one deadline sample per character
+# on a line capped at CDG_LINE_MAX_BYTES (scoped LC_ALL=C, so indexing is by byte), O(line) iterations plus
+# O(line squared) byte copies at most; only gated lines pay it.
 cdg_chain_out=""
 cdg_chain_line() {
   local ln="$1" LC_ALL=C
@@ -1422,147 +1005,84 @@ cdg_chain_line() {
   done
 }
 
-# is_apply_patch_word TEXT (#407 amendment A1; reworked #407 kickback rounds 2/3; reworked again
-# #437) -- true iff TEXT (a whole tool_input.command, possibly multi-line) has a segment whose
-# RESOLVED command word is exactly "apply_patch"/"applypatch", OR a path-qualified spelling of
-# either (`./apply_patch`, `/usr/local/bin/apply_patch`) matched by BASENAME -- distinguishing the
-# Bash COMMAND WORD from the same text appearing only as an argument (`rg apply_patch hooks/`) or
-# inside quotes (`grep -n "apply_patch" x`), neither of which this walk ever treats as a leading
-# token. Pure builtins: parameter-expansion substitution splits segments and words, `[[ =~ ]]`
-# matches an assignment prefix or a bare-digits fd, no execve.
+# is_apply_patch_word TEXT (#407, #437): true iff TEXT (a whole tool_input.command, possibly multi-line) has
+# a segment whose RESOLVED command word is exactly apply_patch or applypatch, or a path-qualified spelling
+# matched by basename. It tells the command word from the same text as an argument (rg apply_patch hooks/)
+# or inside quotes, neither of which this walk treats as a leading token. Pure builtins (parameter-expansion
+# substitution splits segments and words; [[ =~ ]] matches an assignment prefix or a bare-digits fd), no
+# execve. It memoises its verdict (iapw_memo) and fills the globals iapw_unsafe and iapw_unquoted.
 #
-# Segment breaks (reset the walk_window skip state at the start of every new command position, the
-# same set hooks/agent-boundary.sh's own tokenizer treats as segment breaks): `;` `&` `|` `(` `)`
-# `{` `}` and a backtick (since #503 a gated line's segment list also carries the chain texts of
-# cdg_chain_line(), above, judged by this same walk). Word breaks WITHIN a segment: whitespace (via ordinary word-splitting
-# below) plus `<` and `>`, each replaced by a padded, near-uncollidable sentinel word (not a bare
-# space) so walk_window can still see WHERE a redirect operator was -- a redirect never starts a
-# new segment, but it DOES separate a command word from a glued redirect target or source
-# (`apply_patch<x.patch`), and (#407 kickback round 2, finding D) a LEADING redirect must not let
-# the token AFTER it (the redirect's own target/source) or a bare-digits fd token immediately
-# BEFORE it (`2>/dev/null apply_patch`) be mistaken for, or hide, the command word: both the fd and
-# the marker-plus-target are skipped as a unit. Within each segment, walk_window skips a
-# `NAME=value` assignment prefix, then a PREFIX_WORDS member (repeat-until-exhausted, so `if true;
-# then apply_patch < x.patch; fi` resolves past `then`; when the skipped member is exactly
-# `repeat`, its own count token right after it is skipped too), then -- once a PREFIX_WORDS member
-# has been seen -- a further "-"-leading option (an option to the prefix word itself, e.g. `env -i
-# apply_patch`; since #518, in the value context of a PREFIX_VALUE_WORDS member or `env`, a dash option
-# followed by a non-option word first looks for a shim-named word after that word; since #537, after an
-# interpreter word, a dash or plus option is classified and a value option takes its plain value word
-# with it; since #538 a
-# runtime-expansion word is skipped like a prefix word, and an option after an `env` word is read as
-# an `env -S` string); the first token surviving every skip is the segment's resolved command word,
-# compared both in full and by basename (finding E). (#437) Every token is also stripped of `'`/`"`
-# quote characters, and (#538) of backslashes, before any of the above matching happens (see
-# walk_window's own comment).
+# Segments and words. Segment breaks (the set hooks/agent-boundary.sh uses): ; & | ( ) { } and a backtick; a
+# gated line's segment list also carries the chain texts of cdg_chain_line() (#503). Word breaks within a
+# segment: whitespace plus < and >, each replaced by a padded sentinel word (mark_in, mark_out) so
+# walk_window still sees WHERE a redirect was: a redirect never starts a segment, but it separates a command
+# word from a glued target (apply_patch<x.patch), and a LEADING redirect or a bare-digits fd right before one
+# (2>/dev/null apply_patch) is skipped as a unit and cannot hide the command word. walk_window skips, in
+# order: a NAME=value assignment; a PREFIX_WORDS member (repeated, so `if true; then apply_patch < x.patch;
+# fi` resolves past then; repeat also skips its count token); then, once a prefix word was seen, a dash-led
+# option of that word (refined by the #518, #537 and #538 rules below); a runtime-expansion word (#538). The
+# first token surviving every skip is the resolved word, compared in full and by basename.
 #
-# (#437) Each segment whose raw text carries a literal `]]` is ALSO walked one additional way,
-# ported from #403's agent-boundary.sh/push-guard.sh technique but kept pure bash here (no awk --
-# this hook's own booby-trap fixtures trap it): every standalone `]]` token splits the segment into
-# disjoint tails, so `if [[ cond ]] apply_patch < x.patch` (zsh's short-`if` form, which this walk
-# cannot otherwise tell apart from a `[[ ... ]]` test whose OWN command word is `[[`) resolves the
-# text AFTER each `]]` as its own candidate command word too. Tails are disjoint (each one ends at
-# the NEXT standalone `]]`, or the segment's end for the last one) so their combined cost is bounded
-# by the segment's own token count, never quadratic. A segment carrying more than DBRACKET_MAX
-# (#437; counted per segment here, unlike agent-boundary's per-record count) standalone `]]` tokens
-# denies unconditionally, fail-closed, as soon as the (DBRACKET_MAX+1)-th one is seen -- at most
-# DBRACKET_MAX disjoint tails are ever walked first, each bounded by its own short window, so the
-# work done before that deny still stays linear in the tokens consumed so far. A CUT tail -- one
-# ending at the NEXT standalone `]]`, never the final tail that runs to the segment's own end (that
-# one is not cut: an unresolved final tail is simply not found) -- that consumes at least one skip
-# token without ever resolving a word (`walk_window`'s own `ww_skipped=1` with `ww_word` empty) also denies,
-# fail-closed, rather than silently treat the cut as "no command word here" -- this is the same
-# `env -u ]] -i apply_patch` shape push-guard.sh's own cut-push rule closes. A cut tail that DOES
-# resolve to the shim simply marks it found, with no unconditional deny: unlike push-guard's own
-# cut-push rule, the downstream checks in the Bash route below (the belt-and-braces raw-text scan,
-# the structured patch parse, and the "no inline patch" deny) all read the WHOLE command text, never
-# only the resolved tail, so cutting the command-word search here hides nothing those checks use.
-# (#455) The shim's own-segment input scan likewise never stops at a `]]` cut: it starts after the
-# smallest shim index any window of the segment resolved and runs to the segment's end, and it runs
-# once per segment, stopping at the first unsafe token. An unquoted heredoc delimiter (the
-# `iapw_unquoted` flag) is judged once at the end against the whole text: `$`, a backtick or a
-# backslash anywhere makes it unsafe.
+# ]] pass (#437). A segment whose raw text carries a literal ]] is ALSO walked one more way, in pure bash:
+# every standalone ]] splits the segment into disjoint tails, so the zsh short form `if [[ cond ]]
+# apply_patch < x.patch` resolves the text after each ]] as its own candidate command word. Tails end at the
+# NEXT standalone ]] (or the segment's end), so their combined cost is bounded by the segment's token count.
+# A segment with more than DBRACKET_MAX standalone ]] denies unconditionally as soon as the excess one is
+# seen. A CUT tail (one ended by a following ]], never the final tail) that consumes a skip token without
+# resolving a word (ww_skipped=1, empty ww_word) also denies, fail closed (env -u ]] -i apply_patch). A cut
+# tail that DOES resolve the shim just marks it found: the checks in the Bash route below all read the WHOLE
+# command text, so cutting the command-word search hides nothing they use.
 #
-# Fail-closed: a value-taking option of a prefix word (#518). A dash option of nice, sudo, stdbuf, exec,
-# xargs or time (PREFIX_VALUE_WORDS), or of `env` (this walk models no env option grammar beyond the
-# `-S` string of #538, so `env -u X apply_patch` hides the shim the same way), may take the NEXT word
-# as its value (`nice -n 5 apply_patch < x.patch`,
-# `sudo -u root apply_patch`, `xargs -a x applypatch`); the walk skipped the option but not the value, so
-# the value became the resolved word. This walk models no prefix command's option grammar. While the
-# most recent prefix word is in that set, a dash token followed by a word that is not an option, not a
-# redirect marker and not itself shim-named triggers ONE scan per window (walk_window's vp_done) of the
+# #455 shim input. The input scan (scan_shim_input) starts after the smallest shim index any window resolved
+# and runs once per segment to its end, stopping at the first unsafe token. An unquoted heredoc delimiter
+# (iapw_unquoted) is judged once at the end against the whole text: $, a backtick or a backslash anywhere
+# makes it unsafe, since the shell expands the body first. quote_parity_check runs in a segment that mentions
+# the shim and carries a quote or backslash.
+#
+# #518 fail-closed: a value-taking option of a prefix word. A dash option of a PREFIX_VALUE_WORDS member, or
+# of env (this walk models no env option grammar beyond the -S string of #538), may take the NEXT word as its
+# value (nice -n 5 apply_patch < x.patch), so the walk, which skipped the option but not the value, resolved
+# the value instead. While the most recent prefix word is in that set, a dash token followed by a word that is
+# not an option, not a redirect marker and not itself shim-named triggers ONE scan per window (vp_done) of the
 # tokens after that word, in a segment that mentions the shim or carries a quote (seg_mflag): the first
-# shim-named token (quote- and backslash-stripped, basename compared, markers skipped; since #538 a
-# dash token that ends in the shim name counts too, in any value context) becomes the resolved word, so
-# seg_shim_at records its index and the Bash route judges the call as usual (an inline heredoc patch
-# stays judged by its headers; no inline patch denies). A value word that itself names the shim is
-# excluded from the trigger: the walk resolves it at the smaller index, so the scan never moves
-# seg_shim_at later (`env -i apply_patch evil.patch applypatch <<'EOF'` keeps its argument deny). The
-# scan starts after the value word, never at it. Cost: at most one scan per window, so the base window
-# and the disjoint `]]` tails scan at most twice the segment's tokens; each token costs one deadline
-# sample, two quote strips, one backslash strip and one glob, on a line already capped at
-# CDG_LINE_MAX_BYTES. A scan hit in
-# a flagged segment (seg_qflag) first runs the #455 unbalanced-quote check over every token before the
-# hit, a superset of the check the walk made before #518 through the word it resolved, so `nice -n
-# "a b" apply_patch <<'EOF'` keeps its deny (over-blocking, measured rc 2: a quoted value of a later
-# prefix option, `nice -n 5 sudo -u "a b" apply_patch <<'EOF'`); a segment that carries a quote but
-# never spells the shim plainly (`nice -n 5 apply_"patch"`, or since #538 `nice -n 5 apply\_patch`) is
-# scanned too (seg_mflag). Over-blocking,
-# each measured rc 2: `nice -n 5 rg apply_patch hooks/` and `sudo -u root bash -c "echo apply_patch"`.
-# Residual, measured rc 0: a launcher outside PREFIX_WORDS (see the residual list above).
+# shim-named token (quote- and backslash-stripped, compared by basename; a dash token ending in the shim name
+# counts too) becomes the resolved word. A value word that itself names the shim is excluded from the
+# trigger: the walk resolves it at the smaller index, so the scan never moves seg_shim_at later. A scan hit
+# in a flagged segment (seg_qflag) first runs the #455 parity check over every token before the hit. Cost: at
+# most one scan per window, so the base window and the disjoint ]] tails scan at most twice the segment's
+# tokens, each token costing one deadline sample, two quote strips, one backslash strip and one glob.
 #
-# An option of an interpreter prefix word (#537). Interpreters stay out of PREFIX_VALUE_WORDS: the value of
-# `bash -c` IS the command string, so scanning past it would deny `bash -e -o pipefail -c echo apply_patch`.
-# Their options are classified instead, with case globs only (no function call per token: bash 3.2 makes a
-# call expensive while this walk's frame is large). While the most recent prefix word is in
-# PREFIX_INTERP_WORDS (bash, dash, ksh, sh, zsh; a bare `-` leaves it alone), a token that starts with a dash
-# or a plus, is longer than one character, is not `--` and holds no slash is one of three kinds. A VALUE
-# option is a member of INTERP_VALUE_OPTS (--init-file, --rcfile, -init-file, -rcfile) or a dash or plus
-# followed by letters of which exactly one is o or O, and it is the last (`-o`, `+O`, `-eo`): it is skipped
-# together with the NEXT word (walk_window's `i + 2`), but only when that word is plain: not empty, not led
-# by a dash or plus, no quote, backslash or dollar sign, not a redirect marker, not shim-named, not an
-# assignment and not a PREFIX_WORDS member. The -c string behind the options is then resolved as usual, so
-# `bash -o pipefail -c 'apply_patch < x.patch'` denies with the "no inline patch text" reason. A FLAG is a
-# dash or plus followed by letters with no o or O (`-e`, `-c`, `-lc`, `+e`), skipped alone as every dash
-# token was (a plus-led token used to be the resolved word). Anything else is UNCLASSIFIED: two value
-# letters, a value letter that is not last, an unlisted long option, a non-letter, or a value option whose
-# next word failed the test. When the next word is no option, no redirect marker and not shim-named, ONE
-# scan per window (walk_window's vp_done, shared with the #518 scan) looks for a shim-named token after
-# that word, in a segment that mentions the shim or carries a quote (seg_mflag), with the #518 scan's
-# matching; a hit runs the #455 unbalanced-quote check over the WHOLE window, because the walk never
-# reached the option's next word or the tokens after it up to the hit, and any of them (a backslash-stripped
-# prefix word, an expansion word, an env -S string) would have marked the window for that whole-window
-# check on its own (`bash --login \env apply_patch <<'EOF' > a'b` keeps its unbalanced-quote deny); the
-# option is then skipped alone. A next word that itself names the shim is never skipped and never scanned
-# past: the walk resolves it at the smaller index, so the scan never moves seg_shim_at later (`zsh -cO apply_patch
-# evil.patch applypatch <<'EOF'` keeps its argument deny). A token holding a dollar sign is never skipped by
-# this rule, a token with a slash or the bare `--` keeps the walk it had (`bash +/apply_patch < x.patch`
-# still resolves the shim by its basename), and an expansion word that reopened the value or env context
-# after the interpreter (`bash $X -o pipefail -c ...`) leaves the option to the dash arm, which scans. A
-# word is skipped only when the old walk, which took it for the resolved word, could not have resolved the
-# shim through it, so no deny turns into an allow; every other path adds a scan. Cost: a constant number of
-# case globs and two `#?`/`%?` strips per option token, on a line already capped at CDG_LINE_MAX_BYTES; at
-# most one scan per window, so the base window and the disjoint `]]` tails scan at most twice the segment's
-# tokens, each scanned token costing one deadline sample, two quote strips, one backslash strip and one
-# glob. Over-blocking, each measured rc 2: `bash -O "extglob" -c 'echo apply_patch'` (a quoted value fails
-# the test, and the unbalanced-quote check of #455 then reads the quoted first word of the -c string),
-# `bash -o pipefail -c 'echo apply_patch'` (the option no longer hides the verdict `bash -c 'echo
-# apply_patch'` already gets through that same check), `bash --norc script.sh apply_patch` (an unlisted
-# long option followed by a script whose arguments name the shim), and `bash -oo x apply_patch <<'EOF' >
-# a'b` with a patch (the whole-window check on a scan hit reads a quote opened after the shim, which a plain
-# `apply_patch <<'EOF' > a'b` gets past). Residuals, each measured rc 0: a value
-# option outside the o/O letters and the two long options (`ksh -R x -c 'apply_patch < x.patch'`;
-# UNVERIFIED which shell takes which option's value), and an interpreter reached behind a launcher outside
-# PREFIX_WORDS (`timeout 5 bash -o pipefail -c 'apply_patch < x.patch'`).
+# #537 fail-closed: an option of an interpreter prefix word. Interpreters stay out of PREFIX_VALUE_WORDS (the
+# value of bash -c IS the command string, and scanning past it would deny `bash -e -o pipefail -c echo
+# apply_patch`), so their options are classified, with case globs only (no function call per token: bash 3.2
+# makes a call expensive while this walk's frame is large). While the most recent prefix word is in
+# PREFIX_INTERP_WORDS (a bare - leaves it alone), a token that starts with a dash or plus, is longer than one
+# character, is not -- and holds no slash is one of three kinds. A VALUE option is a member of
+# INTERP_VALUE_OPTS, or a dash or plus followed by letters of which exactly one is o or O and it is the last
+# (-o, +O, -eo): it is skipped together with the NEXT word, but only when that word is plain (not empty, not
+# dash- or plus-led, no quote, backslash or dollar sign, not a redirect marker, not shim-named, not an
+# assignment, not a PREFIX_WORDS member). A FLAG is a dash or plus followed by letters with no o or O (-e, -c,
+# -lc, +e), skipped alone. Anything else is UNCLASSIFIED (two value letters, a value letter that is not last,
+# an unlisted long option, a non-letter, or a value option whose next word failed the test): when the next
+# word is no option, no redirect marker and not shim-named, ONE scan per window (vp_done, shared with the
+# #518 scan) looks for a shim-named token after that word, in a segment flagged seg_mflag; a hit runs the
+# #455 parity check over the WHOLE window (the walk never reached the tokens up to the hit, and any
+# backslash-stripped prefix word, expansion word or env -S string among them would have marked the window on
+# its own), and the option is then skipped alone. A next word that names the shim is never skipped and never
+# scanned past. A token holding a dollar sign is never skipped by this rule, a token with a slash or the bare
+# -- keeps the walk it had (`bash +/apply_patch < x.patch` still resolves by basename), and an expansion word
+# that reopened the value or env context after the interpreter leaves the option to the dash arm, which
+# scans. A word is skipped only when the old walk, which took it for the resolved word, could not have
+# resolved the shim through it, so no deny turns into an allow. Cost: a constant number of case globs and
+# two #? / %? strips per option token; at most one scan per window.
 #
-# (#437) Memoised: both call sites in the Bash route below always pass the identical text, so the
-# global `iapw_memo` (declared just below, empty until the first call in this process) short-
-# circuits the second call rather than re-walking the whole command a second time.
+# Memoised (#437): both call sites in the Bash route below pass the identical text, so the global iapw_memo
+# (empty until the first call in this process) short-circuits the second call.
 iapw_memo=""
-# (#455) Globals is_apply_patch_word fills while it walks (not `local`, so the Bash route reads them
-# after the call, including on a memoised return): `iapw_unsafe` holds the first reason a shim
-# segment's input is not only an inline heredoc (empty when every shim segment is safe), and
-# `iapw_unquoted` is 1 once any shim heredoc has an unquoted delimiter.
+# Globals is_apply_patch_word fills while it walks (not local, so the Bash route reads them after the call,
+# including on a memoised return): iapw_unsafe holds the first reason a shim segment's input is not only an
+# inline heredoc (empty when every shim segment is safe), and iapw_unquoted is 1 once any shim heredoc has an
+# unquoted delimiter.
 iapw_unsafe=""
 iapw_unquoted=0
 is_apply_patch_word() {
@@ -1578,24 +1098,22 @@ is_apply_patch_word() {
     return "$iapw_memo"
   fi
 
-  # NOTE: a literal "{"/"}" inside a `${var//[...]/...}` bracket expression confuses bash's own
-  # parser (it can misread the inner "}" as closing the "${" construct itself, corrupting both the
-  # pattern and everything after it -- measured directly against this exact construct under both
-  # bash 5 and Apple's bash 3.2), so "{"/"}" are substituted in their own separate statements
-  # rather than folded into the bracket expression below.
-  # (#457) Every substitution below runs on ONE physical line at a time, never on the whole command
-  # text, and never builds a whole-text `flat` string: bash 3.2's `${x//pat/repl}` is superlinear in
-  # the text's length and match count, and a newline is itself a segment break, so processing line
-  # by line gives the identical segments. Each line is at most CDG_LINE_MAX_BYTES bytes
-  # (cdg_prepare_text, run on the command first under a scoped LC_ALL=C so the length is a byte
-  # count, denies a longer one), and the loop below samples the deadline before every line.
+  # NOTE: a literal "{" or "}" inside a ${var//[...]/...} bracket expression confuses bash's own parser (it
+  # can misread the inner "}" as closing the "${" construct itself, corrupting the pattern and everything
+  # after it, measured under both bash 5 and Apple bash 3.2), so "{" and "}" are substituted in their own
+  # separate statements rather than folded into the bracket expression below.
+  # Every substitution below runs on ONE physical line at a time, never on the whole command text (bash
+  # 3.2's ${x//pat/repl} is superlinear in the text's length and match count, and a newline is itself a
+  # segment break, so line by line gives the identical segments). Each line is at most CDG_LINE_MAX_BYTES
+  # bytes (cdg_prepare_text, run on the command first, denies a longer one), and the loop below samples the
+  # deadline before every line.
   oldifs="$IFS"
   set -f
   IFS="$lf"
   for ln in $text; do
     check_deadline
-    # An fd duplication (`>&2`, `2>&1`, `<&0`, `>&-`) keeps its `&` as part of the redirect rather
-    # than letting it act as a segment break below (#407 kickback round 3).
+    # An fd duplication (`>&2`, `2>&1`, `<&0`, `>&-`) keeps its `&` as part of the redirect instead of
+    # acting as a segment break below.
     ln="${ln//>&/>}"
     ln="${ln//<&/<}"
     # `>|` (noclobber override) is one redirect operator too; its `|` must not split the segment.
@@ -1603,7 +1121,7 @@ is_apply_patch_word() {
     flat="${ln//[;\&\|()\`]/$lf}"
     flat="${flat//\{/$lf}"
     flat="${flat//\}/$lf}"
-    # (#538) Does the line name the shim: ln_m is 1 for the plain spelling, 2 for a split one (quote or
+    # Does the line name the shim (#538): ln_m is 1 for the plain spelling, 2 for a split one (quote or
     # backslash characters inside the name, one regex over the line), 0 otherwise.
     ln_m=0
     case "$ln" in
@@ -1614,10 +1132,9 @@ is_apply_patch_word() {
         [[ $ln =~ $cdg_split_ere ]] && ln_m=2
         ;;
     esac
-    # (#503) The additive chain pass: only a line that names the shim (plain or, since #538, split),
-    # carries a quote, a backslash, a backtick or a dollar-paren / dollar-brace, and holds a break
-    # character is lexed. Its chain texts join the segment list, so the unchanged loop below judges
-    # each one like a segment.
+    # The additive chain pass (#503): only a line that names the shim, carries a quote, a backslash, a
+    # backtick or a dollar-paren / dollar-brace, and holds a break character is lexed. Its chain texts join
+    # the segment list, so the unchanged loop below judges each like a segment.
     case "$ln_m" in
       1|2)
         case "$ln" in
@@ -1634,8 +1151,8 @@ is_apply_patch_word() {
     esac
     flat="${flat//</ $mark_in }"
     flat="${flat//>/ $mark_out }"
-    # (The segment loop's body below keeps its pre-#457 indentation, so every line stays textually
-    # identical to the version it was nested inside.)
+    # The segment loop's body below keeps its old indentation on purpose: the mutant registry's from texts
+    # match it.
     IFS="$lf"
     for seg in $flat; do
     check_deadline
@@ -1655,9 +1172,9 @@ is_apply_patch_word() {
         ;;
       *"$sq"*|*"$dq"*) seg_mflag=1 ;;
     esac
-    # (#538) A segment of a line that names the shim, which itself spells the shim split by quote or
-    # backslash characters (and not plainly), is flagged like one that mentions it: the parity check
-    # and, for a backslash-only spelling, the value scan (quoted ones are scanned already).
+    # A segment of a line that names the shim which itself spells the shim split by quote or backslash
+    # characters (and not plainly) is flagged like one that mentions it: the parity check and, for a
+    # backslash-only spelling, the value scan (quoted ones are scanned already).
     if [ "$ln_m" -ne 0 ] && [ "$seg_qflag" -eq 0 ]; then
       case "$seg" in
         *applypatch*|*apply_patch*) ;;
@@ -1679,8 +1196,8 @@ is_apply_patch_word() {
       apply_patch|applypatch) found=0 ;;
     esac
 
-    # (#437) The additive `]]`-cut pass, gated so a segment without a literal `]]` costs what it
-    # cost before this change (toks is walked once, by the base walk above, and never re-walked).
+    # The additive ]]-cut pass (#437), gated so a segment without a literal ]] costs what it cost before:
+    # toks is walked once, by the base walk above, and never re-walked.
     case "$seg" in
       *']]'*)
         db_n=0
@@ -1720,8 +1237,8 @@ is_apply_patch_word() {
         fi
         ;;
     esac
-    # (#455) The shim's own segment: scan its input once, from the smallest resolved shim index,
-    # unless an earlier segment already recorded an unsafe input.
+    # The shim's own segment (#455): scan its input once, from the smallest resolved shim index, unless an
+    # earlier segment already recorded an unsafe input.
     if [ "$seg_shim_at" -ge 0 ] && [ -z "$iapw_unsafe" ]; then
       scan_shim_input $((seg_shim_at + 1)) "$n"
     fi
@@ -1730,9 +1247,8 @@ is_apply_patch_word() {
   done
   set +f
   IFS="$oldifs"
-  # (#455) An unquoted heredoc delimiter lets the shell expand the body before the shim reads it,
-  # so the patch the hook parsed is not the patch the shim applies whenever the command carries
-  # anything expandable.
+  # An unquoted heredoc delimiter lets the shell expand the body before the shim reads it, so the patch the
+  # hook parsed is not the patch the shim applies whenever the command carries anything expandable.
   if [ -z "$iapw_unsafe" ] && [ "$iapw_unquoted" -eq 1 ]; then
     case "$text" in
       *'$'*|*'`'*|*\\*) iapw_unsafe="through an unquoted heredoc delimiter, whose body the shell expands first" ;;
@@ -1742,12 +1258,10 @@ is_apply_patch_word() {
   return "$found"
 }
 
-# has_exact_begin_patch_line TEXT (#407 kickback finding 3) -- true iff some line of TEXT, after
-# full-trimming (leading AND trailing spaces/tabs), equals EXACTLY "*** Begin Patch". A substring
-# match alone (the #407-amendment original) denied a benign command that merely MENTIONS the
-# marker (`grep -rn '*** Begin Patch' hooks/`, a commit message) -- requiring an exact, whole,
-# trimmed line closes that over-block. Pure builtins, same IFS-splitting idiom as
-# parse_patch_headers above; never executes anything.
+# has_exact_begin_patch_line TEXT (#407): true iff some line of TEXT, full-trimmed, equals EXACTLY
+# "*** Begin Patch". A substring match alone would deny a benign command that merely MENTIONS the marker
+# (grep -rn '*** Begin Patch' hooks/, a commit message). Pure builtins, the same IFS-splitting idiom as
+# parse_patch_headers; never executes anything.
 has_exact_begin_patch_line() {
   local text="$1" oldifs raw_line line found=1
   set -f
@@ -1766,16 +1280,14 @@ has_exact_begin_patch_line() {
   return "$found"
 }
 
-# cdg_prepare_text TEXT [MODE] (#457) -- run once on the Bash route's command (MODE "all", the
-# default) AND on the apply_patch route's patch text (MODE "native"), before any substitution on
-# either, under a scoped LC_ALL=C so every length is a BYTE count: denies (deny_too_large) a text
-# longer than CDG_TEXT_MAX_BYTES before any split, denies a
-# physical line longer than CDG_LINE_MAX_BYTES (in MODE "native" only a line holding a CR or a
-# `*** ` marker; any other line is bounded by the whole-text cap), and sets the global cdg_text to
-# TEXT with every CR stripped LINE BY LINE (a whole-text `${x//$cr/}` is superlinear in the CR count
-# under bash 3.2; blank lines are dropped only when a CR was present, which no later consumer
-# distinguishes, since each reads its text with IFS-splitting on LF). The loop samples the deadline
-# before every line.
+# cdg_prepare_text TEXT [MODE] (#457): run once on the Bash route's command (MODE "all", the default) AND on
+# the apply_patch route's patch text (MODE "native"), before any substitution on either, under a scoped
+# LC_ALL=C so every length is a BYTE count. It denies (deny_too_large) a text longer than CDG_TEXT_MAX_BYTES
+# before any split, and a physical line longer than CDG_LINE_MAX_BYTES (in MODE "native" only a line holding
+# a CR or a `*** ` marker; any other line is bounded by the whole-text cap), and sets the global cdg_text to
+# TEXT with every CR stripped LINE BY LINE (a whole-text ${x//$cr/} is superlinear in the CR count under bash
+# 3.2; blank lines are dropped only when a CR was present, which no later consumer distinguishes, since each
+# reads its text with IFS-splitting on LF). The loop samples the deadline before every line.
 cdg_text=""
 cdg_prepare_text() {
   local text="$1" mode="${2:-all}" ln lmax oldifs="$IFS" hascr=0 out=""
@@ -1811,10 +1323,8 @@ cdg_prepare_text() {
 }
 
 if [ "$tool_name" = "apply_patch" ]; then
-  # --- apply_patch route (#407) -----------------------------------------------------------------
-  # Codex's file-editing tool call: tool_input.command holds the WHOLE patch text (Codex's own
-  # patch grammar), and there is no file_path at all -- see this file's header "Codex apply_patch
-  # probe record".
+  # Codex's file-editing tool call: tool_input.command holds the WHOLE patch text (Codex's own patch
+  # grammar), and there is no file_path at all (see the Codex apply_patch probe in the header).
   patch_cmd="$(printf '%s' "$input" | jq -r '.tool_input.command? // empty' 2>/dev/null)"
   [ -n "$patch_cmd" ] || deny_patch_unparseable "no command"
 
@@ -1832,27 +1342,21 @@ if [ "$tool_name" = "apply_patch" ]; then
   parse_patch_headers "apply_patch" "$patch" "$cwd"
 elif [ "$tool_name" = "Bash" ]; then
   # --- Bash apply_patch-shim route (#407 amendment A1) ------------------------------------------
-  # Codex also puts an `apply_patch`/`applypatch` shim on the shell PATH; a shell-issued
-  # `apply_patch <<'EOF' … EOF` heredoc (or a bare `apply_patch < x.patch`) reaches THIS hook as an
-  # ordinary Bash call, with the whole heredoc body (if any) inlined into tool_input.command --
-  # see the ADR 0002 amendment's S0 spike (#412, Q7): a shell-issued heredoc wrote
-  # .claude/settings.local.json in the Codex sandbox while both v2.9.0 hooks/agent-boundary.sh and
-  # this hook (pre-#407-amendment) exited 0 on the Bash-shaped payload.
+  # Codex also puts an apply_patch/applypatch shim on the shell PATH; a shell-issued `apply_patch <<'EOF'`
+  # heredoc (or a bare `apply_patch < x.patch`) reaches THIS hook as an ordinary Bash call, with the whole
+  # heredoc body (if any) inlined into tool_input.command (see the Codex shim probe in the header).
   bash_cmd="$(printf '%s' "$input" | jq -r '.tool_input.command? // empty' 2>/dev/null)"
   [ -n "$bash_cmd" ] || exit 0
-  # #457: the per-line size cap and the per-line CR strip, BEFORE any other substitution on the
-  # command text (see the header's "Size caps (#457)").
+  # The per-line size cap and the per-line CR strip (#457), BEFORE any other substitution on the command text.
   cdg_prepare_text "$bash_cmd"
   bash_cmd="$cdg_text"
 
-  # Belt and braces (#407 kickback round 2, finding A): evaluated FIRST and UNCONDITIONALLY,
-  # before either branch below, whenever apply_patch/applypatch is the resolved command word
-  # anywhere in the text -- not only inside the `elif` this originally lived in. A decoy can
-  # defeat has_exact_begin_patch_line (an ANSI-C-quoted ($'...') line whose "\n"s are the two
-  # literal characters backslash+n, never a real line break; or a genuine SECOND real line with a
-  # benign header sitting next to a first header hidden behind Unicode whitespace ltrim() never
-  # strips) while still mentioning `.claude`/`.codex` in the raw text -- this catch-all does not
-  # depend on the structured parse recognising anything at all.
+  # Belt and braces: evaluated FIRST and UNCONDITIONALLY, before either branch below, whenever
+  # apply_patch/applypatch is the resolved command word anywhere in the text. A decoy can defeat
+  # has_exact_begin_patch_line (an ANSI-C-quoted line whose "\n"s are the two literal characters backslash
+  # and n, never a real line break; or a genuine SECOND real line with a benign header next to a first
+  # header hidden behind Unicode whitespace ltrim() never strips) while still mentioning .claude or .codex
+  # in the raw text; this catch-all does not depend on the structured parse recognising anything.
   if is_apply_patch_word "$bash_cmd"; then
     case "$bash_cmd" in
       *.[Cc][Ll][Aa][Uu][Dd][Ee]*|*.[Cc][Oo][Dd][Ee][Xx]*)
@@ -1862,14 +1366,13 @@ elif [ "$tool_name" = "Bash" ]; then
   fi
 
   if has_exact_begin_patch_line "$bash_cmd"; then
-    # The command text carries an inline patch. (#455) When the shim is invoked with an input that
-    # is not only its own inline heredoc (a file, a redirect, a pipe, a here-string, an unquoted
-    # delimiter on an expandable command), the inline patch found here may be an unrelated decoy
-    # while the shim applies something this hook never sees, so deny BEFORE the structured parse
-    # trusts it. Otherwise parse the inline patch exactly like the apply_patch route,
-    # resolved against the SAME top-level `cwd` field -- this gives the precise ".claude"/".codex"
-    # segment message (via classify_path) whenever the structured patch itself names one AND the
-    # belt-and-braces check above did not already deny.
+    # The command text carries an inline patch. When the shim is invoked with an input that is not only its
+    # own inline heredoc (a file, a redirect, a pipe, a here-string, an unquoted delimiter on an expandable
+    # command; #455), the inline patch found here may be an unrelated decoy while the shim applies something
+    # this hook never sees, so deny BEFORE the structured parse trusts it. Otherwise parse the inline patch
+    # exactly like the apply_patch route, resolved against the SAME top-level cwd field; this gives the
+    # precise .claude/.codex message whenever the structured patch itself names one and the belt-and-braces
+    # check above did not already deny.
     if is_apply_patch_word "$bash_cmd" && [ -n "$iapw_unsafe" ]; then
       deny_patch_unparseable "apply_patch/applypatch invoked via Bash takes its patch $iapw_unsafe, not from an inline heredoc this hook parsed"
     fi
@@ -1880,16 +1383,14 @@ elif [ "$tool_name" = "Bash" ]; then
     cwd="${cwd//\\//}"
     parse_patch_headers "Bash" "$bash_cmd" "$cwd"
   elif is_apply_patch_word "$bash_cmd"; then
-    # The shim was invoked as the command word, but no line's trimmed text was EXACTLY
-    # "*** Begin Patch", so the structured parse above never ran, and the belt-and-braces check
-    # above found no .claude/.codex mention either: the shim was invoked with no inline patch text
-    # this hook can see at all (e.g. `apply_patch < x.patch`, reading the patch from a file this
-    # hook never opens) -- the hook cannot verify what it writes, so it denies fail-closed rather
-    # than guess.
+    # The shim was invoked as the command word, but no line's trimmed text was EXACTLY "*** Begin Patch", so
+    # the structured parse never ran, and the belt-and-braces check found no .claude/.codex mention either:
+    # the shim was invoked with no inline patch text this hook can see (e.g. `apply_patch < x.patch`, reading
+    # a file this hook never opens). The hook cannot verify what it writes, so it denies fail closed.
     deny_patch_unparseable "apply_patch/applypatch invoked via Bash with no inline patch text"
   fi
-  # else: "apply_patch"/"applypatch" appears only as an argument or inside quoted text (e.g.
-  # `rg apply_patch hooks/`, `grep -n "apply_patch" x`) -- no opinion; not this hook's concern.
+  # else: apply_patch/applypatch appears only as an argument or inside quoted text (e.g. `rg apply_patch
+  # hooks/`) -- no opinion; not this hook's concern.
 else
   # --- Edit/Write route (unchanged behaviour) ---------------------------------------------------
   file_path="$(printf '%s' "$input" | jq -r '.tool_input.file_path? // empty' 2>/dev/null)"

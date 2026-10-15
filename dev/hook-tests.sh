@@ -9015,8 +9015,8 @@ case_cdg_bash_deny_decoy_dollar_quote() {
 }
 # #407 kickback round 2, finding A's second decoy: the FIRST header is preceded by U+00A0
 # NO-BREAK SPACE (ltrim() strips only ASCII space/tab, never Unicode whitespace -- the header
-# hides from the structured parse as an ordinary content line, per this file's own header
-# residual note), sitting next to a SECOND, genuinely benign header -- if the belt-and-braces
+# hides from the structured parse as an ordinary content line, per hooks/claude-dir-guard.sh's
+# ltrim() comment), sitting next to a SECOND, genuinely benign header -- if the belt-and-braces
 # check were not unconditional/first, the structured parse alone would see only the benign header
 # and return no opinion despite the raw text plainly mentioning ".claude".
 case_cdg_bash_deny_decoy_nbsp_header() {
@@ -11223,7 +11223,7 @@ case_push_chain_deny_misc() {
 # mutant:503-pg-glue-cap — a glued token keeps growing past the cap, so the text after a substitution
 #   close is glued even onto a token of 256 or more characters and the quoted value reads as balanced.
 case_push_chain_deny_overblock() {
-  # Documented over-blocks, each listed in the hook header: a quoted value with a space and a break
+  # Documented over-blocks, each a class in "Known over-blocks" in docs/reference/safety-model.md: a quoted value with a space and a break
   # character before a push (the #449 class, whatever the destination), a quoted value that names a
   # push, and a git -C value that is a command substitution. A token of 256 or more characters stops
   # growing, so the closing quote after a substitution is dropped and the value reads as unbalanced:
@@ -12079,7 +12079,7 @@ case_push_qnl_deny_mixed() {
   pqn_deny "$PQN_CC" "git -c \"k=a${pq_sq}\"${pq_sq}b c${pq_sq} push origin main"
 }
 case_push_qnl_deny_overblock() {
-  # Documented over-blocks, each listed in the hook header: a heredoc body line that holds the carry
+  # Documented over-blocks, each a class in "Known over-blocks" in docs/reference/safety-model.md: a heredoc body line that holds the carry
   # shape before a push to main (the existing body-line class), a mixed-quote value with a space before
   # a push to a feature branch, a value with an apostrophe that runs past a line end, and a value whose
   # next line starts with a space.
