@@ -18,6 +18,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #570: the comments of push-guard, agent-boundary and claude-dir-guard now state each rule's contract,
+  cost and portability notes only; the per-fix history and the over-block and gap catalogs move to two
+  lists, "Known gaps" and "Known over-blocks", in `docs/reference/safety-model.md`, each class with
+  examples measured against the hook. No code change. No consumer step.
 - #581: CI's `selfcheck-macos` job now runs nightly and on manual dispatch only, not after each merge
   to `main`, and `selfcheck-macos-driver` runs weekly (Sundays) and on manual dispatch instead of
   nightly; the schedule is now a Monday–Saturday cron entry plus a Sunday one. No consumer step.
