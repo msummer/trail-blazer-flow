@@ -18,6 +18,10 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #553 (CI fix): the `505-ab-unbalanced-dq` registry record no longer lists `ab-lost-deny-env-opt`:
+  #553's chain pass now denies that case's `X="a b" ls && X="a b" gh pr merge 5` row on its own, so
+  dropping the double-quote count no longer flips it. The post-merge mutant driver failed on the stale
+  set. No consumer step.
 - #538: claude-dir-guard now reads a shim name split by quote or backslash characters (`apply_"patch"`,
   `apply\_patch`), skips a runtime-expansion word before the shim (`$X apply_patch`), and reads an
   attached `env -S` string (`env -S'apply_patch'`). No consumer step.

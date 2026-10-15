@@ -7623,7 +7623,6 @@
       "expect_fail": [
         "ab-lost-deny-assign-dquote",
         "ab-lost-deny-claude",
-        "ab-lost-deny-env-opt",
         "ab-lost-deny-env-u-quoted",
         "ab-lost-deny-verifier-git"
       ]
