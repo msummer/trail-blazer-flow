@@ -5,10 +5,16 @@ on:
   push:
     branches: [main]
   schedule:
-    # Nightly (UTC). The macOS jobs are not per-PR checks since #365: the maintainer's local run
-    # already happens under Apple's bash 3.2, so this catches a BSD-only regression on main
-    # within a day instead of holding every merge for ~12 minutes.
-    - cron: '17 6 * * *'
+    # Nightly (UTC), as two entries that split the week at the same time of day, so every night
+    # has exactly one scheduled run: Monday-Saturday, then Sunday. The ubuntu jobs and
+    # selfcheck-macos run on either entry; selfcheck-macos-driver runs only on the Sunday entry
+    # (#581). That job's `if:` compares github.event.schedule against the Monday-Saturday cron
+    # string below, so the two copies of that string must stay byte-identical.
+    # The macOS jobs are never pull-request or push checks (#365, #581): the maintainer's local
+    # run already happens under Apple's bash 3.2, so the nightly run catches a BSD-only
+    # regression on main the next morning.
+    - cron: '17 6 * * 1-6'
+    - cron: '17 6 * * 0'
   workflow_dispatch:
 
 permissions:
@@ -77,11 +83,12 @@ jobs:
     # The mutant driver's own bash-3.2 run, split out of selfcheck-macos (#471) so the two macOS
     # jobs run in parallel instead of one runner absorbing both, and sharded four ways like
     # selfcheck-driver above (#526). Post-merge, selfcheck-driver already runs the driver (#464:
-    # only the records the pushed range can affect), so this job is nightly and manual dispatch
-    # only. Declared against its partner in dev/selfcheck.sh 4.9's split_jobs, so together with
-    # selfcheck-macos it must still run every dev/*.sh exactly once. Must NOT be the file's last
-    # job — see selfcheck-macos's own comment below for why that job stays last.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # only the records the pushed range can affect), so this job runs only on the weekly (Sunday)
+    # schedule entry and on manual dispatch (#581). Declared against its partner in
+    # dev/selfcheck.sh 4.9's split_jobs, so together with selfcheck-macos it must still run every
+    # dev/*.sh exactly once. Must NOT be the file's last job — see selfcheck-macos's own comment
+    # below for why that job stays last.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.event.schedule != '17 6 * * 1-6')
     runs-on: macos-latest
     # Per-shard ceiling.
     timeout-minutes: 45
@@ -100,8 +107,8 @@ jobs:
           /bin/bash --version | head -1
           bash --version | head -1 | grep -q 'version 3\.2' || {
             echo "PATH bash is not 3.2 — this job would not be testing the BSD/3.2 userland"; exit 1; }
-      # Nightly and manual dispatch only, not post-merge: selfcheck-driver already runs the driver
-      # after every merge, and the registry's recorded sets are the same on both shells. Fewer
+      # Weekly and manual dispatch only: selfcheck-driver already runs the driver after every
+      # merge and every night, and the registry's recorded sets are the same on both shells. Fewer
       # concurrent mutants than on ubuntu: the macOS runner has fewer cores, and an oversubscribed
       # one stretched the hook suite's timing cases past their budgets (#527). The shard is
       # passed only through env:, never interpolated into shell text.
@@ -111,11 +118,12 @@ jobs:
           MUTANT_DRIVER_SHARD: ${{ matrix.shard }}
 
   selfcheck-macos:
-    # Post-merge and nightly only (#365) — never a pull_request check. Keep this job LAST in the
-    # file: dev/selfcheck-tests.sh's 4.9-uneven-jobs case deletes the workflow's final line, which
-    # must therefore stay a `- run:` step line — the plain `dev/mutant-driver-tests.sh` run below,
-    # not the driver, which runs in the selfcheck-macos-driver job above (#471).
-    if: github.event_name != 'pull_request'
+    # Nightly and manual dispatch only (#365, #581) — never a pull_request or push check. Keep
+    # this job LAST in the file: dev/selfcheck-tests.sh's 4.9-uneven-jobs case deletes the
+    # workflow's final line, which must therefore stay a `- run:` step line — the plain
+    # `dev/mutant-driver-tests.sh` run below, not the driver, which runs in the
+    # selfcheck-macos-driver job above (#471).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     # Ceiling per the headroom rule in selfcheck's comment above (#539): slowest recent run 1506 s,
     # times 1.5, is about 2259 s, so 40.
