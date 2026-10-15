@@ -25,20 +25,23 @@ It prints a `PASS`/`FAIL` line per assertion (grouped and labelled in its own ou
 CI (`.github/workflows/selfcheck.yml`, four jobs — `selfcheck` on `ubuntu-latest`, the only
 required check on every pull request; `selfcheck-macos` on `macos-latest`, which prepends `/bin`
 to `PATH` so the same commands run under Apple's bash 3.2 instead of a newer bash, and which since
-#365 runs only post-merge on `main`, nightly, and on manual dispatch — never on a pull request,
-because the maintainer's own local run already happens under bash 3.2, so a BSD-only regression is
-caught on `main` within a day rather than holding every merge for that job's run time; and
-`selfcheck-macos-driver`, also on `macos-latest` with the same `/bin` PATH pin, which runs only
-`bash dev/mutant-driver.sh`, only on `schedule` and `workflow_dispatch`, in parallel with
-`selfcheck-macos`. The driver (#359) runs as a four-shard matrix on each platform (#526): the
+#365 and #581 runs only nightly and on manual dispatch — never on a pull request or a push to
+`main`, because the maintainer's own local run already happens under bash 3.2, so a BSD-only
+regression is caught on `main` within a day rather than holding every merge for that job's run
+time; and `selfcheck-macos-driver`, also on `macos-latest` with the same `/bin` PATH pin, which
+runs only `bash dev/mutant-driver.sh`, only on the workflow's weekly (Sunday) `schedule` entry and
+on `workflow_dispatch`, in parallel with `selfcheck-macos` (the workflow's two `schedule` entries
+split the week at the same time of day, so each of the other scheduled jobs still runs once a night).
+The driver (#359) runs as a four-shard matrix on each platform (#526): the
 ubuntu shards are the `selfcheck-driver` job, gated by `if: github.event_name != 'pull_request'`
 and on a push running only the records the pushed range can affect (#464), and the macOS shards
 are `selfcheck-macos-driver`; each shard's `timeout-minutes` is sized for its own slice of a
 *full* driver run. `selfcheck` runs the other nine commands on every event, and `selfcheck-macos`
 runs the same nine and never the driver. So a pull request runs nine commands on `ubuntu` only
 (driver-tests still runs; the driver itself, and both macOS jobs entirely, never run on a pull
-request), a merge to `main` runs all ten on `ubuntu` and nine on macOS, and the nightly and
-dispatch runs run all ten on both platforms, the ten on each split across that platform's two
+request), a merge to `main` runs all ten on `ubuntu` and nothing on macOS, a Monday-to-Saturday
+nightly run runs ten on `ubuntu` and nine on macOS, and only the Sunday (weekly) run and a
+dispatch run run all ten on both platforms, the ten on each split across that platform's two
 jobs; a red check means one of the commands that ran
 failed — reproduce locally with `bash dev/selfcheck.sh`, `bash dev/selfcheck-tests.sh`, `bash dev/doctor-tests.sh`,
 `bash dev/hook-tests.sh`, `bash dev/cleanup-tests.sh`, `bash dev/planning-tests.sh`,
@@ -200,7 +203,7 @@ declared order regardless of completion order, with its own `PASS <name> <total>
 hand before pushing any change to a registry `target`, a registry `suite`, or the registry itself
 — it runs in CI as four parallel shards in the `selfcheck-driver` (ubuntu) job, post-merge on
 `main`, nightly, and on manual dispatch, and as four more in its own parallel
-`selfcheck-macos-driver` job (#471), nightly and on manual dispatch only; never on a pull
+`selfcheck-macos-driver` job (#471), weekly and on manual dispatch only; never on a pull
 request. Sharding (#526): `--shard <i>/<n>` (or `MUTANT_DRIVER_SHARD=<i>/<n>`; the flag wins)
 partitions whatever set the run would otherwise run — after the name filter and any
 change-based selection — by giving each whole `(suite, filter)` group to the shard with the
@@ -233,9 +236,9 @@ selection (`--changed-from`, `MUTANT_DRIVER_SINCE`, `dev/mutants/suite-deps.txt`
 matching, and each full-run fallback), sharding (the partition's union and balance, spec
 validation, its composition with selection, and its no-op default), and the CLI (`-j <n>`/`--serial`/`MUTANT_DRIVER_JOBS`/an
 unknown filter). It runs in CI as the last command in both the `selfcheck` and `selfcheck-macos` jobs
-(neither driver job runs it) — but since #365's job-level `if:` already keeps
-`selfcheck-macos` off pull requests entirely, a pull request runs it only via the `selfcheck`
-(ubuntu) job; both jobs run it post-merge, nightly, and on manual dispatch. It is not part of
+(neither driver job runs it) — but since `selfcheck-macos`'s job-level `if:` (#365, #581) keeps
+it off pull requests and pushes entirely, a pull request or a merge runs it only via the
+`selfcheck` (ubuntu) job; both jobs run it nightly and on manual dispatch. It is not part of
 `dev/selfcheck.sh` itself — run it by hand whenever `dev/mutant-driver.sh` changes.
 
 Per-PR history of what each suite pins — the "Since #N, X gains…" narrative — lives in
@@ -280,8 +283,9 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   (macOS) and Git-Bash userlands — no GNU-only flags (`sed -i` without a suffix, `grep -P`,
   `readlink -f`, `mapfile`/`readarray`, `declare -A`). Enforced mechanically on `bin/*.sh`
   (assertion 1.4); `dev/*.sh` follows the same rule by convention, and is exercised under
-  BSD/bash 3.2 by the `selfcheck-macos` CI job (post-merge and nightly, not per PR — #365), and
-  `dev/mutant-driver.sh` by the `selfcheck-macos-driver` shards (nightly and on dispatch).
+  BSD/bash 3.2 by the `selfcheck-macos` CI job (nightly and on dispatch, not per PR or
+  post-merge — #365, #581), and `dev/mutant-driver.sh` by the `selfcheck-macos-driver` shards
+  (weekly and on dispatch).
 - **No writer piped into `grep`'s quiet mode** (a `-q`/`-c`/`-x` flag cluster containing `q`, or
   `--quiet`) in `bin/*.sh`, `dev/*.sh`, or `hooks/*.sh`: every script in these three directories
   runs `set -uo pipefail`, under which that early-exit reader can send its upstream writer

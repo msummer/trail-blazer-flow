@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #581: CI's `selfcheck-macos` job now runs nightly and on manual dispatch only, not after each merge
+  to `main`, and `selfcheck-macos-driver` runs weekly (Sundays) and on manual dispatch instead of
+  nightly; the schedule is now a Monday–Saturday cron entry plus a Sunday one. No consumer step.
 - #537: agent-boundary, push-guard and claude-dir-guard now follow the options of an interpreter prefix
   word (`bash`, `sh`, `zsh`, `ksh`, `dash`) instead of taking an option's separate value for the command
   word: a value option (`-o`, `+o`, `-O`, `+O`, `--rcfile`, `--init-file`, or a cluster ending in one of
