@@ -18,6 +18,11 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #560: `dev/doctor-tests.sh`'s `forwarder` codex stub now pauses for a fixed half second in its TERM trap
+  before it forwards to its child, so `codex-sched-wrapper-killed-forwards-term` kills the
+  `427-wrapper-kill-immediate` mutant however the wrapper is scheduled between its two signals (a macOS
+  nightly failed when it didn't); a new `560-wrapper-kill-short-pause` registry record pins the pause.
+  No consumer step.
 - #553 (CI fix): the `505-ab-unbalanced-dq` registry record no longer lists `ab-lost-deny-env-opt`:
   #553's chain pass now denies that case's `X="a b" ls && X="a b" gh pr merge 5` row on its own, so
   dropping the double-quote count no longer flips it. The post-merge mutant driver failed on the stale

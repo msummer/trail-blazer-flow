@@ -4039,7 +4039,15 @@ dead_pid_sched() {
 # forwards SIGTERM to it from a JS handler: backgrounds a real long-sleeping child (same
 # load-tolerant-margin reasoning as hang-noterm-long above), records that child's pid to
 # DIR/forwarder-child.pid, traps TERM to kill that child and exit, then waits on it — so a case can
-# assert the child is ALSO gone, not just the launcher stub itself).
+# assert the child is ALSO gone, not just the launcher stub itself). The TERM trap first pauses a
+# fixed 0.5s, using the stub's own real sleep and standing in for the time the JS handler takes to
+# run, and only then kills the child and exits. The pause has two bounds. Lower: it must outlast
+# the gap between a TERM and a KILL sent with no grace poll between them — any descheduling between
+# the two signals, and the fixed sleep the 560-wrapper-kill-short-pause registry record puts there
+# — so that KILL always lands before the trap forwards and orphans the child, however the wrapper
+# is scheduled. Upper: it must end well inside the shortest wait on_wrapper_signal's grace poll
+# ever allows before its post-grace KILL; that poll never sends KILL before at least one full
+# 1-second slice has passed, so a correct wrapper always sees the stub forward and exit on its own.
 build_stub_sched_codex() {
   local dir="$1" mode="$2" real_sleep
   real_sleep="$(command -v sleep)"
@@ -4087,8 +4095,9 @@ case "$mode" in
     "$real_sleep" 60 &
     fchild=$!
     # The trap goes in BEFORE forwarder-child.pid exists, for the same reason as the TERM-ignoring
-    # modes above: a case sends its TERM as soon as that file appears.
-    trap 'kill "$fchild" 2>/dev/null; exit 0' TERM
+    # modes above: a case sends its TERM as soon as that file appears. The trap pauses before it
+    # forwards; see build_stub_sched_codex's header for why.
+    trap '"$real_sleep" 0.5; kill "$fchild" 2>/dev/null; exit 0' TERM
     printf '%s' "$fchild" > "$dir/forwarder-child.pid"
     wait "$fchild"
     exit 0
@@ -5295,11 +5304,20 @@ case_codex_sched_wrapper_killed() {
 # itself is sent TERM mid-run; on_wrapper_signal must TERM codex_pid and then POLL for it to exit
 # (up to $grace) before ever sending KILL, so the forwarder gets a real chance to run its own trap
 # and kill its own child — the actual point of this case. Both the forwarder stub itself and its
-# child must be gone. Same sched_launch/sched_await_file/sched_collect/sched_await_dead shape as
-# codex-sched-wrapper-killed above.
+# child must be gone. The stub's trap pauses before it forwards (see build_stub_sched_codex), so
+# only a real grace poll, never a KILL sent just after TERM, lets it finish. Same
+# sched_launch/sched_await_file/sched_collect/sched_await_dead shape as codex-sched-wrapper-killed
+# above.
 # mutant:427-wrapper-kill-immediate — bin: on_wrapper_signal's TERM-then-poll-then-KILL sequence
-#   collapses back to an immediate TERM followed by an immediate KILL. Killed here: the forwarder is
-#   killed before it can run its own trap, so its child (the simulated native binary) survives.
+#   collapses back to an immediate TERM followed by an immediate KILL. Killed here: the KILL lands
+#   while the forwarder's TERM trap is still in its fixed pause, before it has forwarded, so its
+#   child (the simulated native binary) survives, however the wrapper is scheduled between its two
+#   signals.
+# mutant:560-wrapper-kill-short-pause — bin: the same collapse, but with a fixed 'sleep 0.1' between
+#   the TERM and the KILL. Killed here only because the forwarder's 0.5s pause outlasts that sleep:
+#   the KILL still lands before the trap forwards, so the child survives. With the stub's pause
+#   removed, the trap forwards within that sleep and this mutant survives, so this record is what
+#   pins the pause.
 case_codex_sched_wrapper_killed_forwards_term() {
   mk_sched sched-wrapper-forward
   build_stub_sched_codex "$sched_stub" forwarder

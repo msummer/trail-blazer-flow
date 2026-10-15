@@ -2628,6 +2628,21 @@
       "expect_fail": [
         "codex-sched-unattended-stop"
       ]
+    },
+    {
+      "name": "560-wrapper-kill-short-pause",
+      "target": "bin/codex-scheduled-run.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-sched-wrapper-killed-forwards-term",
+      "edits": [
+        {
+          "from": "    kill -TERM \"$codex_pid\" 2>/dev/null\n    local deadline=$((SECONDS + grace))\n    while [ \"$SECONDS\" -lt \"$deadline\" ] && kill -0 \"$codex_pid\" 2>/dev/null; do\n      sleep 1\n    done\n    kill -0 \"$codex_pid\" 2>/dev/null && kill -KILL \"$codex_pid\" 2>/dev/null  # on_wrapper_signal's own post-grace escalation",
+          "to": "    kill -TERM \"$codex_pid\" 2>/dev/null\n    sleep 0.1\n    kill -KILL \"$codex_pid\" 2>/dev/null"
+        }
+      ],
+      "expect_fail": [
+        "codex-sched-wrapper-killed-forwards-term"
+      ]
     }
   ]
 }
