@@ -253,8 +253,7 @@ GIT_CMDCFG_ENV_PREFIXES="GIT_CONFIG_KEY_ GIT_CONFIG_VALUE_"
 GIT_CFG_RELOC_ENV_VARS="HOME XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM"
 # PREFIX_VALUE_WORDS (#518): the PREFIX_WORDS members whose dash options can take a SEPARATE value word (nice -n
 # 5, sudo -u root). Interpreter words stay out (their -c value IS the command string; see PREFIX_INTERP_WORDS).
-# Matches the claude-dir-guard.sh copy, by convention, unpinned; the agent-boundary.sh copy also holds the
-# interpreter words (#576).
+# Matches no other copy: the agent-boundary.sh copy also holds the interpreter words (#576).
 PREFIX_VALUE_WORDS="exec nice stdbuf sudo time xargs"
 # PREFIX_INTERP_WORDS / INTERP_VALUE_OPTS (#537): the interpreter members of PREFIX_WORDS, and the long options
 # of those interpreters that take a SEPARATE value word. Their options are classified by ip_kind(). This rule is

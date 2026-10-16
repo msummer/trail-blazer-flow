@@ -38,8 +38,8 @@
 #     strips in bash after the jq extraction; push-guard strips first thing in its awk record block);
 #   - the #505 assignment-parity trigger with quote_unbalanced(); the #518 value context with
 #     PREFIX_VALUE_WORDS, except that this hook's PREFIX_VALUE_WORDS also holds the interpreter words bash dash
-#     ksh sh zsh (#576), so it differs from the push-guard.sh and claude-dir-guard.sh copies; push-guard.sh
-#     keeps its own #537 interpreter-option rule.
+#     ksh sh zsh (#576), so it differs from the push-guard.sh copy; push-guard.sh keeps its own #537
+#     interpreter-option rule.
 # Pinned by the gate: PREFIX_WORDS is byte-identical to push-guard.sh (4.40(c)); the AGENT_TYPES_* lines
 # match hooks/claude-dir-guard.sh (4.45) and agents/*.md (4.39). Every other copy is by convention, unpinned.
 #
@@ -77,11 +77,10 @@ CLAUDE_PATH_ARG_COMMANDS="tee cp mv cd pushd"
 CLAUDE_CMDLINE_WRITE_COMMANDS="python perl ruby node nodejs deno bun php lua awk gawk ed ex dd install ln touch truncate rsync tar patch curl wget"
 # PREFIX_VALUE_WORDS (#518): the PREFIX_WORDS members whose dash options can take a SEPARATE value word
 # (nice -n 5, sudo -u root, exec -a foo). After one of these, a dash token followed by a non-option word is
-# a point where the walk cannot tell the value from the command word. Unlike the push-guard.sh and
-# claude-dir-guard.sh copies, this one also holds the interpreter words bash dash ksh sh zsh (#576): the value
-# of their -c IS the command string, so reading past it denies a -c string that names gh, git or a .claude
-# path after its first word, an accepted over-block (docs/reference/safety-model.md, "Known over-blocks"). The
-# other two copies are byte-identical to each other, by convention.
+# a point where the walk cannot tell the value from the command word. Unlike the push-guard.sh copy, this one
+# also holds the interpreter words bash dash ksh sh zsh (#576): the value of their -c IS the command string, so
+# reading past it denies a -c string that names gh, git or a .claude path after its first word, an accepted
+# over-block (docs/reference/safety-model.md, "Known over-blocks").
 PREFIX_VALUE_WORDS="exec nice stdbuf sudo time xargs bash dash ksh sh zsh"
 DENY_STEM="trail-blazer-flow agent boundary:"
 
