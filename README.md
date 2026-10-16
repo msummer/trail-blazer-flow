@@ -816,8 +816,9 @@ and its eight negative-test harnesses (`dev/selfcheck-tests.sh`, `dev/doctor-tes
 `dev/stop-tests.sh`, and `dev/mutant-driver-tests.sh`) all run in CI on every pull request on
 ubuntu, and again under Apple's bash 3.2 on macOS nightly and on manual dispatch.
 `dev/mutant-driver.sh` re-runs the records a merge can affect post-merge on `main` on ubuntu only,
-and every `dev/mutants/*.json` record on ubuntu nightly, on macOS weekly, and on both runners on
-manual dispatch. This repo's
+and every `dev/mutants/*.json` record on both runners on manual dispatch. Its scheduled runs
+(ubuntu nightly, macOS weekly) skip only the driver's own self-mutants, which a merge that changes
+the driver or its tests re-runs. This repo's
 `CLAUDE.md` "Verification" section lists the exact commands and jobs.
 
 This repo deliberately does **not** aim to pass `bin/check-harness.sh`, the *consumer* doctor.

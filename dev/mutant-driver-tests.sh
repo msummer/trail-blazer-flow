@@ -19,12 +19,14 @@
 # failed.
 set -uo pipefail
 
-# A CI step env (MUTANT_DRIVER_SINCE, #464; MUTANT_DRIVER_SHARD, #526) inherited through the OUTER
-# driver run that runs this very file as a suite would otherwise leak into every nested driver
-# invocation this file makes below, silently switching every plain run_driver call into (fallback)
-# selection mode or into a shard slice.
+# A CI step env (MUTANT_DRIVER_SINCE, #464; MUTANT_DRIVER_SHARD, #526; MUTANT_DRIVER_SKIP_SELF,
+# #582) inherited through the OUTER driver run that runs this very file as a suite would otherwise
+# leak into every nested driver invocation this file makes below, silently switching every plain
+# run_driver call into (fallback) selection mode, into a shard slice, or into a run that drops the
+# self-mutant records.
 unset MUTANT_DRIVER_SINCE
 unset MUTANT_DRIVER_SHARD
+unset MUTANT_DRIVER_SKIP_SELF
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 filter="${1:-}"
@@ -529,6 +531,7 @@ EOF
   expect_out "PASS m-beta 3 case-beta"
   expect_out "PASS baseline:dev/fixture-suite.sh: 3 -"
   expect_out "== summary: 2 pass, 0 fail =="
+  expect_not_out "    recorded"
 }
 
 case_fail_extra_joiner() {
@@ -555,13 +558,24 @@ case_fail_missing_member() {
 {"mutants":[
   {"name":"m-one","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"",
    "edits":[{"from":"TAG_BETA=\"on\"","to":"TAG_BETA=\"off\""}],
-   "expect_fail":["case-beta","case-gamma"]}
+   "expect_fail":["case-beta","case-gamma"]},
+  {"name":"m-none","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TAG_ALPHA=\"on\"","to":"TAG_ALPHA=\"on\" # inert"}],
+   "expect_fail":["case-alpha"]}
 ]}
 EOF
   run_driver "$dir" --serial
   expect_rc 1
-  expect_out "FAIL m-one 3 case-beta"
-  expect_out "    expected case-beta,case-gamma"
+  # A recorded set is an upper bound (#582): m-one fails only case-beta of its recorded
+  # {case-beta, case-gamma}, so it PASSes and a "recorded" line names the full recorded set. m-none
+  # carries an edit no case detects (the suite's substring match still reads the tag), so its
+  # failing set is empty and it FAILs with an "expected" line.
+  expect_out "PASS m-one 3 case-beta"
+  expect_not_out "PASS m-one 3 case-beta,case-gamma"
+  expect_out "    recorded case-beta,case-gamma"
+  expect_out "FAIL m-none 3 -"
+  expect_out "    expected case-alpha"
+  expect_out "== summary: 2 pass, 1 fail =="
 }
 
 # mutant:drv-setcmp — recorded in dev/mutants/mutant-driver-tests.json; run
@@ -2001,11 +2015,136 @@ case_shard_precedence() {
 }
 
 # ---------------------------------------------------------------------------------------------
+# Self-mutant skip (#582).
+#
+# Each case below checks WHICH records ran (driver_mutant_names, the status lines), never a
+# record's own verdict or the exit code of a run that reaches the edit engine: a self-mutant that
+# retargets the engine's writer (case_exec_bit_preserved) turns every post-edit PASS into a FAIL,
+# so asserting a post-edit verdict here would put these cases in that self-mutant's failing set.
+
+# write_self_fixture DIR — the generic fixture plus a registry of two records on one suite:
+#   m-beta  target lib.sh (an ordinary record)
+#   m-self  target dev/mutant-driver.sh (the fixture's own driver copy — a self-mutant by target);
+#           its one edit deliberately matches nothing in the driver, so the record FAILs at once
+#           whenever it runs, which proves it ran without leaning on the edit engine or the suite.
+write_self_fixture() {
+  local dir="$1"
+  write_generic_fixture "$dir"
+  write_registry "$dir" <<'EOF'
+{"mutants":[
+  {"name":"m-beta","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TAG_BETA=\"on\"","to":"TAG_BETA=\"off\""}],
+   "expect_fail":["case-beta"]},
+  {"name":"m-self","target":"dev/mutant-driver.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TEXT_THE_DRIVER_NEVER_HOLDS","to":"x"}],
+   "expect_fail":["case-alpha"]}
+]}
+EOF
+}
+
+# expect_ran_only WANT — the mutant names in $driver_out, space-joined in C-sorted order, equal WANT
+# exactly (a trailing space after each name, like case_shard_balance's own comparison).
+expect_ran_only() {
+  local got; got="$(driver_mutant_names | tr '\n' ' ')"
+  [ "$got" = "$1" ] || { __ok=0; __why="${__why}ran records were '$got', expected '$1'\n"; }
+}
+
+case_skip_self_on() {
+  local dir; dir="$(fresh_driver_root skip-self-on)"
+  write_self_fixture "$dir"
+  driver_out="$(MUTANT_DRIVER_SKIP_SELF=1 MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" bash "$dir/dev/mutant-driver.sh" --serial 2>&1)"
+  driver_rc=$?
+  expect_out "== mutant-driver: skip-self: 1 of 2 records skipped =="
+  expect_ran_only "m-beta "
+  expect_not_out "m-self"
+  driver_out="$(MUTANT_DRIVER_SKIP_SELF=1 MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" bash "$dir/dev/mutant-driver.sh" --serial --shard 1/1 2>&1)"
+  driver_rc=$?
+  expect_out "== mutant-driver: skip-self: 1 of 2 records skipped =="
+  expect_out "== mutant-driver: shard 1/1: 1 of 1 records =="
+  expect_ran_only "m-beta "
+  expect_not_out "m-self"
+  # The count is taken over the set left after the name filter, and the line prints even when the
+  # skip drops nothing.
+  driver_out="$(MUTANT_DRIVER_SKIP_SELF=1 MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" bash "$dir/dev/mutant-driver.sh" --serial m-beta 2>&1)"
+  driver_rc=$?
+  expect_out "== mutant-driver: skip-self: 0 of 1 records skipped =="
+  expect_ran_only "m-beta "
+}
+
+case_skip_self_all() {
+  local dir; dir="$(fresh_driver_root skip-self-all)"
+  write_generic_fixture "$dir"
+  write_registry "$dir" <<'EOF'
+{"mutants":[
+  {"name":"m-self","target":"dev/mutant-driver.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TEXT_THE_DRIVER_NEVER_HOLDS","to":"x"}],
+   "expect_fail":["case-alpha"]}
+]}
+EOF
+  driver_out="$(MUTANT_DRIVER_SKIP_SELF=1 MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" bash "$dir/dev/mutant-driver.sh" --serial 2>&1)"
+  driver_rc=$?
+  expect_rc 0
+  expect_out "== mutant-driver: skip-self: 1 of 1 records skipped =="
+  expect_out "== summary: 0 pass, 0 fail =="
+  expect_not_out "baseline:"
+  expect_not_out "m-self"
+}
+
+case_skip_self_off() {
+  local dir; dir="$(fresh_driver_root skip-self-off)"
+  write_self_fixture "$dir"
+  run_driver "$dir" --serial
+  expect_not_out "skip-self"
+  expect_ran_only "m-beta m-self "
+  driver_out="$(MUTANT_DRIVER_SKIP_SELF= MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" bash "$dir/dev/mutant-driver.sh" --serial 2>&1)"
+  driver_rc=$?
+  expect_not_out "skip-self"
+  expect_ran_only "m-beta m-self "
+}
+
+case_skip_self_with_change() {
+  local dir; dir="$(fresh_driver_root skip-self-with-change)"
+  write_self_fixture "$dir"
+  printf 'dev/mutant-driver.sh\n' > "$dir/changed.txt"
+  driver_out="$(MUTANT_DRIVER_SKIP_SELF=1 MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" bash "$dir/dev/mutant-driver.sh" --serial --changed-from "$dir/changed.txt" 2>&1)"
+  driver_rc=$?
+  expect_out "full run (reason: driver changed)"
+  expect_not_out "skip-self"
+  expect_ran_only "m-beta m-self "
+  driver_out="$(MUTANT_DRIVER_SKIP_SELF=1 MUTANT_DRIVER_SINCE=0000000000000000000000000000000000000000 MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" bash "$dir/dev/mutant-driver.sh" --serial 2>&1)"
+  driver_rc=$?
+  expect_out "full run (reason: unusable base"
+  expect_not_out "skip-self"
+  expect_ran_only "m-beta m-self "
+}
+
+case_skip_self_bad_value() {
+  local dir; dir="$(fresh_driver_root skip-self-bad-value)"
+  local sentinel="$tmpbase/sentinel-skip-self-bad-value" val
+  write_sentinel_fixture "$dir" "$sentinel"
+  write_registry "$dir" <<'EOF'
+{"mutants":[
+  {"name":"m-a1","target":"lib.sh","suite":"dev/fixture-suite.sh","filter":"",
+   "edits":[{"from":"TAG_ALPHA=\"on\"","to":"TAG_ALPHA=\"off\""}],"expect_fail":["case-alpha"]}
+]}
+EOF
+  for val in 0 yes; do
+    rm -f "$sentinel"
+    driver_out="$(MUTANT_DRIVER_SKIP_SELF="$val" MUTANT_DRIVER_REGISTRY_DIR="$dir/mutants" bash "$dir/dev/mutant-driver.sh" --serial 2>&1)"
+    driver_rc=$?
+    assert_registry_rejected "$sentinel"
+    expect_out "usage: dev/mutant-driver.sh"
+    expect_out "MUTANT_DRIVER_SKIP_SELF must be 1 or empty, got '$val'"
+    expect_not_out "jobs =="
+  done
+}
+
+# ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
   "pass-exact|case_pass_exact|an edit's failing set matches expect_fail exactly: PASS"
   "fail-extra-joiner|case_fail_extra_joiner|the observed failing set has a member expect_fail does not: FAIL, expected line shows the recorded set"
-  "fail-missing-member|case_fail_missing_member|expect_fail names a member the observed failing set does not have: FAIL"
+  "fail-missing-member|case_fail_missing_member|expect_fail names a member the observed failing set does not have: a non-empty strict subset PASSes with a recorded line, an empty failing set (a survivor) FAILs with an expected line"
   "fail-swapped-member|case_fail_swapped_member|same cardinality, different member (kills drv-setcmp: a count-only compare would wrongly PASS)"
   "recipe-zero-match|case_recipe_zero_match|an edit's 'from' matches zero times: FAIL naming the edit index and the count"
   "recipe-multi-match|case_recipe_multi_match|an edit's 'from' matches twice: FAIL naming the edit index and the count (kills drv-once)"
@@ -2072,6 +2211,11 @@ cases=(
   "shard-after-selection|case_shard_after_selection|the shard partitions the set left after change-based selection, not the whole registry (kills drv-shard-presel)"
   "shard-unset-unchanged|case_shard_unset_unchanged|no spec, or an empty MUTANT_DRIVER_SHARD: no shard line and every record runs (kills drv-shard-default)"
   "shard-precedence|case_shard_precedence|--shard wins over MUTANT_DRIVER_SHARD (kills drv-shard-precedence)"
+  "skip-self-on|case_skip_self_on|MUTANT_DRIVER_SKIP_SELF=1 with no selection drops every record whose target is the driver, names how many of the set the name filter leaves, and the shard partitions what is left"
+  "skip-self-all|case_skip_self_all|a registry holding only self-mutants with the skip on: skip-self line, zero summary, exit 0, no baseline ever runs"
+  "skip-self-off|case_skip_self_off|MUTANT_DRIVER_SKIP_SELF unset or empty: no skip-self line and every record runs"
+  "skip-self-with-change|case_skip_self_with_change|the skip has no effect under --changed-from or MUTANT_DRIVER_SINCE, including their full-run fallbacks: no skip-self line and the self-mutant runs"
+  "skip-self-bad-value|case_skip_self_bad_value|a MUTANT_DRIVER_SKIP_SELF value other than 1 or empty exits 2 with usage before the jobs line and before any suite runs"
 )
 
 matched=0

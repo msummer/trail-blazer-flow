@@ -24,8 +24,8 @@
 #   always wins over MUTANT_DRIVER_JOBS.
 #
 #   Change-based selection (#464): with neither --changed-from nor a non-empty
-#   MUTANT_DRIVER_SINCE, and no shard spec, every registry record runs (after any name-filter)
-#   and this script's output is byte-identical to before #464. Set MUTANT_DRIVER_SINCE=<rev> to
+#   MUTANT_DRIVER_SINCE, no skip-self (below) and no shard spec, every registry record runs (after
+#   any name-filter) and no selection, skip or shard line prints. Set MUTANT_DRIVER_SINCE=<rev> to
 #   select instead, by `git -C <root> diff --no-renames --name-only <rev> HEAD --`: a record is
 #   selected iff a changed path equals its target, its suite, or its registry file, or matches a
 #   dev/mutants/suite-deps.txt pattern its suite declares — a suite with no map line matches any
@@ -34,12 +34,20 @@
 #   full run instead — so does an unusable MUTANT_DRIVER_SINCE (a leading "-", an all-zero or
 #   unknown commit, or any other git-diff failure).
 #
+#   Self-mutant skip (#582): MUTANT_DRIVER_SKIP_SELF=1 (env only; the value must be 1 or empty,
+#   anything else exits 2 with usage on stderr before any suite runs) drops every record whose
+#   target is this script — the driver's own self-mutants — from the set left after the name-filter,
+#   and prints a skip-self line naming how many were dropped. It applies only when the run asks for
+#   no change-based selection (neither --changed-from nor a non-empty MUTANT_DRIVER_SINCE); under
+#   either, including their full-run fallbacks, it has no effect and prints nothing. CI sets it on
+#   scheduled runs only. A set left empty by the skip is a PASS, like zero selected.
+#
 #   Sharding: a shard spec partitions whatever set the run would otherwise run — after the
-#   name-filter and any change-based selection. The set is grouped by (suite, filter) pair, the
-#   same pairs that get one baseline each, in order of first appearance; each whole group goes to
-#   the shard with the fewest records so far (ties to the lowest index), so a baseline is never
-#   run by two shards and every record lands in exactly one shard. A shard left with no record
-#   prints the zero-record footer and exits 0.
+#   name-filter, any skip-self and any change-based selection. The set is grouped by (suite,
+#   filter) pair, the same pairs that get one baseline each, in order of first appearance; each
+#   whole group goes to the shard with the fewest records so far (ties to the lowest index), so a
+#   baseline is never run by two shards and every record lands in exactly one shard. A shard left
+#   with no record prints the zero-record footer and exits 0.
 #
 # What this does: reads every dev/mutants/*.json registry file (or the directory named by
 # MUTANT_DRIVER_REGISTRY_DIR, default dev/mutants — the override a fixture harness uses to point
@@ -52,6 +60,13 @@
 # baseline-red without running its own suite. Every edit must match its target's current text
 # EXACTLY ONCE — zero or multiple matches is a FAIL naming the edit index and the observed count,
 # never a silent no-op or an ambiguous rewrite.
+#
+# Verdict (#582): a record's expect_fail is an upper bound on what its mutant may fail, not an exact
+# prediction. A mutant PASSes when its failing set is non-empty and every failing case is named in
+# expect_fail: an exact match prints the PASS line alone, a strict subset prints the PASS line
+# (with the cases that did fail) plus a "recorded" line naming the full recorded set. A mutant
+# that no case detects (an empty failing set) or that fails a case outside expect_fail is a FAIL
+# with an "expected" line.
 #
 # Concurrency: a rolling pool of up to $jobs background children, each a background job that
 # writes its own <idx>.out/<idx>.verdict files under one shared mktemp -d root (removed via an EXIT
@@ -69,19 +84,27 @@
 #   == mutant-driver: <N> jobs ==                   (first line; N is concurrency, not job count)
 #   == mutant-driver: selected <N> of <M> records ==  (change-based selection only; #464)
 #   == mutant-driver: full run (reason: <text>) ==    (change-based selection fell back; #464)
+#   == mutant-driver: skip-self: <K> of <M> records skipped ==  (MUTANT_DRIVER_SKIP_SELF=1 with no
+#                                                    selection only; M is the set left after the
+#                                                    name-filter, K the self-mutants dropped; #582)
 #   == mutant-driver: shard <i>/<n>: <K> of <N> records ==  (sharded runs only; N is the set left
-#                                                    after the name-filter and any selection)
+#                                                    after the name-filter, any skip-self and any
+#                                                    selection)
 #   PASS baseline:<suite>:<filter> <total> -        (or FAIL ... <total> <set>, red baseline)
 #   PASS <name> <total> <set>                       (<set> is "-" when empty)
+#       recorded <set>                              (only on a PASS whose failing set is a strict
+#                                                    subset of expect_fail; #582)
 #   FAIL <name> <total|-> <set|->
-#       expected <set>                              (only on a failing-set mismatch)
+#       expected <set>                              (only on a FAIL whose failing set is empty or
+#                                                    holds a case outside expect_fail)
 #       reason <text>                               (only on a structural/skip failure)
 #   == summary: <N> pass, <M> fail ==
 # Exit 0 iff every baseline and mutant passed; 1 if any FAILed; 2 on a usage or registry error
-# (before any suite ever runs). With neither --changed-from nor a non-empty MUTANT_DRIVER_SINCE,
-# and no shard spec, neither a selection line nor the shard line ever prints and every registry
-# record runs — byte-identical to before #464. Zero records selected is itself a PASS: the
-# "selected 0 of <M>" line, then the summary footer, exit 0, no suite ever runs.
+# (before any suite ever runs). With none of --changed-from, a non-empty MUTANT_DRIVER_SINCE,
+# MUTANT_DRIVER_SKIP_SELF=1 or a shard spec, no selection, skip-self or shard line ever prints and
+# every record left after the name-filter runs. Zero records selected is itself a PASS: the
+# "selected 0 of <M>" line, then the summary footer, exit 0, no suite ever runs; so is a set the
+# skip leaves empty ("skip-self: <M> of <M> records skipped", then the footer).
 #
 # Writes only under its own single mktemp -d root (an EXIT trap removes it); the tracked tree is
 # never touched — every edit lands on a fresh_copy scratch copy, and the copy's own root (never a
@@ -151,15 +174,18 @@ usage: dev/mutant-driver.sh [-j <n>|--serial] [--changed-from <file>] [--shard <
                     count); MUTANT_DRIVER_SHARD is the env form; the flag wins
   name-filter       run only the registry records whose name contains this substring
 
-With no name-filter, runs every selected registry record (every record, when neither selection
-nor a shard spec is in effect). MUTANT_DRIVER_JOBS overrides the detected default when neither -j
-nor --serial is given. MUTANT_DRIVER_REGISTRY_DIR overrides the registry directory (default:
-dev/mutants under this checkout). With neither --changed-from nor a non-empty
-MUTANT_DRIVER_SINCE, and no shard spec, every registry record runs -- unchanged from before
-change-based selection landed. MUTANT_DRIVER_SINCE=<rev> selects
-instead by `git diff --no-renames --name-only <rev> HEAD` against this checkout and
-dev/mutants/suite-deps.txt; an unusable base (a leading "-", an all-zero or unknown commit, or any
-other git-diff failure) forces a full run instead.
+With no name-filter, runs every selected registry record (every record left after any skip-self,
+when no selection or shard spec is in effect). MUTANT_DRIVER_JOBS overrides the detected default
+when neither -j nor --serial is given. MUTANT_DRIVER_REGISTRY_DIR overrides the registry directory
+(default: dev/mutants under this checkout). With neither --changed-from nor a non-empty
+MUTANT_DRIVER_SINCE, no skip-self and no shard spec, every registry record runs.
+MUTANT_DRIVER_SINCE=<rev> selects instead by `git diff --no-renames --name-only <rev> HEAD`
+against this checkout and dev/mutants/suite-deps.txt; an unusable base (a leading "-", an all-zero
+or unknown commit, or any other git-diff failure) forces a full run instead.
+MUTANT_DRIVER_SKIP_SELF=1 (env only; the value must be 1 or empty) drops the records whose target
+is this script when no selection is requested, and has no effect under --changed-from or
+MUTANT_DRIVER_SINCE.
+A mutant passes when it is killed and every case that fails is named in its expect_fail.
 EOF
       exit 0
       ;;
@@ -230,6 +256,19 @@ if [ -n "$shard_spec" ]; then
   if [ "$shard_i" -gt "$shard_n" ]; then
     usage_die "$shard_where <i>/<n> with 1 <= i <= n, got '$shard_spec'"
   fi
+fi
+
+# Self-mutant skip switch (#582): MUTANT_DRIVER_SKIP_SELF is env-only, and its value must be 1 or
+# empty. The skip applies only when a run asks for no change-based selection — keyed on the request
+# variables themselves (not on sel_mode), because an unusable base leaves sel_mode at 0 and is still
+# a selection request.
+case "${MUTANT_DRIVER_SKIP_SELF:-}" in
+  ''|1) ;;
+  *) usage_die "MUTANT_DRIVER_SKIP_SELF must be 1 or empty, got '${MUTANT_DRIVER_SKIP_SELF}'" ;;
+esac
+skip_self=0
+if [ "${MUTANT_DRIVER_SKIP_SELF:-}" = "1" ] && [ -z "$changed_from" ] && [ -z "${MUTANT_DRIVER_SINCE:-}" ]; then
+  skip_self=1
 fi
 
 if [ -n "$jobs_flag" ]; then
@@ -424,9 +463,29 @@ if [ "${#sel[@]}" -eq 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------------------------
+# Self-mutant skip (#582). When skip_self is 1 (MUTANT_DRIVER_SKIP_SELF=1 with no change-based
+# selection requested), every record whose target is this script is dropped from the set left
+# after the name filter, and the count dropped is reported. A set left empty is a PASS, like zero
+# selected. The check precedes the reassignment because bash 3.2 under set -u fails an expansion of
+# an empty array.
+if [ "$skip_self" -eq 1 ]; then
+  keep_idx=()
+  for ridx in "${sel[@]}"; do
+    [ "${rec_target[$ridx]}" = "dev/mutant-driver.sh" ] || keep_idx+=("$ridx")
+  done
+  echo "== mutant-driver: skip-self: $(( ${#sel[@]} - ${#keep_idx[@]} )) of ${#sel[@]} records skipped =="
+  if [ "${#keep_idx[@]}" -eq 0 ]; then
+    echo
+    echo "== summary: 0 pass, 0 fail =="
+    exit 0
+  fi
+  sel=("${keep_idx[@]}")
+fi
+
+# ---------------------------------------------------------------------------------------------
 # Change-based selection (#464). With neither --changed-from nor a non-empty
-# MUTANT_DRIVER_SINCE, sel_mode never leaves 0 and this whole block is a no-op — $sel, and this
-# script's output, stay exactly what they were before #464.
+# MUTANT_DRIVER_SINCE, sel_mode never leaves 0 and this whole block is a no-op — it leaves $sel
+# untouched and prints no selection line.
 sel_mode=0
 changed=()
 
@@ -544,9 +603,10 @@ fi
 
 # ---------------------------------------------------------------------------------------------
 # Sharding. With no shard spec this block is a no-op. Otherwise it partitions the set left after
-# the name filter and change-based selection: records are grouped by (suite, filter) pair in order
-# of first appearance, and each whole group goes to the shard with the fewest records so far
-# (strict < keeps ties on the lowest index). Indexed arrays only — bash 3.2 has no declare -A.
+# the name filter, any skip-self and any change-based selection: records are grouped by (suite,
+# filter) pair in order of first appearance, and each whole group goes to the shard with the
+# fewest records so far (strict < keeps ties on the lowest index). Indexed arrays only — bash 3.2
+# has no declare -A.
 if [ -n "$shard_n" ]; then
   sh_gsuite=(); sh_gfilter=(); sh_gcount=(); sh_rgroup=()
   for sh_pos in "${!sel[@]}"; do
@@ -991,14 +1051,35 @@ run_mutant_job() {
     return 1
   fi
 
-  local expect_set observed_set
+  # Verdict (#582): the recorded set is an upper bound. A mutant that no case detects (an empty
+  # failing set) FAILs first, so an empty recorded set never matches it. Then an exact match PASSes
+  # alone, a failing set that is a strict subset of the recorded set PASSes with a "recorded" line,
+  # and any failing case outside the recorded set FAILs.
+  local expect_set observed_set fcase outside=0
   expect_set="$(join_sorted $(lines_to_words "$expect_names"))"
   observed_set="$(join_sorted $(lines_to_words "$parsed_fail_names"))"
+  if [ -z "$parsed_fail_names" ]; then
+    echo "FAIL $name $parsed_total $observed_set"
+    echo "    expected $expect_set"
+    return 1
+  fi
   # (dev/mutants/mutant-driver-tests.json's drv-setcmp self-mutant replaces this exact-set
   # compare with a count-only compare — see dev/mutant-driver-tests.sh's own
   # case_fail_swapped_member comment.)
   if [ "$expect_set" = "$observed_set" ]; then
     echo "PASS $name $parsed_total $observed_set"
+    return 0
+  fi
+  while IFS= read -r fcase; do
+    [ -n "$fcase" ] || continue
+    if ! grep -qxF -- "$fcase" <<<"$expect_names"; then
+      outside=1
+      break
+    fi
+  done <<<"$parsed_fail_names"
+  if [ "$outside" -eq 0 ]; then
+    echo "PASS $name $parsed_total $observed_set"
+    echo "    recorded $expect_set"
     return 0
   fi
   echo "FAIL $name $parsed_total $observed_set"

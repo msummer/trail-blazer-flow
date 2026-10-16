@@ -18,6 +18,13 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #582: the mutant driver now passes a mutant whose failing set is a non-empty subset of its recorded
+  `expect_fail` (an exact match prints the same `PASS` line as before, a strict subset adds a
+  `recorded <set>` line, and only a survivor or a failing case outside the recorded set fails), so a later rule
+  that adds a second deny path no longer turns an old record red. Scheduled CI runs (ubuntu nightly,
+  macOS weekly) now set the new env-only `MUTANT_DRIVER_SKIP_SELF=1`, which drops the driver's own
+  self-mutants (every record targeting `dev/mutant-driver.sh`); they still run on any push that
+  changes the driver, its tests or its registry, on manual dispatch, and locally. No consumer step.
 - #570: the comments of push-guard, agent-boundary and claude-dir-guard now state each rule's contract,
   cost and portability notes only; the per-fix history and the over-block and gap catalogs move to two
   lists, "Known gaps" and "Known over-blocks", in `docs/reference/safety-model.md`, each class with

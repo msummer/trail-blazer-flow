@@ -70,14 +70,18 @@ jobs:
       # The driver's suites spend most of their wall clock waiting, not computing, so it runs
       # more jobs than the runner has cores. MUTANT_DRIVER_SINCE (#464) selects, on a push, only
       # the registry records the pushed range can affect; schedule/dispatch runs pass it empty,
-      # so every record runs. MUTANT_DRIVER_SHARD (#526) then takes this job's slice of whatever
-      # set that leaves. Both are passed only through env:, never interpolated into shell text —
-      # and the step line stays a bare `bash dev/mutant-driver.sh`, which is the shape 4.9 counts.
+      # so they apply no selection and a dispatch runs every record. A scheduled run also sets
+      # MUTANT_DRIVER_SKIP_SELF (#582), which skips the driver's own self-mutants: those run on
+      # any push that changes the driver, its self-test suite or its registry, and on dispatch.
+      # MUTANT_DRIVER_SHARD (#526) then takes this job's slice of whatever set that leaves. All
+      # three are passed only through env:, never interpolated into shell text — and the step line
+      # stays a bare `bash dev/mutant-driver.sh`, which is the shape 4.9 counts.
       - run: bash dev/mutant-driver.sh
         env:
           MUTANT_DRIVER_JOBS: 8
           MUTANT_DRIVER_SHARD: ${{ matrix.shard }}
           MUTANT_DRIVER_SINCE: ${{ github.event_name == 'push' && github.event.before || '' }}
+          MUTANT_DRIVER_SKIP_SELF: ${{ github.event_name == 'schedule' && '1' || '' }}
 
   selfcheck-macos-driver:
     # The mutant driver's own bash-3.2 run, split out of selfcheck-macos (#471) so the two macOS
@@ -110,12 +114,15 @@ jobs:
       # Weekly and manual dispatch only: selfcheck-driver already runs the driver after every
       # merge and every night, and the registry's recorded sets are the same on both shells. Fewer
       # concurrent mutants than on ubuntu: the macOS runner has fewer cores, and an oversubscribed
-      # one stretched the hook suite's timing cases past their budgets (#527). The shard is
-      # passed only through env:, never interpolated into shell text.
+      # one stretched the hook suite's timing cases past their budgets (#527). The weekly
+      # scheduled run skips the driver's own self-mutants the same way selfcheck-driver's
+      # scheduled run does (#582), so they run here on manual dispatch only. The shard and the skip
+      # are passed only through env:, never interpolated into shell text.
       - run: bash dev/mutant-driver.sh
         env:
           MUTANT_DRIVER_JOBS: 4
           MUTANT_DRIVER_SHARD: ${{ matrix.shard }}
+          MUTANT_DRIVER_SKIP_SELF: ${{ github.event_name == 'schedule' && '1' || '' }}
 
   selfcheck-macos:
     # Nightly and manual dispatch only (#365, #581) — never a pull_request or push check. Keep

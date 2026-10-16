@@ -193,8 +193,12 @@ whenever `bin/harness-stop.sh` changes.
 registry file, and for each selected record applies the recorded exact-text `{from,to}` edits
 (each required to match exactly once) to a scratch copy of the record's `target` file — never the
 tracked tree — then runs the record's own `suite`, name-filtered by its own `filter`, from inside
-that copy, and compares the observed failing-case set against the record's `expect_fail`. A
-baseline run (no edits) proves each distinct `(suite, filter)` pair is clean before any dependent
+that copy, and judges the observed failing-case set against the record's `expect_fail`, which is an
+upper bound (#582): a mutant passes when its failing set is non-empty and every failing case is
+named in `expect_fail`. An exact match prints the plain `PASS` line, a strict subset prints it
+plus a `    recorded <set>` line, and a survivor (nothing fails) or a failing case outside the
+recorded set is a `FAIL` with an `    expected <set>` line. A baseline run (no edits) proves each
+distinct `(suite, filter)` pair is clean before any dependent
 mutant is trusted; a red baseline short-circuits every mutant that depends on it. It runs mutants
 through a rolling pool of concurrent jobs — a new job starts whenever a running one finishes, and
 no mutant starts before its own baseline has finished — and prints results in
@@ -205,8 +209,8 @@ hand before pushing any change to a registry `target`, a registry `suite`, or th
 `main`, nightly, and on manual dispatch, and as four more in its own parallel
 `selfcheck-macos-driver` job (#471), weekly and on manual dispatch only; never on a pull
 request. Sharding (#526): `--shard <i>/<n>` (or `MUTANT_DRIVER_SHARD=<i>/<n>`; the flag wins)
-partitions whatever set the run would otherwise run — after the name filter and any
-change-based selection — by giving each whole `(suite, filter)` group to the shard with the
+partitions whatever set the run would otherwise run — after the name filter, any skip-self (below)
+and any change-based selection — by giving each whole `(suite, filter)` group to the shard with the
 fewest records so far, so every record runs in exactly one shard and no baseline runs twice; a
 malformed spec exits 2 before any suite runs. Change-based selection (#464): a
 post-merge ubuntu run passes
@@ -217,10 +221,21 @@ or that a `dev/mutants/suite-deps.txt` pattern claims for that record's own suit
 suite matches any change); a changed path under `bin/`, `hooks/`, `templates/`, `agents/`,
 `skills/` or `dev/` that nothing claims, a change to the driver itself, or an unusable base (a
 leading `-`, an all-zero or unknown commit, or any other git-diff failure) instead forces a full
-run. Nightly and manual-dispatch runs pass no base, so they always run every record. So a stale
-recorded set turns the post-merge ubuntu run red only once some push selects the affected record,
-turning it red at the latest by the following nightly run — never silently skipped forever. The
-ubuntu shards set `MUTANT_DRIVER_JOBS=8`, more jobs than the runner has cores, because the suites
+run. Manual-dispatch runs pass no base and run every record. A scheduled run (the ubuntu nightly
+and the weekly macOS one) also passes no base, but sets `MUTANT_DRIVER_SKIP_SELF=1` (#582; env
+only, the value must be `1` or empty, anything else exits 2), which drops every record whose
+`target` is `dev/mutant-driver.sh` — the driver's own self-mutants — and prints a `skip-self`
+line; under `--changed-from` or a non-empty `MUTANT_DRIVER_SINCE`, full-run fallbacks included,
+it has no effect. The self-mutants therefore run when a push's selection picks them (a driver
+change forces a full run, and a change to `dev/mutant-driver-tests.sh` or to
+`dev/mutants/mutant-driver-tests.json` selects them), on any push full-run fallback, on manual
+dispatch, and in local runs — never in a scheduled run. A record goes red when its mutant
+survives or fails a case outside its recorded set (a recorded case it no longer fails leaves it
+green). Such a record turns the post-merge ubuntu run red once some push selects it, and at the
+latest at the following nightly run — never silently skipped forever — except a self-mutant,
+which no scheduled run includes but every push that touches its inputs (the driver, its test
+suite, their registry) selects. The ubuntu shards set `MUTANT_DRIVER_JOBS=8`, more jobs than the
+runner has cores, because the suites
 it runs spend most of their wall clock waiting rather than computing; the macOS shards set 4,
 because an oversubscribed 3-core runner stretches the hook suite's timing cases past their
 budgets (#527).
@@ -234,7 +249,12 @@ fixture tree is never touched, that a same-named decoy earlier on `PATH` is neve
 `dev/selfcheck-tests.sh`'s own), the rolling pool's refill and baseline gating, change-based
 selection (`--changed-from`, `MUTANT_DRIVER_SINCE`, `dev/mutants/suite-deps.txt` validation and
 matching, and each full-run fallback), sharding (the partition's union and balance, spec
-validation, its composition with selection, and its no-op default), and the CLI (`-j <n>`/`--serial`/`MUTANT_DRIVER_JOBS`/an
+validation, its composition with selection, and its no-op default), the verdict (an exact match
+and a non-empty strict subset of `expect_fail` pass, the latter with its `recorded` line; a
+survivor and a failing case outside `expect_fail` fail), `MUTANT_DRIVER_SKIP_SELF` (which records
+the skip drops and its count line, the exit 0 when nothing is left, its composition with the
+shard, its no-op when unset, empty or under change-based selection, and the value check), and the
+CLI (`-j <n>`/`--serial`/`MUTANT_DRIVER_JOBS`/an
 unknown filter). It runs in CI as the last command in both the `selfcheck` and `selfcheck-macos` jobs
 (neither driver job runs it) — but since `selfcheck-macos`'s job-level `if:` (#365, #581) keeps
 it off pull requests and pushes entirely, a pull request or a merge runs it only via the
