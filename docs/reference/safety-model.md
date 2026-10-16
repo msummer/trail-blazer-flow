@@ -246,6 +246,10 @@ line end (`X="a<LF>b" gh pr merge 5`), by carrying the open quote state and the 
 line, and a mixed-quote or escaped-quote assignment value with a space and no break character (`X="a'"'b c'
 gh pr merge 5`); the lines it lexes and the tokens it copies count toward the same budget, and the
 over-blocks and residuals of both extensions are in the two lists below.
+**Since #559** the hook checks the awk scan's exit status: a scan that exits non-zero (an awk abort, a resource
+limit, a killed process, or a host where `awk` cannot run) denies with the fixed line `(blocked: command scan
+failed)`, instead of judging only the lines printed before it stopped; awk's own error text is dropped, so the
+deny stays one line (the over-block is in "Known over-blocks" below).
 The scan processes `tool_input.command` one line at a time, so it over-blocks some benign commands and
 misses some spellings; both are catalogued, each with a measured example, in "Known over-blocks" and
 "Known gaps" below. The remedy for a file-content over-block is to write through the Write/Edit tools rather
@@ -324,7 +328,10 @@ origin main`, where the open quote state and the chain's tokens are carried to t
 re-judged the same way, so those deny. The pass lexes at most a fixed budget of characters per command, of
 gated lines and of the lines the carry lexes; a command past it denies fail-closed (`too much quoted text to
 analyse`), so the worst-case cost stays near the base scan's. The over-blocks and the residuals of #449,
-#503 and #553 are in the two lists below. **Since #508**, a word in
+#503 and #553 are in the two lists below. **Since #559** a scan that exits non-zero (an awk abort, a resource
+limit, a killed process, or a host where `awk` cannot run) denies with the fixed line `(blocked: command scan
+failed)`, instead of judging only the lines printed before it stopped; awk's own error text is dropped, so the
+deny stays one line (the over-block is in "Known over-blocks" below). **Since #508**, a word in
 command position (or in git's option slot) whose basename holds a runtime expansion (`$X git push
 origin main`, `env $'A=b' git push ...`, `git $X push ...`, `git $'-c' k=v push`) is skipped as a
 possibly-empty word, and the segment denies as unresolved when the rest could still be a push; an
@@ -737,10 +744,8 @@ one newline. A role is the `agent_type` the hook governs; "every session" means 
 that names several hooks gives its examples in the same order. The Issue column names the issue that
 describes the class or the rule it belongs to, and `—` means neither. The fail-open conditions are not rows,
 because no command triggers them: the plugin disabled, `disableAllHooks`, no `jq` or a missing `agent_type`
-(stated in each hook's paragraph above), the 10-second hook timeout, and an awk error inside the
-`agent-boundary` or `push-guard` scan (#559), after which the scan prints nothing and the hook gives no opinion
-on the call. Nor is a command whose analysis outlasts the 5-second budget of `push-guard` or `claude-dir-guard`
-a row: it denies, whatever its text.
+(stated in each hook's paragraph above), and the 10-second hook timeout. Nor is a command whose analysis
+outlasts the 5-second budget of `push-guard` or `claude-dir-guard` a row: it denies, whatever its text.
 
 **Known gaps.** Commands a hook gives no opinion on (exit 0, empty stdout, empty stderr) although they do what
 that hook exists to stop.
@@ -792,6 +797,7 @@ scan, or, for `push-guard` and `agent-boundary`, to run the command from a termi
 | `claude-dir-guard` (implementer) | A quoted `bash -c` string: its first word keeps the opening quote and trips the #455 unbalanced-quote check (the bare `rg -n apply_patch hooks/` is no opinion) | `bash -c 'rg -n apply_patch hooks/'` | #568 |
 | `agent-boundary` (implementer), `push-guard` (every session), `claude-dir-guard` (implementer) | The chain pass re-judges a quoted value that holds a break character and a space, a mixed-quote value, or a substitution glued into a word, so a harmless mention behind it denies | `MSG="a; see gh docs" ./run.sh` (`agent-boundary`). `X="a;b c" git push origin feature/x`; `X="it's<LF>b" git push origin feature/x`; `git -C "$(pwd)" push origin feature/x`; `X='(' git commit -m "fix include path"` (`push-guard`). `X='a;b c' apply_patch <<'EOF'<LF>*** Begin Patch<LF>*** Add File: /repo/a.txt<LF>+hi<LF>*** End Patch<LF>EOF` (`claude-dir-guard`) | #503, #553 |
 | `agent-boundary` (implementer), `push-guard` (every session) | Too much quoted text: the gated lines of one command are lexed up to a budget of 65536 characters, and a command past it denies | 4000 lines of `echo "a"; ls # git` (3000 such lines are no opinion) | #503 |
+| `agent-boundary` (implementer, verifier), `push-guard` (every session) | The awk scan exits non-zero (an awk abort, a resource limit, a killed process, or a host where `awk` cannot run): the hook denies every command that reaches the scan, with the fixed line `(blocked: command scan failed)`, instead of judging only the lines the scan printed before it stopped. A call that a hook's raw-input fast path exits before the scan is unaffected | `git status`, with an `awk` on `PATH` that exits 2 (`agent-boundary` verifier; `push-guard`) | #559 |
 | `push-guard` (every session) | Destination rules: a lone argument is judged as a possible destination, a destination built at run time or `refs/tags/$T` denies, `main`/`master` always deny whatever the repo's default branch is, and `--all`/`--mirror` always deny | `git push main`; `git push "$REMOTE"`; `git push origin refs/tags/$T`; `B=feature/x; git push origin HEAD:$B`; `git push origin main` in a repo whose default branch is `trunk`; `git push --all origin` | #260, #517 |
 | `push-guard` (every session) | Config read as a union, not the way git picks one value: `$GIT_CONFIG_GLOBAL` alongside `~/.gitconfig`; `push.default` across files, or twice in one file | `git push`, with a route in `~/.gitconfig` while `$GIT_CONFIG_GLOBAL` names a benign file; with `push.default = upstream` in `~/.gitconfig` and `current` in the repo config; with those two values on two lines of `~/.gitconfig` (the branch's upstream is `main` in both) | #290 |
 | `push-guard` (every session) | A configured route git would not take: an `includeIf` condition is ignored, `GIT_CONFIG_NOSYSTEM=2` does not disable the system read, a quoted destination holding `#` is cut there as if it were a comment, a wildcard refspec and `push.default = matching` always deny, and a bare push checks every remote's route | `git push`, with a route behind `[includeIf "gitdir:/nonexistent/"]`; a route in `/etc/gitconfig` and `GIT_CONFIG_NOSYSTEM=2`; `push = "HEAD:refs/heads/main#hotfix"`; `push = refs/heads/*:refs/heads/*`; `push.default = matching`; `[remote "other"] push = HEAD:main` | #268, #304, #305 |

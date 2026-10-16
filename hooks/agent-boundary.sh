@@ -16,7 +16,9 @@
 #     CLAUDE_PATH_ARG_COMMANDS member, an in-place sed argument) or an interpreter or one-step writer
 #     (CLAUDE_CMDLINE_WRITE_COMMANDS) sharing the call with a .claude mention anywhere;
 #   - both roles: a fail-closed sentinel when the scan cannot afford to finish a record (too many
-#     standalone ]], too much quoted text for the chain pass, a ]] cut that may hide a .claude write).
+#     standalone ]], too much quoted text for the chain pass, a ]] cut that may hide a .claude write);
+#   - both roles: an awk scan that exits non-zero (an abort, a resource limit, a killed process, or no
+#     runnable awk), denied with the fixed reason "command scan failed" (#559).
 # Never executes anything (no git, no gh, nothing derived from the untrusted command), never evals, never
 # writes a file. bash + jq + POSIX awk only: no python, no perl, no GNU-only flag; exercised under Apple
 # bash 3.2 by the macOS CI job.
@@ -1005,7 +1007,16 @@ END {
   }
   if (!ch_cwb && cw_word != "" && cw_tok != "") print "-claude-write- " cw_word " with " cw_tok
 }
-')"
+' 2>/dev/null)"
+scan_rc=$?
+# #559: a non-zero status means the scan stopped early (an awk abort, a resource limit, a killed process, or
+# no runnable awk) and judged only part of the command, so deny with one fixed reason before the role policy
+# reads scan_out. awk's own error text is dropped (2>/dev/null above) so the deny stays one stderr line.
+if [ "$scan_rc" -ne 0 ]; then
+  printf '%s %s role: the command scan did not finish, so the command cannot be checked (blocked: command scan failed) — see agents/%s.md\n' \
+    "$DENY_STEM" "$role" "$role" >&2
+  exit 2
+fi
 
 # --- role policy -----------------------------------------------------------------------------
 # Implementer: deny on ANY segment whose command word is git or gh, whatever the subcommand. Verifier: deny
