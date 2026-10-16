@@ -1320,11 +1320,9 @@ case_ab_pc_noop_verifier_eval_status() {
   expect_no_opinion
 }
 
-# --- hooks/agent-boundary.sh: an env -S string holding or cut at a runtime expansion (#508) --------
-# An env -S string that holds an expansion, or that the segmenter cut at ${, $( or a backtick, and
-# that names git or gh as an exact word denies for both roles (the verifier's git as the fail-closed
-# "-expansion-" subcommand). Every payload names git, gh or claude, or the raw-stdin fast path would
-# pass it vacuously.
+# --- hooks/agent-boundary.sh: shared helpers for the cases below -------------------------------------
+# Every payload a case sends names git, gh or claude, or the raw-stdin fast path would pass it
+# vacuously.
 # abx_deny ROLE BLOCKED CMD... — each CMD denies, naming (blocked: BLOCKED).
 abx_deny() {
   local role="$1" blocked="$2" c w0
@@ -1351,127 +1349,17 @@ abx_noop() {
     if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
   done
 }
-case_ab_rtexp_deny_env_s_record_wide() {
-  # The env -S check is record-wide: an expansion-bearing -S string denies when the record names
-  # git or gh anywhere as an exact word.
-  abx_deny implementer gh "env -S'\$X' true; echo gh"
-  abx_deny verifier 'git -expansion-' "env -S'\$X' true; git status"
-}
-# mutant:508-ab-rx-envs-off — never runs the env -S check, so an expansion-bearing split string
-#   naming gh is skipped as an option.
-case_ab_rtexp_deny_env_s_brace_gh() {
-  abx_deny implementer gh 'env -S'"'"'${X}gh\_pr\_merge\_5'"'"
-}
-# mutant:508-ab-rx-envs-unescape — stops reading the backslash-underscore separator as a space, so a
-#   name glued to it is no exact word.
-case_ab_rtexp_deny_env_s_escaped_gh() {
-  abx_deny implementer gh 'env -S'"'"'$X\_gh\_pr\_merge\_5'"'"
-  # the segment-cut form: the record-level check alone reads it, the split string's own tokens do not
-  abx_deny implementer gh 'env -S'"'"'${X}\_gh\_pr\_merge\_5'"'"
-}
-# mutant:508-ab-rx-in-env-any — tracks every prefix word as env, so a sudo -S option with an
-#   expansion runs the env -S check.
-case_ab_rtexp_noop_sudo_s() {
-  # -S belongs to sudo here, not env, so the env -S check never applies.
-  abx_noop implementer "sudo -S'\$X' true && echo gh"
-}
-# mutant:508-ab-rx-envs-word — matches git and gh as substrings instead of exact words, so github in
-#   a later segment trips the check.
-case_ab_rtexp_noop_env_s_no_names() {
-  abx_noop implementer 'env -S'"'"'${X}ls\_-la'"'"' && echo github'
-}
-# ab_rx_flood_cmd N — an env line of N expansion-bearing -S options, then a line naming github so the
-# raw-stdin fast path reads the payload. ab_rx_flood_twin_cmd N keeps the same layout and byte length
-# but only the FIRST -S option carries an expansion.
-ab_rx_flood_cmd() {
-  printf 'env%s true\necho github' "$(printf " -S'\$X'%.0s" $(seq 1 "$1"))"
-}
-ab_rx_flood_twin_cmd() {
-  local m=$(( $1 - 1 ))
-  printf "env -S'\$X'%s true\necho github" "$(printf " -S'ab'%.0s" $(seq 1 "$m"))"
-}
+# ab_rx_payload CMD — an implementer Bash payload whose command reaches jq on stdin, never as a --arg.
 ab_rx_payload() {
   printf '%s' "$1" | jq -Rs '{tool_name: "Bash", agent_type: "implementer", tool_input: {command: .}}'
 }
-# mutant:508-ab-rx-rescan — rescans the whole record at every expansion-bearing -S option instead of
-#   using the per-record result, so the flood turns quadratic and overruns its calibrated deadline.
-case_ab_rtexpscan_noop_flood() {
-  # FLOOD + TIMING, sized and bounded by cost RATIO from a same-run control, never by absolute speed:
-  # the twin (one expansion-bearing -S option) is timed with no deadline, the flood's token count is
-  # scaled from it, and the flood runs under an active deadline of K times the predicted linear cost.
-  # The command reaches jq on stdin, never as a --arg.
-  local ctl_n=1000 min_n=700 max_n=10000 floor=2 k=8
-  local target_ms=$(( DL_KNOB_MAX * 200 )) ctl_ms pred_ms
-  measure_ms run_boundary "$(ab_rx_payload "$(ab_rx_flood_twin_cmd "$ctl_n")")"
-  ctl_ms="$measured_ms"
-  if [ -z "$ctl_ms" ]; then
-    __ok=0; __why="${__why}control run's own timing report could not be parsed — can't size the flood\n"
-    return
-  fi
-  expect_no_opinion
-  if [ "$__ok" -eq 0 ]; then
-    __why="${__why}twin control did not return no opinion\n"
-    return
-  fi
-  calibrated_flood_tokens "$ctl_ms" "$ctl_n" "$target_ms" "$min_n" "$max_n"
-  pred_ms=$(( ctl_ms * flood_tokens / ctl_n ))
-  calibrated_deadline "$floor" "$k" "$pred_ms"
-  boundary_deadline_override="$calibrated_secs"
-  measure_ms run_boundary "$(ab_rx_payload "$(ab_rx_flood_cmd "$flood_tokens")")"
-  expect_no_opinion
-  if [ "$__ok" -eq 0 ]; then
-    __why="${__why}control ${ctl_ms}ms at ${ctl_n} -> ${flood_tokens} tokens, predicted ${pred_ms}ms -> deadline ${calibrated_secs}s, flood ${measured_ms}ms\n"
-  fi
-}
 
 # --- hooks/agent-boundary.sh: a command prefix the scan cannot follow (#505) ----------------------
-# An env option that takes a value, or an assignment whose quoted or escaped value holds a space,
-# leaves a bogus word in command position. The walk follows env's -u/--unset values, and a trigger
-# (an assignment with unbalanced quotes, an env option outside the allowlist, a quote-bearing option
-# or assignment after a prefix word) reads the rest of the segment once for an exact word git or gh,
-# or a .claude path segment. A hit prints gh, the fixed sentinel "git -prefix-", or the .claude
-# write line; no hit keeps the old walk. Every payload names git, gh, github or claude, or the
-# raw-stdin fast path would pass it vacuously. abx_deny and abx_noop are defined above.
-# mutant:505-ab-env-u-consume — makes the detached env -u value skip one token instead of two, so
-#   the value stays a command word and the real command behind it is no longer read.
-case_ab_lost_deny_env_u_gh() {
-  abx_deny implementer gh 'env -u X gh pr merge 5' 'env --unset X gh pr merge 5'
-}
-case_ab_lost_deny_env_u_git() {
-  abx_deny implementer 'git commit' 'env -u X git commit -m m'
-}
-# mutant:505-ab-env-u-value-check — drops the unbalanced-quote check on the detached env -u value,
-#   so a value split at a space leaves its tail as the command word.
-# mutant:505-ab-env-u-attached-quote — drops the same check on the attached -u token.
-case_ab_lost_deny_env_u_quoted() {
-  abx_deny implementer gh 'env -u "A B" gh pr merge 5' 'env -u"A B" gh pr merge 5'
-}
-# mutant:505-ab-env-opt-off — drops the fail-closed read for an env option outside the allowlist.
-# mutant:505-ab-scan-reset — never resets the once-per-segment memo at a segment start, so a no-hit
-#   scan in an earlier segment or line silences the scan of every later one. The multi-segment and
-#   two-line commands below carry a no-hit trigger first.
-case_ab_lost_deny_env_opt() {
-  abx_deny implementer gh 'env -C /tmp gh pr merge 5' \
-    'env -C /tmp ls; env -C /tmp gh pr merge 5' 'X="a b" ls && X="a b" gh pr merge 5' \
-    $'env -C /tmp ls\nenv -C /tmp gh pr merge 5'
-}
-# mutant:505-ab-word-lead-off — drops the rule that reads an option with an attached value (-Sgh),
-#   so a split string glued to its option is no exact word.
-case_ab_lost_deny_env_split_string() {
-  abx_deny implementer gh "env -S'gh pr merge 5'" 'env -S"X=1 gh pr merge 5"' "env --split-string='gh pr merge 5'"
-}
-# mutant:505-ab-word-unescape — stops reading the backslash-underscore separator as a space.
-case_ab_lost_deny_env_split_string_escaped() {
-  abx_deny implementer gh "env -S'gh\\_pr\\_merge\\_5'"
-}
-# mutant:505-ab-git-sentinel — makes the git hit print a read-only git subcommand instead of the
-#   fixed sentinel, so the verifier no longer denies it and the implementer's blocked text changes.
-# mutant:505-ab-word-lower — stops case-folding the scanned token, so an upper-case GIT or GH word
-#   (which runs on a case-insensitive filesystem) is no exact word.
-case_ab_lost_deny_env_split_string_git() {
-  abx_deny implementer 'git -prefix-' "env -S'git commit -m m'" 'env -S"X=1 git commit -m m"' \
-    'env -C /tmp GIT push'
-}
+# An assignment whose quoted or escaped value holds a space leaves a bogus word in command position.
+# The trigger (an assignment with unbalanced quotes) reads the rest of the segment once for an exact
+# word git or gh, or a .claude path segment. A hit prints gh, the fixed sentinel "git -prefix-", or
+# the .claude write line; no hit keeps the old walk. Every payload names git, gh, github or claude,
+# or the raw-stdin fast path would pass it vacuously. abx_deny and abx_noop are defined above.
 # mutant:505-ab-unbalanced-off — never fires the assignment trigger.
 # mutant:505-ab-unbalanced-dq — drops the odd double-quote arm of quote_unbalanced().
 # mutant:505-ab-word-strip-sq — stops deleting single quotes from a scanned word, so g'h' is no gh.
@@ -1479,10 +1367,15 @@ case_ab_lost_deny_env_split_string_git() {
 # mutant:505-ab-word-strip-bs — stops deleting backslashes from a scanned word, so g\h is no gh.
 #   The quote-split commands end in a gh-notes comment word: it is no exact word, and only keeps the
 #   raw-stdin fast path from passing the payload vacuously.
+# mutant:505-ab-word-lower — stops case-folding the scanned token, so an upper-case GIT or GH word
+#   (which runs on a case-insensitive filesystem) is no exact word.
+# mutant:505-ab-scan-reset — never resets the once-per-segment memo at a segment start, so a no-hit
+#   scan in an earlier segment silences the scan of every later one. The multi-segment command below
+#   carries a no-hit trigger first.
 case_ab_lost_deny_assign_dquote() {
   abx_deny implementer gh 'X="a b" gh pr merge 5' 'env X="a b" gh pr merge 5' 'X="a b" GH pr merge 5' \
     "X=\"a b\" g'h' pr merge 5 # gh-notes" 'X="a b" g"h" pr merge 5 # gh-notes' \
-    'X="a b" g\h pr merge 5 # gh-notes'
+    'X="a b" g\h pr merge 5 # gh-notes' 'X="a b" ls && X="a b" gh pr merge 5'
 }
 # mutant:505-ab-unbalanced-sq — drops the odd single-quote arm of quote_unbalanced().
 case_ab_lost_deny_assign_squote() {
@@ -1492,81 +1385,42 @@ case_ab_lost_deny_assign_squote() {
 case_ab_lost_deny_assign_backslash() {
   abx_deny implementer gh 'X=a\ b gh pr merge 5'
 }
-# mutant:505-ab-prefix-quoted-shape — never fires the trigger for a quote-bearing option or
-#   assignment after a prefix word.
-case_ab_lost_deny_prefix_quoted() {
-  abx_deny implementer gh 'env "X=a b" gh pr merge 5' 'env "-Sgh pr merge 5"' 'bash -c "X=1 gh pr merge 5"'
-}
-# mutant:505-ab-quote-bearing-sq — drops the single-quote arm of quote_bearing().
-# mutant:505-ab-strip-bs — stops deleting backslashes in strip_quotes(), so an escaped option still
-#   starts with its backslash and the shape test of the prefix trigger no longer sees a dash.
-# mutant:505-ab-quote-bearing-bs — drops the backslash arm of quote_bearing(), so an escaped option
-#   (its first character is no dash) is no trigger.
-case_ab_lost_deny_prefix_squoted_opt() {
-  abx_deny implementer gh "env '-C' /tmp gh pr merge 5" 'env \-C /tmp gh pr merge 5'
-}
+# mutant:505-ab-git-sentinel — makes the git hit print a read-only git subcommand instead of the
+#   fixed sentinel, so the verifier no longer denies it and the implementer's blocked text changes.
 case_ab_lost_deny_verifier_git() {
-  abx_deny verifier 'git -prefix-' 'GIT_PAGER="less -R" git log' 'env -C /tmp git status' "env -S'git status'"
+  abx_deny verifier 'git -prefix-' 'GIT_PAGER="less -R" git log'
 }
-# mutant:505-ab-env-arm-prefix-guard — keeps a word whose basename is a prefix word (a directory
-#   named env, a lone dash) out of the env option arm.
-case_ab_lost_deny_verifier_env_arm_basename() {
-  abx_deny verifier 'git -prefix-' 'env --chdir=../env git status' 'env - git status'
-}
-# mutant:505-ab-claude-arm — drops the .claude path arm of the lost-prefix scan. The first two
-#   commands deny through the scan (an assignment trigger, an env option trigger); the third through
-#   the env -u value walk, which resolves tee as the command word for the ordinary .claude walk.
+# mutant:505-ab-claude-arm — drops the .claude path arm of the lost-prefix scan, so the assignment
+#   trigger no longer finds the .claude path behind the unbalanced assignment.
 case_ab_lost_deny_claude() {
-  abx_deny implementer '.claude/LESSONS.md' 'X="a b" tee -a .claude/LESSONS.md' \
-    'env -C . tee -a .claude/LESSONS.md' 'env -u X tee -a .claude/LESSONS.md'
-}
-case_ab_lost_noop_env_u_consumes() {
-  abx_noop implementer 'env -u gh pr merge 5' 'env --unset git status'
-}
-# mutant:505-ab-env-novalue-vocab — empties the allowlist of no-value env options.
-# mutant:505-ab-env-u-attached — drops the attached -uNAME arm, so it reads as an unsupported option.
-case_ab_lost_noop_verifier_env_allowlist() {
-  abx_noop verifier 'env -i git status' 'env -uX git status' 'env --unset=X git status' \
-    'git -C "../demo-wt-5" status --porcelain' 'git -C "../demo-wt-5" diff main...HEAD --stat'
-}
-# mutant:505-ab-env-context — tracks every prefix word as env, so an option of sudo reads as one.
-case_ab_lost_noop_verifier_nonenv_opt() {
-  abx_noop verifier 'sudo -E git status'
+  abx_deny implementer '.claude/LESSONS.md' 'X="a b" tee -a .claude/LESSONS.md'
 }
 # mutant:505-ab-word-exact — matches git and gh as substrings instead of exact words.
-# mutant:505-ab-scan-lead — applies the attached-value rule to every scanned token.
 case_ab_lost_noop_scan_precision() {
-  abx_noop implementer 'env -C /tmp cat gh-notes.md && echo ok' 'env -C /tmp ls -lgh && echo ok'
-}
-# mutant:505-ab-shape-gate — drops the option-or-assignment shape test of the prefix trigger.
-case_ab_lost_noop_candidate_exempt() {
-  abx_noop implementer $'cat > notes.md <<\'EOF\'\n- "Fix" the gh merge flow\nEOF'
+  abx_noop implementer 'X="a b" cat gh-notes.md && echo ok'
 }
 # mutant:505-ab-word-ungated — makes every read report gh, so a trigger always denies.
 case_ab_lost_noop_controls() {
-  abx_noop implementer 'env -C /tmp ls && echo github' 'X="a b" ls && echo github' \
+  abx_noop implementer 'X="a b" ls && echo github' \
     'X="a b" tee -a notes.md && echo github' \
     'PATH=/bin:$PATH bash dev/selfcheck.sh && echo github' \
     $'cat > notes.md <<\'EOF\'\nDon\'t let gh merge it\nX="a b" is quoted\nEOF'
 }
-# ab_lost_flood_cmd N — three triggering lines of N tokens each (an unbalanced assignment, an env
-# option outside the allowlist, a quoted option after a prefix word), then a line naming github so the
-# raw-stdin fast path reads the payload. ab_lost_flood_twin_cmd N keeps the same layout and per-token
-# byte length but only the FIRST token of each line is a trigger.
+# ab_lost_flood_cmd N — one triggering line of N tokens (an unbalanced assignment), then a line naming
+# github so the raw-stdin fast path reads the payload. ab_lost_flood_twin_cmd N keeps the same layout and
+# per-token byte length but only the FIRST token of the line is a trigger.
 ab_lost_flood_cmd() {
-  printf '%s true\nenv%s true\nnice%s true\necho github' \
-    "$(printf ' X="a%.0s' $(seq 1 "$1"))" "$(printf ' -Z%.0s' $(seq 1 "$1"))" "$(printf ' "-x"%.0s' $(seq 1 "$1"))"
+  printf '%s true\necho github' "$(printf ' X="a%.0s' $(seq 1 "$1"))"
 }
 ab_lost_flood_twin_cmd() {
   local m=$(( $1 - 1 ))
-  printf ' X="a%s true\nenv -Z%s true\nnice "-x"%s true\necho github' \
-    "$(printf ' X=ab%.0s' $(seq 1 "$m"))" "$(printf ' -i%.0s' $(seq 1 "$m"))" "$(printf ' -xyz%.0s' $(seq 1 "$m"))"
+  printf ' X="a%s true\necho github' "$(printf ' X=ab%.0s' $(seq 1 "$m"))"
 }
 # mutant:505-ab-scan-once — drops the once-per-segment memo, so every trigger rescans the rest of its
 #   segment, the flood turns quadratic and overruns its calibrated deadline.
 case_ab_lostscan_noop_flood() {
   # FLOOD + TIMING, sized and bounded by cost RATIO from a same-run control, never by absolute speed:
-  # the twin (one trigger per record) is timed with no deadline, the flood's token count is scaled
+  # the twin (one trigger in the record) is timed with no deadline, the flood's token count is scaled
   # from it, and the flood runs under an active deadline of K times the predicted linear cost. The
   # command reaches jq on stdin, never as a --arg.
   local ctl_n=1000 min_n=700 max_n=10000 floor=2 k=8
@@ -2824,8 +2678,8 @@ case_push_cmdcfg_deny_precedence() {
   esac
 }
 
-# --- a push segment the tokenizer cannot follow: a quoted or escaped git option, a quote or escape
-# in the command prefix, or an env option it cannot read (#449, absorbing #451) ---------------------
+# --- a push segment the tokenizer cannot follow: a quoted or escaped git option, or a quote or escape
+# in the command prefix (#449, absorbing #451) -----------------------------------------------------
 # Every deny fixture builds the same fixture checkout (default branch main, current branch
 # feature/x) and asserts the ONE fixed #292 "unresolved" line naming the fixed reason; every
 # no-opinion fixture also passes that checkout as cwd (the AMBIENT-$PWD rule) and its raw payload
@@ -2839,21 +2693,9 @@ case_push_cmdcfg_deny_precedence() {
 # mutant:449-pg-unbalanced-dq — drops the double-quote parity arm of quote_unbalanced().
 # mutant:449-pg-unbalanced-sq — drops the single-quote parity arm of quote_unbalanced().
 # mutant:449-pg-unbalanced-bs — drops the trailing-backslash arm of quote_unbalanced().
-# mutant:449-pg-prefix-quoted-shape — drops the trigger for a quote-bearing option or assignment
-#   after a prefix word.
-# mutant:449-pg-env-u-consume — makes -u/--unset skip only themselves, not their value token.
-# mutant:449-pg-env-u-value-check — drops the unbalanced-value check on the token consumed by a
-#   detached -u/--unset.
-# mutant:449-pg-env-u-attached-quote — drops the unbalanced check on an attached -uNAME /
-#   --unset=NAME token.
-# mutant:449-pg-env-u-attached — drops the attached -uNAME / --unset=NAME arm.
-# mutant:449-pg-env-lost-off — drops the unsupported-env-option trigger.
-# mutant:449-pg-env-novalue-vocab — empties PUSH_ENV_NOVALUE_OPTS, so -i is an unsupported option.
-# mutant:449-pg-env-context — sets the env-context flag for any prefix word, not only env.
 # mutant:449-pg-lost-ungated — makes lost_push() always true, so a segment that cannot be a push
 #   denies too.
 # mutant:449-pg-lost-unarmed — makes any later push substring count, not only one after a git word.
-# mutant:449-pg-lost-same-token — drops the single-token git-and-push check in lost_push().
 # mutant:449-pg-lost-unres-precedence — lets the new reason win over an earlier #292 reason
 #   (GIT_DIR=) in emit_lost().
 # mutant:449-pg-lost-precedence — lets the new reason win over command-line git config in
@@ -2863,8 +2705,6 @@ case_push_cmdcfg_deny_precedence() {
 # mutant:449-pg-lost-gopt-skip-armed1 — limits that value skip to the prefix triggers' unarmed
 #   scan (armed 0), so the quoted-option trigger's armed-1 scan reads the -C value as a word,
 #   disarms, and a quoted git option followed by -C <dir> push gets no opinion.
-# mutant:449-pg-env-arm-prefix-guard — keeps the env arm from seeing an option whose basename is a
-#   prefix word (--chdir=../env, a lone -).
 # mutant:449-pg-quote-bearing-sq — drops the single-quote arm of quote_bearing().
 # mutant:449-pg-gopt-value-off — drops the unbalanced-value check for a global option other than -C.
 # mutant:449-pg-gopt-attached-off — drops the unbalanced attached-option check in the subcommand walk.
@@ -2890,7 +2730,6 @@ pp_expect_unres() {
 }
 PP_R_OPT="quoted or escaped git option"
 PP_R_PFX="quote or escape in the command prefix"
-PP_R_ENV="unsupported env option"
 case_pp_deny_quoted_c() {
   pp_run 'git "-c" remote.origin.push=HEAD:main push'
   pp_expect_unres "$PP_R_OPT"
@@ -2938,18 +2777,6 @@ case_pp_deny_git_dir_space() {
   pp_run 'GIT_DIR="../a b/.git" git push origin feature/x'
   pp_expect_unres "GIT_DIR="
 }
-case_pp_deny_env_quoted_assign() {
-  pp_run 'env "X=a" git push origin feature/x'
-  pp_expect_unres "$PP_R_PFX"
-}
-case_pp_deny_env_quoted_opt() {
-  pp_run 'env "-C" ../other git push origin feature/x'
-  pp_expect_unres "$PP_R_PFX"
-}
-case_pp_deny_env_u_quoted_value() {
-  pp_run 'env -u "A B" git push origin feature/x'
-  pp_expect_unres "$PP_R_PFX"
-}
 case_pp_noop_assign_space_nonpush() {
   pp_run 'X="a b" git status && git push origin feature/x'
   expect_push_no_opinion
@@ -2964,64 +2791,6 @@ case_pp_noop_heredoc_apostrophe() {
   # The command-word candidate is never a trigger: a heredoc prose line starting Don't is scanned as
   # its own segment and must stay silent.
   pp_run "git commit -F - <<EOF${LF}Don't let git push skip the guard${LF}EOF${LF}git push -u origin \"claude/17-a\""
-  expect_push_no_opinion
-}
-case_pp_deny_env_u_main() {
-  # -u consumes FOO, so git is the command word and the ordinary default-branch route denies.
-  pp_run 'env -u FOO git push origin main'
-  expect_push_deny
-  case "$push_err" in
-    *"resolves to the default branch"*) ;;
-    *) __ok=0; __why="${__why}stderr missing 'resolves to the default branch': '$push_err'\n" ;;
-  esac
-  case "$push_err" in
-    *"cannot resolve"*) __ok=0; __why="${__why}denied as unresolved, not via the default-branch route: '$push_err'\n" ;;
-  esac
-}
-case_pp_noop_env_u_feature() {
-  pp_run 'env -u FOO git push origin feature/x'
-  expect_push_no_opinion
-}
-case_pp_noop_env_unset_attached() {
-  pp_run 'env --unset=FOO -uBAR git push origin feature/x'
-  expect_push_no_opinion
-}
-case_pp_deny_env_u_attached_unbalanced() {
-  pp_run 'env -u"A B" git push origin feature/x'
-  pp_expect_unres "$PP_R_PFX"
-}
-case_pp_deny_env_u_git_dir() {
-  pp_run 'env -u FOO GIT_DIR=../x/.git git push origin feature/x'
-  pp_expect_unres "GIT_DIR="
-}
-case_pp_deny_env_c() {
-  pp_run 'env -C ../other git push origin main'
-  pp_expect_unres "$PP_R_ENV"
-}
-case_pp_deny_env_chdir() {
-  pp_run 'env --chdir=../other git push origin feature/x'
-  pp_expect_unres "$PP_R_ENV"
-}
-case_pp_deny_env_s() {
-  pp_run "env -S 'git push origin feature/x'"
-  pp_expect_unres "$PP_R_ENV"
-}
-case_pp_deny_env_s_attached() {
-  # Literal backslash-t inside the attached -S body.
-  pp_run 'env -S"git\tpush origin feature/x"'
-  pp_expect_unres "$PP_R_ENV"
-}
-case_pp_noop_env_c_nonpush() {
-  pp_run 'env -C ../other git status && git push origin feature/x'
-  expect_push_no_opinion
-}
-case_pp_noop_env_i_feature() {
-  pp_run 'env -i git push origin feature/x'
-  expect_push_no_opinion
-}
-case_pp_noop_sudo_opt_feature() {
-  # A dash option after a non-env prefix word is still skipped alone.
-  pp_run 'sudo -E git push origin feature/x'
   expect_push_no_opinion
 }
 case_pp_deny_lost_cmdcfg() {
@@ -3060,8 +2829,8 @@ case_pp_deny_never_executes() {
 case_pp_deny_codex_main_session() {
   local dir="$tmpbase/repo-pp-codex"
   mk_fixture_repo "$dir" main feature/x
-  run_push_guard "$(mk_codex_shell '' 'env -C ../other git push origin main' "$dir")"
-  pp_expect_unres "$PP_R_ENV"
+  run_push_guard "$(mk_codex_shell '' 'X="a b" git push origin main' "$dir")"
+  pp_expect_unres "$PP_R_PFX"
 }
 case_pp_noop_c_quoted_value() {
   # The harness own worktree shape: a quoted -C VALUE is consumed with its option and is never an
@@ -3134,41 +2903,28 @@ case_pp_deny_quoted_opt_gopt_value() {
   pp_run 'git "--no-pager" -C ../other push origin feature/x'
   pp_expect_unres "$PP_R_OPT"
 }
-case_pp_deny_env_chdir_prefix_basename() {
-  # The option value basename is a PREFIX_WORDS member; the env arm must still see the option.
-  pp_run 'env --chdir=../env git push origin feature/x'
-  pp_expect_unres "$PP_R_ENV"
-}
-case_pp_deny_env_lone_dash() {
-  pp_run 'env - git push origin feature/x'
-  pp_expect_unres "$PP_R_ENV"
-}
-# pp_flood_cmd N — the six-record flood shape at N tokens per record: one record per trigger, then
+# pp_flood_cmd N — the three-record flood shape at N tokens per record: one record per trigger, then
 # a real push so the hook reaches check_deadline after the tokenizer.
 pp_flood_cmd() {
-  local n="$1" r1 r2 r3 r4 r5
+  local n="$1" r1 r2 r3
   r1="$(printf ' X="a%.0s' $(seq 1 "$n"))"
   r2="git$(printf ' -"x"%.0s' $(seq 1 "$n")) status"
-  r3="env$(printf ' -Z%.0s' $(seq 1 "$n")) true"
-  r4="env$(printf ' -u X%.0s' $(seq 1 "$n"))$(printf ' Y="b"%.0s' $(seq 1 "$n")) true"
-  r5="git$(printf ' -c "a%.0s' $(seq 1 "$n")) status"
-  printf '%s\n%s\n%s\n%s\n%s\ngit push origin feature/x' "$r1" "$r2" "$r3" "$r4" "$r5"
+  r3="git$(printf ' -c "a%.0s' $(seq 1 "$n")) status"
+  printf '%s\n%s\n%s\ngit push origin feature/x' "$r1" "$r2" "$r3"
 }
-# pp_flood_twin_cmd N (#507) — the mutant-invariant twin of pp_flood_cmd N: the same six-line
-# layout, the same token count per line and the same byte length per token, but records 1, 2, 3
-# and 5 carry exactly ONE trigger token (the first) followed by N-1 tokens that trigger nothing
-# (X=ab, -xyz, -i, -c ab). lost_push() therefore runs at most once per record whether or not the
+# pp_flood_twin_cmd N (#507) — the mutant-invariant twin of pp_flood_cmd N: the same four-line
+# layout, the same token count per line and the same byte length per token, but each of the three
+# records carries exactly ONE trigger token (the first) followed by N-1 tokens that trigger nothing
+# (X=ab, -xyz, -c ab). lost_push() therefore runs at most once per record whether or not the
 # per-segment memos exist, so the twin's cost tracks the unmutated flood and is the same under
-# 449-pg-scan-once, as #470's ab-pc control is under its overlap mutant. Record 4 and the final
-# push line are copied verbatim. Requires N >= 2 (BSD seq counts down when first > last).
+# 449-pg-scan-once, as #470's ab-pc control is under its overlap mutant. The final push line is
+# copied verbatim. Requires N >= 2 (BSD seq counts down when first > last).
 pp_flood_twin_cmd() {
-  local n="$1" r1 r2 r3 r4 r5 m=$(( $1 - 1 ))
+  local n="$1" r1 r2 r3 m=$(( $1 - 1 ))
   r1=' X="a'"$(printf ' X=ab%.0s' $(seq 1 "$m"))"
   r2='git -"x"'"$(printf ' -xyz%.0s' $(seq 1 "$m"))"' status'
-  r3='env -Z'"$(printf ' -i%.0s' $(seq 1 "$m"))"' true'
-  r4="env$(printf ' -u X%.0s' $(seq 1 "$n"))$(printf ' Y="b"%.0s' $(seq 1 "$n")) true"
-  r5='git -c "a'"$(printf ' -c ab%.0s' $(seq 1 "$m"))"' status'
-  printf '%s\n%s\n%s\n%s\n%s\ngit push origin feature/x' "$r1" "$r2" "$r3" "$r4" "$r5"
+  r3='git -c "a'"$(printf ' -c ab%.0s' $(seq 1 "$m"))"' status'
+  printf '%s\n%s\n%s\ngit push origin feature/x' "$r1" "$r2" "$r3"
 }
 case_push_lostscan_noop_flood() {
   # FLOOD + TIMING, sized and bounded by cost RATIO from a same-run control, never by absolute
@@ -3208,12 +2964,9 @@ case_push_lostscan_noop_flood() {
   fi
 }
 
-# --- an env -S string or env -C value cut at a runtime expansion (#508) ---------------------------
-# The segmenter cuts a record at ${, $( and a backtick, so an env -S string or env -C value holding one
-# arrives in pieces. For a record that holds one and names env, the unsupported-env-option trigger reads
-# the whole record, and a push that could still follow denies. Every fixture passes an explicit cwd
-# (pp_run), and every deny pins the fixed reason in parentheses and that no deny line echoes input. Case
-# names avoid the substrings other registry filters match.
+# --- helpers for the runtime-expansion cases below (#517) -----------------------------------------
+# Every fixture passes an explicit cwd (pp_run), and every deny pins the fixed reason in parentheses and
+# that no deny line echoes input. Case names avoid the substrings other registry filters match.
 PP_R_RXG="runtime expansion in the git options"
 # rtx_deny REASON CMD... — each CMD denies with the unresolved line naming REASON, echoing no input.
 rtx_deny() {
@@ -3236,29 +2989,6 @@ rtx_noop() {
     expect_push_no_opinion
     if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
   done
-}
-# mutant:508-pg-rec-lost-off — drops the record-level fallback of the unsupported-env-option
-#   trigger, so an env -S string the segmenter cut at an expansion is judged without its tail.
-case_push_rtexp_deny_env_s_brace() {
-  rtx_deny "$PP_R_ENV" 'env -S'"'"'${X}git\_push\_origin\_main'"'"
-}
-case_push_rtexp_deny_env_s_cmdsubst() {
-  rtx_deny "$PP_R_ENV" 'env -S"$(true)git\_push\_origin\_main"'
-}
-case_push_rtexp_deny_env_c_brace() {
-  rtx_deny "$PP_R_ENV" 'env -C ${D} git push origin feature/x'
-}
-# mutant:508-pg-rec-cut-gate — drops the cut-character condition of that fallback, so every record
-#   naming env is scanned whole.
-# mutant:508-pg-rec-lost-always — makes the record-level fallback unconditional instead of push-
-#   reachability gated, so an unsupported env option in a cut record denies even when no push can
-#   follow.
-case_push_rtexp_noop_env_c_status() {
-  # An unsupported env option in a cut record denies only when a push can follow.
-  rtx_noop 'env -C ${D} git status'
-}
-case_push_rtexp_noop_env_s_uncut() {
-  rtx_noop 'env -S'"'"'echo hi'"'"' true; git push origin feature/x'
 }
 
 # --- runtime expansion in the push destination, the lost-segment alias name, the command-size cap (#517)
@@ -3744,8 +3474,6 @@ case_push_rxscan_noop_flood() {
 #   breaks, so push followed by an escaped TAB or LF fuses into one word.
 # mutant:448-pg-alias-cr-mid -- drops the interior-CR marker on an [alias] value, so a CR strictly
 #   inside the line fuses the words around it.
-# mutant:448-pg-alias-lost-quoted-reloc -- drops the quoted relocation or command-line-config
-#   assignment test from emit_alias_lost().
 # mutant:448-pg-alias-xcfg-export-cfg -- drops the GIT_CONFIG_* test from the exported-name arm of the
 #   cross-segment config flag.
 # mutant:448-pg-alias-xcfg-bare-cfg -- drops the GIT_CONFIG_* test from the bare-assignment arm of the
@@ -3759,13 +3487,6 @@ case_push_rxscan_noop_flood() {
 # mutant:448-pg-alias-subsection-space -- drops the blank-run alternative of the subsection header.
 # mutant:448-pg-alias-subsection-tab -- drops the TAB alternative of the subsection header.
 # mutant:448-pg-alias-subsection-dot -- drops the dotted alias header alternative.
-# mutant:448-pg-alias-lost-quoted-cfg -- drops the GIT_CONFIG_* name tests from the embedded
-#   assignment scan of a lost segment.
-# mutant:448-pg-alias-lost-trigger-git -- drops the trigger token from the names-git gate of a lost
-#   segment, so a relocation packed with git into one env -S token (backslash-underscore separators) is
-#   not treated as an alias candidate.
-# mutant:448-pg-alias-lost-substring -- makes the embedded assignment scan prefix-only, so an
-#   assignment inside an env -S string no longer counts.
 # mutant:448-pg-alias-backtick -- drops the backtick test on command-line config of an alias candidate.
 # mutant:448-pg-alias-dollar-env -- drops the dollar-sign test on GIT_CONFIG_* assignment values.
 # mutant:448-pg-alias-cr-mid-subsection -- drops the interior-CR marker on a subsection alias value.
@@ -4165,30 +3886,6 @@ case_al_deny_cr_mid_subsection() {
   al_run 'git zqp main' "$dir"
   al_expect_alias ".git/config"
 }
-case_al_deny_env_quoted_home() {
-  local dir="$tmpbase/repo-al-env-qhome"
-  mk_fixture_repo "$dir" main feature/x
-  al_run "env \"HOME=$tmpbase/home-al-qhome\" git p origin main" "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_env_squoted_xdg() {
-  local dir="$tmpbase/repo-al-env-qxdg"
-  mk_fixture_repo "$dir" main feature/x
-  al_run "env 'XDG_CONFIG_HOME=/x' git p origin main" "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_command_env_quoted() {
-  local dir="$tmpbase/repo-al-command-env"
-  mk_fixture_repo "$dir" main feature/x
-  al_run "command env \"HOME=$tmpbase/home-al-cenv\" git p origin main" "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_env_s_reloc() {
-  local dir="$tmpbase/repo-al-env-s"
-  mk_fixture_repo "$dir" main feature/x
-  al_run "env -S \"HOME=$tmpbase/home-al-envs git p origin main\"" "$dir"
-  al_expect_aliascfg
-}
 case_al_deny_xcfg_export_gitconfig() {
   local dir="$tmpbase/repo-al-xcfg-export-cfg"
   mk_fixture_repo "$dir" main feature/x
@@ -4297,42 +3994,6 @@ case_al_deny_subsection_any_subcommand() {
   mk_fixture_config "$dir" "$(printf '[alias "zqp"]\n\tcommand = push\n')"
   al_run 'git status' "$dir"
   al_expect_alias ".git/config"
-}
-case_al_deny_env_s_attached() {
-  local dir="$tmpbase/repo-al-env-s-att"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'env -S"HOME=/x git p origin main"' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_env_s_squoted() {
-  local dir="$tmpbase/repo-al-env-s-sq"
-  mk_fixture_repo "$dir" main feature/x
-  al_run "env -S'XDG_CONFIG_HOME=/x git p origin main'" "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_env_split_string() {
-  local dir="$tmpbase/repo-al-env-split"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'env --split-string="HOME=/x git p origin main"' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_env_s_underscore_all() {
-  local dir="$tmpbase/repo-al-env-s-us-all"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'env -S"HOME=/x\_git\_p\_origin\_main"' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_env_s_underscore_git() {
-  local dir="$tmpbase/repo-al-env-s-us-git"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'env -S"HOME=/x\_git" p origin main' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_env_quoted_gitconfig() {
-  local dir="$tmpbase/repo-al-env-qcfg"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'env "GIT_CONFIG_PARAMETERS=$X" git p origin main' "$dir"
-  al_expect_aliascfg
 }
 case_al_deny_backtick_quoted() {
   # The backtick cuts the segment inside the quoted key, so the -c value is never seen whole.
@@ -9185,20 +8846,6 @@ case_push_optval_deny_alias() {
   al_expect_alias ".git/config"
   al_expect_no_echo "zqp"
 }
-# mutant:518-pg-optval-alias-quoted — drops the quote-bearing guard on the alias call, so the trigger sets
-#   the once-per-segment alias flag first and the value word own trigger, which counts it toward the
-#   names-git gate, never runs.
-case_push_optval_deny_alias_quoted() {
-  local dir="$tmpbase/repo-optval-alias-quoted" c w0
-  mk_fixture_repo "$dir" main feature/x
-  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
-  for c in 'nice -n "X=git" zqp origin main' 'sudo -u "-git" zqp origin main'; do
-    w0="$__why"; __why=""
-    al_run "$c" "$dir"
-    al_expect_alias ".git/config"
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
 case_push_optval_noop_alias_none() {
   local dir="$tmpbase/repo-optval-noalias"
   mk_fixture_repo "$dir" main feature/x
@@ -9393,9 +9040,6 @@ case_ab_interp_deny_guard() {
   # a token with a slash, or one whose basename is a prefix word, keeps the walk it had: +/gh was the
   # command word gh, and -/sudo the prefix word sudo whose own option scan finds the gh behind it
   abx_deny implementer gh "bash +/gh pr merge 5" "bash -/sudo -u root gh pr merge 5"
-  # a quote-bearing value word that reads as an assignment or an option once unquoted was judged by the
-  # #505 rule that follows a prefix word, so it is no plain value word either
-  abx_deny implementer gh "bash -o 'X=gh' pr merge 5" 'bash -O "X=gh" pr merge 5' "bash -o '-Sgh' pr merge 5"
 }
 case_ab_interp_deny_codex() {
   run_boundary "$(mk_codex_shell implementer "bash -o pipefail -c 'gh pr merge 5'")"
@@ -9518,8 +9162,8 @@ case_push_interp_deny_guard() {
   pp_expect_unres "cd/pushd/popd earlier in this command"
   pp_run 'bash -o export GIT_DIR; git push origin feature/x'
   pp_expect_unres "GIT_DIR set earlier in this command"
-  # a quote-bearing value word that reads as an assignment or an option once unquoted was judged by the
-  # #449 rule that follows a prefix word, so it is no plain value word either
+  # a quote-bearing value word that reads as an assignment or an option once unquoted is no plain value
+  # word either: ip_value_ok() refuses any quote-bearing word
   for c in "bash -o 'X=a' echo git push origin main" 'bash -O "X=a" echo git push origin main' \
     "bash -o '-x' echo git push origin main"; do
     w0="$__why"; __why=""
@@ -9812,10 +9456,9 @@ case_push_subst_noop() {
     'echo use `git` to push'
 }
 
-# --- claude-dir-guard.sh: a shim name split by quote or backslash characters, and an attached env -S
-# string (#538) ---------------------------------------------------------------------------------
+# --- claude-dir-guard.sh: a shim name split by quote or backslash characters (#538) ----------------
 # Each spelling runs the shim in a real shell, and the walk resolves it the same way (a quote strip, a
-# backslash strip, an env -S reading). The deny rows reach the Bash route's
+# backslash strip). The deny rows reach the Bash route's
 # no-inline-patch deny (or, behind a quoted or escaped prefix, the unbalanced-quote deny); the
 # no-opinion rows are the prose and precision controls that must stay quiet. Case names carry the
 # cdg-split- prefix, and no fixture command mentions a codex directory (the cdg- registry filters
@@ -9879,26 +9522,20 @@ case_cdg_split_deny_names() {
     'a\pply_patch < x.patch'
 }
 case_cdg_split_deny_verifier() {
-  cdg_split_nip 'trail-blazer-flow:verifier' \
-    'apply_"patch" < x.patch' \
-    "env -S'apply_patch' < x.patch"
+  cdg_split_nip 'trail-blazer-flow:verifier' 'apply_"patch" < x.patch'
 }
 case_cdg_split_heredoc() {
-  # The two new routes each take an inline heredoc patch: a .claude header denies through the
+  # The split-name route takes an inline heredoc patch: a .claude header denies through the
   # raw-text catch-all, and a benign header gets no opinion.
-  local f w0 hdr="*** Begin Patch${LF}*** Add File: .claude/settings.local.json${LF}+x${LF}*** End Patch"
-  for f in 'apply_"patch"' "env -S'apply_patch'"; do
-    w0="$__why"; __why=""
-    run_claude_guard "$(mk_codex_shell implementer "$f <<'EOF'${LF}${hdr}${LF}EOF")"
-    expect_cdg_deny_unparseable
-    case "$cdg_err" in
-      *"mentioning a .claude/.codex path"*) ;;
-      *) __ok=0; __why="${__why}stderr missing 'mentioning a .claude/.codex path': '$cdg_err'\n" ;;
-    esac
-    run_claude_guard "$(mk_codex_shell implementer "$f <<'EOF'${LF}${CDG_P}${LF}EOF")"
-    expect_cdg_no_opinion
-    if [ -n "$__why" ]; then __why="${w0}[$f] ${__why}"; else __why="$w0"; fi
-  done
+  local f='apply_"patch"' hdr="*** Begin Patch${LF}*** Add File: .claude/settings.local.json${LF}+x${LF}*** End Patch"
+  run_claude_guard "$(mk_codex_shell implementer "$f <<'EOF'${LF}${hdr}${LF}EOF")"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"mentioning a .claude/.codex path"*) ;;
+    *) __ok=0; __why="${__why}stderr missing 'mentioning a .claude/.codex path': '$cdg_err'\n" ;;
+  esac
+  run_claude_guard "$(mk_codex_shell implementer "$f <<'EOF'${LF}${CDG_P}${LF}EOF")"
+  expect_cdg_no_opinion
 }
 case_cdg_split_noop_prose() {
   # Prose that merely mentions a split spelling, and a command that fast path 2 excludes outright.
@@ -9916,20 +9553,14 @@ case_cdg_split_noop_scope() {
   run_claude_guard "$(mk_agent_cmd_mode implementer 'apply_"patch" < x.patch' plan)"
   expect_cdg_no_opinion
 }
-# mutant:538-cdg-alt-parity — the whole-window parity check on a shim resolved through the new routes
-#   is switched off, so the unbalanced quote or trailing backslash before it no longer denies.
+# mutant:538-cdg-alt-parity — the whole-window parity check on a shim resolved through the split-name
+#   routes is switched off, so the trailing backslash before it no longer denies.
 # mutant:538-cdg-alt-bs — a backslash-stripped token no longer marks its window, so a trailing
 #   backslash before a shim resolved that way goes unchecked.
-# mutant:538-cdg-alt-envs — an env -S string resolved by the glued-option rule no longer marks its
-#   window, so an unbalanced quote before it goes unchecked.
-# mutant:538-cdg-alt-envs-word — an env -S string resolved by its word match no longer marks its
-#   window, so an unbalanced quote before -S/opt/apply_patch goes unchecked.
-# mutant:538-cdg-alt-envs-value — an env -S string read from the next token no longer marks its
-#   window, so an unbalanced quote before a separate -S string goes unchecked.
 case_cdg_split_expansion_guards() {
-  # Denies that must survive the new routes: the plain spellings, and four prefixes whose unbalanced
-  # quote or trailing backslash the new-route parity check keeps denying.
-  local eof="<<'EOF'${LF}${CDG_P}${LF}EOF" c w0 q="'"
+  # Denies that must survive the split-name routes: the plain spellings, and a shim with a trailing
+  # backslash that the route parity check keeps denying.
+  local eof="<<'EOF'${LF}${CDG_P}${LF}EOF"
   cdg_split_nip implementer \
     'apply_patch < x.patch' \
     'applypatch < x.patch' \
@@ -9937,77 +9568,8 @@ case_cdg_split_expansion_guards() {
     '${X} apply_patch < x.patch' \
     "env -S 'apply_patch' < x.patch" \
     'env apply_patch < x.patch'
-  for c in 'apply_patch\ '"$eof" "env -u${q}a -S${q}apply_patch${q} $eof" \
-    "env -u${q}a -S/opt/apply_patch $eof" "env -u${q}a -S ${q}X=1\\_apply_patch${q} $eof"; do
-    w0="$__why"; __why=""
-    run_claude_guard "$(mk_codex_shell implementer "$c")"
-    expect_cdg_qa_deny
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
-# mutant:538-cdg-envs-off — the env -S reading never runs, so an attached string naming the shim is
-#   never found.
-# mutant:538-cdg-envs-lead — the glued-option rule is removed, so a first word such as -Sapply_patch
-#   no longer resolves.
-# mutant:538-cdg-envs-unescape — a backslash-underscore is no longer read as a space, so a string whose
-#   shim word is followed by one (-S'apply_patch\_-') reads as one word that is not the name.
-# mutant:538-cdg-envs-names — the word match drops the no-underscore spelling, so a string whose second
-#   word is applypatch is never found.
-# mutant:538-cdg-envs-basename — the word match drops the path-qualified underscore spelling, so a
-#   string whose second word is /opt/bin/apply_patch is never found.
-# mutant:538-cdg-envs-delete-bs — the string reading keeps backslashes, so a name split by one inside
-#   the string (-S'a\pply_patch') no longer reads as the shim.
-# mutant:538-cdg-envs-dash — a bare dash prefix word resets the env context, so an env -S string after
-#   env - is never read.
-case_cdg_split_deny_env_s() {
-  # An attached env -S string is read the way env reads it: a backslash-underscore is a space, and
-  # quotes and backslashes are deleted. The first word may carry the option itself (-Sapply_patch).
-  local q="'"
-  cdg_split_nip implementer \
-    "env -S${q}apply_patch${q} < x.patch" \
-    'env -S"applypatch" < x.patch' \
-    'env -Sapply_patch < x.patch' \
-    'env --split-string=apply_patch < x.patch' \
-    "env -vS${q}apply_patch${q} < x.patch" \
-    "env -i -S${q}apply_patch${q} < x.patch" \
-    "env -S${q}X=1\\_apply_patch${q} < x.patch" \
-    "env -S${q}apply_patch\\_-${q} < x.patch" \
-    "env -S${q}X=1\\_applypatch${q} < x.patch" \
-    "env -S${q}X=1\\_/opt/bin/apply_patch${q} < x.patch" \
-    "env -S${q}a\\pply_patch${q} < x.patch" \
-    "env - -S${q}apply_patch${q} < x.patch"
-}
-# mutant:538-cdg-envs-sep — a bare -S no longer reads the next token as its string.
-# mutant:538-cdg-envs-longopt — the separate-string read drops the long option, so a bare
-#   --split-string never reads the next token.
-# mutant:538-cdg-vp-lead — the value scan loses its glued-option rule, so an env -S string behind
-#   another option's value (env -u X -S'apply_patch') is never found.
-# mutant:538-cdg-envs-value-dq — the separate-string read keeps double quotes, so a name split by them
-#   inside the string (-S 'X=1\_a"pply"_patch') no longer reads as the shim.
-# mutant:538-cdg-envs-value-names — the separate-string read drops the no-underscore spelling, so a
-#   separate string whose second word is applypatch is never found.
-case_cdg_split_deny_env_s_value() {
-  # The -S string as a separate value, and an attached one behind another option's value.
-  local q="'"
-  cdg_split_nip implementer \
-    "env -S ${q}X=1\\_apply_patch${q} < x.patch" \
-    "env -S ${q}X=1\\_a\"pply\"_patch${q} < x.patch" \
-    "env -S ${q}X=1\\_applypatch${q} < x.patch" \
-    "env --split-string ${q}X=1\\_apply_patch${q} < x.patch" \
-    "env -u X -S${q}apply_patch${q} < x.patch" \
-    "env -C /tmp -S${q}apply_patch${q} < x.patch" \
-    "nice -n 5 env -S${q}apply_patch${q} < x.patch"
-}
-# mutant:538-cdg-envs-context — every prefix word opens the env context, so an option of a non-env
-#   prefix word that ends in the shim name (exec -aapply_patch) is read as an env -S string.
-case_cdg_split_noop_env_s() {
-  # An env string or option that does not name the shim, and a non-env prefix option that merely
-  # ends in the shim name, stay quiet.
-  cdg_split_noop implementer \
-    "env -S'echo hi' true; echo applypatch.md" \
-    'env FOO=1 rg apply_patch hooks/' \
-    'env -i ls apply_patch.md' \
-    'exec -aapply_patch ./tool'
+  run_claude_guard "$(mk_codex_shell implementer 'apply_patch\ '"$eof")"
+  expect_cdg_qa_deny
 }
 # mutant:538-cdg-seg-split — a segment spelling the shim split is no longer flagged for the parity
 #   check, so the quoted or escaped prefix before it is never judged.
@@ -10045,7 +9607,7 @@ case_cdg_split_deny_overblock() {
 case_cdg_split_never_executes() {
   local c
   cdg_trap_path cdg-split
-  for c in 'apply_"patch" < x.patch' "env -S'apply_patch' < x.patch"; do
+  for c in 'apply_"patch" < x.patch'; do
     run_claude_guard "$(mk_codex_shell 'implementer' "$c")" "$cdg_trapdir:$PATH"
     expect_cdg_deny_unparseable
   done
@@ -10446,34 +10008,14 @@ cases=(
   "ab-pc-deny-repeat|case_ab_pc_deny_repeat|zsh repeat deny: implementer, repeat 3 git push -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab, 403-ab-pc-repeat)"
   "ab-pc-deny-verifier-eval|case_ab_pc_deny_verifier_eval|eval deny: verifier, eval git push -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
   "ab-pc-noop-verifier-eval-status|case_ab_pc_noop_verifier_eval_status|eval no opinion: verifier, eval git status (release-blocker control: the new skip must not narrow the verifier's read-only git) -- control, not part of the mutation-proof registry"
-  "ab-rtexp-deny-env-s-record-wide|case_ab_rtexp_deny_env_s_record_wide|the env -S check is record-wide for both roles -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-envs-off)"
-  "ab-rtexp-deny-env-s-brace-gh|case_ab_rtexp_deny_env_s_brace_gh|env -S with a brace expansion naming gh denies -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-envs-off)"
-  "ab-rtexp-deny-env-s-escaped-gh|case_ab_rtexp_deny_env_s_escaped_gh|env -S with an expansion and escaped separators naming gh denies -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-envs-off, 508-ab-rx-envs-unescape)"
-  "ab-rtexp-noop-sudo-s|case_ab_rtexp_noop_sudo_s|no opinion: sudo -S with an expansion is not env -S -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-in-env-any)"
-  "ab-rtexp-noop-env-s-no-names|case_ab_rtexp_noop_env_s_no_names|no opinion: env -S with an expansion that names neither git nor gh -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-envs-word)"
-  "ab-rtexpscan-noop-flood|case_ab_rtexpscan_noop_flood|FLOOD+TIMING: an env line of expansion-bearing -S options, no opinion; token count sized from a same-run, mutant-invariant twin control, deadline a multiple of the predicted linear cost -- mutation proof: dev/mutants/hook-tests.json (508-ab-rx-rescan)"
-  "ab-lost-deny-env-u-gh|case_ab_lost_deny_env_u_gh|env -u/--unset consumes its value, so the next word is the command; gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-u-consume)"
-  "ab-lost-deny-env-u-git|case_ab_lost_deny_env_u_git|env -u X git commit denies for the implementer -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-u-consume)"
-  "ab-lost-deny-env-u-quoted|case_ab_lost_deny_env_u_quoted|an env -u value split at a space, detached or attached, still reaches gh -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-u-attached-quote, 505-ab-env-u-value-check, 505-ab-unbalanced-dq)"
-  "ab-lost-deny-env-opt|case_ab_lost_deny_env_opt|an env option outside the allowlist (-C) before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-opt-off, 505-ab-scan-reset, 505-ab-unbalanced-dq, 505-ab-unbalanced-off)"
-  "ab-lost-deny-env-split-string|case_ab_lost_deny_env_split_string|env -S and --split-string with a quoted string naming gh deny -- mutation proof: dev/mutants/hook-tests.json (505-ab-word-lead-off)"
-  "ab-lost-deny-env-split-string-escaped|case_ab_lost_deny_env_split_string_escaped|env -S with backslash-underscore separators naming gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-word-lead-off, 505-ab-word-unescape)"
-  "ab-lost-deny-env-split-string-git|case_ab_lost_deny_env_split_string_git|env -S naming git denies as the fixed git -prefix- sentinel -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-opt-off, 505-ab-git-sentinel, 505-ab-word-lead-off, 505-ab-word-lower, 505-ab-word-ungated)"
   "ab-lost-deny-assign-dquote|case_ab_lost_deny_assign_dquote|an assignment with a double-quoted value holding a space before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-unbalanced-dq, 505-ab-unbalanced-off, 505-ab-word-lower, 505-ab-word-strip-bs, 505-ab-word-strip-dq, 505-ab-word-strip-sq)"
   "ab-lost-deny-assign-squote|case_ab_lost_deny_assign_squote|an assignment with a single-quoted or ANSI-C value holding a space before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-unbalanced-off, 505-ab-unbalanced-sq)"
   "ab-lost-deny-assign-backslash|case_ab_lost_deny_assign_backslash|an assignment with a backslash-escaped space before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-unbalanced-bs, 505-ab-unbalanced-off)"
-  "ab-lost-deny-prefix-quoted|case_ab_lost_deny_prefix_quoted|a quoted assignment or option after a prefix word before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-prefix-quoted-shape, 505-ab-word-lead-off)"
-  "ab-lost-deny-prefix-squoted-opt|case_ab_lost_deny_prefix_squoted_opt|a single-quoted env option before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-prefix-quoted-shape, 505-ab-quote-bearing-bs, 505-ab-quote-bearing-sq, 505-ab-strip-bs)"
-  "ab-lost-deny-verifier-git|case_ab_lost_deny_verifier_git|the verifier denies read-only git behind a lost prefix as git -prefix- -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-opt-off, 505-ab-git-sentinel, 505-ab-unbalanced-dq, 505-ab-unbalanced-off, 505-ab-word-lead-off, 505-ab-word-ungated)"
-  "ab-lost-deny-verifier-env-arm-basename|case_ab_lost_deny_verifier_env_arm_basename|the env option arm reads a word whose basename is a prefix word -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-arm-prefix-guard, 505-ab-env-opt-off, 505-ab-git-sentinel, 505-ab-word-ungated)"
-  "ab-lost-deny-claude|case_ab_lost_deny_claude|a .claude write behind a lost prefix denies with the .claude reason -- mutation proof: dev/mutants/hook-tests.json (505-ab-claude-arm, 505-ab-env-opt-off, 505-ab-env-u-consume, 505-ab-unbalanced-dq, 505-ab-unbalanced-off, 505-ab-word-ungated)"
-  "ab-lost-noop-env-u-consumes|case_ab_lost_noop_env_u_consumes|no opinion: env -u gh pr merge 5 runs pr, the value is consumed -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-u-consume)"
-  "ab-lost-noop-verifier-env-allowlist|case_ab_lost_noop_verifier_env_allowlist|no opinion: allowlisted env options and the harness git -C shapes -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-novalue-vocab, 505-ab-env-u-attached)"
-  "ab-lost-noop-verifier-nonenv-opt|case_ab_lost_noop_verifier_nonenv_opt|no opinion: an option of sudo is not an env option -- mutation proof: dev/mutants/hook-tests.json (505-ab-env-context)"
-  "ab-lost-noop-scan-precision|case_ab_lost_noop_scan_precision|no opinion: the scan reads exact words, not substrings or option suffixes -- mutation proof: dev/mutants/hook-tests.json (505-ab-scan-lead, 505-ab-word-exact, 505-ab-word-ungated)"
-  "ab-lost-noop-candidate-exempt|case_ab_lost_noop_candidate_exempt|no opinion: a heredoc bullet line with a quoted word is no option or assignment -- mutation proof: dev/mutants/hook-tests.json (505-ab-shape-gate)"
+  "ab-lost-deny-verifier-git|case_ab_lost_deny_verifier_git|the verifier denies read-only git behind a lost prefix as git -prefix- -- mutation proof: dev/mutants/hook-tests.json (505-ab-git-sentinel, 505-ab-unbalanced-dq, 505-ab-unbalanced-off, 505-ab-word-ungated)"
+  "ab-lost-deny-claude|case_ab_lost_deny_claude|a .claude write behind a lost prefix denies with the .claude reason -- mutation proof: dev/mutants/hook-tests.json (505-ab-claude-arm, 505-ab-unbalanced-dq, 505-ab-unbalanced-off, 505-ab-word-ungated)"
+  "ab-lost-noop-scan-precision|case_ab_lost_noop_scan_precision|no opinion: the scan reads exact words, not substrings -- mutation proof: dev/mutants/hook-tests.json (505-ab-word-exact, 505-ab-word-ungated)"
   "ab-lost-noop-controls|case_ab_lost_noop_controls|no opinion: a trigger with no gh, git or claude word after it -- mutation proof: dev/mutants/hook-tests.json (505-ab-word-ungated)"
-  "ab-lostscan-noop-flood|case_ab_lostscan_noop_flood|FLOOD+TIMING: three records of triggering tokens, no opinion; token count sized from a same-run twin holding one trigger per record, deadline a multiple of the predicted linear cost -- mutation proof: dev/mutants/hook-tests.json (505-ab-scan-once)"
+  "ab-lostscan-noop-flood|case_ab_lostscan_noop_flood|FLOOD+TIMING: one record of triggering tokens, no opinion; token count sized from a same-run twin holding one trigger in the record, deadline a multiple of the predicted linear cost -- mutation proof: dev/mutants/hook-tests.json (505-ab-scan-once)"
   # --- hooks/push-guard.sh (#260) cases -----------------------------------------------------------
   # Mutation-proof table (LESSON 2026-09-01, LESSON 2026-09-07(b)): each row below cites one of
   # the mutants actually applied to hooks/push-guard.sh via a Python literal-string replace
@@ -11733,16 +11275,9 @@ cases=(
   "push-parse-deny-assign-squote-space|case_pp_deny_assign_squote_space|deny: X='a b' git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-off, 449-pg-unbalanced-sq)"
   "push-parse-deny-assign-backslash-space|case_pp_deny_assign_backslash_space|deny: X=a\\ b git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-off, 449-pg-unbalanced-bs)"
   "push-parse-deny-git-dir-space|case_pp_deny_git_dir_space|deny: GIT_DIR=\"../a b/.git\" git push origin feature/x keeps the earlier #292 reason GIT_DIR= -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-off, 449-pg-unbalanced-dq, 449-pg-lost-unres-precedence)"
-  "push-parse-deny-env-quoted-assign|case_pp_deny_env_quoted_assign|deny: env \"X=a\" git push origin feature/x (quoted assignment after a prefix word) -- mutation proof: dev/mutants/hook-tests.json (449-pg-prefix-quoted-shape)"
-  "push-parse-deny-env-quoted-opt|case_pp_deny_env_quoted_opt|deny: env \"-C\" ../other git push origin feature/x (quoted option after a prefix word) -- mutation proof: dev/mutants/hook-tests.json (449-pg-prefix-quoted-shape)"
-  "push-parse-deny-env-u-quoted-value|case_pp_deny_env_u_quoted_value|deny: env -u \"A B\" git push origin feature/x (unbalanced value of -u) -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-env-u-value-check)"
   "push-parse-noop-assign-space-nonpush|case_pp_noop_assign_space_nonpush|no opinion: X=\"a b\" git status, then a feature push -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated)"
   "push-parse-noop-assign-space-commit|case_pp_noop_assign_space_commit|no opinion: GIT_AUTHOR_NAME=\"A B\" git commit -m \"fix push\", then a feature push -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated, 449-pg-lost-unarmed)"
   "push-parse-noop-heredoc-apostrophe|case_pp_noop_heredoc_apostrophe|no opinion: a heredoc commit whose body line starts Don't, then the harness's own push -- control, not part of the mutation-proof registry"
-  "push-parse-deny-env-u-main|case_pp_deny_env_u_main|deny: env -u FOO git push origin main via the default-branch route (-u consumes FOO) -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-u-consume)"
-  "push-parse-noop-env-u-feature|case_pp_noop_env_u_feature|no opinion: env -u FOO git push origin feature/x -- control, not part of the mutation-proof registry"
-  "push-parse-noop-env-unset-attached|case_pp_noop_env_unset_attached|no opinion: env --unset=FOO -uBAR git push origin feature/x (attached forms) -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-u-attached)"
-  "push-parse-deny-env-u-attached-unbalanced|case_pp_deny_env_u_attached_unbalanced|deny: env -u\"A B\" git push origin feature/x (unbalanced attached -u value) -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-env-u-attached, 449-pg-env-u-attached-quote)"
   "push-parse-deny-gopt-value-c|case_pp_deny_gopt_value_c|deny: git -c \"user.name=A B\" push origin feature/x -- the quoted -c value splits -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-lost-precedence, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
   "push-parse-deny-gopt-value-sshcommand|case_pp_deny_gopt_value_sshcommand|deny: git -c \"core.sshCommand=ssh -i k\" push origin main -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
   "push-parse-deny-gopt-value-namespace|case_pp_deny_gopt_value_namespace|deny: git --namespace \"a b\" push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-dq, 449-pg-gopt-value-off, 449-pg-lost-mode2)"
@@ -11756,26 +11291,11 @@ cases=(
   "push-parse-deny-squote-c|case_pp_deny_squote_c|deny: git '-c' remote.origin.push=HEAD:main push (single-quoted option) -- mutation proof: dev/mutants/hook-tests.json (449-pg-obscured-off, 449-pg-quote-bearing-sq)"
   "push-parse-deny-prefix-gopt-value|case_pp_deny_prefix_gopt_value|deny: X=\"a b\" git -C ../other push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-off, 449-pg-unbalanced-dq, 449-pg-lost-gopt-skip)"
   "push-parse-deny-quoted-opt-gopt-value|case_pp_deny_quoted_opt_gopt_value|deny: git \"--no-pager\" -C ../other push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-obscured-off, 449-pg-lost-gopt-skip, 449-pg-lost-gopt-skip-armed1)"
-  "push-parse-deny-env-chdir-prefix-basename|case_pp_deny_env_chdir_prefix_basename|deny: env --chdir=../env git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off, 449-pg-env-arm-prefix-guard)"
-  "push-parse-deny-env-lone-dash|case_pp_deny_env_lone_dash|deny: env - git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off, 449-pg-env-arm-prefix-guard)"
-  "push-parse-deny-env-u-git-dir|case_pp_deny_env_u_git_dir|deny: env -u FOO GIT_DIR=../x/.git git push origin feature/x (-u value consumed, GIT_DIR= reason) -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-u-consume)"
-  "push-parse-deny-env-c|case_pp_deny_env_c|deny: env -C ../other git push origin main as an unsupported env option -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off)"
-  "push-parse-deny-env-chdir|case_pp_deny_env_chdir|deny: env --chdir=../other git push origin feature/x as an unsupported env option -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off)"
-  "push-parse-deny-env-s|case_pp_deny_env_s|deny: env -S 'git push origin feature/x' as an unsupported env option -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off)"
-  "push-parse-deny-env-s-attached|case_pp_deny_env_s_attached|deny: env -S\"git\\tpush origin feature/x\" (attached body, literal backslash-t) as an unsupported env option -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off, 449-pg-lost-same-token)"
-  "push-parse-noop-env-c-nonpush|case_pp_noop_env_c_nonpush|no opinion: env -C ../other git status, then a feature push -- mutation proof: dev/mutants/hook-tests.json (449-pg-lost-ungated)"
-  "push-parse-noop-env-i-feature|case_pp_noop_env_i_feature|no opinion: env -i git push origin feature/x -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-novalue-vocab)"
-  "push-parse-noop-sudo-opt-feature|case_pp_noop_sudo_opt_feature|no opinion: sudo -E git push origin feature/x (a dash option after a non-env prefix word) -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-context)"
   "push-parse-deny-lost-cmdcfg|case_pp_deny_lost_cmdcfg|deny: GIT_CONFIG_COUNT=1 X=\"a b\" git push origin feature/x with the command-line-config message -- mutation proof: dev/mutants/hook-tests.json (449-pg-unbalanced-off, 449-pg-unbalanced-dq, 449-pg-lost-precedence)"
   "push-parse-deny-never-executes|case_pp_deny_never_executes|deny via the new route, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH, AND the fixture repo's file listing is byte-identical -- mutation proof: dev/mutants/hook-tests.json (449-pg-obscured-off)"
-  "push-parse-deny-codex-main-session|case_pp_deny_codex_main_session|deny: a Codex-shaped main-session payload with env -C ../other git push origin main -- mutation proof: dev/mutants/hook-tests.json (449-pg-env-lost-off, 494-pg-wd-precedence)"
+  "push-parse-deny-codex-main-session|case_pp_deny_codex_main_session|deny: a Codex-shaped main-session payload with X=\"a b\" git push origin main -- mutation proof: dev/mutants/hook-tests.json (494-pg-wd-precedence)"
   "push-parse-noop-c-quoted-value|case_pp_noop_c_quoted_value|no opinion: git -C \"../demo-wt-1\" push -u origin \"claude/17-a\" (the harness's own worktree shape) -- control, not part of the mutation-proof registry"
   "push-lostscan-noop-flood|case_push_lostscan_noop_flood|FLOOD+TIMING: large records, one per trigger, then a feature push -- no opinion; token count sized from a same-run, mutant-invariant twin control, deadline a multiple of the predicted linear cost (#507) -- mutation proof: dev/mutants/hook-tests.json (449-pg-scan-once)"
-  "push-rtexp-deny-env-s-brace|case_push_rtexp_deny_env_s_brace|deny: env -S with a brace expansion cut by the segmenter -- mutation proof: dev/mutants/hook-tests.json (508-pg-rec-lost-off)"
-  "push-rtexp-deny-env-s-cmdsubst|case_push_rtexp_deny_env_s_cmdsubst|deny: env -S with a command substitution cut by the segmenter -- mutation proof: dev/mutants/hook-tests.json (508-pg-rec-lost-off)"
-  "push-rtexp-deny-env-c-brace|case_push_rtexp_deny_env_c_brace|deny: env -C \${D} before a push -- mutation proof: dev/mutants/hook-tests.json (508-pg-rec-lost-off)"
-  "push-rtexp-noop-env-s-uncut|case_push_rtexp_noop_env_s_uncut|no opinion: env -S with no expansion in an uncut record -- mutation proof: dev/mutants/hook-tests.json (508-pg-rec-cut-gate)"
-  "push-rtexp-noop-env-c-status|case_push_rtexp_noop_env_c_status|no opinion: env -C \${D} git status (no push can follow) -- mutation proof: dev/mutants/hook-tests.json (508-pg-rec-lost-always)"
   "push-rxdest-deny-dollar|case_push_rxdest_deny_dollar|deny: a push destination built at run time (HEAD:\$B, \"HEAD:\${B}\", \$B, +HEAD:\$B, refs/heads/\$B, a non-plain dollar-quote word, a second refspec) -- the fixed rxdest line, echoing nothing -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxdest-dollar-off, 517-pg-rxdest-deny-off)"
   "push-rxdest-deny-single-arg|case_push_rxdest_deny_single_arg|deny: a lone push argument built at run time -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxdest-n1-off, 517-pg-rxdest-dollar-off)"
   "push-rxdest-deny-ansi-c-literal|case_push_rxdest_deny_ansi_c_literal|deny: a destination that is exactly one plain ANSI-C or locale segment is read as the name it spells -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxdest-lit-off, 517-pg-rxdest-plus)"
@@ -11845,10 +11365,6 @@ cases=(
   "push-alias-deny-escape-newline|case_al_deny_escape_newline|an alias value push, backslash n, origin denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-escape)"
   "push-alias-deny-cr-mid|case_al_deny_cr_mid|a raw CR inside an alias value denies instead of fusing the words around it -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cr-mid)"
   "push-alias-deny-cr-mid-subsection|case_al_deny_cr_mid_subsection|a raw CR inside a subsection alias value denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cr-mid-subsection)"
-  "push-alias-deny-env-quoted-home|case_al_deny_env_quoted_home|env \"HOME=<d>\" git p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-reloc)"
-  "push-alias-deny-env-squoted-xdg|case_al_deny_env_squoted_xdg|env single-quoted XDG_CONFIG_HOME=/x git p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-reloc)"
-  "push-alias-deny-command-env-quoted|case_al_deny_command_env_quoted|command env \"HOME=<d>\" git p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-reloc)"
-  "push-alias-deny-env-s-reloc|case_al_deny_env_s_reloc|env -S \"HOME=<d> git p origin main\" denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-reloc)"
   "push-alias-deny-xcfg-export-gitconfig|case_al_deny_xcfg_export_gitconfig|an exported GIT_CONFIG_COUNT/KEY/VALUE triple makes a later alias candidate deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg-export-cfg)"
   "push-alias-deny-xcfg-export-parameters|case_al_deny_xcfg_export_parameters|an exported GIT_CONFIG_PARAMETERS makes a later alias candidate deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg-export-cfg)"
   "push-alias-deny-xcfg-bare-gitconfig|case_al_deny_xcfg_bare_gitconfig|a bare GIT_CONFIG_COUNT= segment makes a later alias candidate deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg-bare-cfg)"
@@ -11864,12 +11380,6 @@ cases=(
   "push-alias-deny-subsection-escaped-name|case_al_deny_subsection_escaped_name|a backslash-escaped subsection name denies (the name is never read) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-name)"
   "push-alias-deny-subsection-odd-name|case_al_deny_subsection_odd_name|subsection names holding a blank or a slash deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-name)"
   "push-alias-deny-subsection-any-subcommand|case_al_deny_subsection_any_subcommand|a push-ish subsection alias makes every alias candidate of that checkout deny (deliberate over-block) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-name)"
-  "push-alias-deny-env-s-attached|case_al_deny_env_s_attached|env -S\"HOME=/x git p ...\" (attached string) denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-substring)"
-  "push-alias-deny-env-s-squoted|case_al_deny_env_s_squoted|env -S single-quoted XDG_CONFIG_HOME string denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-substring)"
-  "push-alias-deny-env-split-string|case_al_deny_env_split_string|env --split-string=\"HOME=/x git p ...\" denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-substring)"
-  "push-alias-deny-env-s-underscore-all|case_al_deny_env_s_underscore_all|env -S with HOME and git packed into one token by backslash-underscore separators denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-trigger-git)"
-  "push-alias-deny-env-s-underscore-git|case_al_deny_env_s_underscore_git|env -S with HOME and git in the trigger token, the rest as plain words, denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-trigger-git)"
-  "push-alias-deny-env-quoted-gitconfig|case_al_deny_env_quoted_gitconfig|env \"GIT_CONFIG_PARAMETERS=\$X\" git p denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-quoted-cfg)"
   "push-alias-deny-backtick-quoted|case_al_deny_backtick_quoted|a backtick substitution inside a quoted -c key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"
   "push-alias-deny-backtick-bare|case_al_deny_backtick_bare|a backtick substitution as the -c key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"
   "push-alias-deny-backtick-config-env|case_al_deny_backtick_config_env|a backtick substitution in a --config-env key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"
@@ -12245,7 +11755,6 @@ cases=(
   "push-optval-deny-precedence|case_push_optval_deny_precedence|deny: an earlier unresolved reason and command-line config keep their own deny -- control, not part of the mutation-proof registry"
   "push-optval-noop|case_push_optval_noop|no opinion: the scan starts after the value word and resets at a non-value prefix word -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-start, 518-pg-optval-nonopt, 518-pg-optval-reset, 518-pg-optval-alias-from)"
   "push-optval-deny-alias|case_push_optval_deny_alias|deny: nice -n 5 git zqp origin main with a push alias, through the alias line -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-alias-off)"
-  "push-optval-deny-alias-quoted|case_push_optval_deny_alias_quoted|deny: a quote-bearing value word before a push alias keeps the alias deny the value word own trigger gave -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-alias-quoted)"
   "push-optval-noop-alias-none|case_push_optval_noop_alias_none|no opinion: nice -n 5 git status with no alias config -- control, not part of the mutation-proof registry"
   "push-optval-deny-alias-word|case_push_optval_deny_alias_word|deny: nice -n 10 git log --grep alias, the documented alias-word over-block -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-alias-off)"
   "push-optvalscan-noop-flood|case_push_optvalscan_noop_flood|FLOOD+TIMING: a segment of value-context triggers then a feature push, no opinion; CPU time within a multiple of a same-size twin with one trigger -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-memo)"
@@ -12262,7 +11771,7 @@ cases=(
   # --- an option of an interpreter prefix word (#537) cases --------------------------------------
   "ab-interp-deny-impl-gh|case_ab_interp_deny_impl_gh|deny: gh behind bash/sh/zsh/ksh/dash with a value option (-o, +o, -O, +O, --rcfile, --init-file, -rcfile, a cluster ending in o) or a flag (+e), implementer -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-off, 537-ab-interp-cluster, 537-ab-interp-longopt, 537-ab-interp-plus)"
   "ab-interp-deny-unclassified|case_ab_interp_deny_unclassified|deny: gh behind an option the walk cannot classify (two value letters, a quoted or dollar value, an unlisted long option, a dollar in the option), implementer -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-multi, 537-ab-interp-scan-off)"
-  "ab-interp-deny-guard|case_ab_interp_deny_guard|deny: a value word the old walk could deny on is never skipped with its option (a quoted gh, a quoted assignment or option holding gh, gh, git, a path-qualified gh, a prefix word, tee, sed -i, python3 with a .claude path), and a token with a slash keeps the walk it had, implementer -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-guard, 537-ab-interp-oldwalk)"
+  "ab-interp-deny-guard|case_ab_interp_deny_guard|deny: a value word the old walk could deny on is never skipped with its option (a quoted gh, gh, git, a path-qualified gh, a prefix word, tee, sed -i, python3 with a .claude path), and a token with a slash keeps the walk it had, implementer -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-guard, 537-ab-interp-oldwalk)"
   "ab-interp-deny-codex|case_ab_interp_deny_codex|deny: bash -o pipefail -c with gh pr merge 5 as a Codex-shaped implementer payload -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-off)"
   "ab-interp-deny-verifier|case_ab_interp_deny_verifier|deny: git push and gh behind a value option, verifier -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-off)"
   "ab-interp-noop|case_ab_interp_noop|no opinion: prose after the options, a script argument, and read-only git for the verifier; the read stops at an option and starts after the next word -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-start, 537-ab-interp-nonopt)"
@@ -12289,17 +11798,14 @@ cases=(
   "push-subst-deny|case_push_subst_deny|deny: git with a command substitution in the option slot, quoted, bare, in backticks, glued to a path, as the whole option and as the value of -C, then push origin main, and the same shape for a feature branch -- no registry record (the rule only adds a deny)"
   "push-subst-noop|case_push_subst_noop|no opinion: the same option slot on a line that does not name push, a subcommand found before the substitution, and a code span that is only git beside the word push -- the precision controls of the rule"
   "cdg-split-deny-names|case_cdg_split_deny_names|deny (#538): a shim name split by double quotes, single quotes or backslashes, with or without the underscore -- mutation proof: dev/mutants/hook-tests.json (538-cdg-fast-off, 538-cdg-split-dq, 538-cdg-bs-strip)"
-  "cdg-split-deny-verifier|case_cdg_split_deny_verifier|deny (#538): the split name and the env -S string for the verifier role"
-  "cdg-split-heredoc|case_cdg_split_heredoc|deny with a .claude header, no opinion with a benign one (#538): the two new routes each taking an inline heredoc patch"
+  "cdg-split-deny-verifier|case_cdg_split_deny_verifier|deny (#538): the split name for the verifier role"
+  "cdg-split-heredoc|case_cdg_split_heredoc|deny with a .claude header, no opinion with a benign one (#538): the split-name route taking an inline heredoc patch"
   "cdg-split-noop-prose|case_cdg_split_noop_prose|no opinion (#538): prose and a heredoc body line mentioning a split spelling, and a call fast path 2 excludes -- control, not part of the mutation-proof registry"
   "cdg-split-noop-scope|case_cdg_split_noop_scope|no opinion (#538): a split spelling from the main session, another agent and a plan-mode turn -- control, not part of the mutation-proof registry"
-  "cdg-split-expansion-guards|case_cdg_split_expansion_guards|deny (#538): the plain spellings and four quoted or escaped prefixes keep their deny through the new routes -- mutation proof: dev/mutants/hook-tests.json (538-cdg-alt-parity, 538-cdg-alt-bs, 538-cdg-alt-envs, 538-cdg-alt-envs-word, 538-cdg-alt-envs-value)"
-  "cdg-split-deny-env-s|case_cdg_split_deny_env_s|deny (#538): an attached env -S string in every spelling the reading names -- mutation proof: dev/mutants/hook-tests.json (538-cdg-envs-off, 538-cdg-envs-lead, 538-cdg-envs-unescape, 538-cdg-envs-names, 538-cdg-envs-basename, 538-cdg-envs-delete-bs, 538-cdg-envs-dash)"
-  "cdg-split-deny-env-s-value|case_cdg_split_deny_env_s_value|deny (#538): an env -S string as a separate value, and behind another option's value -- mutation proof: dev/mutants/hook-tests.json (538-cdg-envs-sep, 538-cdg-envs-longopt, 538-cdg-vp-lead, 538-cdg-envs-value-dq, 538-cdg-envs-value-names)"
-  "cdg-split-noop-env-s|case_cdg_split_noop_env_s|no opinion (#538): an env string that does not name the shim, and a non-env prefix option ending in the shim name -- mutation proof: dev/mutants/hook-tests.json (538-cdg-envs-context)"
+  "cdg-split-expansion-guards|case_cdg_split_expansion_guards|deny (#538): the plain spellings and a trailing-backslash shim keep their deny through the split-name routes -- mutation proof: dev/mutants/hook-tests.json (538-cdg-alt-parity, 538-cdg-alt-bs)"
   "cdg-split-deny-combos|case_cdg_split_deny_combos|deny (#538): a split spelling behind a quoted or escaped prefix, and behind a prefix option's value -- mutation proof: dev/mutants/hook-tests.json (538-cdg-seg-split, 538-cdg-vp-bs-loop, 538-cdg-seg-bs-scan, 538-cdg-vp-bs-excl, 538-cdg-ln-sq, 538-cdg-seg-sq)"
   "cdg-split-deny-overblock|case_cdg_split_deny_overblock|deny (#538): the documented over-block, an apostrophe on a split-spelling line -- control, not part of the mutation-proof registry"
-  "cdg-split-never-executes|case_cdg_split_never_executes|deny, sentinel absent on a booby-trapped PATH: the two new routes run no awk, sed, grep or tr -- no registry record"
+  "cdg-split-never-executes|case_cdg_split_never_executes|deny, sentinel absent on a booby-trapped PATH: the split-name route runs no awk, sed, grep or tr -- no registry record"
   "solo-cdgsplit-fastpath-cpu|case_solo_cdgsplit_fastpath_cpu|CPU TIME: a payload of the command cap's size made of near misses of the split shim name, no opinion within a bound relative to a same-run control that shuts the new check's gate -- no registry record; solo-: outside every registry filter, so it never runs under the mutant driver"
   "solo-cdgsplit-walk-cpu|case_solo_cdgsplit_walk_cpu|CPU TIME: hundreds of lines that each spell the shim split beside a quote, no opinion within a bound relative to a twin whose lines run no split-name regex -- no registry record; solo-: outside every registry filter, so it never runs under the mutant driver"
   "push-awkabort-deny|case_push_awkabort_deny|deny with the one fixed scan-failure line, and awk's own error line dropped, when the awk scan exits non-zero after printing a partial line (a stub awk first on PATH) -- no registry record: removing the status check leaves the case red"
