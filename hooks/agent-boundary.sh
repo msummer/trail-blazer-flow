@@ -19,6 +19,8 @@
 #   - both roles (#551): a DEPLOY_COMMANDS entry as the command word, as the word a LAUNCH_WORDS launcher hands
 #     on to, or in a segment tail the scan cannot follow; and, after npm, pnpm, yarn or bun, a script name
 #     containing "deploy". package.json is never read. This deny is printed last, so any other deny decides first;
+#   - both roles (#543): a command over AB_CMD_MAX_BYTES bytes, or over AB_CR_MAX_BYTES bytes when it carries a
+#     carriage return, denied before the carriage-return strip and the scan with one line that names the limit;
 #   - both roles: an awk scan that exits non-zero (an abort, a resource limit, a killed process, or no
 #     runnable awk), denied with the fixed reason "command scan failed" (#559).
 # Never executes anything (no git, no gh, nothing derived from the untrusted command), never evals, never
@@ -97,15 +99,33 @@ PREFIX_VALUE_WORDS="exec nice stdbuf sudo time xargs bash dash ksh sh zsh"
 # below.
 DEPLOY_COMMANDS="vercel,netlify,fly,flyctl,wrangler,railway,heroku,aws,gcloud,az,doctl,terraform,pulumi,supabase,stripe,kubectl,helm,prisma migrate deploy,prisma db push,drizzle-kit push"
 LAUNCH_WORDS="npx bunx pnpx uvx pipx npm pnpm yarn bun exec x dlx run run-script"
+# AB_CMD_MAX_BYTES (#543): the longest Bash command, in BYTES, analysed at all. A longer one denies before the
+# carriage-return strip and the scan: this hook has no deadline, so only a cap keeps the scan inside the hook
+# timeout, and a timed-out hook gives no deny. Sized above every cooperative subagent command measured.
+AB_CMD_MAX_BYTES="131072"
+# AB_CR_MAX_BYTES (#535): the longest command, in BYTES, analysed when it carries a carriage return. The
+# whole-text strip below grows faster than its input under bash 3.2, so a command with any CR gets this lower cap.
+AB_CR_MAX_BYTES="2048"
 DENY_STEM="trail-blazer-flow agent boundary:"
+
+# ab_bytes STRING (#543) sets ab_n to STRING's length in BYTES (C locale, whatever locale the hook runs under);
+# mirrors hooks/push-guard.sh's pg_bytes.
+ab_bytes() { local LC_ALL=C; ab_n="${#1}"; }
+
+# deny_over_cap LIMIT (#543) prints the one fixed over-cap line, naming LIMIT, and exits 2. Builtins only.
+deny_over_cap() {
+  printf '%s %s role: the command is longer than the %s-byte limit this hook analyses (blocked: command over the size cap) — split it into smaller Bash calls, or write file content with the Write tool; see agents/%s.md\n' \
+    "$DENY_STEM" "$role" "$1" "$role" >&2
+  exit 2
+}
 
 input="$(cat)"
 
 # --- fast paths ----------------------------------------------------------------------------
 # Both are performance shortcuts, semantics-preserving with the check they stand in for EXCEPT for a command
 # word split by quote, backslash or carriage-return characters (see fast path 2): a documented limit of the
-# same tripwire class as the scan quote-blind behaviour. A miss on either means the call is out of scope for
-# this hook, which is also what the slower checks below conclude.
+# same tripwire class as the scan quote-blind behaviour. A miss on either means no scan below could deny the
+# call, so the call exits before the size cap too; that is harmless, because the cap only bounds the scan.
 #
 # Fast path 1: a main-session Bash call (no agent_type key in the JSON) can never resolve to a role, so skip
 # jq. A raw substring hit only means the JSON has an agent_type key worth asking jq about (a subagent cwd can
@@ -133,8 +153,8 @@ esac
 # segment split by a quote or backslash inside it can miss the same way, and so can a deploy word split the
 # same way. The second arm also lets a payload that names an arm word but none of git, gh or claude reach the
 # scan, where a split git or gh spelling, or a split .claude write target (echo hi > .cl"aude"/x), can deny.
-# How often this path short-circuits a subagent call is UNVERIFIED; a miss costs one extra jq/awk spawn,
-# never a verdict.
+# How often this path short-circuits a subagent call is UNVERIFIED; a payload it lets through costs the
+# jq/awk spawns and meets the size cap and the scan below.
 case "$input" in
   *[Gg][Ii][Tt]*|*[Gg][Hh]*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;
   *[Vv][Ee][Rr][Cc][Ee][Ll]*|*[Nn][Ee][Tt][Ll][Ii][Ff][Yy]*|*[Ff][Ll][Yy]*|*[Ww][Rr][Aa][Nn][Gg][Ll][Ee][Rr]*|*[Rr][Aa][Ii][Ll][Ww][Aa][Yy]*|\
@@ -172,11 +192,21 @@ pmode="$(printf '%s' "$input" | jq -r '.permission_mode? // empty' 2>/dev/null)"
 
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command? // empty' 2>/dev/null)"
 
+# #543: the command-size cap, before the strip and the scan (see AB_CMD_MAX_BYTES above). Both roles, every
+# command that got past the fast paths and the role and plan-mode exits above, whatever it holds.
+ab_bytes "$cmd"
+[ "$ab_n" -le "$AB_CMD_MAX_BYTES" ] || deny_over_cap "$AB_CMD_MAX_BYTES"
+
 # A CRLF-carrying transport can deliver tokens with a trailing carriage return (#270); every comparison
 # below is an exact match, so an unstripped CR would make git<CR> a command word never matched. Stripped
 # once here, before the tokenizer (hooks/push-guard.sh strips inside its awk record block instead, before
-# reading any token). Pure parameter expansion: no new process, so this hook still executes nothing.
+# reading any token). Pure parameter expansion: no new process, so this hook still executes nothing. Under
+# bash 3.2 that substitution's cost grows faster than its input and the cap above does not bound it, so a
+# command that carries any CR also meets the lower AB_CR_MAX_BYTES first (#535).
 cr=$'\r'
+case "$cmd" in
+  *"$cr"*) [ "$ab_n" -le "$AB_CR_MAX_BYTES" ] || deny_over_cap "$AB_CR_MAX_BYTES" ;;
+esac
 cmd="${cmd//$cr/}"
 
 [ -n "$cmd" ] || exit 0

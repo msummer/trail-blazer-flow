@@ -3077,7 +3077,22 @@ pcap_fill() {
   pcap_s="$s$pad"
 }
 # PCAP_MAX_BYTES -- hand-typed mirror of hooks/push-guard.sh's PUSH_CMD_MAX_BYTES.
-PCAP_MAX_BYTES=524288
+PCAP_MAX_BYTES=262144
+# PCAP_LINE -- the over-cap deny line hooks/push-guard.sh's deny_too_large command arm prints, hand-typed here
+# (never extracted from the hook) with the limit taken from the mirror above. It differs from DL_DEADLINE_LINE,
+# so a case that expects it can pass only through the cap, never through the deadline.
+PCAP_LINE="trail-blazer-flow push guard: denies this command: it is longer than the ${PCAP_MAX_BYTES}-byte limit this hook analyses (blocked: command over the size cap) — split it into smaller Bash calls, or write file content with the Write tool; see README.md's Safety model"
+# pcap_prose N [EOL] -- sets pcap_text to a cooperative heredoc file write of exactly N BYTES: prose lines that
+# name git in the middle of a line (never at a line start, so no segment of it is a git command), then one
+# padding line. EOL (default a line feed) ends every line, so a carriage-return EOL builds a CRLF command.
+pcap_text=""
+pcap_prose() {
+  local n="$1" eol="${2:-$LF}" head line
+  head="cat > notes.md <<'EOF'$eol"
+  line="- Run git status and git diff before each commit.$eol"
+  pcap_fill $(( n - ${#head} - ${#eol} - 3 )) "$line"
+  pcap_text="$head$pcap_s${eol}EOF"
+}
 # mk_push_cmd_big_plan CMD CWD -- mk_push_cmd_big with permission_mode plan: the hook exits no opinion
 # right after the second jq pass, so the run times the unsampled stdin prefix alone (cat, the
 # fast-path globs, two jq passes) of the identical bytes -- a same-run control no cap mutant changes.
@@ -3096,20 +3111,22 @@ pg_need_utf8() {
   return 0
 }
 # mutant:517-pg-cmdcap-off -- deletes the cap check, so an over-cap command is analysed (cheaply, here)
-#   and gets no opinion instead of the too-large line.
+#   and gets no opinion instead of the over-cap line.
 case_push_cmdcap_deny_over_cap() {
   local dir="$tmpbase/repo-pp" pre='git push origin feature/x; echo '
   mk_fixture_repo "$dir" main feature/x
   pcap_fill $(( PCAP_MAX_BYTES + 1 - ${#pre} )) x
   run_push_guard "$(mk_push_cmd_big "$pre$pcap_s" "$dir")"
-  expect_push_deny_exact "$DL_DEADLINE_LINE"
+  expect_push_deny_exact "$PCAP_LINE"
 }
-# mutant:517-pg-cmdcap-off-by-one -- denies a command of exactly the cap.
+# mutant:517-pg-cmdcap-off-by-one -- denies a command of exactly the cap. The fixture is the cooperative
+#   shape the cap must let through: a heredoc file write whose prose names git mid-line, so the payload
+#   passes the raw-stdin git fast path and reaches the cap.
 case_push_cmdcap_noop_at_cap() {
-  local dir="$tmpbase/repo-pp" pre='git push origin feature/x; echo '
+  local dir="$tmpbase/repo-pp"
   mk_fixture_repo "$dir" main feature/x
-  pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) x
-  run_push_guard "$(mk_push_cmd_big "$pre$pcap_s" "$dir")"
+  pcap_prose "$PCAP_MAX_BYTES"
+  run_push_guard "$(mk_push_cmd_big "$pcap_text" "$dir")"
   expect_push_no_opinion
 }
 # mutant:517-pg-cmdcap-chars -- counts characters in a UTF-8 locale instead of bytes, so a payload over
@@ -3117,12 +3134,12 @@ case_push_cmdcap_noop_at_cap() {
 case_push_cmdcap_deny_multibyte() {
   local dir="$tmpbase/repo-pp" pre='git push origin feature/x; echo ' mb
   mk_fixture_repo "$dir" main feature/x
-  # 131073 four-byte characters: 524292 bytes, 131073 characters
-  pcap_fill 524292 "$(printf '\360\237\230\200')"
+  # four-byte characters: more bytes than the cap, far fewer characters than it
+  pcap_fill $(( PCAP_MAX_BYTES + 4 )) "$(printf '\360\237\230\200')"
   mb="$pcap_s"
   pg_need_utf8 || return
   run_push_guard "$(mk_push_cmd_big "$pre$mb" "$dir")"
-  expect_push_deny_exact "$DL_DEADLINE_LINE"
+  expect_push_deny_exact "$PCAP_LINE"
 }
 case_push_cmdcap_noop_no_git() {
   # An over-cap command whose raw stdin never names git (and holds no dollar sign with push) leaves
@@ -3145,11 +3162,12 @@ case_push_cmdcap_noop_plan_mode() {
   expect_push_no_opinion
 }
 # mutant:517-pg-cmdcap-off -- FLOOD + TIMING: the issue-C payload shape (a push, then one very long
-#   ab$'cd' word) at four times the cap denies via the cap. With the cap deleted the unsampled
-#   tokenizer runs on the whole word: on a slow awk it overruns the deadline, on a fast one it denies
-#   with the default-branch reason instead of the too-large line. The active deadline is calibrated
-#   from a same-run plan-mode control of identical bytes and clamped below the 5s production budget,
-#   so the too-large line can never come from the deadline sampler.
+#   ab$'cd' word) at four times the cap denies via the cap, with the cap's own line. With the cap deleted
+#   the unsampled tokenizer runs on the whole word: on a slow awk it overruns the active deadline, on a
+#   fast one it denies with the default-branch reason; either way the cap line is missing. That line
+#   differs from the deadline's, so the deadline sampler can never produce it. The active deadline is
+#   calibrated from a same-run plan-mode control of identical bytes and clamped below the production
+#   budget: it is a hang guard that reaps a runaway run, not part of the verdict.
 case_push_cmdcaptime_deny_flood() {
   local dir="$tmpbase/repo-pp-cap" pre='git push origin main ' cmd ctl_ms secs
   mk_fixture_repo "$dir" main feature/x
@@ -3171,55 +3189,101 @@ case_push_cmdcaptime_deny_flood() {
   [ "$secs" -le "$DL_KNOB_MAX" ] || secs="$DL_KNOB_MAX"
   push_deadline_override="$secs"
   run_push_guard "$(mk_push_cmd_big "$cmd" "$dir")"
-  expect_push_deny_exact "$DL_DEADLINE_LINE"
+  expect_push_deny_exact "$PCAP_LINE"
   if [ "$__ok" -eq 0 ]; then
     __why="${__why}control ${ctl_ms}ms -> deadline ${secs}s\n"
   fi
 }
-# pcap_shape SHAPE -- sets pcap_cmd to a command of exactly PCAP_MAX_BYTES bytes in one of the worst
-# shapes for the unsampled prefix: a one long ab$'cd' word (a), a carriage-return flood (b), one
-# refspec whose first colon is at its end (c), one quote-dense word (d), one push with very many
-# short refspecs (f), one -C path (i) or one -C path of a non-push git segment (s) filling the
-# command, a segment lost to the tokenizer followed by very many short words (t), a segment of
-# value-context prefix-word triggers (o), a segment of unclassified interpreter options (p), and a -C path
-# of segment breaks (xc), the control for the relative bound of p.
-pcap_cmd=""
-pcap_shape() {
-  local pre qc l1
-  case "$1" in
-    a) pre='git push origin '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) "ab\$'cd'"; pcap_cmd="$pre$pcap_s" ;;
-    b) pre='git push origin main'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) "$(printf '\r')"; pcap_cmd="$pre$pcap_s" ;;
-    c) pre='git push origin '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 6 )) x; pcap_cmd="$pre$pcap_s: main" ;;
-    d) pre='git push origin feature/x '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) '"a"'; pcap_cmd="$pre$pcap_s" ;;
-    f) pre='git push origin'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 5 )) ' a'; pcap_cmd="$pre$pcap_s main" ;;
-    i) pre='git -C '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 17 )) x; pcap_cmd="$pre$pcap_s push origin main" ;;
-    s) pre='git -C '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 7 )) x; pcap_cmd="$pre$pcap_s status" ;;
-    t) pre='git "--no-pager" '; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) 'ab '; pcap_cmd="$pre$pcap_s" ;;
-    o) pre='git push origin feature/x; nice'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) ' -n nice'; pcap_cmd="$pre$pcap_s" ;;
-    p) pre='git push origin feature/x; bash'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} )) ' -oo bash'; pcap_cmd="$pre$pcap_s" ;;
-    # xc: a -C path of segment breaks to the cap -- the heaviest base scan at the cap, the control for the
-    # relative bound of shape p
-    xc) pre='git -C a'; pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - 17 )) ';;'; pcap_cmd="$pre$pcap_s push origin main" ;;
-  esac
+# --- hooks/agent-boundary.sh: the command-size cap (#543, #535) ---------------------------------------
+# A command longer than AB_CMD_MAX_BYTES bytes, or longer than AB_CR_MAX_BYTES bytes when it carries a carriage
+# return, denies before the strip and the scan with one line that names the limit. The cap sits after the role
+# and plan-mode exits, so the main session, an unrecognised agent and a planning turn are never capped. Case
+# names carry "ab-cmdcap-" so `bash dev/hook-tests.sh ab-cmdcap-` runs the family. Every payload names git in its
+# prose, so the raw-stdin fast paths let it through to the cap; the prose never starts a line with git or gh,
+# a writer word or a deploy word, and never names a .claude path.
+# ABCAP_MAX_BYTES / ABCR_MAX_BYTES -- hand-typed mirrors of hooks/agent-boundary.sh's AB_CMD_MAX_BYTES and
+# AB_CR_MAX_BYTES.
+ABCAP_MAX_BYTES=131072
+ABCR_MAX_BYTES=2048
+# abcap_payload ROLE MODE CMD -- a Bash payload whose command reaches jq on stdin, never as a --arg. An empty ROLE
+# leaves agent_type out (the main session); an empty MODE leaves permission_mode out.
+abcap_payload() {
+  printf '%s' "$3" | jq -Rs --arg role "$1" --arg mode "$2" '{tool_name: "Bash", tool_input: {command: .}} + (if $role == "" then {} else {agent_type: $role} end) + (if $mode == "" then {} else {permission_mode: $mode} end)'
 }
-# pcap_verdict WANT -- the run reached a verdict: the too-large line, or WANT (rxdest, main, unres or noop).
-pcap_verdict() {
-  if [ "$push_rc" -eq 2 ] && [ "$push_err" = "$DL_DEADLINE_LINE" ]; then return; fi
-  case "$1" in
-    rxdest)
-      expect_push_deny
-      case "$push_err" in *"(blocked: $PP_R_RXD)"*) ;; *) __ok=0; __why="${__why}stderr missing '(blocked: $PP_R_RXD)': '$push_err'\n" ;; esac
-      ;;
-    main)
-      expect_push_deny
-      case "$push_err" in *'denies pushing to "main"'*) ;; *) __ok=0; __why="${__why}stderr missing 'denies pushing to \"main\"': '$push_err'\n" ;; esac
-      ;;
-    unres)
-      expect_push_deny
-      case "$push_err" in *"cannot resolve which repository"*) ;; *) __ok=0; __why="${__why}stderr missing the unresolved line: '$push_err'\n" ;; esac
-      ;;
-    noop) expect_push_no_opinion ;;
-  esac
+# abcap_line ROLE LIMIT -- the over-cap deny line hooks/agent-boundary.sh's deny_over_cap prints for ROLE, hand-typed
+# here (never extracted from the hook), the way DL_DEADLINE_LINE is.
+abcap_line() {
+  printf '%s' "trail-blazer-flow agent boundary: $1 role: the command is longer than the $2-byte limit this hook analyses (blocked: command over the size cap) — split it into smaller Bash calls, or write file content with the Write tool; see agents/$1.md"
+}
+# expect_ab_deny_exact LINE -- expect_deny, plus an exact match of the WHOLE stderr line. Refuses an empty LINE
+# (the empty-needle convention): an empty LINE would only match a hook that denied with a blank line, which
+# expect_deny already treats as a failure.
+expect_ab_deny_exact() {
+  local want="$1"
+  if [ -z "$want" ]; then
+    __ok=0; __why="${__why}expect_ab_deny_exact called with an empty LINE (needle_required)\n"
+    return
+  fi
+  expect_deny
+  [ "$boundary_err" = "$want" ] || { __ok=0; __why="${__why}stderr: expected exactly '$want', got '$boundary_err'\n"; }
+}
+case_ab_cmdcap_deny_over_cap() {
+  # One byte over the cap, both roles: the line names the limit and the role.
+  local role
+  pcap_prose $(( ABCAP_MAX_BYTES + 1 ))
+  for role in implementer verifier; do
+    run_boundary "$(abcap_payload "$role" "" "$pcap_text")"
+    expect_ab_deny_exact "$(abcap_line "$role" "$ABCAP_MAX_BYTES")"
+  done
+}
+# mutant:543-ab-cmdcap-off-by-one -- denies a command of exactly the cap. The controls over the cap pin where
+#   the check sits: the main session and an unrecognised agent leave at the role gate and a planning turn at the
+#   plan-mode exit, all before the cap. The carriage-return command at exactly its own cap shows that the
+#   lower cap applies to a command with a CR only, since the plain command above it is longer than that cap.
+case_ab_cmdcap_noop_at_cap() {
+  local role
+  pcap_prose "$ABCAP_MAX_BYTES"
+  for role in implementer verifier; do
+    run_boundary "$(abcap_payload "$role" "" "$pcap_text")"
+    expect_no_opinion
+  done
+  pcap_prose "$ABCR_MAX_BYTES" $'\r\n'
+  run_boundary "$(abcap_payload implementer "" "$pcap_text")"
+  expect_no_opinion
+  pcap_prose $(( ABCAP_MAX_BYTES + 1 ))
+  run_boundary "$(abcap_payload "" "" "$pcap_text")"
+  expect_no_opinion
+  run_boundary "$(abcap_payload Explore "" "$pcap_text")"
+  expect_no_opinion
+  run_boundary "$(abcap_payload implementer plan "$pcap_text")"
+  expect_no_opinion
+}
+case_ab_cmdcap_deny_cr_over_cap() {
+  # A CRLF heredoc one byte over the carriage-return cap, far under the plain cap: the line names the lower limit.
+  local role
+  pcap_prose $(( ABCR_MAX_BYTES + 1 )) $'\r\n'
+  for role in implementer verifier; do
+    run_boundary "$(abcap_payload "$role" "" "$pcap_text")"
+    expect_ab_deny_exact "$(abcap_line "$role" "$ABCR_MAX_BYTES")"
+  done
+}
+case_ab_cmdcap_deny_wide_chars() {
+  # The hook counts bytes whatever the locale it runs under: four-byte characters, more bytes than the cap and
+  # far fewer characters than it, still deny. The harness pins a UTF-8 locale for the one run, then restores
+  # LC_ALL exactly as it found it. A control: no registry mutant (the family's one record is the off-by-one).
+  local mb had_lc=0 old_lc=""
+  pcap_fill $(( ABCAP_MAX_BYTES + 4 )) "$(printf '\360\237\230\200')"
+  mb="$pcap_s"
+  cdg_utf8_locale
+  if [ -z "$cdg_utf8" ]; then
+    __ok=0; __why="${__why}no working UTF-8 locale on this host (tried C.UTF-8, en_US.UTF-8, and locale -a): the multibyte cases cannot run\n"
+    return
+  fi
+  if [ "${LC_ALL+x}" = x ]; then had_lc=1; old_lc="$LC_ALL"; fi
+  export LC_ALL="$cdg_utf8"
+  run_boundary "$(abcap_payload implementer "" "echo git $mb")"
+  if [ "$had_lc" -eq 1 ]; then export LC_ALL="$old_lc"; else unset LC_ALL; fi
+  expect_ab_deny_exact "$(abcap_line implementer "$ABCAP_MAX_BYTES")"
 }
 # measure_cpu_ms CMD [ARGS...] -- like measure_ms, but times user+system CPU (TIMEFORMAT=%3U and
 # %3S, which bash's `time` keyword takes over the command and every child it reaped, so the whole
@@ -3241,67 +3305,44 @@ measure_cpu_ms() {
   _ms_from_timeformat "${last##* }"; s="$parsed_ms"
   [ -n "$u" ] && [ -n "$s" ] && measured_cpu_ms=$(( u + s ))
 }
-case_solo_cmdcap_pin_at_cap_worst() {
-  # Regression pin (no registry mutant: whether an unbounded run overruns depends on the bash and awk
-  # build, as case_cdg_dl_deny_cwd_cr's comment says for claude-dir-guard). The hook's worst case is
-  # max(budget, T_prefix) + U_max (see the hook's Analysis deadline paragraph): the unsampled prefix
-  # before its first deadline sample, then sampled work up to the budget, plus the one step a sample
-  # cannot interrupt. For each worst shape exactly at the cap this pin bounds CPU time -- the hook's
-  # whole process tree, user plus system -- twice: (1) a zero-budget run, which denies at the first
-  # sample and so is the unsampled prefix alone, against a tight bound; (2) the production-budget run,
-  # which also covers the budget and U_max, against a bound at most the hook's 10s timeout, and that
-  # run must reach its verdict: the shape's own, or the too-large line. CPU time, not wall clock: a
-  # super-linear step at the cap (the whole-text CR strip this issue removed costs tens of seconds of
-  # CPU there) still blows a bound, while host load, which stretches wall clock, moves it far less.
-  # Far less is not nothing: on a contended runner it still crossed these bounds under the mutant
-  # driver's concurrency (#546). So this case carries a solo- name and runs only in the plain
-  # hook-tests run: a solo- name must not contain any registry filter, so no mutant-driver group ever
-  # selects it, and a new record's filter must not be a substring of a solo- name. A step that waits
-  # without using CPU is outside what this pin measures; the hook has no such step. Both runs carry a
-  # generous safety deadline only so a runaway mutant cannot hang the suite.
-  local dir="$tmpbase/repo-pp-cap-worst" shape want payload cpu_max_ms=6000 run_cpu_max_ms=8000 bound rel_max_ms
+case_solo_cmdcap_ratio() {
+  # Regression pin (no registry mutant: whether a scan stays inside its ratio depends on the bash and awk build,
+  # as case_cdg_dl_deny_cwd_cr's comment says for claude-dir-guard). The worst shape for the unsampled tokenizer
+  # is a -C path made of segment breaks: the base scan costs more than linearly in the number of breaks, so the
+  # cap's own cost cannot be bounded by a fixed number of milliseconds on every host. What stays stable across
+  # hosts is how that cost grows between two sizes. This case runs the shape at exactly the cap and at half
+  # the cap, each with a zero analysis budget (the unsampled work alone) and a hang-guard deadline, and bounds
+  # the cap run's CPU time -- the hook's whole process tree, user plus system -- by K times the half run's plus a
+  # constant. K sits above the measured growth of one doubling by a margin for host noise and below the growth
+  # of a scan that has become much worse; the constant absorbs a run too short to time. Both runs are the same
+  # host seconds apart, so a slow or loaded runner stretches both, which an absolute bound cannot allow for.
+  # Both runs must also reach their verdict: no opinion. This case carries a solo- name and runs only in the
+  # plain hook-tests run: a solo- name must not contain any registry filter, so no mutant-driver group ever
+  # selects it, and a new record's filter must not be a substring of a solo- name.
+  local dir="$tmpbase/repo-pp-cap-ratio" pre='git -C a' post=' push origin main' k=5 f=250
+  local half_cmd cap_cmd half_ms cap_ms
   mk_fixture_repo "$dir" main feature/x
-  # Shape p (#537) costs what the base scan costs, and the base scan's cost at the cap depends on the host
-  # (on a slow runner it alone nears the fixed bounds), so its knob-0 run, the tokenizer alone, is bounded
-  # relative to a same-run control instead: xc, the heaviest base scan at the cap, within 1.3 times it plus
-  # 250ms and at most the hook's 10s timeout in CPU time, which never fails before the real hook would
-  # time out.
-  pcap_shape xc
+  pcap_fill $(( PCAP_MAX_BYTES / 2 - ${#pre} - ${#post} )) ';;'
+  half_cmd="$pre$pcap_s$post"
+  pcap_fill $(( PCAP_MAX_BYTES - ${#pre} - ${#post} )) ';;'
+  cap_cmd="$pre$pcap_s$post"
+  push_budget_override="0"
   push_deadline_override=60
-  measure_cpu_ms run_push_guard "$(mk_push_cmd_big "$pcap_cmd" "$dir")"
-  pcap_verdict noop
-  if [ -z "$measured_cpu_ms" ]; then
-    __ok=0; __why="${__why}[shape xc] control run's CPU report could not be parsed\n"
+  measure_cpu_ms run_push_guard "$(mk_push_cmd_big "$half_cmd" "$dir")"
+  half_ms="$measured_cpu_ms"
+  expect_push_no_opinion
+  push_budget_override="0"
+  push_deadline_override=60
+  measure_cpu_ms run_push_guard "$(mk_push_cmd_big "$cap_cmd" "$dir")"
+  cap_ms="$measured_cpu_ms"
+  expect_push_no_opinion
+  if [ -z "$half_ms" ] || [ -z "$cap_ms" ]; then
+    __ok=0; __why="${__why}a CPU report could not be parsed (half '${half_ms}', cap '${cap_ms}')\n"
     return
   fi
-  rel_max_ms=$(( measured_cpu_ms * 13 / 10 + 250 ))
-  [ "$rel_max_ms" -le 10000 ] || rel_max_ms=10000
-  for shape in a b c d f i s t o p; do
-    case "$shape" in a|c|d) want=rxdest ;; i) want=unres ;; s|t|o|p) want=noop ;; *) want=main ;; esac
-    pcap_shape "$shape"
-    payload="$(mk_push_cmd_big "$pcap_cmd" "$dir")"
-    bound="$cpu_max_ms"
-    [ "$shape" != p ] || bound="$rel_max_ms"
-    push_budget_override="0"
-    push_deadline_override=60
-    measure_cpu_ms run_push_guard "$payload"
-    if [ -z "$measured_cpu_ms" ]; then
-      __ok=0; __why="${__why}[shape $shape] knob-0 run's CPU report could not be parsed\n"
-      continue
-    fi
-    if [ "$measured_cpu_ms" -gt "$bound" ]; then
-      __ok=0; __why="${__why}[shape $shape] unsampled prefix used ${measured_cpu_ms}ms of CPU, over the ${bound}ms bound\n"
-    fi
-    [ "$shape" != p ] || continue
-    push_deadline_override=60
-    measure_cpu_ms run_push_guard "$payload"
-    pcap_verdict "$want"
-    if [ -z "$measured_cpu_ms" ]; then
-      __ok=0; __why="${__why}[shape $shape] production run's CPU report could not be parsed\n"
-    elif [ "$measured_cpu_ms" -gt "$run_cpu_max_ms" ]; then
-      __ok=0; __why="${__why}[shape $shape] production run used ${measured_cpu_ms}ms of CPU, over the ${run_cpu_max_ms}ms bound\n"
-    fi
-  done
+  if [ "$cap_ms" -gt $(( k * half_ms + f )) ]; then
+    __ok=0; __why="${__why}the cap run used ${cap_ms}ms of CPU against ${half_ms}ms for half the cap, over ${k}x plus ${f}ms\n"
+  fi
 }
 
 # --- git aliases and config relocation (#448, absorbs #450) ----------------------------------------
@@ -3727,7 +3768,9 @@ case_al_deny_flood() {
   [ "$c_us" -ge 100 ] || c_us=100
   n=$(( DL_KNOB_MAX * 3000000 / c_us ))
   [ "$n" -ge 3000 ] || n=3000
-  [ "$n" -le 40000 ] || n=40000
+  # The upper clamp keeps the flood under PCAP_MAX_BYTES: a longer command would meet the command-size cap,
+  # not the alias path this case proves.
+  [ "$n" -le 30000 ] || n=30000
   flood="$(printf 'git st;%.0s' $(seq 1 "$n"))"
   payload="$(mk_push_cmd_big "${flood}git p origin main" "$dir")"
   dl_site_run "$payload"
@@ -10342,13 +10385,17 @@ cases=(
   "push-rxdest-deny-option-dollar|case_push_rxdest_deny_option_dollar|deny: an option word holding a dollar sign (quoted or not, long or short) leaves the remote and the current-branch deny intact -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxopt-off, 517-pg-rxopt-raw)"
   "push-rxdest-deny-option-dollar-config|case_push_rxdest_deny_option_dollar_config|deny: the same option words with a configured push route to main -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxopt-off)"
   "push-rxdest-noop-controls|case_push_rxdest_noop_controls|no opinion: the harness's own quoted push shapes (a control, no registry mutant)"
-  "push-cmdcap-deny-over-cap|case_push_cmdcap_deny_over_cap|deny: a command one byte over the cap -- the too-large line -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
-  "push-cmdcap-noop-at-cap|case_push_cmdcap_noop_at_cap|no opinion: a command of exactly the cap is analysed -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off-by-one)"
+  "push-cmdcap-deny-over-cap|case_push_cmdcap_deny_over_cap|deny: a command one byte over the cap -- the cap's own line -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
+  "push-cmdcap-noop-at-cap|case_push_cmdcap_noop_at_cap|no opinion: a cooperative heredoc write of exactly the cap is analysed -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off-by-one)"
   "push-cmdcap-deny-multibyte|case_push_cmdcap_deny_multibyte|deny: four-byte characters over the cap in bytes but under it in characters, under a UTF-8 locale -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-chars)"
   "push-cmdcap-noop-no-git|case_push_cmdcap_noop_no_git|no opinion: an over-cap command whose raw stdin never names git leaves through the fast path (a control, no registry mutant)"
   "push-cmdcap-noop-plan-mode|case_push_cmdcap_noop_plan_mode|no opinion: an over-cap command in plan mode leaves before the cap (a control, no registry mutant)"
-  "push-cmdcaptime-deny-flood|case_push_cmdcaptime_deny_flood|FLOOD+TIMING: a push followed by one multi-megabyte dollar-quote word denies via the cap under an active deadline calibrated from a same-run plan-mode control -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
-  "solo-cmdcap-pin-at-cap-worst|case_solo_cmdcap_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap stays within a fixed CPU bound before its first deadline sample, and within a bound of at most the hook timeout for its whole production-budget run (the #537 interpreter-option shape p on its prefix, within a margin of a same-run control, xc), and reaches its verdict (regression pin, no registry mutant; solo-: outside every registry filter, so it never runs under the mutant driver)"
+  "push-cmdcaptime-deny-flood|case_push_cmdcaptime_deny_flood|FLOOD+TIMING: a push followed by one dollar-quote word of four times the cap denies with the cap's own line, under a hang-guard deadline calibrated from a same-run plan-mode control -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
+  "ab-cmdcap-deny-over-cap|case_ab_cmdcap_deny_over_cap|deny: a heredoc one byte over the cap, implementer and verifier, with the line that names the limit (no registry record: the base hook allows it)"
+  "ab-cmdcap-noop-at-cap|case_ab_cmdcap_noop_at_cap|no opinion: a heredoc of exactly the cap for both roles, a CRLF heredoc of exactly the carriage-return cap, and over-cap payloads from the main session, an unrecognised agent and a planning turn -- mutation proof: dev/mutants/hook-tests.json (543-ab-cmdcap-off-by-one)"
+  "ab-cmdcap-deny-cr-over-cap|case_ab_cmdcap_deny_cr_over_cap|deny: a CRLF heredoc one byte over the carriage-return cap, far under the plain cap, implementer and verifier, with the line that names the lower limit (no registry record: the base hook allows it)"
+  "ab-cmdcap-deny-wide-chars|case_ab_cmdcap_deny_wide_chars|deny: four-byte characters over the cap in bytes but under it in characters, under a UTF-8 locale, with the line that names the limit (a control, no registry mutant)"
+  "solo-cmdcap-ratio|case_solo_cmdcap_ratio|TIMING PIN: the worst segment-break shape at the cap costs at most a fixed multiple of its half-cap run, plus a constant, in CPU time, and both runs reach their verdict (regression pin, no registry mutant; solo-: outside every registry filter, so it never runs under the mutant driver)"
   "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"
   "push-alias-deny-feature-dest|case_al_deny_feature_dest|a push alias denies even when the destination is a feature branch -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
   "push-alias-deny-global-config|case_al_deny_global_config|an alias in \$HOME/.gitconfig denies and names your global git config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-section)"

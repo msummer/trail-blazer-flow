@@ -143,11 +143,13 @@
 # run, and denies (`deny_too_large configline`) instead of ever reaching them. A test-only knob,
 # TBF_PUSH_GUARD_BUDGET_SECS, is read from the ENVIRONMENT only and can only LOWER push_budget (exactly one or
 # two ASCII digits and strictly less than the production budget; anything else is ignored).
-# Command-size cap (#517): a Bash command longer than PUSH_CMD_MAX_BYTES bytes (counted in the C locale by
+# Command-size cap (#517, #543): a Bash command longer than PUSH_CMD_MAX_BYTES bytes (counted in the C locale by
 # pg_bytes(), so a multibyte payload is not undercounted), once past the fast path and the plan-mode exit,
-# denies "too large to analyse" before the tokenizer or any other use of the command text, because a timed-out
-# hook gives no deny at all. It applies to every such command, whether or not it holds a push (the same shape as
-# hooks/claude-dir-guard.sh's cap). Worst-case wall clock, for review: at most `max(push_budget, T_prefix(L)) +
+# denies before the tokenizer or any other use of the command text, with a line of its own that names the limit
+# (the deadline's line is a different one), because a timed-out hook gives no deny at all. It applies to every
+# such command, whether or not it holds a push (the same shape as hooks/claude-dir-guard.sh's cap), so a
+# cooperative command over it that names git is denied too, with the remedy in the line. Worst-case wall clock,
+# for review: at most `max(push_budget, T_prefix(L)) +
 # U_max`. T_prefix is the pre-tokenizer prefix the deadline cannot sample around: `cat`, the fast-path
 # glob and the three jq extractions of the raw stdin (linear in the stdin, not bounded by the cap), then, for a
 # command at or under the cap, the cwd jq and the awk tokenizer (CR strip included). The tokenizer is bounded
@@ -218,9 +220,11 @@ CFG_INCLUDE_MAX_CHARS=65536
 # PUSH_ANALYSIS_BUDGET_SECS (#435): the whole-second budget this hook's analysis may spend before check_deadline()
 # denies; see "Analysis deadline (#435)" in the header.
 PUSH_ANALYSIS_BUDGET_SECS=5
-# PUSH_CMD_MAX_BYTES (#517): the longest Bash command, in BYTES, analysed at all. A longer one that got past the
-# fast path denies before the tokenizer runs, because a timed-out hook gives no deny.
-PUSH_CMD_MAX_BYTES="524288"
+# PUSH_CMD_MAX_BYTES (#517, #543): the longest Bash command, in BYTES, analysed at all. A longer one that got past
+# the fast path denies before the tokenizer runs, because a timed-out hook gives no deny. Sized so the unsampled
+# tokenizer stays well inside the hook timeout on a slow host, and above every cooperative command measured, the
+# largest heredoc file writes included.
+PUSH_CMD_MAX_BYTES="262144"
 # CFG_TOPLEVEL_MAX_LINE_CHARS (#435): a depth-0 config line longer than this denies outright, checked BEFORE
 # comment-strip or trim, instead of reaching cfg_trim() (see its comment).
 CFG_TOPLEVEL_MAX_LINE_CHARS=2048
@@ -285,14 +289,18 @@ case "${TBF_PUSH_GUARD_BUDGET_SECS:-}" in
 esac
 push_deadline=$((push_t0 + push_budget))
 
-# deny_too_large KIND (#435): KIND is configline (the depth-0 line cap), command (#517, a command over
-# PUSH_CMD_MAX_BYTES) or anything else (the deadline). Prints exactly one fixed stderr line that echoes no
-# input, then exits 2.
+# deny_too_large KIND (#435): KIND is configline (the depth-0 line cap), command (#517, #543: a command over
+# PUSH_CMD_MAX_BYTES, which names the limit) or anything else (the deadline). Prints exactly one fixed stderr
+# line that echoes no input, then exits 2.
 deny_too_large() {
   case "$1" in
     configline)
       printf '%s denies this push: a git config file it reads has a line too long to analyse (blocked: config line too long to analyse) — shorten that line, or run the push from a terminal; see README.md'"'"'s Safety model\n' \
         "$PUSH_DENY_STEM" >&2
+      ;;
+    command)
+      printf '%s denies this command: it is longer than the %s-byte limit this hook analyses (blocked: command over the size cap) — split it into smaller Bash calls, or write file content with the Write tool; see README.md'"'"'s Safety model\n' \
+        "$PUSH_DENY_STEM" "$PUSH_CMD_MAX_BYTES" >&2
       ;;
     *)
       printf '%s denies this command: too large to analyse before the hook'"'"'s time limit (blocked: command too large to analyse) — split it into smaller Bash calls; see README.md'"'"'s Safety model\n' \
