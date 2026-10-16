@@ -18,6 +18,8 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #584: `dev/hook-tests.sh`'s case descriptions no longer end with a list of the registry records that kill each case;
+  `dev/mutants/hook-tests.json` alone records which registry mutant fails which case. No consumer step.
 - #543: push-guard's command-size cap drops to 256 KiB and agent-boundary gains one for the implementer and verifier,
   128 KiB, or 2 KiB with a carriage return (#535); a command over a cap is denied with a line naming it, a large heredoc
   write included: split the call or use the Write tool. No consumer step.
