@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #580: `dev/lock-tests.sh`'s `dead_pid` and `dev/doctor-tests.sh`'s `dead_pid_sched` get a dead pid from a
+  self-exiting subshell instead of killing a fresh `sleep 30`, whose TERM could be lost (traced with bash 5.2 on
+  Linux) so the helper's `wait` sat out the whole sleep in the reclaim and journal cases. No consumer step.
 - #582: the mutant driver now passes a mutant whose failing set is a non-empty subset of its recorded
   `expect_fail` (an exact match prints the same `PASS` line as before, a strict subset adds a
   `recorded <set>` line, and only a survivor or a failing case outside the recorded set fails), so a later rule
