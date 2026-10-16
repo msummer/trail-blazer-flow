@@ -101,7 +101,9 @@
 # BOTH files: segment breaking; normalize(); the empty-normalised-token skip (also in the subcommand
 # search); the repeat-until-exhausted PREFIX_WORDS skip (a once-only skip is a known regression
 # class) and the repeat-count skip; the command-word case fold; the CR strip; the #449 assignment-parity
-# trigger; the #518 value context; the #537 interpreter-option rule.
+# trigger; the #518 value context. The #537 interpreter-option rule is this script's own: agent-boundary.sh
+# reads interpreter options through its #518 value context instead (its PREFIX_VALUE_WORDS also holds the
+# interpreter words, #576), and claude-dir-guard.sh does not read them.
 # Gate 4.40(c) pins PREFIX_WORDS byte-identical to agent-boundary.sh's; every other shared value is by
 # convention, unpinned. Differences: after a segment's command word resolves as `git`, this script walks forward
 # again, skipping a GIT_GLOBAL_OPTS_WITH_VALUE token together with its value and any other dash token alone,
@@ -251,11 +253,12 @@ GIT_CMDCFG_ENV_PREFIXES="GIT_CONFIG_KEY_ GIT_CONFIG_VALUE_"
 GIT_CFG_RELOC_ENV_VARS="HOME XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM"
 # PREFIX_VALUE_WORDS (#518): the PREFIX_WORDS members whose dash options can take a SEPARATE value word (nice -n
 # 5, sudo -u root). Interpreter words stay out (their -c value IS the command string; see PREFIX_INTERP_WORDS).
-# Byte-identical to the agent-boundary.sh and claude-dir-guard.sh copies, by convention, unpinned.
+# Matches the claude-dir-guard.sh copy, by convention, unpinned; the agent-boundary.sh copy also holds the
+# interpreter words (#576).
 PREFIX_VALUE_WORDS="exec nice stdbuf sudo time xargs"
 # PREFIX_INTERP_WORDS / INTERP_VALUE_OPTS (#537): the interpreter members of PREFIX_WORDS, and the long options
-# of those interpreters that take a SEPARATE value word. Their options are classified by ip_kind(). Byte-identical
-# to the agent-boundary.sh and claude-dir-guard.sh copies, by convention, unpinned.
+# of those interpreters that take a SEPARATE value word. Their options are classified by ip_kind(). This rule is
+# this hook's own (#576): agent-boundary.sh and claude-dir-guard.sh carry no copy of these two lines.
 PREFIX_INTERP_WORDS="bash dash ksh sh zsh"
 INTERP_VALUE_OPTS="--init-file --rcfile -init-file -rcfile"
 # PUSH_TRANSCRIPT_TAIL_BYTES (#494): the most bytes read from the END of the Codex rollout file named by the
