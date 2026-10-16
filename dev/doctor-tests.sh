@@ -153,9 +153,61 @@
 # own rewrite of the wrapper's `slash_tmp` line, plus a per-fixture TMPDIR) that keeps every
 # fixture's own stub tree out of the wrapper's own idea of "/tmp".
 #
-# Usage: bash dev/doctor-tests.sh [name-filter] — same output contract as
-# dev/selfcheck-tests.sh: one PASS/FAIL line per case, a `== summary: N pass, M fail ==` footer,
-# exit 0 iff nothing failed; a filter with no match exits 1.
+# Usage: bash dev/doctor-tests.sh [-j <n>|--serial] [name-filter]
+#   -j <n>       run <n> cases concurrently (a positive integer; an invalid value prints usage
+#                on stderr and exits 2).
+#   --serial     equivalent to -j 1 — one case at a time, in declared order.
+#   name-filter  run only the cases whose name contains this substring (a non-zero exit if the
+#                filter matches nothing).
+#   With no -j/--serial, the job count comes from DOCTOR_TESTS_JOBS if set (env var), else from
+#   detect_jobs (the host's core count via sysctl/nproc/getconf, clamped to at most 16, falling
+#   back to 2 if none answers — see detect_jobs's own comment below). A command-line -j/--serial
+#   always wins over DOCTOR_TESTS_JOBS. The resolved count is printed as this run's first stdout
+#   line, `== doctor-tests: <N> jobs ==`, so every recorded run states its own concurrency.
+#
+# Same output contract as dev/selfcheck-tests.sh: one PASS/FAIL line per case, in DECLARED case
+# order regardless of which case's child finishes first (see the pool scheduler below), a
+# `== summary: N pass, M fail ==` footer, exit 0 iff nothing failed; a filter with no match exits 1.
+#
+# Concurrency (#616): cases run through the same rolling pool dev/selfcheck-tests.sh uses
+# (#336, #472), copied here rather than shared — a shared dev/*.sh library would need its own CI
+# step (gate 4.9), and the pool is the target of that suite's own mutant records. The enqueue loop
+# (below the cases=() table) only enqueues: it fills the parallel indexed arrays
+# job_name/job_fn/job_desc/job_state (1-based, keyed by case_no) and then calls run_pool once, as
+# a plain statement in the parent shell — never inside `$( )` or a pipeline, so the pass/fail
+# counters it advances are the parent's own. run_pool loops calling fill_slots (launches
+# `dispatch_case ... &` into any free slot, so a new case starts as soon as a running one finishes,
+# never waiting for a batch to drain), reap_slots (a slot is finished once its .verdict file
+# exists or its pid is no longer alive per `kill -0`; bash 3.2 has no `wait -n`, so completion is
+# polled in short `sleep 0.1` slices) and print_ready (collects and prints every already-done case
+# starting at next_print, IN DECLARED ORDER, stopping at the first case that isn't done yet — so
+# output order and the totals never depend on completion order).
+#
+# Each case runs in its own child, through run_case: __ok, __why, doctor_out, doctor_rc,
+# sched_overran and every other global a case function sets live and die in that child, and the
+# parent's pass/fail come only from the per-case verdict files. A dispatch_case child writes
+# run_case's captured stdout/stderr to $resdir/<idx>.out / <idx>.err, and "pass" or "fail" to
+# $resdir/<idx>.verdict as its LAST action, so a child that dies before reporting leaves that file
+# absent: it is reported as a FAIL naming the case and stating it produced no verdict, and is
+# counted as a failure, never silently omitted. Every child's FIRST statement is `trap - EXIT`,
+# kept as insurance so a child that exits can never race cleanup()'s `rm -rf "$tmpbase"` against a
+# sibling still writing under it. $resdir is a subdirectory of the suite's one mktemp -d root.
+# With jobs=1 there is one slot, so --serial runs the identical launch/reap/print code path, one
+# case at a time. A case's stderr is replayed after its stdout, not interleaved live.
+#
+# No per-case timeout exists in the pool (BSD has no portable `timeout`): a case that hangs on a
+# path with no deadline of its own still holds the whole suite — print_ready cannot cross a
+# not-yet-done case — while the other slots keep launching and finishing cases around it. The
+# rows that run the scheduled-run wrapper with real timeouts bound themselves (wait_deadline,
+# sched_collect), as they always have. The four harness-* self-tests below (harness-internal,
+# never cases=() rows) prove exactly these properties mechanically — three through an
+# env-var-injected DOCTOR_TESTS_FAULT, a `die:<case>` fault (a dead case is counted as a FAIL), a
+# `slow:<case>` fault (declared order survives an out-of-order finish), a `fail:<case>` fault (a
+# case whose verdict is fail is replayed, tallied and exits 1), and harness-cli, through the
+# command line and DOCTOR_TESTS_JOBS, the CLI's precedence, banner and usage handling — and prove
+# nothing beyond them: not every real death mode, not scheduling
+# behaviour under an externally loaded host, and not that a freed slot is refilled by a later case
+# rather than after a batch drains (a barrier regression would only slow the suite).
 #
 # Every write happens under one `mktemp -d` root, removed via an EXIT trap; this repo's own .git
 # is never opened. Each fixture gets its OWN copy of bin/check-harness.sh + its template (the
@@ -175,10 +227,98 @@
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
+
+# detect_jobs — the default worker count when neither -j/--serial nor DOCTOR_TESTS_JOBS is given.
+# Tries, in order, `sysctl -n hw.ncpu`, `nproc`, `getconf _NPROCESSORS_ONLN`, each command
+# -v-guarded first and its own output digits-validated (empty, non-digit, or "0" output is
+# treated as "this probe didn't answer", never trusted) — the chain is safe by construction: a
+# probe that is absent or prints a non-number is simply skipped, so correctness never depends on
+# which probe exists on which platform. The first digits-only, >=1 answer wins; if none of the
+# three answers, falls back to 2. The winning value is then clamped to at most 16. Prints the
+# resolved count, nothing else, on stdout.
+detect_jobs() {
+  local n=""
+  if [ -z "$n" ] && command -v sysctl >/dev/null 2>&1; then
+    n="$(sysctl -n hw.ncpu 2>/dev/null)"
+    case "$n" in ''|*[!0-9]*|0) n="" ;; esac
+  fi
+  if [ -z "$n" ] && command -v nproc >/dev/null 2>&1; then
+    n="$(nproc 2>/dev/null)"
+    case "$n" in ''|*[!0-9]*|0) n="" ;; esac
+  fi
+  if [ -z "$n" ] && command -v getconf >/dev/null 2>&1; then
+    n="$(getconf _NPROCESSORS_ONLN 2>/dev/null)"
+    case "$n" in ''|*[!0-9]*|0) n="" ;; esac
+  fi
+  [ -n "$n" ] || n=2
+  [ "$n" -le 16 ] || n=16
+  printf '%s' "$n"
+}
+
+usage_die() {
+  echo "usage: dev/doctor-tests.sh [-j <n>|--serial] [name-filter] -- $1" >&2
+  exit 2
+}
+
+# Option parsing: -j <n> / --serial / -h|--help, consumed before the positional filter. A case
+# name never starts with '-' (see the cases=() table below), so a leading-dash filter needs no
+# support — any other dash-prefixed token is an unknown option, not a filter. Precedence: a
+# command-line -j/--serial flag > DOCTOR_TESTS_JOBS > detect_jobs. All of this runs before the
+# mktemp -d below, so a usage error creates nothing.
+jobs_flag=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      cat <<'EOF'
+usage: dev/doctor-tests.sh [-j <n>|--serial] [name-filter]
+
+  -j <n>       run <n> cases concurrently (a positive integer)
+  --serial     equivalent to -j 1 -- one case at a time, in declared order
+  name-filter  run only the cases whose name contains this substring
+
+With no name-filter, runs every case. DOCTOR_TESTS_JOBS overrides the detected default when
+neither -j nor --serial is given.
+EOF
+      exit 0
+      ;;
+    -j)
+      shift
+      jobs_flag="${1:-}"
+      case "$jobs_flag" in
+        ''|*[!0-9]*|0) usage_die "-j requires a positive integer, got '${1:-}'" ;;
+      esac
+      shift
+      ;;
+    --serial)
+      jobs_flag=1
+      shift
+      ;;
+    -*)
+      usage_die "unknown option: $1"
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 filter="${1:-}"
 
+if [ -n "$jobs_flag" ]; then
+  jobs="$jobs_flag"
+elif [ -n "${DOCTOR_TESTS_JOBS:-}" ]; then
+  jobs="$DOCTOR_TESTS_JOBS"
+  case "$jobs" in
+    ''|*[!0-9]*|0) usage_die "DOCTOR_TESTS_JOBS must be a positive integer, got '$jobs'" ;;
+  esac
+else
+  jobs="$(detect_jobs)"
+fi
+
 tmpbase="$(mktemp -d)"
+resdir="$tmpbase/results"
+mkdir -p "$resdir"
 cleanup() {
+  wait
   if [ -n "$tmpbase" ] && [ -d "$tmpbase" ]; then
     rm -rf "$tmpbase"
   fi
@@ -189,6 +329,8 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "  FAIL  jq not installed — required to derive fixture settings.json variants from templates/repo-settings.json"
   exit 1
 fi
+
+echo "== doctor-tests: $jobs jobs =="
 
 # Captured before any PATH is handed to a fixture run — this process's own PATH is never
 # mutated, only passed as an explicit PATHVAL to run_doctor's subprocess.
@@ -729,7 +871,7 @@ run_record_check() {
 # captures stdout and stderr to SEPARATE files (.claude/LESSONS.md 2026-09-08(b): a capture that
 # merges both streams cannot pin a criterion that names a stream), leaving $version_out/
 # $version_err/$version_rc set as globals. Also copies a merged view into $doctor_out/$doctor_rc
-# so a failing version-* case's captured output still reaches the generic runner loop's
+# so a failing version-* case's captured output still reaches run_case's
 # diagnostics dump below.
 version_out=""
 version_err=""
@@ -755,7 +897,7 @@ ERR: $version_err"
 # SEPARATE files, same rationale as run_version_script (a capture that merges both streams cannot
 # pin a criterion that names a stream), leaving $gov_out/$gov_err/$gov_rc set as globals, and
 # copies a merged view into $doctor_out/$doctor_rc so a failing gov-* case's captured output still
-# reaches the generic runner loop's diagnostics dump below.
+# reaches run_case's diagnostics dump below.
 gov_out=""
 gov_err=""
 gov_rc=0
@@ -1389,13 +1531,15 @@ case_toolchain_grant_absent() {
   expect_absent "covers the detected toolchain(s)"
 }
 
-# record_body TEXT_LINES — writes a synthetic issue body to $tmpbase/<caller-provided path> via
+# write_record_body DIR TEXT — writes a synthetic issue body to DIR/gh-issue-body.json via
 # jq -Rs '{body: .}', never a hand-escaped JSON literal (see the header's fixture contract note).
-# Callers pass the destination gh-stub directory; this writes DIR/gh-issue-body.json.
+# Callers pass the destination gh-stub directory, one per case, and the jq source text is staged
+# in DIR/record-body-src.txt beside it, never at a fixed $tmpbase path two concurrently running
+# cases could both write.
 write_record_body() {
   local ghdir="$1" text="$2"
-  printf '%s\n' "$text" > "$tmpbase/record-body-src.txt"
-  jq -Rs '{body: .}' "$tmpbase/record-body-src.txt" > "$ghdir/gh-issue-body.json"
+  printf '%s\n' "$text" > "$ghdir/record-body-src.txt"
+  jq -Rs '{body: .}' "$ghdir/record-body-src.txt" > "$ghdir/gh-issue-body.json"
 }
 
 case_record_complete() {
@@ -1419,6 +1563,9 @@ text'
   expect "PASS  element: Migration posture"
   expect "PASS  element: Worked example"
   expect_absent "FAIL"
+  # #616: write_record_body stages its jq source file inside the case's own gh dir, never at one
+  # fixed $tmpbase path that every record-* case would share once cases run concurrently.
+  expect_no_file "$tmpbase/record-body-src.txt"
 }
 
 case_record_missing_element() {
@@ -4158,8 +4305,8 @@ tmpl_branch_ops="$(jq -r '.permissions.deny[]? // empty' "$root/templates/repo-s
 # empty-needle-guard (#262-1) — exercises every guarded helper in this file (expect, expect_absent)
 # with an empty needle, and asserts the guard fired for each: sets $doctor_out to a fixed non-empty
 # value first (so a non-guarded regression couldn't pass vacuously against empty captured output),
-# calls both helpers with "", then checks the ACCUMULATED __ok/__why saved off before this case's
-# own __ok/__why are reset by the runner loop. Measured mutant: delete `needle_required expect
+# calls both helpers with "", then checks the ACCUMULATED __ok/__why saved off before the case resets
+# __ok/__why itself to report its own verdict. Measured mutant: delete `needle_required expect
 # "$1" || return 0` from expect() only — failing exactly empty-needle-guard (saved_why no longer
 # names "expect:").
 case_empty_needle_guard() {
@@ -4330,7 +4477,7 @@ mk_cx_repo() {
 # into REPO (so a developer's real global git config can never leak into a verdict) and
 # GIT_CONFIG_NOSYSTEM=1. Captures stdout/stderr to SEPARATE files, leaving $cx_out/$cx_err/$cx_rc
 # set as globals, and copies a merged view into $doctor_out/$doctor_rc so a failing codex-setup-*
-# case's captured output still reaches the generic runner loop's diagnostics dump below.
+# case's captured output still reaches run_case's diagnostics dump below.
 cx_out=""
 cx_err=""
 cx_rc=0
@@ -5850,7 +5997,7 @@ ERR: $sched_err"
 # overrides it): the ordinary call every case that doesn't itself need to signal the wrapper mid-run
 # uses. See sched_launch's own header for the full argument and environment contract. Leaves
 # $sched_out/$sched_err/$doctor_rc set, plus $doctor_out (merged) for the generic
-# expect/expect_absent/expect_rc/expect_no_file helpers and the runner loop's own diagnostics dump.
+# expect/expect_absent/expect_rc/expect_no_file helpers and run_case's own diagnostics dump.
 run_sched() {
   sched_launch "$@"
   sched_collect "${sched_deadline:-30}"
@@ -8893,19 +9040,24 @@ cases=(
   "codex-path-safe|case_codex_path_safe|#444: a PATH entry that doesn't resolve is dropped silently (no refusal, outcome=completed) and a symlink to the stub directory, as the only stub entry, still completes -> the launched codex's own captured PATH names the stub's physical path, never the symlink's spelling"
 )
 
-matched=0
-for row in "${cases[@]}"; do
-  name="${row%%|*}"
-  case "$name" in
-    *"$filter"*) : ;;
-    *) continue ;;
-  esac
-  matched=$((matched+1))
-  rest="${row#*|}"
-  fn="${rest%%|*}"
-  desc="${rest#*|}"
+# ---------------------------------------------------------------------------------------------
+# Pool scheduler (#616) — copied from dev/selfcheck-tests.sh (#336, #472), adapted to the
+# name|fn|desc rows above. See the file header's "Concurrency" paragraph.
+
+# run_case NAME FN DESC [INJECT_FAIL] — runs one cases=() row in the CURRENT shell, which is always
+# a dispatch_case child, and returns 0 iff the row passed: the verdict is a function result, not a
+# counter side effect. case_ok/case_bad still print their own PASS/FAIL line and still increment
+# the $pass/$fail globals, but those increments happen in the child and are inert there — the
+# parent's $pass/$fail are advanced only by collect_case, which reads each case's verdict file
+# back. The per-case globals (__ok, __why, sched_overran, and the doctor_out/doctor_rc every run_*
+# helper leaves behind) are reset here so a row never reads a value only a sibling set; they live
+# and die in the child either way. A nonzero INJECT_FAIL (DOCTOR_TESTS_FAULT=fail:<name>) fails
+# the row after its function ran, for harness-fail-verdict only.
+run_case() {
+  local name="$1" fn="$2" desc="$3" inject="${4:-0}"
   __ok=1; __why=""
   sched_overran=false
+  doctor_out=""; doctor_rc=0
   # mutant:383-fn-doctor — renames a cases=() row's target function in a scratch copy of this
   #   suite; this declare -F guard must report that row FAIL naming the missing function, instead
   #   of a silent PASS the row would otherwise get by falling through with $__ok unchanged.
@@ -8913,6 +9065,9 @@ for row in "${cases[@]}"; do
     "$fn"
   else
     __ok=0; __why="${__why}case function '$fn' is not defined (deleted or renamed?) — this row never ran\n"
+  fi
+  if [ "$inject" -ne 0 ]; then
+    __ok=0; __why="${__why}injected failure (DOCTOR_TESTS_FAULT=fail:$name)\n"
   fi
   if [ "$__ok" -eq 1 ]; then
     case_ok "$name" "$desc"
@@ -8926,16 +9081,381 @@ for row in "${cases[@]}"; do
       printf '%s\n' "$doctor_out" | sed -n '1,40p' | sed 's/^/    | /'
     fi
   fi
+  [ "$__ok" -eq 1 ]
+}
+
+# dispatch_case IDX NAME FN DESC — runs one row as a background child (always invoked as
+# `dispatch_case ... &`, even at jobs=1 — see launch_case). FIRST statement: `trap - EXIT`,
+# unconditionally (see the file header's concurrency comment). Then a harness-internal fault hook,
+# read from DOCTOR_TESTS_FAULT (self-tests only; no cases=() row ever sets this): "die:<name>"
+# exits with status 9 after the case's .out/.err captures are opened and before the case runs, so
+# this case writes no .verdict (a verdict written ahead of the case would already exist by then,
+# and harness-dead-case would see the death counted as a pass); "slow:<name>" sleeps 2 seconds
+# before running the case, inverting completion order without changing the case's own outcome;
+# "fail:<name>" runs the case normally and then fails it with an injected reason, so its verdict
+# is fail while its own function passed.
+# No case name contains ':', so the colon-delimited fault forms never collide with a case's own
+# name. run_case's stdout and stderr are captured to SEPARATE files (never `2>&1` — a merged
+# stream could never prove a stream-specific claim like "usage on stderr"), and the verdict
+# ("pass"/"fail") is written to $IDX.verdict as the LAST action, so a child that dies mid-run
+# leaves that file absent rather than half-written.
+dispatch_case() {
+  trap - EXIT
+  local idx="$1" name="$2" fn="$3" desc="$4"
+  local fault="${DOCTOR_TESTS_FAULT:-}"
+  local inject=0 die=0
+  case "$fault" in
+    "die:$name") die=1 ;;
+    "slow:$name") sleep 2 ;;
+    "fail:$name") inject=1 ;;
+  esac
+  {
+    [ "$die" -eq 0 ] || exit 9
+    run_case "$name" "$fn" "$desc" "$inject"
+  } > "$resdir/$idx.out" 2> "$resdir/$idx.err"
+  local rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf 'pass' > "$resdir/$idx.verdict"
+  else
+    printf 'fail' > "$resdir/$idx.verdict"
+  fi
+}
+
+# Pool scheduler state: plain indexed arrays (no declare -A), one entry per enqueued case, 1-based
+# and keyed by case_no (also each case's result-file stem). job_name/job_fn/job_desc hold each
+# case's own dispatch_case arguments; job_state[idx] moves "pending" -> "running" -> "done".
+# next_launch is the lowest not-yet-launched index; next_print is the lowest not-yet-printed
+# index. slot_idx/slot_pid track which case (if any) occupies each of the $jobs slots. n_jobs is
+# set once, after the enqueue loop below finishes, to the highest case_no enqueued (0 for a filter
+# that matches only self-tests, e.g. "harness-dead").
+case_no=0
+n_jobs=0
+next_launch=1
+next_print=1
+running=0
+reaped=0
+slot_idx=()
+slot_pid=()
+job_name=()
+job_fn=()
+job_desc=()
+job_state=()
+
+# launch_case IDX SLOT — forks dispatch_case for job IDX into slot SLOT, records its pid, and
+# marks the job running.
+launch_case() {
+  local idx="$1" slot="$2"
+  dispatch_case "$idx" "${job_name[$idx]}" "${job_fn[$idx]}" "${job_desc[$idx]}" &
+  slot_pid[$slot]="$!"
+  slot_idx[$slot]="$idx"
+  job_state[$idx]=running
+  running=$((running+1))
+}
+
+# fill_slots — for each free slot, launches the next not-yet-launched case (in declared order) if
+# one remains. A slot stays free once every case has already been launched.
+fill_slots() {
+  local s
+  s=0
+  while [ "$s" -lt "$jobs" ]; do
+    if [ -z "${slot_idx[$s]:-}" ] && [ "$next_launch" -le "$n_jobs" ]; then
+      launch_case "$next_launch" "$s"
+      next_launch=$((next_launch+1))
+    fi
+    s=$((s+1))
+  done
+}
+
+# reap_slots — a busy slot is finished once its .verdict file exists (the child's last write) or
+# its pid is no longer alive (kill -0 fails — a dead child with no verdict). Either way, wait reaps
+# it (returns at once; the process has already exited or is about to), the slot frees up, and
+# job_state flips to "done" so fill_slots and print_ready can both see it. Sets $reaped so run_pool
+# knows whether this pass made progress.
+reap_slots() {
+  local s idx pid
+  reaped=0
+  s=0
+  while [ "$s" -lt "$jobs" ]; do
+    idx="${slot_idx[$s]:-}"
+    if [ -n "$idx" ]; then
+      pid="${slot_pid[$s]}"
+      if [ -e "$resdir/$idx.verdict" ] || ! kill -0 "$pid" 2>/dev/null; then
+        wait "$pid" 2>/dev/null
+        job_state[$idx]=done
+        slot_idx[$s]=""
+        slot_pid[$s]=""
+        running=$((running-1))
+        reaped=1
+      fi
+    fi
+    s=$((s+1))
+  done
+}
+
+# collect_case IDX — reads IDX's result files and either tallies a pass/fail and replays its
+# captured stdout/stderr, or, when no verdict file exists, counts and reports it as a dead case.
+# Called only from print_ready, and only once IDX's job_state is "done" — i.e. only after
+# reap_slots has already wait'ed on its child, so its .verdict file (the child's LAST write, see
+# dispatch_case's own comment) is always complete by the time this reads it, never seen mid-write.
+# No file test on a result path — a missing file yields the empty string from `cat`, and that
+# empty string alone is what routes a dead case to the no-verdict branch below.
+collect_case() {
+  local idx="$1" v out err
+  v="$(cat "$resdir/$idx.verdict" 2>/dev/null)"
+  out="$(cat "$resdir/$idx.out" 2>/dev/null)"
+  err="$(cat "$resdir/$idx.err" 2>/dev/null)"
+  case "$v" in
+    pass)
+      pass=$((pass+1))
+      [ -n "$out" ] && printf '%s\n' "$out"
+      [ -n "$err" ] && printf '%s\n' "$err" 1>&2
+      ;;
+    fail)
+      fail=$((fail+1))
+      [ -n "$out" ] && printf '%s\n' "$out"
+      [ -n "$err" ] && printf '%s\n' "$err" 1>&2
+      ;;
+    *)
+      fail=$((fail+1))
+      echo "  FAIL  ${job_name[$idx]} — ${job_desc[$idx]}"
+      echo "    this case produced no verdict — it died before reporting and is counted as a failure"
+      [ -n "$out" ] && printf '%s\n' "$out" | sed -n '1,40p'
+      [ -n "$err" ] && printf '%s\n' "$err" | sed -n '1,40p' 1>&2
+      ;;
+  esac
+}
+
+# print_ready — collects and prints every already-done case starting at next_print, in declared
+# order, stopping at the first index that isn't done yet (or past the end).
+print_ready() {
+  while [ "$next_print" -le "$n_jobs" ] && [ "${job_state[$next_print]}" = "done" ]; do
+    collect_case "$next_print"
+    next_print=$((next_print+1))
+  done
+}
+
+# run_pool — drives the pool until every case has been printed. With n_jobs=0 (e.g. the
+# "harness-dead" filter, which matches only a self-test and enqueues nothing) the loop body never
+# runs.
+run_pool() {
+  while [ "$next_print" -le "$n_jobs" ]; do
+    fill_slots
+    reap_slots
+    print_ready
+    [ "$reaped" -eq 0 ] && sleep 0.1
+  done
+}
+
+# Pool self-tests (#616). Each runs a real, nested invocation of THIS SAME script with the job
+# count and DOCTOR_TESTS_FAULT set explicitly and a name filter that matches only cheap, pure-shell
+# rows, then pins that run's stdout+stderr and exit code. They prove exactly the properties named
+# in the file header's Concurrency paragraph, one injected fault each, and nothing beyond them.
+
+# mutant:616-doctor-pool-noverdict — collapsing collect_case's no-verdict arm to an unconditional
+# pass makes a dead child counted as a silent pass instead of a reported FAIL; harness-dead-case is
+# the only self-test this trips (harness-accounting stays clean, since the mutation misclassifies a
+# verdict rather than dropping one from the pass+fail total).
+# harness-dead-case — proves a child that dies without writing a verdict is reported as a FAIL
+# naming the case and the missing-verdict wording, never silently omitted from the totals. The
+# die fault exits before the case's function ever runs, so this nested run costs essentially
+# nothing; "empty-needle-guard" matches exactly one cases=() row and no self-test. The die falls
+# after the child's output captures are opened, where a verdict written ahead of the case would
+# already exist, so this self-test also fails if the verdict stops being the child's last write.
+# It does not pin reap_slots' own `! kill -0` half (a dead pid, the other way besides a .verdict
+# file that a slot is recognized as finished): no registry record mutates it either, because
+# removing only that clause makes a dead child's slot never reap and this self-test's own nested
+# run hang instead of failing fast — only a CI job timeout would show that regression.
+run_deadcase_selftest() {
+  local out rc bad
+  out="$(DOCTOR_TESTS_JOBS=2 DOCTOR_TESTS_FAULT="die:empty-needle-guard" "$bash_bin" "$root/dev/doctor-tests.sh" empty-needle-guard 2>&1)"
+  rc=$?
+  bad=""
+  [ "$rc" -eq 1 ] || bad="$bad rc: expected 1, got $rc;"
+  grep -qE '^  FAIL  empty-needle-guard ' <<<"$out" || bad="$bad missing the '  FAIL  empty-needle-guard ' line;"
+  grep -qF -- "produced no verdict" <<<"$out" || bad="$bad missing the no-verdict wording;"
+  grep -qF -- "== summary: 0 pass, 1 fail ==" <<<"$out" || bad="$bad missing footer '== summary: 0 pass, 1 fail ==';"
+  if [ -z "$bad" ]; then
+    case_ok "harness-dead-case" "a child that dies without writing a verdict (DOCTOR_TESTS_FAULT=die:<case>) is reported as a FAIL naming the case, never silently omitted from the totals"
+  else
+    case_bad "harness-dead-case" "a child that dies without writing a verdict (DOCTOR_TESTS_FAULT=die:<case>) is reported as a FAIL naming the case, never silently omitted from the totals"
+    echo "    $bad"
+    printf '%s\n' "$out" | sed -n '1,40p' | sed 's/^/    | /'
+  fi
+}
+
+# mutant:616-doctor-pool-order — moving the print call from print_ready into reap_slots (and
+# turning print_ready's own call into a no-op) makes cases print at reap time, in completion order,
+# instead of declared order; harness-order is the only self-test this trips.
+# harness-order — proves declared order, not completion order, decides the PASS/FAIL line
+# sequence and the totals. Runs a nested invocation (two jobs, a slow: fault on the FIRST of
+# exactly three cases the "settings-" filter matches, in declared order settings-missing /
+# settings-unparseable / settings-parsed) and extracts the case-name sequence from the
+# "  PASS  "/"  FAIL  " lines, requiring it to equal the declared order even though the delayed
+# case finishes last among its own pool-mates. Covers one injected inversion only.
+run_order_selftest() {
+  local out rc seq expected_seq bad
+  out="$(DOCTOR_TESTS_JOBS=2 DOCTOR_TESTS_FAULT="slow:settings-missing" "$bash_bin" "$root/dev/doctor-tests.sh" settings- 2>&1)"
+  rc=$?
+  seq="$(printf '%s\n' "$out" | sed -n -E 's/^  (PASS|FAIL)  ([^ ]*) .*/\2/p' | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  expected_seq="settings-missing settings-unparseable settings-parsed"
+  bad=""
+  [ "$rc" -eq 0 ] || bad="$bad rc: expected 0, got $rc;"
+  [ "$seq" = "$expected_seq" ] || bad="$bad case-name sequence: expected '$expected_seq', got '$seq';"
+  grep -qF -- "== summary: 3 pass, 0 fail ==" <<<"$out" || bad="$bad missing footer '== summary: 3 pass, 0 fail ==';"
+  if [ -z "$bad" ]; then
+    case_ok "harness-order" "declared order, not completion order, decides the PASS/FAIL line sequence and the totals (DOCTOR_TESTS_FAULT=slow:<case> delays the first-declared case past its pool-mates)"
+  else
+    case_bad "harness-order" "declared order, not completion order, decides the PASS/FAIL line sequence and the totals (DOCTOR_TESTS_FAULT=slow:<case> delays the first-declared case past its pool-mates)"
+    echo "    $bad"
+    printf '%s\n' "$out" | sed -n '1,40p' | sed 's/^/    | /'
+  fi
+}
+
+# mutant:616-doctor-pool-fail-tally — counting a fail-verdict case as a pass in collect_case's fail
+# arm leaves its FAIL line printed but turns the totals and the exit status green; harness-fail-
+# verdict is the only self-test this trips.
+# harness-fail-verdict — proves a case whose verdict file says fail (here forced by a fail: fault,
+# since every real row passes) is replayed — its FAIL line, its indented reason lines, and its
+# bounded `    | ` doctor_out dump — is tallied as a failure, and makes the suite exit 1. The
+# "empty-needle-guard" row sets $doctor_out itself, so the dump is non-empty. This nested run
+# covers the fail verdict only; the dead-child path is harness-dead-case's.
+run_failverdict_selftest() {
+  local out rc bad
+  out="$(DOCTOR_TESTS_JOBS=2 DOCTOR_TESTS_FAULT="fail:empty-needle-guard" "$bash_bin" "$root/dev/doctor-tests.sh" empty-needle-guard 2>&1)"
+  rc=$?
+  bad=""
+  [ "$rc" -eq 1 ] || bad="$bad rc: expected 1, got $rc;"
+  grep -qE '^  FAIL  empty-needle-guard ' <<<"$out" || bad="$bad missing the '  FAIL  empty-needle-guard ' line;"
+  grep -qE '^    injected failure' <<<"$out" || bad="$bad missing the indented injected-failure reason line;"
+  grep -qF -- "    | fixture output for the empty-needle guard" <<<"$out" || bad="$bad missing the doctor_out dump line;"
+  grep -qF -- "== summary: 0 pass, 1 fail ==" <<<"$out" || bad="$bad missing footer '== summary: 0 pass, 1 fail ==';"
+  if [ -z "$bad" ]; then
+    case_ok "harness-fail-verdict" "a case whose verdict is fail (DOCTOR_TESTS_FAULT=fail:<case>) is replayed with its reason lines and doctor_out dump, tallied as a failure, and makes the suite exit 1"
+  else
+    case_bad "harness-fail-verdict" "a case whose verdict is fail (DOCTOR_TESTS_FAULT=fail:<case>) is replayed with its reason lines and doctor_out dump, tallied as a failure, and makes the suite exit 1"
+    echo "    $bad"
+    printf '%s\n' "$out" | sed -n '1,40p' | sed 's/^/    | /'
+  fi
+}
+
+# harness-cli — proves the command line and environment resolve to the right job count and
+# fail the right way, each against a real nested invocation whose filter ("zz-no-such-case")
+# matches no row, so nothing but the CLI, the banner and the no-match exit is exercised. stdout and
+# stderr are captured to SEPARATE files: (a) -j 0 prints usage on stderr, nothing on stdout, and
+# exits 2 before the banner; (b) a non-numeric DOCTOR_TESTS_JOBS exits 2; (c) --serial wins over
+# DOCTOR_TESTS_JOBS=5 and the banner says 1 job, ahead of the no-match message and exit 1; (d) -j 3
+# wins over DOCTOR_TESTS_JOBS=5; (e) DOCTOR_TESTS_JOBS=4 alone is used; (f) with neither, a stub
+# sysctl answering above the clamp yields 16; (g) with neither and every probe stubbed to answer
+# nothing usable, the count falls back to 2; (h) -h exits 0 with the usage on stdout. The stubs
+# stand in for the host's own probes, so the real core count never decides a verdict; the order in
+# which the three real probes are tried is not exercised.
+run_cli_selftest() {
+  local o e rc bad first stubdir
+  bad=""
+  o="$(DOCTOR_TESTS_JOBS=2 "$bash_bin" "$root/dev/doctor-tests.sh" -j 0 zz-no-such-case 2>"$tmpbase/cli.err")"
+  rc=$?
+  e="$(cat "$tmpbase/cli.err")"
+  [ "$rc" -eq 2 ] || bad="$bad (a) rc: expected 2, got $rc;"
+  grep -qF -- "usage: dev/doctor-tests.sh" <<<"$e" || bad="$bad (a) stderr lacks the usage line;"
+  [ -z "$o" ] || bad="$bad (a) stdout not empty;"
+  o="$(DOCTOR_TESTS_JOBS=abc "$bash_bin" "$root/dev/doctor-tests.sh" zz-no-such-case 2>"$tmpbase/cli.err")"
+  rc=$?
+  [ "$rc" -eq 2 ] || bad="$bad (b) rc: expected 2, got $rc;"
+  o="$(DOCTOR_TESTS_JOBS=5 "$bash_bin" "$root/dev/doctor-tests.sh" --serial zz-no-such-case 2>"$tmpbase/cli.err")"
+  rc=$?
+  first="$(printf '%s\n' "$o" | sed -n '1p')"
+  [ "$rc" -eq 1 ] || bad="$bad (c) rc: expected 1, got $rc;"
+  [ "$first" = "== doctor-tests: 1 jobs ==" ] || bad="$bad (c) first line: expected '== doctor-tests: 1 jobs ==', got '$first';"
+  grep -qF -- "no case name contains 'zz-no-such-case'" <<<"$o" || bad="$bad (c) missing the no-match message;"
+  o="$(DOCTOR_TESTS_JOBS=5 "$bash_bin" "$root/dev/doctor-tests.sh" -j 3 zz-no-such-case 2>"$tmpbase/cli.err")"
+  first="$(printf '%s\n' "$o" | sed -n '1p')"
+  [ "$first" = "== doctor-tests: 3 jobs ==" ] || bad="$bad (d) first line: expected '== doctor-tests: 3 jobs ==', got '$first';"
+  o="$(DOCTOR_TESTS_JOBS=4 "$bash_bin" "$root/dev/doctor-tests.sh" zz-no-such-case 2>"$tmpbase/cli.err")"
+  first="$(printf '%s\n' "$o" | sed -n '1p')"
+  [ "$first" = "== doctor-tests: 4 jobs ==" ] || bad="$bad (e) first line: expected '== doctor-tests: 4 jobs ==', got '$first';"
+  # (f)/(g): with neither a flag nor DOCTOR_TESTS_JOBS the count comes from detect_jobs. A stub
+  # sysctl first on the nested run's PATH answers with a count above the clamp, which must come
+  # back as 16; stubs for all three probes that answer nothing usable (empty, "0", non-digits)
+  # must fall back to 2.
+  stubdir="$tmpbase/cli-probe-clamp"
+  mkdir -p "$stubdir"
+  printf '#!/bin/sh\necho 64\n' > "$stubdir/sysctl"
+  chmod +x "$stubdir/sysctl"
+  o="$(DOCTOR_TESTS_JOBS= PATH="$stubdir:$PATH" "$bash_bin" "$root/dev/doctor-tests.sh" zz-no-such-case 2>"$tmpbase/cli.err")"
+  first="$(printf '%s\n' "$o" | sed -n '1p')"
+  [ "$first" = "== doctor-tests: 16 jobs ==" ] || bad="$bad (f) first line: expected '== doctor-tests: 16 jobs ==', got '$first';"
+  stubdir="$tmpbase/cli-probe-none"
+  mkdir -p "$stubdir"
+  printf '#!/bin/sh\nexit 0\n' > "$stubdir/sysctl"
+  printf '#!/bin/sh\necho 0\n' > "$stubdir/nproc"
+  printf '#!/bin/sh\necho abc\n' > "$stubdir/getconf"
+  chmod +x "$stubdir/sysctl" "$stubdir/nproc" "$stubdir/getconf"
+  o="$(DOCTOR_TESTS_JOBS= PATH="$stubdir:$PATH" "$bash_bin" "$root/dev/doctor-tests.sh" zz-no-such-case 2>"$tmpbase/cli.err")"
+  first="$(printf '%s\n' "$o" | sed -n '1p')"
+  [ "$first" = "== doctor-tests: 2 jobs ==" ] || bad="$bad (g) first line: expected '== doctor-tests: 2 jobs ==', got '$first';"
+  # (h): -h prints the usage on stdout and exits 0.
+  o="$(DOCTOR_TESTS_JOBS=abc "$bash_bin" "$root/dev/doctor-tests.sh" -h 2>"$tmpbase/cli.err")"
+  rc=$?
+  [ "$rc" -eq 0 ] || bad="$bad (h) rc: expected 0, got $rc;"
+  grep -qF -- "usage: dev/doctor-tests.sh" <<<"$o" || bad="$bad (h) stdout lacks the usage line;"
+  if [ -z "$bad" ]; then
+    case_ok "harness-cli" "-j/--serial beat DOCTOR_TESTS_JOBS, which beats detect_jobs (clamped to 16, 2 when no probe answers); the banner states the resolved count; an invalid -j or DOCTOR_TESTS_JOBS prints usage on stderr and exits 2; -h exits 0; a filter matching nothing exits 1"
+  else
+    case_bad "harness-cli" "-j/--serial beat DOCTOR_TESTS_JOBS, which beats detect_jobs (clamped to 16, 2 when no probe answers); the banner states the resolved count; an invalid -j or DOCTOR_TESTS_JOBS prints usage on stderr and exits 2; -h exits 0; a filter matching nothing exits 1"
+    echo "    $bad"
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
+matched=0
+
+# Enqueue: fills the job_* arrays only; nothing runs until run_pool below.
+for row in "${cases[@]}"; do
+  name="${row%%|*}"
+  case "$name" in
+    *"$filter"*) : ;;
+    *) continue ;;
+  esac
+  matched=$((matched+1))
+  rest="${row#*|}"
+  fn="${rest%%|*}"
+  desc="${rest#*|}"
+  case_no=$((case_no+1))
+  job_name[$case_no]="$name"
+  job_fn[$case_no]="$fn"
+  job_desc[$case_no]="$desc"
+  job_state[$case_no]=pending
 done
+n_jobs=$case_no
+run_pool
+
+case "harness-dead-case" in
+  *"$filter"*) matched=$((matched+1)); run_deadcase_selftest ;;
+esac
+case "harness-order" in
+  *"$filter"*) matched=$((matched+1)); run_order_selftest ;;
+esac
+case "harness-fail-verdict" in
+  *"$filter"*) matched=$((matched+1)); run_failverdict_selftest ;;
+esac
+case "harness-cli" in
+  *"$filter"*) matched=$((matched+1)); run_cli_selftest ;;
+esac
 
 if [ "$matched" -eq 0 ]; then
   echo "no case name contains '$filter'"
   exit 1
 fi
 
+accounting_bad=0
+if [ "$((pass+fail))" -ne "$matched" ]; then
+  echo "  FAIL  harness-accounting — pass ($pass) + fail ($fail) = $((pass+fail)), expected $matched matched work items; a case vanished from the totals"
+  accounting_bad=1
+fi
+
 echo
 echo "== summary: $pass pass, $fail fail =="
-if [ "$fail" -gt 0 ]; then
+if [ "$fail" -gt 0 ] || [ "$accounting_bad" -eq 1 ]; then
   exit 1
 fi
 exit 0

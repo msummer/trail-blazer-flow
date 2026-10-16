@@ -104,7 +104,12 @@ resolves from the wrapper's own directory only, the exact launch argv and its `/
 the watchdog's timeout/kill-grace with no orphan left behind, the outcome classification, and the
 run-record pruning. Its time-bound fixtures (the wrapper runs that exercise a hang path) run under
 an active deadline (`wait_deadline`/`kill_tree`, #463): an overrun kills the run's whole process
-tree and fails the case at once, instead of waiting the hang out. It runs in CI as the third command, but
+tree and fails the case at once, instead of waiting the hang out. Its cases run through the same
+rolling pool `dev/selfcheck-tests.sh` uses — one child per case, sized from the host's core count
+(clamped at 16, falling back to 2), overridable with `DOCTOR_TESTS_JOBS=<n>` or `-j <n>`, with
+`--serial` (`-j 1`) restoring one case at a time — and print in declared order whatever order they
+finish in, a child that dies before reporting counting as a FAIL naming the case; its time-bound
+rows run in that pool like every other row. The suite runs in CI as the third command, but
 it is not part of `dev/selfcheck.sh` itself; run it by hand whenever `bin/check-harness.sh`,
 `bin/check-decision-record.sh`, `bin/governance-paths.sh`, `bin/reserve-paths.sh`,
 `bin/codex-setup.sh`, or `bin/codex-scheduled-run.sh` changes.
