@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #543: push-guard's command-size cap drops to 256 KiB and agent-boundary gains one for the implementer and verifier,
+  128 KiB, or 2 KiB with a carriage return (#535); a command over a cap is denied with a line naming it, a large heredoc
+  write included: split the call or use the Write tool. No consumer step.
 - #551: agent-boundary now denies the implementer and verifier a deploy or cloud CLI (`vercel`, `fly`, `wrangler`, `aws`,
   `terraform`, …), directly or through `npx`, `pnpm dlx` or `uvx`, and an `npm`, `pnpm`, `yarn` or `bun` script named
   for `deploy` or for such a CLI; `package.json` is never read, so `npm test` stays quiet. No consumer step.

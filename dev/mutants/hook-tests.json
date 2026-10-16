@@ -5702,6 +5702,21 @@
       "expect_fail": [
         "ab-deploy-deny-precedence"
       ]
+    },
+    {
+      "name": "543-ab-cmdcap-off-by-one",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-cmdcap-",
+      "edits": [
+        {
+          "from": "[ \"$ab_n\" -le \"$AB_CMD_MAX_BYTES\" ]",
+          "to": "[ \"$ab_n\" -lt \"$AB_CMD_MAX_BYTES\" ]"
+        }
+      ],
+      "expect_fail": [
+        "ab-cmdcap-noop-at-cap"
+      ]
     }
   ]
 }

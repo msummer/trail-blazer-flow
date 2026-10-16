@@ -242,6 +242,15 @@ known gap ("Known gaps" below).
 limit, a killed process, or a host where `awk` cannot run) denies with the fixed line `(blocked: command scan
 failed)`, instead of judging only the lines printed before it stopped; awk's own error text is dropped, so the
 deny stays one line (the over-block is in "Known over-blocks" below).
+**Since #543** both roles deny a Bash command that gets past the raw-input fast paths and is longer than
+`AB_CMD_MAX_BYTES` bytes (131072, counted in the C locale), or that carries a carriage return and is longer than
+`AB_CR_MAX_BYTES` bytes (2048). The check sits after the fast paths and the role and plan-mode exits, and before
+the carriage-return strip and the scan, and prints one line that names the limit and carries `(blocked: command
+over the size cap)`. This hook has no analysis deadline, so only a cap keeps a flood of segment breaks or carriage
+returns inside Claude Code's 10-second hook timeout, and a hook that times out gives no deny (#535); the lower
+carriage-return cap is there because the whole-text strip grows faster than its input under bash 3.2. The main
+session and an unrecognised agent are outside it. A cooperative command over a cap is denied too (see "Known
+over-blocks" below).
 The scan processes `tool_input.command` one line at a time, so it over-blocks some benign commands and
 misses some spellings; both are catalogued, each with a measured example, in "Known over-blocks" and
 "Known gaps" below. The remedy for a file-content over-block is to write through the Write/Edit tools rather
@@ -442,11 +451,12 @@ instead of silently degrading into it. See `hooks/push-guard.sh`'s own "Analysis
 header section for the exact sampling rule, the worst-case wall-clock bound, and the residual this
 deadline still cannot reach (the unsampled pre-tokenizer prefix, bounded by the command-size cap
 described next; one single config line's own `read`; and the Codex CLI's own hook timeout, which is
-UNVERIFIED here). Since #517 a Bash command longer than `PUSH_CMD_MAX_BYTES` bytes (524288, counted in
-the C locale so multibyte text is not undercounted) that gets past the git fast path and plan mode
-denies with the same "too large to analyse" line before the tokenizer runs, because a hook that times
-out gives no deny at all; the remedy is the same, split the call or write large content with the Write
-tool. The carriage-return strip runs inside the awk scan, where a long run of carriage returns stays
+UNVERIFIED here). Since #517 a Bash command longer than `PUSH_CMD_MAX_BYTES` bytes (262144 since #543,
+counted in the C locale so multibyte text is not undercounted) that gets past the git fast path and plan
+mode denies before the tokenizer runs, with a line of its own that names the limit and carries `(blocked:
+command over the size cap)` (the deadline's line carries `(blocked: command too large to analyse)`), because
+a hook that times out gives no deny at all; the remedy is to split the call or write large content with
+the Write tool. The carriage-return strip runs inside the awk scan, where a long run of carriage returns stays
 cheap. A
 deny whose route came from a system file names the source `your system git config`; one from an
 included file appends ` (via include)` to whichever source label already applies, exactly once no
@@ -741,7 +751,8 @@ scan, or, for `push-guard` and `agent-boundary`, to run the command from a termi
 | `push-guard` (every session) | Command-line git config on a push | `git -c core.pager=cat push origin feature/x` | #439 |
 | `push-guard` (every session) | Alias lookup: a `!` alias, an alias that expands to `push`, a push-ish subsection alias, or config the hook cannot read denies every non-push git segment | `git up`, with `alias.up = !git pull`; `git status`, with `alias.status = push`; `git status`, with `[alias "x"]` and `command = push`; `HOME=/tmp git status` | #448 |
 | `push-guard` (every session, Codex payload) | The workdir check denies a `workdir` that is a variable or `undefined`, any directory but the session checkout, and a foreign `workdir` in any call of the last 1 MiB of the rollout, finished or not | `git push origin feature/x`, with `workdir: dir`, `workdir: undefined`, `workdir: "/repo/sub"`, or an earlier call with `workdir: "/somewhere/else"` | #494 |
-| `push-guard` (every session) | A command over 524288 bytes; a depth-0 config line over 2048 characters | `echo` followed by 6000 words of 100 characters, then `; git push origin feature/x`; `git push`, with a 2100-character config line | #517, #435 |
+| `push-guard` (every session) | A command over 262144 bytes whose payload names git (its text, `cwd` or transcript path), whatever it does (the deny names the limit); a depth-0 config line over 2048 characters | `cat > notes.md <<'EOF'<LF>`, then prose that mentions git, then `<LF>EOF`, 262145 bytes in all; `git push`, with a 2100-character config line | #543, #517, #435 |
+| `agent-boundary` (implementer, verifier) | A command over 131072 bytes, whatever it does, or over 2048 bytes when it carries a carriage return, such as a CRLF heredoc from Git Bash (the deny names the limit); a payload naming none of git, gh, claude or a deploy word leaves through the fast path first and gets no opinion | `cat > notes.md <<'EOF'<LF>`, then prose, then `<LF>EOF`, 131073 bytes in all; the same heredoc with CRLF line endings, 2049 bytes in all | #543, #535 |
 | `claude-dir-guard` (implementer) | A Bash call that names the shim, holds `Begin Patch`, or holds `"Edit"` or `"Write"` as a whole JSON string, and has a line over 2000 bytes, or a text over 1000000 bytes (counted in bytes) | `echo apply_patch` followed by 2100 characters on one line; `echo apply_patch` followed by more than 1000000 bytes of lines; `echo` followed by 2100 characters on one line, in a call whose `description` is exactly `Edit` | #457 |
 | `claude-dir-guard` (implementer) | A path it cannot classify or that merely looks like `.claude`: a relative path, a case variant, a backslash it rewrites, a checkout that lives under a `.claude` directory | Edit `file_path` `src/main.rs`; `/repo/.Claude/x`; `/repo/foo\.claude\bar`; `/repo/.claude/worktrees/w/src/a.rs` | #327 |
 | `claude-dir-guard` (implementer) | An `apply_patch` call whose `cwd` is under `.codex`, or whose hunk has a context line starting `*** ` | `apply_patch` with `cwd` `…/.codex/sub` and `*** Add File: a.txt`; an `*** Update File: /repo/a.txt` hunk with the context line ` *** note` | #407 |
