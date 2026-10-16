@@ -16,7 +16,32 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v3.5.0
+
+This minor release moves two autonomy rails into read-only, fail-closed scripts: the merge pass's
+mechanical floor is `bin/merge-floor.sh <pr>` (#550), and the Autonomy reserve is matched by
+`bin/reserve-paths.sh` (#552). The contract-file matchers changed too:
+- `governance-paths.sh` follows a `CLAUDE.md` symlink one hop and reads route-parameter brackets as
+  literal, and both matchers accept a `./` link (#596, #595, #597);
+- the Claude Code doctor FAILs a contract git tracks as `claude.md` (#614).
+
+agent-boundary denies the implementer and verifier a deploy or cloud CLI (#551) and caps their
+command size (#543). The guard hooks are simplified:
+- their comments state each rule's contract, and the gap and over-block catalogs move to
+  `docs/reference/safety-model.md` (#570);
+- a failed command scan denies with a fixed reason (#559), and claude-dir-guard's Edit/Write fast
+  path keys on the tool name alone (#571);
+- the rules for a set of rare command-hiding forms are removed, with several over-blocks; each entry
+  names what is no longer caught, and branch protection is the backstop for a push (#572–#579);
+- interpreter options, split shim names and quoted assignment values are followed (#537, #538,
+  #553), and a trailing-backslash continuation is judged as one joined line, with push-guard's size
+  cap at 128 KiB (#556).
+
+CI and the test suites run faster (#580–#584, #560, #616). Consumer steps (README v3.4.0 →
+v3.5.0): add the `merge-floor.sh` and `reserve-paths.sh` grants, and on Codex re-run
+`bin/codex-setup.sh`; fix an Autonomy reserve or Governance paths entry the doctor names as
+malformed; check a `CLAUDE.md` symlink by hand; run the `git mv` the doctor names for a
+`claude.md` contract.
 
 - #616: `dev/doctor-tests.sh` runs its cases through a rolling pool like `dev/selfcheck-tests.sh`'s, sized from the
   host's cores (`-j <n>`, `--serial` or `DOCTOR_TESTS_JOBS` override it), and prints them in declared order; a case that
