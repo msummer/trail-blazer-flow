@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #572: the hooks no longer catch a command behind a quoted break character, a quoted substitution, a mixed-quote
+  value, a quote left open at a line end or a push alias behind a substitution (`X="a;b c" gh pr merge 5`), and no
+  longer deny large quoted text; push-guard still denies `git -C "$(pwd)" push origin main`. No consumer step.
 - #550: the merge pass's mechanical hard floor is one read-only, fail-closed script, `bin/merge-floor.sh <pr>`,
   that the issue-cycle skill calls once per PR. Consumer step: re-copy the permissions block from
   `templates/repo-settings.json` or add `Bash(merge-floor.sh:*)`; on Codex, re-run `bin/codex-setup.sh`.
