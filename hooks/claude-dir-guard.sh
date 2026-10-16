@@ -50,9 +50,8 @@
 #     PATCH_TOOLS and BASH_TOOLS (MultiEdit, NotebookEdit) is not guarded: no role's tools: line names one
 #     today, and the gate fails if one gains it without a matching update.
 #   - By convention, unpinned: PREFIX_WORDS (agent-boundary.sh and push-guard.sh are pinned to each other by
-#     4.40(c); this copy is not), PREFIX_VALUE_WORDS, PREFIX_INTERP_WORDS, INTERP_VALUE_OPTS and cdg_rx_ere
-#     (the class of agent-boundary.sh's rx_re). The walk is a pure-bash port of the agent-boundary.sh and push-guard.sh
-#     technique, not a byte copy.
+#     4.40(c); this copy is not), PREFIX_VALUE_WORDS, PREFIX_INTERP_WORDS and INTERP_VALUE_OPTS. The walk is a
+#     pure-bash port of the agent-boundary.sh and push-guard.sh technique, not a byte copy.
 #
 # Live probe, #327 (measured 2026-09-17 against Claude Code 2.1.274, macOS, a temporary logging PreToolUse
 # hook with matcher Edit|Write, this repo loaded via --plugin-dir; one version, one platform, one install):
@@ -117,7 +116,7 @@
 # U_max is the largest single step the deadline cannot interrupt: one line's substitutions (bounded by
 # CDG_LINE_MAX_BYTES), one line's or segment's split-name regex, one segment's `toks=($seg)` word-split,
 # one `"${toks[@]}"` expansion, one walk_window iteration (plus any per-index cost bash 3.2's arrays add;
-# also one token's env -S reading and one expansion-word regex), one forked trim or ltrim call up to its
+# also one token's env -S reading), one forked trim or ltrim call up to its
 # first in-subshell sample, or one classify_path. Not closed: T_prefix is unsampled (though counted by the wall clock), and the Codex CLI's
 # own hook timeout, if any, is UNVERIFIED; the budget is sized against Claude Code's documented 10s
 # PreToolUse timeout only.
@@ -280,9 +279,6 @@ tab=$'\t'
 # characters from a token before resolving it. Pure parameter expansion, like cr/lf/tab above.
 sq="'"
 dq='"'
-# cdg_rx_ere (#538): a runtime expansion inside a word: a dollar sign followed by a name character, a digit,
-# a special parameter or a quote. The class of hooks/agent-boundary.sh's rx_re, by convention unpinned.
-cdg_rx_ere="[\$][A-Za-z0-9_@*#?!\$=~^${dq}${sq}-]"
 
 # classify_path TOOL RAW_PATH -- the classifier both routes call: pure builtins, no filesystem access.
 # Order matters: the more specific ".claude"/".codex" message wins over the generic "unclassifiable" one.
@@ -533,26 +529,20 @@ scan_shim_input() {
 # exhausted first. It is also the first shim-named token found by the #518 or #537 scan, or the shim itself
 # when an env -S string names it (#538).
 #
-# #538 fail-closed: a shim name split by quote or backslash characters, a runtime expansion before it, or an
-# env -S string. The shell deletes quote and backslash characters inside a word, so apply_"patch" and
-# apply\_patch run the shim; a runtime-expansion word may expand to nothing, so `$X apply_patch` runs it; and
+# #538 fail-closed: a shim name split by quote or backslash characters, or an env -S string. The shell
+# deletes quote and backslash characters inside a word, so apply_"patch" and apply\_patch run the shim, and
 # env -S'apply_patch' splits its string into words. (1) Every shim-name comparison deletes backslashes as
 # well as quotes (a token that carried one marks its window, ww_alt), and fast path 2 and
 # the #455 and #518 segment flags all count a split spelling as a mention of the shim, by cdg_split_ere
 # (tested on a line only when it carries a quote or a backslash and not the plain name, and on a segment only
-# inside a line that names the shim). (2) A token whose basename holds a dollar sign followed by a name
-# character, a digit, a special parameter or a quote is skipped like a prefix word, in a segment that mentions
-# the shim or carries a quote: a dash-led one opens no context, any other opens the value context (#518) and
-# the env context. The skip sits after the dash arm, so `nice -$X 5 apply_patch` still starts the #518 scan.
-# (3) After an env word (or a skipped expansion word) an option token is read the way env -S reads its
-# string, each backslash-underscore a space, then quotes and backslashes deleted: a space-separated word that
-# is the shim, or a first word that is an option glued to the shim name (-Sapply_patch), resolves it, and a
-# bare -S or --split-string reads the NEXT token the same way. The reading sits before the #518 scan, so it
-# never reads past the token the string is in. (4) A shim resolved through a backslash strip, an expansion
-# skip or an env -S string, in a segment flagged for the parity check, runs the #455 check over the WHOLE
-# window. Cost: per line at most one regex, per segment at most one, per walked token one backslash
-# substitution, one glob and, for a token holding a dollar sign, one regex, and per dash token after an env
-# word two single-token reads: no loop grows with the input.
+# inside a line that names the shim). (2) After an env word an option token is read the way env -S reads
+# its string, each backslash-underscore a space, then quotes and backslashes deleted: a space-separated word
+# that is the shim, or a first word that is an option glued to the shim name (-Sapply_patch), resolves it,
+# and a bare -S or --split-string reads the NEXT token the same way. The reading sits before the #518 scan,
+# so it never reads past the token the string is in. (3) A shim resolved through a backslash strip or an
+# env -S string, in a segment flagged for the parity check, runs the #455 check over the WHOLE window. Cost:
+# per line at most one regex, per segment at most one, per walked token one backslash substitution and one
+# glob, and per dash token after an env word two single-token reads: no loop grows with the input.
 walk_window() {
   local i n tok nxt saw_prefix vp vp_done j vt hit ve ww_alt er
   local ip=0 ipb ipk ipw ipj ipt iph
@@ -690,7 +680,7 @@ walk_window() {
                 done
                 if [ "$iph" -eq 1 ]; then
                   # the walk never reached the option's next word or the tokens after it up to the hit;
-                  # any of those (a backslash-stripped prefix word, an expansion word, an env -S string)
+                  # any of those (a backslash-stripped prefix word, an env -S string)
                   # would have marked the window for the whole-window check, so run it here
                   if [ "$seg_qflag" -eq 1 ]; then
                     quote_parity_check "$1" $((n - 1))
@@ -780,27 +770,6 @@ walk_window() {
           i=$((i + 1)); continue ;;
       esac
     fi
-    # #538: a runtime expansion in command position may expand to nothing (hooks/agent-boundary.sh's
-    # #508 rule): a token whose basename holds a dollar sign followed by a name character, a digit, a
-    # special parameter or a quote is skipped like a prefix word, so the shim behind it still
-    # resolves. It opens the value context and the env context (a dash-led one opens neither), and
-    # sits AFTER the dash arm above so `nice -$X 5 apply_patch` still starts the #518 scan.
-    if [ "$seg_mflag" -eq 1 ]; then
-      case "${toks[$i]}" in
-        *'$'*)
-          if [[ ${toks[$i]##*/} =~ $cdg_rx_ere ]]; then
-            ww_alt=1
-            saw_prefix=1
-            case "${toks[$i]}" in
-              -*) ;;
-              *) vp=1; ve=1 ;;
-            esac
-            i=$((i + 1))
-            continue
-          fi
-          ;;
-      esac
-    fi
     ww_word="$tok"
     break
   done
@@ -810,7 +779,7 @@ walk_window() {
   # window's last token when nothing resolved).
   case "${ww_word##*/}" in
     apply_patch|applypatch)
-      # #538: a shim resolved through a backslash strip, an expansion skip or an env -S string runs the
+      # #538: a shim resolved through a backslash strip or an env -S string runs the
       # unbalanced-quote check over the WHOLE window (a superset of the walk's own check on those routes)
       if [ "$ww_alt" -eq 1 ] && [ "$seg_qflag" -eq 1 ]; then quote_parity_check "$1" $((n - 1)); fi
       if [ "$seg_shim_at" -lt 0 ] || [ "$i" -lt "$seg_shim_at" ]; then
@@ -843,8 +812,8 @@ walk_window() {
 # (2>/dev/null apply_patch) is skipped as a unit and cannot hide the command word. walk_window skips, in
 # order: a NAME=value assignment; a PREFIX_WORDS member (repeated, so `if true; then apply_patch < x.patch;
 # fi` resolves past then; repeat also skips its count token); then, once a prefix word was seen, a dash-led
-# option of that word (refined by the #518, #537 and #538 rules below); a runtime-expansion word (#538). The
-# first token surviving every skip is the resolved word, compared in full and by basename.
+# option of that word (refined by the #518, #537 and #538 rules below). The first token surviving every
+# skip is the resolved word, compared in full and by basename.
 #
 # #455 shim input. The input scan (scan_shim_input) starts after the shim index the walk resolved and runs
 # once per segment to its end, stopping at the first unsafe token. An unquoted heredoc delimiter
@@ -880,12 +849,10 @@ walk_window() {
 # word is no option, no redirect marker and not shim-named, ONE scan per window (vp_done, shared with the
 # #518 scan) looks for a shim-named token after that word, in a segment flagged seg_mflag; a hit runs the
 # #455 parity check over the WHOLE window (the walk never reached the tokens up to the hit, and any
-# backslash-stripped prefix word, expansion word or env -S string among them would have marked the window on
-# its own), and the option is then skipped alone. A next word that names the shim is never skipped and never
-# scanned past. A token holding a dollar sign is never skipped by this rule, a token with a slash or the bare
-# -- keeps the walk it had (`bash +/apply_patch < x.patch` still resolves by basename), and an expansion word
-# that reopened the value or env context after the interpreter leaves the option to the dash arm, which
-# scans. A word is skipped only when the old walk, which took it for the resolved word, could not have
+# backslash-stripped prefix word or env -S string among them would have marked the window on its own), and
+# the option is then skipped alone. A next word that names the shim is never skipped and never scanned past.
+# A token holding a dollar sign is never skipped by this rule, and a token with a slash or the bare -- keeps
+# the walk it had (`bash +/apply_patch < x.patch` still resolves by basename). A word is skipped only when the old walk, which took it for the resolved word, could not have
 # resolved the shim through it, so no deny turns into an allow. Cost: a constant number of case globs and
 # two #? / %? strips per option token; at most one scan per window.
 #

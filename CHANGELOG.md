@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #574: the hooks no longer skip a runtime-expansion word in the command or git-subcommand slot, so `$X gh pr merge 5`,
+  `$X apply_patch < x.patch` and, in any session, `$X git push origin main` or `git $'zqp' origin main` go unseen
+  (branch protection is the backstop); `$X git status` and `$PAGER apply_patch` no longer deny. No consumer step.
 - #578: push-guard, in every session, no longer reads a push route or alias key on its section header's line
   (`[remote "origin"] push = HEAD:main`), a route under a dotted, mixed, TAB-separated or `#`/`;`-named remote, branch
   or includeIf header, or a header after a BOM; no git command is denied for an unsplittable header. No consumer step.
