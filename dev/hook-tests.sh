@@ -11947,10 +11947,11 @@ case_solo_cdgsplit_walk_cpu() {
 # The lexer passes the class of an escaped character to ch_qchar() as a plain value (ch_cls[c] + 0),
 # never the array element itself. Under gawk 5.2 the element form aborts the scan with an internal
 # error once a line is lexed a second time (#553's capture pass, or a later gated line) after that
-# character was first escaped and then read unescaped, so the abort text reaches stderr and a deny the
-# scan had not printed yet is lost. Each pair holds a deny row (exactly one stderr line) and a quiet
-# row (empty stderr). Only gawk aborts, so these cases fail only where awk is gawk (the ubuntu CI
-# job): no registry record, since the macOS driver cannot observe the mutant.
+# character was first escaped and then read unescaped. The scan then exits non-zero and the hook
+# denies with the fixed scan-failure reason (#559), so both rows of the pair fail. Each pair holds a
+# deny row (exactly one stderr line) and a quiet row (empty stderr). Only gawk aborts, so these cases
+# fail only where awk is gawk (the ubuntu CI job): no registry record, since the macOS driver cannot
+# observe the mutant.
 case_push_lexcls_gawk() {
   pcd_unres "$PP_R_PFX" "X=\"a;b\" \\q q git status${LF}X=\"a;b\" \\q git push origin main"
   pq_push "X=\"a\" \\h h # git push origin main"
@@ -11958,6 +11959,61 @@ case_push_lexcls_gawk() {
 case_ab_lexcls_gawk() {
   abx_deny implementer gh "X=\"a;b\" \\q q gh status${LF}X=\"a;b\" \\q gh status"
   abx_noop implementer "X=\"a\" \\q q # gh"
+}
+
+# --- push-guard.sh and agent-boundary.sh: an awk scan that exits non-zero (#559) ----------------------
+# A stub awk first on PATH drains stdin, prints one benign line and one error line, and then ends with a
+# non-zero status: it stands in for any awk abort, a resource limit or a killed process. The benign line
+# is one neither hook acts on, so a hook that ignored the scan status would give no opinion. Each hook
+# must instead deny with its one fixed scan-failure line (echoing none of the command) and drop awk's
+# own error line, whatever the non-zero status: 2 (a fatal awk error), 1 (gawk's non-fatal error
+# status) and a self-inflicted SIGKILL (status 137, a killed awk) each run the same assertion, so a
+# status test narrowed to one value leaves a case red. No registry record: removing the status check
+# leaves each case red.
+# mk_awk_abort_stub DIR SHAPE — create DIR/awk, the stub above. SHAPE is the exit status the stub ends
+# with, or "kill" for a stub that kills itself with SIGKILL after the same output.
+mk_awk_abort_stub() {
+  local dir="$1" shape="$2"
+  mkdir -p "$dir"
+  {
+    printf '#!%s\n' "$bash_bin"
+    printf 'cat >/dev/null\n'
+    printf 'printf "partial\\n"\n'
+    printf 'printf "awk: stub abort\\n" >&2\n'
+    if [ "$shape" = "kill" ]; then
+      printf 'kill -KILL $$\n'
+    else
+      printf 'exit %s\n' "$shape"
+    fi
+  } > "$dir/awk"
+  chmod +x "$dir/awk"
+}
+# The two fixed lines, hand-typed the way DL_DEADLINE_LINE is: agent-boundary's is the implementer
+# role's.
+PG_SCAN_FAILED_LINE="trail-blazer-flow push guard: denies this command: its command scan did not finish (blocked: command scan failed) — run the command from a terminal; see README.md's Safety model"
+AB_SCAN_FAILED_LINE="trail-blazer-flow agent boundary: implementer role: the command scan did not finish, so the command cannot be checked (blocked: command scan failed) — see agents/implementer.md"
+case_push_awkabort_deny() {
+  local shape stubdir w0
+  for shape in 2 1 kill; do
+    stubdir="$tmpbase/awk-abort-stub-push-$shape"
+    mk_awk_abort_stub "$stubdir" "$shape"
+    w0="$__why"; __why=""
+    run_push_guard "$(mk_push_cmd 'git push origin main')" "$stubdir:$PATH"
+    expect_push_deny_exact "$PG_SCAN_FAILED_LINE"
+    if [ -n "$__why" ]; then __why="${w0}[stub awk: $shape] ${__why}"; else __why="$w0"; fi
+  done
+}
+case_ab_awkabort_deny() {
+  local shape stubdir w0
+  for shape in 2 1 kill; do
+    stubdir="$tmpbase/awk-abort-stub-ab-$shape"
+    mk_awk_abort_stub "$stubdir" "$shape"
+    w0="$__why"; __why=""
+    run_boundary "$(mk_agent_cmd 'implementer' 'gh pr merge 5')" "$stubdir:$PATH"
+    expect_deny
+    [ "$boundary_err" = "$AB_SCAN_FAILED_LINE" ] || { __ok=0; __why="${__why}stderr: expected exactly '$AB_SCAN_FAILED_LINE', got '$boundary_err'\n"; }
+    if [ -n "$__why" ]; then __why="${w0}[stub awk: $shape] ${__why}"; else __why="$w0"; fi
+  done
 }
 case_push_qnl_quiet() {
   pq_push \
@@ -14681,6 +14737,8 @@ cases=(
   "ab-qnl-budget|case_ab_qnl_budget|deny one character past the chain budget and no opinion at exactly the budget, for a candidate line, a candidate and a carried line, a long carried chain copied by a short carried line, and an old-gated line plus a candidate line -- mutation proof: dev/mutants/hook-tests.json (553-ab-budget-off, 553-ab-budget-edge, 553-ab-budget-copy)"
   "push-lexcls-gawk|case_push_lexcls_gawk|deny (unresolved prefix) for a push to main on a second gated line, and no opinion for a quiet line, each lexed twice after an escaped character that recurs unescaped, with exactly one stderr line or none: under gawk 5.2 the lexer aborted with an internal error and lost the deny (#553) -- no registry record: only gawk aborts, so the macOS driver cannot observe the mutant"
   "ab-lexcls-gawk|case_ab_lexcls_gawk|deny for a gh call on a second gated line, and no opinion for a quiet line, each lexed twice after an escaped character that recurs unescaped, with exactly one stderr line or none: under gawk 5.2 the lexer aborted with an internal error and lost the deny (#553) -- no registry record: only gawk aborts, so the macOS driver cannot observe the mutant"
+  "push-awkabort-deny|case_push_awkabort_deny|deny with the one fixed scan-failure line, and awk's own error line dropped, when the awk scan exits non-zero after printing a partial line (a stub awk first on PATH) -- no registry record: removing the status check leaves the case red"
+  "ab-awkabort-deny|case_ab_awkabort_deny|deny with the one fixed scan-failure line, and awk's own error line dropped, when the awk scan exits non-zero after printing a partial line (a stub awk first on PATH) -- no registry record: removing the status check leaves the case red"
   "solo-abqnl-flood-cpu|case_solo_abqnl_flood_cpu|CPU TIME: a 512 KiB newline-carry flood reaches the chain budget within 1.3 times the CPU of the same bytes with the carry gate shut plus 250ms -- no registry record; solo-: outside every registry filter, so it never runs under the mutant driver"
   # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
   "codex-gcg-main-status|case_codex_gcg_main_status|allow: git-c-guard.sh under a Codex-shaped main-session payload, git -C ../demo-wt-1 status --porcelain (pins the unchanged verdict -- Codex ignores this hook's if gate, but the script itself never reads it)"

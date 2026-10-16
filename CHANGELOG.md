@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #559: push-guard and agent-boundary now deny with the fixed reason `(blocked: command scan failed)` when
+  their awk scan exits non-zero (an awk abort, a resource limit, a killed process, or a host where `awk`
+  cannot run), instead of judging only the lines the scan printed before it stopped. No consumer step.
 - #580: `dev/lock-tests.sh`'s `dead_pid` and `dev/doctor-tests.sh`'s `dead_pid_sched` get a dead pid from a
   self-exiting subshell instead of killing a fresh `sleep 30`, whose TERM could be lost (traced with bash 5.2 on
   Linux) so the helper's `wait` sat out the whole sleep in the reclaim and journal cases. No consumer step.

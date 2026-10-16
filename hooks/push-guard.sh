@@ -35,7 +35,8 @@
 #   - a git command that reads a config file with a section header line it cannot split the way git does (#510);
 #   - an analysis that cannot finish: more than DBRACKET_MAX standalone ]], or a push cut by one; a command
 #     over PUSH_CMD_MAX_BYTES; quoted text past the chain budget; the deadline; a depth-0 config line over
-#     CFG_TOPLEVEL_MAX_LINE_CHARS (#435, #517).
+#     CFG_TOPLEVEL_MAX_LINE_CHARS (#435, #517); an awk scan that exits non-zero (an abort, a resource limit, a
+#     killed process, or no runnable awk), denied with the fixed reason "command scan failed" (#559).
 # There is deliberately no allow-list of `claude/<n>-<slug>` destinations: it would deny ordinary work (a
 # release branch, an annotated-tag push, any `git push origin feature/x` a human runs in ANY Claude Code session
 # of a plugin-enabled repo, since this hook is plugin-wide) for no matching safety gain, and a plugin that
@@ -725,8 +726,8 @@ function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, u, av
 # unres; #439: -c and --config-env set cmdcfg; #449 and #508 as described there; -C and its value are
 # consumed), then the subcommand is taken. A non-push subcommand is an alias candidate (#448); a push prints
 # its PUSH line, the remaining tokens passed through dest_word() (#517).
-# An awk error anywhere in this program kills it as a whole: scan_out is then empty and the hook gives no
-# opinion on EVERYTHING.
+# An awk error anywhere in this program kills it as a whole: the scan then exits non-zero and the hook denies
+# with the fixed scan-failure reason (#559), whatever the scan had printed so far.
 # BWK awk allows at most 50 for arguments passed plus parameters declared; emit_segment() is at that limit, so add no local without removing one.
 function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, in_vp, in_ip, ipw, ipk, mi, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, cfgdollar, cv, rx_at, rxg_at, rxn_at, rxbs, av, jend, ro, k, xname, cmdcfg, co, cp, cfgname, cpath_big) {
   if (ch_use) { for (idx = 1; idx <= ch_n; idx++) toks[idx] = ch_t[idx]; ntok = ch_n }
@@ -1456,7 +1457,16 @@ function cy_pass(r,    q) {
 }
 END { if (xseg != "") print "-xseg-\t" xseg }
 END { if (xcfg) print "-xcfg-" }
-')"
+' 2>/dev/null)"
+scan_rc=$?
+# #559: a non-zero status means the scan stopped early (an awk abort, a resource limit, a killed process, or
+# no runnable awk) and judged only part of the command, so deny with one fixed reason before anything reads
+# scan_out. awk's own error text is dropped (2>/dev/null above) so the deny stays one stderr line.
+if [ "$scan_rc" -ne 0 ]; then
+  printf '%s denies this command: its command scan did not finish (blocked: command scan failed) — run the command from a terminal; see README.md'"'"'s Safety model\n' \
+    "$PUSH_DENY_STEM" >&2
+  exit 2
+fi
 
 # #435: nothing to judge anywhere in the scan -- no PUSH line, no ALIAS candidate line, and no dbracket,
 # cut-push or command-line-config sentinel (the -alias-cmdline-config- sentinel contains the last one) -- so
