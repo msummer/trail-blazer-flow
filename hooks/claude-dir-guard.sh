@@ -106,7 +106,7 @@
 #     apply_patch route the line cap applies only to a line that contains a CR (the strip is the only
 #     superlinear step a long CR-free content line meets there) or a `*** ` marker (a header line the parser
 #     acts on); every other line is bounded by the whole-text cap and the sampled loops. The Bash route caps
-#     every line;
+#     every line of a call that reaches it (a call the fast paths exit is never capped);
 #   - a single path (an Edit/Write file_path, or a patch header path joined to cwd) and the stdin cwd field
 #     are each denied, before any substitution, when longer than CDG_LINE_MAX_BYTES bytes. Every cap counts
 #     BYTES, not characters: the length check runs under a scoped LC_ALL=C, because ${#x} counts characters
@@ -228,18 +228,20 @@ cdg_q="[\\\"']*"
 cdg_split_ere="a${cdg_q}p${cdg_q}p${cdg_q}l${cdg_q}y${cdg_q}_?${cdg_q}p${cdg_q}a${cdg_q}t${cdg_q}c${cdg_q}h"
 cdg_split_raw() { local LC_ALL=C; [[ $input =~ $cdg_split_ere ]]; }
 
-# Fast path 2 (#407, #538): a pre-filter. Every genuine Edit, Write or apply_patch call spells its tool_name
-# literally in the raw JSON, so requiring Edit, Write, apply_patch, applypatch (Codex's shim also answers to
-# the no-underscore spelling) or the grammar marker "*** Begin Patch" anywhere in the raw stdin never skips a
-# real call; the substring can sit anywhere in the payload, so a pass only means "look closer". A Bash call
-# that spells none of them can still run the shim when the shell deletes quote or backslash characters inside
-# its name, so a second check runs only when the literal check fails and the payload carries a backslash or an
-# apostrophe (in raw JSON a double quote arrives as a backslash and a quote, and a backslash as two): one
-# regex pass for the split spelling, which spawns no jq. A call that fails both checks gets no opinion. Both
-# checks read the raw JSON text as the serializer wrote it, so they assume it writes ASCII letters, the
-# underscore and the apostrophe literally rather than as a \u escape.
+# Fast path 2 (#407, #538, #571): a pre-filter that spawns no jq. An Edit or Write call passes by its tool_name
+# value, matched as the whole JSON string with its quotes: a payload that only contains either word (a
+# permission_mode of acceptEdits, a cwd, a command) does not pass on that account. A tool added to
+# GUARDED_TOOLS needs its quoted name added here too. Any call also passes when the raw payload names
+# apply_patch or applypatch (Codex's shim also answers to the no-underscore spelling) or holds the grammar
+# marker "*** Begin Patch"; those substrings can sit anywhere in the payload, so a pass only means "look
+# closer". A Bash call that spells none of them can still run the shim when the shell deletes quote or
+# backslash characters inside its name, so the second arm runs only when the first fails and the payload
+# carries a backslash or an apostrophe (in raw JSON a double quote arrives as a backslash and a quote, and a
+# backslash as two): one regex pass for the split spelling. Everything else gets no opinion. Both arms read
+# the raw JSON text as the serializer wrote it, so they assume it writes ASCII letters, the underscore and the
+# apostrophe literally rather than as a \u escape.
 case "$input" in
-  *Edit*|*Write*|*apply_patch*|*applypatch*|*'Begin Patch'*) : ;;
+  *'"Edit"'*|*'"Write"'*|*apply_patch*|*applypatch*|*'Begin Patch'*) : ;;
   *\\*|*"'"*) cdg_split_raw || exit 0 ;;
   *) exit 0 ;;
 esac
@@ -1098,10 +1100,8 @@ is_apply_patch_word() {
     return "$iapw_memo"
   fi
 
-  # NOTE: a literal "{" or "}" inside a ${var//[...]/...} bracket expression confuses bash's own parser (it
-  # can misread the inner "}" as closing the "${" construct itself, corrupting the pattern and everything
-  # after it, measured under both bash 5 and Apple bash 3.2), so "{" and "}" are substituted in their own
-  # separate statements rather than folded into the bracket expression below.
+  # NOTE: each segment-break character is substituted by its own statement below, because a bracket-expression
+  # pattern is quadratic in the line's length under bash 3.2, even for a line with a single break.
   # Every substitution below runs on ONE physical line at a time, never on the whole command text (bash
   # 3.2's ${x//pat/repl} is superlinear in the text's length and match count, and a newline is itself a
   # segment break, so line by line gives the identical segments). Each line is at most CDG_LINE_MAX_BYTES
@@ -1118,7 +1118,12 @@ is_apply_patch_word() {
     ln="${ln//<&/<}"
     # `>|` (noclobber override) is one redirect operator too; its `|` must not split the segment.
     ln="${ln//>|/>}"
-    flat="${ln//[;\&\|()\`]/$lf}"
+    flat="${ln//;/$lf}"
+    flat="${flat//&/$lf}"
+    flat="${flat//|/$lf}"
+    flat="${flat//\(/$lf}"
+    flat="${flat//\)/$lf}"
+    flat="${flat//\`/$lf}"
     flat="${flat//\{/$lf}"
     flat="${flat//\}/$lf}"
     # Does the line name the shim (#538): ln_m is 1 for the plain spelling, 2 for a split one (quote or
