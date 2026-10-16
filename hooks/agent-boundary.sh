@@ -33,9 +33,9 @@
 #
 # Shared with hooks/push-guard.sh, which inlines a near-twin of this tokenizer for its own emitter. Each
 # change to one of these must be applied in BOTH files:
-#   - the segment breaking, normalize(), the prefix-word skip including the repeat-count skip, the
-#     empty-token skip, the command-word case fold, and the CR strip before any token is read (this hook
-#     strips in bash after the jq extraction; push-guard strips first thing in its awk record block);
+#   - the segment breaking, normalize(), the prefix-word skip, the empty-token skip, the command-word case
+#     fold, and the CR strip before any token is read (this hook strips in bash after the jq extraction;
+#     push-guard strips first thing in its awk record block);
 #   - the #505 assignment-parity trigger with quote_unbalanced(); the #518 value context with
 #     PREFIX_VALUE_WORDS, except that this hook's PREFIX_VALUE_WORDS also holds the interpreter words bash dash
 #     ksh sh zsh (#576), so it differs from the push-guard.sh copy; push-guard.sh keeps its own #537
@@ -57,14 +57,14 @@ VERIFIER_GIT_READONLY="status diff log show rev-parse ls-files merge-base blame 
 BLOCKED_COMMANDS="git gh"
 # PREFIX_WORDS: words after which the next word is still in command position. Interpreter-indirection
 # words (env, bash, xargs, ...); the shell reserved words that directly precede a command (if, then, do,
-# while, !, ...); eval and trap, which run their string argument as a command (the quote-blind scan already
-# reads a quoted argument's words as command words); and the zsh precommand modifiers noglob, nocorrect, -
-# and repeat N (repeat also consumes its count token). { } ( ) need no entry: they are segment breaks.
-# for, select, case, function, in, fi, done, esac and [[ are left out because none runs the next word as a
-# command. Keywords share the dash-token skip after a prefix word, harmless because no keyword precedes a
-# dash-led command.
+# while, !, ...); and eval, which runs its string argument as a command (the quote-blind scan already reads a
+# quoted argument's words as command words). { } ( ) need no entry: they are segment breaks. for, select,
+# case, function, in, fi, done, esac and [[ are left out because none runs the next word as a command. The
+# signal-handler word and the zsh command modifiers do run one, and are left out too, a documented gap (see
+# "Known gaps" in docs/reference/safety-model.md). Keywords share the dash-token skip after a prefix word,
+# harmless because no keyword precedes a dash-led command.
 # Pinned byte-identical to hooks/push-guard.sh by 4.40(c); the hooks/claude-dir-guard.sh copy is by convention.
-PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat"
+PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval"
 # CLAUDE_PATH_ARG_COMMANDS (#340): command words whose first argument carrying a .claude segment is a
 # one-step write (tee, cp, mv) or a move into the directory that lets a later write skip the redirect check
 # (cd, pushd). See the arg_set walk in emit_segment().
@@ -282,8 +282,8 @@ function lost_scan(toks, from, ntok,    i, r, c, lw, cwf) {
 # emit_segment: walk the tokens of one segment to its command word and print the finding. Per token, in order:
 # an assignment (after the #505 parity check) and a token whose normalised, case-folded form is empty (a
 # lone quote left by a leading space inside a quoted eval argument) are skipped; then the #518 trigger
-# below; then a PREFIX_WORDS member is skipped and sets saw_prefix (repeat also skips its count token);
-# after a prefix word a dash token is skipped as an option of that word. The first surviving token is the
+# below; then a PREFIX_WORDS member is skipped and sets saw_prefix; after a prefix word a dash token is
+# skipped as an option of that word. The first surviving token is the
 # command word, printed normalised and case-folded. For git the tokens after it are walked once more: -C and
 # its value are skipped, any other dash token gives -globalopt-, no subcommand gives -none-; the subcommand
 # is never case-folded, so the verifier read-only match stays exact and fails closed. For a
@@ -316,8 +316,8 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
       lost = lost_scan(toks, idx + 2, ntok)
       if (lost != "") { print lost; return }
     }
-    if (norm in prefix_set && norm != "-") { in_vp = (norm in vprefix_set) }
-    if (norm in prefix_set) { saw_prefix = 1; idx += (norm == "repeat") ? 2 : 1; continue }
+    if (norm in prefix_set) { in_vp = (norm in vprefix_set) }
+    if (norm in prefix_set) { saw_prefix = 1; idx++; continue }
     if (saw_prefix && substr(tok, 1, 1) == "-") { idx++; continue }
     cmdword = norm
     idx++

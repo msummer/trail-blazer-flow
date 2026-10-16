@@ -138,9 +138,9 @@ GUARDED_SEGMENT_CODEX=".codex"
 CLAUDE_DIR_DENY_STEM="trail-blazer-flow claude-dir guard:"
 # PREFIX_WORDS: byte-identical to the hooks/agent-boundary.sh and hooks/push-guard.sh copies, by convention
 # (4.40(c) pins only those two against each other). Used only by walk_window() to skip a leading shell
-# keyword or interpreter-indirection word, then a following dash-led option (or, after repeat, its count
-# token), before resolving the command word of a segment.
-PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat"
+# keyword or interpreter-indirection word, then a following dash-led option, before resolving the command
+# word of a segment.
+PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval"
 # CDG_ANALYSIS_BUDGET_SECS (#457): whole-second wall-clock budget; see "Analysis deadline (#457)". Sized well
 # under Claude Code's 10s hook timeout, like hooks/push-guard.sh's.
 CDG_ANALYSIS_BUDGET_SECS="5"
@@ -403,10 +403,10 @@ parse_patch_headers() {
 # local `toks` array, read through bash's dynamic scope: it takes no toks parameter and must only be called
 # from is_apply_patch_word, which declares toks, mark_in, mark_out, assign_ere and digits_ere in its own scope
 # first. It skips, in order: a redirect run with its one target or source token, a bare-digits fd right
-# before a redirect, a NAME=value assignment, a PREFIX_WORDS member (repeat also skips its count token) and,
-# once a prefix word was seen, a dash-led option. Quote characters are stripped from a token before it is
-# matched (#437). It sets the global ww_word, the first token surviving every skip (empty if the window runs
-# out first). It never prints, and exits only through check_deadline's deny.
+# before a redirect, a NAME=value assignment, a PREFIX_WORDS member and, once a prefix word was seen, a
+# dash-led option. Quote characters are stripped from a token before it is matched (#437). It sets the global
+# ww_word, the first token surviving every skip (empty if the window runs out first). It never prints, and
+# exits only through check_deadline's deny.
 walk_window() {
   local i n tok nxt saw_prefix
   i="$1"
@@ -449,7 +449,6 @@ walk_window() {
     case " $PREFIX_WORDS " in
       *" $tok "*)
         saw_prefix=1
-        [ "$tok" = repeat ] && i=$((i + 1))
         i=$((i + 1))
         continue
         ;;

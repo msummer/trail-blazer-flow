@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #579: push-guard misses, in every session, a lost-segment push alias, `export HOME=<d>; git push` via `<d>/.gitconfig`,
+  a `$`/backtick-built config key or a CR-split alias value; no hook sees past `trap`, `noglob`, `nocorrect`, `-`, `repeat`
+  (zsh runs them on Codex); branch protection is the backstop; the `- git push` over-block is gone. No consumer step.
 - #577: claude-dir-guard no longer catches a decoy patch beside a file-reading shim, a variable-built unquoted heredoc,
   a prefix option's value or a quoted or escaped space before the shim, a split or escaped shim name, or a `.claude`
   mention off a `*** ` line; it stops denying `..` paths, `+.claude/x` patch lines and apostrophes. No consumer step.

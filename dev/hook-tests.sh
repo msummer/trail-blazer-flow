@@ -1107,9 +1107,8 @@ case_ab_cwrite_noop_main_session() {
 # Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "ab-kw-"),
 # re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
 # mutant:398-ab-kw-vocab — drops only the shell-keyword words (if/then/elif/else/do/while/until/!/
-#   coproc) from PREFIX_WORDS, leaving the #403 eval/trap/zsh-modifier words in place, so every
-#   fixture below whose command relies on skipping a leading keyword no longer resolves git/gh as
-#   the command word.
+#   coproc) from PREFIX_WORDS, leaving eval in place, so every fixture below whose command relies
+#   on skipping a leading keyword no longer resolves git/gh as the command word.
 # mutant:398-ab-case-fold — removes emit_segment()'s tolower() around normalize(tok), so an
 #   upper/mixed-case command word no longer resolves to "git"/"gh"/a vocabulary member.
 # mutant:398-ab-fastpath-case — narrows fast path 2's widened `*[Gg][Ii][Tt]*|*[Gg][Hh]*`
@@ -1229,14 +1228,11 @@ case_ab_kw_noop_verifier_if_diff() {
   expect_no_opinion
 }
 
-# --- hooks/agent-boundary.sh: the #403 eval/trap/zsh-precommand-modifier class -------------------
+# --- hooks/agent-boundary.sh: the #403 eval class -------------------------------------------------
 # Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "ab-pc-"),
 # re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
-# mutant:403-ab-pc-vocab — reverts PREFIX_WORDS to its pre-#403 (#398) value (drops eval/trap/
-#   noglob/nocorrect/-/repeat), so every fixture below whose command relies on skipping one of
-#   those words no longer resolves git/gh as the command word.
-# mutant:403-ab-pc-repeat — removes the `repeat`-count skip, so a `repeat N` prefix leaves the
-#   count token itself as the resolved command word instead of the real command.
+# mutant:403-ab-pc-vocab — reverts PREFIX_WORDS to its pre-#403 (#398) value (drops eval), so every
+#   fixture below whose command relies on skipping eval no longer resolves git/gh as the command word.
 # mutant:403-ab-pc-empty-tok — deletes the empty-normalised-token skip, so a token that normalises
 #   to empty (e.g. a lone `"` left by a leading space inside a quoted `eval` argument) ends the
 #   walk with an empty command word instead of being skipped.
@@ -1265,46 +1261,6 @@ case_ab_pc_deny_eval_lead_space() {
     *) __ok=0; __why="${__why}stderr does not contain '(blocked: gh)': '$boundary_err'\n" ;;
   esac
 }
-case_ab_pc_deny_trap_gh() {
-  run_boundary "$(mk_agent_cmd 'implementer' "trap 'gh issue close 5' EXIT")"
-  expect_deny
-  case "$boundary_err" in
-    *"(blocked: gh)"*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain '(blocked: gh)': '$boundary_err'\n" ;;
-  esac
-}
-case_ab_pc_deny_noglob() {
-  run_boundary "$(mk_agent_cmd 'implementer' 'noglob git push')"
-  expect_deny
-  case "$boundary_err" in
-    *"(blocked: git push)"*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain '(blocked: git push)': '$boundary_err'\n" ;;
-  esac
-}
-case_ab_pc_deny_nocorrect() {
-  run_boundary "$(mk_agent_cmd 'implementer' 'nocorrect gh pr merge 5')"
-  expect_deny
-  case "$boundary_err" in
-    *"(blocked: gh)"*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain '(blocked: gh)': '$boundary_err'\n" ;;
-  esac
-}
-case_ab_pc_deny_dash() {
-  run_boundary "$(mk_agent_cmd 'implementer' '- git push')"
-  expect_deny
-  case "$boundary_err" in
-    *"(blocked: git push)"*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain '(blocked: git push)': '$boundary_err'\n" ;;
-  esac
-}
-case_ab_pc_deny_repeat() {
-  run_boundary "$(mk_agent_cmd 'implementer' 'repeat 3 git push')"
-  expect_deny
-  case "$boundary_err" in
-    *"(blocked: git push)"*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain '(blocked: git push)': '$boundary_err'\n" ;;
-  esac
-}
 case_ab_pc_deny_verifier_eval() {
   run_boundary "$(mk_agent_cmd 'verifier' 'eval git push')"
   expect_deny
@@ -1314,8 +1270,7 @@ case_ab_pc_deny_verifier_eval() {
   esac
 }
 case_ab_pc_noop_verifier_eval_status() {
-  # Release-blocker control: the new eval/trap/zsh-modifier skip must not narrow the verifier's
-  # read-only git allowance.
+  # Release-blocker control: the eval skip must not narrow the verifier's read-only git allowance.
   run_boundary "$(mk_agent_cmd 'verifier' 'eval git status')"
   expect_no_opinion
 }
@@ -2967,19 +2922,6 @@ case_push_lostscan_noop_flood() {
 # --- helpers for the runtime-expansion cases below (#517) -----------------------------------------
 # Every fixture passes an explicit cwd (pp_run), and every deny pins the fixed reason in parentheses and
 # that no deny line echoes input. Case names avoid the substrings other registry filters match.
-PP_R_RXG="runtime expansion in the git options"
-# rtx_deny REASON CMD... — each CMD denies with the unresolved line naming REASON, echoing no input.
-rtx_deny() {
-  local reason="$1" c w0
-  shift
-  for c in "$@"; do
-    w0="$__why"; __why=""
-    pp_run "$c"
-    pp_expect_unres "$reason"
-    al_expect_no_echo '$'
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
 # rtx_noop CMD... — each CMD gets no opinion.
 rtx_noop() {
   local c w0
@@ -2991,7 +2933,7 @@ rtx_noop() {
   done
 }
 
-# --- runtime expansion in the push destination, the lost-segment alias name, the command-size cap (#517)
+# --- runtime expansion in the push destination, the command-size cap (#517)
 # A destination built at run time cannot be judged against the default branch, so it denies with one
 # fixed line that never echoes it; a destination that is exactly one plain ANSI-C or locale segment is
 # read as the name it spells. Every fixture passes an explicit cwd (pp_run). Case names avoid the
@@ -3117,30 +3059,6 @@ case_push_rxdest_deny_option_dollar_config() {
 case_push_rxdest_noop_controls() {
   rtx_noop 'git push -u origin "claude/17-a"' 'git -C "../demo-wt-1" push -u origin "claude/17-a"'
 }
-# mutant:517-pg-rxlost-lit-off -- hands the driver a plain ANSI-C or locale word with its dollar sign
-#   still on, so the alias name is never found in the lost segment.
-case_push_rxlost_deny_alias_ansi_c() {
-  local dir="$tmpbase/repo-rxlost-alias" c w0
-  mk_fixture_repo "$dir" main main
-  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
-  for c in 'git "--no-pager" zqp origin main' "git \"--no-pager\" \$'zqp' origin main" \
-    "git \"--no-pager\" \$\"zqp\" origin main" "X=\"a b\" git \$'zqp' origin main"; do
-    w0="$__why"; __why=""
-    al_run "$c" "$dir"
-    al_expect_alias ".git/config"
-    al_expect_no_echo "zqp"
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
-# mutant:517-pg-rxlost-failclosed-off -- never fails a non-plain dollar-quote word closed, so a word
-#   the tokenizer cannot read as one name is dropped from the candidates.
-case_push_rxlost_deny_concat() {
-  rtx_deny "$PP_R_RXG" "git \"--no-pager\" z\$'qp' origin main" "git \"--no-pager\" \$'z'\$'qp' origin main" \
-    "git \"--no-pager\" \$'\\x7aqp' origin main" "git \"--no-pager\" status \$'a b'"
-}
-case_push_rxlost_noop_status() {
-  rtx_noop "git \"--no-pager\" \$'status'" 'git "--no-pager" log'
-}
 
 # pcap_fill N UNIT -- sets pcap_s to exactly N BYTES: UNIT repeated whole times, then x padding for
 # the remainder. Built by doubling in the C locale, so the length is bytes whatever the harness locale.
@@ -3262,7 +3180,7 @@ case_push_cmdcaptime_deny_flood() {
 # shapes for the unsampled prefix: a one long ab$'cd' word (a), a carriage-return flood (b), one
 # refspec whose first colon is at its end (c), one quote-dense word (d), one push with very many
 # short refspecs (f), one -C path (i) or one -C path of a non-push git segment (s) filling the
-# command, a segment the tokenizer lost followed by very many short words (t), a segment of
+# command, a segment lost to the tokenizer followed by very many short words (t), a segment of
 # value-context prefix-word triggers (o), a segment of unclassified interpreter options (p), and a -C path
 # of segment breaks (xc), the control for the relative bound of p.
 pcap_cmd=""
@@ -3385,57 +3303,12 @@ case_solo_cmdcap_pin_at_cap_worst() {
     fi
   done
 }
-# pp_rxs_flood_cmd N -- a lost segment holding N plain ANSI-C words, a push holding N option values
-# written the same way, then a real push so the hook reaches check_deadline after the tokenizer.
-# pp_rxs_flood_twin_cmd N is its mutant-invariant twin: the same layout and byte length per token with
-# no dollar sign in it.
-pp_rxs_flood_cmd() {
-  local n="$1" r1 r2
-  r1='git "--no-pager" log'"$(printf " \$'a'%.0s" $(seq 1 "$n"))"
-  r2='git push origin feature/x'"$(printf " -o \$'a'%.0s" $(seq 1 "$n"))"
-  printf '%s\n%s\ngit push origin feature/x' "$r1" "$r2"
-}
-pp_rxs_flood_twin_cmd() {
-  local n="$1" r1 r2
-  r1='git "--no-pager" log'"$(printf ' abcd%.0s' $(seq 1 "$n"))"
-  r2='git push origin feature/x'"$(printf ' -o abcd%.0s' $(seq 1 "$n"))"
-  printf '%s\n%s\ngit push origin feature/x' "$r1" "$r2"
-}
-# mutant:517-pg-rxlost-rescan -- re-scans the rest of the lost segment at every dollar-quote word
-#   instead of reading each word once, so the flood turns quadratic and overruns its deadline.
-case_push_rxscan_noop_flood() {
-  # FLOOD + TIMING, sized and bounded by cost RATIO from a same-run control exactly as
-  # case_push_rtexpscan_noop_flood does.
-  local dir="$tmpbase/repo-pp-flood" ctl_n=1000 min_n=700 max_n=10000 floor=2 k=8
-  local target_ms=$(( DL_KNOB_MAX * 200 )) ctl_ms pred_ms
-  mk_fixture_repo "$dir" main feature/x
-  measure_ms run_push_guard "$(mk_push_cmd_big "$(pp_rxs_flood_twin_cmd "$ctl_n")" "$dir")"
-  ctl_ms="$measured_ms"
-  if [ -z "$ctl_ms" ]; then
-    __ok=0; __why="${__why}control run's own timing report could not be parsed -- can't size the flood\n"
-    return
-  fi
-  expect_push_no_opinion
-  if [ "$__ok" -eq 0 ]; then
-    __why="${__why}twin control did not return no opinion\n"
-    return
-  fi
-  calibrated_flood_tokens "$ctl_ms" "$ctl_n" "$target_ms" "$min_n" "$max_n"
-  pred_ms=$(( ctl_ms * flood_tokens / ctl_n ))
-  calibrated_deadline "$floor" "$k" "$pred_ms"
-  push_deadline_override="$calibrated_secs"
-  measure_ms run_push_guard "$(mk_push_cmd_big "$(pp_rxs_flood_cmd "$flood_tokens")" "$dir")"
-  expect_push_no_opinion
-  if [ "$__ok" -eq 0 ]; then
-    __why="${__why}control ${ctl_ms}ms at ${ctl_n} -> ${flood_tokens} tokens, predicted ${pred_ms}ms -> deadline ${calibrated_secs}s, flood ${measured_ms}ms\n"
-  fi
-}
 
 # --- git aliases and config relocation (#448, absorbs #450) ----------------------------------------
 # Every non-push git segment is an alias candidate: the hook looks `alias.<subcmd>` up in the config it
 # already reads and denies when the expansion could push (first word push, a `!` shell alias, an
 # option, another defined alias, or a trailing-backslash continuation). Config it cannot read (inline
-# or exported HOME=/XDG_CONFIG_HOME=/GIT_CONFIG_*, a -c/--config-env value naming alias or include)
+# HOME=/XDG_CONFIG_HOME=/GIT_CONFIG_*, or a -c/--config-env value naming alias or include)
 # denies the candidate outright. Every fixture passes an explicit cwd (AMBIENT-$PWD RULE above), and
 # the raw stdin of the config-file cases never contains the word push, so a re-added push fast path
 # cannot hide them. Suffixes sit before -wt-<n>.
@@ -3458,27 +3331,13 @@ case_push_rxscan_noop_flood() {
 # mutant:448-pg-alias-cmdline -- stops treating a command-line alias or include as unreadable config.
 # mutant:448-pg-alias-reloc-nonpush -- stops treating a relocation assignment on a non-push git
 #   segment as unreadable config.
-# mutant:448-pg-alias-xcfg -- drops the cross-segment config flag from the ALIAS arm of the driver.
 # mutant:448-pg-alias-cmdline-text -- treats any command-line config as alias-bearing.
 # mutant:448-pg-alias-name-match -- matches an alias record whatever its key is.
 # mutant:448-pg-alias-classify-open -- makes every matching alias record deny.
-# mutant:448-pg-alias-lost-prefix -- drops the alias lookup for a segment lost to a quoted prefix
-#   assignment.
-# mutant:448-pg-alias-lost-option -- drops the alias lookup for a segment lost to a quoted option.
-# mutant:448-pg-alias-lost-reloc -- drops the relocation test for a lost segment.
-# mutant:448-pg-alias-lost-needgit -- drops the names-git gate for a loss in the command prefix, so a
-#   quote-split assignment in front of a command that never names git is treated as an alias candidate.
 # mutant:448-pg-alias-subsection -- makes the [alias "<name>"] subsection header arm unmatchable, so a
 #   command key under it is never recorded.
 # mutant:448-pg-alias-escape -- drops the git-config whitespace escapes (backslash t, n, b) as word
 #   breaks, so push followed by an escaped TAB or LF fuses into one word.
-# mutant:448-pg-alias-cr-mid -- drops the interior-CR marker on an [alias] value, so a CR strictly
-#   inside the line fuses the words around it.
-# mutant:448-pg-alias-xcfg-export-cfg -- drops the GIT_CONFIG_* test from the exported-name arm of the
-#   cross-segment config flag.
-# mutant:448-pg-alias-xcfg-bare-cfg -- drops the GIT_CONFIG_* test from the bare-assignment arm of the
-#   cross-segment config flag.
-# mutant:448-pg-alias-dollar -- drops the dollar-sign test on command-line config of an alias candidate.
 # mutant:448-pg-alias-subcmd-fold -- drops the lowercase fold of the subcommand in the ALIAS line.
 # mutant:448-pg-alias-reset -- drops the alias-record reset in resolve_repo(), so the session records
 #   leak into a resolved -C target.
@@ -3487,9 +3346,6 @@ case_push_rxscan_noop_flood() {
 # mutant:448-pg-alias-subsection-space -- drops the blank-run alternative of the subsection header.
 # mutant:448-pg-alias-subsection-tab -- drops the TAB alternative of the subsection header.
 # mutant:448-pg-alias-subsection-dot -- drops the dotted alias header alternative.
-# mutant:448-pg-alias-backtick -- drops the backtick test on command-line config of an alias candidate.
-# mutant:448-pg-alias-dollar-env -- drops the dollar-sign test on GIT_CONFIG_* assignment values.
-# mutant:448-pg-alias-cr-mid-subsection -- drops the interior-CR marker on a subsection alias value.
 al_cfg_body() { printf '[alias]\n\t%s\n' "$1"; }
 al_run() { run_push_guard "$(mk_push_cmd_cwd "$1" "$2")"; }
 al_expect_alias() {
@@ -3661,67 +3517,6 @@ case_al_deny_global_env_nonpush() {
   al_run 'GIT_CONFIG_GLOBAL=/x git p origin main' "$dir"
   al_expect_aliascfg
 }
-case_al_deny_xcfg_export_home() {
-  local dir="$tmpbase/repo-al-xcfg-export"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'export HOME=/x; git p origin main' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_xcfg_bare_xdg() {
-  local dir="$tmpbase/repo-al-xcfg-bare"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'XDG_CONFIG_HOME=/x; git p origin main' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_quoted_option() {
-  # #449 interplay: the quoted -c option is lost to the tokenizer; the push word in its value makes
-  # it a lost push segment, denied through #449's own fixed reason.
-  local dir="$tmpbase/repo-al-quoted-option"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'git "-c" alias.p=push p origin main' "$dir"
-  expect_push_deny
-}
-case_al_deny_quoted_space_assign() {
-  # #449 interplay: the quoted assignment splits at its space, so the real command word is lost. The
-  # HOME relocation it carries makes the rest of the segment an alias candidate that denies.
-  local dir="$tmpbase/repo-al-quoted-assign"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'HOME="/tmp/a b" git p origin main' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_lost_prefix_config() {
-  # #449 interplay: X="a b" leaves a bogus command word; the alias is still looked up for every later
-  # token, so a config-file alias behind it denies.
-  local dir="$tmpbase/repo-al-lost-prefix"
-  mk_fixture_repo "$dir" main feature/x
-  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
-  al_run 'X="a b" git zqp origin main' "$dir"
-  al_expect_alias ".git/config"
-}
-case_al_deny_lost_option_config() {
-  # #449 interplay: a quoted option the tokenizer cannot follow must not hide the alias behind it.
-  local dir="$tmpbase/repo-al-lost-option"
-  mk_fixture_repo "$dir" main feature/x
-  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
-  al_run 'git "--no-pager" zqp origin main' "$dir"
-  al_expect_alias ".git/config"
-}
-case_al_deny_lost_value_config() {
-  # #449 interplay: a quoted -c value split at its space leaves junk fragments; the real subcommand
-  # after them is still looked up.
-  local dir="$tmpbase/repo-al-lost-value"
-  mk_fixture_repo "$dir" main feature/x
-  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
-  al_run 'git -c "user.name=A B" zqp origin main' "$dir"
-  al_expect_alias ".git/config"
-}
-case_al_deny_lost_reloc_prefix() {
-  # #449 interplay: a quoted relocation assignment in front of a lost segment that names git.
-  local dir="$tmpbase/repo-al-lost-reloc"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'env XDG_CONFIG_HOME="/a b" git p origin main' "$dir"
-  al_expect_aliascfg
-}
 case_al_deny_codex_shaped() {
   # Not suffixed -deny-codex-main-session: 494-pg-wd-precedence filters on that substring.
   local dir="$tmpbase/repo-al-codex"
@@ -3795,43 +3590,11 @@ case_al_noop_env_nosystem() {
   al_run 'GIT_CONFIG_NOSYSTEM=1 git st' "$dir"
   expect_push_no_opinion
 }
-case_al_noop_scoped_home() {
-  # The HOME assignment belongs to the ls segment only; the git segment is judged on its own.
-  local dir="$tmpbase/repo-al-noop-scoped"
-  mk_fixture_repo "$dir" main feature/x
-  mk_fixture_config "$dir" "$(al_cfg_body 'st = status')"
-  al_run 'HOME=/x ls; git st' "$dir"
-  expect_push_no_opinion
-}
 case_al_noop_harness_shapes() {
   local dir="$tmpbase/repo-al-noop-harness"
   mk_fixture_repo "$dir" main claude/17-a
   mk_fixture_config "$dir" "$(printf '[alias]\n\tp = push\n\tup = !git pull\n')"
   al_run 'git add -A && git commit -m "x" && git push -u origin "claude/17-a"' "$dir"
-  expect_push_no_opinion
-}
-case_al_noop_quoted_prefix_nonalias() {
-  # A quoted-space assignment before an ordinary built-in stays no opinion, alias config present.
-  local dir="$tmpbase/repo-al-noop-quoted-prefix"
-  mk_fixture_repo "$dir" main feature/x
-  mk_fixture_config "$dir" "$(al_cfg_body 'p = push')"
-  al_run 'X="a b" git status' "$dir"
-  expect_push_no_opinion
-}
-case_al_noop_quoted_option_nonalias() {
-  local dir="$tmpbase/repo-al-noop-quoted-option"
-  mk_fixture_repo "$dir" main feature/x
-  mk_fixture_config "$dir" "$(al_cfg_body 'p = push')"
-  al_run 'git "--no-pager" log -5' "$dir"
-  expect_push_no_opinion
-}
-case_al_noop_lost_no_git() {
-  # A quote-split assignment in front of a command that never names git, mentioning alias text: with
-  # no later git token the lost segment is not an alias candidate. The fixture directory name carries
-  # the git literal the raw-stdin fast path needs.
-  local dir="$tmpbase/repo-al-lost-no-git-gitdir"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'X="a b" echo alias include' "$dir"
   expect_push_no_opinion
 }
 case_al_deny_subsection_repo() {
@@ -3870,65 +3633,6 @@ case_al_deny_escape_newline() {
   mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push\norigin')"
   al_run 'git zqp main' "$dir"
   al_expect_alias ".git/config"
-}
-case_al_deny_cr_mid() {
-  # A raw CR strictly inside the line is stripped by the line reader, which would fuse push and origin.
-  local dir="$tmpbase/repo-al-cr-mid"
-  mk_fixture_repo "$dir" main feature/x
-  mk_fixture_config "$dir" "$(al_cfg_body "zqp = push${CR}origin")"
-  al_run 'git zqp main' "$dir"
-  al_expect_alias ".git/config"
-}
-case_al_deny_cr_mid_subsection() {
-  local dir="$tmpbase/repo-al-cr-mid-sub"
-  mk_fixture_repo "$dir" main feature/x
-  mk_fixture_config "$dir" "$(printf '[alias "zqp"]\n\tcommand = push%sorigin\n' "$CR")"
-  al_run 'git zqp main' "$dir"
-  al_expect_alias ".git/config"
-}
-case_al_deny_xcfg_export_gitconfig() {
-  local dir="$tmpbase/repo-al-xcfg-export-cfg"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push; git p origin main' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_xcfg_export_parameters() {
-  local dir="$tmpbase/repo-al-xcfg-export-params"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'export GIT_CONFIG_PARAMETERS=x; git p origin main' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_xcfg_bare_gitconfig() {
-  local dir="$tmpbase/repo-al-xcfg-bare-cfg"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'GIT_CONFIG_COUNT=1; git p origin main' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_dollar_c() {
-  # A variable builds the config key at run time, which the hook cannot expand.
-  local dir="$tmpbase/repo-al-dollar-c"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'K=alias.p; git -c $K=push p origin main' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_dollar_env_key() {
-  local dir="$tmpbase/repo-al-dollar-env"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'K=alias.p; GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=$K GIT_CONFIG_VALUE_0=push git p origin main' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_dollar_parameters() {
-  local dir="$tmpbase/repo-al-dollar-params"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'GIT_CONFIG_PARAMETERS=$X git p origin main' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_dollar_subst() {
-  # The command substitution splits the segment, so the subcommand is never reached in it.
-  local dir="$tmpbase/repo-al-dollar-subst"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'git -c "$(echo alias.p)=push" p origin main' "$dir"
-  al_expect_aliascfg
 }
 case_al_deny_subcmd_fold() {
   # git matches an alias key case-insensitively.
@@ -3995,34 +3699,6 @@ case_al_deny_subsection_any_subcommand() {
   al_run 'git status' "$dir"
   al_expect_alias ".git/config"
 }
-case_al_deny_backtick_quoted() {
-  # The backtick cuts the segment inside the quoted key, so the -c value is never seen whole.
-  local dir="$tmpbase/repo-al-bt-quoted"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'git -c "`echo alias.p`=push" p origin main' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_backtick_bare() {
-  local dir="$tmpbase/repo-al-bt-bare"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'git -c `echo alias.p`=push p origin main' "$dir"
-  al_expect_aliascfg
-}
-case_al_deny_backtick_config_env() {
-  local dir="$tmpbase/repo-al-bt-cenv"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'git --config-env "`echo alias.p`=PV" p origin main' "$dir"
-  al_expect_aliascfg
-}
-case_al_noop_dollar_not_config() {
-  # A dollar sign outside the config VALUE tokens is no reason to deny.
-  local dir="$tmpbase/repo-al-dollar-noop"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'git -c color.ui=false -C "$WT" status' "$dir"
-  expect_push_no_opinion
-  al_run 'X=$Y GIT_CONFIG_COUNT=0 git log' "$dir"
-  expect_push_no_opinion
-}
 case_al_deny_flood() {
   # mutant:448-pg-aliasdl-check-off -- FLOOD + TIMING, calibrated by dl_site_run's same-run knob-0
   # control. 3000 alias candidates that each resolve cleanly (st = status), then one that denies as
@@ -4069,12 +3745,7 @@ case_al_deny_budget_zero() {
 # --- #450: an inline HOME=/XDG_CONFIG_HOME= relocation on a push segment -----------------------
 # mutant:448-pg-reloc-vocab -- empties the relocation vocabulary, so no assignment is ever flagged.
 # mutant:448-pg-reloc-push-sentinel -- deletes the push-segment relocation deny.
-# mutant:448-pg-reloc-xseg -- deletes the HOME/XDG cross-segment block.
 # mutant:448-pg-reloc-exact -- widens relocation membership to any name containing HOME.
-# mutant:448-pg-reloc-scoped -- drops the command-word-empty guard from the bare-assignment arm of the
-#   HOME/XDG cross-segment rule, so a HOME assignment scoped to another command flags the whole command.
-# mutant:448-pg-alias-xcfg-scoped -- drops the same guard from the cross-segment config flag, so a HOME
-#   assignment scoped to an ls segment makes a later alias candidate deny.
 al_expect_reloc() {
   expect_push_deny
   case "$push_err" in
@@ -4102,36 +3773,10 @@ case_rl_deny_env_home() {
   al_run 'env HOME=/nonexistent git push origin feature/x' "$dir"
   al_expect_reloc
 }
-case_rl_deny_xseg_export_home() {
-  local dir="$tmpbase/repo-rl-xseg-export"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'export HOME=/x; git push origin feature/x' "$dir"
-  expect_push_deny
-  case "$push_err" in
-    *"(HOME or XDG_CONFIG_HOME set earlier in this command)"*) ;;
-    *) __ok=0; __why="${__why}stderr missing '(HOME or XDG_CONFIG_HOME set earlier in this command)': '$push_err'\n" ;;
-  esac
-}
-case_rl_deny_xseg_bare_xdg() {
-  local dir="$tmpbase/repo-rl-xseg-bare"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'XDG_CONFIG_HOME=/x; git push origin feature/x' "$dir"
-  expect_push_deny
-  case "$push_err" in
-    *"(HOME or XDG_CONFIG_HOME set earlier in this command)"*) ;;
-    *) __ok=0; __why="${__why}stderr missing '(HOME or XDG_CONFIG_HOME set earlier in this command)': '$push_err'\n" ;;
-  esac
-}
 case_rl_noop_similar_name() {
   local dir="$tmpbase/repo-rl-similar"
   mk_fixture_repo "$dir" main feature/x
   al_run 'HOMEBREW_NO_AUTO_UPDATE=1 git push origin feature/x' "$dir"
-  expect_push_no_opinion
-}
-case_rl_noop_scoped() {
-  local dir="$tmpbase/repo-rl-scoped"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'HOME=/x ls; git push origin feature/x' "$dir"
   expect_push_no_opinion
 }
 case_pd_crlf_push_literal() {
@@ -5515,9 +5160,8 @@ case_push_reads_only() {
 # Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter
 # "push-kw-"), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
 # mutant:398-pg-kw-vocab — drops only the shell-keyword words (if/then/elif/else/do/while/until/!/
-#   coproc) from PREFIX_WORDS, leaving the #403 eval/trap/zsh-modifier words in place, so a fixture
-#   below whose command relies on skipping a leading keyword no longer resolves git as the command
-#   word.
+#   coproc) from PREFIX_WORDS, leaving eval in place, so a fixture below whose command relies on
+#   skipping a leading keyword no longer resolves git as the command word.
 # mutant:398-pg-case-fold — removes emit_segment()'s tolower() around normalize(tok), so an
 #   upper-case command word no longer resolves to "git".
 # mutant:398-pg-fastpath-case — narrows the widened `*[Gg][Ii][Tt]*` fast path back to the plain
@@ -6317,14 +5961,11 @@ case_push_include_deny_never_executes() {
   [ "$before_home" = "$after_home" ] || { __ok=0; __why="${__why}fixture HOME's file listing changed — push-guard.sh wrote to or altered a file it should only read (include route)\n"; }
 }
 
-# --- #403: the eval/trap/zsh-precommand-modifier class ------------------------------------------
+# --- #403: the eval class -----------------------------------------------------------------------
 # Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter
 # "push-pc-"), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
-# mutant:403-pg-pc-vocab — reverts PREFIX_WORDS to its pre-#403 (#398) value (drops eval/trap/
-#   noglob/nocorrect/-/repeat), so every fixture below whose command relies on skipping one of
-#   those words no longer resolves git as the command word.
-# mutant:403-pg-pc-repeat — removes the `repeat`-count skip, so a `repeat N` prefix leaves the
-#   count token itself as the resolved command word instead of the real command.
+# mutant:403-pg-pc-vocab — reverts PREFIX_WORDS to its pre-#403 (#398) value (drops eval), so every
+#   fixture below whose command relies on skipping eval no longer resolves git as the command word.
 # mutant:403-pg-pc-empty-tok — deletes the empty-normalised-token skip in the command-word walk,
 #   so a token that normalises to empty ends the walk with an empty command word instead of being
 #   skipped.
@@ -6361,46 +6002,6 @@ case_push_pc_deny_eval_split() {
   # The quoted string splits "git" from "push" across two tokens; the leftover closing-quote
   # token in between must be skipped, not mistaken for the subcommand.
   run_push_guard "$(mk_push_cmd 'eval "git " push origin main')"
-  expect_push_deny
-  case "$push_err" in
-    *'denies pushing to "main"'*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
-  esac
-}
-case_push_pc_deny_trap() {
-  run_push_guard "$(mk_push_cmd "trap 'git push origin main' EXIT")"
-  expect_push_deny
-  case "$push_err" in
-    *'denies pushing to "main"'*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
-  esac
-}
-case_push_pc_deny_noglob() {
-  run_push_guard "$(mk_push_cmd 'noglob git push origin main')"
-  expect_push_deny
-  case "$push_err" in
-    *'denies pushing to "main"'*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
-  esac
-}
-case_push_pc_deny_nocorrect() {
-  run_push_guard "$(mk_push_cmd 'nocorrect git push origin main')"
-  expect_push_deny
-  case "$push_err" in
-    *'denies pushing to "main"'*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
-  esac
-}
-case_push_pc_deny_dash() {
-  run_push_guard "$(mk_push_cmd '- git push origin main')"
-  expect_push_deny
-  case "$push_err" in
-    *'denies pushing to "main"'*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain 'denies pushing to \"main\"': '$push_err'\n" ;;
-  esac
-}
-case_push_pc_deny_repeat() {
-  run_push_guard "$(mk_push_cmd 'repeat 2 git push origin main')"
   expect_push_deny
   case "$push_err" in
     *'denies pushing to "main"'*) ;;
@@ -7595,42 +7196,15 @@ case_cdg_bash_never_executes_no_inline_patch() {
   [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
 }
 
-# --- hooks/claude-dir-guard.sh: the #403 eval/noglob/dash/repeat prefix-word class ---------------
+# --- hooks/claude-dir-guard.sh: the #403 eval prefix-word class ---------------------------------
 # Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "cdg-pc-"),
 # re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table. This hook's own
-# PREFIX_WORDS copy gains the same eval/trap/noglob/nocorrect/-/repeat vocabulary and the `repeat`
-# count skip; the quote stripping #437 added is exercised separately by the `cdg-dbq-*` fixtures
-# right below — so only the unquoted forms are exercised here.
+# PREFIX_WORDS copy gains the same eval word; the quote stripping #437 added is exercised separately
+# by the `cdg-dbq-*` fixtures right below — so only the unquoted forms are exercised here.
 # mutant:403-cdg-pc-vocab — reverts this hook's PREFIX_WORDS copy to its pre-#403 (#398) value, so
 #   every fixture below no longer resolves past its own prefix word to "apply_patch".
-# mutant:403-cdg-pc-repeat — removes the `repeat`-count skip from is_apply_patch_word, so a
-#   `repeat N` prefix leaves the count token itself as the resolved word instead of "apply_patch".
 case_cdg_pc_deny_eval_shim() {
   run_claude_guard "$(mk_codex_shell 'implementer' 'eval apply_patch < x.patch')"
-  expect_cdg_deny_unparseable
-  case "$cdg_err" in
-    *"with no inline patch text"*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
-  esac
-}
-case_cdg_pc_deny_noglob_shim() {
-  run_claude_guard "$(mk_codex_shell 'implementer' 'noglob apply_patch < x.patch')"
-  expect_cdg_deny_unparseable
-  case "$cdg_err" in
-    *"with no inline patch text"*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
-  esac
-}
-case_cdg_pc_deny_dash_shim() {
-  run_claude_guard "$(mk_codex_shell 'implementer' '- apply_patch < x.patch')"
-  expect_cdg_deny_unparseable
-  case "$cdg_err" in
-    *"with no inline patch text"*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
-  esac
-}
-case_cdg_pc_deny_repeat_shim() {
-  run_claude_guard "$(mk_codex_shell 'implementer' 'repeat 2 apply_patch < x.patch')"
   expect_cdg_deny_unparseable
   case "$cdg_err" in
     *"with no inline patch text"*) ;;
@@ -7676,14 +7250,6 @@ case_cdg_dbq_deny_eval_lead_space() {
     *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
   esac
 }
-case_cdg_dbq_deny_trap_sq() {
-  run_claude_guard "$(mk_codex_shell 'verifier' "trap 'apply_patch < x.patch' EXIT")"
-  expect_cdg_deny_unparseable
-  case "$cdg_err" in
-    *"with no inline patch text"*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain 'with no inline patch text': '$cdg_err'\n" ;;
-  esac
-}
 case_cdg_dbq_deny_bash_c_dq() {
   run_claude_guard "$(mk_codex_shell 'implementer' 'bash -c "apply_patch < x.patch"')"
   expect_cdg_deny_unparseable
@@ -7701,9 +7267,9 @@ case_cdg_dbq_deny_quoted_name() {
   esac
 }
 case_cdg_dbq_deny_quoted_prefix() {
-  # The PREFIX_WORDS match itself uses the STRIPPED token: "'noglob" strips to "noglob", a genuine
+  # The PREFIX_WORDS match itself uses the STRIPPED token: "'command" strips to "command", a genuine
   # member, so the walk keeps going past it to "apply_patch".
-  run_claude_guard "$(mk_codex_shell 'implementer' "bash -c 'noglob apply_patch < x.patch'")"
+  run_claude_guard "$(mk_codex_shell 'implementer' "bash -c 'command apply_patch < x.patch'")"
   expect_cdg_deny_unparseable
   case "$cdg_err" in
     *"with no inline patch text"*) ;;
@@ -8626,10 +8192,6 @@ case_ab_optvalscan_noop_flood() {
 #   another option reads the rest of the segment.
 # mutant:518-pg-optval-reset — keeps the value context after a later non-value prefix word, so a push
 #   behind bash and its option denies.
-# mutant:518-pg-optval-alias-off — drops the alias check at the value-context trigger, so a git alias
-#   that expands to push behind a value-taking option is never looked up.
-# mutant:518-pg-optval-alias-from — starts the alias check one token early, so the value word counts
-#   toward the names-git gate and an include in a commit message denies.
 # mutant:518-pg-optval-memo — runs the push scan at every trigger instead of once per segment, so a
 #   flood of triggers turns quadratic (filter "push-optvalscan-").
 PP_R_OPTV="option value in the command prefix"
@@ -8667,26 +8229,6 @@ case_push_optval_noop() {
     expect_push_no_opinion
     if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
   done
-}
-case_push_optval_deny_alias() {
-  local dir="$tmpbase/repo-optval-alias"
-  mk_fixture_repo "$dir" main feature/x
-  mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
-  al_run 'nice -n 5 git zqp origin main' "$dir"
-  al_expect_alias ".git/config"
-  al_expect_no_echo "zqp"
-}
-case_push_optval_noop_alias_none() {
-  local dir="$tmpbase/repo-optval-noalias"
-  mk_fixture_repo "$dir" main feature/x
-  al_run 'nice -n 5 git status' "$dir"
-  expect_push_no_opinion
-}
-case_push_optval_deny_alias_word() {
-  # A documented over-block: the segment names git behind a value-taking option and any later word
-  # naming an alias or include fails closed.
-  pp_run 'nice -n 10 git log --grep alias'
-  expect_push_deny
 }
 pp_optvalscan_cmd() {
   printf 'nice%s -n x git status\ngit push origin feature/x' "$(printf ' -n nice%.0s' $(seq 1 "$1"))"
@@ -8733,8 +8275,6 @@ case_push_optvalscan_noop_flood() {
 #   cannot be classified.
 # mutant:537-pg-interp-oldwalk — drops the keep-the-old-walk test for a token with a slash or one the
 #   walk reads as a prefix word, so +/git and -/sudo are skipped as options instead of being walked.
-# mutant:537-pg-interp-alias-off — drops the alias check at an unclassified option, so a git alias that
-#   expands to push behind it is never looked up.
 # mutant:537-pg-interp-nonopt — drops the next-word-is-not-an-option test, so an unclassified option
 #   followed by another option reads the rest of the segment.
 # mutant:537-pg-interp-memo — runs the push check at every unclassified option instead of once per
@@ -8822,11 +8362,6 @@ case_push_interp_deny_alias() {
   local dir="$tmpbase/repo-interp-alias"
   mk_fixture_repo "$dir" main feature/x
   mk_fixture_config "$dir" "$(al_cfg_body 'zqp = push')"
-  # the unclassified path: the quoted value word fails the value-word test, and the alias lookup
-  # counts that word toward the names-git gate
-  al_run "bash -O \"extglob\" -c 'git zqp origin main'" "$dir"
-  al_expect_alias ".git/config"
-  al_expect_no_echo "zqp"
   # the precise path: the value word is skipped and git is the command word
   al_run "bash -o pipefail -c 'git zqp origin main'" "$dir"
   al_expect_alias ".git/config"
@@ -9261,11 +8796,6 @@ cases=(
   "ab-pc-deny-eval-git|case_ab_pc_deny_eval_git|eval deny: implementer, eval git push -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
   "ab-pc-deny-eval-quoted-gh|case_ab_pc_deny_eval_quoted_gh|eval-quoted deny: trail-blazer-flow:implementer, eval \"gh issue close 5\" (the issue's own shape) -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
   "ab-pc-deny-eval-lead-space|case_ab_pc_deny_eval_lead_space|eval-quoted deny with a leading space: implementer, eval \" gh issue close 5\" -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab, 403-ab-pc-empty-tok)"
-  "ab-pc-deny-trap-gh|case_ab_pc_deny_trap_gh|trap deny: implementer, trap 'gh issue close 5' EXIT -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
-  "ab-pc-deny-noglob|case_ab_pc_deny_noglob|zsh precommand modifier deny: implementer, noglob git push -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
-  "ab-pc-deny-nocorrect|case_ab_pc_deny_nocorrect|zsh precommand modifier deny: implementer, nocorrect gh pr merge 5 -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
-  "ab-pc-deny-dash|case_ab_pc_deny_dash|zsh precommand modifier deny: implementer, - git push -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
-  "ab-pc-deny-repeat|case_ab_pc_deny_repeat|zsh repeat deny: implementer, repeat 3 git push -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab, 403-ab-pc-repeat)"
   "ab-pc-deny-verifier-eval|case_ab_pc_deny_verifier_eval|eval deny: verifier, eval git push -- mutation proof: dev/mutants/hook-tests.json (403-ab-pc-vocab)"
   "ab-pc-noop-verifier-eval-status|case_ab_pc_noop_verifier_eval_status|eval no opinion: verifier, eval git status (release-blocker control: the new skip must not narrow the verifier's read-only git) -- control, not part of the mutation-proof registry"
   "ab-lost-deny-assign-dquote|case_ab_lost_deny_assign_dquote|an assignment with a double-quoted value holding a space before gh denies -- mutation proof: dev/mutants/hook-tests.json (505-ab-unbalanced-dq, 505-ab-unbalanced-off, 505-ab-word-lower, 505-ab-word-strip-bs, 505-ab-word-strip-dq, 505-ab-word-strip-sq)"
@@ -10501,11 +10031,6 @@ cases=(
   "push-pc-deny-eval-quoted|case_push_pc_deny_eval_quoted|eval-quoted deny: eval 'git push origin main' -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
   "push-pc-deny-eval-lead-space|case_push_pc_deny_eval_lead_space|eval-quoted deny with a leading space: eval \" git push origin main\" -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab, 403-pg-pc-empty-tok)"
   "push-pc-deny-eval-split|case_push_pc_deny_eval_split|eval-quoted deny split across tokens: eval \"git \" push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab, 403-pg-pc-empty-sub)"
-  "push-pc-deny-trap|case_push_pc_deny_trap|trap deny: trap 'git push origin main' EXIT -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
-  "push-pc-deny-noglob|case_push_pc_deny_noglob|zsh precommand modifier deny: noglob git push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
-  "push-pc-deny-nocorrect|case_push_pc_deny_nocorrect|zsh precommand modifier deny: nocorrect git push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
-  "push-pc-deny-dash|case_push_pc_deny_dash|zsh precommand modifier deny: - git push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
-  "push-pc-deny-repeat|case_push_pc_deny_repeat|zsh repeat deny: repeat 2 git push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab, 403-pg-pc-repeat)"
   "push-pc-noop-eval-feature|case_push_pc_noop_eval_feature|eval no opinion: eval git push origin feature/x (control: a non-default-branch destination behind eval still gets no opinion) -- control, not part of the mutation-proof registry"
   "push-cmdcfg-deny-c-remote-push|case_push_cmdcfg_deny_c_remote_push|deny: git -c remote.origin.push=HEAD:main push (the issue's own row-1 shape) -- stderr echoes neither the key nor the value -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel)"
   "push-cmdcfg-deny-c-benign-key|case_push_cmdcfg_deny_c_benign_key|deny: git -c core.pager=cat push origin feature/x -- the deny doesn't depend on the key or the destination -- mutation proof: dev/mutants/hook-tests.json (439-pg-cmdcfg-sentinel)"
@@ -10566,9 +10091,6 @@ cases=(
   "push-rxdest-deny-option-dollar|case_push_rxdest_deny_option_dollar|deny: an option word holding a dollar sign (quoted or not, long or short) leaves the remote and the current-branch deny intact -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxopt-off, 517-pg-rxopt-raw)"
   "push-rxdest-deny-option-dollar-config|case_push_rxdest_deny_option_dollar_config|deny: the same option words with a configured push route to main -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxopt-off)"
   "push-rxdest-noop-controls|case_push_rxdest_noop_controls|no opinion: the harness's own quoted push shapes (a control, no registry mutant)"
-  "push-rxlost-deny-alias-ansi-c|case_push_rxlost_deny_alias_ansi_c|deny: a push alias spelled as an ANSI-C or locale word in a segment the tokenizer lost -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-lit-off)"
-  "push-rxlost-deny-concat|case_push_rxlost_deny_concat|deny: a non-plain dollar-quote word in a lost segment fails closed -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-failclosed-off)"
-  "push-rxlost-noop-status|case_push_rxlost_noop_status|no opinion: a plain dollar-quote git status in a lost segment, and a plain lost log (a control, no registry mutant)"
   "push-cmdcap-deny-over-cap|case_push_cmdcap_deny_over_cap|deny: a command one byte over the cap -- the too-large line -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
   "push-cmdcap-noop-at-cap|case_push_cmdcap_noop_at_cap|no opinion: a command of exactly the cap is analysed -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off-by-one)"
   "push-cmdcap-deny-multibyte|case_push_cmdcap_deny_multibyte|deny: four-byte characters over the cap in bytes but under it in characters, under a UTF-8 locale -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-chars)"
@@ -10576,7 +10098,6 @@ cases=(
   "push-cmdcap-noop-plan-mode|case_push_cmdcap_noop_plan_mode|no opinion: an over-cap command in plan mode leaves before the cap (a control, no registry mutant)"
   "push-cmdcaptime-deny-flood|case_push_cmdcaptime_deny_flood|FLOOD+TIMING: a push followed by one multi-megabyte dollar-quote word denies via the cap under an active deadline calibrated from a same-run plan-mode control -- mutation proof: dev/mutants/hook-tests.json (517-pg-cmdcap-off)"
   "solo-cmdcap-pin-at-cap-worst|case_solo_cmdcap_pin_at_cap_worst|TIMING PIN: each worst shape exactly at the cap stays within a fixed CPU bound before its first deadline sample, and within a bound of at most the hook timeout for its whole production-budget run (the #537 interpreter-option shape p on its prefix, within a margin of a same-run control, xc), and reaches its verdict (regression pin, no registry mutant; solo-: outside every registry filter, so it never runs under the mutant driver)"
-  "push-rxscan-noop-flood|case_push_rxscan_noop_flood|FLOOD+TIMING: a lost segment and a push full of plain dollar-quote words, then a feature push -- no opinion; token count sized from a same-run twin control -- mutation proof: dev/mutants/hook-tests.json (517-pg-rxlost-rescan)"
   "push-alias-deny-repo-config|case_al_deny_repo_config|a config-file alias (zqp = push) in .git/config denies git zqp origin main with the alias line naming .git/config and never echoing the alias name, and the raw stdin carries no push literal -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-push, 448-pg-alias-early-exit, 448-pg-alias-emit, 448-pg-alias-section)"
   "push-alias-deny-feature-dest|case_al_deny_feature_dest|a push alias denies even when the destination is a feature branch -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
   "push-alias-deny-global-config|case_al_deny_global_config|an alias in \$HOME/.gitconfig denies and names your global git config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-section)"
@@ -10597,14 +10118,6 @@ cases=(
   "push-alias-deny-home-nonpush|case_al_deny_home_nonpush|an inline HOME= on a non-push git segment denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-reloc-nonpush)"
   "push-alias-deny-env-xdg-nonpush|case_al_deny_env_xdg_nonpush|env XDG_CONFIG_HOME= on a non-push git segment denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-reloc-nonpush)"
   "push-alias-deny-global-env-nonpush|case_al_deny_global_env_nonpush|an inline GIT_CONFIG_GLOBAL= on a non-push git segment denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-reloc-nonpush)"
-  "push-alias-deny-xcfg-export-home|case_al_deny_xcfg_export_home|export HOME=/x in an earlier segment makes a later alias candidate deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg)"
-  "push-alias-deny-xcfg-bare-xdg|case_al_deny_xcfg_bare_xdg|a bare XDG_CONFIG_HOME= segment makes a later alias candidate deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg)"
-  "push-alias-deny-quoted-option|case_al_deny_quoted_option|git \"-c\" alias.p=push p origin main denies (#449 interplay) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-option)"
-  "push-alias-deny-quoted-space-assign|case_al_deny_quoted_space_assign|HOME=\"/tmp/a b\" git p origin main denies as unreadable config (#449 interplay) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-prefix, 448-pg-alias-lost-reloc)"
-  "push-alias-deny-lost-prefix-config|case_al_deny_lost_prefix_config|X=\"a b\" git zqp denies via the config-file alias (#449 interplay) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-prefix)"
-  "push-alias-deny-lost-option-config|case_al_deny_lost_option_config|git \"--no-pager\" zqp denies via the config-file alias (#449 interplay) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-option)"
-  "push-alias-deny-lost-value-config|case_al_deny_lost_value_config|git -c \"user.name=A B\" zqp denies via the config-file alias (#449 interplay) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-option)"
-  "push-alias-deny-lost-reloc-prefix|case_al_deny_lost_reloc_prefix|env XDG_CONFIG_HOME=\"/a b\" git p denies as unreadable config (#449 interplay) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-reloc)"
   "push-alias-deny-codex-shaped|case_al_deny_codex_shaped|a Codex-shaped main-session payload with a repo alias denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
   "push-alias-deny-never-executes|case_al_deny_never_executes|the alias route never invokes git/gh/rm/dirname on a booby-trapped PATH and leaves the fixture tree byte-identical -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-emit)"
   "push-alias-noop-nonpush-alias|case_al_noop_nonpush_alias|git st with st = status is no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-classify-open)"
@@ -10613,25 +10126,12 @@ cases=(
   "push-alias-noop-other-alias-word|case_al_noop_other_alias_word|git co main with co = checkout and p = push is no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-classify-open)"
   "push-alias-noop-c-benign|case_al_noop_c_benign|git -c core.pager=cat st is no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cmdline-text)"
   "push-alias-noop-env-nosystem|case_al_noop_env_nosystem|GIT_CONFIG_NOSYSTEM=1 git st is no opinion -- control, not part of the mutation-proof registry"
-  "push-alias-noop-scoped-home|case_al_noop_scoped_home|HOME=/x scoped to an ls segment leaves a later git st no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg-scoped)"
   "push-alias-noop-harness-shapes|case_al_noop_harness_shapes|the harness own add/commit/push shape is no opinion with p = push and up = !git pull configured -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-name-match)"
-  "push-alias-noop-quoted-prefix-nonalias|case_al_noop_quoted_prefix_nonalias|X=\"a b\" git status stays no opinion with a push alias configured -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-classify-open)"
-  "push-alias-noop-quoted-option-nonalias|case_al_noop_quoted_option_nonalias|git \"--no-pager\" log -5 stays no opinion with a push alias configured -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-classify-open)"
-  "push-alias-noop-lost-no-git|case_al_noop_lost_no_git|a quote-split assignment before a command that never names git stays no opinion even with alias text in it -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-lost-needgit)"
   "push-alias-deny-subsection-repo|case_al_deny_subsection_repo|[alias \"zqp\"] command = push in .git/config denies git zqp -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection)"
   "push-alias-deny-subsection-global|case_al_deny_subsection_global|[alias \"zqp\"] command = push in the global config denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection)"
   "push-alias-noop-subsection|case_al_noop_subsection|a subsection alias to status, and a subsection key other than command, stay no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-classify-open)"
   "push-alias-deny-escape-tab|case_al_deny_escape_tab|an alias value push, backslash t, origin denies (the escape is a word break) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-escape)"
   "push-alias-deny-escape-newline|case_al_deny_escape_newline|an alias value push, backslash n, origin denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-escape)"
-  "push-alias-deny-cr-mid|case_al_deny_cr_mid|a raw CR inside an alias value denies instead of fusing the words around it -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cr-mid)"
-  "push-alias-deny-cr-mid-subsection|case_al_deny_cr_mid_subsection|a raw CR inside a subsection alias value denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-cr-mid-subsection)"
-  "push-alias-deny-xcfg-export-gitconfig|case_al_deny_xcfg_export_gitconfig|an exported GIT_CONFIG_COUNT/KEY/VALUE triple makes a later alias candidate deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg-export-cfg)"
-  "push-alias-deny-xcfg-export-parameters|case_al_deny_xcfg_export_parameters|an exported GIT_CONFIG_PARAMETERS makes a later alias candidate deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg-export-cfg)"
-  "push-alias-deny-xcfg-bare-gitconfig|case_al_deny_xcfg_bare_gitconfig|a bare GIT_CONFIG_COUNT= segment makes a later alias candidate deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-xcfg-bare-cfg)"
-  "push-alias-deny-dollar-c|case_al_deny_dollar_c|git -c \$K=push p (a variable-built key) denies as unreadable config -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-dollar)"
-  "push-alias-deny-dollar-env-key|case_al_deny_dollar_env_key|GIT_CONFIG_KEY_0=\$K on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-dollar)"
-  "push-alias-deny-dollar-parameters|case_al_deny_dollar_parameters|GIT_CONFIG_PARAMETERS=\$X on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-dollar)"
-  "push-alias-deny-dollar-subst|case_al_deny_dollar_subst|git -c with a command substitution in the key denies even though it splits the segment -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-dollar)"
   "push-alias-deny-subcmd-fold|case_al_deny_subcmd_fold|git ZQP with zqp = push denies (alias keys match case-insensitively) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subcmd-fold)"
   "push-alias-noop-c-target-clean|case_al_noop_c_target_clean|a push alias in the session does not leak into a resolved -C checkout that defines none -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-reset)"
   "push-alias-deny-subsection-spaces|case_al_deny_subsection_spaces|[alias   \"zqp\"] (several blanks) command = push denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-space)"
@@ -10640,19 +10140,12 @@ cases=(
   "push-alias-deny-subsection-escaped-name|case_al_deny_subsection_escaped_name|a backslash-escaped subsection name denies (the name is never read) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-name)"
   "push-alias-deny-subsection-odd-name|case_al_deny_subsection_odd_name|subsection names holding a blank or a slash deny -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-name)"
   "push-alias-deny-subsection-any-subcommand|case_al_deny_subsection_any_subcommand|a push-ish subsection alias makes every alias candidate of that checkout deny (deliberate over-block) -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-subsection-name)"
-  "push-alias-deny-backtick-quoted|case_al_deny_backtick_quoted|a backtick substitution inside a quoted -c key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"
-  "push-alias-deny-backtick-bare|case_al_deny_backtick_bare|a backtick substitution as the -c key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"
-  "push-alias-deny-backtick-config-env|case_al_deny_backtick_config_env|a backtick substitution in a --config-env key on an alias candidate denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-backtick)"
-  "push-alias-noop-dollar-not-config|case_al_noop_dollar_not_config|a dollar sign outside the config value tokens (-C \"\$WT\", X=\$Y) stays no opinion -- control, not part of the mutation-proof registry"
   "push-aliasdl-deny-flood|case_al_deny_flood|FLOOD+TIMING: a flood of clean alias candidates, sized from a same-run per-candidate cost, then a push alias denies with the deadline line, calibrated from a same-run knob-0 control (#476) -- mutation proof: dev/mutants/hook-tests.json (448-pg-aliasdl-check-off)"
   "push-aliasdl-deny-budget-zero|case_al_deny_budget_zero|a bare git log at knob 0 reaches the deadline sample instead of the early exit -- mutation proof: dev/mutants/hook-tests.json (448-pg-alias-early-exit)"
   "push-reloc-deny-home-inline|case_rl_deny_home_inline|HOME=<d> git push with a push route in <d>/.gitconfig denies with the command-line-config message -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-vocab, 448-pg-reloc-push-sentinel)"
   "push-reloc-deny-xdg-inline|case_rl_deny_xdg_inline|XDG_CONFIG_HOME=/nonexistent git push denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-vocab, 448-pg-reloc-push-sentinel)"
   "push-reloc-deny-env-home|case_rl_deny_env_home|env HOME=/nonexistent git push denies -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-vocab, 448-pg-reloc-push-sentinel)"
-  "push-reloc-deny-xseg-export-home|case_rl_deny_xseg_export_home|export HOME=/x then a push denies with the HOME/XDG reason -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-xseg)"
-  "push-reloc-deny-xseg-bare-xdg|case_rl_deny_xseg_bare_xdg|a bare XDG_CONFIG_HOME= then a push denies with the HOME/XDG reason -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-xseg)"
   "push-reloc-noop-similar-name|case_rl_noop_similar_name|HOMEBREW_NO_AUTO_UPDATE=1 git push origin feature/x is no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-exact)"
-  "push-reloc-noop-scoped|case_rl_noop_scoped|HOME=/x scoped to ls then a feature push is no opinion -- mutation proof: dev/mutants/hook-tests.json (448-pg-reloc-scoped)"
   "push-deny-crlf-push-literal|case_pd_crlf_push_literal|git pu<CR>sh origin main denies once the raw-stdin push fast path is gone -- mutation proof: dev/mutants/hook-tests.json (448-pg-fastpath-crlf, 517-pg-cr-strip-off)"
   # --- hooks/push-guard.sh: analysis deadline (#435) cases ----------------------------------------
   "push-dl-deny-budget-zero|case_push_dl_deny_budget_zero|knob 0 denies the very first sample even for an ordinary feature/x push -- mutation proof: dev/mutants/hook-tests.json (435-dl-check-off)"
@@ -10892,16 +10385,12 @@ cases=(
   "cdg-bash-never-executes|case_cdg_bash_never_executes|deny, AND the Bash route never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent"
   "cdg-bash-never-executes-no-inline-patch|case_cdg_bash_never_executes_no_inline_patch|deny via the is_apply_patch_word \"no inline patch\" route specifically, AND it never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH — sentinel absent"
   "cdg-pc-deny-eval-shim|case_cdg_pc_deny_eval_shim|eval deny: implementer, eval apply_patch < x.patch -- mutation proof: dev/mutants/hook-tests.json (403-cdg-pc-vocab)"
-  "cdg-pc-deny-noglob-shim|case_cdg_pc_deny_noglob_shim|zsh precommand modifier deny: implementer, noglob apply_patch < x.patch -- mutation proof: dev/mutants/hook-tests.json (403-cdg-pc-vocab)"
-  "cdg-pc-deny-dash-shim|case_cdg_pc_deny_dash_shim|zsh precommand modifier deny: implementer, - apply_patch < x.patch -- mutation proof: dev/mutants/hook-tests.json (403-cdg-pc-vocab)"
-  "cdg-pc-deny-repeat-shim|case_cdg_pc_deny_repeat_shim|zsh repeat deny: implementer, repeat 2 apply_patch < x.patch -- mutation proof: dev/mutants/hook-tests.json (403-cdg-pc-vocab, 403-cdg-pc-repeat)"
   "cdg-dbq-deny-eval-sq|case_cdg_dbq_deny_eval_sq|unparseable deny (#437): eval 'apply_patch < x.patch' -- a single-quoted eval argument -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-sq)"
   "cdg-dbq-deny-eval-dq|case_cdg_dbq_deny_eval_dq|unparseable deny (#437): eval \"apply_patch < x.patch\" -- a double-quoted eval argument -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-dq)"
   "cdg-dbq-deny-eval-lead-space|case_cdg_dbq_deny_eval_lead_space|unparseable deny (#437): eval \" apply_patch < x.patch\" -- a lone quote token stripped to empty must be skipped, not resolved -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-dq, 437-cdg-dbq-empty-tok)"
-  "cdg-dbq-deny-trap-sq|case_cdg_dbq_deny_trap_sq|unparseable deny (#437): verifier, trap 'apply_patch < x.patch' EXIT -- a single-quoted trap argument -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-sq)"
   "cdg-dbq-deny-bash-c-dq|case_cdg_dbq_deny_bash_c_dq|unparseable deny (#437): bash -c \"apply_patch < x.patch\" -- a double-quoted bash -c argument -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-dq)"
   "cdg-dbq-deny-quoted-name|case_cdg_dbq_deny_quoted_name|unparseable deny (#437): \"apply_patch\" < x.patch -- a quoted shim spelling as the command word itself -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-dq)"
-  "cdg-dbq-deny-quoted-prefix|case_cdg_dbq_deny_quoted_prefix|unparseable deny (#437): bash -c 'noglob apply_patch < x.patch' -- the PREFIX_WORDS match itself uses the stripped token -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-sq)"
+  "cdg-dbq-deny-quoted-prefix|case_cdg_dbq_deny_quoted_prefix|unparseable deny (#437): bash -c 'command apply_patch < x.patch' -- the PREFIX_WORDS match itself uses the stripped token -- mutation proof: dev/mutants/hook-tests.json (437-cdg-dbq-quote-sq)"
   "cdg-dl-deny-budget-zero|case_cdg_dl_deny_budget_zero|deny (#457): implementer Bash echo apply_patch under budget knob 0 -- the first sample denies with the exact too-large line, and the budget override is cleared after the call"
   "cdg-dl-deny-budget-zero-patch|case_cdg_dl_deny_budget_zero_patch|deny (#457): verifier apply_patch with a benign patch under budget knob 0 -- exact too-large line naming verifier and apply_patch"
   "cdg-dl-never-executes|case_cdg_dl_never_executes|deny (#457): the budget-zero deny never invokes git/gh/rm/dirname/tr/awk/grep/sed on the booby-trapped PATH -- sentinel absent"
@@ -10964,17 +10453,14 @@ cases=(
   "ab-optvalscan-noop-flood|case_ab_optvalscan_noop_flood|FLOOD+TIMING: a segment of value-context triggers, no opinion; CPU time within a multiple of a same-size twin with one trigger -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-memo, 463-hook-boundary-override-leaks)"
   "push-optval-deny-main|case_push_optval_deny_main|deny: a push behind nice/sudo/stdbuf/exec/xargs/time and an option with a separate value, naming the fixed command-prefix reason -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-off)"
   "push-optval-deny-precedence|case_push_optval_deny_precedence|deny: an earlier unresolved reason and command-line config keep their own deny -- control, not part of the mutation-proof registry"
-  "push-optval-noop|case_push_optval_noop|no opinion: the scan starts after the value word and resets at a non-value prefix word -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-start, 518-pg-optval-nonopt, 518-pg-optval-reset, 518-pg-optval-alias-from)"
-  "push-optval-deny-alias|case_push_optval_deny_alias|deny: nice -n 5 git zqp origin main with a push alias, through the alias line -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-alias-off)"
-  "push-optval-noop-alias-none|case_push_optval_noop_alias_none|no opinion: nice -n 5 git status with no alias config -- control, not part of the mutation-proof registry"
-  "push-optval-deny-alias-word|case_push_optval_deny_alias_word|deny: nice -n 10 git log --grep alias, the documented alias-word over-block -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-alias-off)"
+  "push-optval-noop|case_push_optval_noop|no opinion: the scan starts after the value word and resets at a non-value prefix word -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-start, 518-pg-optval-nonopt, 518-pg-optval-reset)"
   "push-optvalscan-noop-flood|case_push_optvalscan_noop_flood|FLOOD+TIMING: a segment of value-context triggers then a feature push, no opinion; CPU time within a multiple of a same-size twin with one trigger -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-memo)"
   # --- an option of an interpreter prefix word (#537) cases --------------------------------------
   "push-interp-deny-main|case_push_interp_deny_main|deny: a push to main behind bash/sh/zsh/ksh/dash with a value option or a flag, naming the default branch -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-off, 537-pg-interp-cluster, 537-pg-interp-plus)"
   "push-interp-deny-guard|case_push_interp_deny_guard|deny: a value word the old walk could deny on is never skipped with its option (a quoted git, a quoted assignment or option before a push, git, a prefix word, a directory change or GIT_DIR export in the same command), and a token with a slash or read as a prefix word keeps the walk it had -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-guard, 537-pg-interp-oldwalk)"
   "push-interp-deny-unres|case_push_interp_deny_unres|deny: a push behind an option the walk cannot classify, naming the fixed command-prefix reason and never echoing the command -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-scan-off)"
   "push-interp-deny-memo|case_push_interp_deny_memo|deny: a #518 trigger behind an unclassified interpreter option still reads from its own start (--git-dir before the push), naming the fixed command-prefix reason -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-own-memo)"
-  "push-interp-deny-alias|case_push_interp_deny_alias|deny: git zqp origin main with a push alias behind a value option, through the alias line, on the unclassified and the precise path -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-alias-off)"
+  "push-interp-deny-alias|case_push_interp_deny_alias|deny: git zqp origin main with a push alias behind a value option, through the alias line, on the precise path -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-off, 537-pg-interp-cluster)"
   "push-interp-noop|case_push_interp_noop|no opinion: feature pushes, prose and a script argument behind options; the read stops at an option -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-nonopt)"
   "push-interpscan-noop-flood|case_push_interpscan_noop_flood|FLOOD+TIMING: a segment of unclassified options then a feature push, no opinion; CPU time within 1.3 times a same-size control with the option gate shut plus 250ms -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-memo)"
   # --- a command substitution that cuts the git option slot (#572) cases ---------------------------
