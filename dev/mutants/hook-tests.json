@@ -6012,310 +6012,6 @@
       ]
     },
     {
-      "name": "508-pg-rx-prefix-off",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if (rx_at && lost_push(toks, rx_at + 1, ntok, 1)) {",
-          "to": "if (0 && lost_push(toks, rx_at + 1, ntok, 1)) {"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-built-command-word",
-        "push-rtexp-deny-codex-shaped",
-        "push-rtexp-deny-dollar-name",
-        "push-rtexp-deny-env-assign",
-        "push-rtexp-deny-env-u-attached",
-        "push-rtexp-deny-env-u-value",
-        "push-rtexp-deny-quote-expansion",
-        "push-rtexp-deny-special"
-      ]
-    },
-    {
-      "name": "508-pg-rx-armed",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "lost_push(toks, rx_at + 1, ntok, 1)",
-          "to": "lost_push(toks, rx_at + 1, ntok, 0)"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-built-command-word"
-      ]
-    },
-    {
-      "name": "508-pg-rx-skip-off",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if (rx_word(tok)) { if (!rx_at) rx_at = idx; saw_prefix = 1; idx++; continue }",
-          "to": "if (rx_word(tok)) { if (!rx_at) rx_at = idx }"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-prefix-alias",
-        "push-rtexp-deny-prefix-cd"
-      ]
-    },
-    {
-      "name": "508-pg-rx-git-off",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if (rxg_at && (rxbs || index(",
-          "to": "if (0 && (rxbs || index("
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot",
-        "push-rtexp-deny-git-slot-ansi-c-concat",
-        "push-rtexp-deny-git-slot-ansi-c-literal",
-        "push-rtexp-deny-git-slot-ansi-c-opt",
-        "push-rtexp-deny-git-slot-push-text"
-      ]
-    },
-    {
-      "name": "508-pg-rx-git-skip-off",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if (rx_word(tok)) { if (!rxg_at) rxg_at = j; if (!rxn_at && substr(tok, 1, 1) != \"-\") rxn_at = j; j++; continue }",
-          "to": "if (rx_word(tok)) { if (!rxg_at) rxg_at = j }"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot-alias",
-        "push-rtexp-deny-git-slot-ansi-c-concat",
-        "push-rtexp-deny-git-slot-dash-led"
-      ]
-    },
-    {
-      "name": "508-pg-rx-re-sq",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "\"[$][A-Za-z0-9_@*#?!$=~^\\\"\" sq \"-]\"",
-          "to": "\"[$][A-Za-z0-9_@*#?!$=~^\\\"\" \"-]\""
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-quote-expansion"
-      ]
-    },
-    {
-      "name": "508-pg-rx-re-dq",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "\"[$][A-Za-z0-9_@*#?!$=~^\\\"\" sq \"-]\"",
-          "to": "\"[$][A-Za-z0-9_@*#?!$=~^\" sq \"-]\""
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-quote-expansion"
-      ]
-    },
-    {
-      "name": "508-pg-rx-re-special",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "\"[$][A-Za-z0-9_@*#?!$=~^\\\"\" sq \"-]\"",
-          "to": "\"[$][A-Za-z_=~^\\\"\" sq \"-]\""
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-special"
-      ]
-    },
-    {
-      "name": "508-pg-rx-lone-dollar",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "return match(parts[np], rx_re) > 0",
-          "to": "return 1"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-noop-dir-expansion",
-        "push-rtexp-noop-prompt-dollar"
-      ]
-    },
-    {
-      "name": "508-pg-rx-basename",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "np = split(tok, parts, \"/\")\n  return match(parts[np], rx_re) > 0",
-          "to": "return match(tok, rx_re) > 0"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-noop-dir-expansion"
-      ]
-    },
-    {
-      "name": "508-pg-rx-ungated",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if (rx_at && lost_push(toks, rx_at + 1, ntok, 1)) {",
-          "to": "if (rx_at) {"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-prefix-alias",
-        "push-rtexp-deny-prefix-cd",
-        "push-rtexp-noop-editor",
-        "push-rtexp-noop-status"
-      ]
-    },
-    {
-      "name": "508-pg-rx-git-ungated",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "(rxbs || index(strip_quotes(toks[rxg_at]), \"push\") > 0 || lost_push(toks, rxg_at + 1, ntok, 2))",
-          "to": "1"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot-alias",
-        "push-rtexp-noop-git-slot-status"
-      ]
-    },
-    {
-      "name": "508-pg-rx-git-armed2",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "lost_push(toks, rxg_at + 1, ntok, 2)",
-          "to": "lost_push(toks, rxg_at + 1, ntok, 1)"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot"
-      ]
-    },
-    {
-      "name": "508-pg-rx-git-self",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "index(strip_quotes(toks[rxg_at]), \"push\") > 0 || ",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot-push-text"
-      ]
-    },
-    {
-      "name": "508-pg-rx-assign-prefix",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if (saw_prefix && !rx_at && rx_word(tok)) rx_at = idx",
-          "to": "if (0) rx_at = idx"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-env-assign"
-      ]
-    },
-    {
-      "name": "508-pg-rx-bare-assign",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if (saw_prefix && !rx_at && rx_word(tok)) rx_at = idx",
-          "to": "if (!rx_at && rx_word(tok)) rx_at = idx"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-noop-bare-assign"
-      ]
-    },
-    {
-      "name": "508-pg-rx-env-u-value",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if (!rx_at && rx_word(toks[idx + 1])) rx_at = idx + 1",
-          "to": "if (0) rx_at = idx + 1"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-env-u-value"
-      ]
-    },
-    {
-      "name": "508-pg-rx-env-u-attached",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if (!rx_at && rx_word(tok)) rx_at = idx",
-          "to": "if (0) rx_at = idx"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-env-u-attached"
-      ]
-    },
-    {
-      "name": "508-pg-fastpath-dollar",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "  *'$'*push*|*push*'$'*) : ;;\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-built-command-word"
-      ]
-    },
-    {
       "name": "508-pg-rec-lost-off",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -6345,160 +6041,6 @@
       ],
       "expect_fail": [
         "push-rtexp-noop-env-s-uncut"
-      ]
-    },
-    {
-      "name": "508-pg-rx-scan-per-token",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexpscan-",
-      "edits": [
-        {
-          "from": "if (rx_word(tok)) { if (!rx_at) rx_at = idx; saw_prefix = 1; idx++; continue }",
-          "to": "if (rx_word(tok)) { if (!rx_at) rx_at = idx; if (lost_push(toks, idx + 1, ntok, 1)) { emit_lost(\"scan\", unres, cmdcfg); return } saw_prefix = 1; idx++; continue }"
-        },
-        {
-          "from": "if (saw_prefix && !rx_at && rx_word(tok)) rx_at = idx",
-          "to": "if (saw_prefix && rx_word(tok)) { if (!rx_at) rx_at = idx; if (lost_push(toks, idx + 1, ntok, 1)) { emit_lost(\"scan\", unres, cmdcfg); return } }"
-        },
-        {
-          "from": "rxg_at = j; if (!rxn_at",
-          "to": "rxg_at = j; if (lost_push(toks, j + 1, ntok, 2)) { emit_lost(\"scan\", unres, cmdcfg); return } if (!rxn_at"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexpscan-noop-flood"
-      ]
-    },
-    {
-      "name": "508-ab-rx-skip-off",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "if (rx_word(tok)) { saw_exp = 1;",
-          "to": "if (0 && rx_word(tok)) { saw_exp = 1;"
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-deny-claude-tee",
-        "ab-rtexp-deny-codex-impl-gh",
-        "ab-rtexp-deny-env-ansi-c-gh",
-        "ab-rtexp-deny-impl-gh",
-        "ab-rtexp-deny-impl-git",
-        "ab-rtexp-deny-option-word-gh",
-        "ab-rtexp-deny-positional-gh",
-        "ab-rtexp-deny-verifier-gh",
-        "ab-rtexp-deny-verifier-git-status"
-      ]
-    },
-    {
-      "name": "508-ab-rx-git-sentinel",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "if (saw_exp) gitsub = \"-expansion-\"",
-          "to": "if (saw_exp) gitsub = gitsub"
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-deny-impl-git",
-        "ab-rtexp-deny-verifier-env-assign",
-        "ab-rtexp-deny-verifier-git-status"
-      ]
-    },
-    {
-      "name": "508-ab-rx-re-sq",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "\"[$][A-Za-z0-9_@*#?!$=~^\\\"\" sq \"-]\"",
-          "to": "\"[$][A-Za-z0-9_@*#?!$=~^\\\"\" \"-]\""
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-deny-env-ansi-c-gh"
-      ]
-    },
-    {
-      "name": "508-ab-rx-re-special",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "\"[$][A-Za-z0-9_@*#?!$=~^\\\"\" sq \"-]\"",
-          "to": "\"[$][A-Za-z_=~^\\\"\" sq \"-]\""
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-deny-positional-gh"
-      ]
-    },
-    {
-      "name": "508-ab-rx-lone-dollar",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "return match(parts[np], rx_re) > 0",
-          "to": "return 1"
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-deny-dir-expansion-gh",
-        "ab-rtexp-noop-prompt-dollar"
-      ]
-    },
-    {
-      "name": "508-ab-rx-basename",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "np = split(tok, parts, \"/\")\n  return match(parts[np], rx_re) > 0",
-          "to": "return match(tok, rx_re) > 0"
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-deny-dir-expansion-gh"
-      ]
-    },
-    {
-      "name": "508-ab-rx-assign-prefix",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "if (saw_prefix && rx_word(tok)) saw_exp = 1",
-          "to": "if (0) saw_exp = 1"
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-deny-verifier-env-assign"
-      ]
-    },
-    {
-      "name": "508-ab-rx-bare-assign",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "if (saw_prefix && rx_word(tok)) saw_exp = 1",
-          "to": "if (rx_word(tok)) saw_exp = 1"
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-noop-verifier-bare-assign"
       ]
     },
     {
@@ -6553,38 +6095,6 @@
       ]
     },
     {
-      "name": "508-pg-rx-re-zsh",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "\"[$][A-Za-z0-9_@*#?!$=~^\\\"\" sq \"-]\"",
-          "to": "\"[$][A-Za-z0-9_@*#?!$\\\"\" sq \"-]\""
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot",
-        "push-rtexp-deny-special"
-      ]
-    },
-    {
-      "name": "508-pg-rx-git-trailing",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if (subcmd == \"\" && rxn_at)",
-          "to": "if (0 && rxn_at)"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot-dash-led",
-        "push-rtexp-deny-git-slot-trailing"
-      ]
-    },
-    {
       "name": "508-pg-rec-lost-always",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -6597,21 +6107,6 @@
       ],
       "expect_fail": [
         "push-rtexp-noop-env-c-status"
-      ]
-    },
-    {
-      "name": "508-ab-rx-re-zsh",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "\"[$][A-Za-z0-9_@*#?!$=~^\\\"\" sq \"-]\"",
-          "to": "\"[$][A-Za-z0-9_@*#?!$\\\"\" sq \"-]\""
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-deny-impl-gh"
       ]
     },
     {
@@ -6630,100 +6125,6 @@
       ]
     },
     {
-      "name": "508-ab-rx-skip-no-prefix",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "if (rx_word(tok)) { saw_exp = 1; saw_prefix = 1; if (substr(tok, 1, 1) != \"-\") in_vp = 1; idx++; continue }",
-          "to": "if (rx_word(tok)) { saw_exp = 1; if (substr(tok, 1, 1) != \"-\") in_vp = 1; idx++; continue }"
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-deny-option-word-gh"
-      ]
-    },
-    {
-      "name": "508-pg-rx-git-wholeslot",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "j = jend + 1 }",
-          "to": "j = rxn_at + 1 }"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot-dash-led"
-      ]
-    },
-    {
-      "name": "508-pg-rx-ansic-literal",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "  if (b ~ /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/) return b\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot-ansi-c-concat",
-        "push-rtexp-deny-git-slot-ansi-c-literal"
-      ]
-    },
-    {
-      "name": "508-pg-rx-ansic-failclosed",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "      else { rxbs = 1; if (!rxg_at) rxg_at = j; j++; continue }\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot-ansi-c-concat",
-        "push-rtexp-deny-git-slot-ansi-c-literal"
-      ]
-    },
-    {
-      "name": "508-pg-rx-ansic-locale",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": " || index(tok, \"$\\\"\") > 0) {",
-          "to": ") {"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot-ansi-c-concat",
-        "push-rtexp-deny-git-slot-ansi-c-literal"
-      ]
-    },
-    {
-      "name": "508-pg-rx-ansic-backslash",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if (rxg_at && (rxbs || index(",
-          "to": "if (rxg_at && (index("
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot-ansi-c-concat",
-        "push-rtexp-deny-git-slot-ansi-c-literal"
-      ]
-    },
-    {
       "name": "508-ab-rx-rescan",
       "target": "hooks/agent-boundary.sh",
       "suite": "dev/hook-tests.sh",
@@ -6736,21 +6137,6 @@
       ],
       "expect_fail": [
         "ab-rtexpscan-noop-flood"
-      ]
-    },
-    {
-      "name": "508-pg-rx-ansic-unpaired",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "  if (length(tok) < 4 || substr(tok, length(tok)) != q) return \"\"",
-          "to": "  if (length(tok) < 4) return \"\""
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot-ansi-c-concat"
       ]
     },
     {
@@ -6913,7 +6299,6 @@
         }
       ],
       "expect_fail": [
-        "ab-lost-deny-verifier-env-u-expansion",
         "ab-lost-noop-verifier-env-allowlist"
       ]
     },
@@ -6930,36 +6315,6 @@
       ],
       "expect_fail": [
         "ab-lost-deny-env-u-quoted"
-      ]
-    },
-    {
-      "name": "505-ab-env-u-rx",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "        if (rx_word(toks[idx + 1])) saw_exp = 1",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-verifier-env-u-expansion"
-      ]
-    },
-    {
-      "name": "505-ab-env-u-attached-rx",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "        if (rx_word(tok)) saw_exp = 1\n        if (quote_unbalanced(tok))",
-          "to": "        if (quote_unbalanced(tok))"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-verifier-env-u-expansion"
       ]
     },
     {
@@ -7627,21 +6982,6 @@
       ]
     },
     {
-      "name": "518-ab-optval-rx",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-optval-",
-      "edits": [
-        {
-          "from": "if (substr(tok, 1, 1) != \"-\") in_vp = 1; ",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "ab-optval-deny-expansion"
-      ]
-    },
-    {
       "name": "518-ab-optval-memo",
       "target": "hooks/agent-boundary.sh",
       "suite": "dev/hook-tests.sh",
@@ -7701,7 +7041,6 @@
         }
       ],
       "expect_fail": [
-        "push-optval-deny-runtime-expansion",
         "push-optval-noop"
       ]
     },
@@ -8065,21 +7404,6 @@
       ]
     },
     {
-      "name": "538-cdg-alt-rx",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "            ww_alt=1\n            saw_prefix=1\n",
-          "to": "            saw_prefix=1\n"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-expansion-guards"
-      ]
-    },
-    {
       "name": "538-cdg-alt-envs",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -8092,131 +7416,6 @@
       ],
       "expect_fail": [
         "cdg-split-expansion-guards"
-      ]
-    },
-    {
-      "name": "538-cdg-rx-off",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "if [[ ${toks[$i]##*/} =~ $cdg_rx_ere ]]; then",
-          "to": "if [ 0 -eq 1 ] && [[ ${toks[$i]##*/} =~ $cdg_rx_ere ]]; then"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-expansion",
-        "cdg-split-deny-expansion-prefix",
-        "cdg-split-deny-overblock",
-        "cdg-split-deny-verifier",
-        "cdg-split-heredoc",
-        "cdg-split-never-executes"
-      ]
-    },
-    {
-      "name": "538-cdg-rx-basename",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "[[ ${toks[$i]##*/} =~ $cdg_rx_ere ]]",
-          "to": "[[ ${toks[$i]} =~ $cdg_rx_ere ]]"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-expansion-guards"
-      ]
-    },
-    {
-      "name": "538-cdg-rx-lone-dollar",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "cdg_rx_ere=\"[\\$][A-Za-z0-9_@*#?!\\$=~^${dq}${sq}-]\"",
-          "to": "cdg_rx_ere=\"[\\$]\""
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-noop-expansion"
-      ]
-    },
-    {
-      "name": "538-cdg-rx-sq",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "=~^${dq}${sq}-]\"",
-          "to": "=~^${dq}-]\""
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-expansion"
-      ]
-    },
-    {
-      "name": "538-cdg-rx-dq",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "=~^${dq}${sq}-]\"",
-          "to": "=~^${sq}-]\""
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-expansion"
-      ]
-    },
-    {
-      "name": "538-cdg-rx-special",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "[A-Za-z0-9_@*#?!\\$=~^${dq}${sq}-]",
-          "to": "[A-Za-z_${dq}${sq}]"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-expansion"
-      ]
-    },
-    {
-      "name": "538-cdg-rx-vp",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "*) vp=1; ve=1 ;;",
-          "to": "*) ve=1 ;;"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-expansion-prefix"
-      ]
-    },
-    {
-      "name": "538-cdg-rx-env",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "*) vp=1; ve=1 ;;",
-          "to": "*) vp=1 ;;"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-expansion-prefix"
       ]
     },
     {
@@ -8233,7 +7432,6 @@
       "expect_fail": [
         "cdg-split-deny-env-s",
         "cdg-split-deny-env-s-value",
-        "cdg-split-deny-expansion-prefix",
         "cdg-split-deny-verifier",
         "cdg-split-heredoc",
         "cdg-split-never-executes"
@@ -8252,7 +7450,6 @@
       ],
       "expect_fail": [
         "cdg-split-deny-env-s",
-        "cdg-split-deny-expansion-prefix",
         "cdg-split-deny-verifier",
         "cdg-split-heredoc",
         "cdg-split-never-executes"
@@ -8455,21 +7652,6 @@
       ]
     },
     {
-      "name": "538-cdg-rx-saw-prefix",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "            ww_alt=1\n            saw_prefix=1\n            case",
-          "to": "            ww_alt=1\n            case"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-expansion-prefix"
-      ]
-    },
-    {
       "name": "538-cdg-ln-sq",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -8557,25 +7739,6 @@
       ],
       "expect_fail": [
         "cdg-split-expansion-guards"
-      ]
-    },
-    {
-      "name": "538-cdg-rx-order",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "    # #538: a runtime expansion in command position may expand to nothing (hooks/agent-boundary.sh's\n    # #508 rule): a token whose basename holds a dollar sign followed by a name character, a digit, a\n    # special parameter or a quote is skipped like a prefix word, so the shim behind it still\n    # resolves. It opens the value context and the env context (a dash-led one opens neither), and\n    # sits AFTER the dash arm above so `nice -$X 5 apply_patch` still starts the #518 scan.\n    if [ \"$seg_mflag\" -eq 1 ]; then\n      case \"${toks[$i]}\" in\n        *'$'*)\n          if [[ ${toks[$i]##*/} =~ $cdg_rx_ere ]]; then\n            ww_alt=1\n            saw_prefix=1\n            case \"${toks[$i]}\" in\n              -*) ;;\n              *) vp=1; ve=1 ;;\n            esac\n            i=$((i + 1))\n            continue\n          fi\n          ;;\n      esac\n    fi\n    ww_word=\"$tok\"\n    break\n  done",
-          "to": "    ww_word=\"$tok\"\n    break\n  done"
-        },
-        {
-          "from": "    if [ \"$saw_prefix\" -eq 1 ]; then\n      case \"$tok\" in\n        -*)",
-          "to": "    if [ \"$seg_mflag\" -eq 1 ]; then\n      case \"${toks[$i]}\" in\n        *'$'*)\n          if [[ ${toks[$i]##*/} =~ $cdg_rx_ere ]]; then\n            ww_alt=1\n            saw_prefix=1\n            case \"${toks[$i]}\" in\n              -*) ;;\n              *) vp=1; ve=1 ;;\n            esac\n            i=$((i + 1))\n            continue\n          fi\n          ;;\n      esac\n    fi\n    if [ \"$saw_prefix\" -eq 1 ]; then\n      case \"$tok\" in\n        -*)"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-expansion-prefix"
       ]
     },
     {
@@ -8688,21 +7851,6 @@
       ],
       "expect_fail": [
         "ab-interp-deny-unclassified"
-      ]
-    },
-    {
-      "name": "537-ab-interp-dollar",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-interp-",
-      "edits": [
-        {
-          "from": "if (index(tok, \"$\") == 0) { idx++; continue }",
-          "to": "{ idx++; continue }"
-        }
-      ],
-      "expect_fail": [
-        "ab-interp-deny-verifier"
       ]
     },
     {
@@ -8849,21 +7997,6 @@
       "expect_fail": [
         "push-interp-deny-guard",
         "push-interp-deny-unres"
-      ]
-    },
-    {
-      "name": "537-pg-interp-dollar",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-interp-",
-      "edits": [
-        {
-          "from": "if (index(tok, \"$\") == 0) { idx++; continue }",
-          "to": "{ idx++; continue }"
-        }
-      ],
-      "expect_fail": [
-        "push-interp-deny-rx"
       ]
     },
     {
@@ -9052,21 +8185,6 @@
         {
           "from": "        --|*/*) ;;",
           "to": "        --) ;;"
-        }
-      ],
-      "expect_fail": [
-        "cdg-interp-deny-guard"
-      ]
-    },
-    {
-      "name": "537-cdg-interp-expansion",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-interp-",
-      "edits": [
-        {
-          "from": "if [ \"$ip\" -eq 1 ] && [ \"$vp\" -eq 0 ] && [ \"$ve\" -eq 0 ]; then",
-          "to": "if [ \"$ip\" -eq 1 ]; then"
         }
       ],
       "expect_fail": [
