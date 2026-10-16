@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #576: agent-boundary now denies an implementer `bash -c` string that names `gh`, `git` or a `.claude` path after its
+  first word, and a verifier `bash -o pipefail -c '… git …'` command, but misses `bash +O extglob -c 'gh pr merge 5'`;
+  claude-dir-guard no longer catches `bash -o pipefail -c 'apply_patch < x.patch'`. No consumer step.
 - #575: the hooks no longer follow `env` options or a quoted option or assignment after a prefix word; push-guard
   misses `env -C /tmp git push origin main` and `bash -c "X=1 git push origin main"` in any session (branch protection
   is the backstop). `env` stays a prefix word and `X="a b" git push origin main` still denies. No consumer step.

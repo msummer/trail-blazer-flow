@@ -8687,11 +8687,11 @@ case_canary_main_session() {
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
 # ---------------------------------------------------------------------------------------------
-# A value-taking option of a prefix word (#518). After exec/nice/stdbuf/sudo/time/xargs, a dash token
-# followed by a non-option word W may be an option and its VALUE, so W is no proof of the command word:
-# each hook reads the rest of the segment AFTER W (never W itself). agent-boundary denies a later gh/git
-# or .claude path, push-guard a later push or git alias, claude-dir-guard resolves a later shim-named
-# word. Case names carry "optval" so `bash dev/hook-tests.sh optval` runs the family; no name here
+# A value-taking option of a prefix word (#518). After exec/nice/stdbuf/sudo/time/xargs (agent-boundary
+# also after bash/sh/zsh/ksh/dash, #576), a dash token followed by a non-option word W may be an option
+# and its VALUE, so W is no proof of the command word: each hook reads the rest of the segment AFTER W
+# (never W itself). agent-boundary denies a later gh/git or .claude path, push-guard a later push or git
+# alias, claude-dir-guard resolves a later shim-named word. Case names carry "optval" so `bash dev/hook-tests.sh optval` runs the family; no name here
 # contains the filter of an existing registry record. Every payload names gh, git, claude or the shim,
 # or the raw-stdin fast path would pass it vacuously.
 # mutant:518-ab-optval-off — empties this hook's PREFIX_VALUE_WORDS, so no prefix word opens a value
@@ -8701,7 +8701,7 @@ case_canary_main_session() {
 # mutant:518-ab-optval-nonopt — drops the next-token-is-not-an-option test, so an option followed by
 #   another option reads the rest of the segment.
 # mutant:518-ab-optval-reset — keeps the value context after a later non-value prefix word, so
-#   sudo bash -c with gh in a string denies.
+#   sudo command -p echo gh denies.
 # mutant:518-ab-optval-memo — clears the per-segment scan memo before each value-context scan, so a
 #   flood of triggers rescans the segment each time (filter "ab-optvalscan-").
 # mutant:518-ab-lost-cw — drops the interpreter capture from the lost-prefix scan, so an interpreter
@@ -8738,10 +8738,25 @@ case_ab_optval_deny_interpreter() {
     *) __ok=0; __why="${__why}stderr missing '(blocked: python3 with ': '$boundary_err'\n" ;;
   esac
 }
+# The interpreter words are value words for this hook (#576): the rest of the segment after bash -o pipefail
+# is read the way the rest after nice -n 5 is, so a gh or git named there denies, whichever value option
+# precedes it. A value-less option leaves the string to the walk, which already resolved it, and a -c
+# string that names gh after its first word is the accepted over-block.
+case_ab_optval_deny_shell() {
+  local g="'gh pr merge 5'"
+  abx_deny implementer gh "bash -o pipefail -c $g" "sh -o errexit -c $g" "zsh -o extendedglob -c $g" \
+    "ksh -R x -c $g" "dash -o errexit -c $g"
+  abx_deny implementer gh "bash -euo pipefail -c $g" "bash --rcfile f -c $g" "sudo bash -o pipefail -c $g" \
+    "/bin/bash -o pipefail -c $g" "BASH -o pipefail -c $g"
+  abx_deny implementer gh "bash -e -c $g" "bash -lc $g"
+  abx_deny implementer gh "bash -c 'echo gh'"
+  abx_deny verifier 'git -prefix-' "bash -o pipefail -c 'git push origin feature/x'" 'bash -o pipefail -c "time git log"'
+}
 case_ab_optval_noop() {
-  abx_noop verifier 'sudo -E git status' 'time -p git status' 'sudo -E -H git status'
-  abx_noop implementer 'bash -c "echo gh"' 'sudo bash -c "echo gh"' 'nice -n 5 make test && echo github' \
-    'xargs -n 1 wc -l < files.txt && echo github'
+  abx_noop verifier 'sudo -E git status' 'time -p git status' 'sudo -E -H git status' "bash -c 'git status'" \
+    "bash -e -c 'git log'"
+  abx_noop implementer 'sudo command -p echo gh' 'nice -n 5 make test && echo github' \
+    'xargs -n 1 wc -l < files.txt && echo github' "bash -o pipefail -c 'make test' && echo github"
 }
 # ab_optvalscan_cmd N — one segment of N value-context triggers (a prefix word, an option, a prefix
 # word, ...) then a line naming github so the raw-stdin fast path reads the payload.
@@ -8984,121 +8999,16 @@ case_cdg_optval_noop_flood_cap() {
 }
 
 # --- an option of an interpreter prefix word (#537) ---------------------------------------------
-# After bash/sh/zsh/ksh/dash each hook classifies a dash or plus token instead of guessing: a value
+# After bash/sh/zsh/ksh/dash push-guard classifies a dash or plus token instead of guessing: a value
 # option (-o, +O, -eo, --rcfile) is skipped together with its value word when that word is plain, a flag
 # (-e, -c, +e) alone, and anything else fails closed on the rest of the segment after the next word, so
-# the -c string behind the options is judged as usual (prose such as `bash -o pipefail -c 'echo gh'` stays
-# quiet). Case names carry "interp" so `bash dev/hook-tests.sh interp` runs the family; no name here
-# contains the filter of an existing registry record except cdg- (407-cdg-codex-*), whose mutants do not
-# touch these cases. Every payload names gh, git, claude or the shim, or the raw-stdin fast path would
-# pass it vacuously. The deny-guard cases carry one row per clause of each hook's value-word test: a
-# value word the old walk took for the command word and could have denied on is never skipped.
-# agent-boundary.
-# mutant:537-ab-interp-off — empties PREFIX_INTERP_WORDS, so no interpreter opens an option context and
-#   the walk takes the value of an option as the command word again.
-# mutant:537-ab-interp-cluster — reads a letter cluster ending in a single value letter as a flag, so
-#   -o and -eo no longer take their value word with them.
-# mutant:537-ab-interp-multi — reads a cluster of two value letters as a value option, so -oo takes a
-#   word it may not.
-# mutant:537-ab-interp-longopt — empties INTERP_VALUE_OPTS, so -rcfile reads as a flag and its value
-#   word becomes the command word.
-# mutant:537-ab-interp-plus — reads only dash-led tokens as options, so +o, +O and +e become command
-#   words.
-# mutant:537-ab-interp-guard — drops the value-word test, so a value word the walk could deny on (a
-#   quoted gh, gh itself) is skipped with its option.
-# mutant:537-ab-interp-scan-off — drops the read of the segment after an option that cannot be
-#   classified.
-# mutant:537-ab-interp-oldwalk — drops the keep-the-old-walk test for a token with a slash or one the
-#   walk reads as a prefix word, so +/gh and -/sudo are skipped as options instead of being walked.
-# mutant:537-ab-interp-start — reads the segment from the next word instead of after it, so a quoted
-#   git the walk judges as the command word denies for the verifier.
-# mutant:537-ab-interp-nonopt — drops the next-word-is-not-an-option test, so an unclassified option
-#   followed by another option reads the rest of the segment.
-# mutant:537-ab-interp-memo — clears the per-segment scan memo before each read, so a flood of
-#   unclassified options rescans the segment each time (filter "ab-interpscan-").
-case_ab_interp_deny_impl_gh() {
-  local g="'gh pr merge 5'"
-  abx_deny implementer gh "bash -o pipefail -c $g" "bash +o pipefail -c $g" "bash -O extglob -c $g" \
-    "bash +O extglob -c $g" "bash --rcfile f -c $g" "bash --init-file f -c $g" "bash -rcfile f -c $g" \
-    "bash -eo pipefail -c $g" "bash -e -o pipefail -O extglob -c $g" "bash +e -c $g" "sh -o errexit -c $g" \
-    "zsh -o extendedglob -c $g" "ksh -o errexit -c $g" "dash -o errexit -c $g" "sudo bash -o pipefail -c $g" \
-    "/bin/bash -o pipefail -c $g" "BASH -o pipefail -c $g"
-}
-case_ab_interp_deny_unclassified() {
-  local g="'gh pr merge 5'"
-  abx_deny implementer gh "bash -oo a b -c $g" 'bash --rcfile "$HOME/r" -c '"$g" 'bash -O "extglob" -c '"$g" \
-    "zsh --emulate sh -c $g" 'bash -o$X pipefail -c '"$g"
-}
-case_ab_interp_deny_guard() {
-  local g="'gh pr merge 5'"
-  abx_deny implementer gh "zsh -c -O $g" "zsh -cO $g" "zsh -cO gh pr merge 5" "bash -o gh pr merge 5" \
-    "bash -o /usr/bin/gh pr merge 5" "bash -o GH pr merge 5" "bash -o sudo -u root gh pr merge 5"
-  abx_deny implementer 'git push' "bash -o git push origin feature/x"
-  abx_deny implementer '.claude/LESSONS.md' "bash -o tee .claude/LESSONS.md" "bash -o sed -i s/a/b/ .claude/LESSONS.md"
-  run_boundary "$(mk_agent_cmd implementer 'bash -o python3 .claude/x.py')"
-  expect_deny
-  # a token with a slash, or one whose basename is a prefix word, keeps the walk it had: +/gh was the
-  # command word gh, and -/sudo the prefix word sudo whose own option scan finds the gh behind it
-  abx_deny implementer gh "bash +/gh pr merge 5" "bash -/sudo -u root gh pr merge 5"
-}
-case_ab_interp_deny_codex() {
-  run_boundary "$(mk_codex_shell implementer "bash -o pipefail -c 'gh pr merge 5'")"
-  expect_deny
-  case "$boundary_err" in
-    *"(blocked: gh)"*) ;;
-    *) __ok=0; __why="${__why}stderr missing '(blocked: gh)': '$boundary_err'\n" ;;
-  esac
-}
-case_ab_interp_deny_verifier() {
-  abx_deny verifier 'git push' "bash -o pipefail -c 'git push origin feature/x'"
-  abx_deny verifier gh "bash -O extglob -c 'gh pr view 5'"
-}
-case_ab_interp_noop() {
-  abx_noop implementer "bash -o pipefail -c 'echo gh'" "bash -c 'echo gh'" "bash -eo pipefail -c 'echo gh'" \
-    "bash -e -o pipefail -O extglob -c 'echo gh'" "bash --rcfile f -c 'echo gh'" \
-    "bash --noprofile --norc -c 'echo gh'" "zsh -o extendedglob -c 'echo gh'" "bash -x deploy.sh gh"
-  abx_noop verifier "bash -o pipefail -c 'git status'" "bash -O extglob -c 'git log'" "zsh -cO 'git status'"
-}
-# ab_interpscan_cmd N — bash, N unclassified options each followed by a word, one more option and a
-# line naming github so the raw-stdin fast path reads the payload. ab_interpscan_ctl_cmd N spells every
-# interpreter bxsh: the same bytes, but the first word is the command word, so the option gate stays
-# shut and only the base scan runs.
-ab_interpscan_cmd() {
-  printf 'bash%s -oo x true\necho github' "$(printf ' -oo bash%.0s' $(seq 1 "$1"))"
-}
-ab_interpscan_ctl_cmd() {
-  printf 'bxsh%s -oo x true\necho github' "$(printf ' -oo bxsh%.0s' $(seq 1 "$1"))"
-}
-# interp_cpu_check CONTROL_MS FLOOD_MS LABEL — the flood's CPU time must stay within 1.3 times its
-# same-run control's plus 250ms, and at most the hook's own 10s timeout: both are CPU time of the hook's
-# whole process tree for the same record size, so host load stretches neither, while a rescan per option
-# grows with the option count.
-interp_cpu_check() {
-  local bound
-  if [ -z "$1" ] || [ -z "$2" ]; then
-    __ok=0; __why="${__why}[$3] a CPU report could not be parsed\n"
-    return
-  fi
-  bound=$(( $1 * 13 / 10 + 250 ))
-  [ "$bound" -le 10000 ] || bound=10000
-  if [ "$2" -gt "$bound" ]; then
-    __ok=0; __why="${__why}[$3] the flood used ${2}ms of CPU against ${1}ms for its control, over the ${bound}ms bound\n"
-  fi
-}
-case_ab_interpscan_noop_flood() {
-  # FLOOD + TIMING by CPU ratio, never wall clock: the control and the flood have the same size and both
-  # must be no opinion. boundary_deadline_override is only a hang guard that reaps the whole tree.
-  local n=1000 ctl_ms flood_ms
-  boundary_deadline_override=60
-  measure_cpu_ms run_boundary "$(ab_rx_payload "$(ab_interpscan_ctl_cmd "$n")")"
-  ctl_ms="$measured_cpu_ms"
-  expect_no_opinion
-  boundary_deadline_override=60
-  measure_cpu_ms run_boundary "$(ab_rx_payload "$(ab_interpscan_cmd "$n")")"
-  flood_ms="$measured_cpu_ms"
-  expect_no_opinion
-  interp_cpu_check "$ctl_ms" "$flood_ms" "ab"
-}
+# the -c string behind the options is judged as usual (prose such as `bash -o pipefail -c 'echo git push
+# origin main'` stays quiet). agent-boundary reads these options through its #518 value context instead
+# (the ab-optval- cases) and claude-dir-guard does not read them. Case names carry "interp" so
+# `bash dev/hook-tests.sh interp` runs the family; no name here contains the filter of an existing
+# registry record. Every payload names git, or the raw-stdin fast path would pass it vacuously. The
+# deny-guard cases carry one row per clause of the value-word test: a value word the old walk took for
+# the command word and could have denied on is never skipped.
 
 # push-guard. PP_R_OPTV is the fixed reason; the deny never echoes input.
 # mutant:537-pg-interp-off — empties PREFIX_INTERP_WORDS, so no interpreter opens an option context and
@@ -9230,6 +9140,22 @@ pp_interpscan_cmd() {
 pp_interpscan_ctl_cmd() {
   printf 'bxsh%s -oo x git status\ngit push origin feature/x' "$(printf ' -oo bxsh%.0s' $(seq 1 "$1"))"
 }
+# interp_cpu_check CONTROL_MS FLOOD_MS LABEL — the flood's CPU time must stay within 1.3 times its
+# same-run control's plus 250ms, and at most the hook's own 10s timeout: both are CPU time of the hook's
+# whole process tree for the same record size, so host load stretches neither, while a rescan per option
+# grows with the option count.
+interp_cpu_check() {
+  local bound
+  if [ -z "$1" ] || [ -z "$2" ]; then
+    __ok=0; __why="${__why}[$3] a CPU report could not be parsed\n"
+    return
+  fi
+  bound=$(( $1 * 13 / 10 + 250 ))
+  [ "$bound" -le 10000 ] || bound=10000
+  if [ "$2" -gt "$bound" ]; then
+    __ok=0; __why="${__why}[$3] the flood used ${2}ms of CPU against ${1}ms for its control, over the ${bound}ms bound\n"
+  fi
+}
 case_push_interpscan_noop_flood() {
   local dir="$tmpbase/repo-interp-flood" n=2000 ctl_ms flood_ms
   mk_fixture_repo "$dir" main feature/x
@@ -9242,164 +9168,6 @@ case_push_interpscan_noop_flood() {
   flood_ms="$measured_cpu_ms"
   expect_push_no_opinion
   interp_cpu_check "$ctl_ms" "$flood_ms" "push"
-}
-
-# claude-dir-guard (Codex shell payloads; the guard is role-scoped and pure bash).
-# mutant:537-cdg-interp-off — empties PREFIX_INTERP_WORDS, so no interpreter opens an option context and
-#   the walk takes the value of an option as the command word again.
-# mutant:537-cdg-interp-cluster — reads a letter cluster ending in a single value letter as a flag, so
-#   -o and -eo no longer take their value word with them.
-# mutant:537-cdg-interp-plus — reads only dash-led tokens as options, so +o, +O and +e become command
-#   words.
-# mutant:537-cdg-interp-guard — drops the quote, backslash, dollar and option tests of the value word,
-#   so a quoted shim name is skipped with its option.
-# mutant:537-cdg-interp-prefix — drops the prefix-word test of the value word, so a prefix word after
-#   an option is skipped instead of being walked.
-# mutant:537-cdg-interp-marker — drops the redirect-marker test of the value word, so a redirect
-#   operator after an option is skipped with it instead of being walked.
-# mutant:537-cdg-interp-oldwalk — drops the keep-the-old-walk test for a token with a slash, so +/shim is
-#   skipped as an option instead of resolving the shim by its basename.
-# mutant:537-cdg-interp-scan-off — drops the scan after an option that cannot be classified.
-# mutant:537-cdg-interp-w-shim — drops the exclusion of a value word that itself names the shim, so
-#   the option skips the shim.
-# mutant:537-cdg-interp-w-shim-scan — drops the exclusion of a next word that itself names the shim from
-#   the scan, so the scan can resolve a later shim index than the walk would.
-# mutant:537-cdg-interp-nonopt — drops the next-word-is-not-an-option test, so an unclassified option
-#   followed by another option scans the rest of the segment.
-# mutant:537-cdg-interp-site — removes the deadline sample from the scan loop (filter "cdg-interp-").
-# mutant:537-cdg-interp-memo — never marks the window scanned, so every unclassified option rescans
-#   (filter "cdg-interp-").
-# mutant:537-cdg-interp-alt-parity — a scan hit checks quotes only up to the hit, so an unbalanced quote
-#   after a shim resolved past a backslash-stripped prefix word goes unchecked.
-cdg_interp_run() {
-  run_claude_guard "$(mk_codex_shell "$1" "$2")"
-}
-# cdg_interp_expect_noinline — the "no inline patch text" deny of the Bash route.
-cdg_interp_expect_noinline() {
-  expect_cdg_deny_unparseable
-  case "$cdg_err" in
-    *"invoked via Bash with no inline patch text"*) ;;
-    *) __ok=0; __why="${__why}stderr missing 'invoked via Bash with no inline patch text': '$cdg_err'\n" ;;
-  esac
-}
-case_cdg_interp_deny() {
-  local c w0 s="'apply_patch < x.patch'"
-  for c in "bash -o pipefail -c $s" "bash +o pipefail -c $s" "bash -O extglob -c $s" "bash +O extglob -c $s" \
-    "bash --rcfile f -c $s" "bash --init-file f -c $s" "bash -rcfile f -c $s" "bash -eo pipefail -c $s" \
-    "bash -e -o pipefail -O extglob -c $s" "bash +e -c $s" "sh -o errexit -c $s" "zsh -o extendedglob -c $s" \
-    "ksh -o errexit -c $s" "dash -o errexit -c $s" "sudo bash -o pipefail -c $s"; do
-    w0="$__why"; __why=""
-    cdg_interp_run implementer "$c"
-    cdg_interp_expect_noinline
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
-case_cdg_interp_deny_unclassified() {
-  # A hit inside a quoted -c string gets the whole-window unbalanced-quote verdict, because the hit token
-  # itself carries the opening quote; an unquoted hit gets the no-inline-patch verdict.
-  local c w0 s="'apply_patch < x.patch'"
-  for c in "bash -oo a b -c $s" 'bash --rcfile "$HOME/r" -c '"$s" 'bash -O "extglob" -c '"$s"; do
-    w0="$__why"; __why=""
-    cdg_interp_run implementer "$c"
-    expect_cdg_qa_deny
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-  for c in "bash -oo x /usr/bin/apply_patch < x.patch" "bash -oo x /usr/bin/applypatch < x.patch"; do
-    w0="$__why"; __why=""
-    cdg_interp_run implementer "$c"
-    cdg_interp_expect_noinline
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
-case_cdg_interp_deny_guard() {
-  local c w0 s="'apply_patch < x.patch'"
-  # the last keeps the walk it had: a token with a slash (+/apply_patch resolves the shim by its basename)
-  for c in "zsh -c -O $s" "zsh -cO $s" "bash -o env -u X apply_patch < x.patch" "bash -o < f apply_patch" \
-    "bash +/apply_patch < x.patch"; do
-    w0="$__why"; __why=""
-    cdg_interp_run implementer "$c"
-    cdg_interp_expect_noinline
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
-case_cdg_interp_w_shim_decoy() {
-  # The next word is itself the shim name: the walk resolves it at the smaller index, so the argument
-  # check still sees `evil.patch applypatch` and denies. Skipping it with its option, or scanning past
-  # it, moves the resolved shim to the later `applypatch`, whose input is only the benign heredoc.
-  cdg_interp_run implementer "zsh -cO apply_patch evil.patch applypatch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}*** End Patch${LF}EOF"
-  expect_cdg_deny_unparseable
-  cdg_interp_run implementer "zsh -oo apply_patch evil.patch applypatch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}*** End Patch${LF}EOF"
-  expect_cdg_deny_unparseable
-  # a path-qualified shim name resolves by its basename, so it is the same decoy
-  cdg_interp_run implementer "zsh -cO /usr/bin/apply_patch evil.patch applypatch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}*** End Patch${LF}EOF"
-  expect_cdg_deny_unparseable
-  cdg_interp_run implementer "zsh -oo /usr/bin/apply_patch evil.patch applypatch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}*** End Patch${LF}EOF"
-  expect_cdg_deny_unparseable
-}
-case_cdg_interp_noop() {
-  local c w0
-  for c in 'bash -o pipefail -c echo apply_patch' 'bash -eo pipefail -c echo apply_patch' \
-    'bash --noprofile --norc -c echo apply_patch' 'bash +e -c echo apply_patch.md' \
-    "bash -o pipefail -c echo apply_patch.md"; do
-    w0="$__why"; __why=""
-    cdg_interp_run implementer "$c"
-    expect_cdg_no_opinion
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
-case_cdg_interp_main_session() {
-  cdg_interp_run '' "bash -o pipefail -c 'apply_patch < x.patch'"
-  expect_cdg_no_opinion
-}
-case_cdg_interp_deny_quote_prose() {
-  # An inherited verdict, not a new one: a -c string whose first word opens a quote, in a segment that
-  # names the shim, already denies through the unbalanced-quote check of #455. The option no longer
-  # hides it, so the pair gets the same verdict.
-  local c w0
-  for c in "bash -c 'echo apply_patch'" "bash -o pipefail -c 'echo apply_patch'"; do
-    w0="$__why"; __why=""
-    cdg_interp_run implementer "$c"
-    expect_cdg_deny_unparseable
-    case "$cdg_err" in
-      *"command word cannot be resolved: an unbalanced quote"*) ;;
-      *) __ok=0; __why="${__why}stderr missing 'command word cannot be resolved: an unbalanced quote': '$cdg_err'\n" ;;
-    esac
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
-# A shim the #537 scan resolves past tokens the walk never reached keeps the whole-window unbalanced-quote
-# check those tokens (a backslash-stripped prefix word) would have triggered on their
-# own, so a quote opened after the heredoc marker still denies, as it did before #537.
-case_cdg_interp_deny_alt_parity() {
-  local eof="<<'EOF' > a'b${LF}${CDG_P}${LF}EOF" c w0
-  for c in "bash --login \\env apply_patch $eof" "bash -oo X=1 su\\do apply_patch $eof"; do
-    w0="$__why"; __why=""
-    cdg_interp_run implementer "$c"
-    expect_cdg_qa_deny
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
-case_cdg_interp_never_executes() {
-  cdg_trap_path cdg-interp
-  run_claude_guard "$(mk_codex_shell 'implementer' "bash -o pipefail -c 'apply_patch < x.patch'")" "$cdg_trapdir:$PATH"
-  cdg_interp_expect_noinline
-  [ ! -e "$cdg_sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
-}
-case_cdg_interp_dl_cap() {
-  # bash -oo, 100 plain words, then a word that is not the shim: only the scan's own sample can reach
-  # the cap (50), since the walk itself resolves the first plain word.
-  local cmd="bash -oo" i
-  for i in $(seq 1 100); do cmd="${cmd} a"; done
-  cdg_dl_cap_check_bash "${cmd} echo apply_patch.md"
-}
-case_cdg_interp_noop_flood_cap() {
-  # SAMPLE COUNT, not time: bash -oo bash repeated 200 times is 200 unclassified options on one line just
-  # under CDG_LINE_MAX_BYTES. One scan per window stays far below the cap; a rescan per option passes it.
-  local cmd="bash" i
-  for i in $(seq 1 200); do cmd="${cmd} -oo bash"; done
-  cdg_cap_override=5000
-  run_claude_guard "$(printf '%s' "${cmd} -oo x echo apply_patch.md" | mk_cdg_dl_bash implementer '')"
-  expect_cdg_no_opinion
 }
 
 # --- push-guard.sh: a command substitution that cuts the git option slot (#572) ----------------------------
@@ -11749,6 +11517,7 @@ cases=(
   "ab-optval-deny-verifier|case_ab_optval_deny_verifier|deny: read-only git and gh behind a value-taking option, verifier -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-off)"
   "ab-optval-deny-expansion|case_ab_optval_deny_expansion|deny: an expansion option after sudo -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-off)"
   "ab-optval-deny-interpreter|case_ab_optval_deny_interpreter|deny: nice -n 5 python3 -c with a .claude path -- mutation proof: dev/mutants/hook-tests.json (518-ab-lost-cw)"
+  "ab-optval-deny-shell|case_ab_optval_deny_shell|deny: gh behind bash/sh/zsh/ksh/dash and an option with a separate value, implementer; a -c string naming gh or git after its first word; git for the verifier -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-off)"
   "ab-optval-noop|case_ab_optval_noop|no opinion: the scan starts after the value word, stops at a non-option, and resets at a non-value prefix word -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-start, 518-ab-optval-nonopt, 518-ab-optval-reset)"
   "ab-optvalscan-noop-flood|case_ab_optvalscan_noop_flood|FLOOD+TIMING: a segment of value-context triggers, no opinion; CPU time within a multiple of a same-size twin with one trigger -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-memo, 463-hook-boundary-override-leaks)"
   "push-optval-deny-main|case_push_optval_deny_main|deny: a push behind nice/sudo/stdbuf/exec/xargs/time and an option with a separate value, naming the fixed command-prefix reason -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-off)"
@@ -11769,13 +11538,6 @@ cases=(
   "cdg-optval-dl-cap|case_cdg_optval_dl_cap|deny (#457): nice -n then 100 plain words under cap 50, only the scan's own deadline sample reaches the cap -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-site)"
   "cdg-optval-noop-flood-cap|case_cdg_optval_noop_flood_cap|SAMPLE COUNT: 100 value-context triggers under a cap between one scan and a rescan per trigger, no opinion -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-memo)"
   # --- an option of an interpreter prefix word (#537) cases --------------------------------------
-  "ab-interp-deny-impl-gh|case_ab_interp_deny_impl_gh|deny: gh behind bash/sh/zsh/ksh/dash with a value option (-o, +o, -O, +O, --rcfile, --init-file, -rcfile, a cluster ending in o) or a flag (+e), implementer -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-off, 537-ab-interp-cluster, 537-ab-interp-longopt, 537-ab-interp-plus)"
-  "ab-interp-deny-unclassified|case_ab_interp_deny_unclassified|deny: gh behind an option the walk cannot classify (two value letters, a quoted or dollar value, an unlisted long option, a dollar in the option), implementer -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-multi, 537-ab-interp-scan-off)"
-  "ab-interp-deny-guard|case_ab_interp_deny_guard|deny: a value word the old walk could deny on is never skipped with its option (a quoted gh, gh, git, a path-qualified gh, a prefix word, tee, sed -i, python3 with a .claude path), and a token with a slash keeps the walk it had, implementer -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-guard, 537-ab-interp-oldwalk)"
-  "ab-interp-deny-codex|case_ab_interp_deny_codex|deny: bash -o pipefail -c with gh pr merge 5 as a Codex-shaped implementer payload -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-off)"
-  "ab-interp-deny-verifier|case_ab_interp_deny_verifier|deny: git push and gh behind a value option, verifier -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-off)"
-  "ab-interp-noop|case_ab_interp_noop|no opinion: prose after the options, a script argument, and read-only git for the verifier; the read stops at an option and starts after the next word -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-start, 537-ab-interp-nonopt)"
-  "ab-interpscan-noop-flood|case_ab_interpscan_noop_flood|FLOOD+TIMING: a segment of unclassified options, no opinion; CPU time within 1.3 times a same-size control with the option gate shut plus 250ms -- mutation proof: dev/mutants/hook-tests.json (537-ab-interp-memo)"
   "push-interp-deny-main|case_push_interp_deny_main|deny: a push to main behind bash/sh/zsh/ksh/dash with a value option or a flag, naming the default branch -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-off, 537-pg-interp-cluster, 537-pg-interp-plus)"
   "push-interp-deny-guard|case_push_interp_deny_guard|deny: a value word the old walk could deny on is never skipped with its option (a quoted git, a quoted assignment or option before a push, git, a prefix word, a directory change or GIT_DIR export in the same command), and a token with a slash or read as a prefix word keeps the walk it had -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-guard, 537-pg-interp-oldwalk)"
   "push-interp-deny-unres|case_push_interp_deny_unres|deny: a push behind an option the walk cannot classify, naming the fixed command-prefix reason and never echoing the command -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-scan-off)"
@@ -11783,17 +11545,6 @@ cases=(
   "push-interp-deny-alias|case_push_interp_deny_alias|deny: git zqp origin main with a push alias behind a value option, through the alias line, on the unclassified and the precise path -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-alias-off)"
   "push-interp-noop|case_push_interp_noop|no opinion: feature pushes, prose and a script argument behind options; the read stops at an option -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-nonopt)"
   "push-interpscan-noop-flood|case_push_interpscan_noop_flood|FLOOD+TIMING: a segment of unclassified options then a feature push, no opinion; CPU time within 1.3 times a same-size control with the option gate shut plus 250ms -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-memo)"
-  "cdg-interp-deny|case_cdg_interp_deny|deny: apply_patch behind bash/sh/zsh/ksh/dash with a value option or a flag, Codex implementer -- mutation proof: dev/mutants/hook-tests.json (537-cdg-interp-off, 537-cdg-interp-cluster, 537-cdg-interp-plus)"
-  "cdg-interp-deny-unclassified|case_cdg_interp_deny_unclassified|deny: apply_patch, bare or path-qualified, behind an option the walk cannot classify, Codex implementer -- mutation proof: dev/mutants/hook-tests.json (537-cdg-interp-scan-off)"
-  "cdg-interp-deny-guard|case_cdg_interp_deny_guard|deny: a value word the old walk could resolve past is never skipped with its option (a quoted shim string, a prefix word, a redirect operator), and a token with a slash before the options keeps the walk it had -- mutation proof: dev/mutants/hook-tests.json (537-cdg-interp-guard, 537-cdg-interp-prefix, 537-cdg-interp-marker, 537-cdg-interp-oldwalk)"
-  "cdg-interp-w-shim-decoy|case_cdg_interp_w_shim_decoy|deny: zsh -cO apply_patch evil.patch applypatch, the next word naming the shim, bare or path-qualified, is never skipped nor scanned past -- mutation proof: dev/mutants/hook-tests.json (537-cdg-interp-w-shim, 537-cdg-interp-w-shim-scan)"
-  "cdg-interp-noop|case_cdg_interp_noop|no opinion: the shim name only as an argument behind options; the scan stops at an option -- mutation proof: dev/mutants/hook-tests.json (537-cdg-interp-nonopt)"
-  "cdg-interp-main-session|case_cdg_interp_main_session|no opinion: bash -o pipefail -c apply_patch from the main session (the route stays role-scoped) -- control, not part of the mutation-proof registry"
-  "cdg-interp-deny-quote-prose|case_cdg_interp_deny_quote_prose|deny: bash -c and bash -o pipefail -c with a quoted echo apply_patch get the same unbalanced-quote verdict -- control, not part of the mutation-proof registry"
-  "cdg-interp-deny-alt-parity|case_cdg_interp_deny_alt_parity|deny: a shim the scan resolves past a backslash-stripped prefix word keeps the whole-window unbalanced-quote check -- mutation proof: dev/mutants/hook-tests.json (537-cdg-interp-alt-parity)"
-  "cdg-interp-never-executes|case_cdg_interp_never_executes|deny, sentinel absent on a booby-trapped PATH: bash -o pipefail -c apply_patch -- control, not part of the mutation-proof registry"
-  "cdg-interp-dl-cap|case_cdg_interp_dl_cap|deny (#457): bash -oo then 100 plain words under cap 50, only the scan's own deadline sample reaches the cap -- mutation proof: dev/mutants/hook-tests.json (537-cdg-interp-site)"
-  "cdg-interp-noop-flood-cap|case_cdg_interp_noop_flood_cap|SAMPLE COUNT: 200 unclassified options under a cap between one scan and a rescan per option, no opinion -- mutation proof: dev/mutants/hook-tests.json (537-cdg-interp-memo)"
   # --- a command substitution that cuts the git option slot (#572) cases ---------------------------
   "push-subst-deny|case_push_subst_deny|deny: git with a command substitution in the option slot, quoted, bare, in backticks, glued to a path, as the whole option and as the value of -C, then push origin main, and the same shape for a feature branch -- no registry record (the rule only adds a deny)"
   "push-subst-noop|case_push_subst_noop|no opinion: the same option slot on a line that does not name push, a subcommand found before the substitution, and a code span that is only git beside the word push -- the precision controls of the rule"
