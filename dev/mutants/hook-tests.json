@@ -1523,8 +1523,8 @@
       "filter": "cdg-bash-",
       "edits": [
         {
-          "from": "    flat=\"${ln//[;\\&\\|()\\`]/$lf}\"\n",
-          "to": "    flat=\"${ln//[;\\&\\|\\`]/$lf}\"\n"
+          "from": "    flat=\"${flat//\\(/$lf}\"\n    flat=\"${flat//\\)/$lf}\"\n",
+          "to": ""
         }
       ],
       "expect_fail": [

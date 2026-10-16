@@ -21,6 +21,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 - #550: the merge pass's mechanical hard floor is one read-only, fail-closed script, `bin/merge-floor.sh <pr>`,
   that the issue-cycle skill calls once per PR. Consumer step: re-copy the permissions block from
   `templates/repo-settings.json` or add `Bash(merge-floor.sh:*)`; on Codex, re-run `bin/codex-setup.sh`.
+- #571: claude-dir-guard's fast path 2 admits Edit/Write by `tool_name` value only, so a call is no longer analysed
+  just for `acceptEdits` mode or Edit/Write in its cwd or command; its split substitutes each break character on its
+  own instead of with one bracket-class pattern that was quadratic in a long line under bash 3.2. No consumer step.
 - #559: push-guard and agent-boundary now deny with the fixed reason `(blocked: command scan failed)` when
   their awk scan exits non-zero (an awk abort, a resource limit, a killed process, or a host where `awk`
   cannot run), instead of judging only the lines the scan printed before it stopped. No consumer step.

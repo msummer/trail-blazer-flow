@@ -535,7 +535,10 @@ parsed at all (an absent command, an unrecognised `*** ` marker, an empty header
 headers found), or (#457) when its own analysis cannot finish inside a 5-second budget sampled
 from hook start, or when a text-size cap trips (a fixed "too large to analyse" reason, implementer
 and verifier only). The caps exist because bash 3.2's text substitutions on a long or match-dense
-line, and a very large whole-text split, cannot be sampled against the budget: a Bash call with any
+line, and a very large whole-text split, cannot be sampled against the budget: a Bash call that
+passes the hook's pre-filter (its payload names `apply_patch` or `applypatch`, plainly or split by
+quote or backslash characters, or holds `Begin Patch`, or holds `"Edit"` or `"Write"` as a whole JSON
+string; any other Bash call is never analysed, whatever its permission mode or cwd) and has any
 physical line longer than `CDG_LINE_MAX_BYTES` bytes denies; a native `apply_patch` call denies
 for a line over that cap only when the line holds a CR or a `*** ` patch-grammar marker (an ordinary
 long content line is not capped there); either route denies a whole text longer than
@@ -808,7 +811,7 @@ scan, or, for `push-guard` and `agent-boundary`, to run the command from a termi
 | `push-guard` (every session) | A config section header line the hook cannot split the way git does, such as a chained header | `git push`, with `[core] [remote "origin"]` heading a key | #510 |
 | `push-guard` (every session, Codex payload) | The workdir check denies a `workdir` that is a variable or `undefined`, any directory but the session checkout, and a foreign `workdir` in any call of the last 1 MiB of the rollout, finished or not | `git push origin feature/x`, with `workdir: dir`, `workdir: undefined`, `workdir: "/repo/sub"`, or an earlier call with `workdir: "/somewhere/else"` | #494 |
 | `push-guard` (every session) | A command over 524288 bytes; a depth-0 config line over 2048 characters | `echo` followed by 6000 words of 100 characters, then `; git push origin feature/x`; `git push`, with a 2100-character config line | #517, #435 |
-| `claude-dir-guard` (implementer) | A Bash line over 2000 bytes, or a Bash text over 1000000 bytes (counted in bytes) | `echo apply_patch` followed by 2100 characters on one line; `echo apply_patch` followed by more than 1000000 bytes of lines | #457 |
+| `claude-dir-guard` (implementer) | A Bash call that names the shim (plainly or split), holds `Begin Patch`, or holds `"Edit"` or `"Write"` as a whole JSON string, and has a line over 2000 bytes, or a text over 1000000 bytes (counted in bytes) | `echo apply_patch` followed by 2100 characters on one line; `echo apply_patch` followed by more than 1000000 bytes of lines; `echo` followed by 2100 characters on one line, in a call whose `description` is exactly `Edit` | #457 |
 | `claude-dir-guard` (implementer) | A path it cannot classify or that merely looks like `.claude`: a `..` segment, a relative path, a case variant, a backslash it rewrites, a checkout that lives under a `.claude` directory | Edit `file_path` `/repo/../etc/passwd`; `src/main.rs`; `/repo/.Claude/x`; `/repo/foo\.claude\bar`; `/repo/.claude/worktrees/w/src/a.rs` | #327 |
 | `claude-dir-guard` (implementer) | An `apply_patch` call whose `cwd` is under `.codex`, or whose hunk has a context line starting `*** ` | `apply_patch` with `cwd` `…/.codex/sub` and `*** Add File: a.txt`; an `*** Update File: /repo/a.txt` hunk with the context line ` *** note` | #407 |
 | `claude-dir-guard` (implementer) | Shim input the hook never parsed: an unquoted heredoc delimiter in a command carrying `$`, a body line that begins with a code span of the shim name | `cd "$HOME/x" && apply_patch <<EOF<LF>*** Begin Patch<LF>*** Add File: /repo/a.txt<LF>+hi<LF>*** End Patch<LF>EOF`; ``cat > f <<'EOF'<LF>`apply_patch` docs<LF>EOF`` | #455 |
