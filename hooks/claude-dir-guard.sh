@@ -115,11 +115,10 @@
 # and parse_patch_headers (all linear, bounded by CDG_TEXT_MAX_BYTES), and the raw-text .claude/.codex glob.
 # U_max is the largest single step the deadline cannot interrupt: one line's substitutions (bounded by
 # CDG_LINE_MAX_BYTES), one line's or segment's split-name regex, one segment's `toks=($seg)` word-split,
-# one `"${toks[@]}"` expansion, one walk_window iteration (plus any per-index cost bash 3.2's arrays add;
-# also one token's env -S reading), one forked trim or ltrim call up to its
-# first in-subshell sample, or one classify_path. Not closed: T_prefix is unsampled (though counted by the wall clock), and the Codex CLI's
-# own hook timeout, if any, is UNVERIFIED; the budget is sized against Claude Code's documented 10s
-# PreToolUse timeout only.
+# one `"${toks[@]}"` expansion, one walk_window iteration (plus any per-index cost bash 3.2's arrays add),
+# one forked trim or ltrim call up to its first in-subshell sample, or one classify_path. Not closed:
+# T_prefix is unsampled (though counted by the wall clock), and the Codex CLI's own hook timeout, if any, is
+# UNVERIFIED; the budget is sized against Claude Code's documented 10s PreToolUse timeout only.
 #
 # This is a tripwire against an off-script subagent, not a sandbox. The spellings the hook does not see and
 # the harmless calls it denies (with the remedy for each) are listed in docs/reference/safety-model.md,
@@ -526,32 +525,25 @@ scan_shim_input() {
 # resolved shim index in seg_shim_at and, in a segment flagged seg_qflag, runs quote_parity_check over the
 # tokens it walked (which can exit 2); otherwise it never prints or exits. One global, not local, is read by
 # the caller: ww_word, the resolved token with quotes and backslashes stripped, or empty if the window is
-# exhausted first. It is also the first shim-named token found by the #518 or #537 scan, or the shim itself
-# when an env -S string names it (#538).
+# exhausted first. It is also the first shim-named token found by the #518 or #537 scan.
 #
-# #538 fail-closed: a shim name split by quote or backslash characters, or an env -S string. The shell
-# deletes quote and backslash characters inside a word, so apply_"patch" and apply\_patch run the shim, and
-# env -S'apply_patch' splits its string into words. (1) Every shim-name comparison deletes backslashes as
-# well as quotes (a token that carried one marks its window, ww_alt), and fast path 2 and
-# the #455 and #518 segment flags all count a split spelling as a mention of the shim, by cdg_split_ere
-# (tested on a line only when it carries a quote or a backslash and not the plain name, and on a segment only
-# inside a line that names the shim). (2) After an env word an option token is read the way env -S reads
-# its string, each backslash-underscore a space, then quotes and backslashes deleted: a space-separated word
-# that is the shim, or a first word that is an option glued to the shim name (-Sapply_patch), resolves it,
-# and a bare -S or --split-string reads the NEXT token the same way. The reading sits before the #518 scan,
-# so it never reads past the token the string is in. (3) A shim resolved through a backslash strip or an
-# env -S string, in a segment flagged for the parity check, runs the #455 check over the WHOLE window. Cost:
-# per line at most one regex, per segment at most one, per walked token one backslash substitution and one
-# glob, and per dash token after an env word two single-token reads: no loop grows with the input.
+# #538 fail-closed: a shim name split by quote or backslash characters. The shell deletes quote and
+# backslash characters inside a word, so apply_"patch" and apply\_patch run the shim. (1) Every shim-name
+# comparison deletes backslashes as well as quotes (a token that carried one marks its window, ww_alt), and
+# fast path 2 and the #455 and #518 segment flags all count a split spelling as a mention of the shim, by
+# cdg_split_ere (tested on a line only when it carries a quote or a backslash and not the plain name, and on
+# a segment only inside a line that names the shim). (2) A shim resolved through a backslash strip, in a
+# segment flagged for the parity check, runs the #455 check over the WHOLE window. Cost: per line at most
+# one regex, per segment at most one, per walked token one backslash substitution and one glob: no loop
+# grows with the input.
 walk_window() {
-  local i n tok nxt saw_prefix vp vp_done j vt hit ve ww_alt er
+  local i n tok nxt saw_prefix vp vp_done j vt hit ww_alt
   local ip=0 ipb ipk ipw ipj ipt iph
   i="$1"
   n="$2"
   ww_word=""
   saw_prefix=0
   vp=0
-  ve=0
   ww_alt=0
   vp_done=0
   while [ "$i" -lt "$n" ]; do
@@ -597,8 +589,6 @@ walk_window() {
           *" $tok "*) vp=1 ;;
           *) [ "$tok" = "-" ] || vp=0 ;;
         esac
-        # #538: the env context follows the most recent prefix word too (a bare `-` leaves it alone)
-        case "$tok" in env) ve=1 ;; -) ;; *) ve=0 ;; esac
         # #537: the interpreter context follows the most recent prefix word too (a bare `-` leaves it alone)
         case " $PREFIX_INTERP_WORDS " in
           *" $tok "*) ip=1 ;;
@@ -612,7 +602,7 @@ walk_window() {
     # #537: an option of an interpreter prefix word, classified with globs only (no function call per token;
     # see the #537 block above is_apply_patch_word()). A value option is skipped with its plain value word, a
     # flag alone; anything else triggers ONE scan per window (vp_done, shared with #518) after the next word.
-    if [ "$ip" -eq 1 ] && [ "$vp" -eq 0 ] && [ "$ve" -eq 0 ]; then
+    if [ "$ip" -eq 1 ] && [ "$vp" -eq 0 ]; then
       case "$tok" in
         --|*/*) ;;
         [-+]?*)
@@ -672,7 +662,6 @@ walk_window() {
                     ipt="${ipt//$dq/}"
                     ipt="${ipt//\\/}"
                     case "$ipt" in
-                      -*apply_patch|-*applypatch) ipt=apply_patch; iph=1; break ;;
                       apply_patch|applypatch|*/apply_patch|*/applypatch) iph=1; break ;;
                     esac
                   fi
@@ -680,8 +669,8 @@ walk_window() {
                 done
                 if [ "$iph" -eq 1 ]; then
                   # the walk never reached the option's next word or the tokens after it up to the hit;
-                  # any of those (a backslash-stripped prefix word, an env -S string)
-                  # would have marked the window for the whole-window check, so run it here
+                  # any of those (a backslash-stripped prefix word) would have marked the window for the
+                  # whole-window check, so run it here
                   if [ "$seg_qflag" -eq 1 ]; then
                     quote_parity_check "$1" $((n - 1))
                   fi
@@ -702,30 +691,6 @@ walk_window() {
     if [ "$saw_prefix" -eq 1 ]; then
       case "$tok" in
         -*)
-          # #538: after an env word, an option that reads as an env -S string names the shim (see the #538
-          # block above walk_window()). At most two single-token reads, before the #518 scan below so the
-          # scan never reads past the token the string sits in.
-          if [ "$ve" -eq 1 ] && [ "$seg_mflag" -eq 1 ]; then
-            er="${toks[$i]//\\_/ }"
-            er="${er//$sq/}"
-            er="${er//$dq/}"
-            er="${er//\\/}"
-            case " $er " in
-              *" apply_patch "*|*" applypatch "*|*/apply_patch" "*|*/applypatch" "*) ww_alt=1; ww_word=apply_patch; break ;;
-            esac
-            case "${er%% *}" in
-              -*apply_patch|-*applypatch) ww_alt=1; ww_word=apply_patch; break ;;
-            esac
-            if { [ "$tok" = "-S" ] || [ "$tok" = "--split-string" ]; } && [ $((i + 1)) -lt "$n" ]; then
-              er="${toks[$((i + 1))]//\\_/ }"
-              er="${er//$sq/}"
-              er="${er//$dq/}"
-              er="${er//\\/}"
-              case " $er " in
-                *" apply_patch "*|*" applypatch "*|*/apply_patch" "*|*/applypatch" "*) ww_alt=1; ww_word=apply_patch; i=$((i + 1)); break ;;
-              esac
-            fi
-          fi
           # #518: a dash token in the value context followed by a non-option word W: W may be that
           # option's value, so look for a shim-named word AFTER W (never W itself: when W names the
           # shim the walk resolves W below, at the smaller index). At most one scan per window.
@@ -749,7 +714,6 @@ walk_window() {
                     vt="${vt//\\/}"
                     case "$vt" in
                       apply_patch|applypatch|*/apply_patch|*/applypatch) hit=1; break ;;
-                      -*apply_patch|-*applypatch) vt=apply_patch; hit=1; break ;;
                     esac
                   fi
                   j=$((j + 1))
@@ -779,8 +743,8 @@ walk_window() {
   # window's last token when nothing resolved).
   case "${ww_word##*/}" in
     apply_patch|applypatch)
-      # #538: a shim resolved through a backslash strip or an env -S string runs the
-      # unbalanced-quote check over the WHOLE window (a superset of the walk's own check on those routes)
+      # #538: a shim resolved through a backslash strip runs the unbalanced-quote check over the WHOLE
+      # window (a superset of the walk's own check on that route)
       if [ "$ww_alt" -eq 1 ] && [ "$seg_qflag" -eq 1 ]; then quote_parity_check "$1" $((n - 1)); fi
       if [ "$seg_shim_at" -lt 0 ] || [ "$i" -lt "$seg_shim_at" ]; then
         seg_shim_at="$i"
@@ -822,17 +786,16 @@ walk_window() {
 # the shim and carries a quote or backslash.
 #
 # #518 fail-closed: a value-taking option of a prefix word. A dash option of a PREFIX_VALUE_WORDS member, or
-# of env (this walk models no env option grammar beyond the -S string of #538), may take the NEXT word as its
-# value (nice -n 5 apply_patch < x.patch), so the walk, which skipped the option but not the value, resolved
-# the value instead. While the most recent prefix word is in that set, a dash token followed by a word that is
-# not an option, not a redirect marker and not itself shim-named triggers ONE scan per window (vp_done) of the
-# tokens after that word, in a segment that mentions the shim or carries a quote (seg_mflag): the first
-# shim-named token (quote- and backslash-stripped, compared by basename; a dash token ending in the shim name
-# counts too) becomes the resolved word. A value word that itself names the shim is excluded from the
-# trigger: the walk resolves it at the smaller index, so the scan never moves seg_shim_at later. A scan hit
-# in a flagged segment (seg_qflag) first runs the #455 parity check over every token before the hit. Cost: at
-# most one scan per window, so a segment scans at most its own tokens, each token costing one deadline
-# sample, two quote strips, one backslash strip and one glob.
+# of env (this walk models no env option grammar), may take the NEXT word as its value (nice -n 5 apply_patch
+# < x.patch), so the walk, which skipped the option but not the value, resolved the value instead. While the
+# most recent prefix word is in that set, a dash token followed by a word that is not an option, not a
+# redirect marker and not itself shim-named triggers ONE scan per window (vp_done) of the tokens after that
+# word, in a segment that mentions the shim or carries a quote (seg_mflag): the first shim-named token (quote-
+# and backslash-stripped, compared by basename) becomes the resolved word. A value word that itself names the
+# shim is excluded from the trigger: the walk resolves it at the smaller index, so the scan never moves
+# seg_shim_at later. A scan hit in a flagged segment (seg_qflag) first runs the #455 parity check over every
+# token before the hit. Cost: at most one scan per window, so a segment scans at most its own tokens, each
+# token costing one deadline sample, two quote strips, one backslash strip and one glob.
 #
 # #537 fail-closed: an option of an interpreter prefix word. Interpreters stay out of PREFIX_VALUE_WORDS (the
 # value of bash -c IS the command string, and scanning past it would deny `bash -e -o pipefail -c echo
@@ -849,7 +812,7 @@ walk_window() {
 # word is no option, no redirect marker and not shim-named, ONE scan per window (vp_done, shared with the
 # #518 scan) looks for a shim-named token after that word, in a segment flagged seg_mflag; a hit runs the
 # #455 parity check over the WHOLE window (the walk never reached the tokens up to the hit, and any
-# backslash-stripped prefix word or env -S string among them would have marked the window on its own), and
+# backslash-stripped prefix word among them would have marked the window on its own), and
 # the option is then skipped alone. A next word that names the shim is never skipped and never scanned past.
 # A token holding a dollar sign is never skipped by this rule, and a token with a slash or the bare -- keeps
 # the walk it had (`bash +/apply_patch < x.patch` still resolves by basename). A word is skipped only when the old walk, which took it for the resolved word, could not have

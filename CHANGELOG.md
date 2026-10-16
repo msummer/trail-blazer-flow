@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #575: the hooks no longer follow `env` options or a quoted option or assignment after a prefix word; push-guard
+  misses `env -C /tmp git push origin main` and `bash -c "X=1 git push origin main"` in any session (branch protection
+  is the backstop). `env` stays a prefix word and `X="a b" git push origin main` still denies. No consumer step.
 - #574: the hooks no longer skip a runtime-expansion word in the command or git-subcommand slot, so `$X gh pr merge 5`,
   `$X apply_patch < x.patch` and, in any session, `$X git push origin main` or `git $'zqp' origin main` go unseen
   (branch protection is the backstop); `$X git status` and `$PAGER apply_patch` no longer deny. No consumer step.

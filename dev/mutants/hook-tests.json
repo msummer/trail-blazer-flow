@@ -3924,6 +3924,7 @@
         "push-parse-deny-assign-backslash-space",
         "push-parse-deny-assign-dquote-space",
         "push-parse-deny-assign-squote-space",
+        "push-parse-deny-codex-main-session",
         "push-parse-deny-git-dir-space",
         "push-parse-deny-lost-cmdcfg",
         "push-parse-deny-prefix-gopt-value"
@@ -3942,8 +3943,7 @@
       ],
       "expect_fail": [
         "push-parse-deny-assign-dquote-space",
-        "push-parse-deny-env-u-attached-unbalanced",
-        "push-parse-deny-env-u-quoted-value",
+        "push-parse-deny-codex-main-session",
         "push-parse-deny-git-dir-space",
         "push-parse-deny-gopt-attached-value",
         "push-parse-deny-gopt-value-attached-trailing-option",
@@ -3988,135 +3988,6 @@
       ]
     },
     {
-      "name": "449-pg-prefix-quoted-shape",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-parse-",
-      "edits": [
-        {
-          "from": "if (saw_prefix && quote_bearing(tok)) {",
-          "to": "if (0 && saw_prefix && quote_bearing(tok)) {"
-        }
-      ],
-      "expect_fail": [
-        "push-parse-deny-env-quoted-assign",
-        "push-parse-deny-env-quoted-opt"
-      ]
-    },
-    {
-      "name": "449-pg-env-u-consume",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-parse-",
-      "edits": [
-        {
-          "from": "        idx += 2\n        continue\n",
-          "to": "        idx += 1\n        continue\n"
-        }
-      ],
-      "expect_fail": [
-        "push-parse-deny-env-u-git-dir",
-        "push-parse-deny-env-u-main"
-      ]
-    },
-    {
-      "name": "449-pg-env-u-value-check",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-parse-",
-      "edits": [
-        {
-          "from": "        if (quote_unbalanced(toks[idx + 1])) {",
-          "to": "        if (0 && quote_unbalanced(toks[idx + 1])) {"
-        }
-      ],
-      "expect_fail": [
-        "push-parse-deny-env-u-quoted-value"
-      ]
-    },
-    {
-      "name": "449-pg-env-u-attached",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-parse-",
-      "edits": [
-        {
-          "from": "if (substr(tok, 1, 2) == \"-u\" || index(tok, \"--unset=\") == 1) {",
-          "to": "if (0) {"
-        }
-      ],
-      "expect_fail": [
-        "push-parse-deny-env-u-attached-unbalanced",
-        "push-parse-noop-env-unset-attached"
-      ]
-    },
-    {
-      "name": "449-pg-env-u-attached-quote",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-parse-",
-      "edits": [
-        {
-          "from": "        if (quote_unbalanced(tok)) {",
-          "to": "        if (0 && quote_unbalanced(tok)) {"
-        }
-      ],
-      "expect_fail": [
-        "push-parse-deny-env-u-attached-unbalanced"
-      ]
-    },
-    {
-      "name": "449-pg-env-lost-off",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-parse-",
-      "edits": [
-        {
-          "from": "{ emit_lost(\"unsupported env option\", unres, cmdcfg); return }",
-          "to": "{ idx = idx }"
-        }
-      ],
-      "expect_fail": [
-        "push-parse-deny-codex-main-session",
-        "push-parse-deny-env-c",
-        "push-parse-deny-env-chdir",
-        "push-parse-deny-env-chdir-prefix-basename",
-        "push-parse-deny-env-lone-dash",
-        "push-parse-deny-env-s",
-        "push-parse-deny-env-s-attached"
-      ]
-    },
-    {
-      "name": "449-pg-env-novalue-vocab",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-parse-",
-      "edits": [
-        {
-          "from": "PUSH_ENV_NOVALUE_OPTS=\"-i -0 -v -- --ignore-environment --null --debug\"",
-          "to": "PUSH_ENV_NOVALUE_OPTS=\"\""
-        }
-      ],
-      "expect_fail": [
-        "push-parse-noop-env-i-feature"
-      ]
-    },
-    {
-      "name": "449-pg-env-context",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-parse-",
-      "edits": [
-        {
-          "from": "    if (norm in prefix_set && norm != \"-\") { in_env = (norm == \"env\"); in_vp = (norm in vprefix_set) }",
-          "to": "    if (norm in prefix_set && norm != \"-\") { in_env = 1; in_vp = (norm in vprefix_set) }"
-        }
-      ],
-      "expect_fail": [
-        "push-parse-noop-sudo-opt-feature"
-      ]
-    },
-    {
       "name": "449-pg-lost-ungated",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -4130,11 +4001,9 @@
       "expect_fail": [
         "push-parse-noop-assign-space-commit",
         "push-parse-noop-assign-space-nonpush",
-        "push-parse-noop-env-c-nonpush",
         "push-parse-noop-gopt-value-nonpush",
         "push-parse-noop-quoted-opt-nonpush",
-        "push-parse-noop-quoted-opt-push-word",
-        "push-parse-noop-sudo-opt-feature"
+        "push-parse-noop-quoted-opt-push-word"
       ]
     },
     {
@@ -4150,23 +4019,7 @@
       ],
       "expect_fail": [
         "push-parse-noop-assign-space-commit",
-        "push-parse-noop-quoted-opt-push-word",
-        "push-parse-noop-sudo-opt-feature"
-      ]
-    },
-    {
-      "name": "449-pg-lost-same-token",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-parse-",
-      "edits": [
-        {
-          "from": "    if (index(lo, \"git\") > 0 && index(s, \"push\") > 0) return 1\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-parse-deny-env-s-attached"
+        "push-parse-noop-quoted-opt-push-word"
       ]
     },
     {
@@ -4246,22 +4099,6 @@
         "push-parse-deny-gopt-value-attached-trailing-option",
         "push-parse-deny-gopt-value-trailing-namespace",
         "push-parse-deny-gopt-value-trailing-option"
-      ]
-    },
-    {
-      "name": "449-pg-env-arm-prefix-guard",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-parse-",
-      "edits": [
-        {
-          "from": "    if (in_env && substr(tok, 1, 1) == \"-\") {",
-          "to": "    if (in_env && substr(tok, 1, 1) == \"-\" && !(norm in prefix_set)) {"
-        }
-      ],
-      "expect_fail": [
-        "push-parse-deny-env-chdir-prefix-basename",
-        "push-parse-deny-env-lone-dash"
       ]
     },
     {
@@ -5012,21 +4849,11 @@
         "push-alias-deny-chain",
         "push-alias-deny-cmdline-include",
         "push-alias-deny-codex-shaped",
-        "push-alias-deny-command-env-quoted",
         "push-alias-deny-config-env",
         "push-alias-deny-continuation",
         "push-alias-deny-cr-mid",
         "push-alias-deny-cr-mid-subsection",
         "push-alias-deny-dollar-parameters",
-        "push-alias-deny-env-quoted-gitconfig",
-        "push-alias-deny-env-quoted-home",
-        "push-alias-deny-env-s-attached",
-        "push-alias-deny-env-s-reloc",
-        "push-alias-deny-env-s-squoted",
-        "push-alias-deny-env-s-underscore-all",
-        "push-alias-deny-env-s-underscore-git",
-        "push-alias-deny-env-split-string",
-        "push-alias-deny-env-squoted-xdg",
         "push-alias-deny-escape-newline",
         "push-alias-deny-escape-tab",
         "push-alias-deny-feature-dest",
@@ -5453,16 +5280,6 @@
         }
       ],
       "expect_fail": [
-        "push-alias-deny-command-env-quoted",
-        "push-alias-deny-env-quoted-gitconfig",
-        "push-alias-deny-env-quoted-home",
-        "push-alias-deny-env-s-attached",
-        "push-alias-deny-env-s-reloc",
-        "push-alias-deny-env-s-squoted",
-        "push-alias-deny-env-s-underscore-all",
-        "push-alias-deny-env-s-underscore-git",
-        "push-alias-deny-env-split-string",
-        "push-alias-deny-env-squoted-xdg",
         "push-alias-deny-lost-prefix-config",
         "push-alias-deny-lost-reloc-prefix",
         "push-alias-deny-quoted-space-assign"
@@ -5497,16 +5314,6 @@
         }
       ],
       "expect_fail": [
-        "push-alias-deny-command-env-quoted",
-        "push-alias-deny-env-quoted-gitconfig",
-        "push-alias-deny-env-quoted-home",
-        "push-alias-deny-env-s-attached",
-        "push-alias-deny-env-s-reloc",
-        "push-alias-deny-env-s-squoted",
-        "push-alias-deny-env-s-underscore-all",
-        "push-alias-deny-env-s-underscore-git",
-        "push-alias-deny-env-split-string",
-        "push-alias-deny-env-squoted-xdg",
         "push-alias-deny-lost-reloc-prefix",
         "push-alias-deny-quoted-space-assign"
       ]
@@ -5709,30 +5516,6 @@
       ]
     },
     {
-      "name": "448-pg-alias-lost-quoted-reloc",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "    if (has_cfg_assign(strip_quotes(toks[i]))) reloc = 1\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-command-env-quoted",
-        "push-alias-deny-env-quoted-gitconfig",
-        "push-alias-deny-env-quoted-home",
-        "push-alias-deny-env-s-attached",
-        "push-alias-deny-env-s-reloc",
-        "push-alias-deny-env-s-squoted",
-        "push-alias-deny-env-s-underscore-all",
-        "push-alias-deny-env-s-underscore-git",
-        "push-alias-deny-env-split-string",
-        "push-alias-deny-env-squoted-xdg"
-      ]
-    },
-    {
       "name": "448-pg-alias-xcfg-export-cfg",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -5884,40 +5667,6 @@
       ]
     },
     {
-      "name": "448-pg-alias-lost-quoted-cfg",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "  for (c = 1; c <= nce; c++) if (index(u, cearr[c] \"=\") > 0) return 1\n  for (c = 1; c <= nccp; c++) if (index(u, ccparr[c]) > 0) return 1\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-env-quoted-gitconfig"
-      ]
-    },
-    {
-      "name": "448-pg-alias-lost-substring",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "if (index(u, rlarr[c] \"=\") > 0) return 1",
-          "to": "if (index(u, rlarr[c] \"=\") == 1) return 1"
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-env-s-attached",
-        "push-alias-deny-env-s-squoted",
-        "push-alias-deny-env-s-underscore-all",
-        "push-alias-deny-env-s-underscore-git",
-        "push-alias-deny-env-split-string"
-      ]
-    },
-    {
       "name": "448-pg-alias-backtick",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -5966,22 +5715,6 @@
       ]
     },
     {
-      "name": "448-pg-alias-lost-trigger-git",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "    if (i == from - 1 && index(t, \"git\") > 0) saw_git = 1\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-env-s-underscore-all",
-        "push-alias-deny-env-s-underscore-git"
-      ]
-    },
-    {
       "name": "507-hook-flood-tokens-min",
       "target": "dev/hook-tests.sh",
       "suite": "dev/hook-tests.sh",
@@ -6012,134 +5745,6 @@
       ]
     },
     {
-      "name": "508-pg-rec-lost-off",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if (m0 || rec_lost) {",
-          "to": "if (m0) {"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-env-c-brace",
-        "push-rtexp-deny-env-s-brace",
-        "push-rtexp-deny-env-s-cmdsubst"
-      ]
-    },
-    {
-      "name": "508-pg-rec-cut-gate",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if ((index($0, \"${\") > 0 || index($0, \"$(\") > 0 || has_bt) && index(tolower($0), \"env\") > 0) {",
-          "to": "if (index(tolower($0), \"env\") > 0) {"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-noop-env-s-uncut"
-      ]
-    },
-    {
-      "name": "508-ab-rx-envs-off",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "if (in_env && (index(tok, \"-S\") == 1",
-          "to": "if (0 && in_env && (index(tok, \"-S\") == 1"
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-deny-env-s-brace-gh",
-        "ab-rtexp-deny-env-s-escaped-gh",
-        "ab-rtexp-deny-env-s-record-wide"
-      ]
-    },
-    {
-      "name": "508-ab-rx-envs-unescape",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "gsub(/\\\\_/, \" \", t)",
-          "to": "t = t"
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-deny-env-s-escaped-gh"
-      ]
-    },
-    {
-      "name": "508-ab-rx-envs-word",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "if (w[i] == \"gh\") return \"gh\"",
-          "to": "if (index(w[i], \"gh\") > 0) return \"gh\""
-        },
-        {
-          "from": "if (w[i] == \"git\") return",
-          "to": "if (index(w[i], \"git\") > 0) return"
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-noop-env-s-no-names"
-      ]
-    },
-    {
-      "name": "508-pg-rec-lost-always",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "rec_lost = lost_push(rtoks, 1, rntok, 0)",
-          "to": "rec_lost = 1"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-noop-env-c-status"
-      ]
-    },
-    {
-      "name": "508-ab-rx-in-env-any",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexp-",
-      "edits": [
-        {
-          "from": "in_env = (norm == \"env\")",
-          "to": "in_env = 1"
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexp-noop-sudo-s"
-      ]
-    },
-    {
-      "name": "508-ab-rx-rescan",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-rtexpscan-",
-      "edits": [
-        {
-          "from": "(rx_word(tok) || rx_cut) && rx_env_hit != \"\") {",
-          "to": "(rx_word(tok) || rx_cut) && rx_env_scan() != \"\") {"
-        }
-      ],
-      "expect_fail": [
-        "ab-rtexpscan-noop-flood"
-      ]
-    },
-    {
       "name": "505-ab-unbalanced-off",
       "target": "hooks/agent-boundary.sh",
       "suite": "dev/hook-tests.sh",
@@ -6155,7 +5760,6 @@
         "ab-lost-deny-assign-dquote",
         "ab-lost-deny-assign-squote",
         "ab-lost-deny-claude",
-        "ab-lost-deny-env-opt",
         "ab-lost-deny-verifier-git"
       ]
     },
@@ -6173,8 +5777,6 @@
       "expect_fail": [
         "ab-lost-deny-assign-dquote",
         "ab-lost-deny-claude",
-        "ab-lost-deny-env-opt",
-        "ab-lost-deny-env-u-quoted",
         "ab-lost-deny-verifier-git"
       ]
     },
@@ -6209,213 +5811,6 @@
       ]
     },
     {
-      "name": "505-ab-prefix-quoted-shape",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "    if (saw_prefix && quote_bearing(tok)) {",
-          "to": "    if (0 && quote_bearing(tok)) {"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-prefix-quoted",
-        "ab-lost-deny-prefix-squoted-opt"
-      ]
-    },
-    {
-      "name": "505-ab-shape-gate",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "      if (substr(s0, 1, 1) == \"-\" || match(s0, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) {",
-          "to": "      if (1) {"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-noop-candidate-exempt"
-      ]
-    },
-    {
-      "name": "505-ab-quote-bearing-sq",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "  return (index(tok, \"\\\"\") > 0 || index(tok, sq) > 0 || index(tok, \"\\\\\") > 0)",
-          "to": "  return (index(tok, \"\\\"\") > 0 || index(tok, \"\\\\\") > 0)"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-prefix-squoted-opt"
-      ]
-    },
-    {
-      "name": "505-ab-env-u-consume",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "        idx += 2\n        continue\n      }\n      if (substr(tok, 1, 2) == \"-u\"",
-          "to": "        idx += 1\n        continue\n      }\n      if (substr(tok, 1, 2) == \"-u\""
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-claude",
-        "ab-lost-deny-env-u-gh",
-        "ab-lost-deny-env-u-git",
-        "ab-lost-noop-env-u-consumes"
-      ]
-    },
-    {
-      "name": "505-ab-env-u-value-check",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "        if (quote_unbalanced(toks[idx + 1])) {",
-          "to": "        if (0) {"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-env-u-quoted"
-      ]
-    },
-    {
-      "name": "505-ab-env-u-attached",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "      if (substr(tok, 1, 2) == \"-u\" || index(tok, \"--unset=\") == 1) {",
-          "to": "      if (0) {"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-noop-verifier-env-allowlist"
-      ]
-    },
-    {
-      "name": "505-ab-env-u-attached-quote",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "        if (quote_unbalanced(tok)) { lost = lost_scan(toks, idx + 1, ntok); if (lost != \"\") { print lost; return } }\n        idx++",
-          "to": "        if (0) { lost = lost_scan(toks, idx + 1, ntok); if (lost != \"\") { print lost; return } }\n        idx++"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-env-u-quoted"
-      ]
-    },
-    {
-      "name": "505-ab-env-opt-off",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "      lost = lost_word(tok, 1)\n      if (lost == \"\") lost = lost_scan(toks, idx + 1, ntok)\n      if (lost != \"\") { print lost; return }\n    }\n    # #505: after a prefix word",
-          "to": "    }\n    # #505: after a prefix word"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-claude",
-        "ab-lost-deny-env-opt",
-        "ab-lost-deny-env-split-string-git",
-        "ab-lost-deny-verifier-env-arm-basename",
-        "ab-lost-deny-verifier-git"
-      ]
-    },
-    {
-      "name": "505-ab-env-novalue-vocab",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "ENV_NOVALUE_OPTS=\"-i -0 -v -- --ignore-environment --null --debug\"",
-          "to": "ENV_NOVALUE_OPTS=\"\""
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-noop-verifier-env-allowlist"
-      ]
-    },
-    {
-      "name": "505-ab-env-context",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "    if (norm in prefix_set && norm != \"-\") { in_env = (norm == \"env\"); in_vp = (norm in vprefix_set) }",
-          "to": "    if (norm in prefix_set && norm != \"-\") { in_env = 1; in_vp = (norm in vprefix_set) }"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-noop-verifier-nonenv-opt"
-      ]
-    },
-    {
-      "name": "505-ab-env-arm-prefix-guard",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "    if (in_env && substr(tok, 1, 1) == \"-\") {\n      if (tok in envnov_set)",
-          "to": "    if (in_env && substr(tok, 1, 1) == \"-\" && !(norm in prefix_set)) {\n      if (tok in envnov_set)"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-verifier-env-arm-basename"
-      ]
-    },
-    {
-      "name": "505-ab-word-lead-off",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "    if (lead && lwf && substr(lwv, 1, 1) == \"-\") {",
-          "to": "    if (0) {"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-env-split-string",
-        "ab-lost-deny-env-split-string-escaped",
-        "ab-lost-deny-env-split-string-git",
-        "ab-lost-deny-prefix-quoted",
-        "ab-lost-deny-verifier-git"
-      ]
-    },
-    {
-      "name": "505-ab-word-unescape",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "  gsub(/\\\\_/, \" \", lx)",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-env-split-string-escaped"
-      ]
-    },
-    {
       "name": "505-ab-word-exact",
       "target": "hooks/agent-boundary.sh",
       "suite": "dev/hook-tests.sh",
@@ -6424,21 +5819,6 @@
         {
           "from": "    if (lwv == \"gh\") return \"gh\"\n    if (lwv == \"git\") return \"git -prefix-\"",
           "to": "    if (index(lwv, \"gh\") > 0) return \"gh\"\n    if (index(lwv, \"git\") > 0) return \"git -prefix-\""
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-noop-scan-precision"
-      ]
-    },
-    {
-      "name": "505-ab-scan-lead",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "    r = lost_word(toks[i], 0)",
-          "to": "    r = lost_word(toks[i], 1)"
         }
       ],
       "expect_fail": [
@@ -6458,12 +5838,9 @@
       ],
       "expect_fail": [
         "ab-lost-deny-claude",
-        "ab-lost-deny-env-split-string-git",
-        "ab-lost-deny-verifier-env-arm-basename",
         "ab-lost-deny-verifier-git",
         "ab-lost-noop-controls",
-        "ab-lost-noop-scan-precision",
-        "ab-lost-noop-verifier-nonenv-opt"
+        "ab-lost-noop-scan-precision"
       ]
     },
     {
@@ -6478,8 +5855,6 @@
         }
       ],
       "expect_fail": [
-        "ab-lost-deny-env-split-string-git",
-        "ab-lost-deny-verifier-env-arm-basename",
         "ab-lost-deny-verifier-git"
       ]
     },
@@ -6525,7 +5900,7 @@
         }
       ],
       "expect_fail": [
-        "ab-lost-deny-env-opt"
+        "ab-lost-deny-assign-dquote"
       ]
     },
     {
@@ -6540,8 +5915,7 @@
         }
       ],
       "expect_fail": [
-        "ab-lost-deny-assign-dquote",
-        "ab-lost-deny-env-split-string-git"
+        "ab-lost-deny-assign-dquote"
       ]
     },
     {
@@ -6587,36 +5961,6 @@
       ],
       "expect_fail": [
         "ab-lost-deny-assign-dquote"
-      ]
-    },
-    {
-      "name": "505-ab-quote-bearing-bs",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "  return (index(tok, \"\\\"\") > 0 || index(tok, sq) > 0 || index(tok, \"\\\\\") > 0)",
-          "to": "  return (index(tok, \"\\\"\") > 0 || index(tok, sq) > 0)"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-prefix-squoted-opt"
-      ]
-    },
-    {
-      "name": "505-ab-strip-bs",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "  gsub(/\"/, \"\", t)\n  gsub(/\\\\/, \"\", t)\n  return t",
-          "to": "  gsub(/\"/, \"\", t)\n  return t"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-prefix-squoted-opt"
       ]
     },
     {
@@ -7216,21 +6560,6 @@
       ]
     },
     {
-      "name": "518-pg-optval-alias-quoted",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-optval-",
-      "edits": [
-        {
-          "from": "if (!al_done && !quote_bearing(toks[idx + 1])) {",
-          "to": "if (!al_done) {"
-        }
-      ],
-      "expect_fail": [
-        "push-optval-deny-alias-quoted"
-      ]
-    },
-    {
       "name": "538-cdg-fast-off",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -7243,8 +6572,6 @@
       ],
       "expect_fail": [
         "cdg-split-deny-combos",
-        "cdg-split-deny-env-s",
-        "cdg-split-deny-env-s-value",
         "cdg-split-deny-names",
         "cdg-split-deny-overblock",
         "cdg-split-deny-verifier",
@@ -7298,7 +6625,6 @@
       ],
       "expect_fail": [
         "cdg-split-deny-combos",
-        "cdg-split-deny-env-s-value",
         "cdg-split-deny-names",
         "cdg-split-deny-overblock",
         "cdg-split-deny-verifier",
@@ -7334,8 +6660,6 @@
       ],
       "expect_fail": [
         "cdg-split-deny-combos",
-        "cdg-split-deny-env-s",
-        "cdg-split-deny-env-s-value",
         "cdg-split-deny-names",
         "cdg-split-deny-overblock",
         "cdg-split-deny-verifier",
@@ -7404,118 +6728,6 @@
       ]
     },
     {
-      "name": "538-cdg-alt-envs",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "-*apply_patch|-*applypatch) ww_alt=1; ww_word=apply_patch; break ;;",
-          "to": "-*apply_patch|-*applypatch) ww_word=apply_patch; break ;;"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-expansion-guards"
-      ]
-    },
-    {
-      "name": "538-cdg-envs-off",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "if [ \"$ve\" -eq 1 ] && [ \"$seg_mflag\" -eq 1 ]; then",
-          "to": "if [ \"$ve\" -eq 9 ] && [ \"$seg_mflag\" -eq 1 ]; then"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-env-s",
-        "cdg-split-deny-env-s-value",
-        "cdg-split-deny-verifier",
-        "cdg-split-heredoc",
-        "cdg-split-never-executes"
-      ]
-    },
-    {
-      "name": "538-cdg-envs-lead",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "case \"${er%% *}\" in",
-          "to": "case \"\" in"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-env-s",
-        "cdg-split-deny-verifier",
-        "cdg-split-heredoc",
-        "cdg-split-never-executes"
-      ]
-    },
-    {
-      "name": "538-cdg-envs-unescape",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "er=\"${toks[$i]//\\\\_/ }\"",
-          "to": "er=\"${toks[$i]}\""
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-env-s"
-      ]
-    },
-    {
-      "name": "538-cdg-envs-sep",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "if { [ \"$tok\" = \"-S\" ] || [ \"$tok\" = \"--split-string\" ]; } && [ $((i + 1)) -lt \"$n\" ]; then",
-          "to": "if [ 0 -eq 1 ]; then"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-env-s-value"
-      ]
-    },
-    {
-      "name": "538-cdg-envs-context",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "case \"$tok\" in env) ve=1 ;; -) ;; *) ve=0 ;; esac",
-          "to": "case \"$tok\" in env) ve=1 ;; -) ;; *) ve=1 ;; esac"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-noop-env-s"
-      ]
-    },
-    {
-      "name": "538-cdg-vp-lead",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "                      -*apply_patch|-*applypatch) vt=apply_patch; hit=1; break ;;\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-env-s-value"
-      ]
-    },
-    {
       "name": "538-cdg-vp-bs-loop",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -7577,81 +6789,6 @@
       ]
     },
     {
-      "name": "538-cdg-envs-names",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; break ;;",
-          "to": "*\" apply_patch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; break ;;"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-env-s"
-      ]
-    },
-    {
-      "name": "538-cdg-envs-basename",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; break ;;",
-          "to": "*\" apply_patch \"*|*\" applypatch \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; break ;;"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-env-s"
-      ]
-    },
-    {
-      "name": "538-cdg-envs-delete-bs",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "            er=\"${er//\\\\/}\"\n            case \" $er \" in",
-          "to": "            case \" $er \" in"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-env-s"
-      ]
-    },
-    {
-      "name": "538-cdg-envs-dash",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "case \"$tok\" in env) ve=1 ;; -) ;; *) ve=0 ;; esac",
-          "to": "case \"$tok\" in env) ve=1 ;; *) ve=0 ;; esac"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-env-s"
-      ]
-    },
-    {
-      "name": "538-cdg-envs-longopt",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "if { [ \"$tok\" = \"-S\" ] || [ \"$tok\" = \"--split-string\" ]; } &&",
-          "to": "if { [ \"$tok\" = \"-S\" ]; } &&"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-env-s-value"
-      ]
-    },
-    {
       "name": "538-cdg-ln-sq",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -7679,66 +6816,6 @@
       ],
       "expect_fail": [
         "cdg-split-deny-combos"
-      ]
-    },
-    {
-      "name": "538-cdg-envs-value-dq",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "              er=\"${er//$dq/}\"\n              er=\"${er//\\\\/}\"",
-          "to": "              er=\"${er//\\\\/}\""
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-env-s-value"
-      ]
-    },
-    {
-      "name": "538-cdg-envs-value-names",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; i=$((i + 1)); break ;;",
-          "to": "*\" apply_patch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; i=$((i + 1)); break ;;"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-deny-env-s-value"
-      ]
-    },
-    {
-      "name": "538-cdg-alt-envs-word",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; break ;;",
-          "to": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_word=apply_patch; break ;;"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-expansion-guards"
-      ]
-    },
-    {
-      "name": "538-cdg-alt-envs-value",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-split-",
-      "edits": [
-        {
-          "from": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_alt=1; ww_word=apply_patch; i=$((i + 1)); break ;;",
-          "to": "*\" apply_patch \"*|*\" applypatch \"*|*/apply_patch\" \"*|*/applypatch\" \"*) ww_word=apply_patch; i=$((i + 1)); break ;;"
-        }
-      ],
-      "expect_fail": [
-        "cdg-split-expansion-guards"
       ]
     },
     {
