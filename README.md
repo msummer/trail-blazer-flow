@@ -702,7 +702,10 @@ name bare (#490).
 **v3.3.2 → v3.4.0** — re-run `bin/setup-labels.sh` (creates `building`; the doctor now requires it).
 
 **v3.4.0 → v3.5.0** — re-copy the permissions block from `templates/repo-settings.json` or add
-`"Bash(merge-floor.sh:*)"` by hand. On Codex, also re-run `bin/codex-setup.sh`.
+`"Bash(merge-floor.sh:*)"` and `"Bash(reserve-paths.sh:*)"` by hand. On Codex, also re-run
+`bin/codex-setup.sh`. If `CLAUDE.md` declares an Autonomy reserve, run `check-harness.sh` and
+rewrite any entry it names as malformed; until then, every implementation stops before
+verification.
 
 </details>
 

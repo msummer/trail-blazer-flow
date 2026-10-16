@@ -189,8 +189,8 @@ subagents need:
    itself; only the `harness-setup` skill does, once, at onboarding, with a human present.
 
 7. **Autonomy reserve** (optional) — a section titled exactly "Autonomy reserve" declaring a
-   fenced block of path globs, one per line (`**` allowed), naming paths a scoped-autonomy grant
-   must never be treated as authorizing, e.g.:
+   fenced block of path globs, one per line, naming paths a scoped-autonomy grant must never be
+   treated as authorizing, e.g.:
 
    ````markdown
    ## Autonomy reserve
@@ -198,20 +198,61 @@ subagents need:
    CLAUDE.md
    .claude/**
    docs/adr/**
+   # our CI enforces the schema rules, so migrations stay out on purpose:
+   not reserved: db/migrations/
    ```
    ````
+
+   Only the section's first fenced block is read; blank lines and `#`-prefixed lines in it are
+   skipped, and every other line is one entry. The globs are matched mechanically, never in
+   prose, by `bin/reserve-paths.sh`, which reads the section from CLAUDE.md **at the base tip**
+   (the merge base), so a PR cannot loosen the rule it is checked against. A `CLAUDE.md` that is a
+   symlink in that base tree (e.g. `CLAUDE.md -> AGENTS.md`) is followed one hop, to a plain
+   relative path inside the same tree; a link that is absolute, escapes, has a `.` segment (so
+   `./AGENTS.md`), is missing, or names another symlink or a directory is an error, never a
+   silent "no reserve". Only an entry named exactly `CLAUDE.md` is read: a file tracked as
+   `claude.md` gives "no reserve". **The dialect:**
+   matching ignores case; a glob matches from the start of any path segment to the end of a
+   segment, at any depth, so `migrations/**` reserves `db/migrations/0001.sql` and `CLAUDE.md`
+   reserves `pkg/sub/Claude.md`, while `docs/adr` does not reserve `docs/adr-notes/x.md`; `*`
+   matches any run of characters, `/` included; a match covers everything beneath it (one
+   trailing `/`, then one trailing `/**`, then one leading `**/` are dropped, so `docs/adr/`,
+   `docs/adr/**` and `**/docs/adr` mean the same); `[` and `]` are literal, never a character
+   class, in a route-parameter group (`[id]`, `[...slug]`, `[[id]]`, `[[...slug]]`, a name being
+   letters, digits and `_`, not starting with a digit), so `app/api/[...slug]/` reserves
+   `app/api/[...slug]/route.ts`; and a rename out of a reserved directory reports the old path.
+   **Anything outside the dialect is unreadable**: a character other than letters, digits and
+   `. _ - / * @ + ( ) [ ] $` (a space, `?`, `{`, `}`, `\`, `!`, `#`, a backtick or any non-ASCII
+   character), a `[` or `]` outside a route-parameter group (`[0-9]`, `[a-z]`), a `**` anywhere
+   but a leading `**/` or trailing `/**`, and an empty, `.` or `..` segment (a leading `/` or
+   `./`, `//`, `..`). One unreadable entry makes the whole section malformed, and a malformed
+   section fails closed: the implementer orchestrator stops before the verifier dispatch with a
+   `needs-human` escalation (stage `2e`, reason `reserve-unreadable`) instead of guessing, and
+   `check-harness.sh` names the entry in a WARN. A `not reserved: <glob>` line in the same block
+   (the same dialect) marks a schema path this repo leaves out of the reserve on purpose; it
+   never makes a path reserved, and it only silences the doctor's schema WARN below.
 
    The planner adds a "Reserve touch list" section to every plan when this section exists: every
    "Affected areas" entry matching a declared glob (naming the glob it matched), or "None". A
    non-empty Reserve touch list blocks auto-approval (item 4's hard floor) unless the "Plan
-   auto-approval policy" section explicitly opts reserve-touching work in. The `verifier` subagent
-   re-checks the same globs against the diff's actually-changed paths at review time (see
-   "Implementation" step 4 above) — a changed path matching a declared glob that the plan's
-   Reserve touch list never named is a `blocker` finding, whether or not the plan was
-   auto-approved. **No section means the harness never populates a Reserve touch list, the hard
-   floor's reserve bullet is inert, and the verifier's reserve-touch check never runs either.**
-   What counts as reserved, and what a grant may override, stays this repo's decision — the
-   harness only reads the declared globs and does the matching in prose.
+   auto-approval policy" section explicitly opts reserve-touching work in. Before every `verifier`
+   dispatch the orchestrator runs `reserve-paths.sh <merge-base> <head>` and pastes its stdout (a
+   `reserved: <path>` line for each reserved changed path, then `verdict=reserved`,
+   `verdict=none` or `verdict=absent`) into the verifier's prompt; the verifier compares those
+   paths with the plan's Reserve touch list and never matches globs itself (see "Implementation"
+   step 4 above). A reserved path the plan's list never named is a `blocker` finding, whether or
+   not the plan was auto-approved, and so is a prompt without the block. **No section means the
+   harness never populates a Reserve touch list, the hard floor's reserve bullet is inert, and the
+   verifier's reserve check is inert (`verdict=absent`).** What counts as reserved, and what a
+   grant may override, stays this repo's decision.
+
+   On Claude Code, `check-harness.sh` validates the section with `reserve-paths.sh --check` (the
+   Codex doctor has no reserve check): a malformed section is a WARN naming the reason and the
+   entry, never a FAIL. While plan auto-approval is active (a
+   "Plan auto-approval policy" section, or item 9's `mode: autonomous`) it also WARNs about tracked
+   schema paths (`migrations`, `alembic/versions`, `prisma/schema.prisma`, `*.sql`, as `git`
+   lists them) that no reserve glob covers, whether or not a reserve is declared; a path a
+   `not reserved:` line covers is reported as a PASS instead. The WARN is advice only.
 
 8. **Autonomy decision record** (optional) — a section titled exactly "Autonomy decision record"
    declaring a fenced block of `key: value` lines describing the record a human-applied grant

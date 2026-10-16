@@ -21,6 +21,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 - #578: push-guard, in every session, no longer reads a push route or alias key on its section header's line
   (`[remote "origin"] push = HEAD:main`), a route under a dotted, mixed, TAB-separated or `#`/`;`-named remote, branch
   or includeIf header, or a header after a BOM; no git command is denied for an unsplittable header. No consumer step.
+- #552: the Autonomy reserve is matched by `bin/reserve-paths.sh`, a read-only script whose written dialect fails closed
+  on an unreadable entry; the doctor warns of unreserved schema paths under auto-approval. Consumer step: add
+  `Bash(reserve-paths.sh:*)`, re-run `bin/codex-setup.sh` on Codex, and fix any reserve entry the doctor names.
 - #573: agent-boundary, push-guard and claude-dir-guard no longer read the word after a standalone `]]` as a command
   word, so zsh's short `if [[ -n x ]] git push origin main` (no `; then`) is no longer caught; `; then` and `&&` still
   deny. The `]]` cap, the cut-tail denies and the `echo "x ]] apply_patch"` over-block are gone. No consumer step.

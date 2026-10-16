@@ -75,7 +75,14 @@
 # compare, every malformed reason token, and every fail-closed error path (bad arguments before
 # any git call, a git failure, an empty diff, a control-character path) — plus the doctor's own
 # validation-only wrapper around it (PASS none/declared <n>, WARN malformed/could not validate,
-# never FAIL), and (#408) bin/codex-setup.sh — the Codex compatibility installer, whose own
+# never FAIL), and (#552) bin/reserve-paths.sh — the Autonomy reserve's mechanical path matcher —
+# run directly in both its diff mode (base/head object ids) and its --check mode, pinning the
+# written dialect (case fold, unanchored any-depth match, `*` crossing '/', "everything beneath",
+# segment alignment, literal route-parameter brackets, --no-renames, a `not reserved:` line that
+# diff mode ignores), every unreadable entry and section fault failing closed in both modes, the
+# base-tip-only read, the buffered output, every bad-argument and git-failure path, the read-only
+# guarantee, and --check's schema classification — plus the doctor's own reserve validator and
+# schema WARN around it (never FAIL), and (#408) bin/codex-setup.sh — the Codex compatibility installer, whose own
 # `--check` drift mode is #410's companion, hence living here rather than in a new suite — run
 # directly against a fake Codex plugin-cache install (mk_cx_plugin, a copy of this checkout's
 # bin/*.sh, agents/*.md and templates/codex.rules) and fixture repos it builds for that purpose
@@ -264,6 +271,8 @@ mk_repo() {
   chmod +x "$dir/bin/harness-version.sh"
   cp "$root/bin/governance-paths.sh" "$dir/bin/governance-paths.sh"
   chmod +x "$dir/bin/governance-paths.sh"
+  cp "$root/bin/reserve-paths.sh" "$dir/bin/reserve-paths.sh"
+  chmod +x "$dir/bin/reserve-paths.sh"
   mkdir -p "$dir/.claude-plugin"
   cp "$root/.claude-plugin/plugin.json" "$dir/.claude-plugin/plugin.json"
   cp "$root/templates/repo-settings.json" "$dir/templates/repo-settings.json"
@@ -752,6 +761,24 @@ run_gov() {
   shift
   outfile="$(mktemp)"; errfile="$(mktemp)"
   (cd "$dir" && HOME="$dir/home" XDG_CONFIG_HOME="$dir/home/.config" GIT_CONFIG_NOSYSTEM=1 "$bash_bin" "$root/bin/governance-paths.sh" "$@") >"$outfile" 2>"$errfile"
+  gov_rc=$?
+  gov_out="$(cat "$outfile")"
+  gov_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $gov_out
+ERR: $gov_err"
+  doctor_rc=$gov_rc
+}
+
+# run_res DIR ARGS… (#552) — run_gov's twin for bin/reserve-paths.sh, also run FROM THIS CHECKOUT
+# and with the same isolation (cwd = DIR, HOME/XDG_CONFIG_HOME inside DIR, GIT_CONFIG_NOSYSTEM=1).
+# It sets the same $gov_out/$gov_err/$gov_rc globals, so expect_gov_out/expect_gov_out_absent/
+# expect_gov_err/expect_gov_last (below) apply to it unchanged.
+run_res() {
+  local dir="$1" outfile errfile
+  shift
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  (cd "$dir" && HOME="$dir/home" XDG_CONFIG_HOME="$dir/home/.config" GIT_CONFIG_NOSYSTEM=1 "$bash_bin" "$root/bin/reserve-paths.sh" "$@") </dev/null >"$outfile" 2>"$errfile"
   gov_rc=$?
   gov_out="$(cat "$outfile")"
   gov_err="$(cat "$errfile")"
@@ -2804,6 +2831,825 @@ case_gov_doctor_script_missing() {
 }
 
 # ---------------------------------------------------------------------------------------------
+# bin/reserve-paths.sh (#552), run directly via run_res on mk_gov_repo fixtures (diff mode and
+# --check mode), and through the doctor on mk_repo fixtures. Every case that compares a whole
+# stdout does it inline, so no needle-taking helper is added beyond the expect_gov_* family.
+
+# res_claude_md FILE BODY — writes a CLAUDE.md whose "Autonomy reserve" section is one fenced block
+# holding BODY (newline-separated lines, written verbatim).
+res_claude_md() {
+  printf '# CLAUDE.md\n\n## Autonomy reserve\n```\n%s\n```\n' "$2" > "$1"
+}
+
+# res_expect_exact LABEL EXPECTED ACTUAL — a whole-stream comparison, labelled so a failure names
+# the row it belongs to. A degenerate empty LABEL is a harness bug, refused like an empty needle.
+res_expect_exact() {
+  needle_required res_expect_exact "$1" || return 0
+  [ "$3" = "$2" ] || { __ok=0; __why="${__why}$1: expected '$2', got '$3'\n"; }
+}
+
+# reserve-dialect — one base section carrying every dialect clause (some lines indented, padded or
+# blank, one comment), one head that adds a path per clause (and renames one out of a reserved
+# directory, with diff.renames on): exactly the reserved paths print, in diff order. A dialect that
+# anchors a glob, drops the case fold, stops `*` at '/', loses the trailing-slash "everything
+# beneath", matches inside a segment, reads brackets as a class, follows renames, keeps the
+# whitespace around an entry, lets `*` match only a non-empty run (`.env*` must reserve `.env`),
+# loses one of the four route-parameter bracket forms, or honours a `not reserved:` line in diff mode
+# changes this list.
+case_reserve_dialect() {
+  local dir base head p
+  dir="$(mk_gov_repo reserve-dialect)"
+  (cd "$dir" && git config diff.renames true) >/dev/null
+  res_claude_md "$dir/CLAUDE.md" "$(printf '%s\n' 'CLAUDE.md' '  migrations/**' 'docs/adr/   ' '*.SQL' '' \
+    'app/api/[...slug]/' 'pages/[id].tsx' '**/infra' '.env*' 'blog/[[...slug]]/' 'shop/[[id]].tsx' \
+    '# a comment line' 'not reserved:    vendor/')"
+  mkdir -p "$dir/docs/adr"
+  printf 'adr two\nfiller filler filler filler filler filler filler filler filler\n' > "$dir/docs/adr/0002.md"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/pkg/sub" "$dir/db/migrations" "$dir/seed" "$dir/app/api/[...slug]" "$dir/app/api/s" \
+    "$dir/pages" "$dir/infra" "$dir/notes" "$dir/db/oldmigrations" "$dir/docs/adr-notes" "$dir/vendor" \
+    "$dir/blog/[[...slug]]" "$dir/shop"
+  for p in pkg/sub/Claude.md db/migrations/0001.sql docs/adr/0001.md seed/Data.sql \
+    'app/api/[...slug]/route.ts' 'pages/[id].tsx' infra/main.tf notes/claude.md.txt \
+    db/oldmigrations/x.txt docs/adr-notes/x.md app/api/s/route.ts pages/i.tsx vendor/lib.js \
+    .env app/.env.local 'blog/[[...slug]]/page.tsx' 'shop/[[id]].tsx'; do
+    printf 'x\n' > "$dir/$p"
+  done
+  (cd "$dir" && git mv docs/adr/0002.md notes/0002.md) >/dev/null
+  head="$(gov_commit "$dir")"
+  run_res "$dir" "$base" "$head"
+  expect_rc 0
+  expect_gov_last "verdict=reserved"
+  for p in pkg/sub/Claude.md db/migrations/0001.sql docs/adr/0001.md seed/Data.sql \
+    'app/api/[...slug]/route.ts' 'pages/[id].tsx' infra/main.tf docs/adr/0002.md .env app/.env.local \
+    'blog/[[...slug]]/page.tsx' 'shop/[[id]].tsx'; do
+    expect_gov_out "reserved: $p"
+  done
+  for p in notes/claude.md.txt db/oldmigrations/x.txt docs/adr-notes/x.md app/api/s/route.ts \
+    pages/i.tsx vendor/lib.js notes/0002.md; do
+    expect_gov_out_absent "reserved: $p"
+  done
+  res_expect_exact "reserved: line count" "12" "$(grep -c '^reserved: ' <<<"$gov_out")"
+  res_expect_exact "stderr" "" "$gov_err"
+}
+
+# reserve-none — a declared section that matches nothing that changed, and an empty diff (the same
+# commit twice): verdict=none alone each time, never an error.
+case_reserve_none() {
+  local dir base head
+  dir="$(mk_gov_repo reserve-none)"
+  res_claude_md "$dir/CLAUDE.md" 'secrets/'
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/src"
+  printf 'x\n' > "$dir/src/app.txt"
+  head="$(gov_commit "$dir")"
+  run_res "$dir" "$base" "$head"
+  expect_rc 0
+  res_expect_exact "stdout" "verdict=none" "$gov_out"
+  res_expect_exact "stderr" "" "$gov_err"
+  run_res "$dir" "$head" "$head"
+  expect_rc 0
+  res_expect_exact "empty diff: stdout" "verdict=none" "$gov_out"
+  res_expect_exact "empty diff: stderr" "" "$gov_err"
+}
+
+# reserve-absent — no section at the base, and no CLAUDE.md at the base at all: verdict=absent
+# alone, exit 0, in diff mode; --check on a section-less file prints exactly `absent`.
+case_reserve_absent() {
+  local dir base head
+  dir="$(mk_gov_repo reserve-absent)"
+  printf '# CLAUDE.md\n\n## Verification\nRun `true`.\n' > "$dir/CLAUDE.md"
+  base="$(gov_commit "$dir")"
+  printf 'x\n' > "$dir/app.txt"
+  head="$(gov_commit "$dir")"
+  run_res "$dir" "$base" "$head"
+  expect_rc 0
+  res_expect_exact "no section: stdout" "verdict=absent" "$gov_out"
+  res_expect_exact "no section: stderr" "" "$gov_err"
+  run_res "$dir" --check "$dir/CLAUDE.md"
+  expect_rc 0
+  res_expect_exact "no section: --check stdout" "absent" "$gov_out"
+  dir="$(mk_gov_repo reserve-absent-no-claude-md)"
+  printf 'seed\n' > "$dir/seed.txt"
+  base="$(gov_commit "$dir")"
+  printf 'x\n' > "$dir/app.txt"
+  head="$(gov_commit "$dir")"
+  run_res "$dir" "$base" "$head"
+  expect_rc 0
+  res_expect_exact "no CLAUDE.md: stdout" "verdict=absent" "$gov_out"
+}
+
+# reserve-from-base — the base reserves secrets/; the head deletes the section from CLAUDE.md and
+# adds secrets/k.txt. The base's section still applies. A reader of the head or the working tree
+# finds no section and reports absent or none.
+case_reserve_from_base() {
+  local dir base head
+  dir="$(mk_gov_repo reserve-from-base)"
+  res_claude_md "$dir/CLAUDE.md" 'secrets/'
+  base="$(gov_commit "$dir")"
+  printf '# CLAUDE.md\n\nNo reserve any more.\n' > "$dir/CLAUDE.md"
+  mkdir -p "$dir/secrets"
+  printf 'x\n' > "$dir/secrets/k.txt"
+  head="$(gov_commit "$dir")"
+  run_res "$dir" "$base" "$head"
+  expect_rc 0
+  res_expect_exact "stdout" "reserved: secrets/k.txt
+verdict=reserved" "$gov_out"
+}
+
+# res_symlink_error_row SHAPE REASON — one error row of reserve-symlink-claude-md: a repo whose
+# base tree holds a CLAUDE.md the one-hop rule cannot read (built by SHAPE), a head that adds a
+# path under migrations/. Diff mode must exit 1 with verdict=error last, no reserved: line and
+# never absent; stderr names the symlink and carries REASON, the one check that rejects this shape
+# (a later check would reject some shapes too, with another reason, so REASON is what pins each
+# check on its own).
+res_symlink_error_row() {
+  local shape="$1" reason="$2" dir base head
+  dir="$(mk_gov_repo "reserve-symlink-$shape")"
+  case "$shape" in
+    absolute) ln -s /etc/hosts "$dir/CLAUDE.md" ;;
+    escapes) ln -s ../AGENTS.md "$dir/CLAUDE.md" ;;
+    missing) ln -s NOPE.md "$dir/CLAUDE.md" ;;
+    missing-dir) ln -s nodir/AGENTS.md "$dir/CLAUDE.md" ;;
+    dot-segment) ln -s ./AGENTS.md "$dir/CLAUDE.md"; res_claude_md "$dir/AGENTS.md" 'migrations/' ;;
+    self) ln -s CLAUDE.md "$dir/CLAUDE.md" ;;
+    control) ln -s "$(printf 'a\tb')" "$dir/CLAUDE.md" ;;
+    chained)
+      res_claude_md "$dir/B.md" 'migrations/'
+      ln -s B.md "$dir/A.md"
+      ln -s A.md "$dir/CLAUDE.md"
+      ;;
+    directory)
+      mkdir "$dir/docs"
+      printf 'x\n' > "$dir/docs/x"
+      ln -s docs "$dir/CLAUDE.md"
+      ;;
+    claude-dir)
+      mkdir "$dir/CLAUDE.md"
+      printf 'x\n' > "$dir/CLAUDE.md/f"
+      ;;
+  esac
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/migrations"
+  printf 'x\n' > "$dir/migrations/0001.sql"
+  head="$(gov_commit "$dir")"
+  run_res "$dir" "$base" "$head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_out_absent "reserved:"
+  expect_gov_out_absent "verdict=absent"
+  case "$shape" in
+    claude-dir) : ;;
+    *) expect_gov_err "is a symlink to" ;;
+  esac
+  expect_gov_err "$reason"
+}
+
+# reserve-symlink-claude-md — a CLAUDE.md that is a symlink in the base tree (the common
+# CLAUDE.md -> AGENTS.md layout) is followed ONE hop inside that tree: the reserve in the target
+# applies (directly beside it, or in a subdirectory), --check, which reads through the filesystem,
+# agrees, and a target without a section is verdict=absent, so a repo with the layout and no
+# reserve is never stopped. A link that is absolute, escapes, is missing, names a missing
+# directory, uses a `.` segment, points at itself or at another symlink, holds a control
+# character, or names a directory is an error, never absent; so is a CLAUDE.md tree entry that is
+# a directory. A reader that treats the link text as the file, or a missing CLAUDE.md as absent,
+# reports absent for the first row.
+case_reserve_symlink_claude_md() {
+  local dir base head
+  dir="$(mk_gov_repo reserve-symlink-claude-md)"
+  res_claude_md "$dir/AGENTS.md" 'migrations/'
+  ln -s AGENTS.md "$dir/CLAUDE.md"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/migrations"
+  printf 'x\n' > "$dir/migrations/0001.sql"
+  head="$(gov_commit "$dir")"
+  run_res "$dir" "$base" "$head"
+  expect_rc 0
+  res_expect_exact "one hop: stdout" "reserved: migrations/0001.sql
+verdict=reserved" "$gov_out"
+  res_expect_exact "one hop: stderr" "" "$gov_err"
+  run_res "$dir" --check "$dir/CLAUDE.md"
+  expect_rc 0
+  res_expect_exact "one hop: --check agrees" "declared 1 0" "$gov_out"
+
+  dir="$(mk_gov_repo reserve-symlink-subdir)"
+  mkdir -p "$dir/docs"
+  res_claude_md "$dir/docs/AGENTS.md" 'migrations/'
+  ln -s docs/AGENTS.md "$dir/CLAUDE.md"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/migrations"
+  printf 'x\n' > "$dir/migrations/0001.sql"
+  head="$(gov_commit "$dir")"
+  run_res "$dir" "$base" "$head"
+  expect_rc 0
+  res_expect_exact "subdirectory target: stdout" "reserved: migrations/0001.sql
+verdict=reserved" "$gov_out"
+
+  dir="$(mk_gov_repo reserve-symlink-no-section)"
+  printf '# AGENTS\n\n## Verification\nRun `true`.\n' > "$dir/AGENTS.md"
+  ln -s AGENTS.md "$dir/CLAUDE.md"
+  base="$(gov_commit "$dir")"
+  printf 'x\n' > "$dir/app.txt"
+  head="$(gov_commit "$dir")"
+  run_res "$dir" "$base" "$head"
+  expect_rc 0
+  res_expect_exact "target without a section: stdout" "verdict=absent" "$gov_out"
+
+  res_symlink_error_row absolute "is an absolute path"
+  res_symlink_error_row escapes "is not a plain relative path"
+  res_symlink_error_row missing "points at a missing file"
+  res_symlink_error_row missing-dir "whose directory is missing from that tree"
+  res_symlink_error_row dot-segment "is not a plain relative path"
+  res_symlink_error_row self "points at another symlink"
+  res_symlink_error_row control "holds a control character"
+  res_symlink_error_row chained "points at another symlink"
+  res_symlink_error_row directory "does not point at a file"
+  res_symlink_error_row claude-dir "neither a file nor a symlink"
+}
+
+# reserve-capture-fails-closed — a helper that cannot run (awk, sed or tr replaced by a stub that
+# prints nothing and exits 2, first on PATH) must end in an error, never in absent, none or
+# reserved: the parse state starts as an error and only a completed parse replaces it, every
+# capture's status is checked, and a glob that could not be judged is not skipped. --check exits 1
+# with empty stdout; so does an awk that exits 0 and prints nothing at the heading search or the
+# fence check (an unknown token). With the section declared (including one bracket group, so sed
+# runs), a state that defaults to absent, a capture whose status is ignored (the matcher's, above
+# all), an unknown token read as absent, or a skipped glob reports a verdict instead.
+case_reserve_capture_fails_closed() {
+  local dir base head tool stubs
+  dir="$(mk_gov_repo reserve-capture-fails-closed)"
+  res_claude_md "$dir/CLAUDE.md" 'migrations/**
+app/[id]/'
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/migrations"
+  printf 'x\n' > "$dir/migrations/0001.sql"
+  head="$(gov_commit "$dir")"
+  for tool in awk sed tr; do
+    stubs="$tmpbase/reserve-stub-$tool"
+    mkdir -p "$stubs"
+    printf '#!/bin/sh\nexit 2\n' > "$stubs/$tool"
+    chmod +x "$stubs/$tool"
+    PATH="$stubs:$PATH" run_res "$dir" "$base" "$head"
+    expect_rc 1
+    expect_gov_last "verdict=error"
+    expect_gov_out_absent "reserved:"
+    expect_gov_out_absent "verdict=absent"
+    expect_gov_out_absent "verdict=none"
+    PATH="$stubs:$PATH" run_res "$dir" --check "$dir/CLAUDE.md"
+    [ "$gov_rc" -ne 0 ] || { __ok=0; __why="${__why}[$tool stub] --check exited 0\n"; }
+    res_expect_exact "[$tool stub] --check stdout" "" "$gov_out"
+  done
+  # One awk call at a time: a stub that runs the real awk unless the program text holds a marker
+  # (the heading search, the section slice, the fence check, the body extract, the matcher). A
+  # capture whose status is ignored would otherwise turn an empty result into a quiet verdict; the
+  # matcher is the one nothing else catches, since the parse stubs above fail first.
+  local real_awk marker
+  real_awk="$(command -v awk)"
+  stubs="$tmpbase/reserve-stub-awk-once"
+  mkdir -p "$stubs"
+  printf '#!/bin/sh\ncase "$1" in *"$RES_TEST_AWK_FAIL"*) [ -n "${RES_TEST_AWK_EMPTY:-}" ] && { cat >/dev/null; exit 0; }; exit 2 ;; esac\nexec %s "$@"\n' "$real_awk" > "$stubs/awk"
+  chmod +x "$stubs/awk"
+  for marker in 'found = 1' '!done' 'status ==' 'opened && !closed' 'function hit'; do
+    RES_TEST_AWK_FAIL="$marker" PATH="$stubs:$PATH" run_res "$dir" "$base" "$head"
+    expect_rc 1
+    expect_gov_last "verdict=error"
+    expect_gov_out_absent "reserved:"
+    expect_gov_out_absent "verdict=absent"
+    expect_gov_out_absent "verdict=none"
+    RES_TEST_AWK_FAIL="$marker" PATH="$stubs:$PATH" run_res "$dir" --check "$dir/CLAUDE.md"
+    [ "$gov_rc" -ne 0 ] || { __ok=0; __why="${__why}[awk fails on '$marker'] --check exited 0\n"; }
+    res_expect_exact "[awk fails on '$marker'] --check stdout" "" "$gov_out"
+  done
+  # An awk that exits 0 and prints nothing (a status check cannot see it): the heading search and
+  # the fence check then print no token at all, and an unknown token is an error too, not absent.
+  for marker in 'found = 1' 'status =='; do
+    RES_TEST_AWK_EMPTY=1 RES_TEST_AWK_FAIL="$marker" PATH="$stubs:$PATH" run_res "$dir" "$base" "$head"
+    expect_rc 1
+    expect_gov_last "verdict=error"
+    expect_gov_out_absent "reserved:"
+    expect_gov_out_absent "verdict=absent"
+    RES_TEST_AWK_EMPTY=1 RES_TEST_AWK_FAIL="$marker" PATH="$stubs:$PATH" run_res "$dir" --check "$dir/CLAUDE.md"
+    [ "$gov_rc" -ne 0 ] || { __ok=0; __why="${__why}[awk prints nothing on '$marker'] --check exited 0\n"; }
+    res_expect_exact "[awk prints nothing on '$marker'] --check stdout" "" "$gov_out"
+  done
+  # Control: the same stub with a marker nothing contains behaves like the real awk.
+  RES_TEST_AWK_FAIL="no such text in any program" PATH="$stubs:$PATH" run_res "$dir" "$base" "$head"
+  expect_rc 0
+  expect_gov_last "verdict=reserved"
+}
+
+# reserve-section-shape — the section is found and sliced as the contract says: an exact title at
+# any '#' depth (### here); a deeper sub-heading and a blank line inside it do not end it; only the
+# FIRST fenced block is read (a second block naming secrets/ is ignored); a title with trailing
+# text is not the section (absent); a sibling heading ends it before any fence (no-fence). A
+# slice that ignores heading depth, reads every block, or accepts a near-miss title changes one of
+# these verdicts.
+case_reserve_section_shape() {
+  local dir base head
+  dir="$(mk_gov_repo reserve-section-shape)"
+  printf '# CLAUDE.md\n\n### Autonomy reserve\n\nIntro prose.\n\n#### Notes\n\n```\n# first block\nCLAUDE.md\n\n```\n\nMore prose.\n\n```\nsecrets/\n```\n\n### Next section\n' > "$dir/CLAUDE.md"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/secrets"
+  printf 'changed\n' >> "$dir/CLAUDE.md"
+  printf 'x\n' > "$dir/secrets/k.txt"
+  head="$(gov_commit "$dir")"
+  run_res "$dir" "$base" "$head"
+  expect_rc 0
+  res_expect_exact "first block: stdout" "reserved: CLAUDE.md
+verdict=reserved" "$gov_out"
+  run_res "$dir" --check "$dir/CLAUDE.md"
+  res_expect_exact "first block: --check" "declared 1 0" "$gov_out"
+  printf '# CLAUDE.md\n\n## Autonomy reserve\n\n## Next section\n\n```\nCLAUDE.md\n```\n' > "$dir/CLAUDE.md"
+  run_res "$dir" --check "$dir/CLAUDE.md"
+  res_expect_exact "sibling heading ends the section: --check" "malformed no-fence" "$gov_out"
+  printf '# CLAUDE.md\n\n## Autonomy reserve (draft)\n```\nCLAUDE.md\n```\n' > "$dir/CLAUDE.md"
+  run_res "$dir" --check "$dir/CLAUDE.md"
+  res_expect_exact "near-miss title: --check" "absent" "$gov_out"
+  printf '# CLAUDE.md\n\n## Autonomy reserve\n```\nnot reserved: db/\n```\n' > "$dir/CLAUDE.md"
+  run_res "$dir" --check "$dir/CLAUDE.md"
+  res_expect_exact "only a not reserved: line is an entry: --check" "declared 0 1" "$gov_out"
+}
+
+# reserve-diff-relative — run from a subdirectory with diff.relative=true, diff mode still lists a
+# reserved path outside it and --check still lists a schema path outside it, because both change to
+# the toplevel first. A run that does not narrows each list to the subdirectory, silently.
+case_reserve_diff_relative() {
+  local dir base head
+  dir="$(mk_gov_repo reserve-diff-relative)"
+  res_claude_md "$dir/CLAUDE.md" 'migrations/**'
+  mkdir -p "$dir/src"
+  printf 'seed\n' > "$dir/src/seed.txt"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/migrations" "$dir/prisma"
+  printf 'x\n' > "$dir/src/app.txt"
+  printf 'x\n' > "$dir/migrations/a.sql"
+  printf 'x\n' > "$dir/prisma/schema.prisma"
+  head="$(gov_commit "$dir")"
+  (cd "$dir" && git config diff.relative true)
+  run_res "$dir/src" "$base" "$head"
+  expect_rc 0
+  expect_gov_out "reserved: migrations/a.sql"
+  expect_gov_last "verdict=reserved"
+  run_res "$dir/src" --check "$dir/CLAUDE.md"
+  expect_rc 0
+  expect_gov_out "schema: prisma/schema.prisma"
+}
+
+# res_unreadable_row ENTRY SHOWN — one row of reserve-unreadable, in the fixture repo $res_dir: a
+# base CLAUDE.md whose fenced block holds CLAUDE.md plus ENTRY, a head that changes CLAUDE.md (a
+# path the readable first line WOULD reserve). --check reports the entry (control bytes as `?`, SHOWN)
+# on its one line; diff mode exits 1 with verdict=error last, not one reserved: line (the output
+# is buffered), and a stderr line that names the reason and SHOWN.
+res_unreadable_row() {
+  local entry="$1" shown="$2" base head err
+  res_claude_md "$res_dir/CLAUDE.md" "CLAUDE.md
+$entry"
+  base="$(gov_commit "$res_dir")"
+  run_res "$res_dir" --check "$res_dir/CLAUDE.md"
+  expect_rc 0
+  res_expect_exact "[$shown] --check" "malformed unreadable-glob $shown" "$gov_out"
+  printf 'changed\n' >> "$res_dir/CLAUDE.md"
+  head="$(gov_commit "$res_dir")"
+  run_res "$res_dir" "$base" "$head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_out_absent "reserved:"
+  err="$gov_err"
+  case "$err" in
+    *"unreadable-glob: $shown"*) : ;;
+    *) __ok=0; __why="${__why}[$shown] stderr does not name the reason and the entry: '$err'\n" ;;
+  esac
+}
+
+# reserve-unreadable — every entry the dialect cannot read unambiguously makes the whole section
+# malformed, in both modes and in either kind of line; so do the three section-level faults. A
+# matcher that tolerates one of these quietly stops matching what the maintainer wrote.
+case_reserve_unreadable() {
+  local e
+  res_dir="$(mk_gov_repo reserve-unreadable)"
+  printf 'seed\n' > "$res_dir/seed.txt"
+  while IFS= read -r e; do
+    res_unreadable_row "$e" "$e"
+  done <<'EOF'
+migrations/[0-9]*.sql
+docs/?.md
+*.{sql,prisma}
+docs\adr
+!docs/adr
+/docs/adr
+./docs
+a/../b
+a//b
+src/**/schema.sql
+docs/adr/**  # ADRs
+`docs/adr`
+docs adr
+[12]
+[!x]
+**
+not reserved: db/[a-z]/
+not reserved:
+Not reserved: db/
+EOF
+  res_unreadable_row "$(printf 'docs/a\tb')" "docs/a?b"
+  res_unreadable_row "$(printf 'docs/a\033b')" "docs/a?b"
+  # A non-ASCII entry stays unreadable even when the caller's locale would let a bracket range match
+  # accented letters: the script pins LC_ALL=C. (Where the locale is not installed, C applies anyway.)
+  LC_ALL=en_US.UTF-8 res_unreadable_row "$(printf 'docs/\303\211t\303\251')" "docs/??t??"
+
+  # Section-level faults: prose only (no fence), an unterminated fence, a fence with no entry.
+  local base head
+  printf '# CLAUDE.md\n\n## Autonomy reserve\n\nJust prose, no fenced block.\n' > "$res_dir/CLAUDE.md"
+  base="$(gov_commit "$res_dir")"
+  run_res "$res_dir" --check "$res_dir/CLAUDE.md"
+  res_expect_exact "no-fence --check" "malformed no-fence" "$gov_out"
+  printf 'x\n' > "$res_dir/after-no-fence.txt"
+  head="$(gov_commit "$res_dir")"
+  run_res "$res_dir" "$base" "$head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_err "no-fence"
+  printf '# CLAUDE.md\n\n## Autonomy reserve\n```\nCLAUDE.md\n' > "$res_dir/CLAUDE.md"
+  base="$(gov_commit "$res_dir")"
+  run_res "$res_dir" --check "$res_dir/CLAUDE.md"
+  res_expect_exact "unterminated-fence --check" "malformed unterminated-fence" "$gov_out"
+  printf 'x\n' > "$res_dir/after-unterminated.txt"
+  head="$(gov_commit "$res_dir")"
+  run_res "$res_dir" "$base" "$head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_err "unterminated-fence"
+  printf '# CLAUDE.md\n\n## Autonomy reserve\n```\n# nothing declared yet\n\n```\n' > "$res_dir/CLAUDE.md"
+  base="$(gov_commit "$res_dir")"
+  run_res "$res_dir" --check "$res_dir/CLAUDE.md"
+  res_expect_exact "no-globs --check" "malformed no-globs" "$gov_out"
+  printf 'x\n' > "$res_dir/after-no-globs.txt"
+  head="$(gov_commit "$res_dir")"
+  run_res "$res_dir" "$base" "$head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_err "no-globs"
+}
+
+# reserve-bad-args — a `--output=` value, a wrong argument count, a short hash and an upper-case
+# hash exit 2 with verdict=error before any git call: nothing is written and no git runs.
+case_reserve_bad_args() {
+  local dir base head
+  dir="$(mk_gov_repo reserve-bad-args)"
+  res_claude_md "$dir/CLAUDE.md" 'migrations/**'
+  base="$(gov_commit "$dir")"
+  printf 'x\n' > "$dir/app.txt"
+  head="$(gov_commit "$dir")"
+  run_res "$dir" "--output=$dir/leak.txt" "$head"
+  expect_rc 2
+  expect_gov_last "verdict=error"
+  expect_no_file "$dir/leak.txt"
+  run_res "$dir"
+  expect_rc 2
+  expect_gov_last "verdict=error"
+  run_res "$dir" "$base"
+  expect_rc 2
+  expect_gov_last "verdict=error"
+  run_res "$dir" "$base" "$head" "$head"
+  expect_rc 2
+  expect_gov_last "verdict=error"
+  run_res "$dir" "${base%?}" "$head"
+  expect_rc 2
+  expect_gov_last "verdict=error"
+  run_res "$dir" "$(printf '%s' "$base" | tr 'a-f' 'A-F')" "$head"
+  expect_rc 2
+  expect_gov_last "verdict=error"
+  run_res "$dir" --check
+  expect_rc 2
+}
+
+# reserve-git-error — a well-formed head that is not an object (the section is declared, so the
+# diff is run): rc 1, verdict=error last, git's own failure quoted on stderr, no reserved: line;
+# and a well-formed base that is not a commit, 40 hex or 64 hex (a 64-hex value is valid input, so
+# it reaches git and fails there, not at the usage check): rc 1, "base commit not found". A diff
+# that fails with a two-line message (a stub git, first on PATH, for the diff call only) is quoted
+# by its first line alone, so stderr stays one reason line.
+case_reserve_git_error() {
+  local dir base head fake_head real_git stubs
+  dir="$(mk_gov_repo reserve-git-error)"
+  res_claude_md "$dir/CLAUDE.md" 'migrations/**'
+  base="$(gov_commit "$dir")"
+  printf 'x\n' > "$dir/app.txt"
+  head="$(gov_commit "$dir")"
+  fake_head="0${base%?}"
+  run_res "$dir" "$base" "$fake_head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_err "git diff failed"
+  expect_gov_out_absent "reserved:"
+  run_res "$dir" "$fake_head" "$head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_err "base commit not found"
+  # Not "$base" plus zero padding: git reads a SHA-1 zero-padded to 64 hex as that SHA-1.
+  run_res "$dir" "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" "$head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  expect_gov_err "base commit not found"
+  real_git="$(command -v git)"
+  stubs="$tmpbase/reserve-stub-git-diff"
+  mkdir -p "$stubs"
+  printf '#!/bin/sh\ncase "$1" in diff) printf "fatal: first line\\nsecond line\\n" >&2; exit 128 ;; esac\nexec %s "$@"\n' "$real_git" > "$stubs/git"
+  chmod +x "$stubs/git"
+  PATH="$stubs:$PATH" run_res "$dir" "$base" "$head"
+  expect_rc 1
+  expect_gov_last "verdict=error"
+  res_expect_exact "two-line git failure: stderr" "git diff failed: fatal: first line" "$gov_err"
+}
+
+# reserve-control-char-path — migrations/** is reserved and the head adds, under migrations/, a
+# sorted-first ordinary path plus a path holding an embedded newline, a tab, an escape or a delete
+# byte (built straight into a tree, so no filesystem has to hold the name): verdict=error each time, and
+# no reserved: line at all — the ordinary path sorts first, so an unbuffered writer would already
+# have printed it; a check that misses the newline marker, or any other control byte, passes one.
+case_reserve_control_char_path() {
+  local dir base head blob basetree sub newtree variant bad_name
+  dir="$(mk_gov_repo reserve-control-char-path)"
+  res_claude_md "$dir/CLAUDE.md" 'migrations/**'
+  base="$(gov_commit "$dir")"
+  blob="$(cd "$dir" && printf 'evil content\n' | git hash-object -w --stdin)"
+  basetree="$(cd "$dir" && git rev-parse "$base^{tree}")"
+  for variant in newline tab escape delete; do
+    case "$variant" in
+      newline) bad_name=$'evil\nfile.sql' ;;
+      tab) bad_name=$'evil\tfile.sql' ;;
+      escape) bad_name=$'evil\033file.sql' ;;
+      delete) bad_name=$'evil\177file.sql' ;;
+    esac
+    sub="$({ printf '100644 blob %s\ta.sql\0' "$blob"; printf '100644 blob %s\t%s\0' "$blob" "$bad_name"; } \
+      | (cd "$dir" && git mktree -z))"
+    newtree="$({ (cd "$dir" && git ls-tree -z "$basetree"); printf '040000 tree %s\tmigrations\0' "$sub"; } \
+      | (cd "$dir" && git mktree -z))"
+    head="$(cd "$dir" && git commit-tree "$newtree" -p "$base" -m "control character path ($variant)")"
+    run_res "$dir" "$base" "$head"
+    expect_rc 1
+    expect_gov_last "verdict=error"
+    expect_gov_out_absent "reserved:"
+    case "$gov_err" in
+      *"control character"*) : ;;
+      *) __ok=0; __why="${__why}[$variant] stderr does not name a control character: '$gov_err'\n" ;;
+    esac
+  done
+}
+
+# reserve-read-only — a diff-mode run and a --check run, with TMPDIR pointed at an empty
+# directory, leave that directory empty and leave every file and name in the repository (.git
+# included) exactly as they were. A script that writes anywhere in the tree, or leaves a temp file
+# behind, changes the listing. The script source also holds no here-string or here-document: bash
+# 3.2 writes each of those to a temp file, and a write denied there would fail the redirect, so the
+# redirect operator itself is pinned absent (a denied temp write can only be forced with macOS's
+# sandbox-exec, used below where it works; elsewhere a bad TMPDIR just falls back to /tmp).
+case_reserve_read_only() {
+  local dir base head tmpd before after sbout
+  dir="$(mk_gov_repo reserve-read-only)"
+  res_claude_md "$dir/CLAUDE.md" 'migrations/**
+not reserved: supabase/'
+  mkdir -p "$dir/db/migrations" "$dir/supabase/migrations"
+  printf 'x\n' > "$dir/supabase/migrations/1.sql"
+  base="$(gov_commit "$dir")"
+  printf 'x\n' > "$dir/db/migrations/1.sql"
+  head="$(gov_commit "$dir")"
+  tmpd="$tmpbase/reserve-read-only-tmp"
+  mkdir -p "$tmpd"
+  before="$(cd "$dir" && { find . | sort; find . -type f -exec cksum {} + | sort; })"
+  (cd "$dir" && TMPDIR="$tmpd" HOME="$dir/home" XDG_CONFIG_HOME="$dir/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+    "$bash_bin" "$root/bin/reserve-paths.sh" "$base" "$head") >/dev/null 2>&1
+  (cd "$dir" && TMPDIR="$tmpd" HOME="$dir/home" XDG_CONFIG_HOME="$dir/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+    "$bash_bin" "$root/bin/reserve-paths.sh" --check "$dir/CLAUDE.md") >/dev/null 2>&1
+  after="$(cd "$dir" && { find . | sort; find . -type f -exec cksum {} + | sort; })"
+  [ "$after" = "$before" ] || { __ok=0; __why="${__why}the repository listing changed across a diff-mode and a --check run\n"; }
+  [ -z "$(ls -A "$tmpd")" ] || { __ok=0; __why="${__why}TMPDIR is not empty afterwards: $(ls -A "$tmpd")\n"; }
+  res_expect_exact "here-strings and here-documents in the source" "0" "$(grep -cF -- '<<' "$root/bin/reserve-paths.sh")"
+  # Where macOS's sandbox-exec works (probed first, so a nested sandbox just skips this), a run that
+  # may not write to any temp location gives the same verdict as an ordinary one: the behavioural
+  # twin of the source check above, which cannot be forced on Linux.
+  if command -v sandbox-exec >/dev/null 2>&1 && sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; then
+    sbout="$(cd "$dir" && HOME="$dir/home" XDG_CONFIG_HOME="$dir/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+      sandbox-exec -p '(version 1)(allow default)(deny file-write* (subpath "/private/tmp") (subpath "/private/var/folders") (subpath "/tmp") (subpath "/var/tmp") (subpath "/private/var/tmp"))' \
+      "$bash_bin" "$root/bin/reserve-paths.sh" "$base" "$head" 2>/dev/null)"
+    res_expect_exact "temp writes denied: stdout" "reserved: db/migrations/1.sql
+verdict=reserved" "$sbout"
+  fi
+}
+
+# reserve-check-scan — --check lists the tracked schema paths by what covers them: a reserve glob
+# (no line), only a `not reserved:` glob (acknowledged:), nothing (schema:). The built-in schema
+# globs are migrations (app/migrations/0003.py matches no other), alembic/versions,
+# prisma/schema.prisma and *.sql; docs/migrations.md and src/app.ts are not schema. A path covered
+# by both kinds of glob (db/migrations/0001.sql: the reserve glob db/migrations/ and the
+# acknowledgment db/) prints nothing, the reserve wins. A tracked path with a tab (added to the
+# index directly) is shown with a `?` for it.
+case_reserve_check_scan() {
+  local dir blob
+  dir="$(mk_gov_repo reserve-check-scan)"
+  res_claude_md "$dir/CLAUDE.md" 'db/migrations/
+CLAUDE.md
+not reserved: supabase/
+not reserved: db/
+not reserved: vendor/'
+  mkdir -p "$dir/db/migrations" "$dir/supabase/migrations" "$dir/prisma" "$dir/alembic/versions" \
+    "$dir/seed" "$dir/src" "$dir/docs"
+  printf 'x\n' > "$dir/db/migrations/0001.sql"
+  printf 'x\n' > "$dir/supabase/migrations/0001.sql"
+  printf 'x\n' > "$dir/prisma/schema.prisma"
+  printf 'x\n' > "$dir/alembic/versions/abc.py"
+  printf 'x\n' > "$dir/seed/data.SQL"
+  printf 'x\n' > "$dir/src/app.ts"
+  printf 'x\n' > "$dir/docs/migrations.md"
+  mkdir -p "$dir/app/migrations"
+  printf 'x\n' > "$dir/app/migrations/0003.py"
+  gov_commit "$dir" >/dev/null
+  blob="$(cd "$dir" && printf 'x\n' | git hash-object -w --stdin)"
+  (cd "$dir" && git update-index --add --cacheinfo "100644,$blob,$(printf 'x\ty.sql')") >/dev/null
+  run_res "$dir" --check "$dir/CLAUDE.md"
+  expect_rc 0
+  res_expect_exact "stdout" "declared 2 3
+schema: alembic/versions/abc.py
+schema: app/migrations/0003.py
+schema: prisma/schema.prisma
+schema: seed/data.SQL
+acknowledged: supabase/migrations/0001.sql
+schema: x?y.sql" "$gov_out"
+  res_expect_exact "stderr" "" "$gov_err"
+}
+
+# reserve-check-unreadable-file — a missing file, a directory and a device that is not a regular
+# file (/dev/null reads as empty, which would parse as `absent`) all exit 2 with empty stdout,
+# never `absent`.
+case_reserve_check_unreadable_file() {
+  local dir
+  dir="$(mk_gov_repo reserve-check-unreadable-file)"
+  run_res "$dir" --check "$dir/no-such-CLAUDE.md"
+  expect_rc 2
+  res_expect_exact "missing file: stdout" "" "$gov_out"
+  run_res "$dir" --check "$dir"
+  expect_rc 2
+  res_expect_exact "directory: stdout" "" "$gov_out"
+  run_res "$dir" --check /dev/null
+  expect_rc 2
+  res_expect_exact "device: stdout" "" "$gov_out"
+}
+
+# reserve-check-git-error — a section that parses, then a git failure: rc 1, empty stdout, a reason
+# on stderr. A corrupt index fails `git ls-files`; a directory outside any repository fails the
+# toplevel lookup before it.
+case_reserve_check_git_error() {
+  local dir outside
+  dir="$(mk_gov_repo reserve-check-git-error)"
+  res_claude_md "$dir/CLAUDE.md" 'migrations/**'
+  gov_commit "$dir" >/dev/null
+  printf 'not an index' > "$dir/.git/index"
+  run_res "$dir" --check "$dir/CLAUDE.md"
+  expect_rc 1
+  res_expect_exact "corrupt index: stdout" "" "$gov_out"
+  [ -n "$gov_err" ] || { __ok=0; __why="${__why}corrupt index: no reason on stderr\n"; }
+  outside="$tmpbase/reserve-check-outside"
+  mkdir -p "$outside"
+  res_claude_md "$outside/CLAUDE.md" 'migrations/**'
+  # The ceiling stops git's upward search at the suite's own scratch root, so an enclosing repository
+  # (a TMPDIR inside a checkout) can never make this directory look like part of one.
+  GIT_CEILING_DIRECTORIES="$tmpbase" run_res "$outside" --check "$outside/CLAUDE.md"
+  expect_rc 1
+  res_expect_exact "outside a repository: stdout" "" "$gov_out"
+}
+
+# Doctor fixtures (through run_doctor on mk_repo variants). A tracked schema path is added to the
+# index only (git add), the doctor never needs a commit.
+
+# reserve-doctor-schema-warn — mode: autonomous, no reserve section, eight tracked migrations:
+# one WARN with the count, the first six paths and (+2 more), and not the seventh.
+case_reserve_doctor_schema_warn() {
+  local dir i
+  dir="$(mk_repo reserve-doctor-schema-warn autonomy verbatim)"
+  mkdir -p "$dir/db/migrations"
+  for i in 1 2 3 4 5 6 7 8; do printf 'x\n' > "$dir/db/migrations/000$i.sql"; done
+  (cd "$dir" && git add db/migrations) >/dev/null
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "WARN  autonomy reserve: 8 schema path(s) outside the reserve while plan auto-approval is on: db/migrations/0001.sql"
+  expect "db/migrations/0006.sql (+2 more)"
+  expect_absent "db/migrations/0007.sql"
+  expect_absent "section is malformed"
+}
+
+# reserve-doctor-acknowledged — a "Plan auto-approval policy" section and a reserve that leaves
+# the migrations directory out on purpose (eight tracked files): the declared PASS counts both
+# kinds of line, the acknowledged paths are one PASS with the count, six paths and (+2 more), and
+# there is no WARN.
+case_reserve_doctor_acknowledged() {
+  local dir i
+  dir="$(mk_repo reserve-doctor-acknowledged base verbatim)"
+  cat >> "$dir/CLAUDE.md" <<'EOF'
+
+## Plan auto-approval policy
+
+Fixture stub policy.
+
+## Autonomy reserve
+```
+CLAUDE.md
+not reserved: db/migrations/
+```
+EOF
+  mkdir -p "$dir/db/migrations"
+  for i in 1 2 3 4 5 6 7 8; do printf 'x\n' > "$dir/db/migrations/000${i}_init.sql"; done
+  (cd "$dir" && git add db/migrations) >/dev/null
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "PASS  autonomy reserve: 1 glob(s), 1 'not reserved:' line(s)"
+  expect "PASS  autonomy reserve: 8 schema path(s) left out of the reserve on purpose: db/migrations/0001_init.sql"
+  expect "db/migrations/0006_init.sql (+2 more)"
+  expect_absent "db/migrations/0007_init.sql"
+  expect_absent "outside the reserve"
+}
+
+# reserve-doctor-declared-quiet — a declared reserve with auto-approval off: the declared PASS only.
+# A tracked migration outside the reserve is not reported while neither a policy section nor
+# `mode: autonomous` makes the schema check apply.
+case_reserve_doctor_declared_quiet() {
+  local dir
+  dir="$(mk_repo reserve-doctor-declared-quiet base verbatim)"
+  cat >> "$dir/CLAUDE.md" <<'EOF'
+
+## Autonomy reserve
+```
+CLAUDE.md
+```
+EOF
+  mkdir -p "$dir/db/migrations"
+  printf 'x\n' > "$dir/db/migrations/0001_init.sql"
+  (cd "$dir" && git add db/migrations) >/dev/null
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "PASS  autonomy reserve: 1 glob(s), 0 'not reserved:' line(s)"
+  expect_absent "schema path(s)"
+}
+
+# reserve-doctor-inactive — no reserve section and auto-approval off: the doctor says nothing about
+# the reserve, whatever is tracked.
+case_reserve_doctor_inactive() {
+  local dir
+  dir="$(mk_repo reserve-doctor-inactive base verbatim)"
+  mkdir -p "$dir/db/migrations"
+  printf 'x\n' > "$dir/db/migrations/0001_init.sql"
+  (cd "$dir" && git add db/migrations) >/dev/null
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect_absent "autonomy reserve:"
+}
+
+# reserve-doctor-malformed — an unreadable entry is a WARN naming the token and the entry, rc 0,
+# with auto-approval off, and no schema line follows.
+case_reserve_doctor_malformed() {
+  local dir
+  dir="$(mk_repo reserve-doctor-malformed base verbatim)"
+  cat >> "$dir/CLAUDE.md" <<'EOF'
+
+## Autonomy reserve
+```
+src/[0-9]*.sql
+```
+EOF
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "WARN  autonomy reserve: section is malformed (unreadable-glob: src/[0-9]*.sql)"
+  expect_absent "schema path(s)"
+}
+
+# reserve-doctor-script-missing — a reserve section with the fixture's own copy of the script
+# deleted, replaced by a stub that exits non-zero, or by a stub that prints a first line outside the
+# three documented shapes: "could not validate" each time, rc 0.
+case_reserve_doctor_script_missing() {
+  local dir
+  dir="$(mk_repo reserve-doctor-script-missing base verbatim)"
+  printf '\n## Autonomy reserve\n```\nCLAUDE.md\n```\n' >> "$dir/CLAUDE.md"
+  rm -f "$dir/bin/reserve-paths.sh"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "WARN  autonomy reserve: could not validate"
+  dir="$(mk_repo reserve-doctor-script-exit base verbatim)"
+  printf '\n## Autonomy reserve\n```\nCLAUDE.md\n```\n' >> "$dir/CLAUDE.md"
+  printf '#!/usr/bin/env bash\necho "declared 1 0"\nexit 3\n' > "$dir/bin/reserve-paths.sh"
+  chmod +x "$dir/bin/reserve-paths.sh"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "WARN  autonomy reserve: could not validate"
+  expect_absent "PASS  autonomy reserve:"
+  dir="$(mk_repo reserve-doctor-script-shape base verbatim)"
+  printf '\n## Autonomy reserve\n```\nCLAUDE.md\n```\n' >> "$dir/CLAUDE.md"
+  printf '#!/usr/bin/env bash\necho "bogus shape"\n' > "$dir/bin/reserve-paths.sh"
+  chmod +x "$dir/bin/reserve-paths.sh"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "WARN  autonomy reserve: could not validate"
+}
+
+# ---------------------------------------------------------------------------------------------
 stub_gh_dir="$tmpbase/stub-gh"
 build_stub_gh "$stub_gh_dir"
 
@@ -3440,8 +4286,8 @@ case_codex_setup_rules_content() {
 # codex-setup-rules-gated — the ALLOW-decision .sh prefix_rule names, the host_executable names,
 # and the set of listed scripts are all the SAME set; every host_executable path is exactly
 # <plugin>/bin/<name>; every one of those names exists under $root/bin; codex-setup.sh,
-# harness-version.sh, governance-paths.sh, and (#427) codex-scheduled-run.sh are absent from both
-# sets — the allow-decision filter on sh_names is what keeps codex-scheduled-run.sh's own
+# harness-version.sh, governance-paths.sh, reserve-paths.sh, and (#427) codex-scheduled-run.sh are
+# absent from both sets — the allow-decision filter on sh_names is what keeps codex-scheduled-run.sh's own
 # FORBIDDEN .sh prefix_rule from being counted as gated by coincidence.
 # mutant:408-cx-host-exec-dropped — deleting one host_executable line from templates/codex.rules
 #   drops it from the installed rules file's own host_executable-name set, breaking the equality.
@@ -3470,7 +4316,7 @@ case_codex_setup_rules_gated() {
     [ -f "$root/bin/$n" ] || { __ok=0; __why="${__why}$n does not exist under $root/bin\n"; }
   done
   local absent
-  for absent in codex-setup.sh harness-version.sh governance-paths.sh codex-scheduled-run.sh; do
+  for absent in codex-setup.sh harness-version.sh governance-paths.sh reserve-paths.sh codex-scheduled-run.sh; do
     case " $sh_names $hx_names " in
       *" $absent "*) __ok=0; __why="${__why}$absent unexpectedly gated\n" ;;
     esac
@@ -7503,6 +8349,28 @@ cases=(
   "gov-doctor-unterminated|case_gov_doctor_unterminated|governance-paths.sh --check via the doctor: an opening fence never closed -> WARN malformed (unterminated-fence), never FAIL"
   "gov-doctor-leading-slash|case_gov_doctor_leading_slash|governance-paths.sh --check via the doctor: a glob starting '/' -> WARN malformed (leading-slash), never FAIL"
   "gov-doctor-script-missing|case_gov_doctor_script_missing|governance-paths.sh --check via the doctor: the fixture's own bin/governance-paths.sh deleted -> WARN could not validate, never FAIL"
+  "reserve-dialect|case_reserve_dialect|#552: reserve-paths.sh diff mode: one base section with every dialect clause (case fold, unanchored any-depth match, * crossing /, trailing-slash and **/ forms, segment alignment, literal route brackets, a not reserved: line ignored) and a head with one path per clause plus a rename out of a reserved directory -> exactly the reserved paths print, in diff order"
+  "reserve-none|case_reserve_none|#552: reserve-paths.sh diff mode: a declared section that matches nothing that changed -> verdict=none alone, empty stderr"
+  "reserve-absent|case_reserve_absent|#552: reserve-paths.sh: no section, or no CLAUDE.md, at the base -> verdict=absent alone, rc 0; --check on a section-less file prints absent"
+  "reserve-from-base|case_reserve_from_base|#552: reserve-paths.sh diff mode: the head deletes the section and adds a path the base reserved -> still reserved, the base's section applies"
+  "reserve-symlink-claude-md|case_reserve_symlink_claude_md|#552: reserve-paths.sh diff mode: a CLAUDE.md symlink in the base tree is followed one hop (beside it or in a subdirectory) and --check agrees; a target without a section is absent; an absolute, escaping, missing, self, chained, directory, dot-segment or control-character link, and a CLAUDE.md directory, is verdict=error rc 1, never absent"
+  "reserve-capture-fails-closed|case_reserve_capture_fails_closed|#552: reserve-paths.sh: awk, sed or tr replaced by a stub that exits 2, or a single awk call (heading, slice, fence, body, matcher) failing or, for the heading and fence checks, printing nothing -> diff mode verdict=error rc 1 (never absent, none or reserved) and --check exits non-zero with empty stdout"
+  "reserve-section-shape|case_reserve_section_shape|#552: reserve-paths.sh: a title at depth three with a deeper sub-heading inside it is read, only its first fenced block counts, a sibling heading ends it before any fence (no-fence), and a title with trailing text is not the section (absent)"
+  "reserve-diff-relative|case_reserve_diff_relative|#552: reserve-paths.sh: run from a subdirectory with diff.relative=true, diff mode still lists a reserved path outside it and --check a schema path outside it (cd to the toplevel)"
+  "reserve-unreadable|case_reserve_unreadable|#552: reserve-paths.sh: every unreadable entry (class, ?, braces, backslash, !, leading slash, ./, .., //, a mid-glob **, an inline comment, a backtick, a space, a control byte, a not reserved: line with a class) and each section fault (no-fence, unterminated-fence, no-globs) -> --check malformed naming it, diff mode verdict=error rc 1 with no reserved: line"
+  "reserve-bad-args|case_reserve_bad_args|#552: reserve-paths.sh: a --output= argument, a wrong argument count, a short hash and an upper-case hash -> rc 2, verdict=error, before any git call (no file written)"
+  "reserve-git-error|case_reserve_git_error|#552: reserve-paths.sh diff mode: a well-formed but nonexistent head object -> verdict=error rc 1, quoting the first line of git diff's own failure"
+  "reserve-control-char-path|case_reserve_control_char_path|#552: reserve-paths.sh diff mode: a changed path holding an embedded newline, a tab or an escape byte, next to a sorted-first reserved path -> verdict=error rc 1 and no reserved: line (buffered output)"
+  "reserve-read-only|case_reserve_read_only|#552: reserve-paths.sh: a diff-mode run and a --check run with TMPDIR at an empty directory leave it empty and leave the repository listing and file checksums unchanged; the source holds no here-string or here-document, and (where sandbox-exec works) a run denied every temp write gives the ordinary verdict"
+  "reserve-check-scan|case_reserve_check_scan|#552: reserve-paths.sh --check: the built-in schema globs are classified as covered (no line), acknowledged: or schema:, non-schema paths are never listed, and a control byte in a tracked path is shown as ?"
+  "reserve-check-unreadable-file|case_reserve_check_unreadable_file|#552: reserve-paths.sh --check on a missing file, a directory or a device -> rc 2 with empty stdout, never absent"
+  "reserve-check-git-error|case_reserve_check_git_error|#552: reserve-paths.sh --check: a corrupt index, or a directory outside any repository -> rc 1 with empty stdout and a reason on stderr"
+  "reserve-doctor-schema-warn|case_reserve_doctor_schema_warn|#552: the doctor under mode: autonomous, no reserve section, eight tracked migrations -> one WARN with the count, six paths and (+2 more), rc 0"
+  "reserve-doctor-acknowledged|case_reserve_doctor_acknowledged|#552: the doctor under a Plan auto-approval policy section, a reserve with a not reserved: line over the migrations directory -> the declared PASS counts both kinds of line, one acknowledged PASS carries the count, six paths and (+2 more), no schema WARN"
+  "reserve-doctor-declared-quiet|case_reserve_doctor_declared_quiet|#552: the doctor with a declared reserve and auto-approval off -> the declared PASS and no schema line for a tracked migration"
+  "reserve-doctor-inactive|case_reserve_doctor_inactive|#552: the doctor with no reserve section and auto-approval off -> no autonomy reserve line at all, whatever is tracked"
+  "reserve-doctor-malformed|case_reserve_doctor_malformed|#552: the doctor with a reserve entry in a character class, auto-approval off -> WARN section is malformed naming the token and the entry, rc 0, no schema line"
+  "reserve-doctor-script-missing|case_reserve_doctor_script_missing|#552: the doctor with the fixture's reserve-paths.sh deleted, exiting non-zero, or printing an unknown first line -> WARN could not validate each time, rc 0"
   "codex-setup-fresh|case_codex_setup_fresh|#408: no AGENTS.md: rc 0, all five files wrote=, no AGENTS.md created, config.toml carries the CLAUDE.md fallback, and the three next: lines including codex --no-daemon"
   "codex-setup-idempotent|case_codex_setup_idempotent|#408: a second run gives only unchanged= lines and byte-identical files; --check afterward is rc 0 with no drift="
   "codex-setup-agents-roundtrip|case_codex_setup_agents_roundtrip|#408: each agent TOML's name/description/developer_instructions round-trips against agents/*.md, byte-identical body, no tools/model lines"
@@ -7514,7 +8382,7 @@ cases=(
   "codex-setup-mkdir-failure|case_codex_setup_mkdir_failure|#485: a PATH-shimmed mkdir -p fails on .codex/rules: rc 3, wrote= only for the three agent TOMLs, report step is mkdir -p failed"
   "codex-setup-first-file-failure|case_codex_setup_first_file_failure|#485: a PATH-shimmed mv fails on the first queued file: rc 3, no wrote= at all, report says written this run: none"
   "codex-setup-rules-content|case_codex_setup_rules_content|#408: every ADVISORY-Q1 allow line present; forbidden token-list set == templates/repo-settings.json's bare deny entries (jq-derived); no @PLUGIN_BIN@ literal remains"
-  "codex-setup-rules-gated|case_codex_setup_rules_gated|#408: the allow-rule .sh names and host_executable names both equal the listed scripts, each path <plugin>/bin/<s>, each name exists under bin/; codex-setup.sh/harness-version.sh/governance-paths.sh/codex-scheduled-run.sh absent from both"
+  "codex-setup-rules-gated|case_codex_setup_rules_gated|#408: the allow-rule .sh names and host_executable names both equal the listed scripts, each path <plugin>/bin/<s>, each name exists under bin/; codex-setup.sh/harness-version.sh/governance-paths.sh/reserve-paths.sh/codex-scheduled-run.sh absent from both"
   "codex-setup-contract-agents-md|case_codex_setup_contract_agents_md|#408: a pre-existing AGENTS.md keeps its content, gains exactly one begin marker naming CLAUDE.md, no fallback key in config.toml, still one marker after a second run; --check before it pins reason=missing-pointer"
   "codex-setup-agents-md-malformed|case_codex_setup_agents_md_malformed|#408 kickback: non-exact or unpaired marker shapes (trailing text or CR on either or both markers, a prose mention of either marker, an unpaired begin) refuse (rc 2, byte-identical, tail content preserved, no .codex) and --check reports reason=malformed-pointer"
   "codex-setup-config-merge|case_codex_setup_config_merge|#408: a pre-existing config.toml with a top-level key plus a [profiles.x] table: the fallback key is inserted above the first table, both originals survive; --check before it pins reason=missing-fallback"

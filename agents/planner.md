@@ -135,9 +135,13 @@ concern. Write "None" if this change alters no documented behaviour.
 
 ## Reserve touch list
 Include this section ONLY if CLAUDE.md declares an "Autonomy reserve" section (a fenced
-block of path globs, one per line). Then list every "Affected areas" entry matching one of
-those globs, naming the glob it matched, or write "None". If no reserve is declared, omit
-this section entirely.
+block of path globs, one per line; a `not reserved:` line there is the repo leaving a schema
+path out on purpose, not a reserve glob). Then list every "Affected areas" entry matching one of
+those globs, naming the glob it matched, or write "None". Matching ignores case and works at any
+directory depth (`migrations/**` matches `db/migrations/0001.sql`), `*` crosses `/`, and a glob
+covers everything beneath it. List an entry when you are unsure: the verifier checks the diff's
+changed paths mechanically, and an unlisted reserved path fails verification. If no reserve is
+declared, omit this section entirely.
 
 ## Data / schema impact
 Any database, schema, or data-model changes, following the project's conventions in CLAUDE.md.

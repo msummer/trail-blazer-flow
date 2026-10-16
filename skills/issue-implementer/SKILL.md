@@ -235,11 +235,11 @@ gh issue edit <number> --add-label needs-human
 `2d` / `2f` (Codex-unattended `permission-denied` only — see `docs/reference/codex.md`'s
 "Unattended runs (`codex exec`)"). `<reason>`: `plan-contradicted` (2a); `branch-has-committed-work`
 or `branch-has-open-pr` (2b); `blocking-question-unanswered` (2c); `ci-red-after-fix`,
-`ci-red-unrelated` (2e); `permission-denied` (2e; on a Codex unattended run, any stage — `2a`–`2f`,
-`plan-initial`, `plan-revision` — see `docs/reference/codex.md`'s "Unattended runs (`codex
-exec`)"); `stalled-dispatch`, `stalled-post`, `stalled-unknown` (planner step 7);
-`hook-canary-failed` (2c, 2e, plan-initial, plan-revision — Codex only, the dispatch canary, see
-`docs/reference/codex.md`) — no site in either skill ever posts a slug outside this list.
+`ci-red-unrelated`, `reserve-unreadable` (2e); `permission-denied` (2e; on a Codex unattended run,
+any stage — `2a`–`2f`, `plan-initial`, `plan-revision` — see `docs/reference/codex.md`'s
+"Unattended runs (`codex exec`)"); `stalled-dispatch`, `stalled-post`, `stalled-unknown` (planner
+step 7); `hook-canary-failed` (2c, 2e, plan-initial, plan-revision — Codex only, the dispatch
+canary, see `docs/reference/codex.md`) — no site in either skill ever posts a slug outside this list.
 
 **Label rules.** No other label changes: `plan-approved` is not removed, `impl-blocked` is not
 added. This is a different path from step 2f's blocked path, whose comment stays deliberately
@@ -563,12 +563,17 @@ e. **Dispatch the `verifier` subagent** (Claude Code: Task tool; Codex: `spawn_a
    + Verified facts + `RESOLVED:` decisions), the implementer's report, the dispatch attempt
    number, "Harness version: `<version>`" (step 0's printed value),
    `git diff <default-branch>...HEAD --stat` (three-dot, from the merge base; non-empty
-   because of step 2c's checkpoint), the declared autonomy reserve globs — pasted one per line
-   from CLAUDE.md's `## Autonomy reserve` fenced block, or the literal `none declared` — plus the
-   plan's "Reserve touch list" (or that it has none), which feed the verifier's `## Reserve touch
-   check`, and *"Verify this implementation against the plan and acceptance criteria following
-   your process. Return your verdict."* Before every verifier dispatch, record `git rev-parse
-   HEAD` — the commit this round reviews (a kickback's re-verification passes it on).
+   because of step 2c's checkpoint), the reserve match (`reserve-paths.sh`'s stdout, verbatim; it
+   reads CLAUDE.md's `## Autonomy reserve` section at the merge base) plus the plan's "Reserve
+   touch list" (or that it has none), which feed the verifier's `## Reserve touch check`, and
+   *"Verify this implementation against the plan and acceptance criteria following your process.
+   Return your verdict."* Before every verifier dispatch (first round, kickback and CI-fix
+   re-verification alike), record `git rev-parse HEAD` — the commit this round reviews (a
+   kickback's re-verification passes it on) — then run `git merge-base <default-branch> HEAD` and
+   `reserve-paths.sh <merge-base> <recorded HEAD>` as separate calls, both SHAs pasted as
+   literals. Exit 0 with a last line `verdict=reserved|none|absent` → dispatch; a permission
+   denial → "Permission-denied" above; anything else → no dispatch, escalate per "Durable
+   escalation" (stage `2e`, reason `reserve-unreadable`), quoting the script's stderr line.
    - **Verdict `pass`:** archive it first, then carry it. Archive: `gh issue comment <number>
      --body-file <tempfile>`, whose temp file's first line is exactly `<!-- verifier-verdict -->`,
      second line is exactly `<!-- verifier-verdict-branch: claude/<number>-<slug> -->` (this

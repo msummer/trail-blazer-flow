@@ -167,8 +167,9 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    mutation probe (3 to 5 mutants in the changed code, tests re-run against each, tree restored
    immediately after every mutant; a surviving mutant on a behavior the plan's criteria named is
    a `major` finding) — scope, declared constraints, and, when CLAUDE.md declares an "Autonomy
-   reserve", the diff's changed paths against those same globs (an undeclared reserve touch is a
-   `blocker` finding). **Verifier fail → kickback**: the
+   reserve", the reserved paths `bin/reserve-paths.sh` matched in the diff, which the orchestrator
+   runs before every dispatch, against the plan's Reserve touch list (an undeclared reserve touch
+   is a `blocker` finding). **Verifier fail → kickback**: the
    implementer is re-dispatched with the findings ("fix ONLY these"), then re-checked. The
    re-check confirms each prior finding is resolved and reviews only the fix's own delta. Its
    mutation probe targets only production code the fix changed, and a new surviving mutant on
