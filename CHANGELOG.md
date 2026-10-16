@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #551: agent-boundary now denies the implementer and verifier a deploy or cloud CLI (`vercel`, `fly`, `wrangler`, `aws`,
+  `terraform`, …), directly or through `npx`, `pnpm dlx` or `uvx`, and an `npm`, `pnpm`, `yarn` or `bun` script named
+  for `deploy` or for such a CLI; `package.json` is never read, so `npm test` stays quiet. No consumer step.
 - #579: push-guard misses, in every session, a lost-segment push alias, `export HOME=<d>; git push` via `<d>/.gitconfig`,
   a `$`/backtick-built config key or a CR-split alias value; no hook sees past `trap`, `noglob`, `nocorrect`, `-`, `repeat`
   (zsh runs them on Codex); branch protection is the backstop; the `- git push` over-block is gone. No consumer step.

@@ -5672,6 +5672,36 @@
       "expect_fail": [
         "push-interp-deny-memo"
       ]
+    },
+    {
+      "name": "551-ab-deploy-stop",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-deploy-",
+      "edits": [
+        {
+          "from": "{ vd = 0; continue }\n    return\n",
+          "to": "{ vd = 0; continue }\n    continue\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-deploy-noop-controls"
+      ]
+    },
+    {
+      "name": "551-ab-deploy-order",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-deploy-",
+      "edits": [
+        {
+          "from": "{ dep_word = h; return }",
+          "to": "{ dep_word = h; print \"-deploy- \" h; return }"
+        }
+      ],
+      "expect_fail": [
+        "ab-deploy-deny-precedence"
+      ]
     }
   ]
 }

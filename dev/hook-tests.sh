@@ -8183,6 +8183,257 @@ case_ab_optvalscan_noop_flood() {
   optval_cpu_check "$twin_ms" "$flood_ms" "ab"
 }
 
+# --- hooks/agent-boundary.sh: deploy and cloud CLIs (#551) --------------------------------------------
+# A DEPLOY_COMMANDS entry is denied whatever its subcommand: as the command word, as the word a LAUNCH_WORDS
+# launcher hands on to, or in a segment tail the scan cannot follow. After npm, pnpm, yarn or bun, a script
+# name containing "deploy" denies too, and package.json is never read. Case names carry "ab-deploy-" so
+# `bash dev/hook-tests.sh ab-deploy-` runs the family. A deny row needs no registry record: the base hook
+# allows every one, so each shows on its own that the rule can fail. The no-opinion and precedence rows pass
+# on the base hook too, so each carries one record.
+# abd_form picks the payload shape. "full" is a Claude payload whose transcript_path sits under a .claude
+# directory (and whose cwd is abd_cwd when set), so the first fast-path arm lets it through to the scan.
+# "bare" is mk_agent_cmd and "codex" is mk_codex_shell with a transcript path of its own: neither payload
+# names git, gh or claude, so such a row reaches the scan only through the second fast-path arm, and
+# abd_run fails the case if a payload does name one of them.
+# mutant:551-ab-deploy-stop — the dep_check read continues past the first word it cannot hand on to
+#   instead of stopping there, so npm install stripe and npx vitest run stripe deny (ab-deploy-noop-controls).
+# mutant:551-ab-deploy-order — dep_check prints its -deploy- finding at once instead of leaving it to the
+#   last END block, so a deploy deny comes before a later gh, git or .claude finding (ab-deploy-deny-precedence).
+abd_form=full
+abd_cwd=""
+abd_pathval=""
+abd_pkgdir="$tmpbase/abd-pkg"
+abd_payload() {
+  jq -n --arg agent "$1" --arg cmd "$2" --arg cwd "${3:-}" \
+    '{tool_name: "Bash", agent_type: $agent, transcript_path: "/home/u/.claude/projects/p/s.jsonl", tool_input: {command: $cmd}}
+     + (if $cwd != "" then {cwd: $cwd} else {} end)'
+}
+# abd_fixture — a directory whose package.json bodies all name a deploy: proof that no body is read.
+abd_fixture() {
+  mkdir -p "$abd_pkgdir"
+  printf '%s\n' '{"scripts":{"test":"vercel deploy --prod","build":"wrangler deploy","ship":"vercel deploy --prod","deploy":"echo ok"}}' > "$abd_pkgdir/package.json"
+}
+# abd_run ROLE CMD — runs the real hook on one payload in the current abd_form; $abd_pathval replaces PATH.
+abd_run() {
+  local payload
+  case "$abd_form" in
+    bare) payload="$(mk_agent_cmd "$1" "$2")" ;;
+    codex) payload="$(mk_codex_shell "$1" "$2" /repo /tmp/codex-551.jsonl)" ;;
+    *) payload="$(abd_payload "$1" "$2" "$abd_cwd")" ;;
+  esac
+  if [ "$abd_form" != full ]; then
+    case "$payload" in
+      *[Gg][Ii][Tt]*|*[Gg][Hh]*|*[Cc][Ll][Aa][Uu][Dd][Ee]*)
+        __ok=0; __why="${__why}[$2] payload names git, gh or claude, so it would not reach the scan through the second fast-path arm alone\n" ;;
+    esac
+  fi
+  run_boundary "$payload" "${abd_pathval:-$PATH}"
+}
+# abd_deny ROLE BLOCKED CMD... — each CMD denies with the one deploy deny line naming (blocked: BLOCKED).
+abd_deny() {
+  local role="$1" blocked="$2" c w0 want
+  shift 2
+  if [ -z "$blocked" ]; then
+    __ok=0; __why="${__why}abd_deny: empty BLOCKED needle\n"; return
+  fi
+  want="trail-blazer-flow agent boundary: $role role may not run a deploy or cloud CLI, directly, through a launcher or through a package script (blocked: $blocked) — see agents/$role.md"
+  for c in "$@"; do
+    w0="$__why"; __why=""
+    abd_run "$role" "$c"
+    expect_deny
+    [ "$boundary_err" = "$want" ] || { __ok=0; __why="${__why}stderr is not the deploy deny line for '$blocked': '$boundary_err'\n"; }
+    if [ -n "$__why" ]; then __why="${w0}[$role/$abd_form: $c] ${__why}"; else __why="$w0"; fi
+  done
+}
+# abd_noop ROLE CMD... — each CMD gets no opinion.
+abd_noop() {
+  local role="$1" c w0
+  shift
+  for c in "$@"; do
+    w0="$__why"; __why=""
+    abd_run "$role" "$c"
+    expect_no_opinion
+    if [ -n "$__why" ]; then __why="${w0}[$role/$abd_form: $c] ${__why}"; else __why="$w0"; fi
+  done
+}
+# One row per DEPLOY_COMMANDS entry (read from the hook, so a new entry must also reach the second fast-path
+# arm or this row fails), then the spellings of a command word: path, case, prefix, chain, substitution,
+# eval, a shell -c string and a version marker. Every payload is bare.
+case_ab_deploy_deny_direct() {
+  local role entry list
+  abd_form=bare; abd_cwd=""; abd_pathval=""
+  list="$(sed -n 's/^DEPLOY_COMMANDS="\(.*\)"$/\1/p' "$boundary" | tr ',' '\n')"
+  if [ -z "$list" ]; then
+    __ok=0; __why="${__why}could not read DEPLOY_COMMANDS from the hook\n"; return
+  fi
+  for role in implementer verifier; do
+    while IFS= read -r entry; do
+      abd_deny "$role" "$entry" "$entry" "$entry status --json" "sudo $entry"
+    done <<EOF
+$list
+EOF
+    abd_deny "$role" vercel 'vercel deploy --prod' 'VERCEL deploy' '/usr/local/bin/vercel deploy' \
+      './node_modules/.bin/vercel deploy' 'vercel@latest deploy' '"vercel" deploy' 'FOO=1 BAR=2 vercel deploy' \
+      'sudo vercel deploy' 'env X=1 vercel deploy' 'command vercel deploy' 'nohup vercel deploy' \
+      'time vercel deploy' 'xargs vercel deploy' 'npm run build && vercel deploy' 'echo ok; vercel deploy' \
+      'echo ok | vercel deploy' 'echo $(vercel whoami)' 'echo `vercel whoami`' 'eval "vercel deploy"' \
+      'bash -c "vercel deploy"' "sh -c 'vercel deploy'" 'if true; then vercel deploy; fi'
+    abd_deny "$role" fly './node_modules/.bin/fly deploy' 'FLY deploy'
+    abd_deny "$role" wrangler 'bash -c "wrangler deploy"'
+    abd_deny "$role" 'prisma db push' 'prisma db push' 'PRISMA DB PUSH' 'prisma db push --force-reset' \
+      'npx prisma db push'
+    abd_deny "$role" 'prisma migrate deploy' 'prisma migrate deploy'
+    abd_deny "$role" 'drizzle-kit push' 'drizzle-kit push'
+  done
+}
+# A launcher or package manager hands on to the word it runs: a dash option, a word right after one (it may be
+# that option value) and the sub-words exec x dlx run run-script are skipped, a version marker is cut. The
+# package manager own subcommands (add, install, ...) end the read only after npm, pnpm, yarn or bun, so a
+# word of that spelling after a dash option of uvx is still skipped as the option value.
+case_ab_deploy_deny_launcher() {
+  local role
+  abd_form=full; abd_cwd=""; abd_pathval=""
+  for role in implementer verifier; do
+    abd_deny "$role" vercel 'npx -y vercel@latest deploy --prod' 'npx vercel deploy' 'bunx vercel deploy' \
+      'pnpx vercel deploy' 'pnpm --filter web exec vercel deploy' 'pnpm exec vercel deploy' \
+      'yarn dlx vercel deploy --prod' 'yarn exec vercel deploy' 'yarn vercel deploy' 'bun x vercel deploy' \
+      'npm exec vercel deploy' 'npm exec -- vercel deploy' 'pnpm dlx vercel deploy' 'npx --yes vercel deploy' \
+      'NPX vercel deploy' 'sudo npx vercel deploy' 'echo ok && npx vercel deploy'
+    abd_deny "$role" fly 'npm exec -- fly deploy' 'npm x fly deploy'
+    abd_deny "$role" wrangler 'pnpm dlx wrangler deploy' 'npx --yes wrangler deploy'
+    abd_deny "$role" aws 'uvx --from awscli aws s3 ls' 'pipx run --spec awscli aws s3 ls' 'uvx aws s3 ls' \
+      'uvx --from add aws s3 ls'
+    abd_deny "$role" 'prisma migrate deploy' 'npx prisma migrate deploy' 'pnpm dlx prisma migrate deploy'
+    abd_deny "$role" 'prisma db push' 'pnpm dlx prisma db push'
+    abd_deny "$role" 'drizzle-kit push' 'npx drizzle-kit push' 'yarn dlx drizzle-kit push'
+  done
+}
+# A listed word in a segment tail the walk cannot follow: an assignment whose quoted value the split cut in
+# two (#505), a value of an option of a prefix word (#518) and the same for the shell words that take -c.
+case_ab_deploy_deny_lost() {
+  local role
+  abd_form=full; abd_cwd=""; abd_pathval=""
+  for role in implementer verifier; do
+    abd_deny "$role" vercel 'X="a b" vercel deploy' "X='a b' vercel deploy" 'bash -o pipefail -c "vercel deploy --prod"' \
+      'sh -o errexit -c "vercel deploy"' 'nice -n 5 vercel deploy' 'sudo -u root vercel deploy' \
+      'stdbuf -o L vercel deploy'
+    abd_deny "$role" aws 'sudo -u root aws s3 ls' 'nice -n 5 aws s3 ls' 'exec -a x aws s3 ls'
+    abd_deny "$role" fly 'eval "fly deploy"'
+    abd_deny "$role" terraform 'X="a b" terraform apply'
+    abd_deny "$role" 'prisma db push' 'sudo -u root prisma db push'
+  done
+}
+# The name rule: after npm, pnpm, yarn or bun, a read word containing deploy is a script name. Each row is
+# sent with a cwd naming a directory that holds a package.json, with no cwd, and as a bare payload (the bare
+# row pins the deploy word in the second fast-path arm). The file is never read, so a harmless deploy script
+# denies by name. The word read after the package manager is handed on to the way a launcher's is, so a
+# script named for a listed CLI denies as that CLI.
+case_ab_deploy_deny_script() {
+  local role form dir="$abd_pkgdir"
+  abd_fixture
+  abd_pathval=""
+  for role in implementer verifier; do
+    for form in "full:" "full:$dir" "bare:"; do
+      abd_form="${form%%:*}"; abd_cwd="${form#*:}"
+      abd_deny "$role" 'package script deploy' 'npm run deploy' 'pnpm deploy' 'yarn deploy' 'bun run deploy' \
+        'npm --prefix web run deploy' 'pnpm --filter=web deploy' 'yarn run deploy' 'pnpm run deploy' \
+        'npm run-script deploy' 'pnpm -C web deploy' 'npm run deploy -- --prod' 'bun deploy'
+      abd_deny "$role" 'package script deploy:prod' 'npm run deploy:prod'
+      abd_deny "$role" 'package script predeploy-check' 'npm run predeploy-check'
+      abd_deny "$role" 'package script deploy-docs' 'npm run deploy-docs'
+      abd_deny "$role" 'package script test:deploy' 'npm run test:deploy'
+      abd_deny "$role" vercel 'npm run vercel' 'yarn run vercel' 'npm vercel'
+      abd_deny "$role" stripe 'npm run-script stripe' 'pnpm stripe' 'bun run stripe'
+    done
+  done
+  abd_form=full; abd_cwd=""
+}
+# No opinion, with and without a package.json whose test, build and ship bodies all name vercel deploy:
+# the read of the command stops at the first word it cannot hand on to, a script not named for deploy is not
+# judged, and an install argument or a read of a file named for a CLI is not a run of it. A package manager
+# own subcommand (add, install, ...) ends the read before it can be taken for the value of an option in front
+# of it, so an install with a flag first (pnpm -w add stripe, npm -g install vercel) stays quiet too. The
+# main session, an agent that is not a role and a plan-mode turn get no opinion on a deploy.
+case_ab_deploy_noop_controls() {
+  local role form dir="$abd_pkgdir"
+  abd_fixture
+  abd_pathval=""
+  for role in implementer verifier; do
+    for form in "full:" "full:$dir"; do
+      abd_form="${form%%:*}"; abd_cwd="${form#*:}"
+      abd_noop "$role" 'npm test' 'pnpm test' 'pnpm --filter web test' 'pnpm -C web test' 'yarn test' 'bun run test' \
+        'npm run build' 'npm run dev' 'npm run lint -- --fix' 'npm run ship' 'pnpm release' \
+        'npm install' 'npm install stripe' 'npm install deploy-kit' 'pnpm add -D wrangler' 'npm i @pulumi/aws' \
+        'npx tsc --noEmit' 'npx vitest run stripe' 'npx prisma generate' 'prisma generate' \
+        'grep -rn supabase src' 'cat vercel.json' 'ls supabase' 'echo deploy' 'make test' \
+        'pnpm -w add -D wrangler' 'pnpm -w add stripe' 'pnpm -r add stripe' 'pnpm --workspace-root add supabase' \
+        'yarn -W add stripe' 'yarn -W add @pulumi/aws' 'npm -g install vercel' 'npm --silent install stripe' \
+        'npm -s install aws' 'npm -g install deploy-kit' 'pnpm -C web install stripe' 'pnpm -r why stripe' \
+        'npm -s view vercel version'
+    done
+  done
+  abd_form=full; abd_cwd=""
+  run_boundary "$(jq -n --arg cmd 'vercel deploy --prod' '{tool_name: "Bash", transcript_path: "/home/u/.claude/projects/p/s.jsonl", tool_input: {command: $cmd}}')"
+  expect_no_opinion
+  abd_noop Explore 'vercel deploy --prod' 'npm run deploy'
+  run_boundary "$(abd_payload implementer 'vercel deploy --prod' | jq -c '.permission_mode = "plan"')"
+  expect_no_opinion
+}
+# A deploy finding is printed last, so a git, gh or .claude finding in the same command keeps its own reason.
+case_ab_deploy_deny_precedence() {
+  local py="python3 -c \"open('.claude/x','w')\""
+  abd_form=full; abd_cwd=""; abd_pathval=""
+  abx_deny implementer gh 'npx vercel deploy; gh pr merge 5' 'gh pr merge 5; npx vercel deploy' \
+    'vercel deploy && gh pr merge 5' 'npm run deploy && gh pr merge 5'
+  abx_deny verifier 'git commit' 'vercel deploy && git commit -m x' 'npx vercel deploy && git commit -m x' \
+    'npm run deploy && git commit -m x'
+  abx_deny verifier gh 'npx wrangler deploy; gh pr view 5'
+  run_boundary "$(abd_payload implementer 'vercel deploy && tee -a .claude/LESSONS.md')"
+  expect_ab_deny_claude
+  run_boundary "$(abd_payload implementer 'npx vercel deploy && tee -a .claude/LESSONS.md')"
+  expect_ab_deny_claude
+  run_boundary "$(abd_payload verifier 'npm run deploy > .claude/out.txt')"
+  expect_ab_deny_claude
+  # an interpreter sharing the call with a .claude mention is the one .claude finding printed by the first END block
+  run_boundary "$(abd_payload implementer "vercel deploy && $py")"
+  expect_ab_deny_claude
+  run_boundary "$(abd_payload verifier "npx vercel deploy && $py")"
+  expect_ab_deny_claude
+}
+# The same rule under a Codex payload (the documented key set, cwd /repo, a transcript path that names none of
+# git, gh or claude): a subagent denies, the main session gets no opinion.
+case_ab_deploy_deny_codex() {
+  abd_form=codex; abd_cwd=""; abd_pathval=""
+  abd_deny implementer vercel 'vercel deploy --prod'
+  abd_deny verifier wrangler 'npx wrangler deploy'
+  abd_deny implementer 'package script deploy' 'pnpm deploy'
+  abd_noop verifier 'npm test'
+  abd_noop '' 'vercel deploy --prod'
+  abd_form=full
+}
+# The hook only reads the command as text: a booby-trapped PATH holding the launchers, the package managers
+# and the listed CLIs they would run is never touched, on a deny through a launcher, a deny by script name and
+# a no-opinion package-manager call.
+case_ab_deploy_never_executes() {
+  local trapdir="$tmpbase/trapbin-abd" sentinel="$tmpbase/sentinel-abd" bin
+  mkdir -p "$trapdir"
+  rm -f "$sentinel"
+  for bin in git gh rm npm npx pnpm pnpx yarn bun bunx uvx pipx node vercel wrangler aws; do
+    {
+      printf '#!%s\n' "$bash_bin"
+      printf 'touch "%s"\n' "$sentinel"
+      printf 'exit 1\n'
+    } > "$trapdir/$bin"
+    chmod +x "$trapdir/$bin"
+  done
+  abd_form=full; abd_cwd=""; abd_pathval="$trapdir:$PATH"
+  abd_deny implementer vercel 'npx vercel deploy'
+  abd_deny implementer 'package script deploy' 'npm run deploy'
+  abd_noop implementer 'npm test'
+  abd_pathval=""
+  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — the boundary invoked something on the booby-trapped PATH\n"; }
+}
+
 # push-guard. PP_R_OPTV is the fixed reason; the deny never echoes input.
 # mutant:518-pg-optval-off — empties this hook's PREFIX_VALUE_WORDS, so no prefix word opens a value
 #   context and the walk takes the option value as the command word again.
@@ -10451,6 +10702,15 @@ cases=(
   "ab-optval-deny-shell|case_ab_optval_deny_shell|deny: gh behind bash/sh/zsh/ksh/dash and an option with a separate value, implementer; a -c string naming gh or git after its first word; git for the verifier -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-off)"
   "ab-optval-noop|case_ab_optval_noop|no opinion: the scan starts after the value word, stops at a non-option, and resets at a non-value prefix word -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-start, 518-ab-optval-nonopt, 518-ab-optval-reset)"
   "ab-optvalscan-noop-flood|case_ab_optvalscan_noop_flood|FLOOD+TIMING: a segment of value-context triggers, no opinion; CPU time within a multiple of a same-size twin with one trigger -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-memo, 463-hook-boundary-override-leaks)"
+  # --- deploy and cloud CLIs (#551) cases ----------------------------------------------------------
+  "ab-deploy-deny-direct|case_ab_deploy_deny_direct|deny: every DEPLOY_COMMANDS entry (read from the hook) and the spellings of a command word (path, case, prefix, chain, substitution, eval, a shell -c string), both roles, bare payloads that reach the scan only through the second fast-path arm -- no registry record (the rule only adds a deny)"
+  "ab-deploy-deny-launcher|case_ab_deploy_deny_launcher|deny: npx, bunx, pnpx, pnpm and yarn dlx or exec, npm exec or x, bun x, uvx and pipx run handing on to a listed CLI or phrase, past dash options and a version marker, both roles -- no registry record (the rule only adds a deny)"
+  "ab-deploy-deny-lost|case_ab_deploy_deny_lost|deny: a listed CLI in a segment tail the walk cannot follow (an assignment with a split quoted value, the value of an option of a prefix word, a shell -c string after an option, eval), both roles -- no registry record (the rule only adds a deny)"
+  "ab-deploy-deny-script|case_ab_deploy_deny_script|deny: a script name containing deploy after npm, pnpm, yarn or bun (deploy, deploy:prod, predeploy-check, deploy-docs, test:deploy), with and without a package.json in cwd and as a bare payload, and a script named for a listed CLI (npm run vercel, pnpm stripe); the file is never read -- no registry record (the rule only adds a deny)"
+  "ab-deploy-noop-controls|case_ab_deploy_noop_controls|no opinion: npm test, a script not named for deploy, an install argument naming a listed CLI (also with an option before the subcommand), a read of a file named for one, a plan-mode turn, an Explore agent and the main session, with and without a package.json whose bodies all name vercel deploy -- mutation proof: dev/mutants/hook-tests.json (551-ab-deploy-stop)"
+  "ab-deploy-deny-precedence|case_ab_deploy_deny_precedence|deny: a git, gh or .claude finding in the same command as a deploy keeps its own reason, in either order -- mutation proof: dev/mutants/hook-tests.json (551-ab-deploy-order)"
+  "ab-deploy-deny-codex|case_ab_deploy_deny_codex|deny a subagent and no opinion for the main session: a deploy CLI, a launcher and a package-script name under a Codex-shaped payload whose transcript path names none of git, gh or claude -- no registry record (the rule only adds a deny)"
+  "ab-deploy-never-executes|case_ab_deploy_never_executes|deny through a launcher, deny by script name and no opinion for npm test with the launchers, package managers and listed CLIs trapped on PATH: nothing from the scanned command is executed"
   "push-optval-deny-main|case_push_optval_deny_main|deny: a push behind nice/sudo/stdbuf/exec/xargs/time and an option with a separate value, naming the fixed command-prefix reason -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-off)"
   "push-optval-deny-precedence|case_push_optval_deny_precedence|deny: an earlier unresolved reason and command-line config keep their own deny -- control, not part of the mutation-proof registry"
   "push-optval-noop|case_push_optval_noop|no opinion: the scan starts after the value word and resets at a non-value prefix word -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-start, 518-pg-optval-nonopt, 518-pg-optval-reset)"
