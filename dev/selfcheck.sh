@@ -840,7 +840,7 @@ fi
 # above the actual, so every file keeps 1-5 lines of headroom. Caps ratchet down as files shrink).
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
-budget_table="issue-implementer 920
+budget_table="issue-implementer 925
 issue-cycle 490
 issue-planner 600
 project-kickoff 220
@@ -999,9 +999,10 @@ fi
 
 # 4.21 — fixed-string presence of 'Autonomy reserve' in the three files that make up the
 # run-time enforcement chain: the planner that populates the Reserve touch list, the orchestrator
-# that hands the declared globs to the verifier, and the verifier that checks the diff against
-# them. 4.8 already pins the *declaration* side (README + harness-setup); this pins the
-# *enforcement* side — a drift in any one of the three silently disables the run-time check.
+# that hands bin/reserve-paths.sh's match of the diff to the verifier, and the verifier that
+# compares that match with the plan's list. 4.8 already pins the *declaration* side (README +
+# harness-setup); this pins the *enforcement* side — a drift in any one of the three silently
+# disables the run-time check.
 marker='Autonomy reserve'
 missing=""
 for f in agents/planner.md agents/verifier.md skills/issue-implementer/SKILL.md; do

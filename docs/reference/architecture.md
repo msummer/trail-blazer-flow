@@ -38,6 +38,7 @@
 │   ├── harness-stop.sh            # read-only maintainer stop switch: GitHub label or local file (#310)
 │   ├── governance-paths.sh        # merge floor's governance-path classifier + doctor's --check validator (#331)
 │   ├── merge-floor.sh             # read-only, fail-closed merge floor for one PR: every mechanical check of the issue-cycle merge pass, one verdict + evidence (#550)
+│   ├── reserve-paths.sh           # read-only Autonomy reserve matcher: the diff's reserved paths for the verifier, and the doctor's --check validator + schema-path scan (#552)
 │   ├── codex-setup.sh             # installs the Codex compatibility layer into a repo: agent TOMLs, rules, contract loading (#408)
 │   ├── codex-scheduled-run.sh     # launchd-driven codex exec wrapper: preflight, timeout, local run records (#427), a deduplicated needs-human tracking issue on failure (#428)
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
@@ -51,7 +52,7 @@
 ├── dev/
 │   ├── selfcheck.sh              # this repo's OWN verification gate — see "Working on the harness itself"
 │   ├── selfcheck-tests.sh        # the gate's own negative-test harness (not run by the gate itself)
-│   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh, bin/governance-paths.sh, bin/codex-setup.sh, AND bin/codex-scheduled-run.sh (not run by the gate)
+│   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh, bin/governance-paths.sh, bin/reserve-paths.sh, bin/codex-setup.sh, AND bin/codex-scheduled-run.sh (not run by the gate)
 │   ├── hook-tests.sh             # fixture-based negative-test harness for all five hooks/*.sh scripts, including Codex-shaped payload fixtures (#407) (not run by the gate)
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
 │   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh, bin/find-implementation-work.sh, bin/harness-status.sh AND bin/merge-floor.sh (not run by the gate)

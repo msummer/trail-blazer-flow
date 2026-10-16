@@ -113,9 +113,9 @@ rule, and otherwise leaves it to the sandbox. `templates/codex.rules` has three 
   bare name **plus** a `host_executable` pin to this install's own absolute `bin/` path. The pin
   matters: an ungated bare-name rule matches *any* file with that basename, anywhere — including
   one a subagent writes into the workspace — so every `.sh` ALLOW rule in the installed file is
-  `host_executable`-gated, with no exception. `codex-setup.sh`, `harness-version.sh`, and
-  `governance-paths.sh` are read-only (or, for `codex-setup.sh`, run once from a normal terminal —
-  ADVISORY Q4) and so are never gated. `codex-scheduled-run.sh` is the one exception to the
+  `host_executable`-gated, with no exception. `codex-setup.sh`, `harness-version.sh`,
+  `governance-paths.sh`, and `reserve-paths.sh` are read-only (or, for `codex-setup.sh`, run once
+  from a normal terminal — ADVISORY Q4) and so are never gated. `codex-scheduled-run.sh` is the one exception to the
   "every `.sh` rule is either gated or ungated-and-read-only" split above: it writes under
   `trail-blazer/` inside `.git`, calls `gh` itself for its own failure-tracking step (I3, #428 —
   see "Scheduling unattended runs (macOS)" below), and launches `codex` (which itself also calls
@@ -811,9 +811,9 @@ Report the resolved root once, in the run summary.
   `check-decision-record.sh`, `check-harness.sh`, `cleanup-after-merge.sh`,
   `find-implementation-work.sh`, `find-planning-work.sh`, `harness-lock.sh`, `harness-status.sh`,
   `harness-stop.sh`, `merge-floor.sh`, `reconcile-ledger.sh`, `setup-labels.sh`.
-- **Ungated** (run sandboxed): `harness-version.sh`, `governance-paths.sh`, and
-  `codex-setup.sh`, whose write mode runs once from a normal terminal, never in-session, while its
-  read-only `--check` runs in-session.
+- **Ungated** (run sandboxed): `harness-version.sh`, `governance-paths.sh`, `reserve-paths.sh`,
+  and `codex-setup.sh`, whose write mode runs once from a normal terminal, never in-session, while
+  its read-only `--check` runs in-session.
 - **Forbidden**: `codex-scheduled-run.sh` — never run this from inside a session, in-sandbox or
   otherwise; it is launchd's own job (see "Scheduling unattended runs (macOS)" below).
 

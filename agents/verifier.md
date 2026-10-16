@@ -103,20 +103,19 @@ diff as a first round and say so in Notes.
       code is a finding, same as an unmet criterion. A dated history record (e.g. a changelog
       entry) is checked only when this diff adds it, against this diff; older entries, and text
       the diff moves verbatim, are not current claims.
-   h. **Autonomy reserve** — read the reserve globs from the orchestrator's prompt (pasted one
-      per line from CLAUDE.md's `## Autonomy reserve` fenced block, or the literal
-      `none declared`). If the prompt is silent on the subject instead, read CLAUDE.md's
-      `## Autonomy reserve` section yourself (you already read CLAUDE.md in step 1) and say in
-      the verdict which source you used. No declared reserve anywhere — the prompt says
-      `none declared`, or the prompt is silent and CLAUDE.md has no such section — means this
-      check is **inert**: record that in the verdict and move on. Otherwise list the diff's
-      changed paths (`git diff <default-branch>...HEAD --name-only`; in worktree mode the same
-      command with `-C <worktree>`), match each against the declared globs the way the planner
-      did, and compare the matches with the plan's "Reserve touch list". A changed path that
-      matches a declared glob and is **not** on that list is an **undeclared reserve touch** — a
-      **`blocker` finding**: name the path, the glob it matched, and whether the plan said
-      "None" or omitted the section. A matched path the list does name is not a finding (the
-      human approved the plan with it listed); a listed path the diff never touched is a Note.
+   h. **Autonomy reserve** — the orchestrator ran `bin/reserve-paths.sh` over the whole branch
+      (merge base to `HEAD`, re-verification rounds included) and pasted its stdout into the
+      prompt: zero or more `reserved: <path>` lines, then a last line `verdict=reserved`,
+      `verdict=none` or `verdict=absent`. You never match globs yourself and never read
+      CLAUDE.md's `## Autonomy reserve` section as a substitute. `verdict=absent` means no
+      reserve is declared: this check is **inert**, so record that in the verdict and move on. A
+      prompt with no such block, or one whose last line is none of the three, is a **`blocker`
+      finding** (reserve match unavailable): name what was missing and do not guess. Otherwise
+      compare the `reserved:` paths with the plan's "Reserve touch list". A reserved path the
+      list does not name is an **undeclared reserve touch** — a **`blocker` finding**: name the
+      path and whether the plan said "None" or omitted the section. A reserved path the list
+      does name is not a finding (the human approved the plan with it listed); a listed path the
+      script never reported is a Note.
 4. **Return the verdict** using the template below.
 
 # What is NOT a finding
@@ -208,10 +207,9 @@ matched its pre-probe value after the last restore. On a re-verification, say th
 was scoped to the delta since `<sha>`.
 
 ## Reserve touch check
-`inert — no autonomy reserve declared` (say which: prompt said `none declared`, or was silent
-and CLAUDE.md has no `## Autonomy reserve` section), or `<n> changed path(s) matched; undeclared:
-none` / `undeclared: <path> (<glob>), …` — and which source supplied the globs (prompt or
-CLAUDE.md).
+`inert — no autonomy reserve declared` (the prompt's block ended `verdict=absent`), or `<n>
+reserved path(s); undeclared: none` / `undeclared: <path>, …`, or `unavailable — <what was
+missing>` (a blocker finding below).
 
 ## Findings
 (Only if fail — a pass has zero findings by definition.) For each:
