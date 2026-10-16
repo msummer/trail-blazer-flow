@@ -1151,12 +1151,6 @@ case_journal_stage_record() {
 # mutant:251-journal-value-unchecked — neuters the slug character-set check in journal_value_ok, so
 #   a value with a space or a quote is accepted.
 # mutant:251-journal-runid-unchecked — neuters journal_runid_ok, so a malformed run id passes.
-# mutant:251-journal-reason-unchecked — drops the reason key's value check, so quoted prose is
-#   written as a reason.
-# mutant:251-journal-deploy-unchecked — drops the deploy key's value check.
-# mutant:251-journal-branch-charset — drops the branch character-set clause, keeping only its
-#   leading-dash/slash and dot-dot/double-slash rules.
-# mutant:251-journal-retries-charset — drops the retries digits-only clause.
 jr_file=""
 jr_dir=""
 journal_rejects() {

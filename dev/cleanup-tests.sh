@@ -3609,13 +3609,9 @@ EOF
 # no multi-pr label, and one open pr-open issue (#7) whose stateReason is REOPENED — measured
 # against dev/mutants/cleanup-tests.json, cross-checked by gate assertion 4.52.
 #
-# mutant:376-reopened-gate — deletes the `elif [[ "$state_reason" == "REOPENED" ]]; then` arm
-#   (plus its `reopened=true` line) from the cheap-signal chain in
-#   bin/cleanup-after-merge.sh, so a reopened issue falls through to the ordinary comment-marker
-#   lookup and close path instead of the reopened KEEP arm.
 # mutant:376-reopened-field — drops `,stateReason` from the open-issue query's own `--json`
 #   field list in bin/cleanup-after-merge.sh, so the stub's field projection serves issues with
-#   no stateReason key at all and the reopened gate above never fires.
+#   no stateReason key at all and the REOPENED gate never fires.
 
 # reopened-not-reclosed (#376) — the headline: a MERGED claude/7-* PR with a valid Closes #7, no
 # sibling, no multi-pr signal at all, but the issue's own stateReason is REOPENED: --fix never

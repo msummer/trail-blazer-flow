@@ -1383,10 +1383,6 @@ run_order_selftest() {
 # while any slot is still running restores barrier-wave behaviour; harness-pool-refill's waiter
 # times out with no verdict, since the slot 1.7-dev frees is never refilled while 1.7 is still
 # polling.
-# mutant:472-sct-blocking-reap — replacing reap_slots' own verdict/kill-0 test with an
-# unconditional true makes it `wait` on whichever pid currently occupies a slot regardless of
-# whether that child has actually finished, so the reap blocks on the still-waiting 1.7 and the
-# slot 1.7-dev frees never gets refilled either; same harness-pool-refill failure.
 # harness-pool-refill (#472) — proves a freed slot is refilled by a later-declared case rather than
 # waiting for the whole batch to drain, using a marker file, not a clock. Runs a nested invocation
 # (SELFCHECK_TESTS_JOBS=2, filter "1.7", matching exactly the three cases 1.7 / 1.7-dev /

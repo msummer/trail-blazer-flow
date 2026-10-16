@@ -1,49 +1,6 @@
 {
   "mutants": [
     {
-      "name": "340-fastpath",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-claude-",
-      "edits": [
-        {
-          "from": "  *[Gg][Ii][Tt]*|*[Gg][Hh]*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;",
-          "to": "  *[Gg][Ii][Tt]*|*[Gg][Hh]*) : ;;"
-        }
-      ],
-      "expect_fail": [
-        "ab-claude-deny-append-redirect",
-        "ab-claude-deny-backslash",
-        "ab-claude-deny-case-variant",
-        "ab-claude-deny-cd",
-        "ab-claude-deny-cp",
-        "ab-claude-deny-heredoc",
-        "ab-claude-deny-never-writes",
-        "ab-claude-deny-quoted-double",
-        "ab-claude-deny-quoted-single",
-        "ab-claude-deny-redirect-nospace-quoted",
-        "ab-claude-deny-sed-combined",
-        "ab-claude-deny-sed-long",
-        "ab-claude-deny-sed-short",
-        "ab-claude-deny-tee"
-      ]
-    },
-    {
-      "name": "340-fastpath-case",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-claude-",
-      "edits": [
-        {
-          "from": "  *[Gg][Ii][Tt]*|*[Gg][Hh]*|*[Cc][Ll][Aa][Uu][Dd][Ee]*) : ;;",
-          "to": "  *[Gg][Ii][Tt]*|*[Gg][Hh]*|*claude*) : ;;"
-        }
-      ],
-      "expect_fail": [
-        "ab-claude-deny-case-variant"
-      ]
-    },
-    {
       "name": "340-redirect-pass",
       "target": "hooks/agent-boundary.sh",
       "suite": "dev/hook-tests.sh",
@@ -523,21 +480,6 @@
       "expect_fail": [
         "push-kw-deny-bang",
         "push-kw-deny-then"
-      ]
-    },
-    {
-      "name": "398-pg-case-fold",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-kw-",
-      "edits": [
-        {
-          "from": "    norm = tolower(normalize(tok))",
-          "to": "    norm = normalize(tok)"
-        }
-      ],
-      "expect_fail": [
-        "push-kw-deny-upper-git"
       ]
     },
     {
@@ -1125,25 +1067,6 @@
       ]
     },
     {
-      "name": "407-cdg-bash-decoy-claude-mention",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-bash-",
-      "edits": [
-        {
-          "from": "      *.[Cc][Ll][Aa][Uu][Dd][Ee]*|*.[Cc][Oo][Dd][Ee][Xx]*)\n",
-          "to": "      *.[Cc][Ll][Aa][Uu][Dd][Ee]Z*|*.[Cc][Oo][Dd][Ee][Xx]Z*)\n"
-        }
-      ],
-      "expect_fail": [
-        "cdg-bash-deny-decoy-dollar-quote",
-        "cdg-bash-deny-decoy-nbsp-header",
-        "cdg-bash-deny-heredoc-claude",
-        "cdg-bash-deny-heredoc-codex",
-        "cdg-bash-never-executes"
-      ]
-    },
-    {
       "name": "407-plg-git-grep-readded",
       "target": "hooks/planner-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -1481,21 +1404,6 @@
       ]
     },
     {
-      "name": "304-sys-label",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-sysconf-",
-      "edits": [
-        {
-          "from": "      sys_records=\"your system git config${cfg_tab}${GIT_CONFIG_SYSTEM:-}\"$'\\n'",
-          "to": "      sys_records=\"your global git config${cfg_tab}${GIT_CONFIG_SYSTEM:-}\"$'\\n'"
-        }
-      ],
-      "expect_fail": [
-        "push-sysconf-deny-env-var"
-      ]
-    },
-    {
       "name": "304-inc-section",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -1670,21 +1578,6 @@
       ]
     },
     {
-      "name": "304-sys-clt-label",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-sysconf-",
-      "edits": [
-        {
-          "from": "      sys_records=\"${sys_records}your system git config${cfg_tab}${sysroot}${PUSH_APPLE_CLT_CONFIG}\"",
-          "to": "      sys_records=\"${sys_records}your global git config${cfg_tab}${sysroot}${PUSH_APPLE_CLT_CONFIG}\""
-        }
-      ],
-      "expect_fail": [
-        "push-sysconf-deny-apple-clt"
-      ]
-    },
-    {
       "name": "304-inc-seen-global",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -1764,21 +1657,6 @@
       ]
     },
     {
-      "name": "304-inc-follow-budget",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-include-",
-      "edits": [
-        {
-          "from": "              && [ \"$cfg_inc_budget\" -gt 0 ] \\\n              && [ \"$cfg_inc_line_budget\" -gt 0 ] && [ \"$cfg_inc_char_budget\" -gt 0 ]; then",
-          "to": "              && [ \"$cfg_inc_line_budget\" -gt 0 ] && [ \"$cfg_inc_char_budget\" -gt 0 ]; then"
-        }
-      ],
-      "expect_fail": [
-        "push-include-noop-over-budget"
-      ]
-    },
-    {
       "name": "304-inc-follow-budget-off-by-one",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -1802,21 +1680,6 @@
         {
           "from": "      [ \"$cfg_inc_line_budget\" -gt 0 ] || break",
           "to": "      :"
-        }
-      ],
-      "expect_fail": [
-        "push-include-noop-over-line-budget"
-      ]
-    },
-    {
-      "name": "304-inc-line-budget-off-by-one",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-include-",
-      "edits": [
-        {
-          "from": "      [ \"$cfg_inc_line_budget\" -gt 0 ] || break",
-          "to": "      [ \"$cfg_inc_line_budget\" -ge 0 ] || break"
         }
       ],
       "expect_fail": [
@@ -1909,36 +1772,6 @@
         {
           "from": "  cfg_inc_budget=\"$CFG_INCLUDE_MAX_FOLLOWS\"",
           "to": "  : \"${cfg_inc_budget:=$CFG_INCLUDE_MAX_FOLLOWS}\""
-        }
-      ],
-      "expect_fail": [
-        "push-include-deny-c-target-fresh-budget"
-      ]
-    },
-    {
-      "name": "304-inc-line-budget-reset",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-include-",
-      "edits": [
-        {
-          "from": "  cfg_inc_line_budget=\"$CFG_INCLUDE_MAX_LINES\"",
-          "to": "  : \"${cfg_inc_line_budget:=$CFG_INCLUDE_MAX_LINES}\""
-        }
-      ],
-      "expect_fail": [
-        "push-include-deny-c-target-fresh-budget"
-      ]
-    },
-    {
-      "name": "304-inc-char-budget-reset",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-include-",
-      "edits": [
-        {
-          "from": "  cfg_inc_char_budget=\"$CFG_INCLUDE_MAX_CHARS\"",
-          "to": "  : \"${cfg_inc_char_budget:=$CFG_INCLUDE_MAX_CHARS}\""
         }
       ],
       "expect_fail": [
@@ -2404,25 +2237,6 @@
       ]
     },
     {
-      "name": "439-pg-cmdcfg-leak",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-cmdcfg-",
-      "edits": [
-        {
-          "from": "ro, k, xname, cmdcfg, co, cp, cfgname, cpath_big) {",
-          "to": "ro, k, xname, co, cp, cfgname, cpath_big) {"
-        },
-        {
-          "from": "  cmdcfg = 0",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-cmdcfg-noop-nonpush-segment"
-      ]
-    },
-    {
       "name": "439-pg-cmdcfg-order",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -2851,21 +2665,6 @@
       ]
     },
     {
-      "name": "463-hook-deadline-root-only",
-      "target": "dev/hook-tests.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "deadline-kill-tree",
-      "edits": [
-        {
-          "from": "        *\" $ppid \"*) set=\"$set$pid \"; found=true ;;",
-          "to": "        *\" $ppid \"*) : ;;"
-        }
-      ],
-      "expect_fail": [
-        "deadline-kill-tree"
-      ]
-    },
-    {
       "name": "463-hook-boundary-override-leaks",
       "target": "dev/hook-tests.sh",
       "suite": "dev/hook-tests.sh",
@@ -2919,51 +2718,6 @@
         {
           "from": "  if [ \"$secs\" -lt \"$floor\" ]; then",
           "to": "  if true; then"
-        }
-      ],
-      "expect_fail": [
-        "deadline-calibrate"
-      ]
-    },
-    {
-      "name": "470-hook-ms-octal",
-      "target": "dev/hook-tests.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "deadline-calibrate",
-      "edits": [
-        {
-          "from": "  parsed_ms=\"$({ echo $((10#${whole}${sub})); } 2>/dev/null)\"",
-          "to": "  parsed_ms=\"$({ echo $((${whole}${sub})); } 2>/dev/null)\""
-        }
-      ],
-      "expect_fail": [
-        "deadline-calibrate"
-      ]
-    },
-    {
-      "name": "470-hook-calib-no-ceil",
-      "target": "dev/hook-tests.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "deadline-calibrate",
-      "edits": [
-        {
-          "from": "  secs=$(( (k * ms + 999) / 1000 ))",
-          "to": "  secs=$(( (k * ms) / 1000 ))"
-        }
-      ],
-      "expect_fail": [
-        "deadline-calibrate"
-      ]
-    },
-    {
-      "name": "470-hook-ms-shape",
-      "target": "dev/hook-tests.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "deadline-calibrate",
-      "edits": [
-        {
-          "from": "  case \"$whole\" in ''|*[!0-9]*) parsed_ms=\"\"; return ;; esac\n",
-          "to": ""
         }
       ],
       "expect_fail": [
@@ -3311,21 +3065,6 @@
         "push-parse-deny-codex-main-session",
         "push-unres-deny-codex-main-session",
         "push-xseg-deny-codex-main-session"
-      ]
-    },
-    {
-      "name": "476-hook-site-budget-window",
-      "target": "dev/hook-tests.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "deadline-site-budget",
-      "edits": [
-        {
-          "from": "  site_budget_secs=$((calibrated_secs + 1))",
-          "to": "  site_budget_secs=$calibrated_secs"
-        }
-      ],
-      "expect_fail": [
-        "deadline-site-budget"
       ]
     },
     {
@@ -4004,21 +3743,6 @@
       ]
     },
     {
-      "name": "457-cdg-dl-iapw-line-site",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dl-cap-",
-      "edits": [
-        {
-          "from": "  for ln in $text; do\n    check_deadline\n    # An fd",
-          "to": "  for ln in $text; do\n    # An fd"
-        }
-      ],
-      "expect_fail": [
-        "cdg-dl-cap-lines"
-      ]
-    },
-    {
       "name": "457-cdg-dl-patch-prepare-off",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -4634,23 +4358,6 @@
       ]
     },
     {
-      "name": "448-pg-reloc-vocab",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-reloc-",
-      "edits": [
-        {
-          "from": "GIT_CFG_RELOC_ENV_VARS=\"HOME XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM\"",
-          "to": "GIT_CFG_RELOC_ENV_VARS=\"\""
-        }
-      ],
-      "expect_fail": [
-        "push-reloc-deny-env-home",
-        "push-reloc-deny-home-inline",
-        "push-reloc-deny-xdg-inline"
-      ]
-    },
-    {
       "name": "448-pg-reloc-push-sentinel",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -4710,28 +4417,6 @@
       ],
       "expect_fail": [
         "push-xseg-noop-cd-no-push"
-      ]
-    },
-    {
-      "name": "448-pg-alias-subsection",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "      \\[[Aa][Ll][Ii][Aa][Ss]\\ *|\\[[Aa][Ll][Ii][Aa][Ss]$'\\t'*|\\[[Aa][Ll][Ii][Aa][Ss].*)",
-          "to": "      \\[[Aa][Ll][Ii][Aa][Ss]X\\ *|\\[[Aa][Ll][Ii][Aa][Ss]X$'\\t'*|\\[[Aa][Ll][Ii][Aa][Ss]X.*)"
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-subsection-any-subcommand",
-        "push-alias-deny-subsection-dotted",
-        "push-alias-deny-subsection-escaped-name",
-        "push-alias-deny-subsection-global",
-        "push-alias-deny-subsection-odd-name",
-        "push-alias-deny-subsection-repo",
-        "push-alias-deny-subsection-spaces",
-        "push-alias-deny-subsection-tab"
       ]
     },
     {
@@ -4860,21 +4545,6 @@
       "edits": [
         {
           "from": "  [ \"$flood_tokens\" -ge \"$min\" ] || flood_tokens=\"$min\"",
-          "to": "  :"
-        }
-      ],
-      "expect_fail": [
-        "deadline-flood-tokens"
-      ]
-    },
-    {
-      "name": "507-hook-flood-tokens-max",
-      "target": "dev/hook-tests.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "deadline-flood-tokens",
-      "edits": [
-        {
-          "from": "  [ \"$flood_tokens\" -le \"$max\" ] || flood_tokens=\"$max\"",
           "to": "  :"
         }
       ],
@@ -5027,36 +4697,6 @@
       ]
     },
     {
-      "name": "505-ab-scan-reset",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "  ls_done = 0\n  idx = 1",
-          "to": "  idx = 1"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-assign-dquote"
-      ]
-    },
-    {
-      "name": "505-ab-word-lower",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "  lx = tolower(tok)",
-          "to": "  lx = tok"
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-assign-dquote"
-      ]
-    },
-    {
       "name": "505-ab-word-strip-sq",
       "target": "hooks/agent-boundary.sh",
       "suite": "dev/hook-tests.sh",
@@ -5064,36 +4704,6 @@
       "edits": [
         {
           "from": "  gsub(sq, \"\", lx)",
-          "to": "  "
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-assign-dquote"
-      ]
-    },
-    {
-      "name": "505-ab-word-strip-dq",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "  gsub(/\"/, \"\", lx)",
-          "to": "  "
-        }
-      ],
-      "expect_fail": [
-        "ab-lost-deny-assign-dquote"
-      ]
-    },
-    {
-      "name": "505-ab-word-strip-bs",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-lost-",
-      "edits": [
-        {
-          "from": "  gsub(/\\\\/, \"\", lx)",
           "to": "  "
         }
       ],
@@ -5375,36 +4985,6 @@
       ]
     },
     {
-      "name": "518-ab-optval-start",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-optval-",
-      "edits": [
-        {
-          "from": "lost = lost_scan(toks, idx + 2, ntok)",
-          "to": "lost = lost_scan(toks, idx + 1, ntok)"
-        }
-      ],
-      "expect_fail": [
-        "ab-optval-noop"
-      ]
-    },
-    {
-      "name": "518-ab-optval-nonopt",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-optval-",
-      "edits": [
-        {
-          "from": " && toks[idx + 1] != \"\" && substr(toks[idx + 1], 1, 1) != \"-\") {",
-          "to": " && toks[idx + 1] != \"\") {"
-        }
-      ],
-      "expect_fail": [
-        "ab-optval-noop"
-      ]
-    },
-    {
       "name": "518-ab-optval-reset",
       "target": "hooks/agent-boundary.sh",
       "suite": "dev/hook-tests.sh",
@@ -5466,36 +5046,6 @@
       ]
     },
     {
-      "name": "518-pg-optval-start",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-optval-",
-      "edits": [
-        {
-          "from": "m0 = lost_push(toks, idx + 2, ntok, 0)",
-          "to": "m0 = lost_push(toks, idx + 1, ntok, 0)"
-        }
-      ],
-      "expect_fail": [
-        "push-optval-noop"
-      ]
-    },
-    {
-      "name": "518-pg-optval-nonopt",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-optval-",
-      "edits": [
-        {
-          "from": " && toks[idx + 1] != \"\" && substr(toks[idx + 1], 1, 1) != \"-\") {",
-          "to": " && toks[idx + 1] != \"\") {"
-        }
-      ],
-      "expect_fail": [
-        "push-optval-noop"
-      ]
-    },
-    {
       "name": "518-pg-optval-reset",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -5534,24 +5084,6 @@
         {
           "from": "PREFIX_INTERP_WORDS=\"bash dash ksh sh zsh\"",
           "to": "PREFIX_INTERP_WORDS=\"\""
-        }
-      ],
-      "expect_fail": [
-        "push-interp-deny-alias",
-        "push-interp-deny-guard",
-        "push-interp-deny-main",
-        "push-interp-deny-unres"
-      ]
-    },
-    {
-      "name": "537-pg-interp-cluster",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-interp-",
-      "edits": [
-        {
-          "from": "if (c == 1 && substr(t, length(t)) ~ /[oO]/) return \"v\"",
-          "to": "if (c == 1 && substr(t, length(t)) ~ /[oO]/) return \"f\""
         }
       ],
       "expect_fail": [

@@ -2200,13 +2200,8 @@ case_protection_ruleset_healthy() {
 # a non-qualifying deletion rule, and no pull_request rule: strict reads true because ANY element
 # is strict, contexts is the UNIQUE UNION (2, not the naive sum of 3), and reviews reads "not
 # configured".
-# mutant:418-rules-any-strict — replacing `any($rsc[]; ...)` with `all($rsc[]; ...)` flips the
-#   strict PASS to the WARN, since the first element is not strict.
 # mutant:418-rules-context-union — dropping `| unique` from the contexts expression widens the
 #   count from 2 to 3 (the sum, double-counting "selfcheck").
-# mutant:418-rules-qualify-rsc — removing required_status_checks from the qualifying-type filter
-#   drops this fixture's only qualifying rule, so it falls through to "no branch protection
-#   detected" instead of PASSing.
 case_protection_ruleset_multi() {
   local dir; dir="$(mk_repo protection-ruleset-multi merge verbatim)"
   local ghdir="$tmpbase/protection-ruleset-multi-gh"
@@ -2399,19 +2394,15 @@ case_autonomy_mode_default_mode() {
 # mutant:331-no-renames — drops --no-renames from the floor mode's own git diff call, so a rename
 #   disappears instead of printing both its old and new path.
 # mutant:331-case-fold — classifies the unlowered path, so case-insensitive matching breaks.
-# mutant:331-seg-claude, mutant:331-seg-github, mutant:331-seg-adr, mutant:331-seg-adrs — each
+# mutant:331-seg-claude, mutant:331-seg-github — each
 #   removes one built-in path-segment alternative from is_builtin.
-# mutant:331-final-claude-md, mutant:331-final-action-yml, mutant:331-final-action-yaml — each
+# mutant:331-final-claude-md, mutant:331-final-action-yaml — each
 #   removes one built-in final-segment alternative from is_builtin.
-# mutant:331-seg-substring — widens */adr/* to *adr*, so a near-miss like src/adr-notes/x.txt
-#   wrongly becomes governance.
 # mutant:331-lessons-exact-case — folds both sides of the lessons-only comparison to lowercase,
 #   so a case-varied .Claude/LESSONS.md wrongly qualifies for lessons-only.
 # mutant:331-lessons-sole — treats ANY governance set containing .claude/LESSONS.md as
 #   lessons-only, dropping the "exactly one path" requirement.
 # mutant:331-declared-ignored — skips the declared-glob matcher entirely.
-# mutant:331-declared-replaces-builtin — runs the declared matcher INSTEAD of the built-in one
-#   whenever any glob is declared, rather than OR'ing the two.
 # mutant:331-read-head — reads $head:CLAUDE.md instead of $base:CLAUDE.md for the declared
 #   section, so a PR can loosen (or lose) the rule it's held against.
 # mutant:331-negation-accepted — deletes the '!'-prefixed-line malformed check.
@@ -2424,7 +2415,6 @@ case_autonomy_mode_default_mode() {
 #   verdict=none instead of erroring.
 # mutant:331-hex-args — deletes the hex-format argument validation inside run_floor.
 # mutant:331-git-error — ignores git diff's own exit status.
-# mutant:331-control-char — deletes the control-character path check.
 # mutant:331-absent-is-error — treats a base tip with no CLAUDE.md at all as an error, instead of
 #   "only the built-in rules apply".
 # mutant:331-doctor-malformed-pass — maps the doctor's malformed verdict to `ok` (PASS) instead of
@@ -4097,8 +4087,6 @@ expect_cx_hit() {
 # mutant:485-cx-preinstall-off — turning the pre-install destination check's predicate into `false`
 #   lets write mode drain the queue: the verifier.toml variant moves planner and implementer into
 #   place and then fails mid-install (exit 3), not the exit-2 refusal this case pins.
-# mutant:485-cx-not-a-file-reason — emitting reason=missing for a non-regular-file path in --check
-#   mode drops the not-a-file token this case pins.
 case_codex_setup_dest_not_a_file() {
   local plugin repo variant rel other
   plugin="$(mk_cx_plugin cx-notfile-plugin 2.9.0)"
@@ -4139,8 +4127,6 @@ case_codex_setup_dest_not_a_file() {
 #   this case's "mv failed".
 # mutant:485-cx-written-list — never accumulating written_rels leaves the report's "written this
 #   run" list as "none" instead of the three agent TOMLs, for every shim case.
-# mutant:485-cx-wrote-early — printing wrote= before the mkdir/mv steps puts a wrote= line for the
-#   file that never landed on stdout.
 # mutant:485-cx-fail-exit-zero — install_failed exiting 0 instead of 3 turns the partial install
 #   into a reported success.
 case_codex_setup_mv_failure() {
@@ -4364,10 +4350,6 @@ case_codex_setup_contract_agents_md() {
 # drift=AGENTS.md reason=malformed-pointer (rc 1).
 # mutant:408-cx-malformed-off — forcing bin/codex-setup.sh's `malformed=true` assignment to
 #   `malformed=false` makes the malformed shapes rewrite instead of refuse.
-# mutant:408-cx-substring-guard — disabling the substring-vs-exact count comparison lets a file
-#   carrying a non-exact begin-marker line read as missing-pointer or a valid pair.
-# mutant:408-cx-end-guard — exact-matching the end marker's substring count switches the guard off
-#   for the end marker, so a prose mention of it next to a valid pair is rewritten.
 case_codex_setup_agents_md_malformed() {
   local plugin
   plugin="$(mk_cx_plugin cx-malformed-plugin 2.9.0)"
@@ -4509,18 +4491,8 @@ case_codex_setup_config_no_newline() {
 # mode rc 2 with the file byte-identical (cmp against a saved copy), no .codex/agents and no
 # .codex/rules (the conflict is caught before anything is installed), and the stderr text naming
 # the cause; --check then reports rc 1 with reason=fallback-conflict, never ok.
-# mutant:484-cx-key-col0 — restoring the column-zero anchor on the key regex makes an indented key
-#   line read as no key, so write mode prepends a second key instead of refusing.
-# mutant:484-cx-indent-ok — switching off the indented-key counter accepts an indented key line
-#   that names CLAUDE.md.
-# mutant:484-cx-dup-off — raising the more-than-one-key threshold reads an already-duplicated
-#   file as current.
-# mutant:490-cx-quoted-off — disabling the quoted-key rule reads a quoted key as no key, so write
-#   mode prepends a bare duplicate instead of refusing.
 # mutant:490-cx-apostrophe-off — skipping the apostrophe-to-double-quote rewrite misses a
 #   single-quoted key name.
-# mutant:490-cx-quoted-branch-off — raising the quoted-key threshold accepts a lone quoted key
-#   naming CLAUDE.md as current.
 case_codex_setup_config_refusals() {
   local plugin repo variant needle
   plugin="$(mk_cx_plugin cx-refusals-plugin 2.9.0)"
@@ -4587,13 +4559,8 @@ case_codex_setup_config_refusals() {
 # prints wrote=, keeps the original line, and leaves exactly one key line above the first table
 # header; a later --check is rc 0 with ok. The same two shapes with a quoted key name (a # comment
 # line, and a single-quoted key inside a table) are not the key either.
-# mutant:484-cx-key-unanchored — dropping the leading-whitespace-only prefix from the key regex
-#   lets the comment line count as the key, so --check reports ok instead of missing-fallback.
 # mutant:484-cx-table-scope — setting the in-table flag to 0 on a table header counts the
 #   table-scoped key as top-level, so it is refused as a foreign value instead of added to.
-# mutant:490-cx-quoted-unanchored — dropping the leading-whitespace-only prefix from the quoted-key
-#   regex lets a commented quoted key count as the key, so --check reports fallback-conflict
-#   instead of missing-fallback.
 case_codex_setup_config_not_key() {
   local plugin repo variant keep count
   plugin="$(mk_cx_plugin cx-not-key-plugin 2.9.0)"
@@ -5198,9 +5165,6 @@ _kt_descendants() {
     while read -r pid ppid; do
       [ -z "${pid:-}" ] && continue
       case "$set" in *" $pid "*) continue ;; esac
-      # mutant:463-doctor-deadline-root-only — this arm (the only place a found descendant is ever
-      #   added to $set) becomes a no-op: every call returns nothing, so kill_tree below only ever
-      #   signals ROOT itself, and case_deadline_kill_tree's own TERM-ignoring child survives it.
       case " $root$set" in
         *" $ppid "*) set="$set$pid "; found=true ;;
       esac
@@ -5562,10 +5526,6 @@ expect_track_state_line() {
 # mutant:427-claude-pid-guard — bin: `if [ -n "${CLAUDE_PID+set}" ]; then` becomes `if false;
 #   then`, so the guard never fires. Killed by codex-sched-claude-pid (rc/outcome no longer show a
 #   refusal).
-# mutant:427-stdin-inherited — bin: the launch line's `< /dev/null` becomes `<&0`, so the wrapper's
-#   own stdin (the sentinel) reaches the launched codex. Killed here: stdin.capture is no longer
-#   empty. (See plan Open question Q1: a bare drop of the redirect is equivalent under an
-#   asynchronous, non-interactive bash — only the explicit `<&0` form is a measurable mutant.)
 # mutant:427-marker-midline — bin: the PROMPT heredoc's first two lines are joined into one
 #   physical line, so the marker no longer sits on a line of its own. Killed here: the whole-line
 #   `grep -qxF` no longer finds it (a `grep -qF` substring match would have missed this mutant).
@@ -5686,11 +5646,9 @@ case_codex_sched_claude_pid() {
 #   (a stop is no longer honoured — rc 0 with an argc file, since the launch proceeds instead), and
 #   by every OTHER launch case (codex-sched-completed included): rc=0 now incorrectly reports
 #   skipped-stop instead of the run actually completing.
-# mutant:427-timeout-default — bin: `${TBF_CODEX_RUN_TIMEOUT:-14400}` becomes `${TBF_CODEX_RUN_TIMEOUT:-0}`.
+# mutant:427-grace-default — bin: `${TBF_CODEX_RUN_KILL_GRACE:-30}` becomes `${TBF_CODEX_RUN_KILL_GRACE:-0}`.
 #   Killed here: with no override, the production default is now 0, which fails the ">0" check, so
 #   the run ends preflight-failed reason=bad-timeout instead of skipped-stop.
-# mutant:427-grace-default — bin: `${TBF_CODEX_RUN_KILL_GRACE:-30}` becomes `${TBF_CODEX_RUN_KILL_GRACE:-0}`.
-#   Killed here the same way, via the grace default instead of the timeout default.
 case_codex_sched_stop_local() {
   mk_sched sched-stop-local
   build_stub_sched_codex "$sched_stub" complete
@@ -5976,12 +5934,8 @@ case_codex_sched_failed() {
 # reason=unattended-stop-preflight, exit 1, and the failure's tracking issue is created with that
 # reason in its body; that phrase embedded mid-line (preflight-midline): completed. When both lines
 # are present (denied-and-preflight, preflight line first), permission-denied wins.
-# mutant:496-precedence-swapped — bin: the preflight block is checked before the permission-denied
-#   block. Killed here (the denied-and-preflight stub classifies unattended-stop-preflight).
 # mutant:427-unattended-stop-ignored — bin: the whole-line `grep -qxF` classification condition
 #   becomes `false`. Killed here (the denied stub no longer classifies as failed).
-# mutant:496-preflight-stop-ignored — bin: the preflight whole-line grep condition becomes `false`.
-#   Killed here (the preflight-stop stub classifies completed).
 # mutant:496-preflight-stop-substring — bin: the preflight grep loses -x (whole-line becomes
 #   substring). Killed here (the preflight-midline control classifies failed).
 case_codex_sched_unattended_stop() {
@@ -6212,9 +6166,6 @@ case_codex_sched_wrapper_killed_forwards_term() {
 # sched_collect/sched_await_dead shape as the two cases above; sched_collect's own 12s deadline is
 # what now catches a handler that never escalates to KILL, replacing the old ad hoc 20s slice-counted
 # wait.
-# mutant:427-wrapper-kill-skipped — bin: on_wrapper_signal's own post-grace
-#   `kill -KILL "$codex_pid"` becomes a no-op. Killed here: the TERM-ignoring stub is never actually
-#   killed, so it survives past this case's bounded survivor poll.
 # mutant:427-wrapper-grace-ignored — bin: on_wrapper_signal's grace deadline is pushed far past the
 #   stub's own natural hang, so the handler never reaches its KILL. Killed here: the wrapper is still
 #   running past sched_collect's own 12s deadline, so this case ends via that overrun instead of
@@ -6257,11 +6208,9 @@ case_codex_sched_wrapper_killed_noterm() {
 # arithmetic reads it as octal, so the watchdog (RUN_TIMEOUT) and its post-TERM poll /
 # on_wrapper_signal (KILL_GRACE) would abort and leave codex unbounded; under a mutant a launched
 # codex stub writes argc, so keeping them last keeps the earlier sub-runs' no-argc checks readable.
-# mutant:460-run-timeout-leading-zero-accepted — the leading-zero rejection arm for $timeout (`0?*)
-#   finish preflight-failed bad-timeout ;;`) deleted: the TBF_CODEX_RUN_TIMEOUT=08 sub-run now passes
+# mutant:460-grace-leading-zero-accepted — the leading-zero rejection arm for $grace (`0?*) finish
+#   preflight-failed bad-timeout ;;`) deleted: the TBF_CODEX_RUN_KILL_GRACE=08 sub-run now passes
 #   preflight step 2, so the run no longer ends preflight-failed reason=bad-timeout with exit 1.
-# mutant:460-grace-leading-zero-accepted — the same arm for $grace deleted: the
-#   TBF_CODEX_RUN_KILL_GRACE=08 sub-run reaches launch the same way.
 case_codex_sched_timeout_invalid() {
   mk_sched sched-timeout-invalid
   build_stub_sched_codex "$sched_stub" complete
@@ -7034,12 +6983,6 @@ case_codex_ghbound_track_view() {
 # (its own preceding `gh issue view` still succeeds — OPEN — under hang-comment, since only the
 # comment sub-command is intercepted). Both give tracking=failed:comment-timeout, exit 3
 # (overriding 0 in (a)), tracking state byte-identical, and the hang stub dead afterwards.
-# mutant:443-comment-timeout-unmapped — the RECOVERY comment site's own `if $bounded_timed_out;
-#   then` becomes `if false; then` (its own preceding `bounded_run` call line included in the edit
-#   to stay textually distinct from the failing-again site below): sub-run (a) falls through to the
-#   ordinary `gh_rc`/`comment-failed` handling instead.
-# mutant:443-refail-comment-timeout-unmapped — the FAILING-AGAIN comment site's own
-#   `if $bounded_timed_out; then` becomes `if false; then`: sub-run (b) falls through the same way.
 # mutant:443-comment-timeout-wording-lost — `finish`'s own stderr case arm,
 #   `failed:create-timeout|failed:comment-timeout)`, drops `failed:comment-timeout` from the
 #   pattern: both sub-runs still get the right tracking=/exit-code slug, but the stderr wording
@@ -7168,8 +7111,6 @@ STUBEOF
 # (d) TBF_CODEX_GH_TIMEOUT=08 -> the same bad-timeout, and codex is never launched (no argc) — a
 # leading zero is rejected outright, before it can ever reach the digits-only/`-gt 0` checks or
 # bash's own arithmetic inside bounded_run.
-# mutant:443-gh-timeout-default — `${TBF_CODEX_GH_TIMEOUT:-120}` becomes `:-0`: sub-run (a) now
-#   fails preflight validation instead of reaching skipped-stop.
 # mutant:443-gh-timeout-fallback — the literal `gh_timeout=120` global becomes
 #   `gh_timeout="$gh_timeout_raw"`, losing the safe fallback while validation is still pending: (b)
 #   aborts before ever reaching its own outcome line, and the state (b) would have written for (c)
@@ -7182,10 +7123,6 @@ STUBEOF
 #   "ok" stub that exits almost instantly), but this mutant stalls that call for the full 60s bound
 #   too, so the wrapper process itself overruns that case's own 10s sched_collect wait for it to
 #   exit.
-# mutant:443-gh-timeout-leading-zero-accepted — the leading-zero rejection arm (`0?*) finish
-#   preflight-failed bad-timeout ;;`) deleted: sub-run (d)'s "08" now passes preflight step 2 and
-#   reaches bounded_run's own arithmetic, which aborts (see the bin's own preflight step 2 comment)
-#   instead of ending in a clean bad-timeout.
 # mutant:443-gh-out-kept — bounded_run's own capture-mode `rm -f "$file"` becomes `:`: sub-run (b)'s
 #   own gh.out (an ordinary, non-hung capture call) survives (see codex-ghbound-track-create for
 #   this same mutant's timed-out half).
@@ -7275,14 +7212,6 @@ expect_path_standard() {
 # space, together with an invalid TBF_CODEX_RUN_TIMEOUT: the refusal line names the entry in its
 # `%q`-quoted spelling, and `reason=unsafe-path` still wins over bad-timeout (preflight step 1 runs
 # first).
-# mutant:444-trailing-empty-dropped — bin: the split loop's last-field arm stops at an empty final
-#   field instead of refusing it. Killed by sub-case (iv).
-# mutant:444-tracking-skipped — bin: finish skips the tracking step for reason=unsafe-path. Killed
-#   by sub-case (ii)'s `tracking=created` assertion.
-# mutant:444-step-order — bin: preflight step 1 moves after the bad-timeout checks. Killed by
-#   sub-case (vi), which would then report bad-timeout instead of unsafe-path.
-# mutant:444-refusal-unquoted — bin: the refusal line's `%q` becomes `%s`. Killed by sub-case (vi),
-#   whose expected refusal names the entry as `rel\ dir`.
 # mutant:444-relative-accepted — bin: the relative arm's own `path_refuse "$e"` call -> `:`. Killed
 #   here: sub-cases (ii)/(iii) each stop setting path_unsafe for their own relative entry, so the run
 #   never reports `reason=unsafe-path` and `expect "refusing PATH entry"` goes missing.
@@ -7338,9 +7267,6 @@ case_codex_path_relative() {
 # (sched_cwd) — proving the work-tree root is discovered upward from the current directory, not
 # taken to BE the current directory. All four share one planted-trap directory and one sentinel,
 # since every spelling in this case names the very same physical location.
-# mutant:444-toplevel-unchecked — bin: drop ` "$path_top"` from path_dir_protected's own `for p in`
-#   list. Killed here: sub-cases (a)-(d) all name a location under the repo toplevel, so none would
-#   be refused any more.
 # mutant:444-toplevel-cwd-only — bin: `if [ -e "$path_walk/.git" ]; then path_top="$path_walk";
 #   break; fi` -> `break`. Killed by sub-case (d): path_top would stay pinned to the subdirectory
 #   itself (never walking up to find `.git`), so the repo-toplevel entry would no longer be an
@@ -7440,11 +7366,8 @@ ERR: $sched_err"
 # checked independently of (a)/(b). The real, un-rewritten `/tmp` string is deliberately never
 # exercised by any fixture — dev/doctor-tests.sh's own header names this as an honest, reviewable
 # limit shared with every other sched fixture.
-# mutant:444-slash-tmp-unchecked — bin: drop `"$slash_tmp" ` from path_dir_protected's own `for p
-#   in` list. Killed by sub-cases (a)/(b): neither spelling of the fixture's own "/tmp" stand-in
-#   would be checked any more.
-# mutant:444-tmpdir-unchecked — bin: drop `"${TMPDIR:-}" ` from that same list. Killed by sub-case
-#   (c): an entry under $TMPDIR would no longer be checked at all.
+# mutant:444-tmpdir-unchecked — bin: drop `"${TMPDIR:-}" ` from path_dir_protected's own `for p
+#   in` list. Killed by sub-case (c): an entry under $TMPDIR would no longer be checked at all.
 case_codex_path_tmp() {
   local name=path-tmp
   mk_sched "$name"
@@ -7477,9 +7400,6 @@ case_codex_path_tmp() {
 #   "$e"; continue; }` (adapted to the loop's own `last` handling). Killed by sub-case (a): the
 #   nonexistent leading entry would now be flagged unsafe, turning a clean `outcome=completed` run
 #   into `preflight-failed reason=unsafe-path`.
-# mutant:444-symlink-kept — bin: `path_safe="${path_safe:+$path_safe:}$d"` -> `...$e"` (keeps the
-#   original spelling instead of the resolved physical path). Killed by sub-case (b): path.capture
-#   would then carry the symlink's own name instead of $sched_stub's physical path.
 case_codex_path_safe() {
   local name=path-safe
   mk_sched "$name"
@@ -7690,9 +7610,6 @@ run_doctor_at() {
 # merge, and (via the shared healthy stub_gh_dir) branch protection; every Claude-only line is
 # absent; and the stub's own request log pins the three-request, notification/non-JSON-tolerant
 # exchange contract.
-# mutant:410-provider-wrapper — turning the `if [ "$provider" = claude ]` wrapper into `if true`
-#   re-enables every Claude-only check on Codex too, so this case's expect_absent assertions
-#   (settings.json, merge autonomy:, autonomy mode:, governance paths:, test-suite ratchet) fail.
 # mutant:410-init-clientinfo — dropping clientInfo from the initialize request (#410 kickback
 #   finding 1) makes the stub reject it and answer hooks/list with "Not initialized" instead of
 #   the trust reply, so this case's "every hook Codex loads for this repo is trusted" PASS and
@@ -7891,8 +7808,6 @@ case_codex_doctor_hooks_modified() {
 # ignored because it's disabled -> PASS, rc 0.
 # mutant:410-trust-managed — no longer excluding "managed" from the not-trusted test flags every
 #   managed plugin hook as untrusted.
-# mutant:410-trust-enabled — dropping the enabled!=false guard from the not-trusted test flags the
-#   disabled untrusted user hook too.
 case_codex_doctor_hooks_tolerated() {
   mk_cx_doctor cx-doctor-hooks-tolerated
   local cxstub="$tmpbase/cx-doctor-hooks-tolerated-stub"

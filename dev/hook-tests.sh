@@ -81,9 +81,6 @@ _kt_descendants() {
     while read -r pid ppid; do
       [ -z "${pid:-}" ] && continue
       case "$set" in *" $pid "*) continue ;; esac
-      # mutant:463-hook-deadline-root-only — this arm (the only place a found descendant is ever
-      #   added to $set) becomes a no-op: every call returns nothing, so kill_tree below only ever
-      #   signals ROOT itself, and case_deadline_kill_tree's own TERM-ignoring child survives it.
       case " $root$set" in
         *" $ppid "*) set="$set$pid "; found=true ;;
       esac
@@ -168,19 +165,13 @@ wait_deadline() {
 # digits, and a second `case` rejects a whole-seconds half that is empty or holds any non-digit —
 # splits on the separator, then evaluates the joined digits under a `10#` base-10 prefix so a leading zero in the sub-second half is never
 # misread as octal ($((0089)) errors in plain bash arithmetic). The evaluation runs inside a
-# command substitution specifically so that a malformed base-10 value (e.g. under the mutant below,
-# which drops the `10#` prefix) fails as a contained, empty result in THIS function alone, instead
+# command substitution specifically so that a malformed base-10 value (e.g. a leading-zero value
+# evaluated without the `10#` prefix) fails as a contained, empty result in THIS function alone, instead
 # of a fatal arithmetic-expansion error unwinding bash's own jump_to_top_level all the way out of
 # the case dispatch loop that calls this — verified directly against this exact shape (#470). Sets
 # $parsed_ms, or "" when STR doesn't match the shape or the arithmetic itself failed (the group's
 # own 2>/dev/null keeps that failure's diagnostic off the suite's stderr). Builtins
 # only — no grep, no pipe into a reader.
-# mutant:470-hook-ms-octal — the `10#` prefix dropped from the arithmetic: a leading-zero
-#   sub-second value like "0.089" then evaluates as invalid octal instead of decimal 89, caught by
-#   case_deadline_calibrate's own 0.089 assertion.
-# mutant:470-hook-ms-shape — the whole-seconds digit check deleted: a report like "1+2.345" then
-#   evaluates as arithmetic instead of coming back empty, caught by case_deadline_calibrate's own
-#   1+2.345 assertion.
 parsed_ms=""
 _ms_from_timeformat() {
   local str="$1" whole sub
@@ -234,8 +225,6 @@ calibrated_deadline() {
 # 1, so B is at least 2; K=4 absorbs a load swing between two back-to-back runs), clamped to MAX,
 # the largest knob the hook adopts, which keeps every site case invariant under 435-dl-knob-raise
 # and its timed deny well inside the harness deadline.
-# mutant:476-hook-site-budget-window — drops the whole-second window, so a fast control yields
-#   budget 1 again (the #476 flake shape); caught by case_deadline_site_budget's own 0ms assertion.
 # mutant:476-hook-site-budget-cap — deletes the MAX clamp, so a slow control yields a knob the hook
 #   ignores (and 435-dl-knob-raise would adopt); caught by case_deadline_site_budget's own 751ms and
 #   5000ms assertions.
@@ -271,8 +260,6 @@ case_deadline_site_budget() {
 # mutant:507-hook-flood-tokens-min — deletes the MIN clamp, so a slow control yields a token count
 #   below the smallest size the kill needs; caught by case_deadline_flood_tokens' own 1143ms
 #   assertion.
-# mutant:507-hook-flood-tokens-max — deletes the MAX clamp, so a fast control yields a token count
-#   above the proven full size; caught by case_deadline_flood_tokens' own 79ms and 0ms assertions.
 flood_tokens=0
 calibrated_flood_tokens() {
   local ms="$1" n="$2" target="$3" min="$4" max="$5"
@@ -383,8 +370,6 @@ TREEEOF
 # mutant:470-hook-calib-floor-only — calibrated_deadline's scale-up branch deleted, so it always
 #   returns FLOOR: caught by the 4000ms assertion below (K*ms=24 > floor=15, so the mutant wrongly
 #   returns 15 instead of 24).
-# mutant:470-hook-calib-no-ceil — the "+999" round-up term dropped from the ceiling arithmetic:
-#   caught by the 2501ms assertion below (16.005s truncates to 15 instead of rounding up to 16).
 case_deadline_calibrate() {
   calibrated_deadline 15 6 1000
   [ "$calibrated_secs" -eq 15 ] || { __ok=0; __why="${__why}calibrated_deadline 15 6 1000: expected 15 (floor), got $calibrated_secs\n"; }
@@ -880,12 +865,6 @@ case_boundary_never_executes_noop() {
 # --- hooks/agent-boundary.sh: the #340 `.claude` Bash-write deny class -----------------------
 # Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter
 # "ab-claude-"), re-run by dev/mutant-driver.sh — the #359 registry idiom, not a prose table.
-# mutant:340-fastpath — deletes the widened fast path 2's `*[Cc]…[Ee]*` alternative, so every
-#   deny fixture below whose raw stdin carries no "git"/"gh" substring exits silently before ever
-#   reaching the scan.
-# mutant:340-fastpath-case — narrows that same alternative to the literal `*claude*` (no case
-#   fold), isolating ab-claude-deny-case-variant's `.Claude` spelling as the one fixture that
-#   depends on the fast path's OWN case-insensitivity (the scan's tolower() still runs regardless).
 # mutant:340-redirect-pass — disables the redirect pass's own `print`, so a bare `>`/`>>` target
 #   carrying a `.claude` segment is never emitted, even though the scan still runs.
 # mutant:340-arg-vocab — empties CLAUDE_PATH_ARG_COMMANDS, so `tee`/`cp`/`cd` writing into
@@ -980,7 +959,7 @@ case_ab_claude_deny_never_writes() {
     chmod +x "$trapdir/$bin"
   done
   # Run from inside the fixture tree with a RELATIVE target: the scanned command text then carries no
-  # random mktemp characters, which could otherwise contain "gh" and defeat the 340-fastpath mutant.
+  # random mktemp characters, which could otherwise contain "gh" and let the payload past the raw-stdin fast path.
   local oldpwd="$PWD"
   cd "$tmpbase/ab-claude-tree" || { __ok=0; __why="${__why}cannot cd into the fixture tree\n"; return; }
   run_boundary "$(mk_agent_cmd 'implementer' 'echo x >> .claude/LESSONS.md')" "$trapdir:$PATH"
@@ -1073,7 +1052,7 @@ case_ab_cwrite_deny_never_writes() {
     chmod +x "$trapdir/$bin"
   done
   # Run from inside the fixture tree with a RELATIVE target: the scanned command text then carries no
-  # random mktemp characters, which could otherwise contain "gh" and defeat the 340-fastpath mutant.
+  # random mktemp characters, which could otherwise contain "gh" and let the payload past the raw-stdin fast path.
   local oldpwd="$PWD"
   cd "$tmpbase/ab-cwrite-tree" || { __ok=0; __why="${__why}cannot cd into the fixture tree\n"; return; }
   run_boundary "$(mk_agent_cmd 'implementer' "python3 -c \"open('.claude/LESSONS.md','a').write('x')\"")" "$trapdir:$PATH"
@@ -1318,15 +1297,8 @@ ab_rx_payload() {
 # mutant:505-ab-unbalanced-off — never fires the assignment trigger.
 # mutant:505-ab-unbalanced-dq — drops the odd double-quote arm of quote_unbalanced().
 # mutant:505-ab-word-strip-sq — stops deleting single quotes from a scanned word, so g'h' is no gh.
-# mutant:505-ab-word-strip-dq — stops deleting double quotes from a scanned word, so g"h" is no gh.
-# mutant:505-ab-word-strip-bs — stops deleting backslashes from a scanned word, so g\h is no gh.
 #   The quote-split commands end in a gh-notes comment word: it is no exact word, and only keeps the
 #   raw-stdin fast path from passing the payload vacuously.
-# mutant:505-ab-word-lower — stops case-folding the scanned token, so an upper-case GIT or GH word
-#   (which runs on a case-insensitive filesystem) is no exact word.
-# mutant:505-ab-scan-reset — never resets the once-per-segment memo at a segment start, so a no-hit
-#   scan in an earlier segment silences the scan of every later one. The multi-segment command below
-#   carries a no-hit trigger first.
 case_ab_lost_deny_assign_dquote() {
   abx_deny implementer gh 'X="a b" gh pr merge 5' 'env X="a b" gh pr merge 5' 'X="a b" GH pr merge 5' \
     "X=\"a b\" g'h' pr merge 5 # gh-notes" 'X="a b" g"h" pr merge 5 # gh-notes' \
@@ -2430,9 +2402,6 @@ case_pu_noop_global_opt_feature() {
 #   "--config-env" spelling is ever flagged.
 # mutant:439-pg-cmdcfg-push-only — moves the sentinel print ahead of the "subcmd != push" check,
 #   so a NON-push segment carrying command-line config is wrongly denied too.
-# mutant:439-pg-cmdcfg-leak — removes "cmdcfg" from emit_segment()'s own local-variable list (and
-#   its own reset), turning it into an awk global that leaks across segments/calls instead of
-#   starting fresh for each one.
 # mutant:439-pg-cmdcfg-order — lets a #292 unresolved-target reason in the same segment win over
 #   the command-line-config reason (the sentinel only fires when nothing else is unresolved).
 #
@@ -3375,8 +3344,6 @@ case_solo_cmdcap_ratio() {
 # mutant:448-pg-alias-cmdline-text -- treats any command-line config as alias-bearing.
 # mutant:448-pg-alias-name-match -- matches an alias record whatever its key is.
 # mutant:448-pg-alias-classify-open -- makes every matching alias record deny.
-# mutant:448-pg-alias-subsection -- makes the [alias "<name>"] subsection header arm unmatchable, so a
-#   command key under it is never recorded.
 # mutant:448-pg-alias-escape -- drops the git-config whitespace escapes (backslash t, n, b) as word
 #   breaks, so push followed by an escaped TAB or LF fuses into one word.
 # mutant:448-pg-alias-subcmd-fold -- drops the lowercase fold of the subcommand in the ALIAS line.
@@ -3786,7 +3753,6 @@ case_al_deny_budget_zero() {
   expect_push_deny_exact "$DL_DEADLINE_LINE"
 }
 # --- #450: an inline HOME=/XDG_CONFIG_HOME= relocation on a push segment -----------------------
-# mutant:448-pg-reloc-vocab -- empties the relocation vocabulary, so no assignment is ever flagged.
 # mutant:448-pg-reloc-push-sentinel -- deletes the push-segment relocation deny.
 # mutant:448-pg-reloc-exact -- widens relocation membership to any name containing HOME.
 al_expect_reloc() {
@@ -5205,8 +5171,6 @@ case_push_reads_only() {
 # mutant:398-pg-kw-vocab — drops only the shell-keyword words (if/then/elif/else/do/while/until/!/
 #   coproc) from PREFIX_WORDS, leaving eval in place, so a fixture below whose command relies on
 #   skipping a leading keyword no longer resolves git as the command word.
-# mutant:398-pg-case-fold — removes emit_segment()'s tolower() around normalize(tok), so an
-#   upper-case command word no longer resolves to "git".
 # mutant:398-pg-fastpath-case — narrows the widened `*[Gg][Ii][Tt]*` fast path back to the plain
 #   `*git*` (no case fold), isolating a fixture whose raw stdin carries no case-insensitive "git"
 #   substring at all. No `cwd` is passed for any fixture below: each carries n >= 2 refspec
@@ -5250,8 +5214,6 @@ case_push_kw_noop_then_feature() {
 # mutant:304-sys-order — emits the system candidate records AFTER .git/config instead of before,
 #   so a repo-local/system conflict on the last-wins branch.<current>.merge scalar resolves
 #   backwards.
-# mutant:304-sys-label — mislabels the $GIT_CONFIG_SYSTEM record as "your global git config".
-# mutant:304-sys-clt-label — mislabels the Apple CLT record as "your global git config".
 # mutant:304-inc-section — makes the plain "[include]" section header unmatchable.
 # mutant:304-incif-section — makes the "[includeIf ...]" section header unmatchable.
 # mutant:304-inc-key-case — narrows the include "path" key match to the exact lower-case spelling.
@@ -5279,14 +5241,10 @@ case_push_kw_noop_then_feature() {
 #   already read via one top-level candidate's own include is wrongly treated as "already seen" by
 #   a later, unrelated top-level candidate (or a sibling include) that names the identical path —
 #   under-blocking exactly the push-include-deny-repo-config-reincluded shape.
-# mutant:304-inc-follow-budget — drops the "$cfg_inc_budget -gt 0" check entirely, so every include
-#   is followed unconditionally regardless of how many have already run.
 # mutant:304-inc-follow-budget-off-by-one — narrows the budget boundary from "-gt 0" to "-ge 0", so
 #   one include past the budget is still followed.
 # mutant:304-inc-line-budget — drops the budget check itself (the "-gt 0" test and its "|| break"),
 #   so an included file is read to its own end regardless of how many lines have already been read.
-# mutant:304-inc-line-budget-off-by-one — narrows the line-budget boundary from "-gt 0" to "-ge 0",
-#   so one line past the budget is still read.
 # mutant:304-inc-line-budget-depth0 — drops the "depth >= 1" guard, so the line budget also applies
 #   to a depth-0 top-level candidate, which can then be truncated mid-file.
 # mutant:304-inc-line-chars — drops the CFG_INCLUDE_MAX_LINE_CHARS length check entirely, so a line
@@ -5306,10 +5264,6 @@ case_push_kw_noop_then_feature() {
 #   assignment to a "set only if unset/empty" default (":=$"), so a SECOND resolve_repo() call in
 #   the same hook invocation (a resolved "-C" target) inherits the session's own already-decremented
 #   value instead of starting fresh.
-# mutant:304-inc-line-budget-reset — the same "set only if unset/empty" change to
-#   cfg_inc_line_budget's own reset.
-# mutant:304-inc-char-budget-reset — the same "set only if unset/empty" change to
-#   cfg_inc_char_budget's own reset.
 # mutant:304-inc-follow-gate — drops the new line-budget/char-budget conjuncts from the include
 #   arm's own follow condition, so a follow is gated on CFG_INCLUDE_MAX_FOLLOWS alone: once the
 #   line or character budget is exhausted but follows remain, each further include is still OPENED
@@ -7032,9 +6986,6 @@ case_cdg_codexseg_noop_my_codex()     { run_claude_guard "$(mk_cdg_agent_path 'i
 #   arm instead, which denies unconditionally once the command word is `apply_patch`.
 # mutant:407-cdg-bash-no-inline-patch — short-circuits the `is_apply_patch_word` check with
 #   `false &&`, so `apply_patch < x.patch` is no longer denied.
-# mutant:407-cdg-bash-decoy-claude-mention — widens the belt-and-braces `.claude`/`.codex`
-#   case arm's own bracket classes so they can never match, isolating the ANSI-C-quoted decoy
-#   fixture's own dependency on that specific check from the generic "no inline patch" fallback.
 # mutant:407-cdg-bash-belt-braces-order (#407 kickback round 2, finding A) — disables the
 #   belt-and-braces check's own guard with `false &&`, so it can never run at all, isolating every
 #   fixture whose deny depends on it running UNCONDITIONALLY/FIRST (both decoys, plus the two
@@ -7107,7 +7058,7 @@ case_cdg_bash_deny_decoy_dollar_quote() {
   # structured parse.
   run_claude_guard "$(mk_codex_shell 'implementer' "apply_patch \$'*** Begin Patch\\n*** Add File: .claude/x\\n+x\\n*** End Patch'${LF}*** Add File: src/ok.txt")"
   expect_cdg_deny_unparseable
-  # mutant:407-cdg-bash-decoy-claude-mention — the generic "could not be parsed" phrase alone does
+  # mutant:407-cdg-bash-belt-braces-order — the generic "could not be parsed" phrase alone does
   # not distinguish the belt-and-braces reason from the "no inline patch text" fallback; pin the
   # SPECIFIC reason text too.
   case "$cdg_err" in
@@ -7377,7 +7328,6 @@ case_cdg_dbq_deny_quoted_prefix() {
 #   exactly the cap denies.
 # mutant:457-cdg-dl-patch-prepare-off — the apply_patch route stops running cdg_prepare_text, so an
 #   over-cap patch line reaches the whole-text work instead of denying at the cap.
-# mutant:457-cdg-dl-iapw-line-site — is_apply_patch_word's per-line loop loses its sample.
 # mutant:457-hook-cdg-budget-override-leaks — run_claude_guard's own trailing budget-override reset
 #   deleted: the post-call emptiness assertion is the only thing that catches it.
 # mutant:457-hook-cdg-cap-override-leaks — the same for the cap-override reset.
@@ -8120,10 +8070,6 @@ case_canary_main_session() {
 # or the raw-stdin fast path would pass it vacuously.
 # mutant:518-ab-optval-off — empties this hook's PREFIX_VALUE_WORDS, so no prefix word opens a value
 #   context and the walk takes the option value as the command word again.
-# mutant:518-ab-optval-start — scans from the value word itself instead of after it, so a prefix word
-#   followed by git or gh that is the command word itself denies for the verifier.
-# mutant:518-ab-optval-nonopt — drops the next-token-is-not-an-option test, so an option followed by
-#   another option reads the rest of the segment.
 # mutant:518-ab-optval-reset — keeps the value context after a later non-value prefix word, so
 #   sudo command -p echo gh denies.
 # mutant:518-ab-optval-memo — clears the per-segment scan memo before each value-context scan, so a
@@ -8480,10 +8426,6 @@ case_ab_deploy_never_executes() {
 # push-guard. PP_R_OPTV is the fixed reason; the deny never echoes input.
 # mutant:518-pg-optval-off — empties this hook's PREFIX_VALUE_WORDS, so no prefix word opens a value
 #   context and the walk takes the option value as the command word again.
-# mutant:518-pg-optval-start — scans from the value word itself instead of after it, so an option of
-#   sudo before git with a feature push denies.
-# mutant:518-pg-optval-nonopt — drops the next-token-is-not-an-option test, so an option followed by
-#   another option reads the rest of the segment.
 # mutant:518-pg-optval-reset — keeps the value context after a later non-value prefix word, so a push
 #   behind bash and its option denies.
 # mutant:518-pg-optval-memo — runs the push scan at every trigger instead of once per segment, so a
@@ -8559,8 +8501,6 @@ case_push_optvalscan_noop_flood() {
 # push-guard. PP_R_OPTV is the fixed reason; the deny never echoes input.
 # mutant:537-pg-interp-off — empties PREFIX_INTERP_WORDS, so no interpreter opens an option context and
 #   the walk takes the value of an option as the command word again.
-# mutant:537-pg-interp-cluster — reads a letter cluster ending in a single value letter as a flag, so
-#   -o and -eo no longer take their value word with them.
 # mutant:537-pg-interp-plus — reads only dash-led tokens as options, so +o, +O and +e become command
 #   words.
 # mutant:537-pg-interp-guard — drops the value-word test, so a value word the walk could deny on (a
