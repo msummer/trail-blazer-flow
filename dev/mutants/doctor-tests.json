@@ -2175,6 +2175,55 @@
       "expect_fail": [
         "contract-name-case-variant"
       ]
+    },
+    {
+      "name": "616-doctor-pool-order",
+      "target": "dev/doctor-tests.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "harness-",
+      "edits": [
+        {
+          "from": "        job_state[$idx]=done",
+          "to": "        job_state[$idx]=done; collect_case \"$idx\""
+        },
+        {
+          "from": "    collect_case \"$next_print\"",
+          "to": "    :"
+        }
+      ],
+      "expect_fail": [
+        "harness-order"
+      ]
+    },
+    {
+      "name": "616-doctor-pool-noverdict",
+      "target": "dev/doctor-tests.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "harness-",
+      "edits": [
+        {
+          "from": "    *)\n      fail=$((fail+1))\n      echo \"  FAIL  ${job_name[$idx]} — ${job_desc[$idx]}\"\n      echo \"    this case produced no verdict — it died before reporting and is counted as a failure\"\n      [ -n \"$out\" ] && printf '%s\\n' \"$out\" | sed -n '1,40p'\n      [ -n \"$err\" ] && printf '%s\\n' \"$err\" | sed -n '1,40p' 1>&2\n      ;;",
+          "to": "    *) pass=$((pass+1)) ;;"
+        }
+      ],
+      "expect_fail": [
+        "harness-dead-case"
+      ]
+    },
+    {
+      "name": "616-doctor-pool-fail-tally",
+      "target": "dev/doctor-tests.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "harness-",
+      "edits": [
+        {
+          "from": "    fail)\n      fail=$((fail+1))",
+          "to": "    fail)\n      pass=$((pass+1))"
+        }
+      ],
+      "expect_fail": [
+        "harness-fail-verdict"
+      ]
     }
   ]
 }

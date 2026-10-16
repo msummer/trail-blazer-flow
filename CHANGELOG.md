@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #616: `dev/doctor-tests.sh` runs its cases through a rolling pool like `dev/selfcheck-tests.sh`'s, sized from the
+  host's cores (`-j <n>`, `--serial` or `DOCTOR_TESTS_JOBS` override it), and prints them in declared order; a case that
+  dies is a FAIL naming it. No consumer step.
 - #614: the Claude Code doctor FAILs when git tracks the contract as `claude.md` (any case but `CLAUDE.md`), which a
   case-insensitive filesystem opened anyway while the merge floor and the reserve match read none of it, and skips its
   governance paths and autonomy reserve checks. Consumer step: run the `git mv` the FAIL names.
