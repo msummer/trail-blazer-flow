@@ -251,9 +251,10 @@ returns inside Claude Code's 10-second hook timeout, and a hook that times out g
 carriage-return cap is there because the whole-text strip grows faster than its input under bash 3.2. The main
 session and an unrecognised agent are outside it. A cooperative command over a cap is denied too (see "Known
 over-blocks" below).
-The scan processes `tool_input.command` one line at a time, so it over-blocks some benign commands and
-misses some spellings; both are catalogued, each with a measured example, in "Known over-blocks" and
-"Known gaps" below. The remedy for a file-content over-block is to write through the Write/Edit tools rather
+The scan processes `tool_input.command` one line at a time and, since #556, each run of lines a trailing
+backslash continues once more as one joined line (appended after every line, so no earlier verdict is lost, and
+joined quote-blind and heredoc-blind), so it over-blocks some benign commands and misses some spellings;
+both are catalogued, each with a measured example, in "Known over-blocks" and "Known gaps" below. The remedy for a file-content over-block is to write through the Write/Edit tools rather
 than a Bash heredoc, and for the #387 read-adjacent case, the Read/Grep tools or a separate Bash call.
 
 **The third hook, `hooks/push-guard.sh` (#260), governs every session — main session included,**
@@ -451,13 +452,15 @@ instead of silently degrading into it. See `hooks/push-guard.sh`'s own "Analysis
 header section for the exact sampling rule, the worst-case wall-clock bound, and the residual this
 deadline still cannot reach (the unsampled pre-tokenizer prefix, bounded by the command-size cap
 described next; one single config line's own `read`; and the Codex CLI's own hook timeout, which is
-UNVERIFIED here). Since #517 a Bash command longer than `PUSH_CMD_MAX_BYTES` bytes (262144 since #543,
+UNVERIFIED here). Since #517 a Bash command longer than `PUSH_CMD_MAX_BYTES` bytes (131072 since #556,
 counted in the C locale so multibyte text is not undercounted) that gets past the git fast path and plan
 mode denies before the tokenizer runs, with a line of its own that names the limit and carries `(blocked:
 command over the size cap)` (the deadline's line carries `(blocked: command too large to analyse)`), because
 a hook that times out gives no deny at all; the remedy is to split the call or write large content with
 the Write tool. The carriage-return strip runs inside the awk scan, where a long run of carriage returns stays
-cheap. A
+cheap. Since #556 that scan reads the command and then each run of lines a trailing backslash continues, joined
+into one line, so the cap is sized for up to twice the command, and a push split by a continuation
+(`git push origin \<LF>main`) is seen whole. A
 deny whose route came from a system file names the source `your system git config`; one from an
 included file appends ` (via include)` to whichever source label already applies, exactly once no
 matter how deep the nesting goes. The residual — a system config at a path not on this
@@ -519,8 +522,10 @@ and verifier only). The caps exist because bash 3.2's text substitutions on a lo
 line, and a very large whole-text split, cannot be sampled against the budget: a Bash call that
 passes the hook's pre-filter (its payload names `apply_patch` or `applypatch`,
 or holds `Begin Patch`, or holds `"Edit"` or `"Write"` as a whole JSON
-string; any other Bash call is never analysed, whatever its permission mode or cwd) and has any
-physical line longer than `CDG_LINE_MAX_BYTES` bytes denies; a native `apply_patch` call denies
+string, or carries a backslash before an `n` as the JSON payload escapes it (#556: a backslash-newline continuation,
+and equally the literal text `\\n`); any other Bash call is never analysed, whatever
+its permission mode or cwd) and has any physical line, or any run of lines a trailing backslash joins, longer
+than `CDG_LINE_MAX_BYTES` bytes denies; a native `apply_patch` call denies
 for a line over that cap only when the line holds a CR or a `*** ` patch-grammar marker (an ordinary
 long content line is not capped there); either route denies a whole text longer than
 `CDG_TEXT_MAX_BYTES`; and a single path (an `Edit`/`Write` `file_path`, or a patch header path joined
@@ -534,11 +539,11 @@ loaded host under bash 3.2 and deny fail-closed, and the same remedies apply. Se
 "Analysis deadline (#457)" and "Size caps (#457)" header sections for the mechanism, the two test-only knobs, and the residuals); a case that matches more than one class resolves to the most specific message. For
 a plain Bash call, whenever `apply_patch`/`applypatch` (bare, or a path-qualified spelling such as
 `./apply_patch`, matched by basename) resolves as the command word of any `;`/`&`/`|`/`(`/`)`/`{`/
-`}`/backtick-delimited segment — skipping a leading redirect's own target/source and a bare-digits
-file-descriptor token immediately before one (a `>>`/`<>` run counts as one redirect, and an fd
+`}`/backtick-delimited segment of a line or (since #556) of a run of lines a trailing backslash joins —
+skipping a leading redirect's own target/source and a bare-digits file-descriptor token immediately before one (a `>>`/`<>` run counts as one redirect, and an fd
 duplication such as `>&2` or `2>&1` keeps its `&`), so a LEADING redirect cannot hide the command word
 either (`< x.patch apply_patch`, `2>/dev/null apply_patch < x`) — a belt-and-braces check runs
-FIRST and UNCONDITIONALLY, before any structured parse: if a physical line of the command text carries a
+FIRST and UNCONDITIONALLY, before any structured parse: if a physical line of the command text, or a joined run, carries a
 `*** ` marker and also mentions `.claude`/`.codex` (case-insensitive, with the leading dot), it denies
 immediately, regardless of whether the text also happens to contain a genuine `*** Begin Patch` line
 elsewhere (this is what defeats a decoy built to slip a `.claude` header past the structured parse — an
@@ -550,7 +555,9 @@ line). A mention on a line with no marker is not looked at: a `.gitignore` patch
 the command fall through to: a genuine, exactly-matched, fully-trimmed `*** Begin Patch` line (which
 triggers the same structured parse as the apply_patch tool route), or — command word present but no such
 line — a fail-closed "no inline patch text" deny (the hook cannot verify what it writes when the patch
-itself is invisible, e.g. `apply_patch < x.patch`). The hook does not check where the shim reads its patch
+itself is invisible, e.g. `apply_patch < x.patch`). Since #556 a shim name split by a
+backslash-newline (`apply_\<LF>patch < x.patch`) resolves through the joined run, while the inline-patch parse
+still reads the lines as written. The hook does not check where the shim reads its patch
 from: an exact `*** Begin Patch` line anywhere in the call lets the structured parse vouch for the call, so
 a shim that reads another file next to an unrelated inline patch is a known gap (#577, "Known gaps" below).
 The command-word walk strips quote characters (`'`/`"`) from each token
@@ -563,7 +570,7 @@ characters is resolved only when the call gets past the pre-filter (its payload 
 `apply_"patch" < x.patch` alone and `apply\_patch < x.patch` go unseen, while `echo apply_patch; apply_"patch"
 < x.patch` still denies. A shim behind a prefix option's separate value (`nice -n 5 apply_patch < x.patch`) and a
 quoted or escaped space before the shim (`X='a b' apply_patch < x.patch`) go unseen too: known gaps since #577
-("Known gaps" below), like the other residuals (a backslash-newline split, a variable-built name, a
+("Known gaps" below), like the other residuals (a variable-built name, a
 runtime-expansion word in front of the shim (`$X apply_patch < x.patch`), an ANSI-C-quoted spelling, an indirect
 `eval` argument, a command behind `trap` or a zsh `noglob`, an unrecognised launcher), which are in the two lists below.
 This lack of enclosing-quote tracking can also over-block (a commit message or
@@ -695,7 +702,7 @@ that hook exists to stop.
 | Hooks (role/session) | Class | Example (exit 0) | Issue |
 |---|---|---|---|
 | `agent-boundary` (implementer), `push-guard` (every session), `claude-dir-guard` (implementer) | An append assignment before the command: `NAME+=value` is not read as an assignment, so it is taken for the command word | `A+=1 gh pr merge 5`; `A+=1 git push origin main`; `A+=1 apply_patch < x.patch` | #555 |
-| the same three | A backslash-newline continuation: each line is judged on its own, so a command split by a trailing backslash is never seen whole | `X=a\<LF>b gh pr merge 5`; `git push origin \<LF>main`; `apply_\<LF>patch < x.patch` | #556 |
+| `agent-boundary` (implementer, verifier), `push-guard` (every session) | A guarded word split by the continuation itself: the raw-input fast path looks for the literal `git`, `gh` or `claude` (and, for `agent-boundary`, a deploy word) before the scan joins the lines, so the call exits unseen when nothing else in the payload names one | `g\<LF>h pr merge 5` (`agent-boundary`, a bare `implementer` agent type and a payload naming none of git, gh, claude or a deploy word). `gi\<LF>t push origin main` (`push-guard`) | #556 |
 | `agent-boundary` (implementer, verifier), `push-guard` (every session), `claude-dir-guard` (implementer) | zsh's short `if [[ cond ]] cmd` form, with no `; then`: the word after the closing `]]` is not read as a command word (the `; then` and `&&` forms are denied, and `claude-dir-guard` still denies an inline patch behind the form whose header names `.claude`) | `if [[ -n x ]] gh pr merge 5` (`agent-boundary`). `if [[ -n x ]] git push origin main` (`push-guard`). `if [[ -n x ]] apply_patch < x.patch` (`claude-dir-guard`) | #573 |
 | `agent-boundary` (implementer, verifier), `push-guard` (every session), `claude-dir-guard` (implementer) | A command behind text the segmenter cuts apart: a break character (`;` `&` `\|` `(` `)` `{` `}` or a backtick) inside a quoted, dollar-quoted or backslash-escaped span, a command substitution inside a quoted value or glued to a word, a mixed-quote or escaped-quote assignment value, or a quote left open at a line end. The scan is quote-blind and cuts at every break character, so the command word sits in a segment that starts with junk. A push alias behind a command substitution in git's option slot is in this class, and so is a push behind a backtick glued to other text in that slot (a `$(` or `${` substitution, or a backtick that starts a word or follows a double quote, in front of `push` itself is denied, see "Known over-blocks") | `X="a;b c" gh pr merge 5`; `X="a<LF>b" gh pr merge 5`; `X="a'"'b c' gh pr merge 5`; `exec -a "x<LF>y" gh pr merge 5` (`agent-boundary`). `X="a;b c" git push origin main`; `X="a<LF>$(true<LF>)b" git push origin main`; `X="a'"'b c' git push origin main`; `git -C "$(pwd)" zqp origin main`, with `alias.zqp = push`; `` git -C ~/`pwd` push origin main `` (`push-guard`). `X='a;b c' apply_patch < x.patch` (`claude-dir-guard`) | #572, #557 |
 | `claude-dir-guard` (implementer) | A path-qualified prefix word is not recognised as a prefix word (a bare `env apply_patch < x.patch` is denied) | `/usr/bin/env apply_patch < x.patch`; `/usr/bin/nice apply_patch < x.patch` | #562 |
@@ -734,6 +741,7 @@ scan, or, for `push-guard` and `agent-boundary`, to run the command from a termi
 |---|---|---|---|
 | `agent-boundary` (implementer), `push-guard` (every session), `claude-dir-guard` (implementer) | A line of a multi-line command is judged as a command, so a heredoc body that only holds one is denied: a line starting with `git`/`gh`, a shell keyword before it, a case variant | `cat > f <<'EOF'<LF>git push<LF>EOF`; `cat > f <<'EOF'<LF>then gh pr merge 5<LF>EOF`; `cat > f <<'EOF'<LF>Git push notes<LF>EOF` (`agent-boundary`). `cat > f <<'EOF'<LF>git push origin main<LF>EOF` (`push-guard`). `cat > f <<'EOF'<LF>apply_patch is the shim<LF>EOF` (`claude-dir-guard`) | #398 |
 | the same three | Quoted prose after a segment break: the scan is quote-blind, so the word after a `;` inside quotes is a command word | `echo "a; git push"`; `echo "a; Git push"` (`agent-boundary`). `echo "a; git push origin main"` (`push-guard`). ``git commit -m "See `apply_patch` docs"``; `git commit -m "fix; apply_patch now works"` (`claude-dir-guard`) | #398 |
+| `agent-boundary` (implementer, verifier), `push-guard` (every session), `claude-dir-guard` (implementer) | A run of lines a trailing backslash joins is judged once more as one line, quote-blind, heredoc-blind and without counting backslash parity (an escaped backslash joins too), so heredoc or quoted text whose continued lines spell a guarded command denies; every line is still judged on its own too | `cat > f <<'EOF'<LF>X=a\<LF>b gh pr merge 5<LF>EOF` (`agent-boundary`). `cat > deploy.sh <<'EOF'<LF>git push origin \<LF>  main<LF>EOF` (`push-guard`). `cat > f <<'EOF'<LF>apply_\<LF>patch < x.patch<LF>EOF` (`claude-dir-guard`) | #556 |
 | `agent-boundary` (implementer) | The command word is case-folded, so a distinct program named `GIT`, `GH` or `CP` on a case-sensitive filesystem is denied | `GIT status`; `CP x .claude/y` | #398 |
 | `agent-boundary` (implementer) | A `.claude` segment in a write position, however harmless: quoted prose, a copy out of `.claude`, a `cd` into it, an input redirect from it | `echo "tip: append with >> .claude/LESSONS.md"`; `cp .claude/settings.json /tmp/s.bak`; `cd .claude`; `tee /tmp/x < .claude/x` | #340 |
 | `agent-boundary` (implementer) | A vocabulary command word that shares a call with any `.claude` mention, even a read | `python3 -c "json.load(open('.claude/settings.json'))"`; `cat .claude/x && python3 -m pytest`; `awk 'NR<5' .claude/x` | #387 |
@@ -751,9 +759,9 @@ scan, or, for `push-guard` and `agent-boundary`, to run the command from a termi
 | `push-guard` (every session) | Command-line git config on a push | `git -c core.pager=cat push origin feature/x` | #439 |
 | `push-guard` (every session) | Alias lookup: a `!` alias, an alias that expands to `push`, a push-ish subsection alias, or config the hook cannot read denies every non-push git segment | `git up`, with `alias.up = !git pull`; `git status`, with `alias.status = push`; `git status`, with `[alias "x"]` and `command = push`; `HOME=/tmp git status` | #448 |
 | `push-guard` (every session, Codex payload) | The workdir check denies a `workdir` that is a variable or `undefined`, any directory but the session checkout, and a foreign `workdir` in any call of the last 1 MiB of the rollout, finished or not | `git push origin feature/x`, with `workdir: dir`, `workdir: undefined`, `workdir: "/repo/sub"`, or an earlier call with `workdir: "/somewhere/else"` | #494 |
-| `push-guard` (every session) | A command over 262144 bytes whose payload names git (its text, `cwd` or transcript path), whatever it does (the deny names the limit); a depth-0 config line over 2048 characters | `cat > notes.md <<'EOF'<LF>`, then prose that mentions git, then `<LF>EOF`, 262145 bytes in all; `git push`, with a 2100-character config line | #543, #517, #435 |
+| `push-guard` (every session) | A command over 131072 bytes whose payload names git (its text, `cwd` or transcript path), whatever it does (the deny names the limit); a depth-0 config line over 2048 characters | `cat > notes.md <<'EOF'<LF>`, then prose that mentions git, then `<LF>EOF`, 131073 bytes in all; `git push`, with a 2100-character config line | #556, #543, #517, #435 |
 | `agent-boundary` (implementer, verifier) | A command over 131072 bytes, whatever it does, or over 2048 bytes when it carries a carriage return, such as a CRLF heredoc from Git Bash (the deny names the limit); a payload naming none of git, gh, claude or a deploy word leaves through the fast path first and gets no opinion | `cat > notes.md <<'EOF'<LF>`, then prose, then `<LF>EOF`, 131073 bytes in all; the same heredoc with CRLF line endings, 2049 bytes in all | #543, #535 |
-| `claude-dir-guard` (implementer) | A Bash call that names the shim, holds `Begin Patch`, or holds `"Edit"` or `"Write"` as a whole JSON string, and has a line over 2000 bytes, or a text over 1000000 bytes (counted in bytes) | `echo apply_patch` followed by 2100 characters on one line; `echo apply_patch` followed by more than 1000000 bytes of lines; `echo` followed by 2100 characters on one line, in a call whose `description` is exactly `Edit` | #457 |
+| `claude-dir-guard` (implementer) | A Bash call that names the shim, holds `Begin Patch`, holds `"Edit"` or `"Write"` as a whole JSON string, or carries a backslash before an `n` as the JSON payload escapes it (a backslash-newline, or the literal text `\\n`), and has a line, or a run of lines a trailing backslash joins, over 2000 bytes, or a text over 1000000 bytes (counted in bytes) | `echo apply_patch` followed by 2100 characters on one line; `echo apply_patch` followed by more than 1000000 bytes of lines; `echo` followed by 2100 characters on one line, in a call whose `description` is exactly `Edit`; `echo` and three 800-character lines, each but the last ending in a backslash; `printf 'a\\nb' && echo` followed by 2100 characters | #457, #556 |
 | `claude-dir-guard` (implementer) | A path it cannot classify or that merely looks like `.claude`: a relative path, a case variant, a backslash it rewrites, a checkout that lives under a `.claude` directory | Edit `file_path` `src/main.rs`; `/repo/.Claude/x`; `/repo/foo\.claude\bar`; `/repo/.claude/worktrees/w/src/a.rs` | #327 |
 | `claude-dir-guard` (implementer) | An `apply_patch` call whose `cwd` is under `.codex`, or whose hunk has a context line starting `*** ` | `apply_patch` with `cwd` `…/.codex/sub` and `*** Add File: a.txt`; an `*** Update File: /repo/a.txt` hunk with the context line ` *** note` | #407 |
 | `agent-boundary` (verifier) | The read-only git list is short and exact: an unlisted subcommand, or a case-variant subcommand | `git branch --show-current`; `git STATUS` | #398 |

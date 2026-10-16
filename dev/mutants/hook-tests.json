@@ -4922,8 +4922,8 @@
       "filter": "push-deny-crlf-",
       "edits": [
         {
-          "from": "gsub(cr, \"\")",
-          "to": "sub(cr, \"\")"
+          "from": "  gsub(cr, \"\")\n",
+          "to": "  sub(cr, \"\")\n"
         }
       ],
       "expect_fail": [
