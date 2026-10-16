@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #573: agent-boundary, push-guard and claude-dir-guard no longer read the word after a standalone `]]` as a command
+  word, so zsh's short `if [[ -n x ]] git push origin main` (no `; then`) is no longer caught; `; then` and `&&` still
+  deny. The `]]` cap, the cut-tail denies and the `echo "x ]] apply_patch"` over-block are gone. No consumer step.
 - #572: the hooks no longer catch a command behind a quoted break character, a quoted substitution, a mixed-quote
   value, a quote left open at a line end or a push alias behind a substitution (`X="a;b c" gh pr merge 5`), and no
   longer deny large quoted text; push-guard still denies `git -C "$(pwd)" push origin main`. No consumer step.

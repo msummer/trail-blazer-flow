@@ -20,9 +20,8 @@
 #     command word): a shim with no inline patch this hook can see (a patch read from a file); a shim whose
 #     input is anything but its own inline heredoc while an inline patch also appears elsewhere in the call
 #     (a decoy); an unbalanced quote or trailing backslash before the resolved command word in a segment
-#     that mentions the shim; more than DBRACKET_MAX standalone `]]` in a segment, or a `]]` cut tail that
-#     consumes skip words without resolving one; and a `.claude` or `.codex` mention anywhere in the call
-#     text when the shim is a command word;
+#     that mentions the shim; and a `.claude` or `.codex` mention anywhere in the call text when the shim is
+#     a command word;
 #   - a call too large for the analysis budget, or over a size cap ("Analysis deadline (#457)" and
 #     "Size caps (#457)" below).
 # No opinion for everything else: the main session (no agent_type), any other agent, permission_mode
@@ -51,9 +50,8 @@
 #     PATCH_TOOLS and BASH_TOOLS (MultiEdit, NotebookEdit) is not guarded: no role's tools: line names one
 #     today, and the gate fails if one gains it without a matching update.
 #   - By convention, unpinned: PREFIX_WORDS (agent-boundary.sh and push-guard.sh are pinned to each other by
-#     4.40(c); this copy is not), PREFIX_VALUE_WORDS, PREFIX_INTERP_WORDS, INTERP_VALUE_OPTS, DBRACKET_MAX
-#     (counted per segment here, per record in agent-boundary.sh) and cdg_rx_ere (the class of
-#     agent-boundary.sh's rx_re). The walk is a pure-bash port of the agent-boundary.sh and push-guard.sh
+#     4.40(c); this copy is not), PREFIX_VALUE_WORDS, PREFIX_INTERP_WORDS, INTERP_VALUE_OPTS and cdg_rx_ere
+#     (the class of agent-boundary.sh's rx_re). The walk is a pure-bash port of the agent-boundary.sh and push-guard.sh
 #     technique, not a byte copy.
 #
 # Live probe, #327 (measured 2026-09-17 against Claude Code 2.1.274, macOS, a temporary logging PreToolUse
@@ -157,9 +155,6 @@ PREFIX_VALUE_WORDS="exec nice stdbuf sudo time xargs"
 # is_apply_patch_word()). Byte-identical to the agent-boundary.sh and push-guard.sh copies, by convention.
 PREFIX_INTERP_WORDS="bash dash ksh sh zsh"
 INTERP_VALUE_OPTS="--init-file --rcfile -init-file -rcfile"
-# DBRACKET_MAX (#437): byte-identical to the agent-boundary.sh and push-guard.sh copies, by convention. It
-# counts standalone ]] tokens PER SEGMENT here (agent-boundary.sh counts per record).
-DBRACKET_MAX="64"
 # CDG_ANALYSIS_BUDGET_SECS (#457): whole-second wall-clock budget; see "Analysis deadline (#457)". Sized well
 # under Claude Code's 10s hook timeout, like hooks/push-guard.sh's.
 CDG_ANALYSIS_BUDGET_SECS="5"
@@ -528,21 +523,15 @@ scan_shim_input() {
   return 0
 }
 
-# walk_window START STOP (#437): resolves ONE window toks[START..STOP) of the CALLER's local `toks` array,
-# read through bash's dynamic scope: it takes no toks parameter and must only be called from
-# is_apply_patch_word, which declares toks, mark_in, mark_out, assign_ere, digits_ere, seg_shim_at, seg_qflag
-# and seg_mflag in its own scope first. Shared by the base walk (the whole segment) and each ]] tail. It
-# records in seg_shim_at the smallest resolved shim index and, in a segment flagged seg_qflag, runs
-# quote_parity_check over the tokens it walked (which can exit 2); otherwise it never prints or exits. Two
-# globals, not local, are read by the caller:
-#   - ww_word: the resolved token with quotes and backslashes stripped, or empty if the window is exhausted
-#     first. It is also the first shim-named token found by the #518 or #537 scan, or the shim itself when an
-#     env -S string names it (#538).
-#   - ww_skipped: 1 when at least one token was consumed by a skip (redirect or fd, assignment, PREFIX_WORDS
-#     member with its repeat count, expansion word, dash option after a prefix word, interpreter option with
-#     its value); a token left empty by the quote strip does not set it. Only the cut-tail walk reads it, and
-#     only when ww_word is empty, to tell "the window held nothing" (benign) from "only skip words, never a
-#     real one" (a cut tail, denied fail closed).
+# walk_window START STOP (#437): resolves the command word of the window toks[START..STOP) of the CALLER's
+# local `toks` array, read through bash's dynamic scope: it takes no toks parameter and must only be called
+# from is_apply_patch_word, which declares toks, mark_in, mark_out, assign_ere, digits_ere, seg_shim_at,
+# seg_qflag and seg_mflag in its own scope first. Its one call passes the whole segment. It records the
+# resolved shim index in seg_shim_at and, in a segment flagged seg_qflag, runs quote_parity_check over the
+# tokens it walked (which can exit 2); otherwise it never prints or exits. One global, not local, is read by
+# the caller: ww_word, the resolved token with quotes and backslashes stripped, or empty if the window is
+# exhausted first. It is also the first shim-named token found by the #518 or #537 scan, or the shim itself
+# when an env -S string names it (#538).
 #
 # #538 fail-closed: a shim name split by quote or backslash characters, a runtime expansion before it, or an
 # env -S string. The shell deletes quote and backslash characters inside a word, so apply_"patch" and
@@ -570,7 +559,6 @@ walk_window() {
   i="$1"
   n="$2"
   ww_word=""
-  ww_skipped=0
   saw_prefix=0
   vp=0
   ve=0
@@ -588,25 +576,22 @@ walk_window() {
         i=$((i + 1))
       done
       i=$((i + 1))
-      ww_skipped=1
       continue
     fi
     if [[ "$tok" =~ $digits_ere ]]; then
       nxt="${toks[$((i + 1))]:-}"
       if [ "$nxt" = "$mark_in" ] || [ "$nxt" = "$mark_out" ]; then
         i=$((i + 1))
-        ww_skipped=1
         continue
       fi
     fi
     if [[ "$tok" =~ $assign_ere ]]; then
       i=$((i + 1))
-      ww_skipped=1
       continue
     fi
     # #437, #538: quote characters and backslashes are stripped from the token before it is matched against
     # PREFIX_WORDS or resolved (a token that carried a backslash marks the window, ww_alt); a token that strips
-    # to nothing is skipped without setting ww_skipped.
+    # to nothing is skipped.
     tok="${tok//$sq/}"
     tok="${tok//$dq/}"
     case "$tok" in *\\*) tok="${tok//\\/}"; ww_alt=1 ;; esac
@@ -661,7 +646,7 @@ walk_window() {
               ;;
           esac
           if [ "$ipk" = f ]; then
-            i=$((i + 1)); ww_skipped=1; continue
+            i=$((i + 1)); continue
           fi
           if [ "$ipk" = v ]; then
             case "$ipw" in
@@ -672,7 +657,7 @@ walk_window() {
                   *" $ipw "*) ;;
                   *)
                     if [[ ! $ipw =~ $assign_ere ]]; then
-                      i=$((i + 2)); ww_skipped=1; continue
+                      i=$((i + 2)); continue
                     fi
                     ;;
                 esac
@@ -719,7 +704,7 @@ walk_window() {
           fi
           case "$tok" in
             *\$*) ;;
-            *) i=$((i + 1)); ww_skipped=1; continue ;;
+            *) i=$((i + 1)); continue ;;
           esac
           ;;
       esac
@@ -792,7 +777,7 @@ walk_window() {
                 ;;
             esac
           fi
-          i=$((i + 1)); ww_skipped=1; continue ;;
+          i=$((i + 1)); continue ;;
       esac
     fi
     # #538: a runtime expansion in command position may expand to nothing (hooks/agent-boundary.sh's
@@ -819,11 +804,10 @@ walk_window() {
     ww_word="$tok"
     break
   done
-  [ "$saw_prefix" -eq 1 ] && ww_skipped=1
-  # Bookkeeping after the per-token loop. A window that resolved the shim records the SMALLEST resolved index
-  # in the caller's seg_shim_at (the input scan starts from the earliest). Any other window, in a segment
-  # flagged seg_qflag, runs the unbalanced-quote check over its own already-walked tokens, start through the
-  # resolved word (through the window's last token when nothing resolved).
+  # Bookkeeping after the per-token loop. A window that resolved the shim records its index in the caller's
+  # seg_shim_at (the input scan starts after it). Any other window, in a segment flagged seg_qflag, runs the
+  # unbalanced-quote check over its own already-walked tokens, start through the resolved word (through the
+  # window's last token when nothing resolved).
   case "${ww_word##*/}" in
     apply_patch|applypatch)
       # #538: a shim resolved through a backslash strip, an expansion skip or an env -S string runs the
@@ -862,18 +846,8 @@ walk_window() {
 # option of that word (refined by the #518, #537 and #538 rules below); a runtime-expansion word (#538). The
 # first token surviving every skip is the resolved word, compared in full and by basename.
 #
-# ]] pass (#437). A segment whose raw text carries a literal ]] is ALSO walked one more way, in pure bash:
-# every standalone ]] splits the segment into disjoint tails, so the zsh short form `if [[ cond ]]
-# apply_patch < x.patch` resolves the text after each ]] as its own candidate command word. Tails end at the
-# NEXT standalone ]] (or the segment's end), so their combined cost is bounded by the segment's token count.
-# A segment with more than DBRACKET_MAX standalone ]] denies unconditionally as soon as the excess one is
-# seen. A CUT tail (one ended by a following ]], never the final tail) that consumes a skip token without
-# resolving a word (ww_skipped=1, empty ww_word) also denies, fail closed (env -u ]] -i apply_patch). A cut
-# tail that DOES resolve the shim just marks it found: the checks in the Bash route below all read the WHOLE
-# command text, so cutting the command-word search hides nothing they use.
-#
-# #455 shim input. The input scan (scan_shim_input) starts after the smallest shim index any window resolved
-# and runs once per segment to its end, stopping at the first unsafe token. An unquoted heredoc delimiter
+# #455 shim input. The input scan (scan_shim_input) starts after the shim index the walk resolved and runs
+# once per segment to its end, stopping at the first unsafe token. An unquoted heredoc delimiter
 # (iapw_unquoted) is judged once at the end against the whole text: $, a backtick or a backslash anywhere
 # makes it unsafe, since the shell expands the body first. quote_parity_check runs in a segment that mentions
 # the shim and carries a quote or backslash.
@@ -888,8 +862,8 @@ walk_window() {
 # counts too) becomes the resolved word. A value word that itself names the shim is excluded from the
 # trigger: the walk resolves it at the smaller index, so the scan never moves seg_shim_at later. A scan hit
 # in a flagged segment (seg_qflag) first runs the #455 parity check over every token before the hit. Cost: at
-# most one scan per window, so the base window and the disjoint ]] tails scan at most twice the segment's
-# tokens, each token costing one deadline sample, two quote strips, one backslash strip and one glob.
+# most one scan per window, so a segment scans at most its own tokens, each token costing one deadline
+# sample, two quote strips, one backslash strip and one glob.
 #
 # #537 fail-closed: an option of an interpreter prefix word. Interpreters stay out of PREFIX_VALUE_WORDS (the
 # value of bash -c IS the command string, and scanning past it would deny `bash -e -o pipefail -c echo
@@ -929,7 +903,6 @@ is_apply_patch_word() {
   local mark_in=$'\x01LT\x01' mark_out=$'\x01GT\x01'
   local assign_ere='^[A-Za-z_][A-Za-z0-9_]*='
   local digits_ere='^[0-9]+$'
-  local db_n k prev t
   local ln_m=0
   local seg_shim_at=-1 seg_qflag=0 seg_mflag=0
 
@@ -1021,48 +994,7 @@ is_apply_patch_word() {
       apply_patch|applypatch) found=0 ;;
     esac
 
-    # The additive ]]-cut pass (#437), gated so a segment without a literal ]] costs what it cost before:
-    # toks is walked once, by the base walk above, and never re-walked.
-    case "$seg" in
-      *']]'*)
-        db_n=0
-        prev=-1
-        k=0
-        for t in "${toks[@]}"; do
-          check_deadline
-          if [ "$t" = "]]" ]; then
-            db_n=$((db_n + 1))
-            if [ "$db_n" -gt "$DBRACKET_MAX" ]; then
-              set +f
-              IFS="$oldifs"
-              deny_patch_unparseable "too many standalone ]] tokens to analyse"
-            fi
-            if [ "$prev" -ge 0 ]; then
-              walk_window $((prev + 1)) "$k"
-              base="${ww_word##*/}"
-              case "$base" in
-                apply_patch|applypatch) found=0 ;;
-              esac
-              if [ -z "$ww_word" ] && [ "$ww_skipped" -eq 1 ]; then
-                set +f
-                IFS="$oldifs"
-                deny_patch_unparseable "command word split by ]] cannot be resolved"
-              fi
-            fi
-            prev="$k"
-          fi
-          k=$((k + 1))
-        done
-        if [ "$prev" -ge 0 ]; then
-          walk_window $((prev + 1)) "$n"
-          base="${ww_word##*/}"
-          case "$base" in
-            apply_patch|applypatch) found=0 ;;
-          esac
-        fi
-        ;;
-    esac
-    # The shim's own segment (#455): scan its input once, from the smallest resolved shim index, unless an
+    # The shim's own segment (#455): scan its input once, from the resolved shim index, unless an
     # earlier segment already recorded an unsafe input.
     if [ "$seg_shim_at" -ge 0 ] && [ -z "$iapw_unsafe" ]; then
       scan_shim_input $((seg_shim_at + 1)) "$n"

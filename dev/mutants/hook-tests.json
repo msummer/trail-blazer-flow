@@ -515,156 +515,6 @@
       ]
     },
     {
-      "name": "403-ab-pc-dbracket",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-pc-",
-      "edits": [
-        {
-          "from": "  db_rest = \" \" $0 \" \"",
-          "to": "  db_rest = \"\""
-        }
-      ],
-      "expect_fail": [
-        "ab-pc-deny-dbracket-cap",
-        "ab-pc-deny-dbracket-disjoint",
-        "ab-pc-deny-dbracket-multiline",
-        "ab-pc-deny-dbracket-second",
-        "ab-pc-deny-dbracket-second-gh",
-        "ab-pc-deny-dbracket-sed-cut",
-        "ab-pc-deny-dbracket-sed-inplace-cut",
-        "ab-pc-deny-dbracket-tab",
-        "ab-pc-deny-short-if",
-        "ab-pc-deny-short-if-and"
-      ]
-    },
-    {
-      "name": "403-ab-pc-dbracket-truncate",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-pc-",
-      "edits": [
-        {
-          "from": "  line = $0\n  gsub(/[;&|(){}`]/, \"\\n\", line)",
-          "to": "  line = \" \" $0 \" \"\n  gsub(/[ \\t]]][ \\t]/, \" \\n \", line)\n  gsub(/[;&|(){}`]/, \"\\n\", line)"
-        }
-      ],
-      "expect_fail": [
-        "ab-pc-deny-dbracket-tee-claude"
-      ]
-    },
-    {
-      "name": "403-ab-pc-dbracket-nopad",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-pc-",
-      "edits": [
-        {
-          "from": "  db_rest = \" \" $0 \" \"",
-          "to": "  db_rest = $0"
-        }
-      ],
-      "expect_fail": [
-        "ab-pc-deny-dbracket-cap",
-        "ab-pc-deny-dbracket-multiline"
-      ]
-    },
-    {
-      "name": "403-ab-pc-dbracket-spaceonly",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-pc-",
-      "edits": [
-        {
-          "from": "  while (db_go && match(db_rest, /[ \\t]]][ \\t]/)) {",
-          "to": "  while (db_go && match(db_rest, /[ ]]][ ]/)) {"
-        }
-      ],
-      "expect_fail": [
-        "ab-pc-deny-dbracket-tab"
-      ]
-    },
-    {
-      "name": "403-ab-pc-dbracket-once",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-pc-",
-      "edits": [
-        {
-          "from": "  while (db_go && match(db_rest, /[ \\t]]][ \\t]/)) {",
-          "to": "  if (db_go && match(db_rest, /[ \\t]]][ \\t]/)) {"
-        }
-      ],
-      "expect_fail": [
-        "ab-pc-deny-dbracket-cap",
-        "ab-pc-deny-dbracket-second",
-        "ab-pc-deny-dbracket-second-gh"
-      ]
-    },
-    {
-      "name": "403-ab-pc-dbracket-cap",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-pc-",
-      "edits": [
-        {
-          "from": "    if (db_n >= dbracket_max) {",
-          "to": "    if (0) {"
-        }
-      ],
-      "expect_fail": [
-        "ab-pc-deny-dbracket-cap"
-      ]
-    },
-    {
-      "name": "403-ab-pc-dbracket-overlap",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-pc-",
-      "edits": [
-        {
-          "from": "      if (match(db_tail, /[;&|(){}`]|[ \\t]]][ \\t]/) > 0) {",
-          "to": "      if (match(db_tail, /[;&|(){}`]/) > 0) {"
-        }
-      ],
-      "expect_fail": [
-        "ab-pc-deny-dbracket-disjoint",
-        "ab-pc-deny-dbracket-sed-cut",
-        "ab-pc-deny-dbracket-sed-inplace-cut",
-        "ab-pc-deny-dbracket-timing"
-      ]
-    },
-    {
-      "name": "403-ab-pc-dbracket-sed-noninplace",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-pc-",
-      "edits": [
-        {
-          "from": "      } else if (cut_flag) {\n        print \"-cut-claude-write-\"\n      }",
-          "to": "      }"
-        }
-      ],
-      "expect_fail": [
-        "ab-pc-deny-dbracket-sed-cut"
-      ]
-    },
-    {
-      "name": "403-ab-pc-dbracket-sed-inplace",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-pc-",
-      "edits": [
-        {
-          "from": "        if (!found_claude && cut_flag) print \"-cut-claude-write-\"\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "ab-pc-deny-dbracket-sed-inplace-cut"
-      ]
-    },
-    {
       "name": "403-ab-pc-empty-tok",
       "target": "hooks/agent-boundary.sh",
       "suite": "dev/hook-tests.sh",
@@ -761,138 +611,6 @@
       ],
       "expect_fail": [
         "push-pc-deny-repeat"
-      ]
-    },
-    {
-      "name": "403-pg-pc-dbracket",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-pc-",
-      "edits": [
-        {
-          "from": "  db_rest = \" \" $0 \" \"",
-          "to": "  db_rest = \"\""
-        }
-      ],
-      "expect_fail": [
-        "push-pc-deny-dbracket-cap",
-        "push-pc-deny-dbracket-multiline",
-        "push-pc-deny-dbracket-second",
-        "push-pc-deny-dbracket-split-push",
-        "push-pc-deny-dbracket-split-subcmd",
-        "push-pc-deny-dbracket-tab",
-        "push-pc-deny-dbracket-timing",
-        "push-pc-deny-short-if"
-      ]
-    },
-    {
-      "name": "403-pg-pc-dbracket-truncate",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-pc-",
-      "edits": [
-        {
-          "from": "  line = $0\n  gsub(/[;&|(){}`]/, \"\\n\", line)",
-          "to": "  line = \" \" $0 \" \"\n  gsub(/[ \\t]]][ \\t]/, \" \\n \", line)\n  gsub(/[;&|(){}`]/, \"\\n\", line)"
-        }
-      ],
-      "expect_fail": [
-        "push-pc-deny-dbracket-all",
-        "push-pc-deny-dbracket-refspec"
-      ]
-    },
-    {
-      "name": "403-pg-pc-dbracket-nopad",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-pc-",
-      "edits": [
-        {
-          "from": "  db_rest = \" \" $0 \" \"",
-          "to": "  db_rest = $0"
-        }
-      ],
-      "expect_fail": [
-        "push-pc-deny-dbracket-cap",
-        "push-pc-deny-dbracket-multiline"
-      ]
-    },
-    {
-      "name": "403-pg-pc-dbracket-spaceonly",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-pc-",
-      "edits": [
-        {
-          "from": "  while (db_go && match(db_rest, /[ \\t]]][ \\t]/)) {",
-          "to": "  while (db_go && match(db_rest, /[ ]]][ ]/)) {"
-        }
-      ],
-      "expect_fail": [
-        "push-pc-deny-dbracket-tab"
-      ]
-    },
-    {
-      "name": "403-pg-pc-dbracket-once",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-pc-",
-      "edits": [
-        {
-          "from": "  while (db_go && match(db_rest, /[ \\t]]][ \\t]/)) {",
-          "to": "  if (db_go && match(db_rest, /[ \\t]]][ \\t]/)) {"
-        }
-      ],
-      "expect_fail": [
-        "push-pc-deny-dbracket-cap",
-        "push-pc-deny-dbracket-second"
-      ]
-    },
-    {
-      "name": "403-pg-pc-dbracket-cap",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-pc-",
-      "edits": [
-        {
-          "from": "    if (db_n >= dbracket_max) {",
-          "to": "    if (0) {"
-        }
-      ],
-      "expect_fail": [
-        "push-pc-deny-dbracket-cap"
-      ]
-    },
-    {
-      "name": "403-pg-pc-dbracket-overlap",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-pc-",
-      "edits": [
-        {
-          "from": "      if (match(db_tail, /[;&|(){}`]|[ \\t]]][ \\t]/) > 0) {",
-          "to": "      if (match(db_tail, /[;&|(){}`]/) > 0) {"
-        }
-      ],
-      "expect_fail": [
-        "push-pc-deny-dbracket-split-push",
-        "push-pc-deny-dbracket-split-subcmd",
-        "push-pc-deny-dbracket-timing"
-      ]
-    },
-    {
-      "name": "403-pg-pc-dbracket-subcmd-open",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-pc-",
-      "edits": [
-        {
-          "from": "  if (subcmd != \"push\") {\n    if (subcmd == \"\" && cut_flag) print \"-cut-push-\"\n    return\n  }",
-          "to": "  if (subcmd != \"push\") return"
-        }
-      ],
-      "expect_fail": [
-        "push-pc-deny-dbracket-split-subcmd"
       ]
     },
     {
@@ -2687,153 +2405,6 @@
       ]
     },
     {
-      "name": "437-cdg-dbq-tails",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dbq-",
-      "edits": [
-        {
-          "from": "          if [ \"$t\" = \"]]\" ]; then\n",
-          "to": "          if [ \"$t\" = \"]]Z\" ]; then\n"
-        }
-      ],
-      "expect_fail": [
-        "cdg-dbq-deny-short-if",
-        "cdg-dbq-deny-short-if-multiline",
-        "cdg-dbq-deny-cut-shim",
-        "cdg-dbq-deny-cut-unresolved",
-        "cdg-dbq-deny-flood-cap",
-        "cdg-dbq-never-executes"
-      ]
-    },
-    {
-      "name": "437-cdg-dbq-last-tail",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dbq-",
-      "edits": [
-        {
-          "from": "        if [ \"$prev\" -ge 0 ]; then\n          walk_window $((prev + 1)) \"$n\"\n          base=\"${ww_word##*/}\"\n          case \"$base\" in\n            apply_patch|applypatch) found=0 ;;\n          esac\n        fi\n",
-          "to": "        :\n"
-        }
-      ],
-      "expect_fail": [
-        "cdg-dbq-deny-short-if",
-        "cdg-dbq-deny-short-if-multiline",
-        "cdg-dbq-never-executes"
-      ]
-    },
-    {
-      "name": "437-cdg-dbq-cut-shim",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dbq-",
-      "edits": [
-        {
-          "from": "              base=\"${ww_word##*/}\"\n              case \"$base\" in\n                apply_patch|applypatch) found=0 ;;\n              esac\n",
-          "to": "              :\n"
-        }
-      ],
-      "expect_fail": [
-        "cdg-dbq-deny-cut-shim"
-      ]
-    },
-    {
-      "name": "437-cdg-dbq-cut",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dbq-",
-      "edits": [
-        {
-          "from": "              if [ -z \"$ww_word\" ] && [ \"$ww_skipped\" -eq 1 ]; then\n                set +f\n                IFS=\"$oldifs\"\n                deny_patch_unparseable \"command word split by ]] cannot be resolved\"\n              fi\n",
-          "to": "              :\n"
-        }
-      ],
-      "expect_fail": [
-        "cdg-dbq-deny-cut-unresolved"
-      ]
-    },
-    {
-      "name": "437-cdg-dbq-cut-resolved",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dbq-",
-      "edits": [
-        {
-          "from": "if [ -z \"$ww_word\" ] && [ \"$ww_skipped\" -eq 1 ]; then",
-          "to": "if [ \"$ww_skipped\" -eq 1 ]; then"
-        }
-      ],
-      "expect_fail": [
-        "cdg-dbq-noop-cut-resolved"
-      ]
-    },
-    {
-      "name": "437-cdg-dbq-overlap",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dbq-",
-      "edits": [
-        {
-          "from": "              walk_window $((prev + 1)) \"$k\"\n",
-          "to": "              walk_window $((prev + 1)) \"$n\"\n"
-        }
-      ],
-      "expect_fail": [
-        "cdg-dbq-deny-cut-unresolved"
-      ]
-    },
-    {
-      "name": "437-cdg-dbq-cap",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dbq-",
-      "edits": [
-        {
-          "from": "            if [ \"$db_n\" -gt \"$DBRACKET_MAX\" ]; then\n",
-          "to": "            if false; then\n"
-        }
-      ],
-      "expect_fail": [
-        "cdg-dbq-deny-flood-cap"
-      ]
-    },
-    {
-      "name": "437-cdg-dbq-cap-exact",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dbq-",
-      "edits": [
-        {
-          "from": "            if [ \"$db_n\" -gt \"$DBRACKET_MAX\" ]; then\n",
-          "to": "            if [ \"$db_n\" -ge \"$DBRACKET_MAX\" ]; then\n"
-        }
-      ],
-      "expect_fail": [
-        "cdg-dbq-deny-timing",
-        "cdg-dbq-noop-flood-at-cap"
-      ]
-    },
-    {
-      "name": "437-cdg-dbq-cap-per-segment",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dbq-",
-      "edits": [
-        {
-          "from": "  local db_n k prev t\n",
-          "to": "  local db_n=0 k prev t\n"
-        },
-        {
-          "from": "        db_n=0\n        prev=-1\n",
-          "to": "        prev=-1\n"
-        }
-      ],
-      "expect_fail": [
-        "cdg-dbq-noop-cap-per-segment"
-      ]
-    },
-    {
       "name": "437-cdg-dbq-quote-sq",
       "target": "hooks/claude-dir-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -3223,8 +2794,8 @@
       "filter": "push-cmdcfg-",
       "edits": [
         {
-          "from": "  if (subcmd != \"push\") {\n    if (subcmd == \"\" && cut_flag) print \"-cut-push-\"\n    return\n  }\n  if (cut_flag) { print \"-cut-push-\"; return }\n  # #439: a real push segment carrying command-line git config denies outright, ahead of the #292\n  # unresolved-target reason (Q5) — either way the segment denies.\n  if (cmdcfg) { print \"-cmdline-config-\"; return }",
-          "to": "  if (cmdcfg) { print \"-cmdline-config-\"; return }\n  if (subcmd != \"push\") {\n    if (subcmd == \"\" && cut_flag) print \"-cut-push-\"\n    return\n  }\n  if (cut_flag) { print \"-cut-push-\"; return }"
+          "from": "  if (subcmd != \"push\") return\n  # #439: a real push segment carrying command-line git config denies outright, ahead of the #292\n  # unresolved-target reason (Q5) — either way the segment denies.\n  if (cmdcfg) { print \"-cmdline-config-\"; return }",
+          "to": "  if (cmdcfg) { print \"-cmdline-config-\"; return }\n  if (subcmd != \"push\") return"
         }
       ],
       "expect_fail": [
@@ -3380,7 +2951,7 @@
       "filter": "push-dl-",
       "edits": [
         {
-          "from": "case \"$scan_out\" in\n  *PUSH*|*ALIAS*|*-too-many-dbrackets-*|*-cut-push-*|*-cmdline-config-*) ;;\n  *) exit 0 ;;\nesac\ncheck_deadline",
+          "from": "case \"$scan_out\" in\n  *PUSH*|*ALIAS*|*-cmdline-config-*) ;;\n  *) exit 0 ;;\nesac\ncheck_deadline",
           "to": "check_deadline"
         }
       ],
@@ -3441,7 +3012,6 @@
         "push-xseg-deny-bash-c",
         "push-xseg-deny-eval",
         "push-xseg-deny-multiline",
-        "push-xseg-deny-dbracket-tail",
         "push-xseg-deny-push-before-cd",
         "push-xseg-deny-codex-main-session",
         "push-xseg-deny-never-executes"
@@ -3540,7 +3110,6 @@
         "push-xseg-deny-cd-bare-push",
         "push-xseg-deny-chdir",
         "push-xseg-deny-codex-main-session",
-        "push-xseg-deny-dbracket-tail",
         "push-xseg-deny-declare-gx-work-tree",
         "push-xseg-deny-eval",
         "push-xseg-deny-export-git-config",
@@ -3699,7 +3268,7 @@
       "name": "463-hook-boundary-override-leaks",
       "target": "dev/hook-tests.sh",
       "suite": "dev/hook-tests.sh",
-      "filter": "ab-pc-deny-dbracket-timing",
+      "filter": "ab-optvalscan-noop-flood",
       "edits": [
         {
           "from": "  boundary_deadline_override=\"\"",
@@ -3707,7 +3276,7 @@
         }
       ],
       "expect_fail": [
-        "ab-pc-deny-dbracket-timing"
+        "ab-optvalscan-noop-flood"
       ]
     },
     {
@@ -3729,7 +3298,7 @@
       "name": "463-hook-cdg-override-leaks",
       "target": "dev/hook-tests.sh",
       "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dbq-deny-timing",
+      "filter": "cdg-dl-noop-big-patch",
       "edits": [
         {
           "from": "  cdg_deadline_override=\"\"",
@@ -3737,7 +3306,7 @@
         }
       ],
       "expect_fail": [
-        "cdg-dbq-deny-timing"
+        "cdg-dl-noop-big-patch"
       ]
     },
     {
@@ -4169,7 +3738,6 @@
         "cdg-dec-deny-redirect-file",
         "cdg-dec-deny-redirect-first",
         "cdg-dec-deny-second-shim",
-        "cdg-dec-deny-two-tails",
         "cdg-dec-deny-unquoted-backslash",
         "cdg-dec-deny-unquoted-backtick",
         "cdg-dec-deny-unquoted-dollar",
@@ -4202,26 +3770,10 @@
         "cdg-dec-deny-redirect-file",
         "cdg-dec-deny-redirect-first",
         "cdg-dec-deny-second-shim",
-        "cdg-dec-deny-two-tails",
         "cdg-dec-deny-unquoted-backslash",
         "cdg-dec-deny-unquoted-backtick",
         "cdg-dec-deny-unquoted-dollar",
         "cdg-dec-never-executes"
-      ]
-    },
-    {
-      "name": "455-cdg-dec-min",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dec-",
-      "edits": [
-        {
-          "from": "if [ \"$seg_shim_at\" -lt 0 ] || [ \"$i\" -lt \"$seg_shim_at\" ]; then",
-          "to": "if true; then"
-        }
-      ],
-      "expect_fail": [
-        "cdg-dec-deny-two-tails"
       ]
     },
     {
@@ -4286,8 +3838,7 @@
       "expect_fail": [
         "cdg-dec-deny-fd-heredoc",
         "cdg-dec-deny-file-arg",
-        "cdg-dec-deny-flood-timing",
-        "cdg-dec-deny-two-tails"
+        "cdg-dec-deny-flood-timing"
       ]
     },
     {
@@ -4465,7 +4016,6 @@
       "expect_fail": [
         "cdg-qa-deny-applypatch",
         "cdg-qa-deny-body-possessive",
-        "cdg-qa-deny-cut-tail",
         "cdg-qa-deny-dq-many-spaces",
         "cdg-qa-deny-dq-space",
         "cdg-qa-deny-env-assign",
@@ -4492,7 +4042,6 @@
       "expect_fail": [
         "cdg-qa-deny-applypatch",
         "cdg-qa-deny-body-possessive",
-        "cdg-qa-deny-cut-tail",
         "cdg-qa-deny-env-assign",
         "cdg-qa-deny-env-quoted-assign",
         "cdg-qa-deny-heredoc",
@@ -4862,7 +4411,7 @@
       "filter": "push-parse-",
       "edits": [
         {
-          "from": "{ emit_lost(\"unsupported env option\", unres, cmdcfg, cut_flag); return }",
+          "from": "{ emit_lost(\"unsupported env option\", unres, cmdcfg); return }",
           "to": "{ idx = idx }"
         }
       ],
@@ -4981,8 +4530,8 @@
       "filter": "push-parse-",
       "edits": [
         {
-          "from": "  else if (cc) print \"-cmdline-config-\"",
-          "to": "  else if (0) print \"-cmdline-config-\""
+          "from": "  if (cc) print \"-cmdline-config-\"",
+          "to": "  if (0) print \"-cmdline-config-\""
         }
       ],
       "expect_fail": [
@@ -5271,21 +4820,6 @@
       ],
       "expect_fail": [
         "cdg-dl-cap-redir"
-      ]
-    },
-    {
-      "name": "457-cdg-dl-db-site",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-dl-cap-",
-      "edits": [
-        {
-          "from": "        for t in \"${toks[@]}\"; do\n          check_deadline\n",
-          "to": "        for t in \"${toks[@]}\"; do\n"
-        }
-      ],
-      "expect_fail": [
-        "cdg-dl-cap-db"
       ]
     },
     {
@@ -5886,8 +5420,8 @@
       "filter": "push-alias",
       "edits": [
         {
-          "from": "  *PUSH*|*ALIAS*|*-too-many-dbrackets-",
-          "to": "  *PUSH*|*-too-many-dbrackets-"
+          "from": "  *PUSH*|*ALIAS*|*-cmdline-config-",
+          "to": "  *PUSH*|*-cmdline-config-"
         }
       ],
       "expect_fail": [
@@ -7160,15 +6694,15 @@
       "edits": [
         {
           "from": "if (rx_word(tok)) { if (!rx_at) rx_at = idx; saw_prefix = 1; idx++; continue }",
-          "to": "if (rx_word(tok)) { if (!rx_at) rx_at = idx; if (lost_push(toks, idx + 1, ntok, 1)) { emit_lost(\"scan\", unres, cmdcfg, cut_flag); return } saw_prefix = 1; idx++; continue }"
+          "to": "if (rx_word(tok)) { if (!rx_at) rx_at = idx; if (lost_push(toks, idx + 1, ntok, 1)) { emit_lost(\"scan\", unres, cmdcfg); return } saw_prefix = 1; idx++; continue }"
         },
         {
           "from": "if (saw_prefix && !rx_at && rx_word(tok)) rx_at = idx",
-          "to": "if (saw_prefix && rx_word(tok)) { if (!rx_at) rx_at = idx; if (lost_push(toks, idx + 1, ntok, 1)) { emit_lost(\"scan\", unres, cmdcfg, cut_flag); return } }"
+          "to": "if (saw_prefix && rx_word(tok)) { if (!rx_at) rx_at = idx; if (lost_push(toks, idx + 1, ntok, 1)) { emit_lost(\"scan\", unres, cmdcfg); return } }"
         },
         {
           "from": "rxg_at = j; if (!rxn_at",
-          "to": "rxg_at = j; if (lost_push(toks, j + 1, ntok, 2)) { emit_lost(\"scan\", unres, cmdcfg, cut_flag); return } if (!rxn_at"
+          "to": "rxg_at = j; if (lost_push(toks, j + 1, ntok, 2)) { emit_lost(\"scan\", unres, cmdcfg); return } if (!rxn_at"
         }
       ],
       "expect_fail": [
@@ -7447,21 +6981,6 @@
       ],
       "expect_fail": [
         "ab-rtexp-deny-option-word-gh"
-      ]
-    },
-    {
-      "name": "508-pg-rx-git-nondash",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rtexp-",
-      "edits": [
-        {
-          "from": "if (!rxn_at && substr(tok, 1, 1) != \"-\") rxn_at = j;",
-          "to": "if (!rxn_at) rxn_at = j;"
-        }
-      ],
-      "expect_fail": [
-        "push-rtexp-deny-git-slot-dash-led"
       ]
     },
     {

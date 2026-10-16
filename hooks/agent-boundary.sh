@@ -15,8 +15,6 @@
 #   - both roles: a path under a .claude segment in a write position (a redirect target, an argument of a
 #     CLAUDE_PATH_ARG_COMMANDS member, an in-place sed argument) or an interpreter or one-step writer
 #     (CLAUDE_CMDLINE_WRITE_COMMANDS) sharing the call with a .claude mention anywhere;
-#   - both roles: a fail-closed sentinel when the scan cannot afford to finish a record (too many
-#     standalone ]], a ]] cut that may hide a .claude write);
 #   - both roles: an awk scan that exits non-zero (an abort, a resource limit, a killed process, or no
 #     runnable awk), denied with the fixed reason "command scan failed" (#559).
 # Never executes anything (no git, no gh, nothing derived from the untrusted command), never evals, never
@@ -41,8 +39,7 @@
 #   - rx_re and rx_word() (the #508 expansion predicate; the verdict differs per file);
 #   - the #505 env arm and prefix triggers with strip_quotes(), quote_bearing(), quote_unbalanced() and the
 #     ENV_* values; the #518 value context with PREFIX_VALUE_WORDS; the #537 interpreter-option rule with
-#     PREFIX_INTERP_WORDS, INTERP_VALUE_OPTS and ip_kind();
-#   - DBRACKET_MAX.
+#     PREFIX_INTERP_WORDS, INTERP_VALUE_OPTS and ip_kind().
 # Pinned by the gate: PREFIX_WORDS is byte-identical to push-guard.sh (4.40(c)); the AGENT_TYPES_* lines
 # match hooks/claude-dir-guard.sh (4.45) and agents/*.md (4.39). Every other copy is by convention, unpinned.
 #
@@ -64,8 +61,8 @@ BLOCKED_COMMANDS="git gh"
 # reads a quoted argument's words as command words); and the zsh precommand modifiers noglob, nocorrect, -
 # and repeat N (repeat also consumes its count token). { } ( ) need no entry: they are segment breaks.
 # for, select, case, function, in, fi, done, esac and [[ are left out because none runs the next word as a
-# command; the zsh short form `if [[ cond ]] cmd` is handled by the separate additive ]] pass. Keywords
-# share the dash-token skip after a prefix word, harmless because no keyword precedes a dash-led command.
+# command. Keywords share the dash-token skip after a prefix word, harmless because no keyword precedes a
+# dash-led command.
 # Pinned byte-identical to hooks/push-guard.sh by 4.40(c); the hooks/claude-dir-guard.sh copy is by convention.
 PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat"
 # CLAUDE_PATH_ARG_COMMANDS (#340): command words whose first argument carrying a .claude segment is a
@@ -96,10 +93,6 @@ PREFIX_VALUE_WORDS="exec nice stdbuf sudo time xargs"
 # the push-guard.sh and claude-dir-guard.sh copies, by convention.
 PREFIX_INTERP_WORDS="bash dash ksh sh zsh"
 INTERP_VALUE_OPTS="--init-file --rcfile -init-file -rcfile"
-# DBRACKET_MAX: the most standalone ]] the scan additive pass analyses per input record before it fails
-# closed. It bounds that pass to about DBRACKET_MAX times the record length, so it stays linear. Byte-identical
-# to the push-guard.sh and claude-dir-guard.sh copies, by convention.
-DBRACKET_MAX="64"
 DENY_STEM="trail-blazer-flow agent boundary:"
 
 input="$(cat)"
@@ -178,22 +171,20 @@ cmd="${cmd//$cr/}"
 # tracking quote state): a quote-aware lexer could mis-track an unterminated quote and let a real push
 # through, the worse failure for a control whose only job is to fail closed. So a break character inside a
 # quote or a substitution cuts a segment like any other, and the command hidden behind it is a known gap
-# (docs/reference/safety-model.md, "Known gaps"). The ]] pass is the one additive pass, and it only adds
-# denies. Each input line is scanned as its own segment start, so a heredoc body line that starts with git
-# or gh is a deliberate over-block (write file content with the Write/Edit tools).
+# (docs/reference/safety-model.md, "Known gaps"). Each input line is scanned as its own segment start, so a
+# heredoc body line that starts with git or gh is a deliberate over-block (write file content with the
+# Write/Edit tools).
 #
 # Output contract, one finding per line:
 #   gh | git <sub> | <word>   a resolved command word; git carries its subcommand (never case-folded), or
 #                             the sentinel -none-, -globalopt-, -expansion- (#508) or -prefix- (#505)
 #   -claude-write- <token>    a .claude path in a write position, or an interpreter word sharing the call
 #                             with a .claude mention (#340, #387)
-#   -cut-claude-write-        a ]] cut that may hide a .claude write
-#   -too-many-dbrackets-      a budget was passed: fail closed
 #
-# Each rule is described next to its code: the per-record block (redirect pass, base split, ]] pass,
+# Each rule is described next to its code: the per-record block (redirect pass, base split,
 # command-level capture) and emit_segment() (the walk; #505 lost prefix, #508 expansion, #518 value
 # context, #537 interpreter options).
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v dbracket_max="$DBRACKET_MAX" -v envnov="$ENV_NOVALUE_OPTS" -v envunset="$ENV_UNSET_OPTS" -v vpwords="$PREFIX_VALUE_WORDS" -v ipwords="$PREFIX_INTERP_WORDS" -v ipvopts="$INTERP_VALUE_OPTS" '
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v envnov="$ENV_NOVALUE_OPTS" -v envunset="$ENV_UNSET_OPTS" -v vpwords="$PREFIX_VALUE_WORDS" -v ipwords="$PREFIX_INTERP_WORDS" -v ipvopts="$INTERP_VALUE_OPTS" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
@@ -287,8 +278,7 @@ function claude_seg_in_text(s,    v) {
 # count). Every trigger then reads, once per segment, every later token (lost_scan): a word that is exactly
 # gh prints gh, exactly git prints the sentinel git -prefix- (denied for both roles), a token with a .claude
 # segment prints the -claude-write- line; a hit ends the segment, no hit leaves the walk unchanged. Cost: a
-# constant number of checks per token and at most one lost_scan() per segment, O(segment); the disjoint ]]
-# tails keep the bound per record.
+# constant number of checks per token and at most one lost_scan() per segment, O(segment).
 # This program is single-quoted shell: it must never contain a literal apostrophe, comments included (use
 # sq). strip_quotes: the token without quote or backslash characters. quote_bearing: the token carries a
 # quote or a backslash. quote_unbalanced: an odd count of double quotes, an odd count of single quotes or a
@@ -415,11 +405,9 @@ function ip_value_ok(w,    h, n, lv) {
 # dash token gives -globalopt-, no subcommand gives -none-, saw_exp gives -expansion-; the subcommand is
 # never case-folded, so the verifier read-only match stays exact and fails closed. For a
 # CLAUDE_PATH_ARG_COMMANDS member the later tokens are searched for a .claude segment (-claude-write-);
-# sed does the same only with an in-place flag (-i, -i.bak, --in-place), since sed -n only reads. CUT_FLAG
-# marks a tail ended by a following standalone ]]: one of those two commands with no .claude segment among
-# its own tokens prints -cut-claude-write- (the far side of the ]] is never read). A segment with no
-# surviving token prints nothing.
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, gitsub, inplace, lw, found_claude, saw_exp, in_env, in_vp, in_ip, ipw, ipk, ipf, lost, s0) {
+# sed does the same only with an in-place flag (-i, -i.bak, --in-place), since sed -n only reads. A segment
+# with no surviving token prints nothing.
+function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, gitsub, inplace, lw, saw_exp, in_env, in_vp, in_ip, ipw, ipk, ipf, lost, s0) {
   ntok = split(seg, toks, /[ \t]+/)
   ls_done = 0
   idx = 1
@@ -530,11 +518,9 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     sub(/[0-9.]+$/, "", lw)
     if ((lw in cw_set) && cw_word == "") cw_word = cmdword
     if (cmdword in arg_set) {
-      found_claude = 0
       for (j = idx; j <= ntok; j++) {
-        if (has_claude_seg(toks[j])) { print "-claude-write- " toks[j]; found_claude = 1; break }
+        if (has_claude_seg(toks[j])) { print "-claude-write- " toks[j]; break }
       }
-      if (!found_claude && cut_flag) print "-cut-claude-write-"
     } else if (cmdword == "sed") {
       inplace = 0
       for (j = idx; j <= ntok; j++) {
@@ -542,13 +528,9 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
         if (match(toks[j], /^--in-place/) == 1) { inplace = 1; break }
       }
       if (inplace) {
-        found_claude = 0
         for (j = idx; j <= ntok; j++) {
-          if (has_claude_seg(toks[j])) { print "-claude-write- " toks[j]; found_claude = 1; break }
+          if (has_claude_seg(toks[j])) { print "-claude-write- " toks[j]; break }
         }
-        if (!found_claude && cut_flag) print "-cut-claude-write-"
-      } else if (cut_flag) {
-        print "-cut-claude-write-"
       }
     }
   }
@@ -558,7 +540,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   # in the raw line (before the segment-break gsub blanks its target) yields -claude-write- <target> when the
   # target token has a .claude segment; < is never matched (an input redirect is ignored) and >&2 / 2>&1 give
   # the targets 2 / 1; (3) the base split: ; & | ( ) { } and a backtick start a new segment, < and > are plain
-  # separators, and each segment goes to emit_segment(); (4) the ]] pass; (5) the #387 cw_tok capture.
+  # separators, and each segment goes to emit_segment(); (4) the #387 cw_tok capture.
   rx_cut = (index($0, "${") > 0 || index($0, "$(") > 0 || index($0, "`") > 0)
   rx_env_hit = ""
   if ((index($0, "$") > 0 || index($0, "`") > 0) && (index($0, "-S") > 0 || index($0, "--split-string") > 0)) rx_env_hit = rx_env_scan()
@@ -574,47 +556,6 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   gsub(/[<>]/, " ", line)
   nseg = split(line, segs, /\n/)
   for (s = 1; s <= nseg; s++) emit_segment(segs[s])
-  # ]] pass (additive): resumes command position at the word right after the closing ]] of a zsh short
-  # `if [[ cond ]] cmd` form. The base segments above are computed exactly as without it, with nothing
-  # truncated, so a base deny keeps its full token list. For every unquoted, whitespace-bounded ]] in a
-  # space-padded copy of the record (so a ]] at the start or end of a record still counts), only the FIRST
-  # segment of the text AFTER that ]] is emitted through emit_segment().
-  # DISJOINT tails: that segment ends at the first real break character or the NEXT standalone ]], never
-  # running past a later ]] into text that the later ]], or the main split, already covers. So the walk in
-  # emit_segment() is bounded by the short cut segment, not by the rest of the record; only the substr()/
-  # match() that finds each cutoff scans on, up to dbracket_max times. A tail ended by a following ]] is
-  # passed as CUT (a CLAUDE_PATH_ARG_COMMANDS or sed command word with no .claude segment among its own
-  # tokens then prints -cut-claude-write-, because the text beyond the ]] is never reconnected). Above
-  # dbracket_max ]] per record the loop stops and prints -too-many-dbrackets- (deny unconditionally), the
-  # fail-closed response to a record this hook can no longer afford to finish analysing.
-  db_rest = " " $0 " "
-  db_n = 0
-  db_go = 1
-  while (db_go && match(db_rest, /[ \t]]][ \t]/)) {
-    if (db_n >= dbracket_max) {
-      print "-too-many-dbrackets-"
-      db_go = 0
-    } else {
-      db_n++
-      # db_next is captured IMMEDIATELY after this match(): the inner match() below and emit_segment() (which
-      # also calls match()) clobber RSTART and RLENGTH, and re-reading them hung this loop. It stops ONE
-      # character short of the match end (RLENGTH - 1) on purpose, leaving the trailing whitespace byte in
-      # db_rest: two standalone ]] separated by exactly one space or tab share that byte as boundary, and
-      # consuming it would skip every other ]] in a tightly packed run.
-      db_next = RSTART + RLENGTH - 1
-      db_tail = substr(db_rest, db_next)
-      db_cut = 0
-      if (match(db_tail, /[;&|(){}`]|[ \t]]][ \t]/) > 0) {
-        db_seg = substr(db_tail, 1, RSTART - 1)
-        if (RLENGTH == 4) db_cut = 1
-      } else {
-        db_seg = db_tail
-      }
-      gsub(/[<>]/, " ", db_seg)
-      emit_segment(db_seg, db_cut)
-      db_rest = substr(db_rest, db_next)
-    }
-  }
   if (cw_tok == "" && claude_seg_in_text($0)) {
     cw_ntok = split($0, cw_toks, /[ \t]+/)
     for (cw_j = 1; cw_j <= cw_ntok; cw_j++) {
@@ -646,16 +587,6 @@ deny_kind="git"
 while IFS= read -r line; do
   [ -n "$line" ] || continue
   case "$line" in
-    "-too-many-dbrackets-")
-      deny_kind="dbracket"
-      deny_cmd="too many ]] tokens to analyse"
-      break
-      ;;
-    "-cut-claude-write-")
-      deny_kind="cutclaude"
-      deny_cmd="split by ]]"
-      break
-      ;;
     "-claude-write- "*)
       deny_kind="claude"
       deny_cmd="${line#-claude-write- }"
@@ -682,13 +613,7 @@ $scan_out
 EOF
 
 if [ -n "$deny_cmd" ]; then
-  if [ "$deny_kind" = "dbracket" ]; then
-    printf '%s %s role: command has too many standalone ]] tokens to analyse safely (blocked: %s) — see agents/%s.md\n' \
-      "$DENY_STEM" "$role" "$deny_cmd" "$role" >&2
-  elif [ "$deny_kind" = "cutclaude" ]; then
-    printf '%s %s role: cannot verify whether this write reaches a .claude segment (blocked: %s) — see agents/%s.md\n' \
-      "$DENY_STEM" "$role" "$deny_cmd" "$role" >&2
-  elif [ "$deny_kind" = "claude" ]; then
+  if [ "$deny_kind" = "claude" ]; then
     printf '%s %s role may not write a path under a .claude segment from Bash (blocked: %s) — record it in your report'"'"'s Reviewer notes instead; see agents/%s.md\n' \
       "$DENY_STEM" "$role" "$deny_cmd" "$role" >&2
   elif [ "$role" = "implementer" ]; then

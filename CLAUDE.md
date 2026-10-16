@@ -128,10 +128,10 @@ traps `git`/`gh`/`rm`/`touch` with sentinel-absence only, the same as its first 
 own lexer legitimately uses `awk`, so that isn't in its trap set). `run_push_guard` isolates
 `HOME`, `XDG_CONFIG_HOME`, and `GIT_CONFIG_GLOBAL` for every push-guard fixture, so no fixture can
 read the developer's or CI runner's real global `git` config. Its time-bound cases use the same
-active-deadline helpers as `dev/doctor-tests.sh`, and `ab-pc-deny-dbracket-timing` sizes its
-deadline from a same-run control measurement (#470). It runs in CI as the fourth command,
-but it is not part of `dev/selfcheck.sh` itself; run it by hand whenever any of the five
-`hooks/*.sh` scripts changes.
+active-deadline helpers as `dev/doctor-tests.sh`, and several of its flood cases (for example
+`ab-lostscan-noop-flood`) size their deadlines from a same-run control measurement (#470). It runs
+in CI as the fourth command, but it is not part of `dev/selfcheck.sh` itself; run it by hand
+whenever any of the five `hooks/*.sh` scripts changes.
 
 `dev/cleanup-tests.sh` is a separate negative-test harness for `bin/cleanup-after-merge.sh`: it
 builds throwaway fixture repos under `mktemp`, with a stub `gh` (and, where needed, a stub
