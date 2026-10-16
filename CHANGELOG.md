@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #577: claude-dir-guard no longer catches a decoy patch beside a file-reading shim, a variable-built unquoted heredoc,
+  a prefix option's value or a quoted or escaped space before the shim, a split or escaped shim name, or a `.claude`
+  mention off a `*** ` line; it stops denying `..` paths, `+.claude/x` patch lines and apostrophes. No consumer step.
 - #576: agent-boundary now denies an implementer `bash -c` string that names `gh`, `git` or a `.claude` path after its
   first word, and a verifier `bash -o pipefail -c '… git …'` command, but misses `bash +O extglob -c 'gh pr merge 5'`;
   claude-dir-guard no longer catches `bash -o pipefail -c 'apply_patch < x.patch'`. No consumer step.

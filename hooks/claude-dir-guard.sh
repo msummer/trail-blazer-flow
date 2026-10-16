@@ -11,17 +11,15 @@
 # policy below denies. A deny prints exactly one reason line to stderr and exits 2; stdout is always empty.
 # Denied:
 #   - Edit/Write: a file_path with any path segment equal to `.claude` or `.codex`, case-insensitively, or
-#     one that cannot be classified (not absolute, or holding a `..` segment: fail closed);
+#     one that cannot be classified (not absolute: fail closed);
 #   - apply_patch, and a Bash call carrying an inline patch: an Add/Update/Delete/Move-to header path with
 #     such a segment (a relative header path is joined to the payload cwd), an unclassifiable path, or a
 #     patch that cannot be parsed into a recognised header shape (an unknown `*** ` marker, an empty header
 #     path, no header at all); an apply_patch call with an absent or empty command also denies;
 #   - Bash, the shim route (is_apply_patch_word resolves apply_patch or applypatch, by basename, as a
-#     command word): a shim with no inline patch this hook can see (a patch read from a file); a shim whose
-#     input is anything but its own inline heredoc while an inline patch also appears elsewhere in the call
-#     (a decoy); an unbalanced quote or trailing backslash before the resolved command word in a segment
-#     that mentions the shim; and a `.claude` or `.codex` mention anywhere in the call text when the shim is
-#     a command word;
+#     command word): a shim with no inline patch this hook can see (a patch read from a file); and a
+#     `.claude` or `.codex` mention on any line of the call that carries a `*** ` marker, when the shim is a
+#     command word;
 #   - a call too large for the analysis budget, or over a size cap ("Analysis deadline (#457)" and
 #     "Size caps (#457)" below).
 # No opinion for everything else: the main session (no agent_type), any other agent, permission_mode
@@ -30,7 +28,7 @@
 # name as a plain argument is quiet), and an ordinary absolute path outside any such segment.
 #
 # No `if` gate in hooks/hooks.json: the `if` field is permission-rule syntax over tool input only. It cannot
-# see agent_type, express a case-insensitive nested or `..` path-segment rule, parse an apply_patch patch
+# see agent_type, express a case-insensitive nested path-segment rule, parse an apply_patch patch
 # header grammar, or tell a Bash command word from an argument, so any `if` would silence this hook for
 # exactly the spellings it exists to catch.
 #
@@ -50,9 +48,8 @@
 #     PATCH_TOOLS and BASH_TOOLS (MultiEdit, NotebookEdit) is not guarded: no role's tools: line names one
 #     today, and the gate fails if one gains it without a matching update.
 #   - By convention, unpinned: PREFIX_WORDS (agent-boundary.sh and push-guard.sh are pinned to each other by
-#     4.40(c); this copy is not) and PREFIX_VALUE_WORDS (the push-guard.sh copy matches this one; the
-#     agent-boundary.sh copy also holds the interpreter words, #576). The walk is a pure-bash port of the
-#     agent-boundary.sh and push-guard.sh technique, not a byte copy.
+#     4.40(c); this copy is not). The walk is a pure-bash port of the agent-boundary.sh and push-guard.sh
+#     technique, not a byte copy.
 #
 # Live probe, #327 (measured 2026-09-17 against Claude Code 2.1.274, macOS, a temporary logging PreToolUse
 # hook with matcher Edit|Write, this repo loaded via --plugin-dir; one version, one platform, one install):
@@ -110,12 +107,12 @@
 #     BYTES, not characters: the length check runs under a scoped LC_ALL=C, because ${#x} counts characters
 #     under a multibyte locale and a text of 4-byte characters would otherwise pass at four times its size.
 # Worst-case wall clock for the whole hook, for review: at most max(cdg_budget, T_prefix(L)) + U_max.
-# T_prefix is the prefix the deadline cannot sample around: cat, the fast-path globs and the one split-name
-# regex pass over the payload, up to five jq calls, the length checks, cdg_prepare_text's CR-presence glob
-# and whole-text word-split, the like whole-text splits in is_apply_patch_word, has_exact_begin_patch_line
-# and parse_patch_headers (all linear, bounded by CDG_TEXT_MAX_BYTES), and the raw-text .claude/.codex glob.
-# U_max is the largest single step the deadline cannot interrupt: one line's substitutions (bounded by
-# CDG_LINE_MAX_BYTES), one line's or segment's split-name regex, one segment's `toks=($seg)` word-split,
+# T_prefix is the prefix the deadline cannot sample around: cat, the fast-path globs, up to five jq calls,
+# the length checks, cdg_prepare_text's CR-presence glob and whole-text word-split, and the like whole-text
+# splits in is_apply_patch_word, has_exact_begin_patch_line and parse_patch_headers (all linear, bounded by
+# CDG_TEXT_MAX_BYTES).
+# U_max is the largest single step the deadline cannot interrupt: one line's substitutions and marker globs
+# (bounded by CDG_LINE_MAX_BYTES), one segment's `toks=($seg)` word-split,
 # one `"${toks[@]}"` expansion, one walk_window iteration (plus any per-index cost bash 3.2's arrays add),
 # one forked trim or ltrim call up to its first in-subshell sample, or one classify_path. Not closed:
 # T_prefix is unsampled (though counted by the wall clock), and the Codex CLI's own hook timeout, if any, is
@@ -144,12 +141,6 @@ CLAUDE_DIR_DENY_STEM="trail-blazer-flow claude-dir guard:"
 # keyword or interpreter-indirection word, then a following dash-led option (or, after repeat, its count
 # token), before resolving the command word of a segment.
 PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat"
-# PREFIX_VALUE_WORDS (#518): the PREFIX_WORDS members whose dash options can take a SEPARATE value word
-# (nice -n 5, sudo -u root). This walk treats env as one too (it has no env arm of its own). Interpreter words
-# stay out, and this walk does not read their options (a Known gap, docs/reference/safety-model.md): the
-# value of bash -c IS the command string. Matches the push-guard.sh copy, by convention; the agent-boundary.sh
-# copy also holds the interpreter words (#576).
-PREFIX_VALUE_WORDS="exec nice stdbuf sudo time xargs"
 # CDG_ANALYSIS_BUDGET_SECS (#457): whole-second wall-clock budget; see "Analysis deadline (#457)". Sized well
 # under Claude Code's 10s hook timeout, like hooks/push-guard.sh's.
 CDG_ANALYSIS_BUDGET_SECS="5"
@@ -201,37 +192,23 @@ input="$(cat)"
 
 # Fast path 1: a main-session call (no agent_type key in the JSON) can never resolve to a role, so skip jq
 # (M1). There is deliberately no .claude/.codex substring fast path: it would not be semantics-preserving,
-# because the unclassifiable-path deny (a non-absolute or ..-carrying file_path, an unparseable apply_patch
-# command) can deny a call that never holds either literal.
+# because the unclassifiable-path deny (a non-absolute file_path, an unparseable apply_patch command) can
+# deny a call that never holds either literal.
 case "$input" in
   *agent_type*) : ;;
   *) exit 0 ;;
 esac
 
-# cdg_split_ere (#538): the shim name with any run of backslash, double-quote or apostrophe characters between
-# its letters (and an optional underscore), which the shell deletes: apply_"patch", apply\_patch. cdg_q is one
-# such run, an ERE bracket expression (a backslash is literal inside it). There is no group and the pattern
-# has a fixed length, so one pass over a payload is linear. cdg_split_raw tests the raw payload under a scoped
-# C locale (byte-wise); the same pattern is tested per line and per segment in is_apply_patch_word().
-cdg_q="[\\\"']*"
-cdg_split_ere="a${cdg_q}p${cdg_q}p${cdg_q}l${cdg_q}y${cdg_q}_?${cdg_q}p${cdg_q}a${cdg_q}t${cdg_q}c${cdg_q}h"
-cdg_split_raw() { local LC_ALL=C; [[ $input =~ $cdg_split_ere ]]; }
-
-# Fast path 2 (#407, #538, #571): a pre-filter that spawns no jq. An Edit or Write call passes by its tool_name
+# Fast path 2 (#407, #571): a pre-filter that spawns no jq. An Edit or Write call passes by its tool_name
 # value, matched as the whole JSON string with its quotes: a payload that only contains either word (a
 # permission_mode of acceptEdits, a cwd, a command) does not pass on that account. A tool added to
 # GUARDED_TOOLS needs its quoted name added here too. Any call also passes when the raw payload names
 # apply_patch or applypatch (Codex's shim also answers to the no-underscore spelling) or holds the grammar
 # marker "*** Begin Patch"; those substrings can sit anywhere in the payload, so a pass only means "look
-# closer". A Bash call that spells none of them can still run the shim when the shell deletes quote or
-# backslash characters inside its name, so the second arm runs only when the first fails and the payload
-# carries a backslash or an apostrophe (in raw JSON a double quote arrives as a backslash and a quote, and a
-# backslash as two): one regex pass for the split spelling. Everything else gets no opinion. Both arms read
-# the raw JSON text as the serializer wrote it, so they assume it writes ASCII letters, the underscore and the
-# apostrophe literally rather than as a \u escape.
+# closer". Everything else gets no opinion. The globs read the raw JSON text as the serializer wrote it, so
+# they assume it writes ASCII letters and the underscore literally rather than as a \u escape.
 case "$input" in
   *'"Edit"'*|*'"Write"'*|*apply_patch*|*applypatch*|*'Begin Patch'*) : ;;
-  *\\*|*"'"*) cdg_split_raw || exit 0 ;;
   *) exit 0 ;;
 esac
 
@@ -324,16 +301,6 @@ classify_path() {
     /*) ;;
     [A-Za-z]:/*) ;;
     *)
-      printf '%s %s role'"'"'s %s file_path could not be classified as absolute or normalised, and is denied fail-closed: %s\n' \
-        "$CLAUDE_DIR_DENY_STEM" "$role" "$tool" "$p_disp" >&2
-      exit 2
-      ;;
-  esac
-
-  # A ".." segment anywhere is also denied fail closed: a path that is not already normalised must not
-  # silently escape a ".claude"/".codex" check that only looks at the literal path string.
-  case "$p/" in
-    */../*)
       printf '%s %s role'"'"'s %s file_path could not be classified as absolute or normalised, and is denied fail-closed: %s\n' \
         "$CLAUDE_DIR_DENY_STEM" "$role" "$tool" "$p_disp" >&2
       exit 2
@@ -432,116 +399,20 @@ parse_patch_headers() {
   [ "$headers" -gt 0 ] || deny_patch_unparseable "no file header"
 }
 
-# quote_parity_check START END (#455): fail-closed deny when any token toks[START..END] (inclusive, the
-# CALLER's toks array through dynamic scope) carries an odd count of single quotes or of double quotes, or
-# ends in a backslash. The walk splits a segment on whitespace BEFORE it strips quotes, so a quoted value
-# with a space (X='a b') or an escaped one (X=a\ b) arrives as two tokens, and the second would be resolved
-# as the command word and hide the shim. It runs only in a segment that mentions the shim and carries a quote
-# or backslash (seg_qflag), over tokens the window already walked; no subshell.
-quote_parity_check() {
-  local j="$1" qraw qa qb
-  while [ "$j" -le "$2" ]; do
-    check_deadline
-    qraw="${toks[$j]:-}"
-    qa="${qraw//$sq/}"
-    qb="${qa//$dq/}"
-    if [ $(( ((${#qraw} - ${#qa}) | (${#qa} - ${#qb})) & 1 )) -eq 1 ]; then
-      set +f
-      deny_patch_unparseable "command word cannot be resolved: an unbalanced quote precedes it in a segment that mentions apply_patch/applypatch"
-    fi
-    # A trailing backslash escapes the following space (`X=a\ b`), splitting one word in two just
-    # like a quoted space does, and carries no quote for the parity test above to see.
-    if [ "${qraw%\\}" != "$qraw" ]; then
-      set +f
-      deny_patch_unparseable "command word cannot be resolved: an unbalanced quote or a trailing backslash precedes it in a segment that mentions apply_patch/applypatch"
-    fi
-    j=$((j + 1))
-  done
-}
-
-# scan_shim_input START STOP (#455): one linear pass over the CALLER's toks[START..STOP) (the tokens after the
-# shim word in its own segment), recording in the global iapw_unsafe the first reason the shim's input is NOT
-# only an inline << heredoc. Safe: a heredoc operator run (exactly two <, no >) plus its delimiter, an output
-# redirect run plus its target, and a bare-digits fd right before an output redirect. Unsafe: a file
-# argument, <, <<<, <> (the LAST stdin redirect wins), an fd-numbered input such as 3<<, a heredoc operator
-# with no delimiter token (process substitution), and a segment with no heredoc at all (a pipe into a bare
-# shim). A heredoc delimiter with a quote or backslash is literal; any other sets iapw_unquoted.
-scan_shim_input() {
-  local j="$1" k nin nout saw_hd=0 d
-  while [ "$j" -lt "$2" ]; do
-    check_deadline
-    d="${toks[$j]}"
-    if [ "$d" = "$mark_in" ] || [ "$d" = "$mark_out" ]; then
-      nin=0
-      nout=0
-      k="$j"
-      while [ "$k" -lt "$2" ]; do
-        check_deadline
-        case "${toks[$k]}" in
-          "$mark_in") nin=$((nin + 1)) ;;
-          "$mark_out") nout=$((nout + 1)) ;;
-          *) break ;;
-        esac
-        k=$((k + 1))
-      done
-      if [ "$nin" -eq 2 ] && [ "$nout" -eq 0 ]; then
-        if [ "$k" -ge "$2" ]; then
-          iapw_unsafe="from a process substitution, or a heredoc operator with no delimiter"
-          return 0
-        fi
-        case "${toks[$k]}" in
-          *"$sq"*|*"$dq"*|*\\*) ;;
-          *) iapw_unquoted=1 ;;
-        esac
-        saw_hd=1
-      elif [ "$nin" -gt 0 ]; then
-        iapw_unsafe="from an input redirect or here-string"
-        return 0
-      fi
-      j=$((k + 1))
-      continue
-    fi
-    if [[ "$d" =~ $digits_ere ]]; then
-      case "${toks[$((j + 1))]:-}" in
-        "$mark_out") j=$((j + 1)); continue ;;
-      esac
-    fi
-    iapw_unsafe="from an argument"
-    return 0
-  done
-  if [ "$saw_hd" -eq 0 ]; then
-    iapw_unsafe="from its standard input, with no heredoc on its own command"
-  fi
-  return 0
-}
-
 # walk_window START STOP (#437): resolves the command word of the window toks[START..STOP) of the CALLER's
 # local `toks` array, read through bash's dynamic scope: it takes no toks parameter and must only be called
-# from is_apply_patch_word, which declares toks, mark_in, mark_out, assign_ere, digits_ere, seg_shim_at,
-# seg_qflag and seg_mflag in its own scope first. Its one call passes the whole segment. It records the
-# resolved shim index in seg_shim_at and, in a segment flagged seg_qflag, runs quote_parity_check over the
-# tokens it walked (which can exit 2); otherwise it never prints or exits. One global, not local, is read by
-# the caller: ww_word, the resolved token with quotes and backslashes stripped, or empty if the window is
-# exhausted first. It is also the first shim-named token found by the #518 scan.
-#
-# #538 fail-closed: a shim name split by quote or backslash characters. The shell deletes quote and
-# backslash characters inside a word, so apply_"patch" and apply\_patch run the shim. (1) Every shim-name
-# comparison deletes backslashes as well as quotes (a token that carried one marks its window, ww_alt), and
-# fast path 2 and the #455 and #518 segment flags all count a split spelling as a mention of the shim, by
-# cdg_split_ere (tested on a line only when it carries a quote or a backslash and not the plain name, and on
-# a segment only inside a line that names the shim). (2) A shim resolved through a backslash strip, in a
-# segment flagged for the parity check, runs the #455 check over the WHOLE window. Cost: per line at most
-# one regex, per segment at most one, per walked token one backslash substitution and one glob: no loop
-# grows with the input.
+# from is_apply_patch_word, which declares toks, mark_in, mark_out, assign_ere and digits_ere in its own scope
+# first. It skips, in order: a redirect run with its one target or source token, a bare-digits fd right
+# before a redirect, a NAME=value assignment, a PREFIX_WORDS member (repeat also skips its count token) and,
+# once a prefix word was seen, a dash-led option. Quote characters are stripped from a token before it is
+# matched (#437). It sets the global ww_word, the first token surviving every skip (empty if the window runs
+# out first). It never prints, and exits only through check_deadline's deny.
 walk_window() {
-  local i n tok nxt saw_prefix vp vp_done j vt hit ww_alt
+  local i n tok nxt saw_prefix
   i="$1"
   n="$2"
   ww_word=""
   saw_prefix=0
-  vp=0
-  ww_alt=0
-  vp_done=0
   while [ "$i" -lt "$n" ]; do
     check_deadline
     tok="${toks[$i]}"
@@ -567,12 +438,10 @@ walk_window() {
       i=$((i + 1))
       continue
     fi
-    # #437, #538: quote characters and backslashes are stripped from the token before it is matched against
-    # PREFIX_WORDS or resolved (a token that carried a backslash marks the window, ww_alt); a token that strips
-    # to nothing is skipped.
+    # #437: quote characters are stripped from the token before it is matched against PREFIX_WORDS or
+    # resolved; a token that strips to nothing is skipped.
     tok="${tok//$sq/}"
     tok="${tok//$dq/}"
-    case "$tok" in *\\*) tok="${tok//\\/}"; ww_alt=1 ;; esac
     if [ -z "$tok" ]; then
       i=$((i + 1))
       continue
@@ -580,11 +449,6 @@ walk_window() {
     case " $PREFIX_WORDS " in
       *" $tok "*)
         saw_prefix=1
-        # #518: the value context follows the most recent prefix word (a bare `-` leaves it alone)
-        case " $PREFIX_VALUE_WORDS env " in
-          *" $tok "*) vp=1 ;;
-          *) [ "$tok" = "-" ] || vp=0 ;;
-        esac
         [ "$tok" = repeat ] && i=$((i + 1))
         i=$((i + 1))
         continue
@@ -592,129 +456,41 @@ walk_window() {
     esac
     if [ "$saw_prefix" -eq 1 ]; then
       case "$tok" in
-        -*)
-          # #518: a dash token in the value context followed by a non-option word W: W may be that
-          # option's value, so look for a shim-named word AFTER W (never W itself: when W names the
-          # shim the walk resolves W below, at the smaller index). At most one scan per window.
-          if [ "$vp" -eq 1 ] && [ "$vp_done" -eq 0 ] && [ "$seg_mflag" -eq 1 ] && [ $((i + 1)) -lt "$n" ]; then
-            vt="${toks[$((i + 1))]}"
-            vt="${vt//$sq/}"
-            vt="${vt//$dq/}"
-            vt="${vt//\\/}"
-            case "$vt" in
-              ""|-*|"$mark_in"|"$mark_out"|apply_patch|applypatch|*/apply_patch|*/applypatch) ;;
-              *)
-                vp_done=1
-                hit=0
-                j=$((i + 2))
-                while [ "$j" -lt "$n" ]; do
-                  check_deadline
-                  vt="${toks[$j]}"
-                  if [ "$vt" != "$mark_in" ] && [ "$vt" != "$mark_out" ]; then
-                    vt="${vt//$sq/}"
-                    vt="${vt//$dq/}"
-                    vt="${vt//\\/}"
-                    case "$vt" in
-                      apply_patch|applypatch|*/apply_patch|*/applypatch) hit=1; break ;;
-                    esac
-                  fi
-                  j=$((j + 1))
-                done
-                if [ "$hit" -eq 1 ]; then
-                  # the hit is past tokens the walk never checked; check every token before it (a
-                  # superset of the base check), fail closed
-                  if [ "$seg_qflag" -eq 1 ]; then
-                    quote_parity_check "$1" $((j - 1))
-                  fi
-                  ww_word="$vt"
-                  i="$j"
-                  break
-                fi
-                ;;
-            esac
-          fi
-          i=$((i + 1)); continue ;;
+        -*) i=$((i + 1)); continue ;;
       esac
     fi
     ww_word="$tok"
     break
   done
-  # Bookkeeping after the per-token loop. A window that resolved the shim records its index in the caller's
-  # seg_shim_at (the input scan starts after it). Any other window, in a segment flagged seg_qflag, runs the
-  # unbalanced-quote check over its own already-walked tokens, start through the resolved word (through the
-  # window's last token when nothing resolved).
-  case "${ww_word##*/}" in
-    apply_patch|applypatch)
-      # #538: a shim resolved through a backslash strip runs the unbalanced-quote check over the WHOLE
-      # window (a superset of the walk's own check on that route)
-      if [ "$ww_alt" -eq 1 ] && [ "$seg_qflag" -eq 1 ]; then quote_parity_check "$1" $((n - 1)); fi
-      if [ "$seg_shim_at" -lt 0 ] || [ "$i" -lt "$seg_shim_at" ]; then
-        seg_shim_at="$i"
-      fi
-      ;;
-    *)
-      if [ "$seg_qflag" -eq 1 ]; then
-        if [ -n "$ww_word" ]; then
-          quote_parity_check "$1" "$i"
-        else
-          quote_parity_check "$1" $((n - 1))
-        fi
-      fi
-      ;;
-  esac
 }
 
 # is_apply_patch_word TEXT (#407, #437): true iff TEXT (a whole tool_input.command, possibly multi-line) has
 # a segment whose RESOLVED command word is exactly apply_patch or applypatch, or a path-qualified spelling
 # matched by basename. It tells the command word from the same text as an argument (rg apply_patch hooks/)
-# or inside quotes, neither of which this walk treats as a leading token. Pure builtins (parameter-expansion
+# or inside quotes, neither of which the walk treats as a leading token. Pure builtins (parameter-expansion
 # substitution splits segments and words; [[ =~ ]] matches an assignment prefix or a bare-digits fd), no
-# execve. It memoises its verdict (iapw_memo) and fills the globals iapw_unsafe and iapw_unquoted.
+# execve.
 #
-# Segments and words. Segment breaks (the set hooks/agent-boundary.sh uses): ; & | ( ) { } and a backtick.
+# Segment breaks (the set hooks/agent-boundary.sh uses): ; & | ( ) { } and a backtick; a newline is one too.
 # Word breaks within a segment: whitespace plus < and >, each replaced by a padded sentinel word (mark_in,
 # mark_out) so walk_window still sees WHERE a redirect was: a redirect never starts a segment, but it
-# separates a command word from a glued target (apply_patch<x.patch), and a LEADING redirect or a bare-digits fd right before one
-# (2>/dev/null apply_patch) is skipped as a unit and cannot hide the command word. walk_window skips, in
-# order: a NAME=value assignment; a PREFIX_WORDS member (repeated, so `if true; then apply_patch < x.patch;
-# fi` resolves past then; repeat also skips its count token); then, once a prefix word was seen, a dash-led
-# option of that word (refined by the #518 and #538 rules below). The first token surviving every
-# skip is the resolved word, compared in full and by basename.
+# separates a command word from a glued target (apply_patch<x.patch). walk_window resolves each segment's
+# command word; its header has the skip order.
 #
-# #455 shim input. The input scan (scan_shim_input) starts after the shim index the walk resolved and runs
-# once per segment to its end, stopping at the first unsafe token. An unquoted heredoc delimiter
-# (iapw_unquoted) is judged once at the end against the whole text: $, a backtick or a backslash anywhere
-# makes it unsafe, since the shell expands the body first. quote_parity_check runs in a segment that mentions
-# the shim and carries a quote or backslash.
-#
-# #518 fail-closed: a value-taking option of a prefix word. A dash option of a PREFIX_VALUE_WORDS member, or
-# of env (this walk models no env option grammar), may take the NEXT word as its value (nice -n 5 apply_patch
-# < x.patch), so the walk, which skipped the option but not the value, resolved the value instead. While the
-# most recent prefix word is in that set, a dash token followed by a word that is not an option, not a
-# redirect marker and not itself shim-named triggers ONE scan per window (vp_done) of the tokens after that
-# word, in a segment that mentions the shim or carries a quote (seg_mflag): the first shim-named token (quote-
-# and backslash-stripped, compared by basename) becomes the resolved word. A value word that itself names the
-# shim is excluded from the trigger: the walk resolves it at the smaller index, so the scan never moves
-# seg_shim_at later. A scan hit in a flagged segment (seg_qflag) first runs the #455 parity check over every
-# token before the hit. Cost: at most one scan per window, so a segment scans at most its own tokens, each
-# token costing one deadline sample, two quote strips, one backslash strip and one glob.
+# It also sets the global iapw_mention: 1 once a physical line of TEXT carries both a `*** ` marker and a
+# .claude or .codex mention.
 #
 # Memoised (#437): both call sites in the Bash route below pass the identical text, so the global iapw_memo
 # (empty until the first call in this process) short-circuits the second call.
 iapw_memo=""
-# Globals is_apply_patch_word fills while it walks (not local, so the Bash route reads them after the call,
-# including on a memoised return): iapw_unsafe holds the first reason a shim segment's input is not only an
-# inline heredoc (empty when every shim segment is safe), and iapw_unquoted is 1 once any shim heredoc has an
-# unquoted delimiter.
-iapw_unsafe=""
-iapw_unquoted=0
+# 1 once a physical line holds both a `*** ` marker and a .claude/.codex mention; not local, so the Bash route
+# reads it after the call, memoised returns included.
+iapw_mention=0
 is_apply_patch_word() {
   local text="$1" ln flat seg base oldifs found=1
   local mark_in=$'\x01LT\x01' mark_out=$'\x01GT\x01'
   local assign_ere='^[A-Za-z_][A-Za-z0-9_]*='
   local digits_ere='^[0-9]+$'
-  local ln_m=0
-  local seg_shim_at=-1 seg_qflag=0 seg_mflag=0
 
   if [ -n "$iapw_memo" ]; then
     return "$iapw_memo"
@@ -746,15 +522,14 @@ is_apply_patch_word() {
     flat="${flat//\`/$lf}"
     flat="${flat//\{/$lf}"
     flat="${flat//\}/$lf}"
-    # Does the line name the shim (#538): ln_m is 1 for the plain spelling, 2 for a split one (quote or
-    # backslash characters inside the name, one regex over the line), 0 otherwise.
-    ln_m=0
+    # The Bash route's belt-and-braces check: a .claude/.codex mention on a line that carries a `*** ` marker.
     case "$ln" in
-      *applypatch*|*apply_patch*)
-        ln_m=1
-        ;;
-      *"$sq"*|*"$dq"*|*\\*)
-        [[ $ln =~ $cdg_split_ere ]] && ln_m=2
+      *"*** "*)
+        case "$ln" in
+          *.[Cc][Ll][Aa][Uu][Dd][Ee]*|*.[Cc][Oo][Dd][Ee][Xx]*)
+            iapw_mention=1
+            ;;
+        esac
         ;;
     esac
     flat="${flat//</ $mark_in }"
@@ -768,59 +543,16 @@ is_apply_patch_word() {
     local -a toks
     toks=($seg)
     local n="${#toks[@]}"
-    seg_shim_at=-1
-    seg_qflag=0
-    seg_mflag=0
-    case "$seg" in
-      *apply_patch*|*applypatch*)
-        seg_mflag=1
-        case "$seg" in
-          *"$sq"*|*"$dq"*|*\\*) seg_qflag=1 ;;
-        esac
-        ;;
-      *"$sq"*|*"$dq"*) seg_mflag=1 ;;
-    esac
-    # A segment of a line that names the shim which itself spells the shim split by quote or backslash
-    # characters (and not plainly) is flagged like one that mentions it: the parity check and, for a
-    # backslash-only spelling, the value scan (quoted ones are scanned already).
-    if [ "$ln_m" -ne 0 ] && [ "$seg_qflag" -eq 0 ]; then
-      case "$seg" in
-        *applypatch*|*apply_patch*) ;;
-        *"$sq"*|*"$dq"*|*\\*)
-          if [[ $seg =~ $cdg_split_ere ]]; then
-            seg_qflag=1
-            case "$seg" in
-              *"$sq"*|*"$dq"*) ;;
-              *) seg_mflag=1 ;;
-            esac
-          fi
-          ;;
-      esac
-    fi
-
     walk_window 0 "$n"
     base="${ww_word##*/}"
     case "$base" in
       apply_patch|applypatch) found=0 ;;
     esac
-
-    # The shim's own segment (#455): scan its input once, from the resolved shim index, unless an
-    # earlier segment already recorded an unsafe input.
-    if [ "$seg_shim_at" -ge 0 ] && [ -z "$iapw_unsafe" ]; then
-      scan_shim_input $((seg_shim_at + 1)) "$n"
-    fi
     IFS="$lf"
     done
   done
   set +f
   IFS="$oldifs"
-  # An unquoted heredoc delimiter lets the shell expand the body before the shim reads it, so the patch the
-  # hook parsed is not the patch the shim applies whenever the command carries anything expandable.
-  if [ -z "$iapw_unsafe" ] && [ "$iapw_unquoted" -eq 1 ]; then
-    case "$text" in
-      *'$'*|*'`'*|*\\*) iapw_unsafe="through an unquoted heredoc delimiter, whose body the shell expands first" ;;
-    esac
-  fi
   iapw_memo="$found"
   return "$found"
 }
@@ -919,30 +651,20 @@ elif [ "$tool_name" = "Bash" ]; then
   bash_cmd="$cdg_text"
 
   # Belt and braces: evaluated FIRST and UNCONDITIONALLY, before either branch below, whenever
-  # apply_patch/applypatch is the resolved command word anywhere in the text. A decoy can defeat
-  # has_exact_begin_patch_line (an ANSI-C-quoted line whose "\n"s are the two literal characters backslash
-  # and n, never a real line break; or a genuine SECOND real line with a benign header next to a first
-  # header hidden behind Unicode whitespace ltrim() never strips) while still mentioning .claude or .codex
-  # in the raw text; this catch-all does not depend on the structured parse recognising anything.
+  # apply_patch/applypatch is the resolved command word anywhere in the text. It denies a .claude or .codex
+  # mention on any line that carries a `*** ` marker. A decoy can defeat has_exact_begin_patch_line (an
+  # ANSI-C-quoted line whose "\n"s are the two literal characters backslash and n, never a real line break; or
+  # a genuine SECOND real line with a benign header next to a first header hidden behind Unicode whitespace
+  # ltrim() never strips), but its header still sits on such a line, so this catch-all does not depend on the
+  # structured parse recognising anything.
   if is_apply_patch_word "$bash_cmd"; then
-    case "$bash_cmd" in
-      *.[Cc][Ll][Aa][Uu][Dd][Ee]*|*.[Cc][Oo][Dd][Ee][Xx]*)
-        deny_patch_unparseable "apply_patch/applypatch invoked via Bash mentioning a .claude/.codex path anywhere in the raw command text"
-        ;;
-    esac
+    [ "$iapw_mention" -eq 0 ] || deny_patch_unparseable "apply_patch/applypatch invoked via Bash mentioning a .claude/.codex path on a line that carries a *** marker"
   fi
 
   if has_exact_begin_patch_line "$bash_cmd"; then
-    # The command text carries an inline patch. When the shim is invoked with an input that is not only its
-    # own inline heredoc (a file, a redirect, a pipe, a here-string, an unquoted delimiter on an expandable
-    # command; #455), the inline patch found here may be an unrelated decoy while the shim applies something
-    # this hook never sees, so deny BEFORE the structured parse trusts it. Otherwise parse the inline patch
-    # exactly like the apply_patch route, resolved against the SAME top-level cwd field; this gives the
-    # precise .claude/.codex message whenever the structured patch itself names one and the belt-and-braces
-    # check above did not already deny.
-    if is_apply_patch_word "$bash_cmd" && [ -n "$iapw_unsafe" ]; then
-      deny_patch_unparseable "apply_patch/applypatch invoked via Bash takes its patch $iapw_unsafe, not from an inline heredoc this hook parsed"
-    fi
+    # The command text carries an inline patch: parse it exactly like the apply_patch route, resolved against
+    # the SAME top-level cwd field; this gives the precise .claude/.codex message whenever the structured patch
+    # itself names one and the belt-and-braces check above did not already deny.
     cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
     cdg_bytes "$cwd"
     [ "$cdg_n" -le "$CDG_LINE_MAX_BYTES" ] || deny_too_large
@@ -951,9 +673,10 @@ elif [ "$tool_name" = "Bash" ]; then
     parse_patch_headers "Bash" "$bash_cmd" "$cwd"
   elif is_apply_patch_word "$bash_cmd"; then
     # The shim was invoked as the command word, but no line's trimmed text was EXACTLY "*** Begin Patch", so
-    # the structured parse never ran, and the belt-and-braces check found no .claude/.codex mention either:
-    # the shim was invoked with no inline patch text this hook can see (e.g. `apply_patch < x.patch`, reading
-    # a file this hook never opens). The hook cannot verify what it writes, so it denies fail closed.
+    # the structured parse never ran, and the belt-and-braces check found no .claude/.codex mention on a marker
+    # line either: the shim was invoked with no inline patch text this hook can see (e.g. a patch read from
+    # a file this hook never opens, `apply_patch < x.patch`). The hook cannot verify what it writes, so it
+    # denies fail closed.
     deny_patch_unparseable "apply_patch/applypatch invoked via Bash with no inline patch text"
   fi
   # else: apply_patch/applypatch appears only as an argument or inside quoted text (e.g. `rg apply_patch

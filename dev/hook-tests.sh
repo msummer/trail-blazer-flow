@@ -6658,9 +6658,8 @@ case_push_dl_deny_toplevel_at_cap() {
 # Windows drive-letter and backslash-spelled forms; ".claude" as the path's final segment; a
 # CR-carrying spelling; a relative path that IS ".claude/..." (still denies via the ".claude"
 # message, discriminated from a relative PLAIN path via the unclassifiable message by
-# cdg-deny-rel-claude/cdg-deny-rel-plain below); a ".."-carrying path with ".claude" present
-# (still the ".claude" message, since that class is checked first) and one without (the
-# unclassifiable message); every documented no-opinion shape, including the two release-blocker
+# cdg-deny-rel-claude/cdg-deny-rel-plain below); an absolute ".."-carrying path with ".claude"
+# present (still the ".claude" message); every documented no-opinion shape, including the two release-blocker
 # controls (a main-session Write to .claude/LESSONS.md, the orchestrator's own lesson-append path,
 # and a verifier-role Edit of a tracked source file, the mutation probe's own shape); and the same
 # booby-trapped git/gh/rm/dirname/tr/awk/grep/sed PATH idiom plus a byte-identical fixture-tree
@@ -6832,8 +6831,8 @@ case_cdg_deny_rel_claude() {
   expect_cdg_deny_claude
 }
 case_cdg_deny_dotdot_claude() {
-  # A ".."-carrying ABSOLUTE path that also carries a real ".claude" segment: the MORE SPECIFIC
-  # ".claude" message wins (checked first), never the unclassifiable one.
+  # A ".." segment hides nothing from the literal segment match: an ABSOLUTE path that also carries a
+  # real ".claude" segment still denies with the ".claude" message.
   run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/Users/x/../.claude/y')"
   expect_cdg_deny_claude
 }
@@ -6851,12 +6850,6 @@ case_cdg_deny_rel_plain() {
   # "relative, no leading slash" shape, but with NO ".claude" segment anywhere -> the OTHER,
   # distinctly-worded deny message.
   run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' 'src/main.rs')"
-  expect_cdg_deny_unclassifiable
-}
-case_cdg_deny_dotdot_no_claude() {
-  # A ".."-carrying ABSOLUTE path with no ".claude" segment anywhere: denies fail-closed, per the
-  # triage record, even though it never mentions ".claude" at all.
-  run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/Users/x/../etc/passwd')"
   expect_cdg_deny_unclassifiable
 }
 case_cdg_deny_lf_unclassifiable() {
@@ -7301,9 +7294,6 @@ case_cdg_patch_deny_codex_case() { run_claude_guard "$(mk_codex_patch 'verifier'
 *** Add File: .CODEX/agents/x.toml
 *** End Patch')"; expect_cdg_deny_codex; }
 
-case_cdg_patch_deny_dotdot() { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
-*** Add File: ../escape/x
-*** End Patch')"; expect_cdg_deny_unclassifiable; }
 case_cdg_patch_deny_no_cwd() { run_claude_guard "$(mk_codex_patch 'implementer' '*** Begin Patch
 *** Add File: src/a.txt
 *** End Patch' '-none-')"; expect_cdg_deny_unclassifiable; }
@@ -7413,7 +7403,7 @@ case_cdg_codexseg_noop_my_codex()     { run_claude_guard "$(mk_cdg_agent_path 'i
 #   has_exact_begin_patch_line's own full trim with a no-op, so an INDENTED "*** Begin Patch" line
 #   no longer matches the exact-line trigger.
 case_cdg_bash_deny_heredoc_claude() {
-  # #407 kickback round 2, finding A: the belt-and-braces raw-text check now runs FIRST and
+  # #407 kickback round 2, finding A: the belt-and-braces marker-line check now runs FIRST and
   # unconditionally, before the structured parse gets a chance to emit the more specific
   # classify_path message -- this payload denies via the belt-and-braces reason now, not via
   # expect_cdg_deny_claude's own phrase.
@@ -7464,12 +7454,12 @@ case_cdg_bash_deny_no_inline_patch_chain()     { run_claude_guard "$(mk_codex_sh
 case_cdg_bash_deny_no_inline_patch_pipe()      { run_claude_guard "$(mk_codex_shell 'implementer' 'cat x.patch | apply_patch')"; expect_cdg_deny_unparseable; }
 # #407 kickback finding 2's "belt and braces": an ANSI-C-quoted ($'...') decoy whose "\n"
 # sequences are literal backslash+n bytes, not real newlines, so has_exact_begin_patch_line never
-# fires on it (there is no genuine line break) -- the raw-text .claude mention still denies.
+# fires on it (there is no genuine line break) -- the marker-line .claude mention still denies.
 case_cdg_bash_deny_decoy_dollar_quote() {
   # The decoy itself is one physical line (its "\n"s are the two literal characters
   # backslash+n, never a real line break); a genuine SECOND, real line follows with an ordinary
   # benign header, proving the deny isn't an artifact of the decoy being the only content -- the
-  # command still denies via the belt-and-braces raw-text check, not the (never-triggered)
+  # command still denies via the belt-and-braces marker-line check, not the (never-triggered)
   # structured parse.
   run_claude_guard "$(mk_codex_shell 'implementer' "apply_patch \$'*** Begin Patch\\n*** Add File: .claude/x\\n+x\\n*** End Patch'${LF}*** Add File: src/ok.txt")"
   expect_cdg_deny_unparseable
@@ -7486,7 +7476,7 @@ case_cdg_bash_deny_decoy_dollar_quote() {
 # hides from the structured parse as an ordinary content line, per hooks/claude-dir-guard.sh's
 # ltrim() comment), sitting next to a SECOND, genuinely benign header -- if the belt-and-braces
 # check were not unconditional/first, the structured parse alone would see only the benign header
-# and return no opinion despite the raw text plainly mentioning ".claude".
+# and return no opinion despite a marker line plainly mentioning ".claude".
 case_cdg_bash_deny_decoy_nbsp_header() {
   local nbsp
   nbsp="$(printf '\xc2\xa0')"
@@ -7779,9 +7769,6 @@ case_cdg_dbq_deny_quoted_prefix() {
 # mutant:457-cdg-dl-patch-prepare-off — the apply_patch route stops running cdg_prepare_text, so an
 #   over-cap patch line reaches the whole-text work instead of denying at the cap.
 # mutant:457-cdg-dl-iapw-line-site — is_apply_patch_word's per-line loop loses its sample.
-# mutant:457-cdg-dl-qpc-site — quote_parity_check's loop loses its sample.
-# mutant:457-cdg-dl-scan-outer-site — scan_shim_input's outer loop loses its sample.
-# mutant:457-cdg-dl-scan-inner-site — scan_shim_input's redirect-run loop loses its sample.
 # mutant:457-hook-cdg-budget-override-leaks — run_claude_guard's own trailing budget-override reset
 #   deleted: the post-call emptiness assertion is the only thing that catches it.
 # mutant:457-hook-cdg-cap-override-leaks — the same for the cap-override reset.
@@ -7892,7 +7879,7 @@ case_cdg_dl_noop_line_over_cap_other_agent() {
 # to the line cap and deny it as too large to analyse. The controls are a compact-JSON Edit call and a
 # compact-JSON Write call, each in acceptEdits mode, the shape Claude Code sends: each must still be analysed
 # and denied, so an arm that matched only the spaced `"tool_name": "Write"` form fails here. Cases outside
-# every registry filter (cdgfast-, not cdg-bash-/cdg-dl-/cdg-split-): no recorded set can move.
+# every registry filter (cdgfast-, not cdg-bash-/cdg-dl-): no recorded set can move.
 case_cdgfast_tool_name_value() {
   local cap long p i=0 j=0 w0
   cap="$(cdg_dl_line_cap)"
@@ -7997,6 +7984,9 @@ case_cdg_dl_deny_path_cr() {
   run_claude_guard "$(printf '%s' "/repo/a${crs}" | jq -Rs '{tool_name: "Edit", agent_type: "implementer", tool_input: {file_path: .}}')"
   expect_cdg_deny_too_large implementer Edit
 }
+# CDG_P — a benign, well-formed inline patch (an Add File under /repo): the payload the cdg-dl- cwd cases below
+# send when the fixture under test is the cwd, not the patch.
+CDG_P="*** Begin Patch${LF}*** Add File: /repo/ok${LF}+x${LF}*** End Patch"
 case_cdg_dl_deny_cwd_cr() {
   # Regression pin (no registry mutant: whether an uncapped run times out or merely denies later
   # depends on the bash; the just-over-cap cwd fixtures carry the kill).
@@ -8322,22 +8312,6 @@ case_cdg_dl_cap_lines() {
   for i in $(seq 1 100); do cmd="${cmd}${LF};"; done
   cdg_dl_cap_check_bash "$cmd" 250
 }
-case_cdg_dl_cap_qpc() {
-  # 100 prefix words before the resolved word, in a segment that mentions the shim and carries a
-  # quote: the walk and the parity pass each sample once per token, so the cap (150) is reached
-  # only when the parity pass samples too.
-  local cmd="" i
-  for i in $(seq 1 100); do cmd="${cmd}env "; done
-  cdg_dl_cap_check_bash "${cmd}echo apply_patch \"\"" 150
-}
-case_cdg_dl_cap_scan_shim() {
-  # A heredoc shim followed by 100 safe output redirects: the input scan's outer loop samples once
-  # per redirect and its redirect-run loop twice, so the cap (270) is reached only when both
-  # sample.
-  local cmd="apply_patch <<'EOF'" i
-  for i in $(seq 1 100); do cmd="${cmd} >x"; done
-  cdg_dl_cap_check_bash "${cmd}${LF}${CDG_P}${LF}EOF" 270
-}
 case_cdg_dl_cap_ph() {
   local patch="*** Begin Patch${LF}*** Add File: /repo/a" i
   for i in $(seq 1 100); do patch="${patch}${LF}+x"; done
@@ -8366,231 +8340,72 @@ case_cdg_dl_cap_trim_bash() {
   cdg_dl_cap_check_bash "echo apply_patch${sp}"
 }
 
-# --- claude-dir-guard.sh decoy inline patch (#455) -------------------------------------------
-# When the shim's own segment takes its input from anything but its own inline `<<` heredoc, the
-# Bash route denies before the structured parse can be satisfied by an unrelated benign inline
-# patch elsewhere in the command. Safe set: a heredoc, an output redirect, a bare-digits fd before
-# an output redirect. An unquoted heredoc delimiter on a command carrying `$`, a backtick or a
-# backslash also denies (the shell expands the body first). Shared fixture text: CDG_P is the
-# issue's benign patch, CDG_DECOY an unrelated heredoc feeding it to `cat`.
-#
-# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "cdg-dec-").
-# mutant:455-cdg-dec-route — the Bash route's new decoy deny is switched off, so a benign inline
-#   patch next to an unsafe shim input is judged by the structured parse alone again.
-# mutant:455-cdg-dec-shim-record — the shim's resolved index is never recorded, so no segment's
-#   input is ever scanned.
-# mutant:455-cdg-dec-in-redirect — a stdin redirect after a heredoc is no longer unsafe.
-# mutant:455-cdg-dec-heredoc-exact — the heredoc test accepts three or more `<`, so a here-string
-#   is read as a heredoc.
-# mutant:455-cdg-dec-delim-required — the missing-delimiter guard is dropped, so a process
-#   substitution's bare `< <` run is read as a heredoc.
-# mutant:455-cdg-dec-arg — a non-redirect token after the shim is skipped instead of unsafe.
-# mutant:455-cdg-dec-no-heredoc — a shim segment with no heredoc at all is no longer unsafe.
-# mutant:455-cdg-dec-fd-out — the fd-before-output-redirect skip is removed, so `2>&1` reads as an
-#   argument.
-# mutant:455-cdg-dec-out-target — the output redirect's target is no longer skipped, so
-#   `>/dev/null` reads as an argument.
-# mutant:455-cdg-dec-unquoted-flag — an unquoted delimiter never sets iapw_unquoted.
-# mutant:455-cdg-dec-delim-sq — a single-quote in the delimiter no longer counts as quoted.
-# mutant:455-cdg-dec-delim-dq — a double-quote in the delimiter no longer counts as quoted.
-# mutant:455-cdg-dec-delim-bs — a backslash in the delimiter no longer counts as quoted.
-# mutant:455-cdg-dec-text-dollar — `$` no longer makes an unquoted-delimiter command unsafe.
-# mutant:455-cdg-dec-text-backtick — a backtick no longer does.
-# mutant:455-cdg-dec-text-backslash — a backslash no longer does.
-CDG_P="*** Begin Patch${LF}*** Add File: /repo/ok${LF}+x${LF}*** End Patch"
-CDG_DECOY="cat >/dev/null <<'EOF'${LF}${CDG_P}${LF}EOF"
-expect_cdg_dec_deny() {
-  expect_cdg_deny_unparseable
-  case "$cdg_err" in
-    *"not from an inline heredoc"*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain 'not from an inline heredoc': '$cdg_err'\n" ;;
-  esac
-}
-cdg_dec_run() { run_claude_guard "$(mk_codex_shell 'implementer' "$1")"; }
-case_cdg_dec_deny_redirect_file() { cdg_dec_run "${CDG_DECOY}${LF}apply_patch < evil.patch"; expect_cdg_dec_deny; }
-case_cdg_dec_deny_redirect_first() { cdg_dec_run "apply_patch < evil.patch${LF}${CDG_DECOY}"; expect_cdg_dec_deny; }
-case_cdg_dec_deny_applypatch() { cdg_dec_run "${CDG_DECOY}${LF}applypatch < evil.patch"; expect_cdg_dec_deny; }
-case_cdg_dec_deny_pipe() { cdg_dec_run "${CDG_DECOY}${LF}cat evil.patch | apply_patch"; expect_cdg_dec_deny; }
-case_cdg_dec_deny_herestring() { cdg_dec_run "${CDG_DECOY}${LF}apply_patch <<< \"\$p\""; expect_cdg_dec_deny; }
-case_cdg_dec_deny_heredoc_then_redirect() { cdg_dec_run "apply_patch <<'EOF' < evil.patch${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
-case_cdg_dec_deny_heredoc_then_herestring() { cdg_dec_run "apply_patch <<'EOF' <<< \"\$p\"${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
-case_cdg_dec_deny_heredoc_then_rw() { cdg_dec_run "apply_patch <<'EOF' <> evil.patch${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
-case_cdg_dec_deny_file_arg() { cdg_dec_run "apply_patch evil.patch <<'EOF'${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
-case_cdg_dec_deny_fd_heredoc() { cdg_dec_run "cat evil.patch | apply_patch 3<<'EOF'${LF}${CDG_P}${LF}EOF"; expect_cdg_dec_deny; }
-case_cdg_dec_deny_procsubst() { cdg_dec_run "${CDG_DECOY}${LF}apply_patch < <(cat evil.patch)"; expect_cdg_dec_deny; }
-case_cdg_dec_deny_second_shim() {
-  cdg_dec_run "apply_patch <<'EOF'${LF}${CDG_P}${LF}EOF${LF}apply_patch < evil.patch"
-  expect_cdg_dec_deny
-}
-case_cdg_dec_deny_unquoted_dollar() {
-  cdg_dec_run "D=.cla\"\"ude; apply_patch <<EOF${LF}*** Begin Patch${LF}*** Add File: "'$D'"/settings.local.json${LF}+x${LF}*** End Patch${LF}EOF"
-  expect_cdg_dec_deny
-}
-case_cdg_dec_deny_unquoted_backtick() {
-  cdg_dec_run "apply_patch <<EOF${LF}*** Begin Patch${LF}*** Add File: src/"'`printf x`'"/y${LF}+x${LF}*** End Patch${LF}EOF"
-  expect_cdg_dec_deny
-}
-case_cdg_dec_deny_unquoted_backslash() {
-  # The shell's backslash-newline joins `.cla\` and `ude/...` into `.claude/...` inside an
-  # unquoted heredoc body.
-  local bs='\'
-  cdg_dec_run "apply_patch <<EOF${LF}*** Begin Patch${LF}*** Add File: .cla${bs}${LF}ude/settings.local.json${LF}+x${LF}*** End Patch${LF}EOF"
-  expect_cdg_dec_deny
-}
-case_cdg_dec_deny_body_codespan() {
-  # Documented over-block: a body line whose first word is a code span of the shim name is its own
-  # walk segment, a bare shim with no heredoc.
-  cdg_dec_run "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Update File: src/a.txt${LF}+See "'`apply_patch`'" docs${LF}*** End Patch${LF}EOF"
-  expect_cdg_dec_deny
-}
-case_cdg_dec_deny_heredoc_dotdot() {
-  # The legitimate heredoc shape still reaches the structured parse, which judges its headers.
-  cdg_dec_run "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: ../etc/x${LF}+x${LF}*** End Patch${LF}EOF"
-  expect_cdg_deny_unclassifiable
-}
-case_cdg_dec_noop_heredoc_sq_dollar() {
-  cdg_dec_run "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+echo "'$HOME'"${LF}*** End Patch${LF}EOF"
-  expect_cdg_no_opinion
-}
-case_cdg_dec_noop_heredoc_dq_dollar() {
-  cdg_dec_run "apply_patch <<\"EOF\"${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+echo "'$HOME'"${LF}*** End Patch${LF}EOF"
-  expect_cdg_no_opinion
-}
-case_cdg_dec_noop_heredoc_bs_dollar() {
-  cdg_dec_run "apply_patch <<\\EOF${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+echo "'$HOME'"${LF}*** End Patch${LF}EOF"
-  expect_cdg_no_opinion
-}
-case_cdg_dec_noop_heredoc_dash() {
-  local t=$'\t'
-  cdg_dec_run "apply_patch <<-'EOF'${LF}${t}*** Begin Patch${LF}${t}*** Add File: src/a.txt${LF}${t}+x${LF}${t}*** End Patch${LF}${t}EOF"
-  expect_cdg_no_opinion
-}
-case_cdg_dec_noop_heredoc_out_redirects() {
-  cdg_dec_run "apply_patch <<'EOF' >/dev/null 2>&1${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
-  expect_cdg_no_opinion
-}
-case_cdg_dec_noop_heredoc_chain() {
-  cdg_dec_run "cd src && apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
-  expect_cdg_no_opinion
-}
-case_cdg_dec_noop_unquoted_plain() {
-  cdg_dec_run "apply_patch <<EOF${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
-  expect_cdg_no_opinion
-}
-case_cdg_dec_noop_two_shims() {
-  local one="apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
-  cdg_dec_run "${one}${LF}${one}"
-  expect_cdg_no_opinion
-}
-cdg_trap_path() {
-  # cdg_trap_path NAME -- build a booby-trapped bin dir; sets cdg_trapdir and cdg_sentinel.
-  cdg_trapdir="$tmpbase/trapbin-$1"
-  cdg_sentinel="$tmpbase/sentinel-$1"
-  mkdir -p "$cdg_trapdir"
-  rm -f "$cdg_sentinel"
-  local bin
-  for bin in git gh rm dirname tr awk grep sed; do
-    {
-      printf '#!%s\n' "$bash_bin"
-      printf 'touch "%s"\n' "$cdg_sentinel"
-      printf 'exit 1\n'
-    } > "$cdg_trapdir/$bin"
-    chmod +x "$cdg_trapdir/$bin"
+# --- claude-dir-guard.sh: the marker-line mention check (#577) -----------------------------------------
+# The Bash route's belt-and-braces check reads only a physical line that carries a `*** ` marker, and no
+# parity, decoy or value-option scan runs before it. Both cases are controls outside every registry filter
+# (cdgmark-, not cdg-bash-/cdg-dl-): no recorded mutant set moves, and each is killed by re-adding the rule
+# its rows name.
+# cdgmark-noop-overblocks: each command is a benign call the older rules denied. A `.gitignore` patch whose
+# body line adds a `.claude` path (killed by a mention check that ignores the marker), a body line with an
+# apostrophe and a `bash -c` string with an unbalanced quote that names the shim only as an argument (killed by
+# a quote-parity check), a body line holding a code span of the shim (killed by a shim-input scan), and
+# `nice -n 5 rg apply_patch hooks/` (killed by a value-option scan); an Edit `file_path` with a `..` segment
+# and no `.claude` segment (killed by a `..` rule in classify_path).
+case_cdgmark_noop_overblocks() {
+  local hd="apply_patch <<'EOF'${LF}*** Begin Patch${LF}" tl="*** End Patch${LF}EOF" c w0
+  for c in \
+    "${hd}*** Update File: .gitignore${LF}@@${LF} node_modules/${LF}+.claude/settings.local.json${LF}${tl}" \
+    "${hd}*** Add File: docs/a.md${LF}+Don't use apply_patch from a script.${LF}${tl}" \
+    "${hd}*** Add File: docs/b.md${LF}"'+Run `apply_patch < x.patch` to apply.'"${LF}${tl}" \
+    'nice -n 5 rg apply_patch hooks/' \
+    "bash -c 'rg -n apply_patch hooks/'"; do
+    w0="$__why"; __why=""
+    run_claude_guard "$(mk_codex_shell implementer "$c")"
+    expect_cdg_no_opinion
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
   done
+  run_claude_guard "$(mk_cdg_agent_path 'implementer' 'Edit' '/repo/../etc/passwd')"
+  expect_cdg_no_opinion
 }
-case_cdg_dec_never_executes() {
-  cdg_trap_path cdg-dec
-  run_claude_guard "$(mk_codex_shell 'implementer' "${CDG_DECOY}${LF}apply_patch < evil.patch")" "$cdg_trapdir:$PATH"
-  expect_cdg_dec_deny
-  [ ! -e "$cdg_sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
-}
-case_cdg_dec_deny_flood_timing() {
-  # A long run of safe output redirects before an unsafe argument: the scan must walk the whole
-  # run and still deny. Under a 15s active deadline (#463); the command reaches jq on stdin, never as
-  # a --arg (killed by 455-cdg-dec-arg: the scan reaches the trailing argument). The
-  # run length is bounded because this shape's cost is superlinear in pre-existing code outside
-  # this change (main overruns the deadline at larger sizes; the cause is not isolated here), and,
-  # since #457, because the run sits on ONE physical line, which must stay under CDG_LINE_MAX_BYTES
-  # or the hook denies it as too large before the scan runs at all.
-  local flood payload
-  flood="$(printf ' >o%.0s' $(seq 1 600))"
-  payload="$(printf '%s' "apply_patch${flood} <<'EOF' x${LF}${CDG_P}${LF}EOF" \
-    | jq -Rs '{tool_name: "Bash", agent_type: "implementer", cwd: "/repo", tool_input: {command: .}}')"
-  cdg_deadline_override=15
-  run_claude_guard "$payload"
-  expect_cdg_dec_deny
-}
-
-# --- claude-dir-guard.sh quoted assignment value (#455, absorbing #456) ----------------------
-# A token carrying an odd count of `'` or `"`, or ending in a backslash, between a walk window's
-# start and its resolved non-shim command word, in a segment that mentions the shim, denies: the
-# whitespace split happens before quotes are stripped, so `X='a b'` leaves `b'` to resolve as the
-# command word and hide the shim.
-#
-# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter "cdg-qa-"
-# unless noted).
-# mutant:455-cdg-qa-check — the parity test never fires.
-# mutant:455-cdg-qa-sq — only double quotes are counted.
-# mutant:455-cdg-qa-dq — only single quotes are counted.
-# mutant:455-cdg-qa-backslash — the trailing-backslash arm never fires.
-# mutant:455-cdg-qa-range-start — the check covers only the resolved token, not the tokens
-#   before it.
-# mutant:455-cdg-qa-range-end — the check runs through the window's end, past the resolved word.
-# mutant:455-cdg-qa-resolved-inclusive — the check stops one token short of the resolved word.
-# mutant:455-cdg-qa-scope — the check runs in every segment, not only those mentioning the shim.
-# mutant:455-cdg-qa-scope-applypatch — the segment scope drops the `applypatch` spelling, so a
-#   quoted-assignment prefix before `applypatch` is never checked.
-# mutant:455-cdg-qa-shim-exempt — the check also runs when the resolved word IS the shim (filter
-#   "cdg-dbq-").
-expect_cdg_qa_deny() {
+# cdgmark-noop-gaps: each class the removals left open gets no opinion, so a rule re-added for it fails here. A
+# decoy inline patch beside a shim that reads another file (decoy scan), an unquoted heredoc whose target is
+# built from a variable (the same scan), a prefix option's value, a quoted space and a split or escaped name
+# before the shim (value-option scan, parity check, split-name rules), a `.codex` mention on a line with no
+# marker and a `.claude` mention on a body line holding `***` without the following space (a mention check
+# that ignores the marker, or that matches the bare asterisks), and a native patch header with a `..` segment
+# (the `..` rule). The walk strips quote characters (#437) but no longer backslashes, so a backslash-split name
+# is unseen even beside a plain mention, while a quote-split one beside a plain mention still denies: that deny
+# and a `.claude` header on a marker line are the two controls at the end. The header denies with the marker-line
+# reason, not the structured parse's, so the reason text and the check's order are pinned.
+case_cdgmark_noop_gaps() {
+  local hd="apply_patch <<'EOF'${LF}*** Begin Patch${LF}" tl="*** End Patch${LF}EOF" c w0
+  for c in \
+    "cat >/dev/null <<'EOF'${LF}${CDG_P}${LF}EOF${LF}apply_patch < evil.patch" \
+    "D=.claude; apply_patch <<EOF${LF}*** Begin Patch${LF}*** Add File: \$D/x${LF}+hi${LF}${tl}" \
+    'nice -n 5 apply_patch < x.patch' \
+    'env -u X apply_patch < x.patch' \
+    "X='a b' apply_patch < x.patch" \
+    'X=a\ b apply_patch < x.patch' \
+    'apply_"patch" < x.patch' \
+    'apply\_patch < x.patch' \
+    'echo apply_patch; apply\_patch < x.patch' \
+    "cd .codex && ${hd}*** Add File: x${LF}+y${LF}${tl}" \
+    "${hd}*** Add File: docs/a.md${LF}+***bold***-note on .claude/x${LF}${tl}"; do
+    w0="$__why"; __why=""
+    run_claude_guard "$(mk_codex_shell implementer "$c")"
+    expect_cdg_no_opinion
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+  run_claude_guard "$(mk_codex_patch 'implementer' "*** Begin Patch${LF}*** Add File: ../escape/x${LF}+x${LF}*** End Patch")"
+  expect_cdg_no_opinion
+  run_claude_guard "$(mk_codex_shell implementer "${hd}*** Add File: .claude/x${LF}+x${LF}${tl}")"
   expect_cdg_deny_unparseable
   case "$cdg_err" in
-    *"unbalanced quote"*) ;;
-    *) __ok=0; __why="${__why}stderr does not contain 'unbalanced quote': '$cdg_err'\n" ;;
+    *"mentioning a .claude/.codex path on a line that carries a *** marker"*) ;;
+    *) __ok=0; __why="${__why}stderr is not the marker-line reason: '$cdg_err'\n" ;;
   esac
-}
-case_cdg_qa_deny_sq_space() { cdg_dec_run "X='a b' apply_patch < x.patch"; expect_cdg_qa_deny; }
-case_cdg_qa_deny_applypatch() { cdg_dec_run "X='a b' applypatch < x.patch"; expect_cdg_qa_deny; }
-case_cdg_qa_deny_dq_space() { cdg_dec_run "X=\"a b\" apply_patch < x.patch"; expect_cdg_qa_deny; }
-case_cdg_qa_deny_sq_many_spaces() { cdg_dec_run "X='a b c d' apply_patch < x.patch"; expect_cdg_qa_deny; }
-case_cdg_qa_deny_dq_many_spaces() { cdg_dec_run "X=\"a b  c\" apply_patch < x.patch"; expect_cdg_qa_deny; }
-case_cdg_qa_deny_env_assign() { cdg_dec_run "env X='a b' apply_patch < x.patch"; expect_cdg_qa_deny; }
-case_cdg_qa_deny_env_quoted_assign() { cdg_dec_run "env 'X=a b' apply_patch < x.patch"; expect_cdg_qa_deny; }
-case_cdg_qa_deny_redirect_target() { cdg_dec_run "< 'a b c' apply_patch"; expect_cdg_qa_deny; }
-case_cdg_qa_deny_two_assigns() { cdg_dec_run "X='a b' Y='c d' apply_patch < x.patch"; expect_cdg_qa_deny; }
-case_cdg_qa_deny_heredoc() { cdg_dec_run "X='a b' apply_patch <<'EOF'${LF}${CDG_P}${LF}EOF"; expect_cdg_qa_deny; }
-case_cdg_qa_deny_backslash_space() { cdg_dec_run 'X=a\ b apply_patch < x.patch'; expect_cdg_qa_deny; }
-case_cdg_qa_deny_body_possessive() {
-  # Documented over-block: a context line whose first word carries an apostrophe and which
-  # mentions the shim.
-  cdg_dec_run "apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Update File: src/a.txt${LF} Codex's apply_patch shim${LF}*** End Patch${LF}EOF"
-  expect_cdg_qa_deny
-}
-case_cdg_qa_noop_quoted_arg() { cdg_dec_run "echo 'a b' apply_patch"; expect_cdg_no_opinion; }
-case_cdg_qa_noop_other_segment() { cdg_dec_run "X='a b' echo hi; rg apply_patch hooks/"; expect_cdg_no_opinion; }
-case_cdg_qa_noop_balanced_assign() {
-  cdg_dec_run "X='ab' apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}+x${LF}*** End Patch${LF}EOF"
-  expect_cdg_no_opinion
-}
-case_cdg_qa_never_executes() {
-  cdg_trap_path cdg-qa
-  run_claude_guard "$(mk_codex_shell 'implementer' "X='a b' apply_patch < x.patch")" "$cdg_trapdir:$PATH"
-  expect_cdg_qa_deny
-  [ ! -e "$cdg_sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
-}
-case_cdg_qa_noop_flood_timing() {
-  # Many balanced quoted tokens before the resolved word, on one physical line (which must stay
-  # under CDG_LINE_MAX_BYTES, #457): pins that balanced quotes never trip the parity check, so a
-  # segment whose resolved word is not the shim (here `x`, with apply_patch only its argument) gets
-  # no opinion. It no longer pins linearity: the line is too short for that, which the
-  # cdg-dl-cap-qpc sample fixture covers.
-  local flood payload
-  flood="$(printf "'env' %.0s" $(seq 1 250))"
-  payload="$(printf '%s' "${flood}x apply_patch" \
-    | jq -Rs '{tool_name: "Bash", agent_type: "implementer", cwd: "/repo", tool_input: {command: .}}')"
-  cdg_deadline_override=15
-  run_claude_guard "$payload"
-  expect_cdg_no_opinion
+  run_claude_guard "$(mk_codex_shell implementer 'echo apply_patch; apply_"patch" < x.patch')"
+  expect_cdg_deny_unparseable
 }
 
 # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
@@ -8893,111 +8708,6 @@ case_push_optvalscan_noop_flood() {
   optval_cpu_check "$twin_ms" "$flood_ms" "push"
 }
 
-# claude-dir-guard (Codex shell payloads; the guard is role-scoped and pure bash).
-# mutant:518-cdg-optval-off — empties this hook's PREFIX_VALUE_WORDS (its env member stays), so the
-#   prefix words other than env open no value context.
-# mutant:518-cdg-optval-w-shim — drops the exclusion of a value word that itself names the shim, so
-#   the scan can resolve a later shim index than the walk would.
-# mutant:518-cdg-optval-site — removes the deadline sample from the scan loop (filter "cdg-optval-").
-# mutant:518-cdg-optval-memo — never marks the window scanned, so every trigger rescans (filter
-#   "cdg-optval-").
-cdg_optval_run() {
-  run_claude_guard "$(mk_codex_shell "$1" "$2")"
-}
-case_cdg_optval_deny_prefix_words() {
-  local c
-  for c in 'nice -n 5 apply_patch < x.patch' 'sudo -u root apply_patch < x.patch' 'stdbuf -o L apply_patch < x.patch' \
-    'exec -a foo apply_patch < x.patch' 'xargs -a x applypatch' 'time -o t apply_patch < x.patch' \
-    'command time -o t apply_patch < x.patch' 'env -u X apply_patch < x.patch'; do
-    cdg_optval_run implementer "$c"
-    expect_cdg_deny_unparseable
-    case "$cdg_err" in
-      *"invoked via Bash with no inline patch text"*) ;;
-      *) __ok=0; __why="${__why}[$c] stderr missing 'invoked via Bash with no inline patch text': '$cdg_err'\n" ;;
-    esac
-  done
-}
-case_cdg_optval_heredoc() {
-  cdg_optval_run implementer "nice -n 5 apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}*** End Patch${LF}EOF"
-  expect_cdg_no_opinion
-  cdg_optval_run implementer "nice -n 5 apply_patch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: .claude/x${LF}*** End Patch${LF}EOF"
-  expect_cdg_deny_unparseable
-}
-case_cdg_optval_main_session() {
-  cdg_optval_run '' 'nice -n 5 apply_patch < x.patch'
-  expect_cdg_no_opinion
-}
-case_cdg_optval_w_shim_decoy() {
-  # The value word is itself the shim name: the walk resolves it at the smaller index, so the argument
-  # check still sees `evil.patch applypatch` and denies. Dropping the exclusion lets the scan move the
-  # resolved shim to the later `applypatch`, whose input is only the benign heredoc.
-  cdg_optval_run implementer "env -i apply_patch evil.patch applypatch <<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}*** End Patch${LF}EOF"
-  expect_cdg_deny_unparseable
-}
-case_cdg_optval_deny_overblock() {
-  # A documented over-block: a read naming the shim behind a value-taking option resolves as the shim.
-  cdg_optval_run implementer 'nice -n 5 rg apply_patch hooks/'
-  expect_cdg_deny_unparseable
-}
-case_cdg_optval_noop_unmentioned() {
-  # The scan matches a shim-named token exactly: a word that merely contains the shim name is no shim.
-  cdg_optval_run implementer 'nice -n 5 echo apply_patch.md'
-  expect_cdg_no_opinion
-  cdg_optval_run implementer 'nice -n 5 ls src/ && sudo -u root ls Edit'
-  expect_cdg_no_opinion
-}
-# mutant:518-cdg-optval-quote — drops the quote-bearing arm of the segment flag, so a shim spelled with a
-#   quote inside its name (apply_"patch") behind a prefix option's value never reaches the scan.
-case_cdg_optval_deny_quote_split() {
-  local c w0
-  for c in 'nice -n 5 apply_"patch" < x.patch; echo applypatch.md' \
-    "nice -n 5 apply_'patch' < x.patch; echo applypatch.md"; do
-    w0="$__why"; __why=""
-    cdg_optval_run implementer "$c"
-    expect_cdg_deny_unparseable
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
-# mutant:518-cdg-optval-parity — drops the unbalanced-quote check on a scan hit, so a quoted value with a
-#   space before the shim (nice -n "a b" apply_patch) resolves the shim and its benign heredoc passes.
-# The check covers every token before the hit, not only the value word: the rows whose value word is
-# itself a prefix word (xargs -0 command time -I "a b" apply_patch) put the quote past it, and the
-# last row is the documented over-block of a quoted value of a later prefix option.
-case_cdg_optval_deny_quote_parity() {
-  local c w0 body="<<'EOF'${LF}*** Begin Patch${LF}*** Add File: src/a.txt${LF}*** End Patch${LF}EOF"
-  for c in 'nice -n "a b" apply_patch' 'nice -n a\ b apply_patch' 'nice -n "a apply_patch' \
-    'exec -a "a b" apply_patch' 'env -u "a b" apply_patch' 'sudo -u "a b" apply_patch' \
-    'stdbuf -o "a b" apply_patch' 'time -o "a b" apply_patch' 'xargs -a "a b" apply_patch' \
-    "xargs -0 command time -I \"a b\" apply_patch" "env -c nice nice -l 'a b' timeout 5 apply_patch" \
-    "sudo exec -c -P sudo -0 \"a repeat 2 -S apply_patch" "xargs -0 then -n5 b' apply_patch" \
-    "nice -n 5 sudo -u \"a b\" apply_patch"; do
-    w0="$__why"; __why=""
-    cdg_optval_run implementer "$c $body"
-    expect_cdg_deny_unparseable
-    case "$cdg_err" in
-      *"command word cannot be resolved: an unbalanced quote"*) ;;
-      *) __ok=0; __why="${__why}stderr missing 'command word cannot be resolved: an unbalanced quote': '$cdg_err'\n" ;;
-    esac
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
-case_cdg_optval_dl_cap() {
-  # nice -n, 100 plain words, then a word that is not the shim: only the scan's own sample can reach
-  # the cap (50), since the walk itself resolves the first plain word.
-  local cmd="nice -n" i
-  for i in $(seq 1 100); do cmd="${cmd} a"; done
-  cdg_dl_cap_check_bash "${cmd} echo apply_patch.md"
-}
-case_cdg_optval_noop_flood_cap() {
-  # SAMPLE COUNT, not time: nice -n repeated 100 times is 100 triggers. One scan per window stays far
-  # below the cap; a rescan per trigger passes it.
-  local cmd="" i
-  for i in $(seq 1 100); do cmd="${cmd}nice -n "; done
-  cdg_cap_override=2500
-  run_claude_guard "$(printf '%s' "${cmd}echo apply_patch.md" | mk_cdg_dl_bash implementer '')"
-  expect_cdg_no_opinion
-}
-
 # --- an option of an interpreter prefix word (#537) ---------------------------------------------
 # After bash/sh/zsh/ksh/dash push-guard classifies a dash or plus token instead of guessing: a value
 # option (-o, +O, -eo, --rcfile) is skipped together with its value word when that word is plain, a flag
@@ -9222,224 +8932,6 @@ case_push_subst_noop() {
     'git -C "$(pwd)" log' \
     'git commit -m "$(cat msg)" && git push origin feature/x' \
     'echo use `git` to push'
-}
-
-# --- claude-dir-guard.sh: a shim name split by quote or backslash characters (#538) ----------------
-# Each spelling runs the shim in a real shell, and the walk resolves it the same way (a quote strip, a
-# backslash strip). The deny rows reach the Bash route's
-# no-inline-patch deny (or, behind a quoted or escaped prefix, the unbalanced-quote deny); the
-# no-opinion rows are the prose and precision controls that must stay quiet. Case names carry the
-# cdg-split- prefix, and no fixture command mentions a codex directory (the cdg- registry filters
-# select every cdg-* case).
-#
-# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, target
-# hooks/claude-dir-guard.sh, filter "cdg-split-").
-# cdg_split_nip ROLE CMD... -- each CMD, run as a Codex shell payload for ROLE, denies with the
-# no-inline-patch line.
-cdg_split_nip() {
-  local role="$1" c w0
-  shift
-  for c in "$@"; do
-    w0="$__why"; __why=""
-    run_claude_guard "$(mk_codex_shell "$role" "$c")"
-    expect_cdg_deny_unparseable
-    case "$cdg_err" in
-      *"with no inline patch text"*) ;;
-      *) __ok=0; __why="${__why}stderr missing 'with no inline patch text': '$cdg_err'\n" ;;
-    esac
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
-# cdg_split_noop ROLE CMD... -- each CMD, run as a Codex shell payload for ROLE, gets no opinion.
-cdg_split_noop() {
-  local role="$1" c w0
-  shift
-  for c in "$@"; do
-    w0="$__why"; __why=""
-    run_claude_guard "$(mk_codex_shell "$role" "$c")"
-    expect_cdg_no_opinion
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-}
-# cdg_split_body LINE -- a quoted-delimiter heredoc whose body is the single prose line LINE.
-cdg_split_body() { printf '%s' "cat > f <<'EOF'${LF}$1${LF}EOF"; }
-# mutant:538-cdg-fast-off — fast path 2's split-name arm is removed, so a payload that spells the shim
-#   only split exits silently before jq is spawned.
-# mutant:538-cdg-fast-sq — the arm's gate drops the apostrophe, so an apostrophe-only spelling (no
-#   backslash in the raw JSON) never reaches the regex.
-# mutant:538-cdg-fast-bs — the arm's gate drops the backslash, so a double-quote or backslash spelling
-#   (a backslash in the raw JSON) never reaches the regex.
-# mutant:538-cdg-split-dq — the regex run loses the double quote, so a name split by double quotes no
-#   longer matches (fast path and line and segment gates alike).
-# mutant:538-cdg-split-sq — the regex run loses the apostrophe.
-# mutant:538-cdg-split-bs — the regex run loses the backslash, so neither a backslash spelling nor a
-#   double quote in raw JSON (a backslash and a quote) matches.
-# mutant:538-cdg-split-underscore — the optional underscore becomes required, so a split
-#   no-underscore spelling (apply"patch") no longer matches.
-# mutant:538-cdg-bs-strip — the walk no longer deletes backslashes from a token, so a backslash
-#   spelling resolves to a word that is not the shim.
-case_cdg_split_deny_names() {
-  cdg_split_nip implementer \
-    'apply_"patch" < x.patch' \
-    "apply_'patch' < x.patch" \
-    'apply\_patch < x.patch' \
-    '"apply"_patch < x.patch' \
-    "a''pply_patch < x.patch" \
-    'apply"patch" < x.patch' \
-    '\apply_patch < x.patch' \
-    'a\pply_patch < x.patch'
-}
-case_cdg_split_deny_verifier() {
-  cdg_split_nip 'trail-blazer-flow:verifier' 'apply_"patch" < x.patch'
-}
-case_cdg_split_heredoc() {
-  # The split-name route takes an inline heredoc patch: a .claude header denies through the
-  # raw-text catch-all, and a benign header gets no opinion.
-  local f='apply_"patch"' hdr="*** Begin Patch${LF}*** Add File: .claude/settings.local.json${LF}+x${LF}*** End Patch"
-  run_claude_guard "$(mk_codex_shell implementer "$f <<'EOF'${LF}${hdr}${LF}EOF")"
-  expect_cdg_deny_unparseable
-  case "$cdg_err" in
-    *"mentioning a .claude/.codex path"*) ;;
-    *) __ok=0; __why="${__why}stderr missing 'mentioning a .claude/.codex path': '$cdg_err'\n" ;;
-  esac
-  run_claude_guard "$(mk_codex_shell implementer "$f <<'EOF'${LF}${CDG_P}${LF}EOF")"
-  expect_cdg_no_opinion
-}
-case_cdg_split_noop_prose() {
-  # Prose that merely mentions a split spelling, and a command that fast path 2 excludes outright.
-  cdg_split_noop implementer \
-    'echo apply_"patch"' \
-    'ls -la' \
-    "git commit -m \"use apply_'patch' here\"" \
-    "rg -n 'apply\\_patch' hooks/" \
-    "$(cdg_split_body 'Run apply_"patch" only via the native tool')"
-}
-case_cdg_split_noop_scope() {
-  # Role scoping is unchanged: the main session, another agent and a plan-mode turn are never judged.
-  cdg_split_noop '' 'apply_"patch" < x.patch'
-  cdg_split_noop Explore 'apply_"patch" < x.patch'
-  run_claude_guard "$(mk_agent_cmd_mode implementer 'apply_"patch" < x.patch' plan)"
-  expect_cdg_no_opinion
-}
-# mutant:538-cdg-alt-parity — the whole-window parity check on a shim resolved through the split-name
-#   routes is switched off, so the trailing backslash before it no longer denies.
-# mutant:538-cdg-alt-bs — a backslash-stripped token no longer marks its window, so a trailing
-#   backslash before a shim resolved that way goes unchecked.
-case_cdg_split_expansion_guards() {
-  # Denies that must survive the split-name routes: the plain spellings, and a shim with a trailing
-  # backslash that the route parity check keeps denying.
-  local eof="<<'EOF'${LF}${CDG_P}${LF}EOF"
-  cdg_split_nip implementer \
-    'apply_patch < x.patch' \
-    'applypatch < x.patch' \
-    '"apply_patch" < x.patch' \
-    '${X} apply_patch < x.patch' \
-    "env -S 'apply_patch' < x.patch" \
-    'env apply_patch < x.patch'
-  run_claude_guard "$(mk_codex_shell implementer 'apply_patch\ '"$eof")"
-  expect_cdg_qa_deny
-}
-# mutant:538-cdg-seg-split — a segment spelling the shim split is no longer flagged for the parity
-#   check, so the quoted or escaped prefix before it is never judged.
-# mutant:538-cdg-seg-bs-scan — a backslash-only segment is no longer flagged for the value scan, so
-#   the shim behind a prefix option's value (nice -n 5 apply\_patch) is never found.
-# mutant:538-cdg-vp-bs-loop — the value scan no longer deletes backslashes from the tokens it reads, so
-#   a backslash spelling behind a prefix option's value is never found.
-# mutant:538-cdg-vp-bs-excl — the value-word exclusion no longer deletes backslashes, so a value word
-#   that names the shim split is scanned past and the later shim hides the argument check.
-# mutant:538-cdg-ln-sq — the line gate's split-name test drops the apostrophe, so a line spelling the
-#   shim split only by single quotes never flags its segments for the parity check.
-# mutant:538-cdg-seg-sq — the segment block's split-name test drops the apostrophe, so a segment
-#   spelling the shim split only by single quotes is never flagged for the parity check.
-case_cdg_split_deny_combos() {
-  # A split spelling behind a quoted or escaped prefix still meets the unbalanced-quote check, and a
-  # split spelling behind a prefix option's value is still found by the value scan.
-  local c w0 q="'"
-  for c in "X=${q}a b${q} apply_\"patch\" < x.patch" 'X=a\ b apply\_patch < x.patch' \
-    "X=${q}a b${q} apply_${q}patch${q} < x.patch"; do
-    w0="$__why"; __why=""
-    run_claude_guard "$(mk_codex_shell implementer "$c")"
-    expect_cdg_qa_deny
-    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
-  done
-  cdg_split_nip implementer 'nice -n 5 apply\_patch < x.patch'
-  # the value word itself names the shim, so the argument check still sees evil.patch
-  run_claude_guard "$(mk_codex_shell implementer "env -i apply\\_patch evil.patch applypatch <<'EOF'${LF}${CDG_P}${LF}EOF")"
-  expect_cdg_dec_deny
-}
-case_cdg_split_deny_overblock() {
-  # The documented over-block, a control row: an apostrophe on a line that spells the shim split.
-  run_claude_guard "$(mk_codex_shell implementer "$(cdg_split_body "Don't run apply_\"patch\" here")")"
-  expect_cdg_qa_deny
-}
-case_cdg_split_never_executes() {
-  local c
-  cdg_trap_path cdg-split
-  for c in 'apply_"patch" < x.patch'; do
-    run_claude_guard "$(mk_codex_shell 'implementer' "$c")" "$cdg_trapdir:$PATH"
-    expect_cdg_deny_unparseable
-  done
-  [ ! -e "$cdg_sentinel" ] || { __ok=0; __why="${__why}sentinel file present — claude-dir-guard.sh invoked something on the booby-trapped PATH\n"; }
-}
-# cdg_split_rel_check LABEL CTL_MS FLOOD_MS -- the relative CPU bound the two timing pins below share:
-# the flood within 1.3 times its same-run control plus 250ms, and at most the hook's own 10s timeout.
-cdg_split_rel_check() {
-  local rel_max_ms
-  if [ -z "$2" ] || [ -z "$3" ]; then
-    __ok=0; __why="${__why}[$1] a CPU report could not be parsed\n"
-    return
-  fi
-  rel_max_ms=$(( $2 * 13 / 10 + 250 ))
-  [ "$rel_max_ms" -le 10000 ] || rel_max_ms=10000
-  if [ "$3" -gt "$rel_max_ms" ]; then
-    __ok=0; __why="${__why}[$1] the flood used ${3}ms of CPU against ${2}ms for its control, over the ${rel_max_ms}ms bound\n"
-  fi
-}
-case_solo_cdgsplit_fastpath_cpu() {
-  # A solo- case (#546): a CPU bound relative to a same-run control with no registry record, so it runs
-  # only in the plain hook-tests run, never under a mutant-driver group's concurrency. Its name must
-  # stay free of every registry filter, cdg- and cdg-split- included.
-  # A payload of the command cap's size whose every unit is a near miss of the split shim name (no
-  # final letter, so the fast path's regex reads the whole payload and rejects it) is timed against a
-  # payload of the same length with no backslash or apostrophe, which shuts the check's gate. Both are
-  # no opinion; the regex pass must cost a bounded slice on top of the control.
-  local cap flood ctl ctl_ms flood_ms
-  cap="$(cdg_dl_text_cap)"
-  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_TEXT_MAX_BYTES from the hook\n"; return; fi
-  pcap_fill "$cap" "axpxpxlxyx_xpxaxtxcx "
-  ctl="$pcap_s"
-  pcap_fill "$cap" "a'p\"p'l\"y'_\"p'a\"t'c\" "
-  flood="$pcap_s"
-  cdg_deadline_override=60
-  measure_cpu_ms run_claude_guard "$(printf '%s' "$ctl" | mk_cdg_dl_bash implementer '')"
-  ctl_ms="$measured_cpu_ms"
-  expect_cdg_no_opinion
-  cdg_deadline_override=60
-  measure_cpu_ms run_claude_guard "$(printf '%s' "$flood" | mk_cdg_dl_bash implementer '')"
-  flood_ms="$measured_cpu_ms"
-  expect_cdg_no_opinion
-  cdg_split_rel_check fastpath "$ctl_ms" "$flood_ms"
-}
-case_solo_cdgsplit_walk_cpu() {
-  # A solo- case, named like the fast-path pin above. Line 1 names the shim plainly so the payload
-  # passes fast path 2 either way; then 400 lines that each spell it split beside a quote, so every
-  # line and every segment runs the split-name regex, against a twin of the same layout and byte
-  # lengths whose lines spell no split name, so the regex never runs. Both are no opinion, inside the
-  # analysis budget.
-  local i flood="echo apply_patch.md" twin="echo apply_patch.md" flood_ms ctl_ms
-  for i in $(seq 1 400); do
-    flood="${flood}${LF}echo apply_\"patch\" 'a'"
-    twin="${twin}${LF}echo apply_xpatchx xax"
-  done
-  cdg_deadline_override=60
-  measure_cpu_ms run_claude_guard "$(printf '%s' "$twin" | mk_cdg_dl_bash implementer '')"
-  ctl_ms="$measured_cpu_ms"
-  expect_cdg_no_opinion
-  cdg_deadline_override=60
-  measure_cpu_ms run_claude_guard "$(printf '%s' "$flood" | mk_cdg_dl_bash implementer '')"
-  flood_ms="$measured_cpu_ms"
-  expect_cdg_no_opinion
-  cdg_split_rel_check walk "$ctl_ms" "$flood_ms"
 }
 
 # --- push-guard.sh and agent-boundary.sh: an awk scan that exits non-zero (#559) ----------------------
@@ -11224,10 +10716,6 @@ cases=(
   #       unclassifiable message; re-measured for the round-1 kickback -- an embedded-LF path of
   #       the same shape is affected too, a widening reasoning-by-inspection alone would have
   #       missed)
-  #  M11  the ".." segment check's deny arm disabled (the trailing "*)" case becomes a no-op)
-  #       (an absolute ".."-carrying path with no ".claude" segment anywhere no longer denies via
-  #       the unclassifiable message; a path that also carries a real ".claude" segment denies
-  #       earlier, via that class, and never reaches this clause at all)
   #  M12  every "exit 2" in the classifier changed to "exit 0"
   #       (coarse -- like hooks/agent-boundary.sh's own M1/M2, this silences EVERY deny verdict at
   #       once, so it only distinguishes an intended-deny fixture from everything else, never one
@@ -11243,7 +10731,7 @@ cases=(
   #       (the deny verdict itself is unaffected -- the classifier still matches $p, unchanged by
   #       this mutant -- but the printed message reverts to embedding the raw LF byte, so the
   #       "exactly 1 non-blank stderr line" assertion now sees 2)
-  # A path with no ".claude"/".." segment and no unrecognised shape survives every mutant in this
+  # A path with no ".claude" segment and no unrecognised shape survives every mutant in this
   # table, since none of M1-M14 makes an ordinary path deny; a payload carrying no `agent_type`
   # substring at all never reaches past the fast path regardless of which downstream check M1-M14
   # breaks; an unparseable stdin's failure mode is jq's own parse error, independent of which check
@@ -11263,10 +10751,9 @@ cases=(
   "cdg-deny-final-segment|case_cdg_deny_final_segment|.claude deny: .claude as the path's FINAL segment, /repo/foo/.claude -- mutation proof: M8 (also M12; above)"
   "cdg-deny-crlf|case_cdg_deny_crlf|.claude deny: a CR embedded inside the spelling itself, /repo/.clau<CR>de/foo (the strip can only widen toward deny) -- mutation proof: M5 (also M12; above)"
   "cdg-deny-rel-claude|case_cdg_deny_rel_claude|.claude deny: a RELATIVE path whose first segment is .claude, .claude/LESSONS.md (discriminated from cdg-deny-rel-plain below) -- mutation proof: M8 (also M12; above)"
-  "cdg-deny-dotdot-claude|case_cdg_deny_dotdot_claude|.claude deny: a \"..\"-carrying ABSOLUTE path that also carries a real .claude segment, /Users/x/../.claude/y (the more specific message wins) -- mutation proof: M12 (above)"
+  "cdg-deny-dotdot-claude|case_cdg_deny_dotdot_claude|.claude deny: an ABSOLUTE path with a \"..\" segment that also carries a real .claude segment, /Users/x/../.claude/y (a \"..\" hides nothing from the segment match) -- mutation proof: M12 (above)"
   "cdg-deny-lf-claude|case_cdg_deny_lf_claude|.claude deny: an embedded LF elsewhere in the path, /repo/.claude/a<LF>b.md (#327 round-1 kickback K1 -- pre-fix this printed 2 stderr lines) -- mutation proof: M14 (also M12; above)"
   "cdg-deny-rel-plain|case_cdg_deny_rel_plain|unclassifiable deny: the SAME relative, no-leading-slash shape as cdg-deny-rel-claude, but no .claude segment anywhere, src/main.rs (discriminates the two deny classes) -- mutation proof: M10 (also M12; above)"
-  "cdg-deny-dotdot-no-claude|case_cdg_deny_dotdot_no_claude|unclassifiable deny: a \"..\"-carrying ABSOLUTE path with no .claude segment anywhere, /Users/x/../etc/passwd -- mutation proof: M11 (also M12; above)"
   "cdg-deny-lf-unclassifiable|case_cdg_deny_lf_unclassifiable|unclassifiable deny: an embedded LF in a relative, no-.claude path, src/a<LF>b.rs (#327 round-1 kickback K1's own second example -- pre-fix this printed 2 stderr lines) -- mutation proof: M10 (a kill-set widening found only by re-measuring, not by inspection; also M14, also M12; above)"
   "cdg-noop-ordinary-abs|case_cdg_noop_ordinary_abs|no opinion: an ordinary absolute path with no .claude segment, /repo/src/main.rs -- not flipped by M1-M14 (an ordinary absolute path never denies under any of these mutants)"
   "cdg-noop-claude-backup|case_cdg_noop_claude_backup|no opinion: near-miss segment spelling, /repo/.claude-backup/x (pins exact-segment matching) -- mutation proof: M9 (above)"
@@ -11349,7 +10836,6 @@ cases=(
   "cdg-patch-deny-indented-header|case_cdg_patch_deny_indented_header|.claude deny: an indented header line, '  *** Add File: .claude/x' (left-trim tolerance)"
   "cdg-patch-deny-codex|case_cdg_patch_deny_codex|.codex deny: Add File: .codex/config.toml"
   "cdg-patch-deny-codex-case|case_cdg_patch_deny_codex_case|.codex deny: case-varied spelling, Add File: .CODEX/agents/x.toml"
-  "cdg-patch-deny-dotdot|case_cdg_patch_deny_dotdot|unclassifiable deny: Add File: ../escape/x"
   "cdg-patch-deny-no-cwd|case_cdg_patch_deny_no_cwd|unclassifiable deny: Add File: src/a.txt with no cwd field at all -- a relative header path with nothing to resolve against"
   "cdg-patch-deny-no-header|case_cdg_patch_deny_no_header|unparseable deny: a patch with Begin/End Patch but zero file headers"
   "cdg-patch-deny-unknown-header|case_cdg_patch_deny_unknown_header|unparseable deny: an unrecognised marker, *** Copy File: .claude/x"
@@ -11379,7 +10865,7 @@ cases=(
   "cdg-bash-deny-no-inline-patch-assignment|case_cdg_bash_deny_no_inline_patch_assignment|unparseable deny (#407 kickback finding 2): FOO=1 apply_patch < x.patch -- past an assignment prefix"
   "cdg-bash-deny-no-inline-patch-chain|case_cdg_bash_deny_no_inline_patch_chain|unparseable deny (#407 kickback finding 2/7): cd src && applypatch < x.patch -- a && chain, the no-underscore spelling"
   "cdg-bash-deny-no-inline-patch-pipe|case_cdg_bash_deny_no_inline_patch_pipe|unparseable deny (#407 kickback finding 2/7): cat x.patch | apply_patch -- a pipe"
-  "cdg-bash-deny-decoy-dollar-quote|case_cdg_bash_deny_decoy_dollar_quote|unparseable deny (#407 kickback finding 2, belt and braces): an ANSI-C-quoted (\$'...') decoy whose \\n sequences are literal backslash+n bytes, not real newlines -- the raw-text .claude mention still denies"
+  "cdg-bash-deny-decoy-dollar-quote|case_cdg_bash_deny_decoy_dollar_quote|unparseable deny (#407 kickback finding 2, belt and braces): an ANSI-C-quoted (\$'...') decoy whose \\n sequences are literal backslash+n bytes, not real newlines -- the marker-line .claude mention still denies"
   "cdg-bash-deny-decoy-nbsp-header|case_cdg_bash_deny_decoy_nbsp_header|unparseable deny (#407 kickback round 2, finding A): a U+00A0-indented .claude header next to a genuinely benign one -- the belt-and-braces check catches it even though the structured parse alone would have missed it"
   "cdg-bash-deny-no-inline-patch-subshell|case_cdg_bash_deny_no_inline_patch_subshell|unparseable deny (#407 kickback round 2, finding B): (apply_patch < x.patch) -- a subshell, and case x in x) apply_patch < x.patch;; esac -- a case arm, where only the \")\" break exposes the shim"
   "cdg-bash-deny-no-inline-patch-cmdsubst|case_cdg_bash_deny_no_inline_patch_cmdsubst|unparseable deny (#407 kickback round 2, finding B): echo \$(apply_patch < x.patch) -- a command substitution"
@@ -11459,57 +10945,13 @@ cases=(
   "cdg-dl-cap-ww|case_cdg_dl_cap_ww|deny (#457): 100 env prefix words under cap 50 -- only walk_window's outer loop samples that many times"
   "cdg-dl-cap-redir|case_cdg_dl_cap_redir|deny (#457): a 100-operator redirect run under cap 50 -- only walk_window's redirect-run loop samples that many times"
   "cdg-dl-cap-lines|case_cdg_dl_cap_lines|deny (#457): 100 semicolon-only lines under cap 250 -- only the three per-line loops together (prepass, per-line segment builder, begin-patch scan) sample that many times"
-  "cdg-dl-cap-qpc|case_cdg_dl_cap_qpc|deny (#457): 100 prefix words before the resolved word in a quoted shim-mentioning segment under cap 150 -- only the walk plus the parity pass sample that many times"
-  "cdg-dl-cap-scan-shim|case_cdg_dl_cap_scan_shim|deny (#457): a heredoc shim with 100 output redirects under cap 270 -- only the input scan's two loops together sample that many times"
   "cdg-dl-cap-ph|case_cdg_dl_cap_ph|deny (#457): an apply_patch with 100 content lines under cap 150 -- only parse_patch_headers' line loop samples that many times"
   "cdg-dl-cap-ltrim|case_cdg_dl_cap_ltrim|deny (#457): a header indented by 100 spaces under cap 50 -- only ltrim's strip loop, in its command substitution, samples that many times"
   "cdg-dl-cap-trim-header|case_cdg_dl_cap_trim_header|deny (#457): a header with 100 trailing spaces under cap 50 -- only trim's trailing loop samples that many times"
   "cdg-dl-cap-trim-nested|case_cdg_dl_cap_trim_nested|deny (#457): a header path with 100 leading spaces under cap 50 -- only the ltrim nested inside trim samples that many times"
   "cdg-dl-cap-trim-bash|case_cdg_dl_cap_trim_bash|deny (#457): a Bash command with 100 trailing spaces under cap 50 -- only the trim inside has_exact_begin_patch_line samples that many times"
-  "cdg-dec-deny-redirect-file|case_cdg_dec_deny_redirect_file|deny: decoy / shim input (#455), deny-redirect-file"
-  "cdg-dec-deny-redirect-first|case_cdg_dec_deny_redirect_first|deny: decoy / shim input (#455), deny-redirect-first"
-  "cdg-dec-deny-applypatch|case_cdg_dec_deny_applypatch|deny: decoy / shim input (#455), deny-applypatch"
-  "cdg-dec-deny-pipe|case_cdg_dec_deny_pipe|deny: decoy / shim input (#455), deny-pipe"
-  "cdg-dec-deny-herestring|case_cdg_dec_deny_herestring|deny: decoy / shim input (#455), deny-herestring"
-  "cdg-dec-deny-heredoc-then-redirect|case_cdg_dec_deny_heredoc_then_redirect|deny: decoy / shim input (#455), deny-heredoc-then-redirect"
-  "cdg-dec-deny-heredoc-then-herestring|case_cdg_dec_deny_heredoc_then_herestring|deny: decoy / shim input (#455), deny-heredoc-then-herestring"
-  "cdg-dec-deny-heredoc-then-rw|case_cdg_dec_deny_heredoc_then_rw|deny: decoy / shim input (#455), deny-heredoc-then-rw"
-  "cdg-dec-deny-file-arg|case_cdg_dec_deny_file_arg|deny: decoy / shim input (#455), deny-file-arg"
-  "cdg-dec-deny-fd-heredoc|case_cdg_dec_deny_fd_heredoc|deny: decoy / shim input (#455), deny-fd-heredoc"
-  "cdg-dec-deny-procsubst|case_cdg_dec_deny_procsubst|deny: decoy / shim input (#455), deny-procsubst"
-  "cdg-dec-deny-second-shim|case_cdg_dec_deny_second_shim|deny: decoy / shim input (#455), deny-second-shim"
-  "cdg-dec-deny-unquoted-dollar|case_cdg_dec_deny_unquoted_dollar|deny: decoy / shim input (#455), deny-unquoted-dollar"
-  "cdg-dec-deny-unquoted-backtick|case_cdg_dec_deny_unquoted_backtick|deny: decoy / shim input (#455), deny-unquoted-backtick"
-  "cdg-dec-deny-unquoted-backslash|case_cdg_dec_deny_unquoted_backslash|deny: decoy / shim input (#455), deny-unquoted-backslash"
-  "cdg-dec-deny-body-codespan|case_cdg_dec_deny_body_codespan|deny: decoy / shim input (#455), deny-body-codespan"
-  "cdg-dec-deny-heredoc-dotdot|case_cdg_dec_deny_heredoc_dotdot|deny: decoy / shim input (#455), deny-heredoc-dotdot"
-  "cdg-dec-noop-heredoc-sq-dollar|case_cdg_dec_noop_heredoc_sq_dollar|no opinion: decoy / shim input (#455), noop-heredoc-sq-dollar"
-  "cdg-dec-noop-heredoc-dq-dollar|case_cdg_dec_noop_heredoc_dq_dollar|no opinion: decoy / shim input (#455), noop-heredoc-dq-dollar"
-  "cdg-dec-noop-heredoc-bs-dollar|case_cdg_dec_noop_heredoc_bs_dollar|no opinion: decoy / shim input (#455), noop-heredoc-bs-dollar"
-  "cdg-dec-noop-heredoc-dash|case_cdg_dec_noop_heredoc_dash|no opinion: decoy / shim input (#455), noop-heredoc-dash"
-  "cdg-dec-noop-heredoc-out-redirects|case_cdg_dec_noop_heredoc_out_redirects|no opinion: decoy / shim input (#455), noop-heredoc-out-redirects"
-  "cdg-dec-noop-heredoc-chain|case_cdg_dec_noop_heredoc_chain|no opinion: decoy / shim input (#455), noop-heredoc-chain"
-  "cdg-dec-noop-unquoted-plain|case_cdg_dec_noop_unquoted_plain|no opinion: decoy / shim input (#455), noop-unquoted-plain"
-  "cdg-dec-noop-two-shims|case_cdg_dec_noop_two_shims|no opinion: decoy / shim input (#455), noop-two-shims"
-  "cdg-dec-never-executes|case_cdg_dec_never_executes|deny, sentinel absent on a booby-trapped PATH: decoy / shim input (#455), never-executes"
-  "cdg-dec-deny-flood-timing|case_cdg_dec_deny_flood_timing|wall-clock proof under a 15s active deadline: decoy / shim input (#455), deny-flood-timing"
-  "cdg-qa-deny-sq-space|case_cdg_qa_deny_sq_space|deny: quoted assignment (#455, absorbing #456), deny-sq-space"
-  "cdg-qa-deny-applypatch|case_cdg_qa_deny_applypatch|deny: quoted assignment before the applypatch spelling (#455, absorbing #456)"
-  "cdg-qa-deny-dq-space|case_cdg_qa_deny_dq_space|deny: quoted assignment (#455, absorbing #456), deny-dq-space"
-  "cdg-qa-deny-sq-many-spaces|case_cdg_qa_deny_sq_many_spaces|deny: quoted assignment (#455, absorbing #456), deny-sq-many-spaces"
-  "cdg-qa-deny-dq-many-spaces|case_cdg_qa_deny_dq_many_spaces|deny: quoted assignment (#455, absorbing #456), deny-dq-many-spaces"
-  "cdg-qa-deny-env-assign|case_cdg_qa_deny_env_assign|deny: quoted assignment (#455, absorbing #456), deny-env-assign"
-  "cdg-qa-deny-env-quoted-assign|case_cdg_qa_deny_env_quoted_assign|deny: quoted assignment (#455, absorbing #456), deny-env-quoted-assign"
-  "cdg-qa-deny-redirect-target|case_cdg_qa_deny_redirect_target|deny: quoted assignment (#455, absorbing #456), deny-redirect-target"
-  "cdg-qa-deny-two-assigns|case_cdg_qa_deny_two_assigns|deny: quoted assignment (#455, absorbing #456), deny-two-assigns"
-  "cdg-qa-deny-heredoc|case_cdg_qa_deny_heredoc|deny: quoted assignment (#455, absorbing #456), deny-heredoc"
-  "cdg-qa-deny-backslash-space|case_cdg_qa_deny_backslash_space|deny: quoted assignment (#455, absorbing #456), deny-backslash-space"
-  "cdg-qa-deny-body-possessive|case_cdg_qa_deny_body_possessive|deny: quoted assignment (#455, absorbing #456), deny-body-possessive"
-  "cdg-qa-noop-quoted-arg|case_cdg_qa_noop_quoted_arg|no opinion: quoted assignment (#455, absorbing #456), noop-quoted-arg"
-  "cdg-qa-noop-other-segment|case_cdg_qa_noop_other_segment|no opinion: quoted assignment (#455, absorbing #456), noop-other-segment"
-  "cdg-qa-noop-balanced-assign|case_cdg_qa_noop_balanced_assign|no opinion: quoted assignment (#455, absorbing #456), noop-balanced-assign"
-  "cdg-qa-never-executes|case_cdg_qa_never_executes|deny, sentinel absent on a booby-trapped PATH: quoted assignment (#455, absorbing #456), never-executes"
-  "cdg-qa-noop-flood-timing|case_cdg_qa_noop_flood_timing|wall-clock proof under a 15s active deadline: quoted assignment (#455, absorbing #456), noop-flood-timing"
+  "cdgmark-noop-overblocks|case_cdgmark_noop_overblocks|no opinion: a .gitignore patch whose body line adds a .claude path, a body line with an apostrophe, a body line holding a code span of the shim, nice -n 5 rg apply_patch hooks/, bash -c 'rg -n apply_patch hooks/' and an Edit file_path with a .. segment (benign calls the removed rules denied) -- control, not part of the mutation-proof registry"
+  "cdgmark-noop-gaps|case_cdgmark_noop_gaps|no opinion for each class the removals left open (a decoy patch, an unquoted heredoc built from a variable, a prefix option's value, a quoted space, a split or escaped name, a .codex mention off a marker line, a native header with a .. segment), and, as controls, deny with the marker-line reason for a .claude header and deny a quote-split name beside a plain mention -- not part of the mutation-proof registry"
   # --- a value-taking option of a prefix word (#518) cases ---------------------------------------
   "ab-optval-deny-impl-gh|case_ab_optval_deny_impl_gh|deny: gh behind nice/sudo/stdbuf/exec/xargs/time and an option with a separate value, implementer -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-off, 518-ab-optval-start)"
   "ab-optval-deny-codex|case_ab_optval_deny_codex|deny: nice -n 5 gh pr merge 5 as a Codex-shaped implementer payload -- mutation proof: dev/mutants/hook-tests.json (518-ab-optval-off)"
@@ -11527,16 +10969,6 @@ cases=(
   "push-optval-noop-alias-none|case_push_optval_noop_alias_none|no opinion: nice -n 5 git status with no alias config -- control, not part of the mutation-proof registry"
   "push-optval-deny-alias-word|case_push_optval_deny_alias_word|deny: nice -n 10 git log --grep alias, the documented alias-word over-block -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-alias-off)"
   "push-optvalscan-noop-flood|case_push_optvalscan_noop_flood|FLOOD+TIMING: a segment of value-context triggers then a feature push, no opinion; CPU time within a multiple of a same-size twin with one trigger -- mutation proof: dev/mutants/hook-tests.json (518-pg-optval-memo)"
-  "cdg-optval-deny-prefix-words|case_cdg_optval_deny_prefix_words|deny: apply_patch behind every value-taking prefix word and env, Codex implementer -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-off)"
-  "cdg-optval-heredoc|case_cdg_optval_heredoc|no opinion for a benign heredoc patch, deny for a .claude header, behind nice -n 5 -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-off)"
-  "cdg-optval-main-session|case_cdg_optval_main_session|no opinion: nice -n 5 apply_patch from the main session (the route stays role-scoped) -- control, not part of the mutation-proof registry"
-  "cdg-optval-w-shim-decoy|case_cdg_optval_w_shim_decoy|deny: env -i apply_patch evil.patch applypatch, the value word naming the shim is never skipped -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-w-shim)"
-  "cdg-optval-deny-overblock|case_cdg_optval_deny_overblock|deny: nice -n 5 rg apply_patch hooks/, the documented read over-block -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-off)"
-  "cdg-optval-noop-unmentioned|case_cdg_optval_noop_unmentioned|no opinion: value-context prefix words before a word that merely contains the shim name, and in a segment that never names it -- control, not part of the mutation-proof registry"
-  "cdg-optval-deny-quote-split|case_cdg_optval_deny_quote_split|deny: nice -n 5 apply_\"patch\" < x.patch, a quote-split shim name behind a value-taking option -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-quote)"
-  "cdg-optval-deny-quote-parity|case_cdg_optval_deny_quote_parity|deny: a quoted or escaped option value with a space before the shim keeps the unbalanced-quote deny, for every value-taking prefix word and env -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-parity)"
-  "cdg-optval-dl-cap|case_cdg_optval_dl_cap|deny (#457): nice -n then 100 plain words under cap 50, only the scan's own deadline sample reaches the cap -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-site)"
-  "cdg-optval-noop-flood-cap|case_cdg_optval_noop_flood_cap|SAMPLE COUNT: 100 value-context triggers under a cap between one scan and a rescan per trigger, no opinion -- mutation proof: dev/mutants/hook-tests.json (518-cdg-optval-memo)"
   # --- an option of an interpreter prefix word (#537) cases --------------------------------------
   "push-interp-deny-main|case_push_interp_deny_main|deny: a push to main behind bash/sh/zsh/ksh/dash with a value option or a flag, naming the default branch -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-off, 537-pg-interp-cluster, 537-pg-interp-plus)"
   "push-interp-deny-guard|case_push_interp_deny_guard|deny: a value word the old walk could deny on is never skipped with its option (a quoted git, a quoted assignment or option before a push, git, a prefix word, a directory change or GIT_DIR export in the same command), and a token with a slash or read as a prefix word keeps the walk it had -- mutation proof: dev/mutants/hook-tests.json (537-pg-interp-guard, 537-pg-interp-oldwalk)"
@@ -11548,17 +10980,6 @@ cases=(
   # --- a command substitution that cuts the git option slot (#572) cases ---------------------------
   "push-subst-deny|case_push_subst_deny|deny: git with a command substitution in the option slot, quoted, bare, in backticks, glued to a path, as the whole option and as the value of -C, then push origin main, and the same shape for a feature branch -- no registry record (the rule only adds a deny)"
   "push-subst-noop|case_push_subst_noop|no opinion: the same option slot on a line that does not name push, a subcommand found before the substitution, and a code span that is only git beside the word push -- the precision controls of the rule"
-  "cdg-split-deny-names|case_cdg_split_deny_names|deny (#538): a shim name split by double quotes, single quotes or backslashes, with or without the underscore -- mutation proof: dev/mutants/hook-tests.json (538-cdg-fast-off, 538-cdg-split-dq, 538-cdg-bs-strip)"
-  "cdg-split-deny-verifier|case_cdg_split_deny_verifier|deny (#538): the split name for the verifier role"
-  "cdg-split-heredoc|case_cdg_split_heredoc|deny with a .claude header, no opinion with a benign one (#538): the split-name route taking an inline heredoc patch"
-  "cdg-split-noop-prose|case_cdg_split_noop_prose|no opinion (#538): prose and a heredoc body line mentioning a split spelling, and a call fast path 2 excludes -- control, not part of the mutation-proof registry"
-  "cdg-split-noop-scope|case_cdg_split_noop_scope|no opinion (#538): a split spelling from the main session, another agent and a plan-mode turn -- control, not part of the mutation-proof registry"
-  "cdg-split-expansion-guards|case_cdg_split_expansion_guards|deny (#538): the plain spellings and a trailing-backslash shim keep their deny through the split-name routes -- mutation proof: dev/mutants/hook-tests.json (538-cdg-alt-parity, 538-cdg-alt-bs)"
-  "cdg-split-deny-combos|case_cdg_split_deny_combos|deny (#538): a split spelling behind a quoted or escaped prefix, and behind a prefix option's value -- mutation proof: dev/mutants/hook-tests.json (538-cdg-seg-split, 538-cdg-vp-bs-loop, 538-cdg-seg-bs-scan, 538-cdg-vp-bs-excl, 538-cdg-ln-sq, 538-cdg-seg-sq)"
-  "cdg-split-deny-overblock|case_cdg_split_deny_overblock|deny (#538): the documented over-block, an apostrophe on a split-spelling line -- control, not part of the mutation-proof registry"
-  "cdg-split-never-executes|case_cdg_split_never_executes|deny, sentinel absent on a booby-trapped PATH: the split-name route runs no awk, sed, grep or tr -- no registry record"
-  "solo-cdgsplit-fastpath-cpu|case_solo_cdgsplit_fastpath_cpu|CPU TIME: a payload of the command cap's size made of near misses of the split shim name, no opinion within a bound relative to a same-run control that shuts the new check's gate -- no registry record; solo-: outside every registry filter, so it never runs under the mutant driver"
-  "solo-cdgsplit-walk-cpu|case_solo_cdgsplit_walk_cpu|CPU TIME: hundreds of lines that each spell the shim split beside a quote, no opinion within a bound relative to a twin whose lines run no split-name regex -- no registry record; solo-: outside every registry filter, so it never runs under the mutant driver"
   "push-awkabort-deny|case_push_awkabort_deny|deny with the one fixed scan-failure line, and awk's own error line dropped, when the awk scan exits non-zero after printing a partial line (a stub awk first on PATH) -- no registry record: removing the status check leaves the case red"
   "ab-awkabort-deny|case_ab_awkabort_deny|deny with the one fixed scan-failure line, and awk's own error line dropped, when the awk scan exits non-zero after printing a partial line (a stub awk first on PATH) -- no registry record: removing the status check leaves the case red"
   # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
