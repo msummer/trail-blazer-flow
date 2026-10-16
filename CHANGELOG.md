@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #578: push-guard, in every session, no longer reads a push route or alias key on its section header's line
+  (`[remote "origin"] push = HEAD:main`), a route under a dotted, mixed, TAB-separated or `#`/`;`-named remote, branch
+  or includeIf header, or a header after a BOM; no git command is denied for an unsplittable header. No consumer step.
 - #573: agent-boundary, push-guard and claude-dir-guard no longer read the word after a standalone `]]` as a command
   word, so zsh's short `if [[ -n x ]] git push origin main` (no `; then`) is no longer caught; `; then` and `&&` still
   deny. The `]]` cap, the cut-tail denies and the `echo "x ]] apply_patch"` over-block are gone. No consumer step.

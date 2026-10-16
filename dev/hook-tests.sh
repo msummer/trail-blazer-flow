@@ -5765,6 +5765,19 @@ case_pd_config_tab_in_value() {
     *) ;;
   esac
 }
+case_pd_config_header_then_key() {
+  # A header line that also carries a key still sets its section, so the push key on the next line is
+  # read: the trailing text after the closing bracket is dropped, never the section.
+  local dir="$tmpbase/repo-cfg-header-then-key"
+  mk_fixture_repo "$dir" main feature/x
+  mk_fixture_config "$dir" $'[remote "origin"] url = https://example.invalid/r.git\n\tpush = HEAD:main\n'
+  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
+  expect_push_deny
+  case "$push_err" in
+    *"via remote.origin.push in .git/config"*) ;;
+    *) __ok=0; __why="${__why}stderr does not name the config route 'via remote.origin.push in .git/config': '$push_err'\n" ;;
+  esac
+}
 case_pn_config_neither_key() {
   # The decision's required control: a config file that sets NEITHER remote.<name>.push nor
   # push.default at all must stay no opinion.
@@ -5835,6 +5848,34 @@ case_pn_config_push_default_simple() {
   mk_fixture_config "$dir" $'[push]\n\tdefault = simple\n[branch "feature/x"]\n\tmerge = refs/heads/main\n'
   run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")"
   expect_push_no_opinion
+}
+case_pn_config_header_same_line() {
+  # A key is read only below its section header, never on the header's line, and only a plain-spelled
+  # remote, branch or includeIf header sets its section: a key on the header's line is not read, a dotted header, a TAB before the quote, a # inside the quoted name or a byte-order
+  # mark before the first header sets no section, and a chained header line no longer denies any git
+  # command. Each shape is its own fixture, tagged in the failure text.
+  local dir w i=0
+  local tags=("a key on the header's line" "a dotted remote header" "a chained header line"
+              "a byte-order mark before the first header" "a # inside the quoted name"
+              "a TAB before the quote" "an alias key on the header's line")
+  local bodies=($'[remote "origin"] push = HEAD:main\n'
+                $'[remote.origin]\n\tpush = HEAD:main\n'
+                $'[core] [user]\n'
+                $'\357\273\277[remote "origin"]\n\tpush = HEAD:main\n'
+                $'[remote "back#up"]\n\tpush = HEAD:main\n'
+                $'[remote\t"origin"]\n\tpush = HEAD:main\n'
+                $'[alias] zqp = push\n')
+  local cmds=('git push' 'git push origin' 'git status' 'git push' 'git push' 'git push' 'git zqp origin main')
+  while [ "$i" -lt "${#tags[@]}" ]; do
+    dir="$tmpbase/repo-cfg-header-same-line-$i"
+    mk_fixture_repo "$dir" main feature/x
+    mk_fixture_config "$dir" "${bodies[$i]}"
+    w="$__why"
+    run_push_guard "$(mk_push_cmd_cwd "${cmds[$i]}" "$dir")"
+    expect_push_no_opinion
+    [ "$__why" = "$w" ] || __why="${__why}  ^ fixture: ${tags[$i]}\n"
+    i=$((i + 1))
+  done
 }
 
 # --- #290: GLOBAL git config candidates ($GIT_CONFIG_GLOBAL, $XDG_CONFIG_HOME/git/config or its
@@ -6961,375 +7002,6 @@ case_push_include_deny_never_executes() {
   [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH while following an include\n"; }
   [ "$before_repo" = "$after_repo" ] || { __ok=0; __why="${__why}fixture repo's file listing changed — push-guard.sh wrote to or altered a file it should only read (include route)\n"; }
   [ "$before_home" = "$after_home" ] || { __ok=0; __why="${__why}fixture HOME's file listing changed — push-guard.sh wrote to or altered a file it should only read (include route)\n"; }
-}
-
-# --- #510: a config key on its section header's line, and the header spellings git accepts -------
-# Mutation proof lives in dev/mutants/hook-tests.json (suite dev/hook-tests.sh, filter
-# "push-hdrkey-"), re-run by dev/mutant-driver.sh. Every fixture is a scratch repo on feature/x (or
-# featx) with default branch main, an explicit cwd, and the neutral HOME run_push_guard isolates.
-# mutant:510-pg-hdr-rest-off — the text after a header's closing bracket never reaches the key split,
-#   so a key written on its header's line is never read.
-# mutant:510-pg-hdr-raw — drops the re-derivation of the header from the raw line, so the comment
-#   strip cuts a subsection name or an includeIf condition holding # or ; short again.
-# mutant:510-pg-hdr-quoted-end — a quoted header's remainder starts after the first bracket even when
-#   that bracket sits inside the quoted name.
-# mutant:510-pg-hdr-simple-end — a plain header's remainder starts after the last bracket on the line,
-#   so a bracket inside a same-line value swallows the key.
-# mutant:510-pg-hdr-rest-nostrip — the remainder after a header keeps its trailing comment.
-# mutant:510-pg-hdr-chain-off — drops the deny for a second header in the remainder, which is then
-#   split as a key and silently ignored.
-# mutant:510-pg-hdr-escape-off — drops the deny for a closing quote that follows a backslash.
-# mutant:510-pg-hdr-escape-strict — denies a name ending in a backslash even when only the closing
-#   bracket follows it.
-# mutant:510-pg-hdr-after-quote-off — drops the deny for text after the closing quote that is not the
-#   closing bracket.
-# mutant:510-pg-hdr-namepart-off — drops the deny for junk between the section name and the quote.
-# mutant:510-pg-hdr-canon-off — drops the rewrite to the canonical `[name "sub"]` text, so the TAB,
-#   blank-run and any-spacing spellings fall to the generic section.
-# mutant:510-pg-hdr-dotted-off — a dotted header is never read as a subsection.
-# mutant:510-pg-hdr-ws-space-only — the blank run before the quote accepts a space only, so a TAB
-#   there denies as junk.
-# mutant:510-pg-hdr-backslash-off — drops the deny for a backslash in a remote or branch subsection.
-# mutant:510-pg-hdr-dotted-upper-off — drops the deny for an uppercase letter in a dotted subsection.
-# mutant:510-pg-hdr-dotted-scope — records the whole dotted text, section name included, as the
-#   subsection.
-# mutant:510-pg-hdr-reason — the unclassifiable-header deny prints the over-long-line reason.
-# mutant:510-pg-hdr-mixed-off — a mixed header (`[branch.v1 "2"]`) is rewritten with the quoted part
-#   alone as the subsection, dropping the dotted part git joins to it.
-# mutant:510-pg-hdr-mixed-upper-off — drops the deny for an uppercase letter in the dotted part of a
-#   mixed header.
-# mutant:510-pg-hdr-quoted-upper — applies the dotted-subsection uppercase deny to quoted
-#   subsections too, so `[remote "Upstream"]` (a quoted name keeps its case) denies.
-# mutant:510-pg-hdr-bom-off — never strips the byte-order mark from a file's first line.
-# HK_CONFIGHDR_LINE is hand-typed from hooks/push-guard.sh's deny_too_large confighdr arm, so a
-# drift between the two is a visible test diff; the line carries no input text.
-HK_CONFIGHDR_LINE="trail-blazer-flow push guard: denies this git command: a git config file it reads has a section header line it cannot split the way git does (blocked: unparseable config header line) — put that section header on a line of its own, or run the command from a terminal; see README.md's Safety model"
-HK_TAB=$'\t'
-hk_inc=""
-# hk_run TAG BODY CMD [BRANCH] — builds the repo (an optional $hk_inc body becomes .git/extra.inc,
-# cleared after) and runs push-guard on CMD from it. The helpers below tag any failure with TAG, so
-# a case holding several shapes names the one that broke.
-hk_run() {
-  local tag="$1" body="$2" cmd="$3" br="${4:-feature/x}"
-  hk_dir="$tmpbase/repo-hdrkey-$tag"
-  rm -rf "$hk_dir"
-  mk_fixture_repo "$hk_dir" main "$br"
-  mk_fixture_config "$hk_dir" "$body"
-  if [ -n "$hk_inc" ]; then printf '%s' "$hk_inc" > "$hk_dir/.git/extra.inc"; fi
-  hk_inc=""
-  run_push_guard "$(mk_push_cmd_cwd "$cmd" "$hk_dir")"
-}
-hk_tag() { [ "$__why" = "$1" ] || __why="${__why}  ^ fixture $2\n"; }
-# hk_cdeny — a deny through the config route, naming .git/config.
-hk_cdeny() {
-  local w="$__why"
-  hk_run "$@"
-  expect_push_deny
-  case "$push_err" in
-    *"denies pushing to"*"in .git/config"*|*"pushes every matching branch"*"in .git/config"*) ;;
-    *) __ok=0; __why="${__why}stderr is not the config-route line naming .git/config: '$push_err'\n" ;;
-  esac
-  hk_tag "$w" "$1"
-}
-# hk_hdr — the fixed confighdr deny line, exactly.
-hk_hdr() {
-  local w="$__why"
-  hk_run "$@"
-  expect_push_deny_exact "$HK_CONFIGHDR_LINE"
-  hk_tag "$w" "$1"
-}
-hk_noop() {
-  local w="$__why"
-  hk_run "$@"
-  expect_push_no_opinion
-  hk_tag "$w" "$1"
-}
-# hk_alias — an alias deny naming SRC, never echoing the alias name.
-hk_alias() {
-  local w="$__why" src="$4"
-  hk_run "$1" "$2" "$3"
-  al_expect_alias "$src"
-  al_expect_no_echo "zqp"
-  hk_tag "$w" "$1"
-}
-hk_pad() { printf '%*s' "$1" ''; }
-
-case_push_hdrkey_deny_remote_same_line() {
-  hk_cdeny bare '[remote "origin"] push = HEAD:main
-' 'git push'
-  hk_cdeny named '[remote "origin"] push = HEAD:main
-' 'git push origin'
-  hk_cdeny nospace '[remote "origin"]push=HEAD:main
-' 'git push'
-  hk_cdeny crlf "[remote \"origin\"]push=HEAD:main${CR}
-" 'git push'
-  hk_cdeny note '[remote "origin"] push = HEAD:main # note
-' 'git push'
-}
-case_push_hdrkey_deny_remote_name_chars() {
-  hk_cdeny bracket '[remote "a]b"] push = HEAD:main
-' 'git push'
-  hk_cdeny semicolon '[remote "back;up"] push = HEAD:main
-' 'git push'
-  hk_cdeny hash-next-line '[remote "back#up"]
-	push = HEAD:main
-' 'git push'
-}
-case_push_hdrkey_deny_sections_same_line() {
-  hk_cdeny push-default '[push] default = matching
-' 'git push'
-  hk_cdeny branch-merge '[push]
-	default = upstream
-[branch "feature/x"] merge = refs/heads/main
-' 'git push'
-  hk_inc='[remote "origin"]
-	push = HEAD:main
-'
-  hk_cdeny include '[include] path = extra.inc
-' 'git push'
-  hk_inc='[remote "origin"]
-	push = HEAD:main
-'
-  hk_cdeny includeif '[includeIf "gitdir:/nonexistent-510/"] path = extra.inc
-' 'git push'
-  hk_inc='[remote "origin"]
-	push = HEAD:main
-'
-  hk_cdeny includeif-hash '[includeIf "gitdir:/x#y/"]
-	path = extra.inc
-' 'git push'
-}
-case_push_hdrkey_deny_in_included_file() {
-  hk_inc='[remote "origin"] push = HEAD:main
-'
-  hk_cdeny same-line '[include]
-	path = extra.inc
-' 'git push'
-  hk_inc='[remote.origin]
-	push = HEAD:main
-'
-  hk_cdeny dotted '[include]
-	path = extra.inc
-' 'git push origin'
-  hk_inc="[remote${HK_TAB}\"origin\"]
-	push = HEAD:main
-"
-  hk_cdeny tab '[include]
-	path = extra.inc
-' 'git push origin'
-}
-case_push_hdrkey_deny_cap_length_header() {
-  # A depth-0 header line of exactly CFG_TOPLEVEL_MAX_LINE_CHARS characters, ending in a same-line push
-  # key, is within the cap: it reads as a route, and does not deny as an over-cap line.
-  local head='[remote "origin"]' tail='push = HEAD:main' n
-  n=$((DL_TOPLEVEL_MAX_LINE_CHARS - ${#head} - ${#tail}))
-  hk_cdeny cap-header "$head$(hk_pad "$n")$tail
-" 'git push'
-}
-case_push_hdrkey_deny_alias_same_line() {
-  hk_alias alias '[alias] zqp = push
-' 'git zqp origin main' ".git/config"
-  hk_alias sub '[alias "zqp"] command = push
-' 'git zqp origin main' ".git/config"
-  hk_alias sub-tab "[alias${HK_TAB}\"zqp\"] command = push
-" 'git zqp origin main' ".git/config"
-  hk_alias dotted '[alias.zqp] command = push
-' 'git zqp origin main' ".git/config"
-  hk_alias semicolon-in-name '[alias "zq;p"] command = push
-' 'git zqp origin main' ".git/config"
-  hk_alias bracket-in-value '[alias] zqp = "!f() { [ -n x ]; git push; }; f"
-' 'git zqp origin main' ".git/config"
-  local home="$tmpbase/home-hdrkey-alias"
-  mk_fixture_global_config "$home/.gitconfig" '[alias] zqp = push
-'
-  push_home_override="$home"
-  hk_alias global '' 'git zqp origin main' "your global git config"
-}
-case_push_hdrkey_deny_new_spellings() {
-  hk_cdeny remote-dotted '[remote.origin]
-	push = HEAD:main
-' 'git push origin'
-  hk_cdeny remote-tab "[remote${HK_TAB}\"origin\"]
-	push = HEAD:main
-" 'git push origin'
-  hk_cdeny remote-two-blanks '[remote  "origin"]
-	push = HEAD:main
-' 'git push origin'
-  hk_cdeny remote-mixed-case '[Remote.origin]
-	push = HEAD:main
-' 'git push origin'
-  hk_cdeny dotted-same-line '[remote.origin] push = HEAD:main
-' 'git push origin'
-  hk_cdeny branch-dotted '[push]
-	default = upstream
-[branch.featx]
-	merge = refs/heads/main
-' 'git push' featx
-  hk_cdeny branch-tab "[push]
-	default = upstream
-[branch${HK_TAB}\"feature/x\"]
-	merge = refs/heads/main
-" 'git push'
-  hk_inc='[remote "origin"]
-	push = HEAD:main
-'
-  hk_cdeny includeif-tab "[includeIf${HK_TAB}\"gitdir:/nonexistent-510/\"]
-	path = extra.inc
-" 'git push'
-}
-case_push_hdrkey_deny_mixed_spellings() {
-  # A dotted section part followed by a quoted subsection: git joins them (branch.v1 + "2" is the
-  # branch v1.2, remote.my + "fork" the remote my.fork).
-  hk_cdeny branch-mixed '[push]
-	default = upstream
-[branch.v1 "2"]
-	merge = refs/heads/main
-' 'git push' v1.2
-  hk_cdeny remote-mixed '[remote.my "fork"]
-	push = HEAD:main
-' 'git push my.fork'
-  hk_inc='[remote.my "fork"]
-	push = HEAD:main
-'
-  hk_cdeny remote-mixed-in-include '[include]
-	path = extra.inc
-' 'git push my.fork'
-  hk_alias alias-mixed '[alias.x "y"] command = push
-' 'git zqp origin main' ".git/config"
-}
-case_push_hdrkey_deny_confighdr_mixed_upper() {
-  # git lowercases the dotted part of a mixed header, which this hook cannot do: it denies.
-  hk_hdr branch-mixed-upper '[push]
-	default = upstream
-[Branch.V1 "2"]
-	merge = refs/heads/main
-' 'git push' v1.2
-}
-case_push_hdrkey_deny_bom() {
-  # git skips a UTF-8 byte-order mark at the start of a config file, so the first header still counts.
-  local bom=$'\357\273\277' home="$tmpbase/home-hdrkey-bom"
-  hk_cdeny bom-depth0 "$bom"'[remote "origin"]
-	push = HEAD:main
-' 'git push'
-  hk_inc="$bom"'[remote "origin"]
-	push = HEAD:main
-'
-  hk_cdeny bom-in-include '[include]
-	path = extra.inc
-' 'git push'
-  mk_fixture_global_config "$home/.gitconfig" "$bom"'[remote "origin"]
-	push = HEAD:main
-'
-  push_home_override="$home"
-  hk_run bom-global '' 'git push'
-  expect_push_deny
-  case "$push_err" in
-    *"your global git config"*) ;;
-    *) __ok=0; __why="${__why}bom-global: stderr does not name the global config: '$push_err'\n" ;;
-  esac
-}
-case_push_hdrkey_deny_confighdr_chained() {
-  hk_hdr chained '[core] [remote "origin"] push = HEAD:main
-' 'git push'
-  hk_hdr chained-next-line '[core] [remote "origin"]
-	push = HEAD:main
-' 'git push'
-  hk_inc='[core] [remote "origin"]
-'
-  hk_hdr in-include '[include]
-	path = extra.inc
-' 'git push'
-  hk_hdr feature-push '[core] [user]
-' 'git push origin feature/x'
-  hk_hdr non-push '[core] [user]
-' 'git status'
-}
-case_push_hdrkey_deny_confighdr_quote_shapes() {
-  hk_hdr escaped-close-quote '[remote "a\"] push = HEAD:main"]
-' 'git push'
-  hk_hdr escaped-backslash-name '[alias "zqp\\"] command = push
-' 'git zqp origin main'
-  hk_hdr space-before-bracket '[remote "origin" ] push = HEAD:main
-' 'git push'
-  hk_hdr name-junk '[remote x "origin"]
-	push = HEAD:main
-' 'git push'
-}
-case_push_hdrkey_deny_confighdr_backslash() {
-  hk_hdr remote '[remote "or\igin"]
-	push = HEAD:main
-' 'git push origin'
-  hk_hdr branch '[push]
-	default = upstream
-[branch "feature\/x"]
-	merge = refs/heads/main
-' 'git push'
-  hk_inc='[remote "or\igin"]
-	push = HEAD:main
-'
-  hk_hdr in-include '[include]
-	path = extra.inc
-' 'git push origin'
-}
-case_push_hdrkey_deny_confighdr_dotted_upper() {
-  hk_hdr remote-dotted-upper '[remote.Origin]
-	push = HEAD:main
-' 'git push origin'
-}
-case_push_hdrkey_deny_never_executes() {
-  # The confighdr route runs nothing from a booby-trapped PATH, and writes nothing under the fixture.
-  local dir="$tmpbase/repo-hdrkey-never-executes"
-  mk_fixture_repo "$dir" main feature/x
-  mk_fixture_config "$dir" $'[core] [remote "origin"] push = HEAD:main\n'
-  local trapdir="$tmpbase/trapbin-hdrkey" sentinel="$tmpbase/sentinel-hdrkey"
-  mkdir -p "$trapdir"
-  rm -f "$sentinel"
-  for bin in git gh rm dirname; do
-    {
-      printf '#!%s\n' "$bash_bin"
-      printf 'touch "%s"\n' "$sentinel"
-      printf 'exit 1\n'
-    } > "$trapdir/$bin"
-    chmod +x "$trapdir/$bin"
-  done
-  local before after
-  before="$(find "$dir" -type f -exec ls -la {} \; | sort)"
-  run_push_guard "$(mk_push_cmd_cwd 'git push' "$dir")" "$trapdir:$PATH"
-  after="$(find "$dir" -type f -exec ls -la {} \; | sort)"
-  expect_push_deny_exact "$HK_CONFIGHDR_LINE"
-  [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — push-guard.sh invoked something on the booby-trapped PATH on the confighdr route\n"; }
-  [ "$before" = "$after" ] || { __ok=0; __why="${__why}fixture repo's file listing changed — push-guard.sh wrote to a file it should only read (confighdr route)\n"; }
-}
-case_push_hdrkey_noop_controls() {
-  hk_noop remote-url '[remote "origin"] url = https://example.invalid/r.git
-' 'git push'
-  hk_noop comment-after-header '[remote "origin"] # push = HEAD:main
-' 'git push'
-  hk_noop comment-bracket '[core] # see [remote "origin"] push = HEAD:main
-' 'git push'
-  hk_noop alias-nonpush '[alias] st = status
-' 'git st'
-  hk_noop other-dest '[remote "origin"] push = HEAD:refs/heads/feature/x
-' 'git push'
-  hk_noop explicit-refspec '[remote "origin"] push = HEAD:main
-' 'git push -u origin "claude/17-a"'
-  # A quoted subsection keeps its case: this is the remote Upstream, not origin.
-  hk_noop remote-quoted-upper '[remote "Upstream"]
-	push = HEAD:main
-' 'git push origin'
-  # A dotted section for another remote, and a subsection-less [remote], never apply to origin.
-  hk_noop dotted-other-remote '[remote.backup]
-	push = HEAD:main
-' 'git push origin'
-  hk_noop remote-no-subsection '[remote]
-	push = HEAD:main
-' 'git push origin'
-}
-case_push_hdrkey_noop_escaped_name() {
-  # A subsection name ending in a backslash pair, with nothing after the closing bracket, is
-  # readable: it is not the escaped-quote shape, so it does not deny.
-  hk_noop escaped-name-alone '[includeIf "gitdir:/x\\"]
-' 'git push'
 }
 
 # --- #403: the eval/trap/zsh-precommand-modifier class ------------------------------------------
@@ -12392,6 +12064,7 @@ cases=(
   "push-deny-config-mixed-case|case_pd_config_mixed_case|deny: [Remote \"origin\"] / Push = HEAD:main (Q4, case-insensitive section keyword and key name) -- measured: M26, 68 pass 12 fail (also M38, 79 pass 1 fail)"
   "push-deny-config-never-executes|case_pd_config_never_executes|deny via the CONFIG route, AND push-guard.sh never invokes git/gh/rm on the booby-trapped PATH, AND the fixture repo's file listing is byte-identical before/after -- measured: M26, 68 pass 12 fail"
   "push-deny-config-tab-in-value|case_pd_config_tab_in_value|deny: [remote \"origin\"] push = refs/heads/*:refs/heads/*<TAB>junklabel (#290 kickback finding F4 -- a literal TAB byte inside a configured value must not corrupt the two-literal source label) -- measured: M70, 115 pass 1 fail (also M32, 114 pass 2 fail; also M63, 85 pass 31 fail; also M68, 114 pass 2 fail, the inline source-label assertion)"
+  "push-deny-config-header-then-key|case_pd_config_header_then_key|deny: a header line that also carries a key (a url) still sets its [remote \"origin\"] section, so the push key on the next line is read and denies through the config route"
   "push-noop-config-neither-key|case_pn_config_neither_key|no opinion: config sets NEITHER remote.<name>.push nor push.default at all (the decision's required control) -- measured: not flipped by M26-M45 (this fixture's config never reaches any of the twenty mutated clauses)"
   "push-noop-config-remote-push-other-dest|case_pn_config_remote_push_other_dest|no opinion: [remote \"origin\"] push = HEAD:refs/heads/feature/x (a configured refspec whose destination is not the default branch) -- measured: M40, 78 pass 2 fail (with push-noop-config-commented-out)"
   "push-noop-config-other-remote-named|case_pn_config_other_remote_named|no opinion: [remote \"origin\"] push = HEAD:main, command git push backup (n==1 exact remote scoping -- a DIFFERENT remote's own push route must not apply) -- measured: M27, 79 pass 1 fail"
@@ -12400,6 +12073,7 @@ cases=(
   "push-noop-config-commented-out|case_pn_config_commented_out|no opinion: a #-commented push line, a ;-commented push.default line, and odd leading whitespace on the one real harmless key -- measured: M40, 78 pass 2 fail (with push-noop-config-remote-push-other-dest); NOT flipped by M34, 80 pass 0 fail (the comment strip's absence is masked by exact-key matching -- see M34's own table entry)"
   "push-noop-config-push-default-current|case_pn_config_push_default_current|no opinion: [push] default = current + a branch section that WOULD deny if this mode were mistaken for upstream (the sharp form of the mode-check clause) -- measured: M29, 77 pass 3 fail (with push-noop-config-push-default-simple)"
   "push-noop-config-push-default-simple|case_pn_config_push_default_simple|no opinion: [push] default = simple, git's own default mode, same branch-section trap as push-default-current -- measured: M29, 77 pass 3 fail (with push-noop-config-push-default-current)"
+  "push-noop-config-header-same-line|case_pn_config_header_same_line|no opinion: a push key or an alias key on its header's line is not read, a dotted [remote.origin] header, a TAB before the quote, a # inside the quoted name and a byte-order mark before the first header set no section, and a chained [core] [user] header line denies no git command"
   "push-deny-global-gitconfig-upstream|case_pd_global_gitconfig_upstream|deny: GLOBAL \$HOME/.gitconfig carries [push] default = upstream, repo config carries only a [branch] merge record (per-path 1/4); also asserts inline the deny message names the GLOBAL source label -- measured: M58, 103 pass 11 fail (also M67, 113 pass 1 fail, the inline source-label assertion)"
   "push-deny-global-xdg-upstream|case_pd_global_xdg_upstream|deny: explicit \$XDG_CONFIG_HOME/git/config carries [push] default = upstream, neutral HOME (per-path 2/4) -- measured: M58, 103 pass 11 fail (also M61, 112 pass 2 fail)"
   "push-deny-global-xdg-home-default-upstream|case_pd_global_xdg_home_default_upstream|deny: \$XDG_CONFIG_HOME UNSET, [push] default = upstream at the DEFAULT \$HOME/.config/git/config path (per-path 3/4) -- measured: M62, 113 pass 1 fail (also M58, 103 pass 11 fail; also M61, 112 pass 2 fail)"
@@ -12470,23 +12144,6 @@ cases=(
   "push-include-noop-budget-gates-follow|case_push_include_noop_budget_gates_follow|no opinion: a SECOND include, of a real, permission-denied (mode 000) file that DOES carry its own deny route (push.default = matching), is never opened once the character budget is already exhausted by the first (observed via the permission-denied stderr line, so it assumes a non-root runner) -- deterministic, no timing involved -- mutation proof: dev/mutants/hook-tests.json (304-inc-follow-gate)"
   "push-include-noop-line-budget-gates-follow|case_push_include_noop_line_budget_gates_follow|no opinion: the LINE-budget sibling of push-include-noop-budget-gates-follow -- CFG_INCLUDE_MAX_LINES one-character lines exhaust only the line budget, leaving follows and characters both still positive, and a SECOND include naming a real, permission-denied (mode 000) file carrying its own deny route is still never opened (assumes a non-root runner, as its sibling does) -- mutation proof: dev/mutants/hook-tests.json (304-inc-follow-gate, 304-inc-line-follow-gate)"
   "push-include-deny-never-executes|case_push_include_deny_never_executes|deny, AND push-guard.sh never invokes git/gh/rm/dirname on the booby-trapped PATH while following an include, AND the fixture repo's and HOME's own file listings stay byte-identical -- mutation proof: dev/mutants/hook-tests.json (304-inc-section, 304-inc-relative)"
-  "push-hdrkey-deny-remote-same-line|case_push_hdrkey_deny_remote_same_line|a push key on the same line as its [remote \"origin\"] header: bare and named push, no blank, CRLF, and a trailing comment -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-rest-off, 510-pg-hdr-rest-nostrip)"
-  "push-hdrkey-deny-remote-name-chars|case_push_hdrkey_deny_remote_name_chars|a remote subsection name holding ], ; or # still reads as one section -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-rest-off, 510-pg-hdr-raw, 510-pg-hdr-quoted-end)"
-  "push-hdrkey-deny-sections-same-line|case_push_hdrkey_deny_sections_same_line|a same-line key under [push], [branch], [include] and [includeIf], the last also with a # in its condition -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-rest-off, 510-pg-hdr-raw)"
-  "push-hdrkey-deny-in-included-file|case_push_hdrkey_deny_in_included_file|a same-line key, and the dotted and tab spellings, inside an included file -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-rest-off, 510-pg-hdr-canon-off, 510-pg-hdr-dotted-off, 510-pg-hdr-ws-space-only, 510-pg-hdr-dotted-scope)"
-  "push-hdrkey-deny-cap-length-header|case_push_hdrkey_deny_cap_length_header|a header line of exactly the depth-0 line cap, ending in a same-line push key, denies through the config route rather than the configline reason -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-rest-off)"
-  "push-hdrkey-deny-alias-same-line|case_push_hdrkey_deny_alias_same_line|a push alias written on its section header's line, in every alias spelling, repo and global, never echoing the alias name -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-rest-off, 510-pg-hdr-raw, 510-pg-hdr-simple-end, 510-pg-hdr-ws-space-only)"
-  "push-hdrkey-deny-new-spellings|case_push_hdrkey_deny_new_spellings|the dotted, TAB and blank-run remote, branch and includeIf header spellings git accepts -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-rest-off, 510-pg-hdr-canon-off, 510-pg-hdr-dotted-off, 510-pg-hdr-ws-space-only, 510-pg-hdr-dotted-scope)"
-  "push-hdrkey-deny-mixed-spellings|case_push_hdrkey_deny_mixed_spellings|a dotted section part followed by a quoted subsection (branch.v1 \"2\", remote.my \"fork\", alias.x \"y\") reads as git reads it, at depth 0 and in an include -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-rest-off, 510-pg-hdr-canon-off, 510-pg-hdr-mixed-off)"
-  "push-hdrkey-deny-confighdr-mixed-upper|case_push_hdrkey_deny_confighdr_mixed_upper|an uppercase letter in the dotted part of a mixed header denies with the fixed confighdr line -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-mixed-upper-off)"
-  "push-hdrkey-deny-bom|case_push_hdrkey_deny_bom|a UTF-8 byte-order mark before the first header of the repo config, an included file and the global config does not hide it -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-bom-off)"
-  "push-hdrkey-deny-confighdr-chained|case_push_hdrkey_deny_confighdr_chained|a chained header denies with the fixed confighdr line, in the config, in an include, and for a feature push and a non-push command -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-simple-end, 510-pg-hdr-chain-off, 510-pg-hdr-reason)"
-  "push-hdrkey-deny-confighdr-quote-shapes|case_push_hdrkey_deny_confighdr_quote_shapes|an escaped closing quote, a backslash-pair alias name, text before the closing bracket and junk before the quote deny with the fixed confighdr line -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-escape-off, 510-pg-hdr-after-quote-off, 510-pg-hdr-namepart-off)"
-  "push-hdrkey-deny-confighdr-backslash|case_push_hdrkey_deny_confighdr_backslash|a backslash in a remote or branch subsection, also in an include, denies with the fixed confighdr line -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-backslash-off)"
-  "push-hdrkey-deny-confighdr-dotted-upper|case_push_hdrkey_deny_confighdr_dotted_upper|an uppercase letter in a dotted remote subsection denies with the fixed confighdr line -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-dotted-off, 510-pg-hdr-dotted-upper-off)"
-  "push-hdrkey-deny-never-executes|case_push_hdrkey_deny_never_executes|the confighdr deny runs nothing on a booby-trapped PATH and leaves the fixture tree byte-identical -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-simple-end, 510-pg-hdr-chain-off, 510-pg-hdr-reason)"
-  "push-hdrkey-noop-controls|case_push_hdrkey_noop_controls|no opinion: a same-line url, a commented key, a bracket inside a comment, a non-push alias, another destination, an explicit refspec, a quoted remote name keeping its case, a dotted section for another remote and a subsection-less [remote] -- mutation proof for the quoted-case control: dev/mutants/hook-tests.json (510-pg-hdr-quoted-upper); the other shapes pin that the reader does not over-deny"
-  "push-hdrkey-noop-escaped-name|case_push_hdrkey_noop_escaped_name|no opinion: a subsection name ending in a backslash pair with nothing after the closing bracket -- mutation proof: dev/mutants/hook-tests.json (510-pg-hdr-escape-strict)"
   "push-pc-deny-eval|case_push_pc_deny_eval|eval deny: eval git push origin main -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
   "push-pc-deny-eval-quoted|case_push_pc_deny_eval_quoted|eval-quoted deny: eval 'git push origin main' -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab)"
   "push-pc-deny-eval-lead-space|case_push_pc_deny_eval_lead_space|eval-quoted deny with a leading space: eval \" git push origin main\" -- mutation proof: dev/mutants/hook-tests.json (403-pg-pc-vocab, 403-pg-pc-empty-tok)"

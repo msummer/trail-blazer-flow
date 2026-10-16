@@ -32,7 +32,6 @@
 #     option (#518); an interpreter prefix word's options (#537); a $( or ${ substitution, or a backtick that
 #     starts a word or follows a double quote, in the git option slot on a line naming push (#572);
 #   - a Codex push whose shell workdir is not provably the session checkout (#494);
-#   - a git command that reads a config file with a section header line it cannot split the way git does (#510);
 #   - an analysis that cannot finish: a command over PUSH_CMD_MAX_BYTES; the deadline; a depth-0 config line
 #     over CFG_TOPLEVEL_MAX_LINE_CHARS (#435, #517); an awk scan that exits non-zero (an abort, a resource
 #     limit, a killed process, or no runnable awk), denied with the fixed reason "command scan failed" (#559).
@@ -50,8 +49,8 @@
 #
 # Rule index. #292, #433, #439, #448, #449, #508, #518, #537 and #572 are described at emit_segment() and
 # the tokenizer helpers above it; #517 at dest_word() and evaluate_segment(); the #448 alias lookup at
-# emit_alias_lost() and alias_deny(); #494 at the post-loop Codex block; #510 and the include and line
-# budgets at cfg_parse_file(); the cross-segment fallback at the driver loop.
+# emit_alias_lost() and alias_deny(); #494 at the post-loop Codex block; the include and line budgets at
+# cfg_parse_file(); the cross-segment fallback at the driver loop.
 #
 # Repo resolution (reads only, NEVER executes anything). The SESSION checkout is resolved from the stdin
 # `cwd` field (degrades to $PWD when absent) by walking up at most 64 parent directories for `<dir>/.git`: a
@@ -70,8 +69,7 @@
 # in any parsed file is followed inline in git's own order with the includeIf condition ignored (every
 # conditional include is followed: a union); cfg_parse_file() holds the resolution rules, the depth cap, the
 # cycle guard and the budgets. Any failure at any step leaves the branch values and the config-derived
-# variables empty, never an error; the depth-0 line cap and the unparseable-header deny are deliberate
-# denies, not failures.
+# variables empty, never an error; the depth-0 line cap is a deliberate deny, not a failure.
 # A resolved -C target (#269). A push (or, #448, alias-candidate) segment carrying exactly one DETACHED `-C
 # <path>` token whose value satisfies PATH_ERE (byte-identical to hooks/git-c-guard.sh's predicate, pinned by
 # gate 4.42) is ALSO resolved: the named directory itself, one level only (never walking upward the way git does
@@ -128,26 +126,6 @@
 # git's remote selection nor its last-wins precedence); a configured destination containing * and
 # push.default=matching deny unconditionally, like --all and --mirror.
 #
-# Section headers and same-line keys (#510). Git reads what follows a section header's closing bracket on that
-# line as variables of that section (`[alias] p = push`, `[remote "origin"] push = HEAD:main`), so
-# cfg_parse_file() splits every header line into the header and the rest: the rest goes through the ordinary
-# comment strip and key/value split under the section the header just set. The header's end is found on the
-# RAW line, before the comment strip, as git does: a `]`, `#` or `;` inside a quoted subsection stays part of
-# its name, and only keys and values are truncated at a comment marker. The section name matches
-# case-insensitively and may be followed by any run of blanks before the quote, or be written in the legacy
-# dotted form (`[remote.origin]`) or the mixed form (`[branch.v1 "2"]` is the branch v1.2); remote and branch
-# headers, and a quoted includeIf, are rewritten to the one canonical `[name "sub"]` text the section arms
-# accept. Alias headers need no rewrite (every spelling reads its keys under one name-independent key), and a
-# dotted or mixed includeIf is never followed. A UTF-8 byte-order mark on the first line of each file opened is
-# skipped, as git does. A header line it cannot classify denies with the fixed text of `deny_too_large
-# confighdr`, which echoes no input: a chained header (`[core] [remote "origin"] push = HEAD:main`); text after
-# a quoted subsection's closing quote that is not the closing bracket, an escaped closing quote followed by
-# more text, junk or a missing blank before the quote, or whitespace inside a plain name (shapes git itself
-# refuses); a backslash in a remote or branch subsection (git drops it); an uppercase letter in the dotted part
-# of a remote or branch header (git lowercases it). Cost: a fixed number of parameter expansions per header
-# line, run after the depth-0 line cap, the depth >= 1 budgets and the length skip, with at most three
-# cfg_trim() calls per line; the per-line check_deadline() sample bounds the total.
-#
 # Analysis deadline (#435). This hook's own analysis (everything from the tokenizer onward) is bounded by a
 # whole-second wall-clock budget, PUSH_ANALYSIS_BUDGET_SECS (5s), sampled from $SECONDS as an elapsed
 # difference from push_t0 (captured right after `set -f`): check_deadline() denies with a fixed reason
@@ -178,15 +156,15 @@
 # no bash-side split runs on one. U_max is the
 # largest single step the deadline cannot interrupt: one alias-lookup awk pass over the resolved alias records,
 # one session upward walk (at most 64 levels, each an `[ -f ]` probe, plus up to 63 `dirname` forks), one
-# config line's comment-strip (a header line takes a second, plus a fixed number of header expansions) plus up
-# to three cfg_trim() calls (at most CFG_TOPLEVEL_MAX_LINE_CHARS or CFG_INCLUDE_MAX_LINE_CHARS characters,
-# quadratic only in that capped length), one include open, up to two `grep` processes plus a depth-1 resolve's
-# file stats, one refspec_dest() subshell, one word-split of a segment's remaining tokens, the `read` of a
-# single config line (linear in its length), or, for a Codex push, the one `tail -c` + jq + awk pass over the
-# rollout tail (bounded by PUSH_TRANSCRIPT_TAIL_BYTES). Not closed: T_prefix is unsampled (though counted by
-# the wall clock); the single config-line `read` inside U_max is spent before check_deadline can run again;
-# and the Codex CLI's own hook timeout, if any, is UNVERIFIED: the deadline is sized against Claude Code's
-# documented 10s PreToolUse timeout only (hooks/hooks.json, "timeout": 10).
+# config line's comment-strip plus up to three cfg_trim() calls (at most CFG_TOPLEVEL_MAX_LINE_CHARS or
+# CFG_INCLUDE_MAX_LINE_CHARS characters, quadratic only in that capped length), one include open, up to two
+# `grep` processes plus a depth-1 resolve's file stats, one refspec_dest() subshell, one word-split of a
+# segment's remaining tokens, the `read` of a single config line (linear in its length), or, for a Codex push,
+# the one `tail -c` + jq + awk pass over the rollout tail (bounded by PUSH_TRANSCRIPT_TAIL_BYTES). Not closed:
+# T_prefix is unsampled (though counted by the wall clock); the single config-line `read` inside U_max is spent
+# before check_deadline can run again; and the Codex CLI's own hook timeout, if any, is UNVERIFIED: the
+# deadline is sized against Claude Code's documented 10s PreToolUse timeout only (hooks/hooks.json,
+# "timeout": 10).
 set -uo pipefail
 set -f  # noglob: untrusted refspec tokens are word-split unquoted below (e.g. in evaluate_segment
         # and the token-array builders); a token shaped like "*:main" must never glob-expand
@@ -317,15 +295,11 @@ case "${TBF_PUSH_GUARD_BUDGET_SECS:-}" in
 esac
 push_deadline=$((push_t0 + push_budget))
 
-# deny_too_large KIND (#435): KIND is configline (the depth-0 line cap), confighdr (#510), command (#517, a
-# command over PUSH_CMD_MAX_BYTES) or anything else (the deadline). Prints exactly one fixed stderr line that
-# echoes no input, then exits 2.
+# deny_too_large KIND (#435): KIND is configline (the depth-0 line cap), command (#517, a command over
+# PUSH_CMD_MAX_BYTES) or anything else (the deadline). Prints exactly one fixed stderr line that echoes no
+# input, then exits 2.
 deny_too_large() {
   case "$1" in
-    confighdr)
-      printf '%s denies this git command: a git config file it reads has a section header line it cannot split the way git does (blocked: unparseable config header line) — put that section header on a line of its own, or run the command from a terminal; see README.md'"'"'s Safety model\n' \
-        "$PUSH_DENY_STEM" >&2
-      ;;
     configline)
       printf '%s denies this push: a git config file it reads has a line too long to analyse (blocked: config line too long to analyse) — shorten that line, or run the push from a terminal; see README.md'"'"'s Safety model\n' \
         "$PUSH_DENY_STEM" >&2
@@ -1106,9 +1080,6 @@ nl=$'\n'
 # The carriage-return literal the config parser strips from a config line. (The command-string strip is not
 # bash: it lives in the awk tokenizer.)
 cfg_cr=$'\r'
-# The three bytes of a UTF-8 byte-order mark, written as octal escapes so the match is byte-literal whatever the
-# locale. git skips one at the start of a config file; cfg_parse_file() strips it from the first line it opens.
-cfg_bom=$'\357\273\277'
 
 # cfg_parse_file PATH LABEL DEPTH (#304/#305) -- parses one config file inline, recursively following
 # include/includeIf directives found in its own content (conditions ignored: the union stance of every
@@ -1138,9 +1109,7 @@ cfg_bom=$'\357\273\277'
 # the includer's section state. The file is read only through `done < "$1"`, a `[ -f ]`-guarded builtin
 # redirect, never cat, dirname, cd or any external command, and an include path is resolved with parameter
 # expansion only. It appends to the plain globals cfg_push_lines, cfg_alias_lines, cfg_push_defaults and
-# cfg_branch_merge, and reads current_branch. A section header line is split before the comment strip (see
-# "Section headers and same-line keys (#510)" in the header); one it cannot classify denies via
-# deny_too_large confighdr.
+# cfg_branch_merge, and reads current_branch.
 cfg_parse_file() {
   local path="$1" label="$2" depth="$3"
   [ -n "$path" ] || return 0
@@ -1153,8 +1122,6 @@ cfg_parse_file() {
 
   local cfg_section="" cfg_subsection="" cfgline cfg_h cfg_s cfg_key cfg_val
   local inc_resolved inc_childlabel
-  local cfg_raw cfg_rest cfg_hdr cfg_pre cfg_q cfg_nm cfg_after cfg_np cfg_name cfg_ws cfg_sub cfg_lead cfg_form cfg_mix
-  local cfg_first=1
   while IFS= read -r cfgline || [ -n "$cfgline" ]; do
     check_deadline
     # Three depth->=1-only budgets, checked here, in this order, before comment-strip or trim ever
@@ -1184,112 +1151,16 @@ cfg_parse_file() {
     # fast for a long line or whitespace run.
     [ "$depth" -ge 1 ] || [ "${#cfgline}" -le "$CFG_TOPLEVEL_MAX_LINE_CHARS" ] || deny_too_large configline
     cfgline="${cfgline//$cfg_cr/}"
-    # A UTF-8 BOM on the file's first line is skipped, as git skips it; only the first line of each file this
-    # call opens that reaches this point is tested (#510).
-    if [ "$cfg_first" = 1 ]; then cfg_first=0; cfgline="${cfgline#"$cfg_bom"}"; fi
-    cfg_raw="$cfgline"
     # Strip a trailing comment: whichever of # or ; appears first, with no quote-tracking. Git ref names MAY
     # legitimately contain # or ; (refs/heads/feat#123), so this is a known parsing gap: a destination value is
     # truncated at the marker (an over-block), and so is an include value (which then fails open). A SECTION
-    # HEADER line is split before this strip, on the raw line (see the header): only the keys and values after
-    # it are truncated.
+    # HEADER line is cut the same way, so a quoted remote, branch or includeIf name holding # or ; is not
+    # recognised (an alias subsection still is: its arm reads no name).
     cfg_h="${cfgline%%#*}"
     cfg_s="${cfgline%%;*}"
     if [ "${#cfg_h}" -le "${#cfg_s}" ]; then cfgline="$cfg_h"; else cfgline="$cfg_s"; fi
     cfg_trim "$cfgline"; cfgline="$cfg_trim_out"
     [ -n "$cfgline" ] || continue
-    # #510: a section header line is split on the RAW line, before the comment strip above could cut a quoted
-    # subsection short. cfgline becomes the header text git reads as the declaration (remote, branch and
-    # includeIf rewritten to the one canonical `[name "sub"]` spelling the arms below accept), and cfg_rest the
-    # text after the header's closing bracket. A shape it cannot classify denies. Parameter expansion and case
-    # only: no loop, no subshell, no external command.
-    cfg_hdr=0
-    cfg_rest=""
-    case "$cfgline" in
-      \[*)
-        cfg_hdr=1
-        cfgline="[${cfg_raw#*\[}"
-        cfg_pre="${cfgline%%\]*}"
-        cfg_name=""
-        cfg_sub=""
-        cfg_mix=""
-        cfg_form=none
-        if [ "$cfg_pre" != "$cfgline" ]; then
-          case "$cfg_pre" in
-            *\"*)
-              cfg_q="${cfgline#*\"}"
-              cfg_nm="${cfg_q%%\"*}"
-              cfg_after="${cfg_q#*\"}"
-              cfg_np="${cfgline%%\"*}"
-              cfg_np="${cfg_np#\[}"
-              cfg_name="${cfg_np%%[[:space:]]*}"
-              cfg_ws="${cfg_np#"$cfg_name"}"
-              [ -n "$cfg_name" ] || deny_too_large confighdr
-              [ -n "$cfg_ws" ] || deny_too_large confighdr
-              case "$cfg_ws" in
-                *[![:space:]]*) deny_too_large confighdr ;;
-              esac
-              if [ "$cfg_nm" = "$cfg_q" ]; then
-                cfg_name=""
-              else
-                case "$cfg_nm" in
-                  *\\) [ "$cfg_after" = "]" ] || deny_too_large confighdr ;;
-                esac
-                case "$cfg_after" in
-                  \]*) ;;
-                  *) deny_too_large confighdr ;;
-                esac
-                cfg_rest="${cfg_after#\]}"
-                cfg_sub="$cfg_nm"
-                cfg_form=quoted
-                case "$cfg_name" in
-                  ?*.?*) cfg_mix="${cfg_name#*.}"; cfg_name="${cfg_name%%.*}" ;;
-                esac
-              fi
-              ;;
-            *)
-              cfg_np="${cfg_pre#\[}"
-              case "$cfg_np" in
-                *[[:space:]]*) deny_too_large confighdr ;;
-              esac
-              cfg_rest="${cfgline#*\]}"
-              cfg_name="$cfg_np"
-              case "$cfg_np" in
-                *.?*)
-                  cfg_name="${cfg_np%%.*}"
-                  cfg_sub="${cfg_np#*.}"
-                  cfg_form=dotted
-                  ;;
-              esac
-              ;;
-          esac
-          case "$cfg_form" in
-            quoted|dotted)
-              case "$cfg_name" in
-                [Rr][Ee][Mm][Oo][Tt][Ee]|[Bb][Rr][Aa][Nn][Cc][Hh])
-                  case "$cfg_mix$cfg_sub" in
-                    *\\*) deny_too_large confighdr ;;
-                  esac
-                  if [ "$cfg_form" = dotted ]; then
-                    case "$cfg_sub" in
-                      *[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) deny_too_large confighdr ;;
-                    esac
-                  fi
-                  case "$cfg_mix" in
-                    *[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) deny_too_large confighdr ;;
-                    ?*) cfg_sub="$cfg_mix.$cfg_sub" ;;
-                  esac
-                  cfgline="[$cfg_name \"$cfg_sub\"]"
-                  ;;
-                [Ii][Nn][Cc][Ll][Uu][Dd][Ee][Ii][Ff])
-                  if [ "$cfg_form" = quoted ] && [ -z "$cfg_mix" ]; then cfgline="[$cfg_name \"$cfg_sub\"]"; fi
-                  ;;
-              esac
-              ;;
-          esac
-        fi
-        ;;
-    esac
     case "$cfgline" in
       \[[Rr][Ee][Mm][Oo][Tt][Ee]\ \"*\"\]*)
         cfg_section="remote"
@@ -1335,23 +1206,11 @@ cfg_parse_file() {
         cfg_subsection=""
         ;;
     esac
-    # #510: the text after a header's closing bracket is read as a key under the section that header
-    # just set, with the same comment strip and key/value split as any other line. A second header
-    # in that text (a chained header) is not classified: it denies.
-    if [ "$cfg_hdr" = 1 ]; then
-      cfg_h="${cfg_rest%%#*}"
-      cfg_s="${cfg_rest%%;*}"
-      if [ "${#cfg_h}" -le "${#cfg_s}" ]; then cfg_rest="$cfg_h"; else cfg_rest="$cfg_s"; fi
-      case "$cfg_rest" in
-        *[![:space:]]*) ;;
-        *) continue ;;
-      esac
-      cfg_lead="${cfg_rest%%[![:space:]]*}"
-      case "${cfg_rest#"$cfg_lead"}" in
-        \[*) deny_too_large confighdr ;;
-      esac
-      cfgline="$cfg_rest"
-    fi
+    # A section header must sit on its own line: it only sets the section above, and text after its
+    # closing bracket is never read as a key.
+    case "$cfgline" in
+      \[*) continue ;;
+    esac
     case "$cfgline" in
       *=*)
         cfg_trim "${cfgline%%=*}"; cfg_key="$cfg_trim_out"
