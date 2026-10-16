@@ -233,19 +233,10 @@ no `jq` on `PATH`, an unresolved `${CLAUDE_PLUGIN_ROOT}` on Windows, or a Claude
 `agent_type` all leave this hook silent — but unlike the guard hook (whose non-firing degrades to
 an ordinary permission prompt), this hook's non-firing removes a control with **no** visible sign,
 since nothing else in the permission model was narrowing the implementer/verifier's `git`/`gh`
-surface to begin with. The base scan is deliberately quote-blind (it strips quote characters rather
-than tracking quote state, the same trade-off `git-c-guard.sh` makes in the opposite direction).
-**Since #503** an additive chain pass tracks quote state per input line (since #553 also from one line to
-the next, for a value left open at a line end), only to re-judge text the base split cut apart: a quoted value holding a segment-break character and a space (`X="a;b c" gh pr merge
-5`) or a command substitution glued into a word is now judged by the unchanged per-segment rules, and
-the pass can only add denies; the gated lines of one command are lexed up to a budget of
-`CHAIN_LEX_MAX` characters in all, and past it the command denies fail-closed (`too much quoted text
-to analyse`), because this hook has no other size cap — an over-block for a very large heredoc of quoted
-prose that mentions `git`/`gh`. **Since #553** the same pass also covers a quoted value that runs past a
-line end (`X="a<LF>b" gh pr merge 5`), by carrying the open quote state and the chain's tokens to the next
-line, and a mixed-quote or escaped-quote assignment value with a space and no break character (`X="a'"'b c'
-gh pr merge 5`); the lines it lexes and the tokens it copies count toward the same budget, and the
-over-blocks and residuals of both extensions are in the two lists below.
+surface to begin with. The scan is deliberately quote-blind (it strips quote characters rather
+than tracking quote state, the same trade-off `git-c-guard.sh` makes in the opposite direction), so a break
+character inside a quote or a substitution cuts a segment like any other and the command behind it is a
+known gap ("Known gaps" below).
 **Since #559** the hook checks the awk scan's exit status: a scan that exits non-zero (an awk abort, a resource
 limit, a killed process, or a host where `awk` cannot run) denies with the fixed line `(blocked: command scan
 failed)`, instead of judging only the lines printed before it stopped; awk's own error text is dropped, so the
@@ -317,18 +308,14 @@ after a prefix word (`env "-C" <dir> git push`), or an `env` option outside a sh
 splits at a space (`git -c "k=a b" push`); `env -u NAME` consumes its value, which stops `env -u git
 push origin main` from denying. A quoted `-C` value containing a space (which also hides any later option),
 and an even-count quote split in an option value with no assignment text, still get no opinion (see "Known
-gaps" below). **Since
-#503**, an additive chain pass re-judges a quoted value that holds a segment-break character
-(`X="a;b c" git push origin main`) and a command substitution glued into a word or in git's option slot
-(`git -C "$(pwd)" push origin main`) through the same rules, so those deny as unresolved. **Since #553**, a
-mixed-quote or
-escaped-quote assignment value with a space and no break character (`X="a'"'b c' git push origin main`,
-`git -c "k=a'"'b c' push origin main`) and a quoted value that runs past a line end (`X="a<LF>b" git push
-origin main`, where the open quote state and the chain's tokens are carried to the next line) are
-re-judged the same way, so those deny. The pass lexes at most a fixed budget of characters per command, of
-gated lines and of the lines the carry lexes; a command past it denies fail-closed (`too much quoted text to
-analyse`), so the worst-case cost stays near the base scan's. The over-blocks and the residuals of #449,
-#503 and #553 are in the two lists below. **Since #559** a scan that exits non-zero (an awk abort, a resource
+gaps" below). **Since #572**, a
+`$(` or `${` substitution anywhere in git's option slot, or a backtick that starts a word there or follows a double
+quote (`git -C "$(pwd)" push origin main`, `` git -C `pwd` push origin main ``), on a line that names `push` denies
+as unresolved, whatever the push's destination, with the fixed reason `command substitution in the git options`
+unless an earlier reason applies (a `-c` value or `--git-dir` reports its own); a backtick glued to other text
+(`` git -C ~/`pwd` push origin main ``), a quoted value holding a break character, a substitution inside a quoted value,
+a mixed-quote value and a quote that runs past a line end hide the command behind them ("Known gaps" below). The
+over-blocks and the residuals of #449 are in the two lists below. **Since #559** a scan that exits non-zero (an awk abort, a resource
 limit, a killed process, or a host where `awk` cannot run) denies with the fixed line `(blocked: command scan
 failed)`, instead of judging only the lines printed before it stopped; awk's own error text is dropped, so the
 deny stays one line (the over-block is in "Known over-blocks" below). **Since #508**, a word in
@@ -597,13 +584,11 @@ count of `'` or of `"`, or ends in a backslash — the whitespace split happens 
 stripped, so `X='a b' apply_patch < x.patch` or `X=a\ b apply_patch < x.patch` would otherwise
 resolve the word after the space as the command word; `echo 'a b' apply_patch` (the odd token
 comes after the resolved word) and `X='a b' echo hi; rg apply_patch hooks/` (the segment never
-mentions the shim) still get no opinion. **Since #503**, a quoted value that contains a segment-break
-character plus whitespace (`X='a;b c' apply_patch < x.patch`, rc 0 before, whose opening quote sat in
-the previous segment) is caught by an additive chain pass that lexes each gated line in pure bash and
-re-judges the text the base split cut apart; its over-block (a benign inline patch behind such a value) is in "Known over-blocks" below.
+mentions the shim) still get no opinion.
 The command-word walk strips quote characters (`'`/`"`) and, since #538, backslashes from each token
-before matching or resolving it, rather than tracking which quote ENCLOSES which span (the chain pass
-tracks quote state, but only to re-judge text the base split cut apart) — the same
+before matching or resolving it, rather than tracking which quote ENCLOSES which span, so a quoted value
+that contains a segment-break character plus whitespace (`X='a;b c' apply_patch < x.patch`) cuts a segment
+inside the quote and is a known gap ("Known gaps" below) — the same
 tripwire-not-sandbox trade-off every scan in this directory makes. **Since #538** a shim name split
 by quote or backslash characters (`apply_"patch"`, `apply\_patch`), a runtime-expansion word in front
 of the shim (`$X apply_patch < x.patch`, skipped like a prefix word), and an attached `env -S` string
@@ -757,8 +742,7 @@ that hook exists to stop.
 |---|---|---|---|
 | `agent-boundary` (implementer), `push-guard` (every session), `claude-dir-guard` (implementer) | An append assignment before the command: `NAME+=value` is not read as an assignment, so it is taken for the command word | `A+=1 gh pr merge 5`; `A+=1 git push origin main`; `A+=1 apply_patch < x.patch` | #555 |
 | the same three | A backslash-newline continuation: each line is judged on its own, so a command split by a trailing backslash is never seen whole | `X=a\<LF>b gh pr merge 5`; `git push origin \<LF>main`; `apply_\<LF>patch < x.patch` | #556 |
-| `push-guard` (every session) | A quote left open at a line end inside a substitution, on a line with no assignment text, or after more than 256 words of the chain; or an option value whose quote counts are each even (a mixed-quote split) with no assignment text: neither #553 extension (the newline carry or the mixed-quote re-judge) fires | `X="a<LF>$(true<LF>)b" git push origin main`; `exec -a "x<LF>y" git push origin main`; `env -u "a'"'b c' git push origin main`; 300 words `a=1`, then `X="a<LF>b" git push origin main` | #557 |
-| `agent-boundary` (implementer) | The same shapes | `X="a<LF>$(true<LF>)b" gh pr merge 5`; `exec -a "x<LF>y" gh pr merge 5`; `env -u "a'"'b c' gh pr merge 5`; 300 words `a=1`, then `X="a<LF>b" gh pr merge 5` | #557 |
+| `agent-boundary` (implementer, verifier), `push-guard` (every session), `claude-dir-guard` (implementer) | A command behind text the segmenter cuts apart: a break character (`;` `&` `\|` `(` `)` `{` `}` or a backtick) inside a quoted, dollar-quoted or backslash-escaped span, a command substitution inside a quoted value or glued to a word, a mixed-quote or escaped-quote assignment value, or a quote left open at a line end. The scan is quote-blind and cuts at every break character, so the command word sits in a segment that starts with junk. A push alias behind a command substitution in git's option slot is in this class, and so is a push behind a backtick glued to other text in that slot (a `$(` or `${` substitution, or a backtick that starts a word or follows a double quote, in front of `push` itself is denied, see "Known over-blocks") | `X="a;b c" gh pr merge 5`; `X="a<LF>b" gh pr merge 5`; `X="a'"'b c' gh pr merge 5`; `exec -a "x<LF>y" gh pr merge 5` (`agent-boundary`). `X="a;b c" git push origin main`; `X="a<LF>$(true<LF>)b" git push origin main`; `env -u "a'"'b c' git push origin main`; `git -C "$(pwd)" zqp origin main`, with `alias.zqp = push`; `` git -C ~/`pwd` push origin main `` (`push-guard`). `X='a;b c' apply_patch < x.patch` (`claude-dir-guard`) | #572, #557 |
 | `claude-dir-guard` (implementer) | A mixed-quote value whose quote counts are each even, or a value that spans a newline and is closed by an even-count tail, before the shim: the #455 parity check reads it as balanced (the simpler `X="a'"'b c' apply_patch < x.patch` and `X="a<LF>b" apply_patch < x.patch` are denied) | `X="a'"'b c'"'"'d' apply_patch < x.patch`; `X="a<LF>b"'"'"" apply_patch < x.patch` | #558 |
 | `claude-dir-guard` (implementer) | A path-qualified prefix word is not recognised as a prefix word (a bare `env apply_patch < x.patch` is denied) | `/usr/bin/env apply_patch < x.patch`; `/usr/bin/nice apply_patch < x.patch` | #562 |
 | `claude-dir-guard` (implementer), `agent-boundary` (implementer) | An ANSI-C-quoted command word, which the walk skips as a runtime-expansion word, so the name never resolves (`push-guard` denies the `git` twin) | `$'apply_patch' < x.patch`; `apply_$'patch' < x.patch`; `$'gh' pr merge 5` | #563, #508 |
@@ -798,8 +782,7 @@ scan, or, for `push-guard` and `agent-boundary`, to run the command from a termi
 | `agent-boundary` (verifier), `push-guard` (every session), `claude-dir-guard` (implementer) | A dash option of `nice`, `sudo`, `stdbuf`, `exec`, `xargs` or `time` followed by a word: its separate value is not skipped, so the rest of the segment is scanned | `nice -n 5 git status`; `nice -n 5 git push origin feature/x`; `nice -n 5 rg apply_patch hooks/` | #518 |
 | `agent-boundary` (implementer), `push-guard` (every session), `claude-dir-guard` (implementer) | A quoted value of an interpreter option, or an option the walk cannot classify, makes it scan the `-c` string (the unquoted `bash -O extglob -c 'echo gh'` is no opinion) | `bash -O "extglob" -c 'echo gh'`; `bash --norc script.sh gh` (`agent-boundary`). `bash -O "extglob" -c 'git push origin feature/x'` (`push-guard`). `bash -O "extglob" -c 'echo apply_patch'` (`claude-dir-guard`) | #569, #537 |
 | `claude-dir-guard` (implementer) | A quoted `bash -c` string: its first word keeps the opening quote and trips the #455 unbalanced-quote check (the bare `rg -n apply_patch hooks/` is no opinion) | `bash -c 'rg -n apply_patch hooks/'` | #568 |
-| `agent-boundary` (implementer), `push-guard` (every session), `claude-dir-guard` (implementer) | The chain pass re-judges a quoted value that holds a break character and a space, a mixed-quote value, or a substitution glued into a word, so a harmless mention behind it denies | `MSG="a; see gh docs" ./run.sh` (`agent-boundary`). `X="a;b c" git push origin feature/x`; `X="it's<LF>b" git push origin feature/x`; `git -C "$(pwd)" push origin feature/x`; `X='(' git commit -m "fix include path"` (`push-guard`). `X='a;b c' apply_patch <<'EOF'<LF>*** Begin Patch<LF>*** Add File: /repo/a.txt<LF>+hi<LF>*** End Patch<LF>EOF` (`claude-dir-guard`) | #503, #553 |
-| `agent-boundary` (implementer), `push-guard` (every session) | Too much quoted text: the gated lines of one command are lexed up to a budget of 65536 characters, and a command past it denies | 4000 lines of `echo "a"; ls # git` (3000 such lines are no opinion) | #503 |
+| `push-guard` (every session) | A `$(` or `${` substitution in git's option slot, or a backtick that starts a word there or follows a double quote, on a line that names `push`: any such push, whatever its destination, and a git command that is not a push but shares the line with the word. A markdown code span that holds only git and its global options is cut the same way when its text ends in a space, a double quote or a `$` before the closing backtick, such as `` `git -C <path>` `` (the `<` and `>` read as spaces) or `` `git -C "$dir"` `` | `git -C "$(pwd)" push origin feature/x`; `git -C "$(pwd)" log --grep push`; `git -C "$(pwd)" status && git push origin feature/x`; ``echo '- `git -C <path>` selects the repository to push from'`` | #572 |
 | `agent-boundary` (implementer, verifier), `push-guard` (every session) | The awk scan exits non-zero (an awk abort, a resource limit, a killed process, or a host where `awk` cannot run): the hook denies every command that reaches the scan, with the fixed line `(blocked: command scan failed)`, instead of judging only the lines the scan printed before it stopped. A call that a hook's raw-input fast path exits before the scan is unaffected | `git status`, with an `awk` on `PATH` that exits 2 (`agent-boundary` verifier; `push-guard`) | #559 |
 | `push-guard` (every session) | Destination rules: a lone argument is judged as a possible destination, a destination built at run time or `refs/tags/$T` denies, `main`/`master` always deny whatever the repo's default branch is, and `--all`/`--mirror` always deny | `git push main`; `git push "$REMOTE"`; `git push origin refs/tags/$T`; `B=feature/x; git push origin HEAD:$B`; `git push origin main` in a repo whose default branch is `trunk`; `git push --all origin` | #260, #517 |
 | `push-guard` (every session) | Config read as a union, not the way git picks one value: `$GIT_CONFIG_GLOBAL` alongside `~/.gitconfig`; `push.default` across files, or twice in one file | `git push`, with a route in `~/.gitconfig` while `$GIT_CONFIG_GLOBAL` names a benign file; with `push.default = upstream` in `~/.gitconfig` and `current` in the repo config; with those two values on two lines of `~/.gitconfig` (the branch's upstream is `main` in both) | #290 |

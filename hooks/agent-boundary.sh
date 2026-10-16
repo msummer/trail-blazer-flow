@@ -16,7 +16,7 @@
 #     CLAUDE_PATH_ARG_COMMANDS member, an in-place sed argument) or an interpreter or one-step writer
 #     (CLAUDE_CMDLINE_WRITE_COMMANDS) sharing the call with a .claude mention anywhere;
 #   - both roles: a fail-closed sentinel when the scan cannot afford to finish a record (too many
-#     standalone ]], too much quoted text for the chain pass, a ]] cut that may hide a .claude write);
+#     standalone ]], a ]] cut that may hide a .claude write);
 #   - both roles: an awk scan that exits non-zero (an abort, a resource limit, a killed process, or no
 #     runnable awk), denied with the fixed reason "command scan failed" (#559).
 # Never executes anything (no git, no gh, nothing derived from the untrusted command), never evals, never
@@ -41,9 +41,8 @@
 #   - rx_re and rx_word() (the #508 expansion predicate; the verdict differs per file);
 #   - the #505 env arm and prefix triggers with strip_quotes(), quote_bearing(), quote_unbalanced() and the
 #     ENV_* values; the #518 value context with PREFIX_VALUE_WORDS; the #537 interpreter-option rule with
-#     PREFIX_INTERP_WORDS, INTERP_VALUE_OPTS and ip_kind(); the #503 chain lexer and pass and the #553
-#     newline carry (each hook with its own gate and output route); cy_max and glue_max;
-#   - CHAIN_LEX_MAX here and chain_budget in the push-guard awk; DBRACKET_MAX.
+#     PREFIX_INTERP_WORDS, INTERP_VALUE_OPTS and ip_kind();
+#   - DBRACKET_MAX.
 # Pinned by the gate: PREFIX_WORDS is byte-identical to push-guard.sh (4.40(c)); the AGENT_TYPES_* lines
 # match hooks/claude-dir-guard.sh (4.45) and agents/*.md (4.39). Every other copy is by convention, unpinned.
 #
@@ -101,12 +100,6 @@ INTERP_VALUE_OPTS="--init-file --rcfile -init-file -rcfile"
 # closed. It bounds that pass to about DBRACKET_MAX times the record length, so it stays linear. Byte-identical
 # to the push-guard.sh and claude-dir-guard.sh copies, by convention.
 DBRACKET_MAX="64"
-# CHAIN_LEX_MAX (#503): the chain budget, the most characters, summed over every input line of one
-# command that passes the chain-pass gate or is lexed by the #553 newline carry (a carried line also counts
-# the tokens it copies), that the chain pass lexes. This hook has no other command-size cap and no
-# deadline, so past the budget it fails closed (a deny) rather than lexing on. Matches chain_budget in
-# hooks/push-guard.sh, by convention.
-CHAIN_LEX_MAX="65536"
 DENY_STEM="trail-blazer-flow agent boundary:"
 
 input="$(cat)"
@@ -181,12 +174,13 @@ cmd="${cmd//$cr/}"
 # --- the scan ------------------------------------------------------------------------------
 # A POSIX-awk tokenizer that never REJECTS, unlike hooks/git-c-guard.sh's lexer, which rejects on any
 # unquoted metacharacter: rejecting here would leave this hook silent for exactly the composite or injected
-# forms it exists to catch. The base scan is quote-blind by design (it strips quote characters instead of
-# tracking quote state). A quote-aware lexer that REPLACED the base split could mis-track an unterminated
-# quote and let a real push through, the worse failure for a control whose only job is to fail closed. The
-# additive passes (]], chain, carry) track quote state only to re-judge text the base split cut apart, and
-# only add denies. Each input line is scanned as its own segment start, so a heredoc body line that starts
-# with git or gh is a deliberate over-block (write file content with the Write/Edit tools).
+# forms it exists to catch. The scan is quote-blind by design (it strips quote characters instead of
+# tracking quote state): a quote-aware lexer could mis-track an unterminated quote and let a real push
+# through, the worse failure for a control whose only job is to fail closed. So a break character inside a
+# quote or a substitution cuts a segment like any other, and the command hidden behind it is a known gap
+# (docs/reference/safety-model.md, "Known gaps"). The ]] pass is the one additive pass, and it only adds
+# denies. Each input line is scanned as its own segment start, so a heredoc body line that starts with git
+# or gh is a deliberate over-block (write file content with the Write/Edit tools).
 #
 # Output contract, one finding per line:
 #   gh | git <sub> | <word>   a resolved command word; git carries its subcommand (never case-folded), or
@@ -194,14 +188,12 @@ cmd="${cmd//$cr/}"
 #   -claude-write- <token>    a .claude path in a write position, or an interpreter word sharing the call
 #                             with a .claude mention (#340, #387)
 #   -cut-claude-write-        a ]] cut that may hide a .claude write
-#   -too-many-dbrackets-, -too-long-to-lex-   a budget was passed: fail closed
-# Every base line (redirect pass, base segments, ]] tails, the command-level capture) precedes every chain
-# line, so the role policy, whose first offending line decides, can never let a chain change a base verdict.
+#   -too-many-dbrackets-      a budget was passed: fail closed
 #
-# Each rule is described next to its code: the per-record block (redirect pass, base split, ]] pass, chain
-# pass, newline carry, command-level capture), emit_segment() (the walk; #505 lost prefix, #508 expansion,
-# #518 value context, #537 interpreter options) and the chain functions (#503, #553).
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v dbracket_max="$DBRACKET_MAX" -v chain_lex_max="$CHAIN_LEX_MAX" -v envnov="$ENV_NOVALUE_OPTS" -v envunset="$ENV_UNSET_OPTS" -v vpwords="$PREFIX_VALUE_WORDS" -v ipwords="$PREFIX_INTERP_WORDS" -v ipvopts="$INTERP_VALUE_OPTS" '
+# Each rule is described next to its code: the per-record block (redirect pass, base split, ]] pass,
+# command-level capture) and emit_segment() (the walk; #505 lost prefix, #508 expansion, #518 value
+# context, #537 interpreter options).
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v dbracket_max="$DBRACKET_MAX" -v envnov="$ENV_NOVALUE_OPTS" -v envunset="$ENV_UNSET_OPTS" -v vpwords="$PREFIX_VALUE_WORDS" -v ipwords="$PREFIX_INTERP_WORDS" -v ipvopts="$INTERP_VALUE_OPTS" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
@@ -223,15 +215,6 @@ BEGIN {
   for (i = 1; i <= nipv; i++) ipv_set[ipvarr[i]] = 1
   # #508: a dollar sign followed by a name character, a digit, a special parameter, or a quote
   rx_re = "[$][A-Za-z0-9_@*#?!$=~^\"" sq "-]"
-  # #503: the chain pass character classes (see chain_lex()) and the cap on a token grown by gluing
-  ch_cls[" "] = 1; ch_cls["\t"] = 1; ch_cls["<"] = 1; ch_cls[">"] = 1
-  ch_cls[";"] = 2; ch_cls["&"] = 2; ch_cls["|"] = 2
-  ch_cls["("] = 3; ch_cls[")"] = 4; ch_cls["{"] = 5; ch_cls["}"] = 6; ch_cls["`"] = 7
-  ch_cls[sq] = 8; ch_cls["\""] = 9; ch_cls["\\"] = 10; ch_cls["$"] = 11; ch_cls["#"] = 12
-  glue_max = 256
-  # #553: the most chain tokens a newline carry holds; a chain of more tokens up to and including the
-  # word that opens a quote starts no carry, so a carried line copies a bounded number of tokens
-  cy_max = 256
 }
 function normalize(tok,    t, parts, np) {
   t = tok
@@ -437,8 +420,7 @@ function ip_value_ok(w,    h, n, lv) {
 # its own tokens prints -cut-claude-write- (the far side of the ]] is never read). A segment with no
 # surviving token prints nothing.
 function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, gitsub, inplace, lw, found_claude, saw_exp, in_env, in_vp, in_ip, ipw, ipk, ipf, lost, s0) {
-  if (ch_use) { for (idx = 1; idx <= ch_n; idx++) toks[idx] = ch_t[idx]; ntok = ch_n }
-  else ntok = split(seg, toks, /[ \t]+/)
+  ntok = split(seg, toks, /[ \t]+/)
   ls_done = 0
   idx = 1
   saw_prefix = 0
@@ -571,352 +553,12 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     }
   }
 }
-# #503 chain pass (additive). The base split cuts a record at every break character before it looks at
-# quoting, so a break character inside a quote or a command substitution leaves the command word in a
-# segment whose first word is junk (X="a;b c" gh pr merge 5). This pass only ADDS output lines; the base
-# split and every verdict it produces are untouched. It runs once per gated physical line (and, #553, per
-# line of a newline carry), after the base segments and the ]] pass. The gate (ch_gate) is a break character
-# together with a quote, a backslash, $(, ${ or a backtick, in a line that mentions gh, git or claude.
-# chain_lex() reads the line once, tracking single quotes, double quotes, dollar-single-quote, backslash
-# escapes, an unquoted # at a word start outside any substitution (it ends the lexing; later break
-# characters stay head breaks) and a stack of $(...), ${...} and backtick frames, and classifies each break
-# character as H (a real command break), L (quoted or escaped) or a frame open (O dollar, T backtick) or
-# close (C). Segments joined by L breaks, and the two sides of a frame, form a CHAIN; chain_pass() queues
-# every chain of two or more segments (or one holding a cut-marked field, #553), and the last END block
-# judges the queue through the unchanged emit_segment() on the chain tokens, so every deny comes from an
-# existing rule. A token that ends at a quoted or escaped separator or at an L break carries a trailing
-# backslash (the cut marker), which the #505 parity test reads as a quoted span split here; a substitution
-# becomes the expansion word $_ when it is glued to a word or follows a token naming git or gh, and the
-# inert word _ when it starts a word after none; text after a frame close is glued back onto the word
-# before the frame (a glued token stops growing at glue_max). Why it does not repeat the #505 prose
-# over-block: the quote state is sequential (an apostrophe inside double quotes or after a backslash opens
-# nothing); the state does not cross an input line except through the #553 carry; a chain command word is
-# its first segment own, so a prose line adds only arguments; an unquoted # ends the lexing; a markdown code
-# span that starts a word is the inert _. The pass reads the base segments (segs, nseg) and skips a line
-# whose segment count disagrees with the lexer own.
-# Budget: this hook has no other size cap and no deadline, so the characters of all gated lines (and, #553,
-# of every carried line, with the tokens it copies) are summed, and past chain_lex_max the remaining gated
-# lines are not lexed: the scan prints -too-long-to-lex- once and the role policy denies, fail closed
-# (without a budget, padding or a flood of frames would multiply the cost of the whole scan). Cost: the
-# lexer and assembly are O(line) and bounded by the budget; the check is O(1) per gated line.
-# This program is single-quoted shell: it must never contain a literal apostrophe, comments included.
-# ch_cls: 1 separator (space, tab, less, greater), 2 semicolon ampersand pipe, 3 open paren, 4 close
-# paren, 5 open brace, 6 close brace, 7 backtick, 8 single quote, 9 double quote, 10 backslash,
-# 11 dollar, 12 hash.
-# ch_brk: ends segment ch_s with a break of KIND (H head, L literal, O dollar frame open, T backtick
-# frame open, C frame close). A literal break flags the field it ends so the chain adds the cut
-# marker (a trailing backslash) to that token; ch_ot[] records whether the segment had text in its
-# last word, which tells a glued backtick from a word-initial one. ch_mk[s] lists the flagged fields
-# of segment s as a comma-delimited string.
-function ch_brk(kind) {
-  if (kind == "L" && ch_tokhas) ch_mk[ch_s] = ch_mk[ch_s] "," (ch_r + 1) ","
-  ch_bk[ch_s] = kind
-  ch_ot[ch_s] = ch_tokhas
-  ch_s++
-  ch_r = 0
-  ch_inrun = 0
-  ch_tokhas = 0
-  ch_pd = 0
-}
-# ch_sep: a separator character. Field ch_r (the word before the run) is flagged when the run is
-# quoted or escaped, which is where the chain adds the cut marker.
-function ch_sep(quoted) {
-  if (!ch_inrun) { ch_r++; ch_inrun = 1; ch_runtok = ch_tokhas; ch_tokhas = 0 }
-  if (quoted && ch_runtok) ch_mk[ch_s] = ch_mk[ch_s] "," ch_r ","
-  ch_pd = 0
-}
-# ch_qchar: a character that is quoted or escaped, of class K. A caller reading the class of an
-# escaped character, which may have no class, passes ch_cls[c] + 0, a plain value, never the element
-# itself: gawk 5.2 aborts with an internal error when an element first created by such a call is
-# read as a scalar and then passed again (a line lexed twice, #553), and the scan would stop early.
-function ch_qchar(k) {
-  if (k == 1) ch_sep(1)
-  else if (k >= 2 && k <= 7) ch_brk("L")
-  else { ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
-}
-function ch_open(fkind, okind) {
-  ch_ld++
-  ch_fk[ch_ld] = fkind
-  ch_fsv[ch_ld] = ch_lq
-  ch_fcn[ch_ld] = 0
-  ch_lq = 0
-  ch_brk(okind)
-}
-function ch_close() {
-  ch_lq = ch_fsv[ch_ld]
-  ch_ld--
-  ch_brk("C")
-}
-function chain_lex(rec, q0,    n, lc, i, c, k, nx, pl) {
-  n = split(rec, lc, "")
-  split("", ch_mk)
-  split("", ch_bk)
-  split("", ch_ot)
-  split("", ch_fk)
-  split("", ch_fsv)
-  split("", ch_fcn)
-  ch_lq = 0
-  ch_ld = 0
-  ch_s = 1
-  ch_r = 0
-  ch_inrun = 0
-  ch_tokhas = 0
-  ch_pd = 0
-  ch_cmt = 0
-  # #553: ch_qs and ch_qf name the segment and the field of the word in which the last quote opened at
-  # depth 0 (zero when none did); a carried line starts inside the quote state q0 of the line before
-  ch_qs = 0
-  ch_qf = 0
-  if (q0) ch_lq = q0
-  for (i = 1; i <= n; i++) {
-    c = lc[i]
-    k = ch_cls[c]
-    pl = ch_lq
-    if (ch_cmt) { if (k >= 2 && k <= 7) ch_brk("H"); continue }
-    if (k == 0 && ch_lq == 0) { ch_inrun = 0; ch_tokhas = 1; ch_pd = 0; continue }
-    if (ch_lq == 1) {
-      if (k == 8) { ch_lq = 0; ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
-      else ch_qchar(k)
-    } else if (ch_lq == 3) {
-      if (k == 8) { ch_lq = 0; ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
-      else if (k == 10) {
-        ch_inrun = 0; ch_tokhas = 1; ch_pd = 0
-        if (i < n) { i++; ch_qchar(ch_cls[lc[i]] + 0) }
-      } else ch_qchar(k)
-    } else if (ch_lq == 2) {
-      if (k == 9) { ch_lq = 0; ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
-      else if (k == 10) {
-        ch_inrun = 0; ch_tokhas = 1; ch_pd = 0
-        nx = lc[i + 1]
-        if (i < n && (nx == "$" || nx == "`" || nx == "\"" || nx == "\\")) { i++; ch_qchar(ch_cls[nx]) }
-      }
-      else if (k == 11) { ch_inrun = 0; ch_tokhas = 1; ch_pd = 1 }
-      else if (k == 7) ch_open("T", "T")
-      else if (k == 3 && ch_pd) ch_open("P", "O")
-      else if (k == 5 && ch_pd) ch_open("B", "O")
-      else ch_qchar(k)
-    } else if (k == 1) ch_sep(0)
-    else if (k == 2) ch_brk("H")
-    else if (k == 3) {
-      if (ch_pd) ch_open("P", "O")
-      else { if (ch_ld > 0 && ch_fk[ch_ld] == "P") ch_fcn[ch_ld]++; ch_brk("H") }
-    } else if (k == 4) {
-      if (ch_ld > 0 && ch_fk[ch_ld] == "P") {
-        if (ch_fcn[ch_ld] > 0) { ch_fcn[ch_ld]--; ch_brk("H") }
-        else ch_close()
-      } else ch_brk("H")
-    } else if (k == 5) {
-      if (ch_pd) ch_open("B", "O")
-      else { if (ch_ld > 0 && ch_fk[ch_ld] == "B") ch_fcn[ch_ld]++; ch_brk("H") }
-    } else if (k == 6) {
-      if (ch_ld > 0 && ch_fk[ch_ld] == "B") {
-        if (ch_fcn[ch_ld] > 0) { ch_fcn[ch_ld]--; ch_brk("H") }
-        else ch_close()
-      } else ch_brk("H")
-    } else if (k == 7) {
-      if (ch_ld > 0 && ch_fk[ch_ld] == "T") ch_close()
-      else ch_open("T", "T")
-    } else if (k == 8) { ch_lq = (ch_pd ? 3 : 1); ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
-    else if (k == 9) { ch_lq = 2; ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
-    else if (k == 10) {
-      ch_inrun = 0; ch_tokhas = 1; ch_pd = 0
-      if (i < n) { i++; ch_qchar(ch_cls[lc[i]] + 0) }
-    } else if (k == 11) { ch_inrun = 0; ch_tokhas = 1; ch_pd = 1 }
-    else if (k == 12 && !ch_tokhas && ch_ld == 0) ch_cmt = 1
-    else { ch_inrun = 0; ch_tokhas = 1; ch_pd = 0 }
-    if (ch_lq && !pl && !ch_ld && (k == 8 || k == 9)) { ch_qs = ch_s; ch_qf = ch_r + 1 }
-  }
-}
-# ch_judge: queue the chain at depth D when it joins two or more segments or holds a cut-marked field
-# (#553), then drop its tokens (ch_ct[] is one stack shared by every depth: a frame chain starts where its
-# parent chain currently ends, so ch_base[d] marks where depth d starts). The last END block judges the
-# queue through emit_segment() in token mode. A capture-only pass (ch_nj, #553) drops the tokens without
-# queueing.
-function ch_judge(d,    k, nt) {
-  nt = ch_top - ch_base[d]
-  if (ch_cm[d] && nt > 0 && !ch_nj) {
-    ch_pn++
-    ch_pc[ch_pn] = nt
-    ch_ps[ch_pn] = ch_pq
-    for (k = 1; k <= nt; k++) ch_pt[++ch_pq] = ch_ct[ch_base[d] + k]
-  }
-  ch_top = ch_base[d]
-  ch_cm[d] = 0
-  ch_cg[d] = 0
-  ch_cgi[d] = ch_top
-}
-# ch_names_git: true iff a token of the chain at depth D, before the one being decided, names git or gh.
-# Scanned lazily and once per token (ch_cgi[] is the scan frontier), so a chain with no frame pays
-# nothing.
-function ch_names_git(d,    k, lo) {
-  if (!ch_cg[d]) {
-    for (k = ch_cgi[d] + 1; k <= ch_top; k++) {
-      lo = tolower(ch_ct[k])
-      if (index(lo, "git") > 0 || index(lo, "gh") > 0) { ch_cg[d] = 1; break }
-    }
-    ch_cgi[d] = ch_top
-  }
-  return ch_cg[d]
-}
-function chain_pass(rec, q0, cy,    ns, s, seg, tk, ntk, f, first, d, glue, tok, last, kind, mks, ci) {
-  chain_lex(rec, q0)
-  ns = nseg
-  if (ns != ch_s) return
-  d = 0
-  ch_top = 0
-  ch_base[0] = 0
-  ch_cm[0] = 0
-  ch_cg[0] = 0
-  ch_cgi[0] = 0
-  glue = 0
-  # #553: ch_qt is the chain token holding the quote that is still open at the end of the line. A fresh
-  # capture (cy without q0) only records the carry and queues nothing (ch_nj). A carried line (q0) is
-  # lexed from the quote state of the line before: its chain starts as the carried tokens, and the
-  # first word of the line is glued onto the last carried token, as the close of a substitution does.
-  ch_qt = 0
-  ch_nj = (cy && !q0)
-  if (q0) {
-    for (ci = 1; ci <= cy_n; ci++) ch_ct[ci] = cy_t[ci]
-    ch_top = cy_n
-    ch_cm[0] = 1
-    glue = 1
-    if (!ch_qs) ch_qt = cy_n
-  }
-  for (s = 1; s <= ns; s++) {
-    seg = segs[s]
-    mks = ch_mk[s]
-    if (index(seg, " ") == 0 && index(seg, "\t") == 0) { tk[1] = seg; ntk = (seg == "" ? 0 : 1) }
-    else ntk = split(seg, tk, /[ \t]+/)
-    first = 1
-    if (glue) {
-      glue = 0
-      if (ntk >= 1 && tk[1] != "" && ch_top > ch_base[d]) {
-        first = 2
-        last = ch_ct[ch_top]
-        if (length(last) < glue_max) {
-          tok = tk[1]
-          if (mks != "" && index(mks, ",1,")) tok = tok "\\"
-          ch_ct[ch_top] = last tok
-        }
-        if (s == ch_qs && ch_qf == 1) ch_qt = ch_top
-      }
-    }
-    for (f = first; f <= ntk; f++) {
-      tok = tk[f]
-      if (tok == "") continue
-      if (mks != "" && index(mks, "," f ",")) tok = tok "\\"
-      ch_ct[++ch_top] = tok
-      if (s == ch_qs && f == ch_qf) ch_qt = ch_top
-    }
-    if (mks != "") ch_cm[d] = 1
-    if (s == ns) break
-    kind = ch_bk[s]
-    if (kind == "L") ch_cm[d] = 1
-    else if (kind == "O" || kind == "T") {
-      ch_cm[d] = 1
-      last = (ch_top > ch_base[d] ? ch_ct[ch_top] : "")
-      if (kind == "O" && substr(last, length(last)) == "$") {
-        if (length(last) > 1) { if (length(last) < glue_max) ch_ct[ch_top] = last "_" }
-        else ch_ct[ch_top] = (ch_names_git(d) ? "$_" : "_")
-      } else if (kind == "T" && ch_ot[s] && ch_top > ch_base[d]) {
-        if (length(last) < glue_max) ch_ct[ch_top] = last "$_"
-      } else ch_ct[++ch_top] = (ch_names_git(d) ? "$_" : "_")
-      d++
-      ch_base[d] = ch_top
-      ch_cm[d] = 0
-      ch_cg[d] = 0
-      ch_cgi[d] = ch_top
-    } else if (kind == "C" && d > 0) {
-      ch_judge(d)
-      d--
-      glue = 1
-    } else ch_judge(d)
-  }
-  # #553: the line ends inside a quote opened at depth 0 (no substitution open): keep the chain up to
-  # and including the word holding that quote as the carry, with a cut marker on its last token, and
-  # leave the chain unqueued until the quote closes on a later line. The capture-only flag ch_nj, the depth
-  # test here and the substitution tests of cy_inside() have no mutation record: the depth and
-  # substitution tests differ only for a line that holds or ends inside a substitution, a residual of
-  # this pass, and a capture-only line that were judged could only add a deny
-  if (cy && ch_lq && !ch_ld && ch_qt > 0 && ch_qt <= cy_max) {
-    cy_n = ch_qt
-    for (ci = 1; ci <= cy_n; ci++) cy_t[ci] = ch_ct[ci]
-    if (substr(cy_t[cy_n], length(cy_t[cy_n])) != "\\") cy_t[cy_n] = cy_t[cy_n] "\\"
-    cy_q = ch_lq
-    ch_cm[0] = 0
-  }
-  for (; d >= 0; d--) ch_judge(d)
-  ch_nj = 0
-}
-# #553 fail-closed: a quoted value the parity tests or the per-line lexer misread. Two shapes hid the command
-# word behind an assignment value: (1) a mixed-quote or escaped-quote value with a space and no break
-# character whose quote counts are each even (a double-quoted fragment holding a single quote followed by a
-# single-quoted fragment holding a space, or X="\" x" gh ...), which the #505 parity test reads as
-# balanced; (2) a quote left open at a line end (X="a<LF>b" gh ...), because the lexer starts
-# every line in the plain state. Two additive extensions of the chain pass close them, reusing its lexer,
-# queue, emit_segment() and budget; they only add output lines.
-#   ch_mixed (the second ch_gate arm): a line with no break character, assignment text (a name character
-#   and an equals sign), a backslash or both quote kinds, and a word naming gh, git or claude. chain_pass()
-#   also queues a chain that carries a cut-marked field.
-#   The NEWLINE CARRY (cy_*): a line with assignment text, a quote, and a quote count that does not prove it
-#   closed (cy_cand, cy_closed) is lexed once, capture only. If its lexer state at the line end is an open
-#   quote with no substitution open, the chain tokens up to and including the word holding that quote are
-#   kept (that word gets a cut marker; the words inside the quote are dropped) together with the quote
-#   state; a chain of more than cy_max tokens up to that word starts no carry. Each following line is lexed
-#   from the carried state, the carried tokens being the start of its chain and its first word glued onto
-#   the carried word, unless it cannot change the state and is skipped unlexed (cy_inside). The chain is
-#   queued once the quote closes; a line that closes the quote and opens another keeps the carry.
-# Cost: each new per-line test is a bounded number of index(), match() and gsub() calls, O(line); every
-# carried line is charged its length plus the tokens it copies (at most cy_max) to the chain budget.
-function ch_mixed(r,    lo) {
-  if (!match(r, /[A-Za-z0-9_]=/)) return 0
-  if (!(index(r, "\\") > 0 || (index(r, "\"") > 0 && index(r, sq) > 0))) return 0
-  lo = tolower(r)
-  return (index(lo, "git") > 0 || index(lo, "gh") > 0 || index(lo, "claude") > 0)
-}
-function ch_gate(r,    lo) {
-  if (!match(r, /[;&|(){}`]/)) return ch_mixed(r)
-  if (!(index(r, "\"") > 0 || index(r, sq) > 0 || index(r, "\\") > 0 || index(r, "$(") > 0 || index(r, "${") > 0 || index(r, "`") > 0)) return 0
-  lo = tolower(r)
-  return (index(lo, "git") > 0 || index(lo, "gh") > 0 || index(lo, "claude") > 0)
-}
-# cy_closed: no backslash, and the quotes of one kind only, in an even count -- a line that cannot end
-# inside a quote. cy_cand: assignment text, a quote, and not cy_closed. cy_q is the carried quote state and
-# cy_t[1..cy_n] the carried tokens.
-function cy_closed(r,    t, nd, ns) {
-  if (index(r, "\\") > 0) return 0
-  t = r
-  nd = gsub(/"/, "", t)
-  t = r
-  ns = gsub(sq, "", t)
-  return ((ns == 0 && nd % 2 == 0) || (nd == 0 && ns % 2 == 0))
-}
-function cy_cand(r) {
-  if (index(r, "=") == 0) return 0
-  if (index(r, "\"") == 0 && index(r, sq) == 0) return 0
-  if (cy_closed(r)) return 0
-  return (match(r, /[A-Za-z0-9_]=/) > 0)
-}
-# cy_inside: the line cannot leave the carried quote state or open a substitution inside it: a single
-# quote or dollar-single-quote state needs no single quote on the line, a double quote state no double
-# quote, backtick, dollar-paren or dollar-brace. (The substitution tests only keep a substitution on the
-# line in the chain, a substitution that spans lines being outside the carry.)
-function cy_inside(r) {
-  if (cy_q == 1 || cy_q == 3) return (index(r, sq) == 0)
-  return (index(r, "\"") == 0 && index(r, "`") == 0 && index(r, "$(") == 0 && index(r, "${") == 0)
-}
-function cy_pass(r,    q) {
-  q = cy_q
-  cy_q = 0
-  chain_pass(r, q, 1)
-}
 {
   # Per record: (1) the #508 facts the env -S check reads; (2) the #340 redirect pass: every >, >>, >| or >&
   # in the raw line (before the segment-break gsub blanks its target) yields -claude-write- <target> when the
   # target token has a .claude segment; < is never matched (an input redirect is ignored) and >&2 / 2>&1 give
   # the targets 2 / 1; (3) the base split: ; & | ( ) { } and a backtick start a new segment, < and > are plain
-  # separators, and each segment goes to emit_segment(); (4) the ]] pass; (5) the #503 chain pass; (6) the
-  # #553 newline carry; (7) the #387 cw_tok capture.
+  # separators, and each segment goes to emit_segment(); (4) the ]] pass; (5) the #387 cw_tok capture.
   rx_cut = (index($0, "${") > 0 || index($0, "$(") > 0 || index($0, "`") > 0)
   rx_env_hit = ""
   if ((index($0, "$") > 0 || index($0, "`") > 0) && (index($0, "-S") > 0 || index($0, "--split-string") > 0)) rx_env_hit = rx_env_scan()
@@ -973,21 +615,6 @@ function cy_pass(r,    q) {
       db_rest = substr(db_rest, db_next)
     }
   }
-  # #503: the additive chain pass (see chain_lex()). The gated lines of one command, and the lines the #553
-  # newline carry lexes, are lexed up to a budget of chain_lex_max characters in all; past it nothing more is
-  # lexed and -too-long-to-lex- is printed once, which the role policy denies on.
-  if (ch_gate($0)) {
-    ch_used += length($0)
-    if (ch_used > chain_lex_max) { if (!ch_over++) print "-too-long-to-lex-" }
-    else chain_pass($0)
-  }
-  # #553: the newline carry (see cy_closed()). A candidate line, or a carried line that is not wholly
-  # inside the carried quote, is charged its length plus the carried tokens it copies, to the same budget.
-  if (cy_q ? !cy_inside($0) : cy_cand($0)) {
-    ch_used += length($0) + (cy_q ? cy_n : 0)
-    if (chain_lex_max < ch_used) { if (!ch_over++) print "-too-long-to-lex-"; cy_q = 0 }
-    else cy_pass($0)
-  }
   if (cw_tok == "" && claude_seg_in_text($0)) {
     cw_ntok = split($0, cw_toks, /[ \t]+/)
     for (cw_j = 1; cw_j <= cw_ntok; cw_j++) {
@@ -996,17 +623,6 @@ function cy_pass(r,    q) {
   }
 }
 END { if (cw_word != "" && cw_tok != "") print "-claude-write- " cw_word " with " cw_tok }
-END {
-  ch_cwb = (cw_word != "" && cw_tok != "")
-  for (ch_pi = 1; ch_pi <= ch_pn; ch_pi++) {
-    ch_n = ch_pc[ch_pi]
-    for (ch_pk = 1; ch_pk <= ch_n; ch_pk++) ch_t[ch_pk] = ch_pt[ch_ps[ch_pi] + ch_pk]
-    ch_use = 1
-    emit_segment("", 0)
-    ch_use = 0
-  }
-  if (!ch_cwb && cw_word != "" && cw_tok != "") print "-claude-write- " cw_word " with " cw_tok
-}
 ' 2>/dev/null)"
 scan_rc=$?
 # #559: a non-zero status means the scan stopped early (an awk abort, a resource limit, a killed process, or
@@ -1040,11 +656,6 @@ while IFS= read -r line; do
       deny_cmd="split by ]]"
       break
       ;;
-    "-too-long-to-lex-")
-      deny_kind="lexcap"
-      deny_cmd="too much quoted text to analyse"
-      break
-      ;;
     "-claude-write- "*)
       deny_kind="claude"
       deny_cmd="${line#-claude-write- }"
@@ -1073,9 +684,6 @@ EOF
 if [ -n "$deny_cmd" ]; then
   if [ "$deny_kind" = "dbracket" ]; then
     printf '%s %s role: command has too many standalone ]] tokens to analyse safely (blocked: %s) — see agents/%s.md\n' \
-      "$DENY_STEM" "$role" "$deny_cmd" "$role" >&2
-  elif [ "$deny_kind" = "lexcap" ]; then
-    printf '%s %s role: a command holds too much quoted or substituted text to analyse safely (blocked: %s) — see agents/%s.md\n' \
       "$DENY_STEM" "$role" "$deny_cmd" "$role" >&2
   elif [ "$deny_kind" = "cutclaude" ]; then
     printf '%s %s role: cannot verify whether this write reaches a .claude segment (blocked: %s) — see agents/%s.md\n' \
