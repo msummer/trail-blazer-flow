@@ -417,8 +417,8 @@
       "filter": "ab-kw-",
       "edits": [
         {
-          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat\"",
-          "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash eval trap noglob nocorrect - repeat\""
+          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval\"",
+          "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash eval\""
         }
       ],
       "expect_fail": [
@@ -483,35 +483,15 @@
       "filter": "ab-pc-",
       "edits": [
         {
-          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat\"",
+          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval\"",
           "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc\""
         }
       ],
       "expect_fail": [
-        "ab-pc-deny-dash",
         "ab-pc-deny-eval-git",
         "ab-pc-deny-eval-lead-space",
         "ab-pc-deny-eval-quoted-gh",
-        "ab-pc-deny-noglob",
-        "ab-pc-deny-nocorrect",
-        "ab-pc-deny-repeat",
-        "ab-pc-deny-trap-gh",
         "ab-pc-deny-verifier-eval"
-      ]
-    },
-    {
-      "name": "403-ab-pc-repeat",
-      "target": "hooks/agent-boundary.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "ab-pc-",
-      "edits": [
-        {
-          "from": "    if (norm in prefix_set) { saw_prefix = 1; idx += (norm == \"repeat\") ? 2 : 1; continue }",
-          "to": "    if (norm in prefix_set) { saw_prefix = 1; idx++; continue }"
-        }
-      ],
-      "expect_fail": [
-        "ab-pc-deny-repeat"
       ]
     },
     {
@@ -536,8 +516,8 @@
       "filter": "push-kw-",
       "edits": [
         {
-          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat\"",
-          "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash eval trap noglob nocorrect - repeat\""
+          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval\"",
+          "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash eval\""
         }
       ],
       "expect_fail": [
@@ -582,35 +562,15 @@
       "filter": "push-pc-",
       "edits": [
         {
-          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat\"",
+          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval\"",
           "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc\""
         }
       ],
       "expect_fail": [
-        "push-pc-deny-dash",
         "push-pc-deny-eval",
         "push-pc-deny-eval-lead-space",
         "push-pc-deny-eval-quoted",
-        "push-pc-deny-eval-split",
-        "push-pc-deny-noglob",
-        "push-pc-deny-nocorrect",
-        "push-pc-deny-repeat",
-        "push-pc-deny-trap"
-      ]
-    },
-    {
-      "name": "403-pg-pc-repeat",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-pc-",
-      "edits": [
-        {
-          "from": "    if (norm in prefix_set) { saw_prefix = 1; idx += (norm == \"repeat\") ? 2 : 1; continue }",
-          "to": "    if (norm in prefix_set) { saw_prefix = 1; idx++; continue }"
-        }
-      ],
-      "expect_fail": [
-        "push-pc-deny-repeat"
+        "push-pc-deny-eval-split"
       ]
     },
     {
@@ -2038,30 +1998,12 @@
       "filter": "cdg-pc-",
       "edits": [
         {
-          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval trap noglob nocorrect - repeat\"",
+          "from": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc eval\"",
           "to": "PREFIX_WORDS=\"env command builtin exec sudo nohup time nice stdbuf xargs bash sh zsh ksh dash if then elif else do while until ! coproc\""
         }
       ],
       "expect_fail": [
-        "cdg-pc-deny-dash-shim",
-        "cdg-pc-deny-eval-shim",
-        "cdg-pc-deny-noglob-shim",
-        "cdg-pc-deny-repeat-shim"
-      ]
-    },
-    {
-      "name": "403-cdg-pc-repeat",
-      "target": "hooks/claude-dir-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "cdg-pc-",
-      "edits": [
-        {
-          "from": "        [ \"$tok\" = repeat ] && i=$((i + 1))\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "cdg-pc-deny-repeat-shim"
+        "cdg-pc-deny-eval-shim"
       ]
     },
     {
@@ -2077,7 +2019,6 @@
       ],
       "expect_fail": [
         "cdg-dbq-deny-eval-sq",
-        "cdg-dbq-deny-trap-sq",
         "cdg-dbq-deny-quoted-prefix"
       ]
     },
@@ -4326,7 +4267,6 @@
         }
       ],
       "expect_fail": [
-        "push-alias-deny-backtick-config-env",
         "push-alias-deny-c-target",
         "push-alias-deny-case-fold",
         "push-alias-deny-chain",
@@ -4334,21 +4274,13 @@
         "push-alias-deny-codex-shaped",
         "push-alias-deny-config-env",
         "push-alias-deny-continuation",
-        "push-alias-deny-cr-mid",
-        "push-alias-deny-cr-mid-subsection",
-        "push-alias-deny-dollar-parameters",
         "push-alias-deny-escape-newline",
         "push-alias-deny-escape-tab",
         "push-alias-deny-feature-dest",
         "push-alias-deny-global-config",
         "push-alias-deny-include",
-        "push-alias-deny-lost-option-config",
-        "push-alias-deny-lost-prefix-config",
-        "push-alias-deny-lost-reloc-prefix",
-        "push-alias-deny-lost-value-config",
         "push-alias-deny-never-executes",
         "push-alias-deny-option-first",
-        "push-alias-deny-quoted-space-assign",
         "push-alias-deny-quoted-word",
         "push-alias-deny-repo-config",
         "push-alias-deny-session-after-c-target",
@@ -4362,10 +4294,6 @@
         "push-alias-deny-subsection-repo",
         "push-alias-deny-subsection-spaces",
         "push-alias-deny-subsection-tab",
-        "push-alias-deny-xcfg-bare-gitconfig",
-        "push-alias-deny-xcfg-bare-xdg",
-        "push-alias-deny-xcfg-export-home",
-        "push-alias-deny-xcfg-export-parameters",
         "push-alias-deny-xdg-config"
       ]
     },
@@ -4401,16 +4329,11 @@
         "push-alias-deny-chain",
         "push-alias-deny-codex-shaped",
         "push-alias-deny-continuation",
-        "push-alias-deny-cr-mid",
-        "push-alias-deny-cr-mid-subsection",
         "push-alias-deny-escape-newline",
         "push-alias-deny-escape-tab",
         "push-alias-deny-feature-dest",
         "push-alias-deny-global-config",
         "push-alias-deny-include",
-        "push-alias-deny-lost-option-config",
-        "push-alias-deny-lost-prefix-config",
-        "push-alias-deny-lost-value-config",
         "push-alias-deny-never-executes",
         "push-alias-deny-option-first",
         "push-alias-deny-quoted-word",
@@ -4426,11 +4349,6 @@
         "push-alias-deny-subsection-repo",
         "push-alias-deny-subsection-spaces",
         "push-alias-deny-subsection-tab",
-        "push-alias-deny-xcfg-bare-gitconfig",
-        "push-alias-deny-xcfg-bare-xdg",
-        "push-alias-deny-xcfg-export-gitconfig",
-        "push-alias-deny-xcfg-export-home",
-        "push-alias-deny-xcfg-export-parameters",
         "push-alias-deny-xdg-config",
         "push-aliasdl-deny-budget-zero",
         "push-aliasdl-deny-flood"
@@ -4453,8 +4371,6 @@
         "push-alias-deny-chain",
         "push-alias-deny-codex-shaped",
         "push-alias-deny-continuation",
-        "push-alias-deny-cr-mid",
-        "push-alias-deny-cr-mid-subsection",
         "push-alias-deny-escape-newline",
         "push-alias-deny-escape-tab",
         "push-alias-deny-feature-dest",
@@ -4475,11 +4391,6 @@
         "push-alias-deny-subsection-repo",
         "push-alias-deny-subsection-spaces",
         "push-alias-deny-subsection-tab",
-        "push-alias-deny-xcfg-bare-gitconfig",
-        "push-alias-deny-xcfg-bare-xdg",
-        "push-alias-deny-xcfg-export-gitconfig",
-        "push-alias-deny-xcfg-export-home",
-        "push-alias-deny-xcfg-export-parameters",
         "push-alias-deny-xdg-config"
       ]
     },
@@ -4500,15 +4411,11 @@
         "push-alias-deny-chain",
         "push-alias-deny-codex-shaped",
         "push-alias-deny-continuation",
-        "push-alias-deny-cr-mid",
         "push-alias-deny-escape-newline",
         "push-alias-deny-escape-tab",
         "push-alias-deny-feature-dest",
         "push-alias-deny-global-config",
         "push-alias-deny-include",
-        "push-alias-deny-lost-option-config",
-        "push-alias-deny-lost-prefix-config",
-        "push-alias-deny-lost-value-config",
         "push-alias-deny-never-executes",
         "push-alias-deny-option-first",
         "push-alias-deny-quoted-word",
@@ -4531,8 +4438,6 @@
         }
       ],
       "expect_fail": [
-        "push-alias-deny-cr-mid",
-        "push-alias-deny-cr-mid-subsection",
         "push-alias-deny-shell"
       ]
     },
@@ -4677,25 +4582,6 @@
       ]
     },
     {
-      "name": "448-pg-alias-xcfg",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "      if [ \"$xcfg_seen\" = 1 ]; then",
-          "to": "      if false; then"
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-xcfg-bare-gitconfig",
-        "push-alias-deny-xcfg-bare-xdg",
-        "push-alias-deny-xcfg-export-gitconfig",
-        "push-alias-deny-xcfg-export-home",
-        "push-alias-deny-xcfg-export-parameters"
-      ]
-    },
-    {
       "name": "448-pg-alias-cmdline-text",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -4707,8 +4593,7 @@
         }
       ],
       "expect_fail": [
-        "push-alias-noop-c-benign",
-        "push-alias-noop-dollar-not-config"
+        "push-alias-noop-c-benign"
       ]
     },
     {
@@ -4726,8 +4611,6 @@
         "push-alias-noop-builtins-with-push-alias",
         "push-alias-noop-harness-shapes",
         "push-alias-noop-other-alias-word",
-        "push-alias-noop-quoted-option-nonalias",
-        "push-alias-noop-quoted-prefix-nonalias",
         "push-alias-noop-undefined-subcommand"
       ]
     },
@@ -4747,58 +4630,7 @@
         "push-alias-noop-env-nosystem",
         "push-alias-noop-nonpush-alias",
         "push-alias-noop-other-alias-word",
-        "push-alias-noop-scoped-home",
         "push-alias-noop-subsection"
-      ]
-    },
-    {
-      "name": "448-pg-alias-lost-prefix",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "  if (needgit && !saw_git) return",
-          "to": "  if (needgit) return"
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-lost-prefix-config",
-        "push-alias-deny-lost-reloc-prefix",
-        "push-alias-deny-quoted-space-assign"
-      ]
-    },
-    {
-      "name": "448-pg-alias-lost-option",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "  if (needgit && !saw_git) return",
-          "to": "  if (!needgit) return"
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-lost-option-config",
-        "push-alias-deny-lost-value-config",
-        "push-alias-deny-quoted-option"
-      ]
-    },
-    {
-      "name": "448-pg-alias-lost-reloc",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "  if (reloc || saw_alias) {",
-          "to": "  if (saw_alias) {"
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-lost-reloc-prefix",
-        "push-alias-deny-quoted-space-assign"
       ]
     },
     {
@@ -4815,9 +4647,7 @@
       "expect_fail": [
         "push-reloc-deny-env-home",
         "push-reloc-deny-home-inline",
-        "push-reloc-deny-xdg-inline",
-        "push-reloc-deny-xseg-bare-xdg",
-        "push-reloc-deny-xseg-export-home"
+        "push-reloc-deny-xdg-inline"
       ]
     },
     {
@@ -4838,22 +4668,6 @@
       ]
     },
     {
-      "name": "448-pg-reloc-xseg",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-reloc-",
-      "edits": [
-        {
-          "from": "    if (cmdword in export_set) { for (k = idx; k <= ntok; k++) { rname = strip_quotes(toks[k]); sub(/=.*/, \"\", rname); if (rname in reloc_set) { xseg = \"HOME or XDG_CONFIG_HOME set earlier in this command\"; break } } }\n    else if (cmdword == \"\" && reloc) xseg = \"HOME or XDG_CONFIG_HOME set earlier in this command\"\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-reloc-deny-xseg-bare-xdg",
-        "push-reloc-deny-xseg-export-home"
-      ]
-    },
-    {
       "name": "448-pg-reloc-exact",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -4866,37 +4680,6 @@
       ],
       "expect_fail": [
         "push-reloc-noop-similar-name"
-      ]
-    },
-    {
-      "name": "448-pg-reloc-scoped",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-reloc-",
-      "edits": [
-        {
-          "from": "    else if (cmdword == \"\" && reloc) xseg = \"HOME",
-          "to": "    else if (reloc) xseg = \"HOME"
-        }
-      ],
-      "expect_fail": [
-        "push-reloc-noop-scoped"
-      ]
-    },
-    {
-      "name": "448-pg-alias-xcfg-scoped",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-noop-",
-      "edits": [
-        {
-          "from": "    else if (cmdword == \"\" && (reloc || cmdcfg)) xcfg = 1",
-          "to": "    else if (reloc || cmdcfg) xcfg = 1"
-        }
-      ],
-      "expect_fail": [
-        "push-alias-noop-dollar-not-config",
-        "push-alias-noop-scoped-home"
       ]
     },
     {
@@ -4930,21 +4713,6 @@
       ]
     },
     {
-      "name": "448-pg-alias-lost-needgit",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-noop-",
-      "edits": [
-        {
-          "from": "  if (needgit && !saw_git) return\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-alias-noop-lost-no-git"
-      ]
-    },
-    {
       "name": "448-pg-alias-subsection",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -4956,7 +4724,6 @@
         }
       ],
       "expect_fail": [
-        "push-alias-deny-cr-mid-subsection",
         "push-alias-deny-subsection-any-subcommand",
         "push-alias-deny-subsection-dotted",
         "push-alias-deny-subsection-escaped-name",
@@ -4981,68 +4748,6 @@
       "expect_fail": [
         "push-alias-deny-escape-newline",
         "push-alias-deny-escape-tab"
-      ]
-    },
-    {
-      "name": "448-pg-alias-cr-mid",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "[ \"$cfg_cr_mid\" = 0 ] || cfg_val=\"!\"\n        cfg_alias_lines=",
-          "to": "cfg_alias_lines="
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-cr-mid"
-      ]
-    },
-    {
-      "name": "448-pg-alias-xcfg-export-cfg",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "if ((rname in reloc_set) || is_cmdcfg_name(rname)) { xcfg = 1; break }",
-          "to": "if (rname in reloc_set) { xcfg = 1; break }"
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-xcfg-export-gitconfig",
-        "push-alias-deny-xcfg-export-parameters"
-      ]
-    },
-    {
-      "name": "448-pg-alias-xcfg-bare-cfg",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "    else if (cmdword == \"\" && (reloc || cmdcfg)) xcfg = 1",
-          "to": "    else if (cmdword == \"\" && reloc) xcfg = 1"
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-xcfg-bare-gitconfig"
-      ]
-    },
-    {
-      "name": "448-pg-alias-dollar",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "      if (index(cv, \"$\") > 0) cfgdollar = 1\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-dollar-c",
-        "push-alias-deny-dollar-subst"
       ]
     },
     {
@@ -5087,7 +4792,6 @@
         }
       ],
       "expect_fail": [
-        "push-alias-deny-cr-mid-subsection",
         "push-alias-deny-subsection-any-subcommand",
         "push-alias-deny-subsection-dotted",
         "push-alias-deny-subsection-escaped-name",
@@ -5110,7 +4814,6 @@
         }
       ],
       "expect_fail": [
-        "push-alias-deny-cr-mid-subsection",
         "push-alias-deny-subsection-any-subcommand",
         "push-alias-deny-subsection-escaped-name",
         "push-alias-deny-subsection-global",
@@ -5147,54 +4850,6 @@
       ],
       "expect_fail": [
         "push-alias-deny-subsection-dotted"
-      ]
-    },
-    {
-      "name": "448-pg-alias-backtick",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "(cfgdollar || has_bt)",
-          "to": "(cfgdollar)"
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-backtick-bare",
-        "push-alias-deny-backtick-config-env",
-        "push-alias-deny-backtick-quoted"
-      ]
-    },
-    {
-      "name": "448-pg-alias-dollar-env",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "if (index(tok, \"$\") > 0 && is_cmdcfg_name(aname)) cfgdollar = 1",
-          "to": "if (0) cfgdollar = 1"
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-dollar-env-key",
-        "push-alias-deny-dollar-parameters"
-      ]
-    },
-    {
-      "name": "448-pg-alias-cr-mid-subsection",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-alias-deny-",
-      "edits": [
-        {
-          "from": "            [ \"$cfg_cr_mid\" = 0 ] || cfg_val=\"!\"\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-alias-deny-cr-mid-subsection"
       ]
     },
     {
@@ -5586,51 +5241,6 @@
       ]
     },
     {
-      "name": "517-pg-rxlost-lit-off",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rxlost-",
-      "edits": [
-        {
-          "from": "      else t = tolower(av)\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "push-rxlost-deny-alias-ansi-c"
-      ]
-    },
-    {
-      "name": "517-pg-rxlost-failclosed-off",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rxlost-",
-      "edits": [
-        {
-          "from": "      if (av == \"\") al_rx = 1\n",
-          "to": "      if (av == \"\") al_rx = 0\n"
-        }
-      ],
-      "expect_fail": [
-        "push-rxlost-deny-concat"
-      ]
-    },
-    {
-      "name": "517-pg-rxlost-rescan",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-rxscan-",
-      "edits": [
-        {
-          "from": "      if (av == \"\") al_rx = 1\n",
-          "to": "      if (lost_push(toks, i, ntok, 0) || av == \"\") al_rx = 1\n"
-        }
-      ],
-      "expect_fail": [
-        "push-rxscan-noop-flood"
-      ]
-    },
-    {
       "name": "517-pg-cmdcap-off",
       "target": "hooks/push-guard.sh",
       "suite": "dev/hook-tests.sh",
@@ -5851,8 +5461,6 @@
         }
       ],
       "expect_fail": [
-        "push-optval-deny-alias",
-        "push-optval-deny-alias-word",
         "push-optval-deny-main",
         "push-optval-deny-precedence"
       ]
@@ -5896,37 +5504,6 @@
         {
           "from": "in_vp = (norm in vprefix_set) }",
           "to": "if (norm in vprefix_set) in_vp = 1 }"
-        }
-      ],
-      "expect_fail": [
-        "push-optval-noop"
-      ]
-    },
-    {
-      "name": "518-pg-optval-alias-off",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-optval-",
-      "edits": [
-        {
-          "from": "emit_alias_lost(toks, idx + 3, ntok, 1, reloc, \"\")",
-          "to": "al_done = 1"
-        }
-      ],
-      "expect_fail": [
-        "push-optval-deny-alias",
-        "push-optval-deny-alias-word"
-      ]
-    },
-    {
-      "name": "518-pg-optval-alias-from",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-optval-",
-      "edits": [
-        {
-          "from": "emit_alias_lost(toks, idx + 3, ntok, 1, reloc, \"\")",
-          "to": "emit_alias_lost(toks, idx + 2, ntok, 1, reloc, \"\")"
         }
       ],
       "expect_fail": [
@@ -6045,21 +5622,6 @@
       ],
       "expect_fail": [
         "push-interp-deny-guard"
-      ]
-    },
-    {
-      "name": "537-pg-interp-alias-off",
-      "target": "hooks/push-guard.sh",
-      "suite": "dev/hook-tests.sh",
-      "filter": "push-interp-",
-      "edits": [
-        {
-          "from": "emit_alias_lost(toks, idx + 2, ntok, 1, reloc, \"\")",
-          "to": "al_done = 1"
-        }
-      ],
-      "expect_fail": [
-        "push-interp-deny-alias"
       ]
     },
     {
