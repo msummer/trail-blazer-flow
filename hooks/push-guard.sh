@@ -33,10 +33,9 @@
 #     starts a word or follows a double quote, in the git option slot on a line naming push (#572);
 #   - a Codex push whose shell workdir is not provably the session checkout (#494);
 #   - a git command that reads a config file with a section header line it cannot split the way git does (#510);
-#   - an analysis that cannot finish: more than DBRACKET_MAX standalone ]], or a push cut by one; a command
-#     over PUSH_CMD_MAX_BYTES; the deadline; a depth-0 config line over
-#     CFG_TOPLEVEL_MAX_LINE_CHARS (#435, #517); an awk scan that exits non-zero (an abort, a resource limit, a
-#     killed process, or no runnable awk), denied with the fixed reason "command scan failed" (#559).
+#   - an analysis that cannot finish: a command over PUSH_CMD_MAX_BYTES; the deadline; a depth-0 config line
+#     over CFG_TOPLEVEL_MAX_LINE_CHARS (#435, #517); an awk scan that exits non-zero (an abort, a resource
+#     limit, a killed process, or no runnable awk), denied with the fixed reason "command scan failed" (#559).
 # There is deliberately no allow-list of `claude/<n>-<slug>` destinations: it would deny ordinary work (a
 # release branch, an annotated-tag push, any `git push origin feature/x` a human runs in ANY Claude Code session
 # of a plugin-enabled repo, since this hook is plugin-wide) for no matching safety gain, and a plugin that
@@ -103,10 +102,8 @@
 #
 # Tokenizer. The POSIX-awk segment/token walker below is a near-twin of hooks/agent-boundary.sh's (see its
 # "the scan" section) with a different emitter. A change to any of the following must be applied by hand to
-# BOTH files: segment breaking; the additive standalone ]] pass (it emits only the FIRST segment after each
-# ]], disjoint tails, at most DBRACKET_MAX per record; a segment cut at a ]] is passed to emit_segment() as
-# CUT because the text beyond it is never read); normalize(); the empty-normalised-token skip (also in the
-# subcommand search); the repeat-until-exhausted PREFIX_WORDS skip (a once-only skip is a known regression
+# BOTH files: segment breaking; normalize(); the empty-normalised-token skip (also in the subcommand
+# search); the repeat-until-exhausted PREFIX_WORDS skip (a once-only skip is a known regression
 # class) and the repeat-count skip; the command-word case fold; the CR strip; the #508 expansion predicate
 # (rx_re and rx_word(), a per-hook verdict); the #449 env arm and prefix triggers; the #518 value context; the
 # #537 interpreter-option rule.
@@ -160,10 +157,10 @@
 # through a loop body and never only once at the top of a function that itself contains such a loop. Work
 # inside the awk tokenizer (every awk-side rule) is not sampled: it is T_prefix below, bounded by
 # PUSH_CMD_MAX_BYTES. The early exit right after the tokenizer, before the deadline is sampled, continues
-# only when the scan holds a PUSH line, an ALIAS candidate line or a -too-many-dbrackets- / -cut-push- /
-# -cmdline-config- sentinel (a scan that is empty or holds only the -xseg- or -xcfg- marker exits with no
-# opinion), so a command with no push segment and no git alias candidate is never denied merely for being
-# large once it is under the size cap. The one step sampling cannot reach mid-step is a depth-0 config line's
+# only when the scan holds a PUSH line, an ALIAS candidate line or the -cmdline-config- sentinel (a scan that
+# is empty or holds only the -xseg- or -xcfg- marker exits with no opinion), so a command with no push
+# segment and no git alias candidate is never denied merely for being large once it is under the size cap.
+# The one step sampling cannot reach mid-step is a depth-0 config line's
 # own read and trim: cfg_trim() is not uniformly fast on a long whitespace run, so
 # CFG_TOPLEVEL_MAX_LINE_CHARS caps that line's length, checked with ${#cfgline} before comment-strip or trim
 # run, and denies (`deny_too_large configline`) instead of ever reaching them. A test-only knob,
@@ -176,9 +173,9 @@
 # hooks/claude-dir-guard.sh's cap). Worst-case wall clock, for review: at most `max(push_budget, T_prefix(L)) +
 # U_max`. T_prefix is the pre-tokenizer prefix the deadline cannot sample around: `cat`, the two fast-path
 # globs and the three jq extractions of the raw stdin (linear in the stdin, not bounded by the cap), then, for a
-# command at or under the cap, the cwd jq and the awk tokenizer (CR strip included; its ]] pass costs at most
-# DBRACKET_MAX times one record's length). The tokenizer is bounded by the cap, not claimed linear; its output
-# is streamed, and a push word longer than tok_max is rewritten so no bash-side split runs on one. U_max is the
+# command at or under the cap, the cwd jq and the awk tokenizer (CR strip included). The tokenizer is bounded
+# by the cap, not claimed linear; its output is streamed, and a push word longer than tok_max is rewritten so
+# no bash-side split runs on one. U_max is the
 # largest single step the deadline cannot interrupt: one alias-lookup awk pass over the resolved alias records,
 # one session upward walk (at most 64 levels, each an `[ -f ]` probe, plus up to 63 `dirname` forks), one
 # config line's comment-strip (a header line takes a second, plus a fixed number of header expansions) plus up
@@ -214,9 +211,6 @@ GIT_GLOBAL_OPTS_WITH_VALUE="-c -C --git-dir --work-tree --namespace --config-env
 PATH_ERE='^([A-Za-z]:/|/|\.\./)([A-Za-z0-9._ +-]+/)*[A-Za-z0-9._+-]+-wt-[0-9]+/?$'
 PUSH_OPTS_WITH_VALUE="-o --push-option --repo --receive-pack --exec"
 PUSH_ALL_REFS_OPTS="--all --mirror"
-# DBRACKET_MAX: byte-identical to hooks/agent-boundary.sh's, by convention, unpinned: the most standalone ]] the
-# additive pass analyses per input record before failing closed.
-DBRACKET_MAX="64"
 PUSH_DENY_STEM="trail-blazer-flow push guard:"
 # System config candidates (#304/#305), governed by $GIT_CONFIG_NOSYSTEM; see the candidate loop in
 # resolve_repo(). The Apple CLT file sits INSIDE that guard too (verified live: NOSYSTEM drops its scope).
@@ -399,14 +393,13 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
 #       subcommand, or every remaining token of a segment the tokenizer lost;
 #   -alias-cmdline-config-   a git segment under config the hook cannot read (#448);
 #   -cmdline-config-         a push segment carrying command-line git config (#439);
-#   -cut-push-, -too-many-dbrackets-   fixed sentinels (a push cut by ]], the ]] cap);
 #   -xseg-<TAB><reason>      last, once, iff any segment resolved to a directory-change builtin or exported or
 #       bare-assigned a GIT_REPO_ENV_VARS member or a command-line-config name (#433);
 #   -xcfg-                   last, once, iff any segment exported or bare-assigned a relocation or
 #       command-line-config name (#448).
 # No field can contain a TAB, since tokens come from splitting on [ \t]+. Each input line (awk record) is
 # processed on its own: the same deliberate false-positive class agent-boundary.sh documents.
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dbracket_max="$DBRACKET_MAX" -v dirwords="$PUSH_DIR_CHANGE_WORDS" -v exportwords="$PUSH_EXPORT_WORDS" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" -v envnov="$PUSH_ENV_NOVALUE_OPTS" -v envunset="$PUSH_ENV_UNSET_OPTS" -v relocenv="$GIT_CFG_RELOC_ENV_VARS" -v vpwords="$PREFIX_VALUE_WORDS" -v ipwords="$PREFIX_INTERP_WORDS" -v ipvopts="$INTERP_VALUE_OPTS" '
+scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dirwords="$PUSH_DIR_CHANGE_WORDS" -v exportwords="$PUSH_EXPORT_WORDS" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" -v envnov="$PUSH_ENV_NOVALUE_OPTS" -v envunset="$PUSH_ENV_UNSET_OPTS" -v relocenv="$GIT_CFG_RELOC_ENV_VARS" -v vpwords="$PREFIX_VALUE_WORDS" -v ipwords="$PREFIX_INTERP_WORDS" -v ipvopts="$INTERP_VALUE_OPTS" '
 BEGIN {
   sq = sprintf("%c", 39)
   cr = sprintf("%c", 13)
@@ -432,7 +425,7 @@ BEGIN {
   nxw = split(exportwords, xwarr, " ")
   for (i = 1; i <= nxw; i++) export_set[xwarr[i]] = 1
   # #433: xseg is a per-COMMAND flag (never reset per record), first-writer-wins and order-independent across
-  # the whole command including the additive ]] pass; the END block emits it once.
+  # the whole command; the END block emits it once.
   xseg = ""
   # #439
   ncco = split(cmdcfgopts, ccoarr, " ")
@@ -553,7 +546,7 @@ function is_cmdcfg_name(n,    c) {
 # once unquoted; the command-word candidate itself is never a trigger, so heredoc or commit prose stays quiet;
 # (c) after an env word, an option outside PUSH_ENV_NOVALUE_OPTS and PUSH_ENV_UNSET_OPTS. A trigger denies only
 # when lost_push() says a push could still follow; the two split-value triggers use the looser armed == 2 gate.
-# Precedence: a cut push (-cut-push-) and command-line config (-cmdline-config-) keep their own sentinels, and
+# Precedence: command-line config (-cmdline-config-) keeps its own sentinel, and
 # an earlier #292 reason keeps precedence over the new reason. When no push can follow, emit_alias_lost()
 # runs (#448). Every rule only adds denies, except that `env -u git push origin main` no longer denies:
 # -u consumes git as its value and the command env really runs is push.
@@ -599,12 +592,11 @@ function lost_push(toks, from, ntok, armed,    i, tok, s, lo, skip, arm) {
   }
   return 0
 }
-# emit_lost: the segment lost the tokenizer and could still be a push, so fail closed. A cut push keeps its
-# -cut-push- sentinel, command-line git config its own, and an earlier #292 reason (unres) keeps precedence
-# over the fixed new reason; the reason is never input text.
-function emit_lost(reason, unres, cc, cut) {
-  if (cut) print "-cut-push-"
-  else if (cc) print "-cmdline-config-"
+# emit_lost: the segment lost the tokenizer and could still be a push, so fail closed. Command-line git
+# config keeps its own sentinel, and an earlier #292 reason (unres) keeps precedence over the fixed new
+# reason; the reason is never input text.
+function emit_lost(reason, unres, cc) {
+  if (cc) print "-cmdline-config-"
   else print "PUSH\t\t" (unres != "" ? unres : reason) "\t"
 }
 # ip_kind (#537): how the walk reads a dash or plus token after an interpreter prefix word. "v", a value option
@@ -712,8 +704,8 @@ function emit_alias_lost(toks, from, ntok, needgit, reloc, cpath,    i, t, u, av
 # its PUSH line, the remaining tokens passed through dest_word() (#517).
 # An awk error anywhere in this program kills it as a whole: the scan then exits non-zero and the hook denies
 # with the fixed scan-failure reason (#559), whatever the scan had printed so far.
-# BWK awk allows at most 50 for arguments passed plus parameters declared; emit_segment() is at that limit, so add no local without removing one.
-function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, in_vp, in_ip, ipw, ipk, mi, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, cfgdollar, cv, rx_at, rxg_at, rxn_at, rxbs, av, jend, ro, k, xname, cmdcfg, co, cp, cfgname, cpath_big) {
+# BWK awk allows at most 50 for arguments passed plus parameters declared; count the parameters of emit_segment() plus its one passed argument before adding a local.
+function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j, subcmd, rest, sep, cpath, ccount, unres, aname, in_env, in_vp, in_ip, ipw, ipk, mi, m0, m1, m2, s0, reloc, aliasish, at, rname, al_done, cfgdollar, cv, rx_at, rxg_at, rxn_at, rxbs, av, jend, ro, k, xname, cmdcfg, co, cp, cfgname, cpath_big) {
   ntok = split(seg, toks, /[ \t]+/)
   idx = 1
   saw_prefix = 0
@@ -757,7 +749,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
       # the remaining tokens could still be a push.
       if (quote_unbalanced(tok)) {
         if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
-        if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
+        if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg); return }
         if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
       }
       if (saw_prefix && !rx_at && rx_word(tok)) rx_at = idx
@@ -776,7 +768,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
         if (!rx_at && rx_word(toks[idx + 1])) rx_at = idx + 1
         if (quote_unbalanced(toks[idx + 1])) {
           if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
-          if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
+          if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg); return }
           if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
         }
         idx += 2
@@ -786,14 +778,14 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
         if (!rx_at && rx_word(tok)) rx_at = idx
         if (quote_unbalanced(tok)) {
           if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
-          if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
+          if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg); return }
           if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
         }
         idx++
         continue
       }
       if (m0 < 0) m0 = lost_push(toks, idx, ntok, 0)
-      if (m0 || rec_lost) { emit_lost("unsupported env option", unres, cmdcfg, cut_flag); return }
+      if (m0 || rec_lost) { emit_lost("unsupported env option", unres, cmdcfg); return }
       if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
     }
     # #449: after a prefix word, a quote-bearing token that reads as an option or an assignment once
@@ -802,7 +794,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
       s0 = strip_quotes(tok)
       if (substr(s0, 1, 1) == "-" || match(s0, /^[A-Za-z_][A-Za-z0-9_]*=/) == 1) {
         if (m0 < 0) m0 = lost_push(toks, idx + 1, ntok, 0)
-        if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg, cut_flag); return }
+        if (m0) { emit_lost("quote or escape in the command prefix", unres, cmdcfg); return }
         if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 1, ntok, 1, reloc, "") }
       }
     }
@@ -813,7 +805,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     # word that does not start with one is a trigger: the rest of the segment AFTER that word (never the word
     # itself, so `sudo -E git push origin feature/x` is still judged on git) is read with the memoised
     # lost_push() of the segment, and a hit denies with the fixed reason option value in the command prefix. The
-    # precedence is that of the #449 triggers: an earlier #292 reason, -cmdline-config- and -cut-push- keep their own
+    # precedence is that of the #449 triggers: an earlier #292 reason and -cmdline-config- keep their own
     # deny. When no push can follow, emit_alias_lost() runs at most once per segment (al_done), starting one
     # token later than the #449 triggers so that only tokens after the value word count toward its names-git
     # gate (a quote-bearing value word skips this call, so its own #449 trigger runs as before). An expansion
@@ -822,7 +814,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     # memoised lost_push() and one emit_alias_lost() per segment, shared with the triggers above.
     if (in_vp && substr(tok, 1, 1) == "-" && idx < ntok && toks[idx + 1] != "" && substr(toks[idx + 1], 1, 1) != "-") {
       if (m0 < 0) m0 = lost_push(toks, idx + 2, ntok, 0)
-      if (m0) { emit_lost("option value in the command prefix", unres, cmdcfg, cut_flag); return }
+      if (m0) { emit_lost("option value in the command prefix", unres, cmdcfg); return }
       if (!al_done && !quote_bearing(toks[idx + 1])) { al_done = 1; emit_alias_lost(toks, idx + 3, ntok, 1, reloc, "") }
     }
     # #537 fail-closed: an option of an interpreter prefix word (PREFIX_INTERP_WORDS). Interpreters stay out of
@@ -851,7 +843,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
       }
       if (ipw != "" && substr(ipw, 1, 1) != "-") {
         if (mi < 0) mi = lost_push(toks, idx + 2, ntok, 0)
-        if (mi > 0) { emit_lost("option value in the command prefix", unres, cmdcfg, cut_flag); return }
+        if (mi > 0) { emit_lost("option value in the command prefix", unres, cmdcfg); return }
         if (!al_done) { al_done = 1; emit_alias_lost(toks, idx + 2, ntok, 1, reloc, "") }
       }
       if (index(tok, "$") == 0) { idx++; continue }
@@ -868,7 +860,7 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     break
   }
   # #508: an expansion in the command prefix, and the rest of the segment could still be a push
-  if (rx_at && lost_push(toks, rx_at + 1, ntok, 1)) { emit_lost("runtime expansion in the command prefix", unres, cmdcfg, cut_flag); return }
+  if (rx_at && lost_push(toks, rx_at + 1, ntok, 1)) { emit_lost("runtime expansion in the command prefix", unres, cmdcfg); return }
   # #433 cross-segment (xseg) detection, order-independent: the first segment of any kind (a push segment or
   # otherwise) whose resolved command word is a PUSH_DIR_CHANGE_WORDS member, or an export-family segment
   # naming a GIT_REPO_ENV_VARS member, or a bare assignment of one, sets xseg for the WHOLE command. This push
@@ -939,18 +931,18 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
     # unbalanced (-c "k=a b"): the leftover fragments would become the subcommand and drop the segment.
     if (quote_unbalanced(tok) && substr(strip_quotes(tok), 1, 1) == "-") {
       if (m2 < 0) m2 = lost_push(toks, j + 1, ntok, 2)
-      if (m2) { emit_lost("quoted or escaped git option", unres, cmdcfg, cut_flag); return }
+      if (m2) { emit_lost("quoted or escaped git option", unres, cmdcfg); return }
       if (!al_done) { al_done = 1; emit_alias_lost(toks, j + 1, ntok, 0, reloc, ccount == 1 ? cpath : "") }
     }
     s0 = strip_quotes(tok)
     if ((s0 in gopt_set) && s0 != "-C" && quote_unbalanced(toks[j + 1])) {
       if (m2 < 0) m2 = lost_push(toks, j + 2, ntok, 2)
-      if (m2) { emit_lost("quoted or escaped git option", unres, cmdcfg, cut_flag); return }
+      if (m2) { emit_lost("quoted or escaped git option", unres, cmdcfg); return }
       if (!al_done) { al_done = 1; emit_alias_lost(toks, j + 1, ntok, 0, reloc, ccount == 1 ? cpath : "") }
     }
     if (quote_bearing(tok) && substr(strip_quotes(tok), 1, 1) == "-") {
       if (m1 < 0) m1 = lost_push(toks, j, ntok, 1)
-      if (m1) { emit_lost("quoted or escaped git option", unres, cmdcfg, cut_flag); return }
+      if (m1) { emit_lost("quoted or escaped git option", unres, cmdcfg); return }
       if (!al_done) { al_done = 1; emit_alias_lost(toks, j + 1, ntok, 0, reloc, ccount == 1 ? cpath : "") }
     }
     if (tok in gopt_set) {
@@ -986,12 +978,12 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   jend = j
   if (subcmd == "" && rxn_at) { subcmd = normalize(toks[rxn_at]); j = jend + 1 }
   # #508: an expansion in the git option slot may stand for options, the subcommand, or nothing
-  if (rxg_at && (rxbs || index(strip_quotes(toks[rxg_at]), "push") > 0 || lost_push(toks, rxg_at + 1, ntok, 2))) { emit_lost("runtime expansion in the git options", unres, cmdcfg, cut_flag); return }
+  if (rxg_at && (rxbs || index(strip_quotes(toks[rxg_at]), "push") > 0 || lost_push(toks, rxg_at + 1, ntok, 2))) { emit_lost("runtime expansion in the git options", unres, cmdcfg); return }
   # #448: every git segment whose subcommand is not push is an alias candidate; git never lets an alias
   # shadow a built-in, so the config lookup in the driver loop alone decides. Config this hook cannot read (a
   # relocation assignment, or command-line config naming an alias or include, or whose VALUE holds a dollar
   # sign or sits in a record holding a backtick, which may build an alias key at run time) denies here with a
-  # fixed sentinel. Runs even for a CUT segment: a cut never matters to an alias verdict.
+  # fixed sentinel.
   if (cmdcfg && subcmd != "push" && (cfgdollar || has_bt)) print "-alias-cmdline-config-"
   if (subcmd != "" && subcmd != "push") {
     aliasish = 0
@@ -1009,12 +1001,8 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   # follows a double quote, whatever the destination of the push; so does a non-push git command with such a
   # slot on a line that names push. A backtick glued to other text (git -C ~/`pwd` push) leaves no such end
   # and stays quiet.
-  if (rec_push && (subcmd == "" || subcmd == "$") && (substr(toks[ntok], length(toks[ntok])) == "$" || (has_bt && (toks[ntok] == "" || substr(toks[ntok], length(toks[ntok])) == "\"")))) { emit_lost("command substitution in the git options", unres, cmdcfg, cut_flag); return }
-  if (subcmd != "push") {
-    if (subcmd == "" && cut_flag) print "-cut-push-"
-    return
-  }
-  if (cut_flag) { print "-cut-push-"; return }
+  if (rec_push && (subcmd == "" || subcmd == "$") && (substr(toks[ntok], length(toks[ntok])) == "$" || (has_bt && (toks[ntok] == "" || substr(toks[ntok], length(toks[ntok])) == "\"")))) { emit_lost("command substitution in the git options", unres, cmdcfg); return }
+  if (subcmd != "push") return
   # #439: a real push segment carrying command-line git config denies outright, ahead of the #292
   # unresolved-target reason (Q5) — either way the segment denies.
   if (cmdcfg) { print "-cmdline-config-"; return }
@@ -1053,46 +1041,6 @@ function emit_segment(seg, cut_flag,    ntok, toks, idx, tok, norm, saw_prefix, 
   }
   nseg = split(line, segs, /\n/)
   for (s = 1; s <= nseg; s++) emit_segment(segs[s])
-  # Additive standalone-]] pass (the same mechanism as hooks/agent-boundary.sh): the segments above are
-  # computed exactly as without it, so a push segment whose own refspec tokens hold a literal ]] token (git push
-  # origin ]] main) is still fully resolved by the walk above. Separately, for every unquoted,
-  # whitespace-bounded ]] in a space-padded copy of this record, ONLY the FIRST segment of the text AFTER that
-  # ]] is walked the same way, resuming command position at the word right after the closing ]] of a zsh short
-  # `if [[ cond ]] cmd` form. DISJOINT tails: that segment ends at the first real break character or the NEXT
-  # standalone ]], never running past a later ]] into text the later ]], or the main split, already covers, so
-  # the walk that resolves a subcommand or a push destination scales with the short cut segment, not the rest
-  # of the record. A CUT tail (one ended by a following ]]) that resolves to a push, or whose subcommand is
-  # never resolved, prints -cut-push- (deny), because the text beyond the ]] is never read; this still catches
-  # `if [[ a ]] git push origin ]] main`. At most DBRACKET_MAX matches are handled per record; above that the
-  # loop stops and prints -too-many-dbrackets- (deny unconditionally).
-  db_rest = " " $0 " "
-  db_n = 0
-  db_go = 1
-  while (db_go && match(db_rest, /[ \t]]][ \t]/)) {
-    if (db_n >= dbracket_max) {
-      print "-too-many-dbrackets-"
-      db_go = 0
-    } else {
-      db_n++
-      # db_next is captured IMMEDIATELY after this match(): the inner match() below and emit_segment() (which
-      # also calls match()) clobber RSTART and RLENGTH, and re-reading them hung this loop. It stops ONE
-      # character short of the match end (RLENGTH - 1) on purpose, leaving the trailing whitespace byte in
-      # db_rest: two standalone ]] separated by exactly one space or tab share that byte as boundary, and
-      # consuming it would skip every other ]] in a tightly packed run.
-      db_next = RSTART + RLENGTH - 1
-      db_tail = substr(db_rest, db_next)
-      db_cut = 0
-      if (match(db_tail, /[;&|(){}`]|[ \t]]][ \t]/) > 0) {
-        db_seg = substr(db_tail, 1, RSTART - 1)
-        if (RLENGTH == 4) db_cut = 1
-      } else {
-        db_seg = db_tail
-      }
-      gsub(/[<>]/, " ", db_seg)
-      emit_segment(db_seg, db_cut)
-      db_rest = substr(db_rest, db_next)
-    }
-  }
 }
 END { if (xseg != "") print "-xseg-\t" xseg }
 END { if (xcfg) print "-xcfg-" }
@@ -1107,14 +1055,13 @@ if [ "$scan_rc" -ne 0 ]; then
   exit 2
 fi
 
-# #435: nothing to judge anywhere in the scan -- no PUSH line, no ALIAS candidate line, and no dbracket,
-# cut-push or command-line-config sentinel (the -alias-cmdline-config- sentinel contains the last one) -- so
-# the driver loop would find nothing to deny and exit 0 anyway; this gets there before ever sampling the
-# deadline, so a command with no push segment and no git alias candidate is never denied by the deadline
-# merely for being large. The -xseg- and -xcfg- marker lines alone do not count: the xseg fallback denies only
+# #435: nothing to judge anywhere in the scan -- no PUSH line, no ALIAS candidate line, and no command-line-config
+# sentinel (the -alias-cmdline-config- sentinel contains it) -- so the driver loop would find nothing to deny
+# and exit 0 anyway; this gets there before ever sampling the deadline, so a command with no push segment and
+# no git alias candidate is never denied by the deadline merely for being large. The -xseg- and -xcfg- marker lines alone do not count: the xseg fallback denies only
 # when a push segment was also seen, and an xcfg only denies an alias candidate.
 case "$scan_out" in
-  *PUSH*|*ALIAS*|*-too-many-dbrackets-*|*-cut-push-*|*-cmdline-config-*) ;;
+  *PUSH*|*ALIAS*|*-cmdline-config-*) ;;
   *) exit 0 ;;
 esac
 check_deadline
@@ -1961,16 +1908,6 @@ saw_push=0
 while IFS= read -r line; do
   check_deadline
   case "$line" in
-    "-too-many-dbrackets-")
-      deny_dest="too many ]] tokens to analyse"
-      deny_kind="dbracket"
-      break
-      ;;
-    "-cut-push-")
-      deny_dest="split by ]]"
-      deny_kind="cutpush"
-      break
-      ;;
     "-cmdline-config-")
       # #439: fixed reason, no input — see the cmdcfg) message arm below.
       deny_dest="command-line git config"
@@ -2176,14 +2113,6 @@ fi
 
 if [ -n "$deny_dest" ]; then
   case "$deny_kind" in
-    dbracket)
-      printf '%s denies this command: too many standalone ]] tokens to analyse safely (blocked: too many ]] tokens to analyse) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
-        "$PUSH_DENY_STEM" >&2
-      ;;
-    cutpush)
-      printf '%s denies this command (cannot analyse a push split by ]]) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
-        "$PUSH_DENY_STEM" >&2
-      ;;
     allrefs)
       printf '%s denies "%s" (pushes every ref, including the default branch: %s) — open a PR from a claude/<n>-<slug> branch instead; see README.md'"'"'s Safety model\n' \
         "$PUSH_DENY_STEM" "$deny_dest" "$default_display" >&2
