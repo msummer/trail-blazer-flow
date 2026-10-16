@@ -146,22 +146,28 @@ fifth command, but it is not part of `dev/selfcheck.sh` itself; run it by hand w
 `bin/cleanup-after-merge.sh` changes.
 
 `dev/planning-tests.sh` is a separate negative-test harness for both of this repo's discovery
-scripts, `bin/find-planning-work.sh` and `bin/find-implementation-work.sh`, and for their
-consumer, `bin/harness-status.sh`: it builds throwaway fixture directories under `mktemp`, with a
-stub `gh` on `PATH`, and runs the real script(s) against each, pinning the comment-
-and issue-author trust gate, plan selection, plan-binding approval provenance, and
-`bin/harness-status.sh`'s own degraded-run reporting. Part 13 runs both discovery scripts for
+scripts, `bin/find-planning-work.sh` and `bin/find-implementation-work.sh`, for their
+consumer, `bin/harness-status.sh`, and for the merge floor, `bin/merge-floor.sh`: it builds
+throwaway fixture directories under `mktemp`, with a stub `gh` on `PATH`, and runs the real
+script(s) against each, pinning the comment-
+and issue-author trust gate, plan selection, plan-binding approval provenance,
+`bin/harness-status.sh`'s own degraded-run reporting, and the merge floor's checks. Part 13 runs
+both discovery scripts for
 real, end to end; Part 14 exercises `bin/harness-status.sh`'s own `gh` call sites and its
 stop check behind a canned `build_stub_discovery`/`build_stub_stop` stand-in for both discovery
 scripts — so an in-place mutant to either discovery script is reachable only through Part 13's
-own `run_status` fixtures, never Part 14's. The stub validates every `--json` field list a call
+own `run_status` fixtures, never Part 14's. Part 16 runs a copy of `bin/merge-floor.sh` beside
+canned stand-ins for its three sibling scripts (decoy copies of them on `PATH` prove it resolves
+siblings from its own directory only), with a stub `git` as well as a stub `gh`, one fixture per
+check (passing, failing, failing closed), the retry-once rule, and a never-mutates case. The stub
+validates every `--json` field list a call
 sends against `gh`'s own documented field set, a family of `reject-<site>(-once)` fixture
 markers pins a bounded-retry-then-fail-closed shape at each script's batch `gh` call sites (the
 implementer script's `--issue <n>` prefetch is deliberately not retried, pinned by its own
 fixture), and a stub `sleep` keeps the suite's wall clock free of the real backoff wait. It runs
 in CI as the sixth command, but it is not part of `dev/selfcheck.sh` itself; run it by hand
-whenever `bin/find-planning-work.sh`, `bin/find-implementation-work.sh`, or
-`bin/harness-status.sh` changes.
+whenever `bin/find-planning-work.sh`, `bin/find-implementation-work.sh`,
+`bin/harness-status.sh`, or `bin/merge-floor.sh` changes.
 
 `dev/lock-tests.sh` is a separate negative-test harness for `bin/harness-lock.sh`, the
 single-flight lock that guards against two harness cycles running concurrently in one checkout:
@@ -281,7 +287,8 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   `bin/codex-scheduled-run.sh` (#427), which the rules file forbids outright, never gates: a
   scheduled Codex run must never be launched from inside a session — and
   `bin/harness-status.sh` and `bin/reconcile-ledger.sh`
-  resolve their own sibling scripts with PATH first, falling back to their own directory. Scripts
+  resolve their own sibling scripts with PATH first, falling back to their own directory, while
+  `bin/merge-floor.sh` resolves its siblings from its own directory only. Scripts
   meant only for developing this repo (not for consumers) go in `dev/` instead. `hooks/*.sh` is a
   third case: invoked by Claude Code itself (via `hooks/hooks.json`), never by the model issuing
   a Bash command, so a hook script takes no permission allow entry and stays out of the `bin/`

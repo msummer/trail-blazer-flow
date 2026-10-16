@@ -3438,7 +3438,7 @@ case_codex_setup_rules_content() {
 }
 
 # codex-setup-rules-gated — the ALLOW-decision .sh prefix_rule names, the host_executable names,
-# and the set of ten listed scripts are all the SAME set; every host_executable path is exactly
+# and the set of listed scripts are all the SAME set; every host_executable path is exactly
 # <plugin>/bin/<name>; every one of those names exists under $root/bin; codex-setup.sh,
 # harness-version.sh, governance-paths.sh, and (#427) codex-scheduled-run.sh are absent from both
 # sets — the allow-decision filter on sh_names is what keeps codex-scheduled-run.sh's own
@@ -3460,9 +3460,9 @@ case_codex_setup_rules_gated() {
     | sed -E 's/^host_executable\(name = "([a-z-]+\.sh)"/\1/' | sort -u)"
   want_names="$(printf '%s\n' check-decision-record.sh check-harness.sh cleanup-after-merge.sh \
     find-implementation-work.sh find-planning-work.sh harness-lock.sh harness-status.sh \
-    harness-stop.sh reconcile-ledger.sh setup-labels.sh | sort -u)"
-  [ "$sh_names" = "$want_names" ] || { __ok=0; __why="${__why}allow-rule .sh names != the ten listed scripts\ngot:\n$sh_names\n"; }
-  [ "$hx_names" = "$want_names" ] || { __ok=0; __why="${__why}host_executable names != the ten listed scripts\ngot:\n$hx_names\n"; }
+    harness-stop.sh merge-floor.sh reconcile-ledger.sh setup-labels.sh | sort -u)"
+  [ "$sh_names" = "$want_names" ] || { __ok=0; __why="${__why}allow-rule .sh names != the listed scripts\ngot:\n$sh_names\n"; }
+  [ "$hx_names" = "$want_names" ] || { __ok=0; __why="${__why}host_executable names != the listed scripts\ngot:\n$hx_names\n"; }
   local n
   for n in $want_names; do
     grep -qF "host_executable(name = \"$n\", paths = [\"$plugin/bin/$n\"])" "$rules" \
@@ -7514,7 +7514,7 @@ cases=(
   "codex-setup-mkdir-failure|case_codex_setup_mkdir_failure|#485: a PATH-shimmed mkdir -p fails on .codex/rules: rc 3, wrote= only for the three agent TOMLs, report step is mkdir -p failed"
   "codex-setup-first-file-failure|case_codex_setup_first_file_failure|#485: a PATH-shimmed mv fails on the first queued file: rc 3, no wrote= at all, report says written this run: none"
   "codex-setup-rules-content|case_codex_setup_rules_content|#408: every ADVISORY-Q1 allow line present; forbidden token-list set == templates/repo-settings.json's bare deny entries (jq-derived); no @PLUGIN_BIN@ literal remains"
-  "codex-setup-rules-gated|case_codex_setup_rules_gated|#408: the allow-rule .sh names and host_executable names both equal the ten listed scripts, each path <plugin>/bin/<s>, each name exists under bin/; codex-setup.sh/harness-version.sh/governance-paths.sh/codex-scheduled-run.sh absent from both"
+  "codex-setup-rules-gated|case_codex_setup_rules_gated|#408: the allow-rule .sh names and host_executable names both equal the listed scripts, each path <plugin>/bin/<s>, each name exists under bin/; codex-setup.sh/harness-version.sh/governance-paths.sh/codex-scheduled-run.sh absent from both"
   "codex-setup-contract-agents-md|case_codex_setup_contract_agents_md|#408: a pre-existing AGENTS.md keeps its content, gains exactly one begin marker naming CLAUDE.md, no fallback key in config.toml, still one marker after a second run; --check before it pins reason=missing-pointer"
   "codex-setup-agents-md-malformed|case_codex_setup_agents_md_malformed|#408 kickback: non-exact or unpaired marker shapes (trailing text or CR on either or both markers, a prose mention of either marker, an unpaired begin) refuse (rc 2, byte-identical, tail content preserved, no .codex) and --check reports reason=malformed-pointer"
   "codex-setup-config-merge|case_codex_setup_config_merge|#408: a pre-existing config.toml with a top-level key plus a [profiles.x] table: the fallback key is inserted above the first table, both originals survive; --check before it pins reason=missing-fallback"

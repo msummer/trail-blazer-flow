@@ -54,14 +54,16 @@ subagents need:
    branch, *and* against the approval covering the specific plan comment implemented — the PR
    body carrying one of a fresh `find-implementation-work.sh` run's `approval.approved_at_history[]`
    `binding_line` values verbatim, newest first, so a body written under an earlier approval of the
-   same plan still qualifies (#174, extended #213) — every one of these provenance reads, plus the
-   head-branch key read and the archive's own match needle, and, since #300, the `gh pr checks`
-   read, the up-to-date rail's `gh pr view` read, the merge pass's base-branch read and its
-   one-time default-branch lookup, and its merge-landed read, and, since #319, the up-to-date
-   rail's `git fetch origin` (answers by exiting 0, output unread, so any non-zero exit is the
-   transient failure), each get one bounded retry on
-   transient failure before the PR is held, never on a determinate answer — pending or failing
-   checks, a base mismatch, and any non-`MERGED` state all count as an answer, never retried
+   same plan still qualifies (#174, extended #213) — all of these mechanical checks are run by
+   `bin/merge-floor.sh`, a read-only, fail-closed script whose header is the contract, and each of
+   these reads (the PR read, the archive read, the discovery run, `gh pr checks`, the
+   default-branch lookup, and the up-to-date rail's `git fetch origin`, which answers by exiting
+   0 with its output unread, so any non-zero exit is the transient failure), like the skill's
+   merge-landed read, gets one bounded retry on transient failure before the PR is held, never on
+   a determinate answer — pending or failing checks, no checks, a base mismatch, and any
+   non-`MERGED` state all count as an answer, never retried; the script's other reads
+   (`harness-stop.sh`, `git rev-parse`, `git merge-base`, `governance-paths.sh` and the two
+   lessons reads) are not retried by the script (`harness-stop.sh` retries its own query once)
    (#245, #277, #287, #300, #319) — CI
    green on the head commit, its head mechanically checked to contain the default branch's
    current tip (`git merge-base --is-ancestor`) immediately before each PR's own merge attempt,
@@ -360,7 +362,7 @@ subagents need:
    the CLI's own prompting behavior, never the hooks'.
 
 10. **Governance paths** (optional) — a section titled exactly "Governance paths" declaring extra
-    path globs the merge pass's *Governance path list* read (item 5 above) treats as governance,
+    path globs the merge pass's governance-path read (item 5 above) treats as governance,
     on top of the built-in rules below, e.g.:
 
     ````markdown
@@ -373,8 +375,8 @@ subagents need:
     ```
     ````
 
-    Read mechanically by `bin/governance-paths.sh` — the same script the merge pass calls for
-    item 5's read, and the one `check-harness.sh` calls (in a validation-only mode, never to
+    Read mechanically by `bin/governance-paths.sh` — the same script `bin/merge-floor.sh` calls
+    for item 5's read, and the one `check-harness.sh` calls (in a validation-only mode, never to
     compute a verdict) — from the section's first fenced code block only; blank lines and
     `#`-prefixed lines inside it are ignored, and every other line is trimmed and treated as one
     glob. **Built-in rules** (case-insensitive, always active whether or not this section exists):
@@ -397,7 +399,7 @@ subagents need:
     PASSes `governance paths: none declared`, or, with a well-formed section, PASSes
     `governance paths: <n> declared glob(s)`. The rule's own words apply beyond any explicit list
     too — a policy/ADR document or CI/build config under a name these rules don't match, and **any
-    doubt holds**. Only the merge pass's *Governance path list* read (item 5) and the doctor's
+    doubt holds**. Only the merge pass's governance-path read (item 5) and the doctor's
     validation ever read this section; nothing else in the harness does.
 
 The subagents read `CLAUDE.md` at the start of every task — it is the real input that makes
@@ -438,8 +440,8 @@ variable-built or glob path), and still carries the untracked-baseline gap for t
 Under a Merge autonomy policy (#307, ADR 0001 decision 9), a harness PR that carries a lesson
 this way is not automatically held by the *Never the governance surface* rule just because it
 touches `.claude/`: `skills/issue-cycle/SKILL.md`'s *Lesson-append carve-out* releases it only
-when the *Governance path list* read (#324) establishes `.claude/LESSONS.md` as the PR's sole
-governance-surface path, the diff is a pure
+when `bin/merge-floor.sh`'s governance-path read (#324) establishes `.claude/LESSONS.md` as the
+PR's sole governance-surface path, the diff is a pure
 end-of-file append (no deleted or changed lines) of at most 40 added lines with no `<!--` in
 them, and the added lines, read as data, judge as only a project gotcha — any doubt holds the
 PR. Editing, reordering, or deleting an existing entry still holds it, as does any other

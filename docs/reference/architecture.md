@@ -37,6 +37,7 @@
 │   ├── harness-version.sh         # prints the installed plugin's "<version> <sha>", one line
 │   ├── harness-stop.sh            # read-only maintainer stop switch: GitHub label or local file (#310)
 │   ├── governance-paths.sh        # merge floor's governance-path classifier + doctor's --check validator (#331)
+│   ├── merge-floor.sh             # read-only, fail-closed merge floor for one PR: every mechanical check of the issue-cycle merge pass, one verdict + evidence (#550)
 │   ├── codex-setup.sh             # installs the Codex compatibility layer into a repo: agent TOMLs, rules, contract loading (#408)
 │   ├── codex-scheduled-run.sh     # launchd-driven codex exec wrapper: preflight, timeout, local run records (#427), a deduplicated needs-human tracking issue on failure (#428)
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
@@ -53,7 +54,7 @@
 │   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh, bin/governance-paths.sh, bin/codex-setup.sh, AND bin/codex-scheduled-run.sh (not run by the gate)
 │   ├── hook-tests.sh             # fixture-based negative-test harness for all five hooks/*.sh scripts, including Codex-shaped payload fixtures (#407) (not run by the gate)
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
-│   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh AND bin/find-implementation-work.sh (not run by the gate)
+│   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh, bin/find-implementation-work.sh, bin/harness-status.sh AND bin/merge-floor.sh (not run by the gate)
 │   ├── lock-tests.sh             # fixture-based negative-test harness for bin/harness-lock.sh (not run by the gate)
 │   ├── stop-tests.sh             # fixture-based negative-test harness for bin/harness-stop.sh (not run by the gate)
 │   ├── mutant-driver.sh          # checked-in mutant driver: applies dev/mutants/*.json's recorded edits to a scratch copy and re-runs each record's suite (#359)

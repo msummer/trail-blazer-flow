@@ -32,12 +32,13 @@ dev/doctor-tests.sh         hooks/hooks.json
 dev/doctor-tests.sh         .claude-plugin/plugin.json
 
 # planning-tests.sh's run_status runs bin/harness-status.sh (which resolves find-*, harness-stop
-# and reconcile-ledger as siblings) directly.
+# and reconcile-ledger as siblings) directly; its Part 16 copies and runs bin/merge-floor.sh.
 dev/planning-tests.sh       bin/find-planning-work.sh
 dev/planning-tests.sh       bin/find-implementation-work.sh
 dev/planning-tests.sh       bin/harness-status.sh
 dev/planning-tests.sh       bin/harness-stop.sh
 dev/planning-tests.sh       bin/reconcile-ledger.sh
+dev/planning-tests.sh       bin/merge-floor.sh
 
 # cleanup-tests.sh runs bin/cleanup-after-merge.sh only.
 dev/cleanup-tests.sh        bin/cleanup-after-merge.sh

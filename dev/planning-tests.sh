@@ -6,8 +6,10 @@
 # run_status runner, both discovery scripts run for real) and, since #297 (extended #333, #309,
 # #353), against harness-status.sh's own five gh call sites, PLUS (#353) its own stop check (not a
 # gh call site — see build_stub_stop below), via Part 14 (run_status too, but behind
-# a canned stand-in for both discovery scripts — see build_stub_discovery below) — not this repo's
-# own gate (that's dev/selfcheck.sh +
+# a canned stand-in for both discovery scripts — see build_stub_discovery below), and the merge
+# floor itself, bin/merge-floor.sh, via Part 16 (a copy of the script run beside canned stand-ins
+# for its three siblings, with a stub `gh`, `git` and `sleep` — see build_floor_env below) — not
+# this repo's own gate (that's dev/selfcheck.sh +
 # dev/selfcheck-tests.sh) and not the consumer doctor's harness (dev/doctor-tests.sh). Builds
 # throwaway fixture directories under mktemp, with a stub `gh` on PATH, and runs the REAL script(s)
 # under test against each (since #217, six cases run the stub `gh` directly rather than either
@@ -26,8 +28,9 @@
 # Every write happens under one `mktemp -d` root, removed via an EXIT trap. No git fixture is
 # needed — (#353) bin/harness-status.sh now also shells out to harness-stop.sh, but the canned
 # build_stub_stop stand-in that shadows it needs none either, so neither script under test ever
-# reaches a real `git` — so each fixture is just a directory holding a stub `gh` (offline,
-# deterministic) plus the JSON payloads it serves:
+# reaches a real `git` (Part 16's merge floor does call `git`, through a stub) — so each fixture
+# is just a directory holding a stub `gh` (offline, deterministic) plus the JSON payloads it
+# serves:
 #   - initial.json           : the needs_initial_plan query's response (find-planning-work.sh)
 #   - candidates.json         : (#211) the revision candidates query's response — a JSON page
 #                               array of {"number": N} objects, exactly what `gh issue list
@@ -11396,6 +11399,1238 @@ EOF
 # mutant:375-i — emits the closed-after warn line twice per issue.
 
 # ---------------------------------------------------------------------------------------------
+# Part 16 (#550), against bin/merge-floor.sh — the issue-cycle merge pass's mechanical floor for
+# one PR. Every fixture runs a COPY of the real script from DIR/floor, next to canned stand-ins for
+# its three siblings (harness-stop.sh via build_stub_stop, plus find-implementation-work.sh and
+# governance-paths.sh below), because the script resolves siblings from its own directory only.
+# DIR/tbin is prepended to PATH and holds a stub `gh`, a stub `git`, a stub `sleep`, and a DECOY of
+# each sibling that logs to DIR/.decoy-calls and exits 99 — a PATH lookup of any sibling would run
+# the decoy, and the baseline asserts none ever ran. The stub `gh` validates the --json field list
+# of `pr view`, `issue view` and `pr checks` against its own probed field set (`repo view` is
+# deliberately unvalidated, the same carve-out dev/cleanup-tests.sh's repo arm documents), logs
+# every call to DIR/.gh-calls, and models `gh pr checks` on the measured shapes: exit 0 with a JSON
+# array for green and pending alike, exit 1 with empty stdout and the "no checks reported on the"
+# stderr line for a PR with no checks. The stub `git` logs to DIR/.git-calls. One-shot failure
+# markers (reject-<site>-once) are consumed by overwriting them with `spent`, never by deleting the
+# file, so the never-mutates fixture's booby traps stay safe. The cwd is the empty DIR/work.
+# Fixture comment ids continue from the highest used (7152) at 7153.
+
+# Byte-identical copies of the field sets in dev/cleanup-tests.sh (issue and PR); the
+# `gh pr checks --json` set was probed on gh 2.102.0 with `gh pr checks <n> --json` (no fields).
+GH_ISSUE_JSON_FIELDS="assignees author blockedBy blocking body closed closedAt closedByPullRequestsReferences comments createdAt id isPinned issueType labels milestone number parent projectCards projectItems reactionGroups state stateReason subIssues subIssuesSummary title updatedAt url"
+GH_PR_JSON_FIELDS="additions assignees author autoMergeRequest baseRefName baseRefOid body changedFiles closed closedAt closingIssuesReferences comments commits createdAt deletions files fullDatabaseId headRefName headRefOid headRepository headRepositoryOwner id isCrossRepository isDraft labels latestReviews maintainerCanModify mergeCommit mergeStateStatus mergeable mergedAt mergedBy milestone number potentialMergeCommit projectCards projectItems reactionGroups reviewDecision reviewRequests reviews state statusCheckRollup title updatedAt url"
+GH_PR_CHECKS_JSON_FIELDS="bucket completedAt description event link name startedAt state workflow"
+
+FLOOR_HEAD="0123456789abcdef0123456789abcdef01234567"
+FLOOR_BASE="89abcdef0123456789abcdef0123456789abcdef"
+FLOOR_VLINE='<!-- harness-status: stage=verifier issue=12 outcome=pass retries=0 harness=3.5.0 -->'
+FLOOR_BLINE='<!-- harness-plan-binding: issue=12 plan=https://example.invalid/12#issuecomment-7153 approved-at=2026-01-02T00:00:00Z -->'
+FLOOR_BLINE_OLD='<!-- harness-plan-binding: issue=12 plan=https://example.invalid/12#issuecomment-7153 approved-at=2026-01-01T00:00:00Z -->'
+FLOOR_CHECKS_GREEN='[{"bucket":"pass","name":"selfcheck","state":"SUCCESS"},{"bucket":"skipping","name":"deploy","state":"SKIPPED"}]'
+
+# floor_write_gh DIR / floor_write_git DIR — the stub gh and git, __DIR__ + sed template idiom.
+floor_write_gh() {
+  local dir="$1" tmpl="$1/tbin/gh.tmpl"
+  {
+    printf '#!%s\n' "$bash_bin"
+    printf 'GH_PR_JSON_FIELDS="%s"\n' "$GH_PR_JSON_FIELDS"
+    printf 'GH_ISSUE_JSON_FIELDS="%s"\n' "$GH_ISSUE_JSON_FIELDS"
+    printf 'GH_PR_CHECKS_JSON_FIELDS="%s"\n' "$GH_PR_CHECKS_JSON_FIELDS"
+    cat <<'EOF'
+validate_json_fields() {
+  local allowed="$1"; shift
+  local orig="$*" list="" found=0 tok
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--json" ]; then shift; list="${1:-}"; found=1; break; fi
+    shift
+  done
+  if [ "$found" -ne 1 ]; then echo "stub: no --json argument in: gh $orig" >&2; exit 1; fi
+  local IFS=,
+  for tok in $list; do
+    case " $allowed " in
+      *" $tok "*) : ;;
+      *) echo "Unknown JSON field: \"$tok\"" >&2; exit 1 ;;
+    esac
+  done
+}
+fire() {
+  if [ -f "__DIR__/reject-$1" ]; then return 0; fi
+  if [ -f "__DIR__/reject-$1-once" ] && [ "$(cat "__DIR__/reject-$1-once")" = armed ]; then
+    printf 'spent' > "__DIR__/reject-$1-once"
+    return 0
+  fi
+  return 1
+}
+printf '%s\n' "$*" >> "__DIR__/.gh-calls"
+case "$1 $2" in
+  "pr view")
+    validate_json_fields "$GH_PR_JSON_FIELDS" "$@"
+    case " $* " in
+      *" changedFiles,files "*)
+        if fire files; then echo "stub: simulated gh pr view failure" >&2; exit 1; fi
+        cat "__DIR__/pr-files.json"; exit 0 ;;
+    esac
+    if fire pr; then echo "stub: simulated gh pr view failure" >&2; exit 1; fi
+    cat "__DIR__/pr.json"; exit 0 ;;
+  "issue view")
+    validate_json_fields "$GH_ISSUE_JSON_FIELDS" "$@"
+    if fire issue; then echo "stub: simulated gh issue view failure" >&2; exit 1; fi
+    cat "__DIR__/issue-$3.json"; exit 0 ;;
+  "repo view")
+    if fire repo; then echo "stub: simulated gh repo view failure" >&2; exit 1; fi
+    cat "__DIR__/repo.json"; exit 0 ;;
+  "pr checks")
+    validate_json_fields "$GH_PR_CHECKS_JSON_FIELDS" "$@"
+    if fire checks; then echo "stub: simulated gh pr checks failure" >&2; exit 1; fi
+    if [ -f "__DIR__/checks-err.txt" ]; then cat "__DIR__/checks-err.txt" >&2; fi
+    cat "__DIR__/checks.json"
+    exit "$(cat "__DIR__/checks-rc" 2>/dev/null || echo 0)" ;;
+  *) exit 1 ;;
+esac
+EOF
+  } > "$tmpl"
+  sed "s#__DIR__#$dir#g" "$tmpl" > "$dir/tbin/gh"
+  rm -f "$tmpl"
+  chmod +x "$dir/tbin/gh"
+}
+
+floor_write_git() {
+  local dir="$1" tmpl="$1/tbin/git.tmpl"
+  {
+    printf '#!%s\n' "$bash_bin"
+    cat <<'EOF'
+fire() {
+  if [ -f "__DIR__/reject-$1" ]; then return 0; fi
+  if [ -f "__DIR__/reject-$1-once" ] && [ "$(cat "__DIR__/reject-$1-once")" = armed ]; then
+    printf 'spent' > "__DIR__/reject-$1-once"
+    return 0
+  fi
+  return 1
+}
+printf '%s\n' "$*" >> "__DIR__/.git-calls"
+case "$1" in
+  rev-parse)
+    case "$2" in
+      --show-toplevel)
+        if [ -f "__DIR__/not-a-repo" ]; then echo "fatal: not a git repository" >&2; exit 128; fi
+        echo "__DIR__/work"; exit 0 ;;
+      origin/*)
+        if fire revparse; then echo "fatal: ambiguous argument" >&2; exit 128; fi
+        cat "__DIR__/base-tip.txt"; exit 0 ;;
+    esac
+    exit 1 ;;
+  fetch)
+    if fire fetch; then echo "fatal: simulated fetch failure" >&2; exit 128; fi
+    exit 0 ;;
+  merge-base)
+    if [ -f "__DIR__/ancestry-err.txt" ]; then cat "__DIR__/ancestry-err.txt" >&2; fi
+    exit "$(cat "__DIR__/ancestry-rc")" ;;
+  diff)
+    cat "__DIR__/lessons.diff"
+    exit "$(cat "__DIR__/diff-rc")" ;;
+  *) exit 1 ;;
+esac
+EOF
+  } > "$tmpl"
+  sed "s#__DIR__#$dir#g" "$tmpl" > "$dir/tbin/git"
+  rm -f "$tmpl"
+  chmod +x "$dir/tbin/git"
+}
+
+# floor_write_script DIR PATH BODY — an executable stub whose body is BODY with __DIR__ replaced.
+floor_write_script() {
+  local dir="$1" path="$2" body="$3"
+  {
+    printf '#!%s\n' "$bash_bin"
+    printf '%s\n' "$body"
+  } | sed "s#__DIR__#$dir#g" > "$path"
+  chmod +x "$path"
+}
+
+# build_floor_env DIR — the whole Part 16 fixture: stubs, decoys, the script copy with its
+# stand-in siblings, and a passing harness PR #77 on claude/12-thing.
+build_floor_env() {
+  local dir="$1" s
+  mkdir -p "$dir/tbin" "$dir/floor" "$dir/work"
+  floor_write_gh "$dir"
+  floor_write_git "$dir"
+  build_stub_sleep "$dir/tbin"
+  for s in harness-stop.sh find-implementation-work.sh governance-paths.sh; do
+    floor_write_script "$dir" "$dir/tbin/$s" 'printf "%s\n" "${0##*/} $*" >> "__DIR__/.decoy-calls"
+exit 99'
+  done
+  cp "$root/bin/merge-floor.sh" "$dir/floor/merge-floor.sh"
+  build_stub_stop "$dir/floor"
+  floor_write_script "$dir" "$dir/floor/find-implementation-work.sh" 'printf "%s\n" "$*" >> "__DIR__/.impl-calls"
+if [ -f "__DIR__/impl-first.json" ] && [ "$(cat "__DIR__/impl-first.json")" != spent ]; then
+  cat "__DIR__/impl-first.json"
+  printf spent > "__DIR__/impl-first.json"
+  exit 0
+fi
+cat "__DIR__/impl.json" 2>/dev/null
+exit "$(cat "__DIR__/impl-rc" 2>/dev/null || echo 0)"'
+  floor_write_script "$dir" "$dir/floor/governance-paths.sh" 'printf "%s\n" "$*" >> "__DIR__/.gov-calls"
+cat "__DIR__/gov.txt"
+if [ -f "__DIR__/gov-err.txt" ]; then cat "__DIR__/gov-err.txt" >&2; fi
+exit "$(cat "__DIR__/gov-rc" 2>/dev/null || echo 0)"'
+  floor_pr "$dir" "$(printf 'Fixes #12\n\n%s\n%s' "$FLOOR_VLINE" "$FLOOR_BLINE")"
+  floor_archive "$dir" "$FLOOR_VLINE"
+  floor_impl "$dir" true covered "$(floor_hist "$FLOOR_BLINE")" '[]' impl.json
+  printf '{"defaultBranchRef":{"name":"main"}}\n' > "$dir/repo.json"
+  printf '%s\n' "$FLOOR_CHECKS_GREEN" > "$dir/checks.json"
+  printf '%s\n' "$FLOOR_BASE" > "$dir/base-tip.txt"
+  printf '0' > "$dir/ancestry-rc"
+  printf '0' > "$dir/diff-rc"
+  printf 'changed: src/x.sh\nverdict=none\n' > "$dir/gov.txt"
+  floor_files "$dir" '{"changedFiles":1,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":2,"deletions":0}]}'
+  floor_append_diff "$dir"
+}
+
+# floor_pr DIR BODY [HEAD_BRANCH] [BASE_REF] [MERGE_STATE] — pr.json, the consolidated PR read.
+floor_pr() {
+  jq -n --arg body "$2" --arg hb "${3:-claude/12-thing}" --arg br "${4:-main}" --arg ms "${5:-CLEAN}" --arg oid "$FLOOR_HEAD" \
+    '{headRefName:$hb,baseRefName:$br,body:$body,headRefOid:$oid,mergeStateStatus:$ms}' > "$1/pr.json"
+}
+# floor_archive DIR STATUS_LINE [BRANCH] — issue-12.json with one archived verdict comment.
+floor_archive() {
+  jq -n --arg line "$2" --arg br "${3:-claude/12-thing}" \
+    '{comments:[{url:"https://example.invalid/12#issuecomment-7154",createdAt:"2026-01-03T00:00:00Z",body:("<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: " + $br + " -->\n" + $line)}]}' > "$1/issue-12.json"
+}
+# floor_hist BINDING_LINE... — an approved_at_history array, newest first, one entry per line.
+floor_hist() {
+  local out="[" sep="" bl
+  for bl in "$@"; do
+    out="$out$sep$(jq -n -c --arg bl "$bl" '{approved_at:"2026-01-02T00:00:00Z",approved_by:"owner",binding_line:$bl}')"
+    sep=","
+  done
+  printf '%s]' "$out"
+}
+# floor_impl DIR COVERS_JSON REASON HISTORY_JSON TPP_JSON FILE — a find-implementation-work.sh
+# --issue document with one plan_selection entry.
+floor_impl() {
+  jq -n -c --argjson cov "$2" --arg reason "$3" --argjson hist "$4" --argjson tpp "$5" \
+    '{ready:[],plan_selection:[{number:12,plan:null,trusted_post_plan:$tpp,untrusted_post_plan:[],approval:{approved_at:($hist[0].approved_at // null),approved_by:($hist[0].approved_by // null),covers_plan:$cov,reason:$reason,approved_at_history:$hist},binding_line:($hist[0].binding_line // null)}],counts:{}}' > "$1/$6"
+}
+floor_files() { printf '%s\n' "$2" > "$1/pr-files.json"; }
+floor_append_diff() {
+  cat > "$1/lessons.diff" <<'EOF'
+diff --git a/.claude/LESSONS.md b/.claude/LESSONS.md
+index 1111111..2222222 100644
+--- a/.claude/LESSONS.md
++++ b/.claude/LESSONS.md
+@@ -10,3 +10,5 @@ some heading
+ context one
+ context two
+ context three
++added gotcha one
++added gotcha two
+EOF
+}
+# floor_lessons DIR — governance says lessons-only for a clean LESSONS.md append.
+floor_lessons() {
+  printf 'governance: .claude/LESSONS.md\nchanged: src/x.sh\nverdict=lessons-only\n' > "$1/gov.txt"
+}
+
+# run_floor DIR ARGS... — runs the script copy in DIR/floor with DIR/tbin ahead of PATH, cwd
+# DIR/work; sets the same $planning_out/$planning_err/$planning_rc globals the other runners do.
+run_floor_path() {
+  local dir="$1" pathval="$2"
+  shift 2
+  ( cd "$dir/work" && PATH="$pathval" "$bash_bin" "$dir/floor/merge-floor.sh" "$@" ) >"$dir/.stdout" 2>"$dir/.stderr"
+  planning_rc=$?
+  planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
+  planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
+}
+run_floor() {
+  local dir="$1"
+  shift
+  run_floor_path "$dir" "$dir/tbin:$PATH" "$@"
+}
+
+# expect_floor_line LINE — LINE is a whole line of stdout. expect_floor_no_line — it is not.
+# expect_floor_first LINE — LINE is line 1. expect_floor_count PREFIX N — N stdout lines start with
+# PREFIX. expect_log_count FILE NEEDLE N — N lines of the log FILE contain NEEDLE (0 when FILE is
+# absent). expect_no_log FILE — FILE is absent or empty. expect_hold — exit 1 and floor=hold.
+expect_floor_line() {
+  needle_required expect_floor_line "$1" || return 0
+  grep -qxF -- "$1" <<<"$planning_out" || { __ok=0; __why="${__why}missing stdout line: $1\n"; }
+}
+expect_floor_no_line() {
+  needle_required expect_floor_no_line "$1" || return 0
+  grep -qxF -- "$1" <<<"$planning_out" && { __ok=0; __why="${__why}unexpected stdout line: $1\n"; }
+}
+expect_floor_first() {
+  local first
+  first="$(sed -n '1p' <<<"$planning_out")"
+  [ "$first" = "$1" ] || { __ok=0; __why="${__why}line 1: expected $1, got $first\n"; }
+}
+expect_floor_count() {
+  local prefix="$1" expected="$2" actual
+  needle_required expect_floor_count "$prefix" || return 0
+  actual="$(awk -v p="$prefix" 'index($0, p) == 1 { n++ } END { print n + 0 }' <<<"$planning_out")"
+  [ "$actual" = "$expected" ] || { __ok=0; __why="${__why}stdout lines starting '$prefix': expected $expected, got $actual\n"; }
+}
+expect_log_count() {
+  local file="$1" needle="$2" expected="$3" actual
+  needle_required expect_log_count "$needle" || return 0
+  if [ -f "$file" ]; then
+    actual="$(grep -cF -- "$needle" "$file")"
+  else
+    actual=0
+  fi
+  [ "$actual" = "$expected" ] || { __ok=0; __why="${__why}calls containing '$needle' in ${file##*/}: expected $expected, got $actual\n"; }
+}
+expect_no_log() {
+  if [ -s "$1" ]; then
+    __ok=0
+    __why="${__why}${1##*/} should be absent or empty, got: $(cat "$1")\n"
+  fi
+}
+expect_hold() {
+  expect_rc 1
+  expect_floor_first "floor=hold"
+}
+
+# floor-pass-harness — the shared baseline: a clean harness PR passes, with every evidence key, no
+# fail= line, no sleep and no decoy call, and the sibling stand-ins receive the exact argv.
+case_floor_pass_harness() {
+  local dir; dir="$(mk_fixture floor-pass-harness)"
+  build_floor_env "$dir"
+  run_floor "$dir" 77
+  expect_rc 0
+  expect_floor_first "floor=pass"
+  expect_floor_count "fail=" 0
+  expect_floor_line "pr=77"
+  expect_floor_line "mode=harness"
+  expect_floor_line "head-branch=claude/12-thing"
+  expect_floor_line "issue=12"
+  expect_floor_line "default-branch=main"
+  expect_floor_line "base-ref=main"
+  expect_floor_line "base-tip=$FLOOR_BASE"
+  expect_floor_line "head-oid=$FLOOR_HEAD"
+  expect_floor_line "merge-state=CLEAN"
+  expect_floor_line "ancestry-rc=0"
+  expect_floor_line "ci=green"
+  expect_floor_line 'check| ["selfcheck","SUCCESS","pass"]'
+  expect_floor_line "verifier-line=$FLOOR_VLINE"
+  expect_floor_line "archive-url=https://example.invalid/12#issuecomment-7154"
+  expect_floor_line "approved-at=2026-01-02T00:00:00Z"
+  expect_floor_line "approved-by=owner"
+  expect_floor_line "changed: src/x.sh"
+  expect_floor_line "governance=none"
+  expect_floor_count "stop-check=" 0
+  expect_floor_count "verdict=" 0
+  expect_sleep_calls "$dir/tbin" 0
+  expect_no_log "$dir/.decoy-calls"
+  expect_stop_calls "$dir/floor" 1
+  expect_log_count "$dir/.impl-calls" "--issue 12" 1
+  expect_log_count "$dir/.gov-calls" "$FLOOR_BASE $FLOOR_HEAD" 1
+  expect_log_count "$dir/.gh-calls" "pr checks 77 --json name,state,bucket" 1
+  expect_log_count "$dir/.gh-calls" "issue view 12 --json comments" 1
+  expect_log_count "$dir/.git-calls" "merge-base --is-ancestor $FLOOR_BASE $FLOOR_HEAD" 1
+}
+
+# floor-stop-* — harness-stop.sh runs first; any status but 0, 2 or 127 ends the run as floor=stop
+# (exit 3) with the stop script's stdout verbatim, before any gh call, fetch, discovery or
+# governance call. Exit 2 and 127 are install faults: the floor continues and says so.
+floor_stop_case() {
+  local name="$1" rc="$2" stdout="$3" dir
+  dir="$(mk_fixture "$name")"
+  build_floor_env "$dir"
+  printf '%s\n' "$stdout" > "$dir/floor/stop-stdout.txt"
+  build_stub_stop "$dir/floor" "$rc"
+  run_floor "$dir" 77
+  expect_rc 3
+  expect_floor_first "floor=stop"
+  expect_floor_line "stop=true"
+  expect_floor_count "fail=" 0
+  expect_no_log "$dir/.gh-calls"
+  expect_log_count "$dir/.git-calls" "fetch" 0
+  expect_no_log "$dir/.impl-calls"
+  expect_no_log "$dir/.gov-calls"
+  expect_no_log "$dir/.decoy-calls"
+}
+case_floor_stop_set() {
+  floor_stop_case floor-stop-set 3 'stop=true
+route=github issue=9 url=https://example.invalid/9
+clear=gh issue edit 9 --remove-label harness-stop'
+  expect_floor_line "route=github issue=9 url=https://example.invalid/9"
+}
+case_floor_stop_undocumented_exit() {
+  floor_stop_case floor-stop-undocumented-exit 126 'stop=true'
+}
+case_floor_stop_unknown() {
+  local dir; dir="$(mk_fixture floor-stop-unknown)"
+  build_floor_env "$dir"
+  printf 'stop=unknown\nreason=github-query-unavailable\n' > "$dir/floor/stop-stdout.txt"
+  build_stub_stop "$dir/floor" 4
+  run_floor "$dir" 77
+  expect_rc 3
+  expect_floor_first "floor=stop"
+  expect_floor_line "stop=unknown"
+  expect_floor_line "reason=github-query-unavailable"
+  expect_no_log "$dir/.gh-calls"
+  expect_no_log "$dir/.impl-calls"
+}
+case_floor_stop_install_fault() {
+  local dir rc; dir="$(mk_fixture floor-stop-install-fault)"
+  build_floor_env "$dir"
+  for rc in 2 127; do
+    : > "$dir/floor/stop-stdout.txt"
+    build_stub_stop "$dir/floor" "$rc"
+    run_floor "$dir" 77
+    expect_rc 0
+    expect_floor_first "floor=pass"
+    expect_floor_line "stop-check=install-fault exit=$rc"
+  done
+}
+
+# floor-branch-not-harness — a head branch that is not claude/<n>-... holds, and the harness-only
+# reads (archive, discovery) never run.
+case_floor_branch_not_harness() {
+  local dir hb; dir="$(mk_fixture floor-branch-not-harness)"
+  build_floor_env "$dir"
+  for hb in feature/x claude/abc-thing claude/12 claude/-x claude/12x-thing; do
+    floor_pr "$dir" "Fixes #12" "$hb"
+    run_floor "$dir" 77
+    expect_hold
+    expect_floor_line "fail=branch head branch $hb is not claude/<n>-… — not a standard-flow PR"
+    expect_floor_count "issue=" 0
+  done
+  expect_log_count "$dir/.gh-calls" "issue view" 0
+  expect_no_log "$dir/.impl-calls"
+}
+
+# floor-provenance-* — the PR body needs the verifier's outcome=pass line and must not carry an
+# outcome=fail one.
+case_floor_provenance_missing() {
+  local dir; dir="$(mk_fixture floor-provenance-missing)"
+  build_floor_env "$dir"
+  floor_pr "$dir" "$(printf 'Fixes #12\n\nverifier verdict: pass\n%s' "$FLOOR_BLINE")"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=provenance PR body lacks the verifier's outcome=pass status line for issue 12"
+  # A status line whose outcome merely starts with "pass" is no pass line.
+  floor_pr "$dir" "$(printf 'Fixes #12\n\n%s\n%s' '<!-- harness-status: stage=verifier issue=12 outcome=passed retries=0 -->' "$FLOOR_BLINE")"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=provenance PR body lacks the verifier's outcome=pass status line for issue 12"
+}
+case_floor_provenance_fail_line() {
+  local dir; dir="$(mk_fixture floor-provenance-fail-line)"
+  build_floor_env "$dir"
+  floor_pr "$dir" "$(printf 'Fixes #12\n\n%s\n<!-- harness-status: stage=verifier issue=12 outcome=fail retries=1 -->\n%s' "$FLOOR_VLINE" "$FLOOR_BLINE")"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=provenance PR body carries an outcome=fail verifier status line for issue 12"
+}
+# floor-pr-read-fails-closed — the PR read is retried once with one sleep 30, then holds; so is a
+# read that answers but with a document of the wrong shape (a head OID that is not hex).
+case_floor_pr_read_fails_closed() {
+  local dir; dir="$(mk_fixture floor-pr-read-fails-closed)"
+  build_floor_env "$dir"
+  : > "$dir/reject-pr"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_count "fail=read pr:" 1
+  expect_log_count "$dir/.gh-calls" "pr view 77 --json headRefName" 2
+  expect_sleep_calls "$dir/tbin" 1
+  expect_sleep_arg "$dir/tbin" "30"
+  expect_no_log "$dir/.impl-calls"
+  expect_log_count "$dir/.gh-calls" "issue view" 0
+  expect_no_log "$dir/.gov-calls"
+  rm -f "$dir/reject-pr" "$dir/.gh-calls" "$dir/tbin/.sleep-calls"
+  printf '{"headRefName":"claude/12-thing","baseRefName":"main","body":"x","headRefOid":"not-a-sha","mergeStateStatus":"CLEAN"}\n' > "$dir/pr.json"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_count "fail=read pr:" 1
+  expect_log_count "$dir/.gh-calls" "pr view 77 --json headRefName" 2
+  expect_sleep_calls "$dir/tbin" 1
+}
+# floor-retry-succeeds — a read that fails once uses the second attempt's data.
+case_floor_retry_succeeds() {
+  local dir; dir="$(mk_fixture floor-retry-succeeds)"
+  build_floor_env "$dir"
+  printf armed > "$dir/reject-pr-once"
+  run_floor "$dir" 77
+  expect_rc 0
+  expect_floor_first "floor=pass"
+  expect_log_count "$dir/.gh-calls" "pr view 77 --json headRefName" 2
+  expect_sleep_calls "$dir/tbin" 1
+  expect_sleep_arg "$dir/tbin" "30"
+}
+
+# floor-archive-* — a newest verifier-verdict comment keyed to this head branch must exist, open
+# with the expected status prefix (this issue's own outcome=pass line — floor-archive-prefix), and
+# be contained in the PR body. Missing, wrong-prefix and mismatched are determinate (one call, no
+# sleep); an unreadable archive is retried once.
+case_floor_archive_missing() {
+  local dir; dir="$(mk_fixture floor-archive-missing)"
+  build_floor_env "$dir"
+  floor_archive "$dir" "$FLOOR_VLINE" "claude/99-other"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=archive no archived verifier verdict for head branch claude/12-thing"
+  expect_log_count "$dir/.gh-calls" "issue view 12" 1
+  expect_sleep_calls "$dir/tbin" 0
+}
+case_floor_archive_mismatch() {
+  local dir; dir="$(mk_fixture floor-archive-mismatch)"
+  build_floor_env "$dir"
+  floor_archive "$dir" '<!-- harness-status: stage=verifier issue=12 outcome=pass retries=1 harness=3.5.0 -->'
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=archive the PR body's verifier line does not match the verdict archived for head branch claude/12-thing"
+  expect_log_count "$dir/.gh-calls" "issue view 12" 1
+  expect_sleep_calls "$dir/tbin" 0
+  # Only the NEWEST verdict for the branch counts: with the matching comment newest but listed
+  # first, an older non-matching one listed last must not hold the PR.
+  jq -n --arg vline "$FLOOR_VLINE" \
+    '{comments:[{url:"https://example.invalid/12#issuecomment-7154",createdAt:"2026-01-04T00:00:00Z",body:("<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: claude/12-thing -->\n" + $vline)},{url:"https://example.invalid/12#issuecomment-7158",createdAt:"2026-01-03T00:00:00Z",body:"<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: claude/12-thing -->\n<!-- harness-status: stage=verifier issue=12 outcome=pass retries=2 harness=3.5.0 -->"}]}' > "$dir/issue-12.json"
+  run_floor "$dir" 77
+  expect_rc 0
+  expect_floor_first "floor=pass"
+  expect_floor_line "archive-url=https://example.invalid/12#issuecomment-7154"
+}
+# The archived line must open with this issue's own pass prefix: a newest archived line that is a
+# different outcome, or a pass line for another issue, holds even when the PR body contains it
+# verbatim next to the real pass line (so only the archive's prefix check can hold it).
+case_floor_archive_prefix() {
+  local dir il; dir="$(mk_fixture floor-archive-prefix)"
+  build_floor_env "$dir"
+  for il in '<!-- harness-status: stage=verifier issue=12 outcome=incomplete retries=1 harness=3.5.0 -->' \
+            '<!-- harness-status: stage=verifier issue=13 outcome=pass retries=0 harness=3.5.0 -->'; do
+    floor_pr "$dir" "$(printf 'Fixes #12\n\n%s\n%s\n%s' "$FLOOR_VLINE" "$il" "$FLOOR_BLINE")"
+    floor_archive "$dir" "$il"
+    rm -f "$dir/.gh-calls"
+    run_floor "$dir" 77
+    expect_hold
+    expect_floor_line "fail=archive no archived verifier verdict for head branch claude/12-thing"
+    expect_floor_count "archive-url=" 0
+    expect_log_count "$dir/.gh-calls" "issue view 12" 1
+    expect_sleep_calls "$dir/tbin" 0
+  done
+}
+case_floor_archive_read_fails_closed() {
+  local dir; dir="$(mk_fixture floor-archive-read-fails-closed)"
+  build_floor_env "$dir"
+  : > "$dir/reject-issue"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_count "fail=read archive:" 1
+  expect_log_count "$dir/.gh-calls" "issue view 12" 2
+  expect_sleep_calls "$dir/tbin" 1
+}
+
+# floor-binding-* — covers_plan must be true, then the PR body must contain the binding line of
+# some approved_at_history entry, newest first. A false answer is determinate; an unknown one is
+# retried once and then fails closed.
+case_floor_binding_not_covered() {
+  local dir; dir="$(mk_fixture floor-binding-not-covered)"
+  build_floor_env "$dir"
+  floor_impl "$dir" false plan-after-approval "$(floor_hist "$FLOOR_BLINE")" '[]' impl.json
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=binding plan binding: plan-after-approval"
+  expect_log_count "$dir/.impl-calls" "--issue 12" 1
+  expect_sleep_calls "$dir/tbin" 0
+}
+# An empty binding_line entry is skipped, never matched: contains("") would otherwise release.
+case_floor_binding_no_match() {
+  local dir; dir="$(mk_fixture floor-binding-no-match)"
+  build_floor_env "$dir"
+  floor_impl "$dir" true covered "$(floor_hist '' '<!-- harness-plan-binding: issue=12 plan=https://example.invalid/12#issuecomment-7153 approved-at=2026-01-09T00:00:00Z -->')" '[]' impl.json
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=binding the PR body's binding line matches no plan-approved event for this plan — re-approve that plan to release it"
+  expect_floor_count "approved-at=" 0
+}
+case_floor_binding_older_approval_releases() {
+  local dir hist; dir="$(mk_fixture floor-binding-older-approval-releases)"
+  build_floor_env "$dir"
+  # The two history entries carry different approved_at/approved_by, so the evidence says which
+  # entry released the PR: the older one (maint, 2026-01-01), not the newest (owner, 2026-01-02).
+  hist="$(jq -n -c --arg a "$FLOOR_BLINE" --arg b "$FLOOR_BLINE_OLD" \
+    '[{approved_at:"2026-01-02T00:00:00Z",approved_by:"owner",binding_line:$a},{approved_at:"2026-01-01T00:00:00Z",approved_by:"maint",binding_line:$b}]')"
+  floor_pr "$dir" "$(printf 'Fixes #12\n\n%s\n%s' "$FLOOR_VLINE" "$FLOOR_BLINE_OLD")"
+  floor_impl "$dir" true covered "$hist" '[]' impl.json
+  run_floor "$dir" 77
+  expect_rc 0
+  expect_floor_first "floor=pass"
+  expect_floor_line "approved-at=2026-01-01T00:00:00Z"
+  expect_floor_line "approved-by=maint"
+  expect_floor_no_line "approved-at=2026-01-02T00:00:00Z"
+  expect_floor_no_line "approved-by=owner"
+  expect_log_count "$dir/.impl-calls" "--issue 12" 1
+}
+case_floor_binding_unknown_fails_closed() {
+  local dir; dir="$(mk_fixture floor-binding-unknown-fails-closed)"
+  build_floor_env "$dir"
+  floor_impl "$dir" null approval-unreadable '[]' '[]' impl.json
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=binding plan binding unknown after one retry: approval-unreadable"
+  expect_log_count "$dir/.impl-calls" "--issue 12" 2
+  expect_sleep_calls "$dir/tbin" 1
+  printf '1' > "$dir/impl-rc"
+  : > "$dir/impl.json"
+  rm -f "$dir/.impl-calls" "$dir/tbin/.sleep-calls"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=binding plan binding unknown after one retry: discovery exited 1"
+  expect_log_count "$dir/.impl-calls" "--issue 12" 2
+}
+# floor-evidence-from-retry — the binding and post-approval checks read the SAME final run: the
+# first run is unknown AND carries an uncovered comment, the retry run is clean, so no
+# post-approval failure may appear and the result passes. When instead the retry run yields no
+# document at all, the first run's comment is not evidence either: the PR holds on the unknown
+# binding alone.
+case_floor_evidence_from_retry() {
+  local dir first; dir="$(mk_fixture floor-evidence-from-retry)"
+  build_floor_env "$dir"
+  first='[{"author":"owner","association":"OWNER","createdAt":"2026-01-05T00:00:00Z","url":"https://example.invalid/12#issuecomment-7155","covered_by_approval":false,"covered_by_approval_reason":null}]'
+  floor_impl "$dir" null approval-unreadable "$(floor_hist "$FLOOR_BLINE")" "$first" impl-first.json
+  run_floor "$dir" 77
+  expect_rc 0
+  expect_floor_first "floor=pass"
+  expect_floor_count "fail=" 0
+  expect_log_count "$dir/.impl-calls" "--issue 12" 2
+  expect_sleep_calls "$dir/tbin" 1
+  rm -f "$dir/.impl-calls" "$dir/tbin/.sleep-calls"
+  floor_impl "$dir" null approval-unreadable "$(floor_hist "$FLOOR_BLINE")" "$first" impl-first.json
+  : > "$dir/impl.json"
+  printf '1' > "$dir/impl-rc"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=binding plan binding unknown after one retry: discovery exited 1"
+  expect_floor_count "fail=post-approval" 0
+  expect_log_count "$dir/.impl-calls" "--issue 12" 2
+}
+
+# floor-post-approval-uncovered — every trusted_post_plan entry whose covered_by_approval is not
+# true fails (false and null alike), naming its url or, with no url, author and createdAt.
+case_floor_post_approval_uncovered() {
+  local dir; dir="$(mk_fixture floor-post-approval-uncovered)"
+  build_floor_env "$dir"
+  floor_impl "$dir" true covered "$(floor_hist "$FLOOR_BLINE")" '[{"author":"owner","createdAt":"2026-01-01T00:00:00Z","url":"https://example.invalid/12#issuecomment-7156","covered_by_approval":true},{"author":"owner","createdAt":"2026-01-05T00:00:00Z","url":"https://example.invalid/12#issuecomment-7157","covered_by_approval":false},{"author":"alice","createdAt":"2026-01-06T00:00:00Z","url":null,"covered_by_approval":null}]' impl.json
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_count "fail=post-approval" 2
+  expect_floor_line "fail=post-approval post-approval comment not covered by the approval: https://example.invalid/12#issuecomment-7157"
+  expect_floor_line "fail=post-approval post-approval comment not covered by the approval: alice 2026-01-06T00:00:00Z"
+}
+
+# floor-ci-* — green needs every bucket pass or skipping with at least one pass. Pending, failing
+# and no-checks are determinate answers (one call, no sleep); anything gh does not answer cleanly
+# is retried once and then holds.
+case_floor_ci_pending() {
+  local dir; dir="$(mk_fixture floor-ci-pending)"
+  build_floor_env "$dir"
+  printf '%s\n' '[{"bucket":"pending","name":"selfcheck","state":"IN_PROGRESS"},{"bucket":"skipping","name":"deploy","state":"SKIPPED"}]' > "$dir/checks.json"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=ci CI pending on the head commit"
+  expect_floor_line "ci=pending"
+  expect_log_count "$dir/.gh-calls" "pr checks 77" 1
+  expect_sleep_calls "$dir/tbin" 0
+}
+case_floor_ci_failing() {
+  local dir body reason; dir="$(mk_fixture floor-ci-failing)"
+  build_floor_env "$dir"
+  for body in \
+    '[{"bucket":"fail","name":"a","state":"FAILURE"},{"bucket":"pending","name":"b","state":"IN_PROGRESS"}]' \
+    '[{"bucket":"pass","name":"a","state":"SUCCESS"},{"bucket":"cancel","name":"b","state":"CANCELLED"}]' \
+    '[{"bucket":"pass","name":"a","state":"SUCCESS"},{"bucket":"mystery","name":"b","state":"X"}]'; do
+    printf '%s\n' "$body" > "$dir/checks.json"
+    rm -f "$dir/.gh-calls"
+    run_floor "$dir" 77
+    expect_hold
+    expect_floor_line "fail=ci CI failing on the head commit"
+    expect_log_count "$dir/.gh-calls" "pr checks 77" 1
+  done
+  printf '%s\n' '[{"bucket":"skipping","name":"a","state":"SKIPPED"}]' > "$dir/checks.json"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=ci no check passed on the head commit — every check was skipped"
+  expect_sleep_calls "$dir/tbin" 0
+}
+floor_no_checks() {
+  printf '' > "$1/checks.json"
+  printf "no checks reported on the 'claude/12-thing' branch\n" > "$1/checks-err.txt"
+  printf '1' > "$1/checks-rc"
+}
+case_floor_ci_no_checks() {
+  local dir; dir="$(mk_fixture floor-ci-no-checks)"
+  build_floor_env "$dir"
+  floor_no_checks "$dir"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=ci no checks configured — not green without an explicit no-CI opt-in"
+  expect_floor_line "ci=none"
+  expect_log_count "$dir/.gh-calls" "pr checks 77" 1
+  expect_sleep_calls "$dir/tbin" 0
+}
+case_floor_ci_no_checks_allowed() {
+  local dir; dir="$(mk_fixture floor-ci-no-checks-allowed)"
+  build_floor_env "$dir"
+  floor_no_checks "$dir"
+  run_floor "$dir" --allow-no-ci 77
+  expect_rc 0
+  expect_floor_first "floor=pass"
+  expect_floor_line "ci=none-allowed"
+  expect_floor_count "check|" 0
+}
+case_floor_ci_read_fails_closed() {
+  local dir; dir="$(mk_fixture floor-ci-read-fails-closed)"
+  build_floor_env "$dir"
+  printf '' > "$dir/checks.json"
+  printf 'HTTP 502: Bad Gateway\n' > "$dir/checks-err.txt"
+  printf '1' > "$dir/checks-rc"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_count "fail=read checks:" 1
+  expect_log_count "$dir/.gh-calls" "pr checks 77" 2
+  expect_sleep_calls "$dir/tbin" 1
+  rm -f "$dir/.gh-calls" "$dir/tbin/.sleep-calls"
+  printf '[]\n' > "$dir/checks.json"
+  printf '0' > "$dir/checks-rc"
+  : > "$dir/checks-err.txt"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_count "fail=read checks:" 1
+  expect_log_count "$dir/.gh-calls" "pr checks 77" 2
+  rm -f "$dir/.gh-calls" "$dir/tbin/.sleep-calls"
+  floor_no_checks "$dir"
+  printf '4' > "$dir/checks-rc"
+  run_floor "$dir" --allow-no-ci 77
+  expect_hold
+  expect_floor_count "fail=read checks:" 1
+  expect_log_count "$dir/.gh-calls" "pr checks 77" 2
+}
+
+# floor-default-branch-read-fails-closed — the default-branch read is retried once, then holds; the
+# checks that need the default branch are skipped, with no fail=base or fail=rail of their own. A
+# read that answers with no default branch name is no better than one that fails.
+case_floor_default_branch_read_fails_closed() {
+  local dir; dir="$(mk_fixture floor-default-branch-read-fails-closed)"
+  build_floor_env "$dir"
+  : > "$dir/reject-repo"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_count "fail=read default-branch:" 1
+  expect_log_count "$dir/.gh-calls" "repo view" 2
+  expect_sleep_calls "$dir/tbin" 1
+  expect_floor_count "fail=base" 0
+  expect_floor_count "fail=rail" 0
+  expect_log_count "$dir/.git-calls" "merge-base" 0
+  rm -f "$dir/reject-repo" "$dir/.gh-calls" "$dir/tbin/.sleep-calls"
+  printf '{"defaultBranchRef":null}\n' > "$dir/repo.json"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_count "fail=read default-branch:" 1
+  expect_log_count "$dir/.gh-calls" "repo view" 2
+  expect_sleep_calls "$dir/tbin" 1
+}
+
+# floor-fetch-fails-closed — git fetch origin is retried once (one sleep 30), then holds, and
+# neither the rail, the governance read, nor the base check runs.
+case_floor_fetch_fails_closed() {
+  local dir; dir="$(mk_fixture floor-fetch-fails-closed)"
+  build_floor_env "$dir"
+  : > "$dir/reject-fetch"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=fetch could not fetch origin — not comparing against a stale main tip"
+  expect_log_count "$dir/.git-calls" "fetch origin" 2
+  expect_sleep_calls "$dir/tbin" 1
+  expect_sleep_arg "$dir/tbin" "30"
+  expect_log_count "$dir/.git-calls" "merge-base" 0
+  expect_log_count "$dir/.git-calls" "rev-parse origin/" 0
+  expect_no_log "$dir/.gov-calls"
+  expect_floor_count "fail=base" 0
+  expect_floor_count "fail=behind" 0
+}
+case_floor_rail_unresolvable() {
+  local dir; dir="$(mk_fixture floor-rail-unresolvable)"
+  build_floor_env "$dir"
+  : > "$dir/reject-revparse"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=rail could not resolve origin/main"
+  expect_log_count "$dir/.git-calls" "rev-parse origin/main" 1
+  expect_log_count "$dir/.git-calls" "merge-base" 0
+  expect_no_log "$dir/.gov-calls"
+  rm -f "$dir/reject-revparse" "$dir/.git-calls"
+  printf 'not-a-sha\n' > "$dir/base-tip.txt"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=rail could not resolve origin/main"
+  expect_log_count "$dir/.git-calls" "merge-base" 0
+}
+# floor-rail-default-branch — the rail resolves origin/<the default branch GitHub reports>, never a
+# hard-coded main: in a repo whose default branch (and the PR's base) is develop, only
+# origin/develop is read, so a stale origin/main can never stand in for the tip.
+case_floor_rail_default_branch() {
+  local dir; dir="$(mk_fixture floor-rail-default-branch)"
+  build_floor_env "$dir"
+  printf '{"defaultBranchRef":{"name":"develop"}}\n' > "$dir/repo.json"
+  floor_pr "$dir" "$(printf 'Fixes #12\n\n%s\n%s' "$FLOOR_VLINE" "$FLOOR_BLINE")" claude/12-thing develop
+  run_floor "$dir" 77
+  expect_rc 0
+  expect_floor_first "floor=pass"
+  expect_floor_line "default-branch=develop"
+  expect_floor_line "base-ref=develop"
+  expect_floor_line "base-tip=$FLOOR_BASE"
+  expect_log_count "$dir/.git-calls" "rev-parse origin/develop" 1
+  expect_log_count "$dir/.git-calls" "rev-parse origin/main" 0
+}
+
+# floor-behind* — any non-zero merge-base exit holds, with the 12-character base tip in the reason;
+# a git error (not exit 1) also quotes git's first message line.
+case_floor_behind() {
+  local dir; dir="$(mk_fixture floor-behind)"
+  build_floor_env "$dir"
+  printf '1' > "$dir/ancestry-rc"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=behind PR is behind main at 89abcdef0123 — update the branch and let CI re-run"
+  expect_floor_line "ancestry-rc=1"
+  expect_log_count "$dir/.git-calls" "merge-base" 1
+}
+case_floor_behind_git_error() {
+  local dir; dir="$(mk_fixture floor-behind-git-error)"
+  build_floor_env "$dir"
+  printf '128' > "$dir/ancestry-rc"
+  printf 'fatal: Not a valid commit name\nsecond line\n' > "$dir/ancestry-err.txt"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=behind PR is behind main at 89abcdef0123 — update the branch and let CI re-run; git: fatal: Not a valid commit name"
+  expect_floor_line "ancestry-rc=128"
+}
+
+# floor-merge-state-dirty — DIRTY and BLOCKED hold; UNKNOWN is not a signal this clause acts on.
+case_floor_merge_state_dirty() {
+  local dir state; dir="$(mk_fixture floor-merge-state-dirty)"
+  build_floor_env "$dir"
+  for state in DIRTY BLOCKED; do
+    floor_pr "$dir" "$(printf 'Fixes #12\n\n%s\n%s' "$FLOOR_VLINE" "$FLOOR_BLINE")" claude/12-thing main "$state"
+    run_floor "$dir" 77
+    expect_hold
+    expect_floor_line "fail=merge-state mergeStateStatus is $state"
+  done
+  floor_pr "$dir" "$(printf 'Fixes #12\n\n%s\n%s' "$FLOOR_VLINE" "$FLOOR_BLINE")" claude/12-thing main UNKNOWN
+  run_floor "$dir" 77
+  expect_rc 0
+  expect_floor_first "floor=pass"
+}
+
+# floor-governance-* — governance-paths.sh's own verdict is re-emitted as governance=, never echoed;
+# a hold names each governance path; any non-verdict outcome fails closed, with one call (not
+# retried).
+case_floor_governance_hold() {
+  local dir; dir="$(mk_fixture floor-governance-hold)"
+  build_floor_env "$dir"
+  printf 'governance: .github/workflows/x.yml\ngovernance: CLAUDE.md\nchanged: src/x.sh\nverdict=hold\n' > "$dir/gov.txt"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=governance governance path(s): .github/workflows/x.yml, CLAUDE.md"
+  expect_floor_line "governance: .github/workflows/x.yml"
+  expect_floor_line "changed: src/x.sh"
+  expect_floor_line "governance=hold"
+  expect_floor_count "verdict=" 0
+}
+case_floor_governance_error_fails_closed() {
+  local dir; dir="$(mk_fixture floor-governance-error-fails-closed)"
+  build_floor_env "$dir"
+  printf 'verdict=error\n' > "$dir/gov.txt"
+  printf 'base commit not found: %s\n' "$FLOOR_BASE" > "$dir/gov-err.txt"
+  printf '1' > "$dir/gov-rc"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=governance governance-paths.sh failed: base commit not found: $FLOOR_BASE"
+  expect_floor_count "verdict=" 0
+  expect_log_count "$dir/.gov-calls" "$FLOOR_BASE" 1
+  expect_sleep_calls "$dir/tbin" 0
+  rm -f "$dir/gov-err.txt"
+  printf 'changed: src/x.sh\nverdict=none\n' > "$dir/gov.txt"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=governance governance-paths.sh failed: changed: src/x.sh"
+  expect_floor_count "governance=" 0
+}
+
+# floor-lessons-* — on governance=lessons-only (harness mode) the PR file list must be a LESSONS.md
+# append and the diff an end-of-file append; the added lines are printed behind `added| `.
+case_floor_lessons_append_passes() {
+  local dir; dir="$(mk_fixture floor-lessons-append-passes)"
+  build_floor_env "$dir"
+  floor_lessons "$dir"
+  run_floor "$dir" 77
+  expect_rc 0
+  expect_floor_first "floor=pass"
+  expect_floor_line "governance=lessons-only"
+  expect_floor_line "lessons-files=lessons-append"
+  expect_floor_line "added| added gotcha one"
+  expect_floor_line "added| added gotcha two"
+  expect_floor_count "added|" 2
+  expect_log_count "$dir/.git-calls" "diff --no-color --no-ext-diff --no-textconv -U3 $FLOOR_BASE $FLOOR_HEAD -- .claude/LESSONS.md" 1
+  expect_log_count "$dir/.gh-calls" "pr view 77 --json changedFiles,files" 1
+}
+case_floor_lessons_new_file_passes() {
+  local dir; dir="$(mk_fixture floor-lessons-new-file-passes)"
+  build_floor_env "$dir"
+  floor_lessons "$dir"
+  cat > "$dir/lessons.diff" <<'EOF'
+diff --git a/.claude/LESSONS.md b/.claude/LESSONS.md
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/.claude/LESSONS.md
+@@ -0,0 +1,2 @@
++first gotcha
++second gotcha
+EOF
+  floor_files "$dir" '{"changedFiles":1,"files":[{"path":".claude/LESSONS.md","changeType":"ADDED","additions":2,"deletions":0}]}'
+  run_floor "$dir" 77
+  expect_rc 0
+  expect_floor_first "floor=pass"
+  expect_floor_line "added| first gotcha"
+  expect_floor_line "added| second gotcha"
+}
+case_floor_lessons_files_fail() {
+  local dir; dir="$(mk_fixture floor-lessons-files-fail)"
+  build_floor_env "$dir"
+  floor_lessons "$dir"
+  floor_files "$dir" '{"changedFiles":1,"files":[{"path":".claude/LESSONS.md","changeType":"MODIFIED","additions":2,"deletions":1}]}'
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=lessons-files not-add-only"
+  expect_floor_line "lessons-files=not-add-only"
+  expect_log_count "$dir/.git-calls" "diff" 0
+}
+case_floor_lessons_files_read_fails() {
+  local dir; dir="$(mk_fixture floor-lessons-files-read-fails)"
+  build_floor_env "$dir"
+  floor_lessons "$dir"
+  : > "$dir/reject-files"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=lessons-files could not read the PR file list"
+  expect_log_count "$dir/.gh-calls" "changedFiles,files" 1
+  expect_sleep_calls "$dir/tbin" 0
+  expect_log_count "$dir/.git-calls" "diff" 0
+}
+# floor_eof_reject DIR RULE DIFF — the diff must fail the end-of-file check with RULE.
+floor_eof_reject() {
+  local dir="$1" rule="$2"
+  printf '%s\n' "$3" > "$dir/lessons.diff"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=lessons-eof end-of-file check failed: $rule"
+  expect_floor_count "added|" 0
+}
+case_floor_lessons_midfile_insert() {
+  local dir hdr; dir="$(mk_fixture floor-lessons-midfile-insert)"
+  build_floor_env "$dir"
+  floor_lessons "$dir"
+  hdr='diff --git a/.claude/LESSONS.md b/.claude/LESSONS.md
+index 1111111..2222222 100644
+--- a/.claude/LESSONS.md
++++ b/.claude/LESSONS.md'
+  floor_eof_reject "$dir" "context line after the last added line" "$hdr
+@@ -10,4 +10,6 @@ heading
+ c1
+ c2
++new one
++new two
+ c3
+ c4"
+  floor_eof_reject "$dir" "no context line before the first added line" "$hdr
+@@ -1,3 +1,5 @@
++new one
++new two
+ c1
+ c2
+ c3"
+  floor_eof_reject "$dir" "a removed line" "$hdr
+@@ -10,3 +10,3 @@
+ c1
+ c2
+-old
++new"
+  floor_eof_reject "$dir" "an added line contains <!--" "$hdr
+@@ -10,3 +10,4 @@
+ c1
+ c2
+ c3
++<!-- hidden -->"
+  floor_eof_reject "$dir" "hunk new count does not match the added lines" "$hdr
+@@ -10,3 +10,9 @@
+ c1
+ c2
+ c3
++new one
++new two"
+  floor_eof_reject "$dir" "hunk old count does not match the leading context" "$hdr
+@@ -10,5 +10,7 @@
+ c1
+ c2
+ c3
++new one
++new two"
+  floor_eof_reject "$dir" "an unexpected line in the hunk" "$hdr
+@@ -10,3 +10,4 @@
+ c1
+ c2
+ c3
++new one
+@@ -40,3 +41,4 @@
+ d1
+ d2
+ d3
++new two"
+  floor_eof_reject "$dir" "symlink" "diff --git a/.claude/LESSONS.md b/.claude/LESSONS.md
+index 1111111..2222222 120000
+--- a/.claude/LESSONS.md
++++ b/.claude/LESSONS.md
+@@ -1,3 +1,4 @@
+ c1
+ c2
+ c3
++new one"
+  floor_eof_reject "$dir" "mode change or deletion" "diff --git a/.claude/LESSONS.md b/.claude/LESSONS.md
+old mode 100644
+new mode 100755
+index 1111111..2222222
+--- a/.claude/LESSONS.md
++++ b/.claude/LESSONS.md
+@@ -1,3 +1,4 @@
+ c1
+ c2
+ c3
++new one"
+  floor_eof_reject "$dir" "mode change or deletion" "diff --git a/.claude/LESSONS.md b/.claude/LESSONS.md
+old mode 100644
+index 1111111..2222222
+--- a/.claude/LESSONS.md
++++ b/.claude/LESSONS.md
+@@ -1,3 +1,4 @@
+ c1
+ c2
+ c3
++new one"
+  floor_eof_reject "$dir" "mode change or deletion" "diff --git a/.claude/LESSONS.md b/.claude/LESSONS.md
+deleted file mode 100644
+index 1111111..0000000
+--- a/.claude/LESSONS.md
++++ /dev/null
+@@ -1,3 +1,4 @@
+ c1
+ c2
+ c3
++new one"
+  floor_eof_reject "$dir" "new file mode other than 100644" "diff --git a/.claude/LESSONS.md b/.claude/LESSONS.md
+new file mode 100755
+index 0000000..2222222
+--- /dev/null
++++ b/.claude/LESSONS.md
+@@ -0,0 +1 @@
++new one"
+  floor_eof_reject "$dir" "new-file hunk header does not match the added lines" "diff --git a/.claude/LESSONS.md b/.claude/LESSONS.md
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/.claude/LESSONS.md
+@@ -0,0 +1,5 @@
++new one
++new two"
+  floor_eof_reject "$dir" "no hunk" ""
+}
+case_floor_lessons_diff_fails_closed() {
+  local dir; dir="$(mk_fixture floor-lessons-diff-fails-closed)"
+  build_floor_env "$dir"
+  floor_lessons "$dir"
+  printf '1' > "$dir/diff-rc"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=lessons-eof end-of-file check failed: git diff exited 1"
+  expect_log_count "$dir/.git-calls" "diff" 1
+  expect_sleep_calls "$dir/tbin" 0
+}
+
+# floor-base-mismatch — a PR whose base is not the default branch holds with fail=base.
+case_floor_base_mismatch() {
+  local dir; dir="$(mk_fixture floor-base-mismatch)"
+  build_floor_env "$dir"
+  floor_pr "$dir" "$(printf 'Fixes #12\n\n%s\n%s' "$FLOOR_VLINE" "$FLOOR_BLINE")" claude/12-thing develop
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=base base branch develop is not the default branch main"
+  expect_floor_line "base-ref=develop"
+}
+
+# floor-dependabot-* — --dependabot skips the harness-only checks, refuses a claude/ head branch,
+# and never releases a lessons-only PR.
+case_floor_dependabot_mode() {
+  local dir; dir="$(mk_fixture floor-dependabot-mode)"
+  build_floor_env "$dir"
+  floor_pr "$dir" "Bumps x from 1 to 2" dependabot/npm_and_yarn/x-2
+  run_floor "$dir" --dependabot 77
+  expect_rc 0
+  expect_floor_first "floor=pass"
+  expect_floor_line "mode=dependabot"
+  expect_floor_count "issue=" 0
+  expect_floor_count "verifier-line=" 0
+  expect_log_count "$dir/.gh-calls" "issue view" 0
+  expect_no_log "$dir/.impl-calls"
+  expect_no_log "$dir/.decoy-calls"
+}
+case_floor_dependabot_claude_branch_refused() {
+  local dir; dir="$(mk_fixture floor-dependabot-claude-branch-refused)"
+  build_floor_env "$dir"
+  run_floor "$dir" 77 --dependabot
+  expect_hold
+  expect_floor_line "fail=branch --dependabot given for the claude/ head branch claude/12-thing — not a Dependabot PR"
+}
+case_floor_dependabot_lessons_only_held() {
+  local dir; dir="$(mk_fixture floor-dependabot-lessons-only-held)"
+  build_floor_env "$dir"
+  floor_lessons "$dir"
+  floor_pr "$dir" "Bumps x from 1 to 2" dependabot/npm_and_yarn/x-2
+  run_floor "$dir" --dependabot 77
+  expect_hold
+  expect_floor_line "fail=governance .claude/LESSONS.md — the lesson-append carve-out releases harness PRs only"
+  expect_log_count "$dir/.gh-calls" "changedFiles,files" 0
+  expect_log_count "$dir/.git-calls" "diff" 0
+}
+
+# floor-usage-errors — every usage or environment error exits 2 with a stderr reason, no stdout,
+# and no gh, git-remote, sibling or decoy call.
+case_floor_usage_errors() {
+  local dir args; dir="$(mk_fixture floor-usage-errors)"
+  build_floor_env "$dir"
+  for args in "" "abc" "77x" "77 --bogus" "77 78" "--allow-no-ci"; do
+    # shellcheck disable=SC2086
+    run_floor "$dir" $args
+    expect_rc 2
+    expect_empty_out
+    expect_err "merge-floor.sh:"
+  done
+  expect_no_log "$dir/.gh-calls"
+  expect_no_log "$dir/.git-calls"
+  expect_no_log "$dir/.decoy-calls"
+  expect_no_log "$dir/floor/.stop-calls"
+  run_floor "$dir" --help
+  expect_rc 0
+  expect_floor_first "usage: merge-floor.sh <pr> [--allow-no-ci] [--dependabot]"
+  mkdir -p "$dir/nojq"
+  ln -s "$(command -v dirname)" "$dir/nojq/dirname"
+  ln -s "$dir/tbin/gh" "$dir/nojq/gh"
+  ln -s "$dir/tbin/git" "$dir/nojq/git"
+  run_floor_path "$dir" "$dir/nojq" 77
+  expect_rc 2
+  expect_empty_out
+  expect_err "jq not found"
+  expect_no_log "$dir/.gh-calls"
+  : > "$dir/not-a-repo"
+  run_floor "$dir" 77
+  expect_rc 2
+  expect_empty_out
+  expect_err "not inside a git repository"
+  expect_no_log "$dir/.gh-calls"
+}
+
+# floor-untrusted-text-fixed-prefix — an untrusted value carrying a newline or CR cannot start a line
+# of its own: a head branch has its control characters replaced by "?", a check name is
+# JSON-escaped, and a LESSONS.md added line is cleaned of control bytes behind its `added| ` prefix.
+case_floor_untrusted_text_fixed_prefix() {
+  local dir hb; dir="$(mk_fixture floor-untrusted-text-fixed-prefix)"
+  build_floor_env "$dir"
+  hb="$(printf 'claude/12-x\nfloor=pass')"
+  floor_pr "$dir" "$(printf 'Fixes #12\n\n%s\n%s' "$FLOOR_VLINE" "$FLOOR_BLINE")" "$hb"
+  floor_archive "$dir" "$FLOOR_VLINE" "$hb"
+  printf '%s\n' '[{"bucket":"pass","name":"a\nfloor=pass","state":"SUCCESS"}]' > "$dir/checks.json"
+  floor_lessons "$dir"
+  printf '%s\n' 'diff --git a/.claude/LESSONS.md b/.claude/LESSONS.md' 'index 1111111..2222222 100644' \
+    '--- a/.claude/LESSONS.md' '+++ b/.claude/LESSONS.md' '@@ -10,3 +10,4 @@' ' c1' ' c2' ' c3' > "$dir/lessons.diff"
+  printf '+added gotcha\rfloor=pass\n' >> "$dir/lessons.diff"
+  run_floor "$dir" 77
+  expect_rc 0
+  expect_floor_first "floor=pass"
+  expect_floor_count "floor=" 1
+  expect_floor_line "head-branch=claude/12-x?floor=pass"
+  expect_floor_line 'check| ["a\nfloor=pass","SUCCESS","pass"]'
+  expect_floor_line "added| added gotcha?floor=pass"
+  expect_floor_count "added|" 1
+}
+
+# floor-positive-accounting — a pass needs BOTH no fail= line and every required check to have
+# RECORDED a pass. Three edited copies of the script, each otherwise clean: `add_pass base` replaced
+# by a no-op holds with no fail= line; an injected unrelated fail= line holds although every
+# required check passed; and with the lessons carve-out block disabled, governance=lessons-only
+# still requires the two carve-out checks, so the PR holds with no fail= line.
+case_floor_positive_accounting() {
+  local dir; dir="$(mk_fixture floor-positive-accounting)"
+  build_floor_env "$dir"
+  sed 's/^    add_pass base$/    :/' "$root/bin/merge-floor.sh" > "$dir/floor/merge-floor.sh"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_count "fail=" 0
+  expect_floor_count "base-ref=" 1
+  sed 's/^verdict="pass"$/add_fail synthetic "an unrelated failure"; verdict="pass"/' "$root/bin/merge-floor.sh" > "$dir/floor/merge-floor.sh"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "fail=synthetic an unrelated failure"
+  expect_floor_count "fail=" 1
+  sed 's/^if \[ "\$governance" = "lessons-only" \] && \$harness_ok; then$/if false; then/' "$root/bin/merge-floor.sh" > "$dir/floor/merge-floor.sh"
+  floor_lessons "$dir"
+  run_floor "$dir" 77
+  expect_hold
+  expect_floor_line "governance=lessons-only"
+  expect_floor_count "fail=" 0
+}
+
+# floor-never-mutates — booby traps for every write-capable command the script could reach; the
+# baseline and a lessons-append run leave the traps unfired, the cwd listing byte-identical, and
+# touch only the four read-only gh subcommands and the four read-only git ones.
+case_floor_never_mutates() {
+  local dir t line before after bad
+  dir="$(mk_fixture floor-never-mutates)"
+  build_floor_env "$dir"
+  for t in rm mv cp touch mkdir mktemp tee chmod ln; do
+    floor_write_script "$dir" "$dir/tbin/$t" 'printf "%s\n" "${0##*/} $*" >> "__DIR__/.trap-calls"
+exit 1'
+  done
+  before="$(find "$dir/work" | sort)"
+  run_floor "$dir" 77
+  expect_rc 0
+  floor_lessons "$dir"
+  run_floor "$dir" 77
+  expect_rc 0
+  expect_floor_first "floor=pass"
+  expect_floor_count "added|" 2
+  after="$(find "$dir/work" | sort)"
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}the cwd listing changed\n"; }
+  expect_no_log "$dir/.trap-calls"
+  bad=""
+  while IFS= read -r line; do
+    case "$line" in
+      "pr view "*|"pr checks "*|"issue view "*|"repo view "*) : ;;
+      *) bad="$bad [$line]" ;;
+    esac
+  done < "$dir/.gh-calls"
+  [ -z "$bad" ] || { __ok=0; __why="${__why}non-read gh call(s):$bad\n"; }
+  bad=""
+  while IFS= read -r line; do
+    case "$line" in
+      "rev-parse "*|"fetch origin"|"merge-base --is-ancestor "*|"diff "*) : ;;
+      *) bad="$bad [$line]" ;;
+    esac
+  done < "$dir/.git-calls"
+  [ -z "$bad" ] || { __ok=0; __why="${__why}non-read git call(s):$bad\n"; }
+}
+
+# ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
   "untrusted-comment-no-revision|case_untrusted_no_revision|NONE comment after the plan: no revision, reported in untrusted_comments"
@@ -11613,6 +12848,54 @@ cases=(
   "plan-stall-newest-plan-resets|case_plan_stall_newest_plan_resets|#395: only stall records after the NEWEST trusted plan count"
   "plan-stall-untrusted-plan-no-reset|case_plan_stall_untrusted_plan_no_reset|#395: an untrusted comment opening with the plan marker never resets the count"
   "plan-stall-requires-stall-key|case_plan_stall_requires_stall_key|#395: a trusted audit-opening comment without the stall key never counts"
+  "floor-pass-harness|case_floor_pass_harness|#550: a clean harness PR passes — every evidence key, no fail= line, no sleep, no decoy sibling call, exact sibling argv"
+  "floor-stop-set|case_floor_stop_set|#550: harness-stop.sh exit 3 is floor=stop, exit 3, its stdout verbatim, before any gh call, fetch, discovery or governance call"
+  "floor-stop-undocumented-exit|case_floor_stop_undocumented_exit|#550: an undocumented harness-stop.sh status (126) is floor=stop, never a pass"
+  "floor-stop-unknown|case_floor_stop_unknown|#550: harness-stop.sh exit 4 (stop=unknown) is floor=stop with its reason line verbatim"
+  "floor-stop-install-fault|case_floor_stop_install_fault|#550: harness-stop.sh exit 2 or 127 is an install fault — the floor continues and prints stop-check=install-fault"
+  "floor-branch-not-harness|case_floor_branch_not_harness|#550: a head branch that is not claude/<n>-... holds, and the archive and discovery reads never run"
+  "floor-provenance-missing|case_floor_provenance_missing|#550: a PR body without the verifier's outcome=pass line holds, however it is worded otherwise"
+  "floor-provenance-fail-line|case_floor_provenance_fail_line|#550: a PR body that also carries an outcome=fail verifier line holds"
+  "floor-pr-read-fails-closed|case_floor_pr_read_fails_closed|#550: the PR read is attempted twice with one sleep 30, then holds; no dependent read runs"
+  "floor-retry-succeeds|case_floor_retry_succeeds|#550: a PR read that fails once uses the second attempt — pass, two calls, one sleep 30"
+  "floor-archive-missing|case_floor_archive_missing|#550: no verdict archived for this head branch holds — one issue view, no retry"
+  "floor-archive-mismatch|case_floor_archive_mismatch|#550: an archived status line the PR body does not contain holds, and the newest archived line is the one compared — one issue view, no retry"
+  "floor-archive-prefix|case_floor_archive_prefix|#550: a newest archived line that is another outcome or another issue's pass line holds even when the PR body contains it — one issue view, no retry"
+  "floor-archive-read-fails-closed|case_floor_archive_read_fails_closed|#550: an unreadable archive is attempted twice with one sleep, then holds"
+  "floor-binding-not-covered|case_floor_binding_not_covered|#550: covers_plan false holds with the approval reason — one discovery run, no retry"
+  "floor-binding-no-match|case_floor_binding_no_match|#550: no history entry's binding line is in the PR body holds, and an empty binding_line entry is skipped rather than matched"
+  "floor-binding-older-approval-releases|case_floor_binding_older_approval_releases|#550: the newest-first walk releases a PR body written under an older approval, citing that entry's approved-at and approved-by, not the newest entry's"
+  "floor-binding-unknown-fails-closed|case_floor_binding_unknown_fails_closed|#550: an unknown covers_plan (or a failed discovery run) is run twice with one sleep, then holds"
+  "floor-evidence-from-retry|case_floor_evidence_from_retry|#550: binding and post-approval read the same final discovery run, never a mix of the first attempt and the retry; a retry run that returns no document holds on the exit status"
+  "floor-post-approval-uncovered|case_floor_post_approval_uncovered|#550: every trusted_post_plan entry whose covered_by_approval is not true holds (false and null), named by url or author and time"
+  "floor-ci-pending|case_floor_ci_pending|#550: a pending check holds as a determinate answer — one gh pr checks call, no sleep"
+  "floor-ci-failing|case_floor_ci_failing|#550: a fail or cancel bucket, an unknown bucket, and an all-skipped list each hold without a retry"
+  "floor-ci-no-checks|case_floor_ci_no_checks|#550: gh's no-checks answer holds without --allow-no-ci — one call, no sleep"
+  "floor-ci-no-checks-allowed|case_floor_ci_no_checks_allowed|#550: --allow-no-ci lets the no-checks answer pass, recorded as ci=none-allowed"
+  "floor-ci-read-fails-closed|case_floor_ci_read_fails_closed|#550: any other gh pr checks failure, or an empty list, is attempted twice with one sleep, then holds"
+  "floor-default-branch-read-fails-closed|case_floor_default_branch_read_fails_closed|#550: the default-branch read is attempted twice with one sleep, then holds; the checks that need it add no line"
+  "floor-fetch-fails-closed|case_floor_fetch_fails_closed|#550: git fetch origin is attempted twice with one sleep 30, then holds; no rail, governance or base check runs"
+  "floor-rail-unresolvable|case_floor_rail_unresolvable|#550: an unresolvable origin/<default> holds; no ancestry or governance read runs"
+  "floor-rail-default-branch|case_floor_rail_default_branch|#550: the rail reads origin/<the default branch gh reports> (develop) and never origin/main"
+  "floor-behind|case_floor_behind|#550: merge-base exit 1 holds with the 12-character base tip and ancestry-rc=1"
+  "floor-behind-git-error|case_floor_behind_git_error|#550: a merge-base git error holds and quotes git's first message line"
+  "floor-merge-state-dirty|case_floor_merge_state_dirty|#550: mergeStateStatus DIRTY or BLOCKED holds; UNKNOWN does not"
+  "floor-governance-hold|case_floor_governance_hold|#550: verdict=hold names each governance path; the verdict line is re-emitted as governance=, never echoed"
+  "floor-governance-error-fails-closed|case_floor_governance_error_fails_closed|#550: a governance-paths.sh failure holds quoting its message — one call, no retry"
+  "floor-lessons-append-passes|case_floor_lessons_append_passes|#550: a LESSONS.md append passes the files and end-of-file checks and prints its added lines behind added|"
+  "floor-lessons-new-file-passes|case_floor_lessons_new_file_passes|#550: a new LESSONS.md file passes the end-of-file check"
+  "floor-lessons-files-fail|case_floor_lessons_files_fail|#550: a file list that is not an add-only LESSONS.md append holds with the verdict token; no diff read"
+  "floor-lessons-files-read-fails|case_floor_lessons_files_read_fails|#550: an unreadable file list holds — one call, not retried"
+  "floor-lessons-midfile-insert|case_floor_lessons_midfile_insert|#550: each end-of-file rule rejects its own diff: trailing or missing context, a removal, an HTML comment opener, count mismatches, a second hunk, modes, no hunk"
+  "floor-lessons-diff-fails-closed|case_floor_lessons_diff_fails_closed|#550: a failing git diff holds — one call, not retried"
+  "floor-base-mismatch|case_floor_base_mismatch|#550: a base branch that is not the default branch holds with fail=base"
+  "floor-dependabot-mode|case_floor_dependabot_mode|#550: --dependabot skips the harness-only checks — no archive or discovery call — and passes a clean Dependabot PR"
+  "floor-dependabot-claude-branch-refused|case_floor_dependabot_claude_branch_refused|#550: --dependabot on a claude/ head branch holds"
+  "floor-dependabot-lessons-only-held|case_floor_dependabot_lessons_only_held|#550: a lessons-only Dependabot PR holds and the carve-out reads never run"
+  "floor-usage-errors|case_floor_usage_errors|#550: bad arguments, a missing jq and a non-repository each exit 2 with no stdout and no gh, git or sibling call; --help exits 0"
+  "floor-untrusted-text-fixed-prefix|case_floor_untrusted_text_fixed_prefix|#550: a newline or CR in a head branch, a check name or an added line never starts a line of its own — scalars are cleaned, check names JSON-escaped"
+  "floor-positive-accounting|case_floor_positive_accounting|#550: pass needs both an empty fail list and a recorded pass for every required check, the lessons-only checks included"
+  "floor-never-mutates|case_floor_never_mutates|#550: booby-trapped write commands never fire, the cwd listing is byte-identical, and only read-only gh and git calls are made"
 )
 
 # MEASURED MUTANTS (#275/#281) — #281 replaced #275's exclusion-based $planC test

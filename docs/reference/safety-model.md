@@ -845,7 +845,7 @@ CI run itself — its only edits anywhere in this pipeline are harness bookkeepi
 (`.claude/LESSONS.md`, the PR body, issue comments) — and the merge pass's hard floor requires
 three artifacts to agree before any autonomous merge: the PR body carries the verifier's own
 closing status line (`<!-- harness-status: stage=verifier issue=<n> outcome=pass retries=<k>
-harness=<version> -->`) verbatim, checked mechanically (`gh pr view … --jq 'contains(...)'`); the dispatch ledger's
+harness=<version> -->`) verbatim, checked mechanically by `bin/merge-floor.sh` (a jq `contains` over the PR body); the dispatch ledger's
 `verifier` row for that issue reads `pass`; and the verifier's verdict is separately archived,
 also verbatim, as an issue comment opening with `<!-- verifier-verdict -->` — posted by the
 orchestrator after every verifier pass, including a CI-fix re-verification — whose second line

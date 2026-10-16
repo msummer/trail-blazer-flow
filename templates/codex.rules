@@ -54,6 +54,8 @@ prefix_rule(pattern = ["harness-status.sh"], decision = "allow", justification =
 host_executable(name = "harness-status.sh", paths = ["@PLUGIN_BIN@/harness-status.sh"])
 prefix_rule(pattern = ["harness-stop.sh"], decision = "allow", justification = "harness script gated by host_executable below")
 host_executable(name = "harness-stop.sh", paths = ["@PLUGIN_BIN@/harness-stop.sh"])
+prefix_rule(pattern = ["merge-floor.sh"], decision = "allow", justification = "harness script gated by host_executable below")
+host_executable(name = "merge-floor.sh", paths = ["@PLUGIN_BIN@/merge-floor.sh"])
 prefix_rule(pattern = ["reconcile-ledger.sh"], decision = "allow", justification = "harness script gated by host_executable below")
 host_executable(name = "reconcile-ledger.sh", paths = ["@PLUGIN_BIN@/reconcile-ledger.sh"])
 prefix_rule(pattern = ["setup-labels.sh"], decision = "allow", justification = "harness script gated by host_executable below")
