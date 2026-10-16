@@ -31,7 +31,11 @@
 # section exists and names a measurement command via a fence-aware, depth-aware section slice
 # (looked up with `command -v`, never executed), whether "Autonomy reserve" and "Autonomy decision
 # record" sections are declared and well-formed (and, when gh is ready, whether the declared grant
-# label exists — never applied, removed, or judged for content), and, only in autonomous mode,
+# label exists — never applied, removed, or judged for content), whether the "Autonomy reserve"
+# section's globs are all readable by bin/reserve-paths.sh's dialect (#552 — run here by a FIXED
+# path via its `--check` mode; a malformed section is a WARN, and, only while plan auto-approval is
+# active, the repo's tracked schema paths no reserve glob covers are a WARN too, unless a
+# `not reserved:` line in the section leaves them out on purpose), and, only in autonomous mode,
 # each settings file's `permissions.defaultMode` value (a validated bare word only — never an
 # allow/deny entry from any of the three files), the verification baseline
 # (.claude/BASELINE.md, machine-local — an abbreviated recorded commit SHA of 7+ hex characters
@@ -125,7 +129,7 @@ bt="$(printf '\140')"
 # only a sibling-or-shallower heading does. Fence-aware like bin/check-decision-record.sh's
 # claude_md_block (a '#'-prefixed comment inside a fenced block is not a heading — see
 # .claude/LESSONS.md); depth-aware unlike it, which is why that idiom (also used by the
-# scoped-autonomy reserve/record slices below) isn't reused here: it would stop at the very
+# scoped-autonomy record slice below) isn't reused here: it would stop at the very
 # sub-heading this exists to see past. Fence-delimiter lines are included in the output (so a
 # downstream first-fence extractor can still find them), same as claude_md_block.
 claude_md_section() {
@@ -1327,10 +1331,7 @@ EOF
     fi
 
     if $has_reserve && $has_record && $scoped_record_ok; then
-      scoped_reserve_sec="$(awk '/^#+[[:space:]]+Autonomy reserve[[:space:]]*$/ { inx=1; next } inx && /^```/ { infence = !infence } inx && !infence && /^#+[[:space:]]/ { exit } inx { print }' "$root/CLAUDE.md")"
-      scoped_reserve_blk="$(printf '%s\n' "$scoped_reserve_sec" | awk '/^```/ { if (infence) { exit } else { infence=1; next } } infence { print }')"
-      scoped_reserve_count="$(printf '%s\n' "$scoped_reserve_blk" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' | grep -v '^#' | grep -c .)"
-      ok "scoped autonomy: declared (grant label '$scoped_grant_label', $scoped_reserve_count reserve pattern(s), $scoped_element_count required record element(s))"
+      ok "scoped autonomy: declared (grant label '$scoped_grant_label', $scoped_element_count required record element(s))"
     fi
 
     if [ -n "$scoped_grant_label" ]; then
@@ -1344,6 +1345,66 @@ EOF
         fi
       else
         wrn "scoped autonomy: grant label '$scoped_grant_label' existence unknown (gh not ready)"
+      fi
+    fi
+  fi
+
+  # --- autonomy reserve (#552) --- validates the optional "Autonomy reserve" section (README
+  # item 7) that the implementer orchestrator hands to bin/reserve-paths.sh before every verifier
+  # dispatch, and, only while plan auto-approval is active (a "Plan auto-approval policy" section,
+  # or `mode: autonomous`), reports the repo's tracked schema paths that no reserve glob covers
+  # (an advice-only WARN) or that a `not reserved:` line leaves out on purpose (a PASS). Runs only
+  # when the section exists or auto-approval is active, by a FIXED path,
+  # $script_dir/reserve-paths.sh --check "$root/CLAUDE.md" — same precedent as the governance
+  # check below — never a path derived from repo content. Missing, non-executable, a non-zero
+  # exit, or a first line outside the three shapes the script documents is the same "could not
+  # validate" WARN, never a FAIL — this doctor never blocks a run on this. A malformed section is a
+  # WARN whether or not auto-approval is active: every implementation stops before verification
+  # until it is fixed. The script's output is only captured and tested, never executed or expanded.
+  auto_approval_on=false
+  if $autonomy_on || has_policy_section "Plan auto-approval policy"; then
+    auto_approval_on=true
+  fi
+  if $has_reserve || $auto_approval_on; then
+    res_script="$script_dir/reserve-paths.sh"
+    res_out=""
+    res_valid=false
+    if [ -x "$res_script" ] && res_out="$("$res_script" --check "$root/CLAUDE.md" 2>/dev/null)"; then
+      res_first="$(printf '%s\n' "$res_out" | head -1)"
+      case "$res_first" in
+        absent)
+          res_valid=true ;;
+        declared\ [0-9]*\ [0-9]*)
+          res_valid=true
+          res_nums="${res_first#declared }"
+          ok "autonomy reserve: ${res_nums%% *} glob(s), ${res_nums#* } 'not reserved:' line(s)" ;;
+        malformed\ *)
+          res_bad="${res_first#malformed }"
+          case "$res_bad" in
+            *\ *) res_bad="${res_bad%% *}: ${res_bad#* }" ;;
+          esac
+          wrn "autonomy reserve: section is malformed ($res_bad) — every implementation stops before verification until it's fixed (README's CLAUDE.md contract, item 7)" ;;
+        *)
+          wrn "autonomy reserve: could not validate" ;;
+      esac
+    else
+      wrn "autonomy reserve: could not validate"
+    fi
+
+    if $res_valid && $auto_approval_on; then
+      res_schema="$(printf '%s\n' "$res_out" | sed -n 's/^schema: //p')"
+      res_ack="$(printf '%s\n' "$res_out" | sed -n 's/^acknowledged: //p')"
+      if [ -n "$res_schema" ]; then
+        res_n="$(printf '%s\n' "$res_schema" | grep -c .)"
+        res_more=""; [ "$res_n" -gt 6 ] && res_more=" (+$((res_n-6)) more)"
+        res_list="$(printf '%s\n' "$res_schema" | head -6 | awk 'NR > 1 { printf ", " } { printf "%s", $0 } END { print "" }')"
+        wrn "autonomy reserve: $res_n schema path(s) outside the reserve while plan auto-approval is on: $res_list$res_more — a plan that changes one is approved on its own word; add the path to the 'Autonomy reserve' section, or add a 'not reserved: <glob>' line there to leave it out on purpose (advice only, README's CLAUDE.md contract, item 7)"
+      fi
+      if [ -n "$res_ack" ]; then
+        res_n="$(printf '%s\n' "$res_ack" | grep -c .)"
+        res_more=""; [ "$res_n" -gt 6 ] && res_more=" (+$((res_n-6)) more)"
+        res_list="$(printf '%s\n' "$res_ack" | head -6 | awk 'NR > 1 { printf ", " } { printf "%s", $0 } END { print "" }')"
+        ok "autonomy reserve: $res_n schema path(s) left out of the reserve on purpose: $res_list$res_more"
       fi
     fi
   fi
