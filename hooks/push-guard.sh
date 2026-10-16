@@ -101,9 +101,10 @@
 # BOTH files: segment breaking; normalize(); the empty-normalised-token skip (also in the subcommand
 # search); the repeat-until-exhausted PREFIX_WORDS skip (a once-only skip is a known regression
 # class); the command-word case fold; the CR strip; the #449 assignment-parity
-# trigger; the #518 value context. The #537 interpreter-option rule is this script's own: agent-boundary.sh
-# reads interpreter options through its #518 value context instead (its PREFIX_VALUE_WORDS also holds the
-# interpreter words, #576), and claude-dir-guard.sh does not read them.
+# trigger; the #518 value context; the backslash-newline joiner (#556), the one-line awk program that opens the
+# scan statement, which must stay byte-identical in both files. The #537 interpreter-option rule is this
+# script's own: agent-boundary.sh reads interpreter options through its #518 value context instead (its
+# PREFIX_VALUE_WORDS also holds the interpreter words, #576), and claude-dir-guard.sh does not read them.
 # Gate 4.40(c) pins PREFIX_WORDS byte-identical to agent-boundary.sh's; every other shared value is by
 # convention, unpinned. Differences: after a segment's command word resolves as `git`, this script walks forward
 # again, skipping a GIT_GLOBAL_OPTS_WITH_VALUE token together with its value and any other dash token alone,
@@ -152,9 +153,10 @@
 # for review: at most `max(push_budget, T_prefix(L)) +
 # U_max`. T_prefix is the pre-tokenizer prefix the deadline cannot sample around: `cat`, the fast-path
 # glob and the three jq extractions of the raw stdin (linear in the stdin, not bounded by the cap), then, for a
-# command at or under the cap, the cwd jq and the awk tokenizer (CR strip included). The tokenizer is bounded
-# by the cap, not claimed linear; its output is streamed, and a push word longer than tok_max is rewritten so
-# no bash-side split runs on one. U_max is the
+# command at or under the cap, the cwd jq, the awk joiner (#556) and the awk tokenizer (CR strip included). The
+# tokenizer reads the command and then each run of lines a trailing backslash joins, up to twice the command,
+# and is bounded by the cap, not claimed linear; its output is streamed, and a push word longer than tok_max is
+# rewritten so no bash-side split runs on one. U_max is the
 # largest single step the deadline cannot interrupt: one alias-lookup awk pass over the resolved alias records,
 # one session upward walk (at most 64 levels, each an `[ -f ]` probe, plus up to 63 `dirname` forks), one
 # config line's comment-strip plus up to three cfg_trim() calls (at most CFG_TOPLEVEL_MAX_LINE_CHARS or
@@ -220,11 +222,12 @@ CFG_INCLUDE_MAX_CHARS=65536
 # PUSH_ANALYSIS_BUDGET_SECS (#435): the whole-second budget this hook's analysis may spend before check_deadline()
 # denies; see "Analysis deadline (#435)" in the header.
 PUSH_ANALYSIS_BUDGET_SECS=5
-# PUSH_CMD_MAX_BYTES (#517, #543): the longest Bash command, in BYTES, analysed at all. A longer one that got past
-# the fast path denies before the tokenizer runs, because a timed-out hook gives no deny. Sized so the unsampled
-# tokenizer stays well inside the hook timeout on a slow host, and above every cooperative command measured, the
-# largest heredoc file writes included.
-PUSH_CMD_MAX_BYTES="262144"
+# PUSH_CMD_MAX_BYTES (#517, #543, #556): the longest Bash command, in BYTES, analysed at all. A longer one that got
+# past the fast path denies before the tokenizer runs, because a timed-out hook gives no deny. Sized so the
+# unsampled tokenizer, which also re-reads a continued line once more as a joined run (#556), stays well inside
+# the hook timeout on a slow host, and above every cooperative command measured, the largest heredoc file writes
+# included.
+PUSH_CMD_MAX_BYTES="131072"
 # CFG_TOPLEVEL_MAX_LINE_CHARS (#435): a depth-0 config line longer than this denies outright, checked BEFORE
 # comment-strip or trim, instead of reaching cfg_trim() (see its comment).
 CFG_TOPLEVEL_MAX_LINE_CHARS=2048
@@ -318,13 +321,14 @@ check_deadline() { [ "$SECONDS" -lt "$push_deadline" ] || deny_too_large deadlin
 input="$(cat)"
 
 # One fast path, a performance shortcut that is semantics-preserving with the check it stands in for EXCEPT for
-# a command word split by quote, backslash or carriage-return characters (the same quote-blind limit as
-# hooks/agent-boundary.sh's fast paths): a call may skip the tokenizer only when its raw stdin never names git
-# (case-folded). A command word built at run time with no git text in the call (a variable that holds git)
-# exits here unseen (safety-model.md, Known gaps). There is no `push` literal fast path: a git alias that
-# expands to push carries no push text. A CR inside the raw git literal (`g<CR>it`, escaped by the JSON
-# writer) exits here before the strip runs; such a command cannot run as a real git either. A miss means the
-# call is out of scope for this hook.
+# a command word split by quote, backslash or carriage-return characters, or by a backslash-newline continuation
+# (the same quote-blind limit as hooks/agent-boundary.sh's fast paths; the joiner runs after this path, so a word
+# the continuation itself splits is still unseen here, #556): a call may skip the tokenizer only when its raw
+# stdin never names git (case-folded). A command word built at run time with no git text in the call (a
+# variable that holds git) exits here unseen (safety-model.md, Known gaps). There is no `push` literal fast
+# path: a git alias that expands to push carries no push text. A CR inside the raw git literal (`g<CR>it`,
+# escaped by the JSON writer) exits here before the strip runs; such a command cannot run as a real git
+# either. A miss means the call is out of scope for this hook.
 case "$input" in
   *[Gg][Ii][Tt]*) : ;;
   *) exit 0 ;;
@@ -368,8 +372,14 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd? // empty' 2>/dev/null)"
 #   -xseg-<TAB><reason>      last, once, iff any segment resolved to a directory-change builtin or exported or
 #       bare-assigned a GIT_REPO_ENV_VARS member or a command-line-config name (#433).
 # No field can contain a TAB, since tokens come from splitting on [ \t]+. Each input line (awk record) is
-# processed on its own: the same deliberate false-positive class agent-boundary.sh documents.
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dirwords="$PUSH_DIR_CHANGE_WORDS" -v exportwords="$PUSH_EXPORT_WORDS" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" -v relocenv="$GIT_CFG_RELOC_ENV_VARS" -v vpwords="$PREFIX_VALUE_WORDS" -v ipwords="$PREFIX_INTERP_WORDS" -v ipvopts="$INTERP_VALUE_OPTS" '
+# processed on its own, and since #556 each run of lines a trailing backslash continues is then processed once
+# more as one joined line: the joiner (a first awk program inside a group whose stderr is dropped, so neither
+# awk's error text nor bash's notice for a killed awk reaches the one deny line) appends every run after all the
+# physical lines, so a base deny is never lost, and it strips CRs, removes each trailing backslash and
+# concatenates, quote-blind and heredoc-blind, without counting backslash parity. A heredoc or quoted body whose
+# continued lines spell a push is therefore a deliberate over-block, the same false-positive class
+# agent-boundary.sh documents.
+scan_out="$( { printf '%s\n' "$cmd"; { printf '%s\n' "$cmd" | awk 'BEGIN { cr = sprintf("%c", 13) } { gsub(cr, ""); if (substr($0, length($0)) == "\\") { printf "%s", substr($0, 1, length($0) - 1); c = 1 } else if (c) { print; c = 0 } } END { if (c) printf "\n" }'; } 2>/dev/null; } | awk -v prefix_words="$PREFIX_WORDS" -v gopts="$GIT_GLOBAL_OPTS_WITH_VALUE" -v repoopts="$GIT_REPO_OPTS" -v repoenv="$GIT_REPO_ENV_VARS" -v dirwords="$PUSH_DIR_CHANGE_WORDS" -v exportwords="$PUSH_EXPORT_WORDS" -v cmdcfgopts="$GIT_CMDCFG_OPTS" -v cmdcfgenv="$GIT_CMDCFG_ENV_VARS" -v cmdcfgpfx="$GIT_CMDCFG_ENV_PREFIXES" -v relocenv="$GIT_CFG_RELOC_ENV_VARS" -v vpwords="$PREFIX_VALUE_WORDS" -v ipwords="$PREFIX_INTERP_WORDS" -v ipvopts="$INTERP_VALUE_OPTS" '
 BEGIN {
   sq = sprintf("%c", 39)
   cr = sprintf("%c", 13)
@@ -804,8 +814,9 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
 END { if (xseg != "") print "-xseg-\t" xseg }
 ' 2>/dev/null)"
 scan_rc=$?
-# #559: a non-zero status means the scan stopped early (an awk abort, a resource limit, a killed process, or
-# no runnable awk) and judged only part of the command, so deny with one fixed reason before anything reads
+# #559: a non-zero status means the scan (the joiner included: pipefail carries its status out of the group)
+# stopped early (an awk abort, a resource limit, a killed process, or no runnable awk) and judged only part of
+# the command, so deny with one fixed reason before anything reads
 # scan_out. awk's own error text is dropped (2>/dev/null above) so the deny stays one stderr line.
 if [ "$scan_rc" -ne 0 ]; then
   printf '%s denies this command: its command scan did not finish (blocked: command scan failed) — run the command from a terminal; see README.md'"'"'s Safety model\n' \

@@ -17,9 +17,9 @@
 #     patch that cannot be parsed into a recognised header shape (an unknown `*** ` marker, an empty header
 #     path, no header at all); an apply_patch call with an absent or empty command also denies;
 #   - Bash, the shim route (is_apply_patch_word resolves apply_patch or applypatch, by basename, as a
-#     command word): a shim with no inline patch this hook can see (a patch read from a file); and a
-#     `.claude` or `.codex` mention on any line of the call that carries a `*** ` marker, when the shim is a
-#     command word;
+#     command word of a line, or of a run of lines a trailing backslash joins, #556): a shim with no inline
+#     patch this hook can see (a patch read from a file); and a `.claude` or `.codex` mention on any line of
+#     the call, or any such joined run, that carries a `*** ` marker, when the shim is a command word;
 #   - a call too large for the analysis budget, or over a size cap ("Analysis deadline (#457)" and
 #     "Size caps (#457)" below).
 # No opinion for everything else: the main session (no agent_type), any other agent, permission_mode
@@ -93,15 +93,18 @@
 # Size caps (#457). Under Apple bash 3.2 a `${text//pat/repl}` substitution is superlinear in the text's
 # length and match count and cannot be sampled from inside bash; a whole-text word-split is linear but
 # likewise unsampled. So:
-#   - every such substitution runs on ONE physical line at a time (a newline is itself a segment break, so
-#     the segments are identical), inside a loop that samples the deadline first;
+#   - every such substitution runs on ONE line at a time, a physical line or (#556) a run of lines a trailing
+#     backslash joins (a newline is itself a segment break, so the segments are identical), inside a loop that
+#     samples the deadline first;
 #   - cdg_prepare_text runs first on BOTH text routes and denies fail closed, BEFORE any split or
 #     substitution, when the whole text is longer than CDG_TEXT_MAX_BYTES bytes; it then strips CRs line by
-#     line in a sampled loop, and denies a physical line longer than CDG_LINE_MAX_BYTES bytes. On the
+#     line in a sampled loop, and denies a physical line longer than CDG_LINE_MAX_BYTES bytes, and on the Bash
+#     route a joined run of lines (#556) longer than that too. On the
 #     apply_patch route the line cap applies only to a line that contains a CR (the strip is the only
 #     superlinear step a long CR-free content line meets there) or a `*** ` marker (a header line the parser
 #     acts on); every other line is bounded by the whole-text cap and the sampled loops. The Bash route caps
-#     every line of a call that reaches it (a call the fast paths exit is never capped);
+#     every line and every joined run of a call that reaches it, and a call that carries a backslash-newline
+#     reaches it (a call the fast paths exit is never capped);
 #   - a single path (an Edit/Write file_path, or a patch header path joined to cwd) and the stdin cwd field
 #     are each denied, before any substitution, when longer than CDG_LINE_MAX_BYTES bytes. Every cap counts
 #     BYTES, not characters: the length check runs under a scoped LC_ALL=C, because ${#x} counts characters
@@ -110,9 +113,10 @@
 # T_prefix is the prefix the deadline cannot sample around: cat, the fast-path globs, up to five jq calls,
 # the length checks, cdg_prepare_text's CR-presence glob and whole-text word-split, and the like whole-text
 # splits in is_apply_patch_word, has_exact_begin_patch_line and parse_patch_headers (all linear, bounded by
-# CDG_TEXT_MAX_BYTES).
+# CDG_TEXT_MAX_BYTES; the one in is_apply_patch_word runs over the text and its joined runs, at most twice that).
 # U_max is the largest single step the deadline cannot interrupt: one line's substitutions and marker globs
-# (bounded by CDG_LINE_MAX_BYTES), one segment's `toks=($seg)` word-split,
+# (bounded by CDG_LINE_MAX_BYTES), one append of a joined run to cdg_join (a copy of at most CDG_TEXT_MAX_BYTES),
+# one segment's `toks=($seg)` word-split,
 # one `"${toks[@]}"` expansion, one walk_window iteration (plus any per-index cost bash 3.2's arrays add),
 # one forked trim or ltrim call up to its first in-subshell sample, or one classify_path. Not closed:
 # T_prefix is unsampled (though counted by the wall clock), and the Codex CLI's own hook timeout, if any, is
@@ -145,7 +149,8 @@ PREFIX_WORDS="env command builtin exec sudo nohup time nice stdbuf xargs bash sh
 # under Claude Code's 10s hook timeout, like hooks/push-guard.sh's.
 CDG_ANALYSIS_BUDGET_SECS="5"
 # CDG_LINE_MAX_BYTES (#457): longest physical line of a Bash command, of a patch (only a CR-bearing or
-# `*** ` line), and longest single path or cwd, in BYTES; see "Size caps (#457)".
+# `*** ` line), longest run of Bash lines a trailing backslash joins (#556), and longest single path or cwd, in
+# BYTES; see "Size caps (#457)".
 CDG_LINE_MAX_BYTES="2000"
 # CDG_TEXT_MAX_BYTES (#457): longest whole Bash command or patch text, in bytes; see "Size caps (#457)".
 CDG_TEXT_MAX_BYTES="1000000"
@@ -205,10 +210,15 @@ esac
 # GUARDED_TOOLS needs its quoted name added here too. Any call also passes when the raw payload names
 # apply_patch or applypatch (Codex's shim also answers to the no-underscore spelling) or holds the grammar
 # marker "*** Begin Patch"; those substrings can sit anywhere in the payload, so a pass only means "look
-# closer". Everything else gets no opinion. The globs read the raw JSON text as the serializer wrote it, so
-# they assume it writes ASCII letters and the underscore literally rather than as a \u escape.
+# closer". The second arm (#556) passes a payload that holds a backslash-newline, as the serializer writes it
+# (a backslash escaped as two, then n, with an optional r before the n; the literal text of two backslashes and
+# an n is written the same way, so it passes too): the shim name can be split across the two lines of a
+# continuation (apply_, the continuation, patch), which only the analysis rejoins. Everything else gets no
+# opinion. The globs read the raw JSON text as the serializer wrote it, so they assume it writes
+# ASCII letters and the underscore literally rather than as a \u escape.
 case "$input" in
   *'"Edit"'*|*'"Write"'*|*apply_patch*|*applypatch*|*'Begin Patch'*) : ;;
+  *'\\\n'*|*'\\\r\n'*) : ;;
   *) exit 0 ;;
 esac
 
@@ -463,12 +473,12 @@ walk_window() {
   done
 }
 
-# is_apply_patch_word TEXT (#407, #437): true iff TEXT (a whole tool_input.command, possibly multi-line) has
-# a segment whose RESOLVED command word is exactly apply_patch or applypatch, or a path-qualified spelling
-# matched by basename. It tells the command word from the same text as an argument (rg apply_patch hooks/)
-# or inside quotes, neither of which the walk treats as a leading token. Pure builtins (parameter-expansion
-# substitution splits segments and words; [[ =~ ]] matches an assignment prefix or a bare-digits fd), no
-# execve.
+# is_apply_patch_word TEXT (#407, #437, #556): true iff TEXT (a whole tool_input.command, possibly multi-line,
+# followed by the joined runs cdg_prepare_text built from it) has a segment whose RESOLVED command word is
+# exactly apply_patch or applypatch, or a path-qualified spelling matched by basename. It tells the command
+# word from the same text as an argument (rg apply_patch hooks/) or inside quotes, neither of which the walk
+# treats as a leading token. Pure builtins (parameter-expansion substitution splits segments and words;
+# [[ =~ ]] matches an assignment prefix or a bare-digits fd), no execve.
 #
 # Segment breaks (the set hooks/agent-boundary.sh uses): ; & | ( ) { } and a backtick; a newline is one too.
 # Word breaks within a segment: whitespace plus < and >, each replaced by a padded sentinel word (mark_in,
@@ -476,17 +486,17 @@ walk_window() {
 # separates a command word from a glued target (apply_patch<x.patch). walk_window resolves each segment's
 # command word; its header has the skip order.
 #
-# It also sets the global iapw_mention: 1 once a physical line of TEXT carries both a `*** ` marker and a
-# .claude or .codex mention.
+# It also sets the global iapw_mention: 1 once a line of TEXT (a physical line or a joined run) carries both a
+# `*** ` marker and a .claude or .codex mention.
 #
 # Memoised (#437): both call sites in the Bash route below pass the identical text, so the global iapw_memo
 # (empty until the first call in this process) short-circuits the second call.
 iapw_memo=""
-# 1 once a physical line holds both a `*** ` marker and a .claude/.codex mention; not local, so the Bash route
-# reads it after the call, memoised returns included.
+# 1 once a line (physical, or a joined run) holds both a `*** ` marker and a .claude/.codex mention; not local,
+# so the Bash route reads it after the call, memoised returns included.
 iapw_mention=0
 is_apply_patch_word() {
-  local text="$1" ln flat seg base oldifs found=1
+  local text="$1$lf$cdg_join" ln flat seg base oldifs found=1
   local mark_in=$'\x01LT\x01' mark_out=$'\x01GT\x01'
   local assign_ere='^[A-Za-z_][A-Za-z0-9_]*='
   local digits_ere='^[0-9]+$'
@@ -497,11 +507,12 @@ is_apply_patch_word() {
 
   # NOTE: each segment-break character is substituted by its own statement below, because a bracket-expression
   # pattern is quadratic in the line's length under bash 3.2, even for a line with a single break.
-  # Every substitution below runs on ONE physical line at a time, never on the whole command text (bash
-  # 3.2's ${x//pat/repl} is superlinear in the text's length and match count, and a newline is itself a
-  # segment break, so line by line gives the identical segments). Each line is at most CDG_LINE_MAX_BYTES
-  # bytes (cdg_prepare_text, run on the command first, denies a longer one), and the loop below samples the
-  # deadline before every line.
+  # Every substitution below runs on ONE line at a time, never on the whole command text (bash 3.2's
+  # ${x//pat/repl} is superlinear in the text's length and match count, and a newline is itself a segment
+  # break, so line by line gives the identical segments). A line is a physical line of the command or one of
+  # the joined runs cdg_prepare_text appended after it (#556), and each is at most CDG_LINE_MAX_BYTES bytes
+  # (cdg_prepare_text, run on the command first, denies a longer one), and the loop below samples the deadline
+  # before every line.
   oldifs="$IFS"
   set -f
   IFS="$lf"
@@ -585,10 +596,17 @@ has_exact_begin_patch_line() {
 # a CR or a `*** ` marker; any other line is bounded by the whole-text cap), and sets the global cdg_text to
 # TEXT with every CR stripped LINE BY LINE (a whole-text ${x//$cr/} is superlinear in the CR count under bash
 # 3.2; blank lines are dropped only when a CR was present, which no later consumer distinguishes, since each
-# reads its text with IFS-splitting on LF). The loop samples the deadline before every line.
+# reads its text with IFS-splitting on LF). In MODE "all" only it also sets the global cdg_join (#556) to each
+# run of lines a trailing backslash continues, one LF-terminated line per run with every trailing backslash
+# removed, built from the CR-stripped lines, quote-blind and heredoc-blind and without counting backslash
+# parity (the IFS split drops a blank line, so a run joins across one, which only adds a line); a run longer
+# than CDG_LINE_MAX_BYTES denies (deny_too_large). Only is_apply_patch_word reads cdg_join, after the command
+# text; the inline-patch parsers read the lines as written. The loop samples the deadline before every line.
 cdg_text=""
+cdg_join=""
 cdg_prepare_text() {
-  local text="$1" mode="${2:-all}" ln lmax oldifs="$IFS" hascr=0 out=""
+  local text="$1" mode="${2:-all}" ln lmax oldifs="$IFS" hascr=0 out="" jl="" jc=0
+  cdg_join=""
   local LC_ALL=C
   [ "${#text}" -le "$CDG_TEXT_MAX_BYTES" ] || deny_too_large
   case "$text" in
@@ -610,7 +628,26 @@ cdg_prepare_text() {
       ln="${ln//$cr/}"
       out="$out$ln$lf"
     fi
+    if [ "$mode" = all ]; then
+      case "$ln" in
+        *\\)
+          jl="$jl${ln%\\}"
+          jc=1
+          [ "${#jl}" -le "$CDG_LINE_MAX_BYTES" ] || deny_too_large
+          ;;
+        *)
+          if [ "$jc" -eq 1 ]; then
+            jl="$jl$ln"
+            [ "${#jl}" -le "$CDG_LINE_MAX_BYTES" ] || deny_too_large
+            cdg_join="$cdg_join$jl$lf"
+            jl=""
+            jc=0
+          fi
+          ;;
+      esac
+    fi
   done
+  [ "$jc" -eq 0 ] || cdg_join="$cdg_join$jl$lf"
   set +f
   IFS="$oldifs"
   if [ "$hascr" -eq 0 ]; then
@@ -645,17 +682,18 @@ elif [ "$tool_name" = "Bash" ]; then
   # heredoc body (if any) inlined into tool_input.command (see the Codex shim probe in the header).
   bash_cmd="$(printf '%s' "$input" | jq -r '.tool_input.command? // empty' 2>/dev/null)"
   [ -n "$bash_cmd" ] || exit 0
-  # The per-line size cap and the per-line CR strip (#457), BEFORE any other substitution on the command text.
+  # The per-line size cap and the per-line CR strip (#457), and the joined runs of backslash-continued lines
+  # (#556), BEFORE any other substitution on the command text.
   cdg_prepare_text "$bash_cmd"
   bash_cmd="$cdg_text"
 
   # Belt and braces: evaluated FIRST and UNCONDITIONALLY, before either branch below, whenever
   # apply_patch/applypatch is the resolved command word anywhere in the text. It denies a .claude or .codex
-  # mention on any line that carries a `*** ` marker. A decoy can defeat has_exact_begin_patch_line (an
-  # ANSI-C-quoted line whose "\n"s are the two literal characters backslash and n, never a real line break; or
-  # a genuine SECOND real line with a benign header next to a first header hidden behind Unicode whitespace
-  # ltrim() never strips), but its header still sits on such a line, so this catch-all does not depend on the
-  # structured parse recognising anything.
+  # mention on any line, or any joined run, that carries a `*** ` marker. A decoy can defeat
+  # has_exact_begin_patch_line (an ANSI-C-quoted line whose "\n"s are the two literal characters backslash and
+  # n, never a real line break; or a genuine SECOND real line with a benign header next to a first header
+  # hidden behind Unicode whitespace ltrim() never strips), but its header still sits on such a line, so this
+  # catch-all does not depend on the structured parse recognising anything.
   if is_apply_patch_word "$bash_cmd"; then
     [ "$iapw_mention" -eq 0 ] || deny_patch_unparseable "apply_patch/applypatch invoked via Bash mentioning a .claude/.codex path on a line that carries a *** marker"
   fi

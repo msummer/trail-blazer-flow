@@ -42,6 +42,8 @@
 #   - the segment breaking, normalize(), the prefix-word skip, the empty-token skip, the command-word case
 #     fold, and the CR strip before any token is read (this hook strips in bash after the jq extraction;
 #     push-guard strips first thing in its awk record block);
+#   - the backslash-newline joiner (#556), the one-line awk program that opens the scan statement, which must
+#     stay byte-identical in both files (its CR strip is a no-op here, where bash has already stripped);
 #   - the #505 assignment-parity trigger with quote_unbalanced(); the #518 value context with
 #     PREFIX_VALUE_WORDS, except that this hook's PREFIX_VALUE_WORDS also holds the interpreter words bash dash
 #     ksh sh zsh (#576), so it differs from the push-guard.sh copy; push-guard.sh keeps its own #537
@@ -151,8 +153,10 @@ esac
 # g"i"t push normalises to git while the raw literal git never appears, and this path exits silently where
 # the scan would have denied. A CR inside the raw JSON literal (escaped as backslash and r) or a .claude
 # segment split by a quote or backslash inside it can miss the same way, and so can a deploy word split the
-# same way. The second arm also lets a payload that names an arm word but none of git, gh or claude reach the
-# scan, where a split git or gh spelling, or a split .claude write target (echo hi > .cl"aude"/x), can deny.
+# same way, and a word split by a backslash-newline continuation (g, the continuation, h), because the joiner
+# (#556) runs after this path. The second arm also lets a payload that names an arm word but none of git, gh or
+# claude reach the scan, where a split git or gh spelling, or a split .claude write target
+# (echo hi > .cl"aude"/x), can deny.
 # How often this path short-circuits a subagent call is UNVERIFIED; a payload it lets through costs the
 # jq/awk spawns and meets the size cap and the scan below.
 case "$input" in
@@ -220,7 +224,12 @@ cmd="${cmd//$cr/}"
 # quote or a substitution cuts a segment like any other, and the command hidden behind it is a known gap
 # (docs/reference/safety-model.md, "Known gaps"). Each input line is scanned as its own segment start, so a
 # heredoc body line that starts with git or gh is a deliberate over-block (write file content with the
-# Write/Edit tools).
+# Write/Edit tools). Since #556 each run of lines a trailing backslash continues is then scanned once more as
+# one joined line: the joiner (a first awk program inside a group whose stderr is dropped, so neither awk's
+# error text nor bash's notice for a killed awk reaches the one deny line) appends every run after all the
+# physical lines, so an earlier finding still decides first, and it removes each trailing backslash and
+# concatenates, quote-blind and heredoc-blind, without counting backslash parity. Heredoc or quoted text whose
+# continued lines spell a guarded command is therefore a deliberate over-block too.
 #
 # Output contract, one finding per line:
 #   gh | git <sub> | <word>   a resolved command word; git carries its subcommand (never case-folded), or
@@ -232,7 +241,7 @@ cmd="${cmd//$cr/}"
 #
 # Each rule is described next to its code: the per-record block (redirect pass, base split, command-level
 # capture) and emit_segment() (the walk; #505 lost prefix, #518 value context).
-scan_out="$(printf '%s\n' "$cmd" | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v vpwords="$PREFIX_VALUE_WORDS" -v dep_cmds="$DEPLOY_COMMANDS" -v launch_words="$LAUNCH_WORDS" '
+scan_out="$( { printf '%s\n' "$cmd"; { printf '%s\n' "$cmd" | awk 'BEGIN { cr = sprintf("%c", 13) } { gsub(cr, ""); if (substr($0, length($0)) == "\\") { printf "%s", substr($0, 1, length($0) - 1); c = 1 } else if (c) { print; c = 0 } } END { if (c) printf "\n" }'; } 2>/dev/null; } | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v vpwords="$PREFIX_VALUE_WORDS" -v dep_cmds="$DEPLOY_COMMANDS" -v launch_words="$LAUNCH_WORDS" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
@@ -495,8 +504,9 @@ END { if (cw_word != "" && cw_tok != "") print "-claude-write- " cw_word " with 
 END { if (dep_word != "") print "-deploy- " dep_word }
 ' 2>/dev/null)"
 scan_rc=$?
-# #559: a non-zero status means the scan stopped early (an awk abort, a resource limit, a killed process, or
-# no runnable awk) and judged only part of the command, so deny with one fixed reason before the role policy
+# #559: a non-zero status means the scan (the joiner included: pipefail carries its status out of the group)
+# stopped early (an awk abort, a resource limit, a killed process, or no runnable awk) and judged only part of
+# the command, so deny with one fixed reason before the role policy
 # reads scan_out. awk's own error text is dropped (2>/dev/null above) so the deny stays one stderr line.
 if [ "$scan_rc" -ne 0 ]; then
   printf '%s %s role: the command scan did not finish, so the command cannot be checked (blocked: command scan failed) — see agents/%s.md\n' \

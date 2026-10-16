@@ -2861,9 +2861,9 @@ case_push_lostscan_noop_flood() {
   # the kill still needs. The flood then runs under an active deadline of K times that prediction
   # (FLOOR absorbs the whole-second granularity): K sits between the unmutated flood-to-prediction
   # ratio (1 plus the load swing) and the scan-once flood's ratio, whose per-trigger re-scans grow
-  # with the token count while the twin stays linear. A fail-open of the >128 KB input route is
-  # covered by push-dl-deny-production-budget.
-  local dir="$tmpbase/repo-pp-flood" ctl_n=1000 min_n=700 max_n=10000 floor=2 k=8
+  # with the token count while the twin stays linear. MAX also keeps the flood (about 17 bytes a token)
+  # under PCAP_MAX_BYTES: a longer command would meet the command-size cap, not the scan this case proves.
+  local dir="$tmpbase/repo-pp-flood" ctl_n=1000 min_n=700 max_n=7500 floor=2 k=8
   local target_ms=$(( DL_KNOB_MAX * 200 )) ctl_ms pred_ms
   mk_fixture_repo "$dir" main feature/x
   measure_ms run_push_guard "$(mk_push_cmd_big "$(pp_flood_twin_cmd "$ctl_n")" "$dir")"
@@ -3046,7 +3046,7 @@ pcap_fill() {
   pcap_s="$s$pad"
 }
 # PCAP_MAX_BYTES -- hand-typed mirror of hooks/push-guard.sh's PUSH_CMD_MAX_BYTES.
-PCAP_MAX_BYTES=262144
+PCAP_MAX_BYTES=131072
 # PCAP_LINE -- the over-cap deny line hooks/push-guard.sh's deny_too_large command arm prints, hand-typed here
 # (never extracted from the hook) with the limit taken from the mirror above. It differs from DL_DEADLINE_LINE,
 # so a case that expects it can pass only through the cap, never through the deadline.
@@ -3735,9 +3735,9 @@ case_al_deny_flood() {
   [ "$c_us" -ge 100 ] || c_us=100
   n=$(( DL_KNOB_MAX * 3000000 / c_us ))
   [ "$n" -ge 3000 ] || n=3000
-  # The upper clamp keeps the flood under PCAP_MAX_BYTES: a longer command would meet the command-size cap,
-  # not the alias path this case proves.
-  [ "$n" -le 30000 ] || n=30000
+  # The upper clamp keeps the flood (seven bytes a candidate) under PCAP_MAX_BYTES: a longer command would meet
+  # the command-size cap, not the alias path this case proves.
+  [ "$n" -le 17000 ] || n=17000
   flood="$(printf 'git st;%.0s' $(seq 1 "$n"))"
   payload="$(mk_push_cmd_big "${flood}git p origin main" "$dir")"
   dl_site_run "$payload"
@@ -6052,7 +6052,7 @@ case_push_dl_noop_budget_zero_xseg_no_push() {
 case_push_dl_deny_production_budget() {
   # mutant:435-dl-check-off; mutant:435-dl-knob-raise -- FLOOD + TIMING (route 1: a flood of push
   # segments). Knob 99 is two ASCII digits but not less than the production budget (5s), so it must
-  # be IGNORED -- 10000 harmless "git push o a a a a a;" segments each cost five
+  # be IGNORED -- 6000 harmless "git push o a a a a a;" segments each cost five
   # refspec_dest() forks in evaluate_segment()'s n>=2 loop but never deny (remote "o" is skipped,
   # and a bare "a" refspec never resolves to a deny member), so only check_deadline (sampled once
   # per driver-loop iteration, and again inside each of evaluate_segment()'s own loops) can stop
@@ -6065,7 +6065,7 @@ case_push_dl_deny_production_budget() {
   mk_fixture_repo "$dir" main feature/x
   push_budget_override="99"
   local flood
-  flood="$(printf 'git push o a a a a a;%.0s' $(seq 1 10000))"
+  flood="$(printf 'git push o a a a a a;%.0s' $(seq 1 6000))"
   local payload
   payload="$(mk_push_cmd_big "${flood}git push origin main" "$dir")"
   # Same-run control (#476's design rule): the identical payload at knob 0 denies at the hook's
@@ -7099,13 +7099,14 @@ case_cdg_bash_deny_no_inline_patch_subshell() {
   done
 }
 case_cdg_bash_deny_no_inline_patch_cmdsubst()      { run_claude_guard "$(mk_codex_shell 'implementer' 'echo $(apply_patch < x.patch)')"; expect_cdg_deny_unparseable; }
-# #407 kickback round 2, finding C: the ">" word break, and has_exact_begin_patch_line's OWN full
-# trim (not is_apply_patch_word's command-word detection -- a backslash-newline splitting the shim
-# name across two physical lines defeats that, so this denies via the STRUCTURED parse's
-# classify_path message instead).
+# #407 kickback round 2, finding C: the ">" word break.
 case_cdg_bash_deny_no_inline_patch_gt()            { run_claude_guard "$(mk_codex_shell 'implementer' 'apply_patch>out.txt')"; expect_cdg_deny_unparseable; }
+# The indented exact Begin Patch line, with the shim name split by a backslash-newline and behind echo: the
+# name is a command word on no line and in no joined run (#556), so is_apply_patch_word never resolves it and
+# has_exact_begin_patch_line's OWN full trim alone recognises the header; the structured parse then denies
+# through classify_path's message.
 case_cdg_bash_deny_backslash_indented_begin_patch() {
-  run_claude_guard "$(mk_codex_shell 'implementer' "apply_\\${LF}patch <<'EOF'${LF}  *** Begin Patch${LF}  *** Add File: .claude/x${LF}  *** End Patch${LF}EOF")"
+  run_claude_guard "$(mk_codex_shell 'implementer' "echo apply_\\${LF}patch <<'EOF'${LF}  *** Begin Patch${LF}  *** Add File: .claude/x${LF}  *** End Patch${LF}EOF")"
   expect_cdg_deny_claude
 }
 # #407 kickback round 2, finding D: a leading redirect (with or without a bare-digits fd) must not
@@ -8710,15 +8711,23 @@ case_push_subst_noop() {
 # must instead deny with its one fixed scan-failure line (echoing none of the command) and drop awk's
 # own error line, whatever the non-zero status: 2 (a fatal awk error), 1 (gawk's non-fatal error
 # status) and a self-inflicted SIGKILL (status 137, a killed awk) each run the same assertion, so a
-# status test narrowed to one value leaves a case red. No registry record: removing the status check
+# status test narrowed to one value leaves a case red. The stub also stands in for the backslash-newline
+# joiner (#556), the first awk program of the scan, which it replaces along with the scanner; a second run per
+# case aborts only the joiner, whose status must reach the deny through the group, and a killed joiner must not
+# leak bash's own job-status notice into the one stderr line. No registry record: removing the status check
 # leaves each case red.
-# mk_awk_abort_stub DIR SHAPE — create DIR/awk, the stub above. SHAPE is the exit status the stub ends
-# with, or "kill" for a stub that kills itself with SIGKILL after the same output.
+# mk_awk_abort_stub DIR SHAPE [joiner] — create DIR/awk, the stub above. SHAPE is the exit status the stub ends
+# with, or "kill" for a stub that kills itself with SIGKILL after the same output. With a third argument the
+# stub hands any call whose first argument is -v (the scanner) to the real awk and aborts only the joiner (#556).
 mk_awk_abort_stub() {
-  local dir="$1" shape="$2"
+  local dir="$1" shape="$2" joiner="${3:-}" real_awk
+  real_awk="$(command -v awk)"
   mkdir -p "$dir"
   {
     printf '#!%s\n' "$bash_bin"
+    if [ -n "$joiner" ]; then
+      printf 'case "${1:-}" in -v) exec %s "$@" ;; esac\n' "$real_awk"
+    fi
     printf 'cat >/dev/null\n'
     printf 'printf "partial\\n"\n'
     printf 'printf "awk: stub abort\\n" >&2\n'
@@ -8744,6 +8753,14 @@ case_push_awkabort_deny() {
     expect_push_deny_exact "$PG_SCAN_FAILED_LINE"
     if [ -n "$__why" ]; then __why="${w0}[stub awk: $shape] ${__why}"; else __why="$w0"; fi
   done
+  for shape in 2 kill; do
+    stubdir="$tmpbase/awk-abort-stub-push-joiner-$shape"
+    mk_awk_abort_stub "$stubdir" "$shape" joiner
+    w0="$__why"; __why=""
+    run_push_guard "$(mk_push_cmd 'git status')" "$stubdir:$PATH"
+    expect_push_deny_exact "$PG_SCAN_FAILED_LINE"
+    if [ -n "$__why" ]; then __why="${w0}[stub awk, joiner only: $shape] ${__why}"; else __why="$w0"; fi
+  done
 }
 case_ab_awkabort_deny() {
   local shape stubdir w0
@@ -8755,6 +8772,153 @@ case_ab_awkabort_deny() {
     expect_deny
     [ "$boundary_err" = "$AB_SCAN_FAILED_LINE" ] || { __ok=0; __why="${__why}stderr: expected exactly '$AB_SCAN_FAILED_LINE', got '$boundary_err'\n"; }
     if [ -n "$__why" ]; then __why="${w0}[stub awk: $shape] ${__why}"; else __why="$w0"; fi
+  done
+  for shape in 2 kill; do
+    stubdir="$tmpbase/awk-abort-stub-ab-joiner-$shape"
+    mk_awk_abort_stub "$stubdir" "$shape" joiner
+    w0="$__why"; __why=""
+    run_boundary "$(mk_agent_cmd 'implementer' 'echo github')" "$stubdir:$PATH"
+    expect_deny
+    [ "$boundary_err" = "$AB_SCAN_FAILED_LINE" ] || { __ok=0; __why="${__why}stderr: expected exactly '$AB_SCAN_FAILED_LINE', got '$boundary_err'\n"; }
+    if [ -n "$__why" ]; then __why="${w0}[stub awk, joiner only: $shape] ${__why}"; else __why="$w0"; fi
+  done
+}
+
+# --- backslash-newline continuations (#556) -------------------------------------------------------------
+# Each hook judges every physical line as before, then each run of lines a trailing backslash joins once more
+# as one line (quote-blind and heredoc-blind), so the joined run can only add a deny. The comment rows pin the
+# add: a `#` comment ends at its newline in the shell, so a join that replaced the lines would fold the next
+# line into the comment and allow it, while every line is still judged on its own here.
+# push-cont-deny: a push split by a continuation (LF or CRLF, mid-command or before the destination) denies
+# naming the default branch; a heredoc body whose continued lines spell a push, and a line ending in an escaped
+# backslash (the join counts no backslash parity), are deliberate over-blocks.
+case_push_cont_deny() {
+  local bs='\' c w0
+  for c in \
+    "git push origin ${bs}${LF}main" \
+    "git ${bs}${LF}push ${bs}${LF}origin ${bs}${LF}main" \
+    "git push -u origin ${bs}${LF}HEAD:main" \
+    "git push origin ${bs}${CR}${LF}main" \
+    "git push origin ${bs}${bs}${LF}main" \
+    "cat > deploy.sh <<'EOF'${LF}git push origin ${bs}${LF}  main${LF}EOF" \
+    "# note ${bs}${LF}git push origin main"; do
+    w0="$__why"; __why=""
+    pp_run "$c"
+    expect_push_deny
+    case "$push_err" in
+      *'denies pushing to "main"'*) ;;
+      *) __ok=0; __why="${__why}stderr missing 'denies pushing to \"main\"': '$push_err'\n" ;;
+    esac
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+# push-cont-noop: a cooperative continuation (a feature-branch push, a non-push git command, a gh call whose
+# continued line names git) gets no opinion.
+case_push_cont_noop() {
+  local bs='\' c w0
+  for c in \
+    "git push origin ${bs}${LF}feature/x" \
+    "ls ${bs}${LF}-la && git status" \
+    "gh pr create --title t ${bs}${LF}--body \"notes on git\""; do
+    w0="$__why"; __why=""
+    pp_run "$c"
+    expect_push_no_opinion
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
+# ab-cont-deny: a guarded word the continuation joins (an assignment prefix, a split .claude directory name)
+# denies; a heredoc body whose continued lines spell a gh call, and a line ending in an escaped backslash (the
+# join counts no backslash parity), are deliberate over-blocks.
+case_ab_cont_deny() {
+  local bs='\'
+  abx_deny implementer gh \
+    "X=a${bs}${LF}b gh pr merge 5" \
+    "X=a${bs}${bs}${LF}b gh pr merge 5" \
+    "cat > f <<'EOF'${LF}X=a${bs}${LF}b gh pr merge 5${LF}EOF" \
+    "# note ${bs}${LF}gh pr merge 5"
+  run_boundary "$(mk_agent_cmd implementer "echo hi > .cla${bs}${LF}ude/x && echo github")"
+  expect_ab_deny_claude
+}
+# ab-cont-noop: a cooperative continuation gets no opinion, for the implementer and for the verifier's read-only
+# git.
+case_ab_cont_noop() {
+  local bs='\'
+  abx_noop implementer "ls ${bs}${LF}-la && echo github"
+  abx_noop verifier "git log ${bs}${LF}--oneline -5"
+}
+# cdgcont-deny: the shim name split by a continuation (LF or CRLF, the text ending on a continued line
+# included) is a command word of the joined run and denies as a shim with no inline patch text, which only the
+# fast path's backslash-newline arm lets reach the analysis; a heredoc body is a deliberate over-block. A split
+# shim with an inline patch naming .claude denies through the belt-and-braces mention reason.
+case_cdgcont_deny() {
+  local bs='\' c w0
+  for c in \
+    "apply_${bs}${LF}patch < x.patch" \
+    "apply_${bs}${CR}${LF}patch < x.patch" \
+    "apply_${bs}${LF}patch < x.patch ${bs}" \
+    "cat > f <<'EOF'${LF}apply_${bs}${LF}patch < x.patch${LF}EOF" \
+    "# note ${bs}${LF}apply_patch < x.patch"; do
+    w0="$__why"; __why=""
+    run_claude_guard "$(mk_codex_shell 'implementer' "$c")"
+    expect_cdg_deny_unparseable
+    case "$cdg_err" in
+      *"with no inline patch text"*) ;;
+      *) __ok=0; __why="${__why}stderr missing 'with no inline patch text': '$cdg_err'\n" ;;
+    esac
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+  # The same split shim with an inline patch whose indented header names .claude: the joined run resolves the shim
+  # as a command word, so the belt-and-braces check on the marker line decides, not the structured parse.
+  run_claude_guard "$(mk_codex_shell 'implementer' "apply_${bs}${LF}patch <<'EOF'${LF}  *** Begin Patch${LF}  *** Add File: .claude/x${LF}  *** End Patch${LF}EOF")"
+  expect_cdg_deny_unparseable
+  case "$cdg_err" in
+    *"mentioning a .claude/.codex path on a line that carries a *** marker"*) ;;
+    *) __ok=0; __why="${__why}stderr missing the belt-and-braces mention reason: '$cdg_err'\n" ;;
+  esac
+}
+# cdgcont-noop: a continuation that never makes the shim a command word, a joined run under the line cap, and a
+# native apply_patch call with a long content line ending in a backslash get no opinion.
+case_cdgcont_noop() {
+  local bs='\' c w0 x900
+  pcap_fill 900 x
+  x900="$pcap_s"
+  for c in \
+    "ls ${bs}${LF}-la" \
+    "echo apply_${bs}${LF}patch" \
+    "echo $x900 ${bs}${LF}$x900"; do
+    w0="$__why"; __why=""
+    run_claude_guard "$(mk_codex_shell 'implementer' "$c")"
+    expect_cdg_no_opinion
+    if [ -n "$__why" ]; then __why="${w0}[${c:0:40}] ${__why}"; else __why="$w0"; fi
+  done
+  # The native apply_patch route never joins: a content line ending in a backslash, whose join with the next
+  # line would be over the line cap, is not capped there (an ordinary long content line is not either).
+  local xa xb
+  pcap_fill 1500 a
+  xa="$pcap_s"
+  pcap_fill 1500 b
+  xb="$pcap_s"
+  run_claude_guard "$(mk_codex_patch implementer "*** Begin Patch${LF}*** Add File: src/x.txt${LF}+${xa}${bs}${LF}+${xb}${LF}*** End Patch")"
+  expect_cdg_no_opinion
+}
+# cdgcont-deny-too-large: three continued lines, each under the line cap but joined over it, deny as too large
+# (the fail-closed cap on a joined run), whether the run closes on a line without a backslash or the text ends
+# on a continued line; two lines whose first ends in an escaped backslash join too (the join counts no
+# backslash parity).
+case_cdgcont_deny_too_large() {
+  local bs='\' x800 x1000 c w0
+  pcap_fill 800 x
+  x800="$pcap_s"
+  pcap_fill 1000 x
+  x1000="$pcap_s"
+  for c in \
+    "echo $x800 ${bs}${LF}$x800 ${bs}${LF}$x800" \
+    "echo $x800 ${bs}${LF}$x800 ${bs}${LF}$x800 ${bs}" \
+    "echo $x1000 ${bs}${bs}${LF}$x1000"; do
+    w0="$__why"; __why=""
+    run_claude_guard "$(mk_codex_shell 'implementer' "$c")"
+    expect_cdg_deny_too_large implementer Bash
+    if [ -n "$__why" ]; then __why="${w0}[${c:0:40}] ${__why}"; else __why="$w0"; fi
   done
 }
 
@@ -10389,7 +10553,7 @@ cases=(
   "push-dl-deny-budget-zero|case_push_dl_deny_budget_zero|knob 0 denies the very first sample even for an ordinary feature/x push"
   "push-dl-noop-budget-zero-no-push|case_push_dl_noop_budget_zero_no_push|no push segment stays no-opinion even at knob 0, via the pre-deadline scan_out exit"
   "push-dl-noop-budget-zero-xseg-no-push|case_push_dl_noop_budget_zero_xseg_no_push|a cd with no push segment (only #433's marker line in the scan) stays no-opinion even at knob 0"
-  "push-dl-deny-production-budget|case_push_dl_deny_production_budget|FLOOD+TIMING route 1: 10000x harmless push segments, knob 99 ignored (not less than the 5s production budget) -- deny under an active deadline calibrated from a same-run knob-0 control (#463, #476)"
+  "push-dl-deny-production-budget|case_push_dl_deny_production_budget|FLOOD+TIMING route 1: 6000x harmless push segments, knob 99 ignored (not less than the 5s production budget) -- deny under an active deadline calibrated from a same-run knob-0 control (#463, #476)"
   "push-dl-deny-driver-site|case_push_dl_deny_driver_site|FLOOD route 3: 3000x bare -C push (zero evaluate_segment loop iterations, no lane config), once the driver loop starts only its own sample can stop it; budget calibrated from a same-run knob-0 control (#476)"
   "push-dl-deny-evaluate-sites|case_push_dl_deny_evaluate_sites|one push segment with a 10000-token refspec list -- only evaluate_segment()'s own internal samples can stop its refspec loop before it reaches the trailing main; budget calibrated from a same-run knob-0 control (#476)"
   "push-dl-deny-config-lines|case_push_dl_deny_config_lines|bare -C push resolving a lane with a many-line, under-cap depth-0 config -- only cfg_parse_file()'s read-loop sample can stop the parse mid-file; budget calibrated from a same-run knob-0 control (#476)"
@@ -10601,7 +10765,10 @@ cases=(
   "cdg-bash-deny-no-inline-patch-subshell|case_cdg_bash_deny_no_inline_patch_subshell|unparseable deny (#407 kickback round 2, finding B): (apply_patch < x.patch) -- a subshell, and case x in x) apply_patch < x.patch;; esac -- a case arm, where only the \")\" break exposes the shim"
   "cdg-bash-deny-no-inline-patch-cmdsubst|case_cdg_bash_deny_no_inline_patch_cmdsubst|unparseable deny (#407 kickback round 2, finding B): echo \$(apply_patch < x.patch) -- a command substitution"
   "cdg-bash-deny-no-inline-patch-gt|case_cdg_bash_deny_no_inline_patch_gt|unparseable deny (#407 kickback round 2, finding C): apply_patch>out.txt -- the \">\" word break"
-  "cdg-bash-deny-backslash-indented-begin-patch|case_cdg_bash_deny_backslash_indented_begin_patch|.claude deny (#407 kickback round 2, finding C): a backslash-newline-split apply_patch heredoc with an INDENTED exact Begin Patch/Add File line -- has_exact_begin_patch_line's own full trim is what denies here, not command-word detection (the split defeats that)"
+  "cdg-bash-deny-backslash-indented-begin-patch|case_cdg_bash_deny_backslash_indented_begin_patch|.claude deny (#407 kickback round 2, finding C): an echo-prefixed, backslash-newline-split apply_patch heredoc with an INDENTED exact Begin Patch/Add File line -- has_exact_begin_patch_line's own full trim is what denies here, since the shim name is a command word on no line and in no joined run"
+  "cdgcont-deny|case_cdgcont_deny|deny as a shim with no inline patch text: the shim name split by a backslash-newline (LF or CRLF), a heredoc body that spells it (a deliberate over-block) and a comment ending in a backslash above the shim (a control, since every line is still judged on its own); a split shim with an inline patch naming .claude denies with the belt-and-braces mention reason -- no registry record: the base hook exits at the fast path"
+  "cdgcont-noop|case_cdgcont_noop|no opinion: a continuation that never makes the shim a command word, and a joined run under the line cap -- no registry record: the rule only adds a deny"
+  "cdgcont-deny-too-large|case_cdgcont_deny_too_large|deny as too large: three continued lines, each under the line cap, whose join is over it, closed by a plain line or by the end of the text, or whose first line ends in an escaped backslash (the cap on a joined run, counting no backslash parity) -- no registry record: the base hook exits at the fast path"
   "cdg-bash-deny-leading-redirect|case_cdg_bash_deny_leading_redirect|unparseable deny (#407 kickback round 2, finding D): < x.patch apply_patch -- a leading redirect must not hide the command word that follows it"
   "cdg-bash-deny-leading-redirect-fd|case_cdg_bash_deny_leading_redirect_fd|unparseable deny (#407 kickback round 2, finding D): 2>/dev/null apply_patch < x -- a bare-digits fd immediately before a redirect operator"
   "cdg-bash-deny-leading-redirect-append|case_cdg_bash_deny_leading_redirect_append|unparseable deny (#407 kickback round 3): >> log apply_patch < x.patch -- a >> run is one redirect"
@@ -10713,8 +10880,12 @@ cases=(
   # --- a command substitution that cuts the git option slot (#572) cases ---------------------------
   "push-subst-deny|case_push_subst_deny|deny: git with a command substitution in the option slot, quoted, bare, in backticks, glued to a path, as the whole option and as the value of -C, then push origin main, and the same shape for a feature branch -- no registry record (the rule only adds a deny)"
   "push-subst-noop|case_push_subst_noop|no opinion: the same option slot on a line that does not name push, a subcommand found before the substitution, and a code span that is only git beside the word push -- the precision controls of the rule"
-  "push-awkabort-deny|case_push_awkabort_deny|deny with the one fixed scan-failure line, and awk's own error line dropped, when the awk scan exits non-zero after printing a partial line (a stub awk first on PATH) -- no registry record: removing the status check leaves the case red"
-  "ab-awkabort-deny|case_ab_awkabort_deny|deny with the one fixed scan-failure line, and awk's own error line dropped, when the awk scan exits non-zero after printing a partial line (a stub awk first on PATH) -- no registry record: removing the status check leaves the case red"
+  "push-cont-deny|case_push_cont_deny|deny: a push split by a backslash-newline (LF or CRLF, mid-command, before the destination, or as a four-line run) names the default branch, a heredoc body whose continued lines spell a push and a line ending in an escaped backslash are deliberate over-blocks; a comment ending in a backslash above a push is a control (every line is still judged on its own) -- no registry record: the base hook allows each split push"
+  "push-cont-noop|case_push_cont_noop|no opinion: a backslash-newline continuation of a feature-branch push, of a non-push git command and of a gh call whose continued line names git -- no registry record: the rule only adds a deny"
+  "push-awkabort-deny|case_push_awkabort_deny|deny with the one fixed scan-failure line, and awk's own error line dropped, when the awk scan exits non-zero after printing a partial line (a stub awk first on PATH, replacing both awk programs or only the joiner) -- no registry record: removing the status check leaves the case red"
+  "ab-cont-deny|case_ab_cont_deny|deny: an implementer gh call split by a backslash-newline behind an assignment, a heredoc body whose continued lines spell one and a line ending in an escaped backslash (deliberate over-blocks), a comment ending in a backslash above one (a control, since every line is still judged on its own), and a .claude write whose directory name is split -- no registry record: the base hook allows each split call"
+  "ab-cont-noop|case_ab_cont_noop|no opinion: a cooperative backslash-newline continuation for the implementer, and a read-only git log continuation for the verifier -- no registry record: the rule only adds a deny"
+  "ab-awkabort-deny|case_ab_awkabort_deny|deny with the one fixed scan-failure line, and awk's own error line dropped, when the awk scan exits non-zero after printing a partial line (a stub awk first on PATH, replacing both awk programs or only the joiner) -- no registry record: removing the status check leaves the case red"
   # --- existing hooks, Codex payload shape (#407) cases ---------------------------------------
   "codex-gcg-main-status|case_codex_gcg_main_status|allow: git-c-guard.sh under a Codex-shaped main-session payload, git -C ../demo-wt-1 status --porcelain (pins the unchanged verdict -- Codex ignores this hook's if gate, but the script itself never reads it)"
   "codex-gcg-apply-patch|case_codex_gcg_apply_patch|silent: a Codex apply_patch payload (tool_name != Bash)"

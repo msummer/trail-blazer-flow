@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #556: the guard hooks now also judge each run of lines a trailing backslash continues as one joined line, so a split
+  `git push origin \<LF>main`, `X=a\<LF>b gh pr merge 5` or `apply_\<LF>patch < x.patch` denies, as does heredoc or
+  quoted text that spells one; claude-dir-guard analyses and caps such calls; push-guard's cap is 128 KiB. No consumer step.
 - #583: the mutant registries keep one record for each group of mutants that share a suite, filter and recorded case
   set (a gate-off record if there is one, else the fewest and shortest edits) and drop the rest with their `# mutant:`
   comments, so the dropped mutations are no longer re-proved by a record of their own. No consumer step.
