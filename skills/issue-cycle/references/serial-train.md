@@ -6,8 +6,8 @@ not here — read this file only when step 2 there has told you to. Everything t
 stays defined where it already is: step 3's floor, guards (a)–(e), the pre-first-merge recheck,
 the status line and ledger column, and the implementer's own step 2. This file only orders them
 and adds the update-branch fallback below. Merge authority stays defined in step 3 alone
-(`SKILL.md`'s "Rules"); this file restates no floor command — in particular, the
-`governance-paths.sh` line stays unique in `SKILL.md` (gate 4.43).
+(`SKILL.md`'s "Rules"); this file restates no floor command — the floor is the
+`merge-floor.sh` run in step 3.
 
 ## Scope and activation
 
@@ -26,8 +26,8 @@ No new check point is added:
 - the pre-merge-pass check runs immediately before the drain;
 - each issue's own check is the implementer's own step-2 per-issue stop check
   (`skills/issue-implementer/SKILL.md`'s per-issue check, before each issue in that loop);
-- the per-PR check runs at the top of every floor evaluation, including a post-update
-  re-evaluation, because that is a new evaluation of the PR;
+- the per-PR check runs as `merge-floor.sh`'s first step in every floor evaluation, including a
+  post-update re-evaluation, because that is a new evaluation of the PR;
 - the pre-ratchet check is unchanged.
 
 On stop: `SKILL.md`'s "Stop switch" paths apply unchanged. Undispatched train issues are the
@@ -93,12 +93,9 @@ For a PR whose **only** hold is the up-to-date rail ("behind"), eligible only wh
 hold:
 
 - it is a harness PR (`claude/<n>-…` head branch — never Dependabot, never a human's PR);
-- in this evaluation every floor check listed before the rail passed (verdict provenance,
-  archived verdict, ledger cross-check, plan-binding provenance, CI green) and the *Post-approval
-  comments* check passes on the same `find-implementation-work.sh --issue <n>` output;
-- the rail's `git merge-base --is-ancestor` answered exit 1 (not a git error such as exit 128,
-  and not a fetch failure);
-- `mergeStateStatus` is not `DIRTY`/`BLOCKED`;
+- in this evaluation `merge-floor.sh` printed `floor=hold` with `fail=behind` as its only `fail=`
+  line and `ancestry-rc=1` (a git error such as 128, a failed fetch, and every other failed check
+  each print a `fail=` line of their own), and step 3's ledger cross-check passes;
 - no update was applied to this PR earlier this pass;
 - this run has already confirmed a merge (guard (d) `MERGED`), or no update-branch has run yet
   this run — so until a merge proves `gh pr merge` works, at most one update runs;
@@ -118,11 +115,11 @@ Then:
    ceiling), stopping early on a conclusive result. If `sleep` is denied, re-poll once
    immediately, then hold with "backoff unavailable — grant `Bash(sleep:*)`". Budget spent ⇒
    held, "CI still pending on updated head `<sha>`".
-4. Re-evaluate the whole floor for this PR from the top: the per-PR stop check, verdict
-   provenance onward, the rail and `governance-paths.sh` re-run on the new head. A rail failing
-   again ⇒ held, with no second update this pass. Guard (b)'s `--match-head-commit` pin and
-   guard (c)'s hand-off then use the head OID this re-run rail printed, never the pre-update head
-   and never step 2's read.
+4. Re-evaluate the whole floor for this PR from the top: re-run `merge-floor.sh <pr>` (its stop
+   check included) and step 3's judgment checks on the new head. A `fail=behind` again ⇒ held,
+   with no second update this pass. Guard (b)'s `--match-head-commit` pin and guard (c)'s
+   hand-off then use the `head-oid=` this re-run printed, never the pre-update head and never
+   step 2's read.
 5. Record "update-branch: `<old head>` → `<new head>`" in the PR's cycle-report row, held or
    merged alike, and in the merge's audit evidence when it merges.
 

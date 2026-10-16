@@ -602,7 +602,7 @@ check-harness.sh
 It lists what the new version needs that your repo is missing. Fix what it flags and you're done.
 
 <details>
-<summary>Per-version migration notes (v1.9.0 → v3.4.0)</summary>
+<summary>Per-version migration notes (v1.9.0 → v3.5.0)</summary>
 
 For older history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration notes, v1.9.0
 to v2.7.7" subsection).
@@ -700,6 +700,9 @@ name bare (#490).
 **v3.3.1 → v3.3.2** needs no grant, label, script, settings entry, or baseline step.
 
 **v3.3.2 → v3.4.0** — re-run `bin/setup-labels.sh` (creates `building`; the doctor now requires it).
+
+**v3.4.0 → v3.5.0** — re-copy the permissions block from `templates/repo-settings.json` or add
+`"Bash(merge-floor.sh:*)"` by hand. On Codex, also re-run `bin/codex-setup.sh`.
 
 </details>
 

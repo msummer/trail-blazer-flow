@@ -841,7 +841,7 @@ fi
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 920
-issue-cycle 615
+issue-cycle 490
 issue-planner 600
 project-kickoff 220
 test-ratchet 205
@@ -921,25 +921,25 @@ else
 fi
 
 # 4.18 — the literal verifier closing-status-line prefix appears in the agent template that
-# emits it, the skill that writes it into a PR body, and the skill that greps for it before
-# merging. Mirrors 4.1/4.5/4.16/4.17 — this is not pinning duplicated prose (CLAUDE.md's rule):
-# the needle is a marker literal that must appear in the file that writes it, the file that
-# greps it, and the agent template that emits it, the same relationship 4.1 pins between the
-# '<!-- planner-plan -->' marker and its consumer.
+# emits it, the skill that writes it into a PR body, and the script that greps for it before
+# merging (bin/merge-floor.sh since #550). Mirrors 4.1/4.5/4.16/4.17 — this is not pinning
+# duplicated prose (CLAUDE.md's rule): the needle is a marker literal that must appear in the
+# file that writes it, the file that greps it, and the agent template that emits it, the same
+# relationship 4.1 pins between the '<!-- planner-plan -->' marker and its consumer.
 marker='<!-- harness-status: stage=verifier issue='
 missing=""
-for f in agents/verifier.md skills/issue-implementer/SKILL.md skills/issue-cycle/SKILL.md; do
+for f in agents/verifier.md skills/issue-implementer/SKILL.md bin/merge-floor.sh; do
   grep -qF -- "$marker" "$root/$f" || missing="$missing $f"
 done
 if [ -z "$missing" ]; then
-  ok "4.18 '$marker' present in agents/verifier.md, skills/issue-implementer/SKILL.md, and skills/issue-cycle/SKILL.md"
+  ok "4.18 '$marker' present in agents/verifier.md, skills/issue-implementer/SKILL.md, and bin/merge-floor.sh"
 else
   bad "4.18 '$marker' missing from:$missing"
 fi
 
 # 4.19 — the literal verifier-verdict marker and the verifier-verdict-branch key prefix both
 # appear in the skill that writes them (as an issue comment, after every verifier pass) and the
-# skill that checks for them before an autonomous merge. Mirrors 4.1/4.5/4.16/4.17/4.18 — a floor
+# script that checks for them before an autonomous merge (bin/merge-floor.sh since #550). Mirrors 4.1/4.5/4.16/4.17/4.18 — a floor
 # that greps for a marker nobody writes is the exact failure this pins. Like 4.16, the key marker
 # is pinned only by its prefix (without the trailing space) — the branch name varies per PR, so
 # the full key line is never a fixed string; the fine-grained spacing of the writer's key-line
@@ -950,14 +950,14 @@ fi
 # re-triggers a revision), so the verdict marker is pinned there too.
 missing=""
 for marker in '<!-- verifier-verdict -->' '<!-- verifier-verdict-branch:'; do
-  for f in skills/issue-implementer/SKILL.md skills/issue-cycle/SKILL.md; do
+  for f in skills/issue-implementer/SKILL.md bin/merge-floor.sh; do
     grep -qF -- "$marker" "$root/$f" || missing="$missing $f($marker)"
   done
 done
 grep -qF -- '<!-- verifier-verdict -->' "$root/bin/find-implementation-work.sh" || missing="$missing bin/find-implementation-work.sh(<!-- verifier-verdict -->)"
 grep -qF -- '<!-- verifier-verdict -->' "$root/bin/find-planning-work.sh" || missing="$missing bin/find-planning-work.sh(<!-- verifier-verdict -->)"
 if [ -z "$missing" ]; then
-  ok "4.19 '<!-- verifier-verdict -->' and '<!-- verifier-verdict-branch:' present in skills/issue-implementer/SKILL.md, skills/issue-cycle/SKILL.md, bin/find-implementation-work.sh, and bin/find-planning-work.sh"
+  ok "4.19 '<!-- verifier-verdict -->' and '<!-- verifier-verdict-branch:' present in skills/issue-implementer/SKILL.md, bin/merge-floor.sh, bin/find-implementation-work.sh, and bin/find-planning-work.sh"
 else
   bad "4.19 markers missing from:$missing"
 fi
@@ -1168,22 +1168,6 @@ else
   bad "4.27 '$marker' missing from:$missing"
 fi
 
-# 4.28 — fixed-string presence of the literal '<!-- harness-plan-binding:' marker prefix in the
-# script that writes binding_line, the skill that revalidates and pastes it into a PR body, and
-# the skill that greps for it before an autonomous merge (#174). Modelled on 4.19 — a floor that
-# greps for a marker nobody writes is the exact failure this pins. Proves only that the literal
-# is present in writer, paster, and checker — not that the check actually runs.
-marker='<!-- harness-plan-binding:'
-missing=""
-for f in bin/find-implementation-work.sh skills/issue-implementer/SKILL.md skills/issue-cycle/SKILL.md; do
-  grep -qF -- "$marker" "$root/$f" || missing="$missing $f"
-done
-if [ -z "$missing" ]; then
-  ok "4.28 '$marker' present in bin/find-implementation-work.sh, skills/issue-implementer/SKILL.md, and skills/issue-cycle/SKILL.md"
-else
-  bad "4.28 '$marker' missing from:$missing"
-fi
-
 # 4.29 — the two discovery scripts' has_*marker field NAMES agree (#194 workstream A: both
 # scripts annotate their untrusted bucket with a has_harness_marker boolean, alongside the
 # existing has_plan_marker, so a forged harness-record marker from a non-maintainer is called out
@@ -1208,21 +1192,21 @@ else
   fi
 fi
 
-# 4.30 — fixed-string presence of the two field NAMES the merge floor's new post-approval-comment
-# sub-bullet reads — trusted_post_plan and covered_by_approval — in the script that writes them
-# and both instruction surfaces that read them (#206): bin/find-implementation-work.sh (writer),
-# skills/issue-implementer/SKILL.md (the pre-push revalidation reader #198 added), and
-# skills/issue-cycle/SKILL.md (the merge floor's new reader). Mirrors 4.19/4.28 — a floor that
-# reads a field nobody writes is the exact failure this pins. Proves only that the identifier
-# NAMES agree between writer and both readers, not that the floor's check actually runs.
+# 4.30 — fixed-string presence of the two field NAMES the merge floor's post-approval-comment
+# check reads — trusted_post_plan and covered_by_approval — in the script that writes them and
+# both readers (#206): bin/find-implementation-work.sh (writer), skills/issue-implementer/SKILL.md
+# (the pre-push revalidation reader #198 added), and bin/merge-floor.sh (the merge floor's
+# reader). Mirrors 4.19 — a floor that reads a field nobody writes is the exact failure this
+# pins. Proves only that the identifier NAMES agree between writer and both readers, not that the
+# floor's check actually runs.
 missing=""
 for id in trusted_post_plan covered_by_approval; do
-  for f in bin/find-implementation-work.sh skills/issue-implementer/SKILL.md skills/issue-cycle/SKILL.md; do
+  for f in bin/find-implementation-work.sh skills/issue-implementer/SKILL.md bin/merge-floor.sh; do
     grep -qF -- "$id" "$root/$f" || missing="$missing $f($id)"
   done
 done
 if [ -z "$missing" ]; then
-  ok "4.30 'trusted_post_plan' and 'covered_by_approval' present in bin/find-implementation-work.sh, skills/issue-implementer/SKILL.md, and skills/issue-cycle/SKILL.md"
+  ok "4.30 'trusted_post_plan' and 'covered_by_approval' present in bin/find-implementation-work.sh, skills/issue-implementer/SKILL.md, and bin/merge-floor.sh"
 else
   bad "4.30 identifiers missing from:$missing"
 fi
@@ -1258,17 +1242,17 @@ else
 fi
 
 # 4.32 — fixed-string presence of the field name approved_at_history (#213) in the script that
-# writes it and the merge floor's Plan-binding provenance sub-bullet, the one instruction surface
-# that walks it: bin/find-implementation-work.sh (writer) and skills/issue-cycle/SKILL.md (the
-# floor's reader). Modelled on 4.30/4.28 — a floor that walks a field nobody writes is the exact
-# failure this pins. Proves only that the writer and the floor agree on the field NAME, not that
-# the newest-first walk, the dedup, or the release-on-match behaviour actually runs.
+# writes it and the merge floor's plan-binding check, the one reader that walks it:
+# bin/find-implementation-work.sh (writer) and bin/merge-floor.sh (the floor's reader). Modelled
+# on 4.30 — a floor that walks a field nobody writes is the exact failure this pins. Proves only
+# that the writer and the floor agree on the field NAME, not that the newest-first walk, the
+# dedup, or the release-on-match behaviour actually runs.
 missing=""
-for f in bin/find-implementation-work.sh skills/issue-cycle/SKILL.md; do
+for f in bin/find-implementation-work.sh bin/merge-floor.sh; do
   grep -qF -- "approved_at_history" "$root/$f" || missing="$missing $f"
 done
 if [ -z "$missing" ]; then
-  ok "4.32 'approved_at_history' present in bin/find-implementation-work.sh and skills/issue-cycle/SKILL.md"
+  ok "4.32 'approved_at_history' present in bin/find-implementation-work.sh and bin/merge-floor.sh"
 else
   bad "4.32 'approved_at_history' missing from:$missing"
 fi
@@ -1280,8 +1264,8 @@ fi
 # the script that writes it and the one instruction surface that names it individually:
 # bin/find-implementation-work.sh (writer) and skills/issue-implementer/SKILL.md (the pre-push
 # revalidation reader, steps 2a/2e). Modelled on 4.30 — proves only that the reason NAME agrees
-# between writer and reader, not that either behaves correctly. skills/issue-cycle/SKILL.md is
-# deliberately excluded: the merge floor's Plan-binding provenance bullet prints
+# between writer and reader, not that either behaves correctly. bin/merge-floor.sh is
+# deliberately excluded: the merge floor's plan-binding check prints
 # `plan binding: <approval.reason>` verbatim and never names an individual reason string, so
 # there is nothing for this fixed-string check to pin there.
 missing=""
@@ -1299,8 +1283,8 @@ fi
 # that names them individually: bin/find-implementation-work.sh (writer) and
 # skills/issue-implementer/SKILL.md (the pre-push revalidation reader, steps 2a/2e). Modelled on
 # 4.33 — proves only that the reason NAMES agree between writer and reader, not that either
-# behaves correctly. skills/issue-cycle/SKILL.md is deliberately excluded, for the identical
-# reason 4.33 documents: the merge floor's Plan-binding provenance bullet prints
+# behaves correctly. bin/merge-floor.sh is deliberately excluded, for the identical
+# reason 4.33 documents: the merge floor's plan-binding check prints
 # `plan binding: <approval.reason>` verbatim and never names an individual reason string, so
 # there is nothing for this fixed-string check to pin there.
 missing=""
@@ -1587,23 +1571,6 @@ elif [ "$pathere_guard" != "$pathere_push" ]; then
   bad "4.42 PATH_ERE predicate disagrees: hooks/git-c-guard.sh has '$pathere_guard', hooks/push-guard.sh has '$pathere_push'"
 else
   ok "4.42 hooks/git-c-guard.sh and hooks/push-guard.sh share the identical PATH_ERE predicate"
-fi
-
-# 4.43 (#331, folds in #324) — skills/issue-cycle/SKILL.md's *Governance path list* sub-bullet
-# names exactly one Bash call, on one line, for the merge floor's governance-path read: a single
-# fixed-string count of the literal call, with both paste placeholders already inside the counted
-# string (so one count proves both the command name and the placeholders are present and spelled
-# correctly, on the same line). This proves only that literal text is present and spelled
-# correctly — never that the path-match rules bin/governance-paths.sh implements are correct, that
-# the pasted base-tip/head-OID values are right, or that the orchestrator actually runs the
-# command; none of those is machine-parsable under CLAUDE.md's machine-parsed-artifacts rule. $cyc
-# is assigned later in this file (see the 5.5-5.7 block), so this assertion uses its own path.
-gov43_path="$root/skills/issue-cycle/SKILL.md"
-gov43_n="$(grep -c -F -- 'governance-paths.sh <paste the base tip here> <paste the head OID here>' "$gov43_path")"
-if [ "$gov43_n" = "1" ]; then
-  ok "4.43 skills/issue-cycle/SKILL.md names exactly one 'governance-paths.sh <paste the base tip here> <paste the head OID here>' governance-path-list Bash call"
-else
-  bad "4.43 skills/issue-cycle/SKILL.md: expected exactly one 'governance-paths.sh <paste the base tip here> <paste the head OID here>' line, found $gov43_n"
 fi
 
 # 4.44 (#308) — no line in the harness's own instruction/script surface applies the
@@ -2114,21 +2081,27 @@ else
   bad "5.4 reconcile-ledger.sh: expected rc=1 and the unknown-outcome line, got rc=$rc output='$out'"
 fi
 
-# 5.5/5.6/5.7 — extract the archived-verdict --jq program out of skills/issue-cycle/SKILL.md
-# (the actual instruction text, not a copy of it) and execute it with jq against literal offline
+# 5.5/5.6/5.7 — extract the archived-verdict jq program (ARCHIVE_JQ) out of bin/merge-floor.sh
+# (the actual script text, not a copy of it) and execute it with jq against literal offline
 # fixtures. Read-only, offline: no files written, no gh call. Each assertion fails loudly if the
-# extraction is empty or malformed, rather than silently passing on nothing.
-cyc="$root/skills/issue-cycle/SKILL.md"
+# extraction is empty or malformed, rather than silently passing on nothing. The script passes
+# its untrusted values to jq as --arg variables; the helpers below bind the same variable names
+# to a JSON string literal in front of the extracted program, which is the same binding.
+mf="$root/bin/merge-floor.sh"
 q="'"
-av_n="$(grep -c -- '--json comments --jq ' "$cyc")"
-av_line="$(grep -F -- '--json comments --jq ' "$cyc" | head -1)"
-av_prog="$(printf '%s\n' "$av_line" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
-# av_for BRANCH — the extracted program with the head-branch placeholder substituted.
-av_for() { printf '%s' "$av_prog" | sed "s|<paste the head branch here>|$1|"; }
+# mf_const NAME — the one-line single-quoted jq program the script assigns to NAME ('' when the
+# line is missing or no longer a single-quoted one-liner).
+mf_const() { sed -nE "s/^$1='(.*)'\$/\1/p" "$mf"; }
+# mf_str VALUE — VALUE as a JSON string literal, a valid jq string literal too.
+mf_str() { jq -n -c --arg v "$1" '$v'; }
+av_n="$(grep -c -- '^ARCHIVE_JQ=' "$mf")"
+av_prog="$(mf_const ARCHIVE_JQ)"
+# av_for BRANCH — the extracted program with $branch bound to BRANCH.
+av_for() { printf '%s as $branch | %s' "$(mf_str "$1")" "$av_prog"; }
 
 extraction_ok=1
 if [ "$av_n" != "1" ]; then
-  bad "5.5 archived-verdict --jq extraction: expected exactly one matching line in skills/issue-cycle/SKILL.md, found $av_n"
+  bad "5.5 archived-verdict jq extraction: expected exactly one ARCHIVE_JQ= line in bin/merge-floor.sh, found $av_n"
   bad "5.6 archived-verdict --jq extraction: skipped (extraction did not find exactly one line)"
   bad "5.7 archived-verdict --jq extraction: skipped (extraction did not find exactly one line)"
   extraction_ok=0
@@ -2219,25 +2192,24 @@ if [ "$extraction_ok" = "1" ]; then
   fi
 fi
 
-# 5.8/5.9 — execute the merge floor's two PR-body --jq needles out of skills/issue-cycle/SKILL.md
-# (the actual instruction lines, not copies of them) against literal offline fixtures. Read-only,
-# offline: no files written, no gh call. Each fails loudly if its own extraction finds a wrong
-# number of matching lines, an empty program, or a malformed one, rather than silently passing on
-# nothing. $cyc and $q are the 5.5-5.7 block's; reused as-is.
+# 5.8/5.9 — execute the merge floor's two PR-body jq needles (PROVENANCE_JQ, BODY_CONTAINS_JQ) out
+# of bin/merge-floor.sh (the actual script lines, not copies of them) against literal offline
+# fixtures. Read-only, offline: no files written, no gh call. Each fails loudly if its own
+# extraction finds a wrong number of matching lines, an empty program, or a malformed one, rather
+# than silently passing on nothing. $mf, $q, mf_const and mf_str are the 5.5-5.7 block's; reused
+# as-is.
 
-# --- 5.8: verdict-provenance needle (the *Verdict provenance* sub-bullet) ---
-vp_n="$(grep -F -- '--json body --jq' "$cyc" | grep -c -F -- '<!-- harness-status:')"
-vp_line="$(grep -F -- '--json body --jq' "$cyc" | grep -F -- '<!-- harness-status:' | head -1)"
-vp_prog="$(printf '%s\n' "$vp_line" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
-# vp_for N — the extracted verdict-provenance program with <n> substituted.
-vp_for() { printf '%s' "$vp_prog" | sed "s|<n>|$1|"; }
-# vp_fail_for N — the same, with outcome=fail in place of outcome=pass (the SKILL.md line's "the
-# same command with outcome=fail in place of outcome=pass" twin).
-vp_fail_for() { printf '%s' "$vp_prog" | sed -e "s|<n>|$1|" -e "s|outcome=pass |outcome=fail |"; }
+# --- 5.8: verdict-provenance needle (PROVENANCE_JQ) ---
+vp_n="$(grep -c -- '^PROVENANCE_JQ=' "$mf")"
+vp_prog="$(mf_const PROVENANCE_JQ)"
+# vp_for N — the extracted verdict-provenance program with $n bound to N and $outcome to pass.
+vp_for() { printf '%s as $n | "pass" as $outcome | %s' "$(mf_str "$1")" "$vp_prog"; }
+# vp_fail_for N — the same, with $outcome bound to fail (the script's outcome=fail twin).
+vp_fail_for() { printf '%s as $n | "fail" as $outcome | %s' "$(mf_str "$1")" "$vp_prog"; }
 
 vp_ok=1
 if [ "$vp_n" != "1" ]; then
-  bad "5.8 verdict-provenance --jq extraction: expected exactly one matching line in skills/issue-cycle/SKILL.md, found $vp_n"
+  bad "5.8 verdict-provenance jq extraction: expected exactly one PROVENANCE_JQ= line in bin/merge-floor.sh, found $vp_n"
   vp_ok=0
 elif [ -z "$vp_prog" ]; then
   bad "5.8 verdict-provenance --jq extraction: extracted program is empty"
@@ -2296,17 +2268,15 @@ if [ "$vp_ok" = "1" ]; then
   fi
 fi
 
-# --- 5.9: archived-verdict match needle (the *Archived verdict* sub-bullet's match needle) ---
-mn_n="$(grep -F -- '--json body --jq' "$cyc" | grep -c -F -- 'paste the printed line here')"
-mn_line_src="$(grep -F -- '--json body --jq' "$cyc" | grep -F -- 'paste the printed line here' | head -1)"
-mn_prog="$(printf '%s\n' "$mn_line_src" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
-# mn_for LINE — the extracted archived-verdict match program with the placeholder substituted by
-# a literal status line. The substituted line contains no |, & or \, so a |-delimited BRE is safe.
-mn_for() { printf '%s' "$mn_prog" | sed "s|<paste the printed line here>|$1|"; }
+# --- 5.9: archived-verdict match needle (BODY_CONTAINS_JQ, the PR-body containment needle) ---
+mn_n="$(grep -c -- '^BODY_CONTAINS_JQ=' "$mf")"
+mn_prog="$(mf_const BODY_CONTAINS_JQ)"
+# mn_for LINE — the extracted containment program with $needle bound to a literal status line.
+mn_for() { printf '%s as $needle | %s' "$(mf_str "$1")" "$mn_prog"; }
 
 mn_ok=1
 if [ "$mn_n" != "1" ]; then
-  bad "5.9 archived-verdict match --jq extraction: expected exactly one matching line in skills/issue-cycle/SKILL.md, found $mn_n"
+  bad "5.9 archived-verdict match jq extraction: expected exactly one BODY_CONTAINS_JQ= line in bin/merge-floor.sh, found $mn_n"
   mn_ok=0
 elif [ -z "$mn_prog" ]; then
   bad "5.9 archived-verdict match --jq extraction: extracted program is empty"
@@ -2706,19 +2676,18 @@ else
   bad "5.14 reconcile-ledger.sh degraded/degraded_reasons read:$fail_514"
 fi
 
-# 5.15 — extract the lesson-append carve-out's files-check --jq program out of
-# skills/issue-cycle/SKILL.md (#307, the *Lesson-append carve-out* sub-bullet's check 1) — the
-# actual instruction text, not a copy of it — and execute it with jq against literal offline
-# fixtures. Read-only, offline: no files written, no gh call. Fails loudly if its own extraction
-# finds a wrong number of matching lines, an empty program, or a malformed one, rather than
-# silently passing on nothing. $cyc and $q are the 5.5-5.7 block's; reused as-is.
-lac_n="$(grep -c -- '--json changedFiles,files --jq ' "$cyc")"
-lac_line="$(grep -F -- '--json changedFiles,files --jq ' "$cyc" | head -1)"
-lac_prog="$(printf '%s\n' "$lac_line" | sed -e "s/^.*--jq $q//" -e "s/$q | tr -d.*\$//")"
+# 5.15 — extract the lesson-append carve-out's files-check jq program (LESSONS_FILES_JQ, #307)
+# out of bin/merge-floor.sh — the actual script text, not a copy of it — and execute it with jq
+# against literal offline fixtures. Read-only, offline: no files written, no gh call. Fails
+# loudly if its own extraction finds a wrong number of matching lines, an empty program, or a
+# malformed one, rather than silently passing on nothing. $mf and mf_const are the 5.5-5.7
+# block's; reused as-is.
+lac_n="$(grep -c -- '^LESSONS_FILES_JQ=' "$mf")"
+lac_prog="$(mf_const LESSONS_FILES_JQ)"
 
 lac_ok=1
 if [ "$lac_n" != "1" ]; then
-  bad "5.15 lesson-append carve-out files-check --jq extraction: expected exactly one matching line in skills/issue-cycle/SKILL.md, found $lac_n"
+  bad "5.15 lesson-append carve-out files-check jq extraction: expected exactly one LESSONS_FILES_JQ= line in bin/merge-floor.sh, found $lac_n"
   lac_ok=0
 elif [ -z "$lac_prog" ]; then
   bad "5.15 lesson-append carve-out files-check --jq extraction: extracted program is empty"

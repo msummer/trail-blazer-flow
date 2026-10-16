@@ -5,7 +5,7 @@
 # Two modes:
 #
 #   governance-paths.sh <base-sha> <head-oid>
-#     "Floor mode" — the issue-cycle merge pass's *Governance path list* read. Runs its own
+#     "Floor mode" — bin/merge-floor.sh's governance-path read. Runs its own
 #     NUL-delimited, rename-free diff between <base-sha> and <head-oid> (each a 40- or 64-char
 #     lowercase hex object id — 64 for a SHA-256 repo), classifies every changed path, and prints
 #     one line per path, in diff order:

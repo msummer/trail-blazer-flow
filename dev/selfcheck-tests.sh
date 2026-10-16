@@ -420,11 +420,6 @@ p_4_41_extraction() { edit "$1/bin/find-planning-work.sh" 's/\$planC/\$plnC/g'; 
 # that file (the header prose spells this shape "-wt-<n>", never the bracket form).
 p_4_42_extraction() { edit "$1/hooks/git-c-guard.sh" 's/PATH_ERE/PATH_RE/g'; }
 p_4_42_drift()      { edit "$1/hooks/push-guard.sh" 's/-wt-\[0-9\]/-wt-[0-8]/'; }
-# p_4_43_scriptname (#331, folds in #324) — delete a character from inside the script name
-# ('governance-paths.sh' -> 'governancepaths.sh', characters removed, not a suffix appended —
-# LESSON 2026-09-04b) so the gate's fixed-string count of the governance path list's Bash call
-# comes back empty.
-p_4_43_scriptname() { edit "$1/skills/issue-cycle/SKILL.md" 's/governance-paths\.sh </governancepaths.sh </'; }
 # p_4_44 (#308) — append a line applying no-auto-approve via --label to bin/harness-status.sh
 # (the append helper p_1_1/p_1_7 already use, proving an append there trips nothing else besides
 # what it's meant to), so assertion 4.44 clause (a)'s ERE scan finds a match in bin/*.sh.
@@ -719,8 +714,8 @@ p_4_15()              { printf 'x=$(echo hi)\n' | append "$1/skills/harness-setu
 p_4_16()              { edit "$1/bin/cleanup-after-merge.sh" 's/harness-follow-up/harness-followup/g'; }
 p_4_16_status()        { edit "$1/bin/harness-status.sh" 's/harness-follow-up/harness-followup/g'; }
 p_4_17()              { edit "$1/bin/cleanup-after-merge.sh" 's/harness-multi-pr/harness-multipr/g'; }
-p_4_18()              { edit "$1/skills/issue-cycle/SKILL.md" 's/stage=verifier/stage=verified/g'; }
-p_4_19()              { edit "$1/skills/issue-cycle/SKILL.md" 's/verifier-verdict/verifier-verdictx/g'; }
+p_4_18()              { edit "$1/bin/merge-floor.sh" 's/stage=verifier/stage=verified/g'; }
+p_4_19()              { edit "$1/bin/merge-floor.sh" 's/verifier-verdict/verifier-verdictx/g'; }
 p_4_21()               { edit "$1/agents/verifier.md" 's/Autonomy reserve/Autonomy Reserve/g'; }
 p_4_22()               { edit "$1/skills/issue-cycle/SKILL.md" 's/Post-merge verification/Post-Merge Verification/g'; }
 p_4_24_tag_pin()       { edit "$1/.github/workflows/selfcheck.yml" 's|actions/checkout@[0-9a-f]*|actions/checkout@v4|'; }
@@ -739,16 +734,15 @@ p_4_26_extraction_cleanup() { edit "$1/bin/cleanup-after-merge.sh" 's/TRUSTED_AS
 p_4_35_drift()      { edit "$1/bin/cleanup-after-merge.sh" 's/^MULTI_PR_LABEL="multi-pr"$/MULTI_PR_LABEL="mlti-pr"/'; }
 p_4_35_extraction() { edit "$1/bin/cleanup-after-merge.sh" 's/MULTI_PR_LABEL/MULTI_PR_LABEL_NAME/g'; }
 p_4_27()            { edit "$1/bin/cleanup-after-merge.sh" 's/harness-audit/harness-audited/g'; }
-p_4_28()            { edit "$1/skills/issue-cycle/SKILL.md" 's/harness-plan-binding/harness-planbinding/g'; }
 p_4_29_drift()      { edit "$1/bin/find-implementation-work.sh" 's/has_harness_marker/has_harness_flag/g'; }
 p_4_29_extraction() { edit "$1/bin/find-planning-work.sh" 's/has_plan_marker/HAS_PLAN_MARKER/g; s/has_harness_marker/HAS_HARNESS_MARKER/g'; }
-p_4_30()            { edit "$1/skills/issue-cycle/SKILL.md" 's/covered_by_approval/coveredby_approval/'; }
+p_4_30()            { edit "$1/bin/merge-floor.sh" 's/covered_by_approval/coveredby_approval/g'; }
 p_4_31()            { edit "$1/dev/planning-tests.sh" 's/#issuecomment-7001/#c9/'; }
 p_4_31_extraction() { edit "$1/dev/planning-tests.sh" 's/example\.invalid/example.test/g'; }
 p_4_31_prose() {
   printf '      # historical: this fixture used to carry the old `#c1` shape\n' | append "$1/dev/planning-tests.sh"
 }
-p_4_32()            { edit "$1/skills/issue-cycle/SKILL.md" 's/approved_at_history/approved_athistory/g'; }
+p_4_32()            { edit "$1/bin/merge-floor.sh" 's/approved_at_history/approved_athistory/g'; }
 p_4_33()            { edit "$1/skills/issue-implementer/SKILL.md" 's/approval-label-absent/approval-label-missing/g'; }
 p_4_34()            { edit "$1/skills/issue-implementer/SKILL.md" 's/decision-edited-after-approval/decision-edited-post-approval/g'; }
 p_4_36_rename()          { edit "$1/skills/issue-cycle/SKILL.md" 's/harness-lock\.sh release/harness-lock.sh relase/g'; }
@@ -854,18 +848,18 @@ p_4_20_orphan_grant() {
 p_4_20_hyphen_missing_grant() { drop "$1/templates/repo-settings.json" '"Bash\(gh pr update-branch:\*\)"'; }
 p_5_1()               { edit "$1/bin/reconcile-ledger.sh" 's/blocked incomplete died/blocked incomplete/'; }
 p_5_2()               { edit "$1/bin/reconcile-ledger.sh" 's/stage-skipped issue/stage_skipped issue/'; }
-p_5_5()               { edit "$1/skills/issue-cycle/SKILL.md" 's/sort_by(.createdAt) | //'; }
-p_5_6()               { edit "$1/skills/issue-cycle/SKILL.md" 's/verifier-verdict-branch: <paste the head branch here> -->/verifier-verdict-branch: <paste the head branch here>/'; }
+p_5_5()               { edit "$1/bin/merge-floor.sh" '/^ARCHIVE_JQ=/s/sort_by(.createdAt) | //'; }
+p_5_6()               { edit "$1/bin/merge-floor.sh" '/^ARCHIVE_JQ=/s/ + " -->"//'; }
 p_5_7()               { edit "$1/skills/issue-implementer/SKILL.md" 's/verifier-verdict-branch: claude/verifier-verdict-branch:claude/'; }
-p_5_8()               { edit "$1/skills/issue-cycle/SKILL.md" 's/outcome=pass ")/outcome=pass")/'; }
-p_5_9()               { edit "$1/skills/issue-cycle/SKILL.md" 's#(\.body // "") | contains("<paste#(.bodyText // "") | contains("<paste#'; }
-p_5_15_extract()      { edit "$1/skills/issue-cycle/SKILL.md" 's/--json changedFiles,files --jq /--json changedFiles,file --jq /'; }
-p_5_15_complete()     { edit "$1/skills/issue-cycle/SKILL.md" '/--json changedFiles,files --jq /s/(\.files | length) != \.changedFiles/false/'; }
-p_5_15_renamed()      { edit "$1/skills/issue-cycle/SKILL.md" '/--json changedFiles,files --jq /s/select(\.changeType == "RENAMED")/select(.changeType == "NEVERMATCH")/'; }
-p_5_15_casefold()     { edit "$1/skills/issue-cycle/SKILL.md" '/--json changedFiles,files --jq /s/ascii_downcase | //'; }
-p_5_15_deletions()    { edit "$1/skills/issue-cycle/SKILL.md" '/--json changedFiles,files --jq /s/ or \$c\[0\]\.deletions != 0//'; }
-p_5_15_bound()        { edit "$1/skills/issue-cycle/SKILL.md" '/--json changedFiles,files --jq /s/> 40/> 4/'; }
-p_5_15_precedence()   { edit "$1/skills/issue-cycle/SKILL.md" '/--json changedFiles,files --jq /s/if (\.files | length) != \.changedFiles then "incomplete" elif (\[\.files\[\] | select(\.changeType == "RENAMED")\] | length) > 0 then "renamed"/if (\[\.files\[\] | select(\.changeType == "RENAMED")\] | length) > 0 then "renamed" elif (\.files | length) != \.changedFiles then "incomplete"/'; }
+p_5_8()               { edit "$1/bin/merge-floor.sh" '/^PROVENANCE_JQ=/s/ + " ")/)/'; }
+p_5_9()               { edit "$1/bin/merge-floor.sh" '/^BODY_CONTAINS_JQ=/s/(\.body \/\/ "")/(.bodyText \/\/ "")/'; }
+p_5_15_extract()      { edit "$1/bin/merge-floor.sh" 's/^LESSONS_FILES_JQ=/LESSONS_FILE_JQ=/'; }
+p_5_15_complete()     { edit "$1/bin/merge-floor.sh" '/^LESSONS_FILES_JQ=/s/(\.files | length) != \.changedFiles/false/'; }
+p_5_15_renamed()      { edit "$1/bin/merge-floor.sh" '/^LESSONS_FILES_JQ=/s/select(\.changeType == "RENAMED")/select(.changeType == "NEVERMATCH")/'; }
+p_5_15_casefold()     { edit "$1/bin/merge-floor.sh" '/^LESSONS_FILES_JQ=/s/ascii_downcase | //'; }
+p_5_15_deletions()    { edit "$1/bin/merge-floor.sh" '/^LESSONS_FILES_JQ=/s/ or \$c\[0\]\.deletions != 0//'; }
+p_5_15_bound()        { edit "$1/bin/merge-floor.sh" '/^LESSONS_FILES_JQ=/s/> 40/> 4/'; }
+p_5_15_precedence()   { edit "$1/bin/merge-floor.sh" '/^LESSONS_FILES_JQ=/s/if (\.files | length) != \.changedFiles then "incomplete" elif (\[\.files\[\] | select(\.changeType == "RENAMED")\] | length) > 0 then "renamed"/if (\[\.files\[\] | select(\.changeType == "RENAMED")\] | length) > 0 then "renamed" elif (\.files | length) != \.changedFiles then "incomplete"/'; }
 p_5_11_trust() {
   edit "$1/skills/issue-planner/SKILL.md" \
     '/harness-staleness/s/"OWNER","MEMBER","COLLABORATOR"/"OWNER","MEMBER","COLLABORATOR","NONE"/'
@@ -955,8 +949,8 @@ cases=(
   "4.16|4.16|p_4_16|rename the follow-up marker in cleanup-after-merge.sh so the skill and the script disagree"
   "4.16-status|4.16|p_4_16_status|rename the follow-up marker in bin/harness-status.sh so the writer and the status reader disagree"
   "4.17|4.17|p_4_17|rename the multi-pr marker in cleanup-after-merge.sh so the script and the docs disagree"
-  "4.18|4.18 5.8|p_4_18|rename the verifier status-line needle in issue-cycle/SKILL.md so the writer and the checker disagree (also renames stage=verifier inside the extracted verdict-provenance --jq program, so 5.8's unrenamed fixtures no longer match)"
-  "4.19|4.19 5.5 5.6 5.7|p_4_19|rename the verifier-verdict marker throughout skills/issue-cycle/SKILL.md so the writer and the checker disagree (also renames both needles inside the extracted archived-verdict --jq program, so 5.5/5.6/5.7 no longer match the unrenamed fixtures and fail alongside it)"
+  "4.18|4.18 5.8|p_4_18|rename the verifier status-line needle in bin/merge-floor.sh so the writer and the checker disagree (also renames stage=verifier inside PROVENANCE_JQ, so 5.8's unrenamed fixtures no longer match)"
+  "4.19|4.19 5.5 5.6 5.7|p_4_19|rename the verifier-verdict marker throughout bin/merge-floor.sh so the writer and the checker disagree (also renames both needles inside ARCHIVE_JQ, so 5.5/5.6/5.7 no longer match the unrenamed fixtures and fail alongside it)"
   "4.20-missing-grant|4.20|p_4_20_missing_grant|drop the Bash(gh pr edit:*) allow entry while a skill still names 'gh pr edit'"
   "4.20-orphan-grant|4.20|p_4_20_orphan_grant|add a Bash(gh pr close:*) allow entry no skill names"
   "4.20-hyphen-missing-grant|4.20|p_4_20_hyphen_missing_grant|drop the Bash(gh pr update-branch:*) allow entry while a skill still names 'gh pr update-branch' (hyphenated subcommand)"
@@ -974,14 +968,13 @@ cases=(
   "4.26-drift-cleanup|4.26|p_4_26_drift_cleanup|drop COLLABORATOR from bin/cleanup-after-merge.sh's TRUSTED_ASSOCIATIONS= value only"
   "4.26-extraction-cleanup|4.26|p_4_26_extraction_cleanup|rename bin/cleanup-after-merge.sh's TRUSTED_ASSOCIATIONS= line so the gate's extraction comes back empty"
   "4.27|4.27|p_4_27|rename the harness-audit marker in bin/cleanup-after-merge.sh only, so the writers and consumers disagree"
-  "4.28|4.28|p_4_28|rename the plan-binding marker in skills/issue-cycle/SKILL.md only so the writer/paster and the checker disagree"
   "4.29-drift|4.29|p_4_29_drift|rename has_harness_marker to has_harness_flag in bin/find-implementation-work.sh only"
   "4.29-extraction|4.29|p_4_29_extraction|rename both has_*marker field declarations in bin/find-planning-work.sh so the gate's extraction comes back empty"
-  "4.30|4.30|p_4_30|rename covered_by_approval in skills/issue-cycle/SKILL.md only, so the merge floor's reader and bin/find-implementation-work.sh's writer disagree"
+  "4.30|4.30|p_4_30|rename covered_by_approval in bin/merge-floor.sh only, so the merge floor's reader and bin/find-implementation-work.sh's writer disagree"
   "4.31|4.31|p_4_31|rewrite one normalised fixture comment url in dev/planning-tests.sh back to an invented #c<n> fragment"
   "4.31-extraction|4.31|p_4_31_extraction|rewrite the fixture url host in dev/planning-tests.sh so the gate's extraction comes back empty"
   "4.31-prose||p_4_31_prose|control: a #-comment mentioning the invented \`#c1\` shape in prose is not flagged"
-  "4.32|4.32|p_4_32|rename approved_at_history in skills/issue-cycle/SKILL.md only, so the merge floor's reader and bin/find-implementation-work.sh's writer disagree"
+  "4.32|4.32|p_4_32|rename approved_at_history in bin/merge-floor.sh only, so the merge floor's reader and bin/find-implementation-work.sh's writer disagree"
   "4.33|4.33|p_4_33|rename the approval-label-absent reason in skills/issue-implementer/SKILL.md only, so the reader and bin/find-implementation-work.sh's writer disagree"
   "4.34|4.34|p_4_34|rename the decision-edited-after-approval reason in skills/issue-implementer/SKILL.md only, so the reader and bin/find-implementation-work.sh's writer disagree"
   "4.35-drift|4.35|p_4_35_drift|rewrite bin/cleanup-after-merge.sh's MULTI_PR_LABEL value to a label bin/setup-labels.sh doesn't create (characters changed inside the token, not a suffix)"
@@ -1005,18 +998,18 @@ cases=(
   "5.2|5.2 5.14|p_5_2|rename reconcile-ledger.sh's 'stage-skipped' emit to 'stage_skipped' -- also trips 5.14's c6 sub-check (#298), which reuses this same emit to prove a degraded line never cuts the per-issue comparison short: c6's own expected literal still reads 'stage-skipped', so the renamed emit no longer matches it -- measured"
   "5.3|5.3 5.13|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again -- measured (post-#233): this same pass also serves 5.13's 'legacy merge line with deploy= only' sub-check, so it fails alongside 5.3 now"
   "5.4|5.4|p_5_4|reword the deploy-specific unknown-outcome explanation 5.4 compares literally"
-  "5.5|5.5|p_5_5|drop the sort_by(.createdAt) clause from the archived-verdict --jq program so array order, not recency, picks the winner"
+  "5.5|5.5|p_5_5|drop the sort_by(.createdAt) clause from ARCHIVE_JQ so array order, not recency, picks the winner"
   "5.6|5.6|p_5_6|drop the archived-verdict key needle's trailing ' -->' so a shorter branch name substring-matches a longer sibling branch's key line"
   "5.7|5.7|p_5_7|remove the space after the colon in the writer's verifier-verdict-branch key-line template so it no longer matches the checker's needle"
   "5.8|5.8|p_5_8|delete the trailing space after outcome=pass in the verdict-provenance needle so a longer outcome token (outcome=passed) substring-matches"
-  "5.9|5.9|p_5_9|rename .body to .bodyText in the archived-verdict match needle so the extracted program reads a field gh never returns"
-  "5.15-extract|5.15|p_5_15_extract|shorten the lesson-append carve-out's files-check selector text (changedFiles,files -> changedFiles,file) so grep -c -- '--json changedFiles,files --jq ' finds 0 matching lines instead of 1 -- measured: 'expected exactly one matching line in skills/issue-cycle/SKILL.md, found 0'"
-  "5.15-complete|5.15|p_5_15_complete|replace the files-check's (.files | length) != .changedFiles test with a bare false (address-scoped to the changedFiles,files line only) so a truncated files list is no longer caught -- measured: F2 (files list truncated: changedFiles 3 != files|length 2) returns 'lessons-append' instead of 'incomplete', and F13 (an incomplete list AND a RENAMED file both true) now falls through to the renamed clause, returning 'renamed' instead of 'incomplete'"
+  "5.9|5.9|p_5_9|rename .body to .bodyText in BODY_CONTAINS_JQ so the extracted program reads a field gh never returns"
+  "5.15-extract|5.15|p_5_15_extract|rename the LESSONS_FILES_JQ constant (LESSONS_FILES_JQ -> LESSONS_FILE_JQ) so the gate's anchored extraction finds no such line -- measured: 'expected exactly one LESSONS_FILES_JQ= line in bin/merge-floor.sh, found 0'"
+  "5.15-complete|5.15|p_5_15_complete|replace the files-check's (.files | length) != .changedFiles test with a bare false (address-scoped to the LESSONS_FILES_JQ line only) so a truncated files list is no longer caught -- measured: F2 (files list truncated: changedFiles 3 != files|length 2) returns 'lessons-append' instead of 'incomplete', and F13 (an incomplete list AND a RENAMED file both true) now falls through to the renamed clause, returning 'renamed' instead of 'incomplete'"
   "5.15-renamed|5.15|p_5_15_renamed|neutralise the files-check's RENAMED select (changeType == \"RENAMED\" -> changeType == \"NEVERMATCH\") so a renamed file elsewhere in the list is never caught -- measured: F3 (a RENAMED file present elsewhere in the list) returns 'lessons-append' instead of 'renamed', and F14 (a RENAMED file AND a second .claude/ path both true) now falls through to the not-lessons-only clause, returning 'not-lessons-only' instead of 'renamed'"
   "5.15-casefold|5.15|p_5_15_casefold|delete the 'ascii_downcase | ' pipe stage from the files-check's path-prefix test so a case-varied .claude/ path evades it -- measured: F5 (a case-varied .Claude/ path) returns 'lessons-append' instead of 'not-lessons-only'"
   "5.15-deletions|5.15|p_5_15_deletions|delete the ' or \$c[0].deletions != 0' disjunct from the files-check's add-only test so a LESSONS.md edit that also carries deletions is no longer caught -- measured: F8 (LESSONS.md itself has a deletion) returns 'lessons-append' instead of 'not-add-only', and F16 (LESSONS.md's own deletion AND additions==41 both true) now falls through to the too-large clause, returning 'too-large' instead of 'not-add-only'"
   "5.15-bound|5.15|p_5_15_bound|lower the files-check's too-large threshold from > 40 to > 4 so the 40-line size bound narrows to 4 -- measured: F0 (baseline, 9 additions), F1 (ADDED-type, 8 additions) and F11 (the 40-addition boundary fixture) all now return 'too-large' instead of 'lessons-append'"
-  "5.15-precedence|5.15|p_5_15_precedence|swap the files-check's incomplete and renamed clauses (address-scoped to the changedFiles,files line only) so the RENAMED test runs before the file-count test, matching #307 kickback finding 2's own measured survivor -- measured: F13 (an incomplete list AND a RENAMED file both true) returns 'renamed' instead of 'incomplete'; F0-F12 and F14-F16 are unaffected since only F13 makes the incomplete/renamed pair simultaneously true"
+  "5.15-precedence|5.15|p_5_15_precedence|swap the files-check's incomplete and renamed clauses (address-scoped to the LESSONS_FILES_JQ line only) so the RENAMED test runs before the file-count test, matching #307 kickback finding 2's own measured survivor -- measured: F13 (an incomplete list AND a RENAMED file both true) returns 'renamed' instead of 'incomplete'; F0-F12 and F14-F16 are unaffected since only F13 makes the incomplete/renamed pair simultaneously true"
   "5.11-trust|5.11|p_5_11_trust|widen the staleness guard's trust list to include NONE (staleness line only) -- measured: the forged-key-from-NONE-author fixture returns the key instead of 'none'"
   "5.11-order|5.11|p_5_11_order|drop the sort_by(.createdAt) clause from the staleness de-dup --jq program (staleness line only) so array order, not recency, picks the winner -- measured: the newest-wins-out-of-array-order fixture returns the older prs=12,14 key instead of the newer prs=12,14,16 key"
   "5.11-shadow|5.11|p_5_11_shadow|delete the inner select((.body // \"\") | contains(\"<!-- harness-staleness:\")) from the candidate array so sort_by/last picks the newest comment of ANY kind -- measured: the newer-keyless-comment-does-not-shadow fixture returns 'none' instead of the staleness key"
@@ -1036,7 +1029,6 @@ cases=(
   "4.41-extraction|4.41|p_4_41_extraction|rename the \$planC binding in bin/find-planning-work.sh so the gate's extraction comes back empty -- measured: \"4.41 bin/find-planning-work.sh's or bin/find-implementation-work.sh's '... as \$planC' line didn't match (structure changed) — extraction failed\""
   "4.42-extraction|4.42|p_4_42_extraction|rename hooks/git-c-guard.sh's PATH_ERE identifier to PATH_RE (both declaration and use, characters changed inside the token) so the gate's anchored extraction comes back empty -- measured: \"4.42 hooks/git-c-guard.sh's or hooks/push-guard.sh's PATH_ERE='...' line didn't match (structure changed) — extraction failed\""
   "4.42-drift|4.42|p_4_42_drift|alter one character inside hooks/push-guard.sh's own PATH_ERE value (the digit class [0-9] -> [0-8]), so it no longer agrees with hooks/git-c-guard.sh's -- measured: \"4.42 PATH_ERE predicate disagrees: hooks/git-c-guard.sh has '^([A-Za-z]:/|/|\\.\\./)([A-Za-z0-9._ +-]+/)*[A-Za-z0-9._+-]+-wt-[0-9]+/?\$', hooks/push-guard.sh has '^([A-Za-z]:/|/|\\.\\./)([A-Za-z0-9._ +-]+/)*[A-Za-z0-9._+-]+-wt-[0-8]+/?\$'\""
-  "4.43-scriptname|4.43|p_4_43_scriptname|delete the hyphen from 'governance-paths.sh' (a character removed, not a suffix appended) in skills/issue-cycle/SKILL.md's governance-path-list command line, so the gate's fixed-string count of 'governance-paths.sh <paste the base tip here> <paste the head OID here>' comes back empty -- measured: \"4.43 skills/issue-cycle/SKILL.md: expected exactly one 'governance-paths.sh <paste the base tip here> <paste the head OID here>' line, found 0\""
   "4.44|4.44|p_4_44|append a line applying no-auto-approve via --label to bin/harness-status.sh -- measured failing set: {4.44} (70 pass, 1 fail)"
   "5.14-reasons-unread|5.14|p_5_14_reasons_unread|rename degraded_reasons -> degraded_raesons throughout bin/reconcile-ledger.sh (characters swapped, not a suffix) so the script's own read targets a key no fixture sets -- measured: c1, c2, c3, c4, c6, c8, c9, c10, and c11 all collapse to the same 'unspecified' line, and c7 goes silent/rc=0 instead of dying (see the perturbation function's own comment above for the full mechanism)"
   "5.14-status-filter|5.14|p_5_14_status_filter|rewrite the \"status.\" exclusion literal to \"stat_us.\" inside bin/reconcile-ledger.sh's own jq program (characters changed inside the token) so a genuine status.<key> reason no longer matches the exclusion -- measured: c3 (status.-only reasons no longer stay silent) and c4 (both reasons refuse instead of only the planning one) fail"

@@ -140,8 +140,8 @@
 #                 first, deduplicated, as {approved_at, approved_by, binding_line} — so a PR body
 #                 written under an EARLIER approval of the same plan still has a binding line the
 #                 merge floor recognises after a later, unrelated re-approval (removing and
-#                 re-adding plan-approved to bind a post-approval comment, per skills/issue-cycle/
-#                 SKILL.md's *Post-approval comments* rule, no longer permanently strands an open
+#                 re-adding plan-approved to bind a post-approval comment, per bin/merge-floor.sh's
+#                 post-approval check, no longer permanently strands an open
 #                 PR). Each entry's binding_line is built exactly like the top-level one below, but
 #                 is null on every entry when covers_plan is not true (nothing pasteable for a plan
 #                 that isn't covered) — entry [0]'s approved_at/approved_by/binding_line are always
@@ -157,9 +157,9 @@
 #                 `<!-- harness-plan-binding: issue=<n> plan=<plan.url> approved-at=<approved_at>
 #                 -->` when and only when covers_plan is true; null in every other case. Revalidated
 #                 by the issue-implementer skill before dispatch and again before push, then pasted
-#                 verbatim into the PR body for the issue-cycle merge floor to grep for; the floor
-#                 itself (since #213) walks the whole approved_at_history array instead of matching
-#                 only this one field — see that skill and skills/issue-cycle/SKILL.md.
+#                 verbatim into the PR body for the merge floor to grep for; the floor itself
+#                 (bin/merge-floor.sh, since #213) walks the whole approved_at_history array
+#                 instead of matching only this one field — see that skill and that script.
 # One warn: line per non-covered issue, one distinct ASCII stem per reason — except reason:
 # no-plan, which reuses the existing "no maintainer-authored plan comment" line rather than
 # doubling up, and the two plan-edit-unreadable routes (an unparseable comment id, and a rejected
@@ -182,7 +182,7 @@
 # No arguments: unchanged behaviour and output shape (bin/harness-status.sh's own
 # `implementation=$(find-implementation-work.sh)` call depends on this). #284 — this single-issue
 # prefetch is deliberately NOT retried, unlike the two sites below: both of its callers
-# (skills/issue-implementer/SKILL.md step 2a/2e and skills/issue-cycle/SKILL.md's merge floor)
+# (skills/issue-implementer/SKILL.md step 2a/2e and bin/merge-floor.sh)
 # already re-run this whole script once on an unknown verdict, which explicitly covers "no
 # plan_selection entry at all" — a script-level retry here would stack a second 30s backoff on top
 # of that existing re-run for one transient blip. Pinned by the

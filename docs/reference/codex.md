@@ -106,10 +106,10 @@ rule, and otherwise leaves it to the sandbox. `templates/codex.rules` has three 
   (and `-f`, `--force-with-lease`), `git reset --hard`, `git clean`, `rm -rf`, `git branch -D
   main`, `git push origin main`, and `codex-scheduled-run.sh` — a scheduled Codex run is launched
   by launchd, never from inside a session (see "Scheduling unattended runs (macOS)" below).
-- **Gated** — the ten harness scripts that call `gh` (directly, or through `harness-status.sh`)
+- **Gated** — the harness scripts that call `gh` (directly, or through `harness-status.sh`)
   or write inside `.git` (`check-decision-record.sh`, `check-harness.sh`, `cleanup-after-merge.sh`,
   `find-implementation-work.sh`, `find-planning-work.sh`, `harness-lock.sh`, `harness-status.sh`,
-  `harness-stop.sh`, `reconcile-ledger.sh`, `setup-labels.sh`) each get an `allow` rule on their
+  `harness-stop.sh`, `merge-floor.sh`, `reconcile-ledger.sh`, `setup-labels.sh`) each get an `allow` rule on their
   bare name **plus** a `host_executable` pin to this install's own absolute `bin/` path. The pin
   matters: an ungated bare-name rule matches *any* file with that basename, anywhere — including
   one a subagent writes into the workspace — so every `.sh` ALLOW rule in the installed file is
@@ -810,7 +810,7 @@ Report the resolved root once, in the run summary.
 - **Gated** (run outside the sandbox only through the installed rules — see "Rules" above):
   `check-decision-record.sh`, `check-harness.sh`, `cleanup-after-merge.sh`,
   `find-implementation-work.sh`, `find-planning-work.sh`, `harness-lock.sh`, `harness-status.sh`,
-  `harness-stop.sh`, `reconcile-ledger.sh`, `setup-labels.sh`.
+  `harness-stop.sh`, `merge-floor.sh`, `reconcile-ledger.sh`, `setup-labels.sh`.
 - **Ungated** (run sandboxed): `harness-version.sh`, `governance-paths.sh`, and
   `codex-setup.sh`, whose write mode runs once from a normal terminal, never in-session, while its
   read-only `--check` runs in-session.
