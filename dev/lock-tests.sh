@@ -34,8 +34,8 @@
 #
 # CLAUDE_PID PER FIXTURE (RESOLVED): every case passes an explicit CLAUDE_PID value to run_lock —
 # live-holder fixtures pass "$$" (this harness's own pid, alive for the whole run), stale
-# fixtures pass a killed-and-reaped pid (dead_pid(): a backgrounded `sleep 30`, killed and
-# waited on immediately, so its pid is guaranteed dead and not yet recycled). The two fallback
+# fixtures use an exited-and-reaped pid (dead_pid(): a backgrounded subshell that exits on its
+# own, waited on immediately, so its pid is guaranteed dead and not yet recycled). The two fallback
 # cases (19, 20) are the only ones that depend on invocation shape instead of an explicit value:
 # 19 passes the sentinel "UNSET", routing run_lock through
 # `bash -c 'unset CLAUDE_PID; exec "$@"' _ bash harness-lock.sh acquire` (exec keeps the same
@@ -110,15 +110,20 @@ mk_repo() {
   printf '%s' "$dir"
 }
 
-# dead_pid — a pid guaranteed dead and not yet recycled: backgrounds `sleep 30`, kills it, waits
-# on it (reaping it), and prints its pid. Must be called directly (not via `$(…)` from a case
-# that also needs job control on the SAME pid later) — command substitution here is fine since
-# the background job, kill, and wait all happen inside the one subshell command substitution
-# forks, which has its own job table.
+# dead_pid — a pid guaranteed dead and not yet recycled: backgrounds a subshell that exits on its
+# own, waits on it, and prints its pid. The wait guarantees the child has exited and been reaped
+# before its pid is handed out: bin/harness-lock.sh's pid_alive checks `kill -0` and then `ps -p`,
+# and a child that is still running, or exited but not yet reaped, passes both. Call it as
+# `$(dead_pid)` — the background job and the wait both happen inside the one subshell the command
+# substitution forks, which has its own job table.
+# It must not go back to starting a long-lived child and killing it straight away: the TERM can
+# land while the freshly forked child is still a bash resetting the signal handlers it inherited
+# (this suite's `trap cleanup EXIT` makes bash catch TERM; traced with bash 5.2 on Linux), where
+# it is recorded and then dropped at the exec — the child outlives the kill and `wait` blocks for
+# its whole lifetime. Nothing is signalled here, so there is no such window.
 dead_pid() {
-  sleep 30 &
+  ( exit 0 ) &
   local p=$!
-  kill "$p" 2>/dev/null
   wait "$p" 2>/dev/null
   printf '%s' "$p"
 }
@@ -1449,7 +1454,7 @@ case_journal_record_size() {
 cases=(
   "acquire-fresh|case_acquire_fresh|control: rc 0, run-id= last line, all six files written, pid == fixture's CLAUDE_PID"
   "acquire-twice-refused|case_acquire_twice_refused|second acquire with the same live CLAUDE_PID=\$\$: rc 3, holder record printed, stored run-id unchanged"
-  "reclaim-stale-same-host|case_reclaim_stale_same_host|pre-written lock, same host, killed-and-reaped pid: rc 0, one audit line, new run-id"
+  "reclaim-stale-same-host|case_reclaim_stale_same_host|pre-written lock, same host, exited-and-reaped pid: rc 0, one audit line, new run-id"
   "refuse-foreign-host|case_refuse_foreign_host|same fixture but host=other.invalid, pid dead: rc 3, lock untouched"
   "refuse-live-pid-same-host|case_refuse_live_pid_same_host|host from uname -n, pid=\$\$: rc 3"
   "refuse-incomplete-record|case_refuse_incomplete_record|lock dir with no pid file: rc 3, names release --force"

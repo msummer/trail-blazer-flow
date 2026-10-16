@@ -3999,12 +3999,13 @@ mk_sched() {
   fi
 }
 
-# dead_pid_sched — a pid guaranteed dead and not yet recycled (dev/lock-tests.sh's own dead_pid):
-# backgrounds `sleep 30`, kills it, reaps it, and prints its pid.
+# dead_pid_sched — a pid guaranteed dead and not yet recycled (dev/lock-tests.sh's own dead_pid,
+# kept identical to it): backgrounds a subshell that exits on its own, waits on it (reaping it),
+# and prints its pid. Nothing is signalled, so there is no TERM to be lost while the child is still
+# a bash resetting its inherited signal handlers (see dead_pid's comment for why that matters).
 dead_pid_sched() {
-  sleep 30 &
+  ( exit 0 ) &
   local p=$!
-  kill "$p" 2>/dev/null
   wait "$p" 2>/dev/null
   printf '%s' "$p"
 }
