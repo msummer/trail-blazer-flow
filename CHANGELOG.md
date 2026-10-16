@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #596 (with #595, #597): `governance-paths.sh` follows a `CLAUDE.md` symlink one hop (an unusable link holds every PR)
+  and reads only a route-parameter `[...]` group as literal; both matchers accept `./AGENTS.md`. Consumer step: fix a
+  `check-harness.sh` WARN that Governance paths is malformed (bracket), and check a `CLAUDE.md` symlink by hand.
 - #556: the guard hooks now also judge each run of lines a trailing backslash continues as one joined line, so a split
   `git push origin \<LF>main`, `X=a\<LF>b gh pr merge 5` or `apply_\<LF>patch < x.patch` denies, as does heredoc or
   quoted text that spells one; claude-dir-guard analyses and caps such calls; push-guard's cap is 128 KiB. No consumer step.

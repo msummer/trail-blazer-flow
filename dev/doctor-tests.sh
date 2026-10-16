@@ -72,8 +72,9 @@
 # --no-renames, the declared-glob grammar (only the first fenced block, comment/blank lines
 # skipped, case-insensitive, final-segment vs whole-path matching, trailing-slash-means-beneath),
 # the add-only OR of built-in and declared, the base-tip-only read, the lessons-only exact-set
-# compare, every malformed reason token, and every fail-closed error path (bad arguments before
-# any git call, a git failure, an empty diff, a control-character path) — plus the doctor's own
+# compare, every malformed reason token, the base-tree read of a CLAUDE.md symlink (followed one
+# hop, or an error) and literal route-parameter brackets, and every fail-closed error path (bad
+# arguments before any git call, a git failure, an empty diff, a control-character path) — plus the doctor's own
 # validation-only wrapper around it (PASS none/declared <n>, WARN malformed/could not validate,
 # never FAIL), and (#552) bin/reserve-paths.sh — the Autonomy reserve's mechanical path matcher —
 # run directly in both its diff mode (base/head object ids) and its --check mode, pinning the
@@ -2403,8 +2404,9 @@ case_autonomy_mode_default_mode() {
 # mutant:331-lessons-sole — treats ANY governance set containing .claude/LESSONS.md as
 #   lessons-only, dropping the "exactly one path" requirement.
 # mutant:331-declared-ignored — skips the declared-glob matcher entirely.
-# mutant:331-read-head — reads $head:CLAUDE.md instead of $base:CLAUDE.md for the declared
-#   section, so a PR can loosen (or lose) the rule it's held against.
+# mutant:331-read-head — lists the head tree's CLAUDE.md entry instead of the base tree's for the
+#   declared section (a head tree that cannot be listed reads as no entry), so a PR can loosen (or
+#   lose) the rule it's held against.
 # mutant:331-negation-accepted — deletes the '!'-prefixed-line malformed check.
 # mutant:331-no-fence-reason — deletes the no-fence malformed check.
 # mutant:331-unterminated — deletes the unterminated-fence malformed check.
@@ -2415,8 +2417,8 @@ case_autonomy_mode_default_mode() {
 #   verdict=none instead of erroring.
 # mutant:331-hex-args — deletes the hex-format argument validation inside run_floor.
 # mutant:331-git-error — ignores git diff's own exit status.
-# mutant:331-absent-is-error — treats a base tip with no CLAUDE.md at all as an error, instead of
-#   "only the built-in rules apply".
+# mutant:331-absent-is-error — treats a base tree with no CLAUDE.md entry at all as an error,
+#   instead of "only the built-in rules apply".
 # mutant:331-doctor-malformed-pass — maps the doctor's malformed verdict to `ok` (PASS) instead of
 #   `wrn` (WARN) in bin/check-harness.sh.
 # mutant:331-doctor-script-missing — deletes the doctor's "could not validate" fallback WARN when
@@ -2820,6 +2822,335 @@ case_gov_doctor_script_missing() {
   expect "governance paths: could not validate"
 }
 
+# --- governance paths: a symlinked CLAUDE.md and bracket globs (#596, #595, #597) ----------------
+# Mutation proof lives in dev/mutants/doctor-tests.json (suite dev/doctor-tests.sh), re-run by
+# dev/mutant-driver.sh. These cases are named governance-*, never gov-*, so the 331-* records
+# filtered on "gov-" do not run them.
+# mutant:596-gov-link-text — reads a symlink entry's own blob (its link text) as the CLAUDE.md, so
+#   the section behind the link never applies and no unusable link is ever an error.
+# mutant:597-gov-dot-slash — deletes the leading-`./` strip from floor mode's base-tree link read,
+#   so a CLAUDE.md -> ./AGENTS.md link is rejected for its `.` segment.
+# mutant:595-gov-bracket-class — deletes the check that fails a bracket left outside a
+#   route-parameter group, so [0-9] and its kin are read as literal text instead of malformed.
+# mutant:595-gov-bracket-backslash — deletes the check that fails a backslash in an entry holding a
+#   bracket, so `\[id]` passes the route-group strip and its '[' is rewritten into a character class.
+# mutant:595-gov-bracket-literal — stops rewriting '[' as the bracket expression `[[]`, so a
+#   route-parameter group matches as a character class again.
+# mutant:595-gov-bracket-sed — lets a failed sed pass, both the validation of an entry's brackets
+#   and their rewrite as literals, so an entry whose brackets could not be handled reads as
+#   declared.
+
+# link_target_md FILE — writes a CLAUDE.md-shaped link target whose "Autonomy reserve" and
+# "Governance paths" sections both declare migrations/, so a reader of either script that wrongly
+# followed a link to it reports migrations/0001.sql instead of failing.
+link_target_md() {
+  printf '# AGENTS.md\n\n## Autonomy reserve\n```\nmigrations/\n```\n\n## Governance paths\n```\nmigrations/\n```\n' > "$1"
+}
+
+# link_shape DIR SHAPE — builds, in the fixture repo DIR, the CLAUDE.md tree entry of one shape the
+# one-hop rule rejects. Both bin/governance-paths.sh and bin/reserve-paths.sh read the base tree
+# with that rule, so one builder serves both scripts' error rows.
+link_shape() {
+  local dir="$1" shape="$2"
+  case "$shape" in
+    absolute) ln -s /etc/hosts "$dir/CLAUDE.md" ;;
+    escapes) ln -s ../AGENTS.md "$dir/CLAUDE.md" ;;
+    missing) ln -s NOPE.md "$dir/CLAUDE.md" ;;
+    missing-dir) ln -s nodir/AGENTS.md "$dir/CLAUDE.md" ;;
+    dot-segment)
+      mkdir "$dir/docs"
+      link_target_md "$dir/docs/AGENTS.md"
+      ln -s docs/./AGENTS.md "$dir/CLAUDE.md"
+      ;;
+    dot-slash-only) ln -s ./ "$dir/CLAUDE.md" ;;
+    dot-slash-double)
+      link_target_md "$dir/AGENTS.md"
+      ln -s .//AGENTS.md "$dir/CLAUDE.md"
+      ;;
+    linked-dir)
+      mkdir "$dir/docs"
+      link_target_md "$dir/docs/AGENTS.md"
+      ln -s docs "$dir/ldocs"
+      ln -s ldocs/AGENTS.md "$dir/CLAUDE.md"
+      ;;
+    case-mismatch)
+      link_target_md "$dir/AGENTS.md"
+      ln -s agents.md "$dir/CLAUDE.md"
+      ;;
+    self) ln -s CLAUDE.md "$dir/CLAUDE.md" ;;
+    control) ln -s "$(printf 'a\tb')" "$dir/CLAUDE.md" ;;
+    chained)
+      link_target_md "$dir/B.md"
+      ln -s B.md "$dir/A.md"
+      ln -s A.md "$dir/CLAUDE.md"
+      ;;
+    directory)
+      mkdir "$dir/docs"
+      printf 'x\n' > "$dir/docs/x"
+      ln -s docs "$dir/CLAUDE.md"
+      ;;
+    claude-dir)
+      mkdir "$dir/CLAUDE.md"
+      printf 'x\n' > "$dir/CLAUDE.md/f"
+      ;;
+  esac
+}
+
+# gov_symlink_error_row SHAPE REASON — one error row of governance-symlink-error: a repo whose base
+# tree holds a CLAUDE.md the one-hop rule cannot read (built by link_shape), a head that adds a path
+# under migrations/. Floor mode must exit 1 with verdict=error as the whole of stdout (no
+# governance: or changed: line, so never the built-in-only verdict=none or a followed link's hold),
+# and stderr names the symlink and carries REASON, the one check that rejects this shape (a later
+# check would reject some shapes too, with another reason, so REASON pins each check on its own).
+gov_symlink_error_row() {
+  local shape="$1" reason="$2" dir base head
+  dir="$(mk_gov_repo "governance-symlink-$shape")"
+  link_shape "$dir" "$shape"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/migrations"
+  printf 'x\n' > "$dir/migrations/0001.sql"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 1
+  res_expect_exact "[$shape] stdout" "verdict=error" "$gov_out"
+  case "$shape" in
+    claude-dir) : ;;
+    *) expect_gov_err "is a symlink to" ;;
+  esac
+  expect_gov_err "$reason"
+  # The link text is shown with every non-printable byte as `?`, never raw.
+  [ "$shape" != control ] || expect_gov_err "'a?b'"
+}
+
+# gov_follow_row NAME LINK TARGET — one success row of governance-symlink-claude-md: a repo whose
+# CLAUDE.md is a symlink with text LINK to the file TARGET, which holds a Governance paths section
+# declaring ops/. Floor mode follows the link one hop in the base tree, so the head's ops/deploy.sh
+# is governance (verdict=hold) and --check, which reads through the filesystem, agrees.
+gov_follow_row() {
+  local name="$1" link="$2" target="$3" dir base head
+  dir="$(mk_gov_repo "governance-symlink-$name")"
+  case "$target" in
+    */*) mkdir -p "$dir/${target%/*}" ;;
+  esac
+  printf '# AGENTS.md\n\n## Governance paths\n```\nops/\n```\n' > "$dir/$target"
+  ln -s "$link" "$dir/CLAUDE.md"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/ops" "$dir/src"
+  printf 'x\n' > "$dir/ops/deploy.sh"
+  printf 'x\n' > "$dir/src/app.txt"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 0
+  res_expect_exact "[$link] stdout" "governance: ops/deploy.sh
+changed: src/app.txt
+verdict=hold" "$gov_out"
+  res_expect_exact "[$link] stderr" "" "$gov_err"
+  run_gov "$dir" --check "$dir/CLAUDE.md"
+  expect_rc 0
+  res_expect_exact "[$link] --check" "declared 1" "$gov_out"
+}
+
+# governance-symlink-claude-md — a CLAUDE.md that is a symlink in the base tree (the common
+# CLAUDE.md -> AGENTS.md layout, written plain, with one or two leading ./ segments, or into a
+# subdirectory) is followed ONE hop inside that tree: the Governance paths section in the target
+# applies, and --check, which reads through the filesystem, agrees. A target without a section
+# means the built-in rules only, never an error. A reader that treats the link text as the file
+# finds no section and reports changed: for ops/deploy.sh; one that rejects a `./` link errors.
+case_governance_symlink_claude_md() {
+  local dir base head
+  gov_follow_row follow-plain AGENTS.md AGENTS.md
+  gov_follow_row follow-dot-slash ./AGENTS.md AGENTS.md
+  gov_follow_row follow-dot-slash-twice ././AGENTS.md AGENTS.md
+  gov_follow_row follow-subdir docs/AGENTS.md docs/AGENTS.md
+  gov_follow_row follow-dot-slash-subdir ./docs/AGENTS.md docs/AGENTS.md
+
+  dir="$(mk_gov_repo governance-symlink-no-section)"
+  printf '# AGENTS\n\n## Verification\nRun `true`.\n' > "$dir/AGENTS.md"
+  ln -s AGENTS.md "$dir/CLAUDE.md"
+  base="$(gov_commit "$dir")"
+  printf 'x\n' > "$dir/app.txt"
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 0
+  res_expect_exact "target without a section: stdout" "changed: app.txt
+verdict=none" "$gov_out"
+  res_expect_exact "target without a section: stderr" "" "$gov_err"
+  run_gov "$dir" --check "$dir/CLAUDE.md"
+  expect_rc 0
+  res_expect_exact "target without a section: --check" "absent" "$gov_out"
+}
+
+# governance-symlink-error — a CLAUDE.md the one-hop rule cannot follow is verdict=error rc 1 in
+# floor mode, never "no section": a link that is absolute, escapes, is missing, names a missing
+# directory, has an inner `.` segment, is a bare `./` or `.//AGENTS.md`, goes through a symlinked
+# directory, differs from its target in case, points at itself or at another symlink, holds a
+# control character or names a directory, and a CLAUDE.md tree entry that is itself a directory.
+# A reader that took the link text for the file, or a failed read for "no section", reports
+# verdict=none for the first row.
+case_governance_symlink_error() {
+  gov_symlink_error_row absolute "is an absolute path"
+  gov_symlink_error_row escapes "is not a plain relative path"
+  gov_symlink_error_row missing "points at a missing file"
+  gov_symlink_error_row missing-dir "whose directory is missing from that tree"
+  gov_symlink_error_row dot-segment "is not a plain relative path"
+  gov_symlink_error_row dot-slash-only "is not a plain relative path"
+  gov_symlink_error_row dot-slash-double "is not a plain relative path"
+  gov_symlink_error_row linked-dir "whose directory is missing from that tree"
+  gov_symlink_error_row case-mismatch "points at a missing file"
+  gov_symlink_error_row self "points at another symlink"
+  gov_symlink_error_row control "holds a control character"
+  gov_symlink_error_row chained "points at another symlink"
+  gov_symlink_error_row directory "does not point at a file"
+  gov_symlink_error_row claude-dir "neither a file nor a symlink"
+}
+
+# governance-route-brackets — a bracket group that names a route parameter (`[id]`, `[...slug]`,
+# `[[id]]`, `[[...slug]]`) is literal in a declared glob, never a character class: the declared
+# directories and file match their own bracketed names and not the one-character neighbours a class
+# would match; `*` and `?` keep their fnmatch meaning beside a group; a bracket in a comment line is
+# not an entry. A reader that leaves '[' to the case pattern reports app/api/s/route.ts and
+# pages/i.tsx as governance and the bracketed names as changed.
+case_governance_route_brackets() {
+  local dir base head p
+  dir="$(mk_gov_repo governance-route-brackets)"
+  cat > "$dir/CLAUDE.md" <<'EOF'
+# CLAUDE.md
+
+## Governance paths
+```
+app/api/[...slug]/
+pages/[id].tsx
+blog/[[...slug]]/
+shop/[[id]].tsx
+lib/[tenant]/*.sql
+cfg/app?.yml
+# a comment may hold brackets: [0-9] [!x]
+```
+EOF
+  base="$(gov_commit "$dir")"
+  for p in 'app/api/[...slug]/route.ts' 'app/api/s/route.ts' 'pages/[id].tsx' 'pages/i.tsx' \
+    'blog/[[...slug]]/page.tsx' 'blog/x/page.tsx' 'shop/[[id]].tsx' 'shop/i.tsx' \
+    'lib/[tenant]/x.sql' 'lib/t/x.sql' 'cfg/app1.yml' 'cfg/app12.yml'; do
+    mkdir -p "$dir/${p%/*}"
+    printf 'x\n' > "$dir/$p"
+  done
+  head="$(gov_commit "$dir")"
+  run_gov "$dir" "$base" "$head"
+  expect_rc 0
+  expect_gov_out "governance: app/api/[...slug]/route.ts"
+  expect_gov_out "changed: app/api/s/route.ts"
+  expect_gov_out "governance: pages/[id].tsx"
+  expect_gov_out "changed: pages/i.tsx"
+  expect_gov_out "governance: blog/[[...slug]]/page.tsx"
+  expect_gov_out "changed: blog/x/page.tsx"
+  expect_gov_out "governance: shop/[[id]].tsx"
+  expect_gov_out "changed: shop/i.tsx"
+  expect_gov_out "governance: lib/[tenant]/x.sql"
+  expect_gov_out "changed: lib/t/x.sql"
+  expect_gov_out "governance: cfg/app1.yml"
+  expect_gov_out "changed: cfg/app12.yml"
+  expect_gov_last "verdict=hold"
+  run_gov "$dir" --check "$dir/CLAUDE.md"
+  expect_rc 0
+  res_expect_exact "--check" "declared 6" "$gov_out"
+}
+
+# gov_bracket_row ENTRY SHOWN — one row of governance-bracket-malformed: a base section holding a
+# valid entry and then ENTRY (SHOWN is its printable label). --check prints exactly
+# `malformed bracket` and exits 0; floor mode exits 1 with verdict=error as the whole of stdout
+# (the output is buffered, so no governance: or changed: line precedes it), and its stderr names the
+# reason `bracket` and never the entry.
+gov_bracket_row() {
+  local entry="$1" shown="$2" base head
+  printf '# CLAUDE.md\n\n## Governance paths\n```\ndocs/\n%s\n```\n' "$entry" > "$gov_dir/CLAUDE.md"
+  base="$(gov_commit "$gov_dir")"
+  run_gov "$gov_dir" --check "$gov_dir/CLAUDE.md"
+  expect_rc 0
+  res_expect_exact "[$shown] --check" "malformed bracket" "$gov_out"
+  printf 'changed\n' >> "$gov_dir/CLAUDE.md"
+  head="$(gov_commit "$gov_dir")"
+  run_gov "$gov_dir" "$base" "$head"
+  expect_rc 1
+  res_expect_exact "[$shown] floor stdout" "verdict=error" "$gov_out"
+  case "$gov_err" in
+    *"section at $base: bracket") : ;;
+    *) __ok=0; __why="${__why}[$shown] stderr does not name the reason: '$gov_err'\n" ;;
+  esac
+  case "$gov_err" in
+    *"$entry"*) __ok=0; __why="${__why}[$shown] stderr echoes the entry: '$gov_err'\n" ;;
+  esac
+}
+
+# governance-bracket-malformed — a '[' or ']' outside a route-parameter group (a class, a range, a
+# negated class, a set, an unbalanced bracket, an empty or digit-led group name, a group beside a
+# class, a control byte in a group) and a backslash in an entry that holds a bracket (`\[id]`, whose
+# group a strip would leave as a bare backslash) make the whole section malformed with the token
+# `bracket`, in both modes: a glob that would match a character class instead of the name written
+# is the fail-open this closes. A reader that hands the entry to the case pattern reports the
+# section as declared.
+case_governance_bracket_malformed() {
+  local e
+  gov_dir="$(mk_gov_repo governance-bracket-malformed)"
+  printf 'seed\n' > "$gov_dir/seed.txt"
+  while IFS= read -r e; do
+    gov_bracket_row "$e" "$e"
+  done <<'EOF'
+src/[0-9]*.sql
+[!x]
+docs/[a-z]/
+[12]
+docs/[x
+docs/x]
+[...]
+[1abc]
+[[id]
+[id]]
+[[...]]
+app/[id]/[0-9].ts
+pages/\[id].tsx
+app/api/\[...slug]/
+docs/x\]
+EOF
+  gov_bracket_row "$(printf 'docs/[a\001z]/')" 'docs/[a?z]/'
+}
+
+# governance-bracket-sed-fails — the sed that checks an entry's brackets, and the one that rewrites
+# each '[' as a literal, are fail-closed: a sed replaced by a stub that exits 2 on one program (the
+# validation, then the rewrite), first on PATH, turns a route-parameter entry into a malformed
+# `bracket` section in both modes, never `declared`. An empty validation result reads as "no
+# bracket left", so a skipped status check would let the section through. The control row, a stub
+# that fails on nothing, keeps the entry declared.
+case_governance_bracket_sed_fails() {
+  local dir base head real_sed stubs marker
+  dir="$(mk_gov_repo governance-bracket-sed-fails)"
+  printf '# CLAUDE.md\n\n## Governance paths\n```\npages/[id].tsx\n```\n' > "$dir/CLAUDE.md"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/pages"
+  printf 'x\n' > "$dir/pages/i.tsx"
+  head="$(gov_commit "$dir")"
+  real_sed="$(command -v sed)"
+  stubs="$tmpbase/governance-stub-sed"
+  mkdir -p "$stubs"
+  printf '#!/bin/sh\ncase "$*" in *"$GOV_TEST_SED_FAIL"*) exit 2 ;; esac\nexec %s "$@"\n' "$real_sed" > "$stubs/sed"
+  chmod +x "$stubs/sed"
+  for marker in 'A-Za-z_' '[[]'; do
+    GOV_TEST_SED_FAIL="$marker" PATH="$stubs:$PATH" run_gov "$dir" "$base" "$head"
+    expect_rc 1
+    res_expect_exact "[$marker] floor stdout" "verdict=error" "$gov_out"
+    expect_gov_err "bracket"
+    GOV_TEST_SED_FAIL="$marker" PATH="$stubs:$PATH" run_gov "$dir" --check "$dir/CLAUDE.md"
+    expect_rc 0
+    res_expect_exact "[$marker] --check" "malformed bracket" "$gov_out"
+  done
+  GOV_TEST_SED_FAIL='no-such-program-text' PATH="$stubs:$PATH" run_gov "$dir" --check "$dir/CLAUDE.md"
+  expect_rc 0
+  res_expect_exact "control --check" "declared 1" "$gov_out"
+  GOV_TEST_SED_FAIL='no-such-program-text' PATH="$stubs:$PATH" run_gov "$dir" "$base" "$head"
+  expect_rc 0
+  res_expect_exact "control floor" "changed: pages/i.tsx
+verdict=none" "$gov_out"
+}
+
 # ---------------------------------------------------------------------------------------------
 # bin/reserve-paths.sh (#552), run directly via run_res on mk_gov_repo fixtures (diff mode and
 # --check mode), and through the doctor on mk_repo fixtures. Every case that compares a whole
@@ -2948,37 +3279,15 @@ verdict=reserved" "$gov_out"
 }
 
 # res_symlink_error_row SHAPE REASON — one error row of reserve-symlink-claude-md: a repo whose
-# base tree holds a CLAUDE.md the one-hop rule cannot read (built by SHAPE), a head that adds a
-# path under migrations/. Diff mode must exit 1 with verdict=error last, no reserved: line and
-# never absent; stderr names the symlink and carries REASON, the one check that rejects this shape
-# (a later check would reject some shapes too, with another reason, so REASON is what pins each
-# check on its own).
+# base tree holds a CLAUDE.md the one-hop rule cannot read (built by link_shape, the builder
+# governance-symlink-error shares), a head that adds a path under migrations/. Diff mode must exit
+# 1 with verdict=error last, no reserved: line and never absent; stderr names the symlink and
+# carries REASON, the one check that rejects this shape (a later check would reject some shapes
+# too, with another reason, so REASON is what pins each check on its own).
 res_symlink_error_row() {
   local shape="$1" reason="$2" dir base head
   dir="$(mk_gov_repo "reserve-symlink-$shape")"
-  case "$shape" in
-    absolute) ln -s /etc/hosts "$dir/CLAUDE.md" ;;
-    escapes) ln -s ../AGENTS.md "$dir/CLAUDE.md" ;;
-    missing) ln -s NOPE.md "$dir/CLAUDE.md" ;;
-    missing-dir) ln -s nodir/AGENTS.md "$dir/CLAUDE.md" ;;
-    dot-segment) ln -s ./AGENTS.md "$dir/CLAUDE.md"; res_claude_md "$dir/AGENTS.md" 'migrations/' ;;
-    self) ln -s CLAUDE.md "$dir/CLAUDE.md" ;;
-    control) ln -s "$(printf 'a\tb')" "$dir/CLAUDE.md" ;;
-    chained)
-      res_claude_md "$dir/B.md" 'migrations/'
-      ln -s B.md "$dir/A.md"
-      ln -s A.md "$dir/CLAUDE.md"
-      ;;
-    directory)
-      mkdir "$dir/docs"
-      printf 'x\n' > "$dir/docs/x"
-      ln -s docs "$dir/CLAUDE.md"
-      ;;
-    claude-dir)
-      mkdir "$dir/CLAUDE.md"
-      printf 'x\n' > "$dir/CLAUDE.md/f"
-      ;;
-  esac
+  link_shape "$dir" "$shape"
   base="$(gov_commit "$dir")"
   mkdir -p "$dir/migrations"
   printf 'x\n' > "$dir/migrations/0001.sql"
@@ -2993,17 +3302,45 @@ res_symlink_error_row() {
     *) expect_gov_err "is a symlink to" ;;
   esac
   expect_gov_err "$reason"
+  [ "$shape" != control ] || expect_gov_err "'a?b'"
+}
+
+# mutant:597-res-dot-slash — deletes the leading-`./` strip from diff mode's base-tree link read,
+#   so a CLAUDE.md -> ./AGENTS.md link is rejected for its `.` segment.
+
+# res_follow_row NAME LINK — one success row of reserve-symlink-claude-md: a repo whose CLAUDE.md is
+# a symlink with text LINK to AGENTS.md, which reserves migrations/. Diff mode follows the link one
+# hop in the base tree and reports the head's migrations/0001.sql; --check agrees.
+res_follow_row() {
+  local name="$1" link="$2" dir base head
+  dir="$(mk_gov_repo "reserve-symlink-$name")"
+  res_claude_md "$dir/AGENTS.md" 'migrations/'
+  ln -s "$link" "$dir/CLAUDE.md"
+  base="$(gov_commit "$dir")"
+  mkdir -p "$dir/migrations"
+  printf 'x\n' > "$dir/migrations/0001.sql"
+  head="$(gov_commit "$dir")"
+  run_res "$dir" "$base" "$head"
+  expect_rc 0
+  res_expect_exact "[$link] stdout" "reserved: migrations/0001.sql
+verdict=reserved" "$gov_out"
+  res_expect_exact "[$link] stderr" "" "$gov_err"
+  run_res "$dir" --check "$dir/CLAUDE.md"
+  expect_rc 0
+  res_expect_exact "[$link] --check agrees" "declared 1 0" "$gov_out"
 }
 
 # reserve-symlink-claude-md — a CLAUDE.md that is a symlink in the base tree (the common
-# CLAUDE.md -> AGENTS.md layout) is followed ONE hop inside that tree: the reserve in the target
-# applies (directly beside it, or in a subdirectory), --check, which reads through the filesystem,
-# agrees, and a target without a section is verdict=absent, so a repo with the layout and no
-# reserve is never stopped. A link that is absolute, escapes, is missing, names a missing
-# directory, uses a `.` segment, points at itself or at another symlink, holds a control
-# character, or names a directory is an error, never absent; so is a CLAUDE.md tree entry that is
-# a directory. A reader that treats the link text as the file, or a missing CLAUDE.md as absent,
-# reports absent for the first row.
+# CLAUDE.md -> AGENTS.md layout, plain or written with one or two leading ./ segments) is followed
+# ONE hop inside that tree: the reserve in the target applies (directly beside it, or in a
+# subdirectory), --check, which reads through the filesystem, agrees, and a target without a
+# section is verdict=absent, so a repo with the layout and no reserve is never stopped. A link that
+# is absolute, escapes, is missing, names a missing directory, has an inner `.` segment, is a bare
+# `./` or `.//AGENTS.md`, goes through a symlinked directory, differs from its target in case,
+# points at itself or at another symlink, holds a control character, or names a directory is an
+# error, never absent; so is a CLAUDE.md tree entry that is a directory. A reader that treats the
+# link text as the file, or a missing CLAUDE.md as absent, reports absent for the first row; one
+# that rejects a leading `./` errors on the follow rows.
 case_reserve_symlink_claude_md() {
   local dir base head
   dir="$(mk_gov_repo reserve-symlink-claude-md)"
@@ -3045,11 +3382,18 @@ verdict=reserved" "$gov_out"
   expect_rc 0
   res_expect_exact "target without a section: stdout" "verdict=absent" "$gov_out"
 
+  res_follow_row follow-dot-slash ./AGENTS.md
+  res_follow_row follow-dot-slash-twice ././AGENTS.md
+
   res_symlink_error_row absolute "is an absolute path"
   res_symlink_error_row escapes "is not a plain relative path"
   res_symlink_error_row missing "points at a missing file"
   res_symlink_error_row missing-dir "whose directory is missing from that tree"
   res_symlink_error_row dot-segment "is not a plain relative path"
+  res_symlink_error_row dot-slash-only "is not a plain relative path"
+  res_symlink_error_row dot-slash-double "is not a plain relative path"
+  res_symlink_error_row linked-dir "whose directory is missing from that tree"
+  res_symlink_error_row case-mismatch "points at a missing file"
   res_symlink_error_row self "points at another symlink"
   res_symlink_error_row control "holds a control character"
   res_symlink_error_row chained "points at another symlink"
@@ -8264,11 +8608,16 @@ cases=(
   "gov-doctor-unterminated|case_gov_doctor_unterminated|governance-paths.sh --check via the doctor: an opening fence never closed -> WARN malformed (unterminated-fence), never FAIL"
   "gov-doctor-leading-slash|case_gov_doctor_leading_slash|governance-paths.sh --check via the doctor: a glob starting '/' -> WARN malformed (leading-slash), never FAIL"
   "gov-doctor-script-missing|case_gov_doctor_script_missing|governance-paths.sh --check via the doctor: the fixture's own bin/governance-paths.sh deleted -> WARN could not validate, never FAIL"
+  "governance-symlink-claude-md|case_governance_symlink_claude_md|#596, #597: governance-paths.sh floor mode follows a CLAUDE.md symlink in the base tree one hop (plain, with one or two leading ./ segments, or into a subdirectory) so the declared section holds and --check agrees; a target without a section means built-in rules only (verdict=none, --check absent)"
+  "governance-symlink-error|case_governance_symlink_error|#596: governance-paths.sh floor mode: an absolute, escaping, missing, missing-directory, inner-dot-segment, bare ./, .//, symlinked-directory, case-mismatched, self, chained, directory or control-character link, and a CLAUDE.md directory, is verdict=error rc 1 alone on stdout, never built-in-only"
+  "governance-route-brackets|case_governance_route_brackets|#595: governance-paths.sh: a route-parameter bracket group ([id], [...slug], [[id]], [[...slug]]) in a declared glob matches literally, never as a character class; * and ? keep their meaning beside a group; a bracket in a comment line is ignored"
+  "governance-bracket-malformed|case_governance_bracket_malformed|#595: governance-paths.sh: a bracket outside a route-parameter group, or a backslash in an entry holding a bracket, makes the whole section malformed -> --check prints malformed bracket, floor mode verdict=error rc 1 alone on stdout, stderr names bracket and never the entry"
+  "governance-bracket-sed-fails|case_governance_bracket_sed_fails|#595: governance-paths.sh: a sed that exits 2 while checking an entry's brackets, or while rewriting them as literals, makes the section malformed (bracket) in both modes, never declared"
   "reserve-dialect|case_reserve_dialect|#552: reserve-paths.sh diff mode: one base section with every dialect clause (case fold, unanchored any-depth match, * crossing /, trailing-slash and **/ forms, segment alignment, literal route brackets, a not reserved: line ignored) and a head with one path per clause plus a rename out of a reserved directory -> exactly the reserved paths print, in diff order"
   "reserve-none|case_reserve_none|#552: reserve-paths.sh diff mode: a declared section that matches nothing that changed -> verdict=none alone, empty stderr"
   "reserve-absent|case_reserve_absent|#552: reserve-paths.sh: no section, or no CLAUDE.md, at the base -> verdict=absent alone, rc 0; --check on a section-less file prints absent"
   "reserve-from-base|case_reserve_from_base|#552: reserve-paths.sh diff mode: the head deletes the section and adds a path the base reserved -> still reserved, the base's section applies"
-  "reserve-symlink-claude-md|case_reserve_symlink_claude_md|#552: reserve-paths.sh diff mode: a CLAUDE.md symlink in the base tree is followed one hop (beside it or in a subdirectory) and --check agrees; a target without a section is absent; an absolute, escaping, missing, self, chained, directory, dot-segment or control-character link, and a CLAUDE.md directory, is verdict=error rc 1, never absent"
+  "reserve-symlink-claude-md|case_reserve_symlink_claude_md|#552: reserve-paths.sh diff mode: a CLAUDE.md symlink in the base tree is followed one hop (beside it, in a subdirectory, or written with one or two leading ./ segments) and --check agrees; a target without a section is absent; an absolute, escaping, missing, self, chained, directory, inner-dot-segment, bare ./, .//, symlinked-directory, case-mismatched or control-character link, and a CLAUDE.md directory, is verdict=error rc 1, never absent"
   "reserve-capture-fails-closed|case_reserve_capture_fails_closed|#552: reserve-paths.sh: awk, sed or tr replaced by a stub that exits 2, or a single awk call (heading, slice, fence, body, matcher) failing or, for the heading and fence checks, printing nothing -> diff mode verdict=error rc 1 (never absent, none or reserved) and --check exits non-zero with empty stdout"
   "reserve-section-shape|case_reserve_section_shape|#552: reserve-paths.sh: a title at depth three with a deeper sub-heading inside it is read, only its first fenced block counts, a sibling heading ends it before any fence (no-fence), and a title with trailing text is not the section (absent)"
   "reserve-diff-relative|case_reserve_diff_relative|#552: reserve-paths.sh: run from a subdirectory with diff.relative=true, diff mode still lists a reserved path outside it and --check a schema path outside it (cd to the toplevel)"

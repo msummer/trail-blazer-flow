@@ -81,10 +81,11 @@
 # named exactly CLAUDE.md decides what is read.
 #   - A plain file (mode 100644 or 100755) is read as it is.
 #   - A symlink (mode 120000, e.g. CLAUDE.md -> AGENTS.md) is followed exactly ONE hop, inside the
-#     base tree: its text must be a plain relative path (no leading '/', no empty, `.` or `..`
-#     segment, no control character) naming a plain file of that same tree, which is then read. A
-#     link that is absolute, escapes, is missing, names another symlink, or names a directory is an
-#     error, never `absent`.
+#     base tree: its text, after any leading `./` segments are dropped, must be a plain relative
+#     path (no leading '/', no empty, `.` or `..` segment, no control character) naming a plain
+#     file of that same tree, which is then read. A link that is absolute, escapes, is missing,
+#     names another symlink, a symlinked directory or a directory is an error, never `absent`.
+#     bin/governance-paths.sh reads its CLAUDE.md the same way, so the two stay identical by hand.
 #   - No entry named exactly CLAUDE.md (a file tracked as claude.md is not read), or an entry that
 #     is not a file or a symlink, is `absent` and an error respectively.
 #
@@ -121,10 +122,10 @@
 # Honest limits: only the first fenced block is read; the heading search is not fence-aware (the
 # same as bin/governance-paths.sh); only the first unreadable entry is reported; --check reads the
 # working-tree file through the filesystem, so on a symlink (or, on a case-insensitive filesystem,
-# a file tracked as claude.md) it can differ from diff mode's exact-name read of the base tree; a
-# symlink written ./AGENTS.md has a `.` segment and is an error in diff mode; and two hand-made link
-# texts are misread rather than refused: one ending in a newline (a command substitution strips it)
-# and one equal to git's quoted form of another tree name (the listing is matched as printed).
+# a file tracked as claude.md) it can differ from diff mode's exact-name read of the base tree, and
+# so can report a section as declared for a symlink diff mode rejects; and two hand-made link texts
+# are misread rather than refused: one ending in a newline (a command substitution strips it) and
+# one equal to git's quoted form of another tree name (the listing is matched as printed).
 set -uo pipefail
 export LC_ALL=C
 
@@ -431,6 +432,12 @@ read_claude_md_at_base() {
         *[[:cntrl:]]*) reason="holds a control character" ;;
       esac
       if [ -z "$reason" ]; then
+        while :; do
+          case "$target" in
+            ./*) target="${target#./}" ;;
+            *) break ;;
+          esac
+        done
         case "/$target/" in
           *//*|*/./*|*/../*) reason="is not a plain relative path (it has an empty, . or .. segment)" ;;
         esac
