@@ -83,7 +83,9 @@
 # diff mode ignores), every unreadable entry and section fault failing closed in both modes, the
 # base-tip-only read, the buffered output, every bad-argument and git-failure path, the read-only
 # guarantee, and --check's schema classification — plus the doctor's own reserve validator and
-# schema WARN around it (never FAIL), and (#408) bin/codex-setup.sh — the Codex compatibility installer, whose own
+# schema WARN around it (never FAIL), (#614) the doctor's contract-file-name check — it reads the
+# index, FAILs a contract git tracks under another case of claude.md, WARNs when the listing fails,
+# and skips both validators above in either case — and (#408) bin/codex-setup.sh — the Codex compatibility installer, whose own
 # `--check` drift mode is #410's companion, hence living here rather than in a new suite — run
 # directly against a fake Codex plugin-cache install (mk_cx_plugin, a copy of this checkout's
 # bin/*.sh, agents/*.md and templates/codex.rules) and fixture repos it builds for that purpose
@@ -3981,6 +3983,154 @@ case_reserve_doctor_script_missing() {
   run_doctor "$dir" "$stub_gh_dir:$PATH"
   expect_rc 0
   expect "WARN  autonomy reserve: could not validate"
+}
+
+# contract-name-* (#614) — the doctor reads `git ls-files` and FAILs a contract that git tracks under
+# another case of claude.md, then skips its governance and reserve checks (the merge floor and the
+# reserve match read only the base-tree entry named exactly CLAUDE.md, which a case-insensitive
+# filesystem hides by opening claude.md as CLAUDE.md anyway). Every layout is built through the
+# index (`git update-index --add --cacheinfo`), never by renaming the file on disk, so a
+# case-sensitive filesystem and a case-insensitive one give the same "readable CLAUDE.md, index
+# holds only a case variant" layout; each case checks its own preconditions, so a platform where
+# the layout does not hold fails the case instead of passing vacuously.
+
+# cn_contract DIR — appends a well-formed "Autonomy reserve" section to a gov-declared CLAUDE.md,
+# so one file declares both sections the doctor would otherwise PASS.
+cn_contract() {
+  printf '\n## Autonomy reserve\n```\nCLAUDE.md\n```\n' >> "$1/CLAUDE.md"
+}
+
+# cn_index_add DIR NAME — adds an index entry NAME, a blob with nothing on disk under that name.
+cn_index_add() {
+  local blob
+  blob="$(cd "$1" && printf 'x\n' | git hash-object -w --stdin)"
+  (cd "$1" && git update-index --add --cacheinfo "100644,$blob,$2") >/dev/null
+}
+
+# cn_expect_listing LABEL DIR EXPECTED — a precondition: `git ls-files` in DIR prints exactly EXPECTED.
+cn_expect_listing() {
+  res_expect_exact "$1: git ls-files" "$3" "$(cd "$2" && git ls-files)"
+}
+
+# cn_expect_readable LABEL DIR — a precondition: DIR/CLAUDE.md is a readable file, so the doctor's
+# working-tree reads open it whatever the index holds.
+cn_expect_readable() {
+  [ -f "$2/CLAUDE.md" ] && [ -r "$2/CLAUDE.md" ] || { __ok=0; __why="${__why}$1: CLAUDE.md is not a readable file\n"; }
+}
+
+# cn_expect_one_fail LABEL — the doctor's output holds exactly one FAIL line, the contract-file one.
+cn_expect_one_fail() {
+  res_expect_exact "$1: FAIL lines" "1" "$(grep -c '^  FAIL  ' <<<"$doctor_out")"
+}
+
+# contract-name-case-variant — the index holds only a case variant of claude.md next to a readable
+# CLAUDE.md: one FAIL naming the variant and its git mv, rc 1, and neither a governance nor a
+# reserve line, even though CLAUDE.md declares both sections well-formed. A second row, with no
+# section declared at all and a mixed-case name, shows the FAIL depends on neither. No row has a
+# commit, so this also covers a repo with no commits.
+# mutant:614-contract-name-ignored — emptying the doctor's list of tracked claude.md variants
+#   (`cm_tracked=""`) reproduces #614: the variant draws no FAIL, rc stays 0, and the governance and
+#   reserve checks PASS on the working-tree file again.
+case_contract_name_case_variant() {
+  local dir
+  dir="$(mk_repo contract-name-case-variant gov-declared verbatim)"
+  cn_contract "$dir"
+  cn_index_add "$dir" claude.md
+  cn_expect_listing "lowercase" "$dir" "claude.md"
+  cn_expect_readable "lowercase" "$dir"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 1
+  cn_expect_one_fail "lowercase"
+  expect "FAIL  contract file: git tracks it as 'claude.md', not CLAUDE.md"
+  expect "git mv claude.md CLAUDE.md"
+  expect_absent "governance paths:"
+  expect_absent "autonomy reserve:"
+  dir="$(mk_repo contract-name-mixed-case base verbatim)"
+  cn_index_add "$dir" Claude.md
+  cn_expect_listing "mixed case" "$dir" "Claude.md"
+  cn_expect_readable "mixed case" "$dir"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 1
+  cn_expect_one_fail "mixed case"
+  expect "FAIL  contract file: git tracks it as 'Claude.md', not CLAUDE.md"
+  expect "git mv Claude.md CLAUDE.md"
+  expect_absent "governance paths:"
+  expect_absent "autonomy reserve:"
+}
+
+# contract-name-exact — the index holds exactly CLAUDE.md, as a regular file and as a symlink to a
+# tracked AGENTS.md (the layout bin/governance-paths.sh and bin/reserve-paths.sh follow one hop for):
+# no contract-file line, rc 0, and both PASS lines as before.
+case_contract_name_exact() {
+  local dir
+  dir="$(mk_repo contract-name-exact gov-declared verbatim)"
+  cn_contract "$dir"
+  (cd "$dir" && git add CLAUDE.md) >/dev/null
+  cn_expect_listing "regular file" "$dir" "CLAUDE.md"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect_absent "contract file:"
+  expect "PASS  governance paths: 3 declared glob(s)"
+  expect "PASS  autonomy reserve: 1 glob(s), 0 'not reserved:' line(s)"
+  dir="$(mk_repo contract-name-exact-link gov-declared verbatim)"
+  cn_contract "$dir"
+  mv "$dir/CLAUDE.md" "$dir/AGENTS.md"
+  ln -s AGENTS.md "$dir/CLAUDE.md"
+  (cd "$dir" && git add CLAUDE.md AGENTS.md) >/dev/null
+  cn_expect_listing "symlink" "$dir" "AGENTS.md
+CLAUDE.md"
+  [ -L "$dir/CLAUDE.md" ] || { __ok=0; __why="${__why}symlink: CLAUDE.md is not a symlink\n"; }
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect_absent "contract file:"
+  expect "PASS  governance paths: 3 declared glob(s)"
+  expect "PASS  autonomy reserve: 1 glob(s), 0 'not reserved:' line(s)"
+}
+
+# contract-name-untracked — a CLAUDE.md that is not in the index (a fresh repo with nothing staged,
+# the normal state while setup leaves an approved contract for the human) draws no contract-file line
+# and the same two PASS lines. A second row stages only names that are not a root-level case variant
+# of claude.md (a nested docs/claude.md, claude.md.bak): still no line.
+case_contract_name_untracked() {
+  local dir
+  dir="$(mk_repo contract-name-untracked gov-declared verbatim)"
+  cn_contract "$dir"
+  cn_expect_listing "nothing staged" "$dir" ""
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect_absent "contract file:"
+  expect "PASS  governance paths: 3 declared glob(s)"
+  expect "PASS  autonomy reserve: 1 glob(s), 0 'not reserved:' line(s)"
+  dir="$(mk_repo contract-name-other-names gov-declared verbatim)"
+  cn_contract "$dir"
+  cn_index_add "$dir" docs/claude.md
+  cn_index_add "$dir" claude.md.bak
+  cn_expect_listing "other names" "$dir" "claude.md.bak
+docs/claude.md"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect_absent "contract file:"
+  expect "PASS  governance paths: 3 declared glob(s)"
+  expect "PASS  autonomy reserve: 1 glob(s), 0 'not reserved:' line(s)"
+}
+
+# contract-name-git-error — a corrupt index makes `git ls-files` fail: one "could not check" WARN,
+# no FAIL from this check, rc 0, and neither a governance nor a reserve line (a failed listing
+# confirms nothing, so both checks are skipped rather than PASSed).
+case_contract_name_git_error() {
+  local dir
+  dir="$(mk_repo contract-name-git-error gov-declared verbatim)"
+  cn_contract "$dir"
+  printf 'not an index' > "$dir/.git/index"
+  if (cd "$dir" && git ls-files) >/dev/null 2>&1; then
+    __ok=0; __why="${__why}precondition: git ls-files succeeded on a corrupt index\n"
+  fi
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "WARN  contract file: could not check"
+  expect_absent "FAIL  contract file"
+  expect_absent "governance paths:"
+  expect_absent "autonomy reserve:"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -8635,6 +8785,10 @@ cases=(
   "reserve-doctor-inactive|case_reserve_doctor_inactive|#552: the doctor with no reserve section and auto-approval off -> no autonomy reserve line at all, whatever is tracked"
   "reserve-doctor-malformed|case_reserve_doctor_malformed|#552: the doctor with a reserve entry in a character class, auto-approval off -> WARN section is malformed naming the token and the entry, rc 0, no schema line"
   "reserve-doctor-script-missing|case_reserve_doctor_script_missing|#552: the doctor with the fixture's reserve-paths.sh deleted, exiting non-zero, or printing an unknown first line -> WARN could not validate each time, rc 0"
+  "contract-name-case-variant|case_contract_name_case_variant|#614: the doctor with the index holding only claude.md or Claude.md next to a readable CLAUDE.md -> one FAIL naming the name and its git mv, rc 1, no governance paths or autonomy reserve line even with both sections declared"
+  "contract-name-exact|case_contract_name_exact|#614: the doctor with the index holding exactly CLAUDE.md, as a regular file and as a symlink to a tracked AGENTS.md -> no contract file line, rc 0, both PASS lines unchanged"
+  "contract-name-untracked|case_contract_name_untracked|#614: the doctor with CLAUDE.md untracked, or only a nested docs/claude.md and a claude.md.bak tracked -> no contract file line, rc 0, both PASS lines unchanged"
+  "contract-name-git-error|case_contract_name_git_error|#614: the doctor with a corrupt index -> WARN could not check, no contract file FAIL, rc 0, no governance paths or autonomy reserve line"
   "codex-setup-fresh|case_codex_setup_fresh|#408: no AGENTS.md: rc 0, all five files wrote=, no AGENTS.md created, config.toml carries the CLAUDE.md fallback, and the three next: lines including codex --no-daemon"
   "codex-setup-idempotent|case_codex_setup_idempotent|#408: a second run gives only unchanged= lines and byte-identical files; --check afterward is rc 0 with no drift="
   "codex-setup-agents-roundtrip|case_codex_setup_agents_roundtrip|#408: each agent TOML's name/description/developer_instructions round-trips against agents/*.md, byte-identical body, no tools/model lines"

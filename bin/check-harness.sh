@@ -57,7 +57,12 @@
 # own governance-path classifier, bin/governance-paths.sh, run here by a FIXED path (same
 # precedent as bin/harness-version.sh) via its `--check` mode — is absent, declared (naming the
 # glob count), or malformed (naming the reason token); never FAILs, and never runs the classifier
-# against anything but this repo's own CLAUDE.md.
+# against anything but this repo's own CLAUDE.md. The reserve and governance checks run only after
+# (#614) a contract-file-name check reads `git ls-files`: a root-level entry that is a case variant
+# of claude.md with none named exactly CLAUDE.md (which a case-insensitive filesystem opens as
+# CLAUDE.md anyway, while the merge floor and the reserve match read only the exact name) is a FAIL
+# naming the `git mv`, a failed listing is a WARN, and either skips both checks, so neither can
+# PASS; an untracked CLAUDE.md is not reported, with or without commits.
 #
 # --provider codex (#410, default: claude) runs a different, additive check set after the shared
 # preamble above instead of the settings/toolchain/policy-activation checks below (all skipped on
@@ -1349,12 +1354,41 @@ EOF
     fi
   fi
 
+  # --- contract file name (#614) --- the merge floor's governance read (bin/governance-paths.sh)
+  # and the implementer's reserve match (bin/reserve-paths.sh) take the base tree's entry named
+  # exactly CLAUDE.md and nothing else. On a case-insensitive filesystem (macOS, Windows) a repo
+  # that tracks claude.md still has $root/CLAUDE.md openable, so the two checks below, which read
+  # the working-tree file, would PASS while those reads find no section. This reads the index
+  # (`git ls-files`, plain, not -z: git quotes a name holding a control character, so an embedded
+  # newline cannot forge a CLAUDE.md line, and a case variant of claude.md never needs quoting) and
+  # FAILs when a root-level entry matches claude.md ignoring ASCII case (LC_ALL=C) but none is named
+  # exactly CLAUDE.md, naming the rename. The printed name is a whole-line match, so it can only be
+  # a case variant of claude.md. $cm_name_ok then gates the reserve and governance checks below: a
+  # FAIL or a failed listing skips both, so neither can PASS. A failed `git ls-files` is a WARN: the
+  # doctor cannot confirm the name, so it PASSes nothing that depends on it. An untracked CLAUDE.md is
+  # not reported, with or without commits: the index is what is read, and an approved
+  # CLAUDE.md is left uncommitted for the human during setup. Nothing read from the repo is
+  # executed or expanded.
+  cm_name_ok=true
+  if cm_ls="$(git ls-files 2>/dev/null)"; then
+    cm_tracked="$(LC_ALL=C grep -ixF -- 'claude.md' <<<"$cm_ls")"
+    if [ -n "$cm_tracked" ] && ! grep -qxF -- 'CLAUDE.md' <<<"$cm_tracked"; then
+      cm_name_ok=false
+      IFS= read -r cm_variant <<<"$cm_tracked"
+      bad "contract file: git tracks it as '$cm_variant', not CLAUDE.md — the merge floor and the implementer read only an entry named exactly CLAUDE.md, so neither section is ever applied even though a case-insensitive filesystem opens this file; this doctor skips its reserve and governance checks until the file is renamed: git mv $cm_variant CLAUDE.md, then commit"
+    fi
+  else
+    cm_name_ok=false
+    wrn "contract file: could not check that git tracks it as exactly CLAUDE.md (git ls-files failed) — the reserve and governance checks are skipped"
+  fi
+
   # --- autonomy reserve (#552) --- validates the optional "Autonomy reserve" section (README
   # item 7) that the implementer orchestrator hands to bin/reserve-paths.sh before every verifier
   # dispatch, and, only while plan auto-approval is active (a "Plan auto-approval policy" section,
   # or `mode: autonomous`), reports the repo's tracked schema paths that no reserve glob covers
   # (an advice-only WARN) or that a `not reserved:` line leaves out on purpose (a PASS). Runs only
-  # when the section exists or auto-approval is active, by a FIXED path,
+  # when the contract-file check above confirmed the name, and only when the section exists or
+  # auto-approval is active, by a FIXED path,
   # $script_dir/reserve-paths.sh --check "$root/CLAUDE.md" — same precedent as the governance
   # check below — never a path derived from repo content. Missing, non-executable, a non-zero
   # exit, or a first line outside the three shapes the script documents is the same "could not
@@ -1365,7 +1399,7 @@ EOF
   if $autonomy_on || has_policy_section "Plan auto-approval policy"; then
     auto_approval_on=true
   fi
-  if $has_reserve || $auto_approval_on; then
+  if $cm_name_ok && { $has_reserve || $auto_approval_on; }; then
     res_script="$script_dir/reserve-paths.sh"
     res_out=""
     res_valid=false
@@ -1418,10 +1452,14 @@ EOF
   # git object). Missing, non-executable, a non-zero exit, or any stdout shape but the three the
   # script documents (absent / declared <n> / malformed <token>) is the same "could not validate"
   # WARN, never a FAIL — this doctor never blocks a run on this, matching the ratchet and
-  # post-merge-verification declaration checks above.
+  # post-merge-verification declaration checks above. Runs only when the contract-file check
+  # (#614) above confirmed the name; the first arm below is that skip, kept as an arm of the same
+  # chain so the arms after it keep their indentation.
   gov_script="$script_dir/governance-paths.sh"
   gov_out=""
-  if [ -x "$gov_script" ] && gov_out="$("$gov_script" --check "$root/CLAUDE.md" 2>/dev/null)"; then
+  if ! $cm_name_ok; then
+    :
+  elif [ -x "$gov_script" ] && gov_out="$("$gov_script" --check "$root/CLAUDE.md" 2>/dev/null)"; then
     case "$gov_out" in
       absent)
         ok "governance paths: none declared" ;;

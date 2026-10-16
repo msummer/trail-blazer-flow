@@ -6,8 +6,11 @@
 
 ## The CLAUDE.md contract (required)
 
-These skills assume the repo has a **`CLAUDE.md`** documenting the project-specifics the generic
-subagents need:
+These skills assume the repo has a **`CLAUDE.md`**, committed under exactly that name (the
+base-tree reads of items 7 and 10 take only an entry named exactly `CLAUDE.md`, and on Claude Code
+`check-harness.sh` FAILs a contract that git tracks under another case, such as `claude.md`, which
+a case-insensitive filesystem still opens as `CLAUDE.md`), documenting the project-specifics the
+generic subagents need:
 
 1. **Conventions & architecture** — stack, code style, patterns, security/data rules.
 2. **Verification commands** — the checks that define "done" (typecheck/lint/tests/build or the
@@ -212,7 +215,8 @@ subagents need:
    dropped); a link that is absolute, escapes, has an inner `.` segment, is missing, goes through a
    symlinked directory, differs in case from its target, or names another symlink or a directory
    is an error, never a silent "no reserve". Only an entry named exactly `CLAUDE.md` is read: a
-   file tracked as `claude.md` gives "no reserve". **The dialect:**
+   file tracked as `claude.md` gives "no reserve" (the doctor FAILs such a repo, below).
+   **The dialect:**
    matching ignores case; a glob matches from the start of any path segment to the end of a
    segment, at any depth, so `migrations/**` reserves `db/migrations/0001.sql` and `CLAUDE.md`
    reserves `pkg/sub/Claude.md`, while `docs/adr` does not reserve `docs/adr-notes/x.md`; `*`
@@ -252,7 +256,11 @@ subagents need:
    entry, never a FAIL. The doctor reads `CLAUDE.md` through the filesystem, so it can report the
    section as declared when `CLAUDE.md` is a symlink the one-hop rule above cannot follow; the
    implementer then fails closed, stopping with `reserve-unreadable` and the link in its message,
-   never open. While plan auto-approval is active (a
+   never open. When git tracks the contract only under another case, such as a `claude.md` that a
+   case-insensitive filesystem still opens as `CLAUDE.md`, the doctor instead FAILs, naming
+   `git mv claude.md CLAUDE.md`, and skips this check (and item 10's), so it never reports the
+   section as declared while the implementer reads none; an untracked `CLAUDE.md` is not reported.
+   While plan auto-approval is active (a
    "Plan auto-approval policy" section, or item 9's `mode: autonomous`) it also WARNs about tracked
    schema paths (`migrations`, `alembic/versions`, `prisma/schema.prisma`, `*.sql`, as `git`
    lists them) that no reserve glob covers, whether or not a reserve is declared; a path a
@@ -455,9 +463,12 @@ subagents need:
     section at all, PASSes `governance paths: none declared`, or, with a well-formed section,
     PASSes `governance paths: <n> declared glob(s)`. The doctor reads `CLAUDE.md` through the
     filesystem, so it can PASS a symlink the one-hop rule cannot follow; the merge pass then
-    fails closed on it. The rule's own words apply beyond any explicit list
-    too — a policy/ADR document or CI/build config under a name these rules don't match, and **any
-    doubt holds**. Only the merge pass's governance-path read (item 5) and the doctor's
+    fails closed on it. A contract that git tracks only under another case, such as a `claude.md`
+    that a case-insensitive filesystem still opens as `CLAUDE.md`, gets no PASS: the doctor FAILs,
+    naming `git mv claude.md CLAUDE.md`, and prints no `governance paths:` line, because the merge
+    pass reads no section from that repo (an untracked `CLAUDE.md` is not reported). The rule's own
+    words apply beyond any explicit list too — a policy/ADR document or CI/build config under a name
+    these rules don't match, and **any doubt holds**. Only the merge pass's governance-path read (item 5) and the doctor's
     validation ever read this section; nothing else in the harness does.
 
 The subagents read `CLAUDE.md` at the start of every task — it is the real input that makes

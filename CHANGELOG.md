@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #614: the Claude Code doctor FAILs when git tracks the contract as `claude.md` (any case but `CLAUDE.md`), which a
+  case-insensitive filesystem opened anyway while the merge floor and the reserve match read none of it, and skips its
+  governance paths and autonomy reserve checks. Consumer step: run the `git mv` the FAIL names.
 - #596 (with #595, #597): `governance-paths.sh` follows a `CLAUDE.md` symlink one hop (an unusable link holds every PR)
   and reads only a route-parameter `[...]` group as literal; both matchers accept `./AGENTS.md`. Consumer step: fix a
   `check-harness.sh` WARN that Governance paths is malformed (bracket), and check a `CLAUDE.md` symlink by hand.
