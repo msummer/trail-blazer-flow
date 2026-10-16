@@ -2160,6 +2160,21 @@
       "expect_fail": [
         "reserve-symlink-claude-md"
       ]
+    },
+    {
+      "name": "614-contract-name-ignored",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "contract-name-",
+      "edits": [
+        {
+          "from": "    cm_tracked=\"$(LC_ALL=C grep -ixF -- 'claude.md' <<<\"$cm_ls\")\"\n",
+          "to": "    cm_tracked=\"\"\n"
+        }
+      ],
+      "expect_fail": [
+        "contract-name-case-variant"
+      ]
     }
   ]
 }

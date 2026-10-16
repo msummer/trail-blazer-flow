@@ -711,7 +711,8 @@ backslash in a bracketed entry; until then, under merge autonomy every PR is hel
 is a symlink, check by hand that its target is a file inside the repo, written as a relative path
 with no `..` or inner `.` segment, through no symlinked directory, in the file's exact case, and not
 itself a symlink; the doctor does not check it, and an unusable link holds every PR and stops every
-implementation before verification.
+implementation before verification. If `check-harness.sh` FAILs `contract file: git tracks it as
+'<name>'`, run the `git mv <name> CLAUDE.md` it names and commit.
 
 </details>
 
