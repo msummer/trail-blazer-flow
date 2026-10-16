@@ -29,7 +29,10 @@
 #       absent            — no "Governance paths" section
 #       declared <n>       — a well-formed section declaring <n> glob(s)
 #       malformed <token>  — see the malformed tokens below
-#     and exits 0. An unreadable FILE exits 2 (no line printed).
+#     and exits 0. An unreadable FILE exits 2 (no line printed). FILE is read through the
+#     filesystem, so a symlink is followed as the operating system follows it: this mode does not
+#     apply floor mode's one-hop rule below, and it can report a section as declared for a
+#     CLAUDE.md symlink that floor mode refuses.
 #
 # Governance rules (README "The CLAUDE.md contract", item 10). A changed path is governance when
 # EITHER of these fires (declared globs only ever ADD holds — the result is the built-in test OR
@@ -39,6 +42,17 @@
 #     `action.yaml`.
 #   - Declared (only when the base tip's CLAUDE.md carries a well-formed "Governance paths"
 #     section — see below): the path matches one of the section's declared globs.
+#
+# The base tip's CLAUDE.md is read from the base TREE, not by path: the tree entry named exactly
+# CLAUDE.md decides what is read (bin/reserve-paths.sh reads it the same way).
+#   - A plain file (mode 100644 or 100755) is read as it is.
+#   - A symlink (mode 120000, e.g. CLAUDE.md -> AGENTS.md) is followed exactly ONE hop, inside the
+#     base tree: its text, after any leading `./` segments are dropped, must be a plain relative
+#     path (no leading '/', no empty, `.` or `..` segment, no control character) naming a plain file
+#     of that same tree, which is then read. A link that is absolute, escapes, is missing, names
+#     another symlink, a symlinked directory or a directory is an error, never "no section".
+#   - No entry named exactly CLAUDE.md (a file tracked as claude.md is not read) means no declared
+#     globs; an entry that is neither a file nor a symlink is an error.
 #
 # Declared globs (README item 10; ADVISORY defaults accepted for #331's approved plan):
 #   - read from a section titled exactly "Governance paths" (any '#' depth) in CLAUDE.md AT THE
@@ -51,12 +65,19 @@
 #     catches `ci/Jenkinsfile`);
 #   - a glob with a '/' matches the WHOLE repo-relative path, anchored at the repo root;
 #   - a trailing '/' means "everything beneath" (`docs/policies/` becomes `docs/policies/*`);
-#   - '*', '?', and '[...]' follow plain shell `case`-pattern (fnmatch) semantics — '*' crosses
-#     '/', so `**` is no different from `*`;
+#   - '*' and '?' follow plain shell `case`-pattern (fnmatch) semantics — '*' crosses '/', so `**`
+#     is no different from `*`;
+#   - '[' and ']' are literal, never a character class, but only in a route-parameter group:
+#     `[name]`, `[...name]`, `[[name]]` or `[[...name]]` with name = [A-Za-z_][A-Za-z0-9_]* (the
+#     same rule as bin/reserve-paths.sh), so `app/api/[...slug]/` matches
+#     `app/api/[...slug]/route.ts` and `pages/[id].tsx` matches exactly that file. A '[' or ']'
+#     anywhere else (`[0-9]`, `[a-z]`, `[!x]`, an unbalanced one), or a backslash in an entry
+#     that holds a bracket (`pages/\[id].tsx`), makes the WHOLE section malformed, token `bracket`;
 #   - a line starting '!' (negation) or '/' or './' (a leading slash) makes the WHOLE section
 #     malformed, fail-closed — a glob that would otherwise silently never match is exactly the
 #     failure this script exists to prevent, not something to tolerate;
-#   - no CLAUDE.md at the base tip at all ⇒ NOT an error — only the built-in rules apply;
+#   - no tree entry named exactly CLAUDE.md at the base tip ⇒ NOT an error — only the built-in
+#     rules apply;
 #   - CLAUDE.md present but no "Governance paths" section ⇒ same as above (no declared globs);
 #   - CLAUDE.md present with a "Governance paths" section that IS malformed ⇒ floor mode errors
 #     out (verdict=error, exit 1) rather than silently falling back to "built-in only" — a
@@ -87,9 +108,10 @@
 #     checked BEFORE any git call (so a value like `--output=/tmp/x` can never reach `git diff`
 #     and make it write an arbitrary file — option injection via a pasted argument);
 #   - not inside a git repository, or the base commit doesn't exist — exit 1;
-#   - the base tip's CLAUDE.md exists but can't be read as a blob — exit 1;
+#   - the base tree's CLAUDE.md entry can't be listed or read, is neither a file nor a symlink, or
+#     is a symlink the one-hop rule above rejects — exit 1;
 #   - the base tip's "Governance paths" section is malformed (see above) — exit 1, reason one of
-#     `no-fence`, `unterminated-fence`, `no-globs`, `negation`, `leading-slash`;
+#     `no-fence`, `unterminated-fence`, `no-globs`, `negation`, `leading-slash`, `bracket`;
 #   - `git diff` itself fails (bad head object, or any other git error) — exit 1, quoting git's
 #     own stderr;
 #   - the diff prints zero paths, INCLUDING when the two arguments name the same commit — exit 1
@@ -101,6 +123,9 @@
 # anything, and never mutates CLAUDE.md or any other file it reads.
 set -uo pipefail
 export LC_ALL=C
+
+NL=$'\n'
+TAB=$'\t'
 
 # error_out MESSAGE EXIT_CODE — the one exit path for every floor-mode/--check failure: MESSAGE to
 # stderr, then the single fixed line "verdict=error" to stdout (floor mode's contract: the last
@@ -116,14 +141,17 @@ error_out() {
 
 # parse_section — reads a CLAUDE.md's full text on stdin and sets four globals: gp_state
 # (absent|declared|malformed), gp_reason (a fixed token, only when malformed), gp_globs (the
-# declared globs, one per line, already lower-cased) and gp_count (their number). Never echoes a
+# declared globs, one per line, already lower-cased, each '[' written as the bracket expression
+# `[[]` so it matches only itself; an entry that holds a bracket and a backslash is malformed, so no
+# stored glob has a backslash before a '[') and gp_count (their number). Never echoes a
 # declared line. Fence-aware, depth-aware slice: same idiom as bin/check-harness.sh's
 # claude_md_section (its own header explains why: a fenced '#'-prefixed comment line is not a
 # heading, and a deeper nested sub-heading doesn't end the slice, only a sibling-or-shallower one
 # does), with the title fixed to "Governance paths" and reading stdin instead of a named file, so
-# both floor mode (piped the base tip's blob) and --check mode (piped a file) share one parser.
+# both floor mode (piped the CLAUDE.md the base tree names) and --check mode (piped a file) share
+# one parser.
 parse_section() {
-  local content heading_hit sec fence_status body line trimmed g lower_g n globs
+  local content heading_hit sec fence_status body line trimmed g lower_g n globs rest
   content="$(cat)"
   gp_state="absent"
   gp_reason=""
@@ -185,7 +213,38 @@ parse_section() {
       '!'*) gp_state="malformed"; gp_reason="negation"; return 0 ;;
       /*|./*) gp_state="malformed"; gp_reason="leading-slash"; return 0 ;;
     esac
+    # A '[' or ']' is literal only inside a route-parameter group (`[name]`, `[...name]`,
+    # `[[name]]`, `[[...name]]`, name = [A-Za-z_][A-Za-z0-9_]*; the same four forms and the same
+    # sed as bin/reserve-paths.sh's norm_glob). Strip those groups; any bracket left over would be a
+    # character class under case-pattern matching, which no reader of a path list expects, so the
+    # whole section is malformed, fail-closed (#595). A sed that cannot run is malformed too, and so
+    # is a backslash in an entry that holds a bracket: `\[id]` would leave the strip below only a
+    # backslash, and the rewrite of '[' would then turn `\[` into a character class.
+    case "$trimmed" in
+      *'['*|*']'*)
+        case "$trimmed" in
+          *'\'*) gp_state="malformed"; gp_reason="bracket"; return 0 ;;
+        esac
+        rest="$(printf '%s\n' "$trimmed" | sed -E \
+          -e 's/\[\[\.\.\.[A-Za-z_][A-Za-z0-9_]*\]\]//g' \
+          -e 's/\[\[[A-Za-z_][A-Za-z0-9_]*\]\]//g' \
+          -e 's/\[\.\.\.[A-Za-z_][A-Za-z0-9_]*\]//g' \
+          -e 's/\[[A-Za-z_][A-Za-z0-9_]*\]//g')" || \
+          { gp_state="malformed"; gp_reason="bracket"; return 0; }
+        case "$rest" in
+          *'['*|*']'*) gp_state="malformed"; gp_reason="bracket"; return 0 ;;
+        esac
+        ;;
+    esac
     lower_g="$(printf '%s' "$trimmed" | tr '[:upper:]' '[:lower:]')"
+    # Every surviving '[' opens a route-parameter group: rewrite it as the bracket expression `[[]`,
+    # which matches a literal '[' (a ']' outside any bracket expression is already literal).
+    case "$lower_g" in
+      *'['*)
+        lower_g="$(printf '%s' "$lower_g" | sed 's/\[/[[]/g')" || \
+          { gp_state="malformed"; gp_reason="bracket"; return 0; }
+        ;;
+    esac
     globs="${globs}${lower_g}
 "
     n=$((n + 1))
@@ -259,6 +318,109 @@ is_hex() {
   esac
 }
 
+# tree_entry TREEISH NAME — lists the tree TREEISH (`git cat-file -p`) and sets te_found (yes|no)
+# and, for the entry named exactly NAME, te_mode, te_type and te_sha. Returns 1 when the listing
+# itself fails. A name git quotes in the listing is matched in its quoted form, so it equals a NAME
+# only when NAME is that quoted text. (Twin of bin/reserve-paths.sh's tree_entry: no bin/ script
+# sources another, so the two copies are kept identical by hand.)
+tree_entry() {
+  local listing rest line meta name tail
+  te_found="no"
+  te_mode=""
+  te_type=""
+  te_sha=""
+  listing="$(git cat-file -p "$1" 2>/dev/null)" || return 1
+  rest="$listing"
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      *"$NL"*) line="${rest%%"$NL"*}"; rest="${rest#*"$NL"}" ;;
+      *) line="$rest"; rest="" ;;
+    esac
+    case "$line" in
+      *"$TAB"*) : ;;
+      *) continue ;;
+    esac
+    meta="${line%%"$TAB"*}"
+    name="${line#*"$TAB"}"
+    [ "$name" = "$2" ] || continue
+    te_mode="${meta%% *}"
+    tail="${meta#* }"
+    te_type="${tail%% *}"
+    te_sha="${tail#* }"
+    te_found="yes"
+    return 0
+  done
+  return 0
+}
+
+# read_claude_md_at_base — sets claude_content to the text of the CLAUDE.md the tree of $base names
+# (run_floor's local, seen here through dynamic scope), or leaves claude_found=no when that tree has
+# no entry named exactly CLAUDE.md. Follows a symlink ONE hop, inside the base tree (see this file's
+# header); every other shape is an error_out. Twin of bin/reserve-paths.sh's
+# read_claude_md_at_base, kept identical by hand.
+read_claude_md_at_base() {
+  local src_sha target shown reason dir file treeish ty
+  claude_found="no"
+  claude_content=""
+  tree_entry "${base}^{tree}" "CLAUDE.md" || \
+    error_out "could not list the tree of $base" 1
+  [ "$te_found" = "yes" ] || return 0
+  case "$te_mode" in
+    100644|100755)
+      src_sha="$te_sha"
+      ;;
+    120000)
+      target="$(git cat-file blob "$te_sha" 2>/dev/null)" || \
+        error_out "CLAUDE.md at $base is a symlink whose text could not be read" 1
+      shown="$(printf '%s' "$target" | tr -c '[:print:]' '?')"
+      reason=""
+      case "$target" in
+        "") reason="is empty" ;;
+        /*) reason="is an absolute path" ;;
+        *[[:cntrl:]]*) reason="holds a control character" ;;
+      esac
+      if [ -z "$reason" ]; then
+        while :; do
+          case "$target" in
+            ./*) target="${target#./}" ;;
+            *) break ;;
+          esac
+        done
+        case "/$target/" in
+          *//*|*/./*|*/../*) reason="is not a plain relative path (it has an empty, . or .. segment)" ;;
+        esac
+      fi
+      [ -z "$reason" ] || \
+        error_out "CLAUDE.md at $base is a symlink to '$shown' that $reason" 1
+      case "$target" in
+        */*) dir="${target%/*}"; file="${target##*/}"; treeish="$base:$dir" ;;
+        *) dir=""; file="$target"; treeish="${base}^{tree}" ;;
+      esac
+      if [ -n "$dir" ]; then
+        ty="$(git cat-file -t "$treeish" 2>/dev/null)" || ty=""
+        [ "$ty" = "tree" ] || \
+          error_out "CLAUDE.md at $base is a symlink to '$shown' whose directory is missing from that tree" 1
+      fi
+      tree_entry "$treeish" "$file" || \
+        error_out "CLAUDE.md at $base is a symlink to '$shown' whose directory could not be listed" 1
+      [ "$te_found" = "yes" ] || \
+        error_out "CLAUDE.md at $base is a symlink to '$shown' that points at a missing file" 1
+      case "$te_mode" in
+        100644|100755) src_sha="$te_sha" ;;
+        120000) error_out "CLAUDE.md at $base is a symlink to '$shown' that points at another symlink" 1 ;;
+        *) error_out "CLAUDE.md at $base is a symlink to '$shown' that does not point at a file" 1 ;;
+      esac
+      ;;
+    *)
+      error_out "CLAUDE.md at $base is neither a file nor a symlink (mode $te_mode)" 1
+      ;;
+  esac
+  claude_content="$(git cat-file blob "$src_sha" 2>/dev/null)" || \
+    error_out "could not read CLAUDE.md at $base" 1
+  claude_found="yes"
+  return 0
+}
+
 # run_check FILE — the doctor's validation mode. An unreadable (missing, unreadable, or not a
 # regular file) FILE exits 2 with no output at all — everything else exits 0 with exactly one
 # line.
@@ -289,16 +451,14 @@ run_floor() {
 
   # gp_state/gp_reason/gp_globs/gp_count are globals parse_section sets — initialised here
   # unconditionally (not only inside the `if` below) so is_declared can read $gp_globs under
-  # `set -u` even when the base tip has no CLAUDE.md at all (acceptance: absent ⇒ built-in rules
-  # only, never an error).
+  # `set -u` even when the base tree has no CLAUDE.md entry at all (acceptance: absent ⇒ built-in
+  # rules only, never an error).
   gp_state="absent"
   gp_reason=""
   gp_globs=""
   gp_count=0
-  if git cat-file -e "$base:CLAUDE.md" 2>/dev/null; then
-    local claude_content
-    claude_content="$(git cat-file blob "$base:CLAUDE.md" 2>&1)" || \
-      error_out "could not read CLAUDE.md at $base: $claude_content" 1
+  read_claude_md_at_base
+  if [ "$claude_found" = "yes" ]; then
     parse_section <<<"$claude_content"
     if [ "$gp_state" = "malformed" ]; then
       error_out "malformed 'Governance paths' section at $base: $gp_reason" 1

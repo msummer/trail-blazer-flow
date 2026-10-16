@@ -705,7 +705,13 @@ name bare (#490).
 `"Bash(merge-floor.sh:*)"` and `"Bash(reserve-paths.sh:*)"` by hand. On Codex, also re-run
 `bin/codex-setup.sh`. If `CLAUDE.md` declares an Autonomy reserve, run `check-harness.sh` and
 rewrite any entry it names as malformed; until then, every implementation stops before
-verification.
+verification. If `CLAUDE.md` declares Governance paths, run `check-harness.sh` and fix a WARN that
+the section is malformed (bracket), meaning a `[` or `]` outside a route-parameter group or a
+backslash in a bracketed entry; until then, under merge autonomy every PR is held. If `CLAUDE.md`
+is a symlink, check by hand that its target is a file inside the repo, written as a relative path
+with no `..` or inner `.` segment, through no symlinked directory, in the file's exact case, and not
+itself a symlink; the doctor does not check it, and an unusable link holds every PR and stops every
+implementation before verification.
 
 </details>
 

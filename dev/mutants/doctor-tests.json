@@ -281,8 +281,8 @@
       "filter": "gov-",
       "edits": [
         {
-          "from": "  if git cat-file -e \"$base:CLAUDE.md\" 2>/dev/null; then\n    local claude_content\n    claude_content=\"$(git cat-file blob \"$base:CLAUDE.md\" 2>&1)\" || \\\n",
-          "to": "  if git cat-file -e \"$head:CLAUDE.md\" 2>/dev/null; then\n    local claude_content\n    claude_content=\"$(git cat-file blob \"$head:CLAUDE.md\" 2>&1)\" || \\\n"
+          "from": "  tree_entry \"${base}^{tree}\" \"CLAUDE.md\" || \\\n    error_out \"could not list the tree of $base\" 1\n",
+          "to": "  tree_entry \"${head}^{tree}\" \"CLAUDE.md\" || \\\n    return 0\n"
         }
       ],
       "expect_fail": [
@@ -432,8 +432,8 @@
       "filter": "gov-",
       "edits": [
         {
-          "from": "  if git cat-file -e \"$base:CLAUDE.md\" 2>/dev/null; then\n    local claude_content\n    claude_content=\"$(git cat-file blob \"$base:CLAUDE.md\" 2>&1)\" || \\\n      error_out \"could not read CLAUDE.md at $base: $claude_content\" 1\n    parse_section <<<\"$claude_content\"\n    if [ \"$gp_state\" = \"malformed\" ]; then\n      error_out \"malformed 'Governance paths' section at $base: $gp_reason\" 1\n    fi\n  fi\n",
-          "to": "  if git cat-file -e \"$base:CLAUDE.md\" 2>/dev/null; then\n    local claude_content\n    claude_content=\"$(git cat-file blob \"$base:CLAUDE.md\" 2>&1)\" || \\\n      error_out \"could not read CLAUDE.md at $base: $claude_content\" 1\n    parse_section <<<\"$claude_content\"\n    if [ \"$gp_state\" = \"malformed\" ]; then\n      error_out \"malformed 'Governance paths' section at $base: $gp_reason\" 1\n    fi\n  else\n    error_out \"no CLAUDE.md at $base\" 1\n  fi\n"
+          "from": "  read_claude_md_at_base\n  if [ \"$claude_found\" = \"yes\" ]; then\n    parse_section <<<\"$claude_content\"\n    if [ \"$gp_state\" = \"malformed\" ]; then\n      error_out \"malformed 'Governance paths' section at $base: $gp_reason\" 1\n    fi\n  fi\n",
+          "to": "  read_claude_md_at_base\n  if [ \"$claude_found\" = \"yes\" ]; then\n    parse_section <<<\"$claude_content\"\n    if [ \"$gp_state\" = \"malformed\" ]; then\n      error_out \"malformed 'Governance paths' section at $base: $gp_reason\" 1\n    fi\n  else\n    error_out \"no CLAUDE.md at $base\" 1\n  fi\n"
         }
       ],
       "expect_fail": [
@@ -2049,6 +2049,116 @@
       ],
       "expect_fail": [
         "codex-sched-wrapper-killed-forwards-term"
+      ]
+    },
+    {
+      "name": "596-gov-link-text",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "governance-symlink",
+      "edits": [
+        {
+          "from": "    100644|100755)\n      src_sha=\"$te_sha\"\n      ;;\n",
+          "to": "    100644|100755|120000)\n      src_sha=\"$te_sha\"\n      ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "governance-symlink-claude-md",
+        "governance-symlink-error"
+      ]
+    },
+    {
+      "name": "597-gov-dot-slash",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "governance-symlink-claude",
+      "edits": [
+        {
+          "from": "        while :; do\n          case \"$target\" in\n            ./*) target=\"${target#./}\" ;;\n            *) break ;;\n          esac\n        done\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "governance-symlink-claude-md"
+      ]
+    },
+    {
+      "name": "595-gov-bracket-class",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "governance-bracket",
+      "edits": [
+        {
+          "from": "          *'['*|*']'*) gp_state=\"malformed\"; gp_reason=\"bracket\"; return 0 ;;\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "governance-bracket-malformed"
+      ]
+    },
+    {
+      "name": "595-gov-bracket-backslash",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "governance-bracket-malformed",
+      "edits": [
+        {
+          "from": "          *'\\'*) gp_state=\"malformed\"; gp_reason=\"bracket\"; return 0 ;;\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "governance-bracket-malformed"
+      ]
+    },
+    {
+      "name": "595-gov-bracket-literal",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "governance-route",
+      "edits": [
+        {
+          "from": "sed 's/\\[/[[]/g'",
+          "to": "sed 's/\\[/[/g'"
+        }
+      ],
+      "expect_fail": [
+        "governance-route-brackets"
+      ]
+    },
+    {
+      "name": "595-gov-bracket-sed",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "governance-bracket-sed",
+      "edits": [
+        {
+          "from": "          { gp_state=\"malformed\"; gp_reason=\"bracket\"; return 0; }\n        case \"$rest\" in\n",
+          "to": "          true\n        case \"$rest\" in\n"
+        },
+        {
+          "from": "          { gp_state=\"malformed\"; gp_reason=\"bracket\"; return 0; }\n        ;;\n",
+          "to": "          true\n        ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "governance-bracket-sed-fails"
+      ]
+    },
+    {
+      "name": "597-res-dot-slash",
+      "target": "bin/reserve-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "reserve-symlink",
+      "edits": [
+        {
+          "from": "        while :; do\n          case \"$target\" in\n            ./*) target=\"${target#./}\" ;;\n            *) break ;;\n          esac\n        done\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "reserve-symlink-claude-md"
       ]
     }
   ]
